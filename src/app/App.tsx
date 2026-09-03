@@ -28,6 +28,7 @@ import {
   loadSettingsPage,
   loadVideoPage,
   loadVideoPlayerPage,
+  loadVideoSearchPage,
 } from "./routeModules";
 import { HomePage } from "../features/home/HomePage";
 import { homeCategoryPath } from "../features/category/categorySelection";
@@ -51,6 +52,7 @@ const IptvPlayerPage = lazy(loadIptvPlayerPage);
 const MultiRoomPage = lazy(loadMultiRoomPage);
 const VideoPage = lazy(loadVideoPage);
 const VideoPlayerPage = lazy(loadVideoPlayerPage);
+const VideoSearchPage = lazy(loadVideoSearchPage);
 const RoomPage = lazy(loadRoomPage);
 
 /**
@@ -132,6 +134,7 @@ const router = createBrowserRouter(
         {/* 播放页在前：React Router 不会把 `/video/play` 误匹配到 `/video`，
             但两条相邻声明让「发现页 vs 播放页」的关系一眼可读。 */}
         <Route path="video/play" element={<VideoPlayerPage />} />
+        <Route path="video/search" element={<VideoSearchPage />} />
         <Route path="video" element={<VideoPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="multi-room" element={<MultiRoomPage />} />

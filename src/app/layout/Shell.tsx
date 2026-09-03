@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Search } from "lucide-react";
 import {
   useLocation,
   useNavigate,
@@ -38,10 +38,13 @@ import {
 import { recordingSupported } from "@/features/recording/recording";
 import { useRecordingHeaderSnapshot } from "@/features/recording/recordingHeaderState";
 import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
+import { VideoSearchBar } from "@/features/video/VideoSearchBar";
 import {
+  VIDEO_HOME_PATH,
   VIDEO_TABS,
   VIDEO_TAB_PARAM,
   videoHomePath,
+  videoSearchPath,
   videoTabFromSearch,
 } from "@/features/video/videoRoute";
 import { CATEGORY_BROWSE_PATH } from "@/features/category/categorySelection";
@@ -145,6 +148,7 @@ export function Shell() {
   const [searchParams] = useSearchParams();
   const isIptv = pathname === "/iptv";
   const isVideo = pathname === "/video";
+  const isVideoSearch = pathname === "/video/search";
   const isImmersivePlayer = isImmersivePlayerPath(pathname);
   const isSearch = pathname === "/search";
   const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
@@ -223,7 +227,8 @@ export function Shell() {
   // FollowPage、丢失其过渡状态。IPTV 关注分组的动画
   // 发生在 IptvFollowView 内部而不是这一层。
   const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv || isVideo;
-  const showTopNavigation = useGroupedPageContainer || isHistory || isRecordings;
+  // 视频搜索页的头部槽位是查询条，同样需要这条头部（移动端否则整条隐藏）。
+  const showTopNavigation = useGroupedPageContainer || isHistory || isRecordings || isVideoSearch;
   const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
   const iptvSource = useMemo(
@@ -335,6 +340,8 @@ export function Shell() {
   const goBackToDiscovery = useCallback(() => goBackOr("/"), [goBackOr]);
   // 历史页在移动端只从设置进入，深链接直达时回到那个入口而不是首页。
   const goBackFromHistory = useCallback(() => goBackOr("/settings"), [goBackOr]);
+  // 视频搜索是从视频页头部推进去的取向表面，返回它的来源。
+  const goBackToVideo = useCallback(() => goBackOr(VIDEO_HOME_PATH), [goBackOr]);
 
   // 首页/分类/搜索用横向内容滑动切换平台。关注和历史拥有自己嵌套的页签条，
   // Shell 不与这些路由争夺横向手势。
@@ -666,12 +673,13 @@ export function Shell() {
                   {/* 搜索与「全部分类」都是从别处 push 出来的取向表面，侧栏里没有对应
                       条目可点回去，所以头部给一个显式返回口。移动端的历史页同理 ——
                       它的入口收进了设置，底栏里没有历史目的地；桌面端侧栏仍有历史，
-                      因此那里不需要这个按钮。 */}
-                  {(isSearch || isCategoryBrowse || (isHistory && mobileClient)) && (
+                      因此那里不需要这个按钮。视频搜索页的查询条占据了头部，返回
+                      口也一并给它（移动端头部不再隐藏）。 */}
+                  {(isSearch || isCategoryBrowse || isVideoSearch || (isHistory && mobileClient)) && (
                     <div
                       className={cn(
                         "relative z-10 flex shrink-0 items-center",
-                        !isHistory && "max-md:hidden",
+                        !isHistory && !isVideoSearch && "max-md:hidden",
                       )}
                     >
                       <Button
@@ -681,81 +689,95 @@ export function Shell() {
                         className="max-md:size-9"
                         aria-label="返回上一页"
                         title="返回上一页"
-                        onClick={isHistory ? goBackFromHistory : goBackToDiscovery}
+                        onClick={
+                          isHistory
+                            ? goBackFromHistory
+                            : isVideoSearch
+                              ? goBackToVideo
+                              : goBackToDiscovery
+                        }
                       >
                         <ArrowLeft aria-hidden />
                       </Button>
                     </div>
                   )}
-                  <div
-                    className={cn(
-                      "pointer-events-none absolute inset-0 flex h-full items-center justify-center",
-                      "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
-                    )}
-                  >
-                    {showTopNavigation && (
-                      <div className="pointer-events-auto h-full max-md:w-full max-md:min-w-0">
-                        {isHistory ? (
-                          <HistoryViewSwitcher
-                            value={historyHeader.view}
-                            onValueChange={historyHeader.onViewChange}
-                          />
-                        ) : isRecordings ? (
-                          <RecordingViewSwitcher
-                            value={recordingHeader.view}
-                            counts={recordingHeader.counts}
-                            onValueChange={recordingHeader.onViewChange}
-                          />
-                        ) : isFollow ? (
-                          <FollowViewSwitcher
-                            value={followHeader.view}
-                            onValueChange={followHeader.onViewChange}
-                          />
-                        ) : hasIptvSourceShell ? (
-                          <div
-                            data-horizontal-swipe-surface
-                            className="h-full min-w-0"
-                            onPointerDownCapture={iptvSourceSwipe.onPointerDownCapture}
-                            onPointerMoveCapture={iptvSourceSwipe.onPointerMoveCapture}
-                            onPointerUpCapture={iptvSourceSwipe.onPointerUpCapture}
-                            onPointerCancelCapture={iptvSourceSwipe.onPointerCancelCapture}
-                            onClickCapture={iptvSourceSwipe.onClickCapture}
-                          >
-                            <IptvSourceSwitcher
-                              sources={iptvSources}
-                              value={iptvSource.id}
-                              onValueChange={handleIptvSourceChange}
-                              className="h-full w-auto max-w-full max-md:w-full"
+                  {isVideoSearch ? (
+                    // 查询条住在头部：搜索是这一页的本体动作，结果网格在下方滚动。
+                    // 桌面端居中限宽，移动端在返回钮之后铺满剩余宽度。
+                    <div className="relative z-10 flex h-full min-w-0 flex-1 items-center justify-start md:justify-center">
+                      <VideoSearchBar className="h-full w-full max-w-2xl" />
+                    </div>
+                  ) : (
+                    <div
+                      className={cn(
+                        "pointer-events-none absolute inset-0 flex h-full items-center justify-center",
+                        "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
+                      )}
+                    >
+                      {showTopNavigation && (
+                        <div className="pointer-events-auto h-full max-md:w-full max-md:min-w-0">
+                          {isHistory ? (
+                            <HistoryViewSwitcher
+                              value={historyHeader.view}
+                              onValueChange={historyHeader.onViewChange}
                             />
-                          </div>
-                        ) : isVideo ? (
-                          <div
-                            data-horizontal-swipe-surface
-                            className="h-full min-w-0"
-                            onPointerDownCapture={videoTabSwipe.onPointerDownCapture}
-                            onPointerMoveCapture={videoTabSwipe.onPointerMoveCapture}
-                            onPointerUpCapture={videoTabSwipe.onPointerUpCapture}
-                            onPointerCancelCapture={videoTabSwipe.onPointerCancelCapture}
-                            onClickCapture={videoTabSwipe.onClickCapture}
-                          >
-                            <VideoTabSwitcher
-                              value={videoTab}
-                              onValueChange={handleVideoTabChange}
-                              className="h-full w-auto max-w-full max-md:w-full"
+                          ) : isRecordings ? (
+                            <RecordingViewSwitcher
+                              value={recordingHeader.view}
+                              counts={recordingHeader.counts}
+                              onValueChange={recordingHeader.onViewChange}
                             />
-                          </div>
-                        ) : (
-                          <SiteSwitcher
-                            onValueIntent={preloadHomePlatform}
-                            onValueChange={(value) => {
-                              if (value === "all") return;
-                              handleSitePlatformChange(value);
-                            }}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
+                          ) : isFollow ? (
+                            <FollowViewSwitcher
+                              value={followHeader.view}
+                              onValueChange={followHeader.onViewChange}
+                            />
+                          ) : hasIptvSourceShell ? (
+                            <div
+                              data-horizontal-swipe-surface
+                              className="h-full min-w-0"
+                              onPointerDownCapture={iptvSourceSwipe.onPointerDownCapture}
+                              onPointerMoveCapture={iptvSourceSwipe.onPointerMoveCapture}
+                              onPointerUpCapture={iptvSourceSwipe.onPointerUpCapture}
+                              onPointerCancelCapture={iptvSourceSwipe.onPointerCancelCapture}
+                              onClickCapture={iptvSourceSwipe.onClickCapture}
+                            >
+                              <IptvSourceSwitcher
+                                sources={iptvSources}
+                                value={iptvSource.id}
+                                onValueChange={handleIptvSourceChange}
+                                className="h-full w-auto max-w-full max-md:w-full"
+                              />
+                            </div>
+                          ) : isVideo ? (
+                            <div
+                              data-horizontal-swipe-surface
+                              className="h-full min-w-0"
+                              onPointerDownCapture={videoTabSwipe.onPointerDownCapture}
+                              onPointerMoveCapture={videoTabSwipe.onPointerMoveCapture}
+                              onPointerUpCapture={videoTabSwipe.onPointerUpCapture}
+                              onPointerCancelCapture={videoTabSwipe.onPointerCancelCapture}
+                              onClickCapture={videoTabSwipe.onClickCapture}
+                            >
+                              <VideoTabSwitcher
+                                value={videoTab}
+                                onValueChange={handleVideoTabChange}
+                                className="h-full w-auto max-w-full max-md:w-full"
+                              />
+                            </div>
+                          ) : (
+                            <SiteSwitcher
+                              onValueIntent={preloadHomePlatform}
+                              onValueChange={(value) => {
+                                if (value === "all") return;
+                                handleSitePlatformChange(value);
+                              }}
+                            />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="relative z-10 ml-auto flex min-w-0 items-center gap-1.5">
                     {isHistory ? (
                       <HistoryClearButton
@@ -766,7 +788,18 @@ export function Shell() {
                       />
                     ) : isRecordings ? (
                       <RecordingStorageButton onRequestStorage={recordingHeader.onRequestStorage} />
-                    ) : isFollow || isIptv || isVideo ? null : (
+                    ) : isVideo ? (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="max-md:size-9"
+                        aria-label="搜索视频"
+                        title="搜索视频"
+                        onClick={() => navigate(videoSearchPath())}
+                      >
+                        <Search aria-hidden />
+                      </Button>
+                    ) : isVideoSearch || isFollow || isIptv ? null : (
                       <HeaderSearch />
                     )}
                   </div>

@@ -178,10 +178,14 @@ export type VideoArchive = {
   bvid: string;
   /** 见 `VideoItem.aid`：字符串传输，避免丢精度。 */
   aid: string;
+  /** 首 P 的 cid；搜索/UP 主列表的条目没有 cid，播放页用它补齐取流键。 */
+  cid: number;
   title: string;
   desc: string;
   author: string;
   author_face: string | null;
+  /** UP 主的 mid（member ID），用于获取 UP 主的投稿列表。 */
+  author_mid: string;
   view: number;
   danmaku: number;
   reply: number;

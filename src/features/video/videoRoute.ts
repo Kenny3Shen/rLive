@@ -7,6 +7,18 @@
 
 export const VIDEO_HOME_PATH = "/video";
 export const VIDEO_PLAY_PATH = "/video/play";
+export const VIDEO_SEARCH_PATH = "/video/search";
+
+/** 搜索页的关键词参数：住在 URL 里，Shell 头部的查询条与结果页因此无需共享状态。 */
+export const VIDEO_SEARCH_QUERY_PARAM = "q";
+
+/** 搜索页链接。不带关键词时进入空态并自动聚焦输入框。 */
+export function videoSearchPath(keyword?: string | null): string {
+  const trimmed = (keyword ?? "").trim();
+  return trimmed
+    ? `${VIDEO_SEARCH_PATH}?${VIDEO_SEARCH_QUERY_PARAM}=${encodeURIComponent(trimmed)}`
+    : VIDEO_SEARCH_PATH;
+}
 
 /** 头部整行的四个内容页签。顺序即移动端横滑与 `PagePan` 的方向顺序。 */
 export const VIDEO_TABS = ["recommend", "popular", "anime", "cinema"] as const;
@@ -141,7 +153,8 @@ export function videoHomePath(tab: VideoTab, zone?: string | null): string {
 export type VideoPlayTarget = {
   /** UGC 必填；PGC 分集也带着它，仅用于展示与回链。 */
   bvid?: string | null;
-  cid: number;
+  /** 取流键。搜索/UP 主列表的条目没有 cid，可缺省——播放页用稿件详情补齐（P1）。 */
+  cid?: number | null;
   /** 填了就走 PGC playurl。 */
   epId?: string | null;
   title?: string | null;
@@ -149,10 +162,10 @@ export type VideoPlayTarget = {
   aid?: string | null;
 };
 
-/** 播放页链接。cid 是两条链路都必需的键，缺它无法取流。 */
+/** 播放页链接。cid 与 bvid 至少给一个：cid 直接取流，只有 bvid 时由播放页补齐。 */
 export function videoPlayPath(target: VideoPlayTarget): string {
   const params = new URLSearchParams();
-  params.set("cid", String(target.cid));
+  if (target.cid && target.cid > 0) params.set("cid", String(target.cid));
   if (target.bvid) params.set("bvid", target.bvid);
   if (target.epId) params.set("ep_id", target.epId);
   if (target.title) params.set("title", target.title);
@@ -161,6 +174,7 @@ export function videoPlayPath(target: VideoPlayTarget): string {
 }
 
 export type VideoPlayParams = {
+  /** 0 表示未解析（搜索/UP 列表只带 bvid 进入），播放页用稿件详情补齐。 */
   cid: number;
   bvid: string | null;
   epId: string | null;
@@ -169,16 +183,19 @@ export type VideoPlayParams = {
 };
 
 /**
- * 解析播放页参数。cid 不是正整数就返回 null，让页面渲染可读的失败态而不是拿 NaN
- * 去请求后端。aid 是评论区的键，可缺省：相关视频/分集链路带着它，URL 直入时由
- * 播放页用稿件详情补齐。
+ * 解析播放页参数。cid 与 bvid 至少一个有效：cid 无效但带着 bvid 仍可进入
+ * （cid 置 0，由播放页补齐）；两者皆无才返回 null，让页面渲染可读的失败态
+ * 而不是拿 NaN 去请求后端。aid 是评论区的键，可缺省：相关视频/分集链路带着它，
+ * URL 直入时由播放页用稿件详情补齐。
  */
 export function parseVideoPlayParams(search: URLSearchParams): VideoPlayParams | null {
   const cid = Number(search.get("cid"));
-  if (!Number.isSafeInteger(cid) || cid <= 0) return null;
+  const bvid = search.get("bvid");
+  const hasCid = Number.isSafeInteger(cid) && cid > 0;
+  if (!hasCid && !bvid) return null;
   return {
-    cid,
-    bvid: search.get("bvid") || null,
+    cid: hasCid ? cid : 0,
+    bvid: bvid || null,
     epId: search.get("ep_id") || null,
     title: search.get("title") || null,
     aid: search.get("aid") || null,

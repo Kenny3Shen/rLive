@@ -197,10 +197,14 @@ pub struct VideoArchive {
     pub bvid: String,
     /// 见 [`VideoItem::aid`]：字符串传输，避免丢精度。
     pub aid: String,
+    /// 首 P 的 cid。搜索与 UP 主空间列表的条目没有 cid，播放页用它补齐取流键。
+    pub cid: i64,
     pub title: String,
     pub desc: String,
     pub author: String,
     pub author_face: Option<String>,
+    /// UP 主的 mid（member ID），用于获取 UP 主的投稿列表。
+    pub author_mid: String,
     pub view: i64,
     pub danmaku: i64,
     pub reply: i64,

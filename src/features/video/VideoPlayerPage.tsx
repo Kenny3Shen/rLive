@@ -8,9 +8,10 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, FastForward, Home } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -30,7 +31,7 @@ import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
 import { formatRecordingDuration } from "@/features/recording/recording";
 import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
-import { videoGetDanmaku, videoGetPlayInfo, videoStopPlay } from "./videoApi";
+import { videoGetArchive, videoGetDanmaku, videoGetPlayInfo, videoStopPlay } from "./videoApi";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
 import { VideoSidebar } from "./VideoSidebar";
 import {
@@ -44,6 +45,15 @@ import { usePlaylistStore } from "./playlistStore";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const SINGLE_CLICK_DELAY_MS = 220;
+
+/** 倍速档位：菜单可选 0.5x–2x；3x 只作为长按的临时档位，不进菜单。 */
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
+/** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
+const LONG_PRESS_RATE = 3;
+const LONG_PRESS_TRIGGER_MS = 500;
+/** 移动超过这个距离视为滑动手势，取消长按判定。 */
+const LONG_PRESS_CANCEL_MOVE_PX = 12;
 
 function isPlayerControlTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -81,6 +91,12 @@ export function VideoPlayerPage() {
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const controlsHideTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
+  // 长按倍速的临时状态全在 ref 里：按住期间不应触发重渲染（弹幕层在动，
+  // 状态更新会打扰合成器），只有角标的显示与否走 state。
+  const speedHoldTimerRef = useRef<number | null>(null);
+  const speedHoldRef = useRef(false);
+  const suppressClickRef = useRef(false);
+  const speedHoldStartRef = useRef<{ x: number; y: number } | null>(null);
   const volumeRef = useRef(80);
   const mutedRef = useRef(false);
   const previousVolumeRef = useRef(80);
@@ -97,6 +113,9 @@ export function VideoPlayerPage() {
   const [bufferedTime, setBufferedTime] = useState(0);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
+  /** 菜单选中的倍速；长按倍速是临时覆盖，不经过这个状态。 */
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [speedHoldActive, setSpeedHoldActive] = useState(false);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   /** 期望画质（null = 后端自选最高可用档）。切换后带着它重取播放信息。 */
   const [qualityQn, setQualityQn] = useState<number | null>(null);
@@ -108,7 +127,18 @@ export function VideoPlayerPage() {
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
   useScreenWakeLock(!paused && !loading && !playbackError);
 
-  const cid = params?.cid ?? 0;
+  const rawCid = params?.cid ?? 0;
+
+  // 搜索与 UP 主列表的条目没有 cid，链接里只带 bvid：用稿件详情补齐取流键（P1）。
+  // 与右侧栏的 archive 查询同 key、同 staleTime，两次需求共享一次请求。
+  const cidResolveQuery = useQuery({
+    queryKey: ["video_archive", params?.bvid ?? ""],
+    enabled: rawCid === 0 && Boolean(params?.bvid),
+    queryFn: () => videoGetArchive(params!.bvid!),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const cid = rawCid > 0 ? rawCid : (cidResolveQuery.data?.cid ?? 0);
 
   // 播放列表状态
   const playlistStore = usePlaylistStore();
@@ -144,7 +174,7 @@ export function VideoPlayerPage() {
       qualityQn,
       playerRevision,
     ],
-    enabled: params !== null,
+    enabled: params !== null && cid > 0,
     queryFn: () =>
       videoGetPlayInfo({
         bvid: params?.bvid ?? null,
@@ -478,6 +508,68 @@ export function VideoPlayerPage() {
     }
   }, []);
 
+  // 倍速直接写到媒体元素上；换源（新 mpd）后重时应用一次。
+  useEffect(() => {
+    const media = videoRef.current;
+    if (media) media.playbackRate = playbackRate;
+  }, [playbackRate, mpdUrl]);
+
+  const engageSpeedHold = useCallback(() => {
+    const media = videoRef.current;
+    // 没有时长（还没取到流）或已出错时按住没有意义。
+    if (!media || !Number.isFinite(media.duration) || media.duration <= 0) return;
+    speedHoldRef.current = true;
+    suppressClickRef.current = true;
+    media.playbackRate = LONG_PRESS_RATE;
+    setSpeedHoldActive(true);
+  }, []);
+
+  const releaseSpeedHold = useCallback(() => {
+    if (speedHoldTimerRef.current !== null) {
+      window.clearTimeout(speedHoldTimerRef.current);
+      speedHoldTimerRef.current = null;
+    }
+    speedHoldStartRef.current = null;
+    if (!speedHoldRef.current) return;
+    speedHoldRef.current = false;
+    const media = videoRef.current;
+    if (media) media.playbackRate = playbackRate;
+    setSpeedHoldActive(false);
+  }, [playbackRate]);
+
+  const handleSurfacePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || isPlayerControlTarget(event.target)) return;
+      // 新手势开始：清掉上一次长按残留的 click 抑制。
+      suppressClickRef.current = false;
+      speedHoldStartRef.current = { x: event.clientX, y: event.clientY };
+      if (speedHoldTimerRef.current !== null) {
+        window.clearTimeout(speedHoldTimerRef.current);
+      }
+      speedHoldTimerRef.current = window.setTimeout(() => {
+        speedHoldTimerRef.current = null;
+        engageSpeedHold();
+      }, LONG_PRESS_TRIGGER_MS);
+    },
+    [engageSpeedHold],
+  );
+
+  const handleSurfacePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = speedHoldStartRef.current;
+    if (!start) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (dx * dx + dy * dy > LONG_PRESS_CANCEL_MOVE_PX * LONG_PRESS_CANCEL_MOVE_PX) {
+      // 滑动超过阈值：不是长按，取消判定，也别让后续 click 被吞。
+      if (speedHoldTimerRef.current !== null) {
+        window.clearTimeout(speedHoldTimerRef.current);
+        speedHoldTimerRef.current = null;
+      }
+      speedHoldStartRef.current = null;
+      suppressClickRef.current = false;
+    }
+  }, []);
+
   const toggleMute = useCallback(() => {
     const media = videoRef.current;
     if (mutedRef.current || volumeRef.current === 0) {
@@ -578,6 +670,11 @@ export function VideoPlayerPage() {
   const handleSurfaceClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       if (event.detail !== 1 || isPlayerControlTarget(event.target)) return;
+      // 长按倍速松开后的那次 click 不是暂停意图。
+      if (suppressClickRef.current) {
+        suppressClickRef.current = false;
+        return;
+      }
       if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = window.setTimeout(() => {
         clickTimerRef.current = null;
@@ -614,10 +711,16 @@ export function VideoPlayerPage() {
         void fullscreen.toggle();
       } else if (key === "arrowleft") {
         event.preventDefault();
-        seekTo(currentTime - 5);
+        seekTo(currentTime - (event.shiftKey ? 30 : 5));
       } else if (key === "arrowright") {
         event.preventDefault();
-        seekTo(currentTime + 5);
+        seekTo(currentTime + (event.shiftKey ? 30 : 5));
+      } else if (key === "arrowup") {
+        event.preventDefault();
+        setPlayerVolume(volume + 10);
+      } else if (key === "arrowdown") {
+        event.preventDefault();
+        setPlayerVolume(volume - 10);
       } else if ((key === "n" || key === "]") && nextItem && !event.repeat) {
         event.preventDefault();
         navigate(
@@ -645,8 +748,26 @@ export function VideoPlayerPage() {
       }
       revealControls();
     },
-    [currentTime, fullscreen, revealControls, seekTo, toggleMute, togglePlayback, nextItem, prevItem, navigate],
+    [
+      currentTime,
+      fullscreen,
+      navigate,
+      nextItem,
+      prevItem,
+      revealControls,
+      seekTo,
+      setPlayerVolume,
+      toggleMute,
+      togglePlayback,
+      volume,
+    ],
   );
+
+  // 进入播放页即聚焦画面：键盘快捷键不需要先点一下才生效。`autoFocus` 属性
+  // 只在文档加载期生效，SPA 路由挂载的元素必须命令式聚焦。
+  useEffect(() => {
+    stageRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const goBack = useCallback(() => {
     if (canNavigateBackInApp(window.history.state)) {
@@ -660,23 +781,41 @@ export function VideoPlayerPage() {
 
   const topBar = (
     <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="motion-back-button absolute left-3 rounded-lg hover:bg-muted/70"
-              aria-label="返回视频列表"
-              onClick={goBack}
-            />
-          }
-        >
-          <ChevronLeft data-icon="inline-start" aria-hidden />
-        </TooltipTrigger>
-        <TooltipContent>返回视频列表</TooltipContent>
-      </Tooltip>
-      <div className="absolute inset-x-12 flex min-w-0 items-center justify-center px-12">
+      <div className="absolute left-3 flex items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="motion-back-button rounded-lg hover:bg-muted/70"
+                aria-label="返回视频列表"
+                onClick={goBack}
+              />
+            }
+          >
+            <ChevronLeft data-icon="inline-start" aria-hidden />
+          </TooltipTrigger>
+          <TooltipContent>返回视频列表</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="rounded-lg hover:bg-muted/70"
+                aria-label="返回主页"
+                onClick={() => navigate(VIDEO_HOME_PATH)}
+              />
+            }
+          >
+            <Home data-icon="inline-start" aria-hidden className="size-4" />
+          </TooltipTrigger>
+          <TooltipContent>返回主页</TooltipContent>
+        </Tooltip>
+      </div>
+      <div className="absolute inset-x-12 flex min-w-0 items-center justify-center px-16">
         <p className="truncate text-sm font-semibold tracking-tight" title={title}>
           {title}
         </p>
@@ -743,6 +882,29 @@ export function VideoPlayerPage() {
         </span>
       </div>
     ) : undefined;
+
+  /** 倍速选择区：与播放列表设置同一个弹层，只有这一页需要它。 */
+  const rateSettings = (
+    <div className="flex flex-col gap-1 px-1 py-1">
+      <p className="px-2.5 py-1 text-xs text-muted-foreground">倍速</p>
+      <div className="flex flex-wrap gap-1.5 px-1.5 py-1">
+        {PLAYBACK_RATES.map((rate) => (
+          <button
+            key={rate}
+            type="button"
+            onClick={() => setPlaybackRate(rate)}
+            aria-pressed={rate === playbackRate}
+            className={cn(
+              "min-h-9 rounded-md px-2.5 text-sm tabular-nums transition-colors hover:bg-muted/50",
+              rate === playbackRate && "bg-primary text-primary-foreground hover:bg-primary",
+            )}
+          >
+            {rate === 1 ? "1.0x" : `${rate}x`}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   const playlistSettings =
     playlistStore.items.length > 1 ? (
@@ -814,7 +976,11 @@ export function VideoPlayerPage() {
       </div>
     ) : undefined;
 
-  const fatalError = playInfoQuery.isError ? playInfoQuery.error : null;
+  const fatalError = playInfoQuery.isError
+    ? playInfoQuery.error
+    : cid <= 0 && cidResolveQuery.isError
+      ? cidResolveQuery.error
+      : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -832,8 +998,8 @@ export function VideoPlayerPage() {
             "lg:aspect-auto lg:w-auto lg:flex-1",
             "data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
           )}
-          aria-label={`${title}；按空格或 K 播放或暂停，左右方向键快退或快进，M 静音，F 全屏`}
-          aria-keyshortcuts="Space K ArrowLeft ArrowRight M F"
+          aria-label={`${title}；按空格或 K 播放或暂停，左右方向键快退或快进（Shift 加速 30 秒），上下方向键调音量，M 静音，F 全屏`}
+          aria-keyshortcuts="Space K ArrowLeft ArrowRight ArrowUp ArrowDown M F"
           onPointerEnter={handleStagePointerActivity}
           onPointerMove={handleStagePointerActivity}
           onPointerLeave={scheduleControlsHide}
@@ -845,6 +1011,17 @@ export function VideoPlayerPage() {
             className="relative min-h-0 flex-1 overflow-hidden bg-black"
             onClick={handleSurfaceClick}
             onDoubleClick={handleSurfaceDoubleClick}
+            onPointerDown={handleSurfacePointerDown}
+            onPointerMove={handleSurfacePointerMove}
+            onPointerUp={releaseSpeedHold}
+            onPointerCancel={releaseSpeedHold}
+            onPointerLeave={releaseSpeedHold}
+            onContextMenu={(event) => {
+              // 长按倍速会触发系统的长按菜单，按住期间一律压掉。
+              if (speedHoldRef.current || speedHoldTimerRef.current !== null) {
+                event.preventDefault();
+              }
+            }}
           >
             <div
               ref={rootRef}
@@ -867,6 +1044,17 @@ export function VideoPlayerPage() {
                 entries={danmakuEntries}
                 active={danmakuVisible}
               />
+            )}
+
+            {speedHoldActive && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
+              >
+                <FastForward className="size-3.5" aria-hidden />
+                {LONG_PRESS_RATE.toFixed(1)}x 倍速中
+              </div>
             )}
 
             {(loading || waiting || playInfoQuery.isPending) && !playbackError && !fatalError && (
@@ -914,9 +1102,18 @@ export function VideoPlayerPage() {
               portalContainer={stageRef}
               centerSlot={playlistCenterSlot}
               timeline={timeline}
-              playbackSettings={playlistSettings}
-              playbackSettingsTitle="播放列表设置"
-              playbackSettingsLabel={playlistStore.items.length > 1 ? "播放列表" : undefined}
+              playbackSettings={
+                <>
+                  {rateSettings}
+                  {playlistSettings && (
+                    <>
+                      <Separator className="my-1 max-md:my-0.5" />
+                      {playlistSettings}
+                    </>
+                  )}
+                </>
+              }
+              playbackSettingsTitle="播放设置"
               qualities={playInfo?.accept_quality.map((quality) => ({
                 quality: quality.label,
                 // 不可用档位仍列出但置灰：匿名/非大会员能直接看出画质上限的

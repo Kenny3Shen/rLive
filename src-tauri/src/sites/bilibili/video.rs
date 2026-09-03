@@ -19,6 +19,22 @@ use crate::models::video::{
 use super::BilibiliSite;
 use super::api::{DEFAULT_USER_AGENT, as_i64, as_str, avatar_thumb};
 
+/// 移除 HTML 标签（搜索结果的 title 字段包含 `<em class="keyword">` 高亮标记）。
+fn strip_html_tags(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        if ch == '<' {
+            in_tag = true;
+        } else if ch == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 /// 视频接口与媒体 URL 使用的 Referer。
 ///
 /// 站点默认的 `DEFAULT_REFERER` 指向直播域名。JSON 接口对两者都放行（已实测），
@@ -99,25 +115,87 @@ fn video_item(item: &Value) -> VideoItem {
         bvid: item.get("bvid").map(as_str).unwrap_or_default(),
         aid,
         cid,
-        title: item.get("title").map(as_str).unwrap_or_default(),
+        title: strip_html_tags(&item.get("title").map(as_str).unwrap_or_default()),
         cover: video_cover(&item.get("pic").map(as_str).unwrap_or_default()),
+        // 搜索条目是扁平结构：没有 owner/stat，作者在 author、播放量在 play、
+        // 弹幕数在 video_review。带 owner 的接口没有这些字段，回退分支不会触发。
         author: owner
             .and_then(|owner| owner.get("name"))
             .map(as_str)
+            .filter(|name| !name.is_empty())
+            .or_else(|| item.get("author").map(as_str))
+            .filter(|author| !author.is_empty())
             .unwrap_or_default(),
         author_face,
-        duration: item.get("duration").map(as_i64).unwrap_or_default(),
+        duration: video_duration(item.get("duration")),
         view: stat
             .and_then(|stat| stat.get("view"))
             .map(as_i64)
-            .unwrap_or_default(),
+            .filter(|view| *view > 0)
+            .or_else(|| item.get("play").map(as_i64))
+            .unwrap_or(0),
         danmaku: stat
             .and_then(|stat| stat.get("danmaku"))
             .map(as_i64)
-            .unwrap_or_default(),
+            .filter(|danmaku| *danmaku > 0)
+            .or_else(|| item.get("video_review").map(as_i64))
+            .unwrap_or(0),
         pubdate: item.get("pubdate").map(as_i64).unwrap_or_default(),
         rcmd_reason: rcmd_reason(item),
     }
+}
+
+/// 条目时长。推荐/热门给秒数（数字），搜索给 `H:MM:SS` / `M:SS` 格式的字符串。
+fn video_duration(value: Option<&Value>) -> i64 {
+    let Some(value) = value else {
+        return 0;
+    };
+    match value {
+        Value::Number(_) => as_i64(value),
+        Value::String(s) => {
+            let seconds: i64 = s
+                .split(':')
+                .rev()
+                .enumerate()
+                .map(|(index, part)| {
+                    part.trim()
+                        .parse::<i64>()
+                        .map(|part| part * 60_i64.pow(index as u32))
+                        .unwrap_or(0)
+                })
+                .sum();
+            seconds.max(0)
+        }
+        _ => 0,
+    }
+}
+
+/// representation 的候选地址：base_url 优先，backup_url / backupBaseUrl 随后。
+///
+/// mcdn 等 PCDN 节点会对部分网络环境返回 403 或直接拒连，而同一 representation
+/// 的备用地址里通常有可用的 upos 镜像；抓 sidx 时逐个尝试，选第一个能服务的。
+fn stream_candidates(rep: &Value) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    for key in ["base_url", "baseUrl"] {
+        if let Some(url) = rep
+            .get(key)
+            .map(as_str)
+            .filter(|url| !url.is_empty())
+            && !candidates.contains(&url)
+        {
+            candidates.push(url);
+        }
+    }
+    for key in ["backup_url", "backupBaseUrl"] {
+        if let Some(list) = rep.get(key).and_then(Value::as_array) {
+            for url in list.iter().map(as_str).filter(|url| !url.is_empty()) {
+                if !candidates.contains(&url) {
+                    candidates.push(url);
+                }
+            }
+        }
+    }
+    candidates
 }
 
 /// 解析推荐流 `data.item[]`。
@@ -319,6 +397,66 @@ pub fn parse_related(raw: &str) -> AppResult<VideoListPage> {
     })
 }
 
+/// 解析视频搜索结果 `data.result[]`。
+///
+/// 搜索接口返回的结构与热门/推荐略有不同（扁平字段、字符串时长、无 cid），
+/// 差异由 [`video_item`] 的回退分支吸收。上游会把同一个稿件重复返回，
+/// 这里按 bvid 去重，否则前端网格的 key 会冲突。分页由 `numPages` 与当前页码判断。
+pub fn parse_search_videos(raw: &str, page: u32) -> AppResult<VideoListPage> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("搜索视频 json: {e}")))?;
+    let mut items: Vec<VideoItem> = root
+        .pointer("/data/result")
+        .and_then(Value::as_array)
+        .ok_or_else(|| video_err("搜索视频缺少 data.result"))?
+        .iter()
+        .filter(|item| item.get("type").map(as_str).as_deref() == Some("video"))
+        .map(video_item)
+        .filter(|item| !item.bvid.is_empty())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|item| seen.insert(item.bvid.clone()));
+    let num_pages = root
+        .pointer("/data/numPages")
+        .and_then(Value::as_u64)
+        .unwrap_or(1) as u32;
+    Ok(VideoListPage {
+        has_more: page < num_pages,
+        items,
+    })
+}
+
+/// 解析 UP 主空间视频列表 `data.list.vlist[]`（WBI 签名接口 `x/space/wbi/arc/search`）。
+pub fn parse_uploader_videos(raw: &str) -> AppResult<VideoListPage> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("UP 主视频列表 json: {e}")))?;
+    let page = root.pointer("/data/page");
+    let count = page
+        .and_then(|p| p.get("count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let pn = page
+        .and_then(|p| p.get("pn"))
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    let ps = page
+        .and_then(|p| p.get("ps"))
+        .and_then(Value::as_u64)
+        .unwrap_or(30);
+    let items = root
+        .pointer("/data/list/vlist")
+        .and_then(Value::as_array)
+        .ok_or_else(|| video_err("UP 主视频列表缺少 data.list.vlist"))?
+        .iter()
+        .map(video_item)
+        .filter(|item| !item.bvid.is_empty())
+        .collect::<Vec<_>>();
+    Ok(VideoListPage {
+        has_more: (pn * ps) < count,
+        items,
+    })
+}
+
 /// 解析稿件详情 `data`（WBI 签名接口 `x/web-interface/view`）。
 pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
     let root: Value =
@@ -333,9 +471,21 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
         .map(as_str)
         .map(|face| avatar_thumb(&face))
         .filter(|face| !face.is_empty());
+    // 首 P 的 cid：根字段缺失时退回 pages[0]（多 P 稿件两者都有，取 P1 语义一致）。
+    let cid = data
+        .get("cid")
+        .and_then(Value::as_i64)
+        .filter(|cid| *cid > 0)
+        .or_else(|| {
+            data.pointer("/pages/0/cid")
+                .and_then(Value::as_i64)
+                .filter(|cid| *cid > 0)
+        })
+        .unwrap_or(0);
     Ok(VideoArchive {
         bvid: data.get("bvid").map(as_str).unwrap_or_default(),
         aid: data.get("aid").map(as_str).unwrap_or_default(),
+        cid,
         title: data.get("title").map(as_str).unwrap_or_default(),
         desc: data.get("desc").map(as_str).unwrap_or_default(),
         author: owner
@@ -343,6 +493,10 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
             .map(as_str)
             .unwrap_or_default(),
         author_face,
+        author_mid: owner
+            .and_then(|owner| owner.get("mid"))
+            .map(as_str)
+            .unwrap_or_default(),
         view: stat
             .and_then(|stat| stat.get("view"))
             .map(as_i64)
@@ -1162,6 +1316,52 @@ impl BilibiliSite {
         parse_related(&text)
     }
 
+    /// 搜索视频（`x/web-interface/search/type`）。
+    ///
+    /// 关键词搜索，支持分页。与直播搜索复用同一接口，只是 `search_type` 不同。
+    pub async fn video_search(&self, keyword: &str, page: u32) -> AppResult<VideoListPage> {
+        if keyword.is_empty() {
+            return Err(video_err("搜索缺少关键词"));
+        }
+        let text = self
+            .get_json(
+                "https://api.bilibili.com/x/web-interface/search/type",
+                &[
+                    ("search_type", "video".into()),
+                    ("keyword", keyword.into()),
+                    ("page", page.to_string()),
+                    ("order", "".into()),
+                    ("duration", "0".into()),
+                    ("tids", "0".into()),
+                ],
+            )
+            .await?;
+        parse_search_videos(&text, page)
+    }
+
+    /// UP 主空间视频列表（`x/space/wbi/arc/search`）。
+    ///
+    /// 获取指定 UP 主的投稿视频，支持分页。需要 WBI 签名。
+    pub async fn video_uploader_videos(&self, mid: &str, page: u32) -> AppResult<VideoListPage> {
+        if mid.is_empty() {
+            return Err(video_err("UP 主视频列表缺少 mid"));
+        }
+        let mut params = BTreeMap::new();
+        params.insert("mid".into(), mid.to_string());
+        params.insert("ps".into(), "30".to_string());
+        params.insert("tid".into(), "0".into());
+        params.insert("pn".into(), page.max(1).to_string());
+        params.insert("keyword".into(), "".into());
+        params.insert("order".into(), "pubdate".into());
+        let text = self
+            .get_json_signed(
+                "https://api.bilibili.com/x/space/wbi/arc/search",
+                params,
+            )
+            .await?;
+        parse_uploader_videos(&text)
+    }
+
     /// 稿件详情（`x/web-interface/view`）。WBI 签名接口，未签名会被风控拦下。
     pub async fn video_archive(&self, bvid: &str) -> AppResult<VideoArchive> {
         if bvid.is_empty() {
@@ -1300,38 +1500,49 @@ impl BilibiliSite {
     }
 
     /// 抓一条轨的 sidx 并组装成 [`VideoTrack`]。
+    ///
+    /// 地址按 [`stream_candidates`] 的顺序逐个尝试，首个能返回 sidx 的成为该轨
+    /// 的上游地址（代理转发与 sidx 预抓共用它）；全部失败时抛最后一个错误。
     async fn video_track(&self, rep: &Value, is_video: bool) -> AppResult<VideoTrack> {
-        let base_url = rep
-            .get("base_url")
-            .or_else(|| rep.get("baseUrl"))
-            .map(as_str)
-            .filter(|url| !url.is_empty())
-            .ok_or_else(|| video_err("representation 缺少 base_url"))?;
+        let candidates = stream_candidates(rep);
+        if candidates.is_empty() {
+            return Err(video_err("representation 缺少 base_url"));
+        }
         let (init_end, index_start, index_end) = segment_base_ranges(rep)?;
-        let sidx_bytes = self.fetch_range(&base_url, index_start, index_end).await?;
-        let sidx = parse_sidx(&sidx_bytes, index_end)?;
-        Ok(VideoTrack {
-            base_url,
-            init_end,
-            sidx,
-            codecs: rep.get("codecs").map(as_str).unwrap_or_default(),
-            bandwidth: rep.get("bandwidth").map(as_i64).unwrap_or_default(),
-            rep_id: rep.get("id").map(as_str).unwrap_or_default(),
-            width: is_video.then(|| rep.get("width").map(as_i64).unwrap_or_default()),
-            height: is_video.then(|| rep.get("height").map(as_i64).unwrap_or_default()),
-            frame_rate: is_video.then(|| {
-                rep.get("frame_rate")
-                    .or_else(|| rep.get("frameRate"))
-                    .map(as_str)
-                    .unwrap_or_default()
-            }),
-            sar: is_video.then(|| rep.get("sar").map(as_str).unwrap_or_default()),
-            start_with_sap: rep
-                .get("start_with_sap")
-                .or_else(|| rep.get("startWithSap"))
-                .map(as_i64)
-                .unwrap_or(1),
-        })
+        let mut last_error = video_err("representation 缺少 base_url");
+        for candidate in &candidates {
+            let sidx_bytes = match self.fetch_range(candidate, index_start, index_end).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    last_error = error;
+                    continue;
+                }
+            };
+            let sidx = parse_sidx(&sidx_bytes, index_end)?;
+            return Ok(VideoTrack {
+                base_url: candidate.clone(),
+                init_end,
+                sidx,
+                codecs: rep.get("codecs").map(as_str).unwrap_or_default(),
+                bandwidth: rep.get("bandwidth").map(as_i64).unwrap_or_default(),
+                rep_id: rep.get("id").map(as_str).unwrap_or_default(),
+                width: is_video.then(|| rep.get("width").map(as_i64).unwrap_or_default()),
+                height: is_video.then(|| rep.get("height").map(as_i64).unwrap_or_default()),
+                frame_rate: is_video.then(|| {
+                    rep.get("frame_rate")
+                        .or_else(|| rep.get("frameRate"))
+                        .map(as_str)
+                        .unwrap_or_default()
+                }),
+                sar: is_video.then(|| rep.get("sar").map(as_str).unwrap_or_default()),
+                start_with_sap: rep
+                    .get("start_with_sap")
+                    .or_else(|| rep.get("startWithSap"))
+                    .map(as_i64)
+                    .unwrap_or(1),
+            });
+        }
+        Err(last_error)
     }
 
     /// 对媒体 URL 发一次 Range 请求。
@@ -1914,6 +2125,75 @@ mod tests {
     }
 
     #[test]
+    fn stream_candidates_prefers_base_then_dedupes_backups() {
+        let rep = serde_json::json!({
+            "base_url": "https://mcdn.example.com/a.m4s",
+            "backup_url": ["https://upos.example.com/a.m4s", "", "https://mcdn.example.com/a.m4s"],
+            "backupBaseUrl": ["https://upos-2.example.com/a.m4s"]
+        });
+        let candidates = stream_candidates(&rep);
+        assert_eq!(
+            candidates,
+            [
+                "https://mcdn.example.com/a.m4s",
+                "https://upos.example.com/a.m4s",
+                "https://upos-2.example.com/a.m4s"
+            ]
+        );
+        assert!(stream_candidates(&serde_json::json!({ "id": 32 })).is_empty());
+    }
+
+    #[test]
+    fn parse_search_videos_dedupes_and_reads_flat_fields() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": {
+                "numPages": 2,
+                "result": [
+                    {
+                        "type": "video",
+                        "bvid": "BV1duPqq",
+                        "aid": 659724249i64,
+                        "pic": "http://i2.hdslb.com/bfs/archive/a.jpg",
+                        "title": "<em class=\"keyword\">甜药换枪</em>精剪版",
+                        "author": "UP 主甲",
+                        "duration": "1:02:03",
+                        "play": "13856",
+                        "video_review": "58",
+                        "pubdate": 1759000000
+                    },
+                    // 同 bvid 重复返回，前端网格的 key 会冲突，这里应去重。
+                    { "type": "video", "bvid": "BV1duPqq", "aid": 1, "title": "重复", "author": "", "duration": "" },
+                    { "type": "video", "bvid": "BV2abcdefgh", "aid": 2, "title": "第二条", "author": "UP 主乙", "duration": "6:29", "play": 7, "video_review": 2 },
+                    // 非稿件条目混入结果。
+                    { "type": "biz", "bvid": "BV3xxxxxxxx" }
+                ]
+            }
+        })
+        .to_string();
+        let page = parse_search_videos(&raw, 1).unwrap();
+        assert!(page.has_more);
+        assert_eq!(page.items.len(), 2);
+        let first = &page.items[0];
+        assert_eq!(first.aid, "659724249");
+        // 标题里的 <em> 高亮标签被剥掉。
+        assert_eq!(first.title, "甜药换枪精剪版");
+        // 扁平字段：author/play/video_review 取代 owner/stat。
+        assert_eq!(first.author, "UP 主甲");
+        assert_eq!(first.view, 13_856);
+        assert_eq!(first.danmaku, 58);
+        // 字符串时长 H:MM:SS → 秒。
+        assert_eq!(first.duration, 3723);
+        // 搜索条目没有 cid —— 可播性由播放页用稿件详情补齐。
+        assert_eq!(first.cid, None);
+        assert_eq!(page.items[1].duration, 389);
+
+        let last = parse_search_videos(&raw, 2).unwrap();
+        assert!(!last.has_more);
+        assert!(parse_search_videos("{}", 1).is_err());
+    }
+
+    #[test]
     fn parse_related_maps_owner_and_stat() {
         let raw = serde_json::json!({
             "code": 0,
@@ -1950,6 +2230,7 @@ mod tests {
             "data": {
                 "bvid": "BV1Ybuq6nEYq",
                 "aid": 117075725000671i64,
+                "cid": 311001234i64,
                 "title": "测试稿件",
                 "desc": "简介内容",
                 "owner": { "name": "UP 主", "face": "https://i0.hdslb.com/bfs/face/2f.jpg" },
@@ -1960,9 +2241,23 @@ mod tests {
         .to_string();
         let archive = parse_archive(&raw).unwrap();
         assert_eq!(archive.aid, "117075725000671");
+        assert_eq!(archive.cid, 311_001_234);
         assert_eq!(archive.desc, "简介内容");
         assert_eq!(archive.reply, 4986);
         assert_eq!(archive.pubdate, 1759000000);
+
+        // 根上没有 cid 时退回首 P（搜索/UP 列表的条目靠这条路径补齐取流键）。
+        let multi_page = serde_json::json!({
+            "code": 0,
+            "data": {
+                "bvid": "BV1Ybuq6nEYq",
+                "aid": 117075725000671i64,
+                "title": "多P稿件",
+                "pages": [{ "cid": 998877i64 }]
+            }
+        })
+        .to_string();
+        assert_eq!(parse_archive(&multi_page).unwrap().cid, 998877);
 
         assert!(parse_archive("{}").is_err());
     }

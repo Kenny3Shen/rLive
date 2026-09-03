@@ -17,6 +17,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { ImageViewer } from "@/shared/components/ImageViewer";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
@@ -30,6 +31,7 @@ import {
 import { formatVideoDuration } from "./VideoCard";
 import { videoPlayPath } from "./videoRoute";
 import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
+import { UploaderDrawer } from "./UploaderDrawer";
 
 /**
  * 播放页右侧栏：相关视频（UGC）/ 分集（PGC）与评论区。
@@ -101,6 +103,14 @@ function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): 
 }
 
 function CommentBody({ comment }: { comment: VideoComment }) {
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
+  const handleImageClick = (index: number) => {
+    setViewerIndex(index);
+    setViewerOpen(true);
+  };
+
   return (
     <>
       <p className="whitespace-pre-line break-words text-[13px] leading-relaxed">
@@ -108,18 +118,32 @@ function CommentBody({ comment }: { comment: VideoComment }) {
       </p>
       {comment.pictures.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {comment.pictures.map((src) => (
-            <img
+          {comment.pictures.map((src, index) => (
+            <button
               key={src}
-              src={normalizeImageUrl(src)}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              className="h-20 w-28 rounded-md object-cover"
-            />
+              type="button"
+              onClick={() => handleImageClick(index)}
+              className="group relative overflow-hidden rounded-md transition-opacity hover:opacity-90"
+            >
+              <img
+                src={normalizeImageUrl(src)}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                className="h-20 w-28 object-cover"
+              />
+              <div className="absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/10" />
+            </button>
           ))}
         </div>
+      )}
+      {viewerOpen && (
+        <ImageViewer
+          images={comment.pictures}
+          initialIndex={viewerIndex}
+          onClose={() => setViewerOpen(false)}
+        />
       )}
     </>
   );
@@ -623,6 +647,7 @@ export function VideoSidebar({
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
   const [tab, setTab] = useState<SidebarTab>(isPgc ? "episodes" : "related");
+  const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
 
   // 稿件详情：UGC 的评论区 oid 兜底 + 相关视频页签顶部的作者/统计信息。
   const archiveQuery = useQuery({
@@ -656,6 +681,12 @@ export function VideoSidebar({
   const tabs: SidebarTab[] = isPgc ? ["episodes", "comments"] : ["related", "comments"];
   const archive = archiveQuery.data;
 
+  const handleUploaderClick = () => {
+    if (archive?.author_mid) {
+      setUploaderDrawerOpen(true);
+    }
+  };
+
   return (
     // 与直播播放页右侧栏同一套结构：UP 主信息卡（sideHeader 的对应物）在页签
     // 之上，即整页右上角；页签条是 line 变体 Tabs + h-11 条带（见 PlayerPane）。
@@ -676,23 +707,37 @@ export function VideoSidebar({
         >
           <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
             <div className="flex min-w-0 items-center gap-2.5">
-              <Avatar size="lg" className="size-11 ring-1 ring-border/80">
-                <AvatarImage
-                  src={normalizeImageUrl(archive.author_face)}
-                  alt={`${archive.author} 的头像`}
-                  referrerPolicy="no-referrer"
-                />
-                <AvatarFallback className="font-medium">
-                  {Array.from(archive.author)[0] ?? "?"}
-                </AvatarFallback>
-              </Avatar>
+              <button
+                type="button"
+                onClick={handleUploaderClick}
+                aria-label={`查看 ${archive.author} 的投稿视频`}
+                className="shrink-0 transition-opacity hover:opacity-80"
+              >
+                <Avatar size="lg" className="size-11 ring-1 ring-border/80">
+                  <AvatarImage
+                    src={normalizeImageUrl(archive.author_face)}
+                    alt={`${archive.author} 的头像`}
+                    referrerPolicy="no-referrer"
+                  />
+                  <AvatarFallback className="font-medium">
+                    {Array.from(archive.author)[0] ?? "?"}
+                  </AvatarFallback>
+                </Avatar>
+              </button>
               <div className="min-w-0 flex-1">
-                <p
-                  className="truncate text-sm font-semibold leading-5 tracking-tight"
-                  title={archive.author}
+                <button
+                  type="button"
+                  onClick={handleUploaderClick}
+                  className="block w-full text-left transition-opacity hover:opacity-80"
+                  aria-label={`查看 ${archive.author} 的投稿视频`}
                 >
-                  {archive.author}
-                </p>
+                  <p
+                    className="truncate text-sm font-semibold leading-5 tracking-tight"
+                    title={archive.author}
+                  >
+                    {archive.author}
+                  </p>
+                </button>
                 <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
                   <div className="flex min-w-0 items-center gap-1" title={`播放：${formatOnline(archive.view)}`}>
                     <dt className="sr-only">播放</dt>
@@ -767,6 +812,16 @@ export function VideoSidebar({
           <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />
         )}
       </div>
+
+      {/* UP 主投稿抽屉 */}
+      {archive && archive.author_mid && (
+        <UploaderDrawer
+          open={uploaderDrawerOpen}
+          onOpenChange={setUploaderDrawerOpen}
+          mid={archive.author_mid}
+          uploaderName={archive.author}
+        />
+      )}
     </Tabs>
   );
 }
