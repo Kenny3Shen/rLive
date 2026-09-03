@@ -7,6 +7,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
+import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
 import { videoPlayPath } from "./videoRoute";
 
 /**
@@ -88,7 +89,14 @@ function CoverImage({
   );
 }
 
-export const VideoCard = memo(function VideoCard({ item }: { item: VideoItem }) {
+export const VideoCard = memo(function VideoCard({
+  item,
+  playlist,
+}: {
+  item: VideoItem;
+  /** 列表上下文（搜索/UP 主投稿）：点击时把该列表设为播放列表，从这张卡开始连播。 */
+  playlist?: readonly PlaylistItem[];
+}) {
   const navigate = useNavigate();
   // 搜索与 UP 主空间列表的条目没有 cid：只要带 bvid 就可点，播放页用稿件详情
   // 补齐取流键（P1）。真正不可点的只剩无 bvid 的脏数据（后端已过滤，防御而已）。
@@ -97,6 +105,7 @@ export const VideoCard = memo(function VideoCard({ item }: { item: VideoItem }) 
     ? videoPlayPath({ bvid: item.bvid, cid: item.cid ?? null, title: item.title, aid: item.aid })
     : null;
   const preview = useVideoCardPreview({ bvid: item.bvid, cid: item.cid });
+  const playListId = `${item.bvid}_${item.cid ?? 0}`;
 
   return (
     <button
@@ -113,7 +122,15 @@ export const VideoCard = memo(function VideoCard({ item }: { item: VideoItem }) 
       }}
       onPointerLeave={preview.stop}
       onFocus={() => playPath && preloadRouteModule(playPath)}
-      onClick={() => playPath && navigate(playPath)}
+      onClick={() => {
+        if (!playPath) return;
+        // 列表上下文：把点击时刻的列表快照设为播放列表（后续无限加载不影响它），
+        // 从这张卡开始连播，与 PGC 分集的「播放全部」同一套状态。
+        if (playlist && playlist.some((entry) => entry.id === playListId)) {
+          usePlaylistStore.getState().setPlaylist([...playlist], playListId);
+        }
+        navigate(playPath);
+      }}
       className={cn(CARD_CLASS, !playable && "cursor-not-allowed opacity-60")}
     >
       <CoverImage

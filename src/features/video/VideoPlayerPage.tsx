@@ -41,7 +41,7 @@ import {
   type VideoDanmakuEntry,
 } from "./videoDanmaku";
 import { VIDEO_HOME_PATH, parseVideoPlayParams, videoPlayPath } from "./videoRoute";
-import { usePlaylistStore } from "./playlistStore";
+import { usePlaylistStore, playlistItemFromSeasonEpisode, type PlaylistItem } from "./playlistStore";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const SINGLE_CLICK_DELAY_MS = 220;
@@ -129,21 +129,38 @@ export function VideoPlayerPage() {
 
   const rawCid = params?.cid ?? 0;
 
-  // 搜索与 UP 主列表的条目没有 cid，链接里只带 bvid：用稿件详情补齐取流键（P1）。
-  // 与右侧栏的 archive 查询同 key、同 staleTime，两次需求共享一次请求。
-  const cidResolveQuery = useQuery({
+  // 稿件详情：搜索/UP 列表条目没有 cid 时补齐取流键（P1），同时取 UGC 合集——
+  // 稿件属于合集时连播沿合集走。与右侧栏 archive 查询同 key、同 staleTime，
+  // 共享一次请求。PGC（epId）有专属分集接口，不经此路径。
+  const archiveQuery = useQuery({
     queryKey: ["video_archive", params?.bvid ?? ""],
-    enabled: rawCid === 0 && Boolean(params?.bvid),
+    enabled: Boolean(params?.bvid) && !params?.epId,
     queryFn: () => videoGetArchive(params!.bvid!),
     staleTime: 5 * 60_000,
     retry: false,
   });
-  const cid = rawCid > 0 ? rawCid : (cidResolveQuery.data?.cid ?? 0);
+  const cid = rawCid > 0 ? rawCid : (archiveQuery.data?.cid ?? 0);
 
   // 播放列表状态
   const playlistStore = usePlaylistStore();
   const nextItem = playlistStore.getNextItem();
   const prevItem = playlistStore.getPreviousItem();
+
+  /** 跳到播放列表的另一项：自动连播、控制条按钮与键盘快捷键共用。 */
+  const goToPlaylistItem = useCallback(
+    (item: PlaylistItem) => {
+      navigate(
+        videoPlayPath({
+          bvid: item.bvid,
+          cid: item.cid,
+          epId: item.epId,
+          title: item.title,
+          aid: item.aid,
+        }),
+      );
+    },
+    [navigate],
+  );
 
   // 当前播放项更新时同步到 store
   useEffect(() => {
@@ -157,6 +174,23 @@ export function VideoPlayerPage() {
       }
     }
   }, [params, playlistStore]);
+
+  // 合集优先：稿件属于 UGC 合集时，用合集替换播放列表（覆盖搜索/投稿快照），
+  // 自动连播与「下一个」沿合集走。链接可能没带 cid，以 bvid 定位当前项。
+  useEffect(() => {
+    const season = archiveQuery.data?.ugc_season;
+    if (!season || !params?.bvid) return;
+    const items = season.episodes.map(playlistItemFromSeasonEpisode);
+    const current = items.find((item) => item.bvid === params.bvid);
+    if (!current) return; // 合集里没有当前稿件则不动现有列表
+    const alreadyActive =
+      playlistStore.items.length === items.length &&
+      playlistStore.items.every((item, i) => item.id === items[i]?.id) &&
+      playlistStore.currentId === current.id;
+    if (!alreadyActive) {
+      playlistStore.setPlaylist(items, current.id);
+    }
+  }, [archiveQuery.data, params, playlistStore]);
 
   /**
    * 取播放信息。
@@ -368,17 +402,10 @@ export function VideoPlayerPage() {
       setPaused(true);
       // 自动播放下一集
       if (playlistStore.autoPlayNext && nextItem) {
+        const target = nextItem;
         setTimeout(() => {
           if (cancelled) return;
-          navigate(
-            videoPlayPath({
-              bvid: nextItem.bvid,
-              cid: nextItem.cid,
-              epId: nextItem.epId,
-              title: nextItem.title,
-              aid: nextItem.aid,
-            }),
-          );
+          goToPlaylistItem(target);
         }, 1_000);
       }
     }
@@ -723,26 +750,10 @@ export function VideoPlayerPage() {
         setPlayerVolume(volume - 10);
       } else if ((key === "n" || key === "]") && nextItem && !event.repeat) {
         event.preventDefault();
-        navigate(
-          videoPlayPath({
-            bvid: nextItem.bvid,
-            cid: nextItem.cid,
-            epId: nextItem.epId,
-            title: nextItem.title,
-            aid: nextItem.aid,
-          }),
-        );
+        goToPlaylistItem(nextItem);
       } else if ((key === "p" || key === "[") && prevItem && !event.repeat) {
         event.preventDefault();
-        navigate(
-          videoPlayPath({
-            bvid: prevItem.bvid,
-            cid: prevItem.cid,
-            epId: prevItem.epId,
-            title: prevItem.title,
-            aid: prevItem.aid,
-          }),
-        );
+        goToPlaylistItem(prevItem);
       } else {
         return;
       }
@@ -751,7 +762,7 @@ export function VideoPlayerPage() {
     [
       currentTime,
       fullscreen,
-      navigate,
+      goToPlaylistItem,
       nextItem,
       prevItem,
       revealControls,
@@ -978,8 +989,8 @@ export function VideoPlayerPage() {
 
   const fatalError = playInfoQuery.isError
     ? playInfoQuery.error
-    : cid <= 0 && cidResolveQuery.isError
-      ? cidResolveQuery.error
+    : cid <= 0 && archiveQuery.isError
+      ? archiveQuery.error
       : null;
 
   return (
@@ -1134,6 +1145,7 @@ export function VideoPlayerPage() {
               }}
               onOverlayInteractionChange={setOverlayInteractionOpen}
               onRefresh={retryPlayback}
+              onNext={nextItem ? () => goToPlaylistItem(nextItem) : undefined}
               onTogglePause={togglePlayback}
               onVolume={setPlayerVolume}
               onToggleMute={toggleMute}

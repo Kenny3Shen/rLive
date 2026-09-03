@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/drawer";
 import { videoUploaderVideos } from "./videoApi";
 import { VideoCard } from "./VideoCard";
+import { playlistItemFromVideoItem, dedupeVideoItems } from "./playlistStore";
 
 const GRID_CLASS =
   "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4";
@@ -52,7 +53,9 @@ export function UploaderDrawer({
     isFetchNextPageError,
   });
 
-  const allItems = data?.pages.flatMap((page) => page.items) ?? [];
+  const allItems = dedupeVideoItems(data?.pages.flatMap((page) => page.items) ?? []);
+  // 点击时刻的列表快照即播放列表（投稿列表连播）。
+  const playlistItems = allItems.map(playlistItemFromVideoItem);
   const isEmpty = !isFetching && allItems.length === 0;
 
   return (
@@ -86,7 +89,11 @@ export function UploaderDrawer({
               <>
                 <div className={GRID_CLASS}>
                   {allItems.map((item) => (
-                    <VideoCard key={`${item.bvid}:${item.cid ?? ""}`} item={item} />
+                    <VideoCard
+                      key={`${item.bvid}:${item.cid ?? ""}`}
+                      item={item}
+                      playlist={playlistItems}
+                    />
                   ))}
                 </div>
                 {hasNextPage && (
