@@ -37,6 +37,13 @@ import {
 } from "@/features/recording/RecordingHeaderControls";
 import { recordingSupported } from "@/features/recording/recording";
 import { useRecordingHeaderSnapshot } from "@/features/recording/recordingHeaderState";
+import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
+import {
+  VIDEO_TABS,
+  VIDEO_TAB_PARAM,
+  videoHomePath,
+  videoTabFromSearch,
+} from "@/features/video/videoRoute";
 import { CATEGORY_BROWSE_PATH } from "@/features/category/categorySelection";
 import { canNavigateBackInApp } from "@/shared/appHistory";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
@@ -137,6 +144,7 @@ export function Shell() {
   const outlet = useOutlet();
   const [searchParams] = useSearchParams();
   const isIptv = pathname === "/iptv";
+  const isVideo = pathname === "/video";
   const isImmersivePlayer = isImmersivePlayerPath(pathname);
   const isSearch = pathname === "/search";
   const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
@@ -214,7 +222,7 @@ export function Shell() {
   // 两个关注视图共用同一个内容容器，切换 直播/IPTV 页签时不会重新挂载
   // FollowPage、丢失其过渡状态。IPTV 关注分组的动画
   // 发生在 IptvFollowView 内部而不是这一层。
-  const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv;
+  const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv || isVideo;
   const showTopNavigation = useGroupedPageContainer || isHistory || isRecordings;
   const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
@@ -234,11 +242,25 @@ export function Shell() {
     searchParams.get(FOLLOW_PLATFORM_PARAM),
     disabledSiteIds,
   );
+  const videoTab = videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
+  const handleVideoTabChange = useCallback(
+    (nextTab: (typeof VIDEO_TABS)[number]) => {
+      if (nextTab === videoTab) return;
+      // 换页签不带 zone：上一个页签的分区在新页签里无意义，`resolveVideoZoneKey`
+      // 会把它当成无效值回落首项。
+      navigate(videoHomePath(nextTab));
+    },
+    [navigate, videoTab],
+  );
   const platformForMotion = isFollow ? followPlatform : activeSiteId;
   // 页面平移所跨越的分组。直播路由在平台之间移动；
   // IPTV 在播放列表来源之间移动。两者是同一种手势、同一个头部槽位，
   // 因此共享一次平移，而不是各自维护一套方案。
-  const groupForMotion: string = isIptv ? iptvSource.id : String(platformForMotion);
+  const groupForMotion: string = isIptv
+    ? iptvSource.id
+    : isVideo
+      ? videoTab
+      : String(platformForMotion);
   const previousGroupRef = useRef({ pathname, group: groupForMotion });
   const previousGroup = routeScopedPreviousGroup(
     previousGroupRef.current.pathname,
@@ -254,11 +276,16 @@ export function Shell() {
   const platformStrip: readonly PlatformScopeValue[] = sitePlatforms;
   // 每个表面一条有序条带，按字符串比较，
   // 使平台 id 与 IPTV 来源 id 共用同一个方向规则。
+  //
+  // 视频页的条带是四个内容页签，**不能复用 `sitePlatforms`**：那些是直播平台，
+  // 混进同一条轨道会让平移方向按「从 B 站到番剧」这种无意义的距离计算。
   const groupStrip: readonly string[] = isIptv
     ? iptvSourceOptions
-    : isFollow
-      ? ["all", ...sitePlatforms]
-      : platformStrip.map(String);
+    : isVideo
+      ? VIDEO_TABS
+      : isFollow
+        ? ["all", ...sitePlatforms]
+        : platformStrip.map(String);
   const previousGroupIndex = groupStrip.indexOf(previousGroup);
   const currentGroupIndex = groupStrip.indexOf(groupForMotion);
   const groupDirection: "forward" | "backward" =
@@ -331,7 +358,15 @@ export function Shell() {
     onChange: handleIptvSourceChange,
     enabled: isIptv && mobileClient,
   });
-  const contentSwipe = isIptv ? iptvSourceSwipe : sitePlatformSwipe;
+  // 移动端横滑换内容页签。items 用与 `groupStrip` 同一份顺序，
+  // 滑动方向因此与 `PagePan` 的平移方向一致。
+  const videoTabSwipe = useHorizontalSwipe({
+    items: VIDEO_TABS,
+    value: videoTab,
+    onChange: handleVideoTabChange,
+    enabled: isVideo && mobileClient,
+  });
+  const contentSwipe = isIptv ? iptvSourceSwipe : isVideo ? videoTabSwipe : sitePlatformSwipe;
   // `PagePan` 以 pathname 为 key，回到可滑动路由时 hook 会拿到全新的 track。
   // 通过 `bindPage` 绑定才能把它重新停靠到活动平台的偏移处 ——
   // 直接赋值 `pageRef` 会让新 track 保持未变换状态，
@@ -693,6 +728,22 @@ export function Shell() {
                               className="h-full w-auto max-w-full max-md:w-full"
                             />
                           </div>
+                        ) : isVideo ? (
+                          <div
+                            data-horizontal-swipe-surface
+                            className="h-full min-w-0"
+                            onPointerDownCapture={videoTabSwipe.onPointerDownCapture}
+                            onPointerMoveCapture={videoTabSwipe.onPointerMoveCapture}
+                            onPointerUpCapture={videoTabSwipe.onPointerUpCapture}
+                            onPointerCancelCapture={videoTabSwipe.onPointerCancelCapture}
+                            onClickCapture={videoTabSwipe.onClickCapture}
+                          >
+                            <VideoTabSwitcher
+                              value={videoTab}
+                              onValueChange={handleVideoTabChange}
+                              className="h-full w-auto max-w-full max-md:w-full"
+                            />
+                          </div>
                         ) : (
                           <SiteSwitcher
                             onValueIntent={preloadHomePlatform}
@@ -715,7 +766,7 @@ export function Shell() {
                       />
                     ) : isRecordings ? (
                       <RecordingStorageButton onRequestStorage={recordingHeader.onRequestStorage} />
-                    ) : isFollow || isIptv ? null : (
+                    ) : isFollow || isIptv || isVideo ? null : (
                       <HeaderSearch />
                     )}
                   </div>

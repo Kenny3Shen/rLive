@@ -1,0 +1,133 @@
+# B 站视频（VOD）功能设计
+
+参考实现：PiliPlus（Flutter）。本文的每条 API 契约与技术结论均在 2026-09 实机请求验证过，非文档推断。
+
+## 一、已锁定的产品决策
+
+- 入口：**新增侧栏「视频」目的地**，独立路由 `/video`。现有首页的直播平台条（B站/斗鱼/虎牙/抖音/Twitch）完全不动。
+- 头部整行 = 四个内容页签「推荐 / 热门 / 番剧 / 影视」；其下一条**分区条**；再下是内容网格。
+- 番剧 / 影视点进去**要能播**（PGC playurl），与 UGC 是两套播放链路。
+- 画质走 **DASH**，使用官方 `xgplayer-dash` 插件（已装 `3.0.26`，与 `xgplayer` 版本严格对齐）。
+- **VOD 弹幕一起做**（`seg.so` protobuf 分段接口）。
+
+## 二、可直接复用的现有基础设施（不要重写）
+
+| 能力 | 位置 |
+| --- | --- |
+| WBI 签名 | `src-tauri/src/sites/bilibili/api.rs`：`wbi_sign_params` / `get_mixin_key` / `parse_wbi_keys` / `now_unix`，含 `MIXIN_KEY_ENC_TAB` |
+| cookie + buvid 注入 | `BilibiliSite::headers()` → `cookie_with_buvids` / `merge_missing_cookie_value`；`ensure_buvid()`；`normalize_cookie_header()` 清理粘贴前缀 |
+| JSON 请求包装 | `get_json` / `get_public_json` / `get_json_raw` / `get_json_signed` / `get_json_with_map`，统一走 `get_json_request`，`ResponseChecks{Full,Standard,Raw}` 控制校验档位 |
+| B 站 Cookie 读取 | `commands/site.rs::resolve_site` 从 SQLite 快照 `(cookie, proxy)`，整条请求头存 `cookies` 表。视频命令照抄这个模式即可，**登录态天然复用** |
+| 媒体代理 + Range | `stream_proxy.rs::StreamProxy::start(url, headers, session_id, force_hls, proxy, twitch_ad_recovery)`；headers 逐条透传上游，转发客户端 `Range`，回写 `Content-Range` + `Accept-Ranges: bytes`。**MP4/m4s 分片代理与拖进度条已可用，传 `hls: false` 即可** |
+
+注意：`DEFAULT_REFERER` 是 `https://live.bilibili.com/`（直播用）。**视频接口与媒体 URL 必须用 `https://www.bilibili.com`**。
+
+## 三、API 契约（全部实测）
+
+全局：`Referer: https://www.bilibili.com` + 真实浏览器 UA。
+
+| 表面 | 端点与参数 | 认证 |
+| --- | --- | --- |
+| 推荐 | `GET /x/web-interface/wbi/index/top/feed/rcmd`，`version=1&feed_version=V8&homepage_ver=1&ps=<n>&fresh_idx=<i>&brush=<i>&fresh_type=4` | **需 WBI**；有 cookie 才是个性化流，匿名返回通用流。取 `data.item[]`，只保留 `goto=="av"` 且有 `owner` |
+| 热门 | `GET /x/web-interface/popular?pn=&ps=` | 无 WBI、**匿名可用**。`data.list[]`，`data.no_more` 判尾页 |
+| 番剧 | `GET /pgc/season/index/result`，`st=1&season_type=1&order=3&sort=0&pagesize=20&type=1&page=<n>`，其余筛选位一律 `-1` | 无 WBI、匿名可用。`data.list[]` 仅含 `season_id/title/cover/badge/index_show/order`，**无 ep_id** |
+| 影视 | 同上，**加 `index_type=102`** | 同上 |
+| 分区 | `GET /x/web-interface/ranking/v2?rid=<rid>&type=all` | **需 WBI**、匿名可用。`data.list[]` 结构同热门 |
+| PGC 分区 | 番剧 `GET /pgc/web/rank/list?day=3&season_type=1` 取 `result.list[]`；其他 `GET /pgc/season/rank/web/list?day=3&season_type=<n>` 取 `data.list[]` |
+| 番剧时间表 | `GET /pgc/web/timeline?types=1&before=6&after=6`（国创 `types=4`）。`result[].episodes[]` **有 `episode_id`** |
+| UGC playurl | `GET /x/player/wbi/playurl`，`bvid&cid&qn=112&fnval=4048&fourk=1&fnver=0&try_look=1&web_location=1315873` | **需 WBI**。`data.dash.{video,audio}` |
+| PGC playurl | `GET /pgc/player/web/v2/playurl`（响应在 `result.video_info`） |
+| season 详情 | `GET /pgc/view/web/season?season_id=` 或 `?ep_id=` → `result.episodes[]` 有 `aid/cid/id(ep_id)` |
+| VOD 弹幕 | `GET /x/v2/dm/web/seg.so?type=1&oid=<cid>&pid=<aid>&segment_index=<n>` | **无需 cookie / UA / Referer / WBI**，返回裸 protobuf |
+
+分区 rid（PiliPlus 硬编码，非 API）：全站 0、动画 1005、音乐 1003、舞蹈 1004、游戏 1008、知识 1010、科技 1012、运动 1018、汽车 1013、美食 1020、动物 1024、鬼畜 1007、时尚 1014、娱乐 1002、影视 1001。
+season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7。
+
+**`aid` 已是超大整数**（实测 `117191437455648`），Rust 必须 `i64`；跨 IPC 建议序列化为字符串，前端只当标识符，禁止参与算术。
+
+## 四、DASH：三个关键实测结论
+
+### 1. `segment_base.index_range` 是 sidx box，可解析出完整分片表
+
+`playurl` 每个 representation 给 `segment_base: { initialization: "0-937", index_range: "938-1601" }`。按 `index_range` 发一次 Range 请求拿到的正是 `sidx` box。实测解析出 52 片 / 5s 一片 / `timescale=16000`。
+
+每片自带 `moof`+`mdat`，且 `tfdt` 与 sidx 累加时间轴**精确相等**（逐片核对 seg0/1/5/51 全部 match）→ **MSE 乱序 append 安全**，不必保证下载顺序。init 段只有 `ftyp`+`moov`。
+
+同一画质有多编码变体（avc1 / hvc1 / av01）并列，**选流必须按 codec 过滤**，默认取 `avc1` 兼容性最好。
+
+### 2. CDN 分主机行为不同 → 必须走代理
+
+| 主机 | 无 Referer | CORS |
+| --- | --- | --- |
+| `*.mcdn.bilivideo.cn` | 206 可用 | `ACAO=*` |
+| `*.edge.mountaintoys.cn` | **403** | `ACAO=*` |
+| `upos-*.bilivideo.com` | **403** | **无 ACAO** |
+
+不能赌 base_url 落在 mcdn 上，**一律经 `stream_proxy` 注入 Referer**。
+
+### 3. `xgplayer-dash@3.0.26` 两个硬坑（已读源码 + 浏览器验证）
+
+- **MPD 解析器不认 `SegmentBase`**（`es/parse/box/sidx.d.ts` 是空的，只实现了 `SegmentTemplate` / `SegmentList`）→ 必须我们自己解析 sidx，合成带 `SegmentList` 的 MPD。`SegmentList` 支持 `<Initialization range>` 与 `<SegmentURL mediaRange>`，且 `resolveSegmentURL` 对 `^https?://` 直接放行，可以塞绝对代理 URL。
+- **`Task` 按 URL 去重**（`es/media/task.js`：`Task.queue.some(item => item.url === url)` 命中就直接 return，连 XHR 都不建）。Bilibili 是「一条 URL + 不同 Range」，会导致**除首片外全部被静默丢弃**、播放卡死。→ **每个分片 URL 必须拼唯一 query**（如 `&seg=<idx>`），上游忽略该参数。
+- 取 MPD 的 `es/util/xhr.js` 会给 URL **拼 `?`**，`blob:` 精确匹配因此 404 → **MPD 必须由 HTTP 提供**，不能用 blob URL。
+
+### 已验证的浏览器结论
+
+Python 桩服务（模拟 stream_proxy：注入 Referer + 转发 Range）+ 合成 MPD + esbuild 打包 `xgplayer` & `xgplayer-dash`，Chromium 实跑：
+
+- 播放正常：`currentTime` 46.7s → 189.8s，`854x480`，`readyState: 4`。
+- **音轨已挂载**：`sourceBuffer` 同时含 `video/mp4;codecs="avc1.640033"` 与 `audio/mp4;codecs="mp4a.40.2"`，`audioBytes` 持续增长。
+- **seek 成立**：跳 180s 后在 189.8s 继续播，`buffered` 出现新区间 `[175.46, 210]`。
+- 曾观察到只挂载 video 轨：根因是桩服务单线程 502 导致插件 `MPD.init` 走重试路径、把 `mediaList.audio` 换成新数组从而丢掉 `selectedIdx`。桩服务加连接复用与重试后消失。**真实实现里 `stream_proxy` 必须稳定返回，502 会连带打掉音轨。**
+
+参考实现（可移植到 Rust）：`parse_sidx()` 与 `mpd_xml()`，见本轮 `/tmp/dashtest/serve.py`（临时文件，不入库）。
+
+## 五、VOD 弹幕
+
+- 6 分钟一段：`segment_index = floor(ms / 360000) + 1`。
+- **越界返回 HTTP 304 + `bili-status-code: -304`**，这就是停止条件（不是空 body）。
+- PGC 同接口，`oid` 取该集 cid。实测 `pid` 传对、传错、不传，响应字节数完全一致 → `pid` 可省。
+- 旧 XML 接口（`/x/v1/dm/list.so?oid=`、`comment.bilibili.com/{cid}.xml`）仍活着，裸 deflate（`zlib.decompress(d, -MAX_WBITS)`），但 `maxlimit` 截断在 3600 条。**采用 `seg.so`**：官方在用、字段全、可按播放进度懒加载。
+
+protobuf schema（已与实测字节逐字段核对，可手写 varint 解码，不引运行时）：
+
+```proto
+message DmSegMobileReply {
+  repeated DanmakuElem elems = 1;
+  int32 state = 2;
+  DanmakuAIFlag ai_flag = 3;
+  repeated int64 segment_rules = 4;
+  repeated DmColorful colorful_src = 5;
+  string context_src = 6;
+}
+message DanmakuElem {
+  int64  id = 1;
+  int32  progress = 2;    // 出现位置，ms —— 调度用这个
+  int32  mode = 3;        // 1/2/3 滚动 4 底部 5 顶部 6 逆向 7 高级 8 代码 9 BAS
+  int32  fontsize = 4;
+  uint32 color = 5;       // RGB 十进制
+  string mid_hash = 6;
+  string content = 7;
+  int64  ctime = 8;
+  int32  weight = 9;      // [1,10]，屏蔽等级
+  string action = 10;
+  int32  pool = 11;       // 0 普通 1 字幕 2 特殊
+  string id_str = 12;
+  int32  attr = 13;       // bit0 保护 bit1 直播 bit2 高赞
+  int64  like_count = 15;
+  string animation = 22;
+  string extra = 23;
+  DmColorfulType colorful = 24;
+  int32  type = 25;
+  int64  oid = 26;
+  DmFromType dm_from = 27;
+}
+```
+
+实测单条 elem 出现的字段：1,2,3,4,5,6,7,8,9,12,15,20,21,25,26,27（20/21 不在 schema 内，跳过即可）。顶层出现 1,4,5。
+
+## 六、待办与风险
+
+MPD 交付：`stream_proxy` 加**纯增量**文本模式（新增命令返回 `application/dash+xml`），video / audio / mpd 各用**独立 `session_id``（`start` 按 session 覆盖同名代理），离开播放页三个一起停，防连接泄漏。
+
+风险：风控 -352（靠 WBI + buvid3 + Referer + 真 UA 规避）；匿名最高 480P、1080P+ 需大会员；PGC 有版权与地区限制，需要可读的失败态；分区条不能直接复用 `CategoryBar`（它按 `LiveCategory` 类型），但应抽出 `CHIP_HEIGHT` / `CHIP_RADIUS` / `CHIP_TOUCH_TARGET` 与滚动/键盘逻辑共用；Shell 里视频页的 `groupStrip` 必须是四个内容页签，不能复用 `sitePlatforms`。

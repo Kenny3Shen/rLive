@@ -25,6 +25,7 @@ use tokio_tungstenite::{
 use crate::danmu_rs::douyin_sign;
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
+use crate::danmu_rs::{ProtoReader, ProtoValue};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
 use crate::sites::douyin::DEFAULT_USER_AGENT;
@@ -437,85 +438,6 @@ struct PushFrame<'a> {
 struct ResponseAck {
     need_ack: bool,
     internal_ext: String,
-}
-
-#[derive(Debug)]
-enum ProtoValue<'a> {
-    Varint(u64),
-    Bytes(&'a [u8]),
-    Fixed32,
-    Fixed64,
-}
-
-struct ProtoReader<'a> {
-    bytes: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> ProtoReader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
-    }
-
-    fn next_field(&mut self) -> Result<Option<(u32, ProtoValue<'a>)>, &'static str> {
-        if self.offset == self.bytes.len() {
-            return Ok(None);
-        }
-        let tag = self.read_varint()?;
-        let number = (tag >> 3) as u32;
-        if number == 0 {
-            return Err("protobuf field number is zero");
-        }
-        let value = match tag & 0x07 {
-            0 => ProtoValue::Varint(self.read_varint()?),
-            1 => {
-                self.take(8)?;
-                ProtoValue::Fixed64
-            }
-            2 => {
-                let len = usize::try_from(self.read_varint()?).map_err(|_| "protobuf length")?;
-                ProtoValue::Bytes(self.take(len)?)
-            }
-            5 => {
-                self.take(4)?;
-                ProtoValue::Fixed32
-            }
-            _ => return Err("unsupported protobuf wire type"),
-        };
-        Ok(Some((number, value)))
-    }
-
-    fn read_varint(&mut self) -> Result<u64, &'static str> {
-        let mut result = 0u64;
-        for shift in (0..64).step_by(7) {
-            let byte = *self
-                .bytes
-                .get(self.offset)
-                .ok_or("truncated protobuf varint")?;
-            self.offset += 1;
-            result |= u64::from(byte & 0x7f) << shift;
-            if byte & 0x80 == 0 {
-                return Ok(result);
-            }
-            if shift == 63 {
-                break;
-            }
-        }
-        Err("protobuf varint overflow")
-    }
-
-    fn take(&mut self, len: usize) -> Result<&'a [u8], &'static str> {
-        let end = self
-            .offset
-            .checked_add(len)
-            .ok_or("protobuf length overflow")?;
-        let value = self
-            .bytes
-            .get(self.offset..end)
-            .ok_or("truncated protobuf field")?;
-        self.offset = end;
-        Ok(value)
-    }
 }
 
 fn decode_push_frame(bytes: &[u8]) -> AppResult<PushFrame<'_>> {

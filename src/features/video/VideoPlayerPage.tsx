@@ -1,0 +1,757 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ChevronLeft } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ErrorState } from "@/shared/components/ErrorState";
+import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { canNavigateBackInApp } from "@/shared/appHistory";
+import { cn } from "@/lib/utils";
+import {
+  createXgPlayer,
+  loadXgPlayerModules,
+  xgPlayerErrorMessage,
+  type XgPlayerInstance,
+} from "@/features/room/player/xgPlayer";
+import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
+import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
+import { formatRecordingDuration } from "@/features/recording/recording";
+import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
+import { videoGetDanmaku, videoGetPlayInfo, videoStopPlay } from "./videoApi";
+import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
+import {
+  mergeVideoDanmakuEntries,
+  videoDanmakuEntries,
+  videoDanmakuSegmentsFor,
+  type VideoDanmakuEntry,
+} from "./videoDanmaku";
+import { VIDEO_HOME_PATH, parseVideoPlayParams } from "./videoRoute";
+
+const CONTROLS_HIDE_DELAY_MS = 2_600;
+const SINGLE_CLICK_DELAY_MS = 220;
+
+function isPlayerControlTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(
+    target.closest(
+      'button, input, select, textarea, [role="button"], [role="slider"], [role="dialog"], [data-player-controls]',
+    ),
+  );
+}
+
+function bufferedRangeEnd(video: HTMLVideoElement): number {
+  let end = 0;
+  for (let index = 0; index < video.buffered.length; index += 1) {
+    end = Math.max(end, video.buffered.end(index));
+  }
+  return Number.isFinite(end) ? end : 0;
+}
+
+/**
+ * `/video/play`：B 站视频（VOD）播放页。
+ *
+ * 与录制回放（`RecordingPlayer`）共用同一套 chrome —— `PlayerControls`、
+ * 全屏适配器、紧凑视口与屏幕常亮 —— 因为它们是同一类表面：一条有确定时长、
+ * 可拖进度的本地代理媒体。差别只在协议内核（DASH）与弹幕调度源。
+ */
+export function VideoPlayerPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const params = parseVideoPlayParams(searchParams);
+
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerRef = useRef<XgPlayerInstance | null>(null);
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  const controlsHideTimerRef = useRef<number | null>(null);
+  const clickTimerRef = useRef<number | null>(null);
+  const volumeRef = useRef(80);
+  const mutedRef = useRef(false);
+  const previousVolumeRef = useRef(80);
+  const sliderTargetRef = useRef<number | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [waiting, setWaiting] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [paused, setPaused] = useState(true);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(80);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [bufferedTime, setBufferedTime] = useState(0);
+  const [danmakuVisible, setDanmakuVisible] = useState(true);
+  const [playerRevision, setPlayerRevision] = useState(0);
+  const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
+
+  const compact = useCompactPlayerViewport();
+  const fullscreen = useRecordingPlayerFullscreen(stageRef);
+  useScreenWakeLock(!paused && !loading && !playbackError);
+
+  const cid = params?.cid ?? 0;
+
+  /**
+   * 取播放信息。
+   *
+   * 每次进入播放页都重新取而不是复用缓存：后端在这一步拉起三条代理会话并合成 MPD，
+   * 缓存命中会返回一份指向**已经停掉**的会话的 MPD 地址。`staleTime: 0` +
+   * `gcTime: 0` 让这条 query 与代理会话同生命周期。
+   */
+  const playInfoQuery = useQuery({
+    queryKey: ["video_play_info", cid, params?.bvid ?? "", params?.epId ?? "", playerRevision],
+    enabled: params !== null,
+    queryFn: () =>
+      videoGetPlayInfo({
+        bvid: params?.bvid ?? null,
+        cid,
+        ep_id: params?.epId ?? null,
+      }),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
+  const playInfo: VideoPlayInfo | undefined = playInfoQuery.data;
+
+  /**
+   * 离开播放页停掉三个代理会话。
+   *
+   * 三条流（video / audio / mpd）各占一个 session_id，必须一起停，否则三条本机监听器
+   * 与其上游连接都会泄漏。用 ref 存最后一份 session_ids 而不是放进依赖数组：清理必须
+   * 在**卸载**时跑，而按 session_ids 作依赖会让它在每次取到新播放信息时提前触发，
+   * 把正在播的会话停掉。
+   */
+  const sessionIdsRef = useRef<VideoSessionIds | null>(null);
+  if (playInfo) sessionIdsRef.current = playInfo.session_ids;
+  useEffect(
+    () => () => {
+      const sessions = sessionIdsRef.current;
+      sessionIdsRef.current = null;
+      if (sessions) void videoStopPlay(sessions);
+    },
+    [],
+  );
+  // 换画质/重试会换一份 session_ids；旧的那份要在新的替换它之前停掉。
+  const previousSessionsRef = useRef<VideoSessionIds | null>(null);
+  useEffect(() => {
+    const previous = previousSessionsRef.current;
+    previousSessionsRef.current = playInfo?.session_ids ?? null;
+    if (previous && playInfo && previous.mpd !== playInfo.session_ids.mpd) {
+      void videoStopPlay(previous);
+    }
+  }, [playInfo]);
+
+  /**
+   * 弹幕分段懒加载。
+   *
+   * 6 分钟一段，按播放进度取当前段与下一段（跨段的滚动弹幕要提前入场，见
+   * `videoDanmakuSegmentsFor`）。已请求过的段号不再请求；`has_more === false`
+   * 表示段号越界，之后不再向更大的段号推进。
+   */
+  const [danmakuEntries, setDanmakuEntries] = useState<readonly VideoDanmakuEntry[]>([]);
+  const loadedSegmentsRef = useRef(new Map<number, readonly VideoDanmakuEntry[]>());
+  const exhaustedFromRef = useRef<number | null>(null);
+  const inFlightSegmentsRef = useRef(new Set<number>());
+  // 弹幕开关只影响这个 ref 的读数，不进 `ensureDanmakuSegments` 的依赖：
+  // 播放器 effect 依赖那个回调，若它的身份随开关变化，开关弹幕会把整个播放器
+  // 销毁重建、从 0 秒重播（弹幕是叠加层，没有理由动到媒体本身）。
+  const danmakuVisibleRef = useRef(danmakuVisible);
+  danmakuVisibleRef.current = danmakuVisible;
+
+  // 换视频要丢掉上一条的弹幕，否则新视频会投放旧视频的内容。
+  useEffect(() => {
+    loadedSegmentsRef.current = new Map();
+    inFlightSegmentsRef.current = new Set();
+    exhaustedFromRef.current = null;
+    setDanmakuEntries([]);
+  }, [cid]);
+
+  const ensureDanmakuSegments = useCallback(
+    (positionMs: number) => {
+      if (!cid || !danmakuVisibleRef.current) return;
+      for (const segment of videoDanmakuSegmentsFor(positionMs)) {
+        const exhaustedFrom = exhaustedFromRef.current;
+        if (exhaustedFrom !== null && segment >= exhaustedFrom) continue;
+        if (loadedSegmentsRef.current.has(segment)) continue;
+        if (inFlightSegmentsRef.current.has(segment)) continue;
+        inFlightSegmentsRef.current.add(segment);
+        void videoGetDanmaku(cid, segment)
+          .then((result) => {
+            loadedSegmentsRef.current.set(segment, videoDanmakuEntries(result.items, segment));
+            // `has_more === false` 是上游 HTTP 304 的封装：这一段之后没有内容了。
+            if (!result.has_more) {
+              exhaustedFromRef.current =
+                exhaustedFromRef.current === null
+                  ? segment + 1
+                  : Math.min(exhaustedFromRef.current, segment + 1);
+            }
+            setDanmakuEntries(mergeVideoDanmakuEntries([...loadedSegmentsRef.current.values()]));
+          })
+          .catch(() => {
+            // 单段失败不影响其余段落；下次经过这个位置会再试一次。
+          })
+          .finally(() => {
+            inFlightSegmentsRef.current.delete(segment);
+          });
+      }
+    },
+    [cid],
+  );
+
+  // 首屏与开启弹幕时先把 0 位置那一段拉起来。
+  useEffect(() => {
+    if (danmakuVisible) ensureDanmakuSegments(0);
+  }, [danmakuVisible, ensureDanmakuSegments]);
+
+  const seekTo = useCallback(
+    (target: number) => {
+      const media = videoRef.current;
+      if (!media || !Number.isFinite(target)) return;
+      const clamped = Math.max(0, duration > 0 ? Math.min(target, duration) : target);
+      sliderTargetRef.current = null;
+      setCurrentTime(clamped);
+      setWaiting(true);
+      // DASH 的 seek 走原生 `currentTime`：插件在 TIME_UPDATE 里按当前位置补拉分片
+      // （见 xgplayer-dash 的 `loadData`），不需要也没有单独的 seek 入口。
+      media.currentTime = clamped;
+    },
+    [duration],
+  );
+
+  const mpdUrl = playInfo?.mpd_url;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const root = rootRef.current;
+    if (!video || !root || !mpdUrl) return;
+    const media = video;
+    let cancelled = false;
+
+    setLoading(true);
+    setWaiting(false);
+    setPlaybackError(null);
+    setPaused(true);
+    setCurrentTime(0);
+    setBufferedTime(0);
+    setDuration(playInfo?.duration ?? 0);
+
+    function syncTime() {
+      if (cancelled) return;
+      const actual = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : 0;
+      if (sliderTargetRef.current === null) setCurrentTime(actual);
+      ensureDanmakuSegments(actual * 1_000);
+    }
+    function syncDuration() {
+      if (cancelled) return;
+      // 后端从 sidx 时间轴累加出的时长比媒体元数据更早可用也更精确；
+      // 只有它缺失时才退回 `media.duration`。
+      const fromInfo = playInfo?.duration ?? 0;
+      if (fromInfo > 0) return;
+      if (Number.isFinite(media.duration) && media.duration > 0) setDuration(media.duration);
+    }
+    function syncBuffered() {
+      if (cancelled) return;
+      setBufferedTime(bufferedRangeEnd(media));
+    }
+    function onPlay() {
+      if (cancelled) return;
+      setPaused(false);
+      setWaiting(false);
+      setLoading(false);
+    }
+    function onPause() {
+      if (!cancelled) setPaused(true);
+    }
+    function onReady() {
+      if (cancelled) return;
+      setLoading(false);
+      setWaiting(false);
+      syncTime();
+      syncDuration();
+      syncBuffered();
+    }
+    function onWaiting() {
+      if (!cancelled && !media.ended) setWaiting(true);
+    }
+    function onSeeked() {
+      if (!cancelled) setWaiting(false);
+    }
+    function onEnded() {
+      if (!cancelled) setPaused(true);
+    }
+    function onNativeError() {
+      if (cancelled || !media.error) return;
+      setPlaybackError(media.error.message || "视频播放失败");
+      setLoading(false);
+      setWaiting(false);
+    }
+
+    media.volume = volumeRef.current / 100;
+    media.muted = mutedRef.current;
+    media.addEventListener("timeupdate", syncTime);
+    media.addEventListener("durationchange", syncDuration);
+    media.addEventListener("progress", syncBuffered);
+    media.addEventListener("loadedmetadata", onReady);
+    media.addEventListener("canplay", onReady);
+    media.addEventListener("play", onPlay);
+    media.addEventListener("pause", onPause);
+    media.addEventListener("waiting", onWaiting);
+    media.addEventListener("seeked", onSeeked);
+    media.addEventListener("ended", onEnded);
+    media.addEventListener("error", onNativeError);
+
+    void loadXgPlayerModules("dash")
+      .then((modules) => {
+        if (cancelled) return;
+        const player = createXgPlayer(modules, {
+          root,
+          video: media,
+          // 喂的是 `mpd_url`（HTTP），不是 blob：xgplayer-dash 取清单的 XHR 会给地址
+          // 拼 `?`，blob URL 走精确匹配因此 404。别「优化」成 blob。
+          url: mpdUrl,
+          kind: "dash",
+          // VOD 必须显式关掉直播模式：`createXgPlayer` 默认 `isLive: true`，
+          // 那会让 xgplayer 隐藏进度条并把时长当成不确定值。
+          isLive: false,
+        });
+        playerRef.current = player;
+        player.on("error", (cause) => {
+          if (cancelled) return;
+          setPlaybackError(xgPlayerErrorMessage(cause, "视频播放失败"));
+          setLoading(false);
+          setWaiting(false);
+        });
+        // 进页自动起播，与直播同源：先试带声音的 play()，被自动播放策略拒绝时
+        // 降级为静音起播再立刻尝试恢复声音；用户手动静音过则保持静音。
+        const recoverMutedAutoplay = () => {
+          if (mutedRef.current) return false;
+          mutedRef.current = false;
+          setMuted(false);
+          return true;
+        };
+        requestPlayerAutoplay(
+          player,
+          media,
+          () => !cancelled && playerRef.current === player,
+          recoverMutedAutoplay,
+        );
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setPlaybackError(xgPlayerErrorMessage(cause, "无法初始化视频播放器"));
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      media.removeEventListener("timeupdate", syncTime);
+      media.removeEventListener("durationchange", syncDuration);
+      media.removeEventListener("progress", syncBuffered);
+      media.removeEventListener("loadedmetadata", onReady);
+      media.removeEventListener("canplay", onReady);
+      media.removeEventListener("play", onPlay);
+      media.removeEventListener("pause", onPause);
+      media.removeEventListener("waiting", onWaiting);
+      media.removeEventListener("seeked", onSeeked);
+      media.removeEventListener("ended", onEnded);
+      media.removeEventListener("error", onNativeError);
+      const player = playerRef.current;
+      playerRef.current = null;
+      try {
+        player?.pause();
+        player?.destroy();
+      } catch {
+        // 协议插件可能已经释放了它的 MediaSource。
+      }
+    };
+  }, [ensureDanmakuSegments, mpdUrl, playInfo?.duration]);
+
+  const togglePlayback = useCallback(() => {
+    const player = playerRef.current;
+    const media = videoRef.current;
+    if (!player || !media) return;
+    if (media.paused) {
+      void Promise.resolve(player.play()).catch((cause) => {
+        setPlaybackError(xgPlayerErrorMessage(cause, "播放失败"));
+      });
+    } else {
+      player.pause();
+    }
+  }, []);
+
+  const setPlayerVolume = useCallback((next: number) => {
+    const media = videoRef.current;
+    const clamped = Math.max(0, Math.min(100, next));
+    volumeRef.current = clamped;
+    mutedRef.current = clamped === 0;
+    if (clamped > 0) previousVolumeRef.current = clamped;
+    setVolume(clamped);
+    setMuted(clamped === 0);
+    if (media) {
+      media.volume = clamped / 100;
+      media.muted = clamped === 0;
+    }
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const media = videoRef.current;
+    if (mutedRef.current || volumeRef.current === 0) {
+      const restored = previousVolumeRef.current || 80;
+      volumeRef.current = restored;
+      mutedRef.current = false;
+      setVolume(restored);
+      setMuted(false);
+      if (media) {
+        media.volume = restored / 100;
+        media.muted = false;
+      }
+      return;
+    }
+    previousVolumeRef.current = volumeRef.current;
+    mutedRef.current = true;
+    setMuted(true);
+    if (media) media.muted = true;
+  }, []);
+
+  /**
+   * 重试。
+   *
+   * 必须重新取一次播放信息而不是只重建播放器：失败常见于代理返回 502，而设计文档第四节
+   * 记录过那条真实故障 —— 插件走 `MPD.init` 重试路径时会把 `mediaList.audio` 换成新
+   * 数组从而**丢掉音轨**，画面在播但没有声音。重新起一轮会话是唯一能保证音轨挂回来的
+   * 做法，因此失败态必须可见、可重试，不能静默。
+   */
+  const retryPlayback = useCallback(() => {
+    setPlaybackError(null);
+    setWaiting(false);
+    setLoading(true);
+    setPlayerRevision((revision) => revision + 1);
+  }, []);
+
+  const clearControlsHideTimer = useCallback(() => {
+    if (controlsHideTimerRef.current === null) return;
+    window.clearTimeout(controlsHideTimerRef.current);
+    controlsHideTimerRef.current = null;
+  }, []);
+
+  const setChromeVisible = useCallback((visible: boolean) => {
+    const layer = controlsRef.current;
+    if (!layer) return;
+    layer.dataset.visible = visible ? "true" : "false";
+    layer.setAttribute("aria-hidden", String(!visible));
+  }, []);
+
+  const scheduleControlsHide = useCallback(() => {
+    clearControlsHideTimer();
+    if (paused || loading || playbackError || overlayInteractionOpen) {
+      setChromeVisible(true);
+      return;
+    }
+    controlsHideTimerRef.current = window.setTimeout(() => {
+      controlsHideTimerRef.current = null;
+      setChromeVisible(false);
+    }, CONTROLS_HIDE_DELAY_MS);
+  }, [
+    clearControlsHideTimer,
+    loading,
+    overlayInteractionOpen,
+    paused,
+    playbackError,
+    setChromeVisible,
+  ]);
+
+  const revealControls = useCallback(() => {
+    setChromeVisible(true);
+    scheduleControlsHide();
+  }, [scheduleControlsHide, setChromeVisible]);
+
+  const holdControlsVisible = useCallback(() => {
+    clearControlsHideTimer();
+    setChromeVisible(true);
+  }, [clearControlsHideTimer, setChromeVisible]);
+
+  const handleStagePointerActivity = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (isPlayerControlTarget(event.target)) holdControlsVisible();
+      else revealControls();
+    },
+    [holdControlsVisible, revealControls],
+  );
+
+  useEffect(() => {
+    revealControls();
+  }, [fullscreen.fullscreen, revealControls]);
+
+  useEffect(
+    () => () => {
+      clearControlsHideTimer();
+      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
+    },
+    [clearControlsHideTimer],
+  );
+
+  const handleSurfaceClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (event.detail !== 1 || isPlayerControlTarget(event.target)) return;
+      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = window.setTimeout(() => {
+        clickTimerRef.current = null;
+        togglePlayback();
+      }, SINGLE_CLICK_DELAY_MS);
+    },
+    [togglePlayback],
+  );
+
+  const handleSurfaceDoubleClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (isPlayerControlTarget(event.target)) return;
+      if (clickTimerRef.current !== null) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      void fullscreen.toggle();
+    },
+    [fullscreen],
+  );
+
+  const handleStageKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (isPlayerControlTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key === " " || key === "k") {
+        event.preventDefault();
+        togglePlayback();
+      } else if (key === "m") {
+        event.preventDefault();
+        toggleMute();
+      } else if (key === "f" && !event.repeat) {
+        event.preventDefault();
+        void fullscreen.toggle();
+      } else if (key === "arrowleft") {
+        event.preventDefault();
+        seekTo(currentTime - 5);
+      } else if (key === "arrowright") {
+        event.preventDefault();
+        seekTo(currentTime + 5);
+      } else {
+        return;
+      }
+      revealControls();
+    },
+    [currentTime, fullscreen, revealControls, seekTo, toggleMute, togglePlayback],
+  );
+
+  const goBack = useCallback(() => {
+    if (canNavigateBackInApp(window.history.state)) {
+      navigate(-1);
+      return;
+    }
+    navigate(VIDEO_HOME_PATH, { replace: true });
+  }, [navigate]);
+
+  const title = params?.title || "视频播放";
+
+  const topBar = (
+    <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="motion-back-button absolute left-3 rounded-lg hover:bg-muted/70"
+              aria-label="返回视频列表"
+              onClick={goBack}
+            />
+          }
+        >
+          <ChevronLeft data-icon="inline-start" aria-hidden />
+        </TooltipTrigger>
+        <TooltipContent>返回视频列表</TooltipContent>
+      </Tooltip>
+      <div className="absolute inset-x-12 flex min-w-0 items-center justify-center px-12">
+        <p className="truncate text-sm font-semibold tracking-tight" title={title}>
+          {title}
+        </p>
+      </div>
+      {playInfo && (
+        <div className="absolute right-3 flex items-center gap-1.5">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
+            {playInfo.quality_label}
+          </span>
+        </div>
+      )}
+    </header>
+  );
+
+  if (!params) {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-background">
+        {topBar}
+        <main className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 md:p-6">
+          <div className="w-full max-w-xl">
+            <ErrorState
+              error={new Error("缺少有效的视频参数，请从视频页重新选择内容。")}
+              title="无效的视频播放链接"
+            />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  const timeline = (
+    <div className="flex min-w-0 items-center gap-2 py-0.5 text-white/85">
+      <Slider
+        value={currentTime}
+        min={0}
+        max={duration || 1}
+        step={0.1}
+        variant="player"
+        buffered={duration > 0 ? (bufferedTime / duration) * 100 : 0}
+        disabled={!duration}
+        aria-label="播放进度"
+        aria-valuetext={`${formatRecordingDuration(currentTime * 1_000)} / ${formatRecordingDuration(duration * 1_000)}`}
+        className="min-w-0 flex-1"
+        onValueChange={(value) => {
+          const next = Number(Array.isArray(value) ? value[0] : value);
+          if (!Number.isFinite(next)) return;
+          sliderTargetRef.current = next;
+          setCurrentTime(next);
+        }}
+        onValueCommitted={(value) => {
+          const next = Number(Array.isArray(value) ? value[0] : value);
+          if (Number.isFinite(next)) seekTo(next);
+        }}
+      />
+      <span className="shrink-0 font-mono text-[11px] tabular-nums text-white/80">
+        {formatRecordingDuration(currentTime * 1_000)}
+        <span className="px-1 text-white/45" aria-hidden>
+          /
+        </span>
+        {formatRecordingDuration(duration * 1_000)}
+      </span>
+    </div>
+  );
+
+  const fatalError = playInfoQuery.isError ? playInfoQuery.error : null;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      {topBar}
+      <main className="flex min-h-0 flex-1 flex-col bg-black">
+        <section
+          ref={stageRef}
+          data-player-stage
+          data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
+          className={cn(
+            "relative flex min-w-0 flex-1 flex-col overflow-hidden bg-black",
+            "data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
+          )}
+          aria-label={`${title}；按空格或 K 播放或暂停，左右方向键快退或快进，M 静音，F 全屏`}
+          aria-keyshortcuts="Space K ArrowLeft ArrowRight M F"
+          onPointerEnter={handleStagePointerActivity}
+          onPointerMove={handleStagePointerActivity}
+          onPointerLeave={scheduleControlsHide}
+          onKeyDown={handleStageKeyDown}
+          tabIndex={0}
+        >
+          <div
+            data-player-video-surface
+            className="relative min-h-0 flex-1 overflow-hidden bg-black"
+            onClick={handleSurfaceClick}
+            onDoubleClick={handleSurfaceDoubleClick}
+          >
+            <div
+              ref={rootRef}
+              data-player-engine-root
+              className="absolute inset-0 size-full overflow-hidden bg-black"
+            >
+              <video
+                ref={videoRef}
+                data-player-video
+                playsInline
+                preload="metadata"
+                controls={false}
+                className="absolute inset-0 size-full bg-black object-contain"
+              />
+            </div>
+
+            {danmakuEntries.length > 0 && (
+              <VideoDanmakuLayer
+                videoRef={videoRef}
+                entries={danmakuEntries}
+                active={danmakuVisible}
+              />
+            )}
+
+            {(loading || waiting || playInfoQuery.isPending) && !playbackError && !fatalError && (
+              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
+                <Spinner className="text-white" aria-label="正在加载视频" />
+              </div>
+            )}
+
+            {/* 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
+                静默失败会让用户看到「在播但没声音」而无从下手。 */}
+            {(playbackError || fatalError) && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
+                <ErrorState
+                  error={playbackError ?? fatalError}
+                  title="视频播放失败"
+                  onRetry={retryPlayback}
+                  className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
+                />
+              </div>
+            )}
+          </div>
+
+          <div
+            ref={controlsRef}
+            data-player-controls
+            data-visible="true"
+            aria-hidden="false"
+            className="absolute inset-x-0 bottom-0 z-30 transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+            onPointerEnter={holdControlsVisible}
+            onPointerLeave={scheduleControlsHide}
+            onFocusCapture={holdControlsVisible}
+            onBlurCapture={scheduleControlsHide}
+          >
+            <PlayerControls
+              paused={paused}
+              volume={volume}
+              muted={muted}
+              osdOn={danmakuVisible}
+              fullscreen={fullscreen.fullscreen}
+              disabled={loading}
+              refreshDisabled={loading}
+              loadError={fullscreen.error}
+              stackedBelowPlayer={compact}
+              compact={compact}
+              portalContainer={stageRef}
+              timeline={timeline}
+              onOverlayInteractionChange={setOverlayInteractionOpen}
+              onRefresh={retryPlayback}
+              onTogglePause={togglePlayback}
+              onVolume={setPlayerVolume}
+              onToggleMute={toggleMute}
+              onToggleOsd={() => setDanmakuVisible((visible) => !visible)}
+              onToggleFullscreen={() => void fullscreen.toggle()}
+            />
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}

@@ -6,6 +6,7 @@ describe("immersive player routes", () => {
     expect(isImmersivePlayerPath("/room/bilibili/1")).toBe(true);
     expect(isImmersivePlayerPath("/recordings/play/recording-1")).toBe(true);
     expect(isImmersivePlayerPath("/iptv/play")).toBe(true);
+    expect(isImmersivePlayerPath("/video/play")).toBe(true);
     expect(isImmersivePlayerPath("/multi-room")).toBe(true);
   });
 
@@ -14,5 +15,7 @@ describe("immersive player routes", () => {
     expect(isImmersivePlayerPath("/recordings/play")).toBe(false);
     expect(isImmersivePlayerPath("/iptv")).toBe(false);
     expect(isImmersivePlayerPath("/room")).toBe(false);
+    // 视频发现页不是沉浸表面：它要保留侧栏、头部页签与分区条。
+    expect(isImmersivePlayerPath("/video")).toBe(false);
   });
 });

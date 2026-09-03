@@ -230,6 +230,15 @@ struct ProxyLoopContext {
     force_hls: bool,
     twitch_ad_recovery: Option<Arc<TwitchAdRecoverySession>>,
     telemetry: Arc<ProxyTelemetryCounters>,
+    /// 设定时，本代理只回一段固定文本，不连接任何上游（见
+    /// [`StreamProxy::start_text`]）。直播路径永远是 `None`，行为完全不变。
+    text_body: Option<Arc<TextResponse>>,
+}
+
+/// [`StreamProxy::start_text`] 固定应答的内容与类型。
+struct TextResponse {
+    body: String,
+    content_type: String,
 }
 
 impl TwitchAdRecoverySession {
@@ -730,12 +739,92 @@ impl StreamProxy {
             force_hls,
             twitch_ad_recovery,
             telemetry: telemetry.clone(),
+            text_body: None,
         };
         let task = tauri::async_runtime::spawn(async move {
             run_proxy_loop(listener, context, shutdown_rx).await;
         });
         // 让本会话的旧监听器保持存活，直到它的替代者完全绑定并构建好网络客户端。
         // 其他会话不受影响。
+        if let Some(previous) = state.active.remove(&session_id) {
+            Self::stop_inner(previous);
+        }
+        state.pending.remove(&session_id);
+        state.active.insert(
+            session_id,
+            ProxyInner {
+                shutdown: shutdown_tx,
+                task,
+                telemetry,
+            },
+        );
+        Ok(format!("http://127.0.0.1:{port}/live"))
+    }
+
+    /// 用一个只回固定文本的本机监听器占住 `session_id`，返回它的 URL。
+    ///
+    /// 为合成的 DASH 清单而存在：`xgplayer-dash` 取 MPD 的 XHR 会给地址拼 `?`，
+    /// `blob:` URL 走精确匹配因此 404，清单必须由 HTTP 提供。
+    ///
+    /// 刻意不复用 [`Self::start`]：那条路径承载全部直播播放，这里只需要绑端口与
+    /// 写一段字符串，既不需要上游客户端也不需要 HLS/Twitch 处理。
+    pub async fn start_text(
+        &self,
+        body: String,
+        content_type: String,
+        session_id: String,
+    ) -> AppResult<String> {
+        let generation = self.reserve_start(&session_id);
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(e) => {
+                self.clear_pending(&session_id, generation);
+                return Err(AppError::new(
+                    "stream_proxy_bind",
+                    format!("bind localhost failed: {e}"),
+                )
+                .retryable());
+            }
+        };
+        let port = listener
+            .local_addr()
+            .map_err(|e| {
+                self.clear_pending(&session_id, generation);
+                AppError::new("stream_proxy_bind", e.to_string())
+            })?
+            .port();
+        // 文本代理不发上游请求，但 `ProxyLoopContext` 需要一个客户端字段。
+        // 建一个无代理的空客户端，它不会被用到。
+        let client = Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(|_| AppError::new("stream_proxy_client", "文本代理客户端初始化失败"))?;
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.pending.get(&session_id) != Some(&generation) {
+            return Err(AppError::new(
+                "stream_proxy_superseded",
+                "playback session was replaced before proxy startup finished",
+            )
+            .retryable());
+        }
+
+        let telemetry = Arc::new(ProxyTelemetryCounters::new());
+        let context = ProxyLoopContext {
+            client,
+            url: Arc::<str>::from(""),
+            headers: Arc::new(HashMap::new()),
+            hls_resources: Arc::new(HlsResources::new()),
+            local_origin: Arc::<str>::from(format!("http://127.0.0.1:{port}")),
+            force_hls: false,
+            twitch_ad_recovery: None,
+            telemetry: telemetry.clone(),
+            text_body: Some(Arc::new(TextResponse { body, content_type })),
+        };
+        let task = tauri::async_runtime::spawn(async move {
+            run_proxy_loop(listener, context, shutdown_rx).await;
+        });
         if let Some(previous) = state.active.remove(&session_id) {
             Self::stop_inner(previous);
         }
@@ -970,6 +1059,44 @@ mod tests {
                 .active
                 .contains_key("room-a:1")
         );
+        proxy.stop();
+    }
+
+    #[tokio::test]
+    async fn text_mode_serves_a_fixed_manifest_over_http() {
+        // 合成的 MPD 必须由 HTTP 提供：插件取清单的 XHR 会给地址拼 `?`，
+        // `blob:` 走精确匹配因此 404。这里盯住那条约定。
+        let proxy = StreamProxy::new();
+        let body = "<?xml version=\"1.0\"?><MPD/>";
+        let url = proxy
+            .start_text(
+                body.into(),
+                "application/dash+xml".into(),
+                "video-x:mpd".into(),
+            )
+            .await
+            .unwrap();
+
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("{url}?"))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        assert_eq!(
+            response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/dash+xml")
+        );
+        assert_eq!(response.text().await.unwrap(), body);
+
+        // 文本代理与媒体代理共用同一套会话所有权，因此能单独停掉。
+        assert!(proxy.stop_for_session("video-x:mpd"));
         proxy.stop();
     }
 
@@ -1933,6 +2060,7 @@ async fn handle_client(
         force_hls,
         twitch_ad_recovery,
         telemetry,
+        text_body,
     } = context;
 
     // 读取请求头（只需要方法/路径；GET 不使用 body）。
@@ -1971,6 +2099,31 @@ async fn handle_client(
     if method != "GET" && method != "HEAD" {
         let resp = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n";
         let _ = socket.write_all(resp.as_bytes()).await;
+        return Ok(());
+    }
+
+    // 文本模式（合成 MPD）在解析上游目标之前就返回：本代理根本没有上游。
+    // 直播路径的 `text_body` 恒为 `None`，不会进入这里。
+    if let Some(text) = text_body.as_deref() {
+        let body = text.body.as_bytes();
+        let length = body.len().to_string();
+        write_media_headers(
+            socket,
+            200,
+            "OK",
+            &text.content_type,
+            Some(&length),
+            None,
+            "no-store",
+        )
+        .await?;
+        if method == "GET" {
+            socket
+                .write_all(body)
+                .await
+                .map_err(|e| format!("write text body: {e}"))?;
+        }
+        let _ = socket.flush().await;
         return Ok(());
     }
 

@@ -2,10 +2,25 @@ import type { IPlayerOptions } from "xgplayer";
 import { playbackProtocol } from "@/lib/playUrl";
 import type { PlayUrl } from "@/shared/types/live";
 
-export type XgPlaybackKind = "flv" | "hls" | "mpegts" | "native";
+/**
+ * `dash` 只用于 B 站视频（VOD），直播不走它：DASH 需要一份完整的分片清单，
+ * 直播流没有。见 `features/video/`。
+ */
+export type XgPlaybackKind = "flv" | "hls" | "mpegts" | "native" | "dash";
+
+/**
+ * 直播/IPTV 侧能产出的内核，即 `XgPlaybackKind` 去掉 `dash`。
+ *
+ * 这两条链路的结果会流进 `PlayUrl.protocol` 与播放遥测的 `PlayerTransportProtocol`，
+ * 那两个类型镜像后端且不含 DASH。用一个收窄的别名声明「这里永不为 dash」，
+ * 比把 `dash` 灌进那些类型再到处兜底更贴事实。
+ */
+export type XgLivePlaybackKind = Exclude<XgPlaybackKind, "dash">;
 
 /** 把站点声明的传输协议映射到本封装惰性加载的 xgplayer 内核。 */
-export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgPlaybackKind {
+export function webPlaybackKind(
+  source: Pick<PlayUrl, "url" | "protocol">,
+): XgLivePlaybackKind {
   switch (playbackProtocol(source)) {
     case "hls":
       return "hls";
@@ -62,6 +77,7 @@ export type XgMpegtsCore = {
 let coreModulePromise: Promise<typeof import("xgplayer")> | null = null;
 let hlsModulePromise: Promise<typeof import("xgplayer-hls.js")> | null = null;
 let mpegtsModulePromise: Promise<typeof import("xgplayer-mpegts.js")> | null = null;
+let dashModulePromise: Promise<typeof import("xgplayer-dash")> | null = null;
 
 function loadCoreModule(): Promise<typeof import("xgplayer")> {
   if (!coreModulePromise) coreModulePromise = import("xgplayer");
@@ -82,6 +98,14 @@ export async function loadXgPlayerModules(kind: XgPlaybackKind): Promise<XgPlaye
   if (kind === "flv" || kind === "mpegts") {
     if (!mpegtsModulePromise) mpegtsModulePromise = import("xgplayer-mpegts.js");
     const [core, { default: plugin }] = await Promise.all([corePromise, mpegtsModulePromise]);
+    return {
+      Player: core.SimplePlayer as unknown as XgPlayerConstructor,
+      plugin: plugin as unknown as XgStreamingPlugin,
+    };
+  }
+  if (kind === "dash") {
+    if (!dashModulePromise) dashModulePromise = import("xgplayer-dash");
+    const [core, { default: plugin }] = await Promise.all([corePromise, dashModulePromise]);
     return {
       Player: core.SimplePlayer as unknown as XgPlayerConstructor,
       plugin: plugin as unknown as XgStreamingPlugin,
@@ -112,6 +136,11 @@ export function createXgPlayer(
   }
   if (kind === "hls" && !pluginSupported) {
     throw new Error("当前环境不支持 HLS 直播播放");
+  }
+  // DashPlugin 没有 `isSupported`，上面的 `?? true` 因此恒真。DASH 完全靠 MSE
+  // 喂数据，缺它会在插件深处才失败，这里提前给出可读的原因。
+  if (kind === "dash" && typeof window !== "undefined" && !("MediaSource" in window)) {
+    throw new Error("当前环境不支持 MSE，无法播放 DASH 视频");
   }
 
   const plugins = modules.plugin && pluginSupported ? [modules.plugin] : [];

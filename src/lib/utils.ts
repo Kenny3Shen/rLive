@@ -44,13 +44,23 @@ export function normalizeImageUrl(value: string | null | undefined): string | un
 }
 
 /**
- * `normalizeImageUrl` 的封面版本，封面被排除在磁盘缓存之外。封面素材要么每次采集
- * 重新生成（虎牙把秒级时间戳写进文件名，斗鱼的 `asrpic` 同理），
+ * `normalizeImageUrl` 的直播封面版本，封面被排除在磁盘缓存之外。直播封面要么每次
+ * 采集重新生成（虎牙把秒级时间戳写进文件名，斗鱼的 `asrpic` 同理），
  * 要么来自内容每几分钟轮换的稳定 URL（Twitch `previews-ttv`）。缓存前者会用永不
  * 再读的条目填满预算；缓存后者则显示冻结的预览。
  */
 export function normalizeCoverUrl(value: string | null | undefined): string | undefined {
   return normalizeRemoteImage(value, { cache: false });
+}
+
+/**
+ * `normalizeImageUrl` 的视频封面版本。B 站视频/番剧封面是 `bfs/archive/<hash>.jpg`
+ * 这类内容寻址的稳定 URL，同一地址永远指向同一张图，因此进磁盘缓存：
+ * 返回列表时封面由 WebView HTTP 缓存（24h max-age）或本机磁盘直出，
+ * 不再整屏重新加载。与直播封面的差异正在于此。
+ */
+export function normalizeVideoCoverUrl(value: string | null | undefined): string | undefined {
+  return normalizeRemoteImage(value);
 }
 
 function normalizeRemoteImage(

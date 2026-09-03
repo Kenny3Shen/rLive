@@ -29,7 +29,7 @@ const MIXIN_KEY_ENC_TAB: [usize; 64] = [
 // JSON 辅助函数
 // ---------------------------------------------------------------------------
 
-fn as_str(v: &Value) -> String {
+pub(super) fn as_str(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
         Value::String(s) => s.clone(),
@@ -37,7 +37,7 @@ fn as_str(v: &Value) -> String {
     }
 }
 
-fn as_i64(v: &Value) -> i64 {
+pub(super) fn as_i64(v: &Value) -> i64 {
     match v {
         Value::Number(n) => n.as_i64().unwrap_or(0),
         Value::String(s) => s.parse().unwrap_or(0),
@@ -75,7 +75,7 @@ fn cover_thumb(cover: &str, suffix: &str) -> String {
 /// WebView 协议不是有效地址，因此在交给前端之前总是补全协议。
 /// CDN 缩放后缀之后若还有 query/fragment，保持原样，
 /// 而不是把后缀追加到 query 字符串上。
-fn avatar_thumb(face: &str) -> String {
+pub(super) fn avatar_thumb(face: &str) -> String {
     let face = face.trim();
     if face.is_empty() {
         return String::new();

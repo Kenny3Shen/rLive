@@ -1,6 +1,9 @@
 //! Bilibili 直播站点客户端。
 
 mod api;
+pub mod video;
+
+pub use video::VIDEO_ZONES;
 
 pub use api::{
     DEFAULT_REFERER, DEFAULT_USER_AGENT, now_unix, parse_account_recommend_rooms, parse_categories,

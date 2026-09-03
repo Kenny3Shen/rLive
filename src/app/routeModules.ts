@@ -77,17 +77,29 @@ export const loadMultiRoomPage = createCachedRouteLoader(() =>
   })),
 );
 
+export const loadVideoPage = createCachedRouteLoader(() =>
+  import("../features/video/VideoPage").then(({ VideoPage }) => ({ default: VideoPage })),
+);
+
+export const loadVideoPlayerPage = createCachedRouteLoader(() =>
+  import("../features/video/VideoPlayerPage").then(({ VideoPlayerPage }) => ({
+    default: VideoPlayerPage,
+  })),
+);
+
 /** 昂贵的播放器代码放在最后，让小而常用的目的地先就绪。 */
 export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadIptvPage,
   loadSearchPage,
   loadCategoryBrowsePage,
   loadFollowPage,
+  loadVideoPage,
   loadHistoryPage,
   loadRecordingsPage,
   loadIptvPlayerPage,
   loadSettingsPage,
   loadMultiRoomPage,
+  loadVideoPlayerPage,
   loadRoomPage,
 ];
 
@@ -111,6 +123,9 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/recordings") return loadRecordingsPage;
   if (pathname === "/iptv/play") return loadIptvPlayerPage;
   if (pathname === "/iptv") return loadIptvPage;
+  // 播放页在前：`/video` 是它的前缀，顺序颠倒会让播放页命中发现页的 loader。
+  if (pathname === "/video/play") return loadVideoPlayerPage;
+  if (pathname === "/video") return loadVideoPage;
   if (pathname === "/settings") return loadSettingsPage;
   if (pathname === "/multi-room") return loadMultiRoomPage;
   if (pathname.startsWith("/room/")) return loadRoomPage;
