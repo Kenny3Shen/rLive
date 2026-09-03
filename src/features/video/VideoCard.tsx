@@ -90,10 +90,11 @@ function CoverImage({
 
 export const VideoCard = memo(function VideoCard({ item }: { item: VideoItem }) {
   const navigate = useNavigate();
-  // 列表接口通常直接给 cid；缺失的条目点进去也取不到流，因此不给它一个会失败的链接。
-  const playable = typeof item.cid === "number" && item.cid > 0;
+  // 搜索与 UP 主空间列表的条目没有 cid：只要带 bvid 就可点，播放页用稿件详情
+  // 补齐取流键（P1）。真正不可点的只剩无 bvid 的脏数据（后端已过滤，防御而已）。
+  const playable = Boolean(item.bvid);
   const playPath = playable
-    ? videoPlayPath({ bvid: item.bvid, cid: item.cid!, title: item.title, aid: item.aid })
+    ? videoPlayPath({ bvid: item.bvid, cid: item.cid ?? null, title: item.title, aid: item.aid })
     : null;
   const preview = useVideoCardPreview({ bvid: item.bvid, cid: item.cid });
 

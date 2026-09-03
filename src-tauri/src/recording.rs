@@ -1953,6 +1953,7 @@ async fn run_ffmpeg_recording(
             true,
             proxy.as_deref(),
             twitch_recovery,
+            false,
         )
         .await
     {

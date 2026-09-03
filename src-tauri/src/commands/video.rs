@@ -149,24 +149,20 @@ pub async fn video_get_play_info(
 
     let video_url = state
         .stream_proxy
-        .start(
+        .start_ordered(
             selection.video.base_url.clone(),
             headers.clone(),
             session_ids.video.clone(),
-            false,
             proxy.as_deref(),
-            None,
         )
         .await?;
     let audio_url = state
         .stream_proxy
-        .start(
+        .start_ordered(
             selection.audio.base_url.clone(),
             headers.clone(),
             session_ids.audio.clone(),
-            false,
             proxy.as_deref(),
-            None,
         )
         .await?;
 
@@ -239,6 +235,26 @@ pub async fn video_get_related(
     bvid: String,
 ) -> AppResult<VideoListPage> {
     resolve_bilibili(&state)?.video_related(&bvid).await
+}
+
+/// 搜索视频。关键词搜索，支持分页。
+#[tauri::command]
+pub async fn video_search(
+    state: State<'_, AppState>,
+    keyword: String,
+    page: u32,
+) -> AppResult<VideoListPage> {
+    resolve_bilibili(&state)?.video_search(&keyword, page).await
+}
+
+/// UP 主空间视频列表。获取指定 UP 主的投稿视频，支持分页。
+#[tauri::command]
+pub async fn video_uploader_videos(
+    state: State<'_, AppState>,
+    mid: String,
+    page: u32,
+) -> AppResult<VideoListPage> {
+    resolve_bilibili(&state)?.video_uploader_videos(&mid, page).await
 }
 
 /// 稿件详情。WBI 签名接口，播放页右侧栏用它拿简介/统计与评论区的 aid。

@@ -89,6 +89,16 @@ export function videoGetRelated(bvid: string): Promise<VideoListPage> {
   return invokeCmd<VideoListPage>("video_get_related", { bvid });
 }
 
+/** 搜索视频。关键词搜索，支持分页。 */
+export function videoSearch(keyword: string, page: number): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_search", { keyword, page });
+}
+
+/** UP 主空间视频列表。获取指定 UP 主的投稿视频，支持分页。 */
+export function videoUploaderVideos(mid: string, page: number): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_uploader_videos", { mid, page });
+}
+
 /** 稿件详情：右侧栏的简介/统计，以及 URL 直入时补齐评论区的 aid。 */
 export function videoGetArchive(bvid: string): Promise<VideoArchive> {
   return invokeCmd<VideoArchive>("video_get_archive", { bvid });

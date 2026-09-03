@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, RefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ROOM_CARD_PREVIEW_DELAY_MS,
   ROOM_CARD_PREVIEW_START_TIMEOUT_MS,
@@ -18,7 +19,7 @@ import {
 } from "@/features/room/player/xgPlayer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
-import { videoGetPlayInfo, videoStopPlay } from "./videoApi";
+import { videoGetArchive, videoGetPlayInfo, videoStopPlay } from "./videoApi";
 
 /**
  * 视频卡片的悬停预览：与直播卡（`roomCardPreview.ts`）同一套交互语义 ——
@@ -196,6 +197,7 @@ export function useVideoCardPreview(target: {
   cid: number | null;
 }): VideoCardPreview {
   const { bvid, cid } = target;
+  const queryClient = useQueryClient();
   const enabled = useSettingsStore((state) => state.roomCardPreviewEnabled);
   // 指针能力与无障碍偏好在一次会话内不变，每张卡片只探测一次。
   const supported = useMemo(() => supportsRoomCardPreview(), []);
@@ -217,8 +219,10 @@ export function useVideoCardPreview(target: {
   const onPointerEnter = useCallback(
     (event: PointerEvent<HTMLElement>) => {
       if (!enabled || !supported) return;
-      // 与直播卡同一条规则：取不到流的条目（列表没给 cid）预览只会白跑一轮。
-      if (cid == null || cid <= 0) return;
+      // 没有 bvid 的脏条目（后端已过滤，防御）才放弃。搜索与 UP 主列表的条目
+      // 没有 cid：与播放页同一条链路 —— 先经稿件详情补齐 P1 的 cid 再取预览流，
+      // archive 走 react-query 缓存，与右侧栏/播放页共享同一次请求。
+      if (!bvid) return;
       if (!isRoomCardPreviewPointer(event.pointerType)) return;
       stop();
       dwellTimerRef.current = window.setTimeout(() => {
@@ -228,11 +232,23 @@ export function useVideoCardPreview(target: {
         handleRef.current = startVideoCardPreview({
           mount,
           onPhase: setPhase,
-          fetchPlayInfo: () => videoGetPlayInfo({ bvid, cid, qn: VIDEO_PREVIEW_QN }),
+          fetchPlayInfo: async () => {
+            const resolvedCid =
+              cid && cid > 0
+                ? cid
+                : (
+                    await queryClient.fetchQuery({
+                      queryKey: ["video_archive", bvid],
+                      queryFn: () => videoGetArchive(bvid),
+                      staleTime: 5 * 60_000,
+                    })
+                  ).cid;
+            return videoGetPlayInfo({ bvid, cid: resolvedCid, qn: VIDEO_PREVIEW_QN });
+          },
         });
       }, ROOM_CARD_PREVIEW_DELAY_MS);
     },
-    [bvid, cid, enabled, stop, supported],
+    [bvid, cid, enabled, queryClient, stop, supported],
   );
 
   useEffect(() => () => stop(), [stop]);

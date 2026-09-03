@@ -15,7 +15,7 @@ use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio::sync::{Mutex as AsyncMutex, watch, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::error::{AppError, AppResult};
@@ -233,6 +233,9 @@ struct ProxyLoopContext {
     /// 设定时，本代理只回一段固定文本，不连接任何上游（见
     /// [`StreamProxy::start_text`]）。直播路径永远是 `None`，行为完全不变。
     text_body: Option<Arc<TextResponse>>,
+    /// VOD 媒体会话按 accept 顺序串行应答（见 [`StreamProxy::start_ordered`]）。
+    /// 直播与文本会话永远为 `false`，行为完全不变。
+    ordered: bool,
 }
 
 /// [`StreamProxy::start_text`] 固定应答的内容与类型。
@@ -653,6 +656,10 @@ impl StreamProxy {
     }
 
     /// 用 `headers` 为 `url` 启动（或替换）一个代理。返回本地播放 URL。
+    ///
+    /// `ordered`：VOD 媒体分会话传 `true` —— 按到达顺序串行应答，见
+    /// [`StreamProxy::start_ordered`]。
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
         url: String,
@@ -661,6 +668,7 @@ impl StreamProxy {
         force_hls: bool,
         proxy: Option<&str>,
         twitch_ad_recovery: Option<TwitchAdRecovery>,
+        ordered: bool,
     ) -> AppResult<String> {
         // 在第一次 await 之前完成所有权预订。后续的 start 或 stop 可以取代这次预订，
         // 此时当前请求丢弃自己未安装的监听器，
@@ -740,6 +748,7 @@ impl StreamProxy {
             twitch_ad_recovery,
             telemetry: telemetry.clone(),
             text_body: None,
+            ordered,
         };
         let task = tauri::async_runtime::spawn(async move {
             run_proxy_loop(listener, context, shutdown_rx).await;
@@ -759,6 +768,29 @@ impl StreamProxy {
             },
         );
         Ok(format!("http://127.0.0.1:{port}/live"))
+    }
+
+    /// 为一条 VOD 媒体轨启动（或替换）一个**按序**代理，返回本地播放 URL。
+    ///
+    /// 与 [`Self::start`] 的唯一差别是 `ordered = true`：同一会话上的连接按
+    /// accept 顺序串行应答，前一条响应写完才轮到下一条。MSE 插件
+    /// （xgplayer-dash）并行拉取分片、按**完成**顺序 append；Chromium 对
+    /// 时间戳回退的 append 会执行 coded frame removal，把该时间戳之后已缓冲
+    /// 的分片全部清除——先到的第 N+1 片会被后到的第 N 牸清掉，留下一个
+    /// 永久空洞（插件的下载队列按 URL 去重，不会重发）。accept 顺序即
+    /// 插件发出分片请求的顺序，串行化后响应只能按序完成，append 也就有序了。
+    ///
+    /// 代价是同一会话内的并行预取变成串行下载；分片时长（约 5 秒）远大于
+    /// 单片下载耗时，不构成吞吐瓶颈。
+    pub async fn start_ordered(
+        &self,
+        url: String,
+        headers: HashMap<String, String>,
+        session_id: String,
+        proxy: Option<&str>,
+    ) -> AppResult<String> {
+        self.start(url, headers, session_id, false, proxy, None, true)
+            .await
     }
 
     /// 用一个只回固定文本的本机监听器占住 `session_id`，返回它的 URL。
@@ -821,6 +853,7 @@ impl StreamProxy {
             twitch_ad_recovery: None,
             telemetry: telemetry.clone(),
             text_body: Some(Arc::new(TextResponse { body, content_type })),
+            ordered: false,
         };
         let task = tauri::async_runtime::spawn(async move {
             run_proxy_loop(listener, context, shutdown_rx).await;
@@ -1111,6 +1144,7 @@ mod tests {
                 false,
                 None,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1122,6 +1156,7 @@ mod tests {
                 false,
                 None,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1136,6 +1171,92 @@ mod tests {
         assert!(proxy.telemetry_for_session("room-a:1").is_none());
         assert!(proxy.telemetry_for_session("room-b:1").is_some());
         proxy.stop();
+    }
+
+    /// 有序会话必须按 accept 顺序串行应答：第一条响应写完之前，第二条连接
+    /// 不能拿到任何字节。这是 VOD 分片不会乱序到达播放器（进而不会被 MSE
+    /// 的 coded frame removal 清掉后继缓冲）的唯一保证。
+    #[tokio::test]
+    async fn ordered_session_serves_connections_in_arrival_order() {
+        // 上游对第一条请求扣住一个释放闸，对后续请求立即应答：若无串行化，
+        // 第二条响应会先到。
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let (release_first, release_first_tx) = tokio::sync::watch::channel(false);
+        let release_first_rx = release_first_tx.clone();
+        drop(release_first_tx);
+        let server = tokio::spawn(async move {
+            let mut order = 0_u32;
+            loop {
+                let Ok((mut stream, _)) = upstream.accept().await else {
+                    return;
+                };
+                order += 1;
+                let this = order;
+                let mut release = release_first_rx.clone();
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 2048];
+                    let _ = stream.read(&mut request).await;
+                    if this == 1 {
+                        // 等待测试放行第一条，才把它的响应写出去。
+                        while !*release.borrow_and_update() {
+                            if release.changed().await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    let body = format!("resp-{this}");
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let proxy = StreamProxy::new();
+        let local_url = proxy
+            .start_ordered(
+                format!("http://{upstream_address}/seg"),
+                HashMap::new(),
+                "video-x:video".into(),
+                None,
+            )
+            .await
+            .unwrap();
+        let connect = local_url
+            .trim_start_matches("http://")
+            .trim_end_matches("/live")
+            .to_string();
+
+        async fn read_body(connect: String) -> String {
+            let mut stream = tokio::net::TcpStream::connect(&connect).await.unwrap();
+            let request = "GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut buffer = Vec::new();
+            stream.read_to_end(&mut buffer).await.unwrap();
+            String::from_utf8_lossy(&buffer).to_string()
+        }
+
+        let first = tokio::spawn(read_body(connect.clone()));
+        // 稳定压到代理 accept 之后，再开第二条连接。
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let second = tokio::spawn(read_body(connect.clone()));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // 上游第一条仍被扣住：串行化要求第二条连接拿不到任何字节。
+        assert!(!first.is_finished());
+        assert!(!second.is_finished());
+
+        release_first.send(true).unwrap();
+        let first_body = first.await.unwrap();
+        let second_body = second.await.unwrap();
+        assert!(first_body.contains("resp-1"), "first: {first_body}");
+        assert!(second_body.contains("resp-2"), "second: {second_body}");
+
+        proxy.stop_for_session("video-x:video");
+        server.abort();
     }
 
     #[test]
@@ -1433,6 +1554,7 @@ mod tests {
                 true,
                 None,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1484,6 +1606,7 @@ mod tests {
                 true,
                 None,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1510,6 +1633,7 @@ mod tests {
                 true,
                 None,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1559,6 +1683,7 @@ mod tests {
                     target_height: 1080,
                     target_frame_rate_milli: 60_000,
                 }),
+                false,
             )
             .await
             .expect("recording proxy");
@@ -1607,6 +1732,7 @@ mod tests {
                     target_height: 1080,
                     target_frame_rate_milli: 60_000,
                 }),
+                false,
             )
             .await
             .expect("recording proxy");
@@ -1692,6 +1818,7 @@ mod tests {
                     target_height: 1080,
                     target_frame_rate_milli: 60_000,
                 }),
+                false,
             )
             .await
             .expect("recording proxy");
@@ -1876,6 +2003,7 @@ mod tests {
                 false,
                 Some(&format!("http://{address}")),
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1936,6 +2064,7 @@ mod tests {
                 false,
                 None,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -1991,6 +2120,9 @@ async fn run_proxy_loop(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut handlers = JoinSet::new();
+    // 有序会话的单票门：在 accept 分支内取票——多线程运行时下任务的首次轮询
+    // 顺序不保证，唯一确定的顺序是 accept 顺序。
+    let order_gate = Arc::new(Semaphore::new(1));
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -2001,6 +2133,18 @@ async fn run_proxy_loop(
             accept = listener.accept() => {
                 match accept {
                     Ok((mut socket, _)) => {
+                        let permit = if context.ordered {
+                            let gate = order_gate.clone();
+                            tokio::select! {
+                                permit = gate.acquire_owned() => Some(permit.expect("stream proxy order gate is never closed")),
+                                _ = wait_for_proxy_shutdown(&mut shutdown) => {
+                                    // 正在停机：不再应答新连接，直接丢弃。
+                                    continue;
+                                }
+                            }
+                        } else {
+                            None
+                        };
                         let context = context.clone();
                         let telemetry = context.telemetry.clone();
                         let mut handler_shutdown = shutdown.clone();
@@ -2014,6 +2158,8 @@ async fn run_proxy_loop(
                                     }
                                 }
                             }
+                            // permit 随任务结束释放：响应写完（或失败/中止）才放行下一条。
+                            drop(permit);
                         });
                     }
                     Err(e) => {
@@ -2061,6 +2207,7 @@ async fn handle_client(
         twitch_ad_recovery,
         telemetry,
         text_body,
+        ordered: _,
     } = context;
 
     // 读取请求头（只需要方法/路径；GET 不使用 body）。

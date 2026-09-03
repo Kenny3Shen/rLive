@@ -7,6 +7,7 @@ import {
   resolveVideoZoneKey,
   videoHomePath,
   videoPlayPath,
+  videoSearchPath,
   videoTabFromSearch,
   videoTabHasZoneStrip,
   videoTabUsesPgc,
@@ -100,6 +101,11 @@ describe("video paths", () => {
     expect(videoHomePath("popular", "1005")).toBe("/video?tab=popular&zone=1005");
   });
 
+  test("builds the search path with the keyword in the url", () => {
+    expect(videoSearchPath()).toBe("/video/search");
+    expect(videoSearchPath("  猫猫 ")).toBe("/video/search?q=%E7%8C%AB%E7%8C%AB");
+  });
+
   test("round-trips a UGC play target", () => {
     const path = videoPlayPath({ bvid: "BV1xx", cid: 42, title: "标题" });
     const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
@@ -119,12 +125,31 @@ describe("video paths", () => {
     expect(params?.aid).toBe("117075725000671");
   });
 
-  test("rejects play links without a usable cid", () => {
-    // cid 是两条链路都必需的键；拿 NaN 去请求后端只会换来一个无法解释的失败。
+  test("rejects play links without a usable cid or bvid", () => {
+    // cid 与 bvid 至少一个有效；拿 NaN 去请求后端只会换来一个无法解释的失败。
     expect(parseVideoPlayParams(new URLSearchParams(""))).toBeNull();
     expect(parseVideoPlayParams(new URLSearchParams("cid=abc"))).toBeNull();
     expect(parseVideoPlayParams(new URLSearchParams("cid=0"))).toBeNull();
     expect(parseVideoPlayParams(new URLSearchParams("cid=-3"))).toBeNull();
+  });
+
+  test("round-trips a bvid-only target from search/uploader lists", () => {
+    // 搜索/UP 主列表的条目没有 cid：链接只带 bvid，播放页用稿件详情补齐（P1）。
+    const path = videoPlayPath({ bvid: "BV4ww", cid: null, title: "无 cid 条目" });
+    expect(path).not.toContain("cid=");
+    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
+    expect(params).toEqual({
+      cid: 0,
+      bvid: "BV4ww",
+      epId: null,
+      title: "无 cid 条目",
+      aid: null,
+    });
+    // 无效 cid 配 bvid 仍可进入，cid 归零待补。
+    expect(parseVideoPlayParams(new URLSearchParams("cid=abc&bvid=BV4ww"))).toMatchObject({
+      cid: 0,
+      bvid: "BV4ww",
+    });
   });
 
   test("keeps the tab strip order stable for the shell's pan direction", () => {
