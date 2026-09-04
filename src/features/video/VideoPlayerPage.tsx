@@ -18,8 +18,6 @@ import {
   FastForward,
   Home,
   Link2,
-  Maximize2,
-  Minimize2,
   Tv,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -182,6 +180,10 @@ export function VideoPlayerPage() {
   /** 投屏与 CC 字幕弹层的开关态。 */
   const [castOpen, setCastOpen] = useState(false);
   const [subtitleOpen, setSubtitleOpen] = useState(false);
+  /** 窗口全屏（应用内全屏）：隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台
+   *  撑满应用窗口，但保留系统窗口栏（最小化/最大化/关闭），与直播页的
+   *  网页全屏同一语义；与画面全屏（元素级 top layer）相互独立、可叠加。 */
+  const [webFullscreen, setWebFullscreen] = useState(false);
   /** 选中的字幕语言（null = 关闭字幕）。 */
   const [subtitleLan, setSubtitleLan] = useState<string | null>(null);
   /** 当前字幕的 VTT blob 地址。 */
@@ -303,11 +305,27 @@ export function VideoPlayerPage() {
       }),
     // 换画质/重试期间保留旧数据：旧播放器继续播到新信息就位，而不是先黑屏等请求。
     placeholderData: keepPreviousData,
-    staleTime: 0,
     gcTime: 0,
     retry: false,
   });
-  const playInfo: VideoPlayInfo | undefined = playInfoQuery.data;
+  // 换集（cid 变）过渡期不能沿用旧集数据：keepPreviousData 留下的旧 playInfo
+  // 会让旧播放器继续显示旧画面（直到新集就位），seek/时长/画质也是旧集的值。
+  // 换画质/重试（同 cid）仍走 keepPreviousData 的无缝续播路径。VideoPlayInfo
+  // 不回传 cid，用「数据与 cid 对齐时刻」的 cid 比对判定。
+  const settledCidRef = useRef<number | null>(null);
+  if (!playInfoQuery.isPlaceholderData) settledCidRef.current = cid;
+  const switchingItem = playInfoQuery.isPlaceholderData && settledCidRef.current !== cid;
+  const playInfo: VideoPlayInfo | undefined = switchingItem ? undefined : playInfoQuery.data;
+
+  // 换集过渡：清掉旧集的播放错误并停住旧画面/声音（playInfo 已抹成 undefined，
+  // 播放器 effect 会随之销毁旧实例），等新集信息就位再重建。
+  useEffect(() => {
+    if (!switchingItem) return;
+    setPlaybackError(null);
+    setPaused(true);
+    const media = videoRef.current;
+    if (media && !media.paused) media.pause();
+  }, [switchingItem]);
 
   /** 切换画质：记录续播点后带着 qn 重取。 */
   const changeQuality = useCallback(
@@ -356,16 +374,10 @@ export function VideoPlayerPage() {
     retry: false,
   });
 
-  /**
-   * 离开播放页停掉三个代理会话。
-   *
-   * 三条流（video / audio / mpd）各占一个 session_id，必须一起停，否则三条本机监听器
-   * 与其上游连接都会泄漏。用 ref 存最后一份 session_ids 而不是放进依赖数组：清理必须
-   * 在**卸载**时跑，而按 session_ids 作依赖会让它在每次取到新播放信息时提前触发，
-   * 把正在播的会话停掉。
-   */
   const sessionIdsRef = useRef<VideoSessionIds | null>(null);
-  if (playInfo) sessionIdsRef.current = playInfo.session_ids;
+  // 用 query 的原始数据而不是上面换集时被抹成 undefined 的 `playInfo`：
+  // session 链必须 A→B 连续（见下），中间出现 undefined 会丢掉旧引用、泄漏会话。
+  if (playInfoQuery.data) sessionIdsRef.current = playInfoQuery.data.session_ids;
   useEffect(
     () => () => {
       const sessions = sessionIdsRef.current;
@@ -378,11 +390,12 @@ export function VideoPlayerPage() {
   const previousSessionsRef = useRef<VideoSessionIds | null>(null);
   useEffect(() => {
     const previous = previousSessionsRef.current;
-    previousSessionsRef.current = playInfo?.session_ids ?? null;
-    if (previous && playInfo && previous.mpd !== playInfo.session_ids.mpd) {
+    const current = playInfoQuery.data;
+    previousSessionsRef.current = current?.session_ids ?? null;
+    if (previous && current && previous.mpd !== current.session_ids.mpd) {
       void videoStopPlay(previous);
     }
-  }, [playInfo]);
+  }, [playInfoQuery.data]);
 
   /**
    * 弹幕分段懒加载。
@@ -450,7 +463,10 @@ export function VideoPlayerPage() {
     (target: number) => {
       const media = videoRef.current;
       if (!media || !Number.isFinite(target)) return;
-      const clamped = Math.max(0, duration > 0 ? Math.min(target, duration) : target);
+      // 上限离时长留 0.25s 余量：DASH 插件按 floor(t / 段长) 拉分片，seek 目标
+      // 贴着 duration 会落在末段之外拉不到数据、永远停在 waiting；留余量让
+      // 播放器自然播完触发 ended（自动连播走它的正常路径）。
+      const clamped = Math.max(0, duration > 0 ? Math.min(target, duration - 0.25) : target);
       sliderTargetRef.current = null;
       setCurrentTime(clamped);
       setWaiting(true);
@@ -914,6 +930,10 @@ export function VideoPlayerPage() {
       if (key === " " || key === "k") {
         event.preventDefault();
         togglePlayback();
+      } else if (key === "escape" && webFullscreen && !fullscreen.fullscreen) {
+        // 元素全屏时 Escape 由浏览器自己收（退出全屏）；这里只收应用内窗口全屏。
+        event.preventDefault();
+        setWebFullscreen(false);
       } else if (key === "m") {
         event.preventDefault();
         toggleMute();
@@ -947,6 +967,7 @@ export function VideoPlayerPage() {
       currentTime,
       fullscreen,
       goToPlaylistItem,
+      webFullscreen,
       nextItem,
       prevItem,
       revealControls,
@@ -1154,9 +1175,9 @@ export function VideoPlayerPage() {
   // 关闭只需点按钮切换。
   // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
   const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
-  /** 控制栏工具（字幕/窗口全屏）：与内部按钮同一套样式常量；没字幕轨的稿件
-   *  不渲染字幕按钮。窗口全屏与画面全屏共享同一 toggle（桌面即原生窗口全屏），
-   *  图标用 Maximize/Minimize 与底部全屏按钮区分语义。 */
+  /** 控制栏工具（字幕）：与内部按钮同一套样式常量；没字幕轨的稿件不渲染
+   *  字幕按钮。窗口全屏/画面全屏用 PlayerControls 内置的两个按钮（网页全屏
+   *  toggle 应用内全屏，全屏走元素级 top layer）。 */
   const toolsSlot = (
     <>
       {subtitles.length > 0 && (
@@ -1231,27 +1252,6 @@ export function VideoPlayerPage() {
           </PopoverContent>
         </Popover>
       )}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
-              aria-pressed={fullscreen.fullscreen}
-              className={cn(
-                PLAYER_CONTROL_BUTTON_CLASS,
-                PLAYER_CONTROL_ICON_CLASS,
-                PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-              )}
-              onClick={() => void fullscreen.toggle()}
-            />
-          }
-        >
-          {fullscreen.fullscreen ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
-        </TooltipTrigger>
-        <TooltipContent>{fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}</TooltipContent>
-      </Tooltip>
     </>
   );
 
@@ -1354,9 +1354,10 @@ export function VideoPlayerPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {topBar}
+      {!webFullscreen && topBar}
       {/* 宽屏：播放器占满主列，右侧栏固定宽度；窄屏：播放器锁 16:9，
-          右侧栏改列在下方滚动。两种形态同一条侧栏组件。 */}
+          右侧栏改列在下方滚动。两种形态同一条侧栏组件。窗口全屏时隐藏
+          侧栏并解除窄屏高度锁，舞台撑满整个应用窗口（系统窗口栏保留）。 */}
       <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
         <section
           ref={stageRef}
@@ -1364,7 +1365,9 @@ export function VideoPlayerPage() {
           data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
           className={cn(
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
-            "aspect-video w-full max-lg:max-h-[56%]",
+            webFullscreen
+              ? "aspect-auto max-h-none flex-1"
+              : "aspect-video w-full max-lg:max-h-[56%]",
             "lg:aspect-auto lg:w-auto lg:flex-1",
             "data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
           )}
@@ -1427,11 +1430,13 @@ export function VideoPlayerPage() {
               </div>
             )}
 
-            {(loading || waiting || playInfoQuery.isPending) && !playbackError && !fatalError && (
-              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
-                <Spinner className="text-white" aria-label="正在加载视频" />
-              </div>
-            )}
+            {(loading || waiting || playInfoQuery.isPending || switchingItem) &&
+              !playbackError &&
+              !fatalError && (
+                <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
+                  <Spinner className="text-white" aria-label="正在加载视频" />
+                </div>
+              )}
 
             {/* 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
                 静默失败会让用户看到「在播但没声音」而无从下手。 */}
@@ -1447,7 +1452,7 @@ export function VideoPlayerPage() {
             )}
           </div>
 
-          {fullscreen.fullscreen && (
+          {(fullscreen.fullscreen || webFullscreen) && (
             <div
               ref={hudRef}
               data-player-hud
@@ -1468,14 +1473,19 @@ export function VideoPlayerPage() {
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                aria-label="退出窗口全屏"
+                aria-label={fullscreen.fullscreen ? "退出全屏" : "退出窗口全屏"}
                 className={cn(
                   PLAYER_CONTROL_BUTTON_CLASS,
                   PLAYER_CONTROL_ICON_CLASS,
                   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
                   "shrink-0",
                 )}
-                onClick={() => void fullscreen.exit()}
+                // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
+                // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
+                onClick={() => {
+                  if (fullscreen.fullscreen) void fullscreen.exit();
+                  else setWebFullscreen(false);
+                }}
               >
                 <ChevronLeft data-icon="inline-start" aria-hidden />
               </Button>
@@ -1534,7 +1544,9 @@ export function VideoPlayerPage() {
               volume={volume}
               muted={muted}
               osdOn={danmakuVisible}
+              webFullscreen={webFullscreen}
               fullscreen={fullscreen.fullscreen}
+              onToggleWebFullscreen={() => setWebFullscreen((value) => !value)}
               disabled={loading}
               refreshDisabled={loading}
               loadError={fullscreen.error}
@@ -1607,51 +1619,56 @@ export function VideoPlayerPage() {
             />
           </div>
         </section>
-        <aside
-          className={cn(
-            // 与直播播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度，
-            // 窄屏则如直播的紧凑侧栏一样列在播放器下方。
-            "flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar",
-            "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]",
-          )}
-        >
-          <VideoSidebar
-            bvid={params.bvid}
-            epId={params.epId}
-            aid={params.aid}
-            cid={cid}
-            danmaku={{
-              entries: danmakuEntries,
-              positionMs: currentTime * 1000,
-              loading: danmakuEntries.length === 0 && danmakuVisible && !playbackError,
-            }}
-          />
-        </aside>
+        {!webFullscreen && (
+          <aside
+            className={cn(
+              // 与直播播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度，
+              // 窄屏则如直播的紧凑侧栏一样列在播放器下方。
+              "flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar",
+              "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]",
+            )}
+          >
+            <VideoSidebar
+              bvid={params.bvid}
+              epId={params.epId}
+              aid={params.aid}
+              cid={cid}
+              danmaku={{
+                entries: danmakuEntries,
+                positionMs: currentTime * 1000,
+                loading: danmakuEntries.length === 0 && danmakuVisible && !playbackError,
+              }}
+            />
+          </aside>
+        )}
       </main>
       {/* 底部常驻 Shell（与直播页底部操作行同一画法）：跳原址与复制链接
-          的家。全屏（元素级 top layer）时被舞台盖住，HUD 里另有跳原址镜像。 */}
-      <footer className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="max-md:h-11 max-md:touch-manipulation"
-          disabled={!originalUrl}
-          onClick={copyOriginalUrl}
-        >
-          <Link2 data-icon="inline-start" />
-          复制链接
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="max-md:h-11 max-md:touch-manipulation"
-          disabled={!originalUrl}
-          onClick={openOriginalUrl}
-        >
-          <ExternalLink data-icon="inline-start" />
-          在浏览器中打开
-        </Button>
-      </footer>
+          的家。全屏（元素级 top layer）时被舞台盖住，HUD 里另有跳原址镜像；
+          窗口全屏时从布局卸载。 */}
+      {!webFullscreen && (
+        <footer className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="max-md:h-11 max-md:touch-manipulation"
+            disabled={!originalUrl}
+            onClick={copyOriginalUrl}
+          >
+            <Link2 data-icon="inline-start" />
+            复制链接
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="max-md:h-11 max-md:touch-manipulation"
+            disabled={!originalUrl}
+            onClick={openOriginalUrl}
+          >
+            <ExternalLink data-icon="inline-start" />
+            在浏览器中打开
+          </Button>
+        </footer>
+      )}
     </div>
   );
 }
