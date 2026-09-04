@@ -5,6 +5,7 @@ import {
   VIDEO_TABS,
   parseVideoPlayParams,
   resolveVideoZoneKey,
+  videoOriginalUrl,
   videoHomePath,
   videoPlayPath,
   videoSearchPath,
@@ -154,6 +155,27 @@ describe("video paths", () => {
 
   test("keeps the tab strip order stable for the shell's pan direction", () => {
     expect([...VIDEO_TABS]).toEqual(["recommend", "popular", "anime", "cinema"]);
+  });
+});
+
+describe("video original url", () => {
+  test("points UGC at the bvid page and omits ?p= for P1", () => {
+    expect(videoOriginalUrl("BV1Ykt46iEYW", null, 1)).toBe(
+      "https://www.bilibili.com/video/BV1Ykt46iEYW/",
+    );
+  });
+
+  test("keeps the part number for multi-part playback", () => {
+    expect(videoOriginalUrl("BV1Ykt46iEYW", null, 7)).toBe(
+      "https://www.bilibili.com/video/BV1Ykt46iEYW/?p=7",
+    );
+  });
+
+  test("prefers the PGC episode path and falls back to null without identity", () => {
+    expect(videoOriginalUrl("BV1xx", "123456")).toBe(
+      "https://www.bilibili.com/bangumi/play/ep123456",
+    );
+    expect(videoOriginalUrl(null, null)).toBeNull();
   });
 });
 

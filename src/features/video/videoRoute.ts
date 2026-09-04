@@ -201,3 +201,25 @@ export function parseVideoPlayParams(search: URLSearchParams): VideoPlayParams |
     aid: search.get("aid") || null,
   };
 }
+
+/**
+ * 当前播放内容的 B 站原始地址：底部固定条展示与「在浏览器中打开」共用。
+ *
+ * PGC 用 ep_id（`/epis/` 路径），UGC 用 bvid（`/video/` 路径）；多 P 稿件
+ * 带 `?p=` 跳到对应分 P，P1 与 B 站 Web 一致省略该参数。bvid 缺失（异常态）
+ * 返回 null。`page` 是当前分 P 序号，由调用方从稿件详情的 pages 里按 cid 对出，
+ * 缺省按 P1 处理。
+ */
+export function videoOriginalUrl(
+  bvid: string | null,
+  epId: string | null,
+  page = 1,
+): string | null {
+  if (epId) {
+    return `https://www.bilibili.com/bangumi/play/ep${epId}`;
+  }
+  if (!bvid) return null;
+  return page > 1
+    ? `https://www.bilibili.com/video/${bvid}/?p=${page}`
+    : `https://www.bilibili.com/video/${bvid}/`;
+}
