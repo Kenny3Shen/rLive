@@ -236,6 +236,8 @@ export type PlayerControlsProps = {
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
   onTogglePictureInPicture?: () => void;
+  /** 视频页专属工具（投屏/字幕等）：渲染在二级控制组画中画之前。 */
+  toolsSlot?: ReactNode;
   onToggleFullscreen: () => void;
 };
 
@@ -360,6 +362,7 @@ export function PlayerControls({
   onQualityChange,
   onLineChange,
   onTogglePictureInPicture,
+  toolsSlot,
   onToggleFullscreen,
 }: PlayerControlsProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
@@ -995,6 +998,7 @@ export function PlayerControls({
               {webFullscreen ? <Shrink /> : <Expand />}
             </ControlButton>
           )}
+          {showSecondaryControls && toolsSlot}
           {showSecondaryControls && pictureInPictureSupported && onTogglePictureInPicture && (
             <ControlButton
               label={pictureInPictureActive ? "退出画中画" : "画中画"}

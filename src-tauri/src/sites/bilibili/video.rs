@@ -13,7 +13,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::video::{
     DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoComment, VideoCommentPage,
     VideoDanmakuSegment, VideoEmote, VideoItem, VideoListPage, VideoPlayRequest, VideoQuality,
-    VideoSeason, VideoSeasonEpisode, VideoUgcSeason,
+    VideoSeason, VideoSeasonEpisode, VideoSubtitle, VideoUgcSeason,
 };
 
 use super::BilibiliSite;
@@ -455,6 +455,54 @@ pub fn parse_uploader_videos(raw: &str) -> AppResult<VideoListPage> {
         has_more: (pn * ps) < count,
         items,
     })
+}
+
+/**
+ * 解析 html5 playurl 的 `durl[0]`：优先主地址，缺失时回退 backup_url。
+ */
+fn parse_cast_durl(data: &Value) -> AppResult<String> {
+    let durl = data
+        .get("durl")
+        .and_then(Value::as_array)
+        .and_then(|list| list.first())
+        .ok_or_else(|| video_err("html5 playurl 缺少 durl（可能受版权或清晰度限制）"))?;
+    let url = durl
+        .get("url")
+        .map(as_str)
+        .filter(|url| !url.is_empty())
+        .or_else(|| {
+            durl.get("backup_url")
+                .and_then(Value::as_array)
+                .and_then(|list| list.first())
+                .map(as_str)
+        })
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| video_err("html5 playurl 的 durl 缺少可用地址"))?;
+    Ok(url)
+}
+
+/**
+ * 解析 player v2 的 `data.subtitle.subtitles[]`：跳过没给地址的条目，
+ * 协议相对地址（`//aisubtitle...`）补上 https。
+ */
+fn parse_subtitles(list: Option<&Value>) -> Vec<VideoSubtitle> {
+    let mut subtitles = Vec::new();
+    for item in list.and_then(Value::as_array).into_iter().flatten() {
+        let url = item.get("subtitle_url").map(as_str).unwrap_or_default();
+        if url.is_empty() {
+            continue;
+        }
+        let url = match url.strip_prefix("//") {
+            Some(rest) => format!("https://{rest}"),
+            None => url,
+        };
+        subtitles.push(VideoSubtitle {
+            lan: item.get("lan").map(as_str).unwrap_or_default(),
+            lan_doc: item.get("lan_doc").map(as_str).unwrap_or_default(),
+            url,
+        });
+    }
+    subtitles
 }
 
 /**
@@ -1552,6 +1600,114 @@ impl BilibiliSite {
         })
     }
 
+    /// 取 DLNA 投屏直链：html5 playurl 的 MP4 `durl`。
+    ///
+    /// 电视端的 DLNA 渲染器只认渐进式流（MP4/HLS），不能播 DASH MPD；B 站
+    /// html5 接口（`platform=html5&high_quality=1`）返回 480P 内的 MP4 durl，
+    /// 经中继注入 Referer 后电视可直连。PiliPili 的投屏同源。
+    pub async fn video_cast_url(&self, request: &VideoPlayRequest) -> AppResult<String> {
+        if request.cid <= 0 {
+            return Err(video_err("投屏请求缺少 cid"));
+        }
+        let mut params = BTreeMap::new();
+        params.insert("cid".into(), request.cid.to_string());
+        params.insert("qn".into(), "64".into());
+        params.insert("fnval".into(), "1".into());
+        params.insert("platform".into(), "html5".into());
+        params.insert("high_quality".into(), "1".into());
+        params.insert("fnver".into(), "0".into());
+
+        let data = match request.ep_id.as_deref().filter(|id| !id.is_empty()) {
+            Some(ep_id) => {
+                params.insert("ep_id".into(), ep_id.to_string());
+                let text = self
+                    .get_json_signed("https://api.bilibili.com/pgc/player/web/v2/playurl", params)
+                    .await?;
+                let root: Value = serde_json::from_str(&text)
+                    .map_err(|e| video_err(format!("PGC html5 playurl json: {e}")))?;
+                root.pointer("/result/video_info")
+                    .cloned()
+                    .ok_or_else(|| {
+                        video_err("PGC html5 playurl 缺少 result.video_info（可能受版权或地区限制）")
+                    })?
+            }
+            None => {
+                let bvid = request
+                    .bvid
+                    .as_deref()
+                    .filter(|bvid| !bvid.is_empty())
+                    .ok_or_else(|| video_err("投屏请求缺少 bvid"))?;
+                params.insert("bvid".into(), bvid.to_string());
+                params.insert("try_look".into(), "1".into());
+                let text = self
+                    .get_json_signed("https://api.bilibili.com/x/player/wbi/playurl", params)
+                    .await?;
+                let root: Value = serde_json::from_str(&text)
+                    .map_err(|e| video_err(format!("html5 playurl json: {e}")))?;
+                root.get("data")
+                    .cloned()
+                    .ok_or_else(|| video_err("html5 playurl 缺少 data"))?
+            }
+        };
+
+        parse_cast_durl(&data)
+    }
+
+    /// 取 CC 字幕列表（player v2 接口）。
+    ///
+    /// 手动 CC 公开可用；AI 字幕（`ai-` 前缀）需登录身份才会返回。
+    pub async fn video_subtitles(
+        &self,
+        request: &VideoPlayRequest,
+    ) -> AppResult<Vec<VideoSubtitle>> {
+        if request.cid <= 0 {
+            return Err(video_err("字幕请求缺少 cid"));
+        }
+        let mut params = BTreeMap::new();
+        params.insert("cid".into(), request.cid.to_string());
+        match request.ep_id.as_deref().filter(|id| !id.is_empty()) {
+            Some(ep_id) => {
+                params.insert("ep_id".into(), ep_id.to_string());
+            }
+            None => {
+                let bvid = request
+                    .bvid
+                    .as_deref()
+                    .filter(|bvid| !bvid.is_empty())
+                    .ok_or_else(|| video_err("字幕请求缺少 bvid"))?;
+                params.insert("bvid".into(), bvid.to_string());
+            }
+        }
+        let text = self
+            .get_json_signed("https://api.bilibili.com/x/player/wbi/v2", params)
+            .await?;
+        let root: Value = serde_json::from_str(&text)
+            .map_err(|e| video_err(format!("player v2 json: {e}")))?;
+        Ok(parse_subtitles(root.pointer("/data/subtitle/subtitles")))
+    }
+
+    /// 拉取字幕 JSON 原文（aisubtitle 主机无 CORS 头，必须由本端代拉）。
+    pub async fn fetch_subtitle(&self, url: &str) -> AppResult<String> {
+        let response = self
+            .client
+            .get(url)
+            .header("user-agent", DEFAULT_USER_AGENT)
+            .header("referer", VIDEO_REFERER)
+            .send()
+            .await
+            .map_err(|e| video_err(format!("字幕请求失败: {e}")))?;
+        if !response.status().is_success() {
+            return Err(video_err(format!(
+                "字幕请求返回 HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        response
+            .text()
+            .await
+            .map_err(|e| video_err(format!("字幕响应读取失败: {e}")))
+    }
+
     /// 抓一条轨的 sidx 并组装成 [`VideoTrack`]。
     ///
     /// 地址按 [`stream_candidates`] 的顺序逐个尝试，首个能返回 sidx 的成为该轨
@@ -2326,6 +2482,49 @@ mod tests {
                 "ugc_season": { "title": "t", "sections": [ { "episodes": [ { "bvid": "BV1Y", "cid": 1 } ] } ] } }
         });
         assert!(parse_archive(&single.to_string()).unwrap().ugc_season.is_none());
+    }
+
+    #[test]
+    fn cast_durl_prefers_primary_and_falls_back_to_backup() {
+        let primary = serde_json::json!({
+            "durl": [{
+                "url": "https://upos.example/primary.mp4",
+                "backup_url": ["https://upos.example/backup.mp4"]
+            }]
+        });
+        assert_eq!(
+            parse_cast_durl(&primary).unwrap(),
+            "https://upos.example/primary.mp4"
+        );
+
+        let backup_only = serde_json::json!({
+            "durl": [{ "url": "", "backup_url": ["https://upos.example/backup.mp4"] }]
+        });
+        assert_eq!(
+            parse_cast_durl(&backup_only).unwrap(),
+            "https://upos.example/backup.mp4"
+        );
+
+        let empty = serde_json::json!({ "durl": [] });
+        assert!(parse_cast_durl(&empty).is_err());
+    }
+
+    #[test]
+    fn subtitles_parse_prefixes_https_and_skips_empty_urls() {
+        let list = serde_json::json!([
+            {
+                "lan": "zh-CN",
+                "lan_doc": "中文（自动生成）",
+                "subtitle_url": "//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/1.json"
+            },
+            { "lan": "en", "lan_doc": "英语", "subtitle_url": "" }
+        ]);
+        let subtitles = parse_subtitles(Some(&list));
+        assert_eq!(subtitles.len(), 1);
+        assert_eq!(subtitles[0].url, "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/1.json");
+        assert_eq!(subtitles[0].lan_doc, "中文（自动生成）");
+
+        assert!(parse_subtitles(None).is_empty());
     }
 
     #[test]
