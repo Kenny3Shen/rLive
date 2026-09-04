@@ -289,13 +289,14 @@ pub async fn video_get_danmaku(
 ///
 /// 与直播的 `bilibili_danmaku_send` 同一套凭据检查、冷却与历史记录约定；
 /// 限流键用 aid（同一稿件下所有分 P 共用一个冷却），room_id 字段对
-/// 历史记录存 aid，标题带当前播放的稿件标题。
+/// 历史记录存 aid，标题带当前播放的稿件标题。`progress_ms` 是当前播放
+/// 位置（毫秒）—— 上游 `x/v2/dm/post` 的 progress 按毫秒计。
 #[tauri::command]
 pub async fn video_danmaku_send(
     state: State<'_, AppState>,
     cid: i64,
     aid: String,
-    progress_secs: u64,
+    progress_ms: u64,
     message: String,
     video_title: Option<String>,
 ) -> AppResult<()> {
@@ -334,8 +335,9 @@ pub async fn video_danmaku_send(
     crate::danmu_rs::bilibili::send_video_danmaku(
         &client,
         &cookie,
+        &aid_key,
         cid,
-        progress_secs,
+        progress_ms,
         &message,
     )
     .await?;

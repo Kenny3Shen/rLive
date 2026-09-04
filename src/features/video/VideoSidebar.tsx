@@ -910,11 +910,13 @@ export function VideoSidebar({
   aid: string | null;
   /** 当前播放的 cid：多 P 稿件的选集页签用它高亮当前 P。 */
   cid: number;
-  /** 弹幕查看列表数据：播放页已加载的条目 + 当前进度。 */
+  /** 弹幕查看列表数据：播放页已加载的条目 + 当前进度 + 点击跳转。 */
   danmaku?: {
     entries: readonly VideoDanmakuEntry[];
     positionMs: number;
     loading: boolean;
+    /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
+    onSeek: (positionMs: number) => void;
   };
 }) {
   const navigate = useNavigate();
@@ -1126,6 +1128,7 @@ export function VideoSidebar({
             entries={danmaku.entries}
             positionMs={danmaku.positionMs}
             loading={danmaku.loading}
+            onSeek={danmaku.onSeek}
           />
         ) : (
           <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />

@@ -409,6 +409,10 @@ export function VideoPlayerPage() {
   const loadedSegmentsRef = useRef(new Map<number, readonly VideoDanmakuEntry[]>());
   const exhaustedFromRef = useRef<number | null>(null);
   const inFlightSegmentsRef = useRef(new Set<number>());
+  // 在途请求计数与「是否已有段落定」驱动弹幕栏的加载态：空结果只有在本段
+  // 请求落定之后才能宣布「暂无弹幕」，否则无弹幕视频的弹幕栏会永远转圈。
+  const [danmakuRequestsInFlight, setDanmakuRequestsInFlight] = useState(0);
+  const [danmakuSegmentSettled, setDanmakuSegmentSettled] = useState(false);
   // 弹幕开关只影响这个 ref 的读数，不进 `ensureDanmakuSegments` 的依赖：
   // 播放器 effect 依赖那个回调，若它的身份随开关变化，开关弹幕会把整个播放器
   // 销毁重建、从 0 秒重播（弹幕是叠加层，没有理由动到媒体本身）。
@@ -421,20 +425,27 @@ export function VideoPlayerPage() {
     inFlightSegmentsRef.current = new Set();
     exhaustedFromRef.current = null;
     setDanmakuEntries([]);
+    setDanmakuSegmentSettled(false);
   }, [cid]);
 
   const ensureDanmakuSegments = useCallback(
     (positionMs: number) => {
       if (!cid || !danmakuVisibleRef.current) return;
+      // 换视频会把 map/set 换成新实例；在途请求带着旧引用回来时据此丢弃，
+      // 否则旧视频的段落会写进新视频的弹幕里。
+      const segmentsMap = loadedSegmentsRef.current;
+      const inFlight = inFlightSegmentsRef.current;
       for (const segment of videoDanmakuSegmentsFor(positionMs)) {
         const exhaustedFrom = exhaustedFromRef.current;
         if (exhaustedFrom !== null && segment >= exhaustedFrom) continue;
-        if (loadedSegmentsRef.current.has(segment)) continue;
-        if (inFlightSegmentsRef.current.has(segment)) continue;
-        inFlightSegmentsRef.current.add(segment);
+        if (segmentsMap.has(segment)) continue;
+        if (inFlight.has(segment)) continue;
+        inFlight.add(segment);
+        setDanmakuRequestsInFlight((count) => count + 1);
         void videoGetDanmaku(cid, segment)
           .then((result) => {
-            loadedSegmentsRef.current.set(segment, videoDanmakuEntries(result.items, segment));
+            if (loadedSegmentsRef.current !== segmentsMap) return;
+            segmentsMap.set(segment, videoDanmakuEntries(result.items, segment));
             // `has_more === false` 是上游 HTTP 304 的封装：这一段之后没有内容了。
             if (!result.has_more) {
               exhaustedFromRef.current =
@@ -442,13 +453,16 @@ export function VideoPlayerPage() {
                   ? segment + 1
                   : Math.min(exhaustedFromRef.current, segment + 1);
             }
-            setDanmakuEntries(mergeVideoDanmakuEntries([...loadedSegmentsRef.current.values()]));
+            setDanmakuSegmentSettled(true);
+            setDanmakuEntries(mergeVideoDanmakuEntries([...segmentsMap.values()]));
           })
           .catch(() => {
             // 单段失败不影响其余段落；下次经过这个位置会再试一次。
+            // 失败不算落定：加载态继续为真，比误报「暂无弹幕」诚实。
           })
           .finally(() => {
-            inFlightSegmentsRef.current.delete(segment);
+            inFlight.delete(segment);
+            setDanmakuRequestsInFlight((count) => count - 1);
           });
       }
     },
@@ -856,18 +870,48 @@ export function VideoPlayerPage() {
     }
   }, []);
 
+  /**
+   * 键盘焦点是否落在播放器 chrome 里（弹幕输入框正在输入，或键盘导航停在
+   * 控制按钮上）。与直播页 `PlayerPane` 的同名判定同一语义：焦点在 chrome
+   * 里就不排休眠 —— 否则输入过程中指针划过画面、换集/起播等任何触发
+   * `scheduleControlsHide` 的事件，都会让输入框带着未发送的草稿一起淡出。
+   */
+  const hasKeyboardFocusWithinControls = useCallback(() => {
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement) || !activeElement.matches(":focus-visible")) {
+      return false;
+    }
+    return (
+      controlsRef.current?.contains(activeElement) === true ||
+      hudRef.current?.contains(activeElement) === true
+    );
+  }, []);
+
   const scheduleControlsHide = useCallback(() => {
     clearControlsHideTimer();
-    if (paused || loading || playbackError || overlayInteractionOpen) {
+    if (
+      paused ||
+      loading ||
+      playbackError ||
+      overlayInteractionOpen ||
+      hasKeyboardFocusWithinControls()
+    ) {
       setChromeVisible(true);
       return;
     }
     controlsHideTimerRef.current = window.setTimeout(() => {
       controlsHideTimerRef.current = null;
+      // 定时器排定之后焦点才进入 chrome（点进弹幕输入框开始打字），
+      // 触发时再核一次，别把正在输入的输入框淡出去。
+      if (hasKeyboardFocusWithinControls()) {
+        setChromeVisible(true);
+        return;
+      }
       setChromeVisible(false);
     }, CONTROLS_HIDE_DELAY_MS);
   }, [
     clearControlsHideTimer,
+    hasKeyboardFocusWithinControls,
     loading,
     overlayInteractionOpen,
     paused,
@@ -1545,7 +1589,7 @@ export function VideoPlayerPage() {
                 video={{
                   cid,
                   aid: aid ?? "",
-                  progressSecs: Math.floor(currentTime),
+                  progressMs: Math.floor(currentTime * 1000),
                 }}
                 onOverlayInteractionChange={setOverlayInteractionOpen}
               />
@@ -1574,7 +1618,7 @@ export function VideoPlayerPage() {
                       video={{
                         cid,
                         aid: aid ?? "",
-                        progressSecs: Math.floor(currentTime),
+                        progressMs: Math.floor(currentTime * 1000),
                       }}
                       onOverlayInteractionChange={setOverlayInteractionOpen}
                     />
@@ -1647,7 +1691,13 @@ export function VideoPlayerPage() {
               danmaku={{
                 entries: danmakuEntries,
                 positionMs: currentTime * 1000,
-                loading: danmakuEntries.length === 0 && danmakuVisible && !playbackError,
+                // 空列表只有在「本段已落定且没有在途请求」时才不是加载中，
+                // 否则无弹幕的视频会永远显示加载动画。
+                loading:
+                  danmakuVisible &&
+                  !playbackError &&
+                  (danmakuRequestsInFlight > 0 || !danmakuSegmentSettled),
+                onSeek: (positionMs) => seekTo(positionMs / 1000),
               }}
             />
           </aside>

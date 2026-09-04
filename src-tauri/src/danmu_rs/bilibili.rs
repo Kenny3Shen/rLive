@@ -94,17 +94,19 @@ pub async fn send_chat(
 
 /// 发送一条普通滚动 VOD 弹幕（`x/v2/dm/post`，oid = 视频的 cid）。
 ///
-/// 与直播 `send_chat` 同一套凭据与错误语义；`progress` 是当前播放位置（秒），
-/// 上游接受缺省，带上可让弹幕出现在正确的进度条位置。同样不做重试、
+/// 与直播 `send_chat` 同一套凭据与错误语义；`progress` 是当前播放位置
+/// （毫秒，与 web 播放器一致），`aid` 是稿件 av 号 —— 上游要求稿件标识
+/// （aid/bvid 至少一个）参与表单，缺失会被 -400 拒绝。同样不做重试、
 /// 不产生乐观本地事件 —— 发送后由弹幕列表重新拉取回显。
 pub async fn send_video_danmaku(
     client: &Client,
     cookie: &str,
+    aid: &str,
     cid: i64,
-    progress_secs: u64,
+    progress_ms: u64,
     message: &str,
 ) -> AppResult<()> {
-    send_video_danmaku_to_url(client, cookie, cid, progress_secs, message, SEND_VIDEO_DANMAKU_URL)
+    send_video_danmaku_to_url(client, cookie, aid, cid, progress_ms, message, SEND_VIDEO_DANMAKU_URL)
         .await
 }
 
@@ -112,8 +114,9 @@ pub async fn send_video_danmaku(
 async fn send_video_danmaku_to_url(
     client: &Client,
     cookie: &str,
+    aid: &str,
     cid: i64,
-    progress_secs: u64,
+    progress_ms: u64,
     message: &str,
     url: &str,
 ) -> AppResult<()> {
@@ -130,17 +133,28 @@ async fn send_video_danmaku_to_url(
         .with_site("bilibili"));
     }
     let message = normalize_outgoing_message(message)?;
+    let aid = aid.trim();
+    if aid.is_empty() || aid.len() > 32 || !aid.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(
+            AppError::new("video_danmaku_invalid_aid", "B站稿件 aid 无效").with_site("bilibili"),
+        );
+    }
     let csrf = cookie_value(cookie, "bili_jct").unwrap_or_default();
+    // 缺省 rnd 时上游把两次发送的冷却放大到 90 秒（带上为 5 秒），本地 3 秒
+    // 冷却的第二条会直接撞上它；按 web 播放器惯例传微秒时间戳。
+    let rnd = chrono::Utc::now().timestamp_micros().to_string();
     let form = [
         ("type", "1".to_string()),
         ("oid", cid.to_string()),
+        ("aid", aid.to_string()),
         ("msg", message),
-        ("progress", progress_secs.to_string()),
+        ("progress", progress_ms.to_string()),
         ("color", "16777215".to_string()),
         ("fontsize", "25".to_string()),
         ("pool", "0".to_string()),
         ("mode", "1".to_string()),
         ("plat", "1".to_string()),
+        ("rnd", rnd),
         ("csrf", csrf.clone()),
         ("csrf_token", csrf),
     ];
@@ -1970,8 +1984,9 @@ mod tests {
         send_video_danmaku_to_url(
             &client,
             "SESSDATA=session; bili_jct=csrf-token",
+            "170001",
             311001234,
-            42,
+            42_000,
             "hello",
             &url,
         )
@@ -1986,9 +2001,13 @@ mod tests {
         assert!(headers.contains("referer: https://www.bilibili.com"));
         assert!(request.contains("type=1"));
         assert!(request.contains("oid=311001234"));
+        assert!(request.contains("aid=170001"));
         assert!(request.contains("msg=hello"));
-        assert!(request.contains("progress=42"));
+        // progress 与 web 播放器一致，单位毫秒。
+        assert!(request.contains("progress=42000"));
         assert!(request.contains("plat=1"));
+        // rnd 是微秒时间戳，无法断言精确值；存在即可。
+        assert!(request.contains("rnd="));
         assert!(request.contains("csrf=csrf-token"));
     }
 
@@ -1997,10 +2016,17 @@ mod tests {
         // 校验在发出任何网络请求之前完成，不需要服务器。
         let client = Client::builder().build().unwrap();
 
-        let error =
-            send_video_danmaku_to_url(&client, "SESSDATA=s; bili_jct=c", 0, 0, "hi", "http://127.0.0.1:1")
-                .await
-                .unwrap_err();
+        let error = send_video_danmaku_to_url(
+            &client,
+            "SESSDATA=s; bili_jct=c",
+            "170001",
+            0,
+            0,
+            "hi",
+            "http://127.0.0.1:1",
+        )
+        .await
+        .unwrap_err();
 
         assert_eq!(error.code, "bilibili_send_invalid_video");
     }
@@ -2013,6 +2039,7 @@ mod tests {
         let error = send_video_danmaku_to_url(
             &client,
             "SESSDATA=session; bili_jct=csrf-token",
+            "170001",
             1,
             0,
             "hello",
@@ -2027,6 +2054,7 @@ mod tests {
         let error = send_video_danmaku_to_url(
             &client,
             "SESSDATA=session; bili_jct=csrf-token",
+            "170001",
             1,
             0,
             "hello",

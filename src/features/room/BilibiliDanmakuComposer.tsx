@@ -69,8 +69,8 @@ type DanmakuComposerProps = {
   video?: {
     cid: number;
     aid: string;
-    /** 当前播放位置（秒），让弹幕落在正确的进度条位置。 */
-    progressSecs: number;
+    /** 当前播放位置（毫秒），让弹幕落在正确的进度条位置。 */
+    progressMs: number;
   };
 };
 
@@ -734,7 +734,7 @@ export function DanmakuComposer({
           ? {
               cid: video.cid,
               aid: video.aid,
-              progressSecs: video.progressSecs,
+              progressMs: video.progressMs,
               message: outgoingMessage,
               videoTitle: roomTitle,
             }
