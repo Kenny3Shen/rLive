@@ -135,16 +135,15 @@ message DanmakuElem {
 
 ### 弹幕发送（`video_danmaku_send`）
 
-- 写入接口 `POST https://api.bilibili.com/x/v2/dm/post`：表单 `type=1&oid={cid}&msg&progress={秒}&color=16777215&fontsize=25&pool=0&mode=1&plat=1&csrf`，携带 SESSDATA Cookie。与直播 `msg/send` 同一套凭据检查（同一设置项 `danmaku_send_enabled`）、同一 3 秒冷却（`DanmakuSendLimiter`，键用稿件 aid——同稿件各分 P 共用一个冷却）与发送历史（`danmaku_send_history`，room_id 存 aid）。
+- 写入接口 `POST https://api.bilibili.com/x/v2/dm/post`：表单 `type=1&oid={cid}&aid={aid}&msg&progress={毫秒}&rnd={微秒时间戳}&color=16777215&fontsize=25&pool=0&mode=1&plat=1&csrf`，携带 SESSDATA Cookie。三个关键字段的对齐依据（参考 PiliPlus 的 `DanmakuHttp.shootDanmaku`）：`aid` 参与表单（上游要求稿件标识，缺失被 -400 拒绝）；`progress` 单位是毫秒（此前按秒发送导致弹幕落在 1/1000 的错误位置）；`rnd` 缺省时上游把连续发送的冷却放大到 90 秒（带上为 5 秒），本地 3 秒冷却的第二条会直接撞上它。与直播 `msg/send` 同一套凭据检查（同一设置项 `danmaku_send_enabled`）、同一 3 秒冷却（`DanmakuSendLimiter`，键用稿件 aid——同稿件各分 P 共用一个冷却）与发送历史（`danmaku_send_history`，room_id 存 aid）。
 - 错误映射在直播语义之上补两条 VOD 专属：`-102` 账号权限不足（部分视频要求正式会员）、`616` 内容被过滤。不做重试、不产生乐观本地回显。
-- 前端复用直播的 `DanmakuComposer`（`video` prop 切换目标：cid/aid/progressSecs 入参），挂在控制栏居中槽位（`centerSlot`，直播页 composer 同款落点，播放列表计数排其后）；compact 且非全屏时 centerSlot 不渲染，回退控制条上沿。显隐随控制条，快捷表情/收藏/历史选择器同套可用。
+- 前端复用直播的 `DanmakuComposer`（`video` prop 切换目标：cid/aid/progressMs 入参，毫秒与上游 progress 对齐），挂在控制栏居中槽位（`centerSlot`，直播页 composer 同款落点，播放列表计数排其后）；compact 且非全屏时 centerSlot 不渲染，回退控制条上沿。显隐随控制条，快捷表情/收藏/历史选择器同套可用；**键盘焦点在控制条内（正在输入弹幕）时控制条不休眠**，否则输入到一半会被闲置计时器连草稿一起淡出。
 
 ### 弹幕查看列表（`VideoDanmakuList`）
 
 - 侧栏独立「弹幕」选项卡，与相关视频/评论/合集同级（顺序：选集（多 P 时）、相关视频、弹幕、评论、合集），仅 UGC 显示（PGC 分集同接口可用但当前先覆盖 UGC 主场景）。面板自持滚动视口（跟随播放需要独占滚动位置）。
-- 全量渲染已加载条目（时间戳 + 内容，条目颜色还原），行级 `content-visibility: auto` + `contain-intrinsic-size` 让浏览器跳过屏外行的布局与绘制，上万条也不拖垮滚动；随播放自动跟踪滚动（用户上翻暂停跟随，滚回底部恢复）。
-- 数据直接来自播放页 `danmakuEntries`（懒加载已合并的段数据），不额外请求。
-
+- 全量渲染已加载条目（时间戳 + 内容，条目颜色还原），行级 `content-visibility: auto` + `contain-intrinsic-size` 让浏览器跳过屏外行的布局与绘制，上万条也不拖垮滚动；随播放自动跟踪滚动（用户上翻暂停跟随，滚回底部恢复）；**每行是跳转按钮**——点击任意条目（含未来条目）即 seek 到该弹幕出现的播放位置。
+- 数据直接来自播放页 `danmakuEntries`（懒加载已合并的段数据），不额外请求。加载态由「在途请求计数 + 是否有段落定」驱动：空列表只有在首段已落定且没有在途请求时才显示「暂无弹幕」，否则无弹幕视频的弹幕栏会永远转圈（旧实现以 `entries.length === 0` 当 loading，空段落永不落定即无限加载）。在途请求持有段 map 的引用，换视频（换 cid 重置 map）后回来的旧响应据此丢弃，不会污染新视频的弹幕。
 
 ## 六、清晰度切换与右侧栏
 

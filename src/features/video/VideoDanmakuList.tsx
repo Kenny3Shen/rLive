@@ -13,7 +13,8 @@ import type { VideoDanmakuEntry } from "./videoDanmaku";
  *
  * 面板自持滚动视口（跟随播放需要独占滚动位置，不与外层页签容器共享）；
  * 全量渲染已加载条目，屏外行用 `content-visibility: auto` 跳过渲染，
- * 上万条也不拖垮滚动。用户上翻历史暂停跟随，滚回底部恢复。
+ * 上万条也不拖垮滚动。用户上翻历史暂停跟随，滚回底部恢复；点击任意
+ * 条目（含未来条目）跳到该弹幕出现的播放位置。
  */
 
 function formatTimestamp(progressMs: number): string {
@@ -24,6 +25,7 @@ export function VideoDanmakuList({
   entries,
   positionMs,
   loading,
+  onSeek,
 }: {
   /** 已加载并合并排序的全部弹幕条目（播放页的 danmakuEntries）。 */
   entries: readonly VideoDanmakuEntry[];
@@ -31,6 +33,8 @@ export function VideoDanmakuList({
   positionMs: number;
   /** 段还在取（首批没回来）。 */
   loading: boolean;
+  /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
+  onSeek: (positionMs: number) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const followRef = useRef<HTMLLIElement | null>(null);
@@ -84,20 +88,28 @@ export function VideoDanmakuList({
               className={cn(
                 // 屏外行跳过布局与绘制：全量渲染上万条也保持滚动流畅；
                 // contain-intrinsic-size 提供 scrollHeight 估算避免滚动条抖动。
-                "flex items-baseline gap-2 rounded-sm px-1 py-0.5",
                 "[content-visibility:auto] [contain-intrinsic-size:auto_1.75rem]",
                 entry.progressMs > positionMs && "opacity-55",
               )}
             >
-              <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                {formatTimestamp(entry.progressMs)}
-              </span>
-              <span
-                className="min-w-0 flex-1 truncate leading-relaxed"
-                style={entry.color ? { color: entry.color } : undefined}
+              {/* 整行是跳转入口（含未来条目）：点了就走 seek，列表随后跟随
+                  新位置滚动。按钮语义让键盘/读屏也能跳。 */}
+              <button
+                type="button"
+                onClick={() => onSeek(entry.progressMs)}
+                title="跳转到此弹幕的位置"
+                className="flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
               >
-                {entry.content}
-              </span>
+                <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {formatTimestamp(entry.progressMs)}
+                </span>
+                <span
+                  className="min-w-0 flex-1 truncate leading-relaxed"
+                  style={entry.color ? { color: entry.color } : undefined}
+                >
+                  {entry.content}
+                </span>
+              </button>
             </li>
           ))}
         </ol>
