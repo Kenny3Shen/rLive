@@ -135,6 +135,12 @@ export function startVideoCardPreview(request: VideoCardPreviewRequest): VideoCa
         kind: "dash",
         // VOD 必须显式关直播模式，否则内核按不确定时长处理。
         isLive: false,
+        // 预览只播前几秒不 seek，但分片选择走同一条链路：喂真实时间轴，
+        // 让插件按分片级精度取片（见 `applyXgDashSegmentTimeline`）。
+        dashSegmentTimeline: {
+          video: playInfo.video_segment_times,
+          audio: playInfo.audio_segment_times,
+        },
       });
       player = instance;
       // 卡片要铺满而不是留黑边；预览永远静音。

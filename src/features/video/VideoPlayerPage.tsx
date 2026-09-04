@@ -39,6 +39,7 @@ import {
   loadXgPlayerModules,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
+  type XgDashSegmentTimeline,
   type XgPlayerInstance,
 } from "@/features/room/player/xgPlayer";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
@@ -463,9 +464,8 @@ export function VideoPlayerPage() {
     (target: number) => {
       const media = videoRef.current;
       if (!media || !Number.isFinite(target)) return;
-      // 上限离时长留 0.25s 余量：DASH 插件按 floor(t / 段长) 拉分片，seek 目标
-      // 贴着 duration 会落在末段之外拉不到数据、永远停在 waiting；留余量让
-      // 播放器自然播完触发 ended（自动连播走它的正常路径）。
+      // 上限离时长留 0.25s 余量：跳到正正好 duration 会被媒体元素当成播放结束，
+      // 留余量让最后一帧真的播出来、再自然触发 ended（自动连播走它的正常路径）。
       const clamped = Math.max(0, duration > 0 ? Math.min(target, duration - 0.25) : target);
       sliderTargetRef.current = null;
       setCurrentTime(clamped);
@@ -482,6 +482,16 @@ export function VideoPlayerPage() {
   // 视频轨存在，纯音 MPD 会崩，因此走 native 内核而不是 DASH。
   const playUrl = playInfo?.audio_only ? playInfo.audio_url : mpdUrl;
   const playKind: XgPlaybackKind = playInfo?.audio_only ? "native" : "dash";
+  // DASH 专用：真实分片时间轴（插件自己按等长分片算的那份会选错分片，
+  // 见 `applyXgDashSegmentTimeline`）。仅音频走原生内核，没有分片表。
+  //
+  // 存 ref 而不是进重建 effect 的依赖：它是随 play-info 一起到的新数组，放进依赖
+  // 会让任何一次 refetch（同一个 mpd_url）都重建播放器。与 `sessionIdsRef` 同一手法。
+  const dashSegmentTimelineRef = useRef<XgDashSegmentTimeline | undefined>(undefined);
+  dashSegmentTimelineRef.current =
+    playInfo && !playInfo.audio_only
+      ? { video: playInfo.video_segment_times, audio: playInfo.audio_segment_times }
+      : undefined;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -586,6 +596,7 @@ export function VideoPlayerPage() {
           // VOD 必须显式关掉直播模式：`createXgPlayer` 默认 `isLive: true`，
           // 那会让 xgplayer 隐藏进度条并把时长当成不确定值。
           isLive: false,
+          dashSegmentTimeline: dashSegmentTimelineRef.current,
         });
         playerRef.current = player;
         player.on("error", (cause) => {

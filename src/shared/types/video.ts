@@ -127,6 +127,17 @@ export type VideoPlayInfo = {
   /** 实际选中的视频编码，如 `avc1.640033`。 */
   codecs: string;
   accept_quality: VideoQuality[];
+  /**
+   * 视频轨真实分片边界时刻（秒），共 N+1 项：分片 `k` 覆盖 `[t[k], t[k+1])`。
+   *
+   * `xgplayer-dash` 把 `SegmentList` 当等长分片展开，而 B 站按关键帧切片、长度
+   * 不等，偏差累积后插件会选错分片（seek 后永远 waiting）。播放器创建时把这份
+   * 时间轴交给 `applyXgDashSegmentTimeline` 改写插件的分片表。仅音频模式不走
+   * DASH，两条都为空。
+   */
+  video_segment_times: number[];
+  /** 音频轨真实分片边界时刻（秒），同上。 */
+  audio_segment_times: number[];
   session_ids: VideoSessionIds;
   /** 仅音频模式（听视频）：MPD 只含音轨，video_url 为空。 */
   audio_only: boolean;

@@ -125,6 +125,14 @@ pub struct VideoPlayInfo {
     /// 实际选中的视频编码，如 `avc1.640033`。
     pub codecs: String,
     pub accept_quality: Vec<VideoQuality>,
+    /// 视频轨真实分片边界时刻（秒），共 N+1 项：分片 `k` 覆盖 `[t[k], t[k+1])`。
+    ///
+    /// `xgplayer-dash` 把 `SegmentList` 当等长分片展开，而 B 站按关键帧切片、长度
+    /// 不等，偏差累积后插件会选错分片（seek 后永远 waiting）。前端拿这份时间轴
+    /// 改写插件的分片表。仅音频模式不走 DASH，两条都为空。
+    pub video_segment_times: Vec<f64>,
+    /// 音频轨真实分片边界时刻（秒），同上。
+    pub audio_segment_times: Vec<f64>,
     pub session_ids: VideoSessionIds,
     /// 仅音频模式（听视频）：MPD 只含音轨，video_url 为空。
     pub audio_only: bool,

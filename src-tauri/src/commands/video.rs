@@ -211,6 +211,17 @@ pub async fn video_get_play_info(
         quality_label: selection.quality_label,
         codecs: selection.video.codecs.clone(),
         accept_quality: selection.accept_quality,
+        // 仅音频模式走原生媒体元素而不是 DASH，没有分片表要修正。
+        video_segment_times: if audio_only {
+            Vec::new()
+        } else {
+            selection.video.sidx.segment_times()
+        },
+        audio_segment_times: if audio_only {
+            Vec::new()
+        } else {
+            selection.audio.sidx.segment_times()
+        },
         session_ids,
         audio_only,
     })
