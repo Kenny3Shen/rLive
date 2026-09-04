@@ -7,6 +7,7 @@ import {
   Hash,
   Home,
   MessageSquareText,
+  MonitorPlay,
   Radio,
   SearchX,
   Trash2,
@@ -22,8 +23,18 @@ import { isMobileClient } from "@/shared/clientPlatform";
 import { enabledSiteIds } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
-import type { DanmakuSendHistoryItem, HistoryItem, SiteId } from "@/shared/types/live";
+import type { DanmakuSendHistoryItem, HistoryItem } from "@/shared/types/live";
+import type { VideoHistoryItem, VideoHistoryKind } from "@/shared/types/video";
 import {
+  VIDEO_HISTORY_QUERY_KEY,
+  formatVideoDuration,
+  videoHistoryClear,
+  videoHistoryList,
+  videoHistoryPlayPath,
+  videoHistoryRemove,
+} from "@/features/video/videoHistory";
+import {
+  filterHistoryBySite,
   groupHistoryByDate,
   type HistoryDateGroup,
   type HistoryPlatformFilter,
@@ -87,6 +98,16 @@ function formatTime(timestamp: number): string {
     hour12: false,
   });
 }
+
+/** 每个视图的清空确认文案。 */
+const CLEAR_CONFIRM_COPY: Record<HistoryView, { title: string; description: string }> = {
+  watch: { title: "清空观看历史？", description: "将删除全部观看记录，此操作无法恢复。" },
+  video: { title: "清空视频历史？", description: "将删除全部视频观看记录，此操作无法恢复。" },
+  danmaku: {
+    title: "清空弹幕历史？",
+    description: "将删除全部已发送弹幕记录，此操作无法恢复。",
+  },
+};
 
 type HistoryCardProps = {
   item: HistoryItem;
@@ -188,6 +209,118 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   );
 }
 
+type VideoHistoryCardProps = {
+  item: VideoHistoryItem;
+  onOpen: () => void;
+  onRemove: () => void;
+  isRemoving: boolean;
+};
+
+/**
+ * 一条视频观看记录。与直播历史卡同构（封面 + 文本列 + 删除按钮），
+ * 额外在封面上叠时长标签与进度条 —— 用户要判断「上次看到哪儿了」，
+ * 进度是这张卡与直播卡唯一的语义差别。
+ */
+function VideoHistoryCard({ item, onOpen, onRemove, isRemoving }: VideoHistoryCardProps) {
+  const title = item.title || "未命名视频";
+  const playPath = videoHistoryPlayPath(item);
+  const cover = normalizeImageUrl(item.cover);
+  // 副行优先分集标题：番剧没有作者，分集名才是这一行唯一有信息量的内容。
+  const subtitle = item.part_title || item.author;
+  const hasDuration = item.duration > 0;
+  const progressPercent = hasDuration
+    ? Math.min(100, Math.max(0, (item.progress / item.duration) * 100))
+    : 0;
+  const watched = formatVideoDuration(item.progress);
+  // 总时长未知时只报已看到多少：`已看到 3:20 / 0:00` 会读成「一共零秒」。
+  const progressLabel = hasDuration
+    ? `已看到 ${watched} / ${formatVideoDuration(item.duration)}`
+    : `已看到 ${watched}`;
+
+  return (
+    <div
+      role="button"
+      data-motion-press
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.currentTarget !== event.target) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      onContextMenu={(event) => {
+        if (isMobileClient()) event.preventDefault();
+      }}
+      onPointerEnter={() => preloadRouteModule(playPath)}
+      onPointerDown={() => preloadRouteModule(playPath)}
+      onFocus={() => preloadRouteModule(playPath)}
+      className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated focus-ring"
+    >
+      <span className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border-subtle max-sm:w-20">
+        {cover ? (
+          <img
+            src={cover}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <span className="flex h-full w-full items-center justify-center">
+            <MonitorPlay className="size-6 text-muted-foreground" aria-hidden />
+          </span>
+        )}
+        {hasDuration && (
+          <>
+            <span className="absolute right-1 bottom-1.5 rounded-md bg-black/60 px-1 text-[10px] leading-4 font-medium text-white backdrop-blur-sm">
+              {formatVideoDuration(item.duration)}
+            </span>
+            {/* 进度条压在封面底边：它是缩略图的一部分，不占文本列的行。 */}
+            <span className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
+              <span className="block h-full bg-primary" style={{ width: `${progressPercent}%` }} />
+            </span>
+          </>
+        )}
+      </span>
+
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">{title}</span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+          {subtitle || "未知作者"}
+        </span>
+        <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Clock3 className="size-3.5" aria-hidden />
+            {formatTime(item.watched_at)}
+          </span>
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            {progressLabel}
+          </span>
+        </span>
+      </span>
+
+      <Button
+        type="button"
+        variant="destructive"
+        size="icon-sm"
+        data-action="delete-history"
+        aria-label={`删除 ${title} 的观看记录`}
+        title="删除此记录"
+        disabled={isRemoving}
+        onClick={(event) => {
+          event.stopPropagation();
+          onRemove();
+        }}
+      >
+        {isRemoving ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
+      </Button>
+    </div>
+  );
+}
+
 /** 消息发往的房间；不可得时用纯平台标签。 */
 function danmakuRoomLabel(item: DanmakuSendHistoryItem): string {
   const title = item.room_title?.trim();
@@ -264,14 +397,15 @@ function DanmakuSendHistoryCard({
   );
 }
 
-type HistoryTimelineProps<T extends { site_id: SiteId }> = {
+/** 与条目形态无关：只用 `itemKey`/`renderItem`，因此视频历史（无 `site_id`）也能复用。 */
+type HistoryTimelineProps<T> = {
   groups: HistoryDateGroup<T>[];
   headingIdPrefix: string;
   itemKey: (item: T) => string;
   renderItem: (item: T) => React.ReactNode;
 };
 
-function HistoryTimeline<T extends { site_id: SiteId }>({
+function HistoryTimeline<T>({
   groups,
   headingIdPrefix,
   itemKey,
@@ -335,7 +469,11 @@ export function HistoryPage() {
     requestedPlatform === "all" || visibleSiteIds.includes(requestedPlatform)
       ? requestedPlatform
       : "all";
-  const hasFilters = keyword.trim().length > 0 || dateFilter !== "all" || platformFilter !== "all";
+  // 视频历史只有 B 站一个来源，平台筛选对它不适用：把它算进去会让用户在直播视图
+  // 设过平台后，切到视频视图看到「没有匹配的记录」而不是真空态。
+  const hasTextFilters = keyword.trim().length > 0 || dateFilter !== "all";
+  const hasFilters =
+    activeView === "video" ? hasTextFilters : hasTextFilters || platformFilter !== "all";
 
   const allWatchHistoryQuery = useQuery({
     queryKey: ["history", "all"],
@@ -361,6 +499,12 @@ export function HistoryPage() {
     enabled: activeView === "danmaku",
   });
 
+  const videoHistoryQuery = useQuery({
+    queryKey: VIDEO_HISTORY_QUERY_KEY,
+    queryFn: videoHistoryList,
+    enabled: activeView === "video",
+  });
+
   const clearWatchHistoryMutation = useMutation({
     mutationFn: () => invokeCmd<void>("history_clear"),
     onSuccess: () => {
@@ -378,7 +522,17 @@ export function HistoryPage() {
       void qc.invalidateQueries({ queryKey: ["danmaku-send-history"] });
     },
   });
+
+  const clearVideoHistoryMutation = useMutation({
+    mutationFn: videoHistoryClear,
+    onSuccess: () => {
+      qc.setQueriesData<VideoHistoryItem[]>({ queryKey: VIDEO_HISTORY_QUERY_KEY }, []);
+      setClearOpen(false);
+      void qc.invalidateQueries({ queryKey: VIDEO_HISTORY_QUERY_KEY });
+    },
+  });
   const resetWatchHistoryClear = clearWatchHistoryMutation.reset;
+  const resetVideoHistoryClear = clearVideoHistoryMutation.reset;
   const resetDanmakuHistoryClear = clearDanmakuSendHistoryMutation.reset;
 
   const removeWatchHistoryMutation = useMutation({
@@ -396,60 +550,107 @@ export function HistoryPage() {
     },
   });
 
+  const removeVideoHistoryMutation = useMutation({
+    mutationFn: ({ kind, oid }: { kind: VideoHistoryKind; oid: string }) =>
+      videoHistoryRemove(kind, oid),
+    onSuccess: (_result, { kind, oid }) => {
+      qc.setQueriesData<VideoHistoryItem[]>({ queryKey: VIDEO_HISTORY_QUERY_KEY }, (items) =>
+        items?.filter((item) => item.kind !== kind || item.oid !== oid),
+      );
+      void qc.invalidateQueries({ queryKey: VIDEO_HISTORY_QUERY_KEY });
+      notify.success("已删除观看记录");
+    },
+    onError: () => {
+      notify.error("删除观看记录失败", "请稍后重试。");
+    },
+  });
+
   const watchGroups = useMemo(
     () =>
       groupHistoryByDate(
-        filterHistoryItems(watchHistoryQuery.data ?? [], {
+        filterHistoryBySite(
+          filterHistoryItems(watchHistoryQuery.data ?? [], {
+            keyword,
+            dateFilter,
+            getTimestamp: (item) => item.watched_at,
+            getSearchFields: (item) => [item.title, item.user_name, item.room_id],
+          }),
+          platformFilter,
+          disabledSiteIds,
+        ),
+        (item) => item.watched_at,
+      ),
+    [dateFilter, disabledSiteIds, keyword, platformFilter, watchHistoryQuery.data],
+  );
+  const videoGroups = useMemo(
+    () =>
+      groupHistoryByDate(
+        filterHistoryItems(videoHistoryQuery.data ?? [], {
           keyword,
           dateFilter,
           getTimestamp: (item) => item.watched_at,
-          getSearchFields: (item) => [item.title, item.user_name, item.room_id],
+          getSearchFields: (item) => [item.title, item.author, item.part_title, item.bvid],
         }),
         (item) => item.watched_at,
-        platformFilter,
-        disabledSiteIds,
       ),
-    [dateFilter, disabledSiteIds, keyword, platformFilter, watchHistoryQuery.data],
+    [dateFilter, keyword, videoHistoryQuery.data],
   );
   const danmakuGroups = useMemo(
     () =>
       groupHistoryByDate(
-        filterHistoryItems(danmakuSendHistoryQuery.data ?? [], {
-          keyword,
-          dateFilter,
-          getTimestamp: (item) => item.sent_at,
-          getSearchFields: (item) => [
-            item.content,
-            item.room_title,
-            item.room_user_name,
-            item.room_id,
-          ],
-        }),
+        filterHistoryBySite(
+          filterHistoryItems(danmakuSendHistoryQuery.data ?? [], {
+            keyword,
+            dateFilter,
+            getTimestamp: (item) => item.sent_at,
+            getSearchFields: (item) => [
+              item.content,
+              item.room_title,
+              item.room_user_name,
+              item.room_id,
+            ],
+          }),
+          platformFilter,
+          disabledSiteIds,
+        ),
         (item) => item.sent_at,
-        platformFilter,
-        disabledSiteIds,
       ),
     [danmakuSendHistoryQuery.data, dateFilter, disabledSiteIds, keyword, platformFilter],
   );
 
-  const canClear =
-    activeView === "watch"
-      ? (allWatchHistoryQuery.data?.length ?? 0) > 0
-      : (danmakuSendHistoryQuery.data?.length ?? 0) > 0;
-  const clearPending =
-    activeView === "watch"
-      ? clearWatchHistoryMutation.isPending
-      : clearDanmakuSendHistoryMutation.isPending;
-  const clearError =
-    activeView === "watch"
-      ? clearWatchHistoryMutation.isError
-      : clearDanmakuSendHistoryMutation.isError;
+  // 三条时间线各有自己的查询与清空变更；按视图查表，避免每处状态都写一遍三元。
+  const clearableCount: Record<HistoryView, number> = {
+    watch: allWatchHistoryQuery.data?.length ?? 0,
+    video: videoHistoryQuery.data?.length ?? 0,
+    danmaku: danmakuSendHistoryQuery.data?.length ?? 0,
+  };
+  const clearMutation: Record<
+    HistoryView,
+    { mutate: () => void; isPending: boolean; isError: boolean }
+  > = {
+    watch: clearWatchHistoryMutation,
+    video: clearVideoHistoryMutation,
+    danmaku: clearDanmakuSendHistoryMutation,
+  };
+  const activeHistoryQuery: Record<
+    HistoryView,
+    { refetch: () => Promise<unknown>; isRefetching: boolean; isLoading: boolean }
+  > = {
+    watch: watchHistoryQuery,
+    video: videoHistoryQuery,
+    danmaku: danmakuSendHistoryQuery,
+  };
+  const canClear = clearableCount[activeView] > 0;
+  const clearPending = clearMutation[activeView].isPending;
+  const clearError = clearMutation[activeView].isError;
 
   const handleViewChange = useCallback(
     (value: string) => {
-      if (value !== "watch" && value !== "danmaku") return;
+      if (!HISTORY_VIEWS.includes(value as HistoryView)) return;
       setClearOpen(false);
-      setSearchParams((current) => withHistoryView(current, value), { replace: true });
+      setSearchParams((current) => withHistoryView(current, value as HistoryView), {
+        replace: true,
+      });
     },
     [setSearchParams],
   );
@@ -487,14 +688,15 @@ export function HistoryPage() {
   }, [setSearchParams]);
 
   const resetActiveClearMutation = useCallback(() => {
-    if (activeView === "watch") resetWatchHistoryClear();
-    else resetDanmakuHistoryClear();
-  }, [activeView, resetDanmakuHistoryClear, resetWatchHistoryClear]);
+    const reset: Record<HistoryView, () => void> = {
+      watch: resetWatchHistoryClear,
+      video: resetVideoHistoryClear,
+      danmaku: resetDanmakuHistoryClear,
+    };
+    reset[activeView]();
+  }, [activeView, resetDanmakuHistoryClear, resetVideoHistoryClear, resetWatchHistoryClear]);
 
-  const clearActiveHistory = () => {
-    if (activeView === "watch") clearWatchHistoryMutation.mutate();
-    else clearDanmakuSendHistoryMutation.mutate();
-  };
+  const clearActiveHistory = () => clearMutation[activeView].mutate();
 
   // 头部拥有视图页签和清空按钮，因此发布它们渲染所需的状态，
   // 并监听它们请求的清空动作。确认对话框留在这里，
@@ -520,15 +722,13 @@ export function HistoryPage() {
     value: activeView,
     onChange: (view: HistoryView) => handleViewChange(view),
     enabled: isMobileClient(),
-    // 两个面板共用一条 track，下一页已经在屏上并跟随手指移动，
+    // 三个面板共用一条 track，下一页已经在屏上并跟随手指移动，
     // 而不是释放后才出现。
     layout: "track",
   });
 
-  const refreshActiveHistory = () =>
-    activeView === "watch" ? watchHistoryQuery.refetch() : danmakuSendHistoryQuery.refetch();
-  const historyRefreshing =
-    activeView === "watch" ? watchHistoryQuery.isRefetching : danmakuSendHistoryQuery.isRefetching;
+  const refreshActiveHistory = () => activeHistoryQuery[activeView].refetch();
+  const historyRefreshing = activeHistoryQuery[activeView].isRefetching;
 
   return (
     <PullToRefresh
@@ -544,10 +744,7 @@ export function HistoryPage() {
     >
       <RefreshFab
         onRefresh={refreshActiveHistory}
-        pending={
-          historyRefreshing ||
-          (activeView === "watch" ? watchHistoryQuery.isLoading : danmakuSendHistoryQuery.isLoading)
-        }
+        pending={historyRefreshing || activeHistoryQuery[activeView].isLoading}
         label="刷新历史记录"
       />
       <div className="flex min-h-full flex-col touch-pan-y">
@@ -558,11 +755,14 @@ export function HistoryPage() {
               onChange={handleSearchChange}
               className="min-w-0 flex-1"
             />
-            <HistoryPlatformFilterControl
-              value={platformFilter}
-              sites={visibleSiteIds}
-              onValueChange={handlePlatformFilterChange}
-            />
+            {/* 视频历史只有 B 站一个来源，平台筛选在该视图无从可选。 */}
+            {activeView !== "video" && (
+              <HistoryPlatformFilterControl
+                value={platformFilter}
+                sites={visibleSiteIds}
+                onValueChange={handlePlatformFilterChange}
+              />
+            )}
             <HistoryDateFilterControl value={dateFilter} onValueChange={handleDateFilterChange} />
           </div>
 
@@ -585,7 +785,7 @@ export function HistoryPage() {
               <TabsContent
                 value="watch"
                 keepMounted
-                // track 让两个面板并排存在，离场页与进场页在手指之下一起移动。Base UI 会
+                // track 让三个面板并排存在，离场页与进场页在手指之下一起移动。Base UI 会
                 // 隐藏保持挂载的面板，导致整行塌陷 —— 可见性归 track 管，
                 // 所以在这里撤销隐藏，并把非活动页标记为 inert。
                 hidden={false}
@@ -644,6 +844,66 @@ export function HistoryPage() {
                           })
                         }
                         isRemoving={removeWatchHistoryMutation.isPending}
+                      />
+                    )}
+                  />
+                )}
+              </TabsContent>
+
+              <TabsContent
+                value="video"
+                keepMounted
+                hidden={false}
+                inert={activeView === "video" ? undefined : true}
+                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
+                style={{ width: `${100 / HISTORY_VIEWS.length}%` }}
+              >
+                {videoHistoryQuery.isLoading && <HistorySkeleton />}
+
+                {videoHistoryQuery.isError && (
+                  <ErrorState
+                    error={videoHistoryQuery.error}
+                    title="视频历史加载失败"
+                    onRetry={() => void videoHistoryQuery.refetch()}
+                  />
+                )}
+
+                {!videoHistoryQuery.isLoading &&
+                  !videoHistoryQuery.isError &&
+                  videoGroups.length === 0 &&
+                  (hasFilters ? (
+                    <HistoryFilteredEmpty onReset={resetFilters} />
+                  ) : (
+                    <Empty className="min-h-64 py-12">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <MonitorPlay aria-hidden />
+                        </EmptyMedia>
+                        <EmptyTitle>暂无视频观看记录</EmptyTitle>
+                        <EmptyDescription>播放视频后会自动记录在这里。</EmptyDescription>
+                      </EmptyHeader>
+                      <EmptyContent>
+                        <Button variant="outline" size="sm" onClick={() => navigate("/video")}>
+                          <MonitorPlay data-icon="inline-start" aria-hidden />
+                          去看视频
+                        </Button>
+                      </EmptyContent>
+                    </Empty>
+                  ))}
+
+                {videoGroups.length > 0 && (
+                  <HistoryTimeline
+                    groups={videoGroups}
+                    headingIdPrefix="video-history-date"
+                    itemKey={(item) => `${item.kind}:${item.oid}:${item.watched_at}`}
+                    renderItem={(item) => (
+                      <VideoHistoryCard
+                        item={item}
+                        onOpen={() => navigate(videoHistoryPlayPath(item))}
+                        onRemove={() =>
+                          removeVideoHistoryMutation.mutate({ kind: item.kind, oid: item.oid })
+                        }
+                        isRemoving={removeVideoHistoryMutation.isPending}
                       />
                     )}
                   />
@@ -719,12 +979,8 @@ export function HistoryPage() {
           setClearOpen(nextOpen);
         }}
         icon={<Trash2 aria-hidden />}
-        title={activeView === "watch" ? "清空观看历史？" : "清空弹幕历史？"}
-        description={
-          activeView === "watch"
-            ? "将删除全部观看记录，此操作无法恢复。"
-            : "将删除全部已发送弹幕记录，此操作无法恢复。"
-        }
+        title={CLEAR_CONFIRM_COPY[activeView].title}
+        description={CLEAR_CONFIRM_COPY[activeView].description}
         error={clearError ? "清空失败，请重试。" : null}
         busy={clearPending}
         busyText="清空中…"

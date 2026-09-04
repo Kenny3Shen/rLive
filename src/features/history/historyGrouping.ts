@@ -30,20 +30,30 @@ function dateLabel(timestamp: number, today: number, yesterday: number): string 
     : date.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
 }
 
-export function groupHistoryByDate<T extends { site_id: SiteId }>(
+/**
+ * 按平台页签与「已禁用平台」设置过滤。
+ * 只有带 `site_id` 的历史（直播、弹幕）需要它；视频历史只有 B 站一个来源。
+ */
+export function filterHistoryBySite<T extends { site_id: SiteId }>(
   items: readonly T[],
-  getTimestamp: (item: T) => number,
   platformFilter: HistoryPlatformFilter,
   disabledSiteIds: unknown,
+): T[] {
+  const visibleSiteIds = new Set(enabledSiteIds(disabledSiteIds));
+  return items.filter(
+    (item) =>
+      visibleSiteIds.has(item.site_id) &&
+      (platformFilter === "all" || item.site_id === platformFilter),
+  );
+}
+
+/** 按本地日分组，组内按时间戳倒序。与平台无关。 */
+export function groupHistoryByDate<T>(
+  items: readonly T[],
+  getTimestamp: (item: T) => number,
   now = Date.now(),
 ): HistoryDateGroup<T>[] {
-  const visibleSiteIds = new Set(enabledSiteIds(disabledSiteIds));
   const sortedItems = items
-    .filter(
-      (item) =>
-        visibleSiteIds.has(item.site_id) &&
-        (platformFilter === "all" || item.site_id === platformFilter),
-    )
     .map((item, originalIndex) => ({ item, originalIndex, timestamp: getTimestamp(item) }))
     .sort((left, right) => {
       const leftValid = Number.isFinite(left.timestamp);

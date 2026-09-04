@@ -264,6 +264,8 @@ pub struct VideoArchive {
     /// 首 P 的 cid。搜索与 UP 主空间列表的条目没有 cid，播放页用它补齐取流键。
     pub cid: i64,
     pub title: String,
+    /// 稿件封面（上游 `pic`）。观看历史用它，播放页自身不展示。
+    pub cover: String,
     pub desc: String,
     pub author: String,
     pub author_face: Option<String>,

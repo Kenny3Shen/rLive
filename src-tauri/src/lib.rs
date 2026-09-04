@@ -96,6 +96,10 @@ use commands::video::{
     video_get_season, video_get_subtitle, video_get_subtitles, video_get_zone, video_search,
     video_stop_play, video_uploader_videos, video_zone_list,
 };
+use commands::video_history::{
+    video_history_add, video_history_clear, video_history_find, video_history_list,
+    video_history_remove,
+};
 use state::AppState;
 // 只有桌面端的关闭处理器会发出事件；Android 没有退出确认框。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -401,6 +405,11 @@ pub fn run() {
             video_get_comments,
             video_get_comment_replies,
             video_stop_play,
+            video_history_list,
+            video_history_find,
+            video_history_add,
+            video_history_remove,
+            video_history_clear,
             image_proxy_url,
             cache_usage,
             cache_clear,

@@ -4,6 +4,7 @@ use std::io::Read;
 
 use crate::db::follow::{self, FollowRecord, TagRecord};
 use crate::db::history::{self, HistoryRecord};
+use crate::db::video_history::{self, VideoHistoryRecord};
 use crate::db::iptv_favorite::{self, IptvFavoriteGroupRecord, IptvFavoriteRecord};
 use crate::db::schema::map_db_err;
 use crate::error::{AppError, AppResult};
@@ -50,6 +51,9 @@ pub struct ProfilePackage {
     pub iptv_favorite_groups: Vec<IptvFavoriteGroupRecord>,
     pub tags: Vec<TagRecord>,
     pub history: Vec<HistoryRecord>,
+    /// 视频观看历史。旧版本导出的配置没有这一项，按空表导入。
+    #[serde(default)]
+    pub video_history: Vec<VideoHistoryRecord>,
     pub danmaku_shield_words: Vec<String>,
     /// 顶层副本；`settings.danmaku_blocked_users` 与它合并导入。
     #[serde(default)]
@@ -68,6 +72,7 @@ impl ProfilePackage {
             iptv_favorite_groups: vec![],
             tags: vec![],
             history: vec![],
+            video_history: vec![],
             danmaku_shield_words: vec![],
             danmaku_blocked_users: vec![],
         }
@@ -142,6 +147,7 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
         iptv_favorite_groups: iptv_favorite::list_groups(conn)?,
         tags: follow::list_tags(conn)?,
         history: history::list(conn)?,
+        video_history: video_history::list(conn)?,
         danmaku_shield_words: shield,
         danmaku_blocked_users: blocked,
     })
@@ -290,6 +296,9 @@ pub fn merge_into_db(
     }
     for h in &package.history {
         history::upsert(&transaction, h.clone())?;
+    }
+    for h in &package.video_history {
+        video_history::upsert(&transaction, h.clone())?;
     }
 
     let mut settings = settings::get(&transaction)?;

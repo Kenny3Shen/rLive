@@ -1,5 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { CalendarDays, Clock3, MessageSquareText, Search, Trash2, X } from "lucide-react";
+import {
+  CalendarDays,
+  Clock3,
+  MessageSquareText,
+  MonitorPlay,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import {
@@ -27,17 +35,25 @@ export { PlatformFilterSelect as HistoryPlatformFilterControl } from "@/shared/c
 
 const VIEW_LABELS: Record<HistoryView, string> = {
   watch: "观看历史",
+  video: "视频历史",
   danmaku: "弹幕历史",
 };
 
 const VIEW_ICONS = {
   watch: Clock3,
+  video: MonitorPlay,
   danmaku: MessageSquareText,
 } as const;
 
+const CLEAR_LABELS: Record<HistoryView, string> = {
+  watch: "清空观看历史",
+  video: "清空视频历史",
+  danmaku: "清空弹幕历史",
+};
+
 /**
  * 时间线切换器，在 `/history` 上取代应用头部的平台条。它与平台条一样是
- * `tablist`：两个面板并排位于同一条可滑动的 track 上。
+ * `tablist`：三个面板并排位于同一条可滑动的 track 上。
  */
 export function HistoryViewSwitcher({
   value,
@@ -137,7 +153,7 @@ export function HistorySearchInput({
               onChange("");
             }
           }}
-          placeholder="搜索标题或弹幕"
+          placeholder="搜索标题、UP 主或弹幕"
           autoComplete="off"
         />
         {draft && (
@@ -266,7 +282,7 @@ export function HistoryClearButton({
   onRequestClear: () => void;
   className?: string;
 }) {
-  const label = view === "watch" ? "清空观看历史" : "清空弹幕历史";
+  const label = CLEAR_LABELS[view];
 
   return (
     <Tooltip>
