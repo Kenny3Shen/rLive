@@ -74,6 +74,33 @@ export type XgMpegtsCore = {
   seek?: (seconds: number) => boolean;
 };
 
+/**
+ * 一条轨的真实分片边界时刻（秒），共 N+1 项：分片 `k` 覆盖 `[t[k], t[k+1])`。
+ * 由后端 `Sidx::segment_times` 产出（`VideoPlayInfo.{video,audio}_segment_times`）。
+ */
+export type XgDashSegmentTimeline = {
+  video: readonly number[];
+  audio: readonly number[];
+};
+
+/** DashPlugin 解析出的一个分片；只列出选片依赖的字段。 */
+type XgDashMediaSegment = {
+  start: number;
+  end: number;
+  segmentDuration: number;
+};
+
+type XgDashPlugin = {
+  dash?: {
+    mpd?: {
+      mediaList?: {
+        video?: { mediaSegments?: XgDashMediaSegment[] }[];
+        audio?: { mediaSegments?: XgDashMediaSegment[] }[];
+      };
+    };
+  };
+};
+
 let coreModulePromise: Promise<typeof import("xgplayer")> | null = null;
 let hlsModulePromise: Promise<typeof import("xgplayer-hls.js")> | null = null;
 let mpegtsModulePromise: Promise<typeof import("xgplayer-mpegts.js")> | null = null;
@@ -126,9 +153,11 @@ export function createXgPlayer(
     flv?: Record<string, unknown>;
     hls?: Record<string, unknown>;
     mpegts?: Record<string, unknown>;
+    /** DASH 专用：真实分片时间轴，播放器就绪后改写插件算出的等长时间轴。 */
+    dashSegmentTimeline?: XgDashSegmentTimeline;
   },
 ): XgPlayerInstance {
-  const { root, video, url, kind, isLive = true, flv, hls, mpegts } = options;
+  const { root, video, url, kind, isLive = true, flv, hls, mpegts, dashSegmentTimeline } = options;
   const pluginSupported = modules.plugin?.isSupported?.() ?? true;
 
   if ((kind === "flv" || kind === "mpegts") && !pluginSupported) {
@@ -169,7 +198,70 @@ export function createXgPlayer(
   if (kind === "hls") playerOptions.hlsJsPlugin = hls ?? {};
   if (kind === "mpegts") playerOptions.MpegtsPlugin = mpegts ?? {};
 
-  return new modules.Player(playerOptions);
+  const player = new modules.Player(playerOptions);
+  if (kind === "dash" && dashSegmentTimeline) {
+    attachXgDashSegmentTimeline(player, dashSegmentTimeline);
+  }
+  return player;
+}
+
+/**
+ * 用真实的 sidx 时间轴覆盖 DashPlugin 自己算出的分片时间轴。
+ *
+ * 插件把 `<SegmentList>` 当**等长**分片展开（`start = index × 标称时长`），既不认
+ * `SegmentTimeline` 也不解析 sidx。B 站按关键帧切片、长度不等，偏差一路累积；
+ * 而 `mpd.seek(t)` 只在「t、t ± 该片时长」三个窗口里挑分片，偏差超过一片时长后就
+ * 再也挑不到真正覆盖 t 的那片 —— seek 后媒体元素永远停在 waiting，插件下一轮
+ * 轮询算出同样的目标、命中已下载的邻片，于是死锁。分片表是插件唯一的选片依据，
+ * 改写成真实时刻，选片就精确到分片级。
+ *
+ * 返回是否已写入：条数与边界数必须严格对齐，否则这份时间轴描述的不是这条轨。
+ */
+export function applyXgDashSegmentTimeline(
+  player: XgPlayerInstance,
+  timeline: XgDashSegmentTimeline,
+): boolean {
+  const mediaList = (player.getPlugin("DashPlugin") as XgDashPlugin | null)?.dash?.mpd?.mediaList;
+  if (!mediaList) return false;
+  let written = false;
+  for (const kind of ["video", "audio"] as const) {
+    const times = timeline[kind];
+    if (times.length < 2) continue;
+    for (const representation of mediaList[kind] ?? []) {
+      const segments = representation.mediaSegments;
+      if (!segments || segments.length + 1 !== times.length) continue;
+      segments.forEach((segment, index) => {
+        segment.start = times[index]!;
+        segment.end = times[index + 1]!;
+        segment.segmentDuration = segment.end - segment.start;
+      });
+      written = true;
+    }
+  }
+  return written;
+}
+
+/**
+ * 播放器一就绪就把真实时间轴写进 DashPlugin。
+ *
+ * 插件要到 `beforePlayerInit` 的异步链里才给自己挂上 `dash`，构造函数返回时通常
+ * 还没有。`resourceReady` 是清单解析完当拍同步发出的（就在挂 `dash` 之前），
+ * 因此退一个微任务再读；`canplay` 作为兜底，且它必然早于用户能拖进度条。
+ * 写入幂等，成功一次即停。
+ */
+function attachXgDashSegmentTimeline(
+  player: XgPlayerInstance,
+  timeline: XgDashSegmentTimeline,
+): void {
+  let written = applyXgDashSegmentTimeline(player, timeline);
+  const retry = () => {
+    if (written) return;
+    void Promise.resolve().then(() => {
+      if (!written) written = applyXgDashSegmentTimeline(player, timeline);
+    });
+  };
+  player.on("resourceReady", retry);
+  player.on("canplay", retry);
 }
 
 export function getXgMpegtsCore(player: XgPlayerInstance): XgMpegtsCore | null {

@@ -69,11 +69,14 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 不能赌 base_url 落在 mcdn 上，**一律经 `stream_proxy` 注入 Referer**。
 
-### 3. `xgplayer-dash@3.0.26` 两个硬坑（已读源码 + 浏览器验证）
+### 3. `xgplayer-dash@3.0.26` 四个硬坑（已读源码 + 浏览器验证）
 
 - **MPD 解析器不认 `SegmentBase`**（`es/parse/box/sidx.d.ts` 是空的，只实现了 `SegmentTemplate` / `SegmentList`）→ 必须我们自己解析 sidx，合成带 `SegmentList` 的 MPD。`SegmentList` 支持 `<Initialization range>` 与 `<SegmentURL mediaRange>`，且 `resolveSegmentURL` 对 `^https?://` 直接放行，可以塞绝对代理 URL。
 - **`Task` 按 URL 去重**（`es/media/task.js`：`Task.queue.some(item => item.url === url)` 命中就直接 return，连 XHR 都不建）。Bilibili 是「一条 URL + 不同 Range」，会导致**除首片外全部被静默丢弃**、播放卡死。→ **每个分片 URL 必须拼唯一 query**（如 `&seg=<idx>`），上游忽略该参数。
 - 取 MPD 的 `es/util/xhr.js` 会给 URL **拼 `?`**，`blob:` 精确匹配因此 404 → **MPD 必须由 HTTP 提供**，不能用 blob URL。
+- **`SegmentList` 被当成等长分片展开**（`es/m4s/mpd.js`：`start = index × 标称 duration`，既不认 `SegmentTimeline` 也不解析 sidx）。B 站按关键帧切片、单片长度不等（实测 5s 片里混 2.7s 片），偏差一路累积；而 `mpd.seek(t)` 只在「`t`、`t ± 该片时长`」三个窗口里挑分片，偏差超过一片时长后就再也挑不到真正覆盖 `t` 的那片 —— seek 后媒体元素永远停在 `waiting`，插件下一轮轮询算出同样的目标、命中已下载的邻片，于是死锁。→ 两道措施：
+  - 后端标称 `duration` 取**平均槽位**（`mediaPresentationDuration / 片数`）而不是首片时长。取首片时 `片数 × 首片时长 > 总时长`，末片槽位倒挂（`start ≥ end`）、任何时刻都选不中，最后一片永远拉不到数据。
+  - 真实逐片边界由 `Sidx::segment_times`（N+1 项，分片 `k` 覆盖 `[t[k], t[k+1])`）随 play-info 下发，前端 `applyXgDashSegmentTimeline` 在插件挂上 `dash` 后（`resourceReady`/`canplay`）把分片表改写成真实时刻，选片精确到分片级。条数与边界数不符时拒绝改写（那不是这条轨的时间轴）。
 
 ### 已验证的浏览器结论
 
@@ -170,7 +173,7 @@ message DanmakuElem {
 ### 换集过渡与 seek 边界
 
 - 换集（合集/选集/相关视频跳转，cid 变化）时 `keepPreviousData` 的旧 playInfo 不能沿用：换集过渡（`switchingItem`，用「数据与 cid 对齐时刻」的 cid 比对判定）把 playInfo 抹成 undefined —— 播放器 effect 随之销毁旧实例（旧画面/声音立刻停住，不会先闪旧集首帧）、加载遮罩显示、旧播放错误清空；新集信息就位后重建。换画质/重试（同 cid）仍走旧播放器无缝续播路径。代理会话的停用链走 query 原始数据（不经被抹掉的 playInfo），保持 A→B 连续不泄漏。
-- seek 上限离时长留 0.25s 余量：DASH 插件按 `floor(t / 段长)` 拉分片，seek 目标贴着 duration 会落在末段之外拉不到数据、永远停在 waiting（表现为「跳到最后无限加载不进下一 P」）。留余量让播放器自然播完触发 ended，自动连播走正常路径。
+- seek 上限离时长留 0.25s 余量：跳到正正好 `duration` 会被媒体元素当成播放结束，留余量让最后一帧真的播出来、再自然触发 ended（自动连播走正常路径）。「跳到最后无限加载不进下一 P」的真正根因是分片表被当成等长展开（见第二章第 3 节第四坑）：末片槽位倒挂 + 逐片偏差累积，插件永远选不中覆盖目标时刻的分片。仅靠这个余量遮不住它 —— 偏差大的稿件在中段 seek 同样会卡死（实测 1069s 稿件跳 500s 即复现）。
 
 ### 跳原址与复制链接（底部 Shell）
 

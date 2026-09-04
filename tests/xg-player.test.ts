@@ -7,6 +7,7 @@ import {
   nextIptvReconnectAction,
 } from "../src/features/iptv/IptvPlayer";
 import {
+  applyXgDashSegmentTimeline,
   createXgPlayer,
   getXgHlsCore,
   getXgMpegtsCore,
@@ -403,5 +404,106 @@ describe("xgplayer transport selection", () => {
     };
     deferredCore?.startLoad(7);
     expect(startPosition).toBe(7);
+  });
+
+  test("rewrites the DASH segment table to the real sidx boundaries", () => {
+    // 插件按等长分片展开出的表：末片区间倒挂（120 ≥ 119.97），任何时刻都选不中它。
+    const video = [
+      { start: 0, end: 5, segmentDuration: 5 },
+      { start: 5, end: 10, segmentDuration: 5 },
+      { start: 10, end: 119.967, segmentDuration: 5 },
+    ];
+    const audio = [
+      { start: 0, end: 5, segmentDuration: 5 },
+      { start: 5, end: 119.978, segmentDuration: 5 },
+    ];
+    const player = {
+      getPlugin: () => ({
+        dash: {
+          mpd: {
+            mediaList: {
+              video: [{ mediaSegments: video }],
+              audio: [{ mediaSegments: audio }],
+            },
+          },
+        },
+      }),
+    } as unknown as XgPlayerInstance;
+
+    expect(
+      applyXgDashSegmentTimeline(player, {
+        video: [0, 5, 112.7, 119.967],
+        audio: [0, 115.357, 119.978],
+      }),
+    ).toBe(true);
+    expect(video.map((segment) => [segment.start, segment.end])).toEqual([
+      [0, 5],
+      [5, 112.7],
+      [112.7, 119.967],
+    ]);
+    expect(audio.map((segment) => [segment.start, segment.end])).toEqual([
+      [0, 115.357],
+      [115.357, 119.978],
+    ]);
+    // 插件用 segmentDuration 当选片窗口的半径，必须跟着边界一起改。
+    expect(video[2]!.segmentDuration).toBeCloseTo(7.267, 3);
+    expect(audio[1]!.segmentDuration).toBeCloseTo(4.621, 3);
+    // 每片都覆盖一段非空区间:seek 目标落在任意时刻都能选中唯一一片。
+    for (const segment of [...video, ...audio]) {
+      expect(segment.end).toBeGreaterThan(segment.start);
+    }
+  });
+
+  test("leaves a segment table alone when it does not match the timeline", () => {
+    // 条数不符 = 这份时间轴描述的不是这条轨（画质/编码不同),改写会把表写坏。
+    const video = [{ start: 0, end: 5, segmentDuration: 5 }];
+    const player = {
+      getPlugin: () => ({
+        dash: { mpd: { mediaList: { video: [{ mediaSegments: video }], audio: [] } } },
+      }),
+    } as unknown as XgPlayerInstance;
+
+    expect(applyXgDashSegmentTimeline(player, { video: [0, 5, 10], audio: [] })).toBe(false);
+    expect(video).toEqual([{ start: 0, end: 5, segmentDuration: 5 }]);
+  });
+
+  test("applies the DASH timeline once the plugin attaches its parsed manifest", async () => {
+    // 插件要到 `beforePlayerInit` 的异步链里才挂上 `dash`，构造函数返回时还没有:
+    // 播放器创建时写不进去,必须等 resourceReady/canplay 再补。
+    const handlers = new Map<string, () => void>();
+    let dash: unknown = null;
+    // 等长展开的表：末片 end 是标称槽位（10s），真实边界在 7.7s。
+    const segments = [
+      { start: 0, end: 5, segmentDuration: 5 },
+      { start: 5, end: 10, segmentDuration: 5 },
+    ];
+    class PlayerStub {
+      on(event: string, handler: () => void) {
+        handlers.set(event, handler);
+      }
+      getPlugin() {
+        return dash ? { dash } : null;
+      }
+    }
+
+    createXgPlayer({ Player: PlayerStub as unknown as XgPlayerModules["Player"] }, {
+      root: {} as HTMLElement,
+      video: { canPlayType: () => "" } as unknown as HTMLVideoElement,
+      url: "http://127.0.0.1:5001/mpd",
+      kind: "dash",
+      isLive: false,
+      dashSegmentTimeline: { video: [0, 5, 7.7], audio: [] },
+    });
+
+    // 构造函数返回时插件还没挂上 dash，写不进去。
+    expect(segments[1]!.end).toBe(10);
+    dash = { mpd: { mediaList: { video: [{ mediaSegments: segments }], audio: [] } } };
+    handlers.get("resourceReady")?.();
+    await Promise.resolve();
+    expect(segments.map((segment) => [segment.start, segment.end])).toEqual([
+      [0, 5],
+      [5, 7.7],
+    ]);
+    expect(segments[1]!.segmentDuration).toBeCloseTo(2.7, 3);
   });
 });

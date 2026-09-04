@@ -831,6 +831,23 @@ impl Sidx {
             _ => 0.0,
         }
     }
+
+    /// 分片边界时刻（秒），共 N+1 项：分片 `k` 覆盖 `[times[k], times[k+1])`。
+    ///
+    /// 交给前端改写 `xgplayer-dash` 自己算出的分片时间轴用（见
+    /// `applyXgDashSegmentTimeline`）：插件把 `SegmentList` 当等长分片展开，
+    /// 而 B 站按关键帧切片、长度不等。
+    pub fn segment_times(&self) -> Vec<f64> {
+        let timescale = f64::from(self.timescale.max(1));
+        let mut times = Vec::with_capacity(self.segments.len() + 1);
+        times.push(0.0);
+        times.extend(
+            self.segments
+                .iter()
+                .map(|segment| segment.t_end as f64 / timescale),
+        );
+        times
+    }
 }
 
 fn be_u16(bytes: &[u8], offset: usize) -> AppResult<u16> {
@@ -979,7 +996,7 @@ fn xml_escape(value: &str) -> String {
 
 /// 为一条轨输出 `<SegmentList>`。
 ///
-/// 两个不可省的细节：
+/// 三个不可省的细节：
 ///
 /// 1. 必须用 `SegmentList` 而不是 `SegmentBase`。`xgplayer-dash@3.0.26` 只实现了
 ///    `SegmentTemplate` 与 `SegmentList`，喂 `SegmentBase` 会解析不出任何分片。
@@ -988,10 +1005,16 @@ fn xml_escape(value: &str) -> String {
 ///    Bilibili 是「一条 URL + 不同 Range」的形态，若所有分片共用同一个地址，
 ///    除首片外会被全部静默丢弃、播放卡死。这里给每片拼上 `seg=<idx>`，
 ///    上游会忽略该参数，只用来把 URL 撑开成唯一值。
-fn segment_list_xml(track: &VideoTrack, proxy_url: &str) -> String {
-    let timescale = f64::from(track.sidx.timescale.max(1));
-    let first = track.sidx.segments[0];
-    let segment_millis = ((first.t_end - first.t_start) as f64 / timescale * 1000.0).round() as i64;
+/// 3. 标称 `duration` 取**平均槽位**（`mediaPresentationDuration / 片数`）而不是首片
+///    时长。插件把 `SegmentList` 当等长分片展开（`start = index × 标称时长`），并把
+///    末片的 `end` 钉在 `mediaPresentationDuration` 上；B 站按关键帧切片，中途会
+///    出现短片，取首片时长会让 `片数 × 标称 > 总时长` —— 末片区间倒挂
+///    （`start ≥ end`），任何时刻都选不中它，最后一片永远拉不到数据。平均槽位保证
+///    槽位铺满 `[0, 总时长]` 且不越界。真实的逐片时刻由 `Sidx::segment_times`
+///    交给前端改写（见 `applyXgDashSegmentTimeline`）。
+fn segment_list_xml(track: &VideoTrack, proxy_url: &str, presentation_secs: f64) -> String {
+    let count = track.sidx.segments.len().max(1) as f64;
+    let segment_millis = (presentation_secs * 1000.0 / count).floor().max(1.0) as i64;
     let joiner = if proxy_url.contains('?') { '&' } else { '?' };
 
     let mut xml = format!(r#"<SegmentList timescale="1000" duration="{segment_millis}">"#);
@@ -1051,12 +1074,12 @@ pub fn build_mpd(
         video_codecs = xml_escape(&video.codecs),
         video_sap = video.start_with_sap,
         video_bandwidth = video.bandwidth,
-        video_segments = segment_list_xml(video, video_proxy_url),
+        video_segments = segment_list_xml(video, video_proxy_url, duration),
         audio_id = xml_escape(&audio.rep_id),
         audio_codecs = xml_escape(&audio.codecs),
         audio_sap = audio.start_with_sap,
         audio_bandwidth = audio.bandwidth,
-        audio_segments = segment_list_xml(audio, audio_proxy_url),
+        audio_segments = segment_list_xml(audio, audio_proxy_url, duration),
     )
 }
 
@@ -2029,12 +2052,84 @@ mod tests {
         assert!(mpd.contains(r#"media="http://127.0.0.1:5001/live?seg=0" mediaRange="1602-2000""#));
         assert!(mpd.contains(r#"media="http://127.0.0.1:5001/live?seg=1" mediaRange="2001-3000""#));
         assert!(mpd.contains(r#"media="http://127.0.0.1:5002/live?seg=1" mediaRange="2001-3000""#));
-        // 分片时长按单片给出（5s → 5000ms）。
+        // 标称时长取平均槽位：总时长 10s / 2 片 = 5000ms。
         assert!(mpd.contains(r#"<SegmentList timescale="1000" duration="5000">"#));
         // 时长取 sidx 时间轴：160000/16000 = 10s。
         assert!(mpd.contains(r#"mediaPresentationDuration="PT10S""#));
         assert!(mpd.contains(r#"codecs="avc1.640033""#));
         assert!(mpd.contains(r#"codecs="mp4a.40.2""#));
+    }
+
+    #[test]
+    fn mpd_nominal_segment_duration_keeps_last_slot_reachable() {
+        // 实测形态：中途出现短片（2.7s），总时长因此小于「片数 × 首片时长」。
+        let mut video = track_fixture();
+        video.sidx.segments = vec![
+            SidxSegment {
+                start_byte: 1602,
+                end_byte: 2000,
+                t_start: 0,
+                t_end: 80_000,
+            },
+            SidxSegment {
+                start_byte: 2001,
+                end_byte: 3000,
+                t_start: 80_000,
+                t_end: 160_000,
+            },
+            SidxSegment {
+                start_byte: 3001,
+                end_byte: 3500,
+                t_start: 160_000,
+                t_end: 203_200,
+            },
+        ];
+        let selection = VideoPlaySelection {
+            video: video.clone(),
+            audio: video,
+            quality: 32,
+            quality_label: "清晰 480P".into(),
+            accept_quality: Vec::new(),
+        };
+
+        let mpd = build_mpd(
+            &selection,
+            "http://127.0.0.1:5001/live",
+            "http://127.0.0.1:5002/live",
+        );
+
+        // 12.7s / 3 片 = 4233ms（向下取整）。取首片的 5000ms 会让 3 × 5000 > 12700，
+        // 插件展开出的末片区间倒挂（start 15s ≥ end 12.7s）、任何时刻都选不中，
+        // 最后一片永远拉不到数据 —— seek 到尾部会永远 waiting。
+        assert!(mpd.contains(r#"<SegmentList timescale="1000" duration="4233">"#));
+        assert!(mpd.contains(r#"mediaPresentationDuration="PT12.7S""#));
+        assert!(
+            3 * 4233 <= 12_700,
+            "槽位总和必须落在 mediaPresentationDuration 之内"
+        );
+    }
+
+    #[test]
+    fn sidx_segment_times_are_inclusive_boundaries() {
+        let sidx = Sidx {
+            timescale: 16_000,
+            segments: vec![
+                SidxSegment {
+                    start_byte: 0,
+                    end_byte: 1,
+                    t_start: 0,
+                    t_end: 80_000,
+                },
+                SidxSegment {
+                    start_byte: 2,
+                    end_byte: 3,
+                    t_start: 80_000,
+                    t_end: 123_200,
+                },
+            ],
+        };
+        // N+1 项：分片 k 覆盖 [times[k], times[k+1])。
+        assert_eq!(sidx.segment_times(), vec![0.0, 5.0, 7.7]);
     }
 
     #[test]
