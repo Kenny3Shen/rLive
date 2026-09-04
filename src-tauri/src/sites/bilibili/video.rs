@@ -614,6 +614,7 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
         aid: data.get("aid").map(as_str).unwrap_or_default(),
         cid,
         title: data.get("title").map(as_str).unwrap_or_default(),
+        cover: data.get("pic").map(as_str).unwrap_or_default(),
         desc: data.get("desc").map(as_str).unwrap_or_default(),
         author: owner
             .and_then(|owner| owner.get("name"))
@@ -2701,6 +2702,7 @@ mod tests {
                 "aid": 117075725000671i64,
                 "cid": 311001234i64,
                 "title": "测试稿件",
+                "pic": "https://i0.hdslb.com/bfs/archive/x.jpg",
                 "desc": "简介内容",
                 "owner": { "name": "UP 主", "face": "https://i0.hdslb.com/bfs/face/2f.jpg" },
                 "stat": { "view": 100, "danmaku": 5, "reply": 4986 },
@@ -2714,6 +2716,7 @@ mod tests {
         assert_eq!(archive.desc, "简介内容");
         assert_eq!(archive.reply, 4986);
         assert_eq!(archive.pubdate, 1759000000);
+        assert_eq!(archive.cover, "https://i0.hdslb.com/bfs/archive/x.jpg");
 
         // 根上没有 cid 时退回首 P（搜索/UP 列表的条目靠这条路径补齐取流键）。
         let multi_page = serde_json::json!({

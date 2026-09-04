@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import {
   Captions,
   CaptionsOff,
@@ -45,17 +45,26 @@ import {
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
 import { formatRecordingDuration } from "@/features/recording/recording";
-import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
+import type { VideoHistoryItem, VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import {
   videoGetArchive,
   videoGetCastUrl,
   videoGetDanmaku,
   videoGetPlayInfo,
+  videoGetSeason,
   videoGetSubtitle,
   videoGetSubtitles,
   videoStopPlay,
 } from "./videoApi";
+import {
+  shouldReportVideoProgress,
+  videoHistoryAdd,
+  videoHistoryFind,
+  videoResumePosition,
+  VIDEO_HISTORY_MIN_PROGRESS_SECONDS,
+  VIDEO_HISTORY_QUERY_KEY,
+} from "./videoHistory";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { CastMenu } from "@/features/room/CastMenu";
 import {
@@ -213,6 +222,138 @@ export function VideoPlayerPage() {
   const cid = rawCid > 0 ? rawCid : (archiveQuery.data?.cid ?? 0);
   // 弹幕发送历史与 PGC 分集都用 aid；URL 直入时用详情补齐。
   const aid = params?.aid || archiveQuery.data?.aid || null;
+
+  // PGC 剧集详情：观看历史按「作品」去重，PGC 的作品标识是 season_id，而 URL 只带
+  // ep_id，必须靠它换出 season_id 与剧集名。与右侧栏 season 查询同 key、同
+  // staleTime，共享一次请求（侧栏本来就要这份数据，这里不额外发起网络请求）。
+  const seasonQuery = useQuery({
+    queryKey: ["video_season", "", params?.epId ?? ""],
+    enabled: Boolean(params?.epId),
+    queryFn: () => videoGetSeason({ epId: params!.epId! }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  /**
+   * 本次播放要写进观看历史的那一行。
+   *
+   * `oid` 为空表示身份还没解析出来（PGC 的 season 详情未到、或 UGC 连 bvid 都没有），
+   * 此时不上报——宁可漏记开头几秒，也不能写一行认不出是哪部作品的历史。
+   */
+  const historyEntry = useMemo<VideoHistoryItem | null>(() => {
+    if (!params) return null;
+    const watchedAt = 0; // 上报时取当前时间，这里只组装身份与元数据。
+    if (params.epId) {
+      const season = seasonQuery.data;
+      const episode = season?.episodes.find((item) => item.ep_id === params.epId) ?? null;
+      if (!season?.season_id) return null;
+      return {
+        kind: "pgc",
+        oid: season.season_id,
+        title: season.title,
+        cover: episode?.cover || season.cover,
+        // 剧集没有单一作者，副行留给分集标题。
+        author: "",
+        part_title: episode?.long_title || episode?.title || "",
+        bvid: episode?.bvid ?? "",
+        cid: episode?.cid ?? params.cid,
+        ep_id: params.epId,
+        aid: episode?.aid || params.aid || "",
+        progress: 0,
+        duration: 0,
+        watched_at: watchedAt,
+      };
+    }
+    const bvid = params.bvid;
+    if (!bvid) return null;
+    const archive = archiveQuery.data;
+    // 分 P 标题：多 P 稿件才有意义，单 P 稿件的 pages 为空，留空即可。
+    const part = archive?.pages.find((page) => page.cid === cid) ?? null;
+    return {
+      kind: "ugc",
+      oid: bvid,
+      // 详情未到时用 URL 带的标题兜底：至少历史里不是空标题。
+      title: archive?.title || params.title || "",
+      cover: archive?.cover ?? "",
+      author: archive?.author ?? "",
+      part_title: part ? part.part || `P${part.page}` : "",
+      bvid,
+      cid,
+      ep_id: "",
+      aid: aid ?? "",
+      progress: 0,
+      duration: 0,
+      watched_at: watchedAt,
+    };
+  }, [aid, archiveQuery.data, cid, params, seasonQuery.data]);
+
+  /**
+   * 这部作品上次看到哪。
+   *
+   * 独立的 key 前缀（不是 `VIDEO_HISTORY_QUERY_KEY`）：历史页清空/删除时按
+   * `["video-history"]` 前缀写缓存，续播查询的数据形状是单条记录而不是列表，
+   * 混在同一前缀下会被写成数组。`staleTime: Infinity` 让它一次解析后不再变动——
+   * 边看边上报会不断改写这部作品的历史，但续播位置只在进页时有意义。
+   */
+  const historyKind = historyEntry?.kind ?? null;
+  const historyOid = historyEntry?.oid ?? "";
+  const resumeQuery = useQuery({
+    queryKey: ["video_history_resume", historyKind ?? "", historyOid],
+    enabled: historyKind !== null && historyOid.length > 0,
+    queryFn: () => videoHistoryFind(historyKind!, historyOid),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  });
+  /** 身份已定但历史还没查完：播放器要等它，否则先从 0 播再跳会闪一下。 */
+  const resumePending = resumeQuery.isPending && historyKind !== null && historyOid.length > 0;
+
+  // 播放器 effect 只依赖播放地址，不该因为历史/元数据变化就重建播放器，
+  // 因此这三样经 ref 读取。
+  const historyEntryRef = useRef<VideoHistoryItem | null>(null);
+  // 离开播放页的路由切换会先以 params=null 再渲染一次(此时 entry 为 null)再卸载,
+  // 若直接赋值,卸载 flush 读到的会是 null,最后一段进度就丢了。因此只在新身份
+  // 存在时覆盖:离开页面时 ref 保留旧作品,flush 仍能对上 reportedCid。
+  if (historyEntry) historyEntryRef.current = historyEntry;
+  const historyResumeAtRef = useRef(0);
+  historyResumeAtRef.current = videoResumePosition(resumeQuery.data, {
+    cid,
+    epId: params?.epId ?? null,
+  });
+  /** 这一集上次写盘的时刻；null = 还没写过。换集时由播放器 effect 重置。 */
+  const historyReportedAtRef = useRef<number | null>(null);
+
+  const queryClient = useQueryClient();
+
+  /**
+   * 把进度写进本地观看历史。
+   *
+   * 身份经 `historyEntryRef` 读取而不是闭包捕获:稿件详情(标题/封面/UP 主)晚于
+   * 播放器就位,捕获旧值会把这些字段写成空。错位风险由 `reportProgress` 里的
+   * `reportedCid` 比对挡住——换集后 ref 指向新集,旧实例的 flush 因此被丢弃。
+   * `force` 用于暂停/播完/离开这三个「最后一次」的时机,绕过节流窗口。
+   * 失败只吞掉——历史是本地记账,不该让它的故障打断播放。
+   */
+  const reportVideoProgress = useCallback(
+    (entry: VideoHistoryItem, position: number, totalDuration: number, force: boolean) => {
+      const now = Date.now();
+      if (force) {
+        if (!Number.isFinite(position) || position < VIDEO_HISTORY_MIN_PROGRESS_SECONDS) return;
+      } else if (!shouldReportVideoProgress(position, historyReportedAtRef.current, now)) {
+        return;
+      }
+      historyReportedAtRef.current = now;
+      void videoHistoryAdd({
+        ...entry,
+        progress: position,
+        duration: totalDuration > 0 ? totalDuration : 0,
+        watched_at: now,
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: VIDEO_HISTORY_QUERY_KEY }))
+        .catch(() => undefined);
+    },
+    [queryClient],
+  );
 
   // 播放列表状态
   const playlistStore = usePlaylistStore();
@@ -535,8 +676,17 @@ export function VideoPlayerPage() {
     const video = videoRef.current;
     const root = rootRef.current;
     if (!video || !root || !playUrl) return;
+    // 续播位置还没查出来就先不建播放器：先从 0 起播再跳会让画面闪一下，
+    // 而这条查询是本地 SQLite，通常早于 playUrl（网络请求）就位。
+    if (resumePending) return;
     const media = video;
     let cancelled = false;
+    // 这一轮播放器对应的分集。上报前用它比对 ref 里的身份，
+    // 避免换集过渡期把旧集进度记到新集身上。
+    const reportedCid = cid;
+    // 换集/换画质都会重建播放器：节流窗口按播放器实例重置，
+    // 新的一集因此能立刻记下第一笔。
+    historyReportedAtRef.current = null;
 
     setLoading(true);
     setWaiting(false);
@@ -546,11 +696,30 @@ export function VideoPlayerPage() {
     setBufferedTime(0);
     setDuration(playInfo?.duration ?? 0);
 
+    /** 当前分集的总时长：后端算出的值优先，缺失时退回媒体元数据。 */
+    function totalDuration() {
+      const fromInfo = playInfo?.duration ?? 0;
+      if (fromInfo > 0) return fromInfo;
+      return Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
+    }
+    /**
+     * 上报这一集的进度。
+     *
+     * 只在 ref 里的身份仍指向本播放器实例正在播的这一集时才上报：换集后
+     * 清理函数里的最后一次 flush 会读到新集的身份，写下去就是错位的进度。
+     */
+    function reportProgress(position: number, force: boolean) {
+      const entry = historyEntryRef.current;
+      if (!entry || entry.cid !== reportedCid) return;
+      reportVideoProgress(entry, position, totalDuration(), force);
+    }
+
     function syncTime() {
       if (cancelled) return;
       const actual = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : 0;
       if (sliderTargetRef.current === null) setCurrentTime(actual);
       ensureDanmakuSegments(actual * 1_000);
+      reportProgress(actual, false);
     }
     function syncDuration() {
       if (cancelled) return;
@@ -571,7 +740,10 @@ export function VideoPlayerPage() {
       setLoading(false);
     }
     function onPause() {
-      if (!cancelled) setPaused(true);
+      if (cancelled) return;
+      setPaused(true);
+      // 暂停是「可能马上要走」的最强信号：立刻落盘，不等节流窗口。
+      reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
     }
     function onReady() {
       if (cancelled) return;
@@ -590,6 +762,9 @@ export function VideoPlayerPage() {
     function onEnded() {
       if (cancelled) return;
       setPaused(true);
+      // 播完记满进度：历史卡的进度条画到底，续播判定据此认定「已看完」并从头播。
+      const total = totalDuration();
+      reportProgress(total > 0 ? total : media.currentTime, true);
       // 自动播放下一集
       if (playlistStore.autoPlayNext && nextItem) {
         const target = nextItem;
@@ -656,6 +831,14 @@ export function VideoPlayerPage() {
             void Promise.resolve(player.play()).catch(() => undefined);
           }
         } else {
+          // 观看历史续播：上次看到一半的同一分集，从那个位置起播。位置写在
+          // 起播之前，与换画质走同一条「元数据就位前赋值 currentTime」的路径；
+          // 起播仍交给自动播放策略，否则被浏览器策略拒绝时会停在续播点不动。
+          const historyResumeAt = historyResumeAtRef.current;
+          if (historyResumeAt > 0) {
+            media.currentTime = historyResumeAt;
+            setCurrentTime(historyResumeAt);
+          }
           const recoverMutedAutoplay = () => {
             if (mutedRef.current) return false;
             mutedRef.current = false;
@@ -677,6 +860,9 @@ export function VideoPlayerPage() {
       });
 
     return () => {
+      // 销毁前记下最后一次进度:媒体元素此刻还能读 currentTime。
+      // 放在 `cancelled = true` 之前,让它与其它 flush 走同一条 reportProgress。
+      reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
       cancelled = true;
       media.removeEventListener("timeupdate", syncTime);
       media.removeEventListener("durationchange", syncDuration);
@@ -698,7 +884,7 @@ export function VideoPlayerPage() {
         // 协议插件可能已经释放了它的 MediaSource。
       }
     };
-  }, [ensureDanmakuSegments, playUrl, playInfo?.duration, playKind]);
+  }, [cid, ensureDanmakuSegments, playUrl, playInfo?.duration, playKind, reportVideoProgress, resumePending]);
 
   const togglePlayback = useCallback(() => {
     const player = playerRef.current;
@@ -877,6 +1063,12 @@ export function VideoPlayerPage() {
     setPlaybackError(null);
     setWaiting(false);
     setLoading(true);
+    // 记下当前位置：重建走的是换画质那条续播路径，否则会退回观看历史里的
+    // 旧位置（续播查询是进页时的快照，不随边看边上报更新）。
+    const media = videoRef.current;
+    if (media && media.currentTime > 0) {
+      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+    }
     setPlayerRevision((revision) => revision + 1);
   }, []);
 

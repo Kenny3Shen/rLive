@@ -104,6 +104,44 @@ export type VideoSessionIds = {
 };
 
 /**
+ * 一条视频观看历史。镜像 Rust `db::video_history::VideoHistoryRecord`。
+ *
+ * **按「作品」而不是「分集」去重**：`(kind, oid)` 是主键，`oid` 为 UGC 的 bvid
+ * 或 PGC 的 season_id。同一稿件换分 P、同一剧集换集只更新这一行的进度与
+ * `cid`/`ep_id`，历史列表因此不会被一部番的几十集刷满 —— 与 PiliPlus 的
+ * 「同一作品一条记录」语义一致。
+ */
+export type VideoHistoryItem = {
+  /** `ugc` = 稿件（oid 为 bvid），`pgc` = 番剧/影视剧集（oid 为 season_id）。 */
+  kind: VideoHistoryKind;
+  /** 作品标识：UGC 为 bvid，PGC 为 season_id。 */
+  oid: string;
+  /** 作品标题：UGC 为稿件标题，PGC 为剧集名。 */
+  title: string;
+  cover: string;
+  /** UGC 为 UP 主名，PGC 为空（剧集无单一作者）。 */
+  author: string;
+  /** 最后观看的分 P / 分集标题；单 P 稿件为空。 */
+  part_title: string;
+  /** 续播用：最后观看分集的 bvid（PGC 分集也有 bvid）。 */
+  bvid: string;
+  /** 续播用：最后观看分集的 cid，即取流键。 */
+  cid: number;
+  /** 续播用：PGC 的 ep_id；UGC 为空。 */
+  ep_id: string;
+  /** 续播用：评论区 oid，可为空。 */
+  aid: string;
+  /** 已观看位置，秒。 */
+  progress: number;
+  /** 该分集总时长，秒；未知为 0。 */
+  duration: number;
+  /** 最后观看时间，Unix 毫秒。 */
+  watched_at: number;
+};
+
+export type VideoHistoryKind = "ugc" | "pgc";
+
+/**
  * 播放一条 VOD 所需的全部内容。
  *
  * `mpd` 是后端合成的清单文本，`mpd_url` 是同一份文本的 HTTP 地址。
@@ -239,6 +277,8 @@ export type VideoArchive = {
   /** 首 P 的 cid；搜索/UP 主列表的条目没有 cid，播放页用它补齐取流键。 */
   cid: number;
   title: string;
+  /** 稿件封面（上游 `pic`）。观看历史与投屏卡片用它，播放页自身不展示。 */
+  cover: string;
   desc: string;
   author: string;
   author_face: string | null;

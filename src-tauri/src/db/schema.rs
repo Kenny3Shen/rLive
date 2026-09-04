@@ -6,7 +6,10 @@ use rusqlite::Connection;
 use crate::error::{AppError, AppResult};
 
 pub const HISTORY_RETENTION_LIMIT: i64 = 2_000;
-pub const SCHEMA_VERSION: i64 = 3;
+/// 视频观看历史的保留上限。每行比直播历史更重（封面、标题、分集、进度），
+/// 且按作品去重而非按分集，500 条足够覆盖数月的观看记录。
+pub const VIDEO_HISTORY_RETENTION_LIMIT: i64 = 500;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DB_CACHE_SIZE_KIB: i64 = 8 * 1_024;
@@ -105,6 +108,30 @@ CREATE TABLE IF NOT EXISTS cookies (
 );
 "#;
 
+/// `video_history` 的建表 DDL 单独成常量：新库初始化与 v3→v4 迁移共用同一份，
+/// 两条路径不可能产生结构漂移。
+const VIDEO_HISTORY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS video_history (
+  kind TEXT NOT NULL,
+  oid TEXT NOT NULL,
+  title TEXT NOT NULL,
+  cover TEXT NOT NULL DEFAULT '',
+  author TEXT NOT NULL DEFAULT '',
+  part_title TEXT NOT NULL DEFAULT '',
+  bvid TEXT NOT NULL DEFAULT '',
+  cid INTEGER NOT NULL DEFAULT 0,
+  ep_id TEXT NOT NULL DEFAULT '',
+  aid TEXT NOT NULL DEFAULT '',
+  progress REAL NOT NULL DEFAULT 0,
+  duration REAL NOT NULL DEFAULT 0,
+  watched_at INTEGER NOT NULL,
+  PRIMARY KEY (kind, oid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_history_recent_order
+  ON video_history (watched_at DESC, kind ASC, oid ASC);
+"#;
+
 pub struct Db;
 
 impl Db {
@@ -154,6 +181,23 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
     if version == SCHEMA_VERSION {
         return Ok(());
     }
+
+    // v3→v4 只是多出 `video_history` 一张表，没有任何破坏性改动。
+    // 下面的 table_count 分支会拒绝一切非当前版本的库，所以这里必须做增量迁移：
+    // 少了它，所有 v3 存量用户升级后都会打不开自己的数据库。
+    if version == 3 {
+        let transaction = conn
+            .unchecked_transaction()
+            .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+        create_video_history_objects(&transaction)?;
+        transaction
+            .pragma_update(None, "user_version", SCHEMA_VERSION)
+            .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+        return transaction
+            .commit()
+            .map_err(|error| AppError::new("db_schema_error", error.to_string()));
+    }
+
     let table_count: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_schema
@@ -177,6 +221,7 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
     transaction
         .execute_batch(SCHEMA)
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    create_video_history_objects(&transaction)?;
     transaction
         .execute_batch(&format!(
             "CREATE TRIGGER history_prune_after_insert
@@ -198,6 +243,28 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
     transaction
         .commit()
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))
+}
+
+/// 建 `video_history` 的表、索引与修剪触发器。新库初始化与 v3→v4 迁移共用此函数，
+/// 避免两条路径各写一份 DDL 而逐渐漂移。
+fn create_video_history_objects(tx: &Connection) -> AppResult<()> {
+    tx.execute_batch(VIDEO_HISTORY_SCHEMA)
+        .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    tx.execute_batch(&format!(
+        "CREATE TRIGGER IF NOT EXISTS video_history_prune_after_insert
+         AFTER INSERT ON video_history
+         BEGIN
+           DELETE FROM video_history
+           WHERE rowid = (
+             SELECT rowid
+             FROM video_history INDEXED BY idx_video_history_recent_order
+             ORDER BY watched_at DESC, kind ASC, oid ASC
+             LIMIT 1 OFFSET {VIDEO_HISTORY_RETENTION_LIMIT}
+           );
+         END;"
+    ))
+    .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    Ok(())
 }
 
 pub fn map_db_err(err: rusqlite::Error) -> AppError {
@@ -236,6 +303,20 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert!(follow_columns.iter().any(|column| column == "auto_record"));
+
+        let video_columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('video_history') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for expected in ["kind", "oid", "progress", "duration", "watched_at"] {
+            assert!(
+                video_columns.iter().any(|column| column == expected),
+                "video_history 缺少列 {expected}"
+            );
+        }
     }
 
     #[test]
@@ -267,6 +348,58 @@ mod tests {
 
         assert_eq!(error.code, "db_schema_unsupported");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrates_v3_databases_by_adding_video_history() {
+        // v3 形态：SCHEMA 里的表齐全，但没有 video_history。
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(
+            "INSERT INTO history (site_id, room_id, title, user_name, watched_at)
+             VALUES ('bilibili', '1', 'room', 'user', 7);
+             INSERT INTO settings_kv (key, value) VALUES ('sentinel', 'kept');
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+
+        initialize_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // 新表可写，说明列与主键都建好了。
+        conn.execute(
+            "INSERT INTO video_history (kind, oid, title, watched_at) VALUES ('ugc', 'BV1', 't', 1)",
+            [],
+        )
+        .unwrap();
+
+        // 迁移不得动存量数据。
+        let sentinel: String = conn
+            .query_row(
+                "SELECT value FROM settings_kv WHERE key = 'sentinel'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sentinel, "kept");
+        let rooms: i64 = conn
+            .query_row("SELECT count(*) FROM history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rooms, 1);
+
+        let triggers: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type = 'trigger' AND name = 'video_history_prune_after_insert'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(triggers, 1);
     }
 
     #[test]
@@ -394,6 +527,34 @@ mod tests {
         assert!(
             plan.iter()
                 .any(|detail| detail.contains("idx_history_recent_order"))
+        );
+        assert!(
+            plan.iter()
+                .all(|detail| !detail.contains("USE TEMP B-TREE"))
+        );
+    }
+
+    #[test]
+    fn video_history_recent_index_avoids_temporary_sorting() {
+        let conn = open_in_memory().unwrap();
+
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid,
+                        progress, duration, watched_at
+                 FROM video_history
+                 ORDER BY watched_at DESC, kind ASC, oid ASC
+                 LIMIT 200",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_video_history_recent_order"))
         );
         assert!(
             plan.iter()
