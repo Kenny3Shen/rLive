@@ -90,6 +90,7 @@ import {
 } from "./videoRoute";
 import {
   usePlaylistStore,
+  playlistContainsCurrentItem,
   playlistItemFromArchivePage,
   playlistItemFromSeasonEpisode,
   type PlaylistItem,
@@ -247,6 +248,16 @@ export function VideoPlayerPage() {
     }
   }, [params, playlistStore]);
 
+  // PGC 分集不经 archiveQuery：进入的剧集不在播放列表（epId 维度，UGC
+  // 列表项的 epId 恒为 null）时，那份列表是残留快照，同样清空——否则
+  // 「下一个」会跳回之前看过的 UGC 视频。侧栏「播放全部」/「加入列表」
+  // 装好分集列表后含当前 epId，不受影响。
+  useEffect(() => {
+    if (!params?.epId || playlistStore.items.length === 0) return;
+    if (playlistStore.items.some((item) => item.epId === params.epId)) return;
+    playlistStore.clearPlaylist();
+  }, [params, playlistStore]);
+
   // 结构化列表优先：多 P 稿件用分 P 列表、合集稿件用合集替换播放列表
   // （覆盖搜索/投稿快照），自动连播与「下一个」沿结构化列表走。
   // 多 P 优先于合集：分 P 是同一稿件内部的选集，语义更具体；
@@ -268,7 +279,20 @@ export function VideoPlayerPage() {
       const current = items.find((item) => item.bvid === params.bvid);
       startId = current?.id ?? null;
     }
-    if (!items || !startId) return; // 列表里没有当前稿件则不动现有列表
+    if (!items || !startId) {
+      // 单 P 且无合集的稿件没有结构化列表可装。当前稿件也不在现有播放
+      // 列表里时，那份列表是上一个播放会话的残留（旧搜索/投稿/合集快照），
+      // 清空它——「下一个」与自动连播沿它走会跳回之前看过的视频；在列表
+      // 里（搜索/投稿连播点卡时与当前稿件一起装好）则原样保留。id 用
+      // params.cid 构造：与列表项的 id 空间同构（搜索快照的 cid 就是 0）。
+      if (
+        playlistStore.items.length > 0 &&
+        !playlistContainsCurrentItem(playlistStore.items, params.bvid, params.cid)
+      ) {
+        playlistStore.clearPlaylist();
+      }
+      return;
+    }
     const alreadyActive =
       playlistStore.items.length === items.length &&
       playlistStore.items.every((item, i) => item.id === items[i]?.id) &&

@@ -76,6 +76,23 @@ export function playlistItemFromVideoItem(item: VideoItem, index: number): Playl
 }
 
 /**
+ * 当前稿件是否在播放列表里（id 与 `playlistItemFromVideoItem`、VideoCard 的
+ * `playListId` 同构：链接没带 cid 时列表项的 cid 本来就是 0）。
+ *
+ * 播放页进入单 P 且无合集的稿件时没有结构化列表可装：列表不含当前稿件
+ * 说明它是上一个播放会话的残留（旧搜索/投稿/合集快照），应清空，否则
+ * 「下一个」与自动连播会跳回之前看过的视频。
+ */
+export function playlistContainsCurrentItem(
+  items: readonly PlaylistItem[],
+  bvid: string | null,
+  cid: number,
+): boolean {
+  const currentId = `${bvid ?? ""}_${cid}`;
+  return items.some((item) => item.id === currentId);
+}
+
+/**
  * 把稿件分 P 转成播放列表项。同一稿件的所有 P 共享 bvid 与 aid，cid 区分每一 P。
  */
 export function playlistItemFromArchivePage(
