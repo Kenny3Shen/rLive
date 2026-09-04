@@ -13,13 +13,9 @@ import type { VideoDanmakuEntry } from "./videoDanmaku";
  * 定位）。刻意保持轻量 —— 折叠态只是一行标题。
  *
  * 默认折叠（B 站 Web 的侧栏同款落点）：相关视频上方一行，点击展开后
- * 显示当前进度附近的弹幕，随播放自动滚动跟踪。
+ * 显示全部已加载弹幕（屏外行用 `content-visibility: auto` 跳过渲染，
+ * 上万条也不拖垮滚动），并随播放自动滚动跟踪。
  */
-
-/** 展开后最多渲染的行数：只看进度附近，不渲染全量。 */
-const VISIBLE_WINDOW = 120;
-/** 跟随播放滚动后，进度行之下保留的行数。 */
-const FOLLOW_LEAD = 24;
 
 function formatTimestamp(progressMs: number): string {
   return formatRecordingDuration(progressMs);
@@ -61,15 +57,10 @@ export function VideoDanmakuList({
     followRef.current?.scrollIntoView({ block: "center", behavior: "instant" });
   }, [open, positionMs]);
 
-  // 只渲染进度附近的窗口：全量渲染上万条弹幕只会拖垮滚动。
+  // 全量渲染：行级 content-visibility 让浏览器跳过屏外行的布局与绘制，
+  // 滚动可以到达任意位置（进度窗口截断会让"滚动查看更多"失效）。
   const total = entries.length;
-  const firstAtOrAfter =
-    entries.length === 0
-      ? 0
-      : lowerBound(entries, positionMs - FOLLOW_LEAD * 4_000);
-  const windowStart = Math.max(0, firstAtOrAfter - VISIBLE_WINDOW + FOLLOW_LEAD);
-  const windowEnd = Math.min(total, firstAtOrAfter + FOLLOW_LEAD);
-  const visible = entries.slice(windowStart, windowEnd);
+  const followIndex = Math.max(0, lowerBound(entries, positionMs) - 1);
 
   return (
     <section
@@ -115,33 +106,33 @@ export function VideoDanmakuList({
             </p>
           )}
           <ol className="flex flex-col gap-0.5 px-3 text-sm">
-            {visible.map((entry, index) => {
-              const isFollow = windowStart + index === firstAtOrAfter - 1;
-              return (
-                <li
-                  key={`${entry.progressMs}-${windowStart + index}`}
-                  ref={isFollow ? followRef : undefined}
-                  className={cn(
-                    "flex items-baseline gap-2 rounded-sm px-1 py-0.5",
-                    entry.progressMs > positionMs && "opacity-55",
-                  )}
+            {entries.map((entry, index) => (
+              <li
+                key={`${entry.progressMs}-${index}`}
+                ref={index === followIndex ? followRef : undefined}
+                className={cn(
+                  // 屏外行跳过布局与绘制：全量渲染上万条也保持滚动流畅；
+                  // contain-intrinsic-size 提供 scrollHeight 估算避免滚动条抖动。
+                  "flex items-baseline gap-2 rounded-sm px-1 py-0.5",
+                  "[content-visibility:auto] [contain-intrinsic-size:auto_1.75rem]",
+                  entry.progressMs > positionMs && "opacity-55",
+                )}
+              >
+                <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {formatTimestamp(entry.progressMs)}
+                </span>
+                <span
+                  className="min-w-0 flex-1 truncate leading-relaxed"
+                  style={entry.color ? { color: entry.color } : undefined}
                 >
-                  <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                    {formatTimestamp(entry.progressMs)}
-                  </span>
-                  <span
-                    className="min-w-0 flex-1 truncate leading-relaxed"
-                    style={entry.color ? { color: entry.color } : undefined}
-                  >
-                    {entry.content}
-                  </span>
-                </li>
-              );
-            })}
+                  {entry.content}
+                </span>
+              </li>
+            ))}
           </ol>
-          {total > visible.length && (
+          {total > 0 && (
             <p className="px-3 pt-1 text-center text-[11px] text-muted-foreground">
-              显示 {windowStart + 1}-{windowEnd} / {total} 条，滚动查看更多
+              共 {formatOnline(total)} 条弹幕
             </p>
           )}
         </div>
