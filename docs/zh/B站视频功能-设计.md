@@ -160,13 +160,14 @@ message DanmakuElem {
 
 ### 顶栏低频工具与控制布局
 
-- 顶栏（`topBar`）右侧承载低频工具：跳原址 `ExternalLink` 直跳系统浏览器、投屏 `Tv` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）。窗口全屏按钮在**控制栏**工具区（字幕旁，`aria-pressed`，`Maximize2/Minimize2` 图标）：与画面全屏共享 `useRecordingPlayerFullscreen` 的同一 toggle（桌面 = Tauri 原生窗口全屏），语义上是「应用窗口全屏」而非新全屏形态。
+- 顶栏（`topBar`）右侧只留投屏 `Tv` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）；跳原址/复制链接在底部常驻 Shell。窗口全屏按钮在**控制栏**工具区（字幕旁，`aria-pressed`，`Maximize2/Minimize2` 图标）：与画面全屏共享 `useRecordingPlayerFullscreen` 的同一 toggle（桌面 = Tauri 原生窗口全屏），语义上是「应用窗口全屏」而非新全屏形态。
 - 控制栏保留高频播放控制与字幕（CC）按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏居中槽位是弹幕输入条（见第五节「弹幕发送」）。
-- 全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头退出全屏、中间标题、右侧同一套低频工具（投屏弹层此时 `container` 指向 `stageRef`，规避 top layer 压盖）。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器。
+- 全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头退出全屏、中间标题、右侧投屏弹层（`container` 指向 `stageRef`，规避 top layer 压盖）加跳原址镜像（全屏时底部 Shell 被舞台盖住，靠它保持可达）。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器。
+- 底部常驻 Shell（`footer`，与直播页底部操作行同一画法：`border-t` + `bg-sidebar/90` + 安全区 padding，右对齐）：「复制链接」（`Link2`，`copyText` 写 B 站原址 + toast）与「在浏览器中打开」（`ExternalLink`，最右，`tauri-plugin-opener` 直跳系统浏览器、失败回退 `window.open`）。所有断点常驻（视频页没有直播页的移动端溢出菜单可承接），触屏加高 `max-md:h-11`。
 
-### 跳转原始地址按钮
+### 跳原址与复制链接（底部 Shell）
 
-- 顶栏右侧的 `ExternalLink` 图标按钮：与直播页「在浏览器中打开」同一套交互 —— Tooltip 提示、点击经 `tauri-plugin-opener` 打开系统浏览器（失败回退 `window.open`）、toast 通知结果，不在界面上展示具体地址。
+- 底部 Shell 右侧的「在浏览器中打开」按钮：与直播页同一套交互 —— 点击经 `tauri-plugin-opener` 打开系统浏览器（失败回退 `window.open`）、toast 通知结果，不在界面上展示具体地址。全屏 HUD 里另有图标镜像（见上节）。
 
 ### 评论接口的三个坑（实测 + PiliPlus 对照）
 
