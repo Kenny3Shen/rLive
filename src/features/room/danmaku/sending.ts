@@ -49,3 +49,13 @@ export function getDanmakuSendConfig(siteId?: SiteId): DanmakuSendConfig | null 
 export function isDanmakuSendSite(siteId?: SiteId): siteId is DanmakuSendSiteId {
   return siteId === "bilibili" || siteId === "douyu" || siteId === "huya";
 }
+
+/** VOD 弹幕发送：oid 是视频 cid，历史与冷却按稿件 aid 记。 */
+export const VIDEO_DANMAKU_SEND_CONFIG: DanmakuSendConfig = {
+  // 状态检查复用直播的开关与 Cookie 检查（同一个设置项、同一份凭据）。
+  statusCommand: "bilibili_danmaku_send_status",
+  sendCommand: "video_danmaku_send",
+  siteLabel: "B站",
+  maxLength: 20,
+  supportsNativeBilibiliEmoji: true,
+};

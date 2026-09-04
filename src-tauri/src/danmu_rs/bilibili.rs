@@ -69,6 +69,8 @@ const LEGACY_DANMAKU_INFO_URL: &str = "https://api.live.bilibili.com/room/v1/Dan
 /// `getDanmuInfo` 所需 WBI 签名密钥的来源。
 const NAV_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// VOD 弹幕写入接口（oid = 视频 cid）。
+const SEND_VIDEO_DANMAKU_URL: &str = "https://api.bilibili.com/x/v2/dm/post";
 
 /// 保存的浏览器 Cookie 是否包含 Bilibili 直播聊天写入接口所需的两个值。
 /// 这里刻意只向调用方暴露一个布尔值；
@@ -90,6 +92,133 @@ pub async fn send_chat(
     send_chat_to_url(client, cookie, room_id, message, SEND_CHAT_URL).await
 }
 
+/// 发送一条普通滚动 VOD 弹幕（`x/v2/dm/post`，oid = 视频的 cid）。
+///
+/// 与直播 `send_chat` 同一套凭据与错误语义；`progress` 是当前播放位置（秒），
+/// 上游接受缺省，带上可让弹幕出现在正确的进度条位置。同样不做重试、
+/// 不产生乐观本地事件 —— 发送后由弹幕列表重新拉取回显。
+pub async fn send_video_danmaku(
+    client: &Client,
+    cookie: &str,
+    cid: i64,
+    progress_secs: u64,
+    message: &str,
+) -> AppResult<()> {
+    send_video_danmaku_to_url(client, cookie, cid, progress_secs, message, SEND_VIDEO_DANMAKU_URL)
+        .await
+}
+
+/// 供 HTTP 契约测试使用的、可注入接口地址的内部变体。
+async fn send_video_danmaku_to_url(
+    client: &Client,
+    cookie: &str,
+    cid: i64,
+    progress_secs: u64,
+    message: &str,
+    url: &str,
+) -> AppResult<()> {
+    if cid <= 0 {
+        return Err(
+            AppError::new("bilibili_send_invalid_video", "B站视频 cid 无效").with_site("bilibili"),
+        );
+    }
+    if !has_send_credentials(cookie) {
+        return Err(AppError::new(
+            "bilibili_send_cookie_missing",
+            "请先在设置中保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
+        )
+        .with_site("bilibili"));
+    }
+    let message = normalize_outgoing_message(message)?;
+    let csrf = cookie_value(cookie, "bili_jct").unwrap_or_default();
+    let form = [
+        ("type", "1".to_string()),
+        ("oid", cid.to_string()),
+        ("msg", message),
+        ("progress", progress_secs.to_string()),
+        ("color", "16777215".to_string()),
+        ("fontsize", "25".to_string()),
+        ("pool", "0".to_string()),
+        ("mode", "1".to_string()),
+        ("plat", "1".to_string()),
+        ("csrf", csrf.clone()),
+        ("csrf_token", csrf),
+    ];
+    let response = client
+        .post(url)
+        .header("user-agent", crate::sites::bilibili::DEFAULT_USER_AGENT)
+        .header("referer", "https://www.bilibili.com")
+        .header("origin", "https://www.bilibili.com")
+        .header("cookie", cookie_header_value(cookie))
+        .form(&form)
+        .send()
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "bilibili_send_unknown",
+                "发送状态未知，请到视频页确认是否已送达",
+            )
+            .with_site("bilibili")
+            .retryable()
+        })?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(
+            AppError::new("bilibili_send_rate_limited", "发送过快，请稍后再试")
+                .with_site("bilibili")
+                .retryable(),
+        );
+    }
+    if !response.status().is_success() {
+        return Err(AppError::new(
+            "bilibili_send_rejected",
+            "B站未接受此条弹幕，请检查账号状态或视频限制",
+        )
+        .with_site("bilibili"));
+    }
+    let value = response.json::<Value>().await.map_err(|_| {
+        AppError::new(
+            "bilibili_send_unknown",
+            "发送状态未知，请到视频页确认是否已送达",
+        )
+        .with_site("bilibili")
+        .retryable()
+    })?;
+    let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
+    match code {
+        0 => Ok(()),
+        10030 | 10031 | 10039 => Err(AppError::new(
+            "bilibili_send_rate_limited",
+            "发送过快，请稍后再试",
+        )
+        .with_site("bilibili")
+        .retryable()),
+        -101 | -111 => Err(AppError::new(
+            "bilibili_send_login_expired",
+            "B站登录状态已失效，请更新 Cookie 后重试",
+        )
+        .with_site("bilibili")),
+        -102 => Err(AppError::new(
+            "bilibili_send_permission",
+            "账号权限不足（部分视频要求正式会员才能发弹幕）",
+        )
+        .with_site("bilibili")),
+        616 => Err(AppError::new(
+            "bilibili_send_filtered",
+            "弹幕被 B站过滤，请修改内容后重试",
+        )
+        .with_site("bilibili")),
+        -400 => Err(AppError::new(
+            "bilibili_send_rejected",
+            "B站未接受此条弹幕，请检查账号状态或视频限制",
+        )
+        .with_site("bilibili")),
+        _ => Err(AppError::new(
+            "bilibili_send_rejected",
+            "B站未接受此条弹幕，请检查账号状态或视频限制",
+        )
+        .with_site("bilibili")),
+    }
+}
 /// 供 HTTP 契约测试使用的、可注入接口地址的内部变体。
 /// 公开的发送函数刻意固定指向 Bilibili 的直播聊天接口。
 async fn send_chat_to_url(
@@ -1828,6 +1957,85 @@ mod tests {
         assert_eq!(error.code, "bilibili_send_rate_limited");
         assert!(error.retryable);
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn video_send_posts_authenticated_form() {
+        let (url, server) = response_server("200 OK", r#"{"code":0}"#);
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+
+        send_video_danmaku_to_url(
+            &client,
+            "SESSDATA=session; bili_jct=csrf-token",
+            311001234,
+            42,
+            "hello",
+            &url,
+        )
+        .await
+        .unwrap();
+
+        let request = server.join().unwrap();
+        let headers = request.to_ascii_lowercase();
+        assert!(headers.starts_with("post /msg/send http/1.1\r\n"));
+        assert!(headers.contains("cookie: sessdata=session; bili_jct=csrf-token"));
+        assert!(headers.contains("origin: https://www.bilibili.com"));
+        assert!(headers.contains("referer: https://www.bilibili.com"));
+        assert!(request.contains("type=1"));
+        assert!(request.contains("oid=311001234"));
+        assert!(request.contains("msg=hello"));
+        assert!(request.contains("progress=42"));
+        assert!(request.contains("plat=1"));
+        assert!(request.contains("csrf=csrf-token"));
+    }
+
+    #[tokio::test]
+    async fn video_send_requires_positive_cid() {
+        // 校验在发出任何网络请求之前完成，不需要服务器。
+        let client = Client::builder().build().unwrap();
+
+        let error =
+            send_video_danmaku_to_url(&client, "SESSDATA=s; bili_jct=c", 0, 0, "hi", "http://127.0.0.1:1")
+                .await
+                .unwrap_err();
+
+        assert_eq!(error.code, "bilibili_send_invalid_video");
+    }
+
+    #[tokio::test]
+    async fn video_send_maps_filter_and_permission_codes() {
+        let (filtered_url, filtered_server) = response_server("200 OK", r#"{"code":616}"#);
+        let client = Client::builder().build().unwrap();
+
+        let error = send_video_danmaku_to_url(
+            &client,
+            "SESSDATA=session; bili_jct=csrf-token",
+            1,
+            0,
+            "hello",
+            &filtered_url,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "bilibili_send_filtered");
+        filtered_server.join().unwrap();
+
+        let (denied_url, denied_server) = response_server("200 OK", r#"{"code":-102}"#);
+        let error = send_video_danmaku_to_url(
+            &client,
+            "SESSDATA=session; bili_jct=csrf-token",
+            1,
+            0,
+            "hello",
+            &denied_url,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "bilibili_send_permission");
+        denied_server.join().unwrap();
     }
 
     #[test]

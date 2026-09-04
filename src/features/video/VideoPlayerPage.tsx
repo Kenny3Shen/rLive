@@ -45,6 +45,7 @@ import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
 import { formatRecordingDuration } from "@/features/recording/recording";
 import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
+import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { videoGetArchive, videoGetCastUrl, videoGetDanmaku, videoGetPlayInfo, videoGetSubtitle, videoGetSubtitles, videoStopPlay } from "./videoApi";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { CastMenu } from "@/features/room/CastMenu";
@@ -190,6 +191,8 @@ export function VideoPlayerPage() {
     retry: false,
   });
   const cid = rawCid > 0 ? rawCid : (archiveQuery.data?.cid ?? 0);
+  // 弹幕发送历史与 PGC 分集都用 aid；URL 直入时用详情补齐。
+  const aid = params?.aid || archiveQuery.data?.aid || null;
 
   // 播放列表状态
   const playlistStore = usePlaylistStore();
@@ -1028,29 +1031,6 @@ export function VideoPlayerPage() {
         </PopoverContent>
       </Popover>
 
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="rounded-lg hover:bg-muted/70"
-              aria-label={fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
-              aria-pressed={fullscreen.fullscreen}
-              onClick={() => void fullscreen.toggle()}
-            />
-          }
-        >
-          {fullscreen.fullscreen ? (
-            <Minimize2 data-icon="inline-start" aria-hidden className="size-4" />
-          ) : (
-            <Maximize2 data-icon="inline-start" aria-hidden className="size-4" />
-          )}
-        </TooltipTrigger>
-        <TooltipContent>
-          {fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
-        </TooltipContent>
-      </Tooltip>
     </div>
   );
 
@@ -1166,77 +1146,109 @@ export function VideoPlayerPage() {
   // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
   const pipSupported =
     typeof document !== "undefined" && document.pictureInPictureEnabled;
-  /** 字幕工具保留在控制栏，弹层换成与设置/ASR 弹窗同一家族的 Popover 形态
-   *  （side="top" align="end" + glass），替代原先手工绝对定位的面板。 */
-  const toolsSlot = subtitles.length > 0 && (
-    <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
-            aria-pressed={Boolean(subtitleLan)}
-            className={cn(
-              PLAYER_CONTROL_BUTTON_CLASS,
-              PLAYER_CONTROL_ICON_CLASS,
-              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-            )}
-          />
-        }
-      >
-        {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
-      </PopoverTrigger>
-      <PopoverContent
-        container={stageRef}
-        side="top"
-        align="end"
-        collisionBoundary={typeof document !== "undefined" ? document.documentElement : undefined}
-        collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
-        sticky
-        glass
-        className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
-      >
-        <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
-          字幕
-        </PopoverTitle>
-        <Button
-          variant="ghost"
-          className={cn(
-            "w-full justify-between max-md:h-10",
-            glassOptionClass(),
-            !subtitleLan && glassOptionSelectedClass(),
-          )}
-          aria-pressed={!subtitleLan}
-          onClick={() => {
-            setSubtitleLan(null);
-            setSubtitleOpen(false);
-          }}
-        >
-          <span className="truncate">关闭字幕</span>
-          {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
-        </Button>
-        {subtitles.map((subtitle) => (
-          <Button
-            key={subtitle.lan}
-            variant="ghost"
-            className={cn(
-              "w-full justify-between max-md:h-10",
-              glassOptionClass(),
-              subtitleLan === subtitle.lan && glassOptionSelectedClass(),
-            )}
-            aria-pressed={subtitleLan === subtitle.lan}
-            onClick={() => {
-              setSubtitleLan(subtitle.lan);
-              setSubtitleOpen(false);
-            }}
+  /** 控制栏工具（字幕/窗口全屏）：与内部按钮同一套样式常量；没字幕轨的稿件
+   *  不渲染字幕按钮。窗口全屏与画面全屏共享同一 toggle（桌面即原生窗口全屏），
+   *  图标用 Maximize/Minimize 与底部全屏按钮区分语义。 */
+  const toolsSlot = (
+    <>
+      {subtitles.length > 0 && (
+        <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
+          <PopoverTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
+                aria-pressed={Boolean(subtitleLan)}
+                className={cn(
+                  PLAYER_CONTROL_BUTTON_CLASS,
+                  PLAYER_CONTROL_ICON_CLASS,
+                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                )}
+              />
+            }
           >
-            <span className="truncate">{subtitle.lan_doc}</span>
-            {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
-          </Button>
-        ))}
-      </PopoverContent>
-    </Popover>
+            {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
+          </PopoverTrigger>
+          <PopoverContent
+            container={stageRef}
+            side="top"
+            align="end"
+            collisionBoundary={typeof document !== "undefined" ? document.documentElement : undefined}
+            collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
+            sticky
+            glass
+            className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+          >
+            <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
+              字幕
+            </PopoverTitle>
+            <Button
+              variant="ghost"
+              className={cn(
+                "w-full justify-between max-md:h-10",
+                glassOptionClass(),
+                !subtitleLan && glassOptionSelectedClass(),
+              )}
+              aria-pressed={!subtitleLan}
+              onClick={() => {
+                setSubtitleLan(null);
+                setSubtitleOpen(false);
+              }}
+            >
+              <span className="truncate">关闭字幕</span>
+              {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
+            </Button>
+            {subtitles.map((subtitle) => (
+              <Button
+                key={subtitle.lan}
+                variant="ghost"
+                className={cn(
+                  "w-full justify-between max-md:h-10",
+                  glassOptionClass(),
+                  subtitleLan === subtitle.lan && glassOptionSelectedClass(),
+                )}
+                aria-pressed={subtitleLan === subtitle.lan}
+                onClick={() => {
+                  setSubtitleLan(subtitle.lan);
+                  setSubtitleOpen(false);
+                }}
+              >
+                <span className="truncate">{subtitle.lan_doc}</span>
+                {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
+              </Button>
+            ))}
+          </PopoverContent>
+        </Popover>
+      )}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
+              aria-pressed={fullscreen.fullscreen}
+              className={cn(
+                PLAYER_CONTROL_BUTTON_CLASS,
+                PLAYER_CONTROL_ICON_CLASS,
+                PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+              )}
+              onClick={() => void fullscreen.toggle()}
+            />
+          }
+        >
+          {fullscreen.fullscreen ? (
+            <Minimize2 aria-hidden />
+          ) : (
+            <Maximize2 aria-hidden />
+          )}
+        </TooltipTrigger>
+        <TooltipContent>
+          {fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
+        </TooltipContent>
+      </Tooltip>
+    </>
   );
 
   /** 倍速选择区：与播放列表设置同一个弹层，只有这一页需要它。 */
@@ -1483,6 +1495,19 @@ export function VideoPlayerPage() {
             onFocusCapture={holdControlsVisible}
             onBlurCapture={scheduleControlsHide}
           >
+            {/* 弹幕输入条：与直播页控制栏 composer 同一形态（overlay 变体），
+                portal 进舞台避免全屏压盖；显隐随控制条走。 */}
+            <DanmakuComposer
+              overlay
+              portalContainer={stageRef}
+              roomTitle={title}
+              video={{
+                cid,
+                aid: aid ?? "",
+                progressSecs: Math.floor(currentTime),
+              }}
+              onOverlayInteractionChange={setOverlayInteractionOpen}
+            />
             <PlayerControls
               paused={paused}
               volume={volume}
@@ -1552,7 +1577,17 @@ export function VideoPlayerPage() {
             "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]",
           )}
         >
-          <VideoSidebar bvid={params.bvid} epId={params.epId} aid={params.aid} cid={cid} />
+          <VideoSidebar
+            bvid={params.bvid}
+            epId={params.epId}
+            aid={params.aid}
+            cid={cid}
+            danmaku={{
+              entries: danmakuEntries,
+              positionMs: currentTime * 1000,
+              loading: danmakuEntries.length === 0 && danmakuVisible && !playbackError,
+            }}
+          />
         </aside>
       </main>
     </div>

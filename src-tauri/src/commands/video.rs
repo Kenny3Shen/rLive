@@ -274,6 +274,71 @@ pub async fn video_get_danmaku(
     resolve_bilibili(&state)?.video_danmaku(cid, index).await
 }
 
+/// 发送一条 VOD 弹幕（普通滚动、白色、25 号字）。
+///
+/// 与直播的 `bilibili_danmaku_send` 同一套凭据检查、冷却与历史记录约定；
+/// 限流键用 aid（同一稿件下所有分 P 共用一个冷却），room_id 字段对
+/// 历史记录存 aid，标题带当前播放的稿件标题。
+#[tauri::command]
+pub async fn video_danmaku_send(
+    state: State<'_, AppState>,
+    cid: i64,
+    aid: String,
+    progress_secs: u64,
+    message: String,
+    video_title: Option<String>,
+) -> AppResult<()> {
+    let (settings, cookie) = {
+        let conn = state.conn()?;
+        (
+            crate::settings::get(&conn)?,
+            account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default(),
+        )
+    };
+    if !settings.danmaku_send_enabled {
+        return Err(AppError::new(
+            "bilibili_send_disabled",
+            "弹幕发送功能尚未启用，请先在设置中确认开启",
+        )
+        .with_site("bilibili"));
+    }
+    if !crate::danmu_rs::bilibili::has_send_credentials(&cookie) {
+        return Err(AppError::new(
+            "bilibili_send_cookie_missing",
+            "请先在设置中保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
+        )
+        .with_site("bilibili"));
+    }
+    let aid_key = aid.trim().to_string();
+    if aid_key.is_empty() || aid_key.len() > 32 || !aid_key.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(
+            AppError::new("video_danmaku_invalid_aid", "B站稿件 aid 无效").with_site("bilibili"),
+        );
+    }
+    let message = crate::danmu_rs::bilibili::normalize_outgoing_message(&message)?;
+    state.bilibili_send_limiter.reserve(&aid_key)?;
+    // 该请求携带用户的浏览器 Cookie。重定向目标绝不能收到它，
+    // 因此写入路径对代理请求和直连请求都刻意关闭了重定向跟随。
+    let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
+    crate::danmu_rs::bilibili::send_video_danmaku(
+        &client,
+        &cookie,
+        cid,
+        progress_secs,
+        &message,
+    )
+    .await?;
+    crate::commands::danmaku::record_send_history_public(
+        state.inner(),
+        SiteId::Bilibili,
+        &message,
+        &aid_key,
+        video_title.as_deref(),
+        None,
+    );
+    Ok(())
+}
+
 /// 停掉一次播放占用的三个代理。
 ///
 /// 离开播放页必须调用，否则三条本机监听器与其上游连接都会泄漏。

@@ -90,11 +90,11 @@ use commands::site::{
 };
 use commands::stream_proxy::{stream_proxy_start, stream_proxy_stop, stream_proxy_telemetry};
 use commands::video::{
-    video_get_archive, video_get_cast_url, video_get_comment_replies, video_get_comments,
-    video_get_danmaku, video_get_pgc_index, video_get_pgc_zone, video_get_play_info,
-    video_get_popular, video_get_recommend, video_get_related, video_get_season,
-    video_get_subtitle, video_get_subtitles, video_get_zone, video_search, video_stop_play,
-    video_uploader_videos, video_zone_list,
+    video_danmaku_send, video_get_archive, video_get_cast_url, video_get_comment_replies,
+    video_get_comments, video_get_danmaku, video_get_pgc_index, video_get_pgc_zone,
+    video_get_play_info, video_get_popular, video_get_recommend, video_get_related,
+    video_get_season, video_get_subtitle, video_get_subtitles, video_get_zone, video_search,
+    video_stop_play, video_uploader_videos, video_zone_list,
 };
 use state::AppState;
 // 只有桌面端的关闭处理器会发出事件；Android 没有退出确认框。
@@ -393,6 +393,7 @@ pub fn run() {
             video_get_subtitles,
             video_get_subtitle,
             video_get_danmaku,
+            video_danmaku_send,
             video_get_related,
             video_search,
             video_uploader_videos,
