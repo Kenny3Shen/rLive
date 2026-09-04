@@ -145,10 +145,15 @@ message DanmakuElem {
 - 评论的 `oid` 是 aid：列表/分集链路经路由参数携带；URL 直入时 UGC 用稿件详情补齐，PGC 用 season 详情里当前集的 aid。
 - 评论游标翻页（`next`），二级回复 pn 翻页（首传 1）；`[大哭]` 占位符按 `content.emote` 映射换成内联图。
 
+### 顶栏低频工具与控制布局
+
+- 顶栏（`topBar`）右侧承载低频工具：跳原址 `ExternalLink` 直跳系统浏览器、投屏 `Tv` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）、窗口全屏切换按钮（`aria-pressed`，`Maximize2/Minimize2` 图标）。窗口全屏与画面全屏共享 `useRecordingPlayerFullscreen` 的同一 toggle（桌面 = Tauri 原生窗口全屏），语义上是「应用窗口全屏」而非新全屏形态。
+- 控制栏保留高频播放控制与字幕（CC）按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。
+- 全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头退出全屏、中间标题、右侧同一套低频工具（投屏弹层此时 `container` 指向 `stageRef`，规避 top layer 压盖）。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器。
+
 ### 跳转原始地址按钮
 
-- 控制栏工具区（投屏/字幕按钮旁）的 `ExternalLink` 图标按钮：与直播页「在浏览器中打开」同一套交互 —— Tooltip 提示、点击经 `tauri-plugin-opener` 打开系统浏览器（失败回退 `window.open`）、toast 通知结果，不在界面上展示具体地址。
-- 地址由 `videoOriginalUrl` 计算：UGC 为 `https://www.bilibili.com/video/<bvid>/?p=<n>`（P1 省略 `?p=`，与 Web 一致），PGC 为 `https://www.bilibili.com/bangumi/play/ep<epId>`。
+- 顶栏右侧的 `ExternalLink` 图标按钮：与直播页「在浏览器中打开」同一套交互 —— Tooltip 提示、点击经 `tauri-plugin-opener` 打开系统浏览器（失败回退 `window.open`）、toast 通知结果，不在界面上展示具体地址。
 
 ### 评论接口的三个坑（实测 + PiliPlus 对照）
 
