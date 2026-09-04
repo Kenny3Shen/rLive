@@ -17,6 +17,8 @@ import {
   ExternalLink,
   FastForward,
   Home,
+  Maximize2,
+  Minimize2,
   Tv,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -24,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
@@ -120,6 +123,7 @@ export function VideoPlayerPage() {
   const params = parseVideoPlayParams(searchParams);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const hudRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<XgPlayerInstance | null>(null);
@@ -796,10 +800,11 @@ export function VideoPlayerPage() {
   }, []);
 
   const setChromeVisible = useCallback((visible: boolean) => {
-    const layer = controlsRef.current;
-    if (!layer) return;
-    layer.dataset.visible = visible ? "true" : "false";
-    layer.setAttribute("aria-hidden", String(!visible));
+    for (const layer of [controlsRef.current, hudRef.current]) {
+      if (!layer) continue;
+      layer.dataset.visible = visible ? "true" : "false";
+      layer.setAttribute("aria-hidden", String(!visible));
+    }
   }, []);
 
   const scheduleControlsHide = useCallback(() => {
@@ -968,8 +973,89 @@ export function VideoPlayerPage() {
 
   const title = params?.title || "视频播放";
 
+  /** 顶栏右侧的低频工具（跳原址/投屏）：常用播放控制与字幕留在控制栏，
+   *  这里只放旁观类入口，与直播页顶栏右侧的定时/投屏工具同一布局语义。 */
+  const topBarTools = (
+    <div className="flex items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="rounded-lg hover:bg-muted/70"
+              aria-label="在浏览器中打开原始地址"
+              disabled={!originalUrl}
+              onClick={openOriginalUrl}
+            >
+              <ExternalLink aria-hidden className="size-4" />
+            </Button>
+          }
+        />
+        <TooltipContent>在浏览器中打开</TooltipContent>
+      </Tooltip>
+
+      <Popover open={castOpen} onOpenChange={setCastOpen}>
+        <PopoverTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="rounded-lg hover:bg-muted/70"
+              aria-label="投屏"
+              aria-expanded={castOpen}
+            />
+          }
+        >
+          <Tv data-icon="inline-start" aria-hidden className="size-4" />
+        </PopoverTrigger>
+        <PopoverContent
+          container={fullscreen.fullscreen ? stageRef : undefined}
+          side="bottom"
+          align="end"
+          collisionPadding={12}
+          glass
+          className={cn("w-72 overflow-y-auto p-1.5", glassPanelClass())}
+        >
+          <PopoverTitle className={cn("px-2 py-1", glassTitleClass())}>投屏</PopoverTitle>
+          <CastMenu
+            castUrl={castQuery.data?.url ?? null}
+            headers={castQuery.data?.headers ?? {}}
+            title={params?.title ?? "视频"}
+            variant="overlay"
+            showHeader={false}
+          />
+        </PopoverContent>
+      </Popover>
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="rounded-lg hover:bg-muted/70"
+              aria-label={fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
+              aria-pressed={fullscreen.fullscreen}
+              onClick={() => void fullscreen.toggle()}
+            />
+          }
+        >
+          {fullscreen.fullscreen ? (
+            <Minimize2 data-icon="inline-start" aria-hidden className="size-4" />
+          ) : (
+            <Maximize2 data-icon="inline-start" aria-hidden className="size-4" />
+          )}
+        </TooltipTrigger>
+        <TooltipContent>
+          {fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+
   const topBar = (
-    <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
+    <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90">
       <div className="absolute left-3 flex items-center gap-1">
         <Tooltip>
           <TooltipTrigger
@@ -1004,11 +1090,12 @@ export function VideoPlayerPage() {
           <TooltipContent>返回主页</TooltipContent>
         </Tooltip>
       </div>
-      <div className="absolute inset-x-12 flex min-w-0 items-center justify-center px-16">
+      <div className="pointer-events-none absolute inset-x-24 flex min-w-0 items-center justify-center px-16">
         <p className="truncate text-sm font-semibold tracking-tight" title={title}>
           {title}
         </p>
       </div>
+      <div className="absolute right-3 z-10">{topBarTools}</div>
     </header>
   );
 
@@ -1079,130 +1166,77 @@ export function VideoPlayerPage() {
   // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
   const pipSupported =
     typeof document !== "undefined" && document.pictureInPictureEnabled;
-  const toolsSlot = (
-    <>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="在浏览器中打开原始地址"
-              disabled={!originalUrl}
-              className={cn(
-                PLAYER_CONTROL_BUTTON_CLASS,
-                PLAYER_CONTROL_ICON_CLASS,
-                PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-              )}
-              onClick={openOriginalUrl}
-            >
-              <ExternalLink aria-hidden />
-            </Button>
-          }
-        />
-        <TooltipContent>在浏览器中打开</TooltipContent>
-      </Tooltip>
-
-      <div className="relative">
-        {castOpen && castQuery.data && (
-          <div
-            className={cn(
-              "absolute right-0 bottom-10 z-50 w-72 overflow-y-auto p-1.5",
-              glassPanelClass({ overlay: true }),
-            )}
-          >
-            <p className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>投屏</p>
-            <CastMenu
-              castUrl={castQuery.data.url}
-              headers={castQuery.data.headers}
-              title={params?.title ?? "视频"}
-              variant="overlay"
-              showHeader={false}
-            />
-          </div>
-        )}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="投屏"
-          aria-expanded={castOpen}
-          disabled={castOpen && castQuery.isPending}
-          className={cn(
-            PLAYER_CONTROL_BUTTON_CLASS,
-            PLAYER_CONTROL_ICON_CLASS,
-            PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-          )}
-          onClick={() => setCastOpen((open) => !open)}
-        >
-          <Tv aria-hidden />
-        </Button>
-      </div>
-
-      {subtitles.length > 0 && (
-        <div className="relative">
-          {subtitleOpen && (
-            <div
-              className={cn(
-                "absolute right-0 bottom-10 z-50 w-52 overflow-y-auto p-1.5",
-                glassPanelClass({ overlay: true }),
-              )}
-            >
-              <p className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>字幕</p>
-              <Button
-                variant="ghost"
-                className={cn(
-                  "w-full justify-between max-md:h-10",
-                  glassOptionClass(),
-                  !subtitleLan && glassOptionSelectedClass(),
-                )}
-                aria-pressed={!subtitleLan}
-                onClick={() => {
-                  setSubtitleLan(null);
-                  setSubtitleOpen(false);
-                }}
-              >
-                <span className="truncate">关闭字幕</span>
-                {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
-              </Button>
-              {subtitles.map((subtitle) => (
-                <Button
-                  key={subtitle.lan}
-                  variant="ghost"
-                  className={cn(
-                    "w-full justify-between max-md:h-10",
-                    glassOptionClass(),
-                    subtitleLan === subtitle.lan && glassOptionSelectedClass(),
-                  )}
-                  aria-pressed={subtitleLan === subtitle.lan}
-                  onClick={() => {
-                    setSubtitleLan(subtitle.lan);
-                    setSubtitleOpen(false);
-                  }}
-                >
-                  <span className="truncate">{subtitle.lan_doc}</span>
-                  {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
-                </Button>
-              ))}
-            </div>
-          )}
+  /** 字幕工具保留在控制栏，弹层换成与设置/ASR 弹窗同一家族的 Popover 形态
+   *  （side="top" align="end" + glass），替代原先手工绝对定位的面板。 */
+  const toolsSlot = subtitles.length > 0 && (
+    <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
+      <PopoverTrigger
+        render={
           <Button
             variant="ghost"
             size="icon-sm"
             aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
             aria-pressed={Boolean(subtitleLan)}
-            aria-expanded={subtitleOpen}
             className={cn(
               PLAYER_CONTROL_BUTTON_CLASS,
               PLAYER_CONTROL_ICON_CLASS,
               PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
             )}
-            onClick={() => setSubtitleOpen((open) => !open)}
+          />
+        }
+      >
+        {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
+      </PopoverTrigger>
+      <PopoverContent
+        container={stageRef}
+        side="top"
+        align="end"
+        collisionBoundary={typeof document !== "undefined" ? document.documentElement : undefined}
+        collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
+        sticky
+        glass
+        className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+      >
+        <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
+          字幕
+        </PopoverTitle>
+        <Button
+          variant="ghost"
+          className={cn(
+            "w-full justify-between max-md:h-10",
+            glassOptionClass(),
+            !subtitleLan && glassOptionSelectedClass(),
+          )}
+          aria-pressed={!subtitleLan}
+          onClick={() => {
+            setSubtitleLan(null);
+            setSubtitleOpen(false);
+          }}
+        >
+          <span className="truncate">关闭字幕</span>
+          {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
+        </Button>
+        {subtitles.map((subtitle) => (
+          <Button
+            key={subtitle.lan}
+            variant="ghost"
+            className={cn(
+              "w-full justify-between max-md:h-10",
+              glassOptionClass(),
+              subtitleLan === subtitle.lan && glassOptionSelectedClass(),
+            )}
+            aria-pressed={subtitleLan === subtitle.lan}
+            onClick={() => {
+              setSubtitleLan(subtitle.lan);
+              setSubtitleOpen(false);
+            }}
           >
-            {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
+            <span className="truncate">{subtitle.lan_doc}</span>
+            {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
           </Button>
-        </div>
-      )}
-    </>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 
   /** 倍速选择区：与播放列表设置同一个弹层，只有这一页需要它。 */
@@ -1398,6 +1432,45 @@ export function VideoPlayerPage() {
               </div>
             )}
           </div>
+
+          {fullscreen.fullscreen && (
+            <div
+              ref={hudRef}
+              data-player-hud
+              data-visible="true"
+              aria-hidden="false"
+              className={cn(
+                "absolute inset-x-0 top-0 z-30 transition-opacity duration-150 ease-out",
+                "motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,env(safe-area-inset-top))] text-white",
+                compact ? "pb-3" : "pb-6",
+              )}
+              onPointerEnter={holdControlsVisible}
+              onPointerLeave={scheduleControlsHide}
+              onFocusCapture={holdControlsVisible}
+              onBlurCapture={scheduleControlsHide}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="退出窗口全屏"
+                className={cn(
+                  PLAYER_CONTROL_BUTTON_CLASS,
+                  PLAYER_CONTROL_ICON_CLASS,
+                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                  "shrink-0",
+                )}
+                onClick={() => void fullscreen.exit()}
+              >
+                <ChevronLeft data-icon="inline-start" aria-hidden />
+              </Button>
+              <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
+                {title}
+              </p>
+              {topBarTools}
+            </div>
+          )}
 
           <div
             ref={controlsRef}
