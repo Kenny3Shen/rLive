@@ -160,10 +160,17 @@ message DanmakuElem {
 
 ### 顶栏低频工具与控制布局
 
-- 顶栏（`topBar`）右侧只留投屏 `Tv` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）；跳原址/复制链接在底部常驻 Shell。窗口全屏按钮在**控制栏**工具区（字幕旁，`aria-pressed`，`Maximize2/Minimize2` 图标）：与画面全屏共享 `useRecordingPlayerFullscreen` 的同一 toggle（桌面 = Tauri 原生窗口全屏），语义上是「应用窗口全屏」而非新全屏形态。
+- 顶栏（`topBar`）右侧只留投屏 `Tv` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）；跳原址/复制链接在底部常驻 Shell。
+- 两种全屏相互独立、可叠加（与直播页同语义）：**窗口全屏**（`webFullscreen`，PlayerControls 内置「网页全屏」按钮，`Expand/Shrink` 图标）隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台撑满应用窗口、保留系统窗口栏（最小化/最大化/关闭），Escape 退出；**画面全屏**（`useRecordingPlayerFullscreen` 的元素级/top layer 或桌面原生窗口全屏，「全屏（F）」按钮）盖住一切。两层叠加时 HUD 返回箭头与 Escape 一次只收一层（元素全屏优先）。
 - 控制栏保留高频播放控制与字幕（CC）按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏居中槽位是弹幕输入条（见第五节「弹幕发送」）。
-- 全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头退出全屏、中间标题、右侧投屏弹层（`container` 指向 `stageRef`，规避 top layer 压盖）加跳原址镜像（全屏时底部 Shell 被舞台盖住，靠它保持可达）。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器。
+- 画面全屏或窗口全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头（按层级退出）、中间标题、右侧投屏弹层（`container` 指向 `stageRef`，规避 top layer 压盖）加跳原址镜像。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器。
 - 底部常驻 Shell（`footer`，与直播页底部操作行同一画法：`border-t` + `bg-sidebar/90` + 安全区 padding，右对齐）：「复制链接」（`Link2`，`copyText` 写 B 站原址 + toast）与「在浏览器中打开」（`ExternalLink`，最右，`tauri-plugin-opener` 直跳系统浏览器、失败回退 `window.open`）。所有断点常驻（视频页没有直播页的移动端溢出菜单可承接），触屏加高 `max-md:h-11`。
+
+
+### 换集过渡与 seek 边界
+
+- 换集（合集/选集/相关视频跳转，cid 变化）时 `keepPreviousData` 的旧 playInfo 不能沿用：换集过渡（`switchingItem`，用「数据与 cid 对齐时刻」的 cid 比对判定）把 playInfo 抹成 undefined —— 播放器 effect 随之销毁旧实例（旧画面/声音立刻停住，不会先闪旧集首帧）、加载遮罩显示、旧播放错误清空；新集信息就位后重建。换画质/重试（同 cid）仍走旧播放器无缝续播路径。代理会话的停用链走 query 原始数据（不经被抹掉的 playInfo），保持 A→B 连续不泄漏。
+- seek 上限离时长留 0.25s 余量：DASH 插件按 `floor(t / 段长)` 拉分片，seek 目标贴着 duration 会落在末段之外拉不到数据、永远停在 waiting（表现为「跳到最后无限加载不进下一 P」）。留余量让播放器自然播完触发 ended，自动连播走正常路径。
 
 ### 跳原址与复制链接（底部 Shell）
 
