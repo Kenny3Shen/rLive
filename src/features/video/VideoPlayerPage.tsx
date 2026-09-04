@@ -8,7 +8,15 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { ChevronLeft, FastForward, Home } from "lucide-react";
+import {
+  Captions,
+  CaptionsOff,
+  Check,
+  ChevronLeft,
+  FastForward,
+  Home,
+  Tv,
+} from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -25,13 +33,31 @@ import {
   createXgPlayer,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
+  type XgPlaybackKind,
   type XgPlayerInstance,
 } from "@/features/room/player/xgPlayer";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
 import { formatRecordingDuration } from "@/features/recording/recording";
 import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
-import { videoGetArchive, videoGetDanmaku, videoGetPlayInfo, videoStopPlay } from "./videoApi";
+import { videoGetArchive, videoGetCastUrl, videoGetDanmaku, videoGetPlayInfo, videoGetSubtitle, videoGetSubtitles, videoStopPlay } from "./videoApi";
+import { subtitleJsonToVtt } from "./subtitleVtt";
+import { CastMenu } from "@/features/room/CastMenu";
+import {
+  getPictureInPictureDocument,
+  toggleVideoPictureInPicture,
+} from "@/features/room/player/useWebPlayer";
+import {
+  PLAYER_CONTROL_BUTTON_CLASS,
+  PLAYER_CONTROL_ICON_CLASS,
+  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+} from "@/shared/components/player/PlayerControls";
+import {
+  glassOptionClass,
+  glassOptionSelectedClass,
+  glassPanelClass,
+  glassTitleClass,
+} from "@/shared/components/player/glassSurface";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
 import { VideoSidebar } from "./VideoSidebar";
 import {
@@ -119,6 +145,17 @@ export function VideoPlayerPage() {
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   /** 期望画质（null = 后端自选最高可用档）。切换后带着它重取播放信息。 */
   const [qualityQn, setQualityQn] = useState<number | null>(null);
+  /** 仅音频（听视频）：跳过视频轨代理省流，切换时记录续播点后重建播放器。 */
+  const [audioOnly, setAudioOnly] = useState(false);
+  /** 画中画进出状态（监听媒体元素事件，WebView2 支持；Android WebView 无此 API）。 */
+  const [pipActive, setPipActive] = useState(false);
+  /** 投屏与 CC 字幕弹层的开关态。 */
+  const [castOpen, setCastOpen] = useState(false);
+  const [subtitleOpen, setSubtitleOpen] = useState(false);
+  /** 选中的字幕语言（null = 关闭字幕）。 */
+  const [subtitleLan, setSubtitleLan] = useState<string | null>(null);
+  /** 当前字幕的 VTT blob 地址。 */
+  const [subtitleVttUrl, setSubtitleVttUrl] = useState<string | null>(null);
   // 换画质时记住切换前的位置与播放状态：播放器必然重建（新的代理端口 = 新的
   // MPD 地址），不存就会从头播。换视频（相关/分集跳转）不会碰它，天然从头播。
   const resumeAtRef = useRef<{ position: number; playing: boolean } | null>(null);
@@ -206,6 +243,7 @@ export function VideoPlayerPage() {
       params?.bvid ?? "",
       params?.epId ?? "",
       qualityQn,
+      audioOnly,
       playerRevision,
     ],
     enabled: params !== null && cid > 0,
@@ -215,6 +253,7 @@ export function VideoPlayerPage() {
         cid,
         ep_id: params?.epId ?? null,
         qn: qualityQn,
+        audio_only: audioOnly,
       }),
     // 换画质/重试期间保留旧数据：旧播放器继续播到新信息就位，而不是先黑屏等请求。
     placeholderData: keepPreviousData,
@@ -233,6 +272,40 @@ export function VideoPlayerPage() {
     }
     setQualityQn(qn);
   }, [qualityQn]);
+
+  /** 仅音频（听视频）：与切画质同一重建链路（记录续播点 → 重取播放信息）。 */
+  const toggleAudioOnly = useCallback(() => {
+    const media = videoRef.current;
+    if (media) {
+      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+    }
+    setAudioOnly((value) => !value);
+  }, []);
+
+  const togglePictureInPicture = useCallback(() => {
+    void toggleVideoPictureInPicture(getPictureInPictureDocument(), videoRef.current);
+  }, []);
+
+  // CC 字幕列表：多数稿件没有，空列表/失败都按无字幕处理（按钮直接不渲染）。
+  const subtitlesQuery = useQuery({
+    queryKey: ["video_subtitles", cid, params?.bvid ?? "", params?.epId ?? ""],
+    enabled: cid > 0,
+    queryFn: () =>
+      videoGetSubtitles({ bvid: params?.bvid ?? null, cid, ep_id: params?.epId ?? null }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const subtitles = subtitlesQuery.data ?? [];
+
+  // 投屏直链：打开弹层时才取（html5 playurl 的 MP4，与主播放链路无关）。
+  const castQuery = useQuery({
+    queryKey: ["video_cast_url", cid, params?.bvid ?? "", params?.epId ?? ""],
+    enabled: castOpen && cid > 0,
+    queryFn: () =>
+      videoGetCastUrl({ bvid: params?.bvid ?? null, cid, ep_id: params?.epId ?? null }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
 
   /**
    * 离开播放页停掉三个代理会话。
@@ -340,11 +413,15 @@ export function VideoPlayerPage() {
   );
 
   const mpdUrl = playInfo?.mpd_url;
+  // 仅音频时直接播音轨地址（完整 fMP4，代理转发 Range）；xgplayer-dash 写死假设
+  // 视频轨存在，纯音 MPD 会崩，因此走 native 内核而不是 DASH。
+  const playUrl = playInfo?.audio_only ? playInfo.audio_url : mpdUrl;
+  const playKind: XgPlaybackKind = playInfo?.audio_only ? "native" : "dash";
 
   useEffect(() => {
     const video = videoRef.current;
     const root = rootRef.current;
-    if (!video || !root || !mpdUrl) return;
+    if (!video || !root || !playUrl) return;
     const media = video;
     let cancelled = false;
 
@@ -430,7 +507,7 @@ export function VideoPlayerPage() {
     media.addEventListener("ended", onEnded);
     media.addEventListener("error", onNativeError);
 
-    void loadXgPlayerModules("dash")
+    void loadXgPlayerModules(playKind)
       .then((modules) => {
         if (cancelled) return;
         const player = createXgPlayer(modules, {
@@ -438,8 +515,9 @@ export function VideoPlayerPage() {
           video: media,
           // 喂的是 `mpd_url`（HTTP），不是 blob：xgplayer-dash 取清单的 XHR 会给地址
           // 拼 `?`，blob URL 走精确匹配因此 404。别「优化」成 blob。
-          url: mpdUrl,
-          kind: "dash",
+          // 仅音频时喂音轨代理地址并走 native 内核。
+          url: playUrl,
+          kind: playKind,
           // VOD 必须显式关掉直播模式：`createXgPlayer` 默认 `isLive: true`，
           // 那会让 xgplayer 隐藏进度条并把时长当成不确定值。
           isLive: false,
@@ -506,7 +584,7 @@ export function VideoPlayerPage() {
         // 协议插件可能已经释放了它的 MediaSource。
       }
     };
-  }, [ensureDanmakuSegments, mpdUrl, playInfo?.duration]);
+  }, [ensureDanmakuSegments, playUrl, playInfo?.duration, playKind]);
 
   const togglePlayback = useCallback(() => {
     const player = playerRef.current;
@@ -535,11 +613,67 @@ export function VideoPlayerPage() {
     }
   }, []);
 
-  // 倍速直接写到媒体元素上；换源（新 mpd）后重时应用一次。
+  // 倍速直接写到媒体元素上；换源（新播放地址）后重时应用一次。
   useEffect(() => {
     const media = videoRef.current;
     if (media) media.playbackRate = playbackRate;
-  }, [playbackRate, mpdUrl]);
+  }, [playbackRate, playUrl]);
+
+  // 画中画事件在媒体元素上触发且不冒泡；挂捕获阶段监听舞台，播放器重建也能接住。
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const onEnter = () => setPipActive(true);
+    const onLeave = () => setPipActive(false);
+    stage.addEventListener("enterpictureinpicture", onEnter, true);
+    stage.addEventListener("leavepictureinpicture", onLeave, true);
+    return () => {
+      stage.removeEventListener("enterpictureinpicture", onEnter, true);
+      stage.removeEventListener("leavepictureinpicture", onLeave, true);
+    };
+  }, []);
+
+  // 选中的字幕轨 → 后端代拉 JSON → 转 VTT blob；换语言时回收旧 blob。
+  useEffect(() => {
+    const subtitle = subtitles.find((item) => item.lan === subtitleLan);
+    if (!subtitle) {
+      setSubtitleVttUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return null;
+      });
+      return;
+    }
+    let cancelled = false;
+    videoGetSubtitle(subtitle.url)
+      .then((raw) => {
+        if (cancelled) return;
+        const vtt = subtitleJsonToVtt(raw);
+        if (!vtt) return;
+        setSubtitleVttUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+        });
+      })
+      .catch(() => undefined); // 拉取失败保持无字幕，下次选中重试
+    return () => {
+      cancelled = true;
+    };
+  }, [subtitleLan, subtitles]);
+
+  // 把 VTT 挂到媒体元素（<track> 原生渲染）；换源重建媒体元素后重挂。
+  useEffect(() => {
+    const media = videoRef.current;
+    if (!media) return;
+    for (const track of [...media.querySelectorAll("track")]) track.remove();
+    if (!subtitleVttUrl) return;
+    const track = document.createElement("track");
+    track.kind = "subtitles";
+    track.srclang = subtitleLan ?? "zh";
+    track.label = subtitles.find((item) => item.lan === subtitleLan)?.lan_doc ?? "字幕";
+    track.src = subtitleVttUrl;
+    media.appendChild(track);
+    track.track.mode = "showing";
+  }, [subtitleLan, subtitleVttUrl, playUrl, subtitles]);
 
   const engageSpeedHold = useCallback(() => {
     const media = videoRef.current;
@@ -894,6 +1028,117 @@ export function VideoPlayerPage() {
       </div>
     ) : undefined;
 
+  // 视频页专属工具（投屏/字幕），挂进 PlayerControls 的 toolsSlot。与内部按钮同一套
+  // 样式常量（见 multi-room 的同类用法）；没字幕轨的稿件不渲染字幕按钮。
+  // 弹层用绝对定位的轻量面板而不是 Popover：挂在控制条内可同步悬停保活，
+  // 关闭只需点按钮切换。
+  // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
+  const pipSupported =
+    typeof document !== "undefined" && document.pictureInPictureEnabled;
+  const toolsSlot = (
+    <>
+      <div className="relative">
+        {castOpen && castQuery.data && (
+          <div
+            className={cn(
+              "absolute right-0 bottom-10 z-50 w-72 overflow-y-auto p-1.5",
+              glassPanelClass({ overlay: true }),
+            )}
+          >
+            <p className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>投屏</p>
+            <CastMenu
+              castUrl={castQuery.data.url}
+              headers={castQuery.data.headers}
+              title={params?.title ?? "视频"}
+              variant="overlay"
+              showHeader={false}
+            />
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="投屏"
+          aria-expanded={castOpen}
+          disabled={castOpen && castQuery.isPending}
+          className={cn(
+            PLAYER_CONTROL_BUTTON_CLASS,
+            PLAYER_CONTROL_ICON_CLASS,
+            PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+          )}
+          onClick={() => setCastOpen((open) => !open)}
+        >
+          <Tv aria-hidden />
+        </Button>
+      </div>
+
+      {subtitles.length > 0 && (
+        <div className="relative">
+          {subtitleOpen && (
+            <div
+              className={cn(
+                "absolute right-0 bottom-10 z-50 w-52 overflow-y-auto p-1.5",
+                glassPanelClass({ overlay: true }),
+              )}
+            >
+              <p className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>字幕</p>
+              <Button
+                variant="ghost"
+                className={cn(
+                  "w-full justify-between max-md:h-10",
+                  glassOptionClass(),
+                  !subtitleLan && glassOptionSelectedClass(),
+                )}
+                aria-pressed={!subtitleLan}
+                onClick={() => {
+                  setSubtitleLan(null);
+                  setSubtitleOpen(false);
+                }}
+              >
+                <span className="truncate">关闭字幕</span>
+                {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
+              </Button>
+              {subtitles.map((subtitle) => (
+                <Button
+                  key={subtitle.lan}
+                  variant="ghost"
+                  className={cn(
+                    "w-full justify-between max-md:h-10",
+                    glassOptionClass(),
+                    subtitleLan === subtitle.lan && glassOptionSelectedClass(),
+                  )}
+                  aria-pressed={subtitleLan === subtitle.lan}
+                  onClick={() => {
+                    setSubtitleLan(subtitle.lan);
+                    setSubtitleOpen(false);
+                  }}
+                >
+                  <span className="truncate">{subtitle.lan_doc}</span>
+                  {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
+                </Button>
+              ))}
+            </div>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
+            aria-pressed={Boolean(subtitleLan)}
+            aria-expanded={subtitleOpen}
+            className={cn(
+              PLAYER_CONTROL_BUTTON_CLASS,
+              PLAYER_CONTROL_ICON_CLASS,
+              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+            )}
+            onClick={() => setSubtitleOpen((open) => !open)}
+          >
+            {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
+          </Button>
+        </div>
+      )}
+    </>
+  );
+
   /** 倍速选择区：与播放列表设置同一个弹层，只有这一页需要它。 */
   const rateSettings = (
     <div className="flex flex-col gap-1 px-1 py-1">
@@ -1146,6 +1391,12 @@ export function VideoPlayerPage() {
               onOverlayInteractionChange={setOverlayInteractionOpen}
               onRefresh={retryPlayback}
               onNext={nextItem ? () => goToPlaylistItem(nextItem) : undefined}
+              toolsSlot={toolsSlot}
+              audioOnly={audioOnly}
+              onToggleAudioOnly={toggleAudioOnly}
+              pictureInPictureSupported={pipSupported}
+              pictureInPictureActive={pipActive}
+              onTogglePictureInPicture={togglePictureInPicture}
               onTogglePause={togglePlayback}
               onVolume={setPlayerVolume}
               onToggleMute={toggleMute}

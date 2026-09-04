@@ -126,6 +126,27 @@ pub struct VideoPlayInfo {
     pub codecs: String,
     pub accept_quality: Vec<VideoQuality>,
     pub session_ids: VideoSessionIds,
+    /// 仅音频模式（听视频）：MPD 只含音轨，video_url 为空。
+    pub audio_only: bool,
+}
+
+/// DLNA 投屏源：html5 playurl 返回的 MP4 直链（电视经中继可直连）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoCastSource {
+    pub url: String,
+    /// 中继向上游携带的请求头（UA / Referer）。
+    pub headers: HashMap<String, String>,
+}
+
+/// CC 字幕轨道（player v2 接口）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoSubtitle {
+    /// 语言代码，如 `zh-CN`；AI 字幕以 `ai-` 开头（需登录才会返回）。
+    pub lan: String,
+    /// 展示名，如「中文（自动生成）」。
+    pub lan_doc: String,
+    /// 字幕 JSON 地址。
+    pub url: String,
 }
 
 /// 一次 VOD 播放占用的三个代理会话。
@@ -186,6 +207,8 @@ pub struct VideoPlayRequest {
     /// 同一画质会并列 avc1 / hvc1 / av01 三种编码，必须按编码过滤后再选流，
     /// 否则会随机拿到 WebView 不一定能解的 av01。
     pub codec: Option<String>,
+    /// 仅音频模式：跳过视频轨代理，MPD 只含音轨（听视频省流）。
+    pub audio_only: Option<bool>,
 }
 
 /// 稿件详情（`x/web-interface/view`）。

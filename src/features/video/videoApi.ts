@@ -2,6 +2,7 @@ import { invokeCmd } from "@/shared/api/tauri";
 import type {
   PgcListPage,
   VideoArchive,
+  VideoCastSource,
   VideoCommentPage,
   VideoDanmakuSegment,
   VideoListPage,
@@ -9,6 +10,7 @@ import type {
   VideoPlayRequest,
   VideoSeason,
   VideoSessionIds,
+  VideoSubtitle,
   VideoZone,
 } from "@/shared/types/video";
 
@@ -67,6 +69,21 @@ export function videoGetSeason(params: {
 
 export function videoGetPlayInfo(request: VideoPlayRequest): Promise<VideoPlayInfo> {
   return invokeCmd<VideoPlayInfo>("video_get_play_info", { request });
+}
+
+/** DLNA 投屏源：html5 playurl 的 MP4 直链 + 中继请求头（电视经中继可直连）。 */
+export function videoGetCastUrl(request: VideoPlayRequest): Promise<VideoCastSource> {
+  return invokeCmd<VideoCastSource>("video_get_cast_url", { request });
+}
+
+/** CC 字幕轨道列表（player v2）。 */
+export function videoGetSubtitles(request: VideoPlayRequest): Promise<VideoSubtitle[]> {
+  return invokeCmd<VideoSubtitle[]>("video_get_subtitles", { request });
+}
+
+/** 字幕 JSON 原文（字幕主机无 CORS 头，由本端代拉）。 */
+export function videoGetSubtitle(url: string): Promise<string> {
+  return invokeCmd<string>("video_get_subtitle", { url });
 }
 
 /** 取一段 VOD 弹幕。段号 6 分钟一段，见 `videoDanmakuSegmentIndex`。 */

@@ -656,6 +656,14 @@ function UgcSeasonPanel({
     epId?: string;
   }) => void;
 }) {
+  const currentRowRef = useRef<HTMLButtonElement | null>(null);
+
+  // 打开合集页签或连播换集时，把当前播放项滚到可视区中央：长合集（几十上百集）
+  // 默认停在顶部，正在看的那集可能在视口外。仅滚动列表容器，不抖动外层。
+  useEffect(() => {
+    currentRowRef.current?.scrollIntoView({ block: "center" });
+  }, [currentBvid]);
+
   return (
     <div className="flex min-h-0 flex-col">
       <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
@@ -670,6 +678,7 @@ function UgcSeasonPanel({
           return (
             <button
               key={episode.bvid}
+              ref={current ? currentRowRef : undefined}
               type="button"
               aria-current={current || undefined}
               onClick={() =>
@@ -718,7 +727,6 @@ export function VideoSidebar({
   const isPgc = Boolean(epId);
   const [tab, setTab] = useState<SidebarTab>(isPgc ? "episodes" : "related");
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
-  const tabTouchedRef = useRef(false);
 
   // 稿件详情：UGC 的评论区 oid 兜底 + 相关视频页签顶部的作者/统计信息。
   const archiveQuery = useQuery({
@@ -757,12 +765,6 @@ export function VideoSidebar({
       : ["related", "comments"];
 
   // 稿件属于合集时自动切到合集页签（用户手动切换过则不再干预）。
-  useEffect(() => {
-    if (!tabTouchedRef.current && tab === "related" && archive?.ugc_season) {
-      setTab("season");
-    }
-  }, [tab, archive?.ugc_season]);
-
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
       setUploaderDrawerOpen(true);
@@ -776,10 +778,7 @@ export function VideoSidebar({
       value={tab}
       className="flex h-full min-h-0 flex-col gap-0"
       onValueChange={(value) => {
-        if (isSidebarTab(value)) {
-          tabTouchedRef.current = true;
-          setTab(value);
-        }
+        if (isSidebarTab(value)) setTab(value);
       }}
     >
       {/* UP 主信息块：与直播页的主播信息（RoomHostInfo）同一套画法（sideHeader

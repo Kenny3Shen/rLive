@@ -128,6 +128,8 @@ export type VideoPlayInfo = {
   codecs: string;
   accept_quality: VideoQuality[];
   session_ids: VideoSessionIds;
+  /** 仅音频模式（听视频）：MPD 只含音轨，video_url 为空。 */
+  audio_only: boolean;
 };
 
 /** play-info 请求参数，镜像 Rust `VideoPlayRequest`。 */
@@ -142,6 +144,24 @@ export type VideoPlayRequest = {
   qn?: number | null;
   /** 期望视频编码前缀，缺省 `avc1`。 */
   codec?: string | null;
+  /** 仅音频模式：MPD 只含音轨（听视频省流）。 */
+  audio_only?: boolean | null;
+};
+
+/** DLNA 投屏源：html5 playurl 的 MP4 直链 + 中继请求头。 */
+export type VideoCastSource = {
+  url: string;
+  headers: Record<string, string>;
+};
+
+/** CC 字幕轨道（player v2 接口）。 */
+export type VideoSubtitle = {
+  /** 语言代码，AI 字幕以 `ai-` 开头。 */
+  lan: string;
+  /** 展示名，如「中文（自动生成）」。 */
+  lan_doc: string;
+  /** 字幕 JSON 地址。 */
+  url: string;
 };
 
 /** 一条 VOD 弹幕。 */

@@ -11,8 +11,8 @@ use crate::account;
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::models::video::{
-    PgcListPage, VideoArchive, VideoCommentPage, VideoDanmakuSegment, VideoListPage, VideoPlayInfo,
-    VideoPlayRequest, VideoSeason, VideoSessionIds,
+    PgcListPage, VideoArchive, VideoCastSource, VideoCommentPage, VideoDanmakuSegment,
+    VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoSeason, VideoSessionIds, VideoSubtitle,
 };
 use crate::sites::bilibili::BilibiliSite;
 use crate::state::AppState;
@@ -105,6 +105,20 @@ pub async fn video_get_season(
         .await
 }
 
+/// 媒体流向上游携带的请求头：部分 CDN 主机缺 Referer 直接 403。
+fn video_stream_headers() -> HashMap<String, String> {
+    HashMap::from([
+        (
+            "user-agent".to_string(),
+            crate::sites::bilibili::DEFAULT_USER_AGENT.to_string(),
+        ),
+        (
+            "referer".to_string(),
+            crate::sites::bilibili::video::VIDEO_REFERER.to_string(),
+        ),
+    ])
+}
+
 /// 取播放信息：解出分片表、拉起三个代理、合成 MPD。
 ///
 /// 顺序不可调换：MPD 里要写入视频/音频轨的**本机代理地址**，所以必须先把两条
@@ -116,18 +130,11 @@ pub async fn video_get_play_info(
 ) -> AppResult<VideoPlayInfo> {
     let site = resolve_bilibili(&state)?;
     let selection = site.video_play_selection(&request).await?;
+    let audio_only = request.audio_only.unwrap_or(false);
 
     // 媒体 CDN 有一部分主机在缺少站点 Referer 时直接 403，且部分主机不带 CORS 头，
     // 因此两条轨一律经代理注入请求头。
-    let mut headers = HashMap::new();
-    headers.insert(
-        "user-agent".to_string(),
-        crate::sites::bilibili::DEFAULT_USER_AGENT.to_string(),
-    );
-    headers.insert(
-        "referer".to_string(),
-        crate::sites::bilibili::video::VIDEO_REFERER.to_string(),
-    );
+    let headers = video_stream_headers();
 
     let proxy = {
         let conn = state.conn()?;
@@ -147,15 +154,20 @@ pub async fn video_get_play_info(
         mpd: format!("{base}-mpd"),
     };
 
-    let video_url = state
-        .stream_proxy
-        .start_ordered(
-            selection.video.base_url.clone(),
-            headers.clone(),
-            session_ids.video.clone(),
-            proxy.as_deref(),
-        )
-        .await?;
+    // 仅音频模式跳过视频轨代理（听视频省流），清单只含音轨。
+    let video_url = if audio_only {
+        String::new()
+    } else {
+        state
+            .stream_proxy
+            .start_ordered(
+                selection.video.base_url.clone(),
+                headers.clone(),
+                session_ids.video.clone(),
+                proxy.as_deref(),
+            )
+            .await?
+    };
     let audio_url = state
         .stream_proxy
         .start_ordered(
@@ -166,15 +178,22 @@ pub async fn video_get_play_info(
         )
         .await?;
 
-    let mpd = crate::sites::bilibili::video::build_mpd(&selection, &video_url, &audio_url);
-    let mpd_url = state
-        .stream_proxy
-        .start_text(
-            mpd.clone(),
-            "application/dash+xml".to_string(),
-            session_ids.mpd.clone(),
-        )
-        .await?;
+    // 仅音频模式（听视频）：音轨 fMP4 本身是完整文件，代理转发 Range，
+    // 直接当普通媒体地址播（xgplayer-dash 写死假设视频轨存在，纯音 MPD 会在
+    // definitions[0].selected 上崩）。不合成 MPD、不起文本代理。
+    let mut mpd = String::new();
+    let mut mpd_url = String::new();
+    if !audio_only {
+        mpd = crate::sites::bilibili::video::build_mpd(&selection, &video_url, &audio_url);
+        mpd_url = state
+            .stream_proxy
+            .start_text(
+                mpd.clone(),
+                "application/dash+xml".to_string(),
+                session_ids.mpd.clone(),
+            )
+            .await?;
+    }
 
     Ok(VideoPlayInfo {
         mpd,
@@ -182,13 +201,53 @@ pub async fn video_get_play_info(
         video_url,
         audio_url,
         headers,
-        duration: selection.video.sidx.duration_secs(),
+        // 仅音频时视频轨代理不存在，时长只能取音轨 sidx（两者本就一致）。
+        duration: if audio_only {
+            selection.audio.sidx.duration_secs()
+        } else {
+            selection.video.sidx.duration_secs()
+        },
         quality: selection.quality,
         quality_label: selection.quality_label,
         codecs: selection.video.codecs.clone(),
         accept_quality: selection.accept_quality,
         session_ids,
+        audio_only,
     })
+}
+
+/// 取 DLNA 投屏源：html5 playurl 的 MP4 直链 + 中继请求头。
+///
+/// 与直播页的 CastMenu 同一机制：电视访问本机中继，中继代注 UA/Referer。
+#[tauri::command(async)]
+pub async fn video_get_cast_url(
+    state: State<'_, AppState>,
+    request: VideoPlayRequest,
+) -> AppResult<VideoCastSource> {
+    let site = resolve_bilibili(&state)?;
+    let url = site.video_cast_url(&request).await?;
+    Ok(VideoCastSource {
+        url,
+        headers: video_stream_headers(),
+    })
+}
+
+/// 取 CC 字幕轨道列表（player v2）。
+#[tauri::command(async)]
+pub async fn video_get_subtitles(
+    state: State<'_, AppState>,
+    request: VideoPlayRequest,
+) -> AppResult<Vec<VideoSubtitle>> {
+    resolve_bilibili(&state)?.video_subtitles(&request).await
+}
+
+/// 拉取字幕 JSON 原文（字幕主机无 CORS 头，由本端代拉）。
+#[tauri::command(async)]
+pub async fn video_get_subtitle(
+    state: State<'_, AppState>,
+    url: String,
+) -> AppResult<String> {
+    resolve_bilibili(&state)?.fetch_subtitle(&url).await
 }
 
 /// 取一段 VOD 弹幕。
