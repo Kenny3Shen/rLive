@@ -211,6 +211,16 @@ export type VideoUgcSeason = {
   episodes: VideoSeasonEpisode[];
 };
 
+/** 稿件的一个分 P（archive.pages）。 */
+export type VideoArchivePage = {
+  /** P 序号，从 1 开始。 */
+  page: number;
+  cid: number;
+  /** 分 P 标题，空字符串时展示方回退到 P 序号。 */
+  part: string;
+  duration: number;
+};
+
 export type VideoArchive = {
   bvid: string;
   /** 见 `VideoItem.aid`：字符串传输，避免丢精度。 */
@@ -227,6 +237,8 @@ export type VideoArchive = {
   danmaku: number;
   reply: number;
   pubdate: number;
+  /** 多 P 稿件的分 P 列表：选集与连播沿它走；少于 2 个 P 为空数组。 */
+  pages: VideoArchivePage[];
   /** UGC 合集：稿件属于合集时连播沿合集走，无合集为 null。 */
   ugc_season: VideoUgcSeason | null;
 };

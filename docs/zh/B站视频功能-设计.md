@@ -140,9 +140,15 @@ message DanmakuElem {
 
 ### 右侧栏（`VideoSidebar`）
 
-- UGC 页签：相关视频 + 评论；PGC：分集 + 评论。宽屏在右（360px，xl 400px），窄屏列在播放器下方滚动。
+- UGC 页签：选集（多 P）/ 相关视频 + 评论 + 合集；PGC：分集 + 评论。宽屏在右（300px，xl 320px），窄屏列在播放器下方滚动。
+- 多 P 稿件（`pages` ≥ 2）自动展示「选集」页签并接管连播列表：点任意 P 跳转（同 bvid、按 cid 取流），当前 P 按 cid 高亮。合集（`ugc_season`）与之互斥——多 P 优先，选集与连播沿分 P 列表走；无分 P 的合集稿件沿合集走。
 - 评论的 `oid` 是 aid：列表/分集链路经路由参数携带；URL 直入时 UGC 用稿件详情补齐，PGC 用 season 详情里当前集的 aid。
 - 评论游标翻页（`next`），二级回复 pn 翻页（首传 1）；`[大哭]` 占位符按 `content.emote` 映射换成内联图。
+
+### 底部原始地址条
+
+- 播放页最底部常驻一条地址栏（`videoOriginalUrl`）：UGC 为 `https://www.bilibili.com/video/<bvid>/?p=<n>`（P1 省略 `?p=`，与 Web 一致），PGC 为 `https://www.bilibili.com/bangumi/play/ep<epId>`。
+- 点整条用系统浏览器打开（`tauri-plugin-opener`，失败回退 `window.open`）；右侧复制按钮直接复制地址。
 
 ### 评论接口的三个坑（实测 + PiliPlus 对照）
 

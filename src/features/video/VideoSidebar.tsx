@@ -20,7 +20,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
-import type { VideoComment, VideoUgcSeason } from "@/shared/types/video";
+import type { VideoArchivePage, VideoComment, VideoUgcSeason } from "@/shared/types/video";
 import {
   videoGetArchive,
   videoGetCommentReplies,
@@ -34,23 +34,30 @@ import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
 import { UploaderDrawer } from "./UploaderDrawer";
 
 /**
- * 播放页右侧栏：相关视频（UGC）/ 分集（PGC）与评论区。
+ * 播放页右侧栏：相关视频（UGC）/ 分集（PGC）/ 选集（多 P）/ 合集与评论区。
  *
- * 一个文件装下三种列表是刻意的 —— 它们共享同一套「页签 + 滚动容器 + 行项」骨架，
- * 拆成三个文件只会让这个骨架复制三遍。评论区是其中唯一有翻页的，用游标
- * `useInfiniteQuery` + 哨兵；相关视频与分集上游都是一次给全。
+ * 一个文件装下多种列表是刻意的 —— 它们共享同一套「页签 + 滚动容器 + 行项」骨架，
+ * 拆成多个文件只会让这个骨架复制多遍。评论区是其中唯一有翻页的，用游标
+ * `useInfiniteQuery` + 哨兵；相关视频、分集与选集上游都是一次给全。
  */
 
-type SidebarTab = "related" | "episodes" | "season" | "comments";
+type SidebarTab = "related" | "episodes" | "parts" | "season" | "comments";
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
   episodes: "分集",
+  parts: "选集",
   season: "合集",
   comments: "评论",
 };
 
-const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "episodes", "season", "comments"];
+const SIDEBAR_TABS: readonly SidebarTab[] = [
+  "related",
+  "episodes",
+  "parts",
+  "season",
+  "comments",
+];
 
 function isSidebarTab(value: string): value is SidebarTab {
   return (SIDEBAR_TABS as readonly string[]).includes(value);
@@ -714,19 +721,106 @@ function UgcSeasonPanel({
   );
 }
 
+/**
+ * 多 P 选集列表。与合集面板同构：当前播放项按 cid 高亮并滚动到可视区，
+ * 点任意 P 即跳转，连播沿分 P 列表走。
+ */
+function PartsPanel({
+  bvid,
+  aid,
+  pages,
+  currentCid,
+  onNavigate,
+}: {
+  bvid: string;
+  aid: string;
+  pages: VideoArchivePage[];
+  /** 链接缺 cid（搜索进入）时定位不到当前项，不高亮。 */
+  currentCid: number;
+  onNavigate: (target: {
+    bvid: string;
+    cid: number;
+    title: string;
+    aid: string;
+    epId?: string;
+  }) => void;
+}) {
+  const currentRowRef = useRef<HTMLButtonElement | null>(null);
+
+  // 打开选集页签或换 P 时把正在播的那 P 滚到可视区中央（与合集面板同一策略）。
+  useEffect(() => {
+    currentRowRef.current?.scrollIntoView({ block: "center" });
+  }, [currentCid]);
+
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
+        <span className="shrink-0 text-xs font-medium">选集</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          共 {pages.length} P
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        {pages.map((page) => {
+          const current = currentCid > 0 && page.cid === currentCid;
+          const label = page.part || `P${page.page}`;
+          return (
+            <button
+              key={page.cid}
+              ref={current ? currentRowRef : undefined}
+              type="button"
+              aria-current={current || undefined}
+              onClick={() =>
+                onNavigate({
+                  bvid,
+                  cid: page.cid,
+                  title: label,
+                  aid,
+                })
+              }
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
+                current && "bg-primary/10",
+              )}
+            >
+              <span
+                className={cn(
+                  "min-w-7 shrink-0 text-center text-xs tabular-nums",
+                  current ? "font-semibold text-primary" : "text-muted-foreground",
+                )}
+              >
+                P{page.page}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {formatVideoDuration(page.duration)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function VideoSidebar({
   bvid,
   epId,
   aid,
+  cid,
 }: {
   bvid: string | null;
   epId: string | null;
   aid: string | null;
+  /** 当前播放的 cid：多 P 稿件的选集页签用它高亮当前 P。 */
+  cid: number;
 }) {
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
   const [tab, setTab] = useState<SidebarTab>(isPgc ? "episodes" : "related");
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
+  // 用户手动切换过页签后就不再自动改选，见下方的自动切换 effect。
+  const tabTouchedRef = useRef(false);
 
   // 稿件详情：UGC 的评论区 oid 兜底 + 相关视频页签顶部的作者/统计信息。
   const archiveQuery = useQuery({
@@ -758,13 +852,25 @@ export function VideoSidebar({
   };
 
   const archive = archiveQuery.data;
+  const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
   const tabs: SidebarTab[] = isPgc
     ? ["episodes", "comments"]
-    : archive?.ugc_season
-      ? ["related", "comments", "season"]
-      : ["related", "comments"];
+    : multiPart
+      ? archive?.ugc_season
+        ? ["parts", "related", "comments", "season"]
+        : ["parts", "related", "comments"]
+      : archive?.ugc_season
+        ? ["related", "comments", "season"]
+        : ["related", "comments"];
 
-  // 稿件属于合集时自动切到合集页签（用户手动切换过则不再干预）。
+  // 多 P 稿件默认展示选集（与 B 站 Web 同款落点）：详情取回后把未动过页签的
+  // 侧栏切到「选集」；用户已手动切换过则不再干预。
+  useEffect(() => {
+    if (multiPart && !tabTouchedRef.current && tab !== "parts") {
+      setTab("parts");
+    }
+  }, [multiPart, tab]);
+
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
       setUploaderDrawerOpen(true);
@@ -778,7 +884,10 @@ export function VideoSidebar({
       value={tab}
       className="flex h-full min-h-0 flex-col gap-0"
       onValueChange={(value) => {
-        if (isSidebarTab(value)) setTab(value);
+        if (isSidebarTab(value)) {
+          tabTouchedRef.current = true;
+          setTab(value);
+        }
       }}
     >
       {/* UP 主信息块：与直播页的主播信息（RoomHostInfo）同一套画法（sideHeader
@@ -892,6 +1001,14 @@ export function VideoSidebar({
           )
         ) : tab === "episodes" ? (
           <EpisodesPanel epId={epId!} onNavigate={navigateToPlay} />
+        ) : tab === "parts" && multiPart && archive ? (
+          <PartsPanel
+            bvid={bvid ?? ""}
+            aid={archive.aid}
+            pages={archive.pages}
+            currentCid={cid}
+            onNavigate={navigateToPlay}
+          />
         ) : tab === "season" && archive?.ugc_season ? (
           <UgcSeasonPanel
             season={archive.ugc_season}

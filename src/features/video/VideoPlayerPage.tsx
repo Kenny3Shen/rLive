@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -13,6 +14,7 @@ import {
   CaptionsOff,
   Check,
   ChevronLeft,
+  ExternalLink,
   FastForward,
   Home,
   Tv,
@@ -66,8 +68,16 @@ import {
   videoDanmakuSegmentsFor,
   type VideoDanmakuEntry,
 } from "./videoDanmaku";
-import { VIDEO_HOME_PATH, parseVideoPlayParams, videoPlayPath } from "./videoRoute";
-import { usePlaylistStore, playlistItemFromSeasonEpisode, type PlaylistItem } from "./playlistStore";
+import { VIDEO_HOME_PATH, parseVideoPlayParams, videoOriginalUrl, videoPlayPath } from "./videoRoute";
+import {
+  usePlaylistStore,
+  playlistItemFromArchivePage,
+  playlistItemFromSeasonEpisode,
+  type PlaylistItem,
+} from "./playlistStore";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { notify } from "@/components/ui/toast";
+import { copyText } from "@/shared/clipboard";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const SINGLE_CLICK_DELAY_MS = 220;
@@ -212,20 +222,34 @@ export function VideoPlayerPage() {
     }
   }, [params, playlistStore]);
 
-  // 合集优先：稿件属于 UGC 合集时，用合集替换播放列表（覆盖搜索/投稿快照），
-  // 自动连播与「下一个」沿合集走。链接可能没带 cid，以 bvid 定位当前项。
+  // 结构化列表优先：多 P 稿件用分 P 列表、合集稿件用合集替换播放列表
+  // （覆盖搜索/投稿快照），自动连播与「下一个」沿结构化列表走。
+  // 多 P 优先于合集：分 P 是同一稿件内部的选集，语义更具体；
+  // 链接可能没带 cid，多 P 以 bvid+caid 定位当前项、合集以 bvid。
   useEffect(() => {
-    const season = archiveQuery.data?.ugc_season;
-    if (!season || !params?.bvid) return;
-    const items = season.episodes.map(playlistItemFromSeasonEpisode);
-    const current = items.find((item) => item.bvid === params.bvid);
-    if (!current) return; // 合集里没有当前稿件则不动现有列表
+    const archive = archiveQuery.data;
+    if (!archive || !params?.bvid) return;
+    let items: PlaylistItem[] | null = null;
+    let startId: string | null = null;
+    if (archive.pages.length > 0) {
+      items = archive.pages.map((page) =>
+        playlistItemFromArchivePage(archive.bvid, archive.aid, page),
+      );
+      // 链接缺 cid（搜索进入）时用详情补齐的首 P cid 定位。
+      const cid = params.cid > 0 ? params.cid : archive.cid;
+      startId = `${params.bvid}_${cid}`;
+    } else if (archive.ugc_season) {
+      items = archive.ugc_season.episodes.map(playlistItemFromSeasonEpisode);
+      const current = items.find((item) => item.bvid === params.bvid);
+      startId = current?.id ?? null;
+    }
+    if (!items || !startId) return; // 列表里没有当前稿件则不动现有列表
     const alreadyActive =
       playlistStore.items.length === items.length &&
       playlistStore.items.every((item, i) => item.id === items[i]?.id) &&
-      playlistStore.currentId === current.id;
+      playlistStore.currentId === startId;
     if (!alreadyActive) {
-      playlistStore.setPlaylist(items, current.id);
+      playlistStore.setPlaylist(items, startId);
     }
   }, [archiveQuery.data, params, playlistStore]);
 
@@ -922,6 +946,31 @@ export function VideoPlayerPage() {
     navigate(VIDEO_HOME_PATH, { replace: true });
   }, [navigate]);
 
+  // 当前分 P 序号：多 P 稿件按 cid 从详情对出（链接缺 cid 时详情已补齐首 P），
+  // 单 P 或详情未到时为 1，不影响地址正确性（P1 省略 ?p=）。
+  const originalUrl = useMemo(() => {
+    if (!params) return null;
+    const page = archiveQuery.data?.pages.find((item) => item.cid === cid)?.page ?? 1;
+    return videoOriginalUrl(params.bvid, params.epId, page);
+  }, [archiveQuery.data, cid, params]);
+
+  // 跳原始地址：底部固定条点击共用。优先系统浏览器（opener 插件），
+  // 失败回退 window.open（开发预览里仍可用）。
+  const openOriginalUrl = useCallback(() => {
+    if (!originalUrl) return;
+    void openUrl(originalUrl).catch(() => {
+      window.open(originalUrl, "_blank", "noopener,noreferrer");
+    });
+  }, [originalUrl]);
+
+  const copyOriginalUrl = useCallback(() => {
+    if (!originalUrl) return;
+    void copyText(originalUrl).then((success) => {
+      if (success) notify.success("已复制原始地址");
+      else notify.error("复制原始地址失败", "请手动选择并复制。");
+    });
+  }, [originalUrl]);
+
   const title = params?.title || "视频播放";
 
   const topBar = (
@@ -1398,8 +1447,8 @@ export function VideoPlayerPage() {
               pictureInPictureActive={pipActive}
               onTogglePictureInPicture={togglePictureInPicture}
               onTogglePause={togglePlayback}
-              onVolume={setPlayerVolume}
               onToggleMute={toggleMute}
+              onVolume={setPlayerVolume}
               onToggleOsd={() => setDanmakuVisible((visible) => !visible)}
               onToggleFullscreen={() => void fullscreen.toggle()}
             />
@@ -1413,9 +1462,40 @@ export function VideoPlayerPage() {
             "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]",
           )}
         >
-          <VideoSidebar bvid={params.bvid} epId={params.epId} aid={params.aid} />
+          <VideoSidebar bvid={params.bvid} epId={params.epId} aid={params.aid} cid={cid} />
         </aside>
       </main>
+      {/* 底部原始地址条：常驻入口，点整条用系统浏览器打开 B 站原页面；
+          右侧复制按钮避免想留链接的用户必须先开浏览器。窄屏（侧栏在播放器
+          下方）时这条仍然固定在页面最底部，不随侧栏滚动。 */}
+      {originalUrl && (
+        <footer className="flex h-9 shrink-0 items-center gap-1 border-t border-border/80 bg-sidebar/95 pl-3 pr-1.5">
+          <button
+            type="button"
+            onClick={openOriginalUrl}
+            title={originalUrl}
+            aria-label={`在浏览器中打开原始地址：${originalUrl}`}
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left transition-colors hover:bg-muted/60"
+          >
+            <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="truncate text-xs text-muted-foreground">{originalUrl}</span>
+          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-7 shrink-0 rounded-md"
+                  aria-label="复制原始地址"
+                  onClick={copyOriginalUrl}
+                />
+              }
+            />
+            <TooltipContent>复制原始地址</TooltipContent>
+          </Tooltip>
+        </footer>
+      )}
     </div>
   );
 }

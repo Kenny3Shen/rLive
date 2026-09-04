@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { VideoItem, VideoSeasonEpisode } from "@/shared/types/video";
+import type { VideoArchivePage, VideoItem, VideoSeasonEpisode } from "@/shared/types/video";
 
 /**
  * 播放列表项：统一 UGC 分 P、PGC 分集与合集的抽象。
@@ -72,6 +72,26 @@ export function playlistItemFromVideoItem(item: VideoItem, index: number): Playl
     index: String(index + 1),
     duration: item.duration,
     cover: item.cover,
+  };
+}
+
+/**
+ * 把稿件分 P 转成播放列表项。同一稿件的所有 P 共享 bvid 与 aid，cid 区分每一 P。
+ */
+export function playlistItemFromArchivePage(
+  bvid: string,
+  aid: string,
+  page: VideoArchivePage,
+): PlaylistItem {
+  return {
+    id: `${bvid}_${page.cid}`,
+    bvid,
+    cid: page.cid,
+    epId: null,
+    aid,
+    title: page.part || `P${page.page}`,
+    index: `P${page.page}`,
+    duration: page.duration,
   };
 }
 

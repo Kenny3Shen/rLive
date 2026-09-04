@@ -11,9 +11,9 @@ use serde_json::Value;
 use crate::danmu_rs::{ProtoReader, ProtoValue};
 use crate::error::{AppError, AppResult};
 use crate::models::video::{
-    DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoComment, VideoCommentPage,
-    VideoDanmakuSegment, VideoEmote, VideoItem, VideoListPage, VideoPlayRequest, VideoQuality,
-    VideoSeason, VideoSeasonEpisode, VideoSubtitle, VideoUgcSeason,
+    DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoComment,
+    VideoCommentPage, VideoDanmakuSegment, VideoEmote, VideoItem, VideoListPage, VideoPlayRequest,
+    VideoQuality, VideoSeason, VideoSeasonEpisode, VideoSubtitle, VideoUgcSeason,
 };
 
 use super::BilibiliSite;
@@ -557,6 +557,33 @@ fn parse_ugc_season(data: &Value) -> Option<VideoUgcSeason> {
     Some(VideoUgcSeason { title, episodes })
 }
 
+/// 解析稿件分 P（`pages[]`）：多 P 稿件的选集与连播列表。
+///
+/// 少于 2 个有效 P 不成选集，返回空表。`part` 为空时保留空串，
+/// 展示方回退到 P 序号。
+fn parse_archive_pages(data: &Value) -> Vec<VideoArchivePage> {
+    let mut pages = Vec::new();
+    let Some(list) = data.get("pages").and_then(Value::as_array) else {
+        return pages;
+    };
+    for item in list {
+        let cid = item.get("cid").and_then(Value::as_i64).unwrap_or(0);
+        if cid <= 0 {
+            continue;
+        }
+        pages.push(VideoArchivePage {
+            page: item.get("page").and_then(Value::as_i64).unwrap_or(0),
+            cid,
+            part: item.get("part").map(as_str).unwrap_or_default(),
+            duration: item.get("duration").and_then(Value::as_i64).unwrap_or(0),
+        });
+    }
+    if pages.len() < 2 {
+        pages.clear();
+    }
+    pages
+}
+
 /// 解析稿件详情 `data`（WBI 签名接口 `x/web-interface/view`）。
 pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
     let root: Value =
@@ -610,6 +637,7 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
             .map(as_i64)
             .unwrap_or_default(),
         pubdate: data.get("pubdate").map(as_i64).unwrap_or_default(),
+        pages: parse_archive_pages(data),
         ugc_season: parse_ugc_season(data),
     })
 }
@@ -2482,6 +2510,48 @@ mod tests {
                 "ugc_season": { "title": "t", "sections": [ { "episodes": [ { "bvid": "BV1Y", "cid": 1 } ] } ] } }
         });
         assert!(parse_archive(&single.to_string()).unwrap().ugc_season.is_none());
+    }
+
+    #[test]
+    fn parse_archive_collects_multi_p_pages() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": {
+                "bvid": "BV1Ykt46iEYW",
+                "cid": 41444770475i64,
+                "pages": [
+                    { "page": 1, "cid": 41444770475i64, "part": "前言1.0", "duration": 2328 },
+                    { "page": 2, "cid": 41444771227i64, "part": "01", "duration": 140 },
+                    { "page": 3, "cid": 0, "part": "脏数据" },  // 无 cid：跳过
+                    { "page": 4, "cid": 41444771273i64, "part": "", "duration": 140 }
+                ]
+            }
+        })
+        .to_string();
+        let archive = parse_archive(&raw).unwrap();
+        assert_eq!(archive.pages.len(), 3);
+        assert_eq!(archive.pages[0].part, "前言1.0");
+        assert_eq!(archive.pages[1].cid, 41444771227i64);
+        // part 为空保留空串，展示方回退到 P 序号。
+        assert_eq!(archive.pages[2].part, "");
+        assert_eq!(archive.pages[2].page, 4);
+
+        // 单 P 稿件不构成选集：pages 为空，cid 照常从根字段或 pages[0] 补齐。
+        let single = serde_json::json!({
+            "code": 0,
+            "data": {
+                "bvid": "BV1Ykt46iEYW",
+                "pages": [{ "page": 1, "cid": 41444770475i64, "part": "唯一一P", "duration": 2328 }]
+            }
+        })
+        .to_string();
+        let archive = parse_archive(&single).unwrap();
+        assert!(archive.pages.is_empty());
+        assert_eq!(archive.cid, 41444770475);
+
+        // 无 pages 字段 → 空表。
+        let plain = serde_json::json!({ "code": 0, "data": { "bvid": "BV1Y", "cid": 1 } });
+        assert!(parse_archive(&plain.to_string()).unwrap().pages.is_empty());
     }
 
     #[test]

@@ -234,6 +234,20 @@ pub struct VideoUgcSeason {
     pub episodes: Vec<VideoSeasonEpisode>,
 }
 
+/// 稿件的一个分 P（`x/web-interface/view` 的 `pages[]`）。
+///
+/// 多 P 稿件的选集与连播沿这个列表走，与合集（`ugc_season`）互为补充：
+/// 合集跨稿件，分 P 在同一稿件内部。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoArchivePage {
+    /// P 序号，从 1 开始。
+    pub page: i64,
+    pub cid: i64,
+    /// 分 P 标题（上游 `part`），可能为空，展示时回退到 P 序号。
+    pub part: String,
+    pub duration: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoArchive {
     pub bvid: String,
@@ -251,6 +265,8 @@ pub struct VideoArchive {
     pub danmaku: i64,
     pub reply: i64,
     pub pubdate: i64,
+    /// 多 P 稿件的分 P 列表：选集与连播沿它走；少于 2 个 P 不成选集，为空。
+    pub pages: Vec<VideoArchivePage>,
     /// UGC 合集（ugc_season）：稿件属于合集时连播沿合集走，无合集为 None。
     pub ugc_season: Option<VideoUgcSeason>,
 }
