@@ -17,6 +17,7 @@ import {
   ExternalLink,
   FastForward,
   Home,
+  Link2,
   Maximize2,
   Minimize2,
   Tv,
@@ -32,6 +33,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { copyText } from "@/shared/clipboard";
 import { canNavigateBackInApp } from "@/shared/appHistory";
 import { cn } from "@/lib/utils";
 import {
@@ -46,7 +48,15 @@ import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingP
 import { formatRecordingDuration } from "@/features/recording/recording";
 import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
-import { videoGetArchive, videoGetCastUrl, videoGetDanmaku, videoGetPlayInfo, videoGetSubtitle, videoGetSubtitles, videoStopPlay } from "./videoApi";
+import {
+  videoGetArchive,
+  videoGetCastUrl,
+  videoGetDanmaku,
+  videoGetPlayInfo,
+  videoGetSubtitle,
+  videoGetSubtitles,
+  videoStopPlay,
+} from "./videoApi";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { CastMenu } from "@/features/room/CastMenu";
 import {
@@ -73,7 +83,12 @@ import {
   videoDanmakuSegmentsFor,
   type VideoDanmakuEntry,
 } from "./videoDanmaku";
-import { VIDEO_HOME_PATH, parseVideoPlayParams, videoOriginalUrl, videoPlayPath } from "./videoRoute";
+import {
+  VIDEO_HOME_PATH,
+  parseVideoPlayParams,
+  videoOriginalUrl,
+  videoPlayPath,
+} from "./videoRoute";
 import {
   usePlaylistStore,
   playlistItemFromArchivePage,
@@ -295,14 +310,17 @@ export function VideoPlayerPage() {
   const playInfo: VideoPlayInfo | undefined = playInfoQuery.data;
 
   /** 切换画质：记录续播点后带着 qn 重取。 */
-  const changeQuality = useCallback((qn: number) => {
-    if (qn === qualityQn) return;
-    const media = videoRef.current;
-    if (media) {
-      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
-    }
-    setQualityQn(qn);
-  }, [qualityQn]);
+  const changeQuality = useCallback(
+    (qn: number) => {
+      if (qn === qualityQn) return;
+      const media = videoRef.current;
+      if (media) {
+        resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+      }
+      setQualityQn(qn);
+    },
+    [qualityQn],
+  );
 
   /** 仅音频（听视频）：与切画质同一重建链路（记录续播点 → 重取播放信息）。 */
   const toggleAudioOnly = useCallback(() => {
@@ -962,8 +980,9 @@ export function VideoPlayerPage() {
     return videoOriginalUrl(params.bvid, params.epId, page);
   }, [archiveQuery.data, cid, params]);
 
-  // 跳原始地址：控制栏工具区按钮。优先系统浏览器（opener 插件），失败回退
-  // window.open（开发预览里仍可用）；与直播页卡片同一套通知反馈。
+  // 跳原址与复制链接：底部常驻 Shell 的操作（全屏时舞台盖住 Shell，HUD 里
+  // 另有一份镜像）。优先系统浏览器（opener 插件），失败回退 window.open
+  // （开发预览里仍可用）；与直播页卡片同一套通知反馈。
   const openOriginalUrl = useCallback(() => {
     if (!originalUrl) return;
     void openUrl(originalUrl)
@@ -975,30 +994,20 @@ export function VideoPlayerPage() {
       });
   }, [originalUrl]);
 
+  const copyOriginalUrl = useCallback(() => {
+    if (!originalUrl) return;
+    void copyText(originalUrl).then((copied) => {
+      if (copied) notify.success("已复制视频链接");
+      else notify.error("复制失败", "请手动选择并复制。");
+    });
+  }, [originalUrl]);
+
   const title = params?.title || "视频播放";
 
-  /** 顶栏右侧的低频工具（跳原址/投屏）：常用播放控制与字幕留在控制栏，
-   *  这里只放旁观类入口，与直播页顶栏右侧的定时/投屏工具同一布局语义。 */
+  /** 顶栏右侧的低频工具（投屏）：跳原址/复制链接迁到底部常驻 Shell，
+   *  这里只留旁观类入口，与直播页顶栏右侧的定时/投屏工具同一布局语义。 */
   const topBarTools = (
     <div className="flex items-center gap-1">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="rounded-lg hover:bg-muted/70"
-              aria-label="在浏览器中打开原始地址"
-              disabled={!originalUrl}
-              onClick={openOriginalUrl}
-            >
-              <ExternalLink aria-hidden className="size-4" />
-            </Button>
-          }
-        />
-        <TooltipContent>在浏览器中打开</TooltipContent>
-      </Tooltip>
-
       <Popover open={castOpen} onOpenChange={setCastOpen}>
         <PopoverTrigger
           render={
@@ -1031,7 +1040,6 @@ export function VideoPlayerPage() {
           />
         </PopoverContent>
       </Popover>
-
     </div>
   );
 
@@ -1145,8 +1153,7 @@ export function VideoPlayerPage() {
   // 弹层用绝对定位的轻量面板而不是 Popover：挂在控制条内可同步悬停保活，
   // 关闭只需点按钮切换。
   // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
-  const pipSupported =
-    typeof document !== "undefined" && document.pictureInPictureEnabled;
+  const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
   /** 控制栏工具（字幕/窗口全屏）：与内部按钮同一套样式常量；没字幕轨的稿件
    *  不渲染字幕按钮。窗口全屏与画面全屏共享同一 toggle（桌面即原生窗口全屏），
    *  图标用 Maximize/Minimize 与底部全屏按钮区分语义。 */
@@ -1175,7 +1182,9 @@ export function VideoPlayerPage() {
             container={stageRef}
             side="top"
             align="end"
-            collisionBoundary={typeof document !== "undefined" ? document.documentElement : undefined}
+            collisionBoundary={
+              typeof document !== "undefined" ? document.documentElement : undefined
+            }
             collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
             sticky
             glass
@@ -1239,15 +1248,9 @@ export function VideoPlayerPage() {
             />
           }
         >
-          {fullscreen.fullscreen ? (
-            <Minimize2 aria-hidden />
-          ) : (
-            <Maximize2 aria-hidden />
-          )}
+          {fullscreen.fullscreen ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
         </TooltipTrigger>
-        <TooltipContent>
-          {fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}
-        </TooltipContent>
+        <TooltipContent>{fullscreen.fullscreen ? "退出窗口全屏" : "窗口全屏"}</TooltipContent>
       </Tooltip>
     </>
   );
@@ -1318,9 +1321,7 @@ export function VideoPlayerPage() {
           <div
             className={cn(
               "flex size-4 shrink-0 items-center justify-center rounded border-2 transition-colors",
-              playlistStore.reversed
-                ? "border-primary bg-primary"
-                : "border-muted-foreground/50",
+              playlistStore.reversed ? "border-primary bg-primary" : "border-muted-foreground/50",
             )}
           >
             {playlistStore.reversed && (
@@ -1482,6 +1483,22 @@ export function VideoPlayerPage() {
                 {title}
               </p>
               {topBarTools}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="在浏览器中打开原始地址"
+                      disabled={!originalUrl}
+                      onClick={openOriginalUrl}
+                    />
+                  }
+                >
+                  <ExternalLink data-icon="inline-start" aria-hidden className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent>在浏览器中打开</TooltipContent>
+              </Tooltip>
             </div>
           )}
 
@@ -1611,6 +1628,30 @@ export function VideoPlayerPage() {
           />
         </aside>
       </main>
+      {/* 底部常驻 Shell（与直播页底部操作行同一画法）：跳原址与复制链接
+          的家。全屏（元素级 top layer）时被舞台盖住，HUD 里另有跳原址镜像。 */}
+      <footer className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="max-md:h-11 max-md:touch-manipulation"
+          disabled={!originalUrl}
+          onClick={copyOriginalUrl}
+        >
+          <Link2 data-icon="inline-start" />
+          复制链接
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="max-md:h-11 max-md:touch-manipulation"
+          disabled={!originalUrl}
+          onClick={openOriginalUrl}
+        >
+          <ExternalLink data-icon="inline-start" />
+          在浏览器中打开
+        </Button>
+      </footer>
     </div>
   );
 }
