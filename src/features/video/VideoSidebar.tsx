@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
+  ChevronDown,
   MessageSquare,
   MessageSquareText,
   Play,
@@ -20,7 +21,12 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
-import type { VideoArchivePage, VideoComment, VideoUgcSeason } from "@/shared/types/video";
+import type {
+  VideoArchive,
+  VideoArchivePage,
+  VideoComment,
+  VideoUgcSeason,
+} from "@/shared/types/video";
 import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { VideoDanmakuList } from "./VideoDanmakuList";
 import {
@@ -42,29 +48,26 @@ import { UploaderDrawer } from "./UploaderDrawer";
  * 拆成多个文件只会让这个骨架复制多遍。评论区是其中唯一有翻页的，用游标
  * `useInfiniteQuery` + 哨兵；相关视频、分集与选集上游都是一次给全。
  */
-
-type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "season" | "comments";
+type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "comments";
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
   danmaku: "弹幕",
   episodes: "分集",
   parts: "选集",
-  season: "合集",
   comments: "评论",
 };
 
-const SIDEBAR_TABS: readonly SidebarTab[] = [
-  "related",
-  "danmaku",
-  "episodes",
-  "parts",
-  "season",
-  "comments",
-];
+const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "danmaku", "episodes", "parts", "comments"];
 
 function isSidebarTab(value: string): value is SidebarTab {
   return (SIDEBAR_TABS as readonly string[]).includes(value);
+}
+
+/** 页签标签：parts 页签在仅有合集（无分 P）时显示为「合集」。 */
+function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
+  if (value === "parts") return multiPart ? "选集" : "合集";
+  return TAB_LABELS[value];
 }
 
 /** Unix 秒 → 「x 分钟前」。超过一个月退回日期，足够读评不用更准。 */
@@ -216,10 +219,7 @@ function CommentThread({ aid, comment }: { aid: string; comment: VideoComment })
   // 主接口自带的预览（前 2-3 条）先展示，翻页结果按 rpid 去重后接在后面。
   const fetched = repliesQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const previewRpids = new Set(comment.replies.map((reply) => reply.rpid));
-  const replies = [
-    ...comment.replies,
-    ...fetched.filter((reply) => !previewRpids.has(reply.rpid)),
-  ];
+  const replies = [...comment.replies, ...fetched.filter((reply) => !previewRpids.has(reply.rpid))];
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     hasNextPage: repliesQuery.hasNextPage,
     isFetchingNextPage: repliesQuery.isFetchingNextPage,
@@ -252,11 +252,13 @@ function CommentThread({ aid, comment }: { aid: string; comment: VideoComment })
                 {repliesQuery.isFetchingNextPage && (
                   <Spinner className="mx-auto size-4" aria-label="正在加载更多回复" />
                 )}
-                {!supportsIntersectionObserver && repliesQuery.hasNextPage && !repliesQuery.isFetchingNextPage && (
-                  <Button variant="ghost" size="sm" className="w-full" onClick={() => loadMore()}>
-                    加载更多回复
-                  </Button>
-                )}
+                {!supportsIntersectionObserver &&
+                  repliesQuery.hasNextPage &&
+                  !repliesQuery.isFetchingNextPage && (
+                    <Button variant="ghost" size="sm" className="w-full" onClick={() => loadMore()}>
+                      加载更多回复
+                    </Button>
+                  )}
               </div>
             </div>
           )}
@@ -347,11 +349,13 @@ function CommentsPanel({ aid }: { aid: string }) {
             {commentsQuery.isFetchingNextPage && (
               <Spinner className="size-4" aria-label="正在加载更多评论" />
             )}
-            {!supportsIntersectionObserver && commentsQuery.hasNextPage && !commentsQuery.isFetchingNextPage && (
-              <Button variant="ghost" size="sm" onClick={() => loadMore()}>
-                加载更多
-              </Button>
-            )}
+            {!supportsIntersectionObserver &&
+              commentsQuery.hasNextPage &&
+              !commentsQuery.isFetchingNextPage && (
+                <Button variant="ghost" size="sm" onClick={() => loadMore()}>
+                  加载更多
+                </Button>
+              )}
           </div>
         </div>
       )}
@@ -582,9 +586,7 @@ function EpisodesPanel({
                 </Button>
               }
             />
-            <TooltipContent>
-              {playlistStore.reversed ? "正序播放" : "倒序播放"}
-            </TooltipContent>
+            <TooltipContent>{playlistStore.reversed ? "正序播放" : "倒序播放"}</TooltipContent>
           </Tooltip>
         </div>
       )}
@@ -667,6 +669,36 @@ function UgcSeasonPanel({
     epId?: string;
   }) => void;
 }) {
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
+        <span className="min-w-0 truncate text-xs font-medium">{season.title}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          共 {season.episodes.length} 个
+        </span>
+      </div>
+      <UgcSeasonList season={season} currentBvid={currentBvid} onNavigate={onNavigate} />
+    </div>
+  );
+}
+
+/** 合集条目列表：`UgcSeasonPanel` 的列表部分，也供选集页签内的折叠合集复用。 */
+function UgcSeasonList({
+  season,
+  currentBvid,
+  onNavigate,
+}: {
+  season: VideoUgcSeason;
+  /** 链接可能没带 cid，以 bvid 定位当前项。 */
+  currentBvid: string;
+  onNavigate: (target: {
+    bvid: string;
+    cid: number;
+    title: string;
+    aid: string;
+    epId?: string;
+  }) => void;
+}) {
   const currentRowRef = useRef<HTMLButtonElement | null>(null);
 
   // 打开合集页签或连播换集时，把当前播放项滚到可视区中央：长合集（几十上百集）
@@ -676,51 +708,43 @@ function UgcSeasonPanel({
   }, [currentBvid]);
 
   return (
-    <div className="flex min-h-0 flex-col">
-      <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
-        <span className="min-w-0 truncate text-xs font-medium">{season.title}</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          共 {season.episodes.length} 个
-        </span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        {season.episodes.map((episode, index) => {
-          const current = episode.bvid === currentBvid;
-          return (
-            <button
-              key={episode.bvid}
-              ref={current ? currentRowRef : undefined}
-              type="button"
-              aria-current={current || undefined}
-              onClick={() =>
-                onNavigate({
-                  bvid: episode.bvid,
-                  cid: episode.cid,
-                  title: episode.title,
-                  aid: episode.aid,
-                })
-              }
+    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      {season.episodes.map((episode, index) => {
+        const current = episode.bvid === currentBvid;
+        return (
+          <button
+            key={episode.bvid}
+            ref={current ? currentRowRef : undefined}
+            type="button"
+            aria-current={current || undefined}
+            onClick={() =>
+              onNavigate({
+                bvid: episode.bvid,
+                cid: episode.cid,
+                title: episode.title,
+                aid: episode.aid,
+              })
+            }
+            className={cn(
+              "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
+              current && "bg-primary/10",
+            )}
+          >
+            <span
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
-                current && "bg-primary/10",
+                "min-w-7 shrink-0 text-center text-xs tabular-nums",
+                current ? "font-semibold text-primary" : "text-muted-foreground",
               )}
             >
-              <span
-                className={cn(
-                  "min-w-7 shrink-0 text-center text-xs tabular-nums",
-                  current ? "font-semibold text-primary" : "text-muted-foreground",
-                )}
-              >
-                {index + 1}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[13px]">{episode.title}</span>
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                {formatVideoDuration(episode.duration)}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+              {index + 1}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[13px]">{episode.title}</span>
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {formatVideoDuration(episode.duration)}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -760,9 +784,7 @@ function PartsPanel({
     <div className="flex min-h-0 flex-col">
       <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
         <span className="shrink-0 text-xs font-medium">选集</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          共 {pages.length} P
-        </span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">共 {pages.length} P</span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {pages.map((page) => {
@@ -803,6 +825,75 @@ function PartsPanel({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 选集与合集共用一个页签的内容面板：多 P 稿件展开选集、合集默认收起
+ * （两者同时存在时选集优先——连播沿分 P 列表走）；仅有合集时直接展开
+ * 合集（此时页签标签显示为「合集」）。
+ */
+function PartsSeasonPanel({
+  archive,
+  currentCid,
+  currentBvid,
+  onNavigate,
+}: {
+  archive: VideoArchive;
+  currentCid: number;
+  currentBvid: string;
+  onNavigate: (target: {
+    bvid: string;
+    cid: number;
+    title: string;
+    aid: string;
+    epId?: string;
+  }) => void;
+}) {
+  const multiPart = archive.pages.length > 0;
+  const season = archive.ugc_season;
+  const [seasonOpen, setSeasonOpen] = useState(!multiPart);
+
+  return (
+    <div>
+      {multiPart && (
+        <PartsPanel
+          bvid={archive.bvid}
+          aid={archive.aid}
+          pages={archive.pages}
+          currentCid={currentCid}
+          onNavigate={onNavigate}
+        />
+      )}
+      {season && multiPart && (
+        <section className="border-t border-border/60" aria-label={`合集：${season.title}`}>
+          <button
+            type="button"
+            aria-expanded={seasonOpen}
+            onClick={() => setSeasonOpen((value) => !value)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-muted/50"
+          >
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                "size-4 shrink-0 text-muted-foreground transition-transform",
+                !seasonOpen && "-rotate-90",
+              )}
+            />
+            <span className="min-w-0 flex-1 truncate">{season.title}</span>
+            <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
+              共 {season.episodes.length} 个
+            </span>
+          </button>
+          {seasonOpen && (
+            <UgcSeasonList season={season} currentBvid={currentBvid} onNavigate={onNavigate} />
+          )}
+        </section>
+      )}
+      {season && !multiPart && (
+        <UgcSeasonPanel season={season} currentBvid={currentBvid} onNavigate={onNavigate} />
+      )}
     </div>
   );
 }
@@ -864,17 +955,16 @@ export function VideoSidebar({
 
   const archive = archiveQuery.data;
   const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
-  // 弹幕页签与相关视频/评论/合集同级（UGC 专属：PGC 分集无此数据源）。
+  // 弹幕页签固定在最右；选集与合集共用 parts 页签（见 PartsSeasonPanel）。
   const showDanmakuTab = !isPgc && danmaku !== undefined;
+  const hasSeason = Boolean(archive?.ugc_season);
   const tabs: SidebarTab[] = isPgc
     ? ["episodes", "comments"]
     : multiPart
-      ? archive?.ugc_season
-        ? ["parts", "related", "danmaku", "comments", "season"]
-        : ["parts", "related", "danmaku", "comments"]
-      : archive?.ugc_season
-        ? ["related", "danmaku", "comments", "season"]
-        : ["related", "danmaku", "comments"];
+      ? ["parts", "related", "comments", "danmaku"]
+      : hasSeason
+        ? ["related", "comments", "parts", "danmaku"]
+        : ["related", "comments", "danmaku"];
   const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
 
   // 多 P 稿件默认展示选集（与 B 站 Web 同款落点）：详情取回后把未动过页签的
@@ -946,7 +1036,10 @@ export function VideoSidebar({
                   </p>
                 </button>
                 <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
-                  <div className="flex min-w-0 items-center gap-1" title={`播放：${formatOnline(archive.view)}`}>
+                  <div
+                    className="flex min-w-0 items-center gap-1"
+                    title={`播放：${formatOnline(archive.view)}`}
+                  >
                     <dt className="sr-only">播放</dt>
                     <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
                     <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
@@ -958,7 +1051,10 @@ export function VideoSidebar({
                     title={`弹幕：${formatOnline(archive.danmaku)}`}
                   >
                     <dt className="sr-only">弹幕</dt>
-                    <MessageSquare aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    <MessageSquare
+                      aria-hidden
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                    />
                     <dd className="font-semibold leading-4 tracking-normal tabular-nums">
                       {formatOnline(archive.danmaku)}
                     </dd>
@@ -968,7 +1064,10 @@ export function VideoSidebar({
                     title={`评论：${formatOnline(archive.reply)}`}
                   >
                     <dt className="sr-only">评论</dt>
-                    <MessageSquareText aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    <MessageSquareText
+                      aria-hidden
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                    />
                     <dd className="font-semibold leading-4 tracking-normal tabular-nums">
                       {formatOnline(archive.reply)}
                     </dd>
@@ -991,7 +1090,7 @@ export function VideoSidebar({
         >
           {visibleTabs.map((value) => (
             <TabsTrigger key={value} value={value} className="px-3 text-sm">
-              {TAB_LABELS[value]}
+              {sidebarTabLabel(value, multiPart)}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -1015,17 +1114,10 @@ export function VideoSidebar({
           )
         ) : tab === "episodes" ? (
           <EpisodesPanel epId={epId!} onNavigate={navigateToPlay} />
-        ) : tab === "parts" && multiPart && archive ? (
-          <PartsPanel
-            bvid={bvid ?? ""}
-            aid={archive.aid}
-            pages={archive.pages}
+        ) : tab === "parts" && archive && (multiPart || hasSeason) ? (
+          <PartsSeasonPanel
+            archive={archive}
             currentCid={cid}
-            onNavigate={navigateToPlay}
-          />
-        ) : tab === "season" && archive?.ugc_season ? (
-          <UgcSeasonPanel
-            season={archive.ugc_season}
             currentBvid={bvid ?? ""}
             onNavigate={navigateToPlay}
           />
