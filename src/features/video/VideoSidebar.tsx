@@ -21,6 +21,8 @@ import { ImageViewer } from "@/shared/components/ImageViewer";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
 import type { VideoArchivePage, VideoComment, VideoUgcSeason } from "@/shared/types/video";
+import type { VideoDanmakuEntry } from "./videoDanmaku";
+import { VideoDanmakuList } from "./VideoDanmakuList";
 import {
   videoGetArchive,
   videoGetCommentReplies,
@@ -808,12 +810,19 @@ export function VideoSidebar({
   epId,
   aid,
   cid,
+  danmaku,
 }: {
   bvid: string | null;
   epId: string | null;
   aid: string | null;
   /** 当前播放的 cid：多 P 稿件的选集页签用它高亮当前 P。 */
   cid: number;
+  /** 弹幕查看列表数据：播放页已加载的条目 + 当前进度。 */
+  danmaku?: {
+    entries: readonly VideoDanmakuEntry[];
+    positionMs: number;
+    loading: boolean;
+  };
 }) {
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
@@ -983,6 +992,14 @@ export function VideoSidebar({
         </TabsList>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {/* 弹幕查看列表：默认折叠，仅 UGC 有 VOD 弹幕（PGC 分集无此数据源）。 */}
+        {danmaku && !isPgc && (
+          <VideoDanmakuList
+            entries={danmaku.entries}
+            positionMs={danmaku.positionMs}
+            loading={danmaku.loading}
+          />
+        )}
         {tab === "comments" ? (
           resolvedAid ? (
             <CommentsPanel aid={resolvedAid} />

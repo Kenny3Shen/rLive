@@ -122,6 +122,26 @@ fn record_successful_danmaku_send(
     }
 }
 
+/// 供其它命令族（VOD 弹幕发送）复用的历史记录入口：平台写入已成功，
+/// 本地记录失败不回滚 UI 结果。
+pub fn record_send_history_public(
+    state: &AppState,
+    site_id: SiteId,
+    content: &str,
+    room_id: &str,
+    room_title: Option<&str>,
+    room_user_name: Option<&str>,
+) {
+    record_successful_danmaku_send(
+        state,
+        site_id,
+        content,
+        room_id,
+        room_title,
+        room_user_name,
+    );
+}
+
 #[tauri::command]
 pub async fn danmaku_connect(
     app: AppHandle,

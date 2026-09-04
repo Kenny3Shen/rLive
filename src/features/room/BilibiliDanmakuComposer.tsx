@@ -22,6 +22,7 @@ import { insertBilibiliDanmakuText } from "./danmaku/outgoing";
 import {
   getDanmakuSendConfig,
   isDanmakuSendSite,
+  VIDEO_DANMAKU_SEND_CONFIG,
   type DanmakuSendSiteId,
   type DanmakuSendStatus,
 } from "./danmaku/sending";
@@ -64,6 +65,13 @@ type DanmakuComposerProps = {
   portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
   /** 表情选择器打开期间保持播放器 chrome 可见。 */
   onOverlayInteractionChange?: (open: boolean) => void;
+  /** 视频页目标：发送 VOD 弹幕（oid = cid，历史按 aid 记）。 */
+  video?: {
+    cid: number;
+    aid: string;
+    /** 当前播放位置（秒），让弹幕落在正确的进度条位置。 */
+    progressSecs: number;
+  };
 };
 
 type DanmakuPickerTab = "emoji" | "favorites" | "history";
@@ -591,11 +599,13 @@ export function DanmakuComposer({
   overlay = false,
   portalContainer,
   onOverlayInteractionChange,
+  video,
 }: DanmakuComposerProps) {
   const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
   const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
   const danmakuCookieRevision = useSettingsStore((s) => s.danmakuCookieRevision);
-  const sendConfig = getDanmakuSendConfig(siteId);
+  // 视频页固定 bilibili VOD 目标；直播页沿站点配置。
+  const sendConfig = video ? VIDEO_DANMAKU_SEND_CONFIG : getDanmakuSendConfig(siteId);
   const [availability, setAvailability] = useState<DanmakuSendStatus | null>(null);
   const [draft, setDraft] = useState("");
   const [quickPickerOpen, setQuickPickerOpen] = useState(false);
@@ -604,8 +614,13 @@ export function DanmakuComposer({
   const inputRef = useRef<HTMLInputElement>(null);
   const sendInFlightRef = useRef(false);
 
+  // 视频目标的标识键：effect 用它替代整个对象引用，避免每次渲染都重查状态。
+  const videoKey = video ? `${video.cid}:${video.aid}` : "";
+
   useEffect(() => {
-    if (!sendConfig || !roomId) return;
+    if (!sendConfig) return;
+    // 视频目标不需要房间号；直播目标没有房间号就没有可发送的目的地。
+    if (!video && !roomId) return;
     let cancelled = false;
     setAvailability(null);
     // 显式发送权限还在等待持久化时不要询问后端。它落定后本副作用会再次运行，
@@ -638,7 +653,7 @@ export function DanmakuComposer({
     return () => {
       cancelled = true;
     };
-  }, [siteId, roomId, sendConfig, danmakuSendEnabled, danmakuSendPending, danmakuCookieRevision]);
+  }, [siteId, roomId, sendConfig, danmakuSendEnabled, danmakuSendPending, danmakuCookieRevision, videoKey]);
 
   const overlayOpen = quickPickerOpen;
   useEffect(() => {
@@ -651,8 +666,14 @@ export function DanmakuComposer({
     },
     [onOverlayInteractionChange],
   );
-
-  if (!sendConfig || !roomId || !isDanmakuSendSite(siteId)) return null;
+  if (!sendConfig) return null;
+  if (video) {
+    if (!video.aid) return null;
+  } else if (!roomId || !isDanmakuSendSite(siteId)) {
+    return null;
+  }
+  // 守卫后：直播模式 siteId 必是发送站点，视频模式恒为 bilibili。
+  const pickerSiteId = video ? ("bilibili" as const) : (siteId as DanmakuSendSiteId);
 
   const config = sendConfig;
   // 让收窄后的房间身份对异步发送回调保持稳定。早先的请求仍在途时，
@@ -707,12 +728,23 @@ export function DanmakuComposer({
     setResult(null);
     const outgoingMessage = draft.trim();
     try {
-      await invokeCmd<void>(config.sendCommand, {
-        roomId: currentRoomId,
-        message: outgoingMessage,
-        roomTitle,
-        roomUserName,
-      });
+      await invokeCmd<void>(
+        config.sendCommand,
+        video
+          ? {
+              cid: video.cid,
+              aid: video.aid,
+              progressSecs: video.progressSecs,
+              message: outgoingMessage,
+              videoTitle: roomTitle,
+            }
+          : {
+              roomId: currentRoomId,
+              message: outgoingMessage,
+              roomTitle,
+              roomUserName,
+            },
+      );
       setDraft("");
       setResult("发送请求已提交。");
     } catch (error) {
@@ -742,7 +774,7 @@ export function DanmakuComposer({
       >
         <InputGroupAddon align="inline-start" className="py-0">
           <DanmakuQuickPicker
-            siteId={siteId}
+            siteId={pickerSiteId}
             siteLabel={config.siteLabel}
             supportsNativeBilibiliEmoji={config.supportsNativeBilibiliEmoji === true}
             disabled={!ready || sending}
