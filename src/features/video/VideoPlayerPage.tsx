@@ -77,7 +77,6 @@ import {
 } from "./playlistStore";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { notify } from "@/components/ui/toast";
-import { copyText } from "@/shared/clipboard";
 
 const CONTROLS_HIDE_DELAY_MS = 2_600;
 const SINGLE_CLICK_DELAY_MS = 220;
@@ -954,21 +953,17 @@ export function VideoPlayerPage() {
     return videoOriginalUrl(params.bvid, params.epId, page);
   }, [archiveQuery.data, cid, params]);
 
-  // 跳原始地址：底部固定条点击共用。优先系统浏览器（opener 插件），
-  // 失败回退 window.open（开发预览里仍可用）。
+  // 跳原始地址：控制栏工具区按钮。优先系统浏览器（opener 插件），失败回退
+  // window.open（开发预览里仍可用）；与直播页卡片同一套通知反馈。
   const openOriginalUrl = useCallback(() => {
     if (!originalUrl) return;
-    void openUrl(originalUrl).catch(() => {
-      window.open(originalUrl, "_blank", "noopener,noreferrer");
-    });
-  }, [originalUrl]);
-
-  const copyOriginalUrl = useCallback(() => {
-    if (!originalUrl) return;
-    void copyText(originalUrl).then((success) => {
-      if (success) notify.success("已复制原始地址");
-      else notify.error("复制原始地址失败", "请手动选择并复制。");
-    });
+    void openUrl(originalUrl)
+      .then(() => notify.success("已在浏览器中打开"))
+      .catch(() => {
+        const opened = window.open(originalUrl, "_blank", "noopener,noreferrer");
+        if (opened) notify.success("已在浏览器中打开");
+        else notify.error("无法在浏览器中打开", "请稍后重试。");
+      });
   }, [originalUrl]);
 
   const title = params?.title || "视频播放";
@@ -1086,6 +1081,28 @@ export function VideoPlayerPage() {
     typeof document !== "undefined" && document.pictureInPictureEnabled;
   const toolsSlot = (
     <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="在浏览器中打开原始地址"
+              disabled={!originalUrl}
+              className={cn(
+                PLAYER_CONTROL_BUTTON_CLASS,
+                PLAYER_CONTROL_ICON_CLASS,
+                PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+              )}
+              onClick={openOriginalUrl}
+            >
+              <ExternalLink aria-hidden />
+            </Button>
+          }
+        />
+        <TooltipContent>在浏览器中打开</TooltipContent>
+      </Tooltip>
+
       <div className="relative">
         {castOpen && castQuery.data && (
           <div
@@ -1465,37 +1482,6 @@ export function VideoPlayerPage() {
           <VideoSidebar bvid={params.bvid} epId={params.epId} aid={params.aid} cid={cid} />
         </aside>
       </main>
-      {/* 底部原始地址条：常驻入口，点整条用系统浏览器打开 B 站原页面；
-          右侧复制按钮避免想留链接的用户必须先开浏览器。窄屏（侧栏在播放器
-          下方）时这条仍然固定在页面最底部，不随侧栏滚动。 */}
-      {originalUrl && (
-        <footer className="flex h-9 shrink-0 items-center gap-1 border-t border-border/80 bg-sidebar/95 pl-3 pr-1.5">
-          <button
-            type="button"
-            onClick={openOriginalUrl}
-            title={originalUrl}
-            aria-label={`在浏览器中打开原始地址：${originalUrl}`}
-            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left transition-colors hover:bg-muted/60"
-          >
-            <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-            <span className="truncate text-xs text-muted-foreground">{originalUrl}</span>
-          </button>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="size-7 shrink-0 rounded-md"
-                  aria-label="复制原始地址"
-                  onClick={copyOriginalUrl}
-                />
-              }
-            />
-            <TooltipContent>复制原始地址</TooltipContent>
-          </Tooltip>
-        </footer>
-      )}
     </div>
   );
 }
