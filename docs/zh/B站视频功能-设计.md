@@ -145,10 +145,10 @@ message DanmakuElem {
 - 评论的 `oid` 是 aid：列表/分集链路经路由参数携带；URL 直入时 UGC 用稿件详情补齐，PGC 用 season 详情里当前集的 aid。
 - 评论游标翻页（`next`），二级回复 pn 翻页（首传 1）；`[大哭]` 占位符按 `content.emote` 映射换成内联图。
 
-### 底部原始地址条
+### 跳转原始地址按钮
 
-- 播放页最底部常驻一条地址栏（`videoOriginalUrl`）：UGC 为 `https://www.bilibili.com/video/<bvid>/?p=<n>`（P1 省略 `?p=`，与 Web 一致），PGC 为 `https://www.bilibili.com/bangumi/play/ep<epId>`。
-- 点整条用系统浏览器打开（`tauri-plugin-opener`，失败回退 `window.open`）；右侧复制按钮直接复制地址。
+- 控制栏工具区（投屏/字幕按钮旁）的 `ExternalLink` 图标按钮：与直播页「在浏览器中打开」同一套交互 —— Tooltip 提示、点击经 `tauri-plugin-opener` 打开系统浏览器（失败回退 `window.open`）、toast 通知结果，不在界面上展示具体地址。
+- 地址由 `videoOriginalUrl` 计算：UGC 为 `https://www.bilibili.com/video/<bvid>/?p=<n>`（P1 省略 `?p=`，与 Web 一致），PGC 为 `https://www.bilibili.com/bangumi/play/ep<epId>`。
 
 ### 评论接口的三个坑（实测 + PiliPlus 对照）
 
