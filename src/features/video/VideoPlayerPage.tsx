@@ -57,6 +57,7 @@ import {
   PLAYER_CONTROL_BUTTON_CLASS,
   PLAYER_CONTROL_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+  showPlayerControlsCenterSlot,
 } from "@/shared/components/player/PlayerControls";
 import {
   glassOptionClass,
@@ -1495,19 +1496,22 @@ export function VideoPlayerPage() {
             onFocusCapture={holdControlsVisible}
             onBlurCapture={scheduleControlsHide}
           >
-            {/* 弹幕输入条：与直播页控制栏 composer 同一形态（overlay 变体），
-                portal 进舞台避免全屏压盖；显隐随控制条走。 */}
-            <DanmakuComposer
-              overlay
-              portalContainer={stageRef}
-              roomTitle={title}
-              video={{
-                cid,
-                aid: aid ?? "",
-                progressSecs: Math.floor(currentTime),
-              }}
-              onOverlayInteractionChange={setOverlayInteractionOpen}
-            />
+            {/* 弹幕输入条（overlay 变体，portal 进舞台避免全屏压盖）：
+                常规视口放控制栏居中槽位（直播页同款落点）；compact 且非全屏时
+                PlayerControls 不渲染 centerSlot，回退到控制条上沿，保持可用。 */}
+            {compact && !fullscreen.fullscreen && (
+              <DanmakuComposer
+                overlay
+                portalContainer={stageRef}
+                roomTitle={title}
+                video={{
+                  cid,
+                  aid: aid ?? "",
+                  progressSecs: Math.floor(currentTime),
+                }}
+                onOverlayInteractionChange={setOverlayInteractionOpen}
+              />
+            )}
             <PlayerControls
               paused={paused}
               volume={volume}
@@ -1520,7 +1524,24 @@ export function VideoPlayerPage() {
               stackedBelowPlayer={compact}
               compact={compact}
               portalContainer={stageRef}
-              centerSlot={playlistCenterSlot}
+              centerSlot={
+                showPlayerControlsCenterSlot(compact, fullscreen.fullscreen) ? (
+                  <>
+                    <DanmakuComposer
+                      overlay
+                      portalContainer={stageRef}
+                      roomTitle={title}
+                      video={{
+                        cid,
+                        aid: aid ?? "",
+                        progressSecs: Math.floor(currentTime),
+                      }}
+                      onOverlayInteractionChange={setOverlayInteractionOpen}
+                    />
+                    {playlistCenterSlot}
+                  </>
+                ) : undefined
+              }
               timeline={timeline}
               playbackSettings={
                 <>
