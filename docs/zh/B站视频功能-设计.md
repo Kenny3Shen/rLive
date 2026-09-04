@@ -134,12 +134,13 @@ message DanmakuElem {
 
 - 写入接口 `POST https://api.bilibili.com/x/v2/dm/post`：表单 `type=1&oid={cid}&msg&progress={秒}&color=16777215&fontsize=25&pool=0&mode=1&plat=1&csrf`，携带 SESSDATA Cookie。与直播 `msg/send` 同一套凭据检查（同一设置项 `danmaku_send_enabled`）、同一 3 秒冷却（`DanmakuSendLimiter`，键用稿件 aid——同稿件各分 P 共用一个冷却）与发送历史（`danmaku_send_history`，room_id 存 aid）。
 - 错误映射在直播语义之上补两条 VOD 专属：`-102` 账号权限不足（部分视频要求正式会员）、`616` 内容被过滤。不做重试、不产生乐观本地回显。
-- 前端复用直播的 `DanmakuComposer`（`video` prop 切换目标：cid/aid/progressSecs 入参），挂在控制栏容器顶部 overlay 形态，显隐随控制条，快捷表情/收藏/历史选择器同套可用。
+- 前端复用直播的 `DanmakuComposer`（`video` prop 切换目标：cid/aid/progressSecs 入参），挂在控制栏居中槽位（`centerSlot`，直播页 composer 同款落点，播放列表计数排其后）；compact 且非全屏时 centerSlot 不渲染，回退控制条上沿。显隐随控制条，快捷表情/收藏/历史选择器同套可用。
 
 ### 弹幕查看列表（`VideoDanmakuList`）
 
-- 侧栏滚动容器顶部、页签条之下（相关视频上方）：默认折叠一行「弹幕 + 总数」，点击展开后渲染当前进度附近的弹幕（时间戳 + 内容，条目颜色还原），随播放自动跟踪滚动（用户上翻暂停跟随，滚回底部恢复）。只渲染进度附近约 120 行的窗口而不是全量（热门稿件弹幕过万）。
-- 数据直接来自播放页 `danmakuEntries`（懒加载已合并的段数据），不额外请求。仅 UGC 渲染（PGC 分集同接口可用但当前先覆盖 UGC 主场景）。
+- 侧栏独立「弹幕」选项卡，与相关视频/评论/合集同级（顺序：选集（多 P 时）、相关视频、弹幕、评论、合集），仅 UGC 显示（PGC 分集同接口可用但当前先覆盖 UGC 主场景）。面板自持滚动视口（跟随播放需要独占滚动位置）。
+- 全量渲染已加载条目（时间戳 + 内容，条目颜色还原），行级 `content-visibility: auto` + `contain-intrinsic-size` 让浏览器跳过屏外行的布局与绘制，上万条也不拖垮滚动；随播放自动跟踪滚动（用户上翻暂停跟随，滚回底部恢复）。
+- 数据直接来自播放页 `danmakuEntries`（懒加载已合并的段数据），不额外请求。
 
 
 ## 六、清晰度切换与右侧栏
@@ -160,7 +161,7 @@ message DanmakuElem {
 ### 顶栏低频工具与控制布局
 
 - 顶栏（`topBar`）右侧承载低频工具：跳原址 `ExternalLink` 直跳系统浏览器、投屏 `Tv` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）。窗口全屏按钮在**控制栏**工具区（字幕旁，`aria-pressed`，`Maximize2/Minimize2` 图标）：与画面全屏共享 `useRecordingPlayerFullscreen` 的同一 toggle（桌面 = Tauri 原生窗口全屏），语义上是「应用窗口全屏」而非新全屏形态。
-- 控制栏保留高频播放控制与字幕（CC）按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏容器顶部是弹幕输入条（见第五节「弹幕发送」）。
+- 控制栏保留高频播放控制与字幕（CC）按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏居中槽位是弹幕输入条（见第五节「弹幕发送」）。
 - 全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头退出全屏、中间标题、右侧同一套低频工具（投屏弹层此时 `container` 指向 `stageRef`，规避 top layer 压盖）。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器。
 
 ### 跳转原始地址按钮

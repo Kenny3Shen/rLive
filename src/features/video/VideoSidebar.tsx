@@ -43,10 +43,11 @@ import { UploaderDrawer } from "./UploaderDrawer";
  * `useInfiniteQuery` + 哨兵；相关视频、分集与选集上游都是一次给全。
  */
 
-type SidebarTab = "related" | "episodes" | "parts" | "season" | "comments";
+type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "season" | "comments";
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
+  danmaku: "弹幕",
   episodes: "分集",
   parts: "选集",
   season: "合集",
@@ -55,6 +56,7 @@ const TAB_LABELS: Record<SidebarTab, string> = {
 
 const SIDEBAR_TABS: readonly SidebarTab[] = [
   "related",
+  "danmaku",
   "episodes",
   "parts",
   "season",
@@ -862,15 +864,18 @@ export function VideoSidebar({
 
   const archive = archiveQuery.data;
   const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
+  // 弹幕页签与相关视频/评论/合集同级（UGC 专属：PGC 分集无此数据源）。
+  const showDanmakuTab = !isPgc && danmaku !== undefined;
   const tabs: SidebarTab[] = isPgc
     ? ["episodes", "comments"]
     : multiPart
       ? archive?.ugc_season
-        ? ["parts", "related", "comments", "season"]
-        : ["parts", "related", "comments"]
+        ? ["parts", "related", "danmaku", "comments", "season"]
+        : ["parts", "related", "danmaku", "comments"]
       : archive?.ugc_season
-        ? ["related", "comments", "season"]
-        : ["related", "comments"];
+        ? ["related", "danmaku", "comments", "season"]
+        : ["related", "danmaku", "comments"];
+  const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
 
   // 多 P 稿件默认展示选集（与 B 站 Web 同款落点）：详情取回后把未动过页签的
   // 侧栏切到「选集」；用户已手动切换过则不再干预。
@@ -984,7 +989,7 @@ export function VideoSidebar({
           variant="line"
           className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"
         >
-          {tabs.map((value) => (
+          {visibleTabs.map((value) => (
             <TabsTrigger key={value} value={value} className="px-3 text-sm">
               {TAB_LABELS[value]}
             </TabsTrigger>
@@ -992,14 +997,6 @@ export function VideoSidebar({
         </TabsList>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        {/* 弹幕查看列表：默认折叠，仅 UGC 有 VOD 弹幕（PGC 分集无此数据源）。 */}
-        {danmaku && !isPgc && (
-          <VideoDanmakuList
-            entries={danmaku.entries}
-            positionMs={danmaku.positionMs}
-            loading={danmaku.loading}
-          />
-        )}
         {tab === "comments" ? (
           resolvedAid ? (
             <CommentsPanel aid={resolvedAid} />
@@ -1031,6 +1028,12 @@ export function VideoSidebar({
             season={archive.ugc_season}
             currentBvid={bvid ?? ""}
             onNavigate={navigateToPlay}
+          />
+        ) : tab === "danmaku" && danmaku ? (
+          <VideoDanmakuList
+            entries={danmaku.entries}
+            positionMs={danmaku.positionMs}
+            loading={danmaku.loading}
           />
         ) : (
           <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />
