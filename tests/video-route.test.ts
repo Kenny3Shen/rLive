@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_VIDEO_SEARCH_FILTERS,
   PGC_SEASON_TYPES,
   VIDEO_POPULAR_ALL_ZONE_KEY,
   VIDEO_TABS,
   parseVideoPlayParams,
+  parseVideoSearchFilters,
   resolveVideoZoneKey,
   videoOriginalUrl,
   videoHomePath,
@@ -156,6 +158,42 @@ describe("video paths", () => {
   test("keeps the tab strip order stable for the shell's pan direction", () => {
     expect([...VIDEO_TABS]).toEqual(["recommend", "popular", "anime", "cinema"]);
   });
+});
+
+describe("video search filters", () => {
+  test("round-trips non-default filters through the url", () => {
+    const path = videoSearchPath("猫猫", {
+      order: "click",
+      duration: 2,
+      zone: 4,
+      pubTime: "week",
+    });
+    expect(path).toBe("/video/search?q=%E7%8C%AB%E7%8C%AB&order=click&duration=2&zone=4&pubtime=week");
+    expect(parseVideoSearchFilters(new URLSearchParams(path.split("?")[1]))).toEqual({
+      order: "click",
+      duration: 2,
+      zone: 4,
+      pubTime: "week",
+    });
+  });
+
+  test("default filters leave no query params behind", () => {
+    expect(videoSearchPath("猫猫", DEFAULT_VIDEO_SEARCH_FILTERS)).toBe(
+      "/video/search?q=%E7%8C%AB%E7%8C%AB",
+    );
+    // 省略 filters 与显式默认等价：查询条提交新关键词时走的就是这条路。
+    expect(videoSearchPath("猫猫")).toBe(videoSearchPath("猫猫", DEFAULT_VIDEO_SEARCH_FILTERS));
+  });
+
+  test("falls back to defaults on unknown filter values in deep links", () => {
+    // 未知 order / duration / pubtime 一律回落默认，zone 只认非负整数。
+    const params = new URLSearchParams("order=hack&duration=9&zone=-3&pubtime=month");
+    expect(parseVideoSearchFilters(params)).toEqual(DEFAULT_VIDEO_SEARCH_FILTERS);
+    expect(parseVideoSearchFilters(new URLSearchParams("zone=abc"))).toEqual(
+      DEFAULT_VIDEO_SEARCH_FILTERS,
+    );
+  });
+
 });
 
 describe("video original url", () => {

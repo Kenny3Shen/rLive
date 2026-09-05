@@ -13,6 +13,7 @@ import type {
   VideoSubtitle,
   VideoZone,
 } from "@/shared/types/video";
+import type { VideoSearchFilters } from "./videoRoute";
 
 /**
  * B 站视频命令的薄封装。
@@ -106,9 +107,25 @@ export function videoGetRelated(bvid: string): Promise<VideoListPage> {
   return invokeCmd<VideoListPage>("video_get_related", { bvid });
 }
 
-/** 搜索视频。关键词搜索，支持分页。 */
-export function videoSearch(keyword: string, page: number): Promise<VideoListPage> {
-  return invokeCmd<VideoListPage>("video_search", { keyword, page });
+/** 搜索视频。关键词搜索，支持分页与可选筛选（排序 / 时长 / 分区 / 发布时间）。 */
+export function videoSearch(
+  keyword: string,
+  page: number,
+  filters: VideoSearchFilters,
+): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_search", {
+    keyword,
+    page,
+    order: filters.order || null,
+    duration: filters.duration || null,
+    tids: filters.zone || null,
+    pubTime: filters.pubTime || null,
+  });
+}
+
+/** 搜索筛选的分区表（tid）。与 `videoZoneList` 的分区榜 rid 是两套 ID。 */
+export function videoSearchZoneList(): Promise<VideoZone[]> {
+  return invokeCmd<VideoZone[]>("video_search_zone_list");
 }
 
 /** UP 主空间视频列表。获取指定 UP 主的投稿视频，支持分页。 */

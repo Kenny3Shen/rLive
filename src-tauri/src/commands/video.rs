@@ -374,14 +374,40 @@ pub async fn video_get_related(
     resolve_bilibili(&state)?.video_related(&bvid).await
 }
 
-/// 搜索视频。关键词搜索，支持分页。
+/// 搜索视频。关键词搜索，支持分页与可选筛选：
+/// `order` 排序（click/pubdate/dm/stow/scores）、`duration` 时长档（0-4）、
+/// `tids` 搜索分区（`video_search_zone_list` 的 tid）、`pub_time` 发布时间预设
+/// （day/week/halfYear）。非法值一律回落默认，不报错。
 #[tauri::command]
 pub async fn video_search(
     state: State<'_, AppState>,
     keyword: String,
     page: u32,
+    order: Option<String>,
+    duration: Option<i64>,
+    tids: Option<i64>,
+    pub_time: Option<String>,
 ) -> AppResult<VideoListPage> {
-    resolve_bilibili(&state)?.video_search(&keyword, page).await
+    resolve_bilibili(&state)?
+        .video_search(
+            &keyword,
+            page,
+            order.as_deref(),
+            duration,
+            tids,
+            pub_time.as_deref(),
+        )
+        .await
+}
+
+/// 搜索筛选的分区表（tids）。与 [`crate::sites::bilibili::VIDEO_ZONES`] 的分区榜
+/// rid 是两套 ID，搜索接口只认 tid，因此单独成表而非复用 `video_zone_list`。
+#[tauri::command]
+pub fn video_search_zone_list() -> Vec<(String, i64)> {
+    crate::sites::bilibili::VIDEO_SEARCH_ZONES
+        .iter()
+        .map(|(name, tid)| ((*name).to_string(), *tid))
+        .collect()
 }
 
 /// UP 主空间视频列表。获取指定 UP 主的投稿视频，支持分页。

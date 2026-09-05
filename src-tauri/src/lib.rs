@@ -95,7 +95,7 @@ use commands::video::{
     video_get_comments, video_get_danmaku, video_get_pgc_index, video_get_pgc_zone,
     video_get_play_info, video_get_popular, video_get_recommend, video_get_related,
     video_get_season, video_get_subtitle, video_get_subtitles, video_get_zone, video_search,
-    video_stop_play, video_uploader_videos, video_zone_list,
+    video_search_zone_list, video_stop_play, video_uploader_videos, video_zone_list,
 };
 use commands::video_history::{
     video_history_add, video_history_clear, video_history_find, video_history_list,
@@ -407,6 +407,7 @@ pub fn run() {
             video_danmaku_send,
             video_get_related,
             video_search,
+            video_search_zone_list,
             video_uploader_videos,
             video_get_archive,
             video_get_comments,
