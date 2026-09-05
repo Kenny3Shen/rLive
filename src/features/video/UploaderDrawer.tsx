@@ -4,18 +4,12 @@ import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { Button } from "@/components/ui/button";
-import {
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerTitle,
-} from "@/components/ui/drawer";
+import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { videoUploaderVideos } from "./videoApi";
 import { VideoCard } from "./VideoCard";
 import { playlistItemFromVideoItem, dedupeVideoItems } from "./playlistStore";
 
-const GRID_CLASS =
-  "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4";
+const GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,14rem),1fr))] gap-x-3 gap-y-4";
 
 type UploaderDrawerProps = {
   open: boolean;
@@ -27,12 +21,7 @@ type UploaderDrawerProps = {
 /**
  * UP 主投稿视频抽屉，从右侧滑出，展示指定 UP 主的视频列表。
  */
-export function UploaderDrawer({
-  open,
-  onOpenChange,
-  mid,
-  uploaderName,
-}: UploaderDrawerProps) {
+export function UploaderDrawer({ open, onOpenChange, mid, uploaderName }: UploaderDrawerProps) {
   const listQuery = useInfiniteQuery({
     queryKey: ["video", "uploader", mid],
     queryFn: ({ pageParam }) => videoUploaderVideos(mid, pageParam),
@@ -43,8 +32,16 @@ export function UploaderDrawer({
     ...BROWSING_LIST_QUERY_OPTIONS,
   });
 
-  const { data, error, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage, isFetchNextPageError, refetch } =
-    listQuery;
+  const {
+    data,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetching,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    refetch,
+  } = listQuery;
 
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     fetchNextPage,
@@ -60,15 +57,15 @@ export function UploaderDrawer({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent side="right" className="w-[min(48rem,90vw)]">
+      <DrawerContent side="right" className="w-[min(48rem,90vw)] overflow-hidden">
         <div className="flex h-full flex-col">
           {/* 标题栏 */}
-          <div className="flex shrink-0 items-center justify-between border-b border-border pb-3">
-            <DrawerTitle>{uploaderName} 的投稿</DrawerTitle>
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-3">
+            <DrawerTitle className="min-w-0 break-words">{uploaderName} 的投稿</DrawerTitle>
             <DrawerClose
               render={
                 <Button variant="ghost" size="icon-sm" aria-label="关闭">
-                  <X className="size-4" />
+                  <X />
                 </Button>
               }
             />
@@ -77,14 +74,9 @@ export function UploaderDrawer({
           {/* 视频列表 */}
           <div className="min-h-0 flex-1 overflow-y-auto pt-4">
             {error ? (
-              <ErrorState
-                error={error}
-                onRetry={() => refetch()}
-              />
+              <ErrorState error={error} onRetry={() => refetch()} />
             ) : isEmpty ? (
-              <p className="py-12 text-center text-sm text-muted-foreground">
-                暂无投稿视频
-              </p>
+              <p className="py-12 text-center text-sm text-muted-foreground">暂无投稿视频</p>
             ) : allItems.length > 0 ? (
               <>
                 <div className={GRID_CLASS}>

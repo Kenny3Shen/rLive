@@ -5,8 +5,53 @@ import { cn } from "@/lib/utils";
 
 export type DrawerSide = "bottom" | "right";
 
-function Drawer({ ...props }: DialogPrimitive.Root.Props) {
-  return <DialogPrimitive.Root data-slot="drawer" {...props} />;
+const DrawerScopeContext = React.createContext<{
+  container: HTMLDivElement | null;
+  setContainer: React.Dispatch<React.SetStateAction<HTMLDivElement | null>>;
+} | null>(null);
+
+/** 播放页共用侧栏挂载点，播放器和顶栏触发的抽屉也能进入同一范围。 */
+function DrawerScope({ children }: { children: React.ReactNode }) {
+  const [container, setContainer] = React.useState<HTMLDivElement | null>(null);
+  const value = React.useMemo(() => ({ container, setContainer }), [container]);
+  return <DrawerScopeContext value={value}>{children}</DrawerScopeContext>;
+}
+
+/** 放在侧栏的定位容器内，独立于滚动区和带 transform 的页签轨道。 */
+function DrawerViewport({ active = true }: { active?: boolean }) {
+  const setContainer = React.useContext(DrawerScopeContext)?.setContainer;
+  if (!setContainer || !active) return null;
+  return (
+    <div
+      ref={setContainer}
+      data-slot="drawer-viewport"
+      className="pointer-events-none absolute inset-0 isolate z-50 overflow-clip [contain:layout_paint]"
+    />
+  );
+}
+
+function Drawer({ actionsRef, modal = true, ...props }: DialogPrimitive.Root.Props) {
+  const container = React.useContext(DrawerScopeContext)?.container;
+  const internalActionsRef = React.useRef<DialogPrimitive.Root.Actions | null>(null);
+  const actions = actionsRef ?? internalActionsRef;
+  const previousContainer = React.useRef(container);
+
+  React.useLayoutEffect(() => {
+    // 收起侧栏或进入全屏时关闭原来的局部抽屉，避免它跳到全窗口。
+    if (previousContainer.current && previousContainer.current !== container) {
+      actions.current?.close();
+    }
+    previousContainer.current = container;
+  }, [actions, container]);
+
+  return (
+    <DialogPrimitive.Root
+      data-slot="drawer"
+      actionsRef={actions}
+      modal={container ? false : modal}
+      {...props}
+    />
+  );
 }
 
 function DrawerTrigger({ ...props }: DialogPrimitive.Trigger.Props) {
@@ -18,11 +63,13 @@ function DrawerPortal({ ...props }: DialogPrimitive.Portal.Props) {
 }
 
 function DrawerOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) {
+  const scoped = Boolean(React.useContext(DrawerScopeContext)?.container);
   return (
     <DialogPrimitive.Backdrop
       data-slot="drawer-overlay"
       className={cn(
-        "motion-dialog-overlay fixed inset-0 isolate z-50 bg-overlay supports-backdrop-filter:backdrop-blur-xs",
+        "motion-dialog-overlay pointer-events-auto inset-0 isolate z-50 bg-overlay",
+        scoped ? "absolute" : "fixed",
         className,
       )}
       {...props}
@@ -43,14 +90,16 @@ function DrawerContent({
      让玻璃质感的 `::before` 填充透过模糊背景显现。 */
   glass?: boolean;
 }) {
+  const scopedContainer = React.useContext(DrawerScopeContext)?.container;
   return (
-    <DrawerPortal container={container}>
+    <DrawerPortal container={scopedContainer ?? container}>
       <DrawerOverlay />
       <DialogPrimitive.Popup
         data-slot="drawer-content"
         data-side={side}
+        data-scoped={scopedContainer ? "" : undefined}
         className={cn(
-          "motion-drawer fixed z-50 text-popover-foreground shadow-lg outline-none",
+          "motion-drawer pointer-events-auto fixed z-50 text-popover-foreground shadow-lg outline-none",
           !glass && "bg-popover",
           glass && "glass-surface",
           side === "bottom" &&
@@ -58,6 +107,7 @@ function DrawerContent({
           side === "right" &&
             "inset-y-0 right-0 h-full w-[min(20rem,60vw)] max-w-full overflow-y-auto rounded-l-2xl border border-border p-4 pr-[calc(1rem+env(safe-area-inset-right))]",
           className,
+          scopedContainer && "absolute max-h-full w-full rounded-none",
         )}
         {...props}
       />
@@ -99,6 +149,8 @@ export {
   DrawerDescription,
   DrawerOverlay,
   DrawerPortal,
+  DrawerScope,
   DrawerTitle,
   DrawerTrigger,
+  DrawerViewport,
 };
