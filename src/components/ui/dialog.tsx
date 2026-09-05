@@ -29,6 +29,20 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
   );
 }
 
+/**
+ * 不带卡片外观的弹层本体：满屏图片查看器这类自带布局与背景的表面用它，
+ * 不必逐条推翻 `DialogContent` 的卡片样式。定位与尺寸交给调用方。
+ */
+function DialogPopup({ className, ...props }: DialogPrimitive.Popup.Props) {
+  return (
+    <DialogPrimitive.Popup
+      data-slot="dialog-popup"
+      className={cn("motion-dialog fixed z-50 outline-none", className)}
+      {...props}
+    />
+  );
+}
+
 function DialogContent({ className, ...props }: DialogPrimitive.Popup.Props) {
   return (
     <DialogPortal>
@@ -120,6 +134,7 @@ export {
   DialogFooter,
   DialogHeader,
   DialogOverlay,
+  DialogPopup,
   DialogPortal,
   DialogTitle,
   DialogTrigger,

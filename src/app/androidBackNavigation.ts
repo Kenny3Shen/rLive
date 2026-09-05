@@ -22,6 +22,7 @@ export const ANDROID_BACK_EVENT = "rlive:android-back";
  */
 const DISMISSIBLE_POPUP_SLOTS = [
   "dialog-content",
+  "dialog-popup",
   "alert-dialog-content",
   "drawer-content",
   "popover-content",
