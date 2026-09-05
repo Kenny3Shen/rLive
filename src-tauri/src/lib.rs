@@ -81,7 +81,8 @@ use commands::profile::{profile_export, profile_import};
 use commands::recording::{
     recording_danmaku_export_ass, recording_danmaku_url, recording_delete, recording_list,
     recording_playback_url, recording_set_continue_on_leave, recording_set_storage_path,
-    recording_start, recording_stop, recording_storage_info,
+    recording_start, recording_stop, recording_storage_info, recording_watch_progress_find,
+    recording_watch_progress_list, recording_watch_progress_report,
 };
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -355,6 +356,12 @@ pub fn run() {
             recording_danmaku_url,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_danmaku_export_ass,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            recording_watch_progress_list,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            recording_watch_progress_find,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            recording_watch_progress_report,
             account_get_cookie,
             account_get_profile,
             account_set_cookie,

@@ -7,6 +7,7 @@ import {
   Captions,
   CircleDot,
   Clock3,
+  Eye,
   FolderOpen,
   HardDrive,
   MessageSquareText,
@@ -67,6 +68,10 @@ import {
   type RecordingView,
 } from "./recordingRoute";
 import {
+  isWatchFinished,
+  isWatchProgressWorthKeeping,
+} from "@/shared/watchProgress";
+import {
   activeRecordingCount,
   deleteRecording,
   exportRecordingDanmakuAss,
@@ -76,11 +81,14 @@ import {
   RECORDINGS_QUERY_KEY,
   RECORDING_PLAYBACK_QUERY_KEY,
   RECORDING_STORAGE_QUERY_KEY,
+  RECORDING_WATCH_PROGRESS_QUERY_KEY,
+  RECORDING_WATCH_PROGRESS_RESUME_KEY,
   recordingErrorMessage,
   recordingPlatformFromSearch,
   recordingStorageInfo,
   recordingSupported,
   recordingUserGroupKey,
+  recordingWatchProgressList,
   recordingsForPlatform,
   recordingsForView,
   setRecordingStoragePath,
@@ -88,6 +96,7 @@ import {
   useRecordings,
   type RecordingItem,
   type RecordingStatus,
+  type RecordingWatchProgress,
 } from "./recording";
 function recordingStatusLabel(status: RecordingStatus): string {
   switch (status) {
@@ -170,6 +179,7 @@ function RecordingStatusBadge({ status }: { status: RecordingStatus }) {
 
 function RecordingCard({
   item,
+  watched,
   revealing,
   stopping,
   exportingAss,
@@ -180,6 +190,7 @@ function RecordingCard({
   onDelete,
 }: {
   item: RecordingItem;
+  watched: RecordingWatchProgress | null;
   revealing: boolean;
   stopping: boolean;
   exportingAss: boolean;
@@ -193,6 +204,16 @@ function RecordingCard({
   const playbackPath = recordingPlaybackPath(item.id);
   // 伴生文件只有任务完成写入后才存在。
   const exportable = item.status !== "recording" && item.include_danmaku && item.danmaku_count > 0;
+  // 上次看到哪儿。过一遍最小进度门槛：误触留下的一两秒不该在卡片上显示，
+  // 也不该画出一条几乎看不见的进度条。
+  const watchedSeconds =
+    watched && isWatchProgressWorthKeeping(watched.progress) ? watched.progress : 0;
+  const recordedSeconds = Math.max(0, item.duration_ms / 1000);
+  const watchedPercent =
+    recordedSeconds > 0 ? Math.min(100, (watchedSeconds / recordedSeconds) * 100) : 0;
+  const watchedLabel = isWatchFinished(watchedSeconds, recordedSeconds)
+    ? "已看完"
+    : `已看到 ${formatRecordingDuration(watchedSeconds * 1_000)}`;
 
   return (
     <li className="min-w-0">
@@ -323,7 +344,23 @@ function RecordingCard({
               {item.danmaku_count}
             </Badge>
           )}
+          {watchedSeconds > 0 && (
+            <Badge
+              variant="outline"
+              title={`已看到 ${formatRecordingDuration(watchedSeconds * 1_000)} / ${formatRecordingDuration(item.duration_ms)}`}
+            >
+              <Eye aria-hidden />
+              {watchedLabel}
+            </Badge>
+          )}
         </CardContent>
+        {watchedPercent > 0 && (
+          /* 观看进度压在卡片底边：一眼看出上次停在哪儿，不占徽章行的宽度。
+             留出左右内边距而不是铺满，避免与卡片圆角相切。 */
+          <span className="pointer-events-none absolute inset-x-3 bottom-1.5 z-10 h-0.5 overflow-hidden rounded-full bg-foreground/10">
+            <span className="block h-full bg-primary" style={{ width: `${watchedPercent}%` }} />
+          </span>
+        )}
       </Card>
     </li>
   );
@@ -542,6 +579,22 @@ export function RecordingsPage() {
     refetchOnWindowFocus: true,
   });
 
+  /**
+   * 全部录制的观看进度。单独一条查询而不是塞进 `recording_list`：录制列表在采集
+   * 期间每 15 秒轮询并被事件刷新，观看进度只在回放时变，两者的失效时机不同。
+   */
+  const watchProgress = useQuery({
+    queryKey: RECORDING_WATCH_PROGRESS_QUERY_KEY,
+    enabled: supported,
+    queryFn: recordingWatchProgressList,
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
+  });
+  const watchProgressById = useMemo(
+    () => new Map((watchProgress.data ?? []).map((entry) => [entry.id, entry])),
+    [watchProgress.data],
+  );
+
   const items = useMemo(() => recordings.data ?? [], [recordings.data]);
   const requestedPlatform = searchParams.get("platform");
   const platformFilter: PlatformFilter = recordingPlatformFromSearch(requestedPlatform);
@@ -614,6 +667,13 @@ export function RecordingsPage() {
         (current ?? []).filter((item) => item.id !== id),
       );
       queryClient.removeQueries({ queryKey: [RECORDING_PLAYBACK_QUERY_KEY, id] });
+      // 后端删除录像时顺带删掉了进度行，缓存跟着走：留着只会让卡片画一条
+      // 属于已删文件的进度。
+      queryClient.setQueryData<RecordingWatchProgress[]>(
+        RECORDING_WATCH_PROGRESS_QUERY_KEY,
+        (current) => (current ?? []).filter((entry) => entry.id !== id),
+      );
+      queryClient.removeQueries({ queryKey: [RECORDING_WATCH_PROGRESS_RESUME_KEY, id] });
       setDeleteTarget(null);
       notify.success("录制已删除");
     },
@@ -744,6 +804,7 @@ export function RecordingsPage() {
                       <RecordingCard
                         key={item.id}
                         item={item}
+                        watched={watchProgressById.get(item.id) ?? null}
                         stopping={stopMutation.isPending && stopMutation.variables === item.id}
                         onOpen={item.status === "recording" ? undefined : () => openRecording(item)}
                         onStop={() => stopMutation.mutate(item.id)}

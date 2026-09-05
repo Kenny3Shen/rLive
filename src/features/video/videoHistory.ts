@@ -8,8 +8,9 @@
  */
 
 import { invokeCmd } from "@/shared/api/tauri";
+import { watchResumePosition } from "@/shared/watchProgress";
 import { videoPlayPath } from "./videoRoute";
-import type { VideoHistoryItem, VideoHistoryKind } from "@/shared/types/video";
+import type { VideoArchive, VideoHistoryItem, VideoHistoryKind } from "@/shared/types/video";
 
 /** 观看历史的 react-query key 前缀；上报后按它失效缓存。 */
 export const VIDEO_HISTORY_QUERY_KEY = ["video-history"] as const;
@@ -40,40 +41,10 @@ export function videoHistoryClear(): Promise<void> {
 }
 
 /**
- * 低于此秒数不记历史：点开就退、误触与拖动预览不该污染历史列表。
- * 与 PiliPlus 的「进度太小视为未看」同一意图。
- */
-export const VIDEO_HISTORY_MIN_PROGRESS_SECONDS = 3;
-
-/** 两次上报之间的最小间隔。timeupdate 约 250ms 一次，不节流会写穿 SQLite。 */
-export const VIDEO_HISTORY_REPORT_INTERVAL_MS = 5_000;
-
-/**
- * 距片尾这个秒数以内视为看完：续播时从头播，而不是卡在最后一帧反复触发 ended。
- */
-export const VIDEO_HISTORY_FINISHED_TAIL_SECONDS = 5;
-
-/**
- * 是否该把当前进度写盘。
- *
- * `lastReportedAt` 为 null 表示这一集还没上报过 —— 只要越过最小进度就立刻记一次，
- * 让「打开过」这件事尽早落盘（用户可能马上就退出）。
- */
-export function shouldReportVideoProgress(
-  position: number,
-  lastReportedAt: number | null,
-  now: number,
-): boolean {
-  if (!Number.isFinite(position) || position < VIDEO_HISTORY_MIN_PROGRESS_SECONDS) return false;
-  if (lastReportedAt === null) return true;
-  return now - lastReportedAt >= VIDEO_HISTORY_REPORT_INTERVAL_MS;
-}
-
-/**
  * 历史记录该续播到的秒数；不该续播时返回 0。
  *
  * 三种情况从头播：① 没有历史；② 历史停在**别的**分集（用户这次点的是另一集，
- * 沿用旧进度会跳到错误的位置）；③ 已经看到片尾。
+ * 沿用旧进度会跳到错误的位置）；③ 已经看完（阈值见 `watchResumePosition`）。
  * 分集比对以 `cid` 为准（取流键，UGC/PGC 都有），`cid` 未知时退回 `ep_id`。
  */
 export function videoResumePosition(
@@ -86,12 +57,31 @@ export function videoResumePosition(
       ? record.cid === current.cid
       : record.ep_id === (current.epId ?? "");
   if (!samePart) return 0;
-  const progress = record.progress;
-  if (!Number.isFinite(progress) || progress < VIDEO_HISTORY_MIN_PROGRESS_SECONDS) return 0;
-  if (record.duration > 0 && progress >= record.duration - VIDEO_HISTORY_FINISHED_TAIL_SECONDS) {
-    return 0;
-  }
-  return progress;
+  return watchResumePosition(record.progress, record.duration);
+}
+
+/**
+ * URL 没带 cid 时该播哪一个分 P。
+ *
+ * 从首页/搜索/UP 主卡片进入只带 bvid，取流键一律由稿件详情补齐成 P1。但多 P
+ * 稿件「上次退出的地方」在上次看的那一 P 上，因此优先它：那一 P 确实属于本稿件
+ * 且 `videoResumePosition` 认定有续播位置（存在、进度够长、未看到片尾）时返回它
+ * 的 cid，否则退回 P1。详情未到返回 0，调用方据此按「取流键未就绪」处理。
+ *
+ * 只服务「URL 没指定分集」这一种入口：用户明确点了某一 P（选集/播放列表/历史卡）
+ * 时链接一定带 cid，那是他的选择，不能被历史改写。
+ */
+export function videoResumeCid(
+  record: VideoHistoryItem | null | undefined,
+  archive: Pick<VideoArchive, "cid" | "pages"> | null | undefined,
+): number {
+  if (!archive) return 0;
+  if (!record || record.cid <= 0 || record.cid === archive.cid) return archive.cid;
+  // 历史里的 cid 必须真属于这个稿件：合集换稿件与脏数据都不该把取流键带偏。
+  if (!archive.pages.some((page) => page.cid === record.cid)) return archive.cid;
+  return videoResumePosition(record, { cid: record.cid, epId: null }) > 0
+    ? record.cid
+    : archive.cid;
 }
 
 /** 历史条目的续播链接：带上最后观看那一集的取流键。 */

@@ -51,6 +51,24 @@ export type RecordingProgress = {
   danmakuCount: number;
 };
 
+/**
+ * 一段录制的回放观看进度（断点续播）。镜像 Rust
+ * `db::recording_watch::RecordingWatchProgress`。
+ *
+ * 与上面的 `RecordingProgress` 不是一回事：那个是**录制中**的产出量（时长/体积/
+ * 弹幕条数）随事件增长，这个是**看过多少**，只在回放时写入。
+ */
+export type RecordingWatchProgress = {
+  /** 录制 id，与 `RecordingItem.id` 同一空间。 */
+  id: string;
+  /** 已观看位置，秒。 */
+  progress: number;
+  /** 录制总时长，秒；未知为 0。 */
+  duration: number;
+  /** 最后观看时间，Unix 毫秒。 */
+  watched_at: number;
+};
+
 export type RecordingContext = {
   source: PlayUrl;
   sourceKey: string;
@@ -77,6 +95,15 @@ export type RecordingContext = {
 export const RECORDINGS_QUERY_KEY = ["recordings"] as const;
 export const RECORDING_STORAGE_QUERY_KEY = ["recording-storage"] as const;
 export const RECORDING_PLAYBACK_QUERY_KEY = "recording-playback";
+/** 全部录制的观看进度（列表卡片画进度用）；上报后按它失效缓存。 */
+export const RECORDING_WATCH_PROGRESS_QUERY_KEY = ["recording-watch-progress"] as const;
+/**
+ * 单段录制的续播位置。
+ *
+ * 刻意不挂在 `RECORDING_WATCH_PROGRESS_QUERY_KEY` 前缀下：上报会按那个前缀失效
+ * 缓存，而这条查询的数据形状是单条记录而不是列表，混在同一前缀下会被写成数组。
+ */
+export const RECORDING_WATCH_PROGRESS_RESUME_KEY = "recording-watch-progress-resume";
 const RECORDING_CHANGED_EVENT = "recording-changed";
 const RECORDING_PROGRESS_EVENT = "recording-progress";
 
@@ -528,6 +555,22 @@ export function activeRecordingForContext(
 
 export async function recordingPlaybackUrl(id: string): Promise<string> {
   return invokeCmd<string>("recording_playback_url", { id });
+}
+
+/** 全部录制的观看进度。行数由后端保留上限封顶，可以一次取回。 */
+export async function recordingWatchProgressList(): Promise<RecordingWatchProgress[]> {
+  return invokeCmd<RecordingWatchProgress[]>("recording_watch_progress_list");
+}
+
+/** 取单段录制的观看进度；从未看过返回 null。续播位置由它提供。 */
+export async function recordingWatchProgressFind(
+  id: string,
+): Promise<RecordingWatchProgress | null> {
+  return invokeCmd<RecordingWatchProgress | null>("recording_watch_progress_find", { id });
+}
+
+export async function recordingWatchProgressReport(item: RecordingWatchProgress): Promise<void> {
+  await invokeCmd<void>("recording_watch_progress_report", { item });
 }
 
 export async function stopRecording(id: string): Promise<RecordingItem> {
