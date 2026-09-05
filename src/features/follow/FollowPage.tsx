@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DndContext,
-  DragOverlay,
   useDraggable,
   useDroppable,
   type DragEndEvent,
@@ -106,6 +105,7 @@ import {
   type FollowCardDrawerAction,
   type FollowCardDrawerGroup,
 } from "./FollowCardActionDrawer";
+import { FollowDragOverlayPortal } from "./FollowDragOverlayPortal";
 import { groupTargetCollisionDetection } from "./groupCollisionDetection";
 import { IptvFollowView } from "./IptvFollowView";
 import { useFollowDndSensors } from "./useFollowDndSensors";
@@ -502,7 +502,7 @@ function FollowCard({
 
 function FollowDragOverlay({ user }: { user: FollowUser }) {
   return (
-    <Card size="sm" className="w-64 gap-2 py-3 shadow-lg ring-2 ring-primary/50">
+    <Card size="sm" className="h-full justify-center gap-2 py-3 shadow-lg ring-2 ring-primary/50">
       <CardHeader className="items-center gap-x-2.5">
         <div className="flex min-w-0 items-center gap-2.5">
           <Avatar size="lg">
@@ -1258,9 +1258,9 @@ export function FollowPage() {
                         </section>
                       </div>
 
-                      <DragOverlay dropAnimation={{ duration: 160, easing: "ease-out" }}>
+                      <FollowDragOverlayPortal>
                         {activeFollow ? <FollowDragOverlay user={activeFollow} /> : null}
-                      </DragOverlay>
+                      </FollowDragOverlayPortal>
                     </DndContext>
                   )}
                 </div>

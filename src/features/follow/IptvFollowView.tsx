@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   DndContext,
-  DragOverlay,
   useDraggable,
   useDroppable,
   type Announcements,
@@ -84,6 +83,7 @@ import { PagePan } from "@/shared/motion/PagePan";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { FollowCardActionDrawer, type FollowCardDrawerGroup } from "./FollowCardActionDrawer";
 import { IptvFollowGroupManagerDialog } from "./IptvFollowGroupManagerDialog";
+import { FollowDragOverlayPortal } from "./FollowDragOverlayPortal";
 import { groupTargetCollisionDetection } from "./groupCollisionDetection";
 import { useFollowDndSensors } from "./useFollowDndSensors";
 import {
@@ -430,7 +430,7 @@ function IptvFollowSkeleton() {
 
 function IptvFavoriteDragOverlay({ favorite }: { favorite: IptvFavorite }) {
   return (
-    <Card size="sm" className="w-[min(22rem,80vw)] gap-2 py-3 opacity-95 shadow-xl">
+    <Card size="sm" className="h-full justify-center gap-2 py-3 opacity-95 shadow-xl">
       <CardHeader className="items-center gap-x-2.5">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-border-subtle">
@@ -795,9 +795,9 @@ export function IptvFollowView({
           </section>
         </div>
 
-        <DragOverlay dropAnimation={{ duration: 160, easing: "ease-out" }}>
+        <FollowDragOverlayPortal>
           {activeFavorite ? <IptvFavoriteDragOverlay favorite={activeFavorite} /> : null}
-        </DragOverlay>
+        </FollowDragOverlayPortal>
       </DndContext>
 
       <IptvFollowGroupManagerDialog
