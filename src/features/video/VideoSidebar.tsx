@@ -145,7 +145,7 @@ function CommentBody({
           type="button"
           onClick={onOpenDetail}
           aria-label={`查看 ${comment.uname} 的评论详情`}
-          className="block w-full rounded-sm text-left text-[13px] leading-relaxed whitespace-pre-line break-words [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-ring"
+          className="block w-full rounded-sm text-left text-[13px] leading-relaxed whitespace-pre-line break-words [overflow-wrap:anywhere]"
         >
           {renderCommentMessage(comment.message, comment.emotes) || "图片评论"}
         </button>
@@ -242,7 +242,7 @@ function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDeta
   return (
     <button
       type="button"
-      className="block w-full px-2 py-1.5 text-left text-xs leading-relaxed transition-colors hover:bg-muted/70 focus-visible:outline-2 focus-visible:outline-ring"
+      className="block w-full px-2 py-1.5 text-left text-xs leading-relaxed transition-colors hover:bg-muted/70"
       onClick={onOpenDetail}
     >
       <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
@@ -279,7 +279,7 @@ function CommentThread({
             {previewReplies.length < comment.rcount && (
               <button
                 type="button"
-                className="w-full px-2 py-1.5 text-left text-xs text-primary/90 hover:bg-muted/70 focus-visible:outline-2 focus-visible:outline-ring"
+                className="w-full px-2 py-1.5 text-left text-xs text-primary/90 hover:bg-muted/70"
                 onClick={onOpenDetail}
               >
                 共 {formatOnline(comment.rcount)} 条回复

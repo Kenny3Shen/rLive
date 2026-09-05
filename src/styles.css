@@ -28,7 +28,9 @@
   color-scheme: light;
   --radius: 0.75rem;
   --focus-ring-width: 2px;
-  --focus-ring-offset: 2px;
+  /* 负 offset 让描边绘制在元素边缘内侧，呈现为内边框高亮：
+     不增加占位、不被祖先 overflow 裁剪，也不与相邻元素重叠。 */
+  --focus-ring-offset: -2px;
   /* 键盘焦点以中性描边呈现而不是蓝色强调色。ring 必须在 primary、destructive 与
      平台色调表面上同样清晰；而强调色的 ring 恰恰在那些本就是蓝色的控件上
      会被读成选中/激活状态。 */
@@ -982,15 +984,14 @@ html.overlay-window #root {
 }
 
 /* 播放器 chrome 直接位于视频上，应用以前景色派生的 ring 在这里没有可靠对比度：
-   背景就是屏幕上的任意一帧。这些控件保留白色描边，
-   几何与全局 ring 共享，只有颜色不同。用 inset：紧贴视频边缘的控件向外 ring
-   会被裁剪。 */
+   背景就是屏幕上的任意一帧。这些控件只把颜色换成白色，
+   几何（内边框 inset）与全局 ring 完全一致。 */
 @utility focus-ring-overlay {
   outline: none;
 
   &:focus-visible {
     outline: var(--focus-ring-width) solid oklch(1 0 0 / 0.75);
-    outline-offset: calc(var(--focus-ring-offset) * -1);
+    outline-offset: var(--focus-ring-offset);
   }
 }
 

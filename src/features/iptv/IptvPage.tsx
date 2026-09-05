@@ -294,7 +294,7 @@ function IptvChannelCard({
           onPointerEnter={() => preloadRouteModule("/iptv/play")}
           onPointerDown={() => preloadRouteModule("/iptv/play")}
           onFocus={() => preloadRouteModule("/iptv/play")}
-          className="absolute inset-0 rounded-xl outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
+          className="absolute inset-0 rounded-xl outline-none"
           aria-label={`播放 ${channel.name}${availabilityLabel}`}
         />
 

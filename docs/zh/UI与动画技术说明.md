@@ -67,7 +67,7 @@
 ### 3.3 图标、文案与可访问性
 
 - 用 `lucide-react`，不手绘已有语义的 SVG。Button 内图标用 `data-icon="inline-start"` / `data-icon="inline-end"`，基础组件负责尺寸时不额外加尺寸 class。
-- 纯图标按钮必须有中文 `aria-label`，不熟悉的工具图标同时提供 Tooltip。焦点环由 `src/styles.css` 的全局 `:focus-visible` 规则绘制，新增交互元素复用 `focus-ring` 或基础组件的 `focus-visible` 样式。
+- 纯图标按钮必须有中文 `aria-label`，不熟悉的工具图标同时提供 Tooltip。焦点环由 `src/styles.css` 的全局 `:focus-visible` 规则绘制（负 `--focus-ring-offset`，描边落在元素边缘内侧，呈现为内边框高亮），新增交互元素复用 `focus-ring` 或基础组件的 `focus-visible` 样式，不另行内联 outline 工具类。
 - 加载与异步结果用 `role="status"`、`aria-live` 或组件内已有语义，不只靠颜色表达状态。
 - 界面文案以中文为主，代码标识符、协议名与站点名保留原文。
 

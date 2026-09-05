@@ -225,7 +225,7 @@ function RecordingCard({
           <button
             type="button"
             data-motion-press
-            className="absolute inset-0 z-0 rounded-xl outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus-ring-color)]"
+            className="absolute inset-0 z-0 rounded-xl outline-none"
             aria-label={`打开录播：${item.title}`}
             onPointerEnter={() => preloadRouteModule(playbackPath)}
             onPointerDown={() => preloadRouteModule(playbackPath)}
