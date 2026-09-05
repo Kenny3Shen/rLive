@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
@@ -29,11 +29,9 @@ use crate::sites::traits::LiveSite;
 
 use api::{buvid_from_cookie, parse_buvid, parse_room_detail_from_data, parse_room_live_status};
 
-/// 跨请求共享的可变会话字段（buvid / wbi 密钥）。
+/// 跨请求共享的 WBI 签名密钥。
 #[derive(Default)]
 struct Session {
-    buvid3: String,
-    buvid4: String,
     img_key: String,
     sub_key: String,
 }
@@ -42,6 +40,8 @@ pub struct BilibiliSite {
     client: Client,
     cookie: String,
     session: Mutex<Session>,
+    /// 指纹接口失败时也缓存空结果，避免同一次房间加载并发发起重复请求。
+    buvids: OnceCell<(String, String)>,
     /// 以最小间隔串行化 play-info 请求（上游节流）。
     play_gate: AsyncMutex<Option<Instant>>,
 }
@@ -227,53 +227,42 @@ impl BilibiliSite {
             client,
             cookie: normalize_cookie_header(&cookie),
             session: Mutex::new(Session::default()),
+            buvids: OnceCell::const_new(),
             play_gate: AsyncMutex::new(None),
         }
     }
 
     async fn ensure_buvid(&self) -> AppResult<(String, String)> {
-        {
-            let s = self.session.lock().map_err(|_| {
-                AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
-            })?;
-            if !s.buvid3.is_empty() {
-                return Ok((s.buvid3.clone(), s.buvid4.clone()));
-            }
-        }
+        let ids = self
+            .buvids
+            .get_or_init(|| async {
+                let (saved_b3, saved_b4) = buvid_from_cookie(&self.cookie).unwrap_or_default();
+                if !saved_b3.is_empty() && !saved_b4.is_empty() {
+                    return (saved_b3, saved_b4);
+                }
 
-        let (saved_b3, saved_b4) = buvid_from_cookie(&self.cookie).unwrap_or_default();
-        if !saved_b3.is_empty() && !saved_b4.is_empty() {
-            let mut s = self.session.lock().map_err(|_| {
-                AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
-            })?;
-            s.buvid3 = saved_b3.clone();
-            s.buvid4 = saved_b4.clone();
-            return Ok((saved_b3, saved_b4));
-        }
-
-        let (fetched_b3, fetched_b4) = match self.fetch_buvid().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, "bilibili get_buvid failed; continuing empty");
-                (String::new(), String::new())
-            }
-        };
-        let b3 = if saved_b3.is_empty() {
-            fetched_b3
-        } else {
-            saved_b3
-        };
-        let b4 = if saved_b4.is_empty() {
-            fetched_b4
-        } else {
-            saved_b4
-        };
-        let mut s = self.session.lock().map_err(|_| {
-            AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
-        })?;
-        s.buvid3 = b3.clone();
-        s.buvid4 = b4.clone();
-        Ok((b3, b4))
+                let (fetched_b3, fetched_b4) = match self.fetch_buvid().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "bilibili get_buvid failed; continuing empty");
+                        (String::new(), String::new())
+                    }
+                };
+                (
+                    if saved_b3.is_empty() {
+                        fetched_b3
+                    } else {
+                        saved_b3
+                    },
+                    if saved_b4.is_empty() {
+                        fetched_b4
+                    } else {
+                        saved_b4
+                    },
+                )
+            })
+            .await;
+        Ok(ids.clone())
     }
 
     async fn fetch_buvid(&self) -> AppResult<(String, String)> {
@@ -594,9 +583,12 @@ impl BilibiliSite {
 }
 
 fn map_http(e: reqwest::Error) -> AppError {
-    AppError::new("bilibili_http_error", e.to_string())
-        .with_site("bilibili")
-        .retryable()
+    AppError::new(
+        "bilibili_http_error",
+        crate::http_client::describe_request_error(&e),
+    )
+    .with_site("bilibili")
+    .retryable()
 }
 
 /// GET JSON 包装的响应校验档位。
@@ -780,6 +772,49 @@ mod live_tests {
             cookie_with_buvids("SESSDATA=session; buvid3=", "fresh-device-3", ""),
             "SESSDATA=session; buvid3=fresh-device-3"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_buvid_fetch_is_shared_and_preserves_saved_device_ids() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_count = AtomicUsize::new(0);
+        let site = BilibiliSite::new(
+            crate::http_client::client_for_proxy(Some(&format!("http://{address}"))).unwrap(),
+            "buvid4=device-4".into(),
+        );
+        let server = async {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    assert!(request.len() < 4096);
+                    request.push(stream.read_u8().await.unwrap());
+                }
+                request_count.fetch_add(1, Ordering::SeqCst);
+                stream
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                _ = server => unreachable!(),
+                _ = async {
+                    let (first, second) = tokio::join!(site.ensure_buvid(), site.ensure_buvid());
+                    for result in [first, second, site.ensure_buvid().await] {
+                        assert_eq!(result.unwrap(), (String::new(), "device-4".into()));
+                    }
+                } => {}
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
     }
 
     #[test]

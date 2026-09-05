@@ -20,7 +20,8 @@
 
 哔哩哔哩专用的实时能力：
 
-- `danmaku_connect`：使用房间弹幕信息建立接收连接；断线时会轮换网关并刷新短时凭据。
+- `danmaku_connect`：使用房间弹幕信息建立接收连接；断线时会轮换网关并刷新短时凭据。设置了 HTTP(S) 代理时，弹幕 WebSocket 和重连刷新请求共用该代理。
+- 弹幕连接的 TCP、代理 TLS、CONNECT 和 WebSocket 握手阶段各设 10 秒超时；直连与代理连接均保留 TCP keepalive。设备指纹 `buvid` 的获取在同一站点实例内合并并缓存结果，失败时保留 Cookie 中已有的设备标识；新建站点实例可再次尝试。
 - `bilibili_danmaku_send_status` / `bilibili_danmaku_send`：发送一个普通文本片段的窄接口；手动发送和会话级自动发送均复用它。
 - SC 只用于展示；rLive 不提供支付、送礼或付费留言写入。
 

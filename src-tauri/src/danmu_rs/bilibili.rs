@@ -5,13 +5,14 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Url};
 use serde_json::Value;
-use tokio::net::TcpStream;
 use tokio::time;
+use tokio::{io::BufStream, net::TcpStream};
 use tokio_tungstenite::{
-    client_async_tls_with_config,
+    MaybeTlsStream, client_async_tls_with_config,
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
 };
 
+use crate::danmu_rs::proxy::{ConnectProxy, PROXY_CONNECT_TIMEOUT};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
@@ -106,8 +107,16 @@ pub async fn send_video_danmaku(
     progress_ms: u64,
     message: &str,
 ) -> AppResult<()> {
-    send_video_danmaku_to_url(client, cookie, aid, cid, progress_ms, message, SEND_VIDEO_DANMAKU_URL)
-        .await
+    send_video_danmaku_to_url(
+        client,
+        cookie,
+        aid,
+        cid,
+        progress_ms,
+        message,
+        SEND_VIDEO_DANMAKU_URL,
+    )
+    .await
 }
 
 /// 供 HTTP 契约测试使用的、可注入接口地址的内部变体。
@@ -216,11 +225,10 @@ async fn send_video_danmaku_to_url(
             "账号权限不足（部分视频要求正式会员才能发弹幕）",
         )
         .with_site("bilibili")),
-        616 => Err(AppError::new(
-            "bilibili_send_filtered",
-            "弹幕被 B站过滤，请修改内容后重试",
-        )
-        .with_site("bilibili")),
+        616 => Err(
+            AppError::new("bilibili_send_filtered", "弹幕被 B站过滤，请修改内容后重试")
+                .with_site("bilibili"),
+        ),
         -400 => Err(AppError::new(
             "bilibili_send_rejected",
             "B站未接受此条弹幕，请检查账号状态或视频限制",
@@ -1119,10 +1127,20 @@ async fn fetch_wbi_keys(client: &Client, cookie: &str) -> Result<(String, String
     let text = request
         .send()
         .await
-        .map_err(|error| format!("请求 B站 WBI 密钥失败: {error}"))?
+        .map_err(|error| {
+            format!(
+                "请求 B站 WBI 密钥失败: {}",
+                crate::http_client::describe_request_error(&error)
+            )
+        })?
         .text()
         .await
-        .map_err(|error| format!("读取 B站 WBI 密钥失败: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "读取 B站 WBI 密钥失败: {}",
+                crate::http_client::describe_request_error(&error)
+            )
+        })?;
     crate::sites::bilibili::parse_wbi_keys(&text).map_err(|error| error.to_string())
 }
 
@@ -1142,15 +1160,19 @@ async fn request_connection_info(
         request = request.header("cookie", cookie);
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("请求 B站弹幕信息失败: {error}"))?;
+    let response = request.send().await.map_err(|error| {
+        format!(
+            "请求 B站弹幕信息失败: {}",
+            crate::http_client::describe_request_error(&error)
+        )
+    })?;
     let status = response.status();
-    let body = response
-        .json::<Value>()
-        .await
-        .map_err(|error| format!("解析 B站弹幕信息失败: {error}"))?;
+    let body = response.json::<Value>().await.map_err(|error| {
+        format!(
+            "解析 B站弹幕信息失败: {}",
+            crate::http_client::describe_request_error(&error)
+        )
+    })?;
     if !status.is_success() {
         return Err(format!("B站弹幕信息 HTTP {status}"));
     }
@@ -1258,15 +1280,34 @@ fn tune_danmaku_socket(stream: &TcpStream) {
 /// `connect_async` 会用内核默认值拨号，在 Windows 上意味着 keepalive 完全关闭。
 /// 在这里自行构造套接字，是 TLS 握手消费该流之前唯一能设置这些选项的位置。
 async fn open_danmaku_tcp(host: &str) -> std::io::Result<TcpStream> {
-    let stream = TcpStream::connect((host, 443)).await?;
+    let stream = time::timeout(PROXY_CONNECT_TIMEOUT, TcpStream::connect((host, 443)))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "连接弹幕服务器超时"))??;
     tune_danmaku_socket(&stream);
     Ok(stream)
+}
+
+async fn open_danmaku_transport(
+    host: &str,
+    proxy: Option<&ConnectProxy>,
+) -> Result<BufStream<MaybeTlsStream<TcpStream>>, String> {
+    if let Some(proxy) = proxy {
+        return proxy
+            .open_tunnel(&format!("{host}:443"), Some(tune_danmaku_socket))
+            .await
+            .map_err(|error| error.to_string());
+    }
+    open_danmaku_tcp(host)
+        .await
+        .map(|stream| BufStream::new(MaybeTlsStream::Plain(stream)))
+        .map_err(|error| error.to_string())
 }
 
 async fn run_connection(
     events: &DanmakuEventSender,
     args: &BilibiliDanmakuArgs,
     host: &str,
+    proxy: Option<&ConnectProxy>,
 ) -> ConnectionEnd {
     let url = format!("wss://{host}/sub");
     // 如今 Bilibili 的边缘节点在 upgrade 之后会立即重置不带类浏览器请求头的
@@ -1301,8 +1342,8 @@ async fn run_connection(
             headers.insert("Cookie", cookie);
         }
     }
-    let socket = match open_danmaku_tcp(host).await {
-        Ok(socket) => socket,
+    let stream = match open_danmaku_transport(host, proxy).await {
+        Ok(stream) => stream,
         Err(error) => {
             return ConnectionEnd {
                 message_count: 0,
@@ -1313,14 +1354,28 @@ async fn run_connection(
             };
         }
     };
-    let (ws, _) = match client_async_tls_with_config(request, socket, None, None).await {
-        Ok(connection) => connection,
-        Err(error) => {
+    let (ws, _) = match time::timeout(
+        PROXY_CONNECT_TIMEOUT,
+        client_async_tls_with_config(request, stream, None, None),
+    )
+    .await
+    {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(error)) => {
             return ConnectionEnd {
                 message_count: 0,
                 authenticated: false,
                 auth_rejected: false,
                 reason: format!("连接失败: {error}"),
+                connected_for: Duration::ZERO,
+            };
+        }
+        Err(_) => {
+            return ConnectionEnd {
+                message_count: 0,
+                authenticated: false,
+                auth_rejected: false,
+                reason: "连接失败: 弹幕 WebSocket 握手超时".to_string(),
                 connected_for: Duration::ZERO,
             };
         }
@@ -1446,7 +1501,11 @@ async fn run_connection(
     }
 }
 
-pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs) -> AppResult<()> {
+pub async fn run_loop(
+    events: DanmakuEventSender,
+    mut args: BilibiliDanmakuArgs,
+    proxy: Option<String>,
+) -> AppResult<()> {
     if args.room_id <= 0 {
         return Err(
             AppError::new("danmaku_bad_room", "invalid room id for danmaku").with_site("bilibili"),
@@ -1460,7 +1519,10 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
         .with_site("bilibili"));
     }
 
-    let refresh_client = crate::http_client::default_client();
+    let proxy_setting = proxy.clone();
+    let proxy = ConnectProxy::from_setting(proxy.as_deref(), "bilibili", "B站")?;
+    // 房间详情已经使用该代理；重连刷新 token 与主机列表也必须走同一路由。
+    let refresh_client = crate::http_client::client_for_proxy(proxy_setting.as_deref())?;
     // 主机轮换与重连策略保持独立：即使是被 Bilibili 关闭的健康套接字，
     // 也应该尝试下一个边缘节点，
     // 而不是把后续所有尝试都钉在同一个网关上。
@@ -1478,7 +1540,7 @@ pub async fn run_loop(events: DanmakuEventSender, mut args: BilibiliDanmakuArgs)
             emit_system(&events, "正在重连弹幕服务器…");
         }
 
-        let ended = run_connection(&events, &args, &host).await;
+        let ended = run_connection(&events, &args, &host, proxy.as_ref()).await;
         tracing::warn!(
             host = %host,
             received = ended.message_count,
@@ -1616,6 +1678,109 @@ mod tests {
         assert_eq!(
             socket.tcp_keepalive_interval().unwrap(),
             TCP_KEEPALIVE_INTERVAL
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_transport_does_not_resolve_the_bilibili_edge_locally() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 512];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let received = stream.read(&mut buffer).unwrap();
+                assert_ne!(received, 0);
+                request.extend_from_slice(&buffer[..received]);
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(
+                request
+                    .starts_with("CONNECT edge.invalid:443 HTTP/1.1\r\nHost: edge.invalid:443\r\n")
+            );
+            stream
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .unwrap();
+        });
+        let proxy =
+            ConnectProxy::from_setting(Some(&format!("http://{address}")), "bilibili", "B站")
+                .unwrap()
+                .unwrap();
+
+        let transport = open_danmaku_transport("edge.invalid", Some(&proxy))
+            .await
+            .expect("proxy tunnel should not resolve edge.invalid");
+        match transport.get_ref() {
+            MaybeTlsStream::Plain(stream) => {
+                assert!(stream.nodelay().unwrap());
+                assert!(socket2::SockRef::from(stream).keepalive().unwrap());
+            }
+            _ => panic!("HTTP proxy should leave the tunnel stream plain"),
+        }
+        drop(transport);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconnect_refresh_and_rotated_host_use_the_configured_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = async {
+            let mut requests = Vec::new();
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    assert!(headers.len() < 4096);
+                    headers.push(stream.read_u8().await.unwrap());
+                }
+                let headers = String::from_utf8(headers).unwrap();
+                assert!(!headers.contains("session-secret"));
+                assert!(!headers.contains("test-token"));
+                requests.push(headers.lines().next().unwrap().to_string());
+                stream
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            requests
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let events = DanmakuEventSender::new(tx, Default::default());
+        let args = args_from_raw(
+            "12345",
+            &serde_json::json!({
+                "danmaku": {
+                    "token": "test-token",
+                    "cookie": "SESSDATA=session-secret",
+                    "server_host": "edge.invalid",
+                    "server_hosts": ["edge.invalid", "backup.invalid"]
+                }
+            }),
+        )
+        .unwrap();
+
+        let requests = time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = run_loop(events, args, Some(format!("http://{address}"))) => {
+                    panic!("reconnect loop stopped before the next host: {result:?}")
+                }
+                requests = server => requests,
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            requests,
+            [
+                "CONNECT edge.invalid:443 HTTP/1.1",
+                "CONNECT api.bilibili.com:443 HTTP/1.1",
+                "CONNECT api.live.bilibili.com:443 HTTP/1.1",
+                "CONNECT backup.invalid:443 HTTP/1.1",
+            ]
         );
     }
 

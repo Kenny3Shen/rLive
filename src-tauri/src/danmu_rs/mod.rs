@@ -684,7 +684,10 @@ pub async fn connect(
                 source_key.clone(),
                 identity,
                 notice,
-                move |events| bilibili::run_loop(events, args),
+                {
+                    let proxy = proxy.map(str::to_owned);
+                    move |events| bilibili::run_loop(events, args, proxy)
+                },
             );
             Ok(())
         }

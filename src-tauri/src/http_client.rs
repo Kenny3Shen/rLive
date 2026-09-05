@@ -3,7 +3,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use reqwest::{Client, ClientBuilder};
+use reqwest::{Client, ClientBuilder, Url};
 
 use crate::error::{AppError, AppResult};
 
@@ -108,12 +108,90 @@ pub fn default_client() -> Client {
         .clone()
 }
 
+/// 记录请求失败时保留根因和安全的 endpoint，但移除 query、fragment 与 user-info。
+/// Bilibili 的 WBI 参数可能包含短时签名值，不能直接使用 reqwest 的错误字符串。
+pub(crate) fn describe_request_error(error: &reqwest::Error) -> String {
+    let endpoint = error.url().map(safe_request_url);
+    let mut causes = Vec::new();
+    let mut current = std::error::Error::source(error);
+    while let Some(cause) = current {
+        let text = cause.to_string();
+        if !text.is_empty() && !causes.iter().any(|seen| seen == &text) {
+            causes.push(text);
+        }
+        current = cause.source();
+    }
+    let root = if causes.is_empty() {
+        "request failed".to_string()
+    } else {
+        causes.join(": ")
+    };
+    match endpoint {
+        Some(endpoint) => format!("{root} (url={endpoint})"),
+        None => root,
+    }
+}
+
+fn safe_request_url(url: &Url) -> String {
+    let mut safe = url.clone();
+    let _ = safe.set_username("");
+    let _ = safe.set_password(None);
+    safe.set_query(None);
+    safe.set_fragment(None);
+    safe.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    use super::{build_no_redirect_client, client_for_proxy, recording_stream_client_for_proxy};
+    use reqwest::Url;
+
+    use super::{
+        build_no_redirect_client, client_for_proxy, describe_request_error,
+        recording_stream_client_for_proxy,
+    };
+
+    #[test]
+    fn request_error_endpoint_drops_credentials_and_query() {
+        let url =
+            Url::parse("https://user:secret@example.test/path?token=private#fragment").unwrap();
+        assert_eq!(super::safe_request_url(&url), "https://example.test/path");
+    }
+
+    #[tokio::test]
+    async fn request_error_keeps_a_network_root_cause_without_query_values() {
+        struct FailingDns;
+
+        impl reqwest::dns::Resolve for FailingDns {
+            fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+                Box::pin(async {
+                    Err(
+                        std::io::Error::new(std::io::ErrorKind::NotFound, "test DNS lookup failed")
+                            .into(),
+                    )
+                })
+            }
+        }
+
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .dns_resolver(std::sync::Arc::new(FailingDns))
+            .build()
+            .unwrap()
+            .get("http://user:secret@bilibili.invalid/path?token=private#fragment")
+            .header("cookie", "SESSDATA=private")
+            .send()
+            .await
+            .unwrap_err();
+        let text = describe_request_error(&error);
+        assert!(text.contains("test DNS lookup failed"), "{text}");
+        assert!(text.contains("http://bilibili.invalid/path"));
+        assert!(!text.contains("private"));
+        assert!(!text.contains("secret"));
+        assert!(!text.contains("fragment"));
+    }
 
     #[tokio::test]
     async fn no_redirect_client_returns_the_signer_redirect_response() {
