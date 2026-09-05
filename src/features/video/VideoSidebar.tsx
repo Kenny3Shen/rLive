@@ -946,6 +946,11 @@ export function VideoSidebar({
   const isPgc = Boolean(epId);
   const [tab, setTab] = useState<SidebarTab>(isPgc ? "episodes" : "related");
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
+  const [descriptionState, setDescriptionState] = useState<{
+    bvid: string | null;
+    expanded: boolean;
+  }>({ bvid: null, expanded: false });
+  const descriptionExpanded = descriptionState.bvid === bvid && descriptionState.expanded;
   // 用户手动切换过页签后就不再自动改选，见下方的自动切换 effect。
   const tabTouchedRef = useRef(false);
 
@@ -1101,9 +1106,40 @@ export function VideoSidebar({
               </div>
             </div>
             {archive.desc && (
-              <p className="mt-2 line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground max-lg:hidden">
-                {archive.desc}
-              </p>
+              <div className="mt-2 max-lg:hidden">
+                <p
+                  id="video-description"
+                  className={cn(
+                    "whitespace-pre-line text-xs leading-relaxed text-muted-foreground",
+                    !descriptionExpanded && "line-clamp-2",
+                  )}
+                >
+                  {archive.desc}
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  aria-expanded={descriptionExpanded}
+                  aria-controls="video-description"
+                  className="mt-0.5 h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() =>
+                    setDescriptionState((state) => ({
+                      bvid,
+                      expanded: state.bvid === bvid ? !state.expanded : true,
+                    }))
+                  }
+                >
+                  {descriptionExpanded ? "收起简介" : "展开简介"}
+                  <ChevronDown
+                    aria-hidden
+                    className={cn(
+                      "size-3.5 transition-transform",
+                      descriptionExpanded && "rotate-180",
+                    )}
+                  />
+                </Button>
+              </div>
             )}
           </div>
         </section>
