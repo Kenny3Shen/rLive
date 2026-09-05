@@ -435,10 +435,6 @@ function SettingsEntryList({
               ))}
             </div>
           )}
-          {/* 弹窗居中排版下页脚按钮靠右；抽屉内表单直接顺排即可。 */}
-          <div className="flex justify-end">
-            <DrawerClose render={<Button variant="outline" />}>完成</DrawerClose>
-          </div>
         </DrawerContent>
       </Drawer>
     </Field>
