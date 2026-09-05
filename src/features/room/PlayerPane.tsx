@@ -28,6 +28,7 @@ import {
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
+import { readPlayerVolume, rememberPlayerVolume } from "@/shared/playerVolume";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
@@ -582,13 +583,17 @@ export function PlayerPane({
   const playerStageTapRef = useRef<PlayerStageTapState | null>(null);
   const playerStageTapTimerRef = useRef<number | null>(null);
   const lastPlayerStageTapAtRef = useRef(0);
+  // 音量记忆跨会话共享：只读一次 localStorage，作为网页层音量/静音的初值。
+  const [initialAudio] = useState(readPlayerVolume);
   const player = useWebPlayer({
     playUrl,
     siteId,
     quality: qualities[qualityIndex]?.quality ?? null,
     // Android 音量经原生桥由 STREAM_MUSIC 控制；让 WebView 媒体元素保持单位增益，
-    // 避免出现两层音量。
-    initialVolume: androidClient ? 100 : 80,
+    // 避免出现两层音量。也因此 Android 不参与音量记忆：系统媒体音量由 OS 自己
+    // 记住，这里固定 100，读写这份记忆只会污染桌面端。
+    initialVolume: androidClient ? 100 : initialAudio.volume,
+    initialMuted: androidClient ? false : initialAudio.muted,
     sessionKey: roomSessionKey,
     reloadToken,
     onMediaFailure: onPlayerMediaFailure,
@@ -655,6 +660,13 @@ export function PlayerPane({
     },
     [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive],
   );
+
+  // 音量记忆共享给所有播放表面；原生音量生效时真实音量是系统媒体音量，由 OS
+  // 自己记住，这里不落盘以免把 100 写进桌面端的记忆。
+  useEffect(() => {
+    if (nativePlayerControlsActive) return;
+    rememberPlayerVolume(player.volume, player.muted);
+  }, [nativePlayerControlsActive, player.muted, player.volume]);
   /**
    * 键盘调节音量。刻意不复用 `handlePlayerVolumeChange`：它底下的 `changeVolume`
    * 在 video 处于 paused 时会补一次 `play()`（用于协议插件就绪但尚未起播的情况），

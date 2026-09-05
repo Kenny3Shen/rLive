@@ -112,6 +112,21 @@ export function playlistItemFromArchivePage(
   };
 }
 
+/**
+ * 一集播完后做什么。
+ *
+ * 循环播放优先于自动连播：开着它是「就看这一集」的显式意图，不该被连播带走。
+ * 没有下一集时连播退化成停住（进度已在 `ended` 里记满）。
+ */
+export function videoEndedAction(
+  loopPlayback: boolean,
+  autoPlayNext: boolean,
+  hasNext: boolean,
+): "loop" | "next" | "stop" {
+  if (loopPlayback) return "loop";
+  return autoPlayNext && hasNext ? "next" : "stop";
+}
+
 type PlaylistState = {
   /** 当前播放列表。空数组表示无列表（单视频播放）。 */
   items: PlaylistItem[];
@@ -121,6 +136,8 @@ type PlaylistState = {
   reversed: boolean;
   /** 是否自动播放下一集（持久化到本地）。 */
   autoPlayNext: boolean;
+  /** 是否循环播放当前视频（持久化到本地）。优先于自动播放下一集。 */
+  loopPlayback: boolean;
 };
 
 type PlaylistActions = {
@@ -134,6 +151,8 @@ type PlaylistActions = {
   toggleReversed: () => void;
   /** 切换自动播放下一集。 */
   toggleAutoPlayNext: () => void;
+  /** 切换循环播放。 */
+  toggleLoopPlayback: () => void;
   /** 获取下一个播放项（如果有）。 */
   getNextItem: () => PlaylistItem | null;
   /** 获取上一个播放项（如果有）。 */
@@ -149,6 +168,7 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
       currentId: null,
       reversed: false,
       autoPlayNext: true,
+      loopPlayback: false,
 
       setPlaylist: (items, startId) =>
         set({
@@ -175,6 +195,11 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
       toggleAutoPlayNext: () =>
         set((state) => ({
           autoPlayNext: !state.autoPlayNext,
+        })),
+
+      toggleLoopPlayback: () =>
+        set((state) => ({
+          loopPlayback: !state.loopPlayback,
         })),
 
       getNextItem: () => {
@@ -221,6 +246,7 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
       // 只持久化用户偏好，不持久化临时列表状态
       partialize: (state) => ({
         autoPlayNext: state.autoPlayNext,
+        loopPlayback: state.loopPlayback,
         reversed: state.reversed,
       }),
     },

@@ -162,12 +162,21 @@ message DanmakuElem {
 
 ### 顶栏低频工具与控制布局
 
-- 顶栏（`topBar`）右侧只留投屏 `Tv` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）；跳原址/复制链接在底部常驻 Shell。
+- 顶栏（`topBar`）右侧只留投屏 `Cast` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）；跳原址/复制链接在底部常驻 Shell。
+- 全屏时顶栏被舞台吃掉，这批低频入口改由 HUD 右上角的 `⋮` 溢出菜单（`PlayerHudOverflowMenu`，与直播页全屏 HUD 同一组件）承载：投屏 / 复制链接 / 在浏览器中打开三块磁贴（`PlayerToolTile`），点投屏在菜单内展开二级面板（`PlayerToolPanel` + `CastMenu`），正在投屏时磁贴文案变「投屏中」。
+- 顶栏工具与 HUD 菜单共享同一个 `castOpen` 与同一份 `castMenuProps`，因此两处渲染必须互斥：`stageOwnsTopBar = fullscreen || webFullscreen`（与直播页 `stageOwnsRoomTopBar` 同一处缺口）同时决定顶栏是否渲染这份工具、HUD 是否挂载。同时挂载会让一次点击开出两个投屏弹层 —— 画面全屏下两个 `PopoverContent` 都 portal 进舞台（`container` 指向 `stageRef`），叠在画面右上角。
 - 两种全屏相互独立、可叠加（与直播页同语义）：**窗口全屏**（`webFullscreen`，PlayerControls 内置「网页全屏」按钮，`Expand/Shrink` 图标）隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台撑满应用窗口、保留系统窗口栏（最小化/最大化/关闭），Escape 退出；**画面全屏**（`useRecordingPlayerFullscreen` 的元素级/top layer 或桌面原生窗口全屏，「全屏（F）」按钮）盖住一切。两层叠加时 HUD 返回箭头与 Escape 一次只收一层（元素全屏优先）。
 - 控制栏保留高频播放控制与字幕（CC）按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏居中槽位是弹幕输入条（见第五节「弹幕发送」）。
-- 画面全屏或窗口全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头（按层级退出）、中间标题、右侧投屏弹层（`container` 指向 `stageRef`，规避 top layer 压盖）加跳原址镜像。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器。
+- 画面全屏或窗口全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头（按层级退出）、中间标题、右上角 `⋮` 溢出菜单（见上）。菜单的 `portalContainer` 只在画面全屏时指向 `stageRef`（规避 top layer 压盖）；窗口全屏没有这一层，走默认 portal 反而不会被舞台的 `overflow-hidden` 裁掉。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器；菜单开着时通过 `onOverlayInteractionChange` 钉住 chrome。
 - 底部常驻 Shell（`footer`，与直播页底部操作行同一画法：`border-t` + `bg-sidebar/90` + 安全区 padding，右对齐）：「复制链接」（`Link2`，`copyText` 写 B 站原址 + toast）与「在浏览器中打开」（`ExternalLink`，最右，`tauri-plugin-opener` 直跳系统浏览器、失败回退 `window.open`）。所有断点常驻（视频页没有直播页的移动端溢出菜单可承接），触屏加高 `max-md:h-11`。
 
+
+### 播放偏好（循环播放与音量记忆）
+
+- 控制栏「播放设置」弹层分三段：清晰度、倍速、播放偏好。播放偏好里「循环播放」常驻（单视频也要能循环），「自动播放下一集」「倒序播放」只在列表多于一项时出现；三项都由 `playlistStore` 的 `partialize` 持久化到 localStorage `video-playlist`。
+- 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext)` 决定，优先级固定：循环 > 连播 > 停住。循环是「就看这一集」的显式意图，不该被连播带走；没有下一集时连播退化成停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效。
+- 循环重播走原生 `media.currentTime = 0` + `play()`（与 seek 同一条 DASH 路径）；进度已在 `ended` 里按总时长记满，观看历史仍认定「已看完」，下次进入从头播放。
+- 音量与静音由 `src/shared/playerVolume.ts` 记在 localStorage `rlive-player-volume`，视频页、直播页、IPTV 播放页与录制回放共享同一份：初值取 `readPlayerVolume()`，音量/静音状态变化写 `rememberPlayerVolume()`（同值不重渲染，一次拖动最多写它经过的档位数，不需要节流）。不参与的两处：多画面按槽位各存一份音量（副画面默认静音是角色语义）；Android 真实音量是系统媒体音量（由 OS 记住），网页层固定 100 且不落盘，否则会把 100 写进桌面端的记忆。
 
 ### 换集过渡与 seek 边界
 

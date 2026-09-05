@@ -12,13 +12,13 @@ import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-quer
 import {
   Captions,
   CaptionsOff,
+  Cast,
   Check,
   ChevronLeft,
   ExternalLink,
   FastForward,
   Home,
   Link2,
-  Tv,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,11 @@ import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import { copyText } from "@/shared/clipboard";
 import { canNavigateBackInApp } from "@/shared/appHistory";
+import {
+  DEFAULT_PLAYER_VOLUME,
+  readPlayerVolume,
+  rememberPlayerVolume,
+} from "@/shared/playerVolume";
 import { cn } from "@/lib/utils";
 import {
   createXgPlayer,
@@ -78,6 +83,11 @@ import {
   showPlayerControlsCenterSlot,
 } from "@/shared/components/player/PlayerControls";
 import {
+  PlayerHudOverflowMenu,
+  PlayerToolPanel,
+  PlayerToolTile,
+} from "@/shared/components/player/PlayerHudMenu";
+import {
   glassOptionClass,
   glassOptionSelectedClass,
   glassPanelClass,
@@ -102,6 +112,7 @@ import {
   playlistContainsCurrentItem,
   playlistItemFromArchivePage,
   playlistItemFromSeasonEpisode,
+  videoEndedAction,
   type PlaylistItem,
 } from "./playlistStore";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -162,17 +173,19 @@ export function VideoPlayerPage() {
   const speedHoldRef = useRef(false);
   const suppressClickRef = useRef(false);
   const speedHoldStartRef = useRef<{ x: number; y: number } | null>(null);
-  const volumeRef = useRef(80);
-  const mutedRef = useRef(false);
-  const previousVolumeRef = useRef(80);
+  /** 上次记住的音量与静音态：所有会话级播放表面共享一份（见 shared/playerVolume）。 */
+  const [initialAudio] = useState(readPlayerVolume);
+  const volumeRef = useRef(initialAudio.volume);
+  const mutedRef = useRef(initialAudio.muted);
+  const previousVolumeRef = useRef(initialAudio.volume);
   const sliderTargetRef = useRef<number | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [waiting, setWaiting] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [paused, setPaused] = useState(true);
-  const [muted, setMuted] = useState(false);
-  const [volume, setVolume] = useState(80);
+  const [muted, setMuted] = useState(initialAudio.muted);
+  const [volume, setVolume] = useState(initialAudio.volume);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedTime, setBufferedTime] = useState(0);
@@ -188,8 +201,13 @@ export function VideoPlayerPage() {
   const [audioOnly, setAudioOnly] = useState(false);
   /** 画中画进出状态（监听媒体元素事件，WebView2 支持；Android WebView 无此 API）。 */
   const [pipActive, setPipActive] = useState(false);
-  /** 投屏与 CC 字幕弹层的开关态。 */
+  /** 投屏面板与 CC 字幕弹层的开关态。投屏面板窗口化时是顶栏 Popover，
+   *  全屏时是 HUD 溢出菜单里的二级面板 —— 两者互斥（见 `stageOwnsTopBar`）。 */
   const [castOpen, setCastOpen] = useState(false);
+  /** 全屏 HUD 右上角 `⋮` 溢出菜单的开关态（与直播页 HUD 同一形态）。 */
+  const [hudMenuOpen, setHudMenuOpen] = useState(false);
+  /** 正在投屏的设备名（null = 无会话），供入口磁贴展示「投屏中」。 */
+  const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const [subtitleOpen, setSubtitleOpen] = useState(false);
   /** 窗口全屏（应用内全屏）：隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台
    *  撑满应用窗口，但保留系统窗口栏（最小化/最大化/关闭），与直播页的
@@ -765,8 +783,18 @@ export function VideoPlayerPage() {
       // 播完记满进度：历史卡的进度条画到底，续播判定据此认定「已看完」并从头播。
       const total = totalDuration();
       reportProgress(total > 0 ? total : media.currentTime, true);
-      // 自动播放下一集
-      if (playlistStore.autoPlayNext && nextItem) {
+      // 偏好可能在播放期间被改，读 store 快照而不是播放器挂载时的闭包值。
+      const { autoPlayNext, loopPlayback } = usePlaylistStore.getState();
+      const action = videoEndedAction(loopPlayback, autoPlayNext, nextItem != null);
+      if (action === "loop") {
+        // 循环播放：从头重播当前集（DASH 的 seek 同样走原生 currentTime）。
+        media.currentTime = 0;
+        void media.play().catch(() => {
+          // 自动重播被浏览器策略拦下时留在暂停态，用户点一下即可。
+        });
+        return;
+      }
+      if (action === "next" && nextItem) {
         const target = nextItem;
         setTimeout(() => {
           if (cancelled) return;
@@ -913,6 +941,12 @@ export function VideoPlayerPage() {
     }
   }, []);
 
+  // 音量记忆：状态每变一档就落盘。同一个值不会触发重渲染，因此一次拖动最多
+  // 写它经过的档位数，不需要额外节流。
+  useEffect(() => {
+    rememberPlayerVolume(volume, muted);
+  }, [muted, volume]);
+
   // 倍速直接写到媒体元素上；换源（新播放地址）后重时应用一次。
   useEffect(() => {
     const media = videoRef.current;
@@ -1034,7 +1068,7 @@ export function VideoPlayerPage() {
   const toggleMute = useCallback(() => {
     const media = videoRef.current;
     if (mutedRef.current || volumeRef.current === 0) {
-      const restored = previousVolumeRef.current || 80;
+      const restored = previousVolumeRef.current || DEFAULT_PLAYER_VOLUME;
       volumeRef.current = restored;
       mutedRef.current = false;
       setVolume(restored);
@@ -1296,8 +1330,26 @@ export function VideoPlayerPage() {
 
   const title = params?.title || "视频播放";
 
-  /** 顶栏右侧的低频工具（投屏）：跳原址/复制链接迁到底部常驻 Shell，
-   *  这里只留旁观类入口，与直播页顶栏右侧的定时/投屏工具同一布局语义。 */
+  /**
+   * 舞台是否已经吃掉了顶栏：画面全屏把顶栏盖在固定舞台层之下，窗口全屏直接把它
+   * 从布局里卸载 —— 两种情况下顶栏工具都得由 HUD 补回画面内（与直播页
+   * `stageOwnsRoomTopBar` 判的是同一处缺口）。
+   */
+  const stageOwnsTopBar = fullscreen.fullscreen || webFullscreen;
+
+  /** 投屏源：顶栏 Popover 与 HUD 溢出菜单里的面板共用同一份参数，
+   *  两处互斥渲染（见 `stageOwnsTopBar`），因此不会出现两个投屏会话入口。 */
+  const castMenuProps = {
+    castUrl: castQuery.data?.url ?? null,
+    headers: castQuery.data?.headers ?? {},
+    title: params?.title ?? "视频",
+    variant: "overlay" as const,
+    onCastingDeviceChange: setCastingDevice,
+  };
+
+  /** 顶栏右侧的低频工具（投屏）：跳原址/复制链接在底部常驻 Shell，
+   *  这里只留旁观类入口，与直播页顶栏右侧的定时/投屏工具同一布局语义。
+   *  全屏时顶栏被舞台吃掉，同一批入口改由 HUD 的 `⋮` 溢出菜单承载。 */
   const topBarTools = (
     <div className="flex items-center gap-1">
       <Popover open={castOpen} onOpenChange={setCastOpen}>
@@ -1312,10 +1364,9 @@ export function VideoPlayerPage() {
             />
           }
         >
-          <Tv data-icon="inline-start" aria-hidden className="size-4" />
+          <Cast data-icon="inline-start" aria-hidden className="size-4" />
         </PopoverTrigger>
         <PopoverContent
-          container={fullscreen.fullscreen ? stageRef : undefined}
           side="bottom"
           align="end"
           collisionPadding={12}
@@ -1323,13 +1374,7 @@ export function VideoPlayerPage() {
           className={cn("w-72 overflow-y-auto p-1.5", glassPanelClass())}
         >
           <PopoverTitle className={cn("px-2 py-1", glassTitleClass())}>投屏</PopoverTitle>
-          <CastMenu
-            castUrl={castQuery.data?.url ?? null}
-            headers={castQuery.data?.headers ?? {}}
-            title={params?.title ?? "视频"}
-            variant="overlay"
-            showHeader={false}
-          />
+          <CastMenu {...castMenuProps} showHeader={false} />
         </PopoverContent>
       </Popover>
     </div>
@@ -1376,7 +1421,7 @@ export function VideoPlayerPage() {
           {title}
         </p>
       </div>
-      <div className="absolute right-3 z-10">{topBarTools}</div>
+      {!stageOwnsTopBar && <div className="absolute right-3 z-10">{topBarTools}</div>}
     </header>
   );
 
@@ -1549,73 +1594,30 @@ export function VideoPlayerPage() {
     </div>
   );
 
-  const playlistSettings =
-    playlistStore.items.length > 1 ? (
-      <div className="flex flex-col gap-1 px-1 py-1">
-        <button
-          type="button"
-          onClick={() => playlistStore.toggleAutoPlayNext()}
-          className="flex min-h-9 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
-        >
-          <div
-            className={cn(
-              "flex size-4 shrink-0 items-center justify-center rounded border-2 transition-colors",
-              playlistStore.autoPlayNext
-                ? "border-primary bg-primary"
-                : "border-muted-foreground/50",
-            )}
-          >
-            {playlistStore.autoPlayNext && (
-              <svg
-                viewBox="0 0 12 12"
-                fill="none"
-                className="size-3 text-primary-foreground"
-                aria-hidden="true"
-              >
-                <path
-                  d="M10 3L4.5 8.5L2 6"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
-          </div>
-          <span className="flex-1">自动播放下一集</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => playlistStore.toggleReversed()}
-          className="flex min-h-9 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
-        >
-          <div
-            className={cn(
-              "flex size-4 shrink-0 items-center justify-center rounded border-2 transition-colors",
-              playlistStore.reversed ? "border-primary bg-primary" : "border-muted-foreground/50",
-            )}
-          >
-            {playlistStore.reversed && (
-              <svg
-                viewBox="0 0 12 12"
-                fill="none"
-                className="size-3 text-primary-foreground"
-                aria-hidden="true"
-              >
-                <path
-                  d="M10 3L4.5 8.5L2 6"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
-          </div>
-          <span className="flex-1">倒序播放</span>
-        </button>
-      </div>
-    ) : undefined;
+  /** 播放偏好开关：循环播放常驻（单视频也要能循环），连播相关项只有多集时才有意义。 */
+  const playbackToggles = (
+    <div className="flex flex-col gap-1 px-1 py-1">
+      <PlaybackSettingRow
+        label="循环播放"
+        checked={playlistStore.loopPlayback}
+        onToggle={playlistStore.toggleLoopPlayback}
+      />
+      {playlistStore.items.length > 1 && (
+        <>
+          <PlaybackSettingRow
+            label="自动播放下一集"
+            checked={playlistStore.autoPlayNext}
+            onToggle={playlistStore.toggleAutoPlayNext}
+          />
+          <PlaybackSettingRow
+            label="倒序播放"
+            checked={playlistStore.reversed}
+            onToggle={playlistStore.toggleReversed}
+          />
+        </>
+      )}
+    </div>
+  );
 
   const fatalError = playInfoQuery.isError
     ? playInfoQuery.error
@@ -1723,7 +1725,7 @@ export function VideoPlayerPage() {
             )}
           </div>
 
-          {(fullscreen.fullscreen || webFullscreen) && (
+          {stageOwnsTopBar && (
             <div
               ref={hudRef}
               data-player-hud
@@ -1763,23 +1765,55 @@ export function VideoPlayerPage() {
               <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
                 {title}
               </p>
-              {topBarTools}
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="在浏览器中打开原始地址"
-                      disabled={!originalUrl}
-                      onClick={openOriginalUrl}
-                    />
-                  }
-                >
-                  <ExternalLink data-icon="inline-start" aria-hidden className="size-4" />
-                </TooltipTrigger>
-                <TooltipContent>在浏览器中打开</TooltipContent>
-              </Tooltip>
+              <PlayerHudOverflowMenu
+                label="更多操作"
+                title="播放操作"
+                open={hudMenuOpen}
+                onOpenChange={(open) => {
+                  setHudMenuOpen(open);
+                  // 菜单开着时空闲计时器不能把 chrome 淡出。
+                  setOverlayInteractionOpen(open);
+                }}
+                compact={compact}
+                // 只有画面全屏需要把菜单塞进舞台（它在 top layer，portal 到 body 会被压住）；
+                // 窗口全屏没有这层，走默认 portal 反而不会被舞台的 overflow-hidden 裁掉。
+                portalContainer={fullscreen.fullscreen ? stageRef : undefined}
+              >
+                <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
+                  <PlayerToolTile
+                    icon={Cast}
+                    label={castingDevice ? "投屏中" : "投屏"}
+                    pressed={castOpen || castingDevice != null}
+                    active={castingDevice != null}
+                    onClick={() => setCastOpen((open) => !open)}
+                  />
+                  <PlayerToolTile
+                    icon={Link2}
+                    label="复制链接"
+                    disabled={!originalUrl}
+                    onClick={() => {
+                      setHudMenuOpen(false);
+                      setOverlayInteractionOpen(false);
+                      copyOriginalUrl();
+                    }}
+                  />
+                  <PlayerToolTile
+                    icon={ExternalLink}
+                    label="在浏览器中打开"
+                    disabled={!originalUrl}
+                    onClick={() => {
+                      setHudMenuOpen(false);
+                      setOverlayInteractionOpen(false);
+                      openOriginalUrl();
+                    }}
+                  />
+                </div>
+                {castOpen && (
+                  <PlayerToolPanel>
+                    <CastMenu {...castMenuProps} />
+                  </PlayerToolPanel>
+                )}
+              </PlayerHudOverflowMenu>
             </div>
           )}
 
@@ -1846,12 +1880,8 @@ export function VideoPlayerPage() {
               playbackSettings={
                 <>
                   {rateSettings}
-                  {playlistSettings && (
-                    <>
-                      <Separator className="my-1 max-md:my-0.5" />
-                      {playlistSettings}
-                    </>
-                  )}
+                  <Separator className="my-1 max-md:my-0.5" />
+                  {playbackToggles}
                 </>
               }
               playbackSettingsTitle="播放设置"
@@ -1920,8 +1950,8 @@ export function VideoPlayerPage() {
         )}
       </main>
       {/* 底部常驻 Shell（与直播页底部操作行同一画法）：跳原址与复制链接
-          的家。全屏（元素级 top layer）时被舞台盖住，HUD 里另有跳原址镜像；
-          窗口全屏时从布局卸载。 */}
+          的家。全屏（元素级 top layer）时被舞台盖住，两个入口在 HUD 的 `⋮`
+          溢出菜单里另有镜像；窗口全屏时从布局卸载。 */}
       {!webFullscreen && (
         <footer className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
           <Button
@@ -1947,5 +1977,48 @@ export function VideoPlayerPage() {
         </footer>
       )}
     </div>
+  );
+}
+
+/**
+ * 播放设置面板里的勾选行。三个播放偏好共用同一画法，勾选框是内联 SVG
+ * 而不是 `Switch`：面板走的是紧凑列表形态，与倍速档位并排。
+ */
+function PlaybackSettingRow({
+  label,
+  checked,
+  onToggle,
+}: {
+  label: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={checked}
+      className="flex min-h-9 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
+    >
+      <div
+        className={cn(
+          "flex size-4 shrink-0 items-center justify-center rounded border-2 transition-colors",
+          checked ? "border-primary bg-primary" : "border-muted-foreground/50",
+        )}
+      >
+        {checked && (
+          <svg viewBox="0 0 12 12" fill="none" className="size-3 text-primary-foreground" aria-hidden="true">
+            <path
+              d="M10 3L4.5 8.5L2 6"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+      </div>
+      <span className="flex-1">{label}</span>
+    </button>
   );
 }

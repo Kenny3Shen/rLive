@@ -15,6 +15,11 @@ import { PlayerControls } from "@/shared/components/player/PlayerControls";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import {
+  DEFAULT_PLAYER_VOLUME,
+  readPlayerVolume,
+  rememberPlayerVolume,
+} from "@/shared/playerVolume";
 import type { SiteId } from "@/shared/types/live";
 import {
   createXgPlayer,
@@ -93,9 +98,10 @@ export function RecordingPlayer({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<XgPlayerInstance | null>(null);
-  const volumeRef = useRef(80);
-  const mutedRef = useRef(false);
-  const previousVolumeRef = useRef(80);
+  const [initialAudio] = useState(readPlayerVolume);
+  const volumeRef = useRef(initialAudio.volume);
+  const mutedRef = useRef(initialAudio.muted);
+  const previousVolumeRef = useRef(initialAudio.volume);
   const playbackRateRef = useRef(1);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
@@ -105,8 +111,8 @@ export function RecordingPlayer({
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(true);
-  const [muted, setMuted] = useState(false);
-  const [volume, setVolume] = useState(80);
+  const [muted, setMuted] = useState(initialAudio.muted);
+  const [volume, setVolume] = useState(initialAudio.volume);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedTime, setBufferedTime] = useState(0);
@@ -522,7 +528,7 @@ export function RecordingPlayer({
   const toggleMute = useCallback(() => {
     const video = videoRef.current;
     if (mutedRef.current || volumeRef.current === 0) {
-      const restoredVolume = previousVolumeRef.current || 80;
+      const restoredVolume = previousVolumeRef.current || DEFAULT_PLAYER_VOLUME;
       volumeRef.current = restoredVolume;
       mutedRef.current = false;
       setVolume(restoredVolume);
@@ -539,6 +545,11 @@ export function RecordingPlayer({
     setMuted(true);
     if (video) video.muted = true;
   }, []);
+
+  // 音量记忆共享给所有播放表面：录制页的音量变化也写回同一份持久记忆。
+  useEffect(() => {
+    rememberPlayerVolume(volume, muted);
+  }, [muted, volume]);
 
   const changePlaybackRate = useCallback((nextRate: number) => {
     if (!Number.isFinite(nextRate) || nextRate <= 0) return;

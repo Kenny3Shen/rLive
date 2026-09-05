@@ -20,6 +20,7 @@ import {
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { readPlayerVolume, rememberPlayerVolume } from "@/shared/playerVolume";
 import type { PlayUrl } from "@/shared/types/live";
 import type { PlayerEvent } from "@/shared/types/player";
 import { cn } from "@/lib/utils";
@@ -184,11 +185,15 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     setStatus((current) => (current === "playing" ? "ready" : current));
   }, []);
 
+  // 音量记忆跨会话共享：只读一次 localStorage，作为网页层音量/静音的初值。
+  const [initialAudio] = useState(readPlayerVolume);
   const player = useMediaLifecycle({
     playUrl: transportEnabled ? playUrl : null,
     sessionKey: channelId ? `iptv:${channelId}` : "iptv:none",
-    initialVolume: androidClient ? 100 : 80,
-    initialMuted: false,
+    // Android 音量经原生桥由 STREAM_MUSIC 控制；让 WebView 媒体元素保持单位增益，
+    // 避免出现两层音量。也因此 Android 不参与音量记忆：系统媒体音量由 OS 自己记住。
+    initialVolume: androidClient ? 100 : initialAudio.volume,
+    initialMuted: androidClient ? false : initialAudio.muted,
     reloadToken: iptvLifecycleReloadToken(reloadToken, reconnectToken),
     onMediaFailure: handleMediaFailure,
     onReady: handleReady,
@@ -223,6 +228,13 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     if (nativePlayerControlsActive && androidPlayerControls.toggleMediaMute()) return;
     toggleMute();
   }, [androidPlayerControls, nativePlayerControlsActive, toggleMute]);
+
+  // 音量记忆共享给所有播放表面；原生音量生效时真实音量是系统媒体音量，由 OS
+  // 自己记住，这里不落盘以免把 100 写进桌面端的记忆。
+  useEffect(() => {
+    if (nativePlayerControlsActive) return;
+    rememberPlayerVolume(player.volume, player.muted);
+  }, [nativePlayerControlsActive, player.muted, player.volume]);
 
   useScreenWakeLock(status === "playing" && !audioOnly);
   useAndroidFullscreenOrientation({
