@@ -135,7 +135,7 @@ export function VideoSearchBar({ className }: { className?: string }) {
           )}
           {/* 搜索历史下拉：只在空态（尚未出结果）弹出，绝不会盖住结果卡片。 */}
           {showHistory && history.length > 0 && !keyword && (
-            <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-border bg-popover shadow-lg">
+            <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-lg">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <span className="text-xs text-muted-foreground">搜索历史</span>
                 <button
