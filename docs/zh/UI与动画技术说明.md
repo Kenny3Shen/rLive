@@ -159,6 +159,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - 中途抓住正在收尾的页面时从其当前实际像素位置（`DOMMatrixReadOnly`）接管，不回跳。相邻平台页为无缝预览保持挂载，但用 layout/paint/style containment 隔离；完全离屏页的 CSS animation 暂停。
 - Slider、Input、Textarea、Select、可编辑区域与 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管；已识别 swipe 后短暂抑制合成 click。
 - 开始新手势、禁用 hook 或卸载时必须取消在飞 Animation、清兜底定时器并清除 transform / `will-change`；取消收尾动画前先把当前像素位置写回 inline style。
+- 移动层的 `transform` 会让它成为 `position: fixed` 后代的包含块：`track` 连静止时都带着 `translate3d(-活动索引 × width, 0, 0)`，落在其中的固定定位层会被整层平移（RefreshFab 曾随内容滚走，关注页 dnd-kit `DragOverlay` 曾偏移一个 track 左上角）。这类层必须 `createPortal` 到 `document.body`，不能只靠 `position: fixed`。
 
 ### 4.6 `useLongPress`：触摸长按
 
