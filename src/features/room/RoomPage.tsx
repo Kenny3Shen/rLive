@@ -48,7 +48,13 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Drawer, DrawerContent, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerScope,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -59,6 +65,14 @@ import { useMultiRoomStore } from "../multi-room/multiRoomStore";
 import { cn } from "@/lib/utils";
 
 export function RoomPage() {
+  return (
+    <DrawerScope>
+      <RoomPageContent />
+    </DrawerScope>
+  );
+}
+
+function RoomPageContent() {
   const { siteId: siteParam, roomId: roomParam } = useParams<{
     siteId: string;
     roomId: string;

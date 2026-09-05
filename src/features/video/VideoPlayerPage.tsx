@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
@@ -160,6 +161,14 @@ function bufferedRangeEnd(video: HTMLVideoElement): number {
  * 可拖进度的本地代理媒体。差别只在协议内核（DASH）与弹幕调度源。
  */
 export function VideoPlayerPage() {
+  return (
+    <DrawerScope>
+      <VideoPlayerPageContent />
+    </DrawerScope>
+  );
+}
+
+function VideoPlayerPageContent() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const params = parseVideoPlayParams(searchParams);
@@ -1970,7 +1979,7 @@ export function VideoPlayerPage() {
             className={cn(
               // 与直播播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度，
               // 窄屏则如直播的紧凑侧栏一样列在播放器下方。
-              "flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar",
+              "relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar",
               "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]",
             )}
           >
@@ -1991,6 +2000,7 @@ export function VideoPlayerPage() {
                 onSeek: (positionMs) => seekTo(positionMs / 1000),
               }}
             />
+            <DrawerViewport active={!fullscreen.fullscreen} />
           </aside>
         )}
       </main>

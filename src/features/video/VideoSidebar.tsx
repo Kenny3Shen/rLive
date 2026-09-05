@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
+  ChevronLeft,
   MessageSquare,
   MessageSquareText,
   Play,
@@ -12,10 +13,14 @@ import {
   ListMusic,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
@@ -92,6 +97,7 @@ function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): 
   while (rest) {
     let hit: { index: number; text: string; url: string } | null = null;
     for (const emote of emotes) {
+      if (!emote.text) continue;
       const index = rest.indexOf(emote.text);
       if (index !== -1 && (!hit || index < hit.index)) {
         hit = { index, text: emote.text, url: emote.url };
@@ -117,7 +123,13 @@ function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): 
   return parts;
 }
 
-function CommentBody({ comment }: { comment: VideoComment }) {
+function CommentBody({
+  comment,
+  onOpenDetail,
+}: {
+  comment: VideoComment;
+  onOpenDetail?: () => void;
+}) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
 
@@ -128,15 +140,27 @@ function CommentBody({ comment }: { comment: VideoComment }) {
 
   return (
     <>
-      <p className="whitespace-pre-line break-words text-[13px] leading-relaxed">
-        {renderCommentMessage(comment.message, comment.emotes)}
-      </p>
+      {onOpenDetail ? (
+        <button
+          type="button"
+          onClick={onOpenDetail}
+          aria-label={`查看 ${comment.uname} 的评论详情`}
+          className="block w-full rounded-sm text-left text-[13px] leading-relaxed whitespace-pre-line break-words [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          {renderCommentMessage(comment.message, comment.emotes) || "图片评论"}
+        </button>
+      ) : (
+        <p className="whitespace-pre-line break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">
+          {renderCommentMessage(comment.message, comment.emotes)}
+        </p>
+      )}
       {comment.pictures.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {comment.pictures.map((src, index) => (
             <button
               key={src}
               type="button"
+              aria-label={`查看评论图片 ${index + 1}`}
               onClick={() => handleImageClick(index)}
               className="group relative overflow-hidden rounded-md transition-opacity hover:opacity-90"
             >
@@ -164,7 +188,15 @@ function CommentBody({ comment }: { comment: VideoComment }) {
   );
 }
 
-function CommentRow({ comment }: { comment: VideoComment }) {
+function CommentRow({
+  comment,
+  onOpenDetail,
+  isThreadAuthor = false,
+}: {
+  comment: VideoComment;
+  onOpenDetail?: () => void;
+  isThreadAuthor?: boolean;
+}) {
   return (
     <div className="flex gap-2.5">
       {comment.avatar ? (
@@ -184,6 +216,7 @@ function CommentRow({ comment }: { comment: VideoComment }) {
           <span className="truncate text-[13px] font-medium text-foreground/90">
             {comment.uname}
           </span>
+          {isThreadAuthor && <Badge variant="secondary">楼主</Badge>}
           {comment.level > 0 && (
             <span className="shrink-0 rounded-sm bg-muted px-1 text-[10px] leading-4 text-muted-foreground">
               Lv{comment.level}
@@ -194,7 +227,7 @@ function CommentRow({ comment }: { comment: VideoComment }) {
           {formatRelativeTime(comment.ctime)}
         </div>
         <div className="mt-1">
-          <CommentBody comment={comment} />
+          <CommentBody comment={comment} onOpenDetail={onOpenDetail} />
         </div>
         <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
           <ThumbsUp className="size-3" aria-hidden />
@@ -205,21 +238,77 @@ function CommentRow({ comment }: { comment: VideoComment }) {
   );
 }
 
-/** 一条一级评论 + 可展开的二级回复。 */
-function CommentThread({ aid, comment }: { aid: string; comment: VideoComment }) {
-  const [expanded, setExpanded] = useState(false);
+function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDetail: () => void }) {
+  return (
+    <button
+      type="button"
+      className="block w-full px-2 py-1.5 text-left text-xs leading-relaxed transition-colors hover:bg-muted/70 focus-visible:outline-2 focus-visible:outline-ring"
+      onClick={onOpenDetail}
+    >
+      <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
+        <span className="font-medium text-primary/90">{reply.uname}</span>
+        <span className="text-muted-foreground">： </span>
+        <span className="text-foreground/80">
+          {renderCommentMessage(reply.message, reply.emotes)}
+        </span>
+        {reply.pictures.length > 0 && <span className="text-muted-foreground"> [图片]</span>}
+      </span>
+    </button>
+  );
+}
+
+/** 一条一级评论与 PiliPlus 风格的二级回复预览。 */
+function CommentThread({
+  comment,
+  onOpenDetail,
+}: {
+  comment: VideoComment;
+  onOpenDetail: () => void;
+}) {
+  const previewReplies = comment.replies.slice(0, 3);
+
+  return (
+    <div className="border-b border-border/60 py-3 last:border-b-0">
+      <CommentRow comment={comment} onOpenDetail={onOpenDetail} />
+      {(comment.rcount > 0 || previewReplies.length > 0) && (
+        <div className="mt-2 pl-10.5">
+          <div className="overflow-hidden rounded-md bg-muted/40 py-1">
+            {previewReplies.map((reply) => (
+              <ReplyPreview key={reply.rpid} reply={reply} onOpenDetail={onOpenDetail} />
+            ))}
+            {previewReplies.length < comment.rcount && (
+              <button
+                type="button"
+                className="w-full px-2 py-1.5 text-left text-xs text-primary/90 hover:bg-muted/70 focus-visible:outline-2 focus-visible:outline-ring"
+                onClick={onOpenDetail}
+              >
+                共 {formatOnline(comment.rcount)} 条回复
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommentReplies({ aid, comment }: { aid: string; comment: VideoComment }) {
   const repliesQuery = useInfiniteQuery({
     queryKey: ["video_comment_replies", aid, comment.rpid],
-    enabled: expanded,
     initialPageParam: 1,
     queryFn: ({ pageParam }) => videoGetCommentReplies(aid, comment.rpid, pageParam),
     getNextPageParam: (lastPage, _, lastPageParam) =>
       lastPage.has_more ? lastPageParam + 1 : undefined,
   });
-  // 主接口自带的预览（前 2-3 条）先展示，翻页结果按 rpid 去重后接在后面。
-  const fetched = repliesQuery.data?.pages.flatMap((page) => page.items) ?? [];
-  const previewRpids = new Set(comment.replies.map((reply) => reply.rpid));
-  const replies = [...comment.replies, ...fetched.filter((reply) => !previewRpids.has(reply.rpid))];
+  // 完整列表沿接口顺序展示，预览不插入分页数据，避免重复或打乱楼层顺序。
+  const replies = Array.from(
+    new Map(
+      repliesQuery.data?.pages.flatMap((page) =>
+        page.items.map((reply) => [reply.rpid, reply] as const),
+      ),
+    ).values(),
+  );
+  const allCount = repliesQuery.data?.pages[0]?.all_count ?? comment.rcount;
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     hasNextPage: repliesQuery.hasNextPage,
     isFetchingNextPage: repliesQuery.isFetchingNextPage,
@@ -228,40 +317,60 @@ function CommentThread({ aid, comment }: { aid: string; comment: VideoComment })
   });
 
   return (
-    <div className="border-b border-border/60 py-3 last:border-b-0">
-      <CommentRow comment={comment} />
-      {comment.rcount > 0 && (
-        <div className="mt-1 pl-10.5">
-          <button
-            type="button"
-            className="text-xs text-primary/90 hover:underline"
-            onClick={() => setExpanded((value) => !value)}
-          >
-            {expanded ? "收起回复" : `展开 ${comment.rcount} 条回复`}
-          </button>
-          {expanded && (
-            <div className="mt-2 flex flex-col gap-2.5 rounded-lg bg-muted/40 p-2.5">
-              {repliesQuery.isPending && comment.replies.length === 0 ? (
-                <Spinner className="mx-auto size-4" aria-label="正在加载回复" />
-              ) : repliesQuery.isError && replies.length === 0 ? (
-                <p className="text-xs text-muted-foreground">回复加载失败</p>
-              ) : (
-                replies.map((reply) => <CommentRow key={reply.rpid} comment={reply} />)
-              )}
-              <div ref={loadMoreRef}>
-                {repliesQuery.isFetchingNextPage && (
-                  <Spinner className="mx-auto size-4" aria-label="正在加载更多回复" />
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div className="border-b border-border px-4 py-4">
+        <CommentRow comment={comment} isThreadAuthor />
+      </div>
+      <div className="border-b border-border/60 px-4 py-3 text-xs text-muted-foreground">
+        全部回复 {formatOnline(allCount)}
+      </div>
+      {repliesQuery.isPending ? (
+        <div className="flex justify-center py-8">
+          <Spinner aria-label="正在加载回复" />
+        </div>
+      ) : repliesQuery.isError && !repliesQuery.data ? (
+        <div className="p-4">
+          <ErrorState
+            error={repliesQuery.error}
+            title="回复加载失败"
+            onRetry={() => void repliesQuery.refetch()}
+          />
+        </div>
+      ) : replies.length === 0 ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>暂无回复</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <div className="px-4">
+          {replies.map((reply) => (
+            <div key={reply.rpid} className="border-b border-border/60 py-4 last:border-b-0">
+              <CommentRow
+                comment={reply}
+                isThreadAuthor={Boolean(
+                  comment.mid && comment.mid !== "0" && reply.mid === comment.mid,
                 )}
-                {!supportsIntersectionObserver &&
-                  repliesQuery.hasNextPage &&
-                  !repliesQuery.isFetchingNextPage && (
-                    <Button variant="ghost" size="sm" className="w-full" onClick={() => loadMore()}>
-                      加载更多回复
-                    </Button>
-                  )}
-              </div>
+              />
             </div>
-          )}
+          ))}
+          <div ref={loadMoreRef} className="flex min-h-14 items-center justify-center">
+            {repliesQuery.isFetchingNextPage ? (
+              <Spinner aria-label="正在加载更多回复" />
+            ) : repliesQuery.isFetchNextPageError ? (
+              <Button variant="ghost" size="sm" onClick={() => loadMore(true)}>
+                重试加载更多回复
+              </Button>
+            ) : repliesQuery.hasNextPage ? (
+              !supportsIntersectionObserver && (
+                <Button variant="ghost" size="sm" onClick={() => loadMore()}>
+                  加载更多回复
+                </Button>
+              )
+            ) : (
+              <span className="text-xs text-muted-foreground">没有更多回复了</span>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -271,6 +380,7 @@ function CommentThread({ aid, comment }: { aid: string; comment: VideoComment })
 /** 评论列表：排序切换 + 游标翻页。 */
 function CommentsPanel({ aid }: { aid: string }) {
   const [mode, setMode] = useState(3);
+  const [selectedComment, setSelectedComment] = useState<VideoComment | null>(null);
   const commentsQuery = useInfiniteQuery({
     queryKey: ["video_comments", aid, mode],
     enabled: aid !== "",
@@ -282,7 +392,7 @@ function CommentsPanel({ aid }: { aid: string }) {
   const comments = pages.flatMap((page) => page.items);
   const allCount = pages[0]?.all_count ?? 0;
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
-    hasNextPage: commentsQuery.hasNextPage,
+    hasNextPage: commentsQuery.hasNextPage && selectedComment === null,
     isFetchingNextPage: commentsQuery.isFetchingNextPage,
     isFetchNextPageError: commentsQuery.isFetchNextPageError,
     fetchNextPage: () => commentsQuery.fetchNextPage(),
@@ -298,24 +408,20 @@ function CommentsPanel({ aid }: { aid: string }) {
         <span className="text-xs text-muted-foreground">
           {allCount > 0 ? `共 ${formatOnline(allCount)} 条` : "评论"}
         </span>
-        <div className="flex gap-1">
+        <ToggleGroup
+          size="sm"
+          value={[String(mode)]}
+          onValueChange={(values) => {
+            if (values[0]) setMode(Number(values[0]));
+          }}
+          aria-label="评论排序"
+        >
           {sortModes.map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={mode === value}
-              onClick={() => setMode(value)}
-              className={cn(
-                "rounded-full px-2.5 py-0.5 text-xs transition-colors",
-                mode === value
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:bg-muted/70",
-              )}
-            >
+            <ToggleGroupItem key={value} value={String(value)}>
               {label}
-            </button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       </div>
       {commentsQuery.isPending ? (
         <div className="flex flex-col gap-4 px-3 pb-4">
@@ -330,7 +436,7 @@ function CommentsPanel({ aid }: { aid: string }) {
             </div>
           ))}
         </div>
-      ) : commentsQuery.isError ? (
+      ) : commentsQuery.isError && !commentsQuery.data ? (
         <div className="px-3 pb-4">
           <ErrorState
             error={commentsQuery.error}
@@ -343,13 +449,23 @@ function CommentsPanel({ aid }: { aid: string }) {
       ) : (
         <div className="px-3 pb-4">
           {comments.map((comment) => (
-            <CommentThread key={comment.rpid} aid={aid} comment={comment} />
+            <CommentThread
+              key={comment.rpid}
+              comment={comment}
+              onOpenDetail={() => setSelectedComment(comment)}
+            />
           ))}
           <div ref={loadMoreRef} className="flex min-h-10 items-center justify-center">
             {commentsQuery.isFetchingNextPage && (
               <Spinner className="size-4" aria-label="正在加载更多评论" />
             )}
+            {commentsQuery.isFetchNextPageError && (
+              <Button variant="ghost" size="sm" onClick={() => loadMore(true)}>
+                重试加载更多评论
+              </Button>
+            )}
             {!supportsIntersectionObserver &&
+              !commentsQuery.isFetchNextPageError &&
               commentsQuery.hasNextPage &&
               !commentsQuery.isFetchingNextPage && (
                 <Button variant="ghost" size="sm" onClick={() => loadMore()}>
@@ -359,6 +475,28 @@ function CommentsPanel({ aid }: { aid: string }) {
           </div>
         </div>
       )}
+      <Drawer
+        open={selectedComment !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedComment(null);
+        }}
+      >
+        <DrawerContent side="right" className="flex h-full flex-col overflow-hidden p-0">
+          <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
+            <DrawerClose
+              render={
+                <Button variant="ghost" size="icon" aria-label="返回评论区" title="返回评论区">
+                  <ChevronLeft />
+                </Button>
+              }
+            />
+            <DrawerTitle>评论详情</DrawerTitle>
+          </div>
+          {selectedComment && (
+            <CommentReplies key={selectedComment.rpid} aid={aid} comment={selectedComment} />
+          )}
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }
@@ -1159,7 +1297,7 @@ export function VideoSidebar({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {tab === "comments" ? (
           resolvedAid ? (
-            <CommentsPanel aid={resolvedAid} />
+            <CommentsPanel key={resolvedAid} aid={resolvedAid} />
           ) : (
             <div className="px-3 py-6">
               {archiveQuery.isPending || seasonQuery.isPending ? (

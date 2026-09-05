@@ -234,7 +234,7 @@ export function isHorizontalSwipeIgnoredTarget(target: EventTarget | null): bool
     target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
   return Boolean(
     element?.closest(
-      'input, textarea, select, [contenteditable="true"], [role="slider"], [role="combobox"], [data-dnd-handle], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
+      'input, textarea, select, [contenteditable="true"], [role="slider"], [role="combobox"], [data-dnd-handle], [data-slot="drawer-content"], [data-slot="slider"], [data-slot^="slider-"], [data-slot="scroll-area-scrollbar"], [data-slot="scroll-area-thumb"]',
     ),
   );
 }

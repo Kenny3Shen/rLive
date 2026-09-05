@@ -66,6 +66,7 @@ import {
   useCompactPlayerViewport,
 } from "@/shared/hooks/usePlayerViewport";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { DrawerViewport } from "@/components/ui/drawer";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
@@ -2222,7 +2223,7 @@ export function PlayerPane({
           data-room-side-tab-swipe-surface
           data-horizontal-swipe-surface
           className={cn(
-            "flex min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar touch-pan-y overscroll-y-contain",
+            "relative isolate flex min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar touch-pan-y overscroll-y-contain",
             inlineCompactSidePanel
               ? "min-h-0 w-full flex-1 border-t border-border/80"
               : compactLandscapeViewport
@@ -2328,6 +2329,7 @@ export function PlayerPane({
               </div>
             </div>
           </Tabs>
+          <DrawerViewport active={sidePanelVisible && player.mode !== "fullscreen"} />
         </aside>
       )}
     </div>
