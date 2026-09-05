@@ -9,7 +9,11 @@ pub const HISTORY_RETENTION_LIMIT: i64 = 2_000;
 /// 视频观看历史的保留上限。每行比直播历史更重（封面、标题、分集、进度），
 /// 且按作品去重而非按分集，500 条足够覆盖数月的观看记录。
 pub const VIDEO_HISTORY_RETENTION_LIMIT: i64 = 500;
-pub const SCHEMA_VERSION: i64 = 4;
+/// 本地录制回放进度的保留上限。行很轻（只有 id、进度、时长、时间戳），
+/// 上限主要防的是用户在应用外删掉录像目录后留下的孤行——没有可依赖的
+/// 扫描联动去清它们，只能靠容量兜底让旧进度最终被汰汰。
+pub const RECORDING_WATCH_PROGRESS_RETENTION_LIMIT: i64 = 1_000;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DB_CACHE_SIZE_KIB: i64 = 8 * 1_024;
@@ -132,6 +136,20 @@ CREATE INDEX IF NOT EXISTS idx_video_history_recent_order
   ON video_history (watched_at DESC, kind ASC, oid ASC);
 "#;
 
+/// `recording_watch_progress` 的建表 DDL 单独成常量：新库初始化与 v4→v5 迁移
+/// 共用同一份，两条路径不可能产生结构漂移。
+const RECORDING_WATCH_PROGRESS_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS recording_watch_progress (
+  id TEXT PRIMARY KEY,
+  progress REAL NOT NULL DEFAULT 0,
+  duration REAL NOT NULL DEFAULT 0,
+  watched_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recording_watch_progress_recent
+  ON recording_watch_progress (watched_at DESC, id ASC);
+"#;
+
 pub struct Db;
 
 impl Db {
@@ -182,14 +200,18 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         return Ok(());
     }
 
-    // v3→v4 只是多出 `video_history` 一张表，没有任何破坏性改动。
-    // 下面的 table_count 分支会拒绝一切非当前版本的库，所以这里必须做增量迁移：
-    // 少了它，所有 v3 存量用户升级后都会打不开自己的数据库。
-    if version == 3 {
+    // v3/v4→v5 都是纯增量（v3 起补 `video_history`，再补 `recording_watch_progress`），
+    // 没有任何破坏性改动。下面的 table_count 分支会拒绝一切非当前版本的库，
+    // 所以这里必须做增量迁移：少了它，v3/v4 存量用户升级后都会打不开自己
+    // 的数据库。版本再递增时，要在这里补上对应的建表一步。
+    if version == 3 || version == 4 {
         let transaction = conn
             .unchecked_transaction()
             .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
-        create_video_history_objects(&transaction)?;
+        if version < 4 {
+            create_video_history_objects(&transaction)?;
+        }
+        create_recording_watch_progress_objects(&transaction)?;
         transaction
             .pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
@@ -222,6 +244,7 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         .execute_batch(SCHEMA)
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
     create_video_history_objects(&transaction)?;
+    create_recording_watch_progress_objects(&transaction)?;
     transaction
         .execute_batch(&format!(
             "CREATE TRIGGER history_prune_after_insert
@@ -267,6 +290,29 @@ fn create_video_history_objects(tx: &Connection) -> AppResult<()> {
     Ok(())
 }
 
+/// 建 `recording_watch_progress` 的表、索引与修剪触发器。新库初始化与 v4→v5
+/// 迁移共用此函数，避免两条路径各写一份 DDL 而逐渐漂移。触发器排序键与
+/// 索引一致（`watched_at DESC, id ASC`），`INDEXED BY` 保证修剪走的正是索引。
+fn create_recording_watch_progress_objects(tx: &Connection) -> AppResult<()> {
+    tx.execute_batch(RECORDING_WATCH_PROGRESS_SCHEMA)
+        .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    tx.execute_batch(&format!(
+        "CREATE TRIGGER IF NOT EXISTS recording_watch_progress_prune_after_insert
+         AFTER INSERT ON recording_watch_progress
+         BEGIN
+           DELETE FROM recording_watch_progress
+           WHERE rowid = (
+             SELECT rowid
+             FROM recording_watch_progress INDEXED BY idx_recording_watch_progress_recent
+             ORDER BY watched_at DESC, id ASC
+             LIMIT 1 OFFSET {RECORDING_WATCH_PROGRESS_RETENTION_LIMIT}
+           );
+         END;"
+    ))
+    .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    Ok(())
+}
+
 pub fn map_db_err(err: rusqlite::Error) -> AppError {
     AppError::new("db_error", err.to_string())
 }
@@ -275,6 +321,19 @@ pub fn map_db_err(err: rusqlite::Error) -> AppError {
 mod tests {
     use super::*;
     use std::fs;
+
+    fn assert_trigger_exists(conn: &Connection, name: &str) {
+        let count: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = '{name}'"
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "缺少触发器 {name}");
+    }
 
     #[test]
     fn fresh_database_uses_versioned_schema() {
@@ -317,6 +376,20 @@ mod tests {
                 "video_history 缺少列 {expected}"
             );
         }
+
+        let watch_columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('recording_watch_progress') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for expected in ["id", "progress", "duration", "watched_at"] {
+            assert!(
+                watch_columns.iter().any(|column| column == expected),
+                "recording_watch_progress 缺少列 {expected}"
+            );
+        }
     }
 
     #[test]
@@ -351,8 +424,8 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v3_databases_by_adding_video_history() {
-        // v3 形态：SCHEMA 里的表齐全，但没有 video_history。
+    fn migrates_v3_databases_by_adding_the_new_tables() {
+        // v3 形态：SCHEMA 里的表齐全，但没有 video_history 与 recording_watch_progress。
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute_batch(
@@ -376,6 +449,12 @@ mod tests {
             [],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO recording_watch_progress (id, progress, duration, watched_at)
+             VALUES ('bilibili_1/user_1', 30, 600, 1)",
+            [],
+        )
+        .unwrap();
 
         // 迁移不得动存量数据。
         let sentinel: String = conn
@@ -391,15 +470,58 @@ mod tests {
             .unwrap();
         assert_eq!(rooms, 1);
 
-        let triggers: i64 = conn
+        assert_trigger_exists(&conn, "video_history_prune_after_insert");
+        assert_trigger_exists(&conn, "recording_watch_progress_prune_after_insert");
+    }
+
+    #[test]
+    fn migrates_v4_databases_by_adding_recording_watch_progress() {
+        // v4 形态：v3 加上 video_history 的表、索引与修剪触发器。
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        create_video_history_objects(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO video_history (kind, oid, title, watched_at)
+             VALUES ('ugc', 'BV1', 'sentinel', 1);
+             PRAGMA user_version = 4;",
+        )
+        .unwrap();
+
+        initialize_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // 新表可写且能原样读回，说明列、主键与索引都建好了。
+        conn.execute(
+            "INSERT INTO recording_watch_progress (id, progress, duration, watched_at)
+             VALUES ('bilibili_1/user_1', 30.5, 600.25, 1)",
+            [],
+        )
+        .unwrap();
+        let stored: (f64, f64, i64) = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master
-                 WHERE type = 'trigger' AND name = 'video_history_prune_after_insert'",
+                "SELECT progress, duration, watched_at
+                 FROM recording_watch_progress WHERE id = 'bilibili_1/user_1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (30.5, 600.25, 1));
+
+        assert_trigger_exists(&conn, "recording_watch_progress_prune_after_insert");
+
+        // v4 已有的 video_history 数据不得被迁移碰动。
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM video_history WHERE kind = 'ugc' AND oid = 'BV1'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(triggers, 1);
+        assert_eq!(title, "sentinel");
     }
 
     #[test]
@@ -555,6 +677,32 @@ mod tests {
         assert!(
             plan.iter()
                 .any(|detail| detail.contains("idx_video_history_recent_order"))
+        );
+        assert!(
+            plan.iter()
+                .all(|detail| !detail.contains("USE TEMP B-TREE"))
+        );
+    }
+
+    #[test]
+    fn recording_watch_progress_recent_index_avoids_temporary_sorting() {
+        let conn = open_in_memory().unwrap();
+
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id, progress, duration, watched_at
+                 FROM recording_watch_progress
+                 ORDER BY watched_at DESC, id ASC",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_recording_watch_progress_recent"))
         );
         assert!(
             plan.iter()

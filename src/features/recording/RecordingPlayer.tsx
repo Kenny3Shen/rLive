@@ -7,7 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
@@ -31,11 +31,20 @@ import {
 } from "@/features/room/player/xgPlayer";
 import { PlayerFullscreenHud, showPlayerFullscreenHud } from "@/features/room/PlayerFullscreenHud";
 import {
+  isWatchProgressWorthKeeping,
+  shouldReportWatchProgress,
+  watchResumePosition,
+} from "@/shared/watchProgress";
+import {
   clampRecordingPlaybackTime,
   formatRecordingDuration,
+  recordingDanmakuUrl,
   recordingEndedPlaybackTime,
   recordingSeekReached,
-  recordingDanmakuUrl,
+  recordingWatchProgressFind,
+  recordingWatchProgressReport,
+  RECORDING_WATCH_PROGRESS_QUERY_KEY,
+  RECORDING_WATCH_PROGRESS_RESUME_KEY,
   type RecordingItem,
 } from "./recording";
 import { RecordedDanmakuCanvas } from "./RecordedDanmakuCanvas";
@@ -141,6 +150,57 @@ export function RecordingPlayer({
     staleTime: Number.POSITIVE_INFINITY,
   });
 
+  const queryClient = useQueryClient();
+  /**
+   * 这段录制上次看到第几秒。本地 SQLite 查询，通常早于播放地址（IPC + 文件探测）
+   * 就位；未落定时不建播放器（见下方主 effect），避免先从 0 播再跳的闪帧。
+   */
+  const resumeQuery = useQuery({
+    queryKey: [RECORDING_WATCH_PROGRESS_RESUME_KEY, item.id],
+    queryFn: () => recordingWatchProgressFind(item.id),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  });
+  const resumePending = resumeQuery.isPending;
+  /**
+   * 续播位置经渲染期 ref 供给播放器 effect：写进依赖会让上报后的缓存变化重建
+   * 播放器，回放于是从头开始。录制元数据的时长权威（见 `recordedDuration`），
+   * 用它判断「是否已看完」而不是历史里记下的那份。
+   */
+  const resumeAtRef = useRef(0);
+  resumeAtRef.current = watchResumePosition(resumeQuery.data?.progress ?? 0, recordedDuration);
+  /** 已注入过续播位置的录制 id：同一段录制只跳一次。 */
+  const resumeAppliedRef = useRef<string | null>(null);
+  const reportedAtRef = useRef<number | null>(null);
+
+  /**
+   * 把当前位置写进 `recording_watch_progress`。
+   *
+   * `force` 用于暂停/播完/离开这三个「最后一次」的时机，绕过节流窗口。
+   * 失败只吞掉——进度是本地记账，不该让它的故障打断回放。
+   */
+  const reportWatchProgress = useCallback(
+    (position: number, force: boolean) => {
+      const now = Date.now();
+      if (force) {
+        if (!isWatchProgressWorthKeeping(position)) return;
+      } else if (!shouldReportWatchProgress(position, reportedAtRef.current, now)) {
+        return;
+      }
+      reportedAtRef.current = now;
+      void recordingWatchProgressReport({
+        id: item.id,
+        progress: position,
+        duration: recordedDuration,
+        watched_at: now,
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: RECORDING_WATCH_PROGRESS_QUERY_KEY }))
+        .catch(() => undefined);
+    },
+    [item.id, queryClient, recordedDuration],
+  );
+
   useEffect(() => {
     playbackRateRef.current = 1;
     setPlaybackRate(1);
@@ -242,11 +302,20 @@ export function RecordingPlayer({
   seekToRef.current = seekTo;
 
   useEffect(() => {
+    if (resumePending) return;
     let cancelled = false;
     const video = videoRef.current;
     const root = rootRef.current;
     if (!video || !root) return;
     const media = video;
+    // 节流窗口按播放器实例重置：重建后的第一笔进度应当立刻落盘。
+    reportedAtRef.current = null;
+    // 续播只在这段录制第一次建播放器时注入。seek 失败重建与错误重试都走
+    // recoverySeekRef，不能再把用户拉回上次退出的位置。
+    if (resumeAppliedRef.current !== item.id) {
+      resumeAppliedRef.current = item.id;
+      if (resumeAtRef.current > 0) recoverySeekRef.current = resumeAtRef.current;
+    }
 
     setLoading(true);
     setWaiting(false);
@@ -273,6 +342,7 @@ export function RecordingPlayer({
       setDuration((previousDuration) =>
         endedRef.current && nextDuration <= 0 ? previousDuration : nextDuration,
       );
+      reportWatchProgress(actualTime, false);
       const target = seekTargetRef.current;
       if (
         target !== null &&
@@ -306,6 +376,7 @@ export function RecordingPlayer({
     function onPause() {
       if (cancelled) return;
       setPaused(true);
+      reportWatchProgress(clampRecordingPlaybackTime(media.currentTime, recordedDuration), true);
     }
     function onReady() {
       if (cancelled) return;
@@ -355,6 +426,9 @@ export function RecordingPlayer({
         return;
       }
       endedRef.current = true;
+      // 记满时长而不是媒体真正停下的位置：被打断的录制可能比元数据短，
+      // 记实际停止点会让下次进来又跳到尾部立刻结束，等于播不了。
+      reportWatchProgress(endDuration, true);
       setDuration(endDuration);
       setCurrentTime(endedTime);
       setPaused(true);
@@ -456,6 +530,9 @@ export function RecordingPlayer({
 
     return () => {
       cancelled = true;
+      // 离开播放页与协议重建都走这里：最后一段进度必须立刻落盘，
+      // 否则节流窗口内看的那几秒全丢。
+      reportWatchProgress(clampRecordingPlaybackTime(media.currentTime, recordedDuration), true);
       video.removeEventListener("timeupdate", syncTime);
       video.removeEventListener("durationchange", syncTime);
       video.removeEventListener("progress", syncBufferedTime);
@@ -490,6 +567,8 @@ export function RecordingPlayer({
     playbackKind,
     playerRevision,
     recordedDuration,
+    reportWatchProgress,
+    resumePending,
     url,
   ]);
 

@@ -5,6 +5,7 @@
 use std::time::Duration;
 use tauri::State;
 
+use crate::db::recording_watch::{self, RecordingWatchProgress};
 use crate::error::{AppError, AppResult};
 use crate::recording::{
     AssExportOptions, FfmpegRecordingOptions, RecordingItem, RecordingStartInput,
@@ -79,7 +80,15 @@ pub fn recording_set_continue_on_leave(
 
 #[tauri::command]
 pub fn recording_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    state.recording.delete(id.trim())
+    let id = id.trim();
+    state.recording.delete(id)?;
+    // 录像已经删掉之后，进度行的清理失败不能让整个删除报错：
+    // 那会让用户误以为删失败；留下的孤行由保留上限兜底汰汰，记警告即可。
+    // 清理用的 id 必须与删除用的同一个（trim 后），否则清错行。
+    if let Err(error) = state.conn().and_then(|conn| recording_watch::remove(&conn, id)) {
+        tracing::warn!(recording_id = %id, error = %error, "删除录制的观看进度行失败");
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -125,4 +134,33 @@ pub async fn recording_danmaku_export_ass(
         })?
     };
     state.recording.export_danmaku_ass(id.trim(), options).await
+}
+
+/// 本地录制回放的观看进度（断点续播）。回放页进入时 `find` 决定跳回的位置，
+/// 播放期间前端节流心跳 `report` 落盘，列表页用 `list` 画卡片的续播状态；
+/// 上报节流刻意放在前端（心跳间隔由播放器掌握），后端只负责落盘与修剪。
+#[tauri::command]
+pub fn recording_watch_progress_list(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<RecordingWatchProgress>> {
+    let conn = state.conn()?;
+    recording_watch::list(&conn)
+}
+
+#[tauri::command]
+pub fn recording_watch_progress_find(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Option<RecordingWatchProgress>> {
+    let conn = state.conn()?;
+    recording_watch::find(&conn, id.trim())
+}
+
+#[tauri::command]
+pub fn recording_watch_progress_report(
+    state: State<'_, AppState>,
+    item: RecordingWatchProgress,
+) -> AppResult<()> {
+    let conn = state.conn()?;
+    recording_watch::upsert(&conn, item)
 }

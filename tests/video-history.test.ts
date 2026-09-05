@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  shouldReportVideoProgress,
-  videoResumePosition,
-  VIDEO_HISTORY_REPORT_INTERVAL_MS,
-} from "../src/features/video/videoHistory";
+import { videoResumeCid, videoResumePosition } from "../src/features/video/videoHistory";
 import type { VideoHistoryItem } from "../src/shared/types/video";
 
 function record(overrides: Partial<VideoHistoryItem> = {}): VideoHistoryItem {
@@ -55,19 +51,35 @@ describe("视频续播位置", () => {
   });
 });
 
-describe("视频进度上报节流", () => {
-  const now = 1_700_000_000_000;
+describe("视频续播分 P", () => {
+  // 多 P 稿件：pages 有两项，P1 是 archive.cid。
+  const archive = {
+    cid: 1_001,
+    pages: [
+      { page: 1, cid: 1_001, part: "P1", duration: 1_200 },
+      { page: 2, cid: 1_002, part: "P2", duration: 1_200 },
+    ],
+  };
 
-  test("越过最小进度后立刻记第一笔", () => {
-    expect(shouldReportVideoProgress(4, null, now)).toBe(true);
+  test("卡片进入时落回上次看到一半的那一 P", () => {
+    expect(videoResumeCid(record({ cid: 1_002 }), archive)).toBe(1_002);
   });
 
-  test("进度过短不记", () => {
-    expect(shouldReportVideoProgress(1, null, now)).toBe(false);
+  test("上次那一 P 已看完时回到 P1", () => {
+    // 看完的那一 P 没有「上次退出的地方」可回，重播它反而违背预期。
+    expect(videoResumeCid(record({ cid: 1_002, progress: 1_198 }), archive)).toBe(1_001);
   });
 
-  test("节流窗口内不重复写盘", () => {
-    expect(shouldReportVideoProgress(10, now - 1_000, now)).toBe(false);
-    expect(shouldReportVideoProgress(10, now - VIDEO_HISTORY_REPORT_INTERVAL_MS, now)).toBe(true);
+  test("历史的 cid 不属于本稿件时回到 P1", () => {
+    // 合集里换了稿件、或历史是脏数据：拿它取流会播成别的内容。
+    expect(videoResumeCid(record({ cid: 7_777 }), archive)).toBe(1_001);
+  });
+
+  test("没有历史时回到 P1", () => {
+    expect(videoResumeCid(null, archive)).toBe(1_001);
+  });
+
+  test("稿件详情未到时取流键未就绪", () => {
+    expect(videoResumeCid(record({ cid: 1_002 }), undefined)).toBe(0);
   });
 });

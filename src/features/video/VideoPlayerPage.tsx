@@ -50,7 +50,12 @@ import {
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
 import { formatRecordingDuration } from "@/features/recording/recording";
-import type { VideoHistoryItem, VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
+import type {
+  VideoHistoryItem,
+  VideoHistoryKind,
+  VideoPlayInfo,
+  VideoSessionIds,
+} from "@/shared/types/video";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import {
   videoGetArchive,
@@ -63,13 +68,13 @@ import {
   videoStopPlay,
 } from "./videoApi";
 import {
-  shouldReportVideoProgress,
   videoHistoryAdd,
   videoHistoryFind,
+  videoResumeCid,
   videoResumePosition,
-  VIDEO_HISTORY_MIN_PROGRESS_SECONDS,
   VIDEO_HISTORY_QUERY_KEY,
 } from "./videoHistory";
+import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { CastMenu } from "@/features/room/CastMenu";
 import {
@@ -237,9 +242,6 @@ export function VideoPlayerPage() {
     staleTime: 5 * 60_000,
     retry: false,
   });
-  const cid = rawCid > 0 ? rawCid : (archiveQuery.data?.cid ?? 0);
-  // 弹幕发送历史与 PGC 分集都用 aid；URL 直入时用详情补齐。
-  const aid = params?.aid || archiveQuery.data?.aid || null;
 
   // PGC 剧集详情：观看历史按「作品」去重，PGC 的作品标识是 season_id，而 URL 只带
   // ep_id，必须靠它换出 season_id 与剧集名。与右侧栏 season 查询同 key、同
@@ -253,57 +255,20 @@ export function VideoPlayerPage() {
   });
 
   /**
-   * 本次播放要写进观看历史的那一行。
+   * 本次播放属于哪部作品，即观看历史的主键。
    *
-   * `oid` 为空表示身份还没解析出来（PGC 的 season 详情未到、或 UGC 连 bvid 都没有），
-   * 此时不上报——宁可漏记开头几秒，也不能写一行认不出是哪部作品的历史。
+   * 刻意不经 `cid` 推导：跨分 P 续播要拿这条历史反过来决定播哪一个 cid，
+   * 身份若再依赖 cid 就成了环。UGC 的 oid 是 URL 直接给的 bvid，
+   * PGC 的 oid 是 season_id（要等 season 详情换出来）。
    */
-  const historyEntry = useMemo<VideoHistoryItem | null>(() => {
-    if (!params) return null;
-    const watchedAt = 0; // 上报时取当前时间，这里只组装身份与元数据。
-    if (params.epId) {
-      const season = seasonQuery.data;
-      const episode = season?.episodes.find((item) => item.ep_id === params.epId) ?? null;
-      if (!season?.season_id) return null;
-      return {
-        kind: "pgc",
-        oid: season.season_id,
-        title: season.title,
-        cover: episode?.cover || season.cover,
-        // 剧集没有单一作者，副行留给分集标题。
-        author: "",
-        part_title: episode?.long_title || episode?.title || "",
-        bvid: episode?.bvid ?? "",
-        cid: episode?.cid ?? params.cid,
-        ep_id: params.epId,
-        aid: episode?.aid || params.aid || "",
-        progress: 0,
-        duration: 0,
-        watched_at: watchedAt,
-      };
-    }
-    const bvid = params.bvid;
-    if (!bvid) return null;
-    const archive = archiveQuery.data;
-    // 分 P 标题：多 P 稿件才有意义，单 P 稿件的 pages 为空，留空即可。
-    const part = archive?.pages.find((page) => page.cid === cid) ?? null;
-    return {
-      kind: "ugc",
-      oid: bvid,
-      // 详情未到时用 URL 带的标题兜底：至少历史里不是空标题。
-      title: archive?.title || params.title || "",
-      cover: archive?.cover ?? "",
-      author: archive?.author ?? "",
-      part_title: part ? part.part || `P${part.page}` : "",
-      bvid,
-      cid,
-      ep_id: "",
-      aid: aid ?? "",
-      progress: 0,
-      duration: 0,
-      watched_at: watchedAt,
-    };
-  }, [aid, archiveQuery.data, cid, params, seasonQuery.data]);
+  const historyKind: VideoHistoryKind | null = !params
+    ? null
+    : params.epId
+      ? "pgc"
+      : params.bvid
+        ? "ugc"
+        : null;
+  const historyOid = (params?.epId ? seasonQuery.data?.season_id : params?.bvid) ?? "";
 
   /**
    * 这部作品上次看到哪。
@@ -313,8 +278,6 @@ export function VideoPlayerPage() {
    * 混在同一前缀下会被写成数组。`staleTime: Infinity` 让它一次解析后不再变动——
    * 边看边上报会不断改写这部作品的历史，但续播位置只在进页时有意义。
    */
-  const historyKind = historyEntry?.kind ?? null;
-  const historyOid = historyEntry?.oid ?? "";
   const resumeQuery = useQuery({
     queryKey: ["video_history_resume", historyKind ?? "", historyOid],
     enabled: historyKind !== null && historyOid.length > 0,
@@ -325,6 +288,66 @@ export function VideoPlayerPage() {
   });
   /** 身份已定但历史还没查完：播放器要等它，否则先从 0 播再跳会闪一下。 */
   const resumePending = resumeQuery.isPending && historyKind !== null && historyOid.length > 0;
+  // 取流键。URL 带了就用它（用户明确点的那一集）；只带 bvid 进来（首页/搜索/UP 主
+  // 卡片）时，上次看到一半的那一 P 优先于详情给的 P1 —— 「上次退出的地方」包含
+  // 「上次看的是哪一 P」。续播查询未落定前保持 0：先按 P1 取流再切到上次那一 P
+  // 会白起一轮代理会话，还要多一次播放器重建。
+  const cid =
+    rawCid > 0 ? rawCid : resumePending ? 0 : videoResumeCid(resumeQuery.data, archiveQuery.data);
+  // 弹幕发送历史与 PGC 分集都用 aid；URL 直入时用详情补齐。
+  const aid = params?.aid || archiveQuery.data?.aid || null;
+
+  /**
+   * 本次播放要写进观看历史的那一行。
+   *
+   * `oid` 为空表示身份还没解析出来（PGC 的 season 详情未到、或 UGC 连 bvid 都没有），
+   * 此时不上报——宁可漏记开头几秒，也不能写一行认不出是哪部作品的历史。
+   */
+  const historyEntry = useMemo<VideoHistoryItem | null>(() => {
+    if (!params || historyKind === null || historyOid.length === 0) return null;
+    const watchedAt = 0; // 上报时取当前时间，这里只组装身份与元数据。
+    if (historyKind === "pgc") {
+      const season = seasonQuery.data;
+      const episode = season?.episodes.find((item) => item.ep_id === params.epId) ?? null;
+      if (!season) return null;
+      return {
+        kind: "pgc",
+        oid: historyOid,
+        title: season.title,
+        cover: episode?.cover || season.cover,
+        // 剧集没有单一作者，副行留给分集标题。
+        author: "",
+        part_title: episode?.long_title || episode?.title || "",
+        bvid: episode?.bvid ?? "",
+        cid: episode?.cid ?? params.cid,
+        ep_id: params.epId ?? "",
+        aid: episode?.aid || params.aid || "",
+        progress: 0,
+        duration: 0,
+        watched_at: watchedAt,
+      };
+    }
+    const archive = archiveQuery.data;
+    // 分 P 标题：多 P 稿件才有意义，单 P 稿件的 pages 为空，留空即可。
+    const part = archive?.pages.find((page) => page.cid === cid) ?? null;
+    return {
+      kind: "ugc",
+      // UGC 的 oid 就是 bvid，两个字段同源。
+      oid: historyOid,
+      // 详情未到时用 URL 带的标题兜底：至少历史里不是空标题。
+      title: archive?.title || params.title || "",
+      cover: archive?.cover ?? "",
+      author: archive?.author ?? "",
+      part_title: part ? part.part || `P${part.page}` : "",
+      bvid: historyOid,
+      cid,
+      ep_id: "",
+      aid: aid ?? "",
+      progress: 0,
+      duration: 0,
+      watched_at: watchedAt,
+    };
+  }, [aid, archiveQuery.data, cid, historyKind, historyOid, params, seasonQuery.data]);
 
   // 播放器 effect 只依赖播放地址，不该因为历史/元数据变化就重建播放器，
   // 因此这三样经 ref 读取。
@@ -338,6 +361,26 @@ export function VideoPlayerPage() {
     cid,
     epId: params?.epId ?? null,
   });
+  /**
+   * 跨分 P 续播的提示。
+   *
+   * 同一分 P 内的位置续播是静默的（用户看到的还是他点开的那个内容），但落到
+   * 别的一 P 是内容身份的变化，不说一声会让人以为点错了。按 cid 记忆去重，
+   * 换画质/重试不会重复弹。
+   */
+  const crossPartNoticeRef = useRef(0);
+  useEffect(() => {
+    const archive = archiveQuery.data;
+    if (rawCid > 0 || cid <= 0 || !archive || cid === archive.cid) return;
+    if (crossPartNoticeRef.current === cid) return;
+    crossPartNoticeRef.current = cid;
+    const part = archive.pages.find((page) => page.cid === cid);
+    notify.info(
+      part ? `已续播上次观看的 P${part.page}` : "已续播上次观看的分 P",
+      part?.part || undefined,
+    );
+  }, [archiveQuery.data, cid, rawCid]);
+
   /** 这一集上次写盘的时刻；null = 还没写过。换集时由播放器 effect 重置。 */
   const historyReportedAtRef = useRef<number | null>(null);
 
@@ -356,8 +399,8 @@ export function VideoPlayerPage() {
     (entry: VideoHistoryItem, position: number, totalDuration: number, force: boolean) => {
       const now = Date.now();
       if (force) {
-        if (!Number.isFinite(position) || position < VIDEO_HISTORY_MIN_PROGRESS_SECONDS) return;
-      } else if (!shouldReportVideoProgress(position, historyReportedAtRef.current, now)) {
+        if (!isWatchProgressWorthKeeping(position)) return;
+      } else if (!shouldReportWatchProgress(position, historyReportedAtRef.current, now)) {
         return;
       }
       historyReportedAtRef.current = now;
@@ -423,15 +466,17 @@ export function VideoPlayerPage() {
   // 链接可能没带 cid，多 P 以 bvid+caid 定位当前项、合集以 bvid。
   useEffect(() => {
     const archive = archiveQuery.data;
-    if (!archive || !params?.bvid) return;
+    // cid 为 0 = 取流键还没定（续播查询未落定），此刻定位会写下一个不存在的
+    // currentId；等它解析出来这个 effect 会再跑一次。
+    if (!archive || !params?.bvid || cid <= 0) return;
     let items: PlaylistItem[] | null = null;
     let startId: string | null = null;
     if (archive.pages.length > 0) {
       items = archive.pages.map((page) =>
         playlistItemFromArchivePage(archive.bvid, archive.aid, page),
       );
-      // 链接缺 cid（搜索进入）时用详情补齐的首 P cid 定位。
-      const cid = params.cid > 0 ? params.cid : archive.cid;
+      // 链接缺 cid（搜索进入）时用解析出的取流键定位：可能是详情补齐的首 P，
+      // 也可能是跨分 P 续播落到的那一 P。连播因此从续播的那一 P 往后走。
       startId = `${params.bvid}_${cid}`;
     } else if (archive.ugc_season) {
       items = archive.ugc_season.episodes.map(playlistItemFromSeasonEpisode);
@@ -459,7 +504,7 @@ export function VideoPlayerPage() {
     if (!alreadyActive) {
       playlistStore.setPlaylist(items, startId);
     }
-  }, [archiveQuery.data, params, playlistStore]);
+  }, [archiveQuery.data, cid, params, playlistStore]);
 
   /**
    * 取播放信息。

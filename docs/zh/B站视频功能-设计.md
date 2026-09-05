@@ -197,10 +197,11 @@ message DanmakuElem {
 
 参考 PiliPlus 的「同一作品一条记录」语义:SQLite 新增 `video_history` 表(schema v3→v4 增量迁移),主键 `(kind, oid)`——UGC 的 oid 是 bvid,PGC 是 season_id。同一稿件换分 P、同一番剧换集只更新原行的 `progress`/`cid`/`ep_id` 与元数据,历史列表不会被一部番的几十集刷满。保留上限 500 行,插入后触发器按 `watched_at` 淘汰最旧,与直播 `history` 的 2,000 行上限同一手法。配置包 v2 追加 `video_history` 字段(`#[serde(default)]`,旧导出按空表导入)。
 
-前端约定(`videoHistory.ts` 纯逻辑 + 播放页接线):
+前端约定(`videoHistory.ts` 纯逻辑 + 播放页接线)。三个阈值(最小进度 3s、上报间隔 5s、片尾容差 5s)与「该续播到第几秒」的判定住在 `src/shared/watchProgress.ts`，与本地录制回放共用一份：两个表面的落盘方式不同，但「多短算没看、多久写一次盘、离结尾多近算看完」是同一套语义，各写一份只会让阈值随时间漂移。
 
 - **上报节流**:播放中经 `timeupdate` 上报,间隔 ≥ 5s 且进度 ≥ 3s(点开就退/拖动预览不污染历史);首次越过 3s 立即落一笔「打开过」。暂停、ended(记满时长)、离开播放页(effect 清理)三个时机强制 flush。
 - **续播判定**:`videoResumePosition` 只在「历史停在当前分集(`cid` 比对,取流键 UGC/PGC 都有)且未看完(距片尾 > 5s)」时返回旧位置,否则从 0 起播。续播位置写在元数据就位前(`media.currentTime` 直接赋值),与换画质续播同一条路径;续播查询未落定前不建播放器,避免「先播 0 秒再跳」闪帧。
+- **跨分 P 续播**:URL 不带 `cid`(首页/搜索/UP 主卡片进入)时,取流键不再一律取详情给的 P1，而是 `videoResumeCid(record, archive)` 给的「上次看的那一 P」——「上次退出的地方」包含「上次看的是哪一 P」。它要求那一 P 确实在 `archive.pages` 里(合集换稿件与脏数据不算)且 `videoResumePosition` 认定有续播位置,否则退回 P1;稿件详情未到时返回 0。`cid <= 0` 期间播放器、播放列表与侧栏 effect 全部按「取流键未就绪」直接返回,否则会先按 P1 建列表再切、把播放列表锚在错误的一集上。落到非首 P 时提示一次「已续播上次观看的 P{n}」(`crossPartNoticeRef` 按 cid 去重,重建播放器不重复提示)。用户明确点过某一集(选集/播放列表/历史卡)时链接一定带 `cid`,这条路径不介入。
 - **身份错位防线**:`historyEntry` 经渲染期 ref 供给播放器 effect(稿件标题/封面晚于播放器就位,闭包捕获会写成空);但只在非空时覆盖——离开播放页的路由切换会先以 `params=null` 再渲染一次,直接赋值会让卸载 flush 读到 null、丢掉最后一段进度。换集后 ref 指向新集,旧实例的 flush 由 `reportedCid` 比对丢弃,不会把旧集进度记到新集身上。
 - **历史页第三视图**:「观看历史 / 视频历史 / 弹幕历史」三态切换(`view` search 参数)。视频卡片显示封面(缺省回退图标)、时长标签、底边进度条、「已看到 X / Y」与分集副行;点击整卡带着 `cid` 续播进播放页;单条删除乐观更新,清空有确认弹窗。视频只有 B 站一个来源,不参与平台筛选,`historyGrouping` 因此拆成 `filterHistoryBySite`(带 `site_id` 的时间线用)+ `groupHistoryByDate`(通用按日分组)。
 
