@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, X } from "lucide-react";
+import { Search, Trash2, X } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +41,15 @@ function clearSearchHistory() {
     localStorage.removeItem(SEARCH_HISTORY_KEY);
   } catch {
     // 清除失败时静默
+  }
+}
+
+function removeSearchHistory(keyword: string) {
+  try {
+    const updated = getSearchHistory().filter((item) => item !== keyword);
+    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
+  } catch {
+    // 删除失败时静默
   }
 }
 
@@ -90,6 +99,12 @@ export function VideoSearchBar({ className }: { className?: string }) {
     setHistory([]);
   };
 
+  // 删除单条后下拉保持展开，便于连续清理；删空后由 history.length 条件自动收起。
+  const handleRemoveHistoryItem = (item: string) => {
+    removeSearchHistory(item);
+    setHistory(getSearchHistory());
+  };
+
   return (
     <div className={cn("relative flex min-w-0 items-center", className)}>
       <form onSubmit={handleSubmit} className="flex h-full min-w-0 flex-1 items-center gap-2">
@@ -132,16 +147,27 @@ export function VideoSearchBar({ className }: { className?: string }) {
                 </button>
               </div>
               <div className="max-h-60 overflow-y-auto">
-                {history.map((item, index) => (
-                  <button
-                    key={index}
-                    type="button"
-                    onClick={() => handleHistoryClick(item)}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted"
-                  >
-                    <Search className="size-3.5 text-muted-foreground" />
-                    <span className="flex-1 truncate">{item}</span>
-                  </button>
+                {history.map((item) => (
+                  <div key={item} className="flex items-center gap-1 px-3 py-2 hover:bg-muted">
+                    <button
+                      type="button"
+                      onClick={() => handleHistoryClick(item)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm"
+                    >
+                      <Search className="size-3.5 text-muted-foreground" />
+                      <span className="flex-1 truncate">{item}</span>
+                    </button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`删除搜索历史“${item}”`}
+                      onClick={() => handleRemoveHistoryItem(item)}
+                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 aria-hidden />
+                    </Button>
+                  </div>
                 ))}
               </div>
             </div>
