@@ -6,6 +6,7 @@ import {
   DANMU_JS_DEFAULT_DURATION_MS,
   DANMU_JS_DEFAULT_MOVE_V,
   DANMU_JS_FONT_WEIGHT,
+  DANMU_JS_IMAGE_TRACK_SPAN,
   DANMU_JS_LANE_ACTIVE_COMMENTS,
   DANMU_JS_MAX_ACTIVE_COMMENTS,
   DANMU_JS_MAX_AGGREGATED_DISPLAY_COUNT,
@@ -237,6 +238,91 @@ describe("danmu.js event mapping", () => {
 
   test("returns no comment for blank content", () => {
     expect(danmuCommentFromEvent(chat({ content: "   " }), mappingOptions())).toBeNull();
+  });
+});
+
+describe("danmu.js image bullet track span", () => {
+  const EMOTE_URL = "https://i0.hdslb.com/bfs/emote/a.png";
+
+  /** danmu.js 的轨道占用：`ceil(bulletHeight / channelSize)`（`Channel.addBullet`）。 */
+  function trackSpanOf(height: unknown, fontSize: number): number {
+    return Math.ceil(Number.parseFloat(String(height)) / danmuLaneHeight(fontSize));
+  }
+
+  test("reserves two channels for image danmaku and one for text", () => {
+    const image = danmuCommentFromEvent(
+      chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+      mappingOptions({ laneCount: 10 }),
+    );
+    const text = danmuCommentFromEvent(chat(), mappingOptions({ laneCount: 10 }));
+
+    expect(image?.style?.height).toBe(`${DANMU_JS_IMAGE_TRACK_SPAN * danmuLaneHeight(18)}px`);
+    expect(trackSpanOf(image?.style?.height, 18)).toBe(DANMU_JS_IMAGE_TRACK_SPAN);
+    expect(trackSpanOf(text?.style?.height, 18)).toBe(1);
+  });
+
+  test("treats a text and emote mix as an image bullet", () => {
+    const comment = danmuCommentFromEvent(
+      chat({
+        content: "打卡[dog]",
+        spans: [
+          { type: "text", text: "打卡" },
+          { type: "image", image_url: EMOTE_URL },
+        ],
+      }),
+      mappingOptions({ laneCount: 10 }),
+    );
+
+    expect(trackSpanOf(comment?.style?.height, 18)).toBe(DANMU_JS_IMAGE_TRACK_SPAN);
+  });
+
+  // 车道不足两条时 danmu.js 会以 `exceed channels.length` 拒绝双轨道 bullet，
+  // 那样窄舞台上的图片弹幕一条都不会上屏。
+  test("falls back to a single channel when the layer offers one lane", () => {
+    const comment = danmuCommentFromEvent(
+      chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+      mappingOptions({ laneCount: 1 }),
+    );
+
+    expect(comment?.style?.height).toBe(`${danmuLaneHeight(18)}px`);
+    expect(trackSpanOf(comment?.style?.height, 18)).toBe(1);
+  });
+
+  // 高度必须落在车道网格上：写成 em 时 `2 × 1.4em` 会比两条车道高出零点几像素，
+  // 于是图片弹幕吃掉第三条轨道。
+  test("keeps the bullet box on the lane grid at every font size", () => {
+    for (const fontSize of [12, 14, 18, 24, 30, 48]) {
+      const image = danmuCommentFromEvent(
+        chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+        mappingOptions({ fontSize, laneCount: 10 }),
+      );
+      const text = danmuCommentFromEvent(chat(), mappingOptions({ fontSize, laneCount: 10 }));
+
+      expect(trackSpanOf(image?.style?.height, fontSize)).toBe(DANMU_JS_IMAGE_TRACK_SPAN);
+      expect(trackSpanOf(text?.style?.height, fontSize)).toBe(1);
+    }
+  });
+
+  test("re-measures the box when the font size changes", () => {
+    const comment = danmuCommentFromEvent(
+      chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+      mappingOptions({ laneCount: 10 }),
+    );
+    expect(comment).not.toBeNull();
+    comment!.__rliveMeta.element = {
+      style: { setProperty: () => {}, removeProperty: () => "" },
+    } as unknown as HTMLElement;
+
+    updateDanmuAppearance(comment!, {
+      fontSize: 30,
+      fontStroke: 0,
+      opacity: 0.8,
+      laneCount: 10,
+    });
+
+    const expected = `${DANMU_JS_IMAGE_TRACK_SPAN * danmuLaneHeight(30)}px`;
+    expect(comment?.style?.height).toBe(expected);
+    expect(comment?.__rliveMeta.element?.style.height).toBe(expected);
   });
 });
 

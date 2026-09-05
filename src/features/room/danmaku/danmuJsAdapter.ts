@@ -26,6 +26,15 @@ export const DANMU_JS_MIN_ACTIVE_COMMENTS = 120;
  */
 export const DANMU_JS_LANE_ACTIVE_COMMENTS = 12;
 /**
+ * 图片弹幕占据的轨道数。
+ *
+ * 表情是整块不透明的图片，与上下相邻车道的文字贴在一起时双方都糊掉，
+ * 因此带图片的 bullet 预留双倍高度。danmu.js 完全按
+ * `ceil(bulletHeight / channelSize)` 决定占用几条轨道（`Channel.addBullet`），
+ * 轨道占用因此只能由行盒高度表达。
+ */
+export const DANMU_JS_IMAGE_TRACK_SPAN = 2;
+/**
  * 一条已发送评论在被判为丢弃前可以保持未挂载的时长。
  *
  * `Main.readData` 在所有车道都忙时会把实时评论从其数据池取走并直接丢弃，
@@ -86,6 +95,8 @@ export type DanmuJsBulletMeta = {
   event: DanmakuEvent;
   baseText: string;
   spans?: readonly DanmakuContentSpan[];
+  /** 占据的轨道数，见 {@link danmuTrackSpan}：表情按它成比例放大。 */
+  trackSpan: number;
   aggregationKey?: string;
   aggregationCount: number;
   element?: HTMLElement;
@@ -99,9 +110,19 @@ export type DanmuJsMappingOptions = {
   fontSize: number;
   fontStroke: number;
   opacity: number;
+  /**
+   * 该 bullet 将落在的图层的车道数，用于给多轨道 bullet 兜底。
+   * 省略表示车道充足。
+   */
+  laneCount?: number;
   aggregationKey?: string;
   aggregationCount?: number;
 };
+
+export type DanmuJsAppearanceOptions = Pick<
+  DanmuJsMappingOptions,
+  "fontSize" | "fontStroke" | "opacity" | "laneCount"
+>;
 
 export type DanmuJsRenderLayer = "scroll" | "top";
 
@@ -133,10 +154,45 @@ export function danmuLaneHeight(fontSize: number): number {
 }
 
 /**
+ * bullet 占据的轨道数：带图片的占 {@link DANMU_JS_IMAGE_TRACK_SPAN} 条，其余占一条。
+ *
+ * 车道数不足时退回单轨道：danmu.js 会以 `exceed channels.length` 拒绝
+ * 占用超过车道总数的 bullet，否则窄舞台（小窗口叠加最小显示区域）上的
+ * 图片弹幕会一条都不上屏。
+ */
+export function danmuTrackSpan(
+  spans: readonly DanmakuContentSpan[] | undefined,
+  laneCount?: number,
+): number {
+  if (!spans?.some((span) => span.type === "image")) return 1;
+  const lanes = Number.isFinite(laneCount) ? Math.floor(laneCount as number) : Number.POSITIVE_INFINITY;
+  return lanes >= DANMU_JS_IMAGE_TRACK_SPAN ? DANMU_JS_IMAGE_TRACK_SPAN : 1;
+}
+
+/**
+ * bullet 的显式行盒高度。
+ *
+ * danmu.js 在 attach 时用 `getBoundingClientRect().height` 除以 `channelSize`
+ * 向上取整得到轨道占用，因此高度必须正好是车道高度的整数倍：写成 em 会因为
+ * 车道高度自身的四舍五入多吃一条轨道。文本 bullet 同样显式取一条车道高，
+ * 使「高度即轨道占用」成为该层唯一的排版口径。
+ */
+export function danmuBulletHeight(trackSpan: number, fontSize: number): string {
+  const span = Math.max(1, Number.isFinite(trackSpan) ? Math.floor(trackSpan) : 1);
+  return `${span * danmuLaneHeight(fontSize)}px`;
+}
+
+/** danmu.js 在当前舞台上真正开出的车道数：`floor(stageHeight * area / channelSize)`。 */
+export function danmuLaneCount(stageHeight: number, laneHeight: number, area: number): number {
+  const safeHeight = Number.isFinite(stageHeight) ? Math.max(0, stageHeight) : 0;
+  const safeLaneHeight = Math.max(1, Number.isFinite(laneHeight) ? Math.floor(laneHeight) : 16);
+  return Math.max(0, Math.floor(Math.floor(safeHeight * clampDanmuArea(area)) / safeLaneHeight));
+}
+
+/**
  * 当前舞台允许同时跟踪的 bullet 数量。
  *
- * 对齐 danmu.js 自身的车道数（`floor(stageHeight * area / channelSize)`），
- * 使预算随显示面积伸缩，
+ * 对齐 danmu.js 自身的车道数，使预算随显示面积伸缩，
  * 而不是在大播放器上截断评论。
  */
 export function danmuMaxActiveComments(
@@ -144,10 +200,7 @@ export function danmuMaxActiveComments(
   laneHeight: number,
   area: number,
 ): number {
-  const safeHeight = Number.isFinite(stageHeight) ? Math.max(0, stageHeight) : 0;
-  const safeLaneHeight = Math.max(1, Number.isFinite(laneHeight) ? Math.floor(laneHeight) : 16);
-  const lanes = Math.floor(Math.floor(safeHeight * clampDanmuArea(area)) / safeLaneHeight);
-  const budget = Math.max(0, lanes) * DANMU_JS_LANE_ACTIVE_COMMENTS;
+  const budget = danmuLaneCount(stageHeight, laneHeight, area) * DANMU_JS_LANE_ACTIVE_COMMENTS;
   return Math.min(DANMU_JS_MAX_ACTIVE_COMMENTS, Math.max(DANMU_JS_MIN_ACTIVE_COMMENTS, budget));
 }
 
@@ -253,7 +306,8 @@ function aggregateSuffix(count: number): string {
 
 export function danmuStyleForEvent(
   event: DanmakuEvent,
-  options: Pick<DanmuJsMappingOptions, "fontSize" | "fontStroke" | "opacity">,
+  options: DanmuJsAppearanceOptions,
+  trackSpan = 1,
 ): DanmuJsStyle {
   const isSuperChat = event.kind === "super_chat";
   const opacity = clampDanmuOpacity(options.opacity);
@@ -268,6 +322,8 @@ export function danmuStyleForEvent(
     whiteSpace: "nowrap",
     width: "max-content",
     maxWidth: "none",
+    // 行盒高度就是 danmu.js 的轨道占用，见 `danmuBulletHeight`。
+    height: danmuBulletHeight(trackSpan, options.fontSize),
     fontSize: `${clampDanmuFontSize(options.fontSize)}px`,
     fontWeight: DANMU_JS_FONT_WEIGHT,
     lineHeight: "1.35",
@@ -299,11 +355,14 @@ export function danmuCommentFromEvent(
   const aggregationCount = Math.max(1, Math.floor(options.aggregationCount ?? 1));
   const isSuperChat = event.kind === "super_chat";
   const isPinned = isPinnedDanmakuEvent(event);
+  const spans = floatingRichSpans(event);
+  const trackSpan = danmuTrackSpan(spans, options.laneCount);
   const meta: DanmuJsBulletMeta = {
     id: options.id,
     event,
     baseText,
-    spans: floatingRichSpans(event),
+    spans,
+    trackSpan,
     aggregationKey: options.aggregationKey,
     aggregationCount,
   };
@@ -323,7 +382,7 @@ export function danmuCommentFromEvent(
     txt: `${baseText}${aggregateSuffix(aggregationCount)}`,
     elLazyInit: true,
     disableCopyDOM: true,
-    style: danmuStyleForEvent(event, options),
+    style: danmuStyleForEvent(event, options, trackSpan),
     __rliveMeta: meta,
   };
 }
@@ -332,7 +391,15 @@ function appendText(parent: HTMLElement, text: string): void {
   if (text) parent.appendChild(document.createTextNode(text));
 }
 
-function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan[]): void {
+function appendRichSpans(
+  parent: HTMLElement,
+  spans: readonly DanmakuContentSpan[],
+  trackSpan: number,
+): void {
+  // 表情跟着轨道成比例放大：每条轨道 `DANMAKU_IMAGE_SCALE`em，与单轨道时相同的
+  // 呼吸空间。它始终装得下预留的行盒 —— 字号下限 12px 起，
+  // `span × 1.35em` 都小于 `span × round(1.4 × fontSize)`。
+  const imageEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
   for (const span of spans) {
     if (span.type === "text") {
       appendText(parent, span.text);
@@ -354,8 +421,8 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
     // 且在代理未启动、使用直连 CDN URL 时仍然重要。
     image.src = danmakuImageRequestUrl(imageUrl);
     image.className = "rlive-danmu-image";
-    image.style.width = `${DANMAKU_IMAGE_SCALE}em`;
-    image.style.height = `${DANMAKU_IMAGE_SCALE}em`;
+    image.style.width = imageEdge;
+    image.style.height = imageEdge;
     image.style.marginInline = "1px";
     image.style.objectFit = "contain";
     image.style.flex = "0 0 auto";
@@ -416,7 +483,7 @@ export function createDanmuBulletElement(
   content.style.flex = "0 0 auto";
   content.style.pointerEvents = "auto";
 
-  if (meta?.spans?.length) appendRichSpans(content, meta.spans);
+  if (meta?.spans?.length) appendRichSpans(content, meta.spans, meta.trackSpan);
   else appendText(content, meta?.baseText ?? comment.txt ?? "");
   root.appendChild(content);
   if (meta) meta.contentElement = content;
@@ -481,15 +548,21 @@ export function updateDanmuAggregation(
 
 export function updateDanmuAppearance(
   comment: DanmuJsComment & { __rliveMeta?: DanmuJsBulletMeta },
-  options: Pick<DanmuJsMappingOptions, "fontSize" | "fontStroke" | "opacity">,
+  options: DanmuJsAppearanceOptions,
 ): void {
-  const event = comment.__rliveMeta?.event;
+  const meta = comment.__rliveMeta;
+  const event = meta?.event;
   if (!event) return;
-  const style = danmuStyleForEvent(event, options);
+  const trackSpan = danmuTrackSpan(meta?.spans, options.laneCount);
+  const trackSpanChanged = meta !== undefined && meta.trackSpan !== trackSpan;
+  if (meta) meta.trackSpan = trackSpan;
+  const style = danmuStyleForEvent(event, options, trackSpan);
   comment.style = style;
-  const element = comment.__rliveMeta?.element;
+  const element = meta?.element;
   if (!element) return;
   element.style.fontSize = String(style.fontSize ?? "");
+  // 字号变了车道高度就变了，行盒必须跟着走，否则轨道占用与车道对不上。
+  element.style.height = String(style.height ?? "");
   element.style.fontWeight = String(style.fontWeight ?? "");
   element.style.opacity = String(style.opacity ?? "1");
   if (style.WebkitTextStroke === undefined) {
@@ -498,5 +571,14 @@ export function updateDanmuAppearance(
   } else {
     element.style.setProperty("-webkit-text-stroke", String(style.WebkitTextStroke));
     element.style.setProperty("paint-order", String(style.paintOrder));
+  }
+  // 表情边长用 em，字号变化自动跟随；只有轨道数翻转（车道数掉到两条以下）
+  // 才需要重写已上屏 bullet 里的图片。
+  if (trackSpanChanged) {
+    const imageEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
+    for (const image of element.querySelectorAll<HTMLElement>(".rlive-danmu-image")) {
+      image.style.width = imageEdge;
+      image.style.height = imageEdge;
+    }
   }
 }

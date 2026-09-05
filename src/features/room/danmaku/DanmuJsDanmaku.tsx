@@ -30,6 +30,7 @@ import {
   danmuCommentFromEvent,
   danmuGhostRecordIds,
   danmuLayerAreaConfig,
+  danmuLaneCount,
   danmuLaneHeight,
   danmuMaxActiveComments,
   danmuMoveVPlayRate,
@@ -561,6 +562,14 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         laneHeightRef.current,
         areaRef.current,
       );
+      // 图片弹幕占两条轨道，因此需要所在图层真正开出的车道数：滚动层受显示区域
+      // 约束，固定层始终整屏（见 `danmuLayerAreaConfig`）。
+      const scrollLaneCount = danmuLaneCount(
+        stageHeightRef.current,
+        laneHeightRef.current,
+        areaRef.current,
+      );
+      const topLaneCount = danmuLaneCount(stageHeightRef.current, laneHeightRef.current, 1);
       const config = configRef.current;
       const supportsSuperChat = config.superChatEnabled && siteSupportsSuperChat(config.siteId);
       for (const event of events) {
@@ -605,6 +614,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           fontSize: config.fontSize,
           fontStroke: config.fontStroke,
           opacity: config.opacity,
+          laneCount: isPinnedDanmakuEvent(event) ? topLaneCount : scrollLaneCount,
           aggregationKey: aggregation.key ?? undefined,
           aggregationCount: aggregation.count,
         });
@@ -890,11 +900,16 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     instances.scroll.setFontSize(fontSize, laneHeight);
     instances.top.setFontSize(fontSize, laneHeight);
     instances.scroll.setArea({ ...danmuLayerAreaConfig("scroll", normalizedArea), reflow: true });
-    for (const { comment } of recordsRef.current.values()) {
+    // 舞台高度从 ref 读：它随窗口尺寸每帧变化，进依赖数组会把整段
+    // setFontSize/setArea 重排接到拖拽窗口的每一步上。
+    const scrollLaneCount = danmuLaneCount(stageHeightRef.current, laneHeight, normalizedArea);
+    const topLaneCount = danmuLaneCount(stageHeightRef.current, laneHeight, 1);
+    for (const { comment, layer } of recordsRef.current.values()) {
       updateDanmuAppearance(comment, {
         fontSize,
         fontStroke,
         opacity,
+        laneCount: layer === "top" ? topLaneCount : scrollLaneCount,
       });
     }
   }, [fontSize, fontStroke, laneHeight, normalizedArea, opacity]);
