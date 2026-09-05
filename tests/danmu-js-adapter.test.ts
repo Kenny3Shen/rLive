@@ -243,32 +243,43 @@ describe("danmu.js event mapping", () => {
 
 describe("danmu.js image bullet track span", () => {
   const EMOTE_URL = "https://i0.hdslb.com/bfs/emote/a.png";
+  const LARGE_EMOTE = { type: "image", image_url: EMOTE_URL, large: true } as const;
+  const INLINE_EMOTE = { type: "image", image_url: EMOTE_URL } as const;
 
   /** danmu.js 的轨道占用：`ceil(bulletHeight / channelSize)`（`Channel.addBullet`）。 */
   function trackSpanOf(height: unknown, fontSize: number): number {
     return Math.ceil(Number.parseFloat(String(height)) / danmuLaneHeight(fontSize));
   }
 
-  test("reserves two channels for image danmaku and one for text", () => {
-    const image = danmuCommentFromEvent(
-      chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+  test("reserves two channels for a large emote and one for text", () => {
+    const large = danmuCommentFromEvent(
+      chat({ content: "[装扮]", spans: [LARGE_EMOTE] }),
       mappingOptions({ laneCount: 10 }),
     );
     const text = danmuCommentFromEvent(chat(), mappingOptions({ laneCount: 10 }));
 
-    expect(image?.style?.height).toBe(`${DANMU_JS_IMAGE_TRACK_SPAN * danmuLaneHeight(18)}px`);
-    expect(trackSpanOf(image?.style?.height, 18)).toBe(DANMU_JS_IMAGE_TRACK_SPAN);
+    expect(large?.style?.height).toBe(`${DANMU_JS_IMAGE_TRACK_SPAN * danmuLaneHeight(18)}px`);
+    expect(trackSpanOf(large?.style?.height, 18)).toBe(DANMU_JS_IMAGE_TRACK_SPAN);
     expect(trackSpanOf(text?.style?.height, 18)).toBe(1);
   });
 
-  test("treats a text and emote mix as an image bullet", () => {
+  test("keeps an inline emote mix on a single channel", () => {
     const comment = danmuCommentFromEvent(
       chat({
         content: "打卡[dog]",
-        spans: [
-          { type: "text", text: "打卡" },
-          { type: "image", image_url: EMOTE_URL },
-        ],
+        spans: [{ type: "text", text: "打卡" }, INLINE_EMOTE],
+      }),
+      mappingOptions({ laneCount: 10 }),
+    );
+
+    expect(trackSpanOf(comment?.style?.height, 18)).toBe(1);
+  });
+
+  test("treats a bullet mixing large and inline emotes as a large one", () => {
+    const comment = danmuCommentFromEvent(
+      chat({
+        content: "[装扮]看[dog]",
+        spans: [LARGE_EMOTE, { type: "text", text: "看" }, INLINE_EMOTE],
       }),
       mappingOptions({ laneCount: 10 }),
     );
@@ -277,10 +288,10 @@ describe("danmu.js image bullet track span", () => {
   });
 
   // 车道不足两条时 danmu.js 会以 `exceed channels.length` 拒绝双轨道 bullet，
-  // 那样窄舞台上的图片弹幕一条都不会上屏。
+  // 那样窄舞台上的大表情会一条都不上屏。
   test("falls back to a single channel when the layer offers one lane", () => {
     const comment = danmuCommentFromEvent(
-      chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+      chat({ content: "[装扮]", spans: [LARGE_EMOTE] }),
       mappingOptions({ laneCount: 1 }),
     );
 
@@ -289,23 +300,23 @@ describe("danmu.js image bullet track span", () => {
   });
 
   // 高度必须落在车道网格上：写成 em 时 `2 × 1.4em` 会比两条车道高出零点几像素，
-  // 于是图片弹幕吃掉第三条轨道。
+  // 于是大表情吃掉第三条轨道。
   test("keeps the bullet box on the lane grid at every font size", () => {
     for (const fontSize of [12, 14, 18, 24, 30, 48]) {
-      const image = danmuCommentFromEvent(
-        chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+      const large = danmuCommentFromEvent(
+        chat({ content: "[装扮]", spans: [LARGE_EMOTE] }),
         mappingOptions({ fontSize, laneCount: 10 }),
       );
       const text = danmuCommentFromEvent(chat(), mappingOptions({ fontSize, laneCount: 10 }));
 
-      expect(trackSpanOf(image?.style?.height, fontSize)).toBe(DANMU_JS_IMAGE_TRACK_SPAN);
+      expect(trackSpanOf(large?.style?.height, fontSize)).toBe(DANMU_JS_IMAGE_TRACK_SPAN);
       expect(trackSpanOf(text?.style?.height, fontSize)).toBe(1);
     }
   });
 
   test("re-measures the box when the font size changes", () => {
     const comment = danmuCommentFromEvent(
-      chat({ content: "[dog]", spans: [{ type: "image", image_url: EMOTE_URL }] }),
+      chat({ content: "[装扮]", spans: [LARGE_EMOTE] }),
       mappingOptions({ laneCount: 10 }),
     );
     expect(comment).not.toBeNull();

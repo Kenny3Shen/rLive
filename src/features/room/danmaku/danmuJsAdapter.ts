@@ -154,17 +154,19 @@ export function danmuLaneHeight(fontSize: number): number {
 }
 
 /**
- * bullet 占据的轨道数：带图片的占 {@link DANMU_JS_IMAGE_TRACK_SPAN} 条，其余占一条。
+ * bullet 占据的轨道数：带大表情（B 站装扮表情、Twitch 第三方表情等）的占
+ * {@link DANMU_JS_IMAGE_TRACK_SPAN} 条，其余——含文字与内联小表情的混排——占一条。
  *
  * 车道数不足时退回单轨道：danmu.js 会以 `exceed channels.length` 拒绝
  * 占用超过车道总数的 bullet，否则窄舞台（小窗口叠加最小显示区域）上的
- * 图片弹幕会一条都不上屏。
+ * 大表情弹幕会一条都不上屏。
  */
 export function danmuTrackSpan(
   spans: readonly DanmakuContentSpan[] | undefined,
   laneCount?: number,
 ): number {
-  if (!spans?.some((span) => span.type === "image")) return 1;
+  const hasLargeEmote = spans?.some((span) => span.type === "image" && span.large === true);
+  if (!hasLargeEmote) return 1;
   const lanes = Number.isFinite(laneCount) ? Math.floor(laneCount as number) : Number.POSITIVE_INFINITY;
   return lanes >= DANMU_JS_IMAGE_TRACK_SPAN ? DANMU_JS_IMAGE_TRACK_SPAN : 1;
 }
@@ -396,10 +398,11 @@ function appendRichSpans(
   spans: readonly DanmakuContentSpan[],
   trackSpan: number,
 ): void {
-  // 表情跟着轨道成比例放大：每条轨道 `DANMAKU_IMAGE_SCALE`em，与单轨道时相同的
-  // 呼吸空间。它始终装得下预留的行盒 —— 字号下限 12px 起，
-  // `span × 1.35em` 都小于 `span × round(1.4 × fontSize)`。
-  const imageEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
+  // 大表情跟着轨道成比例放大：每条轨道 `DANMAKU_IMAGE_SCALE`em，与单轨道时
+  // 相同的呼吸空间；内联小表情永远保持单轨道尺寸。大表情始终装得下预留的
+  // 行盒 —— 字号下限 12px 起，`span × 1.35em` 都小于 `span × round(1.4 × fontSize)`。
+  const largeEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
+  const inlineEdge = `${DANMAKU_IMAGE_SCALE}em`;
   for (const span of spans) {
     if (span.type === "text") {
       appendText(parent, span.text);
@@ -420,7 +423,10 @@ function appendRichSpans(
     // 放在策略之后设置：策略只对尚未发出的请求生效，
     // 且在代理未启动、使用直连 CDN URL 时仍然重要。
     image.src = danmakuImageRequestUrl(imageUrl);
-    image.className = "rlive-danmu-image";
+    image.className =
+      span.large === true ? "rlive-danmu-image rlive-danmu-image-large" : "rlive-danmu-image";
+    // 标记的 class 供字号/车道变化时按各自尺寸重写，见 `updateDanmuAppearance`。
+    const imageEdge = span.large === true ? largeEdge : inlineEdge;
     image.style.width = imageEdge;
     image.style.height = imageEdge;
     image.style.marginInline = "1px";
@@ -573,10 +579,15 @@ export function updateDanmuAppearance(
     element.style.setProperty("paint-order", String(style.paintOrder));
   }
   // 表情边长用 em，字号变化自动跟随；只有轨道数翻转（车道数掉到两条以下）
-  // 才需要重写已上屏 bullet 里的图片。
+  // 才需要重写已上屏 bullet 里的图片。大表情按新轨道数缩放，
+  // 内联小表情回到单轨道尺寸。
   if (trackSpanChanged) {
-    const imageEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
+    const largeEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
+    const inlineEdge = `${DANMAKU_IMAGE_SCALE}em`;
     for (const image of element.querySelectorAll<HTMLElement>(".rlive-danmu-image")) {
+      const imageEdge = image.classList.contains("rlive-danmu-image-large")
+        ? largeEdge
+        : inlineEdge;
       image.style.width = imageEdge;
       image.style.height = imageEdge;
     }

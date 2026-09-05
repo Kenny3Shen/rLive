@@ -744,7 +744,19 @@ fn safe_bilibili_image_url(value: &str) -> Option<String> {
     Some(url.into())
 }
 
-fn add_bilibili_emote(emotes: &mut HashMap<String, String>, key: &str, raw_url: Option<&Value>) {
+/// 一条弹幕里实际引用到的表情：图片地址与是否为大表情。
+#[derive(Clone)]
+struct BilibiliEmote {
+    url: String,
+    large: bool,
+}
+
+fn add_bilibili_emote(
+    emotes: &mut HashMap<String, BilibiliEmote>,
+    key: &str,
+    raw_url: Option<&Value>,
+    large: bool,
+) {
     let key = key.trim();
     if key.is_empty()
         || key.len() > MAX_DANMAKU_EMOTE_TOKEN_BYTES
@@ -758,10 +770,14 @@ fn add_bilibili_emote(emotes: &mut HashMap<String, String>, key: &str, raw_url: 
     else {
         return;
     };
-    emotes.insert(key.to_string(), url);
+    emotes.insert(key.to_string(), BilibiliEmote { url, large });
 }
 
-fn add_bilibili_extra_emotes(emotes: &mut HashMap<String, String>, extra: &Value, message: &str) {
+fn add_bilibili_extra_emotes(
+    emotes: &mut HashMap<String, BilibiliEmote>,
+    extra: &Value,
+    message: &str,
+) {
     let Some(items) = extra.get("emots").and_then(Value::as_object) else {
         return;
     };
@@ -769,26 +785,20 @@ fn add_bilibili_extra_emotes(emotes: &mut HashMap<String, String>, extra: &Value
         // 该映射可能包含整个房间当前可用的表情包。
         // 只保留这条评论实际引用到的 token。
         if message.contains(key) {
-            add_bilibili_emote(emotes, key, emot.get("url"));
+            add_bilibili_emote(emotes, key, emot.get("url"), false);
         }
     }
 }
 
 /// 按 Bilibili Web 客户端的解码方式构建有序的文本/图片片段：
-/// 整条消息级的一次性表情可能位于 `info[0][13].url`，
-/// 而内联表情按 token 存放在 `info[0][15].extra.emots` 的 JSON 中。
+/// 整条消息级的装扮大表情可能位于 `info[0][13].url`，
+/// 而内联小表情按 token 存放在 `info[0][15].extra.emots` 的 JSON 中。
 fn bilibili_content_spans(info: &[Value], message: &str) -> Option<Vec<DanmakuContentSpan>> {
     let metadata = info.first()?.as_array()?;
-    let mut emotes = HashMap::<String, String>::new();
+    let mut emotes = HashMap::<String, BilibiliEmote>::new();
 
-    if message.starts_with('[') && message.ends_with(']') {
-        add_bilibili_emote(
-            &mut emotes,
-            message,
-            metadata.get(13).and_then(|value| value.get("url")),
-        );
-    }
-
+    // 先收集内联表情：当同一个 token 两边都出现时，
+    // `info[0][13]` 的整条大表情才是该消息的权威来源，后插入覆盖前者。
     if let Some(extra) = metadata.get(15).and_then(|value| value.get("extra")) {
         match extra {
             Value::String(serialized) if !serialized.is_empty() => {
@@ -799,6 +809,15 @@ fn bilibili_content_spans(info: &[Value], message: &str) -> Option<Vec<DanmakuCo
             Value::Object(_) => add_bilibili_extra_emotes(&mut emotes, extra, message),
             _ => {}
         }
+    }
+
+    if message.starts_with('[') && message.ends_with(']') {
+        add_bilibili_emote(
+            &mut emotes,
+            message,
+            metadata.get(13).and_then(|value| value.get("url")),
+            true,
+        );
     }
 
     if emotes.is_empty() {
@@ -828,8 +847,11 @@ fn bilibili_content_spans(info: &[Value], message: &str) -> Option<Vec<DanmakuCo
                     text: std::mem::take(&mut text),
                 });
             }
-            let image_url = emotes.get(key)?.clone();
-            spans.push(DanmakuContentSpan::Image { image_url });
+            let emote = emotes.get(key)?;
+            spans.push(DanmakuContentSpan::Image {
+                image_url: emote.url.clone(),
+                large: emote.large,
+            });
             if spans.len() > MAX_DANMAKU_CONTENT_SPANS {
                 return None;
             }
@@ -1662,13 +1684,15 @@ mod tests {
                     text: "前缀".into()
                 },
                 DanmakuContentSpan::Image {
-                    image_url: "https://i0.hdslb.com/bfs/emote/wuthering-question.png".into()
+                    image_url: "https://i0.hdslb.com/bfs/emote/wuthering-question.png".into(),
+                    large: false,
                 },
                 DanmakuContentSpan::Text {
                     text: "中间".into()
                 },
                 DanmakuContentSpan::Image {
-                    image_url: "https://i0.hdslb.com/bfs/emote/ave-mujica.png".into()
+                    image_url: "https://i0.hdslb.com/bfs/emote/ave-mujica.png".into(),
+                    large: false,
                 },
                 DanmakuContentSpan::Text {
                     text: "后缀".into()
@@ -1695,7 +1719,8 @@ mod tests {
             Some(vec![DanmakuContentSpan::Image {
                 image_url:
                     "https://i0.hdslb.com/bfs/live/b3495aaa935b045bfc2e1d52738ea7b124e0d552.png"
-                        .into()
+                        .into(),
+                large: true,
             }])
         );
 
@@ -1715,6 +1740,33 @@ mod tests {
                 .unwrap()
                 .spans
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn parse_danmu_msg_prefers_the_one_off_emote_when_both_sources_carry_the_token() {
+        let mut metadata = vec![Value::Null; 16];
+        metadata[13] = serde_json::json!({
+            "url": "https://i0.hdslb.com/bfs/live/one-off.png"
+        });
+        metadata[15] = serde_json::json!({
+            "extra": serde_json::json!({
+                "emots": {"[同款]": {"url": "https://i0.hdslb.com/bfs/emote/inline.png"}}
+            })
+            .to_string()
+        });
+        let payload = serde_json::json!({
+            "cmd": "DANMU_MSG",
+            "info": [metadata, "[同款]", [1, "alice", 0]]
+        });
+
+        let event = parse_message_json(&payload.to_string()).unwrap();
+        assert_eq!(
+            event.spans,
+            Some(vec![DanmakuContentSpan::Image {
+                image_url: "https://i0.hdslb.com/bfs/live/one-off.png".into(),
+                large: true,
+            }])
         );
     }
 
