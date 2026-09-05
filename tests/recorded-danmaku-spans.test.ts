@@ -55,7 +55,7 @@ describe("recorded danmaku spans", () => {
     expect(entry).toBeDefined();
     expect(recordedDanmakuSpans(entry!, 1)).toEqual([
       { type: "text", text: "打卡" },
-      { type: "image", image_url: NORMALIZED_EMOTE_URL },
+      { type: "image", image_url: NORMALIZED_EMOTE_URL, large: false },
     ]);
   });
 
@@ -74,10 +74,10 @@ describe("recorded danmaku spans", () => {
 
     // 计数为 1 是未合并的情况，不得添加后缀。
     expect(recordedDanmakuSpans(entry!, 1)).toEqual([
-      { type: "image", image_url: NORMALIZED_EMOTE_URL },
+      { type: "image", image_url: NORMALIZED_EMOTE_URL, large: false },
     ]);
     expect(recordedDanmakuSpans(entry!, 4)).toEqual([
-      { type: "image", image_url: NORMALIZED_EMOTE_URL },
+      { type: "image", image_url: NORMALIZED_EMOTE_URL, large: false },
       { type: "text", text: " ×4" },
     ]);
   });
@@ -96,7 +96,7 @@ describe("recorded danmaku spans", () => {
     expect(recordedDanmakuSpans(entry!, 1)).toEqual([
       { type: "text", text: "【SC】" },
       { type: "text", text: "谢谢" },
-      { type: "image", image_url: NORMALIZED_EMOTE_URL },
+      { type: "image", image_url: NORMALIZED_EMOTE_URL, large: false },
     ]);
   });
 });

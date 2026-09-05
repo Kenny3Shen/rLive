@@ -101,12 +101,21 @@ export type SuperChatInfo = {
 };
 
 /**
- * 直播聊天协议提供的、安全且有序的富文本片段。Bilibili 用它在文本消息中嵌入
- * 图片表情。
+ * 直播聊天协议提供的、安全且有序的富文本片段。Bilibili 与 Twitch 用它在
+ * 文本消息中嵌入图片表情。
  */
 export type DanmakuContentSpan =
   | { type: "text"; text: string }
-  | { type: "image"; image_url: string };
+  | {
+      type: "image";
+      image_url: string;
+      /**
+       * 大表情（Bilibili 装扮表情、Twitch 第三方表情等）：飘屏时占两条车道
+       * 并按车道数放大。普通内联表情为 `false` 或缺省——历史录制的伴生弹幕
+       * 文件没有该字段，按小表情处理。
+       */
+      large?: boolean;
+    };
 
 export type DanmakuEvent = {
   kind: DanmakuKind;

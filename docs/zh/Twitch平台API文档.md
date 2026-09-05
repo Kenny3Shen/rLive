@@ -103,7 +103,7 @@ Twitch 拒绝所有没有浏览器完整性上下文的 Relay 游标：只要请
 
 `danmaku_connect` 使用匿名 IRC WebSocket 加入当前频道并接收聊天。匿名身份没有账号写入权限，因此 rLive 不提供 Twitch 弹幕发送、订阅、礼物、支付或频道管理功能。
 
-官方图片表情不需额外请求：IRC `emotes` 标签已携带 `<emote_id>:<start>-<end>` 位置（按 code point 计数），解析器据此把消息拆为有序的文本/图片 `DanmakuContentSpan`，图片指向 `https://static-cdn.jtvnw.net/emoticons/v2/<id>/default/dark/2.0`。位置越界、重叠或 id 含非法字符时整条丢弃片段并回退纯文本（`/me` 动作消息的 `\x01ACTION` 包裹会让下标错位，属于该回退路径）。前端复用与 B 站表情相同的渲染与本机图片代理缓存路径。
+官方图片表情不需额外请求：IRC `emotes` 标签已携带 `<emote_id>:<start>-<end>` 位置（按 code point 计数），解析器据此把消息拆为有序的文本/图片 `DanmakuContentSpan`，图片指向 `https://static-cdn.jtvnw.net/emoticons/v2/<id>/default/dark/2.0`。位置越界、重叠或 id 含非法字符时整条丢弃片段并回退纯文本（`/me` 动作消息的 `\x01ACTION` 包裹会让下标错位，属于该回退路径）。前端复用与 B 站表情相同的渲染与本机图片代理缓存路径。官方表情按内联小表情渲染（与文字同行、单条车道）；7TV 命中的片段带 `large` 标记，飘屏按大表情占两条车道并放大。
 
 ### 7TV 第三方表情
 

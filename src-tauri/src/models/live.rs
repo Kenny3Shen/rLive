@@ -347,15 +347,22 @@ pub struct SuperChatInfo {
 
 /// 经过校验的富文本弹幕消息有序片段。
 ///
-/// 目前仅针对 Bilibili 图片表情发出。图片 URL 只有在强制 HTTPS 且主机属于
-/// Bilibili 自有 CDN 之后才会被解码器接受，
+/// 目前仅针对 Bilibili 与 Twitch 图片表情发出。图片 URL 只有在强制 HTTPS 且
+/// 主机属于平台自有 CDN 之后才会被解码器接受，
 /// 因此消费方可直接交给图片加载器，
 /// 而不必把任意协议内容当作标记解析。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DanmakuContentSpan {
     Text { text: String },
-    Image { image_url: String },
+    Image {
+        image_url: String,
+        /// 大表情（Bilibili 装扮表情、Twitch 第三方表情等）：飘屏时占两条
+        /// 车道并按车道数放大；普通内联表情与文字同尺寸。
+        /// 历史录制伴生文件缺少该字段，按 `false` 反序列化。
+        #[serde(default)]
+        large: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

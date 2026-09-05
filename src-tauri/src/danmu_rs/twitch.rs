@@ -167,6 +167,8 @@ fn emote_spans(tags: Option<&str>, content: &str) -> Option<Vec<DanmakuContentSp
         }
         spans.push(DanmakuContentSpan::Image {
             image_url: format!("{EMOTE_CDN_BASE}/{id}/default/dark/2.0"),
+            // 官方表情与文字同行混排，保持内联尺寸。
+            large: false,
         });
         cursor = end + 1;
     }
@@ -347,6 +349,8 @@ fn apply_seven_tv_spans(
                     }
                     output.push(DanmakuContentSpan::Image {
                         image_url: image_url.clone(),
+                        // 7TV 第三方表情按大表情渲染：飘屏占两条车道并放大。
+                        large: true,
                     });
                 }
                 None => {
@@ -833,14 +837,17 @@ mod tests {
             vec![
                 DanmakuContentSpan::Image {
                     image_url: format!("{EMOTE_CDN_BASE}/25/default/dark/2.0"),
+                    large: false,
                 },
                 DanmakuContentSpan::Text { text: " ".into() },
                 DanmakuContentSpan::Image {
                     image_url: format!("{EMOTE_CDN_BASE}/1902/default/dark/2.0"),
+                    large: false,
                 },
                 DanmakuContentSpan::Text { text: " ".into() },
                 DanmakuContentSpan::Image {
                     image_url: format!("{EMOTE_CDN_BASE}/1902/default/dark/2.0"),
+                    large: false,
                 },
             ],
         );
@@ -855,6 +862,7 @@ mod tests {
                 },
                 DanmakuContentSpan::Image {
                     image_url: format!("{EMOTE_CDN_BASE}/25/default/dark/2.0"),
+                    large: false,
                 },
                 DanmakuContentSpan::Text {
                     text: " 呀".into()
@@ -970,6 +978,7 @@ mod tests {
                 },
                 DanmakuContentSpan::Image {
                     image_url: "https://cdn.7tv.app/emote/1/2x.webp".into(),
+                    large: true,
                 },
                 DanmakuContentSpan::Text {
                     text: " now".into(),
@@ -999,12 +1008,14 @@ mod tests {
             vec![
                 DanmakuContentSpan::Image {
                     image_url: format!("{EMOTE_CDN_BASE}/25/default/dark/2.0"),
+                    large: false,
                 },
                 DanmakuContentSpan::Text {
                     text: " and ".into(),
                 },
                 DanmakuContentSpan::Image {
                     image_url: "https://cdn.7tv.app/emote/2/2x.webp".into(),
+                    large: true,
                 },
             ],
         );

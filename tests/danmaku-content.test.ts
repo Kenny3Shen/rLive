@@ -85,6 +85,7 @@ describe("rich danmaku content", () => {
       {
         type: "image",
         image_url: "https://i0.hdslb.com/bfs/emote/question.png",
+        large: false,
       },
       { type: "text", text: "后缀" },
     ]);
@@ -105,13 +106,23 @@ describe("rich danmaku content", () => {
       { type: "text", text: " ×3" },
     ]);
   });
+
+  test("preserves the large-emote flag through normalization", () => {
+    // 大表情（装扮/第三方）决定飘屏轨道占用；归一化不得把它丢掉。
+    expect(
+      richDanmakuContent([{ type: "image", image_url: EMOTE_URL, large: true }]),
+    ).toEqual([{ type: "image", image_url: NORMALIZED_EMOTE_URL, large: true }]);
+    expect(hasValidDanmakuContentSpans([{ type: "image", image_url: EMOTE_URL, large: "是" }])).toBe(
+      false,
+    );
+  });
 });
 
 describe("floating rich spans", () => {
   test("normalizes protocol emotes for both renderers", () => {
     expect(floatingRichSpans(spanEvent())).toEqual([
       { type: "text", text: "打卡" },
-      { type: "image", image_url: NORMALIZED_EMOTE_URL },
+      { type: "image", image_url: NORMALIZED_EMOTE_URL, large: false },
     ]);
   });
 
@@ -119,7 +130,7 @@ describe("floating rich spans", () => {
     expect(floatingRichSpans(spanEvent({ kind: "super_chat" }))).toEqual([
       { type: "text", text: "【SC】" },
       { type: "text", text: "打卡" },
-      { type: "image", image_url: NORMALIZED_EMOTE_URL },
+      { type: "image", image_url: NORMALIZED_EMOTE_URL, large: false },
     ]);
   });
 
@@ -136,7 +147,7 @@ describe("floating rich spans", () => {
 
     expect(spans).toEqual([
       { type: "text", text: "【SC】谢谢" },
-      { type: "image", image_url: NORMALIZED_EMOTE_URL },
+      { type: "image", image_url: NORMALIZED_EMOTE_URL, large: false },
     ]);
   });
 

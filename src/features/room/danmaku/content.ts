@@ -68,8 +68,9 @@ export function danmakuImageRequestUrl(imageUrl: string): string {
 
 export function isDanmakuContentSpan(value: unknown): value is DanmakuContentSpan {
   if (!value || typeof value !== "object") return false;
-  const span = value as { type?: unknown; text?: unknown; image_url?: unknown };
+  const span = value as { type?: unknown; text?: unknown; image_url?: unknown; large?: unknown };
   if (span.type === "text") return typeof span.text === "string";
+  if (span.large !== undefined && typeof span.large !== "boolean") return false;
   return span.type === "image" && normalizeDanmakuImageUrl(span.image_url) !== null;
 }
 
@@ -95,7 +96,9 @@ export function richDanmakuContent(spans: unknown): readonly DanmakuContentSpan[
       continue;
     }
     const imageUrl = normalizeDanmakuImageUrl(span.image_url);
-    if (imageUrl) normalized.push({ type: "image", image_url: imageUrl });
+    if (imageUrl) {
+      normalized.push({ type: "image", image_url: imageUrl, large: span.large === true });
+    }
   }
   return normalized.some((span) => span.type === "image") ? normalized : null;
 }
