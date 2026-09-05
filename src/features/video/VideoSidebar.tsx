@@ -751,7 +751,8 @@ function UgcSeasonList({
 
 /**
  * 多 P 选集列表。与合集面板同构：当前播放项按 cid 高亮并滚动到可视区，
- * 点任意 P 即跳转，连播沿分 P 列表走。
+ * 点任意 P 即跳转，连播沿分 P 列表走。标题行即收起开关（与合集折叠行
+ * 同款画法）：左侧「选集」、右侧「共 x P」，点按整行切换列表显隐。
  */
 function PartsPanel({
   bvid,
@@ -774,57 +775,75 @@ function PartsPanel({
   }) => void;
 }) {
   const currentRowRef = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(true);
 
-  // 打开选集页签或换 P 时把正在播的那 P 滚到可视区中央（与合集面板同一策略）。
+  // 打开选集页签或换 P 时把正在播的那 P 滚到可视区中央（与合集面板同一策略）；
+  // 收起后再展开也重新定位，长列表不至于回到顶部找不到当前 P。
   useEffect(() => {
-    currentRowRef.current?.scrollIntoView({ block: "center" });
-  }, [currentCid]);
+    if (open) currentRowRef.current?.scrollIntoView({ block: "center" });
+  }, [currentCid, open]);
 
   return (
     <div className="flex min-h-0 flex-col">
-      <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
-        <span className="shrink-0 text-xs font-medium">选集</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">共 {pages.length} P</span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        {pages.map((page) => {
-          const current = currentCid > 0 && page.cid === currentCid;
-          const label = page.part || `P${page.page}`;
-          return (
-            <button
-              key={page.cid}
-              ref={current ? currentRowRef : undefined}
-              type="button"
-              aria-current={current || undefined}
-              onClick={() =>
-                onNavigate({
-                  bvid,
-                  cid: page.cid,
-                  title: label,
-                  aid,
-                })
-              }
-              className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
-                current && "bg-primary/10",
-              )}
-            >
-              <span
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full shrink-0 items-center gap-2 border-b border-border/50 px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-muted/50"
+      >
+        <ChevronDown
+          aria-hidden
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground transition-transform",
+            !open && "-rotate-90",
+          )}
+        />
+        <span className="shrink-0">选集</span>
+        <span className="ml-auto shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
+          共 {pages.length} P
+        </span>
+      </button>
+      {open && (
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          {pages.map((page) => {
+            const current = currentCid > 0 && page.cid === currentCid;
+            const label = page.part || `P${page.page}`;
+            return (
+              <button
+                key={page.cid}
+                ref={current ? currentRowRef : undefined}
+                type="button"
+                aria-current={current || undefined}
+                onClick={() =>
+                  onNavigate({
+                    bvid,
+                    cid: page.cid,
+                    title: label,
+                    aid,
+                  })
+                }
                 className={cn(
-                  "min-w-7 shrink-0 text-center text-xs tabular-nums",
-                  current ? "font-semibold text-primary" : "text-muted-foreground",
+                  "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
+                  current && "bg-primary/10",
                 )}
               >
-                P{page.page}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                {formatVideoDuration(page.duration)}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+                <span
+                  className={cn(
+                    "min-w-7 shrink-0 text-center text-xs tabular-nums",
+                    current ? "font-semibold text-primary" : "text-muted-foreground",
+                  )}
+                >
+                  P{page.page}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                  {formatVideoDuration(page.duration)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -858,7 +877,11 @@ function PartsSeasonPanel({
   return (
     <div>
       {multiPart && (
+        // key 换稿件即重挂：选集收起态不跨稿件沿用 —— 每个多 P 稿件进来都
+        // 是默认展开的列表（与页签自动切到「选集」同一落点），同一稿件内
+        // 换 P（连播/点行跳转）不重挂、收起态保持。
         <PartsPanel
+          key={archive.bvid}
           bvid={archive.bvid}
           aid={archive.aid}
           pages={archive.pages}
