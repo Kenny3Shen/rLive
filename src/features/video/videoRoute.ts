@@ -12,12 +12,101 @@ export const VIDEO_SEARCH_PATH = "/video/search";
 /** 搜索页的关键词参数：住在 URL 里，Shell 头部的查询条与结果页因此无需共享状态。 */
 export const VIDEO_SEARCH_QUERY_PARAM = "q";
 
-/** 搜索页链接。不带关键词时进入空态并自动聚焦输入框。 */
-export function videoSearchPath(keyword?: string | null): string {
+/**
+ * 搜索页链接。不带关键词时进入空态并自动聚焦输入框；筛选非默认位追加为
+ * 查询参数（默认位不进 URL）。`filters` 省略即「无筛选」——头部查询条提交
+ * 新关键词时就是这么用的，新搜索天然重置筛选。
+ */
+export function videoSearchPath(
+  keyword?: string | null,
+  filters?: VideoSearchFilters | null,
+): string {
+  const params = new URLSearchParams();
   const trimmed = (keyword ?? "").trim();
-  return trimmed
-    ? `${VIDEO_SEARCH_PATH}?${VIDEO_SEARCH_QUERY_PARAM}=${encodeURIComponent(trimmed)}`
-    : VIDEO_SEARCH_PATH;
+  if (trimmed) params.set(VIDEO_SEARCH_QUERY_PARAM, trimmed);
+  if (filters) {
+    if (filters.order) params.set(VIDEO_SEARCH_ORDER_PARAM, filters.order);
+    if (filters.duration) params.set(VIDEO_SEARCH_DURATION_PARAM, String(filters.duration));
+    if (filters.zone) params.set(VIDEO_SEARCH_ZONE_PARAM, String(filters.zone));
+    if (filters.pubTime) params.set(VIDEO_SEARCH_PUBTIME_PARAM, filters.pubTime);
+  }
+  const query = params.toString();
+  return query ? `${VIDEO_SEARCH_PATH}?${query}` : VIDEO_SEARCH_PATH;
+}
+/** 搜索页四个筛选位的 URL 参数名。默认值不进 URL，保持链接干净。 */
+export const VIDEO_SEARCH_ORDER_PARAM = "order";
+export const VIDEO_SEARCH_DURATION_PARAM = "duration";
+export const VIDEO_SEARCH_ZONE_PARAM = "zone";
+export const VIDEO_SEARCH_PUBTIME_PARAM = "pubtime";
+/**
+ * 搜索排序（上游 `search/type` 的 `order` 位）。空串是综合排序，也是默认；
+ * B 站另有 `totalrank` 别名，这里用空串与后端的默认请求对齐。
+ * 标签对齐 B 站 Web 端搜索页，`scores`（评论最多）是 PiliPlus 多带的一档。
+ */
+export const VIDEO_SEARCH_ORDERS = [
+  { value: "", label: "综合排序" },
+  { value: "click", label: "最多点击" },
+  { value: "pubdate", label: "最新发布" },
+  { value: "dm", label: "最多弹幕" },
+  { value: "stow", label: "最多收藏" },
+  { value: "scores", label: "评论最多" },
+] as const;
+
+/** 内容时长（上游 `duration` 位，0 = 全部）。 */
+export const VIDEO_SEARCH_DURATIONS = [
+  { value: 0, label: "全部时长" },
+  { value: 1, label: "10分钟以下" },
+  { value: 2, label: "10-30分钟" },
+  { value: 3, label: "30-60分钟" },
+  { value: 4, label: "60分钟以上" },
+] as const;
+
+/** 发布时间预设（后端换算成 `pubtime_begin_s`/`pubtime_end_s`；day = 今天零点起）。 */
+export const VIDEO_SEARCH_PUB_TIMES = [
+  { value: "", label: "全部时间" },
+  { value: "day", label: "今天" },
+  { value: "week", label: "最近一周" },
+  { value: "halfYear", label: "最近半年" },
+] as const;
+
+export type VideoSearchOrder = (typeof VIDEO_SEARCH_ORDERS)[number]["value"];
+export type VideoSearchDuration = (typeof VIDEO_SEARCH_DURATIONS)[number]["value"];
+export type VideoSearchPubTime = (typeof VIDEO_SEARCH_PUB_TIMES)[number]["value"];
+
+/** 搜索的四格筛选。默认即「无筛选」，四个位都是各自的首项。 */
+export type VideoSearchFilters = {
+  order: VideoSearchOrder;
+  duration: VideoSearchDuration;
+  /** 搜索分区 tid（`video_search_zone_list`），0 = 全部。 */
+  zone: number;
+  pubTime: VideoSearchPubTime;
+};
+
+export const DEFAULT_VIDEO_SEARCH_FILTERS: VideoSearchFilters = {
+  order: "",
+  duration: 0,
+  zone: 0,
+  pubTime: "",
+};
+
+/** 解析 URL 里的筛选位；未知值一律回落默认，深链接因此不会打开奇怪的组合。 */
+export function parseVideoSearchFilters(params: URLSearchParams): VideoSearchFilters {
+  const order = VIDEO_SEARCH_ORDERS.find(
+    (item) => item.value === params.get(VIDEO_SEARCH_ORDER_PARAM),
+  );
+  const duration = VIDEO_SEARCH_DURATIONS.find(
+    (item) => item.value === Number(params.get(VIDEO_SEARCH_DURATION_PARAM)),
+  );
+  const pubTime = VIDEO_SEARCH_PUB_TIMES.find(
+    (item) => item.value === params.get(VIDEO_SEARCH_PUBTIME_PARAM),
+  );
+  const zone = Number(params.get(VIDEO_SEARCH_ZONE_PARAM));
+  return {
+    order: order?.value ?? DEFAULT_VIDEO_SEARCH_FILTERS.order,
+    duration: duration?.value ?? DEFAULT_VIDEO_SEARCH_FILTERS.duration,
+    zone: Number.isInteger(zone) && zone >= 0 ? zone : DEFAULT_VIDEO_SEARCH_FILTERS.zone,
+    pubTime: pubTime?.value ?? DEFAULT_VIDEO_SEARCH_FILTERS.pubTime,
+  };
 }
 
 /** 头部整行的四个内容页签。顺序即移动端横滑与 `PagePan` 的方向顺序。 */

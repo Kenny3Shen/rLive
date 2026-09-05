@@ -16,8 +16,17 @@ import {
 import type { VideoItem } from "@/shared/types/video";
 import { videoSearch } from "./videoApi";
 import { VideoCard } from "./VideoCard";
+import { VideoSearchFiltersBar } from "./VideoSearchFiltersBar";
 import { playlistItemFromVideoItem, dedupeVideoItems, type PlaylistItem } from "./playlistStore";
-import { VIDEO_SEARCH_QUERY_PARAM } from "./videoRoute";
+import {
+  VIDEO_SEARCH_DURATION_PARAM,
+  VIDEO_SEARCH_ORDER_PARAM,
+  VIDEO_SEARCH_PUBTIME_PARAM,
+  VIDEO_SEARCH_QUERY_PARAM,
+  VIDEO_SEARCH_ZONE_PARAM,
+  parseVideoSearchFilters,
+  type VideoSearchFilters,
+} from "./videoRoute";
 
 const GRID_CLASS =
   "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
@@ -45,12 +54,13 @@ const VideoGrid = memo(function VideoGrid({
  * 这一页只负责结果网格与无限滚动，滚动交给 Shell 的页面滚动容器。
  */
 export function VideoSearchPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const keyword = (searchParams.get(VIDEO_SEARCH_QUERY_PARAM) ?? "").trim();
+  const filters = parseVideoSearchFilters(searchParams);
 
   const listQuery = useInfiniteQuery({
-    queryKey: ["video", "search", keyword],
-    queryFn: ({ pageParam }) => videoSearch(keyword, pageParam),
+    queryKey: ["video", "search", keyword, filters],
+    queryFn: ({ pageParam }) => videoSearch(keyword, pageParam, filters),
     initialPageParam: 1,
     getNextPageParam: (lastPage, _allPages, lastPageParam) =>
       lastPage.has_more ? lastPageParam + 1 : undefined,
@@ -73,10 +83,25 @@ export function VideoSearchPage() {
   // 顺带计算不额外记忆化，量级最多几十条。
   const playlistItems = allItems.map(playlistItemFromVideoItem);
   const isEmpty = !isFetching && keyword && allItems.length === 0;
+  const changeFilters = (next: VideoSearchFilters) => {
+    const params = new URLSearchParams(searchParams);
+    // 与首页换分区同一取向：改筛选不往返回栈里堆一层。
+    params.delete(VIDEO_SEARCH_ORDER_PARAM);
+    params.delete(VIDEO_SEARCH_DURATION_PARAM);
+    params.delete(VIDEO_SEARCH_ZONE_PARAM);
+    params.delete(VIDEO_SEARCH_PUBTIME_PARAM);
+    if (next.order) params.set(VIDEO_SEARCH_ORDER_PARAM, next.order);
+    if (next.duration) params.set(VIDEO_SEARCH_DURATION_PARAM, String(next.duration));
+    if (next.zone) params.set(VIDEO_SEARCH_ZONE_PARAM, String(next.zone));
+    if (next.pubTime) params.set(VIDEO_SEARCH_PUBTIME_PARAM, next.pubTime);
+    setSearchParams(params, { replace: true });
+  };
 
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-4 pb-6">
-      <h1 className="sr-only">视频搜索{keyword ? `：${keyword}` : ""}</h1>
+      {keyword && (
+        <VideoSearchFiltersBar filters={filters} onChange={changeFilters} />
+      )}
 
       {error ? (
         <ErrorState error={error} title="搜索失败" onRetry={() => refetch()} />

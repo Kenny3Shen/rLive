@@ -1322,6 +1322,93 @@ pub const VIDEO_ZONES: &[(&str, i64)] = &[
     ("影视", 1001),
 ];
 
+/// 搜索筛选的分区 tid（`x/web-interface/search/type` 的 `tids` 位）。
+///
+/// 与 [`VIDEO_ZONES`] 的分区榜 rid 是两套 ID：搜索接口只认大区 tid，两个表不能混用。
+/// 「全部」不进表 —— `tids = 0` 就是它。取值与 PiliPlus 一致（其对齐 B 站网页端搜索）。
+pub const VIDEO_SEARCH_ZONES: &[(&str, i64)] = &[
+    ("动画", 1),
+    ("番剧", 13),
+    ("国创", 167),
+    ("音乐", 3),
+    ("舞蹈", 129),
+    ("游戏", 4),
+    ("知识", 36),
+    ("科技", 188),
+    ("运动", 234),
+    ("汽车", 223),
+    ("生活", 160),
+    ("美食", 221),
+    ("动物", 217),
+    ("鬼畜", 119),
+    ("时尚", 115),
+    ("资讯", 202),
+    ("娱乐", 5),
+    ("影视", 181),
+    ("纪录片", 177),
+    ("电影", 23),
+    ("电视剧", 11),
+];
+
+/// `search/type` 认的排序键。空串是综合排序（上游对缺省 order 的语义），保持
+/// 与既有请求一致地总是发送该位。
+const SEARCH_ORDERS: &[&str] = &["", "click", "pubdate", "dm", "stow", "scores"];
+/// 发布时间预设换算成上游的 `pubtime_begin_s` / `pubtime_end_s`（unix 秒）。
+///
+/// 口径与 PiliPlus 对齐：begin 是 N 天前的本地零点，end 是当天 23:59:59 ——
+/// 也就是「今天在内的最近 N+1 个自然日」。
+fn pub_time_window(
+    pub_time: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<(i64, i64)> {
+    let days_back = match pub_time {
+        "day" => 0,
+        "week" => 6,
+        "halfYear" => 179,
+        _ => return None,
+    };
+    let today = now.date_naive();
+    let begin_date = today - chrono::Duration::days(days_back);
+    let begin = begin_date
+        .and_hms_opt(0, 0, 0)?
+        .and_local_timezone(chrono::Local)
+        .single()?
+        .timestamp();
+    let end = today
+        .and_hms_opt(23, 59, 59)?
+        .and_local_timezone(chrono::Local)
+        .single()?
+        .timestamp();
+    Some((begin, end))
+}
+
+/// 组装搜索的筛选 query 位。
+///
+/// `order` 非法值回落综合排序，`duration` 越界夹回 0-4，负 `tids` 当 0；
+/// `pub_time` 未知预设不带发布时间位。默认输入产出与旧请求完全相同的参数
+/// （`order=""&duration=0&tids=0`），筛选因此是纯增量。
+fn search_filter_query(
+    order: Option<&str>,
+    duration: Option<i64>,
+    tids: Option<i64>,
+    pub_time: Option<&str>,
+    now: chrono::DateTime<chrono::Local>,
+) -> Vec<(&'static str, String)> {
+    let order = order.unwrap_or("").trim();
+    let order = if SEARCH_ORDERS.contains(&order) { order } else { "" };
+    let duration = duration.unwrap_or(0).clamp(0, 4);
+    let tids = tids.unwrap_or(0).max(0);
+    let mut query = vec![
+        ("order", order.to_string()),
+        ("duration", duration.to_string()),
+        ("tids", tids.to_string()),
+    ];
+    if let Some((begin, end)) = pub_time.and_then(|preset| pub_time_window(preset, now)) {
+        query.push(("pubtime_begin_s", begin.to_string()));
+        query.push(("pubtime_end_s", end.to_string()));
+    }
+    query
+}
 impl BilibiliSite {
     /// 首页推荐流。
     ///
@@ -1471,27 +1558,38 @@ impl BilibiliSite {
 
     /// 搜索视频（`x/web-interface/search/type`）。
     ///
-    /// 关键词搜索，支持分页。与直播搜索复用同一接口，只是 `search_type` 不同。
-    pub async fn video_search(&self, keyword: &str, page: u32) -> AppResult<VideoListPage> {
+    /// 关键词搜索，支持分页与可选筛选（排序 / 时长 / 分区 / 发布时间），
+    /// 筛选位由 [`search_filter_query`] 组装。与直播搜索复用同一接口，只是
+    /// `search_type` 不同。
+    pub async fn video_search(
+        &self,
+        keyword: &str,
+        page: u32,
+        order: Option<&str>,
+        duration: Option<i64>,
+        tids: Option<i64>,
+        pub_time: Option<&str>,
+    ) -> AppResult<VideoListPage> {
         if keyword.is_empty() {
             return Err(video_err("搜索缺少关键词"));
         }
+        let mut query = vec![
+            ("search_type", "video".to_string()),
+            ("keyword", keyword.to_string()),
+            ("page", page.to_string()),
+        ];
+        query.extend(search_filter_query(
+            order,
+            duration,
+            tids,
+            pub_time,
+            chrono::Local::now(),
+        ));
         let text = self
-            .get_json(
-                "https://api.bilibili.com/x/web-interface/search/type",
-                &[
-                    ("search_type", "video".into()),
-                    ("keyword", keyword.into()),
-                    ("page", page.to_string()),
-                    ("order", "".into()),
-                    ("duration", "0".into()),
-                    ("tids", "0".into()),
-                ],
-            )
+            .get_json("https://api.bilibili.com/x/web-interface/search/type", &query)
             .await?;
         parse_search_videos(&text, page)
     }
-
     /// UP 主空间视频列表（`x/space/wbi/arc/search`）。
     ///
     /// 获取指定 UP 主的投稿视频，支持分页。需要 WBI 签名。
@@ -2524,6 +2622,79 @@ mod tests {
         let last = parse_search_videos(&raw, 2).unwrap();
         assert!(!last.has_more);
         assert!(parse_search_videos("{}", 1).is_err());
+    }
+
+    /// 测试内共用的「已知本地时刻」构造（`Local::with_ymd_and_hms` 是
+    /// `TimeZone` trait 方法，这里走 NaiveDate 路径避免引入 trait 导入）。
+    fn local_dt(y: i32, m: u32, d: u32, h: u32) -> chrono::DateTime<chrono::Local> {
+        chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+    }
+
+    #[test]
+    fn search_filter_query_defaults_match_the_legacy_request() {
+        // 全默认时与旧请求逐字相同：order 空串、duration/tids 归零，不带发布时间位。
+        let query = search_filter_query(None, None, None, None, local_dt(2026, 9, 6, 12));
+        assert_eq!(
+            query,
+            vec![
+                ("order", "".to_string()),
+                ("duration", "0".to_string()),
+                ("tids", "0".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn search_filter_query_sanitizes_unknown_values() {
+        let query = search_filter_query(
+            Some("hack"),
+            Some(9),
+            Some(-3),
+            Some("lastYear"),
+            local_dt(2026, 9, 6, 12),
+        );
+        assert_eq!(
+            query,
+            vec![
+                ("order", "".to_string()),
+                ("duration", "4".to_string()),
+                ("tids", "0".to_string()),
+            ]
+        );
+    }
+
+
+    #[test]
+    fn pub_time_window_spans_local_midnights() {
+        // 本地时区语义：拿同一日期的本地零点比对时间戳，DST 边界之外两边
+        // 走同一条构造路径，时区差异互相抵消。
+        fn midnight(y: i32, m: u32, d: u32) -> i64 {
+            local_dt(y, m, d, 0).timestamp()
+        }
+
+        let now = local_dt(2026, 9, 6, 12);
+        // 最近一天：今天全天。
+        let (begin, end) = pub_time_window("day", now).unwrap();
+        assert_eq!(begin, midnight(2026, 9, 6));
+        assert_eq!(end - begin, 24 * 3600 - 1);
+
+        // 最近一周：6 天前零点起（今天在内的 7 个自然日）。
+        let (begin, _) = pub_time_window("week", now).unwrap();
+        assert_eq!(begin, midnight(2026, 8, 31));
+
+        // 最近半年：179 天前零点起（今天在内的 180 个自然日）。
+        let (begin, _) = pub_time_window("halfYear", now).unwrap();
+        assert_eq!(begin, midnight(2026, 3, 11));
+
+        assert!(pub_time_window("month", now).is_none());
+        // 跨月回退由 chrono 的日期算术处理，这里只固定一个已知组合。
+        let (begin, _) = pub_time_window("week", local_dt(2026, 3, 1, 8)).unwrap();
+        assert_eq!(begin, midnight(2026, 2, 23));
     }
 
     #[test]
