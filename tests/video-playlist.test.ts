@@ -4,6 +4,7 @@ import {
   playlistItemFromArchivePage,
   playlistItemFromSeasonEpisode,
   playlistItemFromVideoItem,
+  videoEndedAction,
   type PlaylistItem,
 } from "../src/features/video/playlistStore";
 import type { VideoItem } from "../src/shared/types/video";
@@ -76,5 +77,23 @@ describe("video playlist leftover guard", () => {
     // 直链 ?cid=123 不带 bvid：id 前缀为空，不会命中任何列表项。
     const items = [playlistItemFromVideoItem(searchItem("BV1any", null), 0)];
     expect(playlistContainsCurrentItem(items, null, 0)).toBe(false);
+  });
+});
+
+describe("video ended action", () => {
+  test("lets looping win over auto play next", () => {
+    // 循环播放是「就看这一集」的显式意图,不能被连播带走(哪怕还有下一集)。
+    expect(videoEndedAction(true, true, true)).toBe("loop");
+    expect(videoEndedAction(true, false, false)).toBe("loop");
+  });
+
+  test("advances only when auto play next has somewhere to go", () => {
+    expect(videoEndedAction(false, true, true)).toBe("next");
+    // 最后一集:连播退化成停住,而不是重播。
+    expect(videoEndedAction(false, true, false)).toBe("stop");
+  });
+
+  test("stops when both preferences are off", () => {
+    expect(videoEndedAction(false, false, true)).toBe("stop");
   });
 });

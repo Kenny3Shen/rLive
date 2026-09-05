@@ -1,27 +1,22 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Car, Cast, ChevronLeft, Ellipsis, Timer, type LucideIcon } from "lucide-react";
+import { Car, Cast, ChevronLeft, Timer, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import {
-  glassOptionClass,
-  glassOptionSelectedClass,
-  glassPanelClass,
-  glassSeparatorClass,
-  glassTitleClass,
-} from "@/shared/components/player/glassSurface";
+import { glassSeparatorClass } from "@/shared/components/player/glassSurface";
 import {
   PLAYER_CONTROL_BUTTON_CLASS,
   PLAYER_CONTROL_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
 } from "@/shared/components/player/PlayerControls";
-import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
+import {
+  PlayerHudOverflowMenu,
+  PlayerToolPanel,
+  PlayerToolTile,
+} from "@/shared/components/player/PlayerHudMenu";
 import {
   RoomIdentityLine,
   roomIdentityOverflowDistance,
 } from "@/shared/components/player/RoomIdentityLine";
-import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import type { SiteId } from "@/shared/types/live";
 import { cn, formatOnline } from "@/lib/utils";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
@@ -147,7 +142,6 @@ export function PlayerFullscreenHud({
   const [autoSendExpanded, setAutoSendExpanded] = useState(false);
   const [sleepTimerExpanded, setSleepTimerExpanded] = useState(false);
   const [castExpanded, setCastExpanded] = useState(false);
-  const portrait = usePortraitOrientation();
 
   useEffect(() => {
     onOverlayInteractionChange?.(menuOpen);
@@ -164,7 +158,8 @@ export function PlayerFullscreenHud({
     roomActions.length > 0 ||
     playerActions.length > 0 ||
     autoSend !== undefined ||
-    sleepTimer !== undefined;
+    sleepTimer !== undefined ||
+    cast !== undefined;
 
   function runAction(action: PlayerHudRoomAction) {
     setMenuOpen(false);
@@ -182,20 +177,34 @@ export function PlayerFullscreenHud({
       {roomActions.length > 0 && (
         <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
           {roomActions.map((action) => (
-            <HudActionTile key={action.id} action={action} onRun={runAction} />
+            <PlayerToolTile
+              key={action.id}
+              icon={action.icon}
+              label={action.label}
+              pressed={action.pressed}
+              disabled={action.disabled}
+              onClick={() => runAction(action)}
+            />
           ))}
         </div>
       )}
-      {roomActions.length > 0 && (playerActions.length > 0 || autoSend || sleepTimer) && (
+      {roomActions.length > 0 && (playerActions.length > 0 || autoSend || sleepTimer || cast) && (
         <Separator className={cn("my-2", glassSeparatorClass())} />
       )}
-      {(playerActions.length > 0 || autoSend || sleepTimer) && (
+      {(playerActions.length > 0 || autoSend || sleepTimer || cast) && (
         <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
           {playerActions.map((action) => (
-            <HudActionTile key={action.id} action={action} onRun={runAction} />
+            <PlayerToolTile
+              key={action.id}
+              icon={action.icon}
+              label={action.label}
+              pressed={action.pressed}
+              disabled={action.disabled}
+              onClick={() => runAction(action)}
+            />
           ))}
           {autoSend && (
-            <RoomToolTile
+            <PlayerToolTile
               icon={Car}
               label={autoSend.enabled ? "发送中" : "自动发送"}
               pressed={autoSendExpanded || autoSend.enabled}
@@ -208,7 +217,7 @@ export function PlayerFullscreenHud({
             />
           )}
           {sleepTimer && (
-            <RoomToolTile
+            <PlayerToolTile
               icon={Timer}
               label={sleepTimer.active ? "定时中" : "定时关闭"}
               pressed={sleepTimerExpanded || sleepTimer.active}
@@ -221,7 +230,7 @@ export function PlayerFullscreenHud({
             />
           )}
           {cast && (
-            <RoomToolTile
+            <PlayerToolTile
               icon={Cast}
               label={cast.device ? "投屏中" : "投屏"}
               pressed={castExpanded || cast.device != null}
@@ -237,21 +246,21 @@ export function PlayerFullscreenHud({
         </div>
       )}
       {autoSend && autoSendExpanded && (
-        <RoomToolPanel>
+        <PlayerToolPanel>
           <AutoDanmakuSendMenu
             autoSend={autoSend}
             variant="overlay"
             idPrefix="fullscreen-auto-danmaku"
           />
-        </RoomToolPanel>
+        </PlayerToolPanel>
       )}
       {sleepTimer && sleepTimerExpanded && (
-        <RoomToolPanel>
+        <PlayerToolPanel>
           <SleepTimerMenu timer={sleepTimer} showTrigger={false} variant="overlay" showHeader />
-        </RoomToolPanel>
+        </PlayerToolPanel>
       )}
       {cast && castExpanded && (
-        <RoomToolPanel>
+        <PlayerToolPanel>
           <CastMenu
             castUrl={cast.url}
             headers={cast.headers}
@@ -259,21 +268,10 @@ export function PlayerFullscreenHud({
             variant="overlay"
             onCastingDeviceChange={cast.onDeviceChange}
           />
-        </RoomToolPanel>
+        </PlayerToolPanel>
       )}
     </>
   );
-
-  const menuTriggerProps = {
-    variant: "ghost",
-    size: "icon-sm",
-    "aria-label": "更多房间操作",
-    className: cn(
-      PLAYER_CONTROL_BUTTON_CLASS,
-      PLAYER_CONTROL_ICON_CLASS,
-      PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-    ),
-  } as const;
 
   return (
     <div
@@ -315,127 +313,18 @@ export function PlayerFullscreenHud({
 
       {toolsSlot}
 
-      {hasMenu &&
-        (compact ? (
-          <>
-            <Button
-              {...menuTriggerProps}
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-            >
-              <Ellipsis data-icon="inline-start" aria-hidden />
-            </Button>
-            <Drawer open={menuOpen} onOpenChange={setMenuOpen}>
-              <DrawerContent
-                side={portrait ? "bottom" : "right"}
-                container={portalContainer}
-                glass
-                className={cn("space-y-2", glassPanelClass({ overlay: true }))}
-              >
-                <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay: true }))}>
-                  房间操作
-                </DrawerTitle>
-                {menuBody}
-              </DrawerContent>
-            </Drawer>
-          </>
-        ) : (
-          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-            <PopoverTrigger render={<Button {...menuTriggerProps} />}>
-              <Ellipsis data-icon="inline-start" aria-hidden />
-            </PopoverTrigger>
-            <PopoverContent
-              container={portalContainer}
-              side="bottom"
-              align="end"
-              collisionPadding={{ top: 12, right: 12, bottom: 24, left: 12 }}
-              sticky
-              glass
-              className={cn(
-                "max-h-[calc(100dvh-5rem)] w-[min(32rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] overflow-y-auto gap-0 p-1.5",
-                glassPanelClass({ overlay: true }),
-              )}
-            >
-              <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
-                房间操作
-              </PopoverTitle>
-              {menuBody}
-            </PopoverContent>
-          </Popover>
-        ))}
-    </div>
-  );
-}
-
-/** 图标在上文字在下的磁贴，与移动端房间操作抽屉一致。 */
-function HudActionTile({
-  action,
-  onRun,
-}: {
-  action: PlayerHudRoomAction;
-  onRun: (action: PlayerHudRoomAction) => void;
-}) {
-  const Icon = action.icon;
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      className={cn(
-        "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
-        glassOptionClass(),
-        action.pressed && glassOptionSelectedClass(),
+      {hasMenu && (
+        <PlayerHudOverflowMenu
+          label="更多房间操作"
+          title="房间操作"
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
+          compact={compact}
+          portalContainer={portalContainer}
+        >
+          {menuBody}
+        </PlayerHudOverflowMenu>
       )}
-      disabled={action.disabled}
-      aria-pressed={action.pressed}
-      onClick={() => onRun(action)}
-    >
-      <Icon className="size-5" aria-hidden />
-      <span className="max-w-full truncate">{action.label}</span>
-    </Button>
-  );
-}
-
-function RoomToolTile({
-  icon: Icon,
-  label,
-  pressed,
-  active,
-  disabled,
-  onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  pressed?: boolean;
-  active?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      disabled={disabled}
-      className={cn(
-        "h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3",
-        glassOptionClass(),
-        pressed && glassOptionSelectedClass(),
-      )}
-      aria-pressed={pressed}
-      onClick={onClick}
-    >
-      <span className="relative inline-flex">
-        <Icon className="size-5" aria-hidden />
-        {active && <ToolActiveDot />}
-      </span>
-      <span className="max-w-full truncate">{label}</span>
-    </Button>
-  );
-}
-
-function RoomToolPanel({ children }: { children: ReactNode }) {
-  return (
-    <div className={cn("mt-2 min-w-0 rounded-lg p-3", glassPanelClass({ overlay: true }))}>
-      {children}
     </div>
   );
 }
