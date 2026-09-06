@@ -10,7 +10,12 @@
 import { invokeCmd } from "@/shared/api/tauri";
 import { watchResumePosition } from "@/shared/watchProgress";
 import { videoPlayPath } from "./videoRoute";
-import type { VideoArchive, VideoHistoryItem, VideoHistoryKind } from "@/shared/types/video";
+import type {
+  SeasonEpisode,
+  VideoArchive,
+  VideoHistoryItem,
+  VideoHistoryKind,
+} from "@/shared/types/video";
 
 /** 观看历史的 react-query key 前缀；上报后按它失效缓存。 */
 export const VIDEO_HISTORY_QUERY_KEY = ["video-history"] as const;
@@ -82,6 +87,28 @@ export function videoResumeCid(
   return videoResumePosition(record, { cid: record.cid, epId: null }) > 0
     ? record.cid
     : archive.cid;
+}
+
+/**
+ * 番剧 / 影视卡片直入该播哪一集。
+ *
+ * 与 UGC 卡片的跨分 P 续播（`videoResumeCid`）同一意图：「上次退出的地方」
+ * 优先。差别在完成态的取向：剧集的内容单位是集，看完上一集后回到这部作品，
+ * 落点仍是那一集（从头播，位置续播交给 `videoResumePosition` 判定），而不是
+ * 像多 P 稿件那样退回首集——追番场景里「上次那集」比「第 1 集」有信息量。
+ * 历史停住的那一集已不在分集表里（合集改版、脏数据）时才退回首集；分集表
+ * 为空（版权/地区限制）返回 null，调用方据此展示可读的失败态。
+ */
+export function videoPgcEntryEpisode(
+  episodes: readonly SeasonEpisode[],
+  record: VideoHistoryItem | null | undefined,
+): SeasonEpisode | null {
+  const first = episodes[0];
+  if (!first) return null;
+  const last = record?.ep_id
+    ? episodes.find((episode) => episode.ep_id === record.ep_id)
+    : undefined;
+  return last ?? first;
 }
 
 /** 历史条目的续播链接：带上最后观看那一集的取流键。 */

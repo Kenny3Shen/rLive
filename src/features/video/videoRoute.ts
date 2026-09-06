@@ -246,17 +246,27 @@ export type VideoPlayTarget = {
   cid?: number | null;
   /** 填了就走 PGC playurl。 */
   epId?: string | null;
+  /**
+   * 番剧 / 影视卡片直入：索引/排行榜接口都不给 bvid/cid，链接只带 season_id，
+   * 由播放页解析出要播的那一集（有观看历史续播上次那一集，否则首集）后
+   * 把 URL 规范成带完整取流键的形态。
+   */
+  seasonId?: string | null;
   title?: string | null;
   /** 稿件 av 号，评论区的 `oid`。列表/分集数据都有；URL 直入时由播放页补齐。 */
   aid?: string | null;
 };
 
-/** 播放页链接。cid 与 bvid 至少给一个：cid 直接取流，只有 bvid 时由播放页补齐。 */
+/**
+ * 播放页链接。cid、bvid、season 至少给一个：cid 直接取流，只有 bvid 时由
+ * 播放页补齐，只有 season（番剧/影视卡片直入）时由播放页解析分集。
+ */
 export function videoPlayPath(target: VideoPlayTarget): string {
   const params = new URLSearchParams();
   if (target.cid && target.cid > 0) params.set("cid", String(target.cid));
   if (target.bvid) params.set("bvid", target.bvid);
   if (target.epId) params.set("ep_id", target.epId);
+  if (target.seasonId) params.set("season", target.seasonId);
   if (target.title) params.set("title", target.title);
   if (target.aid) params.set("aid", target.aid);
   return `${VIDEO_PLAY_PATH}?${params.toString()}`;
@@ -267,25 +277,31 @@ export type VideoPlayParams = {
   cid: number;
   bvid: string | null;
   epId: string | null;
+  /** 番剧 / 影视卡片直入的 season_id；带完整取流键的链接里没有它。 */
+  seasonId: string | null;
   title: string | null;
   aid: string | null;
 };
 
 /**
- * 解析播放页参数。cid 与 bvid 至少一个有效：cid 无效但带着 bvid 仍可进入
- * （cid 置 0，由播放页补齐）；两者皆无才返回 null，让页面渲染可读的失败态
- * 而不是拿 NaN 去请求后端。aid 是评论区的键，可缺省：相关视频/分集链路带着它，
- * URL 直入时由播放页用稿件详情补齐。
+ * 解析播放页参数。cid、bvid、season 至少一个有效：cid 无效但带着 bvid 仍可进入
+ * （cid 置 0，由播放页补齐）；只有 season（番剧/影视卡片直入）时由播放页解析
+ * 出分集再回写 URL；三者皆无才返回 null，让页面渲染可读的失败态而不是拿 NaN
+ * 去请求后端。单独的 ep_id 不算有效入口——它标识分集却不给取流键，播放页
+ * 无从解析。aid 是评论区的键，可缺省：相关视频/分集链路带着它，URL 直入时
+ * 由播放页用稿件详情补齐。
  */
 export function parseVideoPlayParams(search: URLSearchParams): VideoPlayParams | null {
   const cid = Number(search.get("cid"));
   const bvid = search.get("bvid");
+  const seasonId = search.get("season") || null;
   const hasCid = Number.isSafeInteger(cid) && cid > 0;
-  if (!hasCid && !bvid) return null;
+  if (!hasCid && !bvid && !seasonId) return null;
   return {
     cid: hasCid ? cid : 0,
     bvid: bvid || null,
     epId: search.get("ep_id") || null,
+    seasonId,
     title: search.get("title") || null,
     aid: search.get("aid") || null,
   };

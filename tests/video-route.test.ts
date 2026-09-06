@@ -112,13 +112,27 @@ describe("video paths", () => {
   test("round-trips a UGC play target", () => {
     const path = videoPlayPath({ bvid: "BV1xx", cid: 42, title: "标题" });
     const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({ cid: 42, bvid: "BV1xx", epId: null, title: "标题", aid: null });
+    expect(params).toEqual({
+      cid: 42,
+      bvid: "BV1xx",
+      epId: null,
+      seasonId: null,
+      title: "标题",
+      aid: null,
+    });
   });
 
   test("round-trips a PGC play target", () => {
     const path = videoPlayPath({ bvid: "BV2yy", cid: 7, epId: "ep99", title: "第 1 话" });
     const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({ cid: 7, bvid: "BV2yy", epId: "ep99", title: "第 1 话", aid: null });
+    expect(params).toEqual({
+      cid: 7,
+      bvid: "BV2yy",
+      epId: "ep99",
+      seasonId: null,
+      title: "第 1 话",
+      aid: null,
+    });
   });
 
   test("round-trips aid for the comment section", () => {
@@ -128,12 +142,32 @@ describe("video paths", () => {
     expect(params?.aid).toBe("117075725000671");
   });
 
-  test("rejects play links without a usable cid or bvid", () => {
-    // cid 与 bvid 至少一个有效；拿 NaN 去请求后端只会换来一个无法解释的失败。
+  test("rejects play links without a usable cid, bvid or season", () => {
+    // 三者至少一个有效；拿 NaN 去请求后端只会换来一个无法解释的失败。
     expect(parseVideoPlayParams(new URLSearchParams(""))).toBeNull();
     expect(parseVideoPlayParams(new URLSearchParams("cid=abc"))).toBeNull();
     expect(parseVideoPlayParams(new URLSearchParams("cid=0"))).toBeNull();
     expect(parseVideoPlayParams(new URLSearchParams("cid=-3"))).toBeNull();
+    // 单独的 ep_id 标识分集却不给取流键，播放页无从解析，也不算有效入口。
+    expect(parseVideoPlayParams(new URLSearchParams("ep_id=ep42"))).toBeNull();
+  });
+
+  test("round-trips a season-only target from pgc cards", () => {
+    // 番剧/影视卡片直入：列表接口不给 bvid/cid，链接只带 season，播放页解析
+    // 出分集后把 URL 规范成完整形态。
+    const path = videoPlayPath({ seasonId: "367", title: "某番剧" });
+    expect(path).not.toContain("cid=");
+    expect(path).not.toContain("bvid=");
+    expect(path).toContain("season=367");
+    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
+    expect(params).toEqual({
+      cid: 0,
+      bvid: null,
+      epId: null,
+      seasonId: "367",
+      title: "某番剧",
+      aid: null,
+    });
   });
 
   test("round-trips a bvid-only target from search/uploader lists", () => {
@@ -145,6 +179,7 @@ describe("video paths", () => {
       cid: 0,
       bvid: "BV4ww",
       epId: null,
+      seasonId: null,
       title: "无 cid 条目",
       aid: null,
     });

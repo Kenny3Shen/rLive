@@ -43,7 +43,8 @@ const BADGE_CLASS =
 /**
  * 卡片封面。`overlay` 里放角标，它们自己带绝对定位，因此堆在渐变之上。
  * `previewMount` / `previewLoading` 由 UGC 卡片传入（悬停预览，见
- * `videoCardPreview.ts`）；PGC 卡片不悬停预览（要先选集才能取流），不传。
+ * `videoCardPreview.ts`）；PGC 卡片不悬停预览（列表没有取流键，season 解析
+ * 在播放页，悬停阶段无从取流），不传。
  */
 function CoverImage({
   cover,
@@ -182,24 +183,23 @@ export const VideoCard = memo(function VideoCard({
 /**
  * 番剧 / 影视卡片。
  *
- * 点它不能直接播：索引接口给的 `ep_id` 只是首集，而排行榜接口连 `ep_id` 都不给。
- * 两种情况都要先经 `video_get_season` 拿到分集表，因此这里只上报「被选中」，
- * 由页面负责展开剧集列表。
+ * 点它直接进播放页：索引/排行榜接口都不给 bvid/cid（索引只给首集 ep_id，
+ * 排行榜连它都不给），因此链接只带 season_id，播放页解析出要播的那一集
+ * （有观看历史续播上次那一集，否则首集）后回写完整取流键；换集走右侧栏
+ * 「分集」页签。
  */
-export const PgcCard = memo(function PgcCard({
-  item,
-  onSelect,
-}: {
-  item: PgcItem;
-  onSelect: (item: PgcItem) => void;
-}) {
+export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
+  const navigate = useNavigate();
+  const playPath = videoPlayPath({ seasonId: item.season_id, title: item.title });
   return (
     <button
       type="button"
       data-motion-press
       data-page-scroll-anchor={`pgc:${item.season_id}`}
       aria-label={`${item.title}${item.index_show ? `，${item.index_show}` : ""}`}
-      onClick={() => onSelect(item)}
+      onPointerEnter={() => preloadRouteModule(playPath)}
+      onFocus={() => preloadRouteModule(playPath)}
+      onClick={() => navigate(playPath)}
       className={CARD_CLASS}
     >
       <CoverImage

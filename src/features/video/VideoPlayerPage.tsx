@@ -71,6 +71,7 @@ import {
 import {
   videoHistoryAdd,
   videoHistoryFind,
+  videoPgcEntryEpisode,
   videoResumeCid,
   videoResumePosition,
   VIDEO_HISTORY_QUERY_KEY,
@@ -240,6 +241,56 @@ function VideoPlayerPageContent() {
   useScreenWakeLock(!paused && !loading && !playbackError);
 
   const rawCid = params?.cid ?? 0;
+
+  // 番剧 / 影视卡片直入：链接只带 season（索引/排行榜接口都不给 bvid/cid），
+  // 先取 season 详情挑出要播的那一集，再把 URL 规范成带完整取流键的形态
+  // （replace，不占返回栈）。挑集规则与历史卡一致：上次看到的那一集还挂在
+  // 分集表里就进它，否则首集；换集仍走右侧栏「分集」。bvid/cid 已在手
+  // （搜索、历史、分集链路）时不经此路径。
+  const seasonEntry = params && params.cid <= 0 && !params.bvid ? params.seasonId : null;
+  const entrySeasonQuery = useQuery({
+    queryKey: ["video_season", seasonEntry ?? "", ""],
+    enabled: seasonEntry !== null,
+    queryFn: () => videoGetSeason({ seasonId: seasonEntry! }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const entryHistoryQuery = useQuery({
+    // 与下方续播查询同 key 形状与选项：这里读过的记录，播放页挂上同 key
+    // 查询时可能仍在缓存里直接复用；被回收了也只是多一次本地读盘。
+    queryKey: ["video_history_resume", "pgc", seasonEntry ?? ""],
+    enabled: seasonEntry !== null,
+    queryFn: () => videoHistoryFind("pgc", seasonEntry!),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (seasonEntry === null) return;
+    const season = entrySeasonQuery.data;
+    // 历史也落定后才挑集：它慢半拍就把人打发到首集，续播语义就破了。
+    if (!season || entryHistoryQuery.isPending) return;
+    // 空分集（版权/地区限制）不跳转，留在直入失败态给出可读解释。
+    const episode = videoPgcEntryEpisode(season.episodes, entryHistoryQuery.data);
+    if (!episode) return;
+    navigate(
+      videoPlayPath({
+        bvid: episode.bvid,
+        cid: episode.cid,
+        epId: episode.ep_id,
+        title: season.title,
+        aid: episode.aid,
+      }),
+      { replace: true },
+    );
+  }, [
+    seasonEntry,
+    entrySeasonQuery.data,
+    entryHistoryQuery.data,
+    entryHistoryQuery.isPending,
+    navigate,
+  ]);
 
   // 稿件详情：搜索/UP 列表条目没有 cid 时补齐取流键（P1），同时取 UGC 合集——
   // 稿件属于合集时连播沿合集走。与右侧栏 archive 查询同 key、同 staleTime，
@@ -1339,10 +1390,12 @@ function VideoPlayerPageContent() {
   );
 
   // 进入播放页即聚焦画面：键盘快捷键不需要先点一下才生效。`autoFocus` 属性
-  // 只在文档加载期生效，SPA 路由挂载的元素必须命令式聚焦。
+  // 只在文档加载期生效，SPA 路由挂载的元素必须命令式聚焦。挂在 cid 上而不是
+  // 仅挂载时：PGC 直入解析完成后舞台才首次挂载（cid 0 → 有效值），换集时也
+  // 重新聚焦——观众接下来的输入几乎总是给播放器的。
   useEffect(() => {
     stageRef.current?.focus({ preventScroll: true });
-  }, []);
+  }, [cid]);
 
   const goBack = useCallback(() => {
     if (canNavigateBackInApp(window.history.state)) {
@@ -1489,6 +1542,34 @@ function VideoPlayerPageContent() {
               error={new Error("缺少有效的视频参数，请从视频页重新选择内容。")}
               title="无效的视频播放链接"
             />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // 直入解析态：season 详情落定前不挂播放器与侧栏（此刻侧栏会以缺 epId 的
+  // 形态初始化出错误的页签），只保留顶栏 + 解析指示；失败给可读的错误态。
+  if (seasonEntry !== null) {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-background">
+        {topBar}
+        <main className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 md:p-6">
+          <div className="w-full max-w-xl">
+            {entrySeasonQuery.isError ? (
+              <ErrorState
+                error={entrySeasonQuery.error}
+                title="剧集信息加载失败"
+                onRetry={() => void entrySeasonQuery.refetch()}
+              />
+            ) : entrySeasonQuery.data && entrySeasonQuery.data.episodes.length === 0 ? (
+              <ErrorState
+                error={new Error("这部剧集暂时没有可播放的分集，可能受版权或地区限制。")}
+                title="无法播放"
+              />
+            ) : (
+              <Spinner className="mx-auto size-6" aria-label="正在打开剧集" />
+            )}
           </div>
         </main>
       </div>
