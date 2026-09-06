@@ -20,11 +20,11 @@ export type VideoItem = {
   title: string;
   cover: string;
   author: string;
-  author_face: string | null;
   /** 时长，秒。 */
   duration: number;
   view: number;
   danmaku: number;
+  /** 发布时间，Unix 秒；UP 主投稿列表由上游 `created` 字符串换算，缺失为 0。 */
   pubdate: number;
   /** 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。 */
   rcmd_reason: string | null;
@@ -33,8 +33,6 @@ export type VideoItem = {
 /** 番剧 / 影视等 PGC 剧集的列表条目。 */
 export type PgcItem = {
   season_id: string;
-  /** 首集 ep_id。索引接口给出，排行榜接口不给 —— 缺失时需先请求 season 详情。 */
-  ep_id: string | null;
   title: string;
   cover: string;
   /** 角标文案，如「大会员」「独家」。 */
@@ -67,7 +65,6 @@ export type SeasonEpisode = {
   cover: string;
   /** 时长，秒（后端已从上游毫秒换算）。 */
   duration: number;
-  badge: string | null;
 };
 
 export type VideoSeason = {
@@ -144,19 +141,16 @@ export type VideoHistoryKind = "ugc" | "pgc";
 /**
  * 播放一条 VOD 所需的全部内容。
  *
- * `mpd` 是后端合成的清单文本，`mpd_url` 是同一份文本的 HTTP 地址。
+ * `mpd_url` 是后端合成的 MPD 清单的 HTTP 地址。
  * **必须把 `mpd_url` 交给播放器**：`xgplayer-dash` 取清单的 XHR 会给地址拼 `?`，
  * `blob:` 走精确匹配因此 404。别「优化」成 blob URL。
  */
 export type VideoPlayInfo = {
-  mpd: string;
   mpd_url: string;
   /** 视频轨的本机代理地址（已注入 Referer，转发 Range）。 */
   video_url: string;
   /** 音频轨的本机代理地址。 */
   audio_url: string;
-  /** 代理向上游携带的请求头，供诊断与前端展示。 */
-  headers: Record<string, string>;
   /** 时长，秒。取自 sidx 时间轴累加，比列表接口的整数秒更精确。 */
   duration: number;
   /** 实际选中的 `qn`。 */
@@ -191,8 +185,6 @@ export type VideoPlayRequest = {
   ep_id?: string | null;
   /** 期望画质；缺省取当前身份可用的最高档。 */
   qn?: number | null;
-  /** 期望视频编码前缀，缺省 `avc1`。 */
-  codec?: string | null;
   /** 仅音频模式：MPD 只含音轨（听视频省流）。 */
   audio_only?: boolean | null;
 };
@@ -286,8 +278,9 @@ export type VideoArchive = {
   author_mid: string;
   view: number;
   danmaku: number;
-  reply: number;
+  /** 发布时间，Unix 秒。 */
   pubdate: number;
+  reply: number;
   /** 多 P 稿件的分 P 列表：选集与连播沿它走；少于 2 个 P 为空数组。 */
   pages: VideoArchivePage[];
   /** UGC 合集：稿件属于合集时连播沿合集走，无合集为 null。 */

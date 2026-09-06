@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback } from "react";
 import type { PointerEvent, RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ROOM_CARD_PREVIEW_DELAY_MS,
   ROOM_CARD_PREVIEW_START_TIMEOUT_MS,
+  adoptCardPreview,
+  cardPreviewQueue,
   createPreviewSurface,
-  isRoomCardPreviewPointer,
-  supportsRoomCardPreview,
+  releaseCardPreview,
+  type CardPreviewSession,
   type PreviewSurface,
   type RoomCardPreviewPhase,
 } from "@/features/room/player/roomCardPreview";
+import { useCardPreview } from "@/features/room/player/useRoomCardPreview";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
-import { createSerialTaskQueue } from "@/features/room/player/serialTaskQueue";
 import {
   createXgPlayer,
   loadXgPlayerModules,
@@ -43,8 +44,6 @@ const VIDEO_PREVIEW_QN = 16;
  */
 const VIDEO_CARD_PREVIEW_MAX_DURATION_MS = 15_000;
 
-export type VideoCardPreviewHandle = { stop: () => void };
-
 type VideoCardPreviewRequest = {
   /** 预览表面的挂载点：封面容器内已定位、pointer-events:none 的空节点。 */
   mount: HTMLElement;
@@ -52,16 +51,7 @@ type VideoCardPreviewRequest = {
   fetchPlayInfo: () => Promise<VideoPlayInfo>;
 };
 
-const previewLifecycleQueue = createSerialTaskQueue();
-let activeSession: VideoCardPreviewHandle | null = null;
-
-export function stopVideoCardPreview(): void {
-  activeSession?.stop();
-}
-
-export function startVideoCardPreview(request: VideoCardPreviewRequest): VideoCardPreviewHandle {
-  stopVideoCardPreview();
-
+function startVideoCardPreview(request: VideoCardPreviewRequest): CardPreviewSession {
   let stopped = false;
   let player: XgPlayerInstance | null = null;
   let surface: PreviewSurface | null = null;
@@ -98,18 +88,18 @@ export function startVideoCardPreview(request: VideoCardPreviewRequest): VideoCa
     if (releasedSessions) await videoStopPlay(releasedSessions);
   }
 
-  const session: VideoCardPreviewHandle = {
+  const session: CardPreviewSession = {
     stop: () => {
       if (stopped) return;
       stopped = true;
-      if (activeSession === session) activeSession = null;
+      releaseCardPreview(session);
       request.onPhase("idle");
-      void previewLifecycleQueue.enqueue(release);
+      void cardPreviewQueue.enqueue(release);
     },
   };
-  activeSession = session;
+  adoptCardPreview(session);
 
-  void previewLifecycleQueue.enqueue(async () => {
+  void cardPreviewQueue.enqueue(async () => {
     // 任何提前返回都由 `session.stop()` 排入的 release 负责回收资源。
     if (stopped) return;
     try {
@@ -181,7 +171,7 @@ export function startVideoCardPreview(request: VideoCardPreviewRequest): VideoCa
       if (stopped) return;
       // 预览是纯增益能力：失败静默回落到封面，绝不打扰浏览。
       stopped = true;
-      if (activeSession === session) activeSession = null;
+      releaseCardPreview(session);
       request.onPhase("idle");
       await release();
     }
@@ -205,59 +195,41 @@ export function useVideoCardPreview(target: {
   const { bvid, cid } = target;
   const queryClient = useQueryClient();
   const enabled = useSettingsStore((state) => state.roomCardPreviewEnabled);
-  // 指针能力与无障碍偏好在一次会话内不变，每张卡片只探测一次。
-  const supported = useMemo(() => supportsRoomCardPreview(), []);
-  const [phase, setPhase] = useState<RoomCardPreviewPhase>("idle");
-  const mountRef = useRef<HTMLDivElement | null>(null);
-  const handleRef = useRef<VideoCardPreviewHandle | null>(null);
-  const dwellTimerRef = useRef<number | null>(null);
 
-  const stop = useCallback(() => {
-    if (dwellTimerRef.current !== null) {
-      window.clearTimeout(dwellTimerRef.current);
-      dwellTimerRef.current = null;
-    }
-    handleRef.current?.stop();
-    handleRef.current = null;
-    setPhase("idle");
-  }, []);
-
-  const onPointerEnter = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
-      if (!enabled || !supported) return;
-      // 没有 bvid 的脏条目（后端已过滤，防御）才放弃。搜索与 UP 主列表的条目
-      // 没有 cid：与播放页同一条链路 —— 先经稿件详情补齐 P1 的 cid 再取预览流，
-      // archive 走 react-query 缓存，与右侧栏/播放页共享同一次请求。
-      if (!bvid) return;
-      if (!isRoomCardPreviewPointer(event.pointerType)) return;
-      stop();
-      dwellTimerRef.current = window.setTimeout(() => {
-        dwellTimerRef.current = null;
-        const mount = mountRef.current;
-        if (!mount) return;
-        handleRef.current = startVideoCardPreview({
-          mount,
-          onPhase: setPhase,
-          fetchPlayInfo: async () => {
-            const resolvedCid =
-              cid && cid > 0
-                ? cid
-                : (
-                    await queryClient.fetchQuery({
-                      queryKey: ["video_archive", bvid],
-                      queryFn: () => videoGetArchive(bvid),
-                      staleTime: 5 * 60_000,
-                    })
-                  ).cid;
-            return videoGetPlayInfo({ bvid, cid: resolvedCid, qn: VIDEO_PREVIEW_QN });
-          },
-        });
-      }, ROOM_CARD_PREVIEW_DELAY_MS);
-    },
-    [bvid, cid, enabled, queryClient, stop, supported],
+  // 搜索与 UP 主列表的条目没有 cid：与播放页同一条链路 —— 先经稿件详情补齐
+  // P1 的 cid 再取预览流，archive 走 react-query 缓存，与右侧栏/播放页共享
+  // 同一次请求。
+  const start = useCallback(
+    (mount: HTMLElement, onPhase: (phase: RoomCardPreviewPhase) => void) =>
+      startVideoCardPreview({
+        mount,
+        onPhase,
+        fetchPlayInfo: async () => {
+          const resolvedCid =
+            cid && cid > 0
+              ? cid
+              : (
+                  await queryClient.fetchQuery({
+                    queryKey: ["video_archive", bvid],
+                    queryFn: () => videoGetArchive(bvid),
+                    staleTime: 5 * 60_000,
+                  })
+                ).cid;
+          return videoGetPlayInfo({ bvid, cid: resolvedCid, qn: VIDEO_PREVIEW_QN });
+        },
+      }),
+    [bvid, cid, queryClient],
   );
 
-  useEffect(() => () => stop(), [stop]);
+  const { mountRef, phase, onPointerEnter: enterPreview, stop } = useCardPreview(enabled, start);
+  // 没有 bvid 的脏条目（后端已过滤，防御）才放弃；其余判定在共享骨架里。
+  const onPointerEnter = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      if (!bvid) return;
+      enterPreview(event);
+    },
+    [bvid, enterPreview],
+  );
 
   return { mountRef, phase, onPointerEnter, stop };
 }

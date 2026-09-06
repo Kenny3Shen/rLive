@@ -3,7 +3,6 @@ import type { DanmakuContentSpan, DanmakuEvent } from "@/shared/types/live";
 import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
   DANMAKU_IMAGE_FALLBACK_TEXT,
-  DANMAKU_IMAGE_SCALE,
   danmakuImageRequestUrl,
   floatingRichSpans,
   normalizeDanmakuImageUrl,
@@ -393,16 +392,10 @@ function appendText(parent: HTMLElement, text: string): void {
   if (text) parent.appendChild(document.createTextNode(text));
 }
 
-function appendRichSpans(
-  parent: HTMLElement,
-  spans: readonly DanmakuContentSpan[],
-  trackSpan: number,
-): void {
-  // 大表情跟着轨道成比例放大：每条轨道 `DANMAKU_IMAGE_SCALE`em，与单轨道时
-  // 相同的呼吸空间；内联小表情永远保持单轨道尺寸。大表情始终装得下预留的
-  // 行盒 —— 字号下限 12px 起，`span × 1.35em` 都小于 `span × round(1.4 × fontSize)`。
-  const largeEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
-  const inlineEdge = `${DANMAKU_IMAGE_SCALE}em`;
+function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan[]): void {
+  // 表情尺寸由 CSS 按 class 画（见 styles.css 的 .rlive-danmu-image*）：
+  // 大表情乘 bullet 上的 --rlive-emote-scale（轨道数），内联小表情永远
+  // 保持单轨道尺寸（聊天字号的 1.35 倍）。
   for (const span of spans) {
     if (span.type === "text") {
       appendText(parent, span.text);
@@ -425,10 +418,6 @@ function appendRichSpans(
     image.src = danmakuImageRequestUrl(imageUrl);
     image.className =
       span.large === true ? "rlive-danmu-image rlive-danmu-image-large" : "rlive-danmu-image";
-    // 标记的 class 供字号/车道变化时按各自尺寸重写，见 `updateDanmuAppearance`。
-    const imageEdge = span.large === true ? largeEdge : inlineEdge;
-    image.style.width = imageEdge;
-    image.style.height = imageEdge;
     image.style.marginInline = "1px";
     image.style.objectFit = "contain";
     image.style.flex = "0 0 auto";
@@ -478,6 +467,8 @@ export function createDanmuBulletElement(
   root.style.alignItems = "center";
   root.style.flexWrap = "nowrap";
   root.style.whiteSpace = "nowrap";
+  // 大表情的倍率：CSS 里 .rlive-danmu-image-large 的尺寸公式读它。
+  root.style.setProperty("--rlive-emote-scale", String(meta?.trackSpan ?? 1));
 
   const content = document.createElement("span");
   content.className = "rlive-danmu-content";
@@ -489,7 +480,7 @@ export function createDanmuBulletElement(
   content.style.flex = "0 0 auto";
   content.style.pointerEvents = "auto";
 
-  if (meta?.spans?.length) appendRichSpans(content, meta.spans, meta.trackSpan);
+  if (meta?.spans?.length) appendRichSpans(content, meta.spans);
   else appendText(content, meta?.baseText ?? comment.txt ?? "");
   root.appendChild(content);
   if (meta) meta.contentElement = content;
@@ -578,18 +569,10 @@ export function updateDanmuAppearance(
     element.style.setProperty("-webkit-text-stroke", String(style.WebkitTextStroke));
     element.style.setProperty("paint-order", String(style.paintOrder));
   }
-  // 表情边长用 em，字号变化自动跟随；只有轨道数翻转（车道数掉到两条以下）
-  // 才需要重写已上屏 bullet 里的图片。大表情按新轨道数缩放，
-  // 内联小表情回到单轨道尺寸。
+  // 表情尺寸公式在 CSS（.rlive-danmu-image*），字号变化自动跟随；只有
+  // 轨道数翻转（车道数掉到两条以下）才需要改 bullet 上的倍率变量，
+  // 不再逐图重写宽高。
   if (trackSpanChanged) {
-    const largeEdge = `${trackSpan * DANMAKU_IMAGE_SCALE}em`;
-    const inlineEdge = `${DANMAKU_IMAGE_SCALE}em`;
-    for (const image of element.querySelectorAll<HTMLElement>(".rlive-danmu-image")) {
-      const imageEdge = image.classList.contains("rlive-danmu-image-large")
-        ? largeEdge
-        : inlineEdge;
-      image.style.width = imageEdge;
-      image.style.height = imageEdge;
-    }
+    element.style.setProperty("--rlive-emote-scale", String(trackSpan));
   }
 }

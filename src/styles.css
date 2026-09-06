@@ -1137,6 +1137,22 @@ html.overlay-window #root {
   }
 }
 
+/*
+ * 弹幕 bullet 里的协议表情图片。基准边长是聊天字号的 1.35 倍（与
+ * `DANMAKU_IMAGE_SCALE` 一致），大表情再乘 bullet 元素上的
+ * `--rlive-emote-scale`（占据的轨道数）：车道数变化时 JS 只改这一个变量，
+ * 不逐图重写宽高。
+ */
+.rlive-danmu-image {
+  width: 1.35em;
+  height: 1.35em;
+}
+
+.rlive-danmu-image-large {
+  width: calc(var(--rlive-emote-scale, 1) * 1.35em);
+  height: calc(var(--rlive-emote-scale, 1) * 1.35em);
+}
+
 /* 移动端 WebView 与视频解码、Canvas 弹幕和图片列表滚动共享 GPU。改用静态半透明
    填充，而不是每帧采样并模糊变化的背景。桌面保留完整玻璃处理。 */
 @media (pointer: coarse), (update: slow) {

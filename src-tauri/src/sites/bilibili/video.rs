@@ -17,23 +17,7 @@ use crate::models::video::{
 };
 
 use super::BilibiliSite;
-use super::api::{DEFAULT_USER_AGENT, as_i64, as_str, avatar_thumb};
-
-/// 移除 HTML 标签（搜索结果的 title 字段包含 `<em class="keyword">` 高亮标记）。
-fn strip_html_tags(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for ch in s.chars() {
-        if ch == '<' {
-            in_tag = true;
-        } else if ch == '>' {
-            in_tag = false;
-        } else if !in_tag {
-            result.push(ch);
-        }
-    }
-    result
-}
+use super::api::{DEFAULT_USER_AGENT, as_i64, as_str, avatar_thumb, strip_em_tags};
 
 /// 视频接口与媒体 URL 使用的 Referer。
 ///
@@ -115,7 +99,7 @@ fn video_item(item: &Value) -> VideoItem {
         bvid: item.get("bvid").map(as_str).unwrap_or_default(),
         aid,
         cid,
-        title: strip_html_tags(&item.get("title").map(as_str).unwrap_or_default()),
+        title: strip_em_tags(&item.get("title").map(as_str).unwrap_or_default()),
         cover: video_cover(&item.get("pic").map(as_str).unwrap_or_default()),
         // 搜索条目是扁平结构：没有 owner/stat，作者在 author、播放量在 play、
         // 弹幕数在 video_review。带 owner 的接口没有这些字段，回退分支不会触发。
@@ -198,66 +182,72 @@ fn stream_candidates(rep: &Value) -> Vec<String> {
     candidates
 }
 
+/// 列表接口的公共骨架：反序列化 + 按指针（可多个回退）取条目数组，
+/// 过滤与 has_more 逻辑由 `build` 就地完成（各接口不同，部分接口还要读根
+/// 上的分页字段，因此把根也交给 `build`）。
+/// 错误串逐字保持：`{name} json: {e}` 与 `{name}缺少 {what}`。
+fn json_items<T>(
+    raw: &str,
+    name: &str,
+    what: &str,
+    pointers: &[&str],
+    build: impl FnOnce(&Value, &[Value]) -> T,
+) -> AppResult<T> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("{name} json: {e}")))?;
+    let items = pointers
+        .iter()
+        .find_map(|pointer| root.pointer(pointer))
+        .and_then(Value::as_array)
+        .ok_or_else(|| video_err(format!("{name}缺少 {what}")))?;
+    Ok(build(&root, items))
+}
+
 /// 解析推荐流 `data.item[]`。
 ///
 /// 该接口会混入直播、番剧等非稿件条目，只有 `goto == "av"` 且带 `owner` 的
 /// 才是可播的 UGC 稿件。
 pub fn parse_recommend(raw: &str) -> AppResult<VideoListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("推荐流 json: {e}")))?;
-    let items = root
-        .pointer("/data/item")
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("推荐流缺少 data.item"))?
-        .iter()
-        .filter(|item| item.get("goto").map(as_str).as_deref() == Some("av"))
-        .filter(|item| item.get("owner").is_some())
-        .map(video_item)
-        .filter(|item| !item.bvid.is_empty())
-        .collect::<Vec<_>>();
-    // 推荐流是无限刷新的，只要这一刷还有内容就认为可以继续。
-    Ok(VideoListPage {
-        has_more: !items.is_empty(),
-        items,
+    json_items(raw, "推荐流", "data.item", &["/data/item"], |_root, items| {
+        let items: Vec<VideoItem> = items
+            .iter()
+            .filter(|item| item.get("goto").map(as_str).as_deref() == Some("av"))
+            .filter(|item| item.get("owner").is_some())
+            .map(video_item)
+            .filter(|item| !item.bvid.is_empty())
+            .collect();
+        // 推荐流是无限刷新的，只要这一刷还有内容就认为可以继续。
+        VideoListPage {
+            has_more: !items.is_empty(),
+            items,
+        }
     })
 }
 
 /// 解析热门 `data.list[]`。尾页由 `data.no_more` 明确告知。
 pub fn parse_popular(raw: &str) -> AppResult<VideoListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("热门 json: {e}")))?;
-    let items = root
-        .pointer("/data/list")
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("热门缺少 data.list"))?
-        .iter()
-        .map(video_item)
-        .collect();
-    let no_more = root
-        .pointer("/data/no_more")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Ok(VideoListPage {
-        has_more: !no_more,
-        items,
+    json_items(raw, "热门", "data.list", &["/data/list"], |root, items| {
+        let items: Vec<VideoItem> = items.iter().map(video_item).collect();
+        let no_more = root
+            .pointer("/data/no_more")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        VideoListPage {
+            has_more: !no_more,
+            items,
+        }
     })
 }
 
 /// 解析分区榜 `data.list[]`（结构与热门一致，但该接口只有一页）。
 pub fn parse_zone(raw: &str) -> AppResult<VideoListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("分区榜 json: {e}")))?;
-    let items = root
-        .pointer("/data/list")
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("分区榜缺少 data.list"))?
-        .iter()
-        .map(video_item)
-        .collect();
-    // `ranking/v2` 一次返回全部榜单条目，没有翻页参数。
-    Ok(VideoListPage {
-        has_more: false,
-        items,
+    json_items(raw, "分区榜", "data.list", &["/data/list"], |_root, items| {
+        let items: Vec<VideoItem> = items.iter().map(video_item).collect();
+        // `ranking/v2` 一次返回全部榜单条目，没有翻页参数。
+        VideoListPage {
+            has_more: false,
+            items,
+        }
     })
 }
 
@@ -288,24 +278,21 @@ fn pgc_item(item: &Value) -> PgcItem {
 
 /// 解析 PGC 索引 `data.list[]`。翻页由 `data.has_next` 明确告知。
 pub fn parse_pgc_index(raw: &str) -> AppResult<PgcListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("PGC 索引 json: {e}")))?;
-    let items = root
-        .pointer("/data/list")
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("PGC 索引缺少 data.list"))?
-        .iter()
-        .map(pgc_item)
-        .filter(|item| !item.season_id.is_empty())
-        .collect();
-    let has_more = root
-        .pointer("/data/has_next")
-        .map(|next| match next {
-            Value::Bool(flag) => *flag,
-            other => as_i64(other) != 0,
-        })
-        .unwrap_or(false);
-    Ok(PgcListPage { has_more, items })
+    json_items(raw, "PGC 索引", "data.list", &["/data/list"], |root, items| {
+        let items: Vec<PgcItem> = items
+            .iter()
+            .map(pgc_item)
+            .filter(|item| !item.season_id.is_empty())
+            .collect();
+        let has_more = root
+            .pointer("/data/has_next")
+            .map(|next| match next {
+                Value::Bool(flag) => *flag,
+                other => as_i64(other) != 0,
+            })
+            .unwrap_or(false);
+        PgcListPage { has_more, items }
+    })
 }
 
 /// 解析 PGC 排行榜。
@@ -314,22 +301,24 @@ pub fn parse_pgc_index(raw: &str) -> AppResult<PgcListPage> {
 /// `pgc/season/rank/web/list`，结果在 `data.list`。两处结构相同，
 /// 因此按存在的那个键取。
 pub fn parse_pgc_rank(raw: &str) -> AppResult<PgcListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("PGC 榜单 json: {e}")))?;
-    let items = root
-        .pointer("/result/list")
-        .or_else(|| root.pointer("/data/list"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("PGC 榜单缺少 list"))?
-        .iter()
-        .map(pgc_item)
-        .filter(|item| !item.season_id.is_empty())
-        .collect();
-    // 榜单是固定长度的快照，没有下一页。
-    Ok(PgcListPage {
-        has_more: false,
-        items,
-    })
+    json_items(
+        raw,
+        "PGC 榜单",
+        "list",
+        &["/result/list", "/data/list"],
+        |_root, items| {
+            let items: Vec<PgcItem> = items
+                .iter()
+                .map(pgc_item)
+                .filter(|item| !item.season_id.is_empty())
+                .collect();
+            // 榜单是固定长度的快照，没有下一页。
+            PgcListPage {
+                has_more: false,
+                items,
+            }
+        },
+    )
 }
 
 /// 解析 season 详情 `result`。
@@ -382,18 +371,12 @@ fn season_episode(episode: &Value) -> SeasonEpisode {
 ///
 /// 与热门/分区榜同构（复用 [`video_item`]），但根下直接是数组、没有分页。
 pub fn parse_related(raw: &str) -> AppResult<VideoListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("相关视频 json: {e}")))?;
-    let items = root
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("相关视频缺少 data 数组"))?
-        .iter()
-        .map(video_item)
-        .collect();
-    Ok(VideoListPage {
-        has_more: false,
-        items,
+    json_items(raw, "相关视频", "data 数组", &["/data"], |_root, items| {
+        let items: Vec<VideoItem> = items.iter().map(video_item).collect();
+        VideoListPage {
+            has_more: false,
+            items,
+        }
     })
 }
 
@@ -403,58 +386,64 @@ pub fn parse_related(raw: &str) -> AppResult<VideoListPage> {
 /// 差异由 [`video_item`] 的回退分支吸收。上游会把同一个稿件重复返回，
 /// 这里按 bvid 去重，否则前端网格的 key 会冲突。分页由 `numPages` 与当前页码判断。
 pub fn parse_search_videos(raw: &str, page: u32) -> AppResult<VideoListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("搜索视频 json: {e}")))?;
-    let mut items: Vec<VideoItem> = root
-        .pointer("/data/result")
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("搜索视频缺少 data.result"))?
-        .iter()
-        .filter(|item| item.get("type").map(as_str).as_deref() == Some("video"))
-        .map(video_item)
-        .filter(|item| !item.bvid.is_empty())
-        .collect();
-    let mut seen = std::collections::HashSet::new();
-    items.retain(|item| seen.insert(item.bvid.clone()));
-    let num_pages = root
-        .pointer("/data/numPages")
-        .and_then(Value::as_u64)
-        .unwrap_or(1) as u32;
-    Ok(VideoListPage {
-        has_more: page < num_pages,
-        items,
-    })
+    json_items(
+        raw,
+        "搜索视频",
+        "data.result",
+        &["/data/result"],
+        |root, items| {
+            let mut items: Vec<VideoItem> = items
+                .iter()
+                .filter(|item| item.get("type").map(as_str).as_deref() == Some("video"))
+                .map(video_item)
+                .filter(|item| !item.bvid.is_empty())
+                .collect();
+            let mut seen = std::collections::HashSet::new();
+            items.retain(|item| seen.insert(item.bvid.clone()));
+            let num_pages = root
+                .pointer("/data/numPages")
+                .and_then(Value::as_u64)
+                .unwrap_or(1) as u32;
+            VideoListPage {
+                has_more: page < num_pages,
+                items,
+            }
+        },
+    )
 }
 
 /// 解析 UP 主空间视频列表 `data.list.vlist[]`（WBI 签名接口 `x/space/wbi/arc/search`）。
 pub fn parse_uploader_videos(raw: &str) -> AppResult<VideoListPage> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| video_err(format!("UP 主视频列表 json: {e}")))?;
-    let page = root.pointer("/data/page");
-    let count = page
-        .and_then(|p| p.get("count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let pn = page
-        .and_then(|p| p.get("pn"))
-        .and_then(Value::as_u64)
-        .unwrap_or(1);
-    let ps = page
-        .and_then(|p| p.get("ps"))
-        .and_then(Value::as_u64)
-        .unwrap_or(30);
-    let items = root
-        .pointer("/data/list/vlist")
-        .and_then(Value::as_array)
-        .ok_or_else(|| video_err("UP 主视频列表缺少 data.list.vlist"))?
-        .iter()
-        .map(video_item)
-        .filter(|item| !item.bvid.is_empty())
-        .collect::<Vec<_>>();
-    Ok(VideoListPage {
-        has_more: (pn * ps) < count,
-        items,
-    })
+    json_items(
+        raw,
+        "UP 主视频列表",
+        "data.list.vlist",
+        &["/data/list/vlist"],
+        |root, items| {
+            let page = root.pointer("/data/page");
+            let count = page
+                .and_then(|p| p.get("count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let pn = page
+                .and_then(|p| p.get("pn"))
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
+            let ps = page
+                .and_then(|p| p.get("ps"))
+                .and_then(Value::as_u64)
+                .unwrap_or(30);
+            let items: Vec<VideoItem> = items
+                .iter()
+                .map(video_item)
+                .filter(|item| !item.bvid.is_empty())
+                .collect();
+            VideoListPage {
+                has_more: (pn * ps) < count,
+                items,
+            }
+        },
+    )
 }
 
 /**
@@ -811,9 +800,7 @@ pub struct SidxSegment {
     pub start_byte: u64,
     /// 结束字节（含），可直接用于 `Range` 与 `mediaRange`。
     pub end_byte: u64,
-    /// 起始时刻，单位为 sidx 的 timescale。
-    pub t_start: u64,
-    /// 结束时刻，同上。
+    /// 结束时刻，单位为 sidx 的 timescale。
     pub t_end: u64,
 }
 
@@ -851,28 +838,13 @@ impl Sidx {
     }
 }
 
-fn be_u16(bytes: &[u8], offset: usize) -> AppResult<u16> {
+/// 从 `offset` 起读 N 字节大端整数（u16/u32/u64 共用，错误消息里的
+/// 位宽由 N 推出）。
+fn be<const N: usize>(bytes: &[u8], offset: usize) -> AppResult<[u8; N]> {
     bytes
-        .get(offset..offset + 2)
+        .get(offset..offset + N)
         .and_then(|slice| slice.try_into().ok())
-        .map(u16::from_be_bytes)
-        .ok_or_else(|| video_err("sidx 截断：读取 u16 越界"))
-}
-
-fn be_u32(bytes: &[u8], offset: usize) -> AppResult<u32> {
-    bytes
-        .get(offset..offset + 4)
-        .and_then(|slice| slice.try_into().ok())
-        .map(u32::from_be_bytes)
-        .ok_or_else(|| video_err("sidx 截断：读取 u32 越界"))
-}
-
-fn be_u64(bytes: &[u8], offset: usize) -> AppResult<u64> {
-    bytes
-        .get(offset..offset + 8)
-        .and_then(|slice| slice.try_into().ok())
-        .map(u64::from_be_bytes)
-        .ok_or_else(|| video_err("sidx 截断：读取 u64 越界"))
+        .ok_or_else(|| video_err(format!("sidx 截断：读取 u{} 越界", N * 8)))
 }
 
 /// 解析 `segment_base.index_range` 取回的 ISO BMFF `sidx` box。
@@ -901,25 +873,25 @@ pub fn parse_sidx(bytes: &[u8], index_range_end: u64) -> AppResult<Sidx> {
     // version(1) + flags(3)
     let mut offset = 12;
     // reference_id(4) 用不到，直接跳过；timescale 决定后面所有时刻的单位。
-    let timescale = be_u32(bytes, offset + 4)?;
+    let timescale = u32::from_be_bytes(be::<4>(bytes, offset + 4)?);
     offset += 8;
     let first_offset = match version {
         // version 0：earliest_presentation_time(4) + first_offset(4)
         0 => {
-            let value = u64::from(be_u32(bytes, offset + 4)?);
+            let value = u64::from(u32::from_be_bytes(be::<4>(bytes, offset + 4)?));
             offset += 8;
             value
         }
         // version 1：两个字段各 8 字节。实测 B 站返回的正是 version 1。
         1 => {
-            let value = be_u64(bytes, offset + 8)?;
+            let value = u64::from_be_bytes(be::<8>(bytes, offset + 8)?);
             offset += 16;
             value
         }
         other => return Err(video_err(format!("不支持的 sidx version={other}"))),
     };
     // reserved(2) + reference_count(2)
-    let count = be_u16(bytes, offset + 2)?;
+    let count = u16::from_be_bytes(be::<2>(bytes, offset + 2)?);
     offset += 4;
 
     let mut base = index_range_end
@@ -931,8 +903,8 @@ pub fn parse_sidx(bytes: &[u8], index_range_end: u64) -> AppResult<Sidx> {
     for index in 0..usize::from(count) {
         let entry = offset + index * 12;
         // 首字段高位是 reference_type，低 31 位才是分片字节数。
-        let size = u64::from(be_u32(bytes, entry)? & 0x7fff_ffff);
-        let duration = u64::from(be_u32(bytes, entry + 4)?);
+        let size = u64::from(u32::from_be_bytes(be::<4>(bytes, entry)?) & 0x7fff_ffff);
+        let duration = u64::from(u32::from_be_bytes(be::<4>(bytes, entry + 4)?));
         if size == 0 {
             return Err(video_err("sidx 分片长度为 0"));
         }
@@ -942,7 +914,6 @@ pub fn parse_sidx(bytes: &[u8], index_range_end: u64) -> AppResult<Sidx> {
         segments.push(SidxSegment {
             start_byte: base,
             end_byte: end - 1,
-            t_start: time,
             t_end: time + duration,
         });
         base = end;
@@ -1199,7 +1170,7 @@ fn select_streams(
         .filter(|audios| !audios.is_empty())
         .ok_or_else(|| video_err("playurl 缺少可用音频流"))?;
 
-    let codec = request.codec.as_deref().unwrap_or(DEFAULT_CODEC);
+    let codec = DEFAULT_CODEC;
     // representation 的 `id` 就是该档位的 qn。
     let available: std::collections::BTreeSet<i64> = videos
         .iter()
@@ -1686,6 +1657,44 @@ impl BilibiliSite {
         parse_comment_replies(&text, page.max(1))
     }
 
+    /// PGC/UGC 双链路的公共骨架：`ep_id` 非空走 PGC 端点，否则要求 `bvid`
+    /// 走 UGC 端点，各自插入额外参数、发起签名请求并反序列化成根对象。
+    /// 端点、额外参数、json 错误前缀与缺 bvid 的错误串由调用方传入
+    /// （各接口不同），全部逐字保持；负载提取留在调用方。
+    async fn fork_json(
+        &self,
+        mut params: BTreeMap<String, String>,
+        request: &VideoPlayRequest,
+        bvid_missing: &str,
+        pgc: (&str, &[(&str, &str)], &str),
+        ugc: (&str, &[(&str, &str)], &str),
+    ) -> AppResult<Value> {
+        let (text, json_label) = match request.ep_id.as_deref().filter(|id| !id.is_empty()) {
+            Some(ep_id) => {
+                let (url, extras, label) = pgc;
+                params.insert("ep_id".into(), ep_id.to_string());
+                for (key, value) in extras {
+                    params.insert((*key).into(), (*value).into());
+                }
+                (self.get_json_signed(url, params).await?, label)
+            }
+            None => {
+                let (url, extras, label) = ugc;
+                let bvid = request
+                    .bvid
+                    .as_deref()
+                    .filter(|bvid| !bvid.is_empty())
+                    .ok_or_else(|| video_err(bvid_missing))?;
+                params.insert("bvid".into(), bvid.to_string());
+                for (key, value) in extras {
+                    params.insert((*key).into(), (*value).into());
+                }
+                (self.get_json_signed(url, params).await?, label)
+            }
+        };
+        serde_json::from_str(&text).map_err(|e| video_err(format!("{json_label} json: {e}")))
+    }
+
     /// 取 playurl 并解出两条轨的完整分片表。
     ///
     /// UGC 与 PGC 是两条链路：端点不同、响应层级不同（PGC 的负载在
@@ -1704,37 +1713,31 @@ impl BilibiliSite {
         params.insert("fourk".into(), "1".into());
         params.insert("fnver".into(), "0".into());
 
+        let root = self
+            .fork_json(
+                params,
+                request,
+                "UGC 播放请求缺少 bvid",
+                (
+                    "https://api.bilibili.com/pgc/player/web/v2/playurl",
+                    &[("support_multi_audio", "true")],
+                    "PGC playurl",
+                ),
+                (
+                    "https://api.bilibili.com/x/player/wbi/playurl",
+                    &[("try_look", "1"), ("web_location", "1315873")],
+                    "UGC playurl",
+                ),
+            )
+            .await?;
         let data = match request.ep_id.as_deref().filter(|id| !id.is_empty()) {
-            Some(ep_id) => {
-                params.insert("ep_id".into(), ep_id.to_string());
-                params.insert("support_multi_audio".into(), "true".into());
-                let text = self
-                    .get_json_signed("https://api.bilibili.com/pgc/player/web/v2/playurl", params)
-                    .await?;
-                let root: Value = serde_json::from_str(&text)
-                    .map_err(|e| video_err(format!("PGC playurl json: {e}")))?;
-                root.pointer("/result/video_info").cloned().ok_or_else(|| {
-                    video_err("PGC playurl 缺少 result.video_info（可能受版权或地区限制）")
-                })?
-            }
-            None => {
-                let bvid = request
-                    .bvid
-                    .as_deref()
-                    .filter(|bvid| !bvid.is_empty())
-                    .ok_or_else(|| video_err("UGC 播放请求缺少 bvid"))?;
-                params.insert("bvid".into(), bvid.to_string());
-                params.insert("try_look".into(), "1".into());
-                params.insert("web_location".into(), "1315873".into());
-                let text = self
-                    .get_json_signed("https://api.bilibili.com/x/player/wbi/playurl", params)
-                    .await?;
-                let root: Value = serde_json::from_str(&text)
-                    .map_err(|e| video_err(format!("UGC playurl json: {e}")))?;
-                root.get("data")
-                    .cloned()
-                    .ok_or_else(|| video_err("UGC playurl 缺少 data"))?
-            }
+            Some(_) => root.pointer("/result/video_info").cloned().ok_or_else(|| {
+                video_err("PGC playurl 缺少 result.video_info（可能受版权或地区限制）")
+            })?,
+            None => root
+                .get("data")
+                .cloned()
+                .ok_or_else(|| video_err("UGC playurl 缺少 data"))?,
         };
 
         let (video, audio, quality, quality_label, accept_quality) =
@@ -1767,37 +1770,31 @@ impl BilibiliSite {
         params.insert("high_quality".into(), "1".into());
         params.insert("fnver".into(), "0".into());
 
+        let root = self
+            .fork_json(
+                params,
+                request,
+                "投屏请求缺少 bvid",
+                (
+                    "https://api.bilibili.com/pgc/player/web/v2/playurl",
+                    &[],
+                    "PGC html5 playurl",
+                ),
+                (
+                    "https://api.bilibili.com/x/player/wbi/playurl",
+                    &[("try_look", "1")],
+                    "html5 playurl",
+                ),
+            )
+            .await?;
         let data = match request.ep_id.as_deref().filter(|id| !id.is_empty()) {
-            Some(ep_id) => {
-                params.insert("ep_id".into(), ep_id.to_string());
-                let text = self
-                    .get_json_signed("https://api.bilibili.com/pgc/player/web/v2/playurl", params)
-                    .await?;
-                let root: Value = serde_json::from_str(&text)
-                    .map_err(|e| video_err(format!("PGC html5 playurl json: {e}")))?;
-                root.pointer("/result/video_info")
-                    .cloned()
-                    .ok_or_else(|| {
-                        video_err("PGC html5 playurl 缺少 result.video_info（可能受版权或地区限制）")
-                    })?
-            }
-            None => {
-                let bvid = request
-                    .bvid
-                    .as_deref()
-                    .filter(|bvid| !bvid.is_empty())
-                    .ok_or_else(|| video_err("投屏请求缺少 bvid"))?;
-                params.insert("bvid".into(), bvid.to_string());
-                params.insert("try_look".into(), "1".into());
-                let text = self
-                    .get_json_signed("https://api.bilibili.com/x/player/wbi/playurl", params)
-                    .await?;
-                let root: Value = serde_json::from_str(&text)
-                    .map_err(|e| video_err(format!("html5 playurl json: {e}")))?;
-                root.get("data")
-                    .cloned()
-                    .ok_or_else(|| video_err("html5 playurl 缺少 data"))?
-            }
+            Some(_) => root.pointer("/result/video_info").cloned().ok_or_else(|| {
+                video_err("PGC html5 playurl 缺少 result.video_info（可能受版权或地区限制）")
+            })?,
+            None => root
+                .get("data")
+                .cloned()
+                .ok_or_else(|| video_err("html5 playurl 缺少 data"))?,
         };
 
         parse_cast_durl(&data)
@@ -1815,43 +1812,65 @@ impl BilibiliSite {
         }
         let mut params = BTreeMap::new();
         params.insert("cid".into(), request.cid.to_string());
-        match request.ep_id.as_deref().filter(|id| !id.is_empty()) {
-            Some(ep_id) => {
-                params.insert("ep_id".into(), ep_id.to_string());
-            }
-            None => {
-                let bvid = request
-                    .bvid
-                    .as_deref()
-                    .filter(|bvid| !bvid.is_empty())
-                    .ok_or_else(|| video_err("字幕请求缺少 bvid"))?;
-                params.insert("bvid".into(), bvid.to_string());
-            }
-        }
-        let text = self
-            .get_json_signed("https://api.bilibili.com/x/player/wbi/v2", params)
+        let root = self
+            .fork_json(
+                params,
+                request,
+                "字幕请求缺少 bvid",
+                (
+                    "https://api.bilibili.com/x/player/wbi/v2",
+                    &[],
+                    "player v2",
+                ),
+                (
+                    "https://api.bilibili.com/x/player/wbi/v2",
+                    &[],
+                    "player v2",
+                ),
+            )
             .await?;
-        let root: Value = serde_json::from_str(&text)
-            .map_err(|e| video_err(format!("player v2 json: {e}")))?;
         Ok(parse_subtitles(root.pointer("/data/subtitle/subtitles")))
+    }
+
+    /// 手写 GET 的公共骨架：站点 UA + VIDEO_REFERER + 状态码检查。
+    ///
+    /// 字幕、sidx Range 与 VOD 弹幕三个调用点共用；错误前缀与可重试位
+    /// 各不相同，由调用方传入以保持错误串逐字节不变。`allow_304` 只给
+    /// 弹幕接口：304 是段号越界的正常终点，不能当错误。Range 头与 query
+    /// 由调用方先拼进 builder，body 读取同样留在调用方。
+    async fn video_fetch(
+        &self,
+        builder: reqwest::RequestBuilder,
+        fail: &str,
+        status: &str,
+        retry: bool,
+        allow_304: bool,
+    ) -> AppResult<reqwest::Response> {
+        let err = |message: String| {
+            let error = video_err(message);
+            if retry { error.retryable() } else { error }
+        };
+        let response = builder
+            .header("user-agent", DEFAULT_USER_AGENT)
+            .header("referer", VIDEO_REFERER)
+            .send()
+            .await
+            .map_err(|e| err(format!("{fail}: {e}")))?;
+        let code = response.status();
+        if allow_304 && code.as_u16() == 304 {
+            return Ok(response);
+        }
+        if !code.is_success() {
+            return Err(err(format!("{status} HTTP {}", code.as_u16())));
+        }
+        Ok(response)
     }
 
     /// 拉取字幕 JSON 原文（aisubtitle 主机无 CORS 头，必须由本端代拉）。
     pub async fn fetch_subtitle(&self, url: &str) -> AppResult<String> {
         let response = self
-            .client
-            .get(url)
-            .header("user-agent", DEFAULT_USER_AGENT)
-            .header("referer", VIDEO_REFERER)
-            .send()
-            .await
-            .map_err(|e| video_err(format!("字幕请求失败: {e}")))?;
-        if !response.status().is_success() {
-            return Err(video_err(format!(
-                "字幕请求返回 HTTP {}",
-                response.status().as_u16()
-            )));
-        }
+            .video_fetch(self.client.get(url), "字幕请求失败", "字幕请求返回", false, false)
+            .await?;
         response
             .text()
             .await
@@ -1910,21 +1929,16 @@ impl BilibiliSite {
     /// Referer 必须用站点域名，媒体 CDN 有一部分主机在缺少它时直接 403。
     async fn fetch_range(&self, url: &str, start: u64, end: u64) -> AppResult<Vec<u8>> {
         let response = self
-            .client
-            .get(url)
-            .header("user-agent", DEFAULT_USER_AGENT)
-            .header("referer", VIDEO_REFERER)
-            .header("range", format!("bytes={start}-{end}"))
-            .send()
-            .await
-            .map_err(|e| video_err(format!("媒体 Range 请求失败: {e}")).retryable())?;
-        if !response.status().is_success() {
-            return Err(video_err(format!(
-                "媒体 Range 请求返回 HTTP {}",
-                response.status().as_u16()
-            ))
-            .retryable());
-        }
+            .video_fetch(
+                self.client
+                    .get(url)
+                    .header("range", format!("bytes={start}-{end}")),
+                "媒体 Range 请求失败",
+                "媒体 Range 请求返回",
+                true,
+                false,
+            )
+            .await?;
         Ok(response
             .bytes()
             .await
@@ -1948,18 +1962,20 @@ impl BilibiliSite {
             return Err(video_err("弹幕请求缺少 cid"));
         }
         let response = self
-            .client
-            .get("https://api.bilibili.com/x/v2/dm/web/seg.so")
-            .header("user-agent", DEFAULT_USER_AGENT)
-            .header("referer", VIDEO_REFERER)
-            .query(&[
-                ("type", "1".to_string()),
-                ("oid", cid.to_string()),
-                ("segment_index", segment_index.max(1).to_string()),
-            ])
-            .send()
-            .await
-            .map_err(|e| video_err(format!("弹幕请求失败: {e}")).retryable())?;
+            .video_fetch(
+                self.client
+                    .get("https://api.bilibili.com/x/v2/dm/web/seg.so")
+                    .query(&[
+                        ("type", "1".to_string()),
+                        ("oid", cid.to_string()),
+                        ("segment_index", segment_index.max(1).to_string()),
+                    ]),
+                "弹幕请求失败",
+                "弹幕接口返回",
+                true,
+                true,
+            )
+            .await?;
 
         // 304 = 段号越界，是遍历的正常终点。上游同时会带 `bili-status-code: -304`，
         // 但该头并非每次都出现（实测有仅 304 无该头的应答），所以只认状态码。
@@ -1968,11 +1984,6 @@ impl BilibiliSite {
                 has_more: false,
                 items: Vec::new(),
             });
-        }
-        if !response.status().is_success() {
-            return Err(
-                video_err(format!("弹幕接口返回 HTTP {}", response.status().as_u16())).retryable(),
-            );
         }
         let bytes = response
             .bytes()
@@ -2045,18 +2056,9 @@ mod tests {
         assert_eq!(sidx.segments[1].start_byte, sidx.segments[0].end_byte + 1);
         assert_eq!(sidx.segments[2].start_byte, sidx.segments[1].end_byte + 1);
         // 时间轴同样累加。
-        assert_eq!(
-            (sidx.segments[0].t_start, sidx.segments[0].t_end),
-            (0, 80_000)
-        );
-        assert_eq!(
-            (sidx.segments[1].t_start, sidx.segments[1].t_end),
-            (80_000, 160_000)
-        );
-        assert_eq!(
-            (sidx.segments[2].t_start, sidx.segments[2].t_end),
-            (160_000, 200_000)
-        );
+        assert_eq!(sidx.segments[0].t_end, 80_000);
+        assert_eq!(sidx.segments[1].t_end, 160_000);
+        assert_eq!(sidx.segments[2].t_end, 200_000);
         assert_eq!(sidx.duration_secs(), 12.5);
     }
 
@@ -2096,13 +2098,11 @@ mod tests {
                     SidxSegment {
                         start_byte: 1602,
                         end_byte: 2000,
-                        t_start: 0,
                         t_end: 80_000,
                     },
                     SidxSegment {
                         start_byte: 2001,
                         end_byte: 3000,
-                        t_start: 80_000,
                         t_end: 160_000,
                     },
                 ],
@@ -2167,19 +2167,16 @@ mod tests {
             SidxSegment {
                 start_byte: 1602,
                 end_byte: 2000,
-                t_start: 0,
                 t_end: 80_000,
             },
             SidxSegment {
                 start_byte: 2001,
                 end_byte: 3000,
-                t_start: 80_000,
                 t_end: 160_000,
             },
             SidxSegment {
                 start_byte: 3001,
                 end_byte: 3500,
-                t_start: 160_000,
                 t_end: 203_200,
             },
         ];
@@ -2216,13 +2213,11 @@ mod tests {
                 SidxSegment {
                     start_byte: 0,
                     end_byte: 1,
-                    t_start: 0,
                     t_end: 80_000,
                 },
                 SidxSegment {
                     start_byte: 2,
                     end_byte: 3,
-                    t_start: 80_000,
                     t_end: 123_200,
                 },
             ],

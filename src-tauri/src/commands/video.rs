@@ -181,26 +181,19 @@ pub async fn video_get_play_info(
     // 仅音频模式（听视频）：音轨 fMP4 本身是完整文件，代理转发 Range，
     // 直接当普通媒体地址播（xgplayer-dash 写死假设视频轨存在，纯音 MPD 会在
     // definitions[0].selected 上崩）。不合成 MPD、不起文本代理。
-    let mut mpd = String::new();
     let mut mpd_url = String::new();
     if !audio_only {
-        mpd = crate::sites::bilibili::video::build_mpd(&selection, &video_url, &audio_url);
+        let mpd = crate::sites::bilibili::video::build_mpd(&selection, &video_url, &audio_url);
         mpd_url = state
             .stream_proxy
-            .start_text(
-                mpd.clone(),
-                "application/dash+xml".to_string(),
-                session_ids.mpd.clone(),
-            )
+            .start_text(mpd, "application/dash+xml".to_string(), session_ids.mpd.clone())
             .await?;
     }
 
     Ok(VideoPlayInfo {
-        mpd,
         mpd_url,
         video_url,
         audio_url,
-        headers,
         // 仅音频时视频轨代理不存在，时长只能取音轨 sidx（两者本就一致）。
         duration: if audio_only {
             selection.audio.sidx.duration_secs()
@@ -272,16 +265,14 @@ pub async fn video_get_danmaku(
     segment_index: Option<i64>,
     position_millis: Option<i64>,
 ) -> AppResult<VideoDanmakuSegment> {
-    let index = match (segment_index, position_millis) {
-        (Some(index), _) => index,
-        (None, Some(position)) => crate::sites::bilibili::video::danmaku_segment_index(position),
-        (None, None) => {
-            return Err(AppError::new(
+    let index = segment_index
+        .or_else(|| position_millis.map(crate::sites::bilibili::video::danmaku_segment_index))
+        .ok_or_else(|| {
+            AppError::new(
                 "video_danmaku_missing_segment",
                 "弹幕请求需要 segment_index 或 position_millis",
-            ));
-        }
-    };
+            )
+        })?;
     resolve_bilibili(&state)?.video_danmaku(cid, index).await
 }
 
@@ -300,27 +291,8 @@ pub async fn video_danmaku_send(
     message: String,
     video_title: Option<String>,
 ) -> AppResult<()> {
-    let (settings, cookie) = {
-        let conn = state.conn()?;
-        (
-            crate::settings::get(&conn)?,
-            account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default(),
-        )
-    };
-    if !settings.danmaku_send_enabled {
-        return Err(AppError::new(
-            "bilibili_send_disabled",
-            "弹幕发送功能尚未启用，请先在设置中确认开启",
-        )
-        .with_site("bilibili"));
-    }
-    if !crate::danmu_rs::bilibili::has_send_credentials(&cookie) {
-        return Err(AppError::new(
-            "bilibili_send_cookie_missing",
-            "请先在设置中保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
-        )
-        .with_site("bilibili"));
-    }
+    let (settings, cookie) =
+        crate::commands::danmaku::ensure_bilibili_send_ready(state.inner())?;
     let aid_key = aid.trim().to_string();
     if aid_key.is_empty() || aid_key.len() > 32 || !aid_key.bytes().all(|b| b.is_ascii_digit()) {
         return Err(

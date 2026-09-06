@@ -18,7 +18,7 @@ import {
   roomIdentityOverflowDistance,
 } from "@/shared/components/player/RoomIdentityLine";
 import type { SiteId } from "@/shared/types/live";
-import { cn, formatOnline } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import { AutoDanmakuSendMenu, SleepTimerMenu } from "./RoomToolMenus";
 import { CastMenu } from "./CastMenu";
@@ -87,12 +87,6 @@ export type PlayerFullscreenHudProps = {
   backLabel?: string;
 };
 
-/** 只有平台真的上报了数值时，热度才值得占一行。 */
-export function playerHudOnlineLabel(online: number | undefined): string | null {
-  if (online === undefined || !Number.isFinite(online) || online < 0) return null;
-  return formatOnline(online);
-}
-
 /**
  * HUD 是否有东西可画。仅全屏还不够：没有解析出的标题、主播和菜单条目的房间
  * 会在画面顶部渲染一条空的遮罩带。
@@ -139,9 +133,10 @@ export function PlayerFullscreenHud({
   backLabel,
 }: PlayerFullscreenHudProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [autoSendExpanded, setAutoSendExpanded] = useState(false);
-  const [sleepTimerExpanded, setSleepTimerExpanded] = useState(false);
-  const [castExpanded, setCastExpanded] = useState(false);
+  // 溢出菜单里三个二级面板互斥展开，null = 全部收起。
+  const [expandedTool, setExpandedTool] = useState<"autoSend" | "sleepTimer" | "cast" | null>(
+    null,
+  );
 
   useEffect(() => {
     onOverlayInteractionChange?.(menuOpen);
@@ -172,80 +167,64 @@ export function PlayerFullscreenHud({
     action.onSelect();
   }
 
+  /** 房间级与播放器级动作条目同一画法，渲染器只写一遍。 */
+  function renderAction(action: PlayerHudRoomAction) {
+    return (
+      <PlayerToolTile
+        key={action.id}
+        icon={action.icon}
+        label={action.label}
+        pressed={action.pressed}
+        disabled={action.disabled}
+        onClick={() => runAction(action)}
+      />
+    );
+  }
+
   const menuBody = (
     <>
       {roomActions.length > 0 && (
-        <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
-          {roomActions.map((action) => (
-            <PlayerToolTile
-              key={action.id}
-              icon={action.icon}
-              label={action.label}
-              pressed={action.pressed}
-              disabled={action.disabled}
-              onClick={() => runAction(action)}
-            />
-          ))}
-        </div>
+        <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">{roomActions.map(renderAction)}</div>
       )}
       {roomActions.length > 0 && (playerActions.length > 0 || autoSend || sleepTimer || cast) && (
         <Separator className={cn("my-2", glassSeparatorClass())} />
       )}
       {(playerActions.length > 0 || autoSend || sleepTimer || cast) && (
         <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
-          {playerActions.map((action) => (
-            <PlayerToolTile
-              key={action.id}
-              icon={action.icon}
-              label={action.label}
-              pressed={action.pressed}
-              disabled={action.disabled}
-              onClick={() => runAction(action)}
-            />
-          ))}
+          {playerActions.map(renderAction)}
           {autoSend && (
             <PlayerToolTile
               icon={Car}
               label={autoSend.enabled ? "发送中" : "自动发送"}
-              pressed={autoSendExpanded || autoSend.enabled}
+              pressed={expandedTool === "autoSend" || autoSend.enabled}
               active={autoSend.enabled}
-              onClick={() => {
-                setAutoSendExpanded((expanded) => !expanded);
-                setSleepTimerExpanded(false);
-                setCastExpanded(false);
-              }}
+              onClick={() => setExpandedTool((tool) => (tool === "autoSend" ? null : "autoSend"))}
             />
           )}
           {sleepTimer && (
             <PlayerToolTile
               icon={Timer}
               label={sleepTimer.active ? "定时中" : "定时关闭"}
-              pressed={sleepTimerExpanded || sleepTimer.active}
+              pressed={expandedTool === "sleepTimer" || sleepTimer.active}
               active={sleepTimer.active}
-              onClick={() => {
-                setSleepTimerExpanded((expanded) => !expanded);
-                setAutoSendExpanded(false);
-                setCastExpanded(false);
-              }}
+              onClick={() =>
+                setExpandedTool((tool) => (tool === "sleepTimer" ? null : "sleepTimer"))
+              }
             />
           )}
           {cast && (
             <PlayerToolTile
               icon={Cast}
               label={cast.device ? "投屏中" : "投屏"}
-              pressed={castExpanded || cast.device != null}
+              pressed={expandedTool === "cast" || cast.device != null}
               active={cast.device != null}
               disabled={cast.url == null}
-              onClick={() => {
-                setCastExpanded((expanded) => !expanded);
-                setAutoSendExpanded(false);
-                setSleepTimerExpanded(false);
-              }}
+              onClick={() => setExpandedTool((tool) => (tool === "cast" ? null : "cast"))}
             />
           )}
         </div>
       )}
-      {autoSend && autoSendExpanded && (
+      {autoSend && expandedTool === "autoSend" && (
         <PlayerToolPanel>
           <AutoDanmakuSendMenu
             autoSend={autoSend}
@@ -254,12 +233,12 @@ export function PlayerFullscreenHud({
           />
         </PlayerToolPanel>
       )}
-      {sleepTimer && sleepTimerExpanded && (
+      {sleepTimer && expandedTool === "sleepTimer" && (
         <PlayerToolPanel>
           <SleepTimerMenu timer={sleepTimer} showTrigger={false} variant="overlay" showHeader />
         </PlayerToolPanel>
       )}
-      {cast && castExpanded && (
+      {cast && expandedTool === "cast" && (
         <PlayerToolPanel>
           <CastMenu
             castUrl={cast.url}

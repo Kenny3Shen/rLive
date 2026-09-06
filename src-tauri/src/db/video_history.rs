@@ -44,6 +44,10 @@ pub struct VideoHistoryRecord {
 
 const LIST_LIMIT: i64 = 200;
 
+/// `list` / `find` 共用的 SELECT 列清单；列序与 [`map_video_history_record`] 一致。
+const VIDEO_HISTORY_COLUMNS: &str =
+    "kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid, progress, duration, watched_at";
+
 fn map_video_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoHistoryRecord> {
     Ok(VideoHistoryRecord {
         kind: row.get(0)?,
@@ -64,13 +68,12 @@ fn map_video_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoHi
 
 pub fn list(conn: &Connection) -> AppResult<Vec<VideoHistoryRecord>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid,
-                    progress, duration, watched_at
+        .prepare(&format!(
+            "SELECT {VIDEO_HISTORY_COLUMNS}
              FROM video_history
              ORDER BY watched_at DESC, kind ASC, oid ASC
-             LIMIT ?1",
-        )
+             LIMIT ?1"
+        ))
         .map_err(map_db_err)?;
     let rows = stmt
         .query_map(params![LIST_LIMIT], map_video_history_record)
@@ -86,10 +89,11 @@ pub fn list(conn: &Connection) -> AppResult<Vec<VideoHistoryRecord>> {
 /// 查单个作品的观看记录。播放页进入时用它决定是否提示续播；从未看过返回 `None`。
 pub fn find(conn: &Connection, kind: &str, oid: &str) -> AppResult<Option<VideoHistoryRecord>> {
     conn.query_row(
-        "SELECT kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid,
-                progress, duration, watched_at
-         FROM video_history
-         WHERE kind = ?1 AND oid = ?2",
+        &format!(
+            "SELECT {VIDEO_HISTORY_COLUMNS}
+             FROM video_history
+             WHERE kind = ?1 AND oid = ?2"
+        ),
         params![kind, oid],
         map_video_history_record,
     )

@@ -127,6 +127,23 @@ export function videoEndedAction(
   return autoPlayNext && hasNext ? "next" : "stop";
 }
 
+/** 取当前项沿播放方向的相邻项：step=1 是「下一个」，倒序播放时方向翻转。 */
+function adjacentItem(
+  state: Pick<PlaylistState, "items" | "currentId" | "reversed">,
+  step: 1 | -1,
+): PlaylistItem | null {
+  const { items, currentId, reversed } = state;
+  if (items.length === 0 || !currentId) return null;
+
+  const currentIndex = items.findIndex((item) => item.id === currentId);
+  if (currentIndex === -1) return null;
+
+  const nextIndex = currentIndex + (reversed ? -step : step);
+  if (nextIndex < 0 || nextIndex >= items.length) return null;
+
+  return items[nextIndex] ?? null;
+}
+
 type PlaylistState = {
   /** 当前播放列表。空数组表示无列表（单视频播放）。 */
   items: PlaylistItem[];
@@ -202,31 +219,9 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
           loopPlayback: !state.loopPlayback,
         })),
 
-      getNextItem: () => {
-        const { items, currentId, reversed } = get();
-        if (items.length === 0 || !currentId) return null;
+      getNextItem: () => adjacentItem(get(), 1),
 
-        const currentIndex = items.findIndex((item) => item.id === currentId);
-        if (currentIndex === -1) return null;
-
-        const nextIndex = reversed ? currentIndex - 1 : currentIndex + 1;
-        if (nextIndex < 0 || nextIndex >= items.length) return null;
-
-        return items[nextIndex] ?? null;
-      },
-
-      getPreviousItem: () => {
-        const { items, currentId, reversed } = get();
-        if (items.length === 0 || !currentId) return null;
-
-        const currentIndex = items.findIndex((item) => item.id === currentId);
-        if (currentIndex === -1) return null;
-
-        const prevIndex = reversed ? currentIndex + 1 : currentIndex - 1;
-        if (prevIndex < 0 || prevIndex >= items.length) return null;
-
-        return items[prevIndex] ?? null;
-      },
+      getPreviousItem: () => adjacentItem(get(), -1),
 
       getCurrentPosition: () => {
         const { items, currentId } = get();

@@ -116,15 +116,38 @@ type HistoryCardProps = {
   isRemoving: boolean;
 };
 
-function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
-  const title = item.title || "未命名直播间";
-  const roomPath = `/room/${item.site_id}/${encodeURIComponent(item.room_id)}`;
-  // 早于封面列出现写入的记录，以及从不提供封面的平台，
-  // 回退到平台标识而不是空盒子。
-  const cover = normalizeImageUrl(item.cover);
-
-  // 这里不放上下文菜单，也不响应触摸长按：点按打开房间、删除按钮覆盖了仅剩的操作，
-  // 右键/长按菜单只会在每张卡上重复这两个功能。
+/**
+ * 直播与视频历史卡共用的骨架：可聚焦的整卡按钮、16:9 封面列、文本列与右端
+ * 删除钮。两种卡只在封面叠层与文本列内容上有差别（见各自组件）。
+ *
+ * 这里不放上下文菜单，也不响应触摸长按：点按打开房间、删除按钮覆盖了仅剩的操作，
+ * 右键/长按菜单只会在每张卡上重复这两个功能。
+ */
+function HistoryCardShell({
+  title,
+  preloadPath,
+  onOpen,
+  onRemove,
+  isRemoving,
+  cover,
+  coverFallback,
+  coverOverlay,
+  children,
+}: {
+  /** 卡片标题；删除按钮的 aria-label 复用它。 */
+  title: string;
+  /** 指针悬停 / 键盘聚焦时预加载的路由。 */
+  preloadPath: string;
+  onOpen: () => void;
+  onRemove: () => void;
+  isRemoving: boolean;
+  /** 已规范化的封面地址；空时展示 `coverFallback`。 */
+  cover: string | undefined;
+  coverFallback: React.ReactNode;
+  /** 封面上的角标 / 进度等叠层。 */
+  coverOverlay?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div
       role="button"
@@ -143,9 +166,9 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
         // 让历史卡片在触摸设备上彻底不可长按。
         if (isMobileClient()) event.preventDefault();
       }}
-      onPointerEnter={() => preloadRouteModule(roomPath)}
-      onPointerDown={() => preloadRouteModule(roomPath)}
-      onFocus={() => preloadRouteModule(roomPath)}
+      onPointerEnter={() => preloadRouteModule(preloadPath)}
+      onPointerDown={() => preloadRouteModule(preloadPath)}
+      onFocus={() => preloadRouteModule(preloadPath)}
       className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated focus-ring"
     >
       <span className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border-subtle max-sm:w-20">
@@ -159,36 +182,12 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
             className="h-full w-full object-cover"
           />
         ) : (
-          <span className="flex h-full w-full items-center justify-center">
-            <SiteLogo siteId={item.site_id} className="size-7" />
-          </span>
+          <span className="flex h-full w-full items-center justify-center">{coverFallback}</span>
         )}
-        {/* 让平台标识在任何亮度的封面上都保持可读。 */}
-        <span className="absolute bottom-1 left-1 flex size-5 items-center justify-center rounded-md bg-black/60 backdrop-blur-sm">
-          <SiteLogo siteId={item.site_id} className="size-3.5" />
-        </span>
-        <CirclePlay
-          className="absolute right-1 bottom-1 size-4 rounded-full bg-card/85 text-foreground/80"
-          aria-hidden
-        />
+        {coverOverlay}
       </span>
 
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">{title}</span>
-        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-          {item.user_name || "未知主播"}
-        </span>
-        <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <Clock3 className="size-3.5" aria-hidden />
-            {formatTime(item.watched_at)}
-          </span>
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <Hash className="size-3.5" aria-hidden />
-            {item.room_id}
-          </span>
-        </span>
-      </span>
+      <span className="min-w-0 flex-1">{children}</span>
 
       <Button
         type="button"
@@ -209,6 +208,53 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   );
 }
 
+function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
+  const title = item.title || "未命名直播间";
+  const roomPath = `/room/${item.site_id}/${encodeURIComponent(item.room_id)}`;
+  // 早于封面列出现写入的记录，以及从不提供封面的平台，
+  // 回退到平台标识而不是空盒子。
+  const cover = normalizeImageUrl(item.cover);
+
+  return (
+    <HistoryCardShell
+      title={title}
+      preloadPath={roomPath}
+      onOpen={onOpen}
+      onRemove={onRemove}
+      isRemoving={isRemoving}
+      cover={cover}
+      coverFallback={<SiteLogo siteId={item.site_id} className="size-7" />}
+      coverOverlay={
+        <>
+          {/* 让平台标识在任何亮度的封面上都保持可读。 */}
+          <span className="absolute bottom-1 left-1 flex size-5 items-center justify-center rounded-md bg-black/60 backdrop-blur-sm">
+            <SiteLogo siteId={item.site_id} className="size-3.5" />
+          </span>
+          <CirclePlay
+            className="absolute right-1 bottom-1 size-4 rounded-full bg-card/85 text-foreground/80"
+            aria-hidden
+          />
+        </>
+      }
+    >
+      <span className="block truncate text-sm font-medium text-foreground">{title}</span>
+      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+        {item.user_name || "未知主播"}
+      </span>
+      <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <Clock3 className="size-3.5" aria-hidden />
+          {formatTime(item.watched_at)}
+        </span>
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <Hash className="size-3.5" aria-hidden />
+          {item.room_id}
+        </span>
+      </span>
+    </HistoryCardShell>
+  );
+}
+
 type VideoHistoryCardProps = {
   item: VideoHistoryItem;
   onOpen: () => void;
@@ -217,7 +263,7 @@ type VideoHistoryCardProps = {
 };
 
 /**
- * 一条视频观看记录。与直播历史卡同构（封面 + 文本列 + 删除按钮），
+ * 一条视频观看记录。骨架与直播历史卡共用（`HistoryCardShell`），
  * 额外在封面上叠时长标签与进度条 —— 用户要判断「上次看到哪儿了」，
  * 进度是这张卡与直播卡唯一的语义差别。
  */
@@ -238,42 +284,16 @@ function VideoHistoryCard({ item, onOpen, onRemove, isRemoving }: VideoHistoryCa
     : `已看到 ${watched}`;
 
   return (
-    <div
-      role="button"
-      data-motion-press
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.currentTarget !== event.target) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
-      onContextMenu={(event) => {
-        if (isMobileClient()) event.preventDefault();
-      }}
-      onPointerEnter={() => preloadRouteModule(playPath)}
-      onPointerDown={() => preloadRouteModule(playPath)}
-      onFocus={() => preloadRouteModule(playPath)}
-      className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated focus-ring"
-    >
-      <span className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border-subtle max-sm:w-20">
-        {cover ? (
-          <img
-            src={cover}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <span className="flex h-full w-full items-center justify-center">
-            <MonitorPlay className="size-6 text-muted-foreground" aria-hidden />
-          </span>
-        )}
-        {hasDuration && (
+    <HistoryCardShell
+      title={title}
+      preloadPath={playPath}
+      onOpen={onOpen}
+      onRemove={onRemove}
+      isRemoving={isRemoving}
+      cover={cover}
+      coverFallback={<MonitorPlay className="size-6 text-muted-foreground" aria-hidden />}
+      coverOverlay={
+        hasDuration ? (
           <>
             <span className="absolute right-1 bottom-1.5 rounded-md bg-black/60 px-1 text-[10px] leading-4 font-medium text-white backdrop-blur-sm">
               {formatVideoDuration(item.duration)}
@@ -283,41 +303,23 @@ function VideoHistoryCard({ item, onOpen, onRemove, isRemoving }: VideoHistoryCa
               <span className="block h-full bg-primary" style={{ width: `${progressPercent}%` }} />
             </span>
           </>
-        )}
+        ) : undefined
+      }
+    >
+      <span className="block truncate text-sm font-medium text-foreground">{title}</span>
+      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+        {subtitle || "未知作者"}
       </span>
-
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">{title}</span>
-        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-          {subtitle || "未知作者"}
+      <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <Clock3 className="size-3.5" aria-hidden />
+          {formatTime(item.watched_at)}
         </span>
-        <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <Clock3 className="size-3.5" aria-hidden />
-            {formatTime(item.watched_at)}
-          </span>
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            {progressLabel}
-          </span>
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          {progressLabel}
         </span>
       </span>
-
-      <Button
-        type="button"
-        variant="destructive"
-        size="icon-sm"
-        data-action="delete-history"
-        aria-label={`删除 ${title} 的观看记录`}
-        title="删除此记录"
-        disabled={isRemoving}
-        onClick={(event) => {
-          event.stopPropagation();
-          onRemove();
-        }}
-      >
-        {isRemoving ? <Spinner aria-hidden /> : <Trash2 aria-hidden />}
-      </Button>
-    </div>
+    </HistoryCardShell>
   );
 }
 
