@@ -24,6 +24,7 @@ import type { SiteId } from "@/shared/types/live";
 import {
   createXgPlayer,
   getXgMpegtsCore,
+  isInterruptedPlayRequest,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
@@ -583,6 +584,7 @@ export function RecordingPlayer({
     if (!player || !video) return;
     if (video.paused) {
       void Promise.resolve(player.play()).catch((cause) => {
+        if (isInterruptedPlayRequest(cause)) return;
         setError(xgPlayerErrorMessage(cause, "播放录制失败"));
       });
     } else {
