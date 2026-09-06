@@ -70,7 +70,6 @@ export type VideoDanmakuEntry = {
   mode: DanmuJsMode;
   color: string;
   content: string;
-  weight: number;
   pool: number;
 };
 
@@ -94,7 +93,6 @@ export function videoDanmakuEntries(
       mode: videoDanmakuMode(item.mode),
       color: videoDanmakuColor(item.color),
       content,
-      weight: Number.isFinite(item.weight) ? item.weight : 0,
       pool: Number.isFinite(item.pool) ? item.pool : 0,
     });
   }
@@ -108,27 +106,15 @@ export function mergeVideoDanmakuEntries(
   return segments.flat().sort((left, right) => left.progressMs - right.progressMs);
 }
 
-export type VideoDanmakuFilterOptions = {
-  /** 屏蔽词，与直播共用设置。 */
-  isShielded: (content: string) => boolean;
-  /**
-   * 权重下限。上游 `weight` 是平台给的屏蔽等级（1..10，越低越可能是垃圾），
-   * 0 表示不按等级过滤。
-   */
-  minWeight: number;
-  /** 是否显示字幕池（pool 1）与特殊池（pool 2）弹幕。 */
-  showSubtitlePool: boolean;
-};
-
+/**
+ * 可见条目：普通池（pool 0）且未被屏蔽词命中。字幕池与特殊池是平台自绘
+ * 字幕的载体，不混进弹幕轨道。
+ */
 export function filterVideoDanmakuEntries(
   entries: readonly VideoDanmakuEntry[],
-  options: VideoDanmakuFilterOptions,
+  isShielded: (content: string) => boolean,
 ): VideoDanmakuEntry[] {
-  return entries.filter((entry) => {
-    if (options.minWeight > 0 && entry.weight > 0 && entry.weight < options.minWeight) return false;
-    if (!options.showSubtitlePool && entry.pool !== 0) return false;
-    return !options.isShielded(entry.content);
-  });
+  return entries.filter((entry) => entry.pool === 0 && !isShielded(entry.content));
 }
 
 /** 二分找出第一条 `progressMs >= positionMs` 的条目下标。 */

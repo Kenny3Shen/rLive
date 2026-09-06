@@ -229,11 +229,6 @@ async fn send_video_danmaku_to_url(
             AppError::new("bilibili_send_filtered", "弹幕被 B站过滤，请修改内容后重试")
                 .with_site("bilibili"),
         ),
-        -400 => Err(AppError::new(
-            "bilibili_send_rejected",
-            "B站未接受此条弹幕，请检查账号状态或视频限制",
-        )
-        .with_site("bilibili")),
         _ => Err(AppError::new(
             "bilibili_send_rejected",
             "B站未接受此条弹幕，请检查账号状态或视频限制",

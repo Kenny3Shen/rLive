@@ -17,11 +17,9 @@ function searchItem(bvid: string, cid: number | null): VideoItem {
     title: `${bvid} 标题`,
     cover: "",
     author: "up",
-    author_face: null,
     duration: 60,
     view: 1,
     danmaku: 0,
-    pubdate: 0,
     rcmd_reason: null,
   };
 }

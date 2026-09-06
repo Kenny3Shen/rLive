@@ -48,16 +48,6 @@ export function videoGetPgcIndex(
   return invokeCmd<PgcListPage>("video_get_pgc_index", { seasonType, indexType, page });
 }
 
-/**
- * PGC 排行榜。同样是榜单，`has_more` 恒为 false。
- *
- * 番剧 / 影视两个页签当前走的是可翻页的 `pgc_index`，因此这个榜单尚未接入界面。
- * 保留封装是因为后端命令已存在且已验证，将来加「榜单」视图时不必再推导一次参数。
- */
-export function videoGetPgcZone(seasonType: number): Promise<PgcListPage> {
-  return invokeCmd<PgcListPage>("video_get_pgc_zone", { seasonType });
-}
-
 export function videoGetSeason(params: {
   seasonId?: string | undefined;
   epId?: string | undefined;

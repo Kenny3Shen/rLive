@@ -19,7 +19,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type {
   PgcItem,
   PgcListPage,
-  VideoItem,
   VideoListPage,
   VideoZone,
 } from "@/shared/types/video";
@@ -30,7 +29,7 @@ import {
   videoGetZone,
   videoZoneList,
 } from "./videoApi";
-import { PgcCard, VideoCard } from "./VideoCard";
+import { PgcCard, VIDEO_GRID_CLASS, VideoGrid } from "./VideoCard";
 import { VideoZoneBar } from "./VideoZoneBar";
 import {
   PGC_SEASON_TYPES,
@@ -57,22 +56,9 @@ const EMPTY_ZONES: readonly VideoZone[] = [];
  */
 type VideoFeedPage = ({ kind: "ugc" } & VideoListPage) | ({ kind: "pgc" } & PgcListPage);
 
-const GRID_CLASS =
-  "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
-
-const VideoGrid = memo(function VideoGrid({ items }: { items: readonly VideoItem[] }) {
-  return (
-    <div className={GRID_CLASS}>
-      {items.map((item) => (
-        <VideoCard key={`${item.bvid}:${item.cid ?? ""}`} item={item} />
-      ))}
-    </div>
-  );
-});
-
 const PgcGrid = memo(function PgcGrid({ items }: { items: readonly PgcItem[] }) {
   return (
-    <div className={GRID_CLASS}>
+    <div className={VIDEO_GRID_CLASS}>
       {items.map((item) => (
         <PgcCard key={item.season_id} item={item} />
       ))}
@@ -82,7 +68,7 @@ const PgcGrid = memo(function PgcGrid({ items }: { items: readonly PgcItem[] }) 
 
 function GridSkeleton() {
   return (
-    <div className={GRID_CLASS} aria-hidden>
+    <div className={VIDEO_GRID_CLASS} aria-hidden>
       {Array.from({ length: 12 }).map((_, index) => (
         <div key={index} className="flex flex-col gap-2">
           <Skeleton className="aspect-video w-full rounded-xl" />

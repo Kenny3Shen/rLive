@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Spinner } from "@/components/ui/spinner";
 import { cn, formatOnline } from "@/lib/utils";
 import { formatRecordingDuration } from "@/features/recording/recording";
-import type { VideoDanmakuEntry } from "./videoDanmaku";
+import { firstVideoDanmakuAtOrAfter, type VideoDanmakuEntry } from "./videoDanmaku";
 
 /**
  * 侧栏「弹幕」选项卡面板：按时间排列当前播放位置附近已加载的 VOD 弹幕。
@@ -16,10 +16,6 @@ import type { VideoDanmakuEntry } from "./videoDanmaku";
  * 上万条也不拖垮滚动。用户上翻历史暂停跟随，滚回底部恢复；点击任意
  * 条目（含未来条目）跳到该弹幕出现的播放位置。
  */
-
-function formatTimestamp(progressMs: number): string {
-  return formatRecordingDuration(progressMs);
-}
 
 export function VideoDanmakuList({
   entries,
@@ -61,15 +57,15 @@ export function VideoDanmakuList({
   // 全量渲染：行级 content-visibility 让浏览器跳过屏外行的布局与绘制，
   // 滚动可以到达任意位置（进度窗口截断会让"滚动查看更多"失效）。
   const total = entries.length;
-  const followIndex = Math.max(0, lowerBound(entries, positionMs) - 1);
+  const followIndex = Math.max(0, firstVideoDanmakuAtOrAfter(entries, positionMs) - 1);
 
   return (
     <div
+      ref={viewportRef}
       data-slot="video-danmaku-list"
       aria-label="视频弹幕"
-      className="flex h-full min-h-0 flex-col"
+      className="h-full overflow-y-auto overscroll-contain pb-2"
     >
-      <div ref={viewportRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
         {total === 0 && loading && (
           <div className="flex items-center justify-center py-4">
             <Spinner className="size-4" aria-label="正在加载弹幕" />
@@ -101,7 +97,7 @@ export function VideoDanmakuList({
                 className="flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
               >
                 <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                  {formatTimestamp(entry.progressMs)}
+                  {formatRecordingDuration(entry.progressMs)}
                 </span>
                 <span
                   className="min-w-0 flex-1 truncate leading-relaxed"
@@ -118,22 +114,6 @@ export function VideoDanmakuList({
             共 {formatOnline(total)} 条弹幕
           </p>
         )}
-      </div>
     </div>
   );
-}
-
-/** 第一条 progressMs >= target 的下标（entries 已按 progressMs 升序）。 */
-function lowerBound(
-  entries: readonly VideoDanmakuEntry[],
-  targetMs: number,
-): number {
-  let low = 0;
-  let high = entries.length;
-  while (low < high) {
-    const mid = (low + high) >> 1;
-    if (entries[mid].progressMs < targetMs) low = mid + 1;
-    else high = mid;
-  }
-  return low;
 }

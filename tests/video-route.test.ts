@@ -3,7 +3,6 @@ import {
   DEFAULT_VIDEO_SEARCH_FILTERS,
   PGC_SEASON_TYPES,
   VIDEO_POPULAR_ALL_ZONE_KEY,
-  VIDEO_TABS,
   parseVideoPlayParams,
   parseVideoSearchFilters,
   resolveVideoZoneKey,
@@ -190,9 +189,6 @@ describe("video paths", () => {
     });
   });
 
-  test("keeps the tab strip order stable for the shell's pan direction", () => {
-    expect([...VIDEO_TABS]).toEqual(["recommend", "popular", "anime", "cinema"]);
-  });
 });
 
 describe("video search filters", () => {
@@ -338,7 +334,7 @@ describe("VOD danmaku mapping", () => {
   });
 });
 
-function entry(progressMs: number, overrides: Partial<{ weight: number; pool: number }> = {}) {
+function entry(progressMs: number, overrides: Partial<{ pool: number }> = {}) {
   return videoDanmakuEntries(
     [
       {
@@ -347,7 +343,7 @@ function entry(progressMs: number, overrides: Partial<{ weight: number; pool: nu
         fontsize: 25,
         color: 16_777_215,
         content: `d${progressMs}`,
-        weight: overrides.weight ?? 5,
+        weight: 5,
         pool: overrides.pool ?? 0,
       },
     ],
@@ -358,43 +354,15 @@ function entry(progressMs: number, overrides: Partial<{ weight: number; pool: nu
 describe("VOD danmaku filtering", () => {
   test("applies the shared shield words", () => {
     const entries = [entry(100), entry(200)];
-    const filtered = filterVideoDanmakuEntries(entries, {
-      isShielded: (content) => content === "d100",
-      minWeight: 0,
-      showSubtitlePool: false,
-    });
+    const filtered = filterVideoDanmakuEntries(entries, (content) => content === "d100");
     expect(filtered.map((item) => item.content)).toEqual(["d200"]);
   });
 
-  test("hides the subtitle and special pools unless asked", () => {
+  test("hides the subtitle and special pools", () => {
     const entries = [entry(100, { pool: 0 }), entry(200, { pool: 1 }), entry(300, { pool: 2 })];
-    const options = { isShielded: () => false, minWeight: 0 };
     expect(
-      filterVideoDanmakuEntries(entries, { ...options, showSubtitlePool: false }).map(
-        (item) => item.content,
-      ),
+      filterVideoDanmakuEntries(entries, () => false).map((item) => item.content),
     ).toEqual(["d100"]);
-    expect(
-      filterVideoDanmakuEntries(entries, { ...options, showSubtitlePool: true }),
-    ).toHaveLength(3);
-  });
-
-  test("treats a zero weight threshold as no level filtering", () => {
-    const entries = [entry(100, { weight: 1 }), entry(200, { weight: 10 })];
-    expect(
-      filterVideoDanmakuEntries(entries, {
-        isShielded: () => false,
-        minWeight: 0,
-        showSubtitlePool: false,
-      }),
-    ).toHaveLength(2);
-    expect(
-      filterVideoDanmakuEntries(entries, {
-        isShielded: () => false,
-        minWeight: 5,
-        showSubtitlePool: false,
-      }).map((item) => item.content),
-    ).toEqual(["d200"]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 import { findVerticalScrollParent } from "@/shared/gestures/pullToRefresh";
 
 type UseInfiniteScrollOptions = {
@@ -22,7 +22,7 @@ export function useInfiniteScroll({
   isFetchNextPageError,
   fetchNextPage,
   rootMargin = "0px 0px 240px 0px",
-}: UseInfiniteScrollOptions) {
+}: UseInfiniteScrollOptions): InfiniteScrollController {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const loadMoreInFlightRef = useRef(false);
   const supportsIntersectionObserver = typeof IntersectionObserver !== "undefined";
@@ -81,9 +81,15 @@ export function useInfiniteScroll({
     supportsIntersectionObserver,
   ]);
 
-  return {
-    loadMore,
-    loadMoreRef,
-    supportsIntersectionObserver,
-  };
+  return { loadMore, loadMoreRef, supportsIntersectionObserver };
 }
+
+/** `useInfiniteScroll` 的控制器形状，供 `LoadMoreRow` 这类消费方声明入参。 */
+export type InfiniteScrollController = {
+  /** 手动触发下一页；`retry` 为 true 时不理会上一次失败继续拉。 */
+  loadMore: (retry?: boolean) => void;
+  /** 挂在列表末尾的哨兵元素。 */
+  loadMoreRef: RefObject<HTMLDivElement | null>;
+  /** 该环境是否可用 IntersectionObserver（不可用时走手动按钮）。 */
+  supportsIntersectionObserver: boolean;
+};

@@ -230,11 +230,8 @@ struct ProxyLoopContext {
     force_hls: bool,
     twitch_ad_recovery: Option<Arc<TwitchAdRecoverySession>>,
     telemetry: Arc<ProxyTelemetryCounters>,
-    /// 设定时，本代理只回一段固定文本，不连接任何上游（见
-    /// [`StreamProxy::start_text`]）。直播路径永远是 `None`，行为完全不变。
-    text_body: Option<Arc<TextResponse>>,
     /// VOD 媒体会话按 accept 顺序串行应答（见 [`StreamProxy::start_ordered`]）。
-    /// 直播与文本会话永远为 `false`，行为完全不变。
+    /// 直播会话永远为 `false`，行为完全不变。
     ordered: bool,
 }
 
@@ -655,6 +652,70 @@ impl StreamProxy {
             .map(|inner| inner.telemetry.snapshot())
     }
 
+    /// [`Self::start`] / [`Self::start_text`] 共用的前置：预订会话所有权
+    /// 并绑定一个回环临时端口，失败时释放预订。
+    async fn bind_session_listener(
+        &self,
+        session_id: &str,
+    ) -> AppResult<(u64, TcpListener, u16)> {
+        // 在第一次 await 之前完成所有权预订。后续的 start 或 stop 可以取代这次预订，
+        // 此时当前请求丢弃自己未安装的监听器，
+        // 而不是覆盖更新的任务。
+        let generation = self.reserve_start(session_id);
+
+        // 每个代理都使用临时端口，无需等待前一个套接字的端口变为可复用。
+        // 避免那个 sleep 同样重要：它曾扩大进入/退出/重进的竞争窗口。
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(e) => {
+                self.clear_pending(session_id, generation);
+                return Err(AppError::new(
+                    "stream_proxy_bind",
+                    format!("bind localhost failed: {e}"),
+                )
+                .retryable());
+            }
+        };
+        let port = listener
+            .local_addr()
+            .map_err(|e| {
+                self.clear_pending(session_id, generation);
+                AppError::new("stream_proxy_bind", e.to_string())
+            })?
+            .port();
+        Ok((generation, listener, port))
+    }
+
+    /// [`Self::start`] / [`Self::start_text`] 共用的安装管道：校验预订未被
+    /// 取代，把会话循环登记为该 session 的活动代理并返回回环 URL。循环任务
+    /// （含监听器、停机通道与遥测的组装）由 `build` 在持锁期间一次性完成，
+    /// 与旧的顺序一致：取代检查在 spawn 之前、旧监听器在新任务就绪之后才停。
+    async fn install_session_proxy(
+        &self,
+        session_id: String,
+        generation: u64,
+        port: u16,
+        build: impl FnOnce() -> ProxyInner,
+    ) -> AppResult<String> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.pending.get(&session_id) != Some(&generation) {
+            return Err(AppError::new(
+                "stream_proxy_superseded",
+                "playback session was replaced before proxy startup finished",
+            )
+            .retryable());
+        }
+        let inner = build();
+        // 让本会话的旧监听器保持存活，直到它的替代者完全绑定并构建好网络客户端。
+        // 其他会话不受影响。
+        if let Some(previous) = state.active.remove(&session_id) {
+            Self::stop_inner(previous);
+        }
+        state.pending.remove(&session_id);
+        state.active.insert(session_id, inner);
+        Ok(format!("http://127.0.0.1:{port}/live"))
+    }
+
     /// 用 `headers` 为 `url` 启动（或替换）一个代理。返回本地播放 URL。
     ///
     /// `ordered`：VOD 媒体分会话传 `true` —— 按到达顺序串行应答，见
@@ -670,31 +731,7 @@ impl StreamProxy {
         twitch_ad_recovery: Option<TwitchAdRecovery>,
         ordered: bool,
     ) -> AppResult<String> {
-        // 在第一次 await 之前完成所有权预订。后续的 start 或 stop 可以取代这次预订，
-        // 此时当前请求丢弃自己未安装的监听器，
-        // 而不是覆盖更新的任务。
-        let generation = self.reserve_start(&session_id);
-
-        // 每个代理都使用临时端口，无需等待前一个套接字的端口变为可复用。
-        // 避免那个 sleep 同样重要：它曾扩大进入/退出/重进的竞争窗口。
-        let listener = match TcpListener::bind("127.0.0.1:0").await {
-            Ok(listener) => listener,
-            Err(e) => {
-                self.clear_pending(&session_id, generation);
-                return Err(AppError::new(
-                    "stream_proxy_bind",
-                    format!("bind localhost failed: {e}"),
-                )
-                .retryable());
-            }
-        };
-        let port = listener
-            .local_addr()
-            .map_err(|e| {
-                self.clear_pending(&session_id, generation);
-                AppError::new("stream_proxy_bind", e.to_string())
-            })?
-            .port();
+        let (generation, listener, port) = self.bind_session_listener(&session_id).await?;
         // MSE 协议插件可能为一场直播发出多个本机请求。在每个代理生命周期内构建一个
         // 客户端，使这些请求共享其连接池，
         // 而不是每个请求都重建 TLS/连接池状态。
@@ -722,52 +759,32 @@ impl StreamProxy {
             None => None,
         };
 
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        let is_current = state.pending.get(&session_id) == Some(&generation);
-        if !is_current {
-            // `listener` 尚未 spawn，丢弃它即可释放套接字。
-            // 不要触碰更新的预订/任务。
-            return Err(AppError::new(
-                "stream_proxy_superseded",
-                "playback session was replaced before proxy startup finished",
-            )
-            .retryable());
-        }
-
-        let hls_resources = Arc::new(HlsResources::new());
-        let telemetry = Arc::new(ProxyTelemetryCounters::new());
-        let local_origin = Arc::<str>::from(format!("http://127.0.0.1:{port}"));
-        let context = ProxyLoopContext {
-            client,
-            url: Arc::<str>::from(url),
-            headers: Arc::new(headers),
-            hls_resources,
-            local_origin,
-            force_hls,
-            twitch_ad_recovery,
-            telemetry: telemetry.clone(),
-            text_body: None,
-            ordered,
-        };
-        let task = tauri::async_runtime::spawn(async move {
-            run_proxy_loop(listener, context, shutdown_rx).await;
-        });
-        // 让本会话的旧监听器保持存活，直到它的替代者完全绑定并构建好网络客户端。
-        // 其他会话不受影响。
-        if let Some(previous) = state.active.remove(&session_id) {
-            Self::stop_inner(previous);
-        }
-        state.pending.remove(&session_id);
-        state.active.insert(
-            session_id,
+        self.install_session_proxy(session_id, generation, port, move || {
+            let hls_resources = Arc::new(HlsResources::new());
+            let telemetry = Arc::new(ProxyTelemetryCounters::new());
+            let local_origin = Arc::<str>::from(format!("http://127.0.0.1:{port}"));
+            let context = ProxyLoopContext {
+                client,
+                url: Arc::<str>::from(url),
+                headers: Arc::new(headers),
+                hls_resources,
+                local_origin,
+                force_hls,
+                twitch_ad_recovery,
+                telemetry: telemetry.clone(),
+                ordered,
+            };
+            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+            let task = tauri::async_runtime::spawn(async move {
+                run_proxy_loop(listener, context, shutdown_rx).await;
+            });
             ProxyInner {
                 shutdown: shutdown_tx,
                 task,
                 telemetry,
-            },
-        );
-        Ok(format!("http://127.0.0.1:{port}/live"))
+            }
+        })
+        .await
     }
 
     /// 为一条 VOD 媒体轨启动（或替换）一个**按序**代理，返回本地播放 URL。
@@ -798,79 +815,31 @@ impl StreamProxy {
     /// 为合成的 DASH 清单而存在：`xgplayer-dash` 取 MPD 的 XHR 会给地址拼 `?`，
     /// `blob:` URL 走精确匹配因此 404，清单必须由 HTTP 提供。
     ///
-    /// 刻意不复用 [`Self::start`]：那条路径承载全部直播播放，这里只需要绑端口与
-    /// 写一段字符串，既不需要上游客户端也不需要 HLS/Twitch 处理。
+    /// 刻意不复用 [`Self::start`]：那条路径承载全部直播播放，这里只需要绑端口
+    /// 与写一段字符串，走专用的 [`run_text_loop`]，既不需要上游客户端也不需要
+    /// HLS/Twitch 处理。
     pub async fn start_text(
         &self,
         body: String,
         content_type: String,
         session_id: String,
     ) -> AppResult<String> {
-        let generation = self.reserve_start(&session_id);
-        let listener = match TcpListener::bind("127.0.0.1:0").await {
-            Ok(listener) => listener,
-            Err(e) => {
-                self.clear_pending(&session_id, generation);
-                return Err(AppError::new(
-                    "stream_proxy_bind",
-                    format!("bind localhost failed: {e}"),
-                )
-                .retryable());
-            }
-        };
-        let port = listener
-            .local_addr()
-            .map_err(|e| {
-                self.clear_pending(&session_id, generation);
-                AppError::new("stream_proxy_bind", e.to_string())
-            })?
-            .port();
-        // 文本代理不发上游请求，但 `ProxyLoopContext` 需要一个客户端字段。
-        // 建一个无代理的空客户端，它不会被用到。
-        let client = Client::builder()
-            .no_proxy()
-            .build()
-            .map_err(|_| AppError::new("stream_proxy_client", "文本代理客户端初始化失败"))?;
-
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        if state.pending.get(&session_id) != Some(&generation) {
-            return Err(AppError::new(
-                "stream_proxy_superseded",
-                "playback session was replaced before proxy startup finished",
-            )
-            .retryable());
-        }
-
-        let telemetry = Arc::new(ProxyTelemetryCounters::new());
-        let context = ProxyLoopContext {
-            client,
-            url: Arc::<str>::from(""),
-            headers: Arc::new(HashMap::new()),
-            hls_resources: Arc::new(HlsResources::new()),
-            local_origin: Arc::<str>::from(format!("http://127.0.0.1:{port}")),
-            force_hls: false,
-            twitch_ad_recovery: None,
-            telemetry: telemetry.clone(),
-            text_body: Some(Arc::new(TextResponse { body, content_type })),
-            ordered: false,
-        };
-        let task = tauri::async_runtime::spawn(async move {
-            run_proxy_loop(listener, context, shutdown_rx).await;
-        });
-        if let Some(previous) = state.active.remove(&session_id) {
-            Self::stop_inner(previous);
-        }
-        state.pending.remove(&session_id);
-        state.active.insert(
-            session_id,
+        let (generation, listener, port) = self.bind_session_listener(&session_id).await?;
+        let response = Arc::new(TextResponse { body, content_type });
+        self.install_session_proxy(session_id, generation, port, move || {
+            let telemetry = Arc::new(ProxyTelemetryCounters::new());
+            let loop_telemetry = telemetry.clone();
+            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+            let task = tauri::async_runtime::spawn(async move {
+                run_text_loop(listener, response, loop_telemetry, shutdown_rx).await;
+            });
             ProxyInner {
                 shutdown: shutdown_tx,
                 task,
                 telemetry,
-            },
-        );
-        Ok(format!("http://127.0.0.1:{port}/live"))
+            }
+        })
+        .await
     }
 
     /// 阻塞直到该代理的 `/live` 端点应答出一份一次性解复用器能打开的播放列表，
@@ -2182,6 +2151,131 @@ async fn run_proxy_loop(
     while handlers.join_next().await.is_some() {}
 }
 
+/// 文本代理的专用会话循环：accept 后逐连接 spawn [`serve_text_client`]，
+/// 停机时中止全部应答任务（与 [`run_proxy_loop`] 同构，但不构造
+/// `ProxyLoopContext`、不做 HLS/Twitch/有序化处理）。
+async fn run_text_loop(
+    listener: TcpListener,
+    response: Arc<TextResponse>,
+    telemetry: Arc<ProxyTelemetryCounters>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut handlers = JoinSet::new();
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
+            accept = listener.accept() => {
+                match accept {
+                    Ok((mut socket, _)) => {
+                        let response = response.clone();
+                        let telemetry = telemetry.clone();
+                        handlers.spawn(async move {
+                            if let Err(e) = serve_text_client(&mut socket, &response).await {
+                                telemetry.upstream_failures.fetch_add(1, Ordering::Relaxed);
+                                tracing::debug!(%e, "stream proxy text client ended");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(%e, "stream proxy accept failed");
+                        break;
+                    }
+                }
+            }
+            completed = handlers.join_next(), if !handlers.is_empty() => {
+                if let Some(Err(error)) = completed
+                    && !error.is_cancelled()
+                {
+                    tracing::debug!(%error, "stream proxy handler task failed");
+                }
+            }
+        }
+    }
+
+    handlers.abort_all();
+    while handlers.join_next().await.is_some() {}
+}
+
+/// 文本代理的单连接应答：方法路由与直播路径一致（[`answer_method_preflight`]），
+/// GET/HEAD 命中即回固定文本。
+async fn serve_text_client(
+    socket: &mut tokio::net::TcpStream,
+    text: &TextResponse,
+) -> Result<(), String> {
+    // 读取请求头（只需要方法）。
+    let mut buf = [0u8; 4096];
+    let n = socket
+        .read(&mut buf)
+        .await
+        .map_err(|e| format!("read request: {e}"))?;
+    if n == 0 {
+        return Ok(());
+    }
+    let head = String::from_utf8_lossy(&buf[..n]);
+    let method = head
+        .lines()
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    if answer_method_preflight(socket, method).await? {
+        return Ok(());
+    }
+    let body = text.body.as_bytes();
+    let length = body.len().to_string();
+    write_media_headers(
+        socket,
+        200,
+        "OK",
+        &text.content_type,
+        Some(&length),
+        None,
+        "no-store",
+    )
+    .await?;
+    if method == "GET" {
+        socket
+            .write_all(body)
+            .await
+            .map_err(|e| format!("write text body: {e}"))?;
+    }
+    let _ = socket.flush().await;
+    Ok(())
+}
+
+/// 只按方法分流的公共前置：OPTIONS 回 CORS 预检（204），非 GET/HEAD 回 405。
+/// 返回 true 表示该请求已应答完毕，调用方直接结束这条连接。
+async fn answer_method_preflight(
+    socket: &mut tokio::net::TcpStream,
+    method: &str,
+) -> Result<bool, String> {
+    if method == "OPTIONS" {
+        let resp = concat!(
+            "HTTP/1.1 204 No Content\r\n",
+            "Access-Control-Allow-Origin: *\r\n",
+            "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n",
+            "Access-Control-Allow-Headers: *\r\n",
+            "Connection: close\r\n\r\n"
+        );
+        socket
+            .write_all(resp.as_bytes())
+            .await
+            .map_err(|e| format!("write options: {e}"))?;
+        return Ok(true);
+    }
+    if method != "GET" && method != "HEAD" {
+        let resp = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n";
+        let _ = socket.write_all(resp.as_bytes()).await;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 async fn wait_for_proxy_shutdown(shutdown: &mut watch::Receiver<bool>) {
     if *shutdown.borrow() {
         return;
@@ -2206,7 +2300,6 @@ async fn handle_client(
         force_hls,
         twitch_ad_recovery,
         telemetry,
-        text_body,
         ordered: _,
     } = context;
 
@@ -2229,48 +2322,7 @@ async fn handle_client(
         .map_or(request_target, |(path, _)| path)
         == "/live";
 
-    if method == "OPTIONS" {
-        let resp = concat!(
-            "HTTP/1.1 204 No Content\r\n",
-            "Access-Control-Allow-Origin: *\r\n",
-            "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n",
-            "Access-Control-Allow-Headers: *\r\n",
-            "Connection: close\r\n\r\n"
-        );
-        socket
-            .write_all(resp.as_bytes())
-            .await
-            .map_err(|e| format!("write options: {e}"))?;
-        return Ok(());
-    }
-    if method != "GET" && method != "HEAD" {
-        let resp = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n";
-        let _ = socket.write_all(resp.as_bytes()).await;
-        return Ok(());
-    }
-
-    // 文本模式（合成 MPD）在解析上游目标之前就返回：本代理根本没有上游。
-    // 直播路径的 `text_body` 恒为 `None`，不会进入这里。
-    if let Some(text) = text_body.as_deref() {
-        let body = text.body.as_bytes();
-        let length = body.len().to_string();
-        write_media_headers(
-            socket,
-            200,
-            "OK",
-            &text.content_type,
-            Some(&length),
-            None,
-            "no-store",
-        )
-        .await?;
-        if method == "GET" {
-            socket
-                .write_all(body)
-                .await
-                .map_err(|e| format!("write text body: {e}"))?;
-        }
-        let _ = socket.flush().await;
+    if answer_method_preflight(socket, method).await? {
         return Ok(());
     }
 

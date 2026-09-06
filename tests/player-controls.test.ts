@@ -45,7 +45,6 @@ import {
   isPortraitStackedPlayer,
 } from "../src/features/room/PlayerPane";
 import {
-  playerHudOnlineLabel,
   roomIdentityOverflowDistance,
   showPlayerFullscreenHud,
 } from "../src/features/room/PlayerFullscreenHud";
@@ -463,15 +462,6 @@ describe("fullscreen top HUD", () => {
     expect(
       showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: false, hasActions: false }),
     ).toBe(false);
-  });
-
-  test("formats a reported viewer count and hides an unreported one", () => {
-    expect(playerHudOnlineLabel(0)).toBe("0");
-    expect(playerHudOnlineLabel(1_200)).toBe("1.2k");
-    expect(playerHudOnlineLabel(12_345)).toBe("1.2万");
-    expect(playerHudOnlineLabel(undefined)).toBeNull();
-    expect(playerHudOnlineLabel(Number.NaN)).toBeNull();
-    expect(playerHudOnlineLabel(-1)).toBeNull();
   });
 });
 

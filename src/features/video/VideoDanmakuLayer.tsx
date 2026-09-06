@@ -66,15 +66,11 @@ export function VideoDanmakuLayer({ videoRef, entries, active }: VideoDanmakuLay
     let cursor = 0;
     let lastPositionMs = 0;
     const isShielded = createShieldMatcher(shieldWords);
-    const visible = filterVideoDanmakuEntries(entries, {
+    const visible = filterVideoDanmakuEntries(entries, (content) =>
       // 复用直播的屏蔽词匹配器需要一个 DanmakuEvent 形状；VOD 弹幕只有文本，
       // 因此合成一条最小事件而不是在这里另写一套匹配。
-      isShielded: (content) =>
-        isShielded({ kind: "chat", user: "", content, color: null, ts: 0 }),
-      // 平台等级过滤交给上游 `weight`（0 表示不启用），不在前端再造一套阈值设置。
-      minWeight: 0,
-      showSubtitlePool: false,
-    });
+      isShielded({ kind: "chat", user: "", content, color: null, ts: 0 }),
+    );
 
     /** 把游标对齐到某个播放位置，并清空屏幕上按旧时间轴投放的 bullet。 */
     function realign(positionMs: number) {

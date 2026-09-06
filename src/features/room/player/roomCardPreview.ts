@@ -33,7 +33,8 @@ export type RoomCardPreviewRequest = {
   fetchLines: (detail: LiveRoomDetail, quality: LivePlayQuality) => Promise<PlayUrl[]>;
 };
 
-export type RoomCardPreviewHandle = { stop: () => void };
+/** 卡片预览会话句柄：直播与视频卡片预览共用（内核不同，生命周期语义一致）。 */
+export type CardPreviewSession = { stop: () => void };
 
 /**
  * 预览只在真正存在悬停语义的桌面指针上开启。触摸客户端的 hover 是点击的副产物,
@@ -127,20 +128,26 @@ export function createPreviewSurface(): PreviewSurface {
 }
 
 /**
- * 全局只允许一个预览存活。卡片网格一行就有五六张,鼠标横穿会连续触发进入事件;
- * 并且创建与销毁共用一条串行队列,新预览绝不会与上一个的拆除交错。
+ * 全局只允许一个预览存活（直播卡与视频卡互斥）：卡片网格一行就有五六张,
+ * 鼠标横穿会连续触发进入事件;并且创建与销毁共用一条串行队列,新预览绝不会
+ * 与上一个的拆除交错。视频侧见 `features/video/videoCardPreview.ts`。
  */
-const previewLifecycleQueue = createSerialTaskQueue();
-let activeSession: RoomCardPreviewHandle | null = null;
+export const cardPreviewQueue = createSerialTaskQueue();
+let activeSession: CardPreviewSession | null = null;
 let previewSessionSerial = 0;
 
-export function stopRoomCardPreview(): void {
+/** 新预览登记为唯一存活者；登记时先停掉上一个。 */
+export function adoptCardPreview(session: CardPreviewSession): void {
   activeSession?.stop();
+  activeSession = session;
 }
 
-export function startRoomCardPreview(request: RoomCardPreviewRequest): RoomCardPreviewHandle {
-  stopRoomCardPreview();
+/** 会话拆除时注销登记。 */
+export function releaseCardPreview(session: CardPreviewSession): void {
+  if (activeSession === session) activeSession = null;
+}
 
+export function startRoomCardPreview(request: RoomCardPreviewRequest): CardPreviewSession {
   previewSessionSerial += 1;
   const serial = previewSessionSerial;
   const sessionId = `${PREVIEW_SESSION_PREFIX}:${serial}`;
@@ -179,18 +186,18 @@ export function startRoomCardPreview(request: RoomCardPreviewRequest): RoomCardP
     }
   }
 
-  const session: RoomCardPreviewHandle = {
+  const session: CardPreviewSession = {
     stop: () => {
       if (stopped) return;
       stopped = true;
-      if (activeSession === session) activeSession = null;
+      releaseCardPreview(session);
       request.onPhase("idle");
-      void previewLifecycleQueue.enqueue(release);
+      void cardPreviewQueue.enqueue(release);
     },
   };
-  activeSession = session;
+  adoptCardPreview(session);
 
-  void previewLifecycleQueue.enqueue(async () => {
+  void cardPreviewQueue.enqueue(async () => {
     // 任何提前返回都由 `session.stop()` 排入的 release 负责回收资源。
     if (stopped) return;
     try {
@@ -280,7 +287,7 @@ export function startRoomCardPreview(request: RoomCardPreviewRequest): RoomCardP
       if (stopped) return;
       // 预览是纯增益能力:失败静默回落到封面,绝不打扰浏览。
       stopped = true;
-      if (activeSession === session) activeSession = null;
+      releaseCardPreview(session);
       request.onPhase("idle");
       await release();
     }

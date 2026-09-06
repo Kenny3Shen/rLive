@@ -7,6 +7,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { ArrowLeft, Search } from "lucide-react";
@@ -105,6 +107,29 @@ function RouteLoadingFallback() {
       正在加载…
     </div>
   );
+}
+
+/** 横向滑动手势在捕获阶段的处理器集合（`useHorizontalSwipe` 返回值的子集）。 */
+type SwipeHandlers = {
+  onPointerDownCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerMoveCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUpCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerCancelCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onClickCapture?: (event: ReactMouseEvent<HTMLElement>) => void;
+};
+
+/**
+ * 把手势处理器铺到一个 `data-horizontal-swipe-surface` 上。刻意逐项挑选：
+ * swipe 对象还带 `bindPage`，整体展开会把 ref 绑定当未知 DOM 属性丢给元素。
+ */
+function bindSwipe(swipe: SwipeHandlers): SwipeHandlers {
+  return {
+    onPointerDownCapture: swipe.onPointerDownCapture,
+    onPointerMoveCapture: swipe.onPointerMoveCapture,
+    onPointerUpCapture: swipe.onPointerUpCapture,
+    onPointerCancelCapture: swipe.onPointerCancelCapture,
+    onClickCapture: swipe.onClickCapture,
+  };
 }
 
 function RouteOutlet({
@@ -736,11 +761,7 @@ export function Shell() {
                             <div
                               data-horizontal-swipe-surface
                               className="h-full min-w-0"
-                              onPointerDownCapture={iptvSourceSwipe.onPointerDownCapture}
-                              onPointerMoveCapture={iptvSourceSwipe.onPointerMoveCapture}
-                              onPointerUpCapture={iptvSourceSwipe.onPointerUpCapture}
-                              onPointerCancelCapture={iptvSourceSwipe.onPointerCancelCapture}
-                              onClickCapture={iptvSourceSwipe.onClickCapture}
+                              {...bindSwipe(iptvSourceSwipe)}
                             >
                               <IptvSourceSwitcher
                                 sources={iptvSources}
@@ -753,11 +774,7 @@ export function Shell() {
                             <div
                               data-horizontal-swipe-surface
                               className="h-full min-w-0"
-                              onPointerDownCapture={videoTabSwipe.onPointerDownCapture}
-                              onPointerMoveCapture={videoTabSwipe.onPointerMoveCapture}
-                              onPointerUpCapture={videoTabSwipe.onPointerUpCapture}
-                              onPointerCancelCapture={videoTabSwipe.onPointerCancelCapture}
-                              onClickCapture={videoTabSwipe.onClickCapture}
+                              {...bindSwipe(videoTabSwipe)}
                             >
                               <VideoTabSwitcher
                                 value={videoTab}
@@ -818,11 +835,7 @@ export function Shell() {
                   isImmersivePlayer ? "overflow-hidden p-0" : "overflow-hidden",
                 )}
                 data-horizontal-swipe-surface
-                onPointerDownCapture={contentSwipe.onPointerDownCapture}
-                onPointerMoveCapture={contentSwipe.onPointerMoveCapture}
-                onPointerUpCapture={contentSwipe.onPointerUpCapture}
-                onPointerCancelCapture={contentSwipe.onPointerCancelCapture}
-                onClickCapture={contentSwipe.onClickCapture}
+                {...bindSwipe(contentSwipe)}
               >
                 {isImmersivePlayer ? (
                   // PageZoom 进入后会清除它的合成提示。稳定下来的播放器因此没有

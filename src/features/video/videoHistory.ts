@@ -134,3 +134,16 @@ export function formatVideoDuration(seconds: number): string {
     ? `${hours}:${String(minutes).padStart(2, "0")}:${paddedSecs}`
     : `${minutes}:${paddedSecs}`;
 }
+
+/** Unix 秒 → 「x 分钟前」，超过一个月退回 `yyyy-MM-dd`。评论区与卡片发布日期共用。 */
+export function formatRelativeTime(unixSec: number): string {
+  const diff = Math.max(0, Date.now() / 1000 - unixSec);
+  if (diff < 60) return "刚刚";
+  if (diff < 3_600) return `${Math.floor(diff / 60)} 分钟前`;
+  if (diff < 86_400) return `${Math.floor(diff / 3_600)} 小时前`;
+  if (diff < 86_400 * 30) return `${Math.floor(diff / 86_400)} 天前`;
+  const date = new Date(unixSec * 1_000);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
+}

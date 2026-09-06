@@ -16,7 +16,8 @@ import { VIDEO_SEARCH_QUERY_PARAM, videoSearchPath } from "./videoRoute";
 const SEARCH_HISTORY_KEY = "video_search_history";
 const MAX_HISTORY_ITEMS = 10;
 
-function getSearchHistory(): string[] {
+/** 读历史；键不存在或数据损坏时按空历史处理。 */
+function readSearchHistory(): string[] {
   try {
     const stored = localStorage.getItem(SEARCH_HISTORY_KEY);
     return stored ? JSON.parse(stored) : [];
@@ -25,31 +26,12 @@ function getSearchHistory(): string[] {
   }
 }
 
-function saveSearchHistory(keyword: string) {
+/** 写历史；存储不可用时静默（历史是纯增益，不该打断搜索）。 */
+function writeSearchHistory(history: string[]): void {
   try {
-    const history = getSearchHistory();
-    const filtered = history.filter((item) => item !== keyword);
-    const updated = [keyword, ...filtered].slice(0, MAX_HISTORY_ITEMS);
-    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
+    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
   } catch {
     // 存储失败时静默
-  }
-}
-
-function clearSearchHistory() {
-  try {
-    localStorage.removeItem(SEARCH_HISTORY_KEY);
-  } catch {
-    // 清除失败时静默
-  }
-}
-
-function removeSearchHistory(keyword: string) {
-  try {
-    const updated = getSearchHistory().filter((item) => item !== keyword);
-    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
-  } catch {
-    // 删除失败时静默
   }
 }
 
@@ -58,7 +40,7 @@ export function VideoSearchBar({ className }: { className?: string }) {
   const [params] = useSearchParams();
   const keyword = (params.get(VIDEO_SEARCH_QUERY_PARAM) ?? "").trim();
   const [draft, setDraft] = useState(keyword);
-  const [history, setHistory] = useState<string[]>([]);
+  const [history, setHistory] = useState<string[]>(readSearchHistory);
   const [showHistory, setShowHistory] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -72,16 +54,17 @@ export function VideoSearchBar({ className }: { className?: string }) {
     if (!keyword) inputRef.current?.focus();
   }, [keyword]);
 
-  useEffect(() => {
-    setHistory(getSearchHistory());
-  }, []);
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = draft.trim();
     if (!trimmed) return;
-    saveSearchHistory(trimmed);
-    setHistory(getSearchHistory());
+    // 最新在前、去重、截断；写完直接用这份列表（读回同一份数据）。
+    const updated = [trimmed, ...history.filter((item) => item !== trimmed)].slice(
+      0,
+      MAX_HISTORY_ITEMS,
+    );
+    writeSearchHistory(updated);
+    setHistory(updated);
     setShowHistory(false);
     // 空态页被结果页替换而不是压栈：从视频页点搜索图标进来时，返回键直接回到
     // 来源页，而不是落回一个空白的搜索页。已有结果时换词仍正常压栈。
@@ -95,14 +78,15 @@ export function VideoSearchBar({ className }: { className?: string }) {
   };
 
   const handleClearHistory = () => {
-    clearSearchHistory();
+    writeSearchHistory([]);
     setHistory([]);
   };
 
   // 删除单条后下拉保持展开，便于连续清理；删空后由 history.length 条件自动收起。
   const handleRemoveHistoryItem = (item: string) => {
-    removeSearchHistory(item);
-    setHistory(getSearchHistory());
+    const updated = history.filter((entry) => entry !== item);
+    writeSearchHistory(updated);
+    setHistory(updated);
   };
 
   return (

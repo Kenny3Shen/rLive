@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -24,6 +24,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
+import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
 import type {
@@ -41,7 +42,7 @@ import {
   videoGetRelated,
   videoGetSeason,
 } from "./videoApi";
-import { formatVideoDuration } from "./VideoCard";
+import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
 import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
 import { UploaderDrawer } from "./UploaderDrawer";
@@ -75,18 +76,6 @@ function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
   return TAB_LABELS[value];
 }
 
-/** Unix 秒 → 「x 分钟前」。超过一个月退回日期，足够读评不用更准。 */
-function formatRelativeTime(unixSec: number): string {
-  const diff = Math.max(0, Date.now() / 1000 - unixSec);
-  if (diff < 60) return "刚刚";
-  if (diff < 3_600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86_400) return `${Math.floor(diff / 3_600)} 小时前`;
-  if (diff < 86_400 * 30) return `${Math.floor(diff / 86_400)} 天前`;
-  const date = new Date(unixSec * 1_000);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
-    date.getDate(),
-  ).padStart(2, "0")}`;
-}
 
 /** 把 `[大哭]` 这类占位符换成内联表情图。 */
 function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): ReactNode {
@@ -354,23 +343,15 @@ function CommentReplies({ aid, comment }: { aid: string; comment: VideoComment }
               />
             </div>
           ))}
-          <div ref={loadMoreRef} className="flex min-h-14 items-center justify-center">
-            {repliesQuery.isFetchingNextPage ? (
-              <Spinner aria-label="正在加载更多回复" />
-            ) : repliesQuery.isFetchNextPageError ? (
-              <Button variant="ghost" size="sm" onClick={() => loadMore(true)}>
-                重试加载更多回复
-              </Button>
-            ) : repliesQuery.hasNextPage ? (
-              !supportsIntersectionObserver && (
-                <Button variant="ghost" size="sm" onClick={() => loadMore()}>
-                  加载更多回复
-                </Button>
-              )
-            ) : (
-              <span className="text-xs text-muted-foreground">没有更多回复了</span>
-            )}
-          </div>
+          <LoadMoreRow
+            scroll={{ loadMore, loadMoreRef, supportsIntersectionObserver }}
+            query={repliesQuery}
+            loadingLabel="正在加载更多回复"
+            retryLabel="重试加载更多回复"
+            loadMoreLabel="加载更多回复"
+            endLabel="没有更多回复了"
+            className="min-h-14"
+          />
         </div>
       )}
     </div>
@@ -455,24 +436,14 @@ function CommentsPanel({ aid }: { aid: string }) {
               onOpenDetail={() => setSelectedComment(comment)}
             />
           ))}
-          <div ref={loadMoreRef} className="flex min-h-10 items-center justify-center">
-            {commentsQuery.isFetchingNextPage && (
-              <Spinner className="size-4" aria-label="正在加载更多评论" />
-            )}
-            {commentsQuery.isFetchNextPageError && (
-              <Button variant="ghost" size="sm" onClick={() => loadMore(true)}>
-                重试加载更多评论
-              </Button>
-            )}
-            {!supportsIntersectionObserver &&
-              !commentsQuery.isFetchNextPageError &&
-              commentsQuery.hasNextPage &&
-              !commentsQuery.isFetchingNextPage && (
-                <Button variant="ghost" size="sm" onClick={() => loadMore()}>
-                  加载更多
-                </Button>
-              )}
-          </div>
+          <LoadMoreRow
+            scroll={{ loadMore, loadMoreRef, supportsIntersectionObserver }}
+            query={commentsQuery}
+            loadingLabel="正在加载更多评论"
+            retryLabel="重试加载更多评论"
+            loadMoreLabel="加载更多"
+            className="min-h-10"
+          />
         </div>
       )}
       <Drawer
@@ -599,6 +570,55 @@ function RelatedPanel({
         })
       )}
     </div>
+  );
+}
+
+/**
+ * 分集/合集/选集三种页签共用的行画法：左列集号（或序数、P 号），中间标题，
+ * 右侧时长；当前播放项高亮，点击整行跳转。三种列表只差数据来源与左列文案。
+ */
+function EpisodeRow({
+  current,
+  label,
+  title,
+  duration,
+  rowRef,
+  onNavigate,
+}: {
+  current: boolean;
+  /** 左列：集号 / 序数 / P 号。 */
+  label: string;
+  title: string;
+  /** 时长，秒。 */
+  duration: number;
+  /** 当前播放行：挂上后由列表滚动定位到可视区中央。 */
+  rowRef?: Ref<HTMLButtonElement>;
+  onNavigate: () => void;
+}) {
+  return (
+    <button
+      ref={rowRef}
+      type="button"
+      aria-current={current || undefined}
+      onClick={onNavigate}
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
+        current && "bg-primary/10",
+      )}
+    >
+      <span
+        className={cn(
+          "min-w-7 shrink-0 text-center text-xs tabular-nums",
+          current ? "font-semibold text-primary" : "text-muted-foreground",
+        )}
+      >
+        {label}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[13px]">{title}</span>
+      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+        {formatVideoDuration(duration)}
+      </span>
+    </button>
   );
 }
 
@@ -743,44 +763,24 @@ function EpisodesPanel({
             onRetry={() => void seasonQuery.refetch()}
           />
         ) : (
-          episodes.map((episode) => {
-            const current = episode.ep_id === epId;
-            return (
-              <button
-                key={episode.ep_id}
-                type="button"
-                aria-current={current || undefined}
-                onClick={() =>
-                  onNavigate({
-                    bvid: episode.bvid,
-                    cid: episode.cid,
-                    epId: episode.ep_id,
-                    title: episode.long_title || episode.title,
-                    aid: episode.aid,
-                  })
-                }
-                className={cn(
-                  "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
-                  current && "bg-primary/10",
-                )}
-              >
-                <span
-                  className={cn(
-                    "min-w-7 shrink-0 text-center text-xs tabular-nums",
-                    current ? "font-semibold text-primary" : "text-muted-foreground",
-                  )}
-                >
-                  {episode.title || "·"}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px]">
-                  {episode.long_title || episode.title}
-                </span>
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                  {formatVideoDuration(episode.duration)}
-                </span>
-              </button>
-            );
-          })
+          episodes.map((episode) => (
+            <EpisodeRow
+              key={episode.ep_id}
+              current={episode.ep_id === epId}
+              label={episode.title || "·"}
+              title={episode.long_title || episode.title}
+              duration={episode.duration}
+              onNavigate={() =>
+                onNavigate({
+                  bvid: episode.bvid,
+                  cid: episode.cid,
+                  epId: episode.ep_id,
+                  title: episode.long_title || episode.title,
+                  aid: episode.aid,
+                })
+              }
+            />
+          ))
         )}
       </div>
     </div>
@@ -850,12 +850,14 @@ function UgcSeasonList({
       {season.episodes.map((episode, index) => {
         const current = episode.bvid === currentBvid;
         return (
-          <button
+          <EpisodeRow
             key={episode.bvid}
-            ref={current ? currentRowRef : undefined}
-            type="button"
-            aria-current={current || undefined}
-            onClick={() =>
+            current={current}
+            label={String(index + 1)}
+            title={episode.title}
+            duration={episode.duration}
+            rowRef={current ? currentRowRef : undefined}
+            onNavigate={() =>
               onNavigate({
                 bvid: episode.bvid,
                 cid: episode.cid,
@@ -863,24 +865,7 @@ function UgcSeasonList({
                 aid: episode.aid,
               })
             }
-            className={cn(
-              "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
-              current && "bg-primary/10",
-            )}
-          >
-            <span
-              className={cn(
-                "min-w-7 shrink-0 text-center text-xs tabular-nums",
-                current ? "font-semibold text-primary" : "text-muted-foreground",
-              )}
-            >
-              {index + 1}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-[13px]">{episode.title}</span>
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-              {formatVideoDuration(episode.duration)}
-            </span>
-          </button>
+          />
         );
       })}
     </div>
@@ -947,37 +932,15 @@ function PartsPanel({
             const current = currentCid > 0 && page.cid === currentCid;
             const label = page.part || `P${page.page}`;
             return (
-              <button
+              <EpisodeRow
                 key={page.cid}
-                ref={current ? currentRowRef : undefined}
-                type="button"
-                aria-current={current || undefined}
-                onClick={() =>
-                  onNavigate({
-                    bvid,
-                    cid: page.cid,
-                    title: label,
-                    aid,
-                  })
-                }
-                className={cn(
-                  "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
-                  current && "bg-primary/10",
-                )}
-              >
-                <span
-                  className={cn(
-                    "min-w-7 shrink-0 text-center text-xs tabular-nums",
-                    current ? "font-semibold text-primary" : "text-muted-foreground",
-                  )}
-                >
-                  P{page.page}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                  {formatVideoDuration(page.duration)}
-                </span>
-              </button>
+                current={current}
+                label={`P${page.page}`}
+                title={label}
+                duration={page.duration}
+                rowRef={current ? currentRowRef : undefined}
+                onNavigate={() => onNavigate({ bvid, cid: page.cid, title: label, aid })}
+              />
             );
           })}
         </div>
@@ -1084,11 +1047,8 @@ export function VideoSidebar({
   const isPgc = Boolean(epId);
   const [tab, setTab] = useState<SidebarTab>(isPgc ? "episodes" : "related");
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
-  const [descriptionState, setDescriptionState] = useState<{
-    bvid: string | null;
-    expanded: boolean;
-  }>({ bvid: null, expanded: false });
-  const descriptionExpanded = descriptionState.bvid === bvid && descriptionState.expanded;
+  // 简介折叠态：换稿件时由 UP 信息卡 section 上的 key={bvid} 重挂载复位。
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   // 用户手动切换过页签后就不再自动改选，见下方的自动切换 effect。
   const tabTouchedRef = useRef(false);
 
@@ -1167,6 +1127,7 @@ export function VideoSidebar({
           分隔线统计行；简介仅宽屏侧栏展示，窄屏与直播页主播卡同构同高。 */}
       {!isPgc && archive && (
         <section
+          key={bvid}
           className="shrink-0 border-b border-border px-2.5 py-2"
           aria-label={`UP 主信息：${archive.author}`}
         >
@@ -1190,19 +1151,29 @@ export function VideoSidebar({
                 </Avatar>
               </button>
               <div className="min-w-0 flex-1">
-                <button
-                  type="button"
-                  onClick={handleUploaderClick}
-                  className="block w-full text-left transition-opacity hover:opacity-80"
-                  aria-label={`查看 ${archive.author} 的投稿视频`}
-                >
-                  <p
-                    className="truncate text-sm font-semibold leading-5 tracking-tight"
-                    title={archive.author}
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={handleUploaderClick}
+                    className="min-w-0 flex-1 text-left transition-opacity hover:opacity-80"
+                    aria-label={`查看 ${archive.author} 的投稿视频`}
                   >
-                    {archive.author}
-                  </p>
-                </button>
+                    <p
+                      className="truncate text-sm font-semibold leading-5 tracking-tight"
+                      title={archive.author}
+                    >
+                      {archive.author}
+                    </p>
+                  </button>
+                  {archive.pubdate > 0 && (
+                    <span
+                      className="shrink-0 text-xs leading-5 text-muted-foreground tabular-nums"
+                      title="视频发布时间"
+                    >
+                      {formatRelativeTime(archive.pubdate)}
+                    </span>
+                  )}
+                </div>
                 <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
                   <div
                     className="flex min-w-0 items-center gap-1"
@@ -1260,13 +1231,7 @@ export function VideoSidebar({
                   size="xs"
                   aria-expanded={descriptionExpanded}
                   aria-controls="video-description"
-                  className="mt-0.5 h-6 px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                  onClick={() =>
-                    setDescriptionState((state) => ({
-                      bvid,
-                      expanded: state.bvid === bvid ? !state.expanded : true,
-                    }))
-                  }
+                  onClick={() => setDescriptionExpanded((expanded) => !expanded)}
                 >
                   {descriptionExpanded ? "收起简介" : "展开简介"}
                   <ChevronDown

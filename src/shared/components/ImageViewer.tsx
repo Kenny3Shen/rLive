@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -39,6 +39,37 @@ export function ImageViewer({ images, initialIndex = 0, onClose }: ImageViewerPr
   const handleNext = () => {
     setCurrentIndex((index) => (index < images.length - 1 ? index + 1 : 0));
   };
+
+/** 左右切换按钮的公共画法：贴屏幕边缘、首/尾张减淡提示不可再翻。 */
+function NavButton({
+  label,
+  icon: Icon,
+  side,
+  dimmed,
+  onClick,
+}: {
+  label: string;
+  icon: LucideIcon;
+  side: "left" | "right";
+  dimmed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className={cn(
+        "absolute top-1/2 z-10 -translate-y-1/2 text-white hover:bg-white/10",
+        side === "left" ? "left-4" : "right-4",
+        dimmed && "opacity-50",
+      )}
+      onClick={onClick}
+      aria-label={label}
+    >
+      <Icon className="size-6" />
+    </Button>
+  );
+}
 
   return (
     <Dialog
@@ -95,30 +126,20 @@ export function ImageViewer({ images, initialIndex = 0, onClose }: ImageViewerPr
           {/* 左右切换按钮 */}
           {images.length > 1 && (
             <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "absolute left-4 top-1/2 z-10 -translate-y-1/2 text-white hover:bg-white/10",
-                  currentIndex === 0 && "opacity-50",
-                )}
+              <NavButton
+                label="上一张"
+                icon={ChevronLeft}
+                side="left"
+                dimmed={currentIndex === 0}
                 onClick={handlePrevious}
-                aria-label="上一张"
-              >
-                <ChevronLeft className="size-6" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "absolute right-4 top-1/2 z-10 -translate-y-1/2 text-white hover:bg-white/10",
-                  currentIndex === images.length - 1 && "opacity-50",
-                )}
+              />
+              <NavButton
+                label="下一张"
+                icon={ChevronRight}
+                side="right"
+                dimmed={currentIndex === images.length - 1}
                 onClick={handleNext}
-                aria-label="下一张"
-              >
-                <ChevronRight className="size-6" />
-              </Button>
+              />
             </>
           )}
 

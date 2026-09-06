@@ -104,19 +104,16 @@ pub struct VideoQuality {
 
 /// 播放一条 VOD 所需的全部内容。
 ///
-/// `mpd` 是后端合成的清单文本，`mpd_url` 是同一份文本的 HTTP 地址。
-/// 必须用 URL 交给播放器：`xgplayer-dash` 取清单的 XHR 会给地址拼 `?`，
-/// `blob:` 走精确匹配因此 404。
+/// `mpd_url` 是后端合成的 MPD 清单的 HTTP 地址。必须用 URL 交给播放器：
+/// `xgplayer-dash` 取清单的 XHR 会给地址拼 `?`，`blob:` URL 走精确匹配
+/// 因此 404。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoPlayInfo {
-    pub mpd: String,
     pub mpd_url: String,
     /// 视频轨的本机代理地址（已注入 Referer，转发 Range）。
     pub video_url: String,
     /// 音频轨的本机代理地址。
     pub audio_url: String,
-    /// 代理向上游携带的请求头，供诊断与前端展示。
-    pub headers: HashMap<String, String>,
     /// 时长，秒。取自 sidx 时间轴累加，比列表接口的整数秒更精确。
     pub duration: f64,
     /// 实际选中的 `qn`。
@@ -210,11 +207,6 @@ pub struct VideoPlayRequest {
     pub ep_id: Option<String>,
     /// 期望画质；缺省取当前身份可用的最高档。
     pub qn: Option<i64>,
-    /// 期望视频编码前缀，缺省 `avc1`。
-    ///
-    /// 同一画质会并列 avc1 / hvc1 / av01 三种编码，必须按编码过滤后再选流，
-    /// 否则会随机拿到 WebView 不一定能解的 av01。
-    pub codec: Option<String>,
     /// 仅音频模式：跳过视频轨代理，MPD 只含音轨（听视频省流）。
     pub audio_only: Option<bool>,
 }

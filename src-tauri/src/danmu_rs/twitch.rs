@@ -595,9 +595,6 @@ async fn connect_and_run(
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
     use super::*;
 
     /// 绝大多数解析断言与第三方表情无关；用空表调用，让这些用例不必关心 7TV。
@@ -829,43 +826,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hostile.broadcaster_id, None);
-    }
-
-    #[tokio::test]
-    async fn http_proxy_tunnel_uses_connect_and_proxy_authentication() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 512];
-            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-                let received = stream.read(&mut buffer).unwrap();
-                assert_ne!(received, 0);
-                request.extend_from_slice(&buffer[..received]);
-            }
-            let request = String::from_utf8(request).unwrap();
-            assert!(request.starts_with(
-                "CONNECT irc-ws.chat.twitch.tv:443 HTTP/1.1\r\nHost: irc-ws.chat.twitch.tv:443\r\n"
-            ));
-            assert!(request.contains("Proxy-Authorization: Basic dmlld2VyOnNlY3JldA==\r\n"));
-            stream
-                .write_all(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: test\r\n\r\n")
-                .unwrap();
-        });
-
-        let proxy = ConnectProxy::from_setting(
-            Some(&format!("http://viewer:secret@{address}")),
-            "twitch",
-            "Twitch",
-        )
-        .unwrap()
-        .unwrap();
-        let tunnel = proxy
-            .open_tunnel(IRC_CONNECT_AUTHORITY, None)
-            .await
-            .unwrap();
-        drop(tunnel);
-        server.join().unwrap();
     }
 }

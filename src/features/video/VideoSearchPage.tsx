@@ -1,7 +1,6 @@
-import { memo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2, Search } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
@@ -13,39 +12,16 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import type { VideoItem } from "@/shared/types/video";
 import { videoSearch } from "./videoApi";
-import { VideoCard } from "./VideoCard";
+import { VideoGrid } from "./VideoCard";
 import { VideoSearchFiltersBar } from "./VideoSearchFiltersBar";
-import { playlistItemFromVideoItem, dedupeVideoItems, type PlaylistItem } from "./playlistStore";
+import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
 import {
-  VIDEO_SEARCH_DURATION_PARAM,
-  VIDEO_SEARCH_ORDER_PARAM,
-  VIDEO_SEARCH_PUBTIME_PARAM,
   VIDEO_SEARCH_QUERY_PARAM,
-  VIDEO_SEARCH_ZONE_PARAM,
   parseVideoSearchFilters,
+  videoSearchPath,
   type VideoSearchFilters,
 } from "./videoRoute";
-
-const GRID_CLASS =
-  "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
-
-const VideoGrid = memo(function VideoGrid({
-  items,
-  playlist,
-}: {
-  items: readonly VideoItem[];
-  playlist: readonly PlaylistItem[];
-}) {
-  return (
-    <div className={GRID_CLASS}>
-      {items.map((item) => (
-        <VideoCard key={`${item.bvid}:${item.cid ?? ""}`} item={item} playlist={playlist} />
-      ))}
-    </div>
-  );
-});
 
 /**
  * `/video/search` 搜索结果页。
@@ -54,7 +30,8 @@ const VideoGrid = memo(function VideoGrid({
  * 这一页只负责结果网格与无限滚动，滚动交给 Shell 的页面滚动容器。
  */
 export function VideoSearchPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const keyword = (searchParams.get(VIDEO_SEARCH_QUERY_PARAM) ?? "").trim();
   const filters = parseVideoSearchFilters(searchParams);
 
@@ -84,17 +61,9 @@ export function VideoSearchPage() {
   const playlistItems = allItems.map(playlistItemFromVideoItem);
   const isEmpty = !isFetching && keyword && allItems.length === 0;
   const changeFilters = (next: VideoSearchFilters) => {
-    const params = new URLSearchParams(searchParams);
-    // 与首页换分区同一取向：改筛选不往返回栈里堆一层。
-    params.delete(VIDEO_SEARCH_ORDER_PARAM);
-    params.delete(VIDEO_SEARCH_DURATION_PARAM);
-    params.delete(VIDEO_SEARCH_ZONE_PARAM);
-    params.delete(VIDEO_SEARCH_PUBTIME_PARAM);
-    if (next.order) params.set(VIDEO_SEARCH_ORDER_PARAM, next.order);
-    if (next.duration) params.set(VIDEO_SEARCH_DURATION_PARAM, String(next.duration));
-    if (next.zone) params.set(VIDEO_SEARCH_ZONE_PARAM, String(next.zone));
-    if (next.pubTime) params.set(VIDEO_SEARCH_PUBTIME_PARAM, next.pubTime);
-    setSearchParams(params, { replace: true });
+    // 与首页换分区同一取向：改筛选不往返回栈里堆一层。默认位不进 URL，与
+    // `videoSearchPath` 的编码一致。
+    navigate(videoSearchPath(keyword, next), { replace: true });
   };
 
   return (

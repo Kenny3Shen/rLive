@@ -79,14 +79,7 @@ export function VideoSearchFiltersBar({
           label="时长"
           options={durationOptions}
           value={String(filters.duration)}
-          onSelect={(next) =>
-            onChange({
-              ...filters,
-              duration: VIDEO_SEARCH_DURATIONS.find(
-                (option) => String(option.value) === next,
-              )?.value ?? 0,
-            })
-          }
+          onSelect={(next) => onChange({ ...filters, duration: Number(next) as VideoSearchFilters["duration"] })}
         />
         <VideoSearchFilterSelect
           label="分区"
@@ -98,14 +91,7 @@ export function VideoSearchFiltersBar({
           label="发布时间"
           options={pubTimeOptions}
           value={filters.pubTime || "all"}
-          onSelect={(next) =>
-            onChange({
-              ...filters,
-              pubTime:
-                VIDEO_SEARCH_PUB_TIMES.find((option) => option.value === next)
-                  ?.value ?? "",
-            })
-          }
+          onSelect={(next) => onChange({ ...filters, pubTime: (next === "all" ? "" : next) as VideoSearchFilters["pubTime"] })}
         />
       </div>
     </div>

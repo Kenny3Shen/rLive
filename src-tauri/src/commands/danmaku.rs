@@ -142,6 +142,33 @@ pub fn record_send_history_public(
     );
 }
 
+/// B 站弹幕发送的公共前置：读取设置与账号 Cookie，发送开关未启用或
+/// Cookie 缺 SESSDATA/bili_jct 时直接报错。直播（`bilibili_danmaku_send`）
+/// 与 VOD（`commands::video::video_danmaku_send`）两条写入路径共用，
+/// 后续的代理与发送仍需要这两个返回值。
+pub(super) fn ensure_bilibili_send_ready(
+    state: &AppState,
+) -> AppResult<(crate::models::settings::AppSettings, String)> {
+    let conn = state.conn()?;
+    let settings = crate::settings::get(&conn)?;
+    let cookie = account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default();
+    if !settings.danmaku_send_enabled {
+        return Err(AppError::new(
+            "bilibili_send_disabled",
+            "弹幕发送功能尚未启用，请先在设置中确认开启",
+        )
+        .with_site("bilibili"));
+    }
+    if !danmu_rs::bilibili::has_send_credentials(&cookie) {
+        return Err(AppError::new(
+            "bilibili_send_cookie_missing",
+            "请先在设置中保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
+        )
+        .with_site("bilibili"));
+    }
+    Ok((settings, cookie))
+}
+
 #[tauri::command]
 pub async fn danmaku_connect(
     app: AppHandle,
@@ -314,27 +341,7 @@ pub async fn bilibili_danmaku_send(
     room_title: Option<String>,
     room_user_name: Option<String>,
 ) -> AppResult<()> {
-    let (settings, cookie) = {
-        let conn = state.conn()?;
-        (
-            crate::settings::get(&conn)?,
-            account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default(),
-        )
-    };
-    if !settings.danmaku_send_enabled {
-        return Err(AppError::new(
-            "bilibili_send_disabled",
-            "弹幕发送功能尚未启用，请先在设置中确认开启",
-        )
-        .with_site("bilibili"));
-    }
-    if !danmu_rs::bilibili::has_send_credentials(&cookie) {
-        return Err(AppError::new(
-            "bilibili_send_cookie_missing",
-            "请先在设置中保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
-        )
-        .with_site("bilibili"));
-    }
+    let (settings, cookie) = ensure_bilibili_send_ready(state.inner())?;
     let (room_id, message) =
         validate_and_reserve_send(&state.bilibili_send_limiter, &room_id, &message)?;
     // 该请求携带用户的浏览器 Cookie。重定向目标绝不能收到它，

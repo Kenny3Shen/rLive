@@ -1,13 +1,14 @@
 import { memo } from "react";
 import type { RefObject } from "react";
 import { useNavigate } from "react-router-dom";
-import { MessageSquare, Play } from "lucide-react";
+import { CalendarDays, MessageSquare, Play } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
 import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
 import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
+import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
 
 /**
@@ -19,17 +20,6 @@ import { videoPlayPath } from "./videoRoute";
  * 等一整套直播专属动作，VOD 一个都用不上。
  */
 
-/** `H:MM:SS` / `M:SS`。与录制回放的时长格式一致。 */
-export function formatVideoDuration(totalSeconds: number): string {
-  const seconds = Number.isFinite(totalSeconds) ? Math.max(0, Math.floor(totalSeconds)) : 0;
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainder = seconds % 60;
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
-  }
-  return `${minutes}:${String(remainder).padStart(2, "0")}`;
-}
 
 const CARD_CLASS =
   "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring";
@@ -160,7 +150,9 @@ export const VideoCard = memo(function VideoCard({
         }
       />
       <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
-        <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
+        {/* 标题恒占两行（min-h-[2lh]）：一行标题的卡片也把 UP 主行与统计行
+            压到与两行标题的卡片相同的纵向位置，网格内左右对齐。 */}
+        <p className="line-clamp-2 min-h-[2lh] text-[13px] font-medium leading-snug text-foreground">
           {item.title}
         </p>
         {/* 副行始终占位，保证网格里两行标题与一行标题的卡片高度一致。 */}
@@ -174,6 +166,12 @@ export const VideoCard = memo(function VideoCard({
             <MessageSquare className="size-3" aria-hidden />
             {formatOnline(item.danmaku)}
           </span>
+          {item.pubdate > 0 && (
+            <span className="inline-flex min-w-0 items-center gap-0.5 truncate">
+              <CalendarDays className="size-3" aria-hidden />
+              {formatRelativeTime(item.pubdate)}
+            </span>
+          )}
         </p>
       </div>
     </button>
@@ -219,5 +217,26 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
         <p className="min-h-4 truncate text-xs text-muted-foreground">{item.index_show ?? ""}</p>
       </div>
     </button>
+  );
+});
+
+/** 发现页与搜索结果页共用的网格列数与间距。 */
+export const VIDEO_GRID_CLASS =
+  "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
+
+/** 视频卡片网格。带 `playlist` 时（搜索/UP 主列表）点击卡片即从该卡连播。 */
+export const VideoGrid = memo(function VideoGrid({
+  items,
+  playlist,
+}: {
+  items: readonly VideoItem[];
+  playlist?: readonly PlaylistItem[];
+}) {
+  return (
+    <div className={VIDEO_GRID_CLASS}>
+      {items.map((item) => (
+        <VideoCard key={`${item.bvid}:${item.cid ?? ""}`} item={item} playlist={playlist} />
+      ))}
+    </div>
   );
 });

@@ -31,8 +31,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import { copyText } from "@/shared/clipboard";
+import { openExternalUrl } from "@/shared/externalUrl";
 import { canNavigateBackInApp } from "@/shared/appHistory";
 import {
   DEFAULT_PLAYER_VOLUME,
@@ -122,10 +124,8 @@ import {
   videoEndedAction,
   type PlaylistItem,
 } from "./playlistStore";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { notify } from "@/components/ui/toast";
 
-const CONTROLS_HIDE_DELAY_MS = 2_600;
 const SINGLE_CLICK_DELAY_MS = 220;
 
 /** 倍速档位：菜单可选 0.5x–2x；3x 只作为长按的临时档位，不进菜单。 */
@@ -180,7 +180,6 @@ function VideoPlayerPageContent() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<XgPlayerInstance | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
-  const controlsHideTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   // 长按倍速的临时状态全在 ref 里：按住期间不应触发重渲染（弹幕层在动，
   // 状态更新会打扰合成器），只有角标的显示与否走 state。
@@ -1211,78 +1210,11 @@ function VideoPlayerPageContent() {
     setPlayerRevision((revision) => revision + 1);
   }, []);
 
-  const clearControlsHideTimer = useCallback(() => {
-    if (controlsHideTimerRef.current === null) return;
-    window.clearTimeout(controlsHideTimerRef.current);
-    controlsHideTimerRef.current = null;
-  }, []);
-
-  const setChromeVisible = useCallback((visible: boolean) => {
-    for (const layer of [controlsRef.current, hudRef.current]) {
-      if (!layer) continue;
-      layer.dataset.visible = visible ? "true" : "false";
-      layer.setAttribute("aria-hidden", String(!visible));
-    }
-  }, []);
-
-  /**
-   * 键盘焦点是否落在播放器 chrome 里（弹幕输入框正在输入，或键盘导航停在
-   * 控制按钮上）。与直播页 `PlayerPane` 的同名判定同一语义：焦点在 chrome
-   * 里就不排休眠 —— 否则输入过程中指针划过画面、换集/起播等任何触发
-   * `scheduleControlsHide` 的事件，都会让输入框带着未发送的草稿一起淡出。
-   */
-  const hasKeyboardFocusWithinControls = useCallback(() => {
-    const activeElement = document.activeElement;
-    if (!(activeElement instanceof HTMLElement) || !activeElement.matches(":focus-visible")) {
-      return false;
-    }
-    return (
-      controlsRef.current?.contains(activeElement) === true ||
-      hudRef.current?.contains(activeElement) === true
-    );
-  }, []);
-
-  const scheduleControlsHide = useCallback(() => {
-    clearControlsHideTimer();
-    if (
-      paused ||
-      loading ||
-      playbackError ||
-      overlayInteractionOpen ||
-      hasKeyboardFocusWithinControls()
-    ) {
-      setChromeVisible(true);
-      return;
-    }
-    controlsHideTimerRef.current = window.setTimeout(() => {
-      controlsHideTimerRef.current = null;
-      // 定时器排定之后焦点才进入 chrome（点进弹幕输入框开始打字），
-      // 触发时再核一次，别把正在输入的输入框淡出去。
-      if (hasKeyboardFocusWithinControls()) {
-        setChromeVisible(true);
-        return;
-      }
-      setChromeVisible(false);
-    }, CONTROLS_HIDE_DELAY_MS);
-  }, [
-    clearControlsHideTimer,
-    hasKeyboardFocusWithinControls,
-    loading,
-    overlayInteractionOpen,
-    paused,
-    playbackError,
-    setChromeVisible,
-  ]);
-
-  const revealControls = useCallback(() => {
-    setChromeVisible(true);
-    scheduleControlsHide();
-  }, [scheduleControlsHide, setChromeVisible]);
-
-  const holdControlsVisible = useCallback(() => {
-    clearControlsHideTimer();
-    setChromeVisible(true);
-  }, [clearControlsHideTimer, setChromeVisible]);
+  const { revealControls, holdControlsVisible, scheduleControlsHide } = usePlayerChromeIdle({
+    controlsRef,
+    hudRef,
+    keepVisible: paused || loading || Boolean(playbackError) || overlayInteractionOpen,
+  });
 
   const handleStagePointerActivity = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -1298,10 +1230,9 @@ function VideoPlayerPageContent() {
 
   useEffect(
     () => () => {
-      clearControlsHideTimer();
       if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
     },
-    [clearControlsHideTimer],
+    [],
   );
 
   const handleSurfaceClick = useCallback(
@@ -1414,17 +1345,14 @@ function VideoPlayerPageContent() {
   }, [archiveQuery.data, cid, params]);
 
   // 跳原址与复制链接：底部常驻 Shell 的操作（全屏时舞台盖住 Shell，HUD 里
-  // 另有一份镜像）。优先系统浏览器（opener 插件），失败回退 window.open
-  // （开发预览里仍可用）；与直播页卡片同一套通知反馈。
+  // 另有一份镜像）；打开与回退细节见 `openExternalUrl`，通知反馈与直播页
+  // 卡片同一套。
   const openOriginalUrl = useCallback(() => {
     if (!originalUrl) return;
-    void openUrl(originalUrl)
-      .then(() => notify.success("已在浏览器中打开"))
-      .catch(() => {
-        const opened = window.open(originalUrl, "_blank", "noopener,noreferrer");
-        if (opened) notify.success("已在浏览器中打开");
-        else notify.error("无法在浏览器中打开", "请稍后重试。");
-      });
+    void openExternalUrl(originalUrl).then((opened) => {
+      if (opened) notify.success("已在浏览器中打开");
+      else notify.error("无法在浏览器中打开", "请稍后重试。");
+    });
   }, [originalUrl]);
 
   const copyOriginalUrl = useCallback(() => {
@@ -1458,8 +1386,7 @@ function VideoPlayerPageContent() {
    *  这里只留旁观类入口，与直播页顶栏右侧的定时/投屏工具同一布局语义。
    *  全屏时顶栏被舞台吃掉，同一批入口改由 HUD 的 `⋮` 溢出菜单承载。 */
   const topBarTools = (
-    <div className="flex items-center gap-1">
-      <Popover open={castOpen} onOpenChange={setCastOpen}>
+    <Popover open={castOpen} onOpenChange={setCastOpen}>
         <PopoverTrigger
           render={
             <Button
@@ -1483,8 +1410,7 @@ function VideoPlayerPageContent() {
           <PopoverTitle className={cn("px-2 py-1", glassTitleClass())}>投屏</PopoverTitle>
           <CastMenu {...castMenuProps} showHeader={false} />
         </PopoverContent>
-      </Popover>
-    </div>
+    </Popover>
   );
 
   const topBar = (
@@ -1620,19 +1546,13 @@ function VideoPlayerPageContent() {
       </div>
     ) : undefined;
 
-  // 视频页专属工具（投屏/字幕），挂进 PlayerControls 的 toolsSlot。与内部按钮同一套
-  // 样式常量（见 multi-room 的同类用法）；没字幕轨的稿件不渲染字幕按钮。
-  // 弹层用绝对定位的轻量面板而不是 Popover：挂在控制条内可同步悬停保活，
-  // 关闭只需点按钮切换。
   // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
-  const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
+  const pipSupported = document.pictureInPictureEnabled;
   /** 控制栏工具（字幕）：与内部按钮同一套样式常量；没字幕轨的稿件不渲染
    *  字幕按钮。窗口全屏/画面全屏用 PlayerControls 内置的两个按钮（网页全屏
    *  toggle 应用内全屏，全屏走元素级 top layer）。 */
-  const toolsSlot = (
-    <>
-      {subtitles.length > 0 && (
-        <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
+  const toolsSlot = subtitles.length > 0 && (
+    <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
           <PopoverTrigger
             render={
               <Button
@@ -1654,9 +1574,7 @@ function VideoPlayerPageContent() {
             container={stageRef}
             side="top"
             align="end"
-            collisionBoundary={
-              typeof document !== "undefined" ? document.documentElement : undefined
-            }
+            collisionBoundary={document.documentElement}
             collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
             sticky
             glass
@@ -1701,9 +1619,7 @@ function VideoPlayerPageContent() {
               </Button>
             ))}
           </PopoverContent>
-        </Popover>
-      )}
-    </>
+    </Popover>
   );
 
   /** 倍速选择区：与播放列表设置同一个弹层，只有这一页需要它。 */

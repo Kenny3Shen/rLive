@@ -184,6 +184,32 @@ fn configure_file_connection(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
+/// 修剪触发器 DDL：新插入把行数顶过保留上限时，删掉排序最旧的一行。
+/// `order` 必须与 `index` 的排序键一致，`INDEXED BY` 保证修剪走的正是索引。
+/// `if_not_exists` 供迁移路径在已有库上重放时幂等；新库初始化的 `history`
+/// 触发器面对空库，省略该位（与既有 DDL 一致）。
+fn prune_trigger_sql(
+    table: &str,
+    index: &str,
+    order: &str,
+    limit: i64,
+    if_not_exists: &str,
+) -> String {
+    format!(
+        "CREATE TRIGGER {if_not_exists}{table}_prune_after_insert
+         AFTER INSERT ON {table}
+         BEGIN
+           DELETE FROM {table}
+           WHERE rowid = (
+             SELECT rowid
+             FROM {table} INDEXED BY {index}
+             ORDER BY {order}
+             LIMIT 1 OFFSET {limit}
+           );
+         END;"
+    )
+}
+
 #[cfg(test)]
 pub fn open_in_memory() -> AppResult<Connection> {
     let conn =
@@ -246,18 +272,12 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
     create_video_history_objects(&transaction)?;
     create_recording_watch_progress_objects(&transaction)?;
     transaction
-        .execute_batch(&format!(
-            "CREATE TRIGGER history_prune_after_insert
-             AFTER INSERT ON history
-             BEGIN
-               DELETE FROM history
-               WHERE rowid = (
-                 SELECT rowid
-                 FROM history INDEXED BY idx_history_recent_order
-                 ORDER BY watched_at DESC, site_id ASC, room_id ASC
-                 LIMIT 1 OFFSET {HISTORY_RETENTION_LIMIT}
-               );
-             END;"
+        .execute_batch(&prune_trigger_sql(
+            "history",
+            "idx_history_recent_order",
+            "watched_at DESC, site_id ASC, room_id ASC",
+            HISTORY_RETENTION_LIMIT,
+            "",
         ))
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
     transaction
@@ -273,18 +293,12 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
 fn create_video_history_objects(tx: &Connection) -> AppResult<()> {
     tx.execute_batch(VIDEO_HISTORY_SCHEMA)
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
-    tx.execute_batch(&format!(
-        "CREATE TRIGGER IF NOT EXISTS video_history_prune_after_insert
-         AFTER INSERT ON video_history
-         BEGIN
-           DELETE FROM video_history
-           WHERE rowid = (
-             SELECT rowid
-             FROM video_history INDEXED BY idx_video_history_recent_order
-             ORDER BY watched_at DESC, kind ASC, oid ASC
-             LIMIT 1 OFFSET {VIDEO_HISTORY_RETENTION_LIMIT}
-           );
-         END;"
+    tx.execute_batch(&prune_trigger_sql(
+        "video_history",
+        "idx_video_history_recent_order",
+        "watched_at DESC, kind ASC, oid ASC",
+        VIDEO_HISTORY_RETENTION_LIMIT,
+        "IF NOT EXISTS ",
     ))
     .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
     Ok(())
@@ -296,18 +310,12 @@ fn create_video_history_objects(tx: &Connection) -> AppResult<()> {
 fn create_recording_watch_progress_objects(tx: &Connection) -> AppResult<()> {
     tx.execute_batch(RECORDING_WATCH_PROGRESS_SCHEMA)
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
-    tx.execute_batch(&format!(
-        "CREATE TRIGGER IF NOT EXISTS recording_watch_progress_prune_after_insert
-         AFTER INSERT ON recording_watch_progress
-         BEGIN
-           DELETE FROM recording_watch_progress
-           WHERE rowid = (
-             SELECT rowid
-             FROM recording_watch_progress INDEXED BY idx_recording_watch_progress_recent
-             ORDER BY watched_at DESC, id ASC
-             LIMIT 1 OFFSET {RECORDING_WATCH_PROGRESS_RETENTION_LIMIT}
-           );
-         END;"
+    tx.execute_batch(&prune_trigger_sql(
+        "recording_watch_progress",
+        "idx_recording_watch_progress_recent",
+        "watched_at DESC, id ASC",
+        RECORDING_WATCH_PROGRESS_RETENTION_LIMIT,
+        "IF NOT EXISTS ",
     ))
     .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
     Ok(())
