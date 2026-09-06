@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Loader2, Video } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
@@ -31,7 +31,6 @@ import {
   videoZoneList,
 } from "./videoApi";
 import { PgcCard, VideoCard } from "./VideoCard";
-import { SeasonEpisodeDialog } from "./SeasonEpisodeDialog";
 import { VideoZoneBar } from "./VideoZoneBar";
 import {
   PGC_SEASON_TYPES,
@@ -71,17 +70,11 @@ const VideoGrid = memo(function VideoGrid({ items }: { items: readonly VideoItem
   );
 });
 
-const PgcGrid = memo(function PgcGrid({
-  items,
-  onSelect,
-}: {
-  items: readonly PgcItem[];
-  onSelect: (item: PgcItem) => void;
-}) {
+const PgcGrid = memo(function PgcGrid({ items }: { items: readonly PgcItem[] }) {
   return (
     <div className={GRID_CLASS}>
       {items.map((item) => (
-        <PgcCard key={item.season_id} item={item} onSelect={onSelect} />
+        <PgcCard key={item.season_id} item={item} />
       ))}
     </div>
   );
@@ -108,13 +101,12 @@ function GridSkeleton() {
  * 的两层：分区条与内容网格。页签与分区都走查询参数而不是路径段，于是换页签沿用
  * Shell 已有的页面平移，不必为四个表面各开一条路由。
  *
- * 番剧 / 影视点卡片不直接播，先经 `video_get_season` 展开分集，理由见
- * `SeasonEpisodeDialog`。
+ * 番剧 / 影视点卡片直接进播放页（season 解析在播放页，见 `VideoPlayerPage`
+ * 的直入解析层），不再弹分集选择。
  */
 export function VideoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
-  const [openSeason, setOpenSeason] = useState<PgcItem | null>(null);
 
   // UGC 分区表由后端提供以免前端硬编码 rid。只有热门页签的条带用得上它。
   const zonesQuery = useQuery({
@@ -234,11 +226,7 @@ export function VideoPage() {
         )}
 
         {itemCount > 0 &&
-          (feedKind === "pgc" ? (
-            <PgcGrid items={pgcItems} onSelect={setOpenSeason} />
-          ) : (
-            <VideoGrid items={ugcItems} />
-          ))}
+          (feedKind === "pgc" ? <PgcGrid items={pgcItems} /> : <VideoGrid items={ugcItems} />)}
 
         {hasNextPage && (
           <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
@@ -266,12 +254,6 @@ export function VideoPage() {
         )}
       </div>
 
-      <SeasonEpisodeDialog
-        item={openSeason}
-        onOpenChange={(open) => {
-          if (!open) setOpenSeason(null);
-        }}
-      />
     </PullToRefresh>
   );
 }
