@@ -124,9 +124,24 @@ fn video_item(item: &Value) -> VideoItem {
             .filter(|danmaku| *danmaku > 0)
             .or_else(|| item.get("video_review").map(as_i64))
             .unwrap_or(0),
-        pubdate: item.get("pubdate").map(as_i64).unwrap_or_default(),
+        // 推荐流/搜索/热门给 Unix 秒；UP 主投稿列表只给 `created`（北京时间
+        // 字符串），回退解析。两处都没有时为 0，前端不渲染日期。
+        pubdate: item
+            .get("pubdate")
+            .map(as_i64)
+            .filter(|pubdate| *pubdate > 0)
+            .unwrap_or_else(|| created_to_unix(item.get("created").map(as_str).as_deref())),
         rcmd_reason: rcmd_reason(item),
     }
+}
+
+/// UP 主投稿列表的 `created`（`yyyy-MM-dd HH:mm`，北京时间）→ Unix 秒。
+/// 解析失败返回 0，前端按「无发布日期」处理。
+fn created_to_unix(value: Option<&str>) -> i64 {
+    let Some(text) = value else { return 0 };
+    chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M")
+        .map(|dt| dt.and_utc().timestamp() - 8 * 3600)
+        .unwrap_or(0)
 }
 
 /// 条目时长。推荐/热门给秒数（数字），搜索给 `H:MM:SS` / `M:SS` 格式的字符串。
@@ -2608,6 +2623,8 @@ mod tests {
         assert_eq!(first.author, "UP 主甲");
         assert_eq!(first.view, 13_856);
         assert_eq!(first.danmaku, 58);
+        // 搜索条目自带 Unix 秒发布时间。
+        assert_eq!(first.pubdate, 1_759_000_000);
         // 字符串时长 H:MM:SS → 秒。
         assert_eq!(first.duration, 3723);
         // 搜索条目没有 cid —— 可播性由播放页用稿件详情补齐。
@@ -2617,6 +2634,40 @@ mod tests {
         let last = parse_search_videos(&raw, 2).unwrap();
         assert!(!last.has_more);
         assert!(parse_search_videos("{}", 1).is_err());
+    }
+
+    #[test]
+    fn parse_uploader_videos_reads_created_as_pubdate() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": {
+                "list": {
+                    "vlist": [
+                        {
+                            "bvid": "BV1up",
+                            "aid": 117_191_437_455_648_i64,
+                            "title": "投稿",
+                            "pic": "http://i1.hdslb.com/bfs/archive/a.jpg",
+                            "author": "up",
+                            "length": "10:30",
+                            "play": 100,
+                            "video_review": 5,
+                            "created": "2026-09-01 12:00"
+                        },
+                        // created 缺失或畸形：pubdate 落 0，前端不渲染日期。
+                        { "bvid": "BV2up", "aid": 2, "title": "无日期", "created": "not-a-date" }
+                    ]
+                },
+                "page": { "count": 60, "pn": 1, "ps": 30 }
+            }
+        })
+        .to_string();
+        let page = parse_uploader_videos(&raw).unwrap();
+        assert!(page.has_more);
+        assert_eq!(page.items.len(), 2);
+        // created 是北京时间字符串：按 UTC 解析再减 8 小时还原真实时刻。
+        assert_eq!(page.items[0].pubdate, 1_788_235_200);
+        assert_eq!(page.items[1].pubdate, 0);
     }
 
     /// 测试内共用的「已知本地时刻」构造（`Local::with_ymd_and_hms` 是
