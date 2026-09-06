@@ -118,9 +118,16 @@ export function videoSearchZoneList(): Promise<VideoZone[]> {
   return invokeCmd<VideoZone[]>("video_search_zone_list");
 }
 
-/** UP 主空间视频列表。获取指定 UP 主的投稿视频，支持分页。 */
-export function videoUploaderVideos(mid: string, page: number): Promise<VideoListPage> {
-  return invokeCmd<VideoListPage>("video_uploader_videos", { mid, page });
+/** UP 主空间视频列表的排序方式。 */
+export type VideoUploaderOrder = "pubdate" | "click";
+
+/** UP 主空间视频列表。获取指定 UP 主的投稿视频，支持分页与排序。 */
+export function videoUploaderVideos(
+  mid: string,
+  page: number,
+  order: VideoUploaderOrder = "pubdate",
+): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_uploader_videos", { mid, page, order });
 }
 
 /** 稿件详情：右侧栏的简介/统计，以及 URL 直入时补齐评论区的 aid。 */

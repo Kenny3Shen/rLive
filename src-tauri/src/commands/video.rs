@@ -388,8 +388,11 @@ pub async fn video_uploader_videos(
     state: State<'_, AppState>,
     mid: String,
     page: u32,
+    order: Option<String>,
 ) -> AppResult<VideoListPage> {
-    resolve_bilibili(&state)?.video_uploader_videos(&mid, page).await
+    resolve_bilibili(&state)?
+        .video_uploader_videos(&mid, page, order.as_deref())
+        .await
 }
 
 /// 稿件详情。WBI 签名接口，播放页右侧栏用它拿简介/统计与评论区的 aid。

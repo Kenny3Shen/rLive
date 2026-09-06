@@ -1591,8 +1591,13 @@ impl BilibiliSite {
     }
     /// UP 主空间视频列表（`x/space/wbi/arc/search`）。
     ///
-    /// 获取指定 UP 主的投稿视频，支持分页。需要 WBI 签名。
-    pub async fn video_uploader_videos(&self, mid: &str, page: u32) -> AppResult<VideoListPage> {
+    /// 获取指定 UP 主的投稿视频，支持分页与排序。需要 WBI 签名。
+    pub async fn video_uploader_videos(
+        &self,
+        mid: &str,
+        page: u32,
+        order: Option<&str>,
+    ) -> AppResult<VideoListPage> {
         if mid.is_empty() {
             return Err(video_err("UP 主视频列表缺少 mid"));
         }
@@ -1602,7 +1607,10 @@ impl BilibiliSite {
         params.insert("tid".into(), "0".into());
         params.insert("pn".into(), page.max(1).to_string());
         params.insert("keyword".into(), "".into());
-        params.insert("order".into(), "pubdate".into());
+        let order = matches!(order, Some("click"))
+            .then_some("click")
+            .unwrap_or("pubdate");
+        params.insert("order".into(), order.into());
         let text = self
             .get_json_signed(
                 "https://api.bilibili.com/x/space/wbi/arc/search",
