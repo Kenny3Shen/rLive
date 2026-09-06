@@ -263,6 +263,10 @@ pub struct VideoArchive {
     pub author_face: Option<String>,
     /// UP 主的 mid（member ID），用于获取 UP 主的投稿列表。
     pub author_mid: String,
+    /// UP 主粉丝数；统计接口不可用时为 0。
+    pub author_fans: i64,
+    /// UP 主投稿视频数；统计接口不可用时为 0。
+    pub author_videos: i64,
     pub view: i64,
     pub danmaku: i64,
     pub reply: i64,

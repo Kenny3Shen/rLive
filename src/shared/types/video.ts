@@ -276,6 +276,10 @@ export type VideoArchive = {
   author_face: string | null;
   /** UP 主的 mid（member ID），用于获取 UP 主的投稿列表。 */
   author_mid: string;
+  /** UP 主粉丝数；统计接口不可用时为 0。 */
+  author_fans: number;
+  /** UP 主投稿视频数；统计接口不可用时为 0。 */
+  author_videos: number;
   view: number;
   danmaku: number;
   /** 发布时间，Unix 秒。 */

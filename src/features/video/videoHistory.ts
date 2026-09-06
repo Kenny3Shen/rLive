@@ -135,6 +135,15 @@ export function formatVideoDuration(seconds: number): string {
     : `${minutes}:${paddedSecs}`;
 }
 
+/** Unix 秒 → `yyyy-MM-dd HH:mm`（本地时区）。发布时间要精确到分钟时用它。 */
+export function formatDateTime(unixSec: number): string {
+  const date = new Date(unixSec * 1_000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
+}
+
 /** Unix 秒 → 「x 分钟前」，超过一个月退回 `yyyy-MM-dd`。评论区与卡片发布日期共用。 */
 export function formatRelativeTime(unixSec: number): string {
   const diff = Math.max(0, Date.now() / 1000 - unixSec);
