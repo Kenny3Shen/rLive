@@ -455,7 +455,8 @@ function CommentsPanel({ aid }: { aid: string }) {
         }}
       >
         <DrawerContent side="right" className="flex h-full flex-col overflow-hidden p-0">
-          <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
+          <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+            <DrawerTitle>评论详情</DrawerTitle>
             <DrawerClose
               render={
                 <Button variant="ghost" size="icon" aria-label="返回评论区" title="返回评论区">
@@ -463,7 +464,6 @@ function CommentsPanel({ aid }: { aid: string }) {
                 </Button>
               }
             />
-            <DrawerTitle>评论详情</DrawerTitle>
           </div>
           {selectedComment && (
             <CommentReplies key={selectedComment.rpid} aid={aid} comment={selectedComment} />
