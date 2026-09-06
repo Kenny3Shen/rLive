@@ -9,7 +9,9 @@ import { videoUploaderVideos } from "./videoApi";
 import { VideoCard } from "./VideoCard";
 import { playlistItemFromVideoItem, dedupeVideoItems } from "./playlistStore";
 
-const GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,14rem),1fr))] gap-x-3 gap-y-4";
+// 行式卡片（缩略图在左）比网格卡宽，列宽下限随之放大到 22rem。
+const GRID_CLASS =
+  "grid grid-cols-[repeat(auto-fill,minmax(min(100%,22rem),1fr))] gap-x-3 gap-y-1";
 
 type UploaderDrawerProps = {
   open: boolean;
@@ -85,6 +87,8 @@ export function UploaderDrawer({ open, onOpenChange, mid, uploaderName }: Upload
                       key={`${item.bvid}:${item.cid ?? ""}`}
                       item={item}
                       playlist={playlistItems}
+                      orientation="row"
+                      showAuthor={false}
                     />
                   ))}
                 </div>

@@ -28,7 +28,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
 import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
-import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
+import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type {
   VideoArchive,
   VideoArchivePage,
@@ -37,6 +37,7 @@ import type {
 } from "@/shared/types/video";
 import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { VideoDanmakuList } from "./VideoDanmakuList";
+import { VideoCard } from "./VideoCard";
 import {
   videoGetArchive,
   videoGetCommentReplies,
@@ -474,13 +475,7 @@ function CommentsPanel({ aid }: { aid: string }) {
 }
 
 /** 相关视频（UGC）。 */
-function RelatedPanel({
-  bvid,
-  onNavigate,
-}: {
-  bvid: string;
-  onNavigate: (target: { bvid: string; cid: number; title: string; aid: string }) => void;
-}) {
+function RelatedPanel({ bvid }: { bvid: string }) {
   const relatedQuery = useQuery({
     queryKey: ["video_related", bvid],
     enabled: bvid !== "",
@@ -492,11 +487,12 @@ function RelatedPanel({
   return (
     <div className="px-3 pb-4">
       {relatedQuery.isPending ? (
-        <div className="flex flex-col gap-3 pt-3">
+        <div className="flex flex-col gap-1 pt-1.5">
           {[0, 1, 2].map((index) => (
-            <div key={index} className="flex gap-2.5">
-              <Skeleton className="aspect-video w-40 shrink-0 rounded-md" />
-              <div className="flex w-full flex-col gap-1.5 py-0.5">
+            // 与行式 VideoCard 同几何：封面占 2/5 列宽，右侧三行文本。
+            <div key={index} className="flex items-start gap-2.5 p-1.5">
+              <Skeleton className="aspect-video w-2/5 shrink-0 rounded-md" />
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5 py-0.5">
                 <Skeleton className="h-3.5 w-full" />
                 <Skeleton className="h-3 w-3/5" />
                 <Skeleton className="h-3 w-2/5" />
@@ -513,62 +509,9 @@ function RelatedPanel({
       ) : items.length === 0 ? (
         <p className="pt-4 text-center text-xs text-muted-foreground">暂无相关视频</p>
       ) : (
-        items.map((item) => {
-          const playable = typeof item.cid === "number" && item.cid > 0;
-          const content = (
-            <>
-              <div className="relative aspect-video w-40 shrink-0 overflow-hidden rounded-md bg-muted">
-                <img
-                  src={normalizeVideoCoverUrl(item.cover)}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                  className="size-full object-cover"
-                />
-                <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 text-[10px] font-medium tabular-nums text-white">
-                  {formatVideoDuration(item.duration)}
-                </span>
-              </div>
-              <div className="flex min-w-0 flex-1 flex-col gap-1 py-0.5">
-                <p className="line-clamp-2 text-[13px] font-medium leading-snug">{item.title}</p>
-                <p className="truncate text-xs text-muted-foreground">{item.author}</p>
-                <p className="text-[11px] text-muted-foreground/85">
-                  {formatOnline(item.view)} 播放 · {formatOnline(item.danmaku)} 弹幕
-                </p>
-              </div>
-            </>
-          );
-          if (!playable) {
-            return (
-              <div
-                key={`${item.bvid}-${item.cid ?? ""}`}
-                aria-label={item.title}
-                className="flex gap-2.5 py-2 opacity-60"
-              >
-                {content}
-              </div>
-            );
-          }
-          return (
-            <button
-              key={`${item.bvid}-${item.cid ?? ""}`}
-              type="button"
-              aria-label={`${item.title}，UP 主 ${item.author}`}
-              onClick={() =>
-                onNavigate({
-                  bvid: item.bvid,
-                  cid: item.cid!,
-                  title: item.title,
-                  aid: item.aid,
-                })
-              }
-              className="flex w-full gap-2.5 rounded-lg py-2 text-left transition-colors hover:bg-muted/50"
-            >
-              {content}
-            </button>
-          );
-        })
+        items.map((item) => (
+          <VideoCard key={`${item.bvid}-${item.cid ?? ""}`} item={item} orientation="row" />
+        ))
       )}
     </div>
   );
@@ -1302,7 +1245,7 @@ export function VideoSidebar({
                 </div>
               </section>
             )}
-            <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />
+            <RelatedPanel bvid={bvid ?? ""} />
           </>
         )}
       </div>
