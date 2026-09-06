@@ -1176,7 +1176,9 @@ export function VideoSidebar({
                 aria-label={`UP 主信息：${archive.author}`}
               >
                 <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
-                  <div className="flex min-w-0 items-center gap-2.5">
+                  {/* 右侧 pr-16 是预留位（关注/更多之类的操作），只留在头像+名称行， */}
+                  {/* 不影响下方播放/评论/发布时间那一行的可用宽度。 */}
+                  <div className="flex min-w-0 items-start gap-2.5 pr-16">
                     <button
                       type="button"
                       onClick={handleUploaderClick}
@@ -1195,40 +1197,38 @@ export function VideoSidebar({
                       </Avatar>
                     </button>
                     <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleUploaderClick}
-                          className="min-w-0 flex-1 text-left transition-opacity hover:opacity-80"
-                          aria-label={`查看 ${archive.author} 的投稿视频`}
+                      <button
+                        type="button"
+                        onClick={handleUploaderClick}
+                        className="block w-full min-w-0 text-left transition-opacity hover:opacity-80"
+                        aria-label={`查看 ${archive.author} 的投稿视频`}
+                      >
+                        <p
+                          className="truncate text-sm font-semibold leading-5 tracking-tight"
+                          title={archive.author}
                         >
-                          <p
-                            className="truncate text-sm font-semibold leading-5 tracking-tight"
-                            title={archive.author}
-                          >
-                            {archive.author}
-                          </p>
-                        </button>
-                        <div className="flex shrink-0 items-center gap-2 text-xs leading-4 text-muted-foreground">
-                          <span
-                            className="inline-flex items-center gap-1"
-                            title={`粉丝：${formatOnline(archive.author_fans)}`}
-                          >
-                            <Users aria-hidden className="size-3.5" />
-                            <span className="tabular-nums">
-                              {formatOnline(archive.author_fans)}
-                            </span>
+                          {archive.author}
+                        </p>
+                      </button>
+                      <div className="mt-0.5 flex items-center gap-2 text-xs leading-4 text-muted-foreground">
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={`粉丝：${formatOnline(archive.author_fans)}`}
+                        >
+                          <Users aria-hidden className="size-3.5" />
+                          <span className="tabular-nums">
+                            {formatOnline(archive.author_fans)}
                           </span>
-                          <span
-                            className="inline-flex items-center gap-1"
-                            title={`视频：${formatOnline(archive.author_videos)}`}
-                          >
-                            <Video aria-hidden className="size-3.5" />
-                            <span className="tabular-nums">
-                              {formatOnline(archive.author_videos)}
-                            </span>
+                        </span>
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={`视频：${formatOnline(archive.author_videos)}`}
+                        >
+                          <Video aria-hidden className="size-3.5" />
+                          <span className="tabular-nums">
+                            {formatOnline(archive.author_videos)}
                           </span>
-                        </div>
+                        </span>
                       </div>
                     </div>
                   </div>
