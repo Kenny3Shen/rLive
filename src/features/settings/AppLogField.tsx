@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
+  ChevronDown,
+  ChevronRight,
   ClipboardCheck,
   ClipboardCopy,
   FolderOpen,
@@ -8,18 +10,16 @@ import {
   ScrollText,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogCloseButton,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@/components/ui/drawer";
 import {
   Field,
   FieldContent,
@@ -28,8 +28,8 @@ import {
   FieldTitle,
 } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
-import { formatByteSize } from "@/lib/utils";
-import { getClientPlatform } from "@/shared/clientPlatform";
+import { cn, formatByteSize } from "@/lib/utils";
+import { getClientPlatform, isMobileClient } from "@/shared/clientPlatform";
 import { invokeCmd } from "@/shared/api/tauri";
 import { FieldTip } from "./FieldTip";
 
@@ -84,11 +84,13 @@ export function AppLogField() {
   const [revealing, setRevealing] = useState(false);
   // 日志目录只能在桌面外壳中打开浏览。
   const canReveal = getClientPlatform() === "desktop";
+  const mobile = isMobileClient();
+  const dialogTitleId = useId();
 
   const snapshot = useQuery({
     queryKey: APP_LOG_QUERY_KEY,
     queryFn: appLogSnapshot,
-    // 只有对话框真正在展示该文件时才读取它。
+    // 只有抽屉真正在展示该文件时才读取它。
     enabled: open,
     staleTime: 0,
     gcTime: 0,
@@ -147,7 +149,7 @@ export function AppLogField() {
   const error = actionError ?? loadError;
 
   return (
-    <Dialog
+    <Drawer
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
@@ -168,7 +170,7 @@ export function AppLogField() {
             </FieldTip>
           </FieldTitle>
         </FieldContent>
-        <DialogTrigger
+        <DrawerTrigger
           render={
             <Button variant="outline" aria-describedby="app-log-title">
               <ScrollText data-icon="inline-start" aria-hidden />
@@ -178,20 +180,39 @@ export function AppLogField() {
         />
       </Field>
 
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>运行日志</DialogTitle>
-          <DialogDescription>
-            {snapshot.data?.directory ? (
-              <span className="break-all">{snapshot.data.directory}</span>
-            ) : (
-              "正在读取日志目录…"
-            )}
-          </DialogDescription>
-        </DialogHeader>
+      {/* 日志查看器用抽屉而不是居中弹窗：日志行很长，需要可以拉宽的版面；
+          桌面端从右滑出、移动端从底部弹出，日志区在抽屉内独立滚动，
+          操作按钮固定留在抽屉底部。 */}
+      <DrawerContent
+        side={mobile ? "bottom" : "right"}
+        aria-labelledby={dialogTitleId}
+        className={cn(
+          "flex flex-col gap-3 overflow-hidden",
+          // 桌面端右侧抽屉加宽容纳长日志行，宽度沿用原居中弹窗的 max-w-3xl。
+          !mobile && "w-[min(48rem,90vw)]",
+        )}
+      >
+        {/* 抽屉没有居中弹窗的系统标题栏，给显式关闭口：图标指向滑出方向
+            （桌面端 ›、移动端 ⌄），Esc/点遮罩仍可关。 */}
+        <div className="flex shrink-0 items-center justify-between gap-2">
+          <DrawerTitle id={dialogTitleId}>运行日志</DrawerTitle>
+          <DrawerClose
+            render={<Button variant="ghost" size="icon-sm" aria-label="关闭" />}
+          >
+            {mobile ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+          </DrawerClose>
+        </div>
+
+        <DrawerDescription className="shrink-0">
+          {snapshot.data?.directory ? (
+            <span className="break-all">{snapshot.data.directory}</span>
+          ) : (
+            "正在读取日志目录…"
+          )}
+        </DrawerDescription>
 
         {hasPrevious && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Button
               type="button"
               size="sm"
@@ -211,7 +232,7 @@ export function AppLogField() {
           </div>
         )}
 
-        <div className="min-h-64 overflow-auto rounded-md border border-border bg-muted/40 p-3">
+        <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/40 p-3">
           {snapshot.isPending ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner aria-hidden />
@@ -231,22 +252,22 @@ export function AppLogField() {
         </div>
 
         {active?.truncated && (
-          <FieldDescription role="status" aria-live="polite">
+          <FieldDescription role="status" aria-live="polite" className="shrink-0">
             文件较大（{formatByteSize(active.size_bytes)}
             ），此处只显示末尾部分；完整内容请打开日志目录查看。
           </FieldDescription>
         )}
         {error ? (
-          <FieldError role="alert">{error}</FieldError>
+          <FieldError role="alert" className="shrink-0">{error}</FieldError>
         ) : (
           status && (
-            <FieldDescription role="status" aria-live="polite">
+            <FieldDescription role="status" aria-live="polite" className="shrink-0">
               {status}
             </FieldDescription>
           )
         )}
 
-        <DialogFooter className="flex-wrap gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2">
           <Button
             type="button"
             variant="outline"
@@ -305,11 +326,8 @@ export function AppLogField() {
             )}
             {clear.isPending ? "正在清空…" : "清空"}
           </Button>
-          {/* 与旁边四个操作按钮相同的 outline 变体与 `sm` 尺寸；
-              其他所有对话框也都用 outline 按钮关闭。 */}
-          <DialogCloseButton size="sm">关闭</DialogCloseButton>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
