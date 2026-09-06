@@ -44,6 +44,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   createXgPlayer,
+  isInterruptedPlayRequest,
   loadXgPlayerModules,
   xgPlayerErrorMessage,
   type XgPlaybackKind,
@@ -234,6 +235,9 @@ function VideoPlayerPageContent() {
   // 换画质时记住切换前的位置与播放状态：播放器必然重建（新的代理端口 = 新的
   // MPD 地址），不存就会从头播。换视频（相关/分集跳转）不会碰它，天然从头播。
   const resumeAtRef = useRef<{ position: number; playing: boolean } | null>(null);
+  // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
+  // 否则卡加载时点暂停会被重试重新拉起，按钮状态与实际播放相反。
+  const userPausedRef = useRef(false);
 
   const compact = useCompactPlayerViewport();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
@@ -814,6 +818,7 @@ function VideoPlayerPageContent() {
     setWaiting(false);
     setPlaybackError(null);
     setPaused(true);
+    userPausedRef.current = false;
     setCurrentTime(0);
     setBufferedTime(0);
     setDuration(playInfo?.duration ?? 0);
@@ -980,7 +985,7 @@ function VideoPlayerPageContent() {
           requestPlayerAutoplay(
             player,
             media,
-            () => !cancelled && playerRef.current === player,
+            () => !cancelled && playerRef.current === player && !userPausedRef.current,
             recoverMutedAutoplay,
           );
         }
@@ -1023,10 +1028,13 @@ function VideoPlayerPageContent() {
     const media = videoRef.current;
     if (!player || !media) return;
     if (media.paused) {
+      userPausedRef.current = false;
       void Promise.resolve(player.play()).catch((cause) => {
+        if (isInterruptedPlayRequest(cause)) return;
         setPlaybackError(xgPlayerErrorMessage(cause, "播放失败"));
       });
     } else {
+      userPausedRef.current = true;
       player.pause();
     }
   }, []);

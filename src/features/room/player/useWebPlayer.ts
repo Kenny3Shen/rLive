@@ -752,6 +752,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const fullscreenInsetFreezeTimerRef = useRef<number | null>(null);
   /** 为没有 `mode` 的销毁路径镜像页面内全屏状态。 */
   const inPageFullscreenRef = useRef(false);
+  // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
+  // 否则卡加载时点暂停会被重试重新拉起，按钮状态与实际播放相反。
+  const userPausedRef = useRef(false);
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
   const [paused, setPaused] = useState(false);
@@ -942,6 +945,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     setLoadError(null);
     setFullscreenError(null);
     setPaused(false);
+    userPausedRef.current = false;
     const playbackKind = webPlaybackKind(playbackSource);
     const hlsSource = playbackKind === "hls";
     // 在串行化代理队列拆除上一会话的同时，开始抓取 xgplayer 与所选的唯一协议插件。
@@ -1315,7 +1319,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           // 不要在 `proxyLifecycleQueue` 中 await 这个 promise：它可能一直挂起直到第一个
           // 直播媒体分片到达。队列必须保持空闲，路由清理才能停止本代理，
           // 重进的房间才能立刻启动替代会话。
-          requestPlayerAutoplay(player, video, isCurrentPlayer, recoverMutedAutoplay);
+          requestPlayerAutoplay(
+            player,
+            video,
+            () => isCurrentPlayer() && !userPausedRef.current,
+            recoverMutedAutoplay,
+          );
 
           // 已有帧则标记运行中；否则等待 play 事件。
           if (hasStartedPlayback(video)) {
@@ -1903,8 +1912,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      userPausedRef.current = false;
       void video.play().catch(() => {});
     } else {
+      userPausedRef.current = true;
       video.pause();
     }
   }, []);
@@ -1927,8 +1938,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     if (video) applyWebPlayerAudio(video, vol, nextMuted);
     setVolume(vol);
     setMuted(nextMuted);
-    // 协议插件已就绪但播放仍未开始时，轻推一次播放。
-    if (video && video.paused && playerRef.current) {
+    // 协议插件已就绪但播放仍未开始时，轻推一次播放；用户自己按下的暂停不推。
+    if (video && video.paused && playerRef.current && !userPausedRef.current) {
       void video.play().catch(() => {});
     }
   }, []);

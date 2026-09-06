@@ -11,6 +11,7 @@ import {
   createXgPlayer,
   getXgHlsCore,
   getXgMpegtsCore,
+  isInterruptedPlayRequest,
   isXgPlayerDecodeError,
   switchXgPlaybackSource,
   xgPlaybackSwitchOptions,
@@ -78,6 +79,17 @@ describe("xgplayer transport selection", () => {
       "decode failed",
     );
     expect(xgPlayerErrorMessage({}, "fallback")).toBe("fallback");
+  });
+
+  test("treats a superseded play() request as no failure at all", () => {
+    const pauseInterrupt = new DOMException(
+      "The play() request was interrupted by a call to pause().",
+      "AbortError",
+    );
+    expect(isInterruptedPlayRequest(pauseInterrupt)).toBe(true);
+    expect(isInterruptedPlayRequest({ name: "NotAllowedError" })).toBe(false);
+    expect(isInterruptedPlayRequest({ errorMessage: "network failed" })).toBe(false);
+    expect(isInterruptedPlayRequest(null)).toBe(false);
   });
 
   test("recognizes Chromium and xgplayer decoder failures", () => {

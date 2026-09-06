@@ -363,6 +363,16 @@ export function xgPlayerErrorMessage(error: unknown, fallback = "播放失败"):
 }
 
 /**
+ * `play()` 被随后的 `pause()` 或新一次 `load()` 打断时，浏览器用 `AbortError`
+ * 拒绝那个 promise。它描述的是「这次请求被取代了」，不是播放失败：卡加载时连点
+ * 暂停/播放会命中它，把 DOMException 原文写进错误面板只是噪音。
+ */
+export function isInterruptedPlayRequest(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("name" in error)) return false;
+  return error.name === "AbortError";
+}
+
+/**
  * Chromium 经多层上报 HLS/MSE 解码失败：原生媒体错误用 code 3，而 xgplayer 协议
  * 插件可能给出 code 5103 或只保留浏览器的 pipeline message。检查保持结构化，
  * 使 Twitch 能降级不兼容的渲染档，
