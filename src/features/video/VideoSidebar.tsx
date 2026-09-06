@@ -2,15 +2,17 @@ import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
+  CalendarDays,
   ChevronDown,
-  ChevronLeft,
-  MessageSquare,
+  ChevronRight,
   MessageSquareText,
   Play,
   ThumbsUp,
   ListOrdered,
+  Users,
   Shuffle,
   ListMusic,
+  Video,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -42,7 +44,7 @@ import {
   videoGetRelated,
   videoGetSeason,
 } from "./videoApi";
-import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
+import { formatDateTime, formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
 import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
 import { UploaderDrawer } from "./UploaderDrawer";
@@ -75,7 +77,6 @@ function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
   if (value === "parts") return multiPart ? "选集" : "合集";
   return TAB_LABELS[value];
 }
-
 
 /** 把 `[大哭]` 这类占位符换成内联表情图。 */
 function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): ReactNode {
@@ -457,7 +458,7 @@ function CommentsPanel({ aid }: { aid: string }) {
             <DrawerClose
               render={
                 <Button variant="ghost" size="icon" aria-label="返回评论区" title="返回评论区">
-                  <ChevronLeft />
+                  <ChevronRight />
                 </Button>
               }
             />
@@ -1110,8 +1111,7 @@ export function VideoSidebar({
   };
 
   return (
-    // 与直播播放页右侧栏同一套结构：UP 主信息卡（sideHeader 的对应物）在页签
-    // 之上，即整页右上角；页签条是 line 变体 Tabs + h-11 条带（见 PlayerPane）。
+    // 页签固定在右侧栏顶部；UP 主信息卡只并入「相关视频」内容区。
     <Tabs
       value={tab}
       className="flex h-full min-h-0 flex-col gap-0"
@@ -1122,131 +1122,6 @@ export function VideoSidebar({
         }
       }}
     >
-      {/* UP 主信息块：与直播页的主播信息（RoomHostInfo）同一套画法（sideHeader
-          的对应物，置于页签之上即整页右上角）—— 圆角卡片包裹、共享 Avatar、
-          分隔线统计行；简介仅宽屏侧栏展示，窄屏与直播页主播卡同构同高。 */}
-      {!isPgc && archive && (
-        <section
-          key={bvid}
-          className="shrink-0 border-b border-border px-2.5 py-2"
-          aria-label={`UP 主信息：${archive.author}`}
-        >
-          <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <button
-                type="button"
-                onClick={handleUploaderClick}
-                aria-label={`查看 ${archive.author} 的投稿视频`}
-                className="shrink-0 transition-opacity hover:opacity-80"
-              >
-                <Avatar size="lg" className="size-11 ring-1 ring-border/80">
-                  <AvatarImage
-                    src={normalizeImageUrl(archive.author_face)}
-                    alt={`${archive.author} 的头像`}
-                    referrerPolicy="no-referrer"
-                  />
-                  <AvatarFallback className="font-medium">
-                    {Array.from(archive.author)[0] ?? "?"}
-                  </AvatarFallback>
-                </Avatar>
-              </button>
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={handleUploaderClick}
-                    className="min-w-0 flex-1 text-left transition-opacity hover:opacity-80"
-                    aria-label={`查看 ${archive.author} 的投稿视频`}
-                  >
-                    <p
-                      className="truncate text-sm font-semibold leading-5 tracking-tight"
-                      title={archive.author}
-                    >
-                      {archive.author}
-                    </p>
-                  </button>
-                  {archive.pubdate > 0 && (
-                    <span
-                      className="shrink-0 text-xs leading-5 text-muted-foreground tabular-nums"
-                      title="视频发布时间"
-                    >
-                      {formatRelativeTime(archive.pubdate)}
-                    </span>
-                  )}
-                </div>
-                <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
-                  <div
-                    className="flex min-w-0 items-center gap-1"
-                    title={`播放：${formatOnline(archive.view)}`}
-                  >
-                    <dt className="sr-only">播放</dt>
-                    <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
-                    <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
-                      {formatOnline(archive.view)}
-                    </dd>
-                  </div>
-                  <div
-                    className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
-                    title={`弹幕：${formatOnline(archive.danmaku)}`}
-                  >
-                    <dt className="sr-only">弹幕</dt>
-                    <MessageSquare
-                      aria-hidden
-                      className="size-3.5 shrink-0 text-muted-foreground"
-                    />
-                    <dd className="font-semibold leading-4 tracking-normal tabular-nums">
-                      {formatOnline(archive.danmaku)}
-                    </dd>
-                  </div>
-                  <div
-                    className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
-                    title={`评论：${formatOnline(archive.reply)}`}
-                  >
-                    <dt className="sr-only">评论</dt>
-                    <MessageSquareText
-                      aria-hidden
-                      className="size-3.5 shrink-0 text-muted-foreground"
-                    />
-                    <dd className="font-semibold leading-4 tracking-normal tabular-nums">
-                      {formatOnline(archive.reply)}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-            {archive.desc && (
-              <div className="mt-2 max-lg:hidden">
-                <p
-                  id="video-description"
-                  className={cn(
-                    "whitespace-pre-line text-xs leading-relaxed text-muted-foreground",
-                    !descriptionExpanded && "line-clamp-2",
-                  )}
-                >
-                  {archive.desc}
-                </p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  aria-expanded={descriptionExpanded}
-                  aria-controls="video-description"
-                  onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-                >
-                  {descriptionExpanded ? "收起简介" : "展开简介"}
-                  <ChevronDown
-                    aria-hidden
-                    className={cn(
-                      "size-3.5 transition-transform",
-                      descriptionExpanded && "rotate-180",
-                    )}
-                  />
-                </Button>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
       <div className="flex h-11 shrink-0 items-center border-b border-border/80">
         <TabsList
           variant="line"
@@ -1293,7 +1168,142 @@ export function VideoSidebar({
             onSeek={danmaku.onSeek}
           />
         ) : (
-          <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />
+          <>
+            {!isPgc && archive && (
+              <section
+                key={bvid}
+                className="shrink-0 border-b border-border px-2.5 py-2"
+                aria-label={`UP 主信息：${archive.author}`}
+              >
+                <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={handleUploaderClick}
+                      aria-label={`查看 ${archive.author} 的投稿视频`}
+                      className="shrink-0 transition-opacity hover:opacity-80"
+                    >
+                      <Avatar size="lg" className="size-11 ring-1 ring-border/80">
+                        <AvatarImage
+                          src={normalizeImageUrl(archive.author_face)}
+                          alt={`${archive.author} 的头像`}
+                          referrerPolicy="no-referrer"
+                        />
+                        <AvatarFallback className="font-medium">
+                          {Array.from(archive.author)[0] ?? "?"}
+                        </AvatarFallback>
+                      </Avatar>
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleUploaderClick}
+                          className="min-w-0 flex-1 text-left transition-opacity hover:opacity-80"
+                          aria-label={`查看 ${archive.author} 的投稿视频`}
+                        >
+                          <p
+                            className="truncate text-sm font-semibold leading-5 tracking-tight"
+                            title={archive.author}
+                          >
+                            {archive.author}
+                          </p>
+                        </button>
+                        <div className="flex shrink-0 items-center gap-2 text-xs leading-4 text-muted-foreground">
+                          <span
+                            className="inline-flex items-center gap-1"
+                            title={`粉丝：${formatOnline(archive.author_fans)}`}
+                          >
+                            <Users aria-hidden className="size-3.5" />
+                            <span className="tabular-nums">
+                              {formatOnline(archive.author_fans)}
+                            </span>
+                          </span>
+                          <span
+                            className="inline-flex items-center gap-1"
+                            title={`视频：${formatOnline(archive.author_videos)}`}
+                          >
+                            <Video aria-hidden className="size-3.5" />
+                            <span className="tabular-nums">
+                              {formatOnline(archive.author_videos)}
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
+                    <div
+                      className="flex min-w-0 items-center gap-1"
+                      title={`播放：${formatOnline(archive.view)}`}
+                    >
+                      <dt className="sr-only">播放</dt>
+                      <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
+                      <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
+                        {formatOnline(archive.view)}
+                      </dd>
+                    </div>
+                    <div
+                      className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
+                      title={`评论：${formatOnline(archive.reply)}`}
+                    >
+                      <dt className="sr-only">评论</dt>
+                      <MessageSquareText
+                        aria-hidden
+                        className="size-3.5 shrink-0 text-muted-foreground"
+                      />
+                      <dd className="font-semibold leading-4 tracking-normal tabular-nums">
+                        {formatOnline(archive.reply)}
+                      </dd>
+                    </div>
+                    {archive.pubdate > 0 && (
+                      <div
+                        className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5 text-muted-foreground"
+                        title="视频发布时间"
+                      >
+                        <dt className="sr-only">发布时间</dt>
+                        <CalendarDays aria-hidden className="size-3.5 shrink-0" />
+                        <dd className="leading-4 tabular-nums">
+                          {formatDateTime(archive.pubdate)}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                  {archive.desc && (
+                    <div className="mt-2 max-lg:hidden">
+                      <p
+                        id="video-description"
+                        className={cn(
+                          "whitespace-pre-line text-xs leading-relaxed text-muted-foreground",
+                          !descriptionExpanded && "line-clamp-2",
+                        )}
+                      >
+                        {archive.desc}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        aria-expanded={descriptionExpanded}
+                        aria-controls="video-description"
+                        onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+                      >
+                        {descriptionExpanded ? "收起简介" : "展开简介"}
+                        <ChevronDown
+                          aria-hidden
+                          className={cn(
+                            "size-3.5 transition-transform",
+                            descriptionExpanded && "rotate-180",
+                          )}
+                        />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
+            <RelatedPanel bvid={bvid ?? ""} onNavigate={navigateToPlay} />
+          </>
         )}
       </div>
 

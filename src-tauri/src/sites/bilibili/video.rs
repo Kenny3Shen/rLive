@@ -629,6 +629,8 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
             .and_then(|owner| owner.get("mid"))
             .map(as_str)
             .unwrap_or_default(),
+        author_fans: 0,
+        author_videos: 0,
         view: stat
             .and_then(|stat| stat.get("view"))
             .map(as_i64)
@@ -645,6 +647,11 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
         pages: parse_archive_pages(data),
         ugc_season: parse_ugc_season(data),
     })
+}
+
+fn parse_uploader_count(raw: &str, field: &str) -> Option<i64> {
+    let root = serde_json::from_str::<Value>(raw).ok()?;
+    Some(as_i64(root.get("data")?.get(field)?))
 }
 
 fn comment_emotes(content: &Value) -> Vec<VideoEmote> {
@@ -1609,7 +1616,21 @@ impl BilibiliSite {
         let text = self
             .get_json_signed("https://api.bilibili.com/x/web-interface/view", params)
             .await?;
-        parse_archive(&text)
+        let mut archive = parse_archive(&text)?;
+        if !archive.author_mid.is_empty() {
+            let card_query = [
+                ("mid", archive.author_mid.clone()),
+                ("photo", "false".to_string()),
+            ];
+            if let Ok(raw) = self
+                .get_public_json("https://api.bilibili.com/x/web-interface/card", &card_query)
+                .await
+            {
+                archive.author_fans = parse_uploader_count(&raw, "follower").unwrap_or(0);
+                archive.author_videos = parse_uploader_count(&raw, "archive_count").unwrap_or(0);
+            }
+        }
+        Ok(archive)
     }
 
     /// 评论首页（`x/v2/reply/main`，游标翻页）。匿名可用。
@@ -2949,6 +2970,19 @@ mod tests {
         assert_eq!(parse_archive(&multi_page).unwrap().cid, 998877);
 
         assert!(parse_archive("{}").is_err());
+    }
+
+    #[test]
+    fn parse_uploader_counts_matches_member_card_response() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": { "follower": 1427549, "archive_count": 321 }
+        })
+        .to_string();
+
+        assert_eq!(parse_uploader_count(&raw, "follower"), Some(1427549));
+        assert_eq!(parse_uploader_count(&raw, "archive_count"), Some(321));
+        assert_eq!(parse_uploader_count("{}", "follower"), None);
     }
 
     #[test]
