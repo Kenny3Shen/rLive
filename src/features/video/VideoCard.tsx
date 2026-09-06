@@ -41,15 +41,17 @@ function CoverImage({
   overlay,
   previewMount,
   previewLoading,
+  className,
 }: {
   cover: string;
   overlay?: React.ReactNode;
   previewMount?: RefObject<HTMLDivElement | null>;
   previewLoading?: boolean;
+  className?: string;
 }) {
   const normalized = normalizeVideoCoverUrl(cover);
   return (
-    <div className={COVER_CLASS}>
+    <div className={cn(COVER_CLASS, className)}>
       {normalized ? (
         <img
           src={normalized}
@@ -83,10 +85,16 @@ function CoverImage({
 export const VideoCard = memo(function VideoCard({
   item,
   playlist,
+  orientation = "grid",
+  showAuthor = true,
 }: {
   item: VideoItem;
   /** 列表上下文（搜索/UP 主投稿）：点击时把该列表设为播放列表，从这张卡开始连播。 */
   playlist?: readonly PlaylistItem[];
+  /** `row`：缩略图在左、文本列在右（相关视频与 UP 主投稿列表）。 */
+  orientation?: "grid" | "row";
+  /** 是否在发布日期旁显示 UP 主名；投稿抽屉按 PiliPlus 语义只显示发布日期。 */
+  showAuthor?: boolean;
 }) {
   const navigate = useNavigate();
   // 搜索与 UP 主空间列表的条目没有 cid：只要带 bvid 就可点，播放页用稿件详情
@@ -122,10 +130,19 @@ export const VideoCard = memo(function VideoCard({
         }
         navigate(playPath);
       }}
-      className={cn(CARD_CLASS, !playable && "cursor-not-allowed opacity-60")}
+      className={cn(
+        CARD_CLASS,
+        // row 下缩略图与文本块垂直居中：侧栏里三行文本高于 16:9 封面，
+        // 顶对齐会在封面下方留一段空白。
+        orientation === "row" && "flex-row items-center gap-2.5 p-1.5 hover:bg-muted/50",
+        !playable && "cursor-not-allowed opacity-60",
+      )}
     >
       <CoverImage
         cover={item.cover}
+        // 封面按列宽取比例而不是固定 w-40：侧栏只有 300px，固定宽度会把文本列
+        // 挤到 90 px 出头，标题每行只剩几个字。
+        className={orientation === "row" ? "w-2/5 shrink-0 rounded-md" : undefined}
         previewMount={preview.mountRef}
         previewLoading={preview.phase === "loading"}
         overlay={
@@ -149,29 +166,43 @@ export const VideoCard = memo(function VideoCard({
           </>
         }
       />
-      <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
-        {/* 标题恒占两行（min-h-[2lh]）：一行标题的卡片也把 UP 主行与统计行
-            压到与两行标题的卡片相同的纵向位置，网格内左右对齐。 */}
+      <div
+        className={cn(
+          "flex min-w-0 flex-1 flex-col gap-0.5",
+          orientation === "row" ? "py-0.5" : "px-0.5 pt-2.5 pb-1",
+        )}
+      >
+        {/* 标题固定两行；第二行发布日期（竖线接 UP 主，投稿抽屉隐藏），第三行播放与弹幕。 */}
         <p className="line-clamp-2 min-h-[2lh] text-[13px] font-medium leading-snug text-foreground">
           {item.title}
         </p>
-        {/* 副行始终占位，保证网格里两行标题与一行标题的卡片高度一致。 */}
-        <p className="min-h-4 truncate text-xs text-muted-foreground">{item.author}</p>
-        <p className="flex min-h-4 items-center gap-2 text-[11px] text-muted-foreground/85">
+        <p className="flex min-h-4 min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/85">
+          {item.pubdate > 0 && (
+            <>
+              {/* 日期不参与压缩：长 UP 主名会把可压缩的日期挤成「3 …」。 */}
+              <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap">
+                <CalendarDays className="size-3" aria-hidden />
+                {formatRelativeTime(item.pubdate)}
+              </span>
+              {showAuthor && (
+                <span aria-hidden className="shrink-0 text-border">
+                  |
+                </span>
+              )}
+            </>
+          )}
+          {showAuthor && <span className="min-w-0 truncate">{item.author}</span>}
+        </p>
+        <p className="flex min-h-4 items-center gap-1.5 text-[11px] text-muted-foreground/85">
           <span className="inline-flex items-center gap-0.5">
             <Play className="size-3" aria-hidden />
             {formatOnline(item.view)}
           </span>
+          <span aria-hidden className="text-border">|</span>
           <span className="inline-flex items-center gap-0.5">
             <MessageSquare className="size-3" aria-hidden />
             {formatOnline(item.danmaku)}
           </span>
-          {item.pubdate > 0 && (
-            <span className="inline-flex min-w-0 items-center gap-0.5 truncate">
-              <CalendarDays className="size-3" aria-hidden />
-              {formatRelativeTime(item.pubdate)}
-            </span>
-          )}
         </p>
       </div>
     </button>
