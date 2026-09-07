@@ -993,8 +993,6 @@ export function VideoSidebar({
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
   // 简介折叠态：换稿件时由 UP 信息卡 section 上的 key={bvid} 重挂载复位。
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
-  // 用户手动切换过页签后就不再自动改选，见下方的自动切换 effect。
-  const tabTouchedRef = useRef(false);
 
   // 稿件详情：UGC 的评论区 oid 兜底 + 相关视频页签顶部的作者/统计信息。
   const archiveQuery = useQuery({
@@ -1027,25 +1025,15 @@ export function VideoSidebar({
 
   const archive = archiveQuery.data;
   const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
-  // 弹幕页签固定在最右；选集与合集共用 parts 页签（见 PartsSeasonPanel）。
+  // 弹幕页签仅在 UGC 且播放页传入弹幕数据时出现；选集/合集（parts）固定在最右。
   const showDanmakuTab = !isPgc && danmaku !== undefined;
   const hasSeason = Boolean(archive?.ugc_season);
   const tabs: SidebarTab[] = isPgc
     ? ["episodes", "comments"]
-    : multiPart
-      ? ["parts", "related", "comments", "danmaku"]
-      : hasSeason
-        ? ["related", "comments", "parts", "danmaku"]
-        : ["related", "comments", "danmaku"];
+    : multiPart || hasSeason
+      ? ["related", "comments", "danmaku", "parts"]
+      : ["related", "comments", "danmaku"];
   const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
-
-  // 多 P 稿件默认展示选集（与 B 站 Web 同款落点）：详情取回后把未动过页签的
-  // 侧栏切到「选集」；用户已手动切换过则不再干预。
-  useEffect(() => {
-    if (multiPart && !tabTouchedRef.current && tab !== "parts") {
-      setTab("parts");
-    }
-  }, [multiPart, tab]);
 
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
@@ -1060,7 +1048,6 @@ export function VideoSidebar({
       className="flex h-full min-h-0 flex-col gap-0"
       onValueChange={(value) => {
         if (isSidebarTab(value)) {
-          tabTouchedRef.current = true;
           setTab(value);
         }
       }}
