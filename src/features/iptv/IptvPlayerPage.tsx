@@ -12,10 +12,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { resolveIptvChannel, useIptvFavoriteMutation, useIptvFavorites } from "./favorites";
 import { iptvChannelPlayUrl, IptvPlayer, type IptvPlaybackStatus } from "./IptvPlayer";
+import { IptvChannelSidebar } from "./IptvChannelSidebar";
 import { RecordingControl } from "@/features/recording/RecordingControl";
 import { RecordingLeaveGuard } from "@/features/recording/RecordingLeaveGuard";
 import type { RecordingContext } from "@/features/recording/recording";
-import { iptvHomePath, iptvReturnPathFromState } from "./iptvRoute";
+import { iptvHomePath, iptvPlayerPath, iptvReturnPathFromState } from "./iptvRoute";
 import {
   builtInSources,
   iptvFavoriteSourceId,
@@ -177,6 +178,9 @@ export function IptvPlayerPage() {
   const [playbackStatus, setPlaybackStatus] = useState<IptvPlaybackStatus>("idle");
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [manualReconnect, setManualReconnect] = useState(false);
+  // 网页全屏（桌面）：画面占满应用窗口但不进入原生全屏。状态留在本页，
+  // 因为要位的顶栏、页脚与频道侧栏属于这一层。
+  const [webFullscreen, setWebFullscreen] = useState(false);
   const iptvCustomM3uUrl = useSettingsStore((state) => state.iptvCustomM3uUrl);
 
   const requestedDirectUrl = searchParams.get("direct");
@@ -283,31 +287,55 @@ export function IptvPlayerPage() {
     navigate(returnPath, { replace: true });
   }
 
+  const header = (
+    <IptvPlayerTopBar
+      title={title}
+      sourceLabel={source.label}
+      group={channelGroup}
+      status={playbackStatus}
+      reconnecting={manualReconnect || playbackStatus === "connecting"}
+      reconnectEnabled={channel !== null && playbackStatus !== "connecting"}
+      isFavorite={isFavorite}
+      favoriteBusy={
+        favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel?.url
+      }
+      favoriteEnabled={!isDirectPlayback && channel !== null && !favoritesQuery.isLoading}
+      backLabel={directRequested ? "返回设置" : "返回频道列表"}
+      onBack={goBack}
+      onReconnect={handleReconnect}
+      onToggleFavorite={() => {
+        if (channel) favoriteMutation.mutate({ channel, isFavorite });
+      }}
+      recordingContext={recordingContext}
+    />
+  );
+  // 错误/加载态整页只有顶栏：离开守卫跟着顶栏一起挂载。
   const topBar = (
     <>
-      <IptvPlayerTopBar
-        title={title}
-        sourceLabel={source.label}
-        group={channelGroup}
-        status={playbackStatus}
-        reconnecting={manualReconnect || playbackStatus === "connecting"}
-        reconnectEnabled={channel !== null && playbackStatus !== "connecting"}
-        isFavorite={isFavorite}
-        favoriteBusy={
-          favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel?.url
-        }
-        favoriteEnabled={!isDirectPlayback && channel !== null && !favoritesQuery.isLoading}
-        backLabel={directRequested ? "返回设置" : "返回频道列表"}
-        onBack={goBack}
-        onReconnect={handleReconnect}
-        onToggleFavorite={() => {
-          if (channel) favoriteMutation.mutate({ channel, isFavorite });
-        }}
-        recordingContext={recordingContext}
-      />
+      {header}
       <RecordingLeaveGuard context={recordingContext} />
     </>
   );
+
+  // 侧栏频道列表：常规来源用当前播放列表；收藏快照来源（无 HTTP 播放列表）用收藏列表。
+  const sidebarChannels = useMemo(() => {
+    if (isDirectPlayback) return null;
+    if (isHttpUrl(source.url)) return playlistQuery.data ?? null;
+    return favoritesQuery.data ?? null;
+  }, [favoritesQuery.data, isDirectPlayback, playlistQuery.data, source.url]);
+
+  function selectChannel(next: IptvChannel) {
+    if (next.url === channelUrl) return;
+    navigate(
+      iptvPlayerPath({
+        source,
+        channelUrl: next.url,
+        favoriteSourceId: isHttpUrl(source.url) ? undefined : favoriteSourceId,
+        group,
+        query,
+      }),
+    );
+  }
 
   if (!channelUrl || !sourceIsValid) {
     return (
@@ -381,18 +409,49 @@ export function IptvPlayerPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {topBar}
-      <main className="flex min-h-0 flex-1 flex-col bg-black">
-        <div className="flex min-h-0 flex-1 items-center justify-center p-3 md:p-5">
-          <div className="flex aspect-video h-full max-h-full max-w-full items-center">
+      {/* 网页全屏卸载顶栏与页脚；录制离开守卫与 chrome 无关，保持挂载。 */}
+      {!webFullscreen && header}
+      <RecordingLeaveGuard context={recordingContext} />
+      {/* 宽屏：播放器占满主列，频道侧栏固定宽度；窄屏：侧栏列在播放器下方。
+          网页全屏时卸载侧栏并解除居中约束，舞台撑满整个应用窗口。 */}
+      <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 items-center justify-center",
+            webFullscreen ? "p-0" : "p-3 md:p-5",
+          )}
+        >
+          <div
+            className={cn(
+              "flex h-full max-h-full max-w-full items-center",
+              webFullscreen ? "w-full" : "aspect-video",
+            )}
+          >
             <IptvPlayer
               channel={channel}
               reloadToken={reloadToken}
+              webFullscreen={webFullscreen}
+              onWebFullscreenChange={setWebFullscreen}
               onStatusChange={handlePlaybackStatus}
               onReconnect={handleReconnect}
             />
           </div>
         </div>
+        {!webFullscreen && sidebarChannels && (
+          <aside
+            aria-label="IPTV 频道侧栏"
+            className="relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]"
+          >
+            <IptvChannelSidebar
+              channels={sidebarChannels}
+              currentUrl={channelUrl}
+              sourceLabel={source.label}
+              onSelect={selectChannel}
+            />
+          </aside>
+        )}
+      </main>
+      {!webFullscreen && (
         <footer
           data-slot="iptv-player-footer"
           className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/80 bg-sidebar/90 px-3 py-2"
@@ -422,7 +481,7 @@ export function IptvPlayerPage() {
           <div className="min-w-0 flex-1" />
           <Tv className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         </footer>
-      </main>
+      )}
     </div>
   );
 }
