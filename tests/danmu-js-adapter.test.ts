@@ -299,6 +299,26 @@ describe("danmu.js image bullet track span", () => {
     expect(trackSpanOf(comment?.style?.height, 18)).toBe(1);
   });
 
+  // 回归：danmu.js 在 `Bullet._makeEl` 里用 `style.cssText = …` 整体替换
+  // bullet 根元素的行内样式，`bulletCreateEl` 钩子里 setProperty 的自定义属性
+  // 活不过这次替换。放大倍率必须随 comment.style 下发（键全小写，danmu.js 的
+  // kebab 转换原样保留），大表情才会在双轨行盒里真的放大。
+  test("ships the emote scale through the style object that danmu.js applies", () => {
+    const large = danmuCommentFromEvent(
+      chat({ content: "[装扮]", spans: [LARGE_EMOTE] }),
+      mappingOptions({ laneCount: 10 }),
+    );
+    const text = danmuCommentFromEvent(chat(), mappingOptions({ laneCount: 10 }));
+    const narrow = danmuCommentFromEvent(
+      chat({ content: "[装扮]", spans: [LARGE_EMOTE] }),
+      mappingOptions({ laneCount: 1 }),
+    );
+
+    expect(large?.style?.["--rlive-emote-scale"]).toBe(String(DANMU_JS_IMAGE_TRACK_SPAN));
+    expect(text?.style?.["--rlive-emote-scale"]).toBe("1");
+    expect(narrow?.style?.["--rlive-emote-scale"]).toBe("1");
+  });
+
   // 高度必须落在车道网格上：写成 em 时 `2 × 1.4em` 会比两条车道高出零点几像素，
   // 于是大表情吃掉第三条轨道。
   test("keeps the bullet box on the lane grid at every font size", () => {
@@ -333,6 +353,7 @@ describe("danmu.js image bullet track span", () => {
 
     const expected = `${DANMU_JS_IMAGE_TRACK_SPAN * danmuLaneHeight(30)}px`;
     expect(comment?.style?.height).toBe(expected);
+    expect(comment?.style?.["--rlive-emote-scale"]).toBe(String(DANMU_JS_IMAGE_TRACK_SPAN));
     expect(comment?.__rliveMeta.element?.style.height).toBe(expected);
   });
 });

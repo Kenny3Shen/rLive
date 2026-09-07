@@ -170,19 +170,6 @@ export function danmuTrackSpan(
   return lanes >= DANMU_JS_IMAGE_TRACK_SPAN ? DANMU_JS_IMAGE_TRACK_SPAN : 1;
 }
 
-/**
- * bullet 的显式行盒高度。
- *
- * danmu.js 在 attach 时用 `getBoundingClientRect().height` 除以 `channelSize`
- * 向上取整得到轨道占用，因此高度必须正好是车道高度的整数倍：写成 em 会因为
- * 车道高度自身的四舍五入多吃一条轨道。文本 bullet 同样显式取一条车道高，
- * 使「高度即轨道占用」成为该层唯一的排版口径。
- */
-export function danmuBulletHeight(trackSpan: number, fontSize: number): string {
-  const span = Math.max(1, Number.isFinite(trackSpan) ? Math.floor(trackSpan) : 1);
-  return `${span * danmuLaneHeight(fontSize)}px`;
-}
-
 /** danmu.js 在当前舞台上真正开出的车道数：`floor(stageHeight * area / channelSize)`。 */
 export function danmuLaneCount(stageHeight: number, laneHeight: number, area: number): number {
   const safeHeight = Number.isFinite(stageHeight) ? Math.max(0, stageHeight) : 0;
@@ -313,6 +300,7 @@ export function danmuStyleForEvent(
   const isSuperChat = event.kind === "super_chat";
   const opacity = clampDanmuOpacity(options.opacity);
   const fontStroke = clampDanmuFontStroke(options.fontStroke);
+  const span = Math.max(1, Number.isFinite(trackSpan) ? Math.floor(trackSpan) : 1);
   const style: DanmuJsStyle = {
     boxSizing: "border-box",
     color: isSuperChat ? superChatAmountColor(event) : safeDanmuColor(event.color),
@@ -322,9 +310,16 @@ export function danmuStyleForEvent(
     flexWrap: "nowrap",
     whiteSpace: "nowrap",
     width: "max-content",
+    // 行盒高度就是 danmu.js 的轨道占用（attach 时 `ceil(height / channelSize)`），
+    // 因此必须正好落在车道网格上：写成 em 会因为车道高度自身的四舍五入
+    // 多吃一条轨道。
+    height: `${span * danmuLaneHeight(options.fontSize)}px`,
+    // 大表情的放大倍率（styles.css 的 .rlive-danmu-image-large 读它）必须
+    // 随样式对象下发：danmu.js 在 `Bullet._makeEl` 里用 `style.cssText = …`
+    // 整体替换 bullet 根元素的行内样式，`bulletCreateEl` 钩子里 setProperty
+    // 的自定义属性会被抹掉，图片于是占着双轨高度却不放大。
+    "--rlive-emote-scale": String(span),
     maxWidth: "none",
-    // 行盒高度就是 danmu.js 的轨道占用，见 `danmuBulletHeight`。
-    height: danmuBulletHeight(trackSpan, options.fontSize),
     fontSize: `${clampDanmuFontSize(options.fontSize)}px`,
     fontWeight: DANMU_JS_FONT_WEIGHT,
     lineHeight: "1.35",
@@ -467,8 +462,6 @@ export function createDanmuBulletElement(
   root.style.alignItems = "center";
   root.style.flexWrap = "nowrap";
   root.style.whiteSpace = "nowrap";
-  // 大表情的倍率：CSS 里 .rlive-danmu-image-large 的尺寸公式读它。
-  root.style.setProperty("--rlive-emote-scale", String(meta?.trackSpan ?? 1));
 
   const content = document.createElement("span");
   content.className = "rlive-danmu-content";
@@ -569,9 +562,9 @@ export function updateDanmuAppearance(
     element.style.setProperty("-webkit-text-stroke", String(style.WebkitTextStroke));
     element.style.setProperty("paint-order", String(style.paintOrder));
   }
-  // 表情尺寸公式在 CSS（.rlive-danmu-image*），字号变化自动跟随；只有
-  // 轨道数翻转（车道数掉到两条以下）才需要改 bullet 上的倍率变量，
-  // 不再逐图重写宽高。
+  // 表情尺寸公式在 CSS（.rlive-danmu-image*），字号变化自动跟随，新 bullet
+  // 的倍率已随 comment.style 下发；只有轨道数翻转（车道数掉到两条以下）才需要
+  // 直接改写在途 bullet 上的倍率变量，不逐图重写宽高。
   if (trackSpanChanged) {
     element.style.setProperty("--rlive-emote-scale", String(trackSpan));
   }
