@@ -176,6 +176,28 @@ struct HlsResourceEntries {
     access_order: VecDeque<u64>,
 }
 
+/// `/live` 主清单的重定向钉扎（见 [`handle_client`]）。
+///
+/// 一些 IPTV 入口在每次请求时都 302 到另一台拥有独立时间轴的上游
+/// （MEDIA-SEQUENCE 基数、分片路径完全不同）。hls.js 依赖清单重载之间的
+/// 序列连续性；反复重进入口会在入口轮换后端的瞬间把播放器甩上另一条
+/// 时间轴，表现为播放一段时间后必然断流重连。记住首个成功应答的最终
+/// URL，后续清单轮询重放它，只有钉扎地址失效时才回退原始入口。
+#[derive(Default)]
+struct ManifestPin {
+    url: Mutex<Option<String>>,
+}
+
+impl ManifestPin {
+    fn get(&self) -> Option<String> {
+        self.url.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    fn set(&self, url: String) {
+        *self.url.lock().unwrap_or_else(|p| p.into_inner()) = Some(url);
+    }
+}
+
 struct TwitchAdRecoverySession {
     config: TwitchAdRecovery,
     client: Client,
@@ -229,6 +251,8 @@ struct ProxyLoopContext {
     local_origin: Arc<str>,
     force_hls: bool,
     twitch_ad_recovery: Option<Arc<TwitchAdRecoverySession>>,
+    /// `/live` 主清单的 302 钉扎状态，同一代理会话内共享。
+    manifest_pin: Arc<ManifestPin>,
     telemetry: Arc<ProxyTelemetryCounters>,
     /// VOD 媒体会话按 accept 顺序串行应答（见 [`StreamProxy::start_ordered`]）。
     /// 直播会话永远为 `false`，行为完全不变。
@@ -771,6 +795,7 @@ impl StreamProxy {
                 local_origin,
                 force_hls,
                 twitch_ad_recovery,
+                manifest_pin: Arc::new(ManifestPin::default()),
                 telemetry: telemetry.clone(),
                 ordered,
             };
@@ -2066,6 +2091,172 @@ mod tests {
         .unwrap();
         upstream.await.unwrap();
     }
+
+    /// IPTV 入口每次请求都 302 轮换到拥有独立时间轴的后端
+    /// （MEDIA-SEQUENCE 基数与分片路径互不相同）。代理必须把主清单钉扎在
+    /// 首个成功应答的后端上：清单重载重放同一上游，时间轴保持连续；
+    /// 钉扎后端失效时回退入口重新解析，并钉住新的后端。
+    #[tokio::test]
+    async fn hls_manifest_reload_pins_the_redirected_upstream() {
+        async fn spawn_backend(
+            sequence: u32,
+            tag: &'static str,
+        ) -> (String, tokio::task::JoinHandle<()>) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        return;
+                    };
+                    let mut request = [0_u8; 2048];
+                    let Ok(length) = stream.read(&mut request).await else {
+                        continue;
+                    };
+                    let request = String::from_utf8_lossy(&request[..length]);
+                    let target = request
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or_default()
+                        .to_string();
+                    let response = if target.ends_with(".ts") {
+                        let body = format!("segment-bytes-{tag}");
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    } else {
+                        let manifest = format!(
+                            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n#EXTINF:2.000000,\n{tag}/segment_{sequence}.ts\n#EXTINF:2.000000,\n{tag}/segment_{}.ts\n",
+                            sequence + 1
+                        );
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{manifest}",
+                            manifest.len()
+                        )
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            });
+            (format!("http://{address}"), task)
+        }
+
+        let (backend_a_url, backend_a) = spawn_backend(100, "a").await;
+        let (backend_b_url, backend_b) = spawn_backend(9000, "b").await;
+        let entry_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let entry = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let entry_address = entry.local_addr().unwrap();
+        let entry_hits_counter = entry_hits.clone();
+        let entry_server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = entry.accept().await else {
+                    return;
+                };
+                let hits = entry_hits_counter.fetch_add(1, Ordering::SeqCst);
+                let backend = if hits % 2 == 0 {
+                    backend_a_url.clone()
+                } else {
+                    backend_b_url.clone()
+                };
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 2048];
+                    let _ = stream.read(&mut request).await;
+                    let response = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {backend}/live/cctv6.m3u8\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let proxy = StreamProxy::new();
+        let session_id = "iptv-pin:1";
+        let local_url = proxy
+            .start(
+                format!("http://{entry_address}/live/cctv6.m3u8"),
+                HashMap::new(),
+                session_id.into(),
+                true,
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        async fn fetch_manifest(client: &reqwest::Client, local_url: &str, query: &str) -> String {
+            let response = client.get(format!("{local_url}?{query}")).send().await.unwrap();
+            assert!(response.status().is_success());
+            response.text().await.unwrap()
+        }
+        fn first_segment_url(manifest: &str) -> String {
+            manifest
+                .lines()
+                .find(|line| line.contains("/hls/"))
+                .expect("manifest rewrites its segments to local URLs")
+                .trim()
+                .to_string()
+        }
+
+        // 首次加载：入口把代理 302 到后端 a。
+        let first = fetch_manifest(&client, &local_url, "t=1").await;
+        assert!(first.contains("#EXT-X-MEDIA-SEQUENCE:100"), "{first}");
+        assert_eq!(entry_hits.load(Ordering::SeqCst), 1);
+
+        // 清单重载必须重放钉扎的后端 a：入口不再被触碰，时间轴保持连续。
+        // 未钉扎时这次重载会经入口轮换到后端 b（MEDIA-SEQUENCE:9000）。
+        let second = fetch_manifest(&client, &local_url, "t=2").await;
+        assert!(second.contains("#EXT-X-MEDIA-SEQUENCE:100"), "{second}");
+        assert_eq!(entry_hits.load(Ordering::SeqCst), 1);
+        let segment_a = first_segment_url(&second);
+        assert_eq!(
+            client
+                .get(&segment_a)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "segment-bytes-a"
+        );
+
+        // 钉扎的后端下线：回退入口重新解析，入口轮换到后端 b 并被重新钉扎。
+        backend_a.abort();
+        let third = fetch_manifest(&client, &local_url, "t=3").await;
+        assert!(third.contains("#EXT-X-MEDIA-SEQUENCE:9000"), "{third}");
+        assert_eq!(entry_hits.load(Ordering::SeqCst), 2);
+        let segment_b = first_segment_url(&third);
+        assert_eq!(
+            client
+                .get(&segment_b)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "segment-bytes-b"
+        );
+
+        // 新钉扎生效：继续重放后端 b。
+        let fourth = fetch_manifest(&client, &local_url, "t=4").await;
+        assert!(fourth.contains("#EXT-X-MEDIA-SEQUENCE:9000"), "{fourth}");
+        assert_eq!(entry_hits.load(Ordering::SeqCst), 2);
+
+        // 4 次清单加载 + 1 次钉扎失败的额外回退 + 2 次分片。
+        let telemetry = proxy.telemetry_for_session(session_id).unwrap();
+        assert_eq!(telemetry.upstream_requests, 7);
+        assert_eq!(telemetry.upstream_failures, 0);
+
+        proxy.stop_for_session(session_id);
+        backend_b.abort();
+        entry_server.abort();
+    }
 }
 
 /// 流式传输刻意不设整体请求超时：健康的直播响应可以无限期保持打开。
@@ -2299,6 +2490,7 @@ async fn handle_client(
         local_origin,
         force_hls,
         twitch_ad_recovery,
+        manifest_pin,
         telemetry,
         ordered: _,
     } = context;
@@ -2347,20 +2539,46 @@ async fn handle_client(
         }
     };
 
-    let mut req = client.get(target);
-    for (k, v) in headers.as_ref() {
-        req = req.header(k.as_str(), v.as_str());
-    }
-    // 避免会让 MSE 解复用器困惑的压缩 body。
-    req = req.header("accept-encoding", "identity");
-    if let Some(range) = request_header(&head, "range") {
-        req = req.header(reqwest::header::RANGE, range);
-    }
+    let build_request = |fetch_url: String| {
+        let mut req = client.get(fetch_url);
+        for (k, v) in headers.as_ref() {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        // 避免会让 MSE 解复用器困惑的压缩 body。
+        req = req.header("accept-encoding", "identity");
+        if let Some(range) = request_header(&head, "range") {
+            req = req.header(reqwest::header::RANGE, range);
+        }
+        req
+    };
+
+    // 钉扎只针对 HLS 会话的主清单重载：FLV/MPEG-TS 是单条长连接，Twitch 的
+    // 续期路径自带目标管理，都不需要（也不应）复用 302 之后的最终地址。
+    let manifest_pin_scope = is_primary_request && force_hls && twitch_ad_recovery.is_none();
+    let pinned_manifest = if manifest_pin_scope {
+        manifest_pin.get()
+    } else {
+        None
+    };
 
     telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
     let request_started = Instant::now();
-    let upstream = req.send().await.map_err(|e| format!("upstream: {e}"))?;
+    let upstream = match pinned_manifest.as_deref() {
+        Some(pinned) => match build_request(pinned.to_string()).send().await {
+            Ok(response) if response.status().is_success() => Ok(response),
+            _failed_pin => {
+                // 钉扎地址已失效（签名过期或后端下线）：回退原始入口重新解析。
+                telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+                build_request(target).send().await
+            }
+        },
+        None => build_request(target).send().await,
+    }
+    .map_err(|e| format!("upstream: {e}"))?;
     telemetry.record_response(request_started.elapsed());
+    if manifest_pin_scope && upstream.status().is_success() {
+        manifest_pin.set(upstream.url().to_string());
+    }
     let status = upstream.status().as_u16();
     let status_reason = upstream.status().canonical_reason().unwrap_or("OK");
     let upstream_url = upstream.url().clone();
