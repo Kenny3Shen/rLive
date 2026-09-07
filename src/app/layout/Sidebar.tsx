@@ -62,7 +62,12 @@ function SidebarLink({
       data-motion-press
       className={({ isActive }) =>
         cn(
-          "group relative flex h-10 w-10 items-center justify-center rounded-xl focus-ring max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1",
+          "group relative flex h-10 w-10 items-center justify-center rounded-xl focus-ring",
+          // 平板（≥md 的粗指针）沿用竖排 rail，但按移动端待遇呈现：
+          // 48px 命中区加图标下方的文字标签 —— 悬停 tooltip 在触摸上不存在，
+          // 无标签的纯图标 rail 在平板上无法自解释。
+          "touch-wide:h-auto touch-wide:min-h-12 touch-wide:w-auto touch-wide:min-w-12 touch-wide:flex-col touch-wide:gap-0.5 touch-wide:rounded-lg touch-wide:px-1.5 touch-wide:py-1",
+          "max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1",
           className,
           isActive
             ? "bg-primary/12 text-primary ring-1 ring-primary/15 shadow-sm shadow-primary/10"
@@ -93,7 +98,7 @@ function SidebarLink({
           </span>
           <span
             data-slot="app-sidebar-label"
-            className="sr-only max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[10px] max-md:leading-3 max-md:font-medium"
+            className="sr-only max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[10px] max-md:leading-3 max-md:font-medium touch-wide:not-sr-only touch-wide:block touch-wide:max-w-full touch-wide:truncate touch-wide:text-[10px] touch-wide:leading-3 touch-wide:font-medium"
           >
             {label}
           </span>
@@ -105,7 +110,7 @@ function SidebarLink({
   return (
     <Tooltip>
       <TooltipTrigger render={link} />
-      <TooltipContent side="right" className="max-md:hidden">
+      <TooltipContent side="right" className="max-md:hidden touch-wide:hidden">
         {label}
       </TooltipContent>
     </Tooltip>

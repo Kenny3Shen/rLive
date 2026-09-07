@@ -80,9 +80,9 @@
 | 桌面侧栏 | 宽 `68px` |
 | 移动端导航 | 底部导航含安全区；全部可见入口在同一 flex 容器内等宽分配 |
 | 触摸目标 | 应用导航与表单至少 `44px`；仅播放器边缘媒体操作可用 `32px` 例外 |
+| 平板宽视口 | `touch-wide` variant（`min-width: 48rem` 且主指针为粗指针，定义在 `styles.css`）下：侧栏 rail 链接按移动端待遇渲染（48px 命中区 + 图标下方文字标签，tooltip 隐藏）；首页/搜索/视频网格在 `xl` 宽度上限 5 列（细指针桌面仍 6 列）；底部 Drawer 限宽 `36rem` 居中，不再通栏拉伸 |
+| 播放器 compact 判定 | `usePlayerViewport` 只按媒体查询（`max-width: 767px` 或矮横屏粗指针）解析，移动端兜底仅播种首个渲染帧；平板（≥md 触摸）与桌面共用宽布局：直播间右侧内联聊天面板、桌面密度控件。客户端平台（`clientPlatform`）只决定原生能力（多画面/录制/标题栏），不再决定布局密度 |
 | 安全区 | `env(safe-area-inset-*)` 用于 edge-to-edge、底部导航、Drawer、悬浮按钮，不用固定 padding 覆盖 |
-| 横向溢出 | 由 `main[data-slot="app-content"]` 裁剪 |
-| 纵向滚动 | 由 `div[data-slot="app-page"]` 承担（`overflow-y-auto`、`overscroll-y-contain`、`touch-pan-y`） |
 
 feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮和触摸手势的全屏滚动层。给祖先加 `overflow-hidden`、`h-full` 或 transform 前，必须确认没有截断 `app-page` 的滚动范围，也没有改变 fixed / fullscreen 元素的 containing block。短横屏手机由 `src/styles.css` 的 coarse-pointer media query 单独压缩标题栏、底部导航与页面 padding；新增 fixed / FAB 控件必须检查与底栏、安全区和其他 Overlay 的遮挡关系。
 

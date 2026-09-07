@@ -253,7 +253,7 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
 
 /** 发现页与搜索结果页共用的网格列数与间距。 */
 export const VIDEO_GRID_CLASS =
-  "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
+  "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 [@media(min-width:80rem)_and_(pointer:coarse)]:grid-cols-5!";
 
 /** 视频卡片网格。带 `playlist` 时（搜索/UP 主列表）点击卡片即从该卡连播。 */
 export const VideoGrid = memo(function VideoGrid({
