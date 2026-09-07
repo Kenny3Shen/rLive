@@ -349,7 +349,9 @@ export function IptvPlayerPage() {
       <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
         <div
           className={cn(
-            "flex min-h-0 flex-1 items-center justify-center",
+            // min-w-0 解除 flex item 的 min-width:auto 下限：aspect-video + h-full
+            // 的内容最小宽 = 播放器高度×16/9，会把固定宽的频道侧栏推出视口右缘。
+            "flex min-h-0 min-w-0 flex-1 items-center justify-center",
             webFullscreen ? "p-0" : "p-3 md:p-5",
           )}
         >
