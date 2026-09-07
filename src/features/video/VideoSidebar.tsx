@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
+  ArrowUpDown,
   CalendarDays,
   ChevronDown,
   ChevronRight,
@@ -22,7 +23,6 @@ import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
@@ -380,31 +380,23 @@ function CommentsPanel({ aid }: { aid: string }) {
     isFetchNextPageError: commentsQuery.isFetchNextPageError,
     fetchNextPage: () => commentsQuery.fetchNextPage(),
   });
-  const sortModes: [number, string][] = [
-    [3, "最热"],
-    [2, "最新"],
-  ];
-
   return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-3 pb-2 pt-3">
         <span className="text-xs text-muted-foreground">
           {allCount > 0 ? `共 ${formatOnline(allCount)} 条` : "评论"}
         </span>
-        <ToggleGroup
+        <Button
+          variant="ghost"
           size="sm"
-          value={[String(mode)]}
-          onValueChange={(values) => {
-            if (values[0]) setMode(Number(values[0]));
-          }}
-          aria-label="评论排序"
+          className="h-6 gap-1 px-2 text-xs text-muted-foreground"
+          aria-label={`评论排序：${mode === 3 ? "最热" : "最新"}，点击切换`}
+          title="点击切换评论排序"
+          onClick={() => setMode(mode === 3 ? 2 : 3)}
         >
-          {sortModes.map(([value, label]) => (
-            <ToggleGroupItem key={value} value={String(value)}>
-              {label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+          {mode === 3 ? "最热" : "最新"}
+          <ArrowUpDown data-icon="inline-end" />
+        </Button>
       </div>
       {commentsQuery.isPending ? (
         <div className="flex flex-col gap-4 px-3 pb-4">
