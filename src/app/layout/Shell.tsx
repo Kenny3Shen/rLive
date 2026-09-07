@@ -43,6 +43,7 @@ import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
 import { VideoSearchBar } from "@/features/video/VideoSearchBar";
 import {
   VIDEO_HOME_PATH,
+  VIDEO_SEARCH_QUERY_PARAM,
   VIDEO_TABS,
   VIDEO_TAB_PARAM,
   videoHomePath,
@@ -365,8 +366,17 @@ export function Shell() {
   const goBackToDiscovery = useCallback(() => goBackOr("/"), [goBackOr]);
   // 历史页在移动端只从设置进入，深链接直达时回到那个入口而不是首页。
   const goBackFromHistory = useCallback(() => goBackOr("/settings"), [goBackOr]);
-  // 视频搜索是从视频页头部推进去的取向表面，返回它的来源。
-  const goBackToVideo = useCallback(() => goBackOr(VIDEO_HOME_PATH), [goBackOr]);
+  // 视频搜索页的返回分两段：结果页先回到空搜索页（清词聚焦输入框，对齐
+  // B 站客户端的取向），空态再返回来源页。用 replace 落回空态而不是压栈：
+  // 换词压栈的历史里每次返回折叠一层，不会在「空态 ↔ 上一词结果」间打转。
+  const goBackToVideo = useCallback(() => {
+    if (searchParams.get(VIDEO_SEARCH_QUERY_PARAM)?.trim()) {
+      navigate(videoSearchPath(), { replace: true });
+      return;
+    }
+    goBackOr(VIDEO_HOME_PATH);
+  }, [goBackOr, navigate, searchParams]);
+
 
   // 首页/分类/搜索用横向内容滑动切换平台。关注和历史拥有自己嵌套的页签条，
   // Shell 不与这些路由争夺横向手势。

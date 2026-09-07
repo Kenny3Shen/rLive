@@ -66,8 +66,9 @@ export function VideoSearchBar({ className }: { className?: string }) {
     writeSearchHistory(updated);
     setHistory(updated);
     setShowHistory(false);
-    // 空态页被结果页替换而不是压栈：从视频页点搜索图标进来时，返回键直接回到
-    // 来源页，而不是落回一个空白的搜索页。已有结果时换词仍正常压栈。
+    // 空态页被结果页替换而不是压栈：头部的返回键会把结果页替换回空搜索页
+    // （见 Shell 的 goBackToVideo），若空态压栈会在它下面再垫一层空白；
+    // 浏览器/硬件返回也因此从结果直达来源页。已有结果时换词仍正常压栈。
     if (trimmed !== keyword) navigate(videoSearchPath(trimmed), { replace: !keyword });
   };
 

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { CATEGORY_PARAM } from "@/features/category/categorySelection";
+import { VIDEO_SEARCH_QUERY_PARAM, videoSearchPath } from "@/features/video/videoRoute";
 
 /**
  * 可取消的应用内事件，在 Android 返回键进入路由导航之前触发。
@@ -107,8 +108,8 @@ export function dispatchAndroidBackEvent(target: EventTarget): boolean {
  * 把 Android 原生 Back 桥接到页面。返回链自上而下：视频全屏退出（原生）→
  * 本监听器 → 展开的 base-ui 弹窗（`dismissTopmostPopup`）→ `ANDROID_BACK_EVENT`
  * （自绘浮层先关闭）→ 底部导航根路由上经 `android_move_task_to_back` 退回系统桌面，
+ * 视频搜索结果页先落回空搜索页（与页面内返回按钮同一取向），
  * 其余路由按浏览器历史回退或回到首页。
- *
  * 弹窗排在自绘浮层之前：弹窗是最上层的模态表面，一次 Back 只应该关掉它。若先跑
  * `ANDROID_BACK_EVENT`，全屏页上的监听器会无条件消费这一次 Back，弹窗却还开着。
  *
@@ -147,6 +148,16 @@ export function AndroidBackNavigator() {
         // 失败时保持安静 —— 此时这次 Back 只是没有效果。
         void invoke("android_move_task_to_back").catch(() => undefined);
         return;
+      }
+      // 视频搜索结果页与页面内返回按钮同一取向：Back 先回到空搜索页
+      // （清词聚焦输入框），空态上的下一次 Back 再返回来源。replace 落回
+      // 空态而不是压栈，换词压栈的历史因此每次返回折叠一层，不打转。
+      if (location.pathname === "/video/search") {
+        const keyword = new URLSearchParams(location.search).get(VIDEO_SEARCH_QUERY_PARAM);
+        if (keyword?.trim()) {
+          navigate(videoSearchPath(), { replace: true });
+          return;
+        }
       }
 
       if (hasBrowserHistoryEntry(window.history.state)) {
