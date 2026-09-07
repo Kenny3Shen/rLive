@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, Heart, RefreshCw, Tv } from "lucide-react";
+import { ChevronLeft, Heart, Tv } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -30,34 +30,22 @@ import type { IptvChannel } from "./types";
 
 type IptvPlayerTopBarProps = {
   title: string;
-  sourceLabel: string;
-  group: string | null;
-  status: IptvPlaybackStatus;
-  reconnecting: boolean;
-  reconnectEnabled: boolean;
   isFavorite: boolean;
   favoriteBusy: boolean;
   favoriteEnabled: boolean;
   backLabel: string;
   onBack: () => void;
-  onReconnect: () => void;
   onToggleFavorite: () => void;
   recordingContext: RecordingContext | null;
 };
 
 function IptvPlayerTopBar({
   title,
-  sourceLabel,
-  group,
-  status,
-  reconnecting,
-  reconnectEnabled,
   isFavorite,
   favoriteBusy,
   favoriteEnabled,
   backLabel,
   onBack,
-  onReconnect,
   onToggleFavorite,
   recordingContext,
 }: IptvPlayerTopBarProps) {
@@ -81,14 +69,9 @@ function IptvPlayerTopBar({
       </Tooltip>
 
       <div className="absolute inset-x-12 flex min-w-0 items-center justify-center px-12">
-        <div className="min-w-0 text-center">
-          <p className="truncate text-sm font-semibold tracking-tight" title={title}>
-            {title}
-          </p>
-          <p className="hidden truncate text-xs text-muted-foreground sm:block" title={sourceLabel}>
-            {sourceLabel}
-          </p>
-        </div>
+        <p className="min-w-0 truncate text-sm font-semibold tracking-tight" title={title}>
+          {title}
+        </p>
       </div>
 
       <div className="absolute right-3 flex items-center gap-1.5">
@@ -117,46 +100,6 @@ function IptvPlayerTopBar({
             <TooltipContent>{isFavorite ? "取消关注" : "关注频道"}</TooltipContent>
           </Tooltip>
         )}
-        {group && (
-          <Badge variant="outline" className="hidden max-w-28 truncate md:inline-flex">
-            {group}
-          </Badge>
-        )}
-        {status === "playing" && (
-          <Badge variant="secondary" className="hidden sm:inline-flex">
-            播放中
-          </Badge>
-        )}
-        {status === "connecting" && (
-          <Badge variant="outline" className="hidden sm:inline-flex">
-            <Spinner data-icon="inline-start" aria-hidden />
-            连接中
-          </Badge>
-        )}
-        {status === "error" && (
-          <Badge variant="destructive" className="hidden sm:inline-flex">
-            播放失败
-          </Badge>
-        )}
-        <Tooltip>
-          <TooltipTrigger render={<span className="inline-flex" />}>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!reconnectEnabled || reconnecting}
-              aria-label="重新连接频道"
-              onClick={onReconnect}
-            >
-              {reconnecting ? (
-                <Spinner data-icon="inline-start" aria-hidden />
-              ) : (
-                <RefreshCw data-icon="inline-start" aria-hidden />
-              )}
-              <span className="hidden sm:inline">{reconnecting ? "重连中" : "重连"}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>重新连接频道</TooltipContent>
-        </Tooltip>
       </div>
     </header>
   );
@@ -177,7 +120,6 @@ export function IptvPlayerPage() {
   const [reloadToken, setReloadToken] = useState(0);
   const [playbackStatus, setPlaybackStatus] = useState<IptvPlaybackStatus>("idle");
   const [playbackError, setPlaybackError] = useState<string | null>(null);
-  const [manualReconnect, setManualReconnect] = useState(false);
   // 网页全屏（桌面）：画面占满应用窗口但不进入原生全屏。状态留在本页，
   // 因为要位的顶栏、页脚与频道侧栏属于这一层。
   const [webFullscreen, setWebFullscreen] = useState(false);
@@ -226,13 +168,11 @@ export function IptvPlayerPage() {
     (nextStatus: IptvPlaybackStatus, nextError: string | null) => {
       setPlaybackStatus(nextStatus);
       setPlaybackError(nextError);
-      if (nextStatus !== "connecting") setManualReconnect(false);
     },
     [],
   );
 
   const handleReconnect = useCallback(() => {
-    setManualReconnect(true);
     setPlaybackStatus("connecting");
     setPlaybackError(null);
     setReloadToken((token) => token + 1);
@@ -276,7 +216,6 @@ export function IptvPlayerPage() {
         : null,
     [channel, favoriteSourceId, isDirectPlayback],
   );
-  const channelGroup = channel?.group || group;
   const isFavorite = Boolean(
     channel && favoritesQuery.data?.some((favorite) => favorite.url === channel.url),
   );
@@ -286,15 +225,9 @@ export function IptvPlayerPage() {
     // 立即重新打开播放。
     navigate(returnPath, { replace: true });
   }
-
   const header = (
     <IptvPlayerTopBar
       title={title}
-      sourceLabel={source.label}
-      group={channelGroup}
-      status={playbackStatus}
-      reconnecting={manualReconnect || playbackStatus === "connecting"}
-      reconnectEnabled={channel !== null && playbackStatus !== "connecting"}
       isFavorite={isFavorite}
       favoriteBusy={
         favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel?.url
@@ -302,7 +235,6 @@ export function IptvPlayerPage() {
       favoriteEnabled={!isDirectPlayback && channel !== null && !favoritesQuery.isLoading}
       backLabel={directRequested ? "返回设置" : "返回频道列表"}
       onBack={goBack}
-      onReconnect={handleReconnect}
       onToggleFavorite={() => {
         if (channel) favoriteMutation.mutate({ channel, isFavorite });
       }}
