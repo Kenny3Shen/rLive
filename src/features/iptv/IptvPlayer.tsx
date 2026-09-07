@@ -432,7 +432,14 @@ export function IptvPlayer({
   };
 
   return (
-    <section className="relative w-full overflow-hidden rounded-2xl border border-border-subtle bg-black shadow-sm">
+    <section
+      className={cn(
+        "relative w-full overflow-hidden bg-black",
+        webFullscreen
+          ? "h-full rounded-none border-0"
+          : "rounded-2xl border border-border-subtle shadow-sm",
+      )}
+    >
       <div
         ref={player.stageRef}
         data-player-stage
@@ -442,7 +449,10 @@ export function IptvPlayer({
         tabIndex={0}
         aria-label={channel ? `${channel.name} 播放器` : "IPTV 播放器"}
         aria-keyshortcuts="Space K M F"
-        className="relative aspect-video bg-muted/20 outline-none"
+        className={cn(
+          "relative bg-muted/20 outline-none",
+          webFullscreen ? "h-full aspect-auto" : "aspect-video",
+        )}
         onKeyDown={handleStageKeyDown}
         onPointerMove={scheduleControlsHide}
         onPointerDown={(event) => {
