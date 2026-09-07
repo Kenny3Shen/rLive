@@ -157,6 +157,7 @@ VS Code Emulate 扩展（remote 侧 machine settings，`~/.vscode-server/data/Ma
 - `-no-window` 会让渲染退回 SwiftShader + lavapipe 软件光栅（宿主 GPU 只在带窗口时启用），冷启动约 30s，app、WebView 与播放均可用。headless 的进程名是 `qemu-system-x86_64-headless`，用 `Get-Process qemu-system-x86_64` 查不到，别据此判定模拟器已退出（带窗口时进程名才是 `qemu-system-x86_64`）。
 - 带窗口启动（含 VS Code Emulate 扩展）默认加载 `default_boot` 快照，userdata 连同已装应用和 WebView 缓存回滚到快照时点 —— 表现为刚装的新版又变回旧版。需要干净状态时加 `-no-snapshot-load`（扩展侧已开 `androidColdBoot`）。
 - `adb emu <cmd>` 会静默失败：控制台 token 在 `C:\Users\shens\.emulator_console_auth_token`，而 WSL 的 adb 读 `~/.emulator_console_auth_token`。需要时 `cp /mnt/c/Users/shens/.emulator_console_auth_token ~/`。
+- 停止模拟器用 `adb -s emulator-XXXX emu kill` 优雅关停：qemu 退出时自行清理 `hardware-qemu.ini.lock`。`Stop-Process -Force` 强杀来不及清锁，是下一次启动 FATAL 的主要来源。另外从 WSL 跑 `emulator.exe` 时输出一律重定向到文件：`emulator.exe ... | head` / `| grep` 这类管道会在读端关闭时杀掉 `emulator.exe`，而它已经派生的 `qemu-system-x86_64.exe` 成为孤儿继续运行并持有 AVD 锁——进程列表里看不到 `emulator` 时别急着断定模拟器已退出，两种 qemu 进程名各查一遍。
 - 镜像仍是 WebView 133（随镜像发布，落后于真机的 149+），触摸/手势类 bug 依旧只能真机验证；镜像也无法升级到 WebView 149，官方 x86_64 WebView 无公开分发渠道，强装 arm64 WebView 会在 berberis 翻译层崩溃。
 
 ### 排错清单
@@ -171,7 +172,8 @@ VS Code Emulate 扩展（remote 侧 machine settings，`~/.vscode-server/data/Ma
   ```
 
   `adb shell pm clear com.shenss.rlive` 也行，但会连设置、Cookie 和本地数据库一起清掉。
-- **模拟器启动 FATAL `Running multiple emulators with the same AVD`**：上次非正常退出留下了 `hardware-qemu.ini.lock/` 和 `multiinstance.lock`。残留进程还活着时 WSL 侧删不掉这两个锁（drvfs 报 Permission denied），先 `Stop-Process` 掉 `emulator`/`qemu-system-x86_64-headless`/`netsimd`，再 `rm -rf` 锁文件。
+- **VS Code Emulate 扩展报 `Error running your Android emulator! Try running this command: <cmd>`**：照提示把那条命令在 WSL 里跑一遍（输出重定向到文件，别接管道，见下一条），真实原因几乎都是 FATAL `Running multiple emulators with the same AVD`。
+- **模拟器启动 FATAL `Running multiple emulators with the same AVD`**：阻塞者不是残留的锁文件，而是仍活着的持有进程——强杀（`Stop-Process -Force` / `taskkill /F`）后没死透的 `qemu-system-x86_64.exe` / `qemu-system-x86_64-headless.exe` / `netsimd`（两种 qemu 进程名都要查），或被关闭的输出管道孤儿化的 qemu。持有者 pid 记录在 `<avd>/hardware-qemu.ini.lock/pid`；模拟器还能响应时优先 `adb -s emulator-XXXX emu kill` 优雅关停（会自行清掉 `hardware-qemu.ini.lock`），不行再 `Stop-Process` 后 `rm -rf` `<avd>/hardware-qemu.ini.lock` 与 `multiinstance.lock`——持有者活着时 drvfs 报 Permission denied，杀干净后才能删。实测无持有者的残留锁文件不阻塞下一次启动，可不清。
 - **无 devtools socket**：装的是 release/不可调试构建（`adb shell pm dump com.shenss.rlive | grep pkgFlags` 无 `DEBUGGABLE`），或 ABI 不匹配导致仍是旧包。重新 `--debug --target aarch64`。
 - **`adb install` 静默失败**：x86_64-only APK 装不进 arm64 设备，`install -r` 可能无输出且旧包仍在。用 `unzip -Z1` 核对 ABI 后重装。
 - **INSTALL_FAILED_UPDATE_INCOMPATIBLE**：换机器构建的 debug 包签名不同。保留数据可用项目 keystore 重签（`apksigner sign --ks /home/shenss/upload-keystore.jks --ks-key-alias upload`），否则先 `adb uninstall com.shenss.rlive`。
