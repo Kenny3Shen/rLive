@@ -20,7 +20,9 @@ import {
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { readPlayerVolume, rememberPlayerVolume } from "@/shared/playerVolume";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { PlayUrl } from "@/shared/types/live";
 import type { PlayerEvent } from "@/shared/types/player";
 import { cn } from "@/lib/utils";
@@ -110,12 +112,22 @@ export function iptvChannelPlayUrl(channel: IptvChannel): PlayUrl {
 type IptvPlayerProps = {
   channel: IptvChannel | null;
   reloadToken: number;
+  /** 桌面端网页全屏：舞台占满应用窗口，由页面层持有（顶栏/页脚/侧栏在那层让位）。 */
+  webFullscreen?: boolean;
+  onWebFullscreenChange?: (value: boolean) => void;
   onStatusChange?: (status: IptvPlaybackStatus, error: string | null) => void;
   onReconnect?: () => void;
 };
 
 /** 共享浏览器媒体生命周期模块的 IPTV 页面适配器。 */
-export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }: IptvPlayerProps) {
+export function IptvPlayer({
+  channel,
+  reloadToken,
+  webFullscreen = false,
+  onWebFullscreenChange,
+  onStatusChange,
+  onReconnect,
+}: IptvPlayerProps) {
   const channelId = channel?.id ?? null;
   const channelUrl = channel?.url ?? null;
   const controlsRef = useRef<HTMLDivElement | null>(null);
@@ -242,6 +254,52 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
     fullscreen,
     aspectRatio: player.aspectRatio,
   });
+
+  const asrEnabled = useSettingsStore((state) => state.asrEnabled);
+  const asrPending = useSettingsStore((state) => state.asrPending);
+  const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
+  const asrFontSize = useSettingsStore((state) => state.asrFontSize);
+  const asrSpeakerDiarizationEnabled = useSettingsStore(
+    (state) => state.asrSpeakerDiarizationEnabled,
+  );
+  const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
+  const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
+  const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
+  const setAsrSpeakerDiarizationEnabled = useSettingsStore(
+    (state) => state.setAsrSpeakerDiarizationEnabled,
+  );
+  const setAsrTranslationEnabled = useSettingsStore((state) => state.setAsrTranslationEnabled);
+  const setAsrTranslationFrom = useSettingsStore((state) => state.setAsrTranslationFrom);
+  const setAsrTranslationTo = useSettingsStore((state) => state.setAsrTranslationTo);
+
+  // 语音字幕与直播页共用同一条 ASR 管线；sessionKey 与媒体生命周期一致，
+  // 换台即换流，识别状态随之清空。
+  const asr = useAsrCaptions({
+    videoRef: player.videoRef,
+    mediaKey: player.mediaKey,
+    sessionKey: channelId ? `iptv:${channelId}` : "iptv:none",
+    featureEnabled: asrEnabled,
+    settingPending: asrPending,
+    mediaAvailable: Boolean(channel) && player.mediaAvailable,
+    chunkSeconds: asrWindowSeconds,
+    translationEnabled: asrTranslationEnabled,
+    translationFrom: asrTranslationFrom,
+    translationTo: asrTranslationTo,
+  });
+
+  // 网页全屏没有浏览器代管的退出路径（原生全屏由 UA 响应 Escape），这里补上
+  // 同一按键习惯。刻意跳过原生全屏：useMediaLifecycle 已为它监听 Escape，
+  // 两个监听器同时响应会让一次按键连退两层。
+  useEffect(() => {
+    if (!webFullscreen || fullscreen) return;
+    const exitOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onWebFullscreenChange?.(false);
+    };
+    window.addEventListener("keydown", exitOnEscape);
+    return () => window.removeEventListener("keydown", exitOnEscape);
+  }, [fullscreen, onWebFullscreenChange, webFullscreen]);
 
   useEffect(() => {
     clearRetryTimer();
@@ -433,6 +491,50 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
           </div>
         )}
 
+        {channel &&
+          !audioOnly &&
+          (asr.captionsOn || asr.notice) &&
+          (asr.notice ||
+            asr.caption ||
+            asr.translatedCaption ||
+            asr.translationNotice ||
+            asr.partial) && (
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="pointer-events-none absolute inset-x-4 bottom-[4.5rem] z-20 flex justify-center"
+            >
+              <p
+                className={cn(
+                  "flex max-h-[min(7em,45dvh)] min-w-0 max-w-[min(48rem,92%)] flex-col justify-end overflow-hidden rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]",
+                  asr.noticeIsError && asr.notice && "border border-destructive/45 text-red-100",
+                )}
+                style={{ fontSize: `${asrFontSize}px` }}
+              >
+                {asr.notice ?? (
+                  <span className="flex shrink-0 flex-col gap-0.5 whitespace-pre-line break-words">
+                    {asr.caption ? <span>{asr.caption}</span> : null}
+                    {asr.translatedCaption ? (
+                      <span
+                        lang={asrTranslationTo === "auto" ? undefined : asrTranslationTo}
+                        className="text-white/82"
+                      >
+                        {asr.translatedCaption}
+                      </span>
+                    ) : null}
+                    {asr.translationNotice ? (
+                      <span className="text-xs font-normal text-destructive">
+                        {asr.translationNotice}
+                      </span>
+                    ) : null}
+                    {asr.partial ? <span className="text-white/60">{asr.partial}</span> : null}
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
+
         {error && (
           <div
             data-mobile-static-backdrop
@@ -451,12 +553,12 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             aria-hidden={!controlsVisibleRef.current}
             className="pointer-events-none absolute top-3 left-3 z-20 flex items-center gap-2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:opacity-0"
           >
-            {fullscreen && (
+            {(fullscreen || webFullscreen) && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                aria-label="退出全屏"
+                aria-label={fullscreen ? "退出全屏" : "退出网页全屏"}
                 className={cn(
                   PLAYER_CONTROL_BUTTON_CLASS,
                   PLAYER_CONTROL_ICON_CLASS,
@@ -465,7 +567,12 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
                 )}
                 onPointerEnter={holdControlsVisible}
                 onPointerLeave={scheduleControlsHide}
-                onClick={() => void exitFullscreen()}
+                // 与直播页 HUD 返回箭头同一层级语义：原生全屏先退，
+                // 网页全屏留给下一次点击。
+                onClick={() => {
+                  if (fullscreen) void exitFullscreen();
+                  else onWebFullscreenChange?.(false);
+                }}
               >
                 <ChevronLeft data-icon="inline-start" aria-hidden />
               </Button>
@@ -514,7 +621,19 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             volume={playerControlVolume}
             muted={playerControlMuted}
             audioOnly={audioOnly}
+            webFullscreen={webFullscreen}
             fullscreen={fullscreen}
+            asrVisible={asr.desktopClient}
+            asrOn={asr.captionsOn}
+            asrLabel={asr.controlLabel}
+            asrDisabled={asr.controlDisabled}
+            asrBusy={asr.controlBusy}
+            asrTranslationEnabled={asrTranslationEnabled}
+            asrTranslationFrom={asrTranslationFrom}
+            asrTranslationTo={asrTranslationTo}
+            asrTranslationBusy={asr.translationPending}
+            asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+            asrSettingsPending={asrPending}
             pictureInPictureSupported={player.pictureInPictureSupported}
             pictureInPictureActive={player.pictureInPictureActive}
             pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
@@ -531,6 +650,12 @@ export function IptvPlayer({ channel, reloadToken, onStatusChange, onReconnect }
             onToggleMute={handleTogglePlayerMute}
             onToggleAudioOnly={() => setAudioOnly((current) => !current)}
             onTogglePictureInPicture={() => void player.togglePictureInPicture()}
+            onToggleWebFullscreen={() => onWebFullscreenChange?.(!webFullscreen)}
+            onToggleAsr={asr.toggle}
+            onAsrTranslationEnabledChange={setAsrTranslationEnabled}
+            onAsrTranslationFromChange={setAsrTranslationFrom}
+            onAsrTranslationToChange={setAsrTranslationTo}
+            onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
             onToggleFullscreen={() => void toggleFullscreen()}
           />
         </div>
