@@ -103,7 +103,9 @@ function DrawerContent({
           !glass && "bg-popover",
           glass && "glass-surface",
           side === "bottom" &&
-            "inset-x-0 bottom-0 max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl border border-border p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]",
+            // 宽视口（平板/桌面窄窗）下不再通栏拉伸：36rem 居中让四个操作磁贴
+            // 保持紧凑，抽屉也不与被长按的卡片失去视觉关联。手机上 w-full 不受影响。
+            "inset-x-0 bottom-0 mx-auto max-h-[85dvh] w-full max-w-[36rem] overflow-y-auto rounded-t-2xl border border-border p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]",
           side === "right" &&
             "inset-y-0 right-0 h-full w-[min(20rem,60vw)] max-w-full overflow-y-auto rounded-l-2xl border border-border p-4 pr-[calc(1rem+env(safe-area-inset-right))]",
           className,

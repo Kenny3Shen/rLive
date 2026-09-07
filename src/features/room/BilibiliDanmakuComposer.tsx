@@ -81,7 +81,8 @@ type DanmakuPickerTab = "emoji" | "favorites" | "history";
  * 且比组合 2rem 高度略小一档，
  * 使任何一个按钮都不会碰到边框。
  */
-const COMPOSER_BUTTON_CLASS = "size-7 rounded-md transition-colors";
+const COMPOSER_BUTTON_CLASS =
+  "size-7 rounded-md transition-colors [@media(pointer:coarse)]:min-w-8";
 /** 匹配浮层输入框所在的透明播放器 chrome。 */
 const COMPOSER_OVERLAY_GHOST_CLASS =
   "text-white/90 hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-ring-overlay";

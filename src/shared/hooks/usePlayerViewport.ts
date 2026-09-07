@@ -70,13 +70,11 @@ function usePlayerMediaQuery(query: string): boolean {
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(query);
-    const update = () =>
-      setMatched(
-        mediaQuery.matches ||
-          playerViewportFallbackMatches(query, isMobileClient(), isLandscapeViewport()),
-      );
-    // 即使这个 WebView 永远不发初始的 media-query 修正也保持移动端安全的答案。
-    // 后续的方向/resize 事件会重算兜底值，旋转设备仍能正确切换布局。
+    // 读取只信 matchMedia。兜底只负责播种首个渲染帧：若在这里长期叠加
+    // `mediaQuery.matches || fallback(...)`，任何移动客户端 —— 包括视口宽度
+    // 超过 md 断点的平板 —— 都会被永久判成 compact，直播间因此永远走
+    // 手机堆叠布局。真正的冷启动修正由下面的跨帧复读与视口事件承担。
+    const update = () => setMatched(mediaQuery.matches);
     update();
     const updateFromEvent = () => update();
 

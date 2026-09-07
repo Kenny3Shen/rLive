@@ -20,6 +20,12 @@
 @custom-variant dark (&:where(.dark, .dark *));
 @custom-variant motion-reduced (&:where([data-motion="reduced"], [data-motion="reduced"] *));
 
+/* 平板等粗指针设备的宽视口（≥md 且主指针为触摸）。这里沿用桌面 chrome
+   （左侧竖排 rail、居中头部），但触摸命中与可发现性需要移动端的待遇：
+   44px+ 目标、图标下方的文字标签。手机（<md）走 max-md 底栏样式，
+   桌面细指针不受影响。 */
+@custom-variant touch-wide (@media (min-width: 48rem) and (pointer: coarse));
+
 /*
   rLive 的深色舞台，风格源自 Simple Live。
   shadcn token 位于 :root / .dark；@theme 把它们映射给 Tailwind。
