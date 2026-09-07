@@ -589,8 +589,6 @@ export function PlayerControls({
         />
       </Field>
 
-      <Separator className={cn(glassSeparatorClass())} />
-
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
         <Select
