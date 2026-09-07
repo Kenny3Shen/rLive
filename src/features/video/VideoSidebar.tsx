@@ -26,6 +26,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
+import { LinkText } from "@/shared/components/LinkText";
 import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
@@ -79,9 +80,10 @@ function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
   return TAB_LABELS[value];
 }
 
-/** 把 `[大哭]` 这类占位符换成内联表情图。 */
+/** 把 `[大哭]` 这类占位符换成内联表情图，正文里的 URL 渲染成可点链接。 */
 function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): ReactNode {
-  if (emotes.length === 0 || !message) return message;
+  if (!message) return message;
+  if (emotes.length === 0) return <LinkText text={message} />;
   const parts: ReactNode[] = [];
   let rest = message;
   let key = 0;
@@ -95,10 +97,14 @@ function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): 
       }
     }
     if (!hit) {
-      parts.push(rest);
+      parts.push(<LinkText key={key} text={rest} />);
+      key += 1;
       break;
     }
-    if (hit.index > 0) parts.push(rest.slice(0, hit.index));
+    if (hit.index > 0) {
+      parts.push(<LinkText key={key} text={rest.slice(0, hit.index)} />);
+      key += 1;
+    }
     parts.push(
       <img
         key={key}
@@ -1200,7 +1206,7 @@ export function VideoSidebar({
                           !descriptionExpanded && "line-clamp-2",
                         )}
                       >
-                        {archive.desc}
+                        <LinkText text={archive.desc} />
                       </p>
                       <Button
                         type="button"
