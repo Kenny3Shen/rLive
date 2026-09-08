@@ -707,27 +707,26 @@ export function HistoryPage() {
     resetActiveClearMutation();
     setClearOpen(true);
   }, [resetActiveClearMutation]);
+  const historyTabSwipe = useHorizontalSwipe({
+    items: HISTORY_VIEWS,
+    value: activeView,
+    onChange: handleViewChange,
+    enabled: isMobileClient(),
+    layout: "track",
+    animateAcrossItems: true,
+  });
+  const selectView = historyTabSwipe.selectValue;
   const headerState = useMemo(
     () => ({
       view: activeView,
       canClear,
       clearPending,
-      onViewChange: handleViewChange,
+      onViewChange: selectView,
       onRequestClear: requestClear,
     }),
-    [activeView, canClear, clearPending, handleViewChange, requestClear],
+    [activeView, canClear, clearPending, selectView, requestClear],
   );
   useHistoryHeaderState(headerState);
-
-  const historyTabSwipe = useHorizontalSwipe({
-    items: HISTORY_VIEWS,
-    value: activeView,
-    onChange: (view: HistoryView) => handleViewChange(view),
-    enabled: isMobileClient(),
-    // 三个面板共用一条 track，下一页已经在屏上并跟随手指移动，
-    // 而不是释放后才出现。
-    layout: "track",
-  });
 
   const refreshActiveHistory = () => activeHistoryQuery[activeView].refetch();
   const historyRefreshing = activeHistoryQuery[activeView].isRefetching;

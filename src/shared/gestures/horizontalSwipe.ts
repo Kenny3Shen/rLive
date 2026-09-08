@@ -203,6 +203,26 @@ export function horizontalSwipeDragOffset(
   return atBoundary ? boundedOffset * HORIZONTAL_SWIPE_EDGE_RESISTANCE : boundedOffset;
 }
 
+/** 已挂载面板保留到离开路由，避免连续切换时卸载仍在视口内的页面。 */
+export function horizontalSwipeRetainedItems<T>(
+  items: readonly T[],
+  value: T,
+  retained: readonly T[],
+): T[] {
+  const index = items.indexOf(value);
+  if (index < 0) return items.filter((item) => retained.includes(item));
+  let first = Math.max(0, index - 1);
+  let last = Math.min(items.length - 1, index + 1);
+  for (const item of retained) {
+    const retainedIndex = items.indexOf(item);
+    if (retainedIndex < 0) continue;
+    first = Math.min(first, retainedIndex);
+    last = Math.max(last, retainedIndex);
+  }
+  // 跨多项点击时补齐途经面板，整个平移区间都有实际内容。
+  return items.slice(first, last + 1);
+}
+
 /** 把全宽翻页 track 定位到指定项。 */
 export function horizontalSwipeTrackOffset(index: number, surfaceWidth: number): number {
   const normalizedIndex = Math.max(0, index);

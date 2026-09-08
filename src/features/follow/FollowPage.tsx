@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -80,8 +80,6 @@ import { RefreshFab } from "@/shared/components/RefreshFab";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
-import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
-import { clearMotionStyles, killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { FollowUser } from "@/shared/types/live";
@@ -526,9 +524,6 @@ export function FollowPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const activeView = followViewFromSearch(searchParams.get(FOLLOW_VIEW_PARAM));
-  const viewMotionRef = useRef<HTMLDivElement>(null);
-  const previousViewRef = useRef<FollowView>(activeView);
-  const skipViewMotionRef = useRef(false);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
   const [selectedGroupId, setSelectedGroupId] = useState(ALL_FOLLOW_GROUP_ID);
   const [activeFollow, setActiveFollow] = useState<FollowUser | null>(null);
@@ -609,39 +604,6 @@ export function FollowPage() {
     selectedIptvGroup,
     setSearchParams,
   ]);
-
-  useLayoutEffect(() => {
-    const previousView = previousViewRef.current;
-    previousViewRef.current = activeView;
-    if (previousView === activeView) return;
-
-    const panel = viewMotionRef.current?.querySelector<HTMLElement>(
-      `[data-follow-view-panel="${activeView}"]`,
-    );
-    if (!panel) return;
-    if (skipViewMotionRef.current || prefersReducedMotion()) {
-      if (skipViewMotionRef.current) skipViewMotionRef.current = false;
-      killTweensOf(panel);
-      clearMotionStyles(panel);
-      return;
-    }
-
-    // 结束帧（原位、完全不透明）与自然态一致，settleTween 会归还行内样式；
-    // 补间中途切页时 tween 先取消旧补间，不留叠加动画。
-    const offset = activeView === "iptv" ? 18 : -18;
-    panel.style.willChange = "transform,opacity";
-    settleTween(
-      panel,
-      tween(
-        panel,
-        [
-          { opacity: 0, transform: `translate3d(${offset}px, 0, 0)` },
-          { opacity: 1, transform: "translate3d(0, 0, 0)" },
-        ],
-        { duration: 240, easing: EASE_OUT, fill: "both" },
-      ),
-    );
-  }, [activeView]);
 
   const refreshMutation = useMutation({
     mutationFn: () => refreshFollows(queryClient),
@@ -891,31 +853,21 @@ export function FollowPage() {
     [setSearchParams],
   );
 
-  const handleViewChangeFromSwipe = useCallback(
-    (view: FollowView) => {
-      skipViewMotionRef.current = true;
-      handleViewChange(view);
-    },
-    [handleViewChange],
-  );
-
   const followTabSwipe = useHorizontalSwipe({
     items: ["live", "iptv"] as const,
     value: activeView,
-    onChange: handleViewChangeFromSwipe,
+    onChange: handleViewChange,
     enabled: isMobileClient(),
-    // 点击页签使用现有的渐隐平移；
-    // 已提交的手势则在 hook 中直接从指针释放处收尾。
-    animate: false,
     layout: "track",
   });
+  const selectView = followTabSwipe.selectValue;
 
   const headerState = useMemo(
     () => ({
       view: activeView,
-      onViewChange: handleViewChange,
+      onViewChange: selectView,
     }),
-    [activeView, handleViewChange],
+    [activeView, selectView],
   );
   useFollowHeaderState(headerState);
 
@@ -952,7 +904,7 @@ export function FollowPage() {
         label={activeView === "live" ? "刷新直播关注" : "刷新 IPTV 关注"}
       />
 
-      <div ref={viewMotionRef}>
+      <div>
         <Tabs value={activeView} onValueChange={handleViewChange} className="gap-4">
           <div data-slot="horizontal-swipe-viewport" className="min-w-0 overflow-x-clip">
             <div

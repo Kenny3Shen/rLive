@@ -70,6 +70,8 @@ export type UseHorizontalSwipeOptions<T> = {
    * 带入下一页，适用于邻居未挂载的条带。
    */
   layout?: HorizontalSwipeLayout;
+  /** 调用方保证切换提交后，中间面板也已挂载，可跨多项连续平移。 */
+  animateAcrossItems?: boolean;
 };
 
 /**
@@ -98,6 +100,7 @@ export function useHorizontalSwipe<T>({
   onChange,
   enabled = true,
   animate: shouldAnimate = true,
+  animateAcrossItems = false,
   layout = "page",
 }: UseHorizontalSwipeOptions<T>) {
   const isTrackLayout = layout === "track";
@@ -210,9 +213,9 @@ export function useHorizontalSwipe<T>({
     const animation = animationRef.current;
     if (!animation) return;
     const stoppedAt = liveOffset();
+    writeOffset(stoppedAt);
     animationRef.current = null;
     animation.cancel();
-    writeOffset(stoppedAt);
   }, [liveOffset, writeOffset]);
 
   /**
@@ -317,8 +320,8 @@ export function useHorizontalSwipe<T>({
 
     if (isTrackLayout) {
       cancelSettle();
-      // 只挂载了紧邻的页面，跨多步跳转会扫过不存在的页面。改为直接落位。
-      if (Math.abs(nextIndex - previousIndex) !== 1) {
+      // 尚未挂载中间页的条带不能跨多步扫过空白。
+      if (!animateAcrossItems && Math.abs(nextIndex - previousIndex) !== 1) {
         restAtValue();
         return;
       }
@@ -329,12 +332,16 @@ export function useHorizontalSwipe<T>({
     // `page`：旧页跟着手指出去了，进入页此刻才存在。把它放到对面边缘之外一整个
     // 表面宽度处再收尾进来，使释放呈现为一次连续平移而不是短促追赶。
     const direction: 1 | -1 = pendingCommit?.direction ?? (nextIndex > previousIndex ? 1 : -1);
+    const interrupted = animationRef.current !== null;
     cancelSettle();
-    const startOffset = horizontalSwipeCommitOffset(
-      pendingCommit === null ? 0 : offsetRef.current,
-      direction,
-      measuredSurfaceWidth,
-    );
+    const startOffset =
+      interrupted && pendingCommit === null
+        ? offsetRef.current
+        : horizontalSwipeCommitOffset(
+            pendingCommit === null ? 0 : offsetRef.current,
+            direction,
+            measuredSurfaceWidth,
+          );
     writeOffset(startOffset);
     settle(
       0,
@@ -343,6 +350,7 @@ export function useHorizontalSwipe<T>({
         : horizontalSwipeSettleDuration(startOffset, pendingCommit.velocity),
     );
   }, [
+    animateAcrossItems,
     cancelSettle,
     clearCommitRollback,
     isTrackLayout,
@@ -386,16 +394,20 @@ export function useHorizontalSwipe<T>({
     const viewport = el?.parentElement;
     if (!el || !viewport) return;
 
+    let appliedWidth = 0;
     const applyWidth = () => {
       const width = viewport.clientWidth;
-      // 手势中途偏移归手指所有；此时的 resize 是键盘或系统栏出现，
-      // 在指针下方重建基准会跳动。
-      if (width <= 0 || swipeRef.current?.horizontal) return;
+      // 列表加载、筛选或 Tab 面板变高也会通知 ResizeObserver；只有宽度变化
+      // 才需要重建横向基准，否则会把仍在运行的动画强制跳到终点。
+      if (width <= 0 || width === appliedWidth || swipeRef.current?.horizontal) return;
+      appliedWidth = width;
       surfaceWidthRef.current = width;
-      const index = itemsRef.current.findIndex((item) => Object.is(item, valueRef.current));
+      const targetValue = pendingCommitRef.current?.value ?? valueRef.current;
+      const index = itemsRef.current.findIndex((item) => Object.is(item, targetValue));
       if (index < 0) return;
       cancelSettle();
       writeOffset(horizontalSwipeTrackOffset(index, width));
+      el.style.willChange = "";
     };
 
     // 观察即使在手势中途也会发生 —— `applyWidth` 自行判断是否可以移动层 ——
@@ -425,10 +437,16 @@ export function useHorizontalSwipe<T>({
         // 表面已经绑定并被观察时运行。只有仍在负责的节点才能拆除任何东西。
         if (pageRef.current !== node) return;
         disconnectTrackResize();
+        clearCommitDelivery();
+        clearCommitRollback();
+        pendingCommitRef.current = null;
+        swipeRef.current = null;
+        cancelSettle();
+        node.style.willChange = "";
         pageRef.current = null;
       };
     },
-    [disconnectTrackResize, parkTrack],
+    [cancelSettle, clearCommitDelivery, clearCommitRollback, disconnectTrackResize, parkTrack],
   );
 
   useLayoutEffect(() => {
@@ -653,8 +671,52 @@ export function useHorizontalSwipe<T>({
     event.stopPropagation();
   }, []);
 
+  /** 已挂载的目的页先开始平移，再通知路由，避免等待大列表的并发提交才出首帧。 */
+  const selectValue = useCallback(
+    (nextValue: T) => {
+      if (Object.is(valueRef.current, nextValue) && pendingCommitRef.current === null) return;
+      clearCommitDelivery();
+      clearCommitRollback();
+      pendingCommitRef.current = null;
+      const previousIndex = itemsRef.current.indexOf(valueRef.current);
+      const nextIndex = itemsRef.current.indexOf(nextValue);
+      if (
+        isTrackLayout &&
+        shouldAnimate &&
+        pageRef.current &&
+        previousIndex >= 0 &&
+        nextIndex >= 0 &&
+        Math.abs(nextIndex - previousIndex) <= 1
+      ) {
+        pendingCommitRef.current = {
+          value: nextValue,
+          direction: nextIndex >= previousIndex ? 1 : -1,
+          velocity: 0,
+        };
+        settle(restOffsetForIndex(nextIndex), motionProfile().enter.duration * 1000);
+        commitRollbackTimerRef.current = window.setTimeout(() => {
+          commitRollbackTimerRef.current = null;
+          if (pendingCommitRef.current === null) return;
+          pendingCommitRef.current = null;
+          settleAtRest();
+        }, HORIZONTAL_SWIPE_COMMIT_GRACE_MS);
+      }
+      onChangeRef.current(nextValue);
+    },
+    [
+      clearCommitDelivery,
+      clearCommitRollback,
+      isTrackLayout,
+      restOffsetForIndex,
+      settle,
+      settleAtRest,
+      shouldAnimate,
+    ],
+  );
+
   if (!enabled) {
     return {
+      selectValue,
       bindPage,
       onPointerDownCapture: undefined,
       onPointerMoveCapture: undefined,
@@ -665,6 +727,7 @@ export function useHorizontalSwipe<T>({
   }
 
   return {
+    selectValue,
     bindPage,
     onPointerDownCapture,
     onPointerMoveCapture,

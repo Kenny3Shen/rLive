@@ -1,13 +1,22 @@
-import { createContext, createElement, useContext, type ReactNode } from "react";
-import type { VideoTab } from "./videoRoute";
+import { createContext, createElement, useContext, useMemo, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
+import { VIDEO_TAB_PARAM, VIDEO_ZONE_PARAM, videoTabFromSearch, type VideoTab } from "./videoRoute";
 
-const VideoTabScopeContext = createContext<VideoTab | null>(null);
+type VideoTabScopeValue = { tab: VideoTab; zone: string | null };
+const VideoTabScopeContext = createContext<VideoTabScopeValue | null>(null);
 
-/** 并排保活的视频面板使用固定页签，避免所有面板都跟随当前 URL 重渲染同一份内容。 */
+/** 离场面板保留自己的页签与分区，不跟随新 URL 先换成另一份列表。 */
 export function VideoTabScope({ value, children }: { value: VideoTab; children: ReactNode }) {
-  return createElement(VideoTabScopeContext.Provider, { value }, children);
+  const [searchParams] = useSearchParams();
+  const active = videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM)) === value;
+  const routeZone = searchParams.get(VIDEO_ZONE_PARAM);
+  const [retainedZone, setRetainedZone] = useState(active ? routeZone : null);
+  const zone = active ? routeZone : retainedZone;
+  if (active && retainedZone !== routeZone) setRetainedZone(routeZone);
+  const scope = useMemo(() => ({ tab: value, zone }), [value, zone]);
+  return createElement(VideoTabScopeContext.Provider, { value: scope }, children);
 }
 
-export function useVideoTabScope(): VideoTab | null {
+export function useVideoTabScope(): VideoTabScopeValue | null {
   return useContext(VideoTabScopeContext);
 }

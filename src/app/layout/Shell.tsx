@@ -67,6 +67,7 @@ import {
   FOLLOW_IPTV_SOURCE_PARAM,
 } from "@/features/follow/iptvFollowGroups";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { horizontalSwipeRetainedItems } from "@/shared/gestures/horizontalSwipe";
 import { PagePan } from "@/shared/motion/PagePan";
 import { PageZoom } from "@/shared/motion/PageZoom";
 import { isMobileClient } from "@/shared/clientPlatform";
@@ -275,14 +276,17 @@ export function Shell() {
     disabledSiteIds,
   );
   const videoTab = videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
+  const [videoMotionValue, setVideoMotionValue] = useState(videoTab);
+  // 离开视频路由时退场轨道仍可见，不能用其他路由的缺省 tab 把它归零。
+  if (isVideo && videoMotionValue !== videoTab) setVideoMotionValue(videoTab);
   const handleVideoTabChange = useCallback(
     (nextTab: (typeof VIDEO_TABS)[number]) => {
-      if (nextTab === videoTab) return;
+      // selectValue 已过滤稳定态的重复点击；待提交时点回原页仍需取消上一条导航。
       // 换页签不带 zone：上一个页签的分区在新页签里无意义，`resolveVideoZoneKey`
       // 会把它当成无效值回落首项。
       navigate(videoHomePath(nextTab));
     },
-    [navigate, videoTab],
+    [navigate],
   );
   const platformForMotion = isFollow ? followPlatform : activeSiteId;
   // 页面平移所跨越的分组。直播路由在平台之间移动；
@@ -381,18 +385,15 @@ export function Shell() {
   // 首页/分类/搜索用横向内容滑动切换平台。关注和历史拥有自己嵌套的页签条，
   // Shell 不与这些路由争夺横向手势。
   const platformSwipeEnabled = showSiteSwitcher && mobileClient && !isHistory;
-  // `track` 就是下面 `liveSwipePage` 渲染的布局：每个已挂载的平台都位于各自的
-  // 绝对下标处，手势平移的这一层的相邻页面已经绘制完成，
-  // 选中任何一个都不会带动其他页面移动。
-  // 其余表面把这些 hooks 绑定到单页版的 `swipePage` 上。
-  const platformSwipeLayout = platformSwipeEnabled ? "track" : "page";
+  // 桌面点击和移动端横滑共用一条保活轨道，离开路由时也不切换布局模式。
   const sitePlatformSwipe = useHorizontalSwipe({
     items: sitePlatforms,
     value: activeSiteId,
     onChange: handleSitePlatformChange,
     enabled: platformSwipeEnabled,
-    animate: platformSwipeEnabled,
-    layout: platformSwipeLayout,
+    animate: showSiteSwitcher,
+    layout: "track",
+    animateAcrossItems: true,
   });
   const iptvSourceSwipe = useHorizontalSwipe({
     items: iptvSourceOptions,
@@ -404,10 +405,11 @@ export function Shell() {
   // 滑动方向因此与 `PagePan` 的平移方向一致。
   const videoTabSwipe = useHorizontalSwipe({
     items: VIDEO_TABS,
-    value: videoTab,
+    value: videoMotionValue,
     onChange: handleVideoTabChange,
     enabled: isVideo && mobileClient,
-    layout: isVideo && mobileClient ? "track" : "page",
+    layout: "track",
+    animateAcrossItems: true,
   });
   const contentSwipe = isIptv ? iptvSourceSwipe : isVideo ? videoTabSwipe : sitePlatformSwipe;
   // `PagePan` 以 pathname 为 key，回到可滑动路由时 hook 会拿到全新的 track。
@@ -581,7 +583,7 @@ export function Shell() {
   );
   const swipePage = (
     <div
-      ref={bindContentSwipePageRef}
+      ref={isIptv ? bindContentSwipePageRef : undefined}
       data-slot="app-swipe-page"
       className="relative h-full min-h-full"
     >
@@ -591,7 +593,8 @@ export function Shell() {
   const groupPage = (
     <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
       <PagePan
-        panKey={groupForMotion}
+        // IPTV 来源由单页 swipe 管位移，父级不能同时创建第二段平移。
+        panKey={isIptv ? "iptv-source-page" : groupForMotion}
         direction={groupDirection === "backward" ? -1 : 1}
         className="min-h-full"
       >
@@ -600,40 +603,36 @@ export function Shell() {
     </div>
   );
   const activeLivePanelIndex = platformStrip.indexOf(platformForMotion);
-  const liveSwipePanels: PlatformScopeValue[] = [];
-  const addLiveSwipePanel = (index: number) => {
-    const platform = platformStrip[index];
-    if (platform !== undefined && !liveSwipePanels.includes(platform)) {
-      liveSwipePanels.push(platform);
-    }
-  };
-  addLiveSwipePanel(activeLivePanelIndex - 1);
-  addLiveSwipePanel(activeLivePanelIndex);
-  addLiveSwipePanel(activeLivePanelIndex + 1);
-  const previousLivePanelIndex = platformStrip.findIndex(
-    (platform) => String(platform) === previousGroup,
-  );
-  if (previousGroup !== groupForMotion) addLiveSwipePanel(previousLivePanelIndex);
-  liveSwipePanels.sort((left, right) => platformStrip.indexOf(left) - platformStrip.indexOf(right));
+  const [retainedLivePanels, setRetainedLivePanels] = useState<{
+    pathname: string;
+    panels: readonly PlatformScopeValue[];
+  }>({ pathname, panels: [] });
+  const liveSwipePanels = showSiteSwitcher
+    ? horizontalSwipeRetainedItems(
+        platformStrip,
+        platformForMotion,
+        retainedLivePanels.pathname === pathname ? retainedLivePanels.panels : [],
+      )
+    : [];
+  if (
+    retainedLivePanels.pathname !== pathname ||
+    liveSwipePanels.length !== retainedLivePanels.panels.length ||
+    liveSwipePanels.some((panel, index) => panel !== retainedLivePanels.panels[index])
+  ) {
+    setRetainedLivePanels({ pathname, panels: liveSwipePanels });
+  }
 
   const activeVideoPanelIndex = VIDEO_TABS.indexOf(videoTab);
-  const videoSwipePanels: Array<(typeof VIDEO_TABS)[number]> = [];
-  const addVideoSwipePanel = (index: number) => {
-    const tab = VIDEO_TABS[index];
-    if (tab !== undefined && !videoSwipePanels.includes(tab)) videoSwipePanels.push(tab);
-  };
-  addVideoSwipePanel(activeVideoPanelIndex - 1);
-  addVideoSwipePanel(activeVideoPanelIndex);
-  addVideoSwipePanel(activeVideoPanelIndex + 1);
-  const previousVideoPanelIndex = VIDEO_TABS.findIndex((tab) => tab === previousGroup);
-  if (previousGroup !== groupForMotion) addVideoSwipePanel(previousVideoPanelIndex);
-  videoSwipePanels.sort((left, right) => VIDEO_TABS.indexOf(left) - VIDEO_TABS.indexOf(right));
+  // 只有四个内容面板，全部常挂载比切换时增删邻居更稳定：WebView2 无需在
+  // transform 动画中途销毁整页卡片纹理，快速连续点击也始终有真实目的页可滑入。
+  const videoSwipePanels = VIDEO_TABS;
 
   const videoSwipePage = (
     <div data-slot="app-swipe-viewport" className="relative h-full min-h-0 min-w-0 overflow-hidden">
       <div
         ref={bindContentSwipePageRef}
         data-slot="app-swipe-track"
+        data-swipe-kind="video"
         className="relative h-full min-h-0 min-w-0"
       >
         {videoSwipePanels.map((tab) => {
@@ -645,9 +644,13 @@ export function Shell() {
               key={tab}
               ref={active ? bindPageScrollRef : undefined}
               data-slot="app-swipe-panel"
+              data-swipe-value={tab}
               aria-hidden={active ? undefined : true}
               inert={active ? undefined : true}
-              className={cn(pageScrollerClassName, "absolute inset-0 w-full")}
+              className={cn(
+                pageScrollerClassName,
+                "absolute inset-0 w-full bg-background [scrollbar-gutter:stable]",
+              )}
               style={{ transform: `translate3d(${panelOffset}%, 0, 0)` }}
             >
               <VideoTabScope value={tab}>
@@ -667,19 +670,13 @@ export function Shell() {
   );
 
   const liveSwipePage = (
-    // 渲染窗口是活动平台加其邻居。track 让它们并排存在并作为一个整体移动，
-    // 因此进入的页面已经绘制完成，能在手指之下连续进入，
-    // 而不是在手势释放后才出现。每个面板保留自己的滚动容器，
-    // 它们是被定位的，不是 flex 行内布局。
-    //
-    // 每个面板位于其*绝对*条带下标处，track 平移 -activeIndex * width。
-    // 若改为相对活动下标定位，滑动提交的那一刻所有面板都会整体移动一个宽度，
-    // 迫使释放动作围绕这次跳变重新基准化 —— 正是这个多余步骤让已提交的滑动
-    // 看起来像先切换了一次再滑了一段。
+    // 活动平台和邻居按绝对索引并排定位，已经挂载的平台保留到离开当前路由。
+    // 连续点击时动画仍可从实际位置继续，不会删除还在视口内的旧面板。
     <div data-slot="app-swipe-viewport" className="relative h-full min-h-0 min-w-0 overflow-hidden">
       <div
         ref={bindContentSwipePageRef}
         data-slot="app-swipe-track"
+        data-swipe-kind="live"
         className="relative h-full min-h-0 min-w-0"
       >
         {liveSwipePanels.map((platform) => {
@@ -691,9 +688,13 @@ export function Shell() {
               key={String(platform)}
               ref={active ? bindPageScrollRef : undefined}
               data-slot="app-swipe-panel"
+              data-swipe-value={String(platform)}
               aria-hidden={active ? undefined : true}
               inert={active ? undefined : true}
-              className={cn(pageScrollerClassName, "absolute inset-0 w-full")}
+              className={cn(
+                pageScrollerClassName,
+                "absolute inset-0 w-full bg-background [scrollbar-gutter:stable]",
+              )}
               style={{ transform: `translate3d(${panelOffset}%, 0, 0)` }}
             >
               <RefreshFabVisibilityProvider visible={active}>
@@ -709,18 +710,17 @@ export function Shell() {
       </div>
     </div>
   );
-  const regularPage =
-    mobileClient && showSiteSwitcher && !isHistory ? (
-      liveSwipePage
-    ) : isVideo && mobileClient ? (
-      videoSwipePage
-    ) : useGroupedPageContainer ? (
-      groupPage
-    ) : (
-      <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
-        {swipePage}
-      </div>
-    );
+  const regularPage = showSiteSwitcher ? (
+    liveSwipePage
+  ) : isVideo ? (
+    videoSwipePage
+  ) : useGroupedPageContainer ? (
+    groupPage
+  ) : (
+    <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
+      {swipePage}
+    </div>
+  );
   const routePanDirection = isDirectSidebarNavigation
     ? sidebarDirectionRef.current
     : tabDirection === "backward"
@@ -844,16 +844,17 @@ export function Shell() {
                             >
                               <VideoTabSwitcher
                                 value={videoTab}
-                                onValueChange={handleVideoTabChange}
+                                onValueChange={videoTabSwipe.selectValue}
                                 className="h-full w-auto max-w-full max-md:w-full"
                               />
                             </div>
                           ) : (
                             <SiteSwitcher
+                              value={activeSiteId}
                               onValueIntent={preloadHomePlatform}
                               onValueChange={(value) => {
                                 if (value === "all") return;
-                                handleSitePlatformChange(value);
+                                sitePlatformSwipe.selectValue(value);
                               }}
                             />
                           )}
