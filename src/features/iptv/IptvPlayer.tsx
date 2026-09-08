@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 import { AlertCircle, ChevronLeft, Radio, Tv } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -112,11 +113,16 @@ export function iptvChannelPlayUrl(channel: IptvChannel): PlayUrl {
 type IptvPlayerProps = {
   channel: IptvChannel | null;
   reloadToken: number;
-  /** 桌面端网页全屏：舞台占满应用窗口，由页面层持有（顶栏/页脚/侧栏在那层让位）。 */
+  /** 桌面端网页全屏：舞台占满应用窗口，由页面层持有（页脚/侧栏在那层让位）。 */
   webFullscreen?: boolean;
   onWebFullscreenChange?: (value: boolean) => void;
   onStatusChange?: (status: IptvPlaybackStatus, error: string | null) => void;
   onReconnect?: () => void;
+  /** 页面返回：挂在顶部 HUD 的返回箭头上；全屏时先退全屏层。 */
+  onBack?: () => void;
+  backLabel?: string;
+  /** 顶部 HUD 右侧的低频工具（关注/录制），由页面层提供。 */
+  hudToolsSlot?: ReactNode;
 };
 
 /** 共享浏览器媒体生命周期模块的 IPTV 页面适配器。 */
@@ -127,6 +133,9 @@ export function IptvPlayer({
   onWebFullscreenChange,
   onStatusChange,
   onReconnect,
+  onBack,
+  backLabel,
+  hudToolsSlot,
 }: IptvPlayerProps) {
   const channelId = channel?.id ?? null;
   const channelUrl = channel?.url ?? null;
@@ -561,45 +570,64 @@ export function IptvPlayer({
             data-player-hud
             data-visible={controlsVisibleRef.current ? "true" : "false"}
             aria-hidden={!controlsVisibleRef.current}
-            className="pointer-events-none absolute top-3 left-3 z-20 flex items-center gap-2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:opacity-0"
-          >
-            {(fullscreen || webFullscreen) && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={fullscreen ? "退出全屏" : "退出网页全屏"}
-                className={cn(
-                  PLAYER_CONTROL_BUTTON_CLASS,
-                  PLAYER_CONTROL_ICON_CLASS,
-                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                  "pointer-events-auto",
-                )}
-                onPointerEnter={holdControlsVisible}
-                onPointerLeave={scheduleControlsHide}
-                // 与直播页 HUD 返回箭头同一层级语义：原生全屏先退，
-                // 网页全屏留给下一次点击。
-                onClick={() => {
-                  if (fullscreen) void exitFullscreen();
-                  else onWebFullscreenChange?.(false);
-                }}
-              >
-                <ChevronLeft data-icon="inline-start" aria-hidden />
-              </Button>
+            className={cn(
+              // 与直播/视频播放页同一画法：悬浮于顶边不占布局高度，
+              // 与底部控制栏共享同一个空闲淡出。
+              "absolute inset-x-0 top-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
             )}
-            <Badge
-              variant="destructive"
-              className="gap-1.5 bg-destructive text-destructive-foreground"
+            onPointerEnter={holdControlsVisible}
+            onPointerLeave={scheduleControlsHide}
+            onFocusCapture={holdControlsVisible}
+            onBlurCapture={scheduleControlsHide}
+          >
+            <div
+              className={cn(
+                "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,var(--player-safe-area-top,0px))] text-white",
+                compactViewport ? "pb-3" : "pb-6",
+              )}
             >
-              <Radio data-icon="inline-start" aria-hidden />
-              直播
-            </Badge>
-            <span
-              data-mobile-static-backdrop
-              className="max-w-[18rem] truncate rounded-md bg-black/55 px-2 py-1 text-xs text-primary-foreground backdrop-blur"
-            >
-              {channel.name}
-            </span>
+              {onBack && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={backLabel ?? "返回上一页"}
+                  className={cn(
+                    PLAYER_CONTROL_BUTTON_CLASS,
+                    PLAYER_CONTROL_ICON_CLASS,
+                    PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                    "shrink-0",
+                  )}
+                  // 与直播/视频页 HUD 返回箭头同一层级语义：先退全屏层，
+                  // 无全屏层时返回页面。
+                  onClick={() => {
+                    if (fullscreen) void exitFullscreen();
+                    else if (webFullscreen) onWebFullscreenChange?.(false);
+                    else onBack();
+                  }}
+                >
+                  <ChevronLeft data-icon="inline-start" aria-hidden />
+                </Button>
+              )}
+              <Badge
+                variant="destructive"
+                className="shrink-0 gap-1.5 bg-destructive text-destructive-foreground"
+              >
+                <Radio data-icon="inline-start" aria-hidden />
+                直播
+              </Badge>
+              <span
+                data-mobile-static-backdrop
+                className="min-w-0 flex-1 truncate rounded-md bg-black/55 px-2 py-1 text-xs text-primary-foreground backdrop-blur"
+              >
+                {channel.name}
+              </span>
+              {/* 原生全屏不挂工具：RecordingControl 的 popover 默认 portal 到
+                  `<body>`，会被 top layer 盖住（与直播页同一取舍）。 */}
+              {!fullscreen && hudToolsSlot && (
+                <div className="flex shrink-0 items-center gap-1">{hudToolsSlot}</div>
+              )}
+            </div>
           </div>
         )}
 

@@ -9,6 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  PLAYER_CONTROL_BUTTON_CLASS,
+  PLAYER_CONTROL_ICON_CLASS,
+  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+} from "@/shared/components/player/PlayerControls";
 import { cn } from "@/lib/utils";
 import { resolveIptvChannel, useIptvFavoriteMutation, useIptvFavorites } from "./favorites";
 import { iptvChannelPlayUrl, IptvPlayer, type IptvPlaybackStatus } from "./IptvPlayer";
@@ -225,6 +230,7 @@ export function IptvPlayerPage() {
     // 立即重新打开播放。
     navigate(returnPath, { replace: true });
   }
+  const favoriteEnabled = !isDirectPlayback && channel !== null && !favoritesQuery.isLoading;
   const header = (
     <IptvPlayerTopBar
       title={title}
@@ -232,7 +238,7 @@ export function IptvPlayerPage() {
       favoriteBusy={
         favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel?.url
       }
-      favoriteEnabled={!isDirectPlayback && channel !== null && !favoritesQuery.isLoading}
+      favoriteEnabled={favoriteEnabled}
       backLabel={directRequested ? "返回设置" : "返回频道列表"}
       onBack={goBack}
       onToggleFavorite={() => {
@@ -248,6 +254,40 @@ export function IptvPlayerPage() {
       <RecordingLeaveGuard context={recordingContext} />
     </>
   );
+  // 顶部 HUD 右侧工具：关注与录制（旧流内顶栏的迁移，遮罩上的白色图标画法）。
+  const hudTools =
+    channel !== null ? (
+      <>
+        <RecordingControl context={recordingContext} disabled={!recordingContext} />
+        {favoriteEnabled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={isFavorite ? "取消关注频道" : "关注频道"}
+            aria-pressed={isFavorite}
+            title={isFavorite ? "取消关注" : "关注频道"}
+            disabled={
+              favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel.url
+            }
+            className={cn(
+              PLAYER_CONTROL_BUTTON_CLASS,
+              PLAYER_CONTROL_ICON_CLASS,
+              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+              "shrink-0",
+            )}
+            onClick={() => favoriteMutation.mutate({ channel, isFavorite })}
+          >
+            {favoriteMutation.isPending &&
+            favoriteMutation.variables?.channel.url === channel.url ? (
+              <Spinner aria-hidden />
+            ) : (
+              <Heart className={cn(isFavorite && "fill-current")} aria-hidden />
+            )}
+          </Button>
+        )}
+      </>
+    ) : null;
 
   // 侧栏频道列表：常规来源用当前播放列表；收藏快照来源（无 HTTP 播放列表）用收藏列表。
   const sidebarChannels = useMemo(() => {
@@ -341,8 +381,8 @@ export function IptvPlayerPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {/* 网页全屏卸载顶栏与页脚；录制离开守卫与 chrome 无关，保持挂载。 */}
-      {!webFullscreen && header}
+      {/* 流内顶栏已删除：返回/频道名/关注/录制都住在播放器顶部 HUD；
+          错误/加载态没有舞台可覆盖，继续用上面的兜底 topBar。 */}
       <RecordingLeaveGuard context={recordingContext} />
       {/* 宽屏：播放器占满主列，频道侧栏固定宽度；窄屏：侧栏列在播放器下方。
           网页全屏时卸载侧栏并解除居中约束，舞台撑满整个应用窗口。 */}
@@ -368,13 +408,16 @@ export function IptvPlayerPage() {
               onWebFullscreenChange={setWebFullscreen}
               onStatusChange={handlePlaybackStatus}
               onReconnect={handleReconnect}
+              onBack={goBack}
+              backLabel={directRequested ? "返回设置" : "返回频道列表"}
+              hudToolsSlot={hudTools}
             />
           </div>
         </div>
         {!webFullscreen && sidebarChannels && (
           <aside
             aria-label="IPTV 频道侧栏"
-            className="relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]"
+            className="relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar lg:w-[320px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[340px]"
           >
             <IptvChannelSidebar
               channels={sidebarChannels}

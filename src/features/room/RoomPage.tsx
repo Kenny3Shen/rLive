@@ -1,25 +1,12 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Car,
-  Cast,
-  ChevronLeft,
-  Heart,
-  Link2,
-  PanelsTopLeft,
-  Share2,
-  Timer,
-  type LucideIcon,
-  UserRoundX,
-} from "lucide-react";
+import { ChevronLeft, Heart, Link2, PanelsTopLeft, Share2, UserRoundX } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { canNavigateBackInApp } from "@/shared/appHistory";
 import { copyText } from "@/shared/clipboard";
-import { isMobileClient, supportsMultiRoom } from "@/shared/clientPlatform";
+import { supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
-import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { RoomSideTab } from "./PlayerPane";
@@ -29,7 +16,6 @@ import { RecordingControl } from "@/features/recording/RecordingControl";
 import { RecordingLeaveGuard } from "@/features/recording/RecordingLeaveGuard";
 import type { PlayerHudRoomAction } from "./PlayerFullscreenHud";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
-import { AutoDanmakuSendMenu, SleepTimerMenu } from "./RoomToolMenus";
 import { useSleepTimer } from "./useSleepTimer";
 import { RoomHostInfo } from "./RoomHostInfo";
 import {
@@ -37,20 +23,17 @@ import {
   roomSideTabFromNavigationState,
 } from "./roomNavigation";
 import { usePlaybackController } from "./playback/usePlaybackController";
-import { CastMenu } from "./CastMenu";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DrawerScope } from "@/components/ui/drawer";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
 import { useMultiRoomStore } from "../multi-room/multiRoomStore";
-import { cn } from "@/lib/utils";
 
 export function RoomPage() {
   return (
@@ -71,10 +54,8 @@ function RoomPageContent() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const recordedHistoryRoomRef = useRef<string | null>(null);
-  const mobileClient = isMobileClient();
 
   const [followBusy, setFollowBusy] = useState(false);
-  const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const [followGroupOpen, setFollowGroupOpen] = useState(false);
   const [confirmUnfollowOpen, setConfirmUnfollowOpen] = useState(false);
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
@@ -303,7 +284,7 @@ function RoomPageContent() {
   if (detailQuery.isLoading) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载中…" onBack={goBack} />
+        <RoomFallbackHeader title="加载中…" onBack={goBack} />
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-8 text-primary" />
         </div>
@@ -314,7 +295,7 @@ function RoomPageContent() {
   if (detailQuery.isError) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载失败" onBack={goBack} />
+        <RoomFallbackHeader title="加载失败" onBack={goBack} />
         <div className="p-6">
           <ErrorState
             error={detailQuery.error}
@@ -380,63 +361,8 @@ function RoomPageContent() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {/* 移动端不渲染流内顶栏：房间身份与工具由 PlayerPane 的画面内 HUD
-          承担（`stageOwnsRoomTopBar`），顶部状态栏空间仍由 Shell 预留。 */}
-      {!webFullscreen && !mobileClient && (
-        <RoomTopBar
-          title={detail.title || "直播间"}
-          onBack={goBack}
-          rightSlot={
-            <div className="flex items-center gap-1">
-              <RecordingControl context={recordingContext} />
-              {/* 顶栏本身已限定桌面，工具行不再按视口宽度隐藏：窄窗口下移动端抽屉
-                  已经不存在，再藏起来就没有入口了。 */}
-              <div className="flex items-center gap-1">
-                <RoomToolPopover icon={Timer} label="定时关闭" active={sleepTimer.active}>
-                  <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
-                </RoomToolPopover>
-                <RoomToolPopover icon={Cast} label="投屏" active={castingDevice != null}>
-                  <CastMenu
-                    castUrl={playback.playUrl?.url ?? null}
-                    headers={playback.playUrl?.headers ?? {}}
-                    title={detail.title || "rLive 直播"}
-                    showHeader={false}
-                    onCastingDeviceChange={setCastingDevice}
-                  />
-                </RoomToolPopover>
-                <RoomToolPopover
-                  icon={Car}
-                  label="自动发送弹幕"
-                  wide
-                  active={autoDanmakuSend.enabled}
-                >
-                  <AutoDanmakuSendMenu
-                    autoSend={autoDanmakuSend}
-                    idPrefix="title-auto-danmaku"
-                    showHeader={false}
-                  />
-                </RoomToolPopover>
-              </div>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="加入并打开多画面"
-                      onClick={openInMultiRoom}
-                    />
-                  }
-                >
-                  <PanelsTopLeft data-icon="inline-start" aria-hidden />
-                </TooltipTrigger>
-                <TooltipContent side="bottom">加入并打开多画面</TooltipContent>
-              </Tooltip>
-            </div>
-          }
-        />
-      )}
+      {/* 所有端都不再渲染流内顶栏：房间身份、返回与工具由 PlayerPane 的画面内
+          HUD 承担（与底部控制栏同一套空闲显隐），顶部空间由 Shell 预留给状态栏。 */}
 
       <div className="flex min-h-0 flex-1 flex-col">
         <PlayerPane
@@ -539,15 +465,8 @@ function RoomPageContent() {
   );
 }
 
-function RoomTopBar({
-  title,
-  onBack,
-  rightSlot,
-}: {
-  title: string;
-  onBack: () => void;
-  rightSlot?: ReactNode;
-}) {
+/** 兜底顶栏：仅在加载/失败态（没有可覆盖的播放舞台）时渲染，只留返回与标题。 */
+function RoomFallbackHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <header className="relative flex min-h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
       <Tooltip>
@@ -559,11 +478,11 @@ function RoomTopBar({
               className="motion-back-button absolute left-3 z-10 rounded-lg hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
               aria-label="返回上一页"
               onClick={onBack}
-            >
-              <ChevronLeft data-icon="inline-start" aria-hidden />
-            </Button>
+            />
           }
-        />
+        >
+          <ChevronLeft data-icon="inline-start" aria-hidden />
+        </TooltipTrigger>
         <TooltipContent side="bottom">返回上一页</TooltipContent>
       </Tooltip>
       <p
@@ -572,60 +491,6 @@ function RoomTopBar({
       >
         {title}
       </p>
-      {rightSlot && <div className="absolute right-3 z-10">{rightSlot}</div>}
     </header>
-  );
-}
-
-function RoomToolPopover({
-  icon: Icon,
-  label,
-  wide = false,
-  active = false,
-  children,
-}: {
-  icon: LucideIcon;
-  label: string;
-  wide?: boolean;
-  /** 工具当前是否开启；渲染开启状态的图标。 */
-  active?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant={active ? "secondary" : "ghost"}
-            size="icon-sm"
-            aria-label={label}
-            title={label}
-            aria-pressed={active}
-          />
-        }
-      >
-        <span className="relative inline-flex">
-          <Icon data-icon="inline-start" aria-hidden className={cn(active && "text-primary")} />
-          {active && <ToolActiveDot />}
-        </span>
-      </PopoverTrigger>
-      <PopoverContent
-        side="bottom"
-        align="end"
-        collisionPadding={12}
-        glass
-        className={cn(
-          "max-h-[calc(100vh-4rem)] overflow-y-auto p-3",
-          glassPanelClass(),
-          wide
-            ? "w-[min(30rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)]"
-            : "w-[min(20rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)]",
-        )}
-      >
-        <PopoverTitle className={cn("mb-2 px-0.5", glassTitleClass())}>{label}</PopoverTitle>
-        {children}
-      </PopoverContent>
-    </Popover>
   );
 }

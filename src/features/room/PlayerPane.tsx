@@ -200,21 +200,6 @@ export function showRoomSidePanel(sidePanelOpen: boolean, webFullscreen: boolean
 }
 
 /**
- * 舞台是否自己画房间顶栏，因此需要 HUD 把房间身份与工具补进画面内。
- *
- * 三种情形缺口相同：原生全屏把顶栏盖在 top layer 之下，桌面网页全屏直接把它从
- * 布局里卸载，而移动端窗口化刻意不再渲染流内顶栏 —— 顶栏改为像控制条一样浮在
- * 画面顶部，画面因此拿到整个视口高度。
- */
-export function stageOwnsRoomTopBar(
-  fullscreen: boolean,
-  webFullscreen: boolean,
-  mobileClient = false,
-): boolean {
-  return fullscreen || webFullscreen || mobileClient;
-}
-
-/**
  * HUD 返回箭头先退哪一层全屏。与 Escape 的按键习惯一致：原生全屏优先，
  * 两种全屏叠加时一次点击只收一层，网页全屏留给下一次。
  */
@@ -655,15 +640,10 @@ export function PlayerPane({
     portraitStackLayout,
     player.mode === "fullscreen",
   );
-  // 网页全屏卸载了 `RoomTopBar`，原生全屏盖住它，移动端窗口化则刻意不渲染流内顶栏：
-  // 三种情形都要把房间身份与工具补进画面内的 HUD。
-  const stageOwnsTopBar = stageOwnsRoomTopBar(
-    player.mode === "fullscreen",
-    webFullscreen,
-    mobileClient,
-  );
+  // 流内顶栏已删除（所有端统一）：房间身份与工具始终住在画面内的 HUD，
+  // HUD 只要身份或动作有东西可画就挂载。
   const fullscreenHudVisible = showPlayerFullscreenHud({
-    fullscreen: stageOwnsTopBar,
+    fullscreen: true,
     hasRoomIdentity: Boolean(roomTitle?.trim() || roomUserName?.trim()),
     hasActions:
       fullscreenRoomActions.length > 0 ||
@@ -1716,7 +1696,7 @@ export function PlayerPane({
               ? "min-h-0 w-full flex-1 border-t border-border/80"
               : compactLandscapeViewport
                 ? `${compactLandscapeSidePanelClassName} shrink-0`
-                : "w-[300px] shrink-0 border-l border-border/80 lg:w-[320px]",
+                : "w-[320px] shrink-0 border-l border-border/80 lg:w-[340px]",
             !sidePanelVisible && "hidden",
           )}
           onPointerDownCapture={sideTabSwipe.onPointerDownCapture}
