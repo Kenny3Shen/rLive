@@ -48,7 +48,14 @@ import {
 } from "./videoApi";
 import { formatDateTime, formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
-import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
+import {
+  dedupeVideoItems,
+  playlistItemFromVideoItem,
+  playlistItemFromArchivePage,
+  playlistItemFromSeasonEpisode,
+  usePlaylistStore,
+  type PlaylistItem,
+} from "./playlistStore";
 import { UploaderDrawer } from "./UploaderDrawer";
 
 /**
@@ -58,7 +65,7 @@ import { UploaderDrawer } from "./UploaderDrawer";
  * 拆成多个文件只会让这个骨架复制多遍。评论区是其中唯一有翻页的，用游标
  * `useInfiniteQuery` + 哨兵；相关视频、分集与选集上游都是一次给全。
  */
-type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "comments";
+export type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "comments";
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
@@ -480,7 +487,10 @@ function RelatedPanel({ bvid }: { bvid: string }) {
     queryFn: () => videoGetRelated(bvid),
     staleTime: 5 * 60_000,
   });
-  const items = relatedQuery.data?.items.filter((item) => item.bvid !== bvid) ?? [];
+  const items = dedupeVideoItems(
+    relatedQuery.data?.items.filter((item) => item.bvid !== bvid) ?? [],
+  );
+  const playlistItems = items.map(playlistItemFromVideoItem);
 
   return (
     <div className="px-3 pb-4">
@@ -508,7 +518,12 @@ function RelatedPanel({ bvid }: { bvid: string }) {
         <p className="pt-4 text-center text-xs text-muted-foreground">暂无相关视频</p>
       ) : (
         items.map((item) => (
-          <VideoCard key={`${item.bvid}-${item.cid ?? ""}`} item={item} orientation="row" />
+          <VideoCard
+            key={`${item.bvid}-${item.cid ?? ""}`}
+            item={item}
+            playlist={playlistItems}
+            orientation="row"
+          />
         ))
       )}
     </div>
@@ -799,14 +814,16 @@ function UgcSeasonList({
             title={episode.title}
             duration={episode.duration}
             rowRef={current ? currentRowRef : undefined}
-            onNavigate={() =>
+            onNavigate={() => {
+              const items = season.episodes.map(playlistItemFromSeasonEpisode);
+              usePlaylistStore.getState().setPlaylist(items, items[index].id);
               onNavigate({
                 bvid: episode.bvid,
                 cid: episode.cid,
                 title: episode.title,
                 aid: episode.aid,
-              })
-            }
+              });
+            }}
           />
         );
       })}
@@ -881,7 +898,13 @@ function PartsPanel({
                 title={label}
                 duration={page.duration}
                 rowRef={current ? currentRowRef : undefined}
-                onNavigate={() => onNavigate({ bvid, cid: page.cid, title: label, aid })}
+                onNavigate={() => {
+                  usePlaylistStore.getState().setPlaylist(
+                    pages.map((entry) => playlistItemFromArchivePage(bvid, aid, entry)),
+                    `${bvid}_${page.cid}`,
+                  );
+                  onNavigate({ bvid, cid: page.cid, title: label, aid });
+                }}
               />
             );
           })}
@@ -892,9 +915,8 @@ function PartsPanel({
 }
 
 /**
- * 选集与合集共用一个页签的内容面板：多 P 稿件展开选集、合集默认收起
- * （两者同时存在时选集优先——连播沿分 P 列表走）；仅有合集时直接展开
- * 合集（此时页签标签显示为「合集」）。
+ * 选集与合集共用一个页签的内容面板：多 P 稿件展开选集、合集默认收起。
+ * 只有显式点选才切换相应队列，单纯展示不接管来源列表。
  */
 function PartsSeasonPanel({
   archive,
@@ -970,10 +992,14 @@ export function VideoSidebar({
   aid,
   cid,
   danmaku,
+  tab: requestedTab,
+  onTabChange,
 }: {
   bvid: string | null;
   epId: string | null;
   aid: string | null;
+  tab: SidebarTab | null;
+  onTabChange: (tab: SidebarTab) => void;
   /** 当前播放的 cid：多 P 稿件的选集页签用它高亮当前 P。 */
   cid: number;
   /** 弹幕查看列表数据：播放页已加载的条目 + 当前进度 + 点击跳转。 */
@@ -987,7 +1013,6 @@ export function VideoSidebar({
 }) {
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
-  const [tab, setTab] = useState<SidebarTab>(isPgc ? "episodes" : "related");
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
   // 简介折叠态：换稿件时由 UP 信息卡 section 上的 key={bvid} 重挂载复位。
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -1032,6 +1057,7 @@ export function VideoSidebar({
       ? ["related", "comments", "danmaku", "parts"]
       : ["related", "comments", "danmaku"];
   const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
+  const tab = requestedTab && visibleTabs.includes(requestedTab) ? requestedTab : visibleTabs[0];
 
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
@@ -1046,7 +1072,7 @@ export function VideoSidebar({
       className="flex h-full min-h-0 flex-col gap-0"
       onValueChange={(value) => {
         if (isSidebarTab(value)) {
-          setTab(value);
+          onTabChange(value);
         }
       }}
     >
@@ -1144,9 +1170,7 @@ export function VideoSidebar({
                           title={`粉丝：${formatOnline(archive.author_fans)}`}
                         >
                           <Users aria-hidden className="size-3.5" />
-                          <span className="tabular-nums">
-                            {formatOnline(archive.author_fans)}
-                          </span>
+                          <span className="tabular-nums">{formatOnline(archive.author_fans)}</span>
                         </span>
                         <span
                           className="inline-flex items-center gap-1"
@@ -1198,7 +1222,7 @@ export function VideoSidebar({
                     )}
                   </dl>
                   {archive.desc && (
-                    <div className="mt-2 max-lg:hidden">
+                    <div className="mt-2">
                       <p
                         id="video-description"
                         className={cn(

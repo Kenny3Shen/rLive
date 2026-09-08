@@ -207,7 +207,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             src={normalizedCover}
             alt=""
             loading="lazy"
-            decoding="async"
+            decoding="sync"
             className="motion-room-cover h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none"
             referrerPolicy="no-referrer"
           />

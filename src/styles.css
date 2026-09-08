@@ -772,9 +772,21 @@ body {
 
 /* Android 使用 edge-to-edge 的 Activity 内容。在紧凑 Tailwind 断点不适用的平板上
    也把应用保持在系统状态区之下，
-   同时移动端底部 chrome 为导航手势区留出余量。 */
+   同时移动端底部 chrome 为导航手势区留出余量。原生顶部 inset 不受 WebView
+   沉浸往返后 env 残留 0 的影响；旧 APK / 浏览器仍回退到 env。 */
 html[data-platform="android"] .app-shell {
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
+}
+
+/* 沉浸舞台脱离外壳，顶部 HUD 也必须避开状态栏与刘海。 */
+html[data-platform="android"] .player-scrim-overlay-top {
+  padding-top: max(0.375rem, var(--android-safe-area-top, env(safe-area-inset-top)));
+}
+
+html[data-platform="android"]
+  [data-player-stage][data-fullscreen="true"]
+  [data-slot="drawer-content"][data-side="right"] {
+  padding-top: max(1rem, var(--android-safe-area-top, env(safe-area-inset-top)));
 }
 
 /* 播放器进入全屏期间保持这份内边距不动。

@@ -5,6 +5,8 @@ import android.os.Bundle
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
   private lateinit var fallbackChromeClient: RustWebChromeClient
@@ -73,6 +75,19 @@ class MainActivity : TauriActivity() {
     // WebView 预绘制帧的底色跟随应用主题，避免启动窗口与页面首帧之间
     // 插入一帧白闪（见 RliveSystemBars.applyWebViewBackground）。
     RliveSystemBars.applyWebViewBackground(this, webView)
+    // WebView 的 env 在沉浸往返后可能仍为 0；外壳与 HUD 共用原生安全区。
+    ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
+      // 临时滑出的系统栏不一定改变可见 inset；始终给顶部操作保留空间。
+      val top = insets.getInsetsIgnoringVisibility(
+        WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout(),
+      ).top
+      webView.evaluateJavascript(
+        "document.documentElement?.style.setProperty('--android-safe-area-top', ($top / window.devicePixelRatio) + 'px')",
+        null,
+      )
+      // 保留 WebView 自身的分发，不消费底部手势栏或键盘 inset。
+      ViewCompat.onApplyWindowInsets(view, insets)
+    }
     installFullscreenBackHandler()
 
     // Wry 在本钩子返回后立刻安装它生成的 RustWebChromeClient。把我们的

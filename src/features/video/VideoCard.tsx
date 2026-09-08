@@ -7,7 +7,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
-import { usePlaylistStore, type PlaylistItem } from "./playlistStore";
+import { usePlaylistStore, type PlaylistItem, type PlaylistUploader } from "./playlistStore";
 import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
 
@@ -19,7 +19,6 @@ import { videoPlayPath } from "./videoRoute";
  * 一个并列的组件而不是给 `RoomCard` 加分支 —— 那个组件还挂着关注、多画面、长按抽屉
  * 等一整套直播专属动作，VOD 一个都用不上。
  */
-
 
 const CARD_CLASS =
   "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring";
@@ -57,7 +56,7 @@ function CoverImage({
           src={normalized}
           alt=""
           loading="lazy"
-          decoding="async"
+          decoding="sync"
           className={COVER_IMAGE_CLASS}
           referrerPolicy="no-referrer"
         />
@@ -85,12 +84,18 @@ function CoverImage({
 export const VideoCard = memo(function VideoCard({
   item,
   playlist,
+  playlistUploader,
+  onNavigate,
   orientation = "grid",
   showAuthor = true,
 }: {
   item: VideoItem;
   /** 列表上下文（搜索/UP 主投稿）：点击时把该列表设为播放列表，从这张卡开始连播。 */
   playlist?: readonly PlaylistItem[];
+  /** 队列来源 UP 标记：与 `playlist` 一起写入 store（UP 投稿抽屉连播），普通列表不传。 */
+  playlistUploader?: PlaylistUploader | null;
+  /** 队列写入后、路由跳转前回调（如关闭来源抽屉）。 */
+  onNavigate?: () => void;
   /** `row`：缩略图在左、文本列在右（相关视频与 UP 主投稿列表）。 */
   orientation?: "grid" | "row";
   /** 是否在发布日期旁显示 UP 主名；投稿抽屉按 PiliPlus 语义只显示发布日期。 */
@@ -126,8 +131,10 @@ export const VideoCard = memo(function VideoCard({
         // 列表上下文：把点击时刻的列表快照设为播放列表（后续无限加载不影响它），
         // 从这张卡开始连播，与 PGC 分集的「播放全部」同一套状态。
         if (playlist && playlist.some((entry) => entry.id === playListId)) {
-          usePlaylistStore.getState().setPlaylist([...playlist], playListId);
+          // 未传来源（推荐/搜索/合集）时第三参为 undefined，store 会清掉旧 UP 标记。
+          usePlaylistStore.getState().setPlaylist([...playlist], playListId, playlistUploader);
         }
+        onNavigate?.();
         navigate(playPath);
       }}
       className={cn(
@@ -198,7 +205,9 @@ export const VideoCard = memo(function VideoCard({
             <Play className="size-3" aria-hidden />
             {formatOnline(item.view)}
           </span>
-          <span aria-hidden className="text-border">|</span>
+          <span aria-hidden className="text-border">
+            |
+          </span>
           <span className="inline-flex items-center gap-0.5">
             <MessageSquare className="size-3" aria-hidden />
             {formatOnline(item.danmaku)}

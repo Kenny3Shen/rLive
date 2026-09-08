@@ -16,12 +16,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import type {
-  PgcItem,
-  PgcListPage,
-  VideoListPage,
-  VideoZone,
-} from "@/shared/types/video";
+import type { PgcItem, PgcListPage, VideoListPage, VideoZone } from "@/shared/types/video";
 import {
   videoGetPgcIndex,
   videoGetPopular,
@@ -31,6 +26,7 @@ import {
 } from "./videoApi";
 import { PgcCard, VIDEO_GRID_CLASS, VideoGrid } from "./VideoCard";
 import { VideoZoneBar } from "./VideoZoneBar";
+import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
 import {
   PGC_SEASON_TYPES,
   VIDEO_POPULAR_ALL_ZONE_KEY,
@@ -126,8 +122,7 @@ export function VideoPage() {
     },
     // 分页语义完全信后端的 `has_more`：分区/排行榜类接口是榜单，它恒为 false，
     // 前端不去猜「返回条数少于 pageSize 就是最后一页」。
-    getNextPageParam: (lastPage, allPages) =>
-      lastPage.has_more ? allPages.length + 1 : undefined,
+    getNextPageParam: (lastPage, allPages) => (lastPage.has_more ? allPages.length + 1 : undefined),
     ...BROWSING_LIST_QUERY_OPTIONS,
   });
 
@@ -135,9 +130,10 @@ export function VideoPage() {
   // 按 payload 自带的 `kind` 分派，理由见 `VideoFeedPage`。
   const feedKind = pages?.[0]?.kind ?? (videoTabUsesPgc(tab) ? "pgc" : "ugc");
   const ugcItems = useMemo(
-    () => pages?.flatMap((page) => (page.kind === "ugc" ? page.items : [])) ?? [],
+    () => dedupeVideoItems(pages?.flatMap((page) => (page.kind === "ugc" ? page.items : [])) ?? []),
     [pages],
   );
+  const playlistItems = useMemo(() => ugcItems.map(playlistItemFromVideoItem), [ugcItems]);
   const pgcItems = useMemo(
     () => pages?.flatMap((page) => (page.kind === "pgc" ? page.items : [])) ?? [],
     [pages],
@@ -212,7 +208,11 @@ export function VideoPage() {
         )}
 
         {itemCount > 0 &&
-          (feedKind === "pgc" ? <PgcGrid items={pgcItems} /> : <VideoGrid items={ugcItems} />)}
+          (feedKind === "pgc" ? (
+            <PgcGrid items={pgcItems} />
+          ) : (
+            <VideoGrid items={ugcItems} playlist={playlistItems} />
+          ))}
 
         {hasNextPage && (
           <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
@@ -239,7 +239,6 @@ export function VideoPage() {
           </div>
         )}
       </div>
-
     </PullToRefresh>
   );
 }
