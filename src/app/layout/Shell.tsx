@@ -75,7 +75,7 @@ import { PlatformScope, type PlatformScopeValue } from "@/shared/hooks/useSiteQu
 import type { SiteId } from "@/shared/types/live";
 import { Sidebar } from "./Sidebar";
 import { AppTitleBar } from "./AppTitleBar";
-import { isImmersivePlayerPath, usesOverlayTopBar } from "./immersiveRoutes";
+import { isImmersivePlayerPath } from "./immersiveRoutes";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import {
@@ -177,10 +177,6 @@ export function Shell() {
   const isVideo = pathname === "/video";
   const isVideoSearch = pathname === "/video/search";
   const isImmersivePlayer = isImmersivePlayerPath(pathname);
-  // 舞台自带画面内顶栏的路由不再让外壳吃掉状态栏高度：画面顶到状态栏之下，
-  // 覆盖层自己让开安全区。CSS 里 Android 与全屏过渡两条 `padding-top` 规则
-  // 同样按这个属性短路。
-  const overlayTopBar = usesOverlayTopBar(pathname);
   const isSearch = pathname === "/search";
   const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
   const isFollow = pathname === "/follow";
@@ -734,10 +730,7 @@ export function Shell() {
   const routePanEnabled = !mobileClient && (isDirectSidebarNavigation || isTabNavigation);
 
   return (
-    <div
-      className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]"
-      data-overlay-top-bar={overlayTopBar ? "true" : undefined}
-    >
+    <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
       <AppTitleBar />
       <PageZoom
         // 两个沉浸播放器各自缩放，且都以自己的 pathname 为 key，

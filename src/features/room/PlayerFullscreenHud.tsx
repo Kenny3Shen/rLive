@@ -258,7 +258,9 @@ export function PlayerFullscreenHud({
       data-compact={compact ? "true" : "false"}
       className={cn(
         "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] text-white",
-        compact ? "pt-[max(0.375rem,env(safe-area-inset-top))] pb-3" : "pt-2.5 pb-6",
+        compact
+          ? "pt-[max(0.375rem,var(--player-safe-area-top,0px))] pb-3"
+          : "pt-[max(0.625rem,var(--player-safe-area-top,0px))] pb-6",
       )}
     >
       {onBack && (

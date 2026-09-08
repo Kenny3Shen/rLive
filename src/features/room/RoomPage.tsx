@@ -380,8 +380,8 @@ function RoomPageContent() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {/* 移动端刻意不渲染流内顶栏：房间身份与工具改由 PlayerPane 的画面内 HUD
-          承担（`stageOwnsRoomTopBar`），画面因此拿到整个视口高度。 */}
+      {/* 移动端不渲染流内顶栏：房间身份与工具由 PlayerPane 的画面内 HUD
+          承担（`stageOwnsRoomTopBar`），顶部状态栏空间仍由 Shell 预留。 */}
       {!webFullscreen && !mobileClient && (
         <RoomTopBar
           title={detail.title || "直播间"}
@@ -549,9 +549,7 @@ function RoomTopBar({
   rightSlot?: ReactNode;
 }) {
   return (
-    // `player-page-top-bar` 让开状态栏：这条路由的外壳内边距已被撤掉（画面内顶栏
-    // 自己负责安全区），流内顶栏只在播放器未挂载的加载/失败态与桌面窗口化出现。
-    <header className="player-page-top-bar relative flex min-h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
+    <header className="relative flex min-h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
       <Tooltip>
         <TooltipTrigger
           render={

@@ -2024,7 +2024,7 @@ function VideoPlayerPageContent() {
   );
 
   const topBar = (
-    <header className="player-page-top-bar relative flex min-h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90">
+    <header className="relative flex min-h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90">
       <div className="absolute left-3 flex items-center gap-1">
         <Tooltip>
           <TooltipTrigger
@@ -2463,7 +2463,7 @@ function VideoPlayerPageContent() {
             >
               <div
                 className={cn(
-                  "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,env(safe-area-inset-top))] text-white",
+                  "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,var(--player-safe-area-top,0px))] text-white",
                   compact ? "pb-3" : "pb-6",
                 )}
               >
