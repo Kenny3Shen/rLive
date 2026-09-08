@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { shouldSkipIdleRoutePreloading } from "../src/app/RouteModulePreloader";
 import {
   createCachedRouteLoader,
+  idleRouteModuleLoadersForPlatform,
   loadCategoryBrowsePage,
   loadFollowPage,
   loadHistoryPage,
@@ -86,6 +87,23 @@ describe("route module loading", () => {
 });
 
 describe("idle route preloading policy", () => {
+  test("移动端不预载桌面分类页、录制库和多画面", () => {
+    for (const platform of ["android", "ios"] as const) {
+      const loaders = idleRouteModuleLoadersForPlatform(platform);
+      expect(loaders).not.toContain(loadCategoryBrowsePage);
+      expect(loaders).not.toContain(loadRecordingsPage);
+      expect(loaders).not.toContain(loadMultiRoomPage);
+      for (const loader of [loadFollowPage, loadHistoryPage, loadIptvPlayerPage, loadRoomPage, loadVideoPlayerPage]) {
+        expect(loaders).toContain(loader);
+      }
+      expect(new Set(loaders).size).toBe(loaders.length);
+    }
+    const desktop = idleRouteModuleLoadersForPlatform("desktop");
+    expect(desktop).toContain(loadCategoryBrowsePage);
+    expect(desktop).toContain(loadRecordingsPage);
+    expect(desktop).toContain(loadMultiRoomPage);
+  });
+
   test("skips data-saving and very slow connections", () => {
     expect(shouldSkipIdleRoutePreloading({ saveData: true, effectiveType: "4g" })).toBe(true);
     expect(shouldSkipIdleRoutePreloading({ effectiveType: "slow-2g" })).toBe(true);

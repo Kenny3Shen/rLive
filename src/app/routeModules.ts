@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import type { ClientPlatform } from "@/shared/clientPlatform";
 
 export type LazyRouteModule = { default: ComponentType };
 export type RouteModuleLoader = () => Promise<LazyRouteModule>;
@@ -94,7 +95,7 @@ export const loadVideoSearchPage = createCachedRouteLoader(() =>
 );
 
 /** 昂贵的播放器代码放在最后，让小而常用的目的地先就绪。 */
-export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
+const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadIptvPage,
   loadSearchPage,
   loadCategoryBrowsePage,
@@ -109,6 +110,19 @@ export const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadVideoPlayerPage,
   loadRoomPage,
 ];
+
+const MOBILE_IDLE_ROUTE_MODULE_LOADERS = IDLE_ROUTE_MODULE_LOADERS.filter(
+  (loader) =>
+    loader !== loadCategoryBrowsePage &&
+    loader !== loadRecordingsPage &&
+    loader !== loadMultiRoomPage,
+);
+
+export function idleRouteModuleLoadersForPlatform(
+  platform: ClientPlatform,
+): readonly RouteModuleLoader[] {
+  return platform === "desktop" ? IDLE_ROUTE_MODULE_LOADERS : MOBILE_IDLE_ROUTE_MODULE_LOADERS;
+}
 
 function pathnameFromTarget(target: string): string | null {
   try {
