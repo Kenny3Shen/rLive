@@ -5,14 +5,7 @@ import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plug
 import { flushSync } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import packageMetadata from "../../../package.json";
-import {
-  type FormEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
@@ -704,7 +697,9 @@ function AccountCard({
                 icon={<LogOut aria-hidden />}
                 title={`退出${title}登录？`}
                 description={
-                  <>将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。</>
+                  <>
+                    将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
+                  </>
                 }
                 error={logoutError}
                 busy={clearing}
@@ -744,7 +739,9 @@ function AccountCard({
               icon={<LogOut aria-hidden />}
               title={`退出${title}登录？`}
               description={
-                <>将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。</>
+                <>
+                  将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
+                </>
               }
               error={logoutError}
               busy={clearing}
@@ -1995,8 +1992,8 @@ export function SettingsPage() {
           <LanSyncField />
         </Section>
         <Section title="导入 / 导出">
-          <Field orientation="horizontal" data-invalid={profileError ? true : undefined}>
-            <FieldContent>
+          <Field orientation="responsive" data-invalid={profileError ? true : undefined}>
+            <FieldContent className="min-w-0 wrap-anywhere">
               <FieldTitle>配置档案</FieldTitle>
               {profileError ? (
                 <FieldError>{profileError}</FieldError>
@@ -2008,7 +2005,7 @@ export function SettingsPage() {
                 )
               )}
             </FieldContent>
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 @md/field-group:justify-end">
               <Button
                 onClick={() => void chooseProfileForExport()}
                 disabled={profileAction !== null}
