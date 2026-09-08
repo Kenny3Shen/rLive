@@ -4,10 +4,8 @@ import {
   formatDanmakuClipboardText,
   isDanmakuActionFailure,
 } from "../src/features/room/danmaku/useDanmakuActions";
-import {
-  danmakuVisibleContentRect,
-  isDanmakuPinTap,
-} from "../src/features/room/danmaku/DanmuJsDanmaku";
+import { danmakuVisibleContentRect } from "../src/features/room/danmaku/DanmuJsDanmaku";
+import { isDanmakuPinTap } from "../src/features/room/danmaku/useDanmakuPinInteraction";
 
 describe("danmaku clipboard actions", () => {
   test("copies a normalized message without altering its wording", () => {
@@ -24,6 +22,13 @@ describe("danmaku clipboard actions", () => {
     expect(danmakuActionStatusMessage("favorited")).toBe("已收藏");
     expect(danmakuActionStatusMessage("blocked")).toBe("已屏蔽该用户，其消息立即隐藏");
     expect(danmakuActionStatusMessage(null)).toBeNull();
+  });
+
+  test("reports video send failures without referring to a live room", () => {
+    expect(danmakuActionStatusMessage("send-failed", "video")).toBe(
+      "发送失败，请检查账号登录状态或视频限制",
+    );
+    expect(danmakuActionStatusMessage("send-failed")).toContain("直播间限制");
   });
 
   test("marks only the failing outcomes as errors", () => {
@@ -55,6 +60,12 @@ describe("floating danmaku pin gesture", () => {
   test("pins on a short press that stayed on the comment", () => {
     expect(isDanmakuPinTap(0, 0, 0)).toBe(true);
     expect(isDanmakuPinTap(6, -8, 200)).toBe(true);
+  });
+
+  test("uses the video player's smaller drag threshold", () => {
+    expect(isDanmakuPinTap(12, 0, 200, 12)).toBe(true);
+    expect(isDanmakuPinTap(13, 0, 200, 12)).toBe(false);
+    expect(isDanmakuPinTap(13, 0, 200)).toBe(true);
   });
 
   test("leaves a drag or a long press to the player stage", () => {

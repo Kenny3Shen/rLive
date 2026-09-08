@@ -4,11 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { glassOptionClass, glassPanelClass } from "@/shared/components/player/glassSurface";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
-import { useDanmakuActions } from "../danmaku/useDanmakuActions";
+import { useDanmakuActions, type DanmakuActionsParams } from "./useDanmakuActions";
 import { cn } from "@/lib/utils";
 
 /**
- * 直播视频舞台上指针所指的评论。渲染器移交元素相对的 CSS 盒（含边框内边距），
+ * 播放器舞台上指针所指的评论。渲染器移交元素相对的 CSS 盒（含边框内边距），
  * 菜单锚定到它上面。
  */
 export type DanmakuHoverTarget = {
@@ -56,6 +56,7 @@ type DanmakuActionMenuProps = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
+  video?: DanmakuActionsParams["video"];
   /** 为全屏桌面舞台提供的更大瞄准目标。 */
   large?: boolean;
 };
@@ -66,6 +67,7 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
   roomId,
   roomTitle,
   roomUserName,
+  video,
   large = false,
 }: DanmakuActionMenuProps) {
   const message = target.content.trim();
@@ -76,6 +78,7 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
     roomId,
     roomTitle,
     roomUserName,
+    video,
   });
   const flipBelow = target.top < MENU_FLIP_THRESHOLD_PX;
   const anchorX = target.left + target.width / 2;

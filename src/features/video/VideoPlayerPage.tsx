@@ -1620,6 +1620,11 @@ function VideoPlayerPageContent() {
 
   const handleSurfacePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.defaultPrevented) {
+        cancelPendingSurfaceActions();
+        edgeGesture.cancel();
+        return;
+      }
       if (edgeGesture.end(event)) return;
       if (fullscreenLocked) {
         revealControls();
@@ -1655,6 +1660,8 @@ function VideoPlayerPageContent() {
       stepPlaylist(direction, velocity);
     },
     [
+      cancelPendingSurfaceActions,
+      edgeGesture.cancel,
       edgeGesture.end,
       fullscreenLocked,
       portraitSwipeEnabled,
@@ -1769,7 +1776,8 @@ function VideoPlayerPageContent() {
 
   const handleSurfaceClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (event.detail !== 1 || isPlayerControlTarget(event.target)) return;
+      if (event.defaultPrevented || event.detail !== 1 || isPlayerControlTarget(event.target))
+        return;
       if (fullscreenLocked) {
         revealControls();
         return;
@@ -1791,7 +1799,7 @@ function VideoPlayerPageContent() {
 
   const handleSurfaceDoubleClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (shortVideo || fullscreenLocked) return;
+      if (event.defaultPrevented || shortVideo || fullscreenLocked) return;
       if (suppressClickRef.current || isPlayerControlTarget(event.target)) return;
       if (clickTimerRef.current !== null) {
         window.clearTimeout(clickTimerRef.current);
@@ -2344,6 +2352,12 @@ function VideoPlayerPageContent() {
                   videoRef={videoRef}
                   entries={danmakuEntries}
                   active={danmakuVisible}
+                  interactive={!fullscreenLocked && !switchingItem}
+                  cid={cid}
+                  aid={aid ?? ""}
+                  title={title}
+                  large={!compact && (fullscreen.fullscreen || webFullscreen)}
+                  tapMaxDistance={LONG_PRESS_CANCEL_MOVE_PX}
                 />
               )}
               <PlayerBrightnessShade ref={edgeGesture.brightnessShadeRef} />
@@ -2395,6 +2409,8 @@ function VideoPlayerPageContent() {
             className={cn(
               "absolute inset-x-0 top-0 z-30 transition-opacity duration-150 ease-out",
               "motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+              // 标题与留白穿透到弹幕；仅可见、可用的按钮接收指针。
+              "pointer-events-none [&[data-visible=true]_button:enabled]:pointer-events-auto",
             )}
             onPointerEnter={holdControlsVisible}
             onPointerLeave={scheduleControlsHide}
