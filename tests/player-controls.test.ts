@@ -17,18 +17,22 @@ import {
 } from "../src/shared/components/player/PlayerControls";
 import {
   canStartPlayerEdgeGesture,
-  isPlayerStageDoubleTap,
-  isPlayerStageTap,
   isVerticalPlayerEdgeGesture,
   playerBrightnessShadeOpacity,
-  playerChromeVisible,
   playerEdgeGestureDragExtent,
   playerEdgeGestureForStart,
   playerEdgeGestureIntent,
   playerEdgeGestureValue,
+} from "../src/shared/gestures/playerEdgeGesture";
+import {
+  playerChromeVisible,
   playerStageGesturesEnabled,
-  playerVolumeForKeyStep,
   showPlayerFullscreenLock,
+} from "../src/shared/components/player/PlayerFullscreenLock";
+import {
+  isPlayerStageDoubleTap,
+  isPlayerStageTap,
+  playerVolumeForKeyStep,
   PLAYER_STAGE_DOUBLE_TAP_MS,
   PLAYER_VOLUME_KEY_STEP,
   showRoomSidePanel,
@@ -213,8 +217,9 @@ describe("mobile player layout", () => {
     // 原生全屏把顶栏盖在 top layer 之下，网页全屏直接卸载它 —— 缺口是同一个。
     expect(stageOwnsRoomTopBar(true, false)).toBe(true);
     expect(stageOwnsRoomTopBar(false, true)).toBe(true);
-    // 窗口化时顶栏就在原处，画面内不需要再补一层。
+    // 桌面窗口化保留流内顶栏；移动端窗口化也由舞台接管。
     expect(stageOwnsRoomTopBar(false, false)).toBe(false);
+    expect(stageOwnsRoomTopBar(false, false, true)).toBe(true);
   });
 
   test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {

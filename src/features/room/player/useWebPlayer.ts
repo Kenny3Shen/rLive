@@ -13,12 +13,7 @@ import {
   setNativePlayerFullscreen,
   toggleNativePlayerFullscreen,
 } from "@/shared/nativePlayerFullscreen";
-import {
-  beginFullscreenTransition,
-  frozenSafeAreaTopValue,
-  shouldFreezeFullscreenInsets,
-  FULLSCREEN_TRANSITION_TIMEOUT_MS,
-} from "@/shared/fullscreenTransition";
+import { useFullscreenInsetFreeze } from "@/shared/hooks/useFullscreenInsetFreeze";
 import { runningOnAndroidTauri, setAndroidImmersive } from "./androidImmersive";
 import { videoAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
@@ -747,9 +742,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const softSwitchInFlightRef = useRef<{ player: XgPlayerInstance; sequence: number } | null>(null);
   const qualityRef = useRef<string | null>(quality);
   const nativeFullscreenSessionRef = useRef(createNativeFullscreenSession());
-  // 释放在进入全屏过渡期间持有的 shell 内边距冻结；无冻结时为 null。
-  const fullscreenInsetFreezeRef = useRef<(() => void) | null>(null);
-  const fullscreenInsetFreezeTimerRef = useRef<number | null>(null);
   /** 为没有 `mode` 的销毁路径镜像页面内全屏状态。 */
   const inPageFullscreenRef = useRef(false);
   // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
@@ -1653,15 +1645,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
   }, [hardStreamKey, mediaKey, profile.telemetry]);
 
-  const releaseFullscreenInsets = useCallback(() => {
-    if (fullscreenInsetFreezeTimerRef.current !== null) {
-      window.clearTimeout(fullscreenInsetFreezeTimerRef.current);
-      fullscreenInsetFreezeTimerRef.current = null;
-    }
-    fullscreenInsetFreezeRef.current?.();
-    fullscreenInsetFreezeRef.current = null;
-  }, []);
-
   /**
    * 为没有节目时钟的容器推导挂钟锚点。
    *
@@ -1810,31 +1793,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     if (video && video.playbackRate !== 1) video.playbackRate = 1;
   }, [liveSyncHold, mediaKey]);
 
-  const freezeFullscreenInsets = useCallback(() => {
-    if (typeof document === "undefined") return;
-    if (!shouldFreezeFullscreenInsets(getClientPlatform())) return;
-    // 用户快速连续切换两次时上一次冻结可能仍然打开。先释放它，
-    // 保证始终至多一个未决冻结。
-    releaseFullscreenInsets();
-    const shell = document.querySelector<HTMLElement>(".app-shell");
-    const root = document.documentElement;
-    if (!shell || !root) return;
-    // 钉住外壳已有的内边距而不是猜测值，使冻结成为真正的保持：
-    // 安装的那一刻布局不得移动。
-    const frozen = frozenSafeAreaTopValue(window.getComputedStyle(shell).paddingTop);
-    if (!frozen) return;
-    fullscreenInsetFreezeRef.current = beginFullscreenTransition(root, frozen);
-    // 兜底 WebView 不触发 fullscreenchange 就 resolve 请求的情况，
-    // 使冻结绝不能比这次交互活得更久。
-    fullscreenInsetFreezeTimerRef.current = window.setTimeout(
-      releaseFullscreenInsets,
-      FULLSCREEN_TRANSITION_TIMEOUT_MS,
-    );
-  }, [releaseFullscreenInsets]);
-
-  // 没有任何东西可以比播放器活得更久：过渡中途的路由变更否则会把外壳
-  // 钉在过期的内边距上。
-  useEffect(() => releaseFullscreenInsets, [releaseFullscreenInsets]);
+  const { freeze: freezeFullscreenInsets, release: releaseFullscreenInsets } =
+    useFullscreenInsetFreeze();
 
   useEffect(() => {
     if (!ownsFullscreen) {

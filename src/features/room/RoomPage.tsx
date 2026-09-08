@@ -5,7 +5,6 @@ import {
   Car,
   Cast,
   ChevronLeft,
-  Ellipsis,
   Heart,
   Link2,
   PanelsTopLeft,
@@ -15,27 +14,23 @@ import {
   UserRoundX,
 } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { canNavigateBackInApp } from "@/shared/appHistory";
 import { copyText } from "@/shared/clipboard";
-import { supportsMultiRoom } from "@/shared/clientPlatform";
+import { isMobileClient, supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
-import {
-  glassPanelClass,
-  glassSurfaceClass,
-  glassTitleClass,
-} from "@/shared/components/player/glassSurface";
+import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
-import type { PlayerMobileRoomAction, RoomSideTab } from "./PlayerPane";
+import type { RoomSideTab } from "./PlayerPane";
 import type { RecordingContext } from "@/features/recording/recording";
 import { fetchRecordingPlayUrl } from "@/features/recording/recordingSource";
 import { RecordingControl } from "@/features/recording/RecordingControl";
 import { RecordingLeaveGuard } from "@/features/recording/RecordingLeaveGuard";
 import type { PlayerHudRoomAction } from "./PlayerFullscreenHud";
-import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import { useAutoDanmakuSend } from "./danmaku/useAutoDanmakuSend";
 import { AutoDanmakuSendMenu, SleepTimerMenu } from "./RoomToolMenus";
-import { useSleepTimer, type SleepTimerController } from "./useSleepTimer";
+import { useSleepTimer } from "./useSleepTimer";
 import { RoomHostInfo } from "./RoomHostInfo";
 import {
   roomBackTargetFromNavigationState,
@@ -48,15 +43,8 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerScope,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@/components/ui/drawer";
+import { DrawerScope } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
@@ -83,6 +71,7 @@ function RoomPageContent() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const recordedHistoryRoomRef = useRef<string | null>(null);
+  const mobileClient = isMobileClient();
 
   const [followBusy, setFollowBusy] = useState(false);
   const [castingDevice, setCastingDevice] = useState<string | null>(null);
@@ -91,9 +80,6 @@ function RoomPageContent() {
   const requestedSideTab = roomSideTabFromNavigationState(location.state);
   const backTarget = roomBackTargetFromNavigationState(location.state);
   const [sideTab, setSideTab] = useState<RoomSideTab>(requestedSideTab);
-  const [playerMobileActions, setPlayerMobileActions] = useState<readonly PlayerMobileRoomAction[]>(
-    [],
-  );
   // 网页全屏（桌面）：画面占满应用窗口，不进入原生全屏。状态留在本页而不是 PlayerPane，
   // 因为要让位的上下两条栏属于本页；右侧栏那部分由 PlayerPane 自己根据此值隐藏。
   const [webFullscreen, setWebFullscreen] = useState(false);
@@ -280,6 +266,24 @@ function RoomPageContent() {
     navigate("/multi-room");
   }
 
+  /**
+   * 离开房间。`backTarget` 由发起导航的入口写进 location state：从首页/关注页
+   * 进来时直接 replace 回那条路由，避免在列表页之间累积返回栈。
+   *
+   * 移动端没有流内顶栏，这个回调由画面内 HUD 的返回箭头（退尽全屏层之后）调用。
+   */
+  const goBack = useCallback(() => {
+    if (backTarget === "home" || backTarget === "follow") {
+      navigate(backTarget === "follow" ? "/follow" : "/", { replace: true });
+      return;
+    }
+    if (canNavigateBackInApp(window.history.state)) {
+      navigate(-1);
+      return;
+    }
+    navigate("/", { replace: true });
+  }, [backTarget, navigate]);
+
   if (!siteId || !roomId) {
     return (
       <div className="p-6">
@@ -299,7 +303,7 @@ function RoomPageContent() {
   if (detailQuery.isLoading) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载中…" backTarget={backTarget} />
+        <RoomTopBar title="加载中…" onBack={goBack} />
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-8 text-primary" />
         </div>
@@ -310,7 +314,7 @@ function RoomPageContent() {
   if (detailQuery.isError) {
     return (
       <div className="flex h-full flex-col">
-        <RoomTopBar title="加载失败" backTarget={backTarget} />
+        <RoomTopBar title="加载失败" onBack={goBack} />
         <div className="p-6">
           <ErrorState
             error={detailQuery.error}
@@ -376,14 +380,18 @@ function RoomPageContent() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {!webFullscreen && (
+      {/* 移动端刻意不渲染流内顶栏：房间身份与工具改由 PlayerPane 的画面内 HUD
+          承担（`stageOwnsRoomTopBar`），画面因此拿到整个视口高度。 */}
+      {!webFullscreen && !mobileClient && (
         <RoomTopBar
           title={detail.title || "直播间"}
-          backTarget={backTarget}
+          onBack={goBack}
           rightSlot={
             <div className="flex items-center gap-1">
               <RecordingControl context={recordingContext} />
-              <div className="hidden md:flex md:items-center md:gap-1">
+              {/* 顶栏本身已限定桌面，工具行不再按视口宽度隐藏：窄窗口下移动端抽屉
+                  已经不存在，再藏起来就没有入口了。 */}
+              <div className="flex items-center gap-1">
                 <RoomToolPopover icon={Timer} label="定时关闭" active={sleepTimer.active}>
                   <SleepTimerMenu timer={sleepTimer} showTrigger={false} showHeader={false} />
                 </RoomToolPopover>
@@ -409,39 +417,22 @@ function RoomPageContent() {
                   />
                 </RoomToolPopover>
               </div>
-              <div className="hidden md:block">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="加入并打开多画面"
-                        onClick={openInMultiRoom}
-                      />
-                    }
-                  >
-                    <PanelsTopLeft data-icon="inline-start" aria-hidden />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">加入并打开多画面</TooltipContent>
-                </Tooltip>
-              </div>
-              <div className="md:hidden">
-                <RoomMobileActions
-                  roomUrl={detail.url || window.location.href}
-                  playbackUrl={playback.playUrl?.url}
-                  castUrl={playback.playUrl?.url ?? null}
-                  castHeaders={playback.playUrl?.headers ?? {}}
-                  castTitle={detail.title || "rLive 直播"}
-                  castingDevice={castingDevice}
-                  onCastingDeviceChange={setCastingDevice}
-                  playerActions={playerMobileActions}
-                  autoSend={autoDanmakuSend}
-                  sleepTimer={sleepTimer}
-                  onCopy={copyRoomValue}
-                />
-              </div>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="加入并打开多画面"
+                      onClick={openInMultiRoom}
+                    />
+                  }
+                >
+                  <PanelsTopLeft data-icon="inline-start" aria-hidden />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">加入并打开多画面</TooltipContent>
+              </Tooltip>
             </div>
           }
         />
@@ -483,7 +474,7 @@ function RoomPageContent() {
           onWebFullscreenChange={setWebFullscreen}
           // 顶栏隐藏后录制入口会跟着消失，因此把同一个控件补进画面内的 HUD。
           hudToolsSlot={<RecordingControl context={recordingContext} />}
-          onMobileRoomActionsChange={setPlayerMobileActions}
+          onNavigateBack={goBack}
         />
       </div>
 
@@ -550,30 +541,17 @@ function RoomPageContent() {
 
 function RoomTopBar({
   title,
-  backTarget,
+  onBack,
   rightSlot,
 }: {
   title: string;
-  backTarget?: "home" | "follow" | null;
+  onBack: () => void;
   rightSlot?: ReactNode;
 }) {
-  const navigate = useNavigate();
-
-  function goBack() {
-    if (backTarget === "home" || backTarget === "follow") {
-      navigate(backTarget === "follow" ? "/follow" : "/", { replace: true });
-      return;
-    }
-    const historyState = window.history.state as { idx?: number } | null;
-    if (typeof historyState?.idx === "number" && historyState.idx > 0) {
-      navigate(-1);
-      return;
-    }
-    navigate("/", { replace: true });
-  }
-
   return (
-    <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
+    // `player-page-top-bar` 让开状态栏：这条路由的外壳内边距已被撤掉（画面内顶栏
+    // 自己负责安全区），流内顶栏只在播放器未挂载的加载/失败态与桌面窗口化出现。
+    <header className="player-page-top-bar relative flex min-h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
       <Tooltip>
         <TooltipTrigger
           render={
@@ -582,7 +560,7 @@ function RoomTopBar({
               size="icon-sm"
               className="motion-back-button absolute left-3 z-10 rounded-lg hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
               aria-label="返回上一页"
-              onClick={goBack}
+              onClick={onBack}
             >
               <ChevronLeft data-icon="inline-start" aria-hidden />
             </Button>
@@ -651,200 +629,5 @@ function RoomToolPopover({
         {children}
       </PopoverContent>
     </Popover>
-  );
-}
-
-function RoomMobileActions({
-  roomUrl,
-  playbackUrl,
-  castUrl,
-  castHeaders,
-  castTitle,
-  castingDevice,
-  onCastingDeviceChange,
-  playerActions,
-  autoSend,
-  sleepTimer,
-  onCopy,
-}: {
-  roomUrl: string;
-  playbackUrl?: string;
-  castUrl: string | null;
-  castHeaders: Record<string, string>;
-  castTitle: string;
-  castingDevice: string | null;
-  onCastingDeviceChange: (deviceName: string | null) => void;
-  playerActions: readonly PlayerMobileRoomAction[];
-  autoSend: AutoDanmakuSendController;
-  sleepTimer: SleepTimerController;
-  onCopy: (value: string, successMessage: string) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [autoSendExpanded, setAutoSendExpanded] = useState(false);
-  const [sleepTimerExpanded, setSleepTimerExpanded] = useState(false);
-  const [castExpanded, setCastExpanded] = useState(false);
-
-  function copy(value: string, successMessage: string) {
-    setOpen(false);
-    void onCopy(value, successMessage);
-  }
-
-  function runPlayerAction(action: PlayerMobileRoomAction) {
-    setOpen(false);
-    action.onSelect();
-  }
-
-  return (
-    <Drawer open={open} onOpenChange={setOpen}>
-      <DrawerTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 touch-manipulation"
-            aria-label="更多房间操作"
-          >
-            <Ellipsis data-icon="inline-start" aria-hidden />
-          </Button>
-        }
-      />
-      <DrawerContent
-        side="bottom"
-        glass
-        className={`max-h-[calc(100dvh-1rem)] overflow-y-auto space-y-4 ${glassSurfaceClass()}`}
-      >
-        <DrawerTitle>房间操作</DrawerTitle>
-        {/* 顶行：链接/复制操作。底行：播放器功能开关。
-           两者都是图标在上文字在下的磁贴，保证足够大的触摸目标。 */}
-        <div className="grid grid-cols-4 gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-auto flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
-            onClick={() => copy(roomUrl, "已复制房间链接")}
-          >
-            <Link2 className="size-5" aria-hidden />
-            复制链接
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-auto flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
-            disabled={!playbackUrl}
-            onClick={() => {
-              if (playbackUrl) copy(playbackUrl, "已复制播放直链");
-            }}
-          >
-            <Share2 className="size-5" aria-hidden />
-            复制直链
-          </Button>
-        </div>
-        {(playerActions.length > 0 || autoSend || sleepTimer) && (
-          <>
-            <Separator />
-            <div className="grid grid-cols-4 gap-2">
-              {playerActions.map((action) => {
-                const Icon = action.icon;
-                return (
-                  <Button
-                    key={action.id}
-                    type="button"
-                    variant={action.pressed ? "secondary" : "ghost"}
-                    className="h-auto flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
-                    disabled={action.disabled}
-                    aria-pressed={action.pressed}
-                    onClick={() => runPlayerAction(action)}
-                  >
-                    <Icon className="size-5" aria-hidden />
-                    <span className="max-w-full truncate">{action.label}</span>
-                  </Button>
-                );
-              })}
-              <Button
-                type="button"
-                variant={autoSendExpanded || autoSend.enabled ? "secondary" : "ghost"}
-                className="h-auto min-w-0 flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
-                aria-pressed={autoSendExpanded || autoSend.enabled}
-                aria-expanded={autoSendExpanded}
-                onClick={() => {
-                  setAutoSendExpanded((expanded) => !expanded);
-                  setSleepTimerExpanded(false);
-                  setCastExpanded(false);
-                }}
-              >
-                <span className="relative inline-flex">
-                  <Car className="size-5" aria-hidden />
-                  {autoSend.enabled && <ToolActiveDot />}
-                </span>
-                <span className="max-w-full truncate">
-                  {autoSend.enabled ? "发送中" : "自动发送"}
-                </span>
-              </Button>
-              <Button
-                type="button"
-                variant={sleepTimerExpanded || sleepTimer.active ? "secondary" : "ghost"}
-                className="h-auto min-w-0 flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
-                aria-pressed={sleepTimerExpanded || sleepTimer.active}
-                aria-expanded={sleepTimerExpanded}
-                onClick={() => {
-                  setSleepTimerExpanded((expanded) => !expanded);
-                  setAutoSendExpanded(false);
-                  setCastExpanded(false);
-                }}
-              >
-                <span className="relative inline-flex">
-                  <Timer className="size-5" aria-hidden />
-                  {sleepTimer.active && <ToolActiveDot />}
-                </span>
-                <span className="max-w-full truncate">
-                  {sleepTimer.active ? "定时中" : "定时关闭"}
-                </span>
-              </Button>
-              <Button
-                type="button"
-                variant={castExpanded || castingDevice != null ? "secondary" : "ghost"}
-                className="h-auto min-w-0 flex-col gap-1.5 py-3 text-xs font-normal touch-manipulation"
-                disabled={!castUrl}
-                aria-pressed={castExpanded || castingDevice != null}
-                aria-expanded={castExpanded}
-                onClick={() => {
-                  setCastExpanded((expanded) => !expanded);
-                  setAutoSendExpanded(false);
-                  setSleepTimerExpanded(false);
-                }}
-              >
-                <span className="relative inline-flex">
-                  <Cast className="size-5" aria-hidden />
-                  {castingDevice != null && <ToolActiveDot />}
-                </span>
-                <span className="max-w-full truncate">
-                  {castingDevice != null ? `投屏中` : "投屏"}
-                </span>
-              </Button>
-            </div>
-          </>
-        )}
-        {sleepTimerExpanded && (
-          <div className={cn("rounded-lg p-3", glassPanelClass())}>
-            <SleepTimerMenu timer={sleepTimer} showTrigger={false} />
-          </div>
-        )}
-        {castExpanded && castUrl && (
-          <div className={cn("rounded-lg p-3", glassPanelClass())}>
-            <CastMenu
-              castUrl={castUrl}
-              headers={castHeaders}
-              title={castTitle}
-              onCastingDeviceChange={onCastingDeviceChange}
-            />
-          </div>
-        )}
-        {autoSendExpanded && (
-          <div className={cn("rounded-lg p-3", glassPanelClass())}>
-            <AutoDanmakuSendMenu autoSend={autoSend} idPrefix="mobile-auto-danmaku" />
-          </div>
-        )}
-      </DrawerContent>
-    </Drawer>
   );
 }

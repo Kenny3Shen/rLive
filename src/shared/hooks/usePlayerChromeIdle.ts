@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { playerChromeVisible } from "@/shared/components/player/PlayerFullscreenLock";
 
 /** 空闲多久后把 chrome 淡出。 */
 const CHROME_IDLE_DELAY_MS = 2_600;
@@ -13,16 +14,22 @@ const CHROME_IDLE_DELAY_MS = 2_600;
 export function usePlayerChromeIdle({
   controlsRef,
   hudRef,
+  lockRef,
+  fullscreenLocked,
   keepVisible,
 }: {
   /** 底部控制条宿主元素。 */
   controlsRef: RefObject<HTMLElement | null>;
   /** 顶部 HUD 宿主元素。 */
   hudRef: RefObject<HTMLElement | null>;
+  /** 锁定按钮跟随唤醒态，锁定期间上下控制层始终隐藏。 */
+  lockRef: RefObject<HTMLElement | null>;
+  fullscreenLocked: boolean;
   /** true 时不参与空闲隐藏（暂停、缓冲、失败、弹层打开）。 */
   keepVisible: boolean;
 }) {
   const hideTimerRef = useRef<number | null>(null);
+  const controlsVisibleRef = useRef(true);
 
   const clearHideTimer = useCallback(() => {
     if (hideTimerRef.current === null) return;
@@ -32,13 +39,22 @@ export function usePlayerChromeIdle({
 
   const setChromeVisible = useCallback(
     (visible: boolean) => {
+      controlsVisibleRef.current = visible;
+      const chromeVisible = playerChromeVisible(visible, fullscreenLocked);
       for (const layer of [controlsRef.current, hudRef.current]) {
         if (!layer) continue;
-        layer.dataset.visible = visible ? "true" : "false";
-        layer.setAttribute("aria-hidden", String(!visible));
+        layer.dataset.visible = chromeVisible ? "true" : "false";
+        layer.setAttribute("aria-hidden", String(!chromeVisible));
+        layer.toggleAttribute("inert", !chromeVisible);
+      }
+      const lock = lockRef.current;
+      if (lock) {
+        lock.dataset.visible = visible ? "true" : "false";
+        lock.setAttribute("aria-hidden", String(!visible));
+        lock.toggleAttribute("inert", !visible);
       }
     },
-    [controlsRef, hudRef],
+    [controlsRef, fullscreenLocked, hudRef, lockRef],
   );
 
   const hasKeyboardFocusWithinChrome = useCallback(() => {
@@ -48,9 +64,10 @@ export function usePlayerChromeIdle({
     }
     return (
       controlsRef.current?.contains(activeElement) === true ||
-      hudRef.current?.contains(activeElement) === true
+      hudRef.current?.contains(activeElement) === true ||
+      lockRef.current?.contains(activeElement) === true
     );
-  }, [controlsRef, hudRef]);
+  }, [controlsRef, hudRef, lockRef]);
 
   const scheduleControlsHide = useCallback(() => {
     clearHideTimer();
@@ -80,8 +97,13 @@ export function usePlayerChromeIdle({
     setChromeVisible(true);
   }, [clearHideTimer, setChromeVisible]);
 
+  // 锁定、解锁与暂停/缓冲状态改变时同步三层，不能等下一次指针事件。
+  useLayoutEffect(() => {
+    revealControls();
+  }, [revealControls]);
+
   // 卸载时不留下悬空的隐藏定时器。
   useEffect(() => clearHideTimer, [clearHideTimer]);
 
-  return { revealControls, holdControlsVisible, scheduleControlsHide };
+  return { controlsVisibleRef, revealControls, holdControlsVisible, scheduleControlsHide };
 }
