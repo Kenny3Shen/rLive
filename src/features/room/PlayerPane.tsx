@@ -1510,6 +1510,9 @@ export function PlayerPane({
                 // 高度，由同一个命令式 data 属性驱动淡入淡出，
                 // 使空闲计时器不会引发 React 协调。
                 "absolute inset-x-0 top-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                // 桌面只让可见 HUD 的按钮接收指针，标题和留白让给下方弹幕。
+                !mobileClient &&
+                  "pointer-events-none [&[data-visible=true]_button:enabled]:pointer-events-auto",
               )}
               onPointerEnter={holdControlsVisible}
               onPointerDown={handleChromePointerDown}
