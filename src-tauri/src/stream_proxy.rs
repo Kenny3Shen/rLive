@@ -15,7 +15,7 @@ use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex as AsyncMutex, watch, Semaphore};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore, watch};
 use tokio::task::JoinSet;
 
 use crate::error::{AppError, AppResult};
@@ -678,10 +678,7 @@ impl StreamProxy {
 
     /// [`Self::start`] / [`Self::start_text`] 共用的前置：预订会话所有权
     /// 并绑定一个回环临时端口，失败时释放预订。
-    async fn bind_session_listener(
-        &self,
-        session_id: &str,
-    ) -> AppResult<(u64, TcpListener, u16)> {
+    async fn bind_session_listener(&self, session_id: &str) -> AppResult<(u64, TcpListener, u16)> {
         // 在第一次 await 之前完成所有权预订。后续的 start 或 stop 可以取代这次预订，
         // 此时当前请求丢弃自己未安装的监听器，
         // 而不是覆盖更新的任务。
@@ -2156,7 +2153,7 @@ mod tests {
                     return;
                 };
                 let hits = entry_hits_counter.fetch_add(1, Ordering::SeqCst);
-                let backend = if hits % 2 == 0 {
+                let backend = if hits.is_multiple_of(2) {
                     backend_a_url.clone()
                 } else {
                     backend_b_url.clone()
@@ -2189,7 +2186,11 @@ mod tests {
 
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         async fn fetch_manifest(client: &reqwest::Client, local_url: &str, query: &str) -> String {
-            let response = client.get(format!("{local_url}?{query}")).send().await.unwrap();
+            let response = client
+                .get(format!("{local_url}?{query}"))
+                .send()
+                .await
+                .unwrap();
             assert!(response.status().is_success());
             response.text().await.unwrap()
         }

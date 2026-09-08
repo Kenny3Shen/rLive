@@ -45,8 +45,7 @@ pub struct VideoHistoryRecord {
 const LIST_LIMIT: i64 = 200;
 
 /// `list` / `find` 共用的 SELECT 列清单；列序与 [`map_video_history_record`] 一致。
-const VIDEO_HISTORY_COLUMNS: &str =
-    "kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid, progress, duration, watched_at";
+const VIDEO_HISTORY_COLUMNS: &str = "kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid, progress, duration, watched_at";
 
 fn map_video_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoHistoryRecord> {
     Ok(VideoHistoryRecord {

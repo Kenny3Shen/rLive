@@ -132,14 +132,7 @@ pub fn record_send_history_public(
     room_title: Option<&str>,
     room_user_name: Option<&str>,
 ) {
-    record_successful_danmaku_send(
-        state,
-        site_id,
-        content,
-        room_id,
-        room_title,
-        room_user_name,
-    );
+    record_successful_danmaku_send(state, site_id, content, room_id, room_title, room_user_name);
 }
 
 /// B 站弹幕发送的公共前置：读取设置与账号 Cookie，发送开关未启用或

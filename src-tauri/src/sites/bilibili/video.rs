@@ -2282,10 +2282,6 @@ mod tests {
         // 最后一片永远拉不到数据 —— seek 到尾部会永远 waiting。
         assert!(mpd.contains(r#"<SegmentList timescale="1000" duration="4233">"#));
         assert!(mpd.contains(r#"mediaPresentationDuration="PT12.7S""#));
-        assert!(
-            3 * 4233 <= 12_700,
-            "槽位总和必须落在 mediaPresentationDuration 之内"
-        );
     }
 
     #[test]
