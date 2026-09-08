@@ -1,10 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/live";
-import { getDanmakuSendConfig } from "./sending";
+import { getDanmakuSendConfig, VIDEO_DANMAKU_SEND_CONFIG } from "./sending";
 
 /**
  * 单条评论共享的复制/收藏/+1 行为，附加仅在侧栏列表提供的屏蔽用户。悬浮 DOM
@@ -37,7 +37,10 @@ export async function copyDanmakuText(text: string): Promise<boolean> {
   return copyText(text);
 }
 
-export function danmakuActionStatusMessage(status: DanmakuActionStatus): string | null {
+export function danmakuActionStatusMessage(
+  status: DanmakuActionStatus,
+  target: "live" | "video" = "live",
+): string | null {
   switch (status) {
     case "copied":
       return "已复制弹幕内容";
@@ -52,7 +55,9 @@ export function danmakuActionStatusMessage(status: DanmakuActionStatus): string 
     case "blocked":
       return "已屏蔽该用户，其消息立即隐藏";
     case "send-failed":
-      return "发送失败，请检查账号登录状态或直播间限制";
+      return target === "video"
+        ? "发送失败，请检查账号登录状态或视频限制"
+        : "发送失败，请检查账号登录状态或直播间限制";
     default:
       return null;
   }
@@ -73,6 +78,12 @@ export type DanmakuActionsParams = {
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
+  /** VOD 的 +1 落在点击操作时的播放位置，不使用被选弹幕的原始时间。 */
+  video?: {
+    cid: number;
+    aid: string;
+    getProgressMs: () => number;
+  };
 };
 
 export type DanmakuActions = {
@@ -103,16 +114,18 @@ export function useDanmakuActions({
   roomId,
   roomTitle,
   roomUserName,
+  video,
 }: DanmakuActionsParams): DanmakuActions {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<DanmakuActionStatus>(null);
   const [favoriting, setFavoriting] = useState(false);
   const [sending, setSending] = useState(false);
+  const sendInFlightRef = useRef(false);
   const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
   const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
   const blockedUsers = useSettingsStore((s) => s.danmakuBlockedUsers);
   const blockDanmakuUser = useSettingsStore((s) => s.blockDanmakuUser);
-  const sendConfig = getDanmakuSendConfig(siteId);
+  const sendConfig = video ? VIDEO_DANMAKU_SEND_CONFIG : getDanmakuSendConfig(siteId);
   const isChat = eventKind === "chat" && message.length > 0;
   const normalizedUser = user?.trim() ?? "";
   // 匿名/空昵称屏蔽不了：列表按昵称精确匹配，空串会匹配所有缺失昵称的事件。
@@ -120,8 +133,11 @@ export function useDanmakuActions({
   const canBlock = normalizedUser !== "" && !isBlocked && eventKind !== "system";
   const blockLabel = isBlocked ? "该用户已被屏蔽" : `屏蔽 ${normalizedUser || "该用户"}`;
 
+  const hasSendTarget = video
+    ? Number.isSafeInteger(video.cid) && video.cid > 0 && /^[1-9]\d*$/.test(video.aid)
+    : Boolean(roomId);
   const canRepeat =
-    isChat && Boolean(sendConfig && roomId && danmakuSendEnabled && !danmakuSendPending);
+    isChat && Boolean(sendConfig && hasSendTarget && danmakuSendEnabled && !danmakuSendPending);
   const canFavorite = isChat && Boolean(siteId);
   const repeatLabel = canRepeat
     ? "发送相同的弹幕（+1）"
@@ -163,23 +179,33 @@ export function useDanmakuActions({
   }, [favoriting, message, queryClient, siteId]);
 
   const repeat = useCallback(async () => {
-    if (!sendConfig || !roomId || !message || sending) return;
+    if (!canRepeat || !sendConfig || sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
     setSending(true);
     setStatus(null);
     try {
-      await invokeCmd<void>(sendConfig.sendCommand, {
-        roomId,
-        message,
-        roomTitle,
-        roomUserName,
-      });
+      const progressMs = video?.getProgressMs() ?? 0;
+      if (!Number.isFinite(progressMs) || progressMs < 0) throw new Error("Invalid video position");
+      await invokeCmd<void>(
+        sendConfig.sendCommand,
+        video
+          ? {
+              cid: video.cid,
+              aid: video.aid,
+              progressMs: Math.floor(progressMs),
+              message,
+              videoTitle: roomTitle,
+            }
+          : { roomId, message, roomTitle, roomUserName },
+      );
       setStatus("sent");
     } catch {
       setStatus("send-failed");
     } finally {
+      sendInFlightRef.current = false;
       setSending(false);
     }
-  }, [message, roomId, roomTitle, roomUserName, sendConfig, sending]);
+  }, [canRepeat, message, roomId, roomTitle, roomUserName, sendConfig, video]);
 
   // 屏蔽是本地持久化偏好，失败面只有"已在列表中"，因此同步完成并直接上报状态。
   const block = useCallback(() => {
@@ -190,7 +216,7 @@ export function useDanmakuActions({
 
   return {
     status,
-    statusMessage: danmakuActionStatusMessage(status),
+    statusMessage: danmakuActionStatusMessage(status, video ? "video" : "live"),
     failed: isDanmakuActionFailure(status),
     resetStatus,
     copy,

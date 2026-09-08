@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { DanmuJsBullet, DanmuJsComment, DanmuJsInstance } from "danmu.js";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
@@ -55,7 +54,8 @@ import {
   siteSupportsSuperChat,
   superChatDedupeKey,
 } from "../superChat";
-import { DANMAKU_MENU_ATTR, DanmakuActionMenu, type DanmakuHoverTarget } from "./DanmakuActionMenu";
+import { DanmakuActionMenu, type DanmakuHoverTarget } from "./DanmakuActionMenu";
+import { useDanmakuPinInteraction } from "./useDanmakuPinInteraction";
 
 export type DanmakuHitRect = {
   x: number;
@@ -63,38 +63,6 @@ export type DanmakuHitRect = {
   width: number;
   height: number;
 };
-
-/**
- * 钉住评论的安全网。
- *
- * 钉住会把 danmu.js 的 Bullet 停在 `forcedPause` 状态，只有显式 restart 才能离开。
- * 下方的每条解除路径都会释放它，但曾有一条冻结的评论跨越舞台缩放或层销毁后
- * 永远停在屏幕上，因此钉住也会自行过期。时长刻意宽松：
- * 绝不能打断还在阅读自己钉住的评论的人。
- */
-const DANMU_JS_PIN_AUTO_RELEASE_MS = 20_000;
-/**
- * 只有保持原地的按压才构成钉住，这样碰巧从评论上开始的音量/亮度拖拽不会被
- * 读成钉住。对齐 `PlayerPane` 的舞台点按阈值；复制而非导入，
- * 因为那个模块渲染本模块。
- */
-const DANMU_JS_PIN_TAP_MAX_DISTANCE_PX = 14;
-const DANMU_JS_PIN_TAP_MAX_DURATION_MS = 320;
-/**
- * 被认领的按压在多长时间内继续抑制由它派生的鼠标事件。`click` 与其 `pointerup`
- * 在同一任务中先后发生，双击的 `dblclick` 跟在第二次之后，
- * 所以只需比一次手势多活片刻。
- */
-const DANMU_JS_PIN_CLAIM_WINDOW_MS = 500;
-
-/** 短促且基本不动的按压：是钉住，不是手势的开始。 */
-export function isDanmakuPinTap(deltaX: number, deltaY: number, durationMs: number): boolean {
-  return (
-    durationMs >= 0 &&
-    durationMs <= DANMU_JS_PIN_TAP_MAX_DURATION_MS &&
-    Math.hypot(deltaX, deltaY) <= DANMU_JS_PIN_TAP_MAX_DISTANCE_PX
-  );
-}
 
 export function danmakuVisibleContentRect(
   contentRect: DanmakuHitRect | null,
@@ -201,17 +169,6 @@ function usePageVisibility(): boolean {
   return visible;
 }
 
-function isMenuTarget(target: EventTarget | null): boolean {
-  const element =
-    target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
-  return Boolean(element?.closest(`[${DANMAKU_MENU_ATTR}]`));
-}
-
-function bulletElementFromTarget(target: EventTarget | null): HTMLElement | null {
-  if (!(target instanceof Element)) return null;
-  return target.closest<HTMLElement>("[data-rlive-danmaku-id]");
-}
-
 function bulletId(value: unknown): string | null {
   if (typeof value === "string" && value) return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -294,15 +251,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const sequenceRef = useRef(0);
   const runtimeEpochRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
-  const pinTapRef = useRef<{
-    pointerId: number;
-    id: string;
-    element: HTMLElement;
-    startX: number;
-    startY: number;
-    startedAt: number;
-  } | null>(null);
-  const claimedPressAtRef = useRef(0);
   const reducedMotion = useReducedMotionPreference();
   const pageVisible = usePageVisibility();
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -928,33 +876,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   useEffect(() => {
     const selectedId = hoverTarget?.hoverKey;
-    if (!selectedId) return;
-
-    const dismissOnOutsidePointerDown = (event: PointerEvent) => {
-      if (isMenuTarget(event.target)) return;
-      const targetBullet = bulletElementFromTarget(event.target);
-      if (targetBullet?.dataset.rliveDanmakuId === selectedId) return;
-      releaseSelection();
-    };
-
-    document.addEventListener("pointerdown", dismissOnOutsidePointerDown, true);
-    return () => document.removeEventListener("pointerdown", dismissOnOutsidePointerDown, true);
-  }, [hoverTarget?.hoverKey, releaseSelection]);
-
-  useEffect(() => {
-    if (!hoverTarget?.hoverKey) return;
-    // 结束一次钉住不能依赖组件之外的任何东西：舞台缩放、层销毁或被拒绝的
-    // 重新挂载都可能让冻结的 bullet 受困。让钉住自行过期，
-    // 评论才绝不可能一直停驻。
-    const timer = window.setTimeout(
-      () => releaseSelectionRef.current(),
-      DANMU_JS_PIN_AUTO_RELEASE_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [hoverTarget?.hoverKey]);
-
-  useEffect(() => {
-    const selectedId = hoverTarget?.hoverKey;
     const host = hostRef.current;
     if (!selectedId || !host) return;
     let frame = 0;
@@ -992,89 +913,14 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     return () => window.cancelAnimationFrame(frame);
   }, [hoverTarget?.hoverKey]);
 
-  // 桌面与触摸共用同一种按压手势。按压瞄准哪条评论在 pointerdown 时决定，
-  // 因为评论一直在指针下方移动；pointerup 只检查按压是否短促且原地不动，
-  // 于是碰巧始于评论的音量/亮度拖拽仍会到达舞台。文档级委托负责解除。
-  const handleLayerPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const bullet = bulletElementFromTarget(event.target);
-    const id = bullet?.dataset.rliveDanmakuId;
-    if (!id || !recordsRef.current.has(id)) {
-      pinTapRef.current = null;
-      return;
-    }
-    pinTapRef.current = {
-      pointerId: event.pointerId,
-      id,
-      element: bullet,
-      startX: event.clientX,
-      startY: event.clientY,
-      startedAt: Date.now(),
-    };
-  }, []);
-
-  const finishPress = useCallback(
-    (event: PointerEvent) => {
-      const tap = pinTapRef.current;
-      if (!tap || tap.pointerId !== event.pointerId) return;
-      pinTapRef.current = null;
-      if (
-        !isDanmakuPinTap(
-          event.clientX - tap.startX,
-          event.clientY - tap.startY,
-          Date.now() - tap.startedAt,
-        )
-      ) {
-        return;
-      }
-      if (!recordsRef.current.has(tap.id)) return;
-      // 认领已完成按压：舞台读取 `defaultPrevented`，
-      // 不会把它变成控制条切换或双击全屏。
-      event.preventDefault();
-      claimedPressAtRef.current = Date.now();
-      if (selectedIdRef.current === tap.id) releaseSelection();
-      else selectBullet(tap.id, tap.element);
-    },
-    [releaseSelection, selectBullet],
-  );
-  const finishPressRef = useRef(finishPress);
-  useLayoutEffect(() => {
-    finishPressRef.current = finishPress;
-  }, [finishPress]);
-
-  useEffect(() => {
-    // 层本身从不接受指针；只有其中的 bullet 文本接受（见 `createDanmuBulletElement`），
-    // 这正是空白画面的按压能落到舞台的原因。
-    const onPointerUp = (event: PointerEvent) => finishPressRef.current(event);
-    const onPointerCancel = (event: PointerEvent) => {
-      if (pinTapRef.current?.pointerId === event.pointerId) pinTapRef.current = null;
-    };
-    // pointerup 上的 `preventDefault` 阻止不了它产生的 click 与 dblclick，
-    // 而这些会冒泡到把画面上的按压当作自己手势的祖先（多房间网格正是借此提升
-    // 单元）。它们的目标是按压与释放的共同祖先，漂移中的评论会让目标指向画面：
-    // 因此依据按压记录下的认领来判断。
-    const swallowClaimedClick = (event: MouseEvent) => {
-      if (isMenuTarget(event.target)) return;
-      if (Date.now() - claimedPressAtRef.current > DANMU_JS_PIN_CLAIM_WINDOW_MS) return;
-      event.stopPropagation();
-    };
-    // 任何不是从评论上开始的按压都会终止认领，因此钉住后立即按下控件
-    // 绝不会被上面的窗口监听吞掉。
-    const dropStaleClaim = (event: PointerEvent) => {
-      if (!bulletElementFromTarget(event.target)) claimedPressAtRef.current = 0;
-    };
-    document.addEventListener("pointerdown", dropStaleClaim, true);
-    document.addEventListener("pointerup", onPointerUp, true);
-    document.addEventListener("pointercancel", onPointerCancel, true);
-    document.addEventListener("click", swallowClaimedClick, true);
-    document.addEventListener("dblclick", swallowClaimedClick, true);
-    return () => {
-      document.removeEventListener("pointerdown", dropStaleClaim, true);
-      document.removeEventListener("pointerup", onPointerUp, true);
-      document.removeEventListener("pointercancel", onPointerCancel, true);
-      document.removeEventListener("click", swallowClaimedClick, true);
-      document.removeEventListener("dblclick", swallowClaimedClick, true);
-    };
-  }, []);
+  useDanmakuPinInteraction({
+    hostRef,
+    enabled: active && !reducedMotion && pageVisible,
+    selectedId: hoverTarget?.hoverKey ?? null,
+    hasBullet: (id) => recordsRef.current.get(id)?.attached === true,
+    selectBullet,
+    releaseSelection,
+  });
 
   return (
     <div ref={hostRef} className={cn("pointer-events-none absolute inset-0", className)}>
@@ -1086,7 +932,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         // 这正是空白画面的按压能落到舞台的原因。
         className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
         style={{ opacity: 1 }}
-        onPointerDown={handleLayerPointerDown}
       />
       <div
         ref={topContainerRef}
@@ -1094,7 +939,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         data-rlive-danmaku-layer="top"
         className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
         style={{ opacity: 1 }}
-        onPointerDown={handleLayerPointerDown}
       />
       {hoverTarget && (
         <>

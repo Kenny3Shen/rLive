@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { DanmuJsInstance } from "danmu.js";
 import {
   clampDanmuArea,
@@ -10,6 +10,16 @@ import {
   danmuLaneHeight,
 } from "@/features/room/danmaku/danmuJsAdapter";
 import { loadDanmuJs } from "@/features/room/danmaku/danmuJsLoader";
+import {
+  DanmakuActionMenu,
+  type DanmakuHoverTarget,
+} from "@/features/room/danmaku/DanmakuActionMenu";
+import {
+  releaseDanmuJsPin,
+  removeDanmuJsPin,
+  resumeDanmuJsPin,
+} from "@/features/room/danmaku/danmuJsPin";
+import { useDanmakuPinInteraction } from "@/features/room/danmaku/useDanmakuPinInteraction";
 import { createShieldMatcher } from "@/features/room/danmaku/filter";
 import { prefersReducedMotion } from "@/shared/motion/preference";
 import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
@@ -37,19 +47,119 @@ type VideoDanmakuLayerProps = {
   videoRef: RefObject<HTMLVideoElement | null>;
   entries: readonly VideoDanmakuEntry[];
   active: boolean;
+  interactive?: boolean;
+  cid?: number;
+  aid?: string;
+  title?: string;
+  large?: boolean;
+  tapMaxDistance?: number;
 };
 
 /** 判定为 seek 的时间跳变阈值。正常播放每次 timeupdate 推进约 250ms。 */
 const SEEK_JUMP_SECONDS = 1.2;
 
-export function VideoDanmakuLayer({ videoRef, entries, active }: VideoDanmakuLayerProps) {
+export function VideoDanmakuLayer({
+  videoRef,
+  entries,
+  active,
+  interactive = true,
+  cid = 0,
+  aid = "",
+  title,
+  large = false,
+  tapMaxDistance,
+}: VideoDanmakuLayerProps) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const instanceRef = useRef<DanmuJsInstance | null>(null);
+  const recordsRef = useRef(new Map<string, { entry: VideoDanmakuEntry; element: HTMLElement }>());
+  const selectedIdRef = useRef<string | null>(null);
+  const [target, setTarget] = useState<DanmakuHoverTarget | null>(null);
   const fontSize = clampDanmuFontSize(useSettingsStore((state) => state.danmakuFontSize));
   const fontStroke = clampDanmuFontStroke(useSettingsStore((state) => state.danmakuFontStroke));
   const opacity = clampDanmuOpacity(useSettingsStore((state) => state.danmakuOpacity));
   const speed = parseDanmakuSpeed(useSettingsStore((state) => state.danmakuSpeed));
   const area = clampDanmuArea(useSettingsStore((state) => state.danmakuArea));
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
+
+  const releaseSelection = useCallback((dropped = false) => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    selectedIdRef.current = null;
+    setTarget(null);
+    const element = recordsRef.current.get(id)?.element;
+    if (element) {
+      delete element.dataset.rliveDanmakuSelected;
+      element.style.removeProperty("z-index");
+    }
+    const instance = instanceRef.current;
+    if (!instance) return;
+    if (dropped) releaseDanmuJsPin(instance, id);
+    else if (!resumeDanmuJsPin(instance, id)) removeDanmuJsPin(instance, id);
+    // VOD 只恢复单条弹幕，不调用 play()，保持媒体原有的暂停状态。
+  }, []);
+
+  const measureTarget = useCallback((id: string): DanmakuHoverTarget | null => {
+    const host = hostRef.current;
+    const record = recordsRef.current.get(id);
+    if (!host || !record?.element.isConnected) return null;
+    const content = record.element.querySelector("[data-rlive-danmaku-content]") ?? record.element;
+    const rect = content.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    return {
+      hoverKey: id,
+      content: record.entry.content,
+      user: "",
+      eventKind: "chat",
+      left: rect.left - hostRect.left,
+      top: rect.top - hostRect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }, []);
+
+  useDanmakuPinInteraction({
+    hostRef,
+    enabled: active && interactive,
+    tapMaxDistance,
+    selectedId: target?.hoverKey ?? null,
+    hasBullet: (id) => recordsRef.current.has(id),
+    selectBullet: (id, element) => {
+      releaseSelection();
+      instanceRef.current?.freezeComment(id);
+      selectedIdRef.current = id;
+      element.dataset.rliveDanmakuSelected = "true";
+      setTarget(measureTarget(id));
+    },
+    releaseSelection,
+  });
+
+  const selectedId = target?.hoverKey ?? null;
+  useEffect(() => {
+    if (!selectedId) return;
+    const id = selectedId;
+    let frame = 0;
+    const update = () => {
+      const next = measureTarget(id);
+      if (!next) {
+        releaseSelection();
+        return;
+      }
+      setTarget((current) =>
+        current &&
+        current.hoverKey === id &&
+        (current.left !== next.left ||
+          current.top !== next.top ||
+          current.width !== next.width ||
+          current.height !== next.height)
+          ? next
+          : current,
+      );
+      frame = requestAnimationFrame(update);
+    };
+    frame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frame);
+  }, [selectedId, measureTarget, releaseSelection]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -72,8 +182,13 @@ export function VideoDanmakuLayer({ videoRef, entries, active }: VideoDanmakuLay
       isShielded({ kind: "chat", user: "", content, color: null, ts: 0 }),
     );
 
+    const visibleById = new Map(visible.map((entry) => [entry.id, entry]));
+    const records = recordsRef.current;
+
     /** 把游标对齐到某个播放位置，并清空屏幕上按旧时间轴投放的 bullet。 */
     function realign(positionMs: number) {
+      releaseSelection(true);
+      records.clear();
       cursor = firstVideoDanmakuAtOrAfter(visible, positionMs);
       lastPositionMs = positionMs;
       danmu?.clear();
@@ -120,16 +235,27 @@ export function VideoDanmakuLayer({ videoRef, entries, active }: VideoDanmakuLay
           area: danmuAreaConfig(area),
           channelSize: danmuLaneHeight(fontSize),
           mouseControl: false,
+          mouseControlPause: false,
           needResizeObserver: true,
           // 弹幕元素必须由 bulletCreateEl 钩子创建：comment 带 `elLazyInit` 时
           // danmu.js 在 attach 阶段完全依赖该钩子产出元素，缺了它 `this.el`
           // 是 undefined，appendChild 直接抛 TypeError（直播层注册的就是同一个）。
           hooks: {
             bulletCreateEl: (comment) => createDanmuBulletElement(comment),
+            bulletAttached: (comment, element) => {
+              const entry = visibleById.get(comment.id);
+              if (entry) records.set(comment.id, { entry, element });
+            },
+            bulletDetached: (comment, element) => {
+              if (records.get(comment.id)?.element !== element) return;
+              if (selectedIdRef.current === comment.id) releaseSelection(true);
+              records.delete(comment.id);
+            },
           },
-          // 叠加层不接指针事件：点击与双击要落到播放器表面上去切播放/全屏。
+          // 仅文字接收指针，空白区域仍穿透到播放器。
           containerStyle: { pointerEvents: "none" },
         });
+        instanceRef.current = danmu;
         // 减少动态效果下不做入场滚动：把滚动弹幕也按固定时长呈现，
         // 与录制回放叠加层的处理一致。
         if (prefersReducedMotion()) danmu.setPlayRate("scroll", 0.01);
@@ -148,6 +274,9 @@ export function VideoDanmakuLayer({ videoRef, entries, active }: VideoDanmakuLay
 
     return () => {
       disposed = true;
+      releaseSelection(true);
+      records.clear();
+      instanceRef.current = null;
       media.removeEventListener("timeupdate", tick);
       media.removeEventListener("seeking", onSeeking);
       media.removeEventListener("seeked", onSeeking);
@@ -160,14 +289,55 @@ export function VideoDanmakuLayer({ videoRef, entries, active }: VideoDanmakuLay
       }
       danmu = null;
     };
-  }, [active, area, entries, fontSize, fontStroke, opacity, shieldWords, speed, videoRef]);
+  }, [
+    active,
+    area,
+    cid,
+    entries,
+    fontSize,
+    fontStroke,
+    opacity,
+    shieldWords,
+    speed,
+    videoRef,
+    releaseSelection,
+  ]);
 
   return (
-    <div
-      ref={containerRef}
-      aria-hidden
-      data-video-danmaku-layer
-      className="pointer-events-none absolute inset-0 size-full overflow-hidden"
-    />
+    <div ref={hostRef} className="pointer-events-none absolute inset-0">
+      <div
+        ref={containerRef}
+        aria-hidden
+        data-video-danmaku-layer
+        className="pointer-events-none absolute inset-0 size-full overflow-hidden"
+      />
+      {target && active && interactive && (
+        <div className="pointer-events-none absolute inset-0 z-40">
+          <div
+            aria-hidden
+            data-rlive-danmaku-selection
+            className="pointer-events-none absolute box-border border border-white/90"
+            style={{
+              left: target.left,
+              top: target.top,
+              width: target.width,
+              height: target.height,
+            }}
+          />
+          <DanmakuActionMenu
+            key={target.hoverKey}
+            target={target}
+            siteId="bilibili"
+            roomTitle={title}
+            video={{
+              cid,
+              aid,
+              getProgressMs: () => (videoRef.current?.currentTime ?? 0) * 1_000,
+            }}
+            large={large}
+          />
+        </div>
+      )}
+    </div>
   );
 }
