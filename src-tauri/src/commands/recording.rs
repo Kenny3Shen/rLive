@@ -85,7 +85,10 @@ pub fn recording_delete(state: State<'_, AppState>, id: String) -> AppResult<()>
     // 录像已经删掉之后，进度行的清理失败不能让整个删除报错：
     // 那会让用户误以为删失败；留下的孤行由保留上限兜底汰汰，记警告即可。
     // 清理用的 id 必须与删除用的同一个（trim 后），否则清错行。
-    if let Err(error) = state.conn().and_then(|conn| recording_watch::remove(&conn, id)) {
+    if let Err(error) = state
+        .conn()
+        .and_then(|conn| recording_watch::remove(&conn, id))
+    {
         tracing::warn!(recording_id = %id, error = %error, "删除录制的观看进度行失败");
     }
     Ok(())

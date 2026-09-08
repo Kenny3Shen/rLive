@@ -4,9 +4,9 @@ use std::io::Read;
 
 use crate::db::follow::{self, FollowRecord, TagRecord};
 use crate::db::history::{self, HistoryRecord};
-use crate::db::video_history::{self, VideoHistoryRecord};
 use crate::db::iptv_favorite::{self, IptvFavoriteGroupRecord, IptvFavoriteRecord};
 use crate::db::schema::map_db_err;
+use crate::db::video_history::{self, VideoHistoryRecord};
 use crate::error::{AppError, AppResult};
 use crate::models::settings::AppSettings;
 use crate::settings;

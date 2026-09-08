@@ -354,7 +354,9 @@ pub struct SuperChatInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DanmakuContentSpan {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     Image {
         image_url: String,
         /// 大表情（Bilibili 装扮表情、Twitch 第三方表情等）：飘屏时占两条
