@@ -182,10 +182,7 @@ fn video_duration(value: Option<&Value>) -> i64 {
 fn stream_candidates(rep: &Value) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
     for key in ["base_url", "baseUrl"] {
-        if let Some(url) = rep
-            .get(key)
-            .map(as_str)
-            .filter(|url| !url.is_empty())
+        if let Some(url) = rep.get(key).map(as_str).filter(|url| !url.is_empty())
             && !candidates.contains(&url)
         {
             candidates.push(url);
@@ -229,47 +226,65 @@ fn json_items<T>(
 /// 该接口会混入直播、番剧等非稿件条目，只有 `goto == "av"` 且带 `owner` 的
 /// 才是可播的 UGC 稿件。
 pub fn parse_recommend(raw: &str) -> AppResult<VideoListPage> {
-    json_items(raw, "推荐流", "data.item", &["/data/item"], |_root, items| {
-        let items: Vec<VideoItem> = items
-            .iter()
-            .filter(|item| item.get("goto").map(as_str).as_deref() == Some("av"))
-            .filter(|item| item.get("owner").is_some())
-            .map(video_item)
-            .filter(|item| !item.bvid.is_empty())
-            .collect();
-        // 推荐流是无限刷新的，只要这一刷还有内容就认为可以继续。
-        VideoListPage {
-            has_more: !items.is_empty(),
-            items,
-        }
-    })
+    json_items(
+        raw,
+        "推荐流",
+        "data.item",
+        &["/data/item"],
+        |_root, items| {
+            let items: Vec<VideoItem> = items
+                .iter()
+                .filter(|item| item.get("goto").map(as_str).as_deref() == Some("av"))
+                .filter(|item| item.get("owner").is_some())
+                .map(video_item)
+                .filter(|item| !item.bvid.is_empty())
+                .collect();
+            // 推荐流是无限刷新的，只要这一刷还有内容就认为可以继续。
+            VideoListPage {
+                has_more: !items.is_empty(),
+                items,
+            }
+        },
+    )
 }
 
 /// 解析热门 `data.list[]`。尾页由 `data.no_more` 明确告知。
 pub fn parse_popular(raw: &str) -> AppResult<VideoListPage> {
-    json_items(raw, "热门", "data.list", &["/data/list"], |root, items| {
-        let items: Vec<VideoItem> = items.iter().map(video_item).collect();
-        let no_more = root
-            .pointer("/data/no_more")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        VideoListPage {
-            has_more: !no_more,
-            items,
-        }
-    })
+    json_items(
+        raw,
+        "热门",
+        "data.list",
+        &["/data/list"],
+        |root, items| {
+            let items: Vec<VideoItem> = items.iter().map(video_item).collect();
+            let no_more = root
+                .pointer("/data/no_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            VideoListPage {
+                has_more: !no_more,
+                items,
+            }
+        },
+    )
 }
 
 /// 解析分区榜 `data.list[]`（结构与热门一致，但该接口只有一页）。
 pub fn parse_zone(raw: &str) -> AppResult<VideoListPage> {
-    json_items(raw, "分区榜", "data.list", &["/data/list"], |_root, items| {
-        let items: Vec<VideoItem> = items.iter().map(video_item).collect();
-        // `ranking/v2` 一次返回全部榜单条目，没有翻页参数。
-        VideoListPage {
-            has_more: false,
-            items,
-        }
-    })
+    json_items(
+        raw,
+        "分区榜",
+        "data.list",
+        &["/data/list"],
+        |_root, items| {
+            let items: Vec<VideoItem> = items.iter().map(video_item).collect();
+            // `ranking/v2` 一次返回全部榜单条目，没有翻页参数。
+            VideoListPage {
+                has_more: false,
+                items,
+            }
+        },
+    )
 }
 
 fn pgc_item(item: &Value) -> PgcItem {
@@ -299,21 +314,27 @@ fn pgc_item(item: &Value) -> PgcItem {
 
 /// 解析 PGC 索引 `data.list[]`。翻页由 `data.has_next` 明确告知。
 pub fn parse_pgc_index(raw: &str) -> AppResult<PgcListPage> {
-    json_items(raw, "PGC 索引", "data.list", &["/data/list"], |root, items| {
-        let items: Vec<PgcItem> = items
-            .iter()
-            .map(pgc_item)
-            .filter(|item| !item.season_id.is_empty())
-            .collect();
-        let has_more = root
-            .pointer("/data/has_next")
-            .map(|next| match next {
-                Value::Bool(flag) => *flag,
-                other => as_i64(other) != 0,
-            })
-            .unwrap_or(false);
-        PgcListPage { has_more, items }
-    })
+    json_items(
+        raw,
+        "PGC 索引",
+        "data.list",
+        &["/data/list"],
+        |root, items| {
+            let items: Vec<PgcItem> = items
+                .iter()
+                .map(pgc_item)
+                .filter(|item| !item.season_id.is_empty())
+                .collect();
+            let has_more = root
+                .pointer("/data/has_next")
+                .map(|next| match next {
+                    Value::Bool(flag) => *flag,
+                    other => as_i64(other) != 0,
+                })
+                .unwrap_or(false);
+            PgcListPage { has_more, items }
+        },
+    )
 }
 
 /// 解析 PGC 排行榜。
@@ -392,13 +413,19 @@ fn season_episode(episode: &Value) -> SeasonEpisode {
 ///
 /// 与热门/分区榜同构（复用 [`video_item`]），但根下直接是数组、没有分页。
 pub fn parse_related(raw: &str) -> AppResult<VideoListPage> {
-    json_items(raw, "相关视频", "data 数组", &["/data"], |_root, items| {
-        let items: Vec<VideoItem> = items.iter().map(video_item).collect();
-        VideoListPage {
-            has_more: false,
-            items,
-        }
-    })
+    json_items(
+        raw,
+        "相关视频",
+        "data 数组",
+        &["/data"],
+        |_root, items| {
+            let items: Vec<VideoItem> = items.iter().map(video_item).collect();
+            VideoListPage {
+                has_more: false,
+                items,
+            }
+        },
+    )
 }
 
 /// 解析视频搜索结果 `data.result[]`。
@@ -1356,10 +1383,7 @@ const SEARCH_ORDERS: &[&str] = &["", "click", "pubdate", "dm", "stow", "scores"]
 ///
 /// 口径与 PiliPlus 对齐：begin 是 N 天前的本地零点，end 是当天 23:59:59 ——
 /// 也就是「今天在内的最近 N+1 个自然日」。
-fn pub_time_window(
-    pub_time: &str,
-    now: chrono::DateTime<chrono::Local>,
-) -> Option<(i64, i64)> {
+fn pub_time_window(pub_time: &str, now: chrono::DateTime<chrono::Local>) -> Option<(i64, i64)> {
     let days_back = match pub_time {
         "day" => 0,
         "week" => 6,
@@ -1394,7 +1418,11 @@ fn search_filter_query(
     now: chrono::DateTime<chrono::Local>,
 ) -> Vec<(&'static str, String)> {
     let order = order.unwrap_or("").trim();
-    let order = if SEARCH_ORDERS.contains(&order) { order } else { "" };
+    let order = if SEARCH_ORDERS.contains(&order) {
+        order
+    } else {
+        ""
+    };
     let duration = duration.unwrap_or(0).clamp(0, 4);
     let tids = tids.unwrap_or(0).max(0);
     let mut query = vec![
@@ -1585,7 +1613,10 @@ impl BilibiliSite {
             chrono::Local::now(),
         ));
         let text = self
-            .get_json("https://api.bilibili.com/x/web-interface/search/type", &query)
+            .get_json(
+                "https://api.bilibili.com/x/web-interface/search/type",
+                &query,
+            )
             .await?;
         parse_search_videos(&text, page)
     }
@@ -1612,10 +1643,7 @@ impl BilibiliSite {
             .unwrap_or("pubdate");
         params.insert("order".into(), order.into());
         let text = self
-            .get_json_signed(
-                "https://api.bilibili.com/x/space/wbi/arc/search",
-                params,
-            )
+            .get_json_signed("https://api.bilibili.com/x/space/wbi/arc/search", params)
             .await?;
         parse_uploader_videos(&text)
     }
@@ -1792,8 +1820,15 @@ impl BilibiliSite {
 
         let (video, audio, quality, quality_label, accept_quality) =
             select_streams(&data, request)?;
-        let video = self.video_track(&video, true).await?;
-        let audio = self.video_track(&audio, false).await?;
+        // 两条轨的 sidx 预抓互不依赖（各自独立的 CDN Range 请求），并发执行
+        // 省掉一次串行往返；错误优先级保持视频轨在前，与原先的串行顺序一致。
+        // 轨内的候选地址回退（mcdn 403 → upos 镜像）是依赖顺序，保持串行。
+        let (video_track, audio_track) = tokio::join!(
+            self.video_track(&video, true),
+            self.video_track(&audio, false)
+        );
+        let video = video_track?;
+        let audio = audio_track?;
         Ok(VideoPlaySelection {
             video,
             audio,
@@ -1867,16 +1902,8 @@ impl BilibiliSite {
                 params,
                 request,
                 "字幕请求缺少 bvid",
-                (
-                    "https://api.bilibili.com/x/player/wbi/v2",
-                    &[],
-                    "player v2",
-                ),
-                (
-                    "https://api.bilibili.com/x/player/wbi/v2",
-                    &[],
-                    "player v2",
-                ),
+                ("https://api.bilibili.com/x/player/wbi/v2", &[], "player v2"),
+                ("https://api.bilibili.com/x/player/wbi/v2", &[], "player v2"),
             )
             .await?;
         Ok(parse_subtitles(root.pointer("/data/subtitle/subtitles")))
@@ -1919,7 +1946,13 @@ impl BilibiliSite {
     /// 拉取字幕 JSON 原文（aisubtitle 主机无 CORS 头，必须由本端代拉）。
     pub async fn fetch_subtitle(&self, url: &str) -> AppResult<String> {
         let response = self
-            .video_fetch(self.client.get(url), "字幕请求失败", "字幕请求返回", false, false)
+            .video_fetch(
+                self.client.get(url),
+                "字幕请求失败",
+                "字幕请求返回",
+                false,
+                false,
+            )
             .await?;
         response
             .text()
@@ -2753,7 +2786,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn pub_time_window_spans_local_midnights() {
         // 本地时区语义：拿同一日期的本地零点比对时间戳，DST 边界之外两边
@@ -2855,13 +2887,23 @@ mod tests {
 
         // 无 ugc_season 字段 → None；单集合 → 不成连播列表。
         let plain = serde_json::json!({ "code": 0, "data": { "bvid": "BV1Ybuq6nEYq", "cid": 1 } });
-        assert!(parse_archive(&plain.to_string()).unwrap().ugc_season.is_none());
+        assert!(
+            parse_archive(&plain.to_string())
+                .unwrap()
+                .ugc_season
+                .is_none()
+        );
         let single = serde_json::json!({
             "code": 0,
             "data": { "bvid": "BV1Ybuq6nEYq", "cid": 1,
                 "ugc_season": { "title": "t", "sections": [ { "episodes": [ { "bvid": "BV1Y", "cid": 1 } ] } ] } }
         });
-        assert!(parse_archive(&single.to_string()).unwrap().ugc_season.is_none());
+        assert!(
+            parse_archive(&single.to_string())
+                .unwrap()
+                .ugc_season
+                .is_none()
+        );
     }
 
     #[test]
@@ -2943,7 +2985,10 @@ mod tests {
         ]);
         let subtitles = parse_subtitles(Some(&list));
         assert_eq!(subtitles.len(), 1);
-        assert_eq!(subtitles[0].url, "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/1.json");
+        assert_eq!(
+            subtitles[0].url,
+            "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/1.json"
+        );
         assert_eq!(subtitles[0].lan_doc, "中文（自动生成）");
 
         assert!(parse_subtitles(None).is_empty());

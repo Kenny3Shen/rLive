@@ -186,7 +186,11 @@ pub async fn video_get_play_info(
         let mpd = crate::sites::bilibili::video::build_mpd(&selection, &video_url, &audio_url);
         mpd_url = state
             .stream_proxy
-            .start_text(mpd, "application/dash+xml".to_string(), session_ids.mpd.clone())
+            .start_text(
+                mpd,
+                "application/dash+xml".to_string(),
+                session_ids.mpd.clone(),
+            )
             .await?;
     }
 
@@ -247,10 +251,7 @@ pub async fn video_get_subtitles(
 
 /// 拉取字幕 JSON 原文（字幕主机无 CORS 头，由本端代拉）。
 #[tauri::command(async)]
-pub async fn video_get_subtitle(
-    state: State<'_, AppState>,
-    url: String,
-) -> AppResult<String> {
+pub async fn video_get_subtitle(state: State<'_, AppState>, url: String) -> AppResult<String> {
     resolve_bilibili(&state)?.fetch_subtitle(&url).await
 }
 
@@ -291,8 +292,7 @@ pub async fn video_danmaku_send(
     message: String,
     video_title: Option<String>,
 ) -> AppResult<()> {
-    let (settings, cookie) =
-        crate::commands::danmaku::ensure_bilibili_send_ready(state.inner())?;
+    let (settings, cookie) = crate::commands::danmaku::ensure_bilibili_send_ready(state.inner())?;
     let aid_key = aid.trim().to_string();
     if aid_key.is_empty() || aid_key.len() > 32 || !aid_key.bytes().all(|b| b.is_ascii_digit()) {
         return Err(
