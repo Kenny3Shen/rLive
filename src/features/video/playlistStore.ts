@@ -127,6 +127,41 @@ export function videoEndedAction(
   return autoPlayNext && hasNext ? "next" : "stop";
 }
 
+/** 上滑前进、下滑后退；短滑与斜向拖动不切片。识别起步方向时可传更小的阈值。 */
+export function videoSwipeDirection(
+  deltaX: number,
+  deltaY: number,
+  minDistance = 48,
+): 1 | -1 | null {
+  if (Math.abs(deltaY) < minDistance || Math.abs(deltaY) <= Math.abs(deltaX) * 1.25) return null;
+  return deltaY < 0 ? 1 : -1;
+}
+
+export type VideoWheelGesture = {
+  lastTime: number;
+  distance: number;
+  committed: boolean;
+};
+
+/** 向下滚轮前进、向上后退；小增量累积，一次惯性滚动只换一条。 */
+export function videoWheelDirection(
+  gesture: VideoWheelGesture,
+  deltaY: number,
+  time: number,
+): 1 | -1 | null {
+  // ponytail: 以 180ms 静默划分滚轮手势；设备误判时再接入平台手势阶段。
+  if (time - gesture.lastTime > 180) {
+    gesture.distance = 0;
+    gesture.committed = false;
+  }
+  gesture.lastTime = time;
+  if (gesture.committed) return null;
+  gesture.distance += deltaY;
+  const direction = videoSwipeDirection(0, -gesture.distance);
+  gesture.committed = direction !== null;
+  return direction;
+}
+
 /** 取当前项沿播放方向的相邻项：step=1 是「下一个」，倒序播放时方向翻转。 */
 function adjacentItem(
   state: Pick<PlaylistState, "items" | "currentId" | "reversed">,
@@ -144,6 +179,12 @@ function adjacentItem(
   return items[nextIndex] ?? null;
 }
 
+/**
+ * 队列来源 UP 标记：UP 投稿抽屉连播时记录队列来自哪位 UP 主，播放页据此
+ * 展示来源信息。推荐 / 搜索 / 合集等普通来源为 null。
+ */
+export type PlaylistUploader = { mid: string; name: string };
+
 type PlaylistState = {
   /** 当前播放列表。空数组表示无列表（单视频播放）。 */
   items: PlaylistItem[];
@@ -155,11 +196,16 @@ type PlaylistState = {
   autoPlayNext: boolean;
   /** 是否循环播放当前视频（持久化到本地）。优先于自动播放下一集。 */
   loopPlayback: boolean;
+  /** 队列来源 UP 标记（不持久化，重开应用即失效）。普通来源与清空队列时为 null。 */
+  uploader: PlaylistUploader | null;
 };
 
 type PlaylistActions = {
-  /** 设置播放列表并开始播放指定项。 */
-  setPlaylist: (items: PlaylistItem[], startId: string) => void;
+  /**
+   * 设置播放列表并开始播放指定项。第三参标记队列来自某位 UP 主；
+   * 不传（普通来源）会清掉上一来源的标记，避免遗留。
+   */
+  setPlaylist: (items: PlaylistItem[], startId: string, uploader?: PlaylistUploader | null) => void;
   /** 清空播放列表。 */
   clearPlaylist: () => void;
   /** 切换当前播放项。 */
@@ -186,17 +232,20 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
       reversed: false,
       autoPlayNext: true,
       loopPlayback: false,
+      uploader: null,
 
-      setPlaylist: (items, startId) =>
+      setPlaylist: (items, startId, uploader) =>
         set({
           items,
           currentId: startId,
+          uploader: uploader ?? null,
         }),
 
       clearPlaylist: () =>
         set({
           items: [],
           currentId: null,
+          uploader: null,
         }),
 
       setCurrentItem: (id) =>

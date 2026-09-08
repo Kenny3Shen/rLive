@@ -1,9 +1,19 @@
-import { useEffect, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Captions,
   CaptionsOff,
   Check,
   Expand,
+  Eye,
+  EyeOff,
   Headphones,
   Maximize2,
   MessageSquareOff,
@@ -133,10 +143,6 @@ export function showPlayerWebFullscreenControl(compact: boolean, fullscreen: boo
   return !compact && !fullscreen;
 }
 
-export function showPlayerControlsCenterSlot(compact: boolean, fullscreen: boolean): boolean {
-  return !compact || fullscreen;
-}
-
 /**
  * 浮层 chrome 是否应为系统手势栏预留空间。
  *
@@ -191,7 +197,8 @@ export type PlayerControlsProps = {
    * 也就不必为系统手势栏预留空间。
    */
   stackedBelowPlayer?: boolean;
-  /** 可选的紧凑内容，居中放置于传输控制与房间控制之间。 */
+  /** 可选内容，渲染进控制行中央的独立轨道：compact 与全屏一致可用，
+   *  轨道互斥保证不与两侧按钮重叠。 */
   centerSlot?: ReactNode;
   /** 可选的全宽媒体时间轴，渲染在传输控制行之上。 */
   timeline?: ReactNode;
@@ -238,6 +245,9 @@ export type PlayerControlsProps = {
   onTogglePictureInPicture?: () => void;
   /** 视频页专属工具（投屏/字幕等）：渲染在二级控制组画中画之前。 */
   toolsSlot?: ReactNode;
+  /** 只切换画面上的用户与视频信息，不影响播放控件。 */
+  infoVisible?: boolean;
+  onToggleInfo?: () => void;
   onToggleFullscreen: () => void;
 };
 
@@ -269,6 +279,15 @@ export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
 const CONTROL_ICON_CLASS = PLAYER_CONTROL_ICON_CLASS;
 const CONTROL_BUTTON_CLASS = PLAYER_CONTROL_BUTTON_CLASS;
 const CONTROL_GROUP_CLASS = "flex shrink-0 items-center gap-0.5";
+/** Android 沉浸(竖屏短视频/全屏)里 `env(safe-area-inset-bottom)` 塌缩为 0，
+ *  底部按钮会贴死屏幕底边、被临时滑出的系统手势栏压住。粗指针设备在
+ *  窗口底边的 chrome 上保底 0.75rem 净空；指针设备维持紧凑。 */
+const GESTURE_NAV_CLEARANCE_CLASS =
+  "[@media(pointer:coarse)]:pb-[max(0.75rem,env(safe-area-inset-bottom))]!";
+
+/** 两侧始终等宽；中心最大宽度由实际按钮占位决定，避免窄屏不对称按钮把输入栏推偏。 */
+const CONTROL_ROW_CLASS =
+  "grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,min(50%,var(--player-center-width,50%)))_minmax(0,1fr)] items-center gap-x-1";
 
 function ControlButton({
   label,
@@ -363,12 +382,44 @@ export function PlayerControls({
   onLineChange,
   onTogglePictureInPicture,
   toolsSlot,
+  infoVisible = true,
+  onToggleInfo,
   onToggleFullscreen,
 }: PlayerControlsProps) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
   const [asrSettingsOpen, setAsrSettingsOpen] = useState(false);
   const [asrSettingsError, setAsrSettingsError] = useState<string | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const leftControlsRef = useRef<HTMLDivElement | null>(null);
+  const rightControlsRef = useRef<HTMLDivElement | null>(null);
+  const hasCenter = Boolean(centerSlot);
+  const hasTimeline = Boolean(timeline);
+  const rowClassName = cn(CONTROL_ROW_CLASS, !hasCenter && "grid-cols-[auto_1fr_auto]");
+
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    const left = leftControlsRef.current;
+    const right = rightControlsRef.current;
+    if (!hasCenter || !row || !left || !right) return;
+    const updateWidth = () => {
+      const style = getComputedStyle(row);
+      const width =
+        row.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const occupied = 2 * Math.max(left.offsetWidth, right.offsetWidth);
+      const available = Math.max(0, width - occupied - 2 * (parseFloat(style.columnGap) || 0));
+      row.style.setProperty("--player-center-width", `${available}px`);
+    };
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(row);
+    observer.observe(left);
+    observer.observe(right);
+    return () => {
+      observer.disconnect();
+      row.style.removeProperty("--player-center-width");
+    };
+  }, [hasCenter, hasTimeline]);
   // 移动端设置以抽屉打开：竖屏为底部抽屉、横屏为右侧抽屉。共享 hook 在首次
   // 绘制和变化时从单一来源解析方向，使控件密度绝不会有渲染成一帧桌面尺寸
   // 才稳定下来的情况。
@@ -670,24 +721,25 @@ export function PlayerControls({
   );
   return (
     <div
+      ref={hasTimeline ? undefined : rowRef}
       data-slot="player-controls-bar"
       data-compact={compact ? "true" : "false"}
       className={cn(
-        "flex min-w-0 shrink-0",
-        timeline ? "flex-col items-stretch gap-0" : "items-center gap-1",
-        compact && !timeline && "justify-between gap-0.5",
+        "min-w-0 shrink-0",
+        hasTimeline ? "flex flex-col items-stretch gap-0" : rowClassName,
         // 向上渐隐入画面的遮罩，普通视频播放器绘制底部 chrome 的方式 —— 无顶边框、
         // 无模糊、无面板边缘。渐变铺满播放器每条边；安全区间距留在表面内部，
         // 绝不形成沟槽。底部 inset 仅当 chrome 真正位于窗口边缘时生效
         // （见 playerControlsAvoidSystemGestureBar）。额外的顶部内边距
-        // 给渐变留出在第一个控件之前化解的空间。
+        // 给渐变留出在第一个控件之前化解的空间；触屏净空见
+        // GESTURE_NAV_CLEARANCE_CLASS。
         cn(
           "player-scrim-overlay bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
           compact ? "pt-1.5" : "pt-3",
           avoidSystemGestureBar
             ? compact
-              ? "pb-[max(1px,env(safe-area-inset-bottom))]"
-              : "pb-[max(0.25rem,env(safe-area-inset-bottom))]"
+              ? cn("pb-[max(1px,env(safe-area-inset-bottom))]", GESTURE_NAV_CLEARANCE_CLASS)
+              : cn("pb-[max(0.25rem,env(safe-area-inset-bottom))]", GESTURE_NAV_CLEARANCE_CLASS)
             : compact
               ? "pb-px"
               : "pb-1",
@@ -696,12 +748,10 @@ export function PlayerControls({
     >
       {timeline && <div className="min-w-0 px-1 pt-1">{timeline}</div>}
       <div
-        className={cn(
-          timeline ? "flex min-w-0 w-full items-center gap-1" : "contents",
-          timeline && compact && "justify-between gap-0.5",
-        )}
+        ref={hasTimeline ? rowRef : undefined}
+        className={hasTimeline ? cn(rowClassName, "w-full") : "contents"}
       >
-        <div className={CONTROL_GROUP_CLASS}>
+        <div ref={leftControlsRef} className={cn(CONTROL_GROUP_CLASS, "justify-self-start")}>
           {onRefresh && (
             <ControlButton
               label="刷新播放"
@@ -813,21 +863,18 @@ export function PlayerControls({
               <AudioOnlyControlIcon aria-hidden />
             </ControlButton>
           )}
+
+          {loadError && (
+            <span className="min-w-0 max-w-28 truncate px-1 text-xs text-red-200">{loadError}</span>
+          )}
         </div>
 
-        {loadError && (
-          <span
-            className="min-w-0 max-w-28 truncate px-1 text-xs text-red-200"
-          >
-            {loadError}
-          </span>
-        )}
+        {centerSlot && <div className="col-start-2 flex min-w-0 justify-center">{centerSlot}</div>}
 
-        {showPlayerControlsCenterSlot(compact, fullscreen) && (
-          <div className="flex min-w-0 flex-1 justify-center px-1">{centerSlot}</div>
-        )}
-
-        <div className={cn(CONTROL_GROUP_CLASS, "ml-auto pl-1")}>
+        <div
+          ref={rightControlsRef}
+          className={cn(CONTROL_GROUP_CLASS, "col-start-3 justify-self-end")}
+        >
           {hasPlaybackSettings &&
             (compact ? (
               <>
@@ -961,7 +1008,9 @@ export function PlayerControls({
                 className={cn("w-72", glassPanelClass({ overlay: true }))}
               >
                 <div className="flex items-center justify-between gap-2 px-0.5">
-                  <PopoverTitle className={glassTitleClass({ overlay: true })}>字幕设置</PopoverTitle>
+                  <PopoverTitle className={glassTitleClass({ overlay: true })}>
+                    字幕设置
+                  </PopoverTitle>
                   {(asrSettingsPending || asrTranslationBusy) && (
                     <Spinner aria-label="正在更新字幕设置" />
                   )}
@@ -1008,6 +1057,18 @@ export function PlayerControls({
               tooltip={!compact}
             >
               <PictureInPicture2 />
+            </ControlButton>
+          )}
+          {onToggleInfo && (
+            <ControlButton
+              label={infoVisible ? "隐藏用户和视频信息" : "显示用户和视频信息"}
+              className={overlayButtonClass}
+              tooltipContainer={portalContainer}
+              aria-pressed={!infoVisible}
+              onClick={onToggleInfo}
+              tooltip={!compact}
+            >
+              {infoVisible ? <EyeOff /> : <Eye />}
             </ControlButton>
           )}
           <ControlButton

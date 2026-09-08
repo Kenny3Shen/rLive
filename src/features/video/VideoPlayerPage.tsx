@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -15,14 +16,29 @@ import {
   Cast,
   Check,
   ChevronLeft,
+  Ellipsis,
   ExternalLink,
   FastForward,
   Home,
   Link2,
+  MessageSquareText,
+  Smartphone,
+  Users,
+  Video,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { ANDROID_BACK_EVENT, dismissTopmostPopup } from "@/app/androidBackNavigation";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { Button } from "@/components/ui/button";
-import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerScope,
+  DrawerTitle,
+  DrawerTrigger,
+  DrawerViewport,
+} from "@/components/ui/drawer";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
@@ -41,7 +57,16 @@ import {
   readPlayerVolume,
   rememberPlayerVolume,
 } from "@/shared/playerVolume";
-import { cn } from "@/lib/utils";
+import { cn, formatOnline, normalizeImageUrl, normalizeVideoCoverUrl } from "@/lib/utils";
+import {
+  horizontalSwipeDragOffset,
+  horizontalSwipeSettleDuration,
+  horizontalSwipeShouldCommit,
+  horizontalSwipeVelocity,
+  type HorizontalSwipeSample,
+} from "@/shared/gestures/horizontalSwipe";
+import { prefersReducedMotion, SWIPE_SETTLE_EASING } from "@/shared/motion/tokens";
+import { tween } from "@/shared/motion/tween";
 import {
   createXgPlayer,
   isInterruptedPlayRequest,
@@ -52,6 +77,14 @@ import {
   type XgPlayerInstance,
 } from "@/features/room/player/xgPlayer";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
+import {
+  videoAspectRatio,
+  setAndroidPlayerOrientation,
+} from "@/features/room/player/androidOrientation";
+import {
+  runningOnAndroidTauri,
+  setAndroidImmersive,
+} from "@/features/room/player/androidImmersive";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
 import { formatRecordingDuration } from "@/features/recording/recording";
 import type {
@@ -90,7 +123,6 @@ import {
   PLAYER_CONTROL_BUTTON_CLASS,
   PLAYER_CONTROL_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-  showPlayerControlsCenterSlot,
 } from "@/shared/components/player/PlayerControls";
 import {
   PlayerHudOverflowMenu,
@@ -104,7 +136,8 @@ import {
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
-import { VideoSidebar } from "./VideoSidebar";
+import { VideoSidebar, type SidebarTab } from "./VideoSidebar";
+import { UploaderDrawer } from "./UploaderDrawer";
 import {
   mergeVideoDanmakuEntries,
   videoDanmakuEntries,
@@ -121,11 +154,13 @@ import {
   usePlaylistStore,
   playlistContainsCurrentItem,
   playlistItemFromArchivePage,
-  playlistItemFromSeasonEpisode,
   videoEndedAction,
+  videoSwipeDirection,
+  videoWheelDirection,
+  type VideoWheelGesture,
   type PlaylistItem,
 } from "./playlistStore";
-import { notify } from "@/components/ui/toast";
+import { notify, setToastPortalContainer } from "@/components/ui/toast";
 
 const SINGLE_CLICK_DELAY_MS = 220;
 
@@ -139,10 +174,10 @@ const LONG_PRESS_TRIGGER_MS = 500;
 const LONG_PRESS_CANCEL_MOVE_PX = 12;
 
 function isPlayerControlTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
+  if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      'button, input, select, textarea, [role="button"], [role="slider"], [role="dialog"], [data-player-controls]',
+      'button, a, input, select, textarea, [contenteditable="true"], [role="button"], [role="slider"], [role="dialog"], [data-player-controls]',
     ),
   );
 }
@@ -153,6 +188,29 @@ function bufferedRangeEnd(video: HTMLVideoElement): number {
     end = Math.max(end, video.buffered.end(index));
   }
   return Number.isFinite(end) ? end : 0;
+}
+
+function VideoSwipePreview({ item, label }: { item: PlaylistItem | null; label: string }) {
+  return (
+    <div
+      data-video-swipe-preview
+      aria-hidden
+      className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center overflow-hidden bg-black text-white"
+    >
+      {item?.cover && (
+        <img
+          src={normalizeVideoCoverUrl(item.cover)}
+          alt=""
+          draggable={false}
+          className="absolute inset-0 size-full object-contain"
+        />
+      )}
+      <div className="relative flex max-w-full flex-col gap-2 rounded-xl bg-black/60 px-5 py-3 text-center">
+        <p className="text-xs text-white/70">{label}</p>
+        {item && <p className="line-clamp-2 text-sm font-medium">{item.title}</p>}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -173,11 +231,20 @@ export function VideoPlayerPage() {
 function VideoPlayerPageContent() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const detailsRef = useRef<HTMLElement | null>(null);
   const params = parseVideoPlayParams(searchParams);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const swipeTrackRef = useRef<HTMLDivElement | null>(null);
+  const swipeOffsetRef = useRef(0);
+  const swipeAnimationRef = useRef<Animation | null>(null);
+  const wheelGestureRef = useRef<VideoWheelGesture>({
+    lastTime: -Infinity,
+    distance: 0,
+    committed: false,
+  });
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<XgPlayerInstance | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
@@ -187,7 +254,18 @@ function VideoPlayerPageContent() {
   const speedHoldTimerRef = useRef<number | null>(null);
   const speedHoldRef = useRef(false);
   const suppressClickRef = useRef(false);
-  const speedHoldStartRef = useRef<{ x: number; y: number } | null>(null);
+  const surfacePressRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    swipe: boolean;
+    moved: boolean;
+    height: number;
+    index: number;
+    count: number;
+    reducedMotion: boolean;
+    samples: HorizontalSwipeSample[];
+  } | null>(null);
   /** 上次记住的音量与静音态：所有会话级播放表面共享一份（见 shared/playerVolume）。 */
   const [initialAudio] = useState(readPlayerVolume);
   const volumeRef = useRef(initialAudio.volume);
@@ -204,6 +282,14 @@ function VideoPlayerPageContent() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedTime, setBufferedTime] = useState(0);
+  const [frameSize, setFrameSize] = useState<{ key: string; ratio: number | null } | null>(null);
+  const [shortVideo, setShortVideo] = useState(false);
+  const [infoHidden, setInfoHidden] = useState(false);
+  const [uploaderOpen, setUploaderOpen] = useState(false);
+  const [detailsKey, setDetailsKey] = useState<string | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab | null>(null);
+  const shortVideoRef = useRef(false);
+  const [swipePoster, setSwipePoster] = useState<PlaylistItem | null>(null);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
   /** 菜单选中的倍速；长按倍速是临时覆盖，不经过这个状态。 */
@@ -214,6 +300,11 @@ function VideoPlayerPageContent() {
   const [qualityQn, setQualityQn] = useState<number | null>(null);
   /** 仅音频（听视频）：跳过视频轨代理省流，切换时记录续播点后重建播放器。 */
   const [audioOnly, setAudioOnly] = useState(false);
+
+  useEffect(() => {
+    // 播放器模块与取流 IPC 同时准备，所有画幅共用已有 import 缓存。
+    void loadXgPlayerModules(audioOnly ? "native" : "dash").catch(() => {});
+  }, [audioOnly]);
   /** 画中画进出状态（监听媒体元素事件，WebView2 支持；Android WebView 无此 API）。 */
   const [pipActive, setPipActive] = useState(false);
   /** 投屏面板与 CC 字幕弹层的开关态。投屏面板窗口化时是顶栏 Popover，
@@ -240,8 +331,15 @@ function VideoPlayerPageContent() {
   const userPausedRef = useRef(false);
 
   const compact = useCompactPlayerViewport();
+  const mobileClient = isMobileClient();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
   useScreenWakeLock(!paused && !loading && !playbackError);
+
+  useEffect(() => {
+    if (!fullscreen.fullscreen && !shortVideo) return;
+    setToastPortalContainer(stageRef.current);
+    return () => setToastPortalContainer(null);
+  }, [fullscreen.fullscreen, shortVideo]);
 
   const rawCid = params?.cid ?? 0;
 
@@ -359,6 +457,43 @@ function VideoPlayerPageContent() {
     rawCid > 0 ? rawCid : resumePending ? 0 : videoResumeCid(resumeQuery.data, archiveQuery.data);
   // 弹幕发送历史与 PGC 分集都用 aid；URL 直入时用详情补齐。
   const aid = params?.aid || archiveQuery.data?.aid || null;
+
+  const videoKey = `${params?.bvid ?? params?.epId ?? ""}:${cid}`;
+  const frameAspectRatio = frameSize?.key === videoKey ? frameSize.ratio : null;
+  const portraitVideo = !audioOnly && frameAspectRatio !== null && frameAspectRatio < 1;
+  const mobilePortrait = mobileClient && !params?.epId && portraitVideo;
+  const returningToShortVideo =
+    mobileClient && !audioOnly && !params?.epId && detailsKey === videoKey && !shortVideo;
+
+  useLayoutEffect(() => {
+    if (audioOnly || params?.epId) {
+      setShortVideo(false);
+    } else if (
+      mobileClient &&
+      frameAspectRatio !== null &&
+      frameAspectRatio < 1 &&
+      detailsKey !== videoKey
+    ) {
+      setShortVideo(true);
+    }
+    // 画幅只决定首次进入；刷到横屏视频或等待首帧时都保持沉浸会话。
+  }, [audioOnly, detailsKey, frameAspectRatio, mobileClient, params?.epId, videoKey]);
+
+  useLayoutEffect(() => {
+    // ended 读取即时模式；模式切换不进入播放器重建依赖。
+    shortVideoRef.current = shortVideo;
+  }, [shortVideo]);
+
+  useEffect(() => {
+    if (!shortVideo || !runningOnAndroidTauri()) return;
+    // 复用直播的页面内全屏，不走会重新挂载 WebView 表面的 HTML 全屏。
+    void setAndroidImmersive(true).catch(() => {});
+    void setAndroidPlayerOrientation("portrait").catch(() => {});
+    return () => {
+      void setAndroidImmersive(false).catch(() => {});
+      void setAndroidPlayerOrientation("auto").catch(() => {});
+    };
+  }, [shortVideo]);
 
   /**
    * 本次播放要写进观看历史的那一行。
@@ -483,10 +618,12 @@ function VideoPlayerPageContent() {
   const playlistStore = usePlaylistStore();
   const nextItem = playlistStore.getNextItem();
   const prevItem = playlistStore.getPreviousItem();
+  const bvid = params?.bvid ?? null;
+  const epId = params?.epId ?? null;
 
-  /** 跳到播放列表的另一项：自动连播、控制条按钮与键盘快捷键共用。 */
+  /** 自动连播、控件、快捷键与滑动共用导航；滑动不往返回栈里逐条堆视频。 */
   const goToPlaylistItem = useCallback(
-    (item: PlaylistItem) => {
+    (item: PlaylistItem, replace = false) => {
       navigate(
         videoPlayPath({
           bvid: item.bvid,
@@ -495,79 +632,53 @@ function VideoPlayerPageContent() {
           title: item.title,
           aid: item.aid,
         }),
+        { replace },
       );
     },
     [navigate],
   );
 
-  // 当前播放项更新时同步到 store
+  // 只响应路由身份变化：点相关/投稿卡片会先装新队列，再提交导航，
+  // 不能因 store 更新而拿旧路由把新队列清空或抢回旧选集。
   useEffect(() => {
-    if (params && playlistStore.items.length > 0) {
-      const currentId = `${params.bvid || ""}_${params.cid}`;
-      if (playlistStore.currentId !== currentId) {
-        const exists = playlistStore.items.some((item) => item.id === currentId);
-        if (exists) {
-          playlistStore.setCurrentItem(currentId);
-        }
-      }
+    const list = usePlaylistStore.getState();
+    const currentId = `${bvid ?? ""}_${rawCid}`;
+    if (list.currentId !== currentId && list.items.some((item) => item.id === currentId)) {
+      list.setCurrentItem(currentId);
     }
-  }, [params, playlistStore]);
+  }, [bvid, rawCid]);
 
   // PGC 分集不经 archiveQuery：进入的剧集不在播放列表（epId 维度，UGC
   // 列表项的 epId 恒为 null）时，那份列表是残留快照，同样清空——否则
   // 「下一个」会跳回之前看过的 UGC 视频。侧栏「播放全部」/「加入列表」
   // 装好分集列表后含当前 epId，不受影响。
   useEffect(() => {
-    if (!params?.epId || playlistStore.items.length === 0) return;
-    if (playlistStore.items.some((item) => item.epId === params.epId)) return;
-    playlistStore.clearPlaylist();
-  }, [params, playlistStore]);
+    const list = usePlaylistStore.getState();
+    if (!epId || list.items.length === 0) return;
+    if (list.items.some((item) => item.epId === epId)) return;
+    list.clearPlaylist();
+  }, [epId]);
 
-  // 结构化列表优先：多 P 稿件用分 P 列表、合集稿件用合集替换播放列表
-  // （覆盖搜索/投稿快照），自动连播与「下一个」沿结构化列表走。
-  // 多 P 优先于合集：分 P 是同一稿件内部的选集，语义更具体；
-  // 链接可能没带 cid，多 P 以 bvid+caid 定位当前项、合集以 bvid。
+  // 来源队列优先；没有有效来源时才为多 P 直链建立选集队列。
+  // 合集只展示在侧栏，不能凭稿件元数据接管推荐、搜索或 UP 投稿顺序。
   useEffect(() => {
     const archive = archiveQuery.data;
-    // cid 为 0 = 取流键还没定（续播查询未落定），此刻定位会写下一个不存在的
-    // currentId；等它解析出来这个 effect 会再跑一次。
-    if (!archive || !params?.bvid || cid <= 0) return;
-    let items: PlaylistItem[] | null = null;
-    let startId: string | null = null;
-    if (archive.pages.length > 0) {
-      items = archive.pages.map((page) =>
-        playlistItemFromArchivePage(archive.bvid, archive.aid, page),
-      );
-      // 链接缺 cid（搜索进入）时用解析出的取流键定位：可能是详情补齐的首 P，
-      // 也可能是跨分 P 续播落到的那一 P。连播因此从续播的那一 P 往后走。
-      startId = `${params.bvid}_${cid}`;
-    } else if (archive.ugc_season) {
-      items = archive.ugc_season.episodes.map(playlistItemFromSeasonEpisode);
-      const current = items.find((item) => item.bvid === params.bvid);
-      startId = current?.id ?? null;
-    }
-    if (!items || !startId) {
-      // 单 P 且无合集的稿件没有结构化列表可装。当前稿件也不在现有播放
-      // 列表里时，那份列表是上一个播放会话的残留（旧搜索/投稿/合集快照），
-      // 清空它——「下一个」与自动连播沿它走会跳回之前看过的视频；在列表
-      // 里（搜索/投稿连播点卡时与当前稿件一起装好）则原样保留。id 用
-      // params.cid 构造：与列表项的 id 空间同构（搜索快照的 cid 就是 0）。
-      if (
-        playlistStore.items.length > 0 &&
-        !playlistContainsCurrentItem(playlistStore.items, params.bvid, params.cid)
-      ) {
-        playlistStore.clearPlaylist();
-      }
+    const list = usePlaylistStore.getState();
+    if (!archive || !bvid || cid <= 0) return;
+    if (
+      playlistContainsCurrentItem(list.items, bvid, rawCid) ||
+      playlistContainsCurrentItem(list.items, bvid, cid)
+    )
       return;
+    if (archive.pages.length > 0) {
+      list.setPlaylist(
+        archive.pages.map((page) => playlistItemFromArchivePage(archive.bvid, archive.aid, page)),
+        `${bvid}_${cid}`,
+      );
+    } else if (list.items.length > 0) {
+      list.clearPlaylist();
     }
-    const alreadyActive =
-      playlistStore.items.length === items.length &&
-      playlistStore.items.every((item, i) => item.id === items[i]?.id) &&
-      playlistStore.currentId === startId;
-    if (!alreadyActive) {
-      playlistStore.setPlaylist(items, startId);
-    }
-  }, [archiveQuery.data, cid, params, playlistStore]);
+  }, [archiveQuery.data, bvid, cid, rawCid]);
 
   /**
    * 取播放信息。
@@ -872,6 +983,9 @@ function VideoPlayerPageContent() {
       // 暂停是「可能马上要走」的最强信号：立刻落盘，不等节流窗口。
       reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
     }
+    function syncAspectRatio() {
+      if (!cancelled) setFrameSize({ key: videoKey, ratio: videoAspectRatio(media) });
+    }
     function onReady() {
       if (cancelled) return;
       setLoading(false);
@@ -879,6 +993,14 @@ function VideoPlayerPageContent() {
       syncTime();
       syncDuration();
       syncBuffered();
+      syncAspectRatio();
+      if (media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        setSwipePoster((poster) =>
+          poster && (poster.cid > 0 ? poster.cid === reportedCid : poster.bvid === bvid)
+            ? null
+            : poster,
+        );
+      }
     }
     function onWaiting() {
       if (!cancelled && !media.ended) setWaiting(true);
@@ -893,8 +1015,13 @@ function VideoPlayerPageContent() {
       const total = totalDuration();
       reportProgress(total > 0 ? total : media.currentTime, true);
       // 偏好可能在播放期间被改，读 store 快照而不是播放器挂载时的闭包值。
-      const { autoPlayNext, loopPlayback } = usePlaylistStore.getState();
-      const action = videoEndedAction(loopPlayback, autoPlayNext, nextItem != null);
+      const { autoPlayNext, loopPlayback, getNextItem } = usePlaylistStore.getState();
+      const nextItem = getNextItem();
+      const action = videoEndedAction(
+        shortVideoRef.current || loopPlayback,
+        autoPlayNext,
+        nextItem != null,
+      );
       if (action === "loop") {
         // 循环播放：从头重播当前集（DASH 的 seek 同样走原生 currentTime）。
         media.currentTime = 0;
@@ -906,7 +1033,7 @@ function VideoPlayerPageContent() {
       if (action === "next" && nextItem) {
         const target = nextItem;
         setTimeout(() => {
-          if (cancelled) return;
+          if (cancelled || shortVideoRef.current || !media.ended) return;
           goToPlaylistItem(target);
         }, 1_000);
       }
@@ -925,6 +1052,7 @@ function VideoPlayerPageContent() {
     media.addEventListener("progress", syncBuffered);
     media.addEventListener("loadedmetadata", onReady);
     media.addEventListener("canplay", onReady);
+    media.addEventListener("resize", syncAspectRatio);
     media.addEventListener("play", onPlay);
     media.addEventListener("pause", onPause);
     media.addEventListener("waiting", onWaiting);
@@ -1006,6 +1134,7 @@ function VideoPlayerPageContent() {
       media.removeEventListener("progress", syncBuffered);
       media.removeEventListener("loadedmetadata", onReady);
       media.removeEventListener("canplay", onReady);
+      media.removeEventListener("resize", syncAspectRatio);
       media.removeEventListener("play", onPlay);
       media.removeEventListener("pause", onPause);
       media.removeEventListener("waiting", onWaiting);
@@ -1021,7 +1150,17 @@ function VideoPlayerPageContent() {
         // 协议插件可能已经释放了它的 MediaSource。
       }
     };
-  }, [cid, ensureDanmakuSegments, playUrl, playInfo?.duration, playKind, reportVideoProgress, resumePending]);
+  }, [
+    bvid,
+    cid,
+    ensureDanmakuSegments,
+    playUrl,
+    playInfo?.duration,
+    playKind,
+    reportVideoProgress,
+    resumePending,
+    videoKey,
+  ]);
 
   const togglePlayback = useCallback(() => {
     const player = playerRef.current;
@@ -1121,22 +1260,145 @@ function VideoPlayerPageContent() {
     track.track.mode = "showing";
   }, [subtitleLan, subtitleVttUrl, playUrl, subtitles]);
 
+  const playlistGestureEnabled =
+    shortVideo &&
+    !audioOnly &&
+    !overlayInteractionOpen &&
+    !uploaderOpen &&
+    !pipActive &&
+    playlistStore.items.length > 1 &&
+    (playlistContainsCurrentItem(playlistStore.items, params?.bvid ?? null, rawCid) ||
+      playlistContainsCurrentItem(playlistStore.items, params?.bvid ?? null, cid));
+  const portraitSwipeEnabled = playlistGestureEnabled && swipePoster === null && !switchingItem;
+
+  // 只移动画面与邻项封面，控制栏和全屏宿主不动，也不预建第二个播放器。
+  const settleSwipe = useCallback((target: number, velocity = 0, complete?: () => void) => {
+    const track = swipeTrackRef.current;
+    const previous = swipeAnimationRef.current;
+    const from =
+      track && previous
+        ? new DOMMatrixReadOnly(getComputedStyle(track).transform).m42
+        : swipeOffsetRef.current;
+    swipeAnimationRef.current = null;
+    previous?.cancel();
+    const finish = () => {
+      swipeOffsetRef.current = target;
+      if (track) {
+        track.style.transform = target === 0 ? "" : `translate3d(0, ${target}px, 0)`;
+        track.style.willChange = "";
+      }
+      complete?.();
+    };
+    if (!track || prefersReducedMotion() || Math.abs(from - target) < 1) {
+      finish();
+      return;
+    }
+    track.style.willChange = "transform";
+    const animation = tween(
+      track,
+      [
+        { transform: `translate3d(0, ${from}px, 0)` },
+        { transform: `translate3d(0, ${target}px, 0)` },
+      ],
+      {
+        duration: horizontalSwipeSettleDuration(target - from, velocity),
+        easing: SWIPE_SETTLE_EASING,
+        fill: "both",
+      },
+    );
+    swipeAnimationRef.current = animation;
+    void animation.finished
+      .then(() => {
+        if (swipeAnimationRef.current !== animation) return;
+        swipeAnimationRef.current = null;
+        finish();
+        animation.cancel();
+      })
+      .catch(() => {});
+  }, []);
+
+  const stepPlaylist = useCallback(
+    (direction: 1 | -1, velocity = 0) => {
+      const list = usePlaylistStore.getState();
+      const target = direction === 1 ? list.getNextItem() : list.getPreviousItem();
+      if (!target) {
+        settleSwipe(0, velocity);
+        notify.info(direction === 1 ? "已经是最后一个视频" : "已经是第一个视频");
+        return;
+      }
+      settleSwipe(-direction * (stageRef.current?.clientHeight ?? 0), velocity, () => {
+        // 邻项封面接住画面，首帧到达后撤下；手势换片不累积返回栈。
+        setSwipePoster(target);
+        goToPlaylistItem(target, true);
+      });
+    },
+    [goToPlaylistItem, settleSwipe],
+  );
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (mobileClient || !stage) return;
+    const onWheel = (event: WheelEvent) => {
+      if (
+        !playlistGestureEnabled ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isPlayerControlTarget(event.target) ||
+        Math.abs(event.deltaY) <= Math.abs(event.deltaX) * 1.25
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.clientHeight : 1;
+      const direction = videoWheelDirection(
+        wheelGestureRef.current,
+        event.deltaY * unit,
+        event.timeStamp,
+      );
+      if (
+        swipePoster !== null ||
+        switchingItem ||
+        swipeAnimationRef.current ||
+        surfacePressRef.current
+      ) {
+        wheelGestureRef.current.committed = true;
+        return;
+      }
+      if (direction !== null) stepPlaylist(direction);
+    };
+    // React 的 wheel 监听是 passive；在舞台上注册才能阻止换片时连带滚动页面。
+    stage.addEventListener("wheel", onWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", onWheel);
+  }, [mobileClient, playlistGestureEnabled, stepPlaylist, swipePoster, switchingItem]);
+
+  useLayoutEffect(() => {
+    swipeAnimationRef.current?.cancel();
+    swipeAnimationRef.current = null;
+    swipeOffsetRef.current = 0;
+    const track = swipeTrackRef.current;
+    if (track) {
+      track.style.transform = "";
+      track.style.willChange = "";
+    }
+  }, [bvid, cid, swipePoster]);
+
   const engageSpeedHold = useCallback(() => {
+    if (surfacePressRef.current) surfacePressRef.current.swipe = false;
     const media = videoRef.current;
-    // 没有时长（还没取到流）或已出错时按住没有意义。
-    if (!media || !Number.isFinite(media.duration) || media.duration <= 0) return;
+    // DASH 的 media.duration 可能为 Infinity，使用已有的真实分片时长。
+    if (!media || duration <= 0 || loading || playbackError) return;
     speedHoldRef.current = true;
     suppressClickRef.current = true;
     media.playbackRate = LONG_PRESS_RATE;
     setSpeedHoldActive(true);
-  }, []);
+  }, [duration, loading, playbackError]);
 
   const releaseSpeedHold = useCallback(() => {
     if (speedHoldTimerRef.current !== null) {
       window.clearTimeout(speedHoldTimerRef.current);
       speedHoldTimerRef.current = null;
     }
-    speedHoldStartRef.current = null;
     if (!speedHoldRef.current) return;
     speedHoldRef.current = false;
     const media = videoRef.current;
@@ -1144,12 +1406,59 @@ function VideoPlayerPageContent() {
     setSpeedHoldActive(false);
   }, [playbackRate]);
 
+  const cancelSurfacePress = useCallback(() => {
+    if (surfacePressRef.current) suppressClickRef.current = true;
+    surfacePressRef.current = null;
+    releaseSpeedHold();
+    settleSwipe(0);
+  }, [releaseSpeedHold, settleSwipe]);
+
+  useEffect(() => {
+    const cancelMultiTouch = (event: PointerEvent) => {
+      if (!event.isPrimary) cancelSurfacePress();
+    };
+    window.addEventListener("pointerdown", cancelMultiTouch, true);
+    window.addEventListener("blur", cancelSurfacePress);
+    window.addEventListener("resize", cancelSurfacePress);
+    window.visualViewport?.addEventListener("resize", cancelSurfacePress);
+    return () => {
+      cancelSurfacePress();
+      swipeAnimationRef.current?.cancel();
+      swipeAnimationRef.current = null;
+      if (clickTimerRef.current !== null) {
+        window.clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      window.removeEventListener("pointerdown", cancelMultiTouch, true);
+      window.removeEventListener("blur", cancelSurfacePress);
+      window.removeEventListener("resize", cancelSurfacePress);
+      window.visualViewport?.removeEventListener("resize", cancelSurfacePress);
+    };
+  }, [cid, audioOnly, cancelSurfacePress]);
+
   const handleSurfacePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || isPlayerControlTarget(event.target)) return;
-      // 新手势开始：清掉上一次长按残留的 click 抑制。
+      if (!event.isPrimary || event.button !== 0 || isPlayerControlTarget(event.target)) return;
+      if (swipeAnimationRef.current || swipePoster !== null) {
+        suppressClickRef.current = true;
+        event.preventDefault();
+        return;
+      }
+      // 新手势开始才清除抑制，避免拖动后的 click/dblclick 暂停或全屏下一条视频。
       suppressClickRef.current = false;
-      speedHoldStartRef.current = { x: event.clientX, y: event.clientY };
+      surfacePressRef.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        swipe:
+          portraitSwipeEnabled && (event.pointerType === "touch" || event.pointerType === "pen"),
+        moved: false,
+        height: event.currentTarget.clientHeight,
+        index: prevItem ? 1 : 0,
+        count: 1 + Number(prevItem !== null) + Number(nextItem !== null),
+        reducedMotion: prefersReducedMotion(),
+        samples: [{ x: event.clientY, time: event.timeStamp }],
+      };
       if (speedHoldTimerRef.current !== null) {
         window.clearTimeout(speedHoldTimerRef.current);
       }
@@ -1158,24 +1467,79 @@ function VideoPlayerPageContent() {
         engageSpeedHold();
       }, LONG_PRESS_TRIGGER_MS);
     },
-    [engageSpeedHold],
+    [engageSpeedHold, nextItem, portraitSwipeEnabled, prevItem, swipePoster],
   );
 
-  const handleSurfacePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const start = speedHoldStartRef.current;
-    if (!start) return;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (dx * dx + dy * dy > LONG_PRESS_CANCEL_MOVE_PX * LONG_PRESS_CANCEL_MOVE_PX) {
-      // 滑动超过阈值：不是长按，取消判定，也别让后续 click 被吞。
-      if (speedHoldTimerRef.current !== null) {
-        window.clearTimeout(speedHoldTimerRef.current);
-        speedHoldTimerRef.current = null;
+  const handleSurfacePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const start = surfacePressRef.current;
+      if (!start || start.pointerId !== event.pointerId) return;
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      if (dx * dx + dy * dy <= LONG_PRESS_CANCEL_MOVE_PX * LONG_PRESS_CANCEL_MOVE_PX) return;
+      if (!start.moved) {
+        // 一旦起步为横滑就不再转成切片；长按已触发时 swipe 也已撤销。
+        start.swipe &&= videoSwipeDirection(dx, dy, LONG_PRESS_CANCEL_MOVE_PX) !== null;
+        start.moved = true;
+        releaseSpeedHold();
+        suppressClickRef.current = true;
+        if (clickTimerRef.current !== null) {
+          window.clearTimeout(clickTimerRef.current);
+          clickTimerRef.current = null;
+        }
+        if (start.swipe) event.currentTarget.setPointerCapture(event.pointerId);
       }
-      speedHoldStartRef.current = null;
-      suppressClickRef.current = false;
-    }
-  }, []);
+      if (start.swipe) {
+        // 速度采样与翻页阻尼沿用共享横滑算法，只把活动轴换成 Y。
+        start.samples.push({ x: event.clientY, time: event.timeStamp });
+        if (start.samples.length > 8) start.samples.shift();
+        const offset = horizontalSwipeDragOffset(start.index, start.count, dy, start.height);
+        swipeOffsetRef.current = offset;
+        const track = swipeTrackRef.current;
+        if (track && !start.reducedMotion) {
+          track.style.willChange = "transform";
+          track.style.transform = `translate3d(0, ${offset}px, 0)`;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    [releaseSpeedHold],
+  );
+
+  const handleSurfacePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const start = surfacePressRef.current;
+      if (!start || start.pointerId !== event.pointerId) return;
+      surfacePressRef.current = null;
+      releaseSpeedHold();
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      if (!start.swipe || !start.moved || !portraitSwipeEnabled) {
+        settleSwipe(0);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      start.samples.push({ x: event.clientY, time: event.timeStamp });
+      const velocity = horizontalSwipeVelocity(start.samples);
+      const deltaY = event.clientY - start.y;
+      const direction = videoSwipeDirection(
+        event.clientX - start.x,
+        deltaY,
+        LONG_PRESS_CANCEL_MOVE_PX,
+      );
+      const commit =
+        direction !== null && horizontalSwipeShouldCommit(deltaY, velocity, start.height);
+      if (!commit) {
+        settleSwipe(0, velocity);
+        return;
+      }
+      stepPlaylist(direction, velocity);
+    },
+    [portraitSwipeEnabled, releaseSpeedHold, settleSwipe, stepPlaylist],
+  );
 
   const toggleMute = useCallback(() => {
     const media = videoRef.current;
@@ -1221,8 +1585,51 @@ function VideoPlayerPageContent() {
   const { revealControls, holdControlsVisible, scheduleControlsHide } = usePlayerChromeIdle({
     controlsRef,
     hudRef,
-    keepVisible: paused || loading || Boolean(playbackError) || overlayInteractionOpen,
+    keepVisible:
+      shortVideo || paused || loading || Boolean(playbackError) || overlayInteractionOpen,
   });
+
+  const openVideoDetails = useCallback(
+    async (tab: SidebarTab = "related") => {
+      cancelSurfacePress();
+      if (fullscreen.fullscreen) await fullscreen.exit();
+      setDetailsKey(videoKey);
+      setShortVideo(false);
+      setWebFullscreen(false);
+      setSidebarTab(tab);
+      setHudMenuOpen(false);
+      setOverlayInteractionOpen(false);
+      requestAnimationFrame(() => detailsRef.current?.focus({ preventScroll: true }));
+    },
+    [cancelSurfacePress, fullscreen.exit, fullscreen.fullscreen, videoKey],
+  );
+
+  const enterShortVideo = useCallback(async () => {
+    cancelSurfacePress();
+    wheelGestureRef.current.lastTime = -Infinity;
+    if (fullscreen.fullscreen) await fullscreen.exit();
+    setDetailsKey(null);
+    setWebFullscreen(false);
+    setInfoHidden(false);
+    setShortVideo(true);
+    requestAnimationFrame(() => stageRef.current?.focus({ preventScroll: true }));
+  }, [cancelSurfacePress, fullscreen.exit, fullscreen.fullscreen]);
+
+  const togglePlayerFullscreen = useCallback(() => {
+    if (mobilePortrait || shortVideo || returningToShortVideo) {
+      if (shortVideo) void openVideoDetails();
+      else void enterShortVideo();
+    } else {
+      void fullscreen.toggle();
+    }
+  }, [
+    enterShortVideo,
+    fullscreen.toggle,
+    mobilePortrait,
+    openVideoDetails,
+    returningToShortVideo,
+    shortVideo,
+  ]);
 
   const handleStagePointerActivity = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -1234,21 +1641,15 @@ function VideoPlayerPageContent() {
 
   useEffect(() => {
     revealControls();
-  }, [fullscreen.fullscreen, revealControls]);
-
-  useEffect(
-    () => () => {
-      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
-    },
-    [],
-  );
+  }, [fullscreen.fullscreen, shortVideo, revealControls]);
 
   const handleSurfaceClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       if (event.detail !== 1 || isPlayerControlTarget(event.target)) return;
-      // 长按倍速松开后的那次 click 不是暂停意图。
-      if (suppressClickRef.current) {
-        suppressClickRef.current = false;
+      // 长按与滑动松开后的合成点击都不是暂停意图。
+      if (suppressClickRef.current) return;
+      if (shortVideo) {
+        togglePlayback();
         return;
       }
       if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
@@ -1257,19 +1658,20 @@ function VideoPlayerPageContent() {
         togglePlayback();
       }, SINGLE_CLICK_DELAY_MS);
     },
-    [togglePlayback],
+    [shortVideo, togglePlayback],
   );
 
   const handleSurfaceDoubleClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (isPlayerControlTarget(event.target)) return;
+      if (shortVideo) return;
+      if (suppressClickRef.current || isPlayerControlTarget(event.target)) return;
       if (clickTimerRef.current !== null) {
         window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = null;
       }
-      void fullscreen.toggle();
+      togglePlayerFullscreen();
     },
-    [fullscreen],
+    [shortVideo, togglePlayerFullscreen],
   );
 
   const handleStageKeyDown = useCallback(
@@ -1288,7 +1690,7 @@ function VideoPlayerPageContent() {
         toggleMute();
       } else if (key === "f" && !event.repeat) {
         event.preventDefault();
-        void fullscreen.toggle();
+        togglePlayerFullscreen();
       } else if (key === "arrowleft") {
         event.preventDefault();
         seekTo(currentTime - (event.shiftKey ? 30 : 5));
@@ -1324,6 +1726,7 @@ function VideoPlayerPageContent() {
       setPlayerVolume,
       toggleMute,
       togglePlayback,
+      togglePlayerFullscreen,
       volume,
     ],
   );
@@ -1344,6 +1747,40 @@ function VideoPlayerPageContent() {
     navigate(VIDEO_HOME_PATH, { replace: true });
   }, [navigate]);
 
+  const handlePageBack = useCallback(() => {
+    if (returningToShortVideo) void enterShortVideo();
+    else goBack();
+  }, [enterShortVideo, goBack, returningToShortVideo]);
+
+  useEffect(() => {
+    if (!returningToShortVideo && !shortVideo) return;
+    const onAndroidBack = (event: Event) => {
+      if (event.defaultPrevented || fullscreen.fullscreen || webFullscreen) return;
+      event.preventDefault();
+      if (!mobileClient && shortVideo) void openVideoDetails();
+      else handlePageBack();
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (dismissTopmostPopup(document)) return;
+      onAndroidBack(event);
+    };
+    window.addEventListener(ANDROID_BACK_EVENT, onAndroidBack);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener(ANDROID_BACK_EVENT, onAndroidBack);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [
+    fullscreen.fullscreen,
+    handlePageBack,
+    mobileClient,
+    openVideoDetails,
+    returningToShortVideo,
+    shortVideo,
+    webFullscreen,
+  ]);
+
   // 当前分 P 序号：多 P 稿件按 cid 从详情对出（链接缺 cid 时详情已补齐首 P），
   // 单 P 或详情未到时为 1，不影响地址正确性（P1 省略 ?p=）。
   const originalUrl = useMemo(() => {
@@ -1352,9 +1789,9 @@ function VideoPlayerPageContent() {
     return videoOriginalUrl(params.bvid, params.epId, page);
   }, [archiveQuery.data, cid, params]);
 
-  // 跳原址与复制链接：底部常驻 Shell 的操作（全屏时舞台盖住 Shell，HUD 里
-  // 另有一份镜像）；打开与回退细节见 `openExternalUrl`，通知反馈与直播页
-  // 卡片同一套。
+  // 跳原址与复制链接：桌面端住底部 Shell、移动端住顶栏 `⋮` 抽屉（全屏时
+  // 舞台盖住两者，HUD 里另有一份镜像）；打开与回退细节见 `openExternalUrl`，
+  // 通知反馈与直播页卡片同一套。
   const openOriginalUrl = useCallback(() => {
     if (!originalUrl) return;
     void openExternalUrl(originalUrl).then((opened) => {
@@ -1373,12 +1810,8 @@ function VideoPlayerPageContent() {
 
   const title = params?.title || "视频播放";
 
-  /**
-   * 舞台是否已经吃掉了顶栏：画面全屏把顶栏盖在固定舞台层之下，窗口全屏直接把它
-   * 从布局里卸载 —— 两种情况下顶栏工具都得由 HUD 补回画面内（与直播页
-   * `stageOwnsRoomTopBar` 判的是同一处缺口）。
-   */
-  const stageOwnsTopBar = fullscreen.fullscreen || webFullscreen;
+  /** 沉浸/全屏舞台接管顶栏，工具只在顶栏或 HUD 中挂载一份。 */
+  const stageOwnsTopBar = shortVideo || fullscreen.fullscreen || webFullscreen;
 
   /** 投屏源：顶栏 Popover 与 HUD 溢出菜单里的面板共用同一份参数，
    *  两处互斥渲染（见 `stageOwnsTopBar`），因此不会出现两个投屏会话入口。 */
@@ -1390,11 +1823,22 @@ function VideoPlayerPageContent() {
     onCastingDeviceChange: setCastingDevice,
   };
 
-  /** 顶栏右侧的低频工具（投屏）：跳原址/复制链接在底部常驻 Shell，
-   *  这里只留旁观类入口，与直播页顶栏右侧的定时/投屏工具同一布局语义。
+  /** 顶栏右侧的低频工具（投屏）：与直播页顶栏右侧的定时/投屏工具同一布局
+   *  语义。复制链接/跳原址在桌面端住底部 Shell，移动端收进 `⋮` 抽屉；
    *  全屏时顶栏被舞台吃掉，同一批入口改由 HUD 的 `⋮` 溢出菜单承载。 */
   const topBarTools = (
-    <Popover open={castOpen} onOpenChange={setCastOpen}>
+    <div className="flex items-center gap-1">
+      {!mobileClient && params?.bvid && !params.epId && !audioOnly && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="进入刷视频模式"
+          onClick={() => void enterShortVideo()}
+        >
+          <Smartphone aria-hidden />
+        </Button>
+      )}
+      <Popover open={castOpen} onOpenChange={setCastOpen}>
         <PopoverTrigger
           render={
             <Button
@@ -1418,7 +1862,15 @@ function VideoPlayerPageContent() {
           <PopoverTitle className={cn("px-2 py-1", glassTitleClass())}>投屏</PopoverTitle>
           <CastMenu {...castMenuProps} showHeader={false} />
         </PopoverContent>
-    </Popover>
+      </Popover>
+      {mobileClient && (
+        <VideoMobileActions
+          originalUrl={originalUrl}
+          onCopy={copyOriginalUrl}
+          onOpen={openOriginalUrl}
+        />
+      )}
+    </div>
   );
 
   const topBar = (
@@ -1431,14 +1883,14 @@ function VideoPlayerPageContent() {
                 variant="ghost"
                 size="icon-sm"
                 className="motion-back-button rounded-lg hover:bg-muted/70"
-                aria-label="返回视频列表"
-                onClick={goBack}
+                aria-label={returningToShortVideo ? "返回短视频" : "返回视频列表"}
+                onClick={handlePageBack}
               />
             }
           >
             <ChevronLeft data-icon="inline-start" aria-hidden />
           </TooltipTrigger>
-          <TooltipContent>返回视频列表</TooltipContent>
+          <TooltipContent>{returningToShortVideo ? "返回短视频" : "返回视频列表"}</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger
@@ -1447,14 +1899,20 @@ function VideoPlayerPageContent() {
                 variant="ghost"
                 size="icon-sm"
                 className="rounded-lg hover:bg-muted/70"
-                aria-label="返回主页"
-                onClick={() => navigate(VIDEO_HOME_PATH)}
+                aria-label={mobilePortrait ? "竖屏全屏" : "返回主页"}
+                onClick={
+                  mobilePortrait ? () => void enterShortVideo() : () => navigate(VIDEO_HOME_PATH)
+                }
               />
             }
           >
-            <Home data-icon="inline-start" aria-hidden className="size-4" />
+            {mobilePortrait ? (
+              <Smartphone data-icon="inline-start" aria-hidden />
+            ) : (
+              <Home data-icon="inline-start" aria-hidden />
+            )}
           </TooltipTrigger>
-          <TooltipContent>返回主页</TooltipContent>
+          <TooltipContent>{mobilePortrait ? "竖屏全屏" : "返回主页"}</TooltipContent>
         </Tooltip>
       </div>
       <div className="pointer-events-none absolute inset-x-24 flex min-w-0 items-center justify-center px-16">
@@ -1510,6 +1968,7 @@ function VideoPlayerPageContent() {
     );
   }
 
+  const playlistPosition = playlistStore.getCurrentPosition();
   const timeline = (
     <div className="flex min-w-0 items-center gap-2 py-0.5 text-white/85">
       <Slider
@@ -1540,19 +1999,18 @@ function VideoPlayerPageContent() {
           /
         </span>
         {formatRecordingDuration(duration * 1_000)}
+        {(playlistStore.uploader || (!shortVideo && playlistStore.items.length > 1)) &&
+          playlistPosition && (
+            <span
+              className="pl-2 text-white/60"
+              aria-label={`${playlistStore.uploader ? "UP 主投稿" : "播放列表"}第 ${playlistPosition.current} 个，共 ${playlistPosition.total} 个`}
+            >
+              {playlistPosition.current}/{playlistPosition.total}
+            </span>
+          )}
       </span>
     </div>
   );
-
-  const playlistPosition = playlistStore.getCurrentPosition();
-  const playlistCenterSlot =
-    playlistStore.items.length > 1 && playlistPosition ? (
-      <div className="flex shrink-0 items-center gap-1 px-1.5 text-white/75">
-        <span className="whitespace-nowrap font-mono text-[11px] tabular-nums">
-          {playlistPosition.current} / {playlistPosition.total}
-        </span>
-      </div>
-    ) : undefined;
 
   // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
   const pipSupported = document.pictureInPictureEnabled;
@@ -1561,72 +2019,72 @@ function VideoPlayerPageContent() {
    *  toggle 应用内全屏，全屏走元素级 top layer）。 */
   const toolsSlot = subtitles.length > 0 && (
     <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
-          <PopoverTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
-                aria-pressed={Boolean(subtitleLan)}
-                className={cn(
-                  PLAYER_CONTROL_BUTTON_CLASS,
-                  PLAYER_CONTROL_ICON_CLASS,
-                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                )}
-              />
-            }
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
+            aria-pressed={Boolean(subtitleLan)}
+            className={cn(
+              PLAYER_CONTROL_BUTTON_CLASS,
+              PLAYER_CONTROL_ICON_CLASS,
+              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+            )}
+          />
+        }
+      >
+        {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
+      </PopoverTrigger>
+      <PopoverContent
+        container={stageRef}
+        side="top"
+        align="end"
+        collisionBoundary={document.documentElement}
+        collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
+        sticky
+        glass
+        className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+      >
+        <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
+          字幕
+        </PopoverTitle>
+        <Button
+          variant="ghost"
+          className={cn(
+            "w-full justify-between max-md:h-10",
+            glassOptionClass(),
+            !subtitleLan && glassOptionSelectedClass(),
+          )}
+          aria-pressed={!subtitleLan}
+          onClick={() => {
+            setSubtitleLan(null);
+            setSubtitleOpen(false);
+          }}
+        >
+          <span className="truncate">关闭字幕</span>
+          {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
+        </Button>
+        {subtitles.map((subtitle) => (
+          <Button
+            key={subtitle.lan}
+            variant="ghost"
+            className={cn(
+              "w-full justify-between max-md:h-10",
+              glassOptionClass(),
+              subtitleLan === subtitle.lan && glassOptionSelectedClass(),
+            )}
+            aria-pressed={subtitleLan === subtitle.lan}
+            onClick={() => {
+              setSubtitleLan(subtitle.lan);
+              setSubtitleOpen(false);
+            }}
           >
-            {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
-          </PopoverTrigger>
-          <PopoverContent
-            container={stageRef}
-            side="top"
-            align="end"
-            collisionBoundary={document.documentElement}
-            collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
-            sticky
-            glass
-            className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
-          >
-            <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
-              字幕
-            </PopoverTitle>
-            <Button
-              variant="ghost"
-              className={cn(
-                "w-full justify-between max-md:h-10",
-                glassOptionClass(),
-                !subtitleLan && glassOptionSelectedClass(),
-              )}
-              aria-pressed={!subtitleLan}
-              onClick={() => {
-                setSubtitleLan(null);
-                setSubtitleOpen(false);
-              }}
-            >
-              <span className="truncate">关闭字幕</span>
-              {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
-            </Button>
-            {subtitles.map((subtitle) => (
-              <Button
-                key={subtitle.lan}
-                variant="ghost"
-                className={cn(
-                  "w-full justify-between max-md:h-10",
-                  glassOptionClass(),
-                  subtitleLan === subtitle.lan && glassOptionSelectedClass(),
-                )}
-                aria-pressed={subtitleLan === subtitle.lan}
-                onClick={() => {
-                  setSubtitleLan(subtitle.lan);
-                  setSubtitleOpen(false);
-                }}
-              >
-                <span className="truncate">{subtitle.lan_doc}</span>
-                {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
-              </Button>
-            ))}
-          </PopoverContent>
+            <span className="truncate">{subtitle.lan_doc}</span>
+            {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
+          </Button>
+        ))}
+      </PopoverContent>
     </Popover>
   );
 
@@ -1653,21 +2111,27 @@ function VideoPlayerPageContent() {
     </div>
   );
 
-  /** 播放偏好开关：循环播放常驻（单视频也要能循环），连播相关项只有多集时才有意义。 */
+  /** 短视频固定单条循环；普通详情保留原有循环/连播设置。 */
   const playbackToggles = (
     <div className="flex flex-col gap-1 px-1 py-1">
-      <PlaybackSettingRow
-        label="循环播放"
-        checked={playlistStore.loopPlayback}
-        onToggle={playlistStore.toggleLoopPlayback}
-      />
+      {shortVideo ? (
+        <p className="px-2.5 py-1.5 text-sm">短视频模式单条循环，上下滑动切换视频。</p>
+      ) : (
+        <PlaybackSettingRow
+          label="循环播放"
+          checked={playlistStore.loopPlayback}
+          onToggle={playlistStore.toggleLoopPlayback}
+        />
+      )}
       {playlistStore.items.length > 1 && (
         <>
-          <PlaybackSettingRow
-            label="自动播放下一集"
-            checked={playlistStore.autoPlayNext}
-            onToggle={playlistStore.toggleAutoPlayNext}
-          />
+          {!shortVideo && (
+            <PlaybackSettingRow
+              label="自动播放下一集"
+              checked={playlistStore.autoPlayNext}
+              onToggle={playlistStore.toggleAutoPlayNext}
+            />
+          )}
           <PlaybackSettingRow
             label="倒序播放"
             checked={playlistStore.reversed}
@@ -1686,25 +2150,33 @@ function VideoPlayerPageContent() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {!webFullscreen && topBar}
-      {/* 宽屏：播放器占满主列，右侧栏固定宽度；窄屏：播放器锁 16:9，
-          右侧栏改列在下方滚动。两种形态同一条侧栏组件。窗口全屏时隐藏
-          侧栏并解除窄屏高度锁，舞台撑满整个应用窗口（系统窗口栏保留）。 */}
+      {!webFullscreen && !shortVideo && topBar}
+      {/* 详情页按画面比例分配高度；沉浸模式让同一舞台铺满屏幕。 */}
       <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
         <section
           ref={stageRef}
           data-player-stage
-          data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
+          data-video-mode={shortVideo ? "short" : "details"}
+          data-fullscreen={
+            (shortVideo && mobileClient) || (fullscreen.fullscreen && fullscreen.nativeLayer)
+              ? "true"
+              : undefined
+          }
           className={cn(
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
-            webFullscreen
+            shortVideo || webFullscreen
               ? "aspect-auto max-h-none flex-1"
-              : "aspect-video w-full max-lg:max-h-[56%]",
+              : portraitVideo || swipePoster !== null
+                ? "aspect-[9/16] w-full max-lg:max-h-[56%]"
+                : "aspect-video w-full max-lg:max-h-[56%]",
             "lg:aspect-auto lg:w-auto lg:flex-1",
             "data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
           )}
           aria-label={`${title}；按空格或 K 播放或暂停，左右方向键快退或快进（Shift 加速 30 秒），上下方向键调音量，M 静音，F 全屏`}
           aria-keyshortcuts="Space K ArrowLeft ArrowRight ArrowUp ArrowDown M F"
+          aria-description={
+            portraitSwipeEnabled ? "竖屏画面上滑播放下一个，下滑播放上一个" : undefined
+          }
           onPointerEnter={handleStagePointerActivity}
           onPointerMove={handleStagePointerActivity}
           onPointerLeave={scheduleControlsHide}
@@ -1713,14 +2185,33 @@ function VideoPlayerPageContent() {
         >
           <div
             data-player-video-surface
-            className="relative min-h-0 flex-1 overflow-hidden bg-black"
+            className={cn(
+              "relative min-h-0 flex-1 overflow-hidden bg-black",
+              portraitSwipeEnabled && "touch-none select-none",
+            )}
             onClick={handleSurfaceClick}
             onDoubleClick={handleSurfaceDoubleClick}
             onPointerDown={handleSurfacePointerDown}
             onPointerMove={handleSurfacePointerMove}
-            onPointerUp={releaseSpeedHold}
-            onPointerCancel={releaseSpeedHold}
-            onPointerLeave={releaseSpeedHold}
+            onPointerUp={handleSurfacePointerUp}
+            onPointerCancel={cancelSurfacePress}
+            onLostPointerCapture={(event) => {
+              // video 的隐式捕获交给 surface 时也会冒泡 lost；只处理自身丢失捕获。
+              if (
+                event.target === event.currentTarget &&
+                surfacePressRef.current?.pointerId === event.pointerId
+              ) {
+                cancelSurfacePress();
+              }
+            }}
+            onPointerLeave={(event) => {
+              if (
+                surfacePressRef.current?.pointerId === event.pointerId &&
+                !event.currentTarget.hasPointerCapture(event.pointerId)
+              ) {
+                cancelSurfacePress();
+              }
+            }}
             onContextMenu={(event) => {
               // 长按倍速会触发系统的长按菜单，按住期间一律压掉。
               if (speedHoldRef.current || speedHoldTimerRef.current !== null) {
@@ -1728,72 +2219,91 @@ function VideoPlayerPageContent() {
               }
             }}
           >
-            <div
-              ref={rootRef}
-              data-player-engine-root
-              className="absolute inset-0 size-full overflow-hidden bg-black"
-            >
-              <video
-                ref={videoRef}
-                data-player-video
-                playsInline
-                preload="metadata"
-                controls={false}
-                className="absolute inset-0 size-full bg-black object-contain"
-              />
-            </div>
-
-            {danmakuEntries.length > 0 && (
-              <VideoDanmakuLayer
-                videoRef={videoRef}
-                entries={danmakuEntries}
-                active={danmakuVisible}
-              />
-            )}
-
-            {speedHoldActive && (
+            <div ref={swipeTrackRef} data-video-swipe-track className="absolute inset-0">
               <div
-                role="status"
-                aria-live="polite"
-                className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
+                className="pointer-events-none absolute inset-x-0 bottom-full h-full"
+                aria-hidden
               >
-                <FastForward className="size-3.5" aria-hidden />
-                {LONG_PRESS_RATE.toFixed(1)}x 倍速中
+                <VideoSwipePreview
+                  item={prevItem}
+                  label={prevItem ? "上一个" : "已经是第一个视频"}
+                />
               </div>
-            )}
+              <div className="pointer-events-none absolute inset-x-0 top-full h-full" aria-hidden>
+                <VideoSwipePreview
+                  item={nextItem}
+                  label={nextItem ? "下一个" : "已经是最后一个视频"}
+                />
+              </div>
+              <div
+                ref={rootRef}
+                data-player-engine-root
+                className="absolute inset-0 size-full overflow-hidden bg-black"
+              >
+                <video
+                  ref={videoRef}
+                  data-player-video
+                  playsInline
+                  preload="metadata"
+                  controls={false}
+                  className="absolute inset-0 size-full bg-black object-contain"
+                />
+              </div>
 
-            {(loading || waiting || playInfoQuery.isPending || switchingItem) &&
-              !playbackError &&
-              !fatalError && (
-                <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
-                  <Spinner className="text-white" aria-label="正在加载视频" />
+              {danmakuEntries.length > 0 && (
+                <VideoDanmakuLayer
+                  videoRef={videoRef}
+                  entries={danmakuEntries}
+                  active={danmakuVisible}
+                />
+              )}
+
+              {swipePoster && <VideoSwipePreview item={swipePoster} label="正在加载视频…" />}
+
+              {speedHoldActive && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
+                >
+                  <FastForward className="size-3.5" aria-hidden />
+                  {LONG_PRESS_RATE.toFixed(1)}x 倍速中
                 </div>
               )}
 
-            {/* 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
+              {(loading || waiting || playInfoQuery.isPending || switchingItem) &&
+                !playbackError &&
+                !fatalError && (
+                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
+                    <Spinner className="text-white" aria-label="正在加载视频" />
+                  </div>
+                )}
+
+              {/* 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
                 静默失败会让用户看到「在播但没声音」而无从下手。 */}
-            {(playbackError || fatalError) && (
-              <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
-                <ErrorState
-                  error={playbackError ?? fatalError}
-                  title="视频播放失败"
-                  onRetry={retryPlayback}
-                  className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
-                />
-              </div>
-            )}
+              {(playbackError || fatalError) && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
+                  <ErrorState
+                    error={playbackError ?? fatalError}
+                    title="视频播放失败"
+                    onRetry={retryPlayback}
+                    className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           {stageOwnsTopBar && (
             <div
-              ref={hudRef}
+              ref={shortVideo ? undefined : hudRef}
               data-player-hud
               data-visible="true"
               aria-hidden="false"
               className={cn(
                 "absolute inset-x-0 top-0 z-30 transition-opacity duration-150 ease-out",
                 "motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
-                "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,env(safe-area-inset-top))] text-white",
+                "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,env(safe-area-inset-top))] text-white",
                 compact ? "pb-3" : "pb-6",
               )}
               onPointerEnter={holdControlsVisible}
@@ -1805,7 +2315,15 @@ function VideoPlayerPageContent() {
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                aria-label={fullscreen.fullscreen ? "退出全屏" : "退出窗口全屏"}
+                aria-label={
+                  shortVideo
+                    ? mobileClient
+                      ? "返回视频列表"
+                      : "退出刷视频模式"
+                    : fullscreen.fullscreen
+                      ? "退出全屏"
+                      : "退出窗口全屏"
+                }
                 className={cn(
                   PLAYER_CONTROL_BUTTON_CLASS,
                   PLAYER_CONTROL_ICON_CLASS,
@@ -1815,15 +2333,20 @@ function VideoPlayerPageContent() {
                 // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
                 // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
                 onClick={() => {
-                  if (fullscreen.fullscreen) void fullscreen.exit();
+                  if (shortVideo) {
+                    if (mobileClient) goBack();
+                    else void openVideoDetails();
+                  } else if (fullscreen.fullscreen) void fullscreen.exit();
                   else setWebFullscreen(false);
                 }}
               >
                 <ChevronLeft data-icon="inline-start" aria-hidden />
               </Button>
-              <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
-                {title}
-              </p>
+              {(!shortVideo || !mobileClient) && (
+                <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
+                  {title}
+                </p>
+              )}
               <PlayerHudOverflowMenu
                 label="更多操作"
                 title="播放操作"
@@ -1834,9 +2357,8 @@ function VideoPlayerPageContent() {
                   setOverlayInteractionOpen(open);
                 }}
                 compact={compact}
-                // 只有画面全屏需要把菜单塞进舞台（它在 top layer，portal 到 body 会被压住）；
-                // 窗口全屏没有这层，走默认 portal 反而不会被舞台的 overflow-hidden 裁掉。
-                portalContainer={fullscreen.fullscreen ? stageRef : undefined}
+                // 固定沉浸层和画面全屏都需舞台内 portal；窗口全屏仍走默认宿主。
+                portalContainer={shortVideo || fullscreen.fullscreen ? stageRef : undefined}
               >
                 <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
                   <PlayerToolTile
@@ -1876,6 +2398,100 @@ function VideoPlayerPageContent() {
             </div>
           )}
 
+          {shortVideo && (
+            // 这层只负责渐变底衬，不带 z-index：控制栏（z-30）要画在渐变之上，
+            // 否则它自己的 `from-black/70` 最浓端会压暗进度条与按钮。
+            // 文字/按钮各自带 `relative z-40` 逃到控制栏遮罩之上（父层一旦有
+            // z-index 就自建层叠上下文，子层再高也出不去）。
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-3 bg-linear-to-t from-black/70 to-transparent px-4 pt-12 pb-[calc(5.5rem+env(safe-area-inset-bottom))] text-white">
+              <div
+                data-video-short-info
+                data-visible={!infoHidden}
+                aria-hidden={infoHidden}
+                inert={infoHidden}
+                className="relative z-40 min-w-0 flex-1 transition-opacity duration-150 motion-reduced:transition-none data-[visible=false]:opacity-0"
+              >
+                {archiveQuery.data?.author && (
+                  <div className="mb-2 flex min-w-0 items-center gap-2.5">
+                    <button
+                      type="button"
+                      aria-label={`查看 ${archiveQuery.data.author} 的投稿视频`}
+                      disabled={!archiveQuery.data.author_mid}
+                      className="pointer-events-auto shrink-0 rounded-full focus-ring-overlay"
+                      onClick={() => {
+                        setUploaderOpen(true);
+                        setOverlayInteractionOpen(true);
+                      }}
+                    >
+                      <Avatar size="lg">
+                        <AvatarImage
+                          src={normalizeImageUrl(archiveQuery.data.author_face)}
+                          alt={`${archiveQuery.data.author} 的头像`}
+                          referrerPolicy="no-referrer"
+                        />
+                        <AvatarFallback>
+                          {Array.from(archiveQuery.data.author)[0] ?? "?"}
+                        </AvatarFallback>
+                      </Avatar>
+                    </button>
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <p className="truncate text-sm font-semibold leading-5">
+                        {archiveQuery.data.author}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs leading-4 text-white/70">
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={`粉丝：${formatOnline(archiveQuery.data.author_fans)}`}
+                        >
+                          <Users aria-hidden className="size-3.5" />
+                          <span className="tabular-nums">
+                            {formatOnline(archiveQuery.data.author_fans)}
+                          </span>
+                        </span>
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={`视频：${formatOnline(archiveQuery.data.author_videos)}`}
+                        >
+                          <Video aria-hidden className="size-3.5" />
+                          <span className="tabular-nums">
+                            {formatOnline(archiveQuery.data.author_videos)}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <p className="line-clamp-2 text-sm font-semibold leading-5 tracking-tight">
+                  {swipePoster?.title ?? title}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                className={cn(
+                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                  "pointer-events-auto relative z-40 h-auto min-h-11 shrink-0 flex-col gap-1 px-3 py-2",
+                )}
+                aria-label="查看视频评论"
+                onClick={() => void openVideoDetails("comments")}
+              >
+                <MessageSquareText data-icon="inline-start" aria-hidden />
+                <span className="text-xs">评论</span>
+              </Button>
+            </div>
+          )}
+          {shortVideo && archiveQuery.data?.author_mid && (
+            <UploaderDrawer
+              open={uploaderOpen}
+              onOpenChange={(open) => {
+                setUploaderOpen(open);
+                setOverlayInteractionOpen(open);
+              }}
+              mid={archiveQuery.data.author_mid}
+              uploaderName={archiveQuery.data.author}
+              container={stageRef}
+            />
+          )}
+
           <div
             ref={controlsRef}
             data-player-controls
@@ -1887,30 +2503,18 @@ function VideoPlayerPageContent() {
             onFocusCapture={holdControlsVisible}
             onBlurCapture={scheduleControlsHide}
           >
-            {/* 弹幕输入条（overlay 变体，portal 进舞台避免全屏压盖）：
-                常规视口放控制栏居中槽位（直播页同款落点）；compact 且非全屏时
-                PlayerControls 不渲染 centerSlot，回退到控制条上沿，保持可用。 */}
-            {compact && !fullscreen.fullscreen && (
-              <DanmakuComposer
-                overlay
-                portalContainer={stageRef}
-                roomTitle={title}
-                video={{
-                  cid,
-                  aid: aid ?? "",
-                  progressMs: Math.floor(currentTime * 1000),
-                }}
-                onOverlayInteractionChange={setOverlayInteractionOpen}
-              />
-            )}
             <PlayerControls
               paused={paused}
               volume={volume}
               muted={muted}
               osdOn={danmakuVisible}
               webFullscreen={webFullscreen}
-              fullscreen={fullscreen.fullscreen}
-              onToggleWebFullscreen={() => setWebFullscreen((value) => !value)}
+              fullscreen={shortVideo || fullscreen.fullscreen}
+              onToggleWebFullscreen={
+                mobilePortrait || shortVideo || returningToShortVideo
+                  ? togglePlayerFullscreen
+                  : () => setWebFullscreen((value) => !value)
+              }
               disabled={loading}
               refreshDisabled={loading}
               loadError={fullscreen.error}
@@ -1918,22 +2522,17 @@ function VideoPlayerPageContent() {
               compact={compact}
               portalContainer={stageRef}
               centerSlot={
-                showPlayerControlsCenterSlot(compact, fullscreen.fullscreen) ? (
-                  <>
-                    <DanmakuComposer
-                      overlay
-                      portalContainer={stageRef}
-                      roomTitle={title}
-                      video={{
-                        cid,
-                        aid: aid ?? "",
-                        progressMs: Math.floor(currentTime * 1000),
-                      }}
-                      onOverlayInteractionChange={setOverlayInteractionOpen}
-                    />
-                    {playlistCenterSlot}
-                  </>
-                ) : undefined
+                <DanmakuComposer
+                  overlay
+                  portalContainer={stageRef}
+                  roomTitle={title}
+                  video={{
+                    cid,
+                    aid: aid ?? "",
+                    progressMs: Math.floor(currentTime * 1000),
+                  }}
+                  onOverlayInteractionChange={setOverlayInteractionOpen}
+                />
               }
               timeline={timeline}
               playbackSettings={
@@ -1966,6 +2565,8 @@ function VideoPlayerPageContent() {
               onRefresh={retryPlayback}
               onNext={nextItem ? () => goToPlaylistItem(nextItem) : undefined}
               toolsSlot={toolsSlot}
+              infoVisible={!infoHidden}
+              onToggleInfo={shortVideo ? () => setInfoHidden((hidden) => !hidden) : undefined}
               audioOnly={audioOnly}
               onToggleAudioOnly={toggleAudioOnly}
               pictureInPictureSupported={pipSupported}
@@ -1975,20 +2576,26 @@ function VideoPlayerPageContent() {
               onToggleMute={toggleMute}
               onVolume={setPlayerVolume}
               onToggleOsd={() => setDanmakuVisible((visible) => !visible)}
-              onToggleFullscreen={() => void fullscreen.toggle()}
+              onToggleFullscreen={togglePlayerFullscreen}
             />
           </div>
         </section>
         {!webFullscreen && (
           <aside
+            ref={detailsRef}
+            tabIndex={-1}
+            aria-label="视频详情"
             className={cn(
               // 与直播播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度，
               // 窄屏则如直播的紧凑侧栏一样列在播放器下方。
-              "relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar",
-              "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px]",
+              "relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar max-md:pb-[env(safe-area-inset-bottom)]",
+              "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px] lg:pb-0",
+              shortVideo && "hidden",
             )}
           >
             <VideoSidebar
+              tab={sidebarTab}
+              onTabChange={setSidebarTab}
               bvid={params.bvid}
               epId={params.epId}
               aid={params.aid}
@@ -2005,32 +2612,20 @@ function VideoPlayerPageContent() {
                 onSeek: (positionMs) => seekTo(positionMs / 1000),
               }}
             />
-            <DrawerViewport active={!fullscreen.fullscreen} />
+            <DrawerViewport active={!fullscreen.fullscreen && !shortVideo} />
           </aside>
         )}
       </main>
-      {/* 底部常驻 Shell（与直播页底部操作行同一画法）：跳原址与复制链接
-          的家。全屏（元素级 top layer）时被舞台盖住，两个入口在 HUD 的 `⋮`
-          溢出菜单里另有镜像；窗口全屏时从布局卸载。 */}
-      {!webFullscreen && (
-        <footer className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="max-md:h-11 max-md:touch-manipulation"
-            disabled={!originalUrl}
-            onClick={copyOriginalUrl}
-          >
+      {/* 底部 Shell 只在桌面端常驻（与直播页底部操作行同一画法）：移动端
+          的两个入口收进顶栏 `⋮` 抽屉。全屏（元素级 top layer）时被舞台盖住，
+          HUD 的 `⋮` 溢出菜单里另有镜像；窗口全屏时从布局卸载。 */}
+      {!webFullscreen && !shortVideo && !mobileClient && (
+        <footer className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
+          <Button variant="ghost" size="sm" disabled={!originalUrl} onClick={copyOriginalUrl}>
             <Link2 data-icon="inline-start" />
             复制链接
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="max-md:h-11 max-md:touch-manipulation"
-            disabled={!originalUrl}
-            onClick={openOriginalUrl}
-          >
+          <Button variant="ghost" size="sm" disabled={!originalUrl} onClick={openOriginalUrl}>
             <ExternalLink data-icon="inline-start" />
             在浏览器中打开
           </Button>
@@ -2067,7 +2662,12 @@ function PlaybackSettingRow({
         )}
       >
         {checked && (
-          <svg viewBox="0 0 12 12" fill="none" className="size-3 text-primary-foreground" aria-hidden="true">
+          <svg
+            viewBox="0 0 12 12"
+            fill="none"
+            className="size-3 text-primary-foreground"
+            aria-hidden="true"
+          >
             <path
               d="M10 3L4.5 8.5L2 6"
               stroke="currentColor"
@@ -2080,5 +2680,63 @@ function PlaybackSettingRow({
       </div>
       <span className="flex-1">{label}</span>
     </button>
+  );
+}
+
+/** 手机和平板的链接操作复用直播页顶栏抽屉形态。 */
+function VideoMobileActions({
+  originalUrl,
+  onCopy,
+  onOpen,
+}: {
+  originalUrl: string | null;
+  onCopy: () => void;
+  onOpen: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Drawer open={open} onOpenChange={setOpen}>
+      <DrawerTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="rounded-lg hover:bg-muted/70"
+            aria-label="更多视频操作"
+          />
+        }
+      >
+        <Ellipsis data-icon="inline-start" aria-hidden />
+      </DrawerTrigger>
+      <DrawerContent
+        side="bottom"
+        glass
+        className={cn("space-y-2", glassPanelClass({ overlay: true }))}
+      >
+        <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay: true }))}>
+          视频操作
+        </DrawerTitle>
+        <div className="grid grid-cols-4 gap-2">
+          <PlayerToolTile
+            icon={Link2}
+            label="复制链接"
+            disabled={!originalUrl}
+            onClick={() => {
+              setOpen(false);
+              onCopy();
+            }}
+          />
+          <PlayerToolTile
+            icon={ExternalLink}
+            label="在浏览器中打开"
+            disabled={!originalUrl}
+            onClick={() => {
+              setOpen(false);
+              onOpen();
+            }}
+          />
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }

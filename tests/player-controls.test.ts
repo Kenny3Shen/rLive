@@ -9,7 +9,6 @@ import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
   playerControlsAvoidSystemGestureBar,
-  showPlayerControlsCenterSlot,
   showPlayerSidePanelControl,
   showPlayerVolumeControl,
   showPlayerWebFullscreenControl,
@@ -32,7 +31,6 @@ import {
   showPlayerFullscreenLock,
   PLAYER_STAGE_DOUBLE_TAP_MS,
   PLAYER_VOLUME_KEY_STEP,
-  showDanmakuComposerInPlayerControls,
   showRoomSidePanel,
   stageOwnsRoomTopBar,
   nextFullscreenLayerToExit,
@@ -135,18 +133,6 @@ describe("mobile player layout", () => {
 
     expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, false, false)).toBe(false);
     expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, false, true)).toBe(false);
-  });
-
-  test("centers the composer in compact chrome only while fullscreen", () => {
-    expect(showPlayerControlsCenterSlot(true, false)).toBe(false);
-    expect(showPlayerControlsCenterSlot(true, true)).toBe(true);
-    expect(showPlayerControlsCenterSlot(false, false)).toBe(true);
-  });
-
-  test("moves the portrait composer into player chrome while fullscreen", () => {
-    expect(showDanmakuComposerInPlayerControls(true, false)).toBe(false);
-    expect(showDanmakuComposerInPlayerControls(true, true)).toBe(true);
-    expect(showDanmakuComposerInPlayerControls(false, false)).toBe(true);
   });
 
   test("keeps secondary controls out of portrait chrome and restores them in landscape", () => {

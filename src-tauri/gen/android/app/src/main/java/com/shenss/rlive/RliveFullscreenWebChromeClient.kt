@@ -264,6 +264,8 @@ class RliveFullscreenWebChromeClient(
 
   override fun onProgressChanged(view: WebView, newProgress: Int) {
     delegate.onProgressChanged(view, newProgress)
+    // 新文档会丢掉上次注入的 CSS 属性；加载完成后重新分发当前安全区。
+    if (newProgress == 100) view.requestApplyInsets()
   }
 
   override fun onReceivedIcon(view: WebView, icon: Bitmap) {

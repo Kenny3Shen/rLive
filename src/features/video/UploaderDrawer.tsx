@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { CalendarClock, Loader2, TrendingUp, X } from "lucide-react";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -11,8 +11,7 @@ import { VideoCard } from "./VideoCard";
 import { playlistItemFromVideoItem, dedupeVideoItems } from "./playlistStore";
 
 // 行式卡片（缩略图在左）比网格卡宽，列宽下限随之放大到 22rem。
-const GRID_CLASS =
-  "grid grid-cols-[repeat(auto-fill,minmax(min(100%,22rem),1fr))] gap-x-3 gap-y-1";
+const GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,22rem),1fr))] gap-x-3 gap-y-1";
 
 /** 排序标签：按钮显示当前排序，aria 宣告点击后的目标排序。 */
 const ORDER_LABELS: Record<VideoUploaderOrder, string> = {
@@ -25,12 +24,20 @@ type UploaderDrawerProps = {
   onOpenChange: (open: boolean) => void;
   mid: string;
   uploaderName: string;
+  /** 自定义挂载容器，沿 DrawerContent 的 container 类型（如播放页侧栏作用域）。 */
+  container?: ComponentProps<typeof DrawerContent>["container"];
 };
 
 /**
  * UP 主投稿视频抽屉，从右侧滑出，展示指定 UP 主的视频列表。
  */
-export function UploaderDrawer({ open, onOpenChange, mid, uploaderName }: UploaderDrawerProps) {
+export function UploaderDrawer({
+  open,
+  onOpenChange,
+  mid,
+  uploaderName,
+  container,
+}: UploaderDrawerProps) {
   const [order, setOrder] = useState<VideoUploaderOrder>("pubdate");
   const nextOrder: VideoUploaderOrder = order === "pubdate" ? "click" : "pubdate";
   const listQuery = useInfiniteQuery({
@@ -64,11 +71,16 @@ export function UploaderDrawer({ open, onOpenChange, mid, uploaderName }: Upload
   const allItems = dedupeVideoItems(data?.pages.flatMap((page) => page.items) ?? []);
   // 点击时刻的列表快照即播放列表（投稿列表连播）。
   const playlistItems = allItems.map(playlistItemFromVideoItem);
+  const playlistUploader = { mid, name: uploaderName };
   const isEmpty = !isFetching && allItems.length === 0;
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent side="right" className="w-[min(48rem,90vw)] overflow-hidden">
+      <DrawerContent
+        side="right"
+        container={container}
+        className="w-[min(48rem,90vw)] overflow-hidden"
+      >
         <div className="flex h-full flex-col">
           {/* 标题栏 */}
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border pb-3">
@@ -113,6 +125,8 @@ export function UploaderDrawer({ open, onOpenChange, mid, uploaderName }: Upload
                       key={`${item.bvid}:${item.cid ?? ""}`}
                       item={item}
                       playlist={playlistItems}
+                      playlistUploader={playlistUploader}
+                      onNavigate={() => onOpenChange(false)}
                       orientation="row"
                       showAuthor={false}
                     />

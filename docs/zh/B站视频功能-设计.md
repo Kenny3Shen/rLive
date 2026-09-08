@@ -56,9 +56,11 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 `playurl` 每个 representation 给 `segment_base: { initialization: "0-937", index_range: "938-1601" }`。按 `index_range` 发一次 Range 请求拿到的正是 `sidx` box。实测解析出 52 片 / 5s 一片 / `timescale=16000`。
 
-每片自带 `moof`+`mdat`，且 `tfdt` 与 sidx 累加时间轴**精确相等**（逐片核对 seg0/1/5/51 全部 match）→ **MSE 乱序 append 安全**，不必保证下载顺序。init 段只有 `ftyp`+`moov`。
+每片自带 `moof`+`mdat`，且 `tfdt` 与 sidx 累加时间轴**精确相等**（逐片核对 seg0/1/5/51 全部 match）。init 段只有 `ftyp`+`moov`。时间轴一致不能替代播放器的顺序约束，生产链路仍使用既有按序媒体代理。
 
 同一画质有多编码变体（avc1 / hvc1 / av01）并列，**选流必须按 codec 过滤**，默认取 `avc1` 兼容性最好。
+
+播放页预载所需 xgplayer 模块，与取流 IPC 并行，复用既有模块缓存；后端 `video_play_selection` 用 `tokio::join!` 并发获取音/视频两条互不依赖的 sidx，减少一次串行 CDN 往返。该链路供 UGC/PGC、横竖屏与仅音频模式共用；各轨候选 CDN 回退仍按序执行，选流、错误优先级、真实分片时间轴与媒体代理顺序不变。
 
 ### 2. CDN 分主机行为不同 → 必须走代理
 
@@ -88,7 +90,7 @@ Python 桩服务（模拟 stream_proxy：注入 Referer + 转发 Range）+ 合�
 - **seek 成立**：跳 180s 后在 189.8s 继续播，`buffered` 出现新区间 `[175.46, 210]`。
 - 曾观察到只挂载 video 轨：根因是桩服务单线程 502 导致插件 `MPD.init` 走重试路径、把 `mediaList.audio` 换成新数组从而丢掉 `selectedIdx`。桩服务加连接复用与重试后消失。**真实实现里 `stream_proxy` 必须稳定返回，502 会连带打掉音轨。**
 
-参考实现（可移植到 Rust）：`parse_sidx()` 与 `mpd_xml()`，见本轮 `/tmp/dashtest/serve.py`（临时文件，不入库）。
+正式的 sidx 解析、取流与 MPD 生成实现位于 `src-tauri/src/sites/bilibili/video.rs`。
 
 ## 五、VOD 弹幕
 
@@ -138,7 +140,7 @@ message DanmakuElem {
 
 - 写入接口 `POST https://api.bilibili.com/x/v2/dm/post`：表单 `type=1&oid={cid}&aid={aid}&msg&progress={毫秒}&rnd={微秒时间戳}&color=16777215&fontsize=25&pool=0&mode=1&plat=1&csrf`，携带 SESSDATA Cookie。三个关键字段的对齐依据（参考 PiliPlus 的 `DanmakuHttp.shootDanmaku`）：`aid` 参与表单（上游要求稿件标识，缺失被 -400 拒绝）；`progress` 单位是毫秒（此前按秒发送导致弹幕落在 1/1000 的错误位置）；`rnd` 缺省时上游把连续发送的冷却放大到 90 秒（带上为 5 秒），本地 3 秒冷却的第二条会直接撞上它。与直播 `msg/send` 同一套凭据检查（同一设置项 `danmaku_send_enabled`）、同一 3 秒冷却（`DanmakuSendLimiter`，键用稿件 aid——同稿件各分 P 共用一个冷却）与发送历史（`danmaku_send_history`，room_id 存 aid）。
 - 错误映射在直播语义之上补两条 VOD 专属：`-102` 账号权限不足（部分视频要求正式会员）、`616` 内容被过滤。不做重试、不产生乐观本地回显。
-- 前端复用直播的 `DanmakuComposer`（`video` prop 切换目标：cid/aid/progressMs 入参，毫秒与上游 progress 对齐），挂在控制栏居中槽位（`centerSlot`，直播页 composer 同款落点，播放列表计数排其后）；compact 且非全屏时 centerSlot 不渲染，回退控制条上沿。显隐随控制条，快捷表情/收藏/历史选择器同套可用；**键盘焦点在控制条内（正在输入弹幕）时控制条不休眠**，否则输入到一半会被闲置计时器连草稿一起淡出。
+- 前端复用直播的 `DanmakuComposer`（`video` prop 切换目标：cid/aid/progressMs 入参，毫秒与上游 progress 对齐），所有尺寸均挂在控制栏居中槽位（`centerSlot`），按两侧按钮组的实际宽度预留对称空间。显隐随控制条，快捷表情/收藏/历史选择器同套可用；**键盘焦点在控制条内（正在输入弹幕）时控制条不休眠**，否则输入到一半会被闲置计时器连草稿一起淡出。
 
 ### 弹幕查看列表（`VideoDanmakuList`）
 
@@ -171,20 +173,31 @@ message DanmakuElem {
 - 播放页的直入解析层（`seasonEntry`）：并发取 season 详情与该作品的观看历史，两份都落定后挑集——历史停住的那一集仍在分集表里就进它，否则首集（`videoPgcEntryEpisode`）——随即以 `replace` 把 URL 规范成带完整取流键的形态（`bvid`/`cid`/`ep_id`），下游（取流、弹幕、历史、侧栏高亮、跳原址）因此全部照旧读 URL，不需要「有效分集」这层派生状态。解析期间只渲染顶栏 + 加载指示，不挂播放器与侧栏（侧栏会以缺 `epId` 的形态初始化出错误页签，舞台聚焦也挂在 `cid` 上等首个有效值）；season 拉取失败给可重试的错误态，分集表为空（版权/地区限制）给不可重试的解释。
 - 落点语义与历史卡一致：看完的那一集也回到那一集从头播，不像多 P 稿件那样退回 P1——剧集的内容单位是集，「上次那集」对追番场景比「第 1 集」有信息量；位置续播仍交给 `videoResumePosition` 判定。换集走右侧栏「分集」页签。
 
+### 移动端竖屏短视频模式
+
+- UGC 视频解码后高度大于宽度时，移动端自动进入 `shortVideo` 模式；横屏画面、PGC 和桌面端不自动进入。帧比例只决定首次自动进入；同一刷视频会话遇到横屏画面或等待下一条首帧时都保持沉浸与滑动能力，直到用户主动进入普通详情、切到仅音频/PGC 或离开播放页。
+- 舞台复用 `data-fullscreen="true"` 的固定层。Android 调用既有 `setAndroidImmersive` / `setAndroidPlayerOrientation("portrait")` 隐藏系统栏、保持竖屏；退出模式或离开路由时恢复。自动沉浸不调用会重新挂载 WebView 表面的 HTML Fullscreen API。`MainActivity` 通过 `getInsetsIgnoringVisibility` 获取原生状态栏/刘海顶部安全区，按 `devicePixelRatio` 换成 `--android-safe-area-top`；外壳、顶部 HUD 和全屏侧抽屉共用它，即使系统栏暂时隐藏也保留顶部操作空间。页面加载完成时重新分发 inset，避免 WebView 的 `env(safe-area-inset-top)` 在沉浸退出后残留 0。旧 APK / 浏览器回退到 `env`。
+- 用户信息使用既有 `Avatar` / `AvatarImage` / `AvatarFallback`：头像跨两行，右侧第一行用户名，第二行用 `Users` / `Video` 图标配数量，复用普通详情页的统计样式、`normalizeImageUrl` 和 `formatOnline`；下方展示视频标题。评论入口或控制栏退出全屏按钮切换为普通详情布局，不提供标题/详情按钮。`VideoSidebar` 页签由播放页控制，评论入口可直接定位。模式往返不改路由、不重新取流、不重建媒体元素；详情页返回键优先回到短视频（包括刷到的横屏项），再次返回才离开播放页。现有弹窗的返回优先级保留。
+- 头像打开挂载在 `stageRef` 的既有 `UploaderDrawer`；选择卡片后写入已加载投稿队列与非持久化 `uploader: { mid, name }`，关闭抽屉后导航。短视频只在 UP 投稿队列中显示 `x/y`。推荐/搜索等普通来源优先于稿件的多 P/合集信息；只有显式点选分 P/合集分集才切换相应队列，无有效来源的多 P 直链仍自动建立选集队列。
+- 短视频进度条与上下控制栏不参与空闲隐藏。`infoHidden` 只控制用户/视频信息的透明度与 `aria-hidden`，评论入口、时间轴与控制栏始终可用；`PlayerControls` 通过 `infoVisible` / `onToggleInfo` 在同一位置切换信息显隐，不再提供舞台独立恢复按钮。状态随队列保持，不写入设置；普通详情仍沿用空闲自动隐藏，返回沉浸时重新显示信息。
+- 单击立即暂停/继续，双击不切换全屏；长按仍临时 3 倍速。移动端只有短视频模式接管上下换片，详情页中的拖动不再切片。无队列也可沉浸/循环，有多项队列才可上下切换。
+- 桌面鼠标滚轮仅在舞台画面内接管纵向滚动，不受视频画幅限制；向下前进、向上后退。原生非 passive `wheel` 监听避免连带滚动页面，过滤控件/菜单、横滚和缩放；像素/行/页增量归一化后交给 `videoWheelDirection`，按静默间隔合并惯性滚动，每段只换一条。触摸与滚轮共用 `stepPlaylist`、邻项封面和动画，沿用正序/倒序及边界提示，不新增返回记录。画面上的「上滑下一个 · 下滑上一个」提示已移除。
+- `ended` 读取即时模式：短视频单条循环，详情模式读取既有循环/连播偏好；不把模式放入播放器重建依赖，也不改写持久化设置。此前安排的延迟连播在已切回短视频或已重新起播时不再执行。
+
 ### 顶栏低频工具与控制布局
 
-- 顶栏（`topBar`）右侧只留投屏 `Cast` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）；跳原址/复制链接在底部常驻 Shell。
+- 普通详情模式顶栏（`topBar`）右侧提供投屏 `Cast` Popover 弹层（`side="bottom" align="end"` + glass，与直播页顶栏 `RoomToolPopover` 同一形态语义）；跳原址/复制链接在桌面端住底部 Shell，移动端收进顶栏的 `⋮` 抽屉。移动端竖屏视频另有「竖屏全屏」入口，详情返回箭头显示「返回短视频」。
 - 全屏时顶栏被舞台吃掉，这批低频入口改由 HUD 右上角的 `⋮` 溢出菜单（`PlayerHudOverflowMenu`，与直播页全屏 HUD 同一组件）承载：投屏 / 复制链接 / 在浏览器中打开三块磁贴（`PlayerToolTile`），点投屏在菜单内展开二级面板（`PlayerToolPanel` + `CastMenu`），正在投屏时磁贴文案变「投屏中」。
-- 顶栏工具与 HUD 菜单共享同一个 `castOpen` 与同一份 `castMenuProps`，因此两处渲染必须互斥：`stageOwnsTopBar = fullscreen || webFullscreen`（与直播页 `stageOwnsRoomTopBar` 同一处缺口）同时决定顶栏是否渲染这份工具、HUD 是否挂载。同时挂载会让一次点击开出两个投屏弹层 —— 画面全屏下两个 `PopoverContent` 都 portal 进舞台（`container` 指向 `stageRef`），叠在画面右上角。
+- 顶栏工具与 HUD 菜单共享同一个 `castOpen` 与同一份 `castMenuProps`，两处互斥渲染：`stageOwnsTopBar = shortVideo || fullscreen || webFullscreen`。避免一次点击打开两份投屏弹层，尤其不能在全屏舞台内叠放两个投屏入口。
 - 两种全屏相互独立、可叠加（与直播页同语义）：**窗口全屏**（`webFullscreen`，PlayerControls 内置「网页全屏」按钮，`Expand/Shrink` 图标）隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台撑满应用窗口、保留系统窗口栏（最小化/最大化/关闭），Escape 退出；**画面全屏**（`useRecordingPlayerFullscreen` 的元素级/top layer 或桌面原生窗口全屏，「全屏（F）」按钮）盖住一切。两层叠加时 HUD 返回箭头与 Escape 一次只收一层（元素全屏优先）。
 - 控制栏保留高频播放控制与字幕（CC）按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏居中槽位是弹幕输入条（见第五节「弹幕发送」）。
-- 画面全屏或窗口全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：左侧返回箭头（按层级退出）、中间标题、右上角 `⋮` 溢出菜单（见上）。菜单的 `portalContainer` 只在画面全屏时指向 `stageRef`（规避 top layer 压盖）；窗口全屏没有这一层，走默认 portal 反而不会被舞台的 `overflow-hidden` 裁掉。HUD 与底部控制栏共用 `setChromeVisible` 显隐调度（同一 `data-visible` 机制），不引入第二套空闲计时器；菜单开着时通过 `onOverlayInteractionChange` 钉住 chrome。
-- 底部常驻 Shell（`footer`，与直播页底部操作行同一画法：`border-t` + `bg-sidebar/90` + 安全区 padding，右对齐）：「复制链接」（`Link2`，`copyText` 写 B 站原址 + toast）与「在浏览器中打开」（`ExternalLink`，最右，`tauri-plugin-opener` 直跳系统浏览器、失败回退 `window.open`）。所有断点常驻（视频页没有直播页的移动端溢出菜单可承接），触屏加高 `max-md:h-11`。
+- 短视频、画面全屏或窗口全屏时舞台顶部渲染轻量 HUD（`data-player-hud`，复用 `player-scrim-overlay-top` 渐变）：返回、标题和 `⋮` 溢出菜单。短视频 HUD 常驻，不随信息隐藏按钮变化，返回即回到来源列表；其他全屏 HUD 沿用控制栏的空闲显隐和分层退出。短视频固定层/画面全屏的菜单与 toast 均进入 `stageRef`，同时停用侧栏的 `DrawerViewport`，避免浮层出现在隐藏的详情区。
+- 底部 Shell 仅桌面端显示「复制链接」与「在浏览器中打开」。手机和平板均通过普通详情顶栏的 `VideoMobileActions` 抽屉访问这两个操作，沉浸模式改由 HUD 菜单承载；移动端详情侧栏保留底部安全区 padding。
 
 
 ### 播放偏好（循环播放与音量记忆）
 
-- 控制栏「播放设置」弹层分三段：清晰度、倍速、播放偏好。播放偏好里「循环播放」常驻（单视频也要能循环），「自动播放下一集」「倒序播放」只在列表多于一项时出现；三项都由 `playlistStore` 的 `partialize` 持久化到 localStorage `video-playlist`。
+- 普通详情模式的「播放设置」弹层分为清晰度、倍速和播放偏好。「循环播放」常驻，「自动播放下一集」「倒序播放」只在列表多于一项时出现；三项由 `playlistStore` 持久化到 localStorage `video-playlist`。短视频模式以单条循环说明替代循环/连播开关，保留倒序与其他播放设置。
 - 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext)` 决定，优先级固定：循环 > 连播 > 停住。循环是「就看这一集」的显式意图，不该被连播带走；没有下一集时连播退化成停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效。
 - 循环重播走原生 `media.currentTime = 0` + `play()`（与 seek 同一条 DASH 路径）；进度已在 `ended` 里按总时长记满，观看历史仍认定「已看完」，下次进入从头播放。
 - 音量与静音由 `src/shared/playerVolume.ts` 记在 localStorage `rlive-player-volume`，视频页、直播页、IPTV 播放页与录制回放共享同一份：初值取 `readPlayerVolume()`，音量/静音状态变化写 `rememberPlayerVolume()`（同值不重渲染，一次拖动最多写它经过的档位数，不需要节流）。不参与的两处：多画面按槽位各存一份音量（副画面默认静音是角色语义）；Android 真实音量是系统媒体音量（由 OS 记住），网页层固定 100 且不落盘，否则会把 100 写进桌面端的记忆。

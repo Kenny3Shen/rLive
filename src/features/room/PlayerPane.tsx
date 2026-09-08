@@ -372,13 +372,6 @@ export function isPortraitStackedPlayer(
   return portraitStackLayout && !fullscreen;
 }
 
-export function showDanmakuComposerInPlayerControls(
-  inlineCompactSidePanel: boolean,
-  fullscreen: boolean,
-): boolean {
-  return !inlineCompactSidePanel || fullscreen;
-}
-
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(
@@ -2122,23 +2115,18 @@ export function PlayerPane({
               compact={compactViewport}
               portalContainer={player.stageRef}
               centerSlot={
-                showDanmakuComposerInPlayerControls(
-                  inlineCompactSidePanel,
-                  player.mode === "fullscreen",
-                ) ? (
-                  <DanmakuComposer
-                    siteId={siteId}
-                    roomId={roomId}
-                    roomTitle={roomTitle}
-                    roomUserName={roomUserName}
-                    overlay
-                    // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
-                    // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
-                    // body 级弹窗会被压在其下。
-                    portalContainer={player.stageRef}
-                    onOverlayInteractionChange={handleComposerOverlayInteractionChange}
-                  />
-                ) : null
+                <DanmakuComposer
+                  siteId={siteId}
+                  roomId={roomId}
+                  roomTitle={roomTitle}
+                  roomUserName={roomUserName}
+                  overlay
+                  // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
+                  // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
+                  // body 级弹窗会被压在其下。
+                  portalContainer={player.stageRef}
+                  onOverlayInteractionChange={handleComposerOverlayInteractionChange}
+                />
               }
               onOverlayInteractionChange={handleControlsOverlayInteractionChange}
               refreshDisabled={refreshDisabled}
@@ -2295,14 +2283,6 @@ export function PlayerPane({
                     statusText={danmakuStatusText}
                     className="min-h-0 flex-1"
                   />
-                  {inlineCompactSidePanel && (
-                    <DanmakuComposer
-                      siteId={siteId}
-                      roomId={roomId}
-                      roomTitle={roomTitle}
-                      roomUserName={roomUserName}
-                    />
-                  )}
                 </div>
                 <div
                   role="tabpanel"
