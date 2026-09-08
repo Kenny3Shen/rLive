@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Loader2, Video } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
@@ -39,6 +39,7 @@ import {
   videoTabUsesPgc,
   videoZoneChips,
 } from "./videoRoute";
+import { useVideoTabScope } from "./videoTabScope";
 
 /** 分区列表未就绪时的稳定空值，避免每次渲染换一个数组引用。 */
 const EMPTY_ZONES: readonly VideoZone[] = [];
@@ -88,7 +89,8 @@ function GridSkeleton() {
  */
 export function VideoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
+  const scopedTab = useVideoTabScope();
+  const tab = scopedTab ?? videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
 
   // UGC 分区表由后端提供以免前端硬编码 rid。只有热门页签的条带用得上它。
   const zonesQuery = useQuery({
@@ -124,8 +126,8 @@ export function VideoPage() {
     // 前端不去猜「返回条数少于 pageSize 就是最后一页」。
     getNextPageParam: (lastPage, allPages) => (lastPage.has_more ? allPages.length + 1 : undefined),
     ...BROWSING_LIST_QUERY_OPTIONS,
+    placeholderData: keepPreviousData,
   });
-
   const pages = listQuery.data?.pages;
   // 按 payload 自带的 `kind` 分派，理由见 `VideoFeedPage`。
   const feedKind = pages?.[0]?.kind ?? (videoTabUsesPgc(tab) ? "pgc" : "ugc");
@@ -140,7 +142,8 @@ export function VideoPage() {
   );
   const itemCount = feedKind === "pgc" ? pgcItems.length : ugcItems.length;
 
-  const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = listQuery;
+  const { fetchNextPage, isFetchingNextPage, isFetchNextPageError } = listQuery;
+  const hasNextPage = listQuery.isPlaceholderData ? false : listQuery.hasNextPage;
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     fetchNextPage,
     hasNextPage,
