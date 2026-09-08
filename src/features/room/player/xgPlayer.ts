@@ -18,9 +18,7 @@ export type XgPlaybackKind = "flv" | "hls" | "mpegts" | "native" | "dash";
 export type XgLivePlaybackKind = Exclude<XgPlaybackKind, "dash">;
 
 /** 把站点声明的传输协议映射到本封装惰性加载的 xgplayer 内核。 */
-export function webPlaybackKind(
-  source: Pick<PlayUrl, "url" | "protocol">,
-): XgLivePlaybackKind {
+export function webPlaybackKind(source: Pick<PlayUrl, "url" | "protocol">): XgLivePlaybackKind {
   switch (playbackProtocol(source)) {
     case "hls":
       return "hls";
@@ -176,6 +174,8 @@ export function createXgPlayer(
   const playerOptions: IPlayerOptions & { hlsJsPlugin?: Record<string, unknown> } = {
     el: root,
     mediaEl: video,
+    // 沿用调用方的音量，避免内核默认的 60% 覆盖 Android 原生音量或桌面音量记忆。
+    volume: video.volume,
     url,
     plugins,
     autoplay: false,

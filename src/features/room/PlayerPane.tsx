@@ -14,12 +14,9 @@ import {
   Captions,
   CaptionsOff,
   Headphones,
-  Lock,
   MessageSquareOff,
   MessageSquareText,
   PictureInPicture2,
-  SunMedium,
-  Unlock,
   VideoOff,
   Volume2,
   VolumeX,
@@ -43,10 +40,18 @@ import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
   PlayerControls,
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
 } from "@/shared/components/player/PlayerControls";
+import {
+  PlayerBrightnessShade,
+  PlayerEdgeGestureFeedback,
+} from "@/shared/components/player/PlayerEdgeGestureOverlays";
+import {
+  playerChromeVisible,
+  playerStageGesturesEnabled,
+  PlayerFullscreenLock,
+  showPlayerFullscreenLock,
+} from "@/shared/components/player/PlayerFullscreenLock";
+import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { DanmuJsDanmaku } from "./danmaku/DanmuJsDanmaku";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
@@ -69,12 +74,10 @@ import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { DrawerViewport } from "@/components/ui/drawer";
 import type { PlayerEvent } from "@/shared/types/player";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
-import { commitTween, killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 
 export type RoomSideTab = "chat" | "settings" | "follow";
 
-export type PlayerMobileRoomAction = {
+type PlayerMobileRoomAction = {
   id: "mute" | "audio-only" | "danmaku" | "asr" | "picture-in-picture";
   label: string;
   icon: LucideIcon;
@@ -86,16 +89,6 @@ export type PlayerMobileRoomAction = {
 /** 把视觉页签顺序与触摸导航顺序保持在同一处。 */
 export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
 
-// Android 经原生桥控制 Activity 亮度。其他移动客户端通过合成器阴影兜底
-// 实现同样的画面局部手势。
-export const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
-const PLAYER_EDGE_GESTURE_DIRECTION_RATIO = 1.25;
-const PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX = 160;
-// Bilibili 风格的调节让手指在整个画面高度上连续跟踪，
-// 而不是按粗粒度的固定档位跳变。
-const PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO = 1;
-const PLAYER_EDGE_GESTURE_HUD_LINGER_MS = 520;
-const PLAYER_EDGE_GESTURE_START_GUTTER_RATIO = 0.08;
 // 对齐常见的移动端舞台交互：短按切换 chrome，
 // 在此窗口内的第二次按击进入/退出全屏。
 export const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
@@ -111,108 +104,12 @@ export function shouldUseLargeDanmakuActionMenu(
   return fullscreen && !mobileClient;
 }
 
-export type PlayerEdgeGesture = "brightness" | "volume";
-
-type PlayerEdgeGestureState = {
-  pointerId: number;
-  kind: PlayerEdgeGesture;
-  startX: number;
-  startY: number;
-  stageHeight: number;
-  startValue: number;
-  lastValue: number;
-  active: boolean;
-  /** 快照原生可用性，使延迟到来的桥失败无法改变滑动路由。 */
-  native: boolean;
-};
-
 type PlayerStageTapState = {
   pointerId: number;
   startX: number;
   startY: number;
   startedAt: number;
 };
-
-/** 左半边调节画面亮度；右半边调节音量。 */
-export function playerEdgeGestureForStart(
-  clientX: number,
-  stageLeft: number,
-  stageWidth: number,
-): PlayerEdgeGesture {
-  return clientX - stageLeft < Math.max(0, stageWidth) / 2 ? "brightness" : "volume";
-}
-
-/** 把 0-100 的兜底亮度转换为仅合成器的黑色叠加层。 */
-export function playerBrightnessShadeOpacity(value: number): number {
-  const brightness = Math.max(0, Math.min(100, value));
-  return (100 - brightness) / 100;
-}
-
-/** 刻意的纵向拖拽优先于斜向或横向手势。 */
-export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boolean {
-  const verticalDistance = Math.abs(deltaY);
-  return (
-    verticalDistance >= PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX &&
-    verticalDistance > Math.abs(deltaX) * PLAYER_EDGE_GESTURE_DIRECTION_RATIO
-  );
-}
-
-export type PlayerEdgeGestureIntent = "pending" | "adjust" | "reject";
-
-/**
- * 让短促的接触保持其原始的画面目标，直到它要么变成纵向调节、
- * 要么明确转变为其他手势。这对直播弹幕浮层尤其重要：
- * 它需要对应的 pointerup 来完成触摸命中测试。
- */
-export function playerEdgeGestureIntent(deltaX: number, deltaY: number): PlayerEdgeGestureIntent {
-  const horizontalDistance = Math.abs(deltaX);
-  const verticalDistance = Math.abs(deltaY);
-  if (
-    horizontalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX &&
-    verticalDistance < PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX
-  ) {
-    return "pending";
-  }
-  return isVerticalPlayerEdgeGesture(deltaX, deltaY) ? "adjust" : "reject";
-}
-
-/**
- * 映射到完整 0–100 调节的拖拽距离。使用整个舞台使小幅手指移动连续可控，
- * 而不是忽跳忽停。
- */
-export function playerEdgeGestureDragExtent(stageHeight: number): number {
-  return (
-    Math.max(PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX, stageHeight) *
-    PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO
-  );
-}
-
-/** 上下拖拽一个播放器高度对应完整的 0–100 调节。 */
-export function playerEdgeGestureValue(
-  startValue: number,
-  deltaY: number,
-  stageHeight: number,
-): number {
-  const height = playerEdgeGestureDragExtent(stageHeight);
-  return Math.max(0, Math.min(100, startValue - (deltaY / height) * 100));
-}
-
-/**
- * 为系统边缘手势留下狭窄的上下留白。交互式播放 chrome 由
- * `isPlayerEdgeGestureIgnoredTarget` 单独排除。
- */
-export function canStartPlayerEdgeGesture(
-  clientY: number,
-  stageTop: number,
-  stageHeight: number,
-): boolean {
-  if (stageHeight <= 0) return false;
-  const ratio = (clientY - stageTop) / stageHeight;
-  return (
-    ratio >= PLAYER_EDGE_GESTURE_START_GUTTER_RATIO &&
-    ratio <= 1 - PLAYER_EDGE_GESTURE_START_GUTTER_RATIO
-  );
-}
 
 /** 短促且基本不动的触摸是舞台点按，而不是拖拽手势。 */
 export function isPlayerStageTap(deltaX: number, deltaY: number, durationMs: number): boolean {
@@ -239,30 +136,6 @@ export function playerVolumeForKeyStep(volume: number, muted: boolean, direction
   const current = muted ? 0 : volume;
   const next = current + direction * PLAYER_VOLUME_KEY_STEP;
   return Math.max(0, Math.min(100, Math.round(next)));
-}
-
-/**
- * 全屏锁定只在移动端全屏出现：它要挡掉的正是单击/双击/边缘滑动这套触摸手势，
- * 桌面端没有误触问题，窗口化时也随时可以直接离开。
- */
-export function showPlayerFullscreenLock(mobileClient: boolean, fullscreen: boolean): boolean {
-  return mobileClient && fullscreen;
-}
-
-/**
- * 锁定期间画面手势全部让位给锁定按钮本身，否则用户既解不开锁、
- * 又会继续误触发音量和全屏。
- */
-export function playerStageGesturesEnabled(fullscreenLocked: boolean): boolean {
-  return !fullscreenLocked;
-}
-
-/**
- * 锁定期间两层 chrome 始终保持收起：画面手势已全部屏蔽，控制条露出来也无从操作。
- * 空闲唤醒态因此只作用于锁定按钮那一层。
- */
-export function playerChromeVisible(visible: boolean, fullscreenLocked: boolean): boolean {
-  return visible && !fullscreenLocked;
 }
 
 function isRoomSideTab(value: string): value is RoomSideTab {
@@ -327,13 +200,18 @@ export function showRoomSidePanel(sidePanelOpen: boolean, webFullscreen: boolean
 }
 
 /**
- * 舞台是否已经吃掉了 `RoomTopBar`，因此需要 HUD 把房间身份与工具补回画面内。
+ * 舞台是否自己画房间顶栏，因此需要 HUD 把房间身份与工具补进画面内。
  *
- * 两种方式都算，缺口是同一个：原生全屏把顶栏盖在 top layer 之下，
- * 桌面网页全屏直接把它从布局里卸载。
+ * 三种情形缺口相同：原生全屏把顶栏盖在 top layer 之下，桌面网页全屏直接把它从
+ * 布局里卸载，而移动端窗口化刻意不再渲染流内顶栏 —— 顶栏改为像控制条一样浮在
+ * 画面顶部，画面因此拿到整个视口高度。
  */
-export function stageOwnsRoomTopBar(fullscreen: boolean, webFullscreen: boolean): boolean {
-  return fullscreen || webFullscreen;
+export function stageOwnsRoomTopBar(
+  fullscreen: boolean,
+  webFullscreen: boolean,
+  mobileClient = false,
+): boolean {
+  return fullscreen || webFullscreen || mobileClient;
 }
 
 /**
@@ -450,8 +328,10 @@ type PlayerPaneProps = {
    * 会被位于 top layer 的 stage 压住，因此原生全屏仍只提供溢出菜单里的条目。
    */
   hudToolsSlot?: ReactNode;
-  /** 把仅竖屏显示的次要控件发布到 RoomPage 的房间操作菜单。 */
-  onMobileRoomActionsChange?: (actions: readonly PlayerMobileRoomAction[]) => void;
+  /**
+   * 窗口化时 HUD 返回箭头的导航。全屏层优先于本回调：先退全屏，退尽后再走导航。
+   */
+  onNavigateBack?: () => void;
 };
 
 /**
@@ -494,7 +374,7 @@ export function PlayerPane({
   webFullscreen = false,
   onWebFullscreenChange,
   hudToolsSlot,
-  onMobileRoomActionsChange,
+  onNavigateBack,
 }: PlayerPaneProps) {
   const compactViewport = useCompactPlayerViewport();
   const compactLandscapeViewport = useCompactLandscapePlayerViewport();
@@ -563,17 +443,6 @@ export function PlayerPane({
     composer: false,
     hud: false,
   });
-  const playerBrightnessRef = useRef(100);
-  const brightnessShadeRef = useRef<HTMLDivElement | null>(null);
-  const playerEdgeGestureRef = useRef<PlayerEdgeGestureState | null>(null);
-  const playerEdgeGestureFeedbackRef = useRef<HTMLDivElement | null>(null);
-  const playerEdgeGesturePanelRef = useRef<HTMLDivElement | null>(null);
-  const playerEdgeGestureBrightnessIconRef = useRef<SVGSVGElement | null>(null);
-  const playerEdgeGestureVolumeIconRef = useRef<SVGSVGElement | null>(null);
-  const playerEdgeGestureLabelRef = useRef<HTMLSpanElement | null>(null);
-  const playerEdgeGestureValueRef = useRef<HTMLElement | null>(null);
-  const playerEdgeGestureProgressRef = useRef<HTMLSpanElement | null>(null);
-  const playerEdgeGestureFeedbackTimerRef = useRef<number | null>(null);
   const playerStageTapRef = useRef<PlayerStageTapState | null>(null);
   const playerStageTapTimerRef = useRef<number | null>(null);
   const lastPlayerStageTapAtRef = useRef(0);
@@ -761,16 +630,6 @@ export function PlayerPane({
     transportDisabled,
   ]);
 
-  useEffect(() => {
-    onMobileRoomActionsChange?.(mobileRoomActions);
-  }, [mobileRoomActions, onMobileRoomActionsChange]);
-
-  useEffect(
-    () => () => {
-      onMobileRoomActionsChange?.([]);
-    },
-    [onMobileRoomActionsChange],
-  );
   const canAutoHideControls =
     showHost && player.running && !player.paused && !overlayInteractionOpen;
   // 锁定按钮只在移动端全屏存在，因此它的层随全屏挂载与卸载。
@@ -796,8 +655,13 @@ export function PlayerPane({
     portraitStackLayout,
     player.mode === "fullscreen",
   );
-  // 网页全屏卸载了 `RoomTopBar`，与原生全屏盖住它是同一处缺口：房间身份与工具都得在画面内补回。
-  const stageOwnsTopBar = stageOwnsRoomTopBar(player.mode === "fullscreen", webFullscreen);
+  // 网页全屏卸载了 `RoomTopBar`，原生全屏盖住它，移动端窗口化则刻意不渲染流内顶栏：
+  // 三种情形都要把房间身份与工具补进画面内的 HUD。
+  const stageOwnsTopBar = stageOwnsRoomTopBar(
+    player.mode === "fullscreen",
+    webFullscreen,
+    mobileClient,
+  );
   const fullscreenHudVisible = showPlayerFullscreenHud({
     fullscreen: stageOwnsTopBar,
     hasRoomIdentity: Boolean(roomTitle?.trim() || roomUserName?.trim()),
@@ -1128,6 +992,7 @@ export function PlayerPane({
   /**
    * HUD 返回箭头：按层退出全屏，与 Escape 的习惯一致 —— 原生全屏先退，
    * 两种全屏叠加时网页全屏留给下一次点击，避免一次点击连退两层。
+   * 窗口化（移动端覆盖顶栏）没有全屏层可退，改走页面导航。
    */
   const handleHudBack = useCallback(() => {
     const layer = nextFullscreenLayerToExit(player.mode === "fullscreen", webFullscreen);
@@ -1135,8 +1000,12 @@ export function PlayerPane({
       void player.exitFullscreen();
       return;
     }
-    if (layer === "webFullscreen") onWebFullscreenChange?.(false);
-  }, [onWebFullscreenChange, player, webFullscreen]);
+    if (layer === "webFullscreen") {
+      onWebFullscreenChange?.(false);
+      return;
+    }
+    onNavigateBack?.();
+  }, [onNavigateBack, onWebFullscreenChange, player, webFullscreen]);
 
   // 指针或键盘焦点位于其中时，两层 chrome 保持自身可见，
   // 且在两者之间 Tab 不得重启空闲倒计时。
@@ -1195,311 +1064,38 @@ export function PlayerPane({
     layout: "track",
   });
 
-  const clearPlayerEdgeGestureFeedbackTimer = useCallback(() => {
-    if (playerEdgeGestureFeedbackTimerRef.current !== null) {
-      window.clearTimeout(playerEdgeGestureFeedbackTimerRef.current);
-      playerEdgeGestureFeedbackTimerRef.current = null;
-    }
-  }, []);
+  // 识别出的音量/亮度拖拽会取消任何待处理的舞台点按。
+  const cancelPendingStageTap = useCallback(() => {
+    clearPlayerStageTapTimer();
+    lastPlayerStageTapAtRef.current = 0;
+    playerStageTapRef.current = null;
+  }, [clearPlayerStageTapTimer]);
 
-  const revealPlayerEdgeGestureFeedback = useMemo(
-    () => () => {
-      const feedback = playerEdgeGestureFeedbackRef.current;
-      const panel = playerEdgeGesturePanelRef.current;
-      if (!feedback) return;
-      const wasVisible = feedback.dataset.visible === "true";
-      feedback.dataset.visible = "true";
-      if (wasVisible) return;
-
-      if (prefersReducedMotion()) {
-        killTweensOf(feedback);
-        if (panel) killTweensOf(panel);
-        feedback.style.opacity = "1";
-        if (panel) panel.style.transform = "scale(1)";
-        return;
-      }
-      // 提示层的自然态是 opacity-0 / scale(0.97)，展开后的终态由 commitTween 固化为
-      // 内联样式持有；隐藏补间的结束帧才回到自然态，由 settleTween 归还。
-      // 不能用 fill 持有展开态：已完成的填充动画会被部分 WebView 从
-      // getAnimations() 移除而效果仍挂在级联上，之后任何 cancel 都无法清除，
-      // 隐藏淡出结束的瞬间会跳回旧效果并永久卡在展开态（提示卡不消失）。
-      // 起点读当前计算值而不是固定常量：隐藏中途再次手势时从当前透明度/缩放
-      // 平滑接续（GSAP `.to` 的语义），不跳回起点。
-      const feedbackFrom = getComputedStyle(feedback).opacity;
-      const panelFrom = panel ? getComputedStyle(panel).transform : null;
-      commitTween(
-        tween(feedback, [{ opacity: feedbackFrom }, { opacity: "1" }], {
-          duration: 160,
-          easing: EASE_OUT,
-          fill: "both",
-        }),
-      );
-      if (panel && panelFrom) {
-        commitTween(
-          tween(panel, [{ transform: panelFrom }, { transform: "scale(1)" }], {
-            duration: 160,
-            easing: EASE_OUT,
-            fill: "both",
-          }),
-        );
-      }
-    },
-    [],
-  );
-
-  const hidePlayerEdgeGestureFeedback = useMemo(
-    () => () => {
-      const feedback = playerEdgeGestureFeedbackRef.current;
-      const panel = playerEdgeGesturePanelRef.current;
-      if (!feedback || feedback.dataset.visible !== "true") return;
-      feedback.dataset.visible = "false";
-
-      if (prefersReducedMotion()) {
-        killTweensOf(feedback);
-        if (panel) killTweensOf(panel);
-        feedback.style.opacity = "0";
-        if (panel) panel.style.transform = "";
-        return;
-      }
-      const feedbackFrom = getComputedStyle(feedback).opacity;
-      const panelFrom = panel ? getComputedStyle(panel).transform : null;
-      settleTween(
-        feedback,
-        tween(feedback, [{ opacity: feedbackFrom }, { opacity: "0" }], {
-          duration: 140,
-          easing: EASE_OUT,
-          fill: "both",
-        }),
-      );
-      if (panel && panelFrom) {
-        settleTween(
-          panel,
-          tween(panel, [{ transform: panelFrom }, { transform: "scale(0.97)" }], {
-            duration: 140,
-            easing: EASE_OUT,
-            fill: "both",
-          }),
-        );
-      }
-    },
-    [],
-  );
-
-  const showPlayerEdgeGestureFeedback = useCallback(
-    (kind: PlayerEdgeGesture, value: number) => {
-      const feedback = playerEdgeGestureFeedbackRef.current;
-      const brightnessIcon = playerEdgeGestureBrightnessIconRef.current;
-      const volumeIcon = playerEdgeGestureVolumeIconRef.current;
-      const label = playerEdgeGestureLabelRef.current;
-      const valueNode = playerEdgeGestureValueRef.current;
-      const progress = playerEdgeGestureProgressRef.current;
-      if (feedback) {
-        feedback.dataset.kind = kind;
-        feedback.dataset.playerEdgeGestureFeedback = kind;
-      }
-      if (brightnessIcon) brightnessIcon.style.display = kind === "brightness" ? "" : "none";
-      if (volumeIcon) volumeIcon.style.display = kind === "volume" ? "" : "none";
-      if (label) label.textContent = kind === "brightness" ? "亮度" : "音量";
-      if (valueNode) valueNode.textContent = `${Math.round(value)}%`;
-      if (progress) progress.style.transform = `scaleX(${Math.max(0, Math.min(1, value / 100))})`;
-      clearPlayerEdgeGestureFeedbackTimer();
-      revealPlayerEdgeGestureFeedback();
-    },
-    [clearPlayerEdgeGestureFeedbackTimer, revealPlayerEdgeGestureFeedback],
-  );
-
-  const schedulePlayerEdgeGestureFeedbackHide = useCallback(() => {
-    clearPlayerEdgeGestureFeedbackTimer();
-    playerEdgeGestureFeedbackTimerRef.current = window.setTimeout(() => {
-      playerEdgeGestureFeedbackTimerRef.current = null;
-      hidePlayerEdgeGestureFeedback();
-    }, PLAYER_EDGE_GESTURE_HUD_LINGER_MS);
-  }, [clearPlayerEdgeGestureFeedbackTimer, hidePlayerEdgeGestureFeedback]);
-
-  const setClampedPlayerBrightness = useCallback((value: number, applyShade: boolean) => {
-    const nextValue = Math.max(0, Math.min(100, value));
-    if (playerBrightnessRef.current === nextValue) return;
-    playerBrightnessRef.current = nextValue;
-    if (applyShade && brightnessShadeRef.current) {
-      brightnessShadeRef.current.style.opacity = String(playerBrightnessShadeOpacity(nextValue));
-    }
-  }, []);
-
-  const releasePlayerEdgeGesturePointer = useCallback(
-    (element: HTMLDivElement, pointerId: number) => {
-      if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
-    },
-    [],
-  );
-
-  const handlePlayerEdgeGestureStart = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (
-        !mobileClient ||
-        !showHost ||
-        !playerStageGesturesEnabled(fullscreenLocked) ||
-        !isTouchPointer(event.pointerType) ||
-        !event.isPrimary ||
-        isPlayerEdgeGestureIgnoredTarget(event.target)
-      ) {
-        return;
-      }
-
-      const stageBounds = event.currentTarget.getBoundingClientRect();
-      if (
-        stageBounds.width <= 0 ||
-        stageBounds.height <= 0 ||
-        !canStartPlayerEdgeGesture(event.clientY, stageBounds.top, stageBounds.height)
-      ) {
-        return;
-      }
-
-      const kind = playerEdgeGestureForStart(event.clientX, stageBounds.left, stageBounds.width);
-      // Android 经原生桥同时控制亮度与音量。
-      const native = nativePlayerControlsActive;
-      let startValue: number;
-      if (kind === "brightness") {
-        startValue = playerBrightnessRef.current;
-      } else {
-        startValue =
-          native && nativePlayerControlState
-            ? nativePlayerControlState.mediaVolume
-            : player.muted || player.volume === 0
-              ? 0
-              : player.volume;
-      }
-      playerEdgeGestureRef.current = {
-        pointerId: event.pointerId,
-        kind,
-        startX: event.clientX,
-        startY: event.clientY,
-        stageHeight: stageBounds.height,
-        startValue,
-        lastValue: startValue,
-        active: false,
-        native,
-      };
-    },
-    [
-      fullscreenLocked,
-      mobileClient,
-      nativePlayerControlsActive,
-      nativePlayerControlState,
-      player.muted,
-      player.volume,
-      showHost,
-    ],
-  );
-
-  /** 返回该指针是否属于一次待处理/进行中的边缘手势。 */
-  const handlePlayerEdgeGestureMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>): boolean => {
-      const gesture = playerEdgeGestureRef.current;
-      if (!gesture || gesture.pointerId !== event.pointerId) return false;
-
-      const deltaX = event.clientX - gesture.startX;
-      const deltaY = event.clientY - gesture.startY;
-      let beganAdjustment = false;
-
-      if (!gesture.active) {
-        const intent = playerEdgeGestureIntent(deltaX, deltaY);
-        if (intent === "pending") return true;
-        if (intent === "reject") {
-          playerEdgeGestureRef.current = null;
-          releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
-          return false;
-        }
-        gesture.active = true;
-        beganAdjustment = true;
-        // 不要在 pointerdown 时捕获：短触摸必须保持其原始目标，
-        // 使弹幕层能收到 pointerup 并完成命中测试。一旦接触被确认是真正的调节，
-        // 捕获可以在 Android WebView 全屏中手指到达舞台边缘时保持连续。
-        event.currentTarget.setPointerCapture(event.pointerId);
-        // 识别出的音量/亮度拖拽会取消任何待处理的舞台点按。
-        clearPlayerStageTapTimer();
-        lastPlayerStageTapAtRef.current = 0;
-        playerStageTapRef.current = null;
-      }
-
-      event.preventDefault();
-      const nextValue = playerEdgeGestureValue(gesture.startValue, deltaY, gesture.stageHeight);
-      if (beganAdjustment || nextValue !== gesture.lastValue) {
-        gesture.lastValue = nextValue;
-        if (gesture.kind === "brightness") {
-          setClampedPlayerBrightness(nextValue, !gesture.native);
-          if (gesture.native) {
-            androidPlayerControls.setBrightness(nextValue);
-          }
-        } else if (gesture.native) {
-          androidPlayerControls.setMediaVolume(nextValue);
-        } else {
-          previewPlayerVolume(nextValue);
-        }
-        showPlayerEdgeGestureFeedback(gesture.kind, nextValue);
-      }
-      return true;
-    },
-    [
-      androidPlayerControls,
-      clearPlayerStageTapTimer,
-      previewPlayerVolume,
-      releasePlayerEdgeGesturePointer,
-      setClampedPlayerBrightness,
-      showPlayerEdgeGestureFeedback,
-    ],
-  );
-
-  const handlePlayerEdgeGestureEnd = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const gesture = playerEdgeGestureRef.current;
-      if (!gesture || gesture.pointerId !== event.pointerId) return false;
-
-      playerEdgeGestureRef.current = null;
-      releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
-      if (gesture.active) {
-        if (gesture.native) androidPlayerControls.flush();
-        if (gesture.kind === "volume" && !gesture.native) {
-          setPlayerAudio(gesture.lastValue, gesture.lastValue === 0);
-        }
-        schedulePlayerEdgeGestureFeedbackHide();
-        event.preventDefault();
-      }
-      return gesture.active;
-    },
-    [
-      androidPlayerControls,
-      releasePlayerEdgeGesturePointer,
-      schedulePlayerEdgeGestureFeedbackHide,
-      setPlayerAudio,
-    ],
-  );
+  // 画面左右半边纵向滑动调亮度/音量。与视频页共用同一套阈值、反馈层与原生桥路由，
+  // 因此两页手感不会分叉：Android 经原生桥控制系统媒体音量与 Activity 亮度，
+  // 其余移动端回落元素音量与合成器亮度罩。
+  const edgeGesture = usePlayerEdgeGesture({
+    enabled: mobileClient && showHost && playerStageGesturesEnabled(fullscreenLocked),
+    volume: player.volume,
+    muted: player.muted,
+    onPreviewVolume: previewPlayerVolume,
+    onCommitVolume: setPlayerAudio,
+    native: nativePlayerControlsActive ? androidPlayerControls : null,
+    nativeState: nativePlayerControlState,
+    isIgnoredTarget: isPlayerEdgeGestureIgnoredTarget,
+    onAdjustStart: cancelPendingStageTap,
+    sessionKey: roomSessionKey,
+  });
 
   const handlePlayerEdgeGestureCancel = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      const gesture = playerEdgeGestureRef.current;
-      if (gesture && gesture.pointerId === event.pointerId) {
-        playerEdgeGestureRef.current = null;
-        releasePlayerEdgeGesturePointer(event.currentTarget, event.pointerId);
-        if (gesture.active) {
-          if (gesture.native) androidPlayerControls.flush();
-          if (gesture.kind === "volume" && !gesture.native) {
-            setPlayerAudio(gesture.lastValue, gesture.lastValue === 0);
-          }
-          schedulePlayerEdgeGestureFeedbackHide();
-        }
-      }
+      edgeGesture.cancel(event);
       if (playerStageTapRef.current?.pointerId === event.pointerId) {
         playerStageTapRef.current = null;
       }
       clearPlayerStageTapTimer();
     },
-    [
-      androidPlayerControls,
-      clearPlayerStageTapTimer,
-      releasePlayerEdgeGesturePointer,
-      schedulePlayerEdgeGestureFeedbackHide,
-      setPlayerAudio,
-    ],
+    [clearPlayerStageTapTimer, edgeGesture.cancel],
   );
 
   const handleStagePointerActivity = useCallback(
@@ -1537,33 +1133,27 @@ export function PlayerPane({
         // 锁定期间按下的第一时间就把休眠的锁定按钮唤回来：这时没有别的手势会跟这次
         // 触摸抢，慢按一下也该立刻有反应，而不是等抬手后再判定是否算点按。
         if (!playerStageGesturesEnabled(fullscreenLocked)) revealControls();
-        handlePlayerEdgeGestureStart(event);
+        edgeGesture.start(event);
         return;
       }
 
       handleStagePointerActivity(event);
-      handlePlayerEdgeGestureStart(event);
+      edgeGesture.start(event);
     },
-    [
-      fullscreenLocked,
-      handlePlayerEdgeGestureStart,
-      handleStagePointerActivity,
-      mobileClient,
-      revealControls,
-    ],
+    [edgeGesture.start, fullscreenLocked, handleStagePointerActivity, mobileClient, revealControls],
   );
 
   const handleStagePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (handlePlayerEdgeGestureMove(event)) return;
+      if (edgeGesture.move(event)) return;
       handleStagePointerActivity(event);
     },
-    [handlePlayerEdgeGestureMove, handleStagePointerActivity],
+    [edgeGesture.move, handleStagePointerActivity],
   );
 
   const handleStagePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      const gestureConsumed = handlePlayerEdgeGestureEnd(event);
+      const gestureConsumed = edgeGesture.end(event);
       const tap = playerStageTapRef.current;
       if (!tap || tap.pointerId !== event.pointerId) return;
       playerStageTapRef.current = null;
@@ -1625,7 +1215,7 @@ export function PlayerPane({
     [
       clearPlayerStageTapTimer,
       fullscreenLocked,
-      handlePlayerEdgeGestureEnd,
+      edgeGesture.end,
       mobileClient,
       revealControls,
       showHost,
@@ -1634,35 +1224,7 @@ export function PlayerPane({
     ],
   );
 
-  useEffect(() => clearPlayerEdgeGestureFeedbackTimer, [clearPlayerEdgeGestureFeedbackTimer]);
   useEffect(() => clearPlayerStageTapTimer, [clearPlayerStageTapTimer]);
-
-  useEffect(() => {
-    const resetFallbackBrightness = () => {
-      playerBrightnessRef.current = 100;
-      if (brightnessShadeRef.current) brightnessShadeRef.current.style.opacity = "0";
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== "visible") resetFallbackBrightness();
-    };
-
-    resetFallbackBrightness();
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [roomSessionKey]);
-
-  useEffect(() => {
-    if (!androidClient || !androidPlayerControls.supported) return;
-    playerBrightnessRef.current = 100;
-    if (brightnessShadeRef.current) brightnessShadeRef.current.style.opacity = "0";
-  }, [androidClient, androidPlayerControls.supported]);
-
-  useEffect(() => {
-    if (!nativePlayerControlState) return;
-    const gesture = playerEdgeGestureRef.current;
-    if (gesture?.active && gesture.kind === "brightness") return;
-    playerBrightnessRef.current = nativePlayerControlState.brightness;
-  }, [nativePlayerControlState]);
 
   const focusFirstControl = useCallback(() => {
     // 隐藏的透明 chrome 不得进入 Tab 序列。Tab 揭示它之后，
@@ -1894,14 +1456,7 @@ export function PlayerPane({
                   className="z-10"
                 />
               )}
-              {/* 调暗只需要 alpha 合成。整面 CSS brightness 滤镜会在浏览器/桥兜底播放中
-                  于每一步手势时对视频和弹幕层重复滤波。 */}
-              <div
-                ref={brightnessShadeRef}
-                data-player-brightness-shade
-                className="pointer-events-none absolute inset-0 z-[11] bg-black opacity-0"
-                aria-hidden="true"
-              />
+              <PlayerBrightnessShade ref={edgeGesture.brightnessShadeRef} />
             </div>
 
             {showHost && audioOnly && player.running && <AudioOnlyIndicator />}
@@ -1958,47 +1513,7 @@ export function PlayerPane({
               </div>
             )}
 
-            <div
-              ref={playerEdgeGestureFeedbackRef}
-              aria-hidden="true"
-              data-kind="brightness"
-              data-player-edge-gesture-feedback="brightness"
-              data-visible="false"
-              className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center opacity-0 [will-change:opacity]"
-            >
-              <div
-                ref={playerEdgeGesturePanelRef}
-                className="flex w-44 max-w-[calc(100%-2rem)] flex-col gap-3 rounded-lg border border-white/12 bg-black/78 p-3 text-white shadow-xl [transform:scale(0.97)] [will-change:transform]"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white/12">
-                    <SunMedium ref={playerEdgeGestureBrightnessIconRef} className="size-5" />
-                    <Volume2
-                      ref={playerEdgeGestureVolumeIconRef}
-                      className="size-5"
-                      style={{ display: "none" }}
-                    />
-                  </span>
-                  <span className="flex min-w-0 flex-1 items-baseline justify-between gap-2">
-                    <span ref={playerEdgeGestureLabelRef} className="text-sm text-white/76">
-                      亮度
-                    </span>
-                    <strong
-                      ref={playerEdgeGestureValueRef}
-                      className="text-base font-semibold tabular-nums"
-                    >
-                      100%
-                    </strong>
-                  </span>
-                </div>
-                <span className="h-1 overflow-hidden rounded-full bg-white/20">
-                  <span
-                    ref={playerEdgeGestureProgressRef}
-                    className="block h-full origin-left rounded-full bg-white [transform:scaleX(1)] [will-change:transform]"
-                  />
-                </span>
-              </div>
-            </div>
+            <PlayerEdgeGestureFeedback refs={edgeGesture.feedback} />
           </div>
 
           {fullscreenHudVisible && (
@@ -2024,7 +1539,13 @@ export function PlayerPane({
             >
               <PlayerFullscreenHud
                 onBack={handleHudBack}
-                backLabel={player.mode === "fullscreen" ? "退出全屏" : "退出网页全屏"}
+                backLabel={
+                  player.mode === "fullscreen"
+                    ? "退出全屏"
+                    : webFullscreen
+                      ? "退出网页全屏"
+                      : "返回上一页"
+                }
                 siteId={siteId}
                 roomId={roomId}
                 roomTitle={roomTitle}
@@ -2042,7 +1563,7 @@ export function PlayerPane({
                   device: castingDevice,
                   onDeviceChange: setCastingDevice,
                 }}
-                toolsSlot={webFullscreen ? hudToolsSlot : undefined}
+                toolsSlot={player.mode === "fullscreen" ? undefined : hudToolsSlot}
                 compact={compactViewport}
                 // 只有原生全屏需要把菜单塞进 stage：它位于 top layer，portal 到 `<body>`
                 // 会被整个压住。网页全屏没有这层，走默认 portal 反而不会被 stage 的
@@ -2155,38 +1676,17 @@ export function PlayerPane({
           </div>
 
           {fullscreenLockMounted && (
-            <div
+            <PlayerFullscreenLock
               ref={lockRef}
-              data-player-fullscreen-lock
-              data-visible={controlsVisibleRef.current ? "true" : "false"}
-              aria-hidden={!controlsVisibleRef.current}
-              /* 锁定按钮是画面手势之外的独立表面，但它与两层 chrome 共享同一个空闲
-                 计时器：锁定期间也会休眠淡出，随后由舞台点按唤回。 */
-              className="absolute top-1/2 left-[max(0.5rem,env(safe-area-inset-left))] z-40 -translate-y-1/2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+              visible={controlsVisibleRef.current}
+              locked={fullscreenLocked}
+              onToggle={handleToggleFullscreenLock}
               onPointerEnter={holdControlsVisible}
               onPointerDown={handleChromePointerDown}
               onPointerLeave={resumeControlsAutoHide}
               onFocusCapture={handleChromeFocusCapture}
               onBlurCapture={handleChromeBlurCapture}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={fullscreenLocked ? "解锁全屏手势" : "锁定全屏手势"}
-                aria-pressed={fullscreenLocked}
-                className={cn(
-                  PLAYER_CONTROL_BUTTON_CLASS,
-                  PLAYER_CONTROL_ICON_CLASS,
-                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                  "bg-black/40 hover:bg-black/55",
-                  fullscreenLocked && "bg-black/60",
-                )}
-                onClick={handleToggleFullscreenLock}
-              >
-                {fullscreenLocked ? <Lock /> : <Unlock />}
-              </Button>
-            </div>
+            />
           )}
         </div>
       </div>

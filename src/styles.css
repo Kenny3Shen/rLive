@@ -804,6 +804,29 @@ html[data-fullscreen-transition="true"] .app-shell {
   padding-top: var(--fullscreen-transition-safe-area-top) !important;
 }
 
+/* 画面内顶栏的路由（直播页、视频播放页）不让外壳吃掉状态栏高度：画面顶到状态栏
+   之下，安全区改由画面内的顶栏覆盖层自己让开（`player-scrim-overlay-top`）。
+
+   三处 `padding-top` 都要短路：Tailwind 的 `max-md:pt-[env(safe-area-inset-top)]`
+   工具类、上面的 Android 原生 inset 规则，以及全屏过渡的冻结值 —— 后者带
+   `!important`，因此这里也需要，否则窗口化状态下一次全屏往返会把内边距钉回来。 */
+.app-shell[data-overlay-top-bar="true"] {
+  padding-top: 0 !important;
+}
+
+/* 覆盖层路由里仍然存在的流内顶栏（播放器未挂载的加载/失败态、桌面窗口化）。
+   外壳的 `padding-top` 已被上面那条规则短路，因此这些顶栏必须自己让开状态栏。
+   border-box 下安全区必须叠加到 44px 操作区上，不能只加 padding 挤压绝对定位按钮。 */
+.player-page-top-bar {
+  min-height: calc(2.75rem + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+}
+
+html[data-platform="android"] .player-page-top-bar {
+  min-height: calc(2.75rem + var(--android-safe-area-top, env(safe-area-inset-top)));
+  padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
+}
+
 /* 全屏播放器舞台。
 
    两条机制汇入这一条规则：

@@ -75,7 +75,7 @@ import { PlatformScope, type PlatformScopeValue } from "@/shared/hooks/useSiteQu
 import type { SiteId } from "@/shared/types/live";
 import { Sidebar } from "./Sidebar";
 import { AppTitleBar } from "./AppTitleBar";
-import { isImmersivePlayerPath } from "./immersiveRoutes";
+import { isImmersivePlayerPath, usesOverlayTopBar } from "./immersiveRoutes";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import {
@@ -177,6 +177,10 @@ export function Shell() {
   const isVideo = pathname === "/video";
   const isVideoSearch = pathname === "/video/search";
   const isImmersivePlayer = isImmersivePlayerPath(pathname);
+  // 舞台自带画面内顶栏的路由不再让外壳吃掉状态栏高度：画面顶到状态栏之下，
+  // 覆盖层自己让开安全区。CSS 里 Android 与全屏过渡两条 `padding-top` 规则
+  // 同样按这个属性短路。
+  const overlayTopBar = usesOverlayTopBar(pathname);
   const isSearch = pathname === "/search";
   const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
   const isFollow = pathname === "/follow";
@@ -377,7 +381,6 @@ export function Shell() {
     }
     goBackOr(VIDEO_HOME_PATH);
   }, [goBackOr, navigate, searchParams]);
-
 
   // 首页/分类/搜索用横向内容滑动切换平台。关注和历史拥有自己嵌套的页签条，
   // Shell 不与这些路由争夺横向手势。
@@ -731,7 +734,10 @@ export function Shell() {
   const routePanEnabled = !mobileClient && (isDirectSidebarNavigation || isTabNavigation);
 
   return (
-    <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
+    <div
+      className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]"
+      data-overlay-top-bar={overlayTopBar ? "true" : undefined}
+    >
       <AppTitleBar />
       <PageZoom
         // 两个沉浸播放器各自缩放，且都以自己的 pathname 为 key，
@@ -764,7 +770,10 @@ export function Shell() {
                       它的入口收进了设置，底栏里没有历史目的地；桌面端侧栏仍有历史，
                       因此那里不需要这个按钮。视频搜索页的查询条占据了头部，返回
                       口也一并给它（移动端头部不再隐藏）。 */}
-                  {(isSearch || isCategoryBrowse || isVideoSearch || (isHistory && mobileClient)) && (
+                  {(isSearch ||
+                    isCategoryBrowse ||
+                    isVideoSearch ||
+                    (isHistory && mobileClient)) && (
                     <div
                       className={cn(
                         "relative z-10 flex shrink-0 items-center",
