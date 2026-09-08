@@ -2301,7 +2301,9 @@ function VideoPlayerPageContent() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       {!stageOwnsTopBar && topBar}
-      {/* 详情页按画面比例分配高度；沉浸模式让同一舞台铺满屏幕。 */}
+      {/* 详情页统一 16:9 舞台，不按画幅分配高度：竖屏视频与横屏视频的
+          播放器/详情区占比一致，竖屏画面在舞台内居中留黑边，
+          「竖屏全屏」按钮进入沉浸铺满屏幕。 */}
       <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
         <section
           ref={stageRef}
@@ -2316,9 +2318,7 @@ function VideoPlayerPageContent() {
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
             shortVideo || webFullscreen
               ? "aspect-auto max-h-none flex-1"
-              : portraitVideo || swipePoster !== null
-                ? "aspect-[9/16] w-full max-lg:max-h-[56%]"
-                : "aspect-video w-full max-lg:max-h-[56%]",
+              : "aspect-video w-full max-lg:max-h-[56%]",
             "lg:aspect-auto lg:w-auto lg:flex-1",
             "data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
           )}

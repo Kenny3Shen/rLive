@@ -176,6 +176,7 @@ message DanmakuElem {
 ### 移动端竖屏短视频模式
 
 - UGC 视频解码后高度大于宽度时，移动端自动进入 `shortVideo` 模式；横屏画面、PGC 和桌面端不自动进入。帧比例只决定首次自动进入；同一刷视频会话遇到横屏画面或等待下一条首帧时都保持沉浸与滑动能力，直到用户主动进入普通详情、切到仅音频/PGC 或离开播放页。
+- 详情页不按画幅分配舞台高度：竖屏视频与横屏视频共用 `aspect-video` 舞台与 `max-lg:max-h-[56%]` 上限，播放器与详情区的空间占比一致，竖屏画面在舞台内居中留黑边；需要铺满画面时经全屏按钮回到沉浸模式。
 - 舞台复用 `data-fullscreen="true"` 的固定层。Android 调用既有 `setAndroidImmersive` / `setAndroidPlayerOrientation("portrait")` 隐藏系统栏、保持竖屏；退出模式或离开路由时恢复。自动沉浸不调用会重新挂载 WebView 表面的 HTML Fullscreen API。`MainActivity` 通过 `getInsetsIgnoringVisibility` 获取原生状态栏/刘海顶部安全区，按 `devicePixelRatio` 换成 `--android-safe-area-top`；外壳、顶部 HUD 和全屏侧抽屉共用它，即使系统栏暂时隐藏也保留顶部操作空间。页面加载完成时重新分发 inset，避免 WebView 的 `env(safe-area-inset-top)` 在沉浸退出后残留 0。旧 APK / 浏览器回退到 `env`。
 - 用户信息使用既有 `Avatar` / `AvatarImage` / `AvatarFallback`：头像跨两行，右侧第一行用户名，第二行用 `Users` / `Video` 图标配数量，复用普通详情页的统计样式、`normalizeImageUrl` 和 `formatOnline`；下方展示视频标题。评论入口或控制栏退出全屏按钮切换为普通详情布局，不提供标题/详情按钮。`VideoSidebar` 页签由播放页控制，评论入口可直接定位。模式往返不改路由、不重新取流、不重建媒体元素；详情页返回键优先回到短视频（包括刷到的横屏项），再次返回才离开播放页。现有弹窗的返回优先级保留。
 - 头像打开挂载在 `stageRef` 的既有 `UploaderDrawer`；选择卡片后写入已加载投稿队列与非持久化 `uploader: { mid, name }`，关闭抽屉后导航。短视频只在 UP 投稿队列中显示 `x/y`。推荐/搜索等普通来源优先于稿件的多 P/合集信息；只有显式点选分 P/合集分集才切换相应队列，无有效来源的多 P 直链仍自动建立选集队列。
