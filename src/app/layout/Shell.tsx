@@ -40,6 +40,7 @@ import {
 import { recordingSupported } from "@/features/recording/recording";
 import { useRecordingHeaderSnapshot } from "@/features/recording/recordingHeaderState";
 import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
+import { VideoTabScope } from "@/features/video/videoTabScope";
 import { VideoSearchBar } from "@/features/video/VideoSearchBar";
 import {
   VIDEO_HOME_PATH,
@@ -407,6 +408,7 @@ export function Shell() {
     value: videoTab,
     onChange: handleVideoTabChange,
     enabled: isVideo && mobileClient,
+    layout: isVideo && mobileClient ? "track" : "page",
   });
   const contentSwipe = isIptv ? iptvSourceSwipe : isVideo ? videoTabSwipe : sitePlatformSwipe;
   // `PagePan` 以 pathname 为 key，回到可滑动路由时 hook 会拿到全新的 track。
@@ -615,6 +617,56 @@ export function Shell() {
   if (previousGroup !== groupForMotion) addLiveSwipePanel(previousLivePanelIndex);
   liveSwipePanels.sort((left, right) => platformStrip.indexOf(left) - platformStrip.indexOf(right));
 
+  const activeVideoPanelIndex = VIDEO_TABS.indexOf(videoTab);
+  const videoSwipePanels: Array<(typeof VIDEO_TABS)[number]> = [];
+  const addVideoSwipePanel = (index: number) => {
+    const tab = VIDEO_TABS[index];
+    if (tab !== undefined && !videoSwipePanels.includes(tab)) videoSwipePanels.push(tab);
+  };
+  addVideoSwipePanel(activeVideoPanelIndex - 1);
+  addVideoSwipePanel(activeVideoPanelIndex);
+  addVideoSwipePanel(activeVideoPanelIndex + 1);
+  const previousVideoPanelIndex = VIDEO_TABS.findIndex((tab) => tab === previousGroup);
+  if (previousGroup !== groupForMotion) addVideoSwipePanel(previousVideoPanelIndex);
+  videoSwipePanels.sort((left, right) => VIDEO_TABS.indexOf(left) - VIDEO_TABS.indexOf(right));
+
+  const videoSwipePage = (
+    <div data-slot="app-swipe-viewport" className="relative h-full min-h-0 min-w-0 overflow-hidden">
+      <div
+        ref={bindContentSwipePageRef}
+        data-slot="app-swipe-track"
+        className="relative h-full min-h-0 min-w-0"
+      >
+        {videoSwipePanels.map((tab) => {
+          const panelIndex = VIDEO_TABS.indexOf(tab);
+          const panelOffset = panelIndex * 100;
+          const active = panelIndex === activeVideoPanelIndex;
+          return (
+            <div
+              key={tab}
+              ref={active ? bindPageScrollRef : undefined}
+              data-slot="app-swipe-panel"
+              aria-hidden={active ? undefined : true}
+              inert={active ? undefined : true}
+              className={cn(pageScrollerClassName, "absolute inset-0 w-full")}
+              style={{ transform: `translate3d(${panelOffset}%, 0, 0)` }}
+            >
+              <VideoTabScope value={tab}>
+                <RefreshFabVisibilityProvider visible={active}>
+                  <RouteOutlet
+                    defer={active && deferRouteOutlet}
+                    outlet={outlet}
+                    platform={platformForMotion}
+                  />
+                </RefreshFabVisibilityProvider>
+              </VideoTabScope>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   const liveSwipePage = (
     // 渲染窗口是活动平台加其邻居。track 让它们并排存在并作为一个整体移动，
     // 因此进入的页面已经绘制完成，能在手指之下连续进入，
@@ -661,6 +713,8 @@ export function Shell() {
   const regularPage =
     mobileClient && showSiteSwitcher && !isHistory ? (
       liveSwipePage
+    ) : isVideo && mobileClient ? (
+      videoSwipePage
     ) : useGroupedPageContainer ? (
       groupPage
     ) : (
