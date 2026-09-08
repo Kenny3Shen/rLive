@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -74,6 +75,8 @@ function bufferedRangeEnd(video: HTMLVideoElement): number {
 
 const RECORDING_SEEK_TIMEOUT_MS = 4_000;
 const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
+/** 派生空轨的稳定身份，避免每帧新数组使弹幕画布失效。 */
+const EMPTY_DANMAKU: RecordedDanmakuEntry[] = [];
 const RECORDING_CONTROLS_HIDE_DELAY_MS = 2_600;
 const RECORDING_SINGLE_CLICK_DELAY_MS = 220;
 const RECORDING_MPEGTS_CONFIG = {
@@ -126,7 +129,6 @@ export function RecordingPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedTime, setBufferedTime] = useState(0);
-  const [danmakuEntries, setDanmakuEntries] = useState<RecordedDanmakuEntry[]>([]);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
@@ -141,7 +143,10 @@ export function RecordingPlayer({
   const recordedDuration = Math.max(0, item.duration_ms / 1000);
   const compact = useCompactPlayerViewport();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
-  playbackRateRef.current = playbackRate;
+  // latest-ref：提交后同步，读者全部在效果/事件里，时序等价。
+  useLayoutEffect(() => {
+    playbackRateRef.current = playbackRate;
+  });
   useScreenWakeLock(!paused && !loading && !error);
 
   const danmakuUrlQuery = useQuery({
@@ -170,7 +175,10 @@ export function RecordingPlayer({
    * 用它判断「是否已看完」而不是历史里记下的那份。
    */
   const resumeAtRef = useRef(0);
-  resumeAtRef.current = watchResumePosition(resumeQuery.data?.progress ?? 0, recordedDuration);
+  // latest-ref：提交后同步，主播放器 effect（useEffect）总在其后运行，读到最新值。
+  useLayoutEffect(() => {
+    resumeAtRef.current = watchResumePosition(resumeQuery.data?.progress ?? 0, recordedDuration);
+  });
   /** 已注入过续播位置的录制 id：同一段录制只跳一次。 */
   const resumeAppliedRef = useRef<string | null>(null);
   const reportedAtRef = useRef<number | null>(null);
@@ -202,32 +210,31 @@ export function RecordingPlayer({
     [item.id, queryClient, recordedDuration],
   );
 
-  useEffect(() => {
-    playbackRateRef.current = 1;
+  // 换一段录制时重置单次回放状态：React 官方的渲染期调整模式。
+  // playbackRateRef 的复位由上方 latest-ref 同步在提交后一并完成。
+  const [prevItemId, setPrevItemId] = useState(item.id);
+  if (item.id !== prevItemId) {
+    setPrevItemId(item.id);
     setPlaybackRate(1);
     setDanmakuVisible(true);
-  }, [item.id]);
+  }
 
-  useEffect(() => {
-    const url = danmakuUrlQuery.data;
-    if (!item.include_danmaku || !url) {
-      setDanmakuEntries([]);
-      return;
-    }
-    const controller = new AbortController();
-    void fetch(url, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error("弹幕轨读取失败");
-        return response.text();
-      })
-      .then((text) => {
-        if (!controller.signal.aborted) setDanmakuEntries(parseRecordedDanmakuSidecar(text));
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setDanmakuEntries([]);
-      });
-    return () => controller.abort();
-  }, [danmakuUrlQuery.data, item.include_danmaku]);
+  const danmakuUrl = danmakuUrlQuery.data;
+  const danmakuEntriesQuery = useQuery({
+    queryKey: ["recording-danmaku-entries", item.id, danmakuUrl ?? ""],
+    enabled: Boolean(item.include_danmaku && danmakuUrl),
+    queryFn: async ({ signal }) => {
+      const response = await fetch(danmakuUrl!, { signal });
+      if (!response.ok) throw new Error("弹幕轨读取失败");
+      return parseRecordedDanmakuSidecar(await response.text());
+    },
+    gcTime: 0,
+    retry: false,
+  });
+  const danmakuEntries =
+    item.include_danmaku && danmakuUrl && !danmakuEntriesQuery.isError
+      ? (danmakuEntriesQuery.data ?? EMPTY_DANMAKU)
+      : EMPTY_DANMAKU;
 
   const clearSeekTimer = useCallback(() => {
     if (seekTimerRef.current !== null) {
@@ -300,7 +307,10 @@ export function RecordingPlayer({
   );
 
   const seekToRef = useRef(seekTo);
-  seekToRef.current = seekTo;
+  // latest-ref：提交后同步，读者在效果/定时器里。
+  useLayoutEffect(() => {
+    seekToRef.current = seekTo;
+  });
 
   useEffect(() => {
     if (resumePending) return;

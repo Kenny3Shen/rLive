@@ -38,11 +38,15 @@ export function useDanmakuConnection(opts: {
   // *不同* 的 epoch：Tauri IPC 是异步的，同 epoch 的延迟 stop 可能
   // 在新 websocket 安装后才到达并将其中止。
   useLayoutEffect(() => {
+    /* 外部系统同步：弹幕 IPC 会话生命周期（epoch 栅栏 + disconnect）在此编排，
+       状态写入是对本次外部会话的本地投影。 */
+    /* oxlint-disable react/set-state-in-effect */
     const { disconnectEpoch, connectionEpoch } = nextDanmakuConnectionFence();
     connectionEpochRef.current = connectionEpoch;
     setExpectedDanmakuConnectionEpoch(connectionEpoch);
     setActive(false);
     setStatusText(null);
+    /* oxlint-enable react/set-state-in-effect */
     void invokeCmd("danmaku_disconnect", { connectionEpoch: disconnectEpoch }).catch(() => {});
     return () => {
       clearExpectedDanmakuConnectionEpoch(connectionEpoch);
@@ -56,6 +60,9 @@ export function useDanmakuConnection(opts: {
 
   useEffect(() => {
     const connectionEpoch = connectionEpochRef.current;
+    /* 前提条件缺失时的早退同样是对外部会话生命周期的同步：不满足则确保无连接
+       残留。后续异步回调里的 setState 不在此范围。 */
+    /* oxlint-disable react/set-state-in-effect */
     if (!enabled || !siteId || !roomId || !detailRoomId) {
       setActive(false);
       setStatusText(null);
@@ -66,6 +73,7 @@ export function useDanmakuConnection(opts: {
       setStatusText("当前平台暂不支持实时弹幕");
       return;
     }
+    /* oxlint-enable react/set-state-in-effect */
     let cancelled = false;
     setStatusText("正在连接弹幕服务器…");
     setActive(false);

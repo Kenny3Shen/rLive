@@ -148,11 +148,15 @@ function DanmakuQuickPicker({
   const favoriteDraft = draft.trim();
   const favoriteBusy = favoriteAction !== null;
 
-  useEffect(() => {
-    if (open) return;
-    setFavoriteFailed(false);
-    setClearFailed(false);
-  }, [open]);
+  // 抽屉收起时复位收藏/清空失败标记：渲染期调整模式，当次渲染即复位。
+  const [prevPickerOpen, setPrevPickerOpen] = useState(open);
+  if (open !== prevPickerOpen) {
+    setPrevPickerOpen(open);
+    if (!open) {
+      setFavoriteFailed(false);
+      setClearFailed(false);
+    }
+  }
 
   function selectStoredMessage(content: string) {
     onSelectMessage(content);
@@ -607,7 +611,10 @@ export function DanmakuComposer({
   const danmakuCookieRevision = useSettingsStore((s) => s.danmakuCookieRevision);
   // 视频页固定 bilibili VOD 目标；直播页沿站点配置。
   const sendConfig = video ? VIDEO_DANMAKU_SEND_CONFIG : getDanmakuSendConfig(siteId);
-  const [availability, setAvailability] = useState<DanmakuSendStatus | null>(null);
+  const [availabilityCache, setAvailabilityCache] = useState<{
+    key: string;
+    status: DanmakuSendStatus;
+  } | null>(null);
   const [draft, setDraft] = useState("");
   const [quickPickerOpen, setQuickPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -617,44 +624,61 @@ export function DanmakuComposer({
 
   // 视频目标的标识键：effect 用它替代整个对象引用，避免每次渲染都重查状态。
   const videoKey = video ? `${video.cid}:${video.aid}` : "";
+  const hasVideoTarget = video != null;
 
-  useEffect(() => {
-    if (!sendConfig) return;
-    // 视频目标不需要房间号；直播目标没有房间号就没有可发送的目的地。
-    if (!video && !roomId) return;
-    let cancelled = false;
-    setAvailability(null);
-    // 显式发送权限还在等待持久化时不要询问后端。它落定后本副作用会再次运行，
-    // 避免一个过期的禁用状态把输入框钉住直到用户重进房间。
-    if (danmakuSendPending) {
-      setAvailability({
+  // 权限快照按身份键派生：前提变化或重新拉取期间自动回退到“正在检查”，
+  // 等待授权同步期间展示占位状态，均无需在 effect 里同步写状态。
+  const availabilityKey = [
+    siteId,
+    roomId ?? "",
+    videoKey,
+    sendConfig?.statusCommand ?? "",
+    danmakuSendEnabled ? "enabled" : "disabled",
+    danmakuSendPending ? "pending" : "ready",
+    String(danmakuCookieRevision),
+  ].join("\u0000");
+  const [previousAvailabilityKey, setPreviousAvailabilityKey] = useState(availabilityKey);
+  if (previousAvailabilityKey !== availabilityKey) {
+    setPreviousAvailabilityKey(availabilityKey);
+    setAvailabilityCache(null);
+  }
+  const availability = danmakuSendPending
+    ? {
         send_enabled: danmakuSendEnabled,
         cookie_ready: false,
         available: false,
         message: "正在同步发送权限…",
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
+      }
+    : availabilityCache?.key === availabilityKey
+      ? availabilityCache.status
+      : null;
+
+  useEffect(() => {
+    if (!sendConfig || danmakuSendPending) return;
+    // 视频目标不需要房间号；直播目标没有房间号就没有可发送的目的地。
+    if (!hasVideoTarget && !roomId) return;
+    let cancelled = false;
     void invokeCmd<DanmakuSendStatus>(sendConfig.statusCommand)
       .then((status) => {
-        if (!cancelled) setAvailability(status);
+        if (!cancelled) setAvailabilityCache({ key: availabilityKey, status });
       })
       .catch(() => {
         if (!cancelled) {
-          setAvailability({
-            send_enabled: false,
-            cookie_ready: false,
-            available: false,
-            message: `暂时无法确认${sendConfig.siteLabel}发送权限`,
+          setAvailabilityCache({
+            key: availabilityKey,
+            status: {
+              send_enabled: false,
+              cookie_ready: false,
+              available: false,
+              message: `暂时无法确认${sendConfig.siteLabel}发送权限`,
+            },
           });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [siteId, roomId, sendConfig, danmakuSendEnabled, danmakuSendPending, danmakuCookieRevision, videoKey]);
+  }, [availabilityKey, danmakuSendPending, hasVideoTarget, roomId, sendConfig]);
 
   const overlayOpen = quickPickerOpen;
   useEffect(() => {

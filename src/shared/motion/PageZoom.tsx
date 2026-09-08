@@ -63,10 +63,12 @@ export function PageZoom({
   }>({ renderedKey: zoomKey, outgoing: null });
 
   if (transition.renderedKey !== zoomKey) {
-    const previous = committedRef.current;
     setTransition({
       renderedKey: zoomKey,
-      outgoing: previous.enabled && !enabled ? previous : null,
+      // 渲染期状态调整是 React 官方模式；committedRef 只在提交后的 layout effect
+      // 里推进（见下），被丢弃的并发渲染不会污染它。规则无法表达这一刻意设计。
+      // oxlint-disable-next-line react/refs
+      outgoing: committedRef.current.enabled && !enabled ? committedRef.current : null,
     });
   }
 

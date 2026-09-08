@@ -34,17 +34,20 @@ export function LoadMoreRow({
   /** 行高等布局差异由调用方给出（如 `min-h-14`）。 */
   className?: string;
 }) {
+  // 解构到局部：useInfiniteScroll 返回值混合 ref 与纯值，直接在 JSX 里逐属性
+  // 访问会触发编译器对整个对象的 ref 污染判定；局部变量传递 ref 对象是标准用法。
+  const { loadMoreRef, loadMore, supportsIntersectionObserver } = scroll;
   return (
-    <div ref={scroll.loadMoreRef} className={cn("flex items-center justify-center", className)}>
+    <div ref={loadMoreRef} className={cn("flex items-center justify-center", className)}>
       {query.isFetchingNextPage ? (
         <Spinner aria-label={loadingLabel} />
       ) : query.isFetchNextPageError ? (
-        <Button variant="ghost" size="sm" onClick={() => scroll.loadMore(true)}>
+        <Button variant="ghost" size="sm" onClick={() => loadMore(true)}>
           {retryLabel}
         </Button>
       ) : query.hasNextPage ? (
-        !scroll.supportsIntersectionObserver && (
-          <Button variant="ghost" size="sm" onClick={() => scroll.loadMore()}>
+        !supportsIntersectionObserver && (
+          <Button variant="ghost" size="sm" onClick={() => loadMore()}>
             {loadMoreLabel}
           </Button>
         )

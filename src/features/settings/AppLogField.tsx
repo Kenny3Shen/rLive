@@ -196,9 +196,7 @@ export function AppLogField() {
             （桌面端 ›、移动端 ⌄），Esc/点遮罩仍可关。 */}
         <div className="flex shrink-0 items-center justify-between gap-2">
           <DrawerTitle id={dialogTitleId}>运行日志</DrawerTitle>
-          <DrawerClose
-            render={<Button variant="ghost" size="icon-sm" aria-label="关闭" />}
-          >
+          <DrawerClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭" />}>
             {mobile ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
           </DrawerClose>
         </div>
@@ -258,7 +256,9 @@ export function AppLogField() {
           </FieldDescription>
         )}
         {error ? (
-          <FieldError role="alert" className="shrink-0">{error}</FieldError>
+          <FieldError role="alert" className="shrink-0">
+            {error}
+          </FieldError>
         ) : (
           status && (
             <FieldDescription role="status" aria-live="polite" className="shrink-0">

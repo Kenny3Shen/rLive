@@ -93,7 +93,13 @@ describe("idle route preloading policy", () => {
       expect(loaders).not.toContain(loadCategoryBrowsePage);
       expect(loaders).not.toContain(loadRecordingsPage);
       expect(loaders).not.toContain(loadMultiRoomPage);
-      for (const loader of [loadFollowPage, loadHistoryPage, loadIptvPlayerPage, loadRoomPage, loadVideoPlayerPage]) {
+      for (const loader of [
+        loadFollowPage,
+        loadHistoryPage,
+        loadIptvPlayerPage,
+        loadRoomPage,
+        loadVideoPlayerPage,
+      ]) {
         expect(loaders).toContain(loader);
       }
       expect(new Set(loaders).size).toBe(loaders.length);

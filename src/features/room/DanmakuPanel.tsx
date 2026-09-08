@@ -327,13 +327,16 @@ export const DanmakuPanel = memo(function DanmakuPanel({
 
   // 与屏蔽词不同，屏蔽用户是即时承诺：点击后该用户的既有行立刻从列表消失，
   // 而不是等自然裁剪淘汰。解除屏蔽不回填历史 —— 被删的行已不可恢复，
-  // 新消息会照常流入。保持相同引用，未命中时避免无效重渲染。
-  useLayoutEffect(() => {
+  // 新消息会照常流入。React 渲染期调整模式：匹配器变化的当次渲染即过滤。
+  // 保持相同引用，未命中时避免无效重渲染。
+  const [prevBlockedMatcher, setPrevBlockedMatcher] = useState(() => blockedUserMatcher);
+  if (blockedUserMatcher !== prevBlockedMatcher) {
+    setPrevBlockedMatcher(() => blockedUserMatcher);
     setItems((previous) => {
       const next = previous.filter((line) => !blockedUserMatcher(line.event));
       return next.length === previous.length ? previous : next;
     });
-  }, [blockedUserMatcher]);
+  }
 
   useLayoutEffect(() => {
     activeRef.current = active;
@@ -346,6 +349,18 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     visibleRef.current = visible;
     if (visible) scheduleFlushRef.current();
   }, [visible]);
+
+  // 房间停用时重置面板状态：渲染期调整模式，当次渲染即回到空列表。
+  // 队列/引用类描述符的重置留在下方的订阅 effect 里。
+  const [prevPanelActive, setPrevPanelActive] = useState(active);
+  if (active !== prevPanelActive) {
+    setPrevPanelActive(active);
+    if (!active) {
+      setAtBottom(true);
+      setUnreadCount(0);
+      setItems([]);
+    }
+  }
 
   useEffect(() => {
     const pending = pendingRef.current;
@@ -368,9 +383,6 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       autoScroll.current = true;
       unreadCountRef.current = 0;
       pendingTrimRef.current = null;
-      setAtBottom(true);
-      setUnreadCount(0);
-      setItems([]);
       return;
     }
 
@@ -467,6 +479,9 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       // 已钉住：先归还读者翻历史期间保留的行，再钉住。钉住状态下裁剪不可见，
       // 因为内容底部不动，偏移由浏览器代为钳制。
       if (items.length > DANMAKU_LIST_MAX_PINNED) {
+        // 视口滚动同步（外部系统）：本 effect 的职责是每批提交后把视口钉回底部，
+        // 裁剪状态写入与其同步发生。
+        // oxlint-disable-next-line react/set-state-in-effect
         setItems((previous) => trimToDanmakuListWindow(previous, DANMAKU_LIST_MAX_PINNED));
       }
       // Base UI 拥有嵌套视口，用 `scrollIntoView` 滚动哨兵元素可能选中外层祖先而非

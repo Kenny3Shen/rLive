@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ListFilter, Search, X } from "lucide-react";
 import {
@@ -94,13 +94,14 @@ type IptvSearchInputProps = {
  */
 export function IptvSearchInput({ keyword, onChange, className }: IptvSearchInputProps) {
   const [draft, setDraft] = useState(keyword);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
 
-  // 采纳外部变更（清除过滤、恢复 URL），同时不覆盖用户正在输入的内容。
-  useEffect(() => {
-    if (keyword !== draftRef.current) setDraft(keyword);
-  }, [keyword]);
+  // 采纳外部变更（清除过滤、恢复 URL），同时不覆盖用户正在输入的内容：
+  // 渲染期调整模式，直接与当前草稿比较。
+  const [prevKeyword, setPrevKeyword] = useState(keyword);
+  if (keyword !== prevKeyword) {
+    setPrevKeyword(keyword);
+    if (keyword !== draft) setDraft(keyword);
+  }
 
   useEffect(() => {
     if (draft === keyword) return;

@@ -1,3 +1,4 @@
+import { usePlayerChromeVisibility } from "@/shared/hooks/usePlayerChromeVisibility";
 import {
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
@@ -421,7 +422,8 @@ export function PlayerPane({
   // 跟踪底部 chrome 内的焦点。点击的按钮也会取得 DOM 焦点，因此下方的空闲守卫
   // 在把焦点当作必须保持显示的键盘交互之前，还会额外检查 :focus-visible。
   const controlsFocusWithinRef = useRef(false);
-  const lastControlsActivityAtRef = useRef(Date.now());
+  const [initialControlsActivityAt] = useState(Date.now);
+  const lastControlsActivityAtRef = useRef(initialControlsActivityAt);
   const overlayInteractionOpenRef = useRef(false);
   const overlayInteractionSourcesRef = useRef<Record<OverlayInteractionSource, boolean>>({
     controls: false,
@@ -447,6 +449,7 @@ export function PlayerPane({
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
   });
+  const { videoRef: playerVideoRef, stageRef: playerStageRef, playerRootRef } = player;
   const androidPlayerControls = useAndroidPlayerControls(androidClient, roomSessionKey);
   // 横屏流在 Android 全屏时自动旋转；竖屏流保持直立，因为方向锁由解码后的帧尺寸决定。
   useAndroidFullscreenOrientation({
@@ -478,7 +481,7 @@ export function PlayerPane({
   const loadError = externalLoadError ?? player.loadError ?? player.fullscreenError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
   const asr = useAsrCaptions({
-    videoRef: player.videoRef,
+    videoRef: playerVideoRef,
     mediaKey: player.mediaKey,
     sessionKey: danmakuSessionKey,
     featureEnabled: asrEnabled,
@@ -622,8 +625,13 @@ export function PlayerPane({
     mobileClient,
     player.mode === "fullscreen",
   );
-  // 三层 chrome 的显隐是命令式的，渲染只负责给出与 DOM 当前值相同的初始/重渲染值。
-  const fullscreenChromeVisible = playerChromeVisible(controlsVisibleRef.current, fullscreenLocked);
+  usePlayerChromeVisibility({
+    controlsRef,
+    hudRef,
+    visibleRef: controlsVisibleRef,
+    lockRef,
+    locked: fullscreenLocked,
+  });
   const inlineCompactSidePanel = compactViewport && !compactLandscapeViewport;
   const mobileDrawerOpen = compactLandscapeViewport && sidePanelOpen;
   // 网页全屏要让出右侧栏。只影响可见性，不影响挂载，因此退出后弹幕队列与滚动位置都还在。
@@ -653,21 +661,22 @@ export function PlayerPane({
       hudToolsSlot !== undefined,
   });
 
-  // 进入较矮横屏时切换为浮层抽屉；转回竖屏恢复立即可用的视频+弹幕堆叠。
-  useEffect(() => {
+  const [previousLandscapeViewport, setPreviousLandscapeViewport] =
+    useState(compactLandscapeViewport);
+  if (previousLandscapeViewport !== compactLandscapeViewport) {
+    setPreviousLandscapeViewport(compactLandscapeViewport);
     setSidePanelOpen(sidePanelStartsOpen(compactLandscapeViewport));
-  }, [compactLandscapeViewport]);
+  }
 
-  // 新房间从头开始：清除保留标志，若此视口仍会挂载面板，
-  // 让下方副作用在下一次渲染中再次置位。用清除而不是重新计算，
-  // 可以保持依赖列表诚实 —— 重算出的值正是那个副作用推导的内容。
-  useEffect(() => {
-    setSidePanelRetained(false);
-  }, [roomSessionKey]);
-
-  useEffect(() => {
-    if (shouldMountSidePanel && !sidePanelRetained) setSidePanelRetained(true);
-  }, [shouldMountSidePanel, sidePanelRetained]);
+  const [previousRoomSessionKey, setPreviousRoomSessionKey] = useState(roomSessionKey);
+  if (previousRoomSessionKey !== roomSessionKey) {
+    setPreviousRoomSessionKey(roomSessionKey);
+    setSidePanelRetained(sidePanelOpen || !compactViewport);
+    setFullscreenLocked(false);
+    setOverlayInteractionOpen(false);
+  } else if (shouldMountSidePanel && !sidePanelRetained) {
+    setSidePanelRetained(true);
+  }
 
   useEffect(() => {
     if (!mobileDrawerOpen) return;
@@ -710,22 +719,15 @@ export function PlayerPane({
   // 使复制/关注反馈保持可见。
   useEffect(() => {
     if (player.mode !== "fullscreen") return;
-    const stage = player.stageRef.current;
+    const stage = playerStageRef.current;
     if (!stage) return;
     setToastPortalContainer(stage);
     return () => setToastPortalContainer(null);
-  }, [player.mode, player.stageRef]);
+  }, [player.mode, playerStageRef]);
 
   // 锁定属于全屏会话。离开全屏（含直接切房、路由变更）必须解锁，
   // 否则窗口化播放器会带着一个不可见的手势屏蔽状态。
-  useEffect(() => {
-    if (player.mode !== "fullscreen") setFullscreenLocked(false);
-  }, [player.mode]);
-
-  // 切房是新的观看会话，不继承上一间的锁定。
-  useEffect(() => {
-    setFullscreenLocked(false);
-  }, [roomSessionKey]);
+  if (player.mode !== "fullscreen" && fullscreenLocked) setFullscreenLocked(false);
 
   const clearControlsHideTimer = useCallback(() => {
     if (controlsHideTimerRef.current !== null) {
@@ -1036,7 +1038,14 @@ export function PlayerPane({
     },
     [selectSideTab],
   );
-  const sideTabSwipe = useHorizontalSwipe({
+  const {
+    onPointerDownCapture: sideTabSwipeOnPointerDownCapture,
+    onPointerMoveCapture: sideTabSwipeOnPointerMoveCapture,
+    onPointerUpCapture: sideTabSwipeOnPointerUpCapture,
+    onPointerCancelCapture: sideTabSwipeOnPointerCancelCapture,
+    onClickCapture: sideTabSwipeOnClickCapture,
+    bindPage: sideTabSwipeBindPage,
+  } = useHorizontalSwipe({
     items: ROOM_SIDE_TABS,
     value: activeSideTab,
     onChange: selectSideTab,
@@ -1066,16 +1075,24 @@ export function PlayerPane({
     onAdjustStart: cancelPendingStageTap,
     sessionKey: roomSessionKey,
   });
+  const {
+    cancel: edgeGestureCancel,
+    start: edgeGestureStart,
+    move: edgeGestureMove,
+    end: edgeGestureEnd,
+    brightnessShadeRef: edgeGestureBrightnessShadeRef,
+    feedback: edgeGestureFeedback,
+  } = edgeGesture;
 
   const handlePlayerEdgeGestureCancel = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      edgeGesture.cancel(event);
+      edgeGestureCancel(event);
       if (playerStageTapRef.current?.pointerId === event.pointerId) {
         playerStageTapRef.current = null;
       }
       clearPlayerStageTapTimer();
     },
-    [clearPlayerStageTapTimer, edgeGesture.cancel],
+    [clearPlayerStageTapTimer, edgeGestureCancel],
   );
 
   const handleStagePointerActivity = useCallback(
@@ -1113,27 +1130,27 @@ export function PlayerPane({
         // 锁定期间按下的第一时间就把休眠的锁定按钮唤回来：这时没有别的手势会跟这次
         // 触摸抢，慢按一下也该立刻有反应，而不是等抬手后再判定是否算点按。
         if (!playerStageGesturesEnabled(fullscreenLocked)) revealControls();
-        edgeGesture.start(event);
+        edgeGestureStart(event);
         return;
       }
 
       handleStagePointerActivity(event);
-      edgeGesture.start(event);
+      edgeGestureStart(event);
     },
-    [edgeGesture.start, fullscreenLocked, handleStagePointerActivity, mobileClient, revealControls],
+    [edgeGestureStart, fullscreenLocked, handleStagePointerActivity, mobileClient, revealControls],
   );
 
   const handleStagePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (edgeGesture.move(event)) return;
+      if (edgeGestureMove(event)) return;
       handleStagePointerActivity(event);
     },
-    [edgeGesture.move, handleStagePointerActivity],
+    [edgeGestureMove, handleStagePointerActivity],
   );
 
   const handleStagePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      const gestureConsumed = edgeGesture.end(event);
+      const gestureConsumed = edgeGestureEnd(event);
       const tap = playerStageTapRef.current;
       if (!tap || tap.pointerId !== event.pointerId) return;
       playerStageTapRef.current = null;
@@ -1195,7 +1212,7 @@ export function PlayerPane({
     [
       clearPlayerStageTapTimer,
       fullscreenLocked,
-      edgeGesture.end,
+      edgeGestureEnd,
       mobileClient,
       revealControls,
       showHost,
@@ -1295,7 +1312,6 @@ export function PlayerPane({
     overlayInteractionSourcesRef.current.hud = false;
     overlayInteractionOpenRef.current = false;
     controlsFocusWithinRef.current = false;
-    setOverlayInteractionOpen(false);
   }, [roomSessionKey]);
 
   useEffect(() => {
@@ -1330,7 +1346,7 @@ export function PlayerPane({
         )}
       >
         <div
-          ref={player.stageRef}
+          ref={playerStageRef}
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
           // 与全屏无关，使 CSS 能在浏览器离开全屏的同一帧恢复 16:9 堆叠。
@@ -1397,7 +1413,7 @@ export function PlayerPane({
 
             <div className="absolute inset-0">
               <div
-                ref={player.playerRootRef}
+                ref={playerRootRef}
                 data-player-engine-root
                 aria-hidden={audioOnly}
                 className={cn(
@@ -1408,7 +1424,7 @@ export function PlayerPane({
                 {/* key=mediaKey 在离开/重进后强制一个干净的 <video>（MSE）。 */}
                 <video
                   key={player.mediaKey}
-                  ref={player.videoRef}
+                  ref={playerVideoRef}
                   data-player-video
                   className="absolute inset-0 size-full bg-black object-contain"
                   crossOrigin="anonymous"
@@ -1436,7 +1452,7 @@ export function PlayerPane({
                   className="z-10"
                 />
               )}
-              <PlayerBrightnessShade ref={edgeGesture.brightnessShadeRef} />
+              <PlayerBrightnessShade ref={edgeGestureBrightnessShadeRef} />
             </div>
 
             {showHost && audioOnly && player.running && <AudioOnlyIndicator />}
@@ -1493,18 +1509,16 @@ export function PlayerPane({
               </div>
             )}
 
-            <PlayerEdgeGestureFeedback refs={edgeGesture.feedback} />
+            <PlayerEdgeGestureFeedback refs={edgeGestureFeedback} />
           </div>
 
           {fullscreenHudVisible && (
             <div
               ref={hudRef}
               data-player-hud
-              /* 渲染值必须与 `setControlVisibility` 写入的目标值一致：React 只在渲染值
-                 变化时改写属性，两者一旦分叉，锁定期间的任何一次重渲染都会把 chrome
-                 patch 回可见。 */
-              data-visible={fullscreenChromeVisible ? "true" : "false"}
-              aria-hidden={!fullscreenChromeVisible}
+              /* 初始属性在提交后由 usePlayerChromeVisibility 对齐命令式显隐状态。 */
+              data-visible="true"
+              aria-hidden={false}
               className={cn(
                 // 底部 chrome 的镜像：视频表面的 fixed 定位兄弟节点，悬浮于顶边而不占布局
                 // 高度，由同一个命令式 data 属性驱动淡入淡出，
@@ -1551,7 +1565,7 @@ export function PlayerPane({
                 // 只有原生全屏需要把菜单塞进 stage：它位于 top layer，portal 到 `<body>`
                 // 会被整个压住。网页全屏没有这层，走默认 portal 反而不会被 stage 的
                 // `overflow-hidden` 裁掉。
-                portalContainer={player.mode === "fullscreen" ? player.stageRef : undefined}
+                portalContainer={player.mode === "fullscreen" ? playerStageRef : undefined}
                 onOverlayInteractionChange={handleHudOverlayInteractionChange}
                 onExitFullscreen={handleExitAnyFullscreen}
               />
@@ -1561,8 +1575,8 @@ export function PlayerPane({
           <div
             ref={controlsRef}
             data-player-controls
-            data-visible={fullscreenChromeVisible ? "true" : "false"}
-            aria-hidden={!fullscreenChromeVisible}
+            data-visible="true"
+            aria-hidden={false}
             className={cn(
               // chrome 悬浮于画面底边而不消耗布局高度，隐藏它即把整个舞台还给视频。
               // 保持被滤镜的表面静止：移动的背景模糊会在过渡的每一帧重新采样视频。
@@ -1617,7 +1631,7 @@ export function PlayerPane({
               // 那里没有手势栏 inset。
               stackedBelowPlayer={portraitStackedPlayer}
               compact={compactViewport}
-              portalContainer={player.stageRef}
+              portalContainer={playerStageRef}
               centerSlot={
                 <DanmakuComposer
                   siteId={siteId}
@@ -1628,7 +1642,7 @@ export function PlayerPane({
                   // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
                   // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
                   // body 级弹窗会被压在其下。
-                  portalContainer={player.stageRef}
+                  portalContainer={playerStageRef}
                   onOverlayInteractionChange={handleComposerOverlayInteractionChange}
                 />
               }
@@ -1661,7 +1675,7 @@ export function PlayerPane({
           {fullscreenLockMounted && (
             <PlayerFullscreenLock
               ref={lockRef}
-              visible={controlsVisibleRef.current}
+              visible={true}
               locked={fullscreenLocked}
               onToggle={handleToggleFullscreenLock}
               onPointerEnter={holdControlsVisible}
@@ -1702,11 +1716,11 @@ export function PlayerPane({
                 : "w-[320px] shrink-0 border-l border-border/80 lg:w-[340px]",
             !sidePanelVisible && "hidden",
           )}
-          onPointerDownCapture={sideTabSwipe.onPointerDownCapture}
-          onPointerMoveCapture={sideTabSwipe.onPointerMoveCapture}
-          onPointerUpCapture={sideTabSwipe.onPointerUpCapture}
-          onPointerCancelCapture={sideTabSwipe.onPointerCancelCapture}
-          onClickCapture={sideTabSwipe.onClickCapture}
+          onPointerDownCapture={sideTabSwipeOnPointerDownCapture}
+          onPointerMoveCapture={sideTabSwipeOnPointerMoveCapture}
+          onPointerUpCapture={sideTabSwipeOnPointerUpCapture}
+          onPointerCancelCapture={sideTabSwipeOnPointerCancelCapture}
+          onClickCapture={sideTabSwipeOnClickCapture}
         >
           {mobileDrawerOpen && (
             <h2 id="room-side-panel-title" className="sr-only">
@@ -1737,7 +1751,7 @@ export function PlayerPane({
             </div>
             <div data-room-side-tab-viewport className="relative min-h-0 flex-1 overflow-hidden">
               <div
-                ref={sideTabSwipe.bindPage}
+                ref={sideTabSwipeBindPage}
                 data-slot="horizontal-swipe-track"
                 className="flex h-full min-w-0"
                 style={{ width: `${ROOM_SIDE_TABS.length * 100}%` }}

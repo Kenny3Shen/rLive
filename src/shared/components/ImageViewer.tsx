@@ -17,29 +17,6 @@ type ImageViewerProps = {
   onClose: () => void;
 };
 
-/**
- * 全屏图片查看器，支持左右切换与关闭。
- * 点击遮罩关闭，点击图片本身不关闭。
- *
- * 走 Dialog 原语而不是自己画一层 `fixed inset-0 z-50`：调用点长在播放页右侧栏
- * （`relative isolate`）和评论详情抽屉的挂载点（`contain: layout paint`）里，
- * 自画的浮层会被困在那两个层叠上下文内 —— 播放器控制条与 HUD（z-30）、顶栏工具
- * （z-10）会压在图片之上，抽屉里打开时还会被裁进侧栏的方框。portal 到 body 之后
- * 顺带拿到 base-ui 的嵌套语义：从抽屉里打开时点查看器不再被抽屉当作外部点击，
- * Esc 与 Android 返回键也只关最上面这一层。
- */
-export function ImageViewer({ images, initialIndex = 0, onClose }: ImageViewerProps) {
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const [open, setOpen] = useState(true);
-
-  const handlePrevious = () => {
-    setCurrentIndex((index) => (index > 0 ? index - 1 : images.length - 1));
-  };
-
-  const handleNext = () => {
-    setCurrentIndex((index) => (index < images.length - 1 ? index + 1 : 0));
-  };
-
 /** 左右切换按钮的公共画法：贴屏幕边缘、首/尾张减淡提示不可再翻。 */
 function NavButton({
   label,
@@ -70,6 +47,29 @@ function NavButton({
     </Button>
   );
 }
+
+/**
+ * 全屏图片查看器，支持左右切换与关闭。
+ * 点击遮罩关闭，点击图片本身不关闭。
+ *
+ * 走 Dialog 原语而不是自己画一层 `fixed inset-0 z-50`：调用点长在播放页右侧栏
+ * （`relative isolate`）和评论详情抽屉的挂载点（`contain: layout paint`）里，
+ * 自画的浮层会被困在那两个层叠上下文内 —— 播放器控制条与 HUD（z-30）、顶栏工具
+ * （z-10）会压在图片之上，抽屉里打开时还会被裁进侧栏的方框。portal 到 body 之后
+ * 顺带拿到 base-ui 的嵌套语义：从抽屉里打开时点查看器不再被抽屉当作外部点击，
+ * Esc 与 Android 返回键也只关最上面这一层。
+ */
+export function ImageViewer({ images, initialIndex = 0, onClose }: ImageViewerProps) {
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [open, setOpen] = useState(true);
+
+  const handlePrevious = () => {
+    setCurrentIndex((index) => (index > 0 ? index - 1 : images.length - 1));
+  };
+
+  const handleNext = () => {
+    setCurrentIndex((index) => (index < images.length - 1 ? index + 1 : 0));
+  };
 
   return (
     <Dialog

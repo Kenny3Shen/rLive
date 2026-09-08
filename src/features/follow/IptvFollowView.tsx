@@ -501,10 +501,14 @@ export function IptvFollowView({
     [favorites, groups, selectedGroup],
   );
   const previousGroupRef = useRef<string | null>(selectedGroup);
-  const previousGroup = previousGroupRef.current;
   const groupIds = useMemo(() => groupOptions.map((group) => group.id), [groupOptions]);
-  const previousGroupIndex = previousGroup === null ? 0 : groupIds.indexOf(previousGroup) + 1;
   const selectedGroupIndex = selectedGroup === null ? 0 : groupIds.indexOf(selectedGroup) + 1;
+  // 上一次已提交的分组快照：与 PagePan 的 committedRef 同款刻意设计 —— 写入仅在
+  // 提交后的 effect 里发生，被丢弃的并发渲染不会污染它；渲染期读取用于推导
+  // 切换方向。
+  const previousGroupIndex =
+    // oxlint-disable-next-line react/refs
+    previousGroupRef.current === null ? 0 : groupIds.indexOf(previousGroupRef.current) + 1;
   const groupDirection =
     previousGroupIndex >= 0 && selectedGroupIndex >= 0 && selectedGroupIndex < previousGroupIndex
       ? -1

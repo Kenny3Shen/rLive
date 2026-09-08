@@ -141,11 +141,15 @@ export function useCaptionTranslation(options: {
     [options.active, options.enabled, options.from, options.to, processPendingJobs],
   );
 
+  // 外部会话编排：reset 含 epoch 栅栏、待办队列与计时器清理，状态写入与这些
+  // 外部副作用必须同步发生。
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
     reset(true);
   }, [options.active, options.enabled, options.from, options.to, reset]);
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
     reset(false);
   }, [options.mediaKey, options.sessionKey, reset]);
 

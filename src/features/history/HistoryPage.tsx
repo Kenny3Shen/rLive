@@ -715,7 +715,17 @@ export function HistoryPage() {
     layout: "track",
     animateAcrossItems: true,
   });
-  const selectView = historyTabSwipe.selectValue;
+  // 解构到局部：useHorizontalSwipe 返回值混合 ref 与回调，直接在 JSX 里逐属性
+  // 访问会触发编译器对整个对象的 ref 污染判定；局部变量传递是标准用法。
+  const {
+    selectValue: selectView,
+    bindPage,
+    onPointerDownCapture,
+    onPointerMoveCapture,
+    onPointerUpCapture,
+    onPointerCancelCapture,
+    onClickCapture,
+  } = historyTabSwipe;
   const headerState = useMemo(
     () => ({
       view: activeView,
@@ -737,11 +747,11 @@ export function HistoryPage() {
       onRefresh={refreshActiveHistory}
       refreshing={historyRefreshing}
       className="mx-auto h-full min-h-full w-full max-w-3xl"
-      onPointerDownCapture={historyTabSwipe.onPointerDownCapture}
-      onPointerMoveCapture={historyTabSwipe.onPointerMoveCapture}
-      onPointerUpCapture={historyTabSwipe.onPointerUpCapture}
-      onPointerCancelCapture={historyTabSwipe.onPointerCancelCapture}
-      onClickCapture={historyTabSwipe.onClickCapture}
+      onPointerDownCapture={onPointerDownCapture}
+      onPointerMoveCapture={onPointerMoveCapture}
+      onPointerUpCapture={onPointerUpCapture}
+      onPointerCancelCapture={onPointerCancelCapture}
+      onClickCapture={onClickCapture}
     >
       <RefreshFab
         onRefresh={refreshActiveHistory}
@@ -778,7 +788,7 @@ export function HistoryPage() {
             className="min-w-0 overflow-x-clip"
           >
             <div
-              ref={historyTabSwipe.bindPage}
+              ref={bindPage}
               data-slot="horizontal-swipe-track"
               className="flex items-start"
               style={{ width: `${HISTORY_VIEWS.length * 100}%` }}

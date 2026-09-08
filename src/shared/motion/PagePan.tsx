@@ -58,10 +58,12 @@ export function PagePan({
   }>({ renderedKey: panKey, outgoing: null, direction, axis });
 
   if (transition.renderedKey !== panKey) {
-    const previous = committedRef.current;
     setTransition({
       renderedKey: panKey,
-      outgoing: enabled ? previous : null,
+      // 渲染期状态调整是 React 官方模式；committedRef 只在提交后的 layout effect
+      // 里推进（见下），被丢弃的并发渲染不会污染它。规则无法表达这一刻意设计。
+      // oxlint-disable-next-line react/refs
+      outgoing: enabled ? committedRef.current : null,
       direction,
       axis,
     });
@@ -84,6 +86,8 @@ export function PagePan({
     if (!incoming || !leaving) return;
 
     if (prefersReducedMotion()) {
+      // 减少动态效果时不启动动画，同步清掉离场层，避免额外保留一帧。
+      // oxlint-disable-next-line react/set-state-in-effect
       setTransition((current) =>
         current.outgoing === outgoing ? { ...current, outgoing: null } : current,
       );

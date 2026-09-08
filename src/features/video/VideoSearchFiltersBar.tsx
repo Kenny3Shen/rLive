@@ -70,16 +70,15 @@ export function VideoSearchFiltersBar({
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      <OrderStrip
-        value={filters.order}
-        onSelect={(order) => onChange({ ...filters, order })}
-      />
+      <OrderStrip value={filters.order} onSelect={(order) => onChange({ ...filters, order })} />
       <div className="flex flex-wrap items-center gap-2">
         <VideoSearchFilterSelect
           label="时长"
           options={durationOptions}
           value={String(filters.duration)}
-          onSelect={(next) => onChange({ ...filters, duration: Number(next) as VideoSearchFilters["duration"] })}
+          onSelect={(next) =>
+            onChange({ ...filters, duration: Number(next) as VideoSearchFilters["duration"] })
+          }
         />
         <VideoSearchFilterSelect
           label="分区"
@@ -91,7 +90,12 @@ export function VideoSearchFiltersBar({
           label="发布时间"
           options={pubTimeOptions}
           value={filters.pubTime || "all"}
-          onSelect={(next) => onChange({ ...filters, pubTime: (next === "all" ? "" : next) as VideoSearchFilters["pubTime"] })}
+          onSelect={(next) =>
+            onChange({
+              ...filters,
+              pubTime: (next === "all" ? "" : next) as VideoSearchFilters["pubTime"],
+            })
+          }
         />
       </div>
     </div>

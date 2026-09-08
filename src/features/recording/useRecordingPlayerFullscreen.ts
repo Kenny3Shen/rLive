@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import {
@@ -48,9 +48,12 @@ export function useRecordingPlayerFullscreen(
   const fullscreenRef = useRef(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  fullscreenRef.current = fullscreen;
   const exitRequestRef = useRef(onExitRequest);
-  exitRequestRef.current = onExitRequest;
+  // latest-ref：提交后同步，读者全在事件/效果里，时序等价。
+  useLayoutEffect(() => {
+    fullscreenRef.current = fullscreen;
+    exitRequestRef.current = onExitRequest;
+  });
   const androidInPage = runningOnAndroidTauri();
   const { freeze: freezeInsets, release: releaseInsets } = useFullscreenInsetFreeze();
 

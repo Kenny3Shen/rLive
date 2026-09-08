@@ -568,10 +568,8 @@ function forwardedSetters(
   set: (partial: Partial<SettingsState>) => void,
   get: () => SettingsState,
 ) {
-  const forward = <K extends keyof SettingsState, P extends keyof AppSettings>(
-    stateKey: K,
-    settingsKey: P,
-  ) =>
+  const forward =
+    <K extends keyof SettingsState, P extends keyof AppSettings>(stateKey: K, settingsKey: P) =>
     (value: SettingsState[K] & AppSettings[P]) => {
       set({ [stateKey]: value } as Partial<SettingsState>);
       void get().persistToBackend({ [settingsKey]: value } as Partial<AppSettings>);
@@ -601,10 +599,8 @@ function asrSettingSetters(
   set: (partial: Partial<SettingsState>) => void,
   get: () => SettingsState,
 ) {
-  const asrSetting = <K extends keyof SettingsState, P extends keyof AppSettings>(
-    stateKey: K,
-    settingsKey: P,
-  ) =>
+  const asrSetting =
+    <K extends keyof SettingsState, P extends keyof AppSettings>(stateKey: K, settingsKey: P) =>
     async (value: SettingsState[K] & AppSettings[P]) => {
       const previous = get()[stateKey];
       if (value === previous) return;

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { useLayoutEffect, useState, useSyncExternalStore } from "react";
 import type { RecordingView } from "./recordingRoute";
 
 export type RecordingHeaderState = {
@@ -39,17 +39,18 @@ function subscribe(listener: () => void) {
 
 /** 发布页面自有操作，供父级 Shell 渲染的控件使用。 */
 export function useRecordingHeaderState(state: RecordingHeaderState) {
-  const ownerRef = useRef<symbol | undefined>(undefined);
-  if (!ownerRef.current) ownerRef.current = Symbol("recording-header");
+  // 惰性初始化的 Symbol 作为会话所有者：useState 保证跨渲染身份稳定，
+  // 也避免渲染期读写 ref。
+  const [owner] = useState(() => Symbol("recording-header"));
 
   useLayoutEffect(() => {
-    publish(ownerRef.current!, state);
-  }, [state]);
+    publish(owner, state);
+  }, [owner, state]);
 
   useLayoutEffect(() => {
-    const currentOwner = ownerRef.current!;
+    const currentOwner = owner;
     return () => clear(currentOwner);
-  }, []);
+  }, [owner]);
 }
 
 /** 由 Shell 订阅，同时不与懒加载的录制页模块耦合。 */

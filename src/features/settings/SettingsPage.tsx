@@ -360,6 +360,8 @@ function QrLogin({
   }, [siteId, siteName]);
 
   useEffect(() => {
+    // 挂载时获取登录二维码（外部 IPC）；refresh 内的同步写入是加载标记。
+    // oxlint-disable-next-line react/set-state-in-effect
     void refresh();
   }, [refresh]);
 
@@ -481,7 +483,8 @@ function AccountCard({
   const [notice, setNotice] = useState<string | null>(null);
   const [loginMethod, setLoginMethod] = useState<AccountLoginMethod | null>(null);
   const [cookieDraft, setCookieDraft] = useState("");
-  const [manualCookieLoaded, setManualCookieLoaded] = useState(false);
+  // 浏览器预览环境没有 Tauri IPC，直接视为已加载，避免一次注定失败的拉取。
+  const [manualCookieLoaded, setManualCookieLoaded] = useState(() => !isTauri());
   const [manualLoading, setManualLoading] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -518,17 +521,17 @@ function AccountCard({
   }, [siteId]);
 
   useEffect(() => {
+    // 挂载时读取账号状态（外部 IPC）；refreshProfile 内的同步写入是加载标记。
+    // oxlint-disable-next-line react/set-state-in-effect
     void refreshProfile();
   }, [refreshProfile]);
 
   useEffect(() => {
     if (loginMethod !== "manual" || manualCookieLoaded) return;
-    if (!isTauri()) {
-      setManualCookieLoaded(true);
-      return;
-    }
 
     let cancelled = false;
+    // 挂载时读取已存 Cookie（外部 IPC）；同步写入是拉取前的加载标记。
+    // oxlint-disable-next-line react/set-state-in-effect
     setManualLoading(true);
     setManualError(null);
     void invokeCmd<string | null>("account_get_cookie", { siteId })
@@ -1215,9 +1218,12 @@ function IptvCustomM3uUrlField() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // 外部设置变化时同步草稿：渲染期调整模式，当次渲染即对齐。
+  const [prevCustomM3uUrl, setPrevCustomM3uUrl] = useState(customM3uUrl);
+  if (customM3uUrl !== prevCustomM3uUrl) {
+    setPrevCustomM3uUrl(customM3uUrl);
     setDraft(customM3uUrl ?? "");
-  }, [customM3uUrl]);
+  }
 
   function save() {
     const next = draft.trim();
@@ -1813,6 +1819,97 @@ export function SettingsPage() {
 
   // 分类主体保持此处的 key，使概览导航只改变页面外壳；
   // 每个既有设置与持久化路径原样保留。
+  function saveProxy() {
+    setProxyStatus(null);
+    const next = normalizeHttpProxy(proxyDraft);
+    if (next.error) {
+      setProxyError(next.error);
+      return;
+    }
+    setProxyError(null);
+    setProxy(next.value);
+    setProxyDraft(next.value ?? "");
+    setProxyStatus(next.value ? "代理已保存，将用于后续请求" : "代理已关闭，后续请求将直连");
+  }
+
+  async function exportProfile(path: string) {
+    setProfileStatus(null);
+    setProfileError(null);
+    setProfileAction("export");
+    try {
+      await invokeCmd("profile_export", { path });
+      setProfileStatus("配置已导出。档案不包含 Cookie、发送授权或本机路径。");
+    } catch (cause) {
+      setProfileError(`导出失败：${errorMessage(cause)}`);
+    } finally {
+      setProfileAction(null);
+    }
+  }
+
+  async function importProfile(path: string) {
+    setProfileStatus(null);
+    setProfileError(null);
+    setProfileAction("import");
+    try {
+      const r = await invokeCmd<{
+        follows: number;
+        iptv_favorites?: number;
+        iptv_favorite_groups?: number;
+        tags: number;
+        history: number;
+        settings: boolean;
+      }>("profile_import", { path });
+      await loadFromBackend();
+      // 导入不仅改变关注/历史，也可能改变设置。把每个缓存页标记为过期并立即刷新
+      // 当前屏幕上的页面，使外壳无法展示旧平台或过期的本地数据。
+      await queryClient.invalidateQueries({ refetchType: "active" });
+      setProfileStatus(
+        `已导入：${r.follows} 个主播关注、${r.iptv_favorites ?? 0} 个 IPTV 关注、${r.iptv_favorite_groups ?? 0} 个 IPTV 分组、${r.tags} 个标签、${r.history} 条历史记录。`,
+      );
+    } catch (cause) {
+      setProfileError(`导入失败：${errorMessage(cause)}`);
+    } finally {
+      setProfileAction(null);
+    }
+  }
+
+  async function chooseProfileForImport() {
+    if (profileAction) return;
+    setProfileStatus(null);
+    setProfileError(null);
+    try {
+      const path = await openFileDialog({
+        multiple: false,
+        directory: false,
+        title: "导入 rLive 配置档案",
+        filters: PROFILE_FILE_FILTERS,
+      });
+      if (typeof path === "string") {
+        await importProfile(path);
+      }
+    } catch (cause) {
+      setProfileError(`打开导入文件失败：${errorMessage(cause)}`);
+    }
+  }
+
+  async function chooseProfileForExport() {
+    if (profileAction) return;
+    setProfileStatus(null);
+    setProfileError(null);
+    try {
+      const path = await saveFileDialog({
+        title: "导出 rLive 配置档案",
+        defaultPath: "rlive-profile.json",
+        filters: PROFILE_FILE_FILTERS,
+      });
+      if (typeof path === "string") {
+        await exportProfile(path);
+      }
+    } catch (cause) {
+      setProfileError(`选择导出位置失败：${errorMessage(cause)}`);
+    }
+  }
+
   const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
     appearance: (
       <SettingsContent title="外观">
@@ -2047,99 +2144,11 @@ export function SettingsPage() {
     ? settingsCategories.find((item) => item.value === category)
     : undefined;
 
-  useEffect(() => {
+  // 外部设置变化时同步草稿：渲染期调整模式，当次渲染即对齐。
+  const [prevProxy, setPrevProxy] = useState(proxy);
+  if (proxy !== prevProxy) {
+    setPrevProxy(proxy);
     setProxyDraft(proxy ?? "");
-  }, [proxy]);
-
-  function saveProxy() {
-    setProxyStatus(null);
-    const next = normalizeHttpProxy(proxyDraft);
-    if (next.error) {
-      setProxyError(next.error);
-      return;
-    }
-    setProxyError(null);
-    setProxy(next.value);
-    setProxyDraft(next.value ?? "");
-    setProxyStatus(next.value ? "代理已保存，将用于后续请求" : "代理已关闭，后续请求将直连");
-  }
-
-  async function exportProfile(path: string) {
-    setProfileStatus(null);
-    setProfileError(null);
-    setProfileAction("export");
-    try {
-      await invokeCmd("profile_export", { path });
-      setProfileStatus("配置已导出。档案不包含 Cookie、发送授权或本机路径。");
-    } catch (cause) {
-      setProfileError(`导出失败：${errorMessage(cause)}`);
-    } finally {
-      setProfileAction(null);
-    }
-  }
-
-  async function importProfile(path: string) {
-    setProfileStatus(null);
-    setProfileError(null);
-    setProfileAction("import");
-    try {
-      const r = await invokeCmd<{
-        follows: number;
-        iptv_favorites?: number;
-        iptv_favorite_groups?: number;
-        tags: number;
-        history: number;
-        settings: boolean;
-      }>("profile_import", { path });
-      await loadFromBackend();
-      // 导入不仅改变关注/历史，也可能改变设置。把每个缓存页标记为过期并立即刷新
-      // 当前屏幕上的页面，使外壳无法展示旧平台或过期的本地数据。
-      await queryClient.invalidateQueries({ refetchType: "active" });
-      setProfileStatus(
-        `已导入：${r.follows} 个主播关注、${r.iptv_favorites ?? 0} 个 IPTV 关注、${r.iptv_favorite_groups ?? 0} 个 IPTV 分组、${r.tags} 个标签、${r.history} 条历史记录。`,
-      );
-    } catch (cause) {
-      setProfileError(`导入失败：${errorMessage(cause)}`);
-    } finally {
-      setProfileAction(null);
-    }
-  }
-
-  async function chooseProfileForImport() {
-    if (profileAction) return;
-    setProfileStatus(null);
-    setProfileError(null);
-    try {
-      const path = await openFileDialog({
-        multiple: false,
-        directory: false,
-        title: "导入 rLive 配置档案",
-        filters: PROFILE_FILE_FILTERS,
-      });
-      if (typeof path === "string") {
-        await importProfile(path);
-      }
-    } catch (cause) {
-      setProfileError(`打开导入文件失败：${errorMessage(cause)}`);
-    }
-  }
-
-  async function chooseProfileForExport() {
-    if (profileAction) return;
-    setProfileStatus(null);
-    setProfileError(null);
-    try {
-      const path = await saveFileDialog({
-        title: "导出 rLive 配置档案",
-        defaultPath: "rlive-profile.json",
-        filters: PROFILE_FILE_FILTERS,
-      });
-      if (typeof path === "string") {
-        await exportProfile(path);
-      }
-    } catch (cause) {
-      setProfileError(`选择导出位置失败：${errorMessage(cause)}`);
-    }
   }
 
   return (

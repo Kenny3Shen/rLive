@@ -57,10 +57,13 @@ export function SearchPage() {
   const [draftScope, setDraftScope] = useState<SearchScope>(scope);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  // 返回/前进到别的关键词时，草稿跟随 URL 回放：渲染期调整模式。
+  const [prevSearchParams, setPrevSearchParams] = useState({ keyword, scope });
+  if (keyword !== prevSearchParams.keyword || scope !== prevSearchParams.scope) {
+    setPrevSearchParams({ keyword, scope });
     setDraft(keyword);
     setDraftScope(scope);
-  }, [keyword, scope]);
+  }
 
   useEffect(() => {
     inputRef.current?.focus();

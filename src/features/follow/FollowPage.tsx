@@ -670,15 +670,14 @@ export function FollowPage() {
     return counts;
   }, [allFollows, groups]);
 
-  useEffect(() => {
-    if (
-      selectedGroupId !== ALL_FOLLOW_GROUP_ID &&
-      selectedGroupId !== UNGROUPED_FOLLOW_GROUP_ID &&
-      !groups.some((group) => group.id === selectedGroupId)
-    ) {
-      setSelectedGroupId(ALL_FOLLOW_GROUP_ID);
-    }
-  }, [groups, selectedGroupId]);
+  // 分组被删除时回到全部分组：渲染期守卫，非法选中值当次渲染即复位。
+  if (
+    selectedGroupId !== ALL_FOLLOW_GROUP_ID &&
+    selectedGroupId !== UNGROUPED_FOLLOW_GROUP_ID &&
+    !groups.some((group) => group.id === selectedGroupId)
+  ) {
+    setSelectedGroupId(ALL_FOLLOW_GROUP_ID);
+  }
 
   const moveMutation = useMutation({
     mutationFn: ({ user, groupId }: { user: FollowUser; groupId: string }) =>
@@ -860,7 +859,17 @@ export function FollowPage() {
     enabled: isMobileClient(),
     layout: "track",
   });
-  const selectView = followTabSwipe.selectValue;
+  // 解构到局部：useHorizontalSwipe 返回值混合 ref 与回调，直接在 JSX 里逐属性
+  // 访问会触发编译器对整个对象的 ref 污染判定；局部变量传递是标准用法。
+  const {
+    selectValue: selectView,
+    bindPage,
+    onPointerDownCapture,
+    onPointerMoveCapture,
+    onPointerUpCapture,
+    onPointerCancelCapture,
+    onClickCapture,
+  } = followTabSwipe;
 
   const headerState = useMemo(
     () => ({
@@ -892,11 +901,11 @@ export function FollowPage() {
       onRefresh={refreshActiveView}
       refreshing={activeRefreshing}
       className="mx-auto max-w-[1600px]"
-      onPointerDownCapture={followTabSwipe.onPointerDownCapture}
-      onPointerMoveCapture={followTabSwipe.onPointerMoveCapture}
-      onPointerUpCapture={followTabSwipe.onPointerUpCapture}
-      onPointerCancelCapture={followTabSwipe.onPointerCancelCapture}
-      onClickCapture={followTabSwipe.onClickCapture}
+      onPointerDownCapture={onPointerDownCapture}
+      onPointerMoveCapture={onPointerMoveCapture}
+      onPointerUpCapture={onPointerUpCapture}
+      onPointerCancelCapture={onPointerCancelCapture}
+      onClickCapture={onClickCapture}
     >
       <RefreshFab
         onRefresh={refreshActiveView}
@@ -908,7 +917,7 @@ export function FollowPage() {
         <Tabs value={activeView} onValueChange={handleViewChange} className="gap-4">
           <div data-slot="horizontal-swipe-viewport" className="min-w-0 overflow-x-clip">
             <div
-              ref={followTabSwipe.bindPage}
+              ref={bindPage}
               data-slot="horizontal-swipe-track"
               className="flex items-start"
               style={{ width: "200%" }}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Car, Timer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -101,9 +101,12 @@ export function AutoDanmakuSendMenu({
   const [intervalDraft, setIntervalDraft] = useState(() => String(autoSend.intervalSeconds));
   const style = menuStyle(variant);
 
-  useEffect(() => {
+  // 外部值变化时同步草稿：渲染期调整模式。
+  const [prevInterval, setPrevInterval] = useState(autoSend.intervalSeconds);
+  if (autoSend.intervalSeconds !== prevInterval) {
+    setPrevInterval(autoSend.intervalSeconds);
     setIntervalDraft(String(autoSend.intervalSeconds));
-  }, [autoSend.intervalSeconds]);
+  }
 
   const commitInterval = () => {
     const intervalSeconds = normalizeAutoDanmakuSendIntervalSeconds(Number(intervalDraft));
@@ -218,9 +221,12 @@ export function SleepTimerMenu({
   const [draftError, setDraftError] = useState<string | null>(null);
   const style = menuStyle(variant);
 
-  useEffect(() => {
+  // 外部值变化时同步草稿：渲染期调整模式。
+  const [prevDurationMinutes, setPrevDurationMinutes] = useState(timer.durationMinutes);
+  if (timer.durationMinutes !== prevDurationMinutes) {
+    setPrevDurationMinutes(timer.durationMinutes);
     setMinutesDraft(String(timer.durationMinutes));
-  }, [timer.durationMinutes]);
+  }
 
   const startTimer = () => {
     const minutes = Number(minutesDraft);

@@ -67,10 +67,7 @@ import {
   withRecordingView,
   type RecordingView,
 } from "./recordingRoute";
-import {
-  isWatchFinished,
-  isWatchProgressWorthKeeping,
-} from "@/shared/watchProgress";
+import { isWatchFinished, isWatchProgressWorthKeeping } from "@/shared/watchProgress";
 import {
   activeRecordingCount,
   deleteRecording,

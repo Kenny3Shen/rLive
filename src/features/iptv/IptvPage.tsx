@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { CircleCheck, CircleX, Folder, Inbox, Layers3, Tv, X } from "lucide-react";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
@@ -102,9 +102,13 @@ export function IptvPage() {
     () => groupTargets(channels.length, groupOptions),
     [channels.length, groupOptions],
   );
-  useEffect(() => {
+  // 筛选条件变化时回到第一页：渲染期调整模式，组合键变化的当次渲染即重置。
+  const discoveryFilterKey = `${availabilityFilter}\u0000${keyword}\u0000${selectedGroup}\u0000${source.url}`;
+  const [prevDiscoveryFilterKey, setPrevDiscoveryFilterKey] = useState(discoveryFilterKey);
+  if (discoveryFilterKey !== prevDiscoveryFilterKey) {
+    setPrevDiscoveryFilterKey(discoveryFilterKey);
     setChannelLimit(CHANNEL_PAGE_SIZE);
-  }, [availabilityFilter, keyword, selectedGroup, source.url]);
+  }
 
   return (
     <PullToRefresh

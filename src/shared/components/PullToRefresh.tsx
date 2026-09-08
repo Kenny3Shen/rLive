@@ -67,10 +67,13 @@ export function PullToRefresh({
   const refreshingRef = useRef(refreshing);
   const refreshingPropRef = useRef(Boolean(refreshingProp));
   const onRefreshRef = useRef(onRefresh);
-  disabledRef.current = disabled;
-  refreshingRef.current = refreshing;
-  refreshingPropRef.current = Boolean(refreshingProp);
-  onRefreshRef.current = onRefresh;
+  // 渲染期不写 ref：提交后同步 latest 值，读者全部在事件/效果里，时序等价。
+  useLayoutEffect(() => {
+    disabledRef.current = disabled;
+    refreshingRef.current = refreshing;
+    refreshingPropRef.current = Boolean(refreshingProp);
+    onRefreshRef.current = onRefresh;
+  });
 
   const applyDistance = useCallback((distance: number, dragging: boolean) => {
     const indicator = indicatorRef.current;

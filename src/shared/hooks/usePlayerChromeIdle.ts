@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { playerChromeVisible } from "@/shared/components/player/PlayerFullscreenLock";
+import {
+  applyPlayerChromeVisibility,
+  usePlayerChromeVisibility,
+} from "./usePlayerChromeVisibility";
 
 /** 空闲多久后把 chrome 淡出。 */
 const CHROME_IDLE_DELAY_MS = 2_600;
@@ -30,6 +34,13 @@ export function usePlayerChromeIdle({
 }) {
   const hideTimerRef = useRef<number | null>(null);
   const controlsVisibleRef = useRef(true);
+  usePlayerChromeVisibility({
+    controlsRef,
+    hudRef,
+    visibleRef: controlsVisibleRef,
+    lockRef,
+    locked: fullscreenLocked,
+  });
 
   const clearHideTimer = useCallback(() => {
     if (hideTimerRef.current === null) return;
@@ -41,18 +52,8 @@ export function usePlayerChromeIdle({
     (visible: boolean) => {
       controlsVisibleRef.current = visible;
       const chromeVisible = playerChromeVisible(visible, fullscreenLocked);
-      for (const layer of [controlsRef.current, hudRef.current]) {
-        if (!layer) continue;
-        layer.dataset.visible = chromeVisible ? "true" : "false";
-        layer.setAttribute("aria-hidden", String(!chromeVisible));
-        layer.toggleAttribute("inert", !chromeVisible);
-      }
-      const lock = lockRef.current;
-      if (lock) {
-        lock.dataset.visible = visible ? "true" : "false";
-        lock.setAttribute("aria-hidden", String(!visible));
-        lock.toggleAttribute("inert", !visible);
-      }
+      applyPlayerChromeVisibility([controlsRef.current, hudRef.current], chromeVisible);
+      applyPlayerChromeVisibility([lockRef.current], visible);
     },
     [controlsRef, fullscreenLocked, hudRef, lockRef],
   );

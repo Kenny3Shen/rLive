@@ -1,6 +1,6 @@
 import { onBackButtonPress } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { CATEGORY_PARAM } from "@/features/category/categorySelection";
@@ -123,7 +123,11 @@ export function AndroidBackNavigator() {
   // 返回事件可能在任意路由上到达；用最新位置应答，避免每次路由变化都
   // 注销重注册监听器（异步间隙会让 Back 落到 WebView 原生历史回退）。
   const locationRef = useRef({ pathname, search });
-  locationRef.current = { pathname, search };
+  // latest-ref：渲染期不写 ref，改在提交后同步；Back 事件总是异步到达，
+  // 读到的位置与原先一致。
+  useLayoutEffect(() => {
+    locationRef.current = { pathname, search };
+  }, [pathname, search]);
 
   useEffect(() => {
     if (

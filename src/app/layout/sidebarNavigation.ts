@@ -1,5 +1,14 @@
 import type { ComponentType } from "react";
-import { Clapperboard, Heart, History, Home, PanelsTopLeft, Settings, Tv, Videotape } from "lucide-react";
+import {
+  Clapperboard,
+  Heart,
+  History,
+  Home,
+  PanelsTopLeft,
+  Settings,
+  Tv,
+  Videotape,
+} from "lucide-react";
 
 export const SIDEBAR_NAVIGATION_STATE = {
   rliveNavigationSource: "sidebar",

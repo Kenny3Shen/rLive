@@ -294,9 +294,12 @@ export function useAndroidPlayerControls(enabled: boolean, roomSessionKey = "") 
     let shouldResetBrightness = false;
     let readVersion = 0;
     if (!enabled || !runningOnAndroidTauri()) {
+      /* 外部系统同步：Android 原生桥不可用时的清理与回读复位。 */
+      /* oxlint-disable react/set-state-in-effect */
       cancelPendingWrites();
       setAvailable(false);
       replaceState(null);
+      /* oxlint-enable react/set-state-in-effect */
       return () => {
         cancelled = true;
       };

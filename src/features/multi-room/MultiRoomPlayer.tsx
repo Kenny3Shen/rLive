@@ -1,3 +1,4 @@
+import { usePlayerChromeVisibility } from "@/shared/hooks/usePlayerChromeVisibility";
 import {
   createContext,
   useCallback,
@@ -463,7 +464,8 @@ export function MultiRoomPlayer({
     controls: false,
     composer: false,
   });
-  const lastControlsActivityAtRef = useRef(Date.now());
+  const [initialControlsActivityAt] = useState(Date.now);
+  const lastControlsActivityAtRef = useRef(initialControlsActivityAt);
   const detailQuery = useQuery({
     queryKey: ["room_detail", room.siteId, room.roomId],
     queryFn: () =>
@@ -502,19 +504,16 @@ export function MultiRoomPlayer({
     onMediaFailure: playback.onPlayerMediaFailure,
     onPlaying: playback.onPlayerPlaying,
   });
+  const { stageRef: playerStageRef, playerRootRef, videoRef: playerVideoRef } = player;
   useMultiRoomLiveSyncRegistration({ key: room.key, main, sync: player.sync });
   const playerVolume = player.volume;
   const playerMuted = player.muted;
   const setPlayerAudio = player.setAudio;
   const exitPlayerFullscreen = player.exitFullscreen;
 
-  useEffect(() => {
-    if (!main) setAudioOnly(false);
-  }, [main]);
-
-  useEffect(() => {
-    if (!main) setOsdOn(false);
-  }, [main]);
+  usePlayerChromeVisibility({ controlsRef, hudRef, visibleRef: controlsVisibleRef, enabled: main });
+  if (!main && audioOnly) setAudioOnly(false);
+  if (!main && osdOn) setOsdOn(false);
 
   // 某条流在全屏舞台期间可能被降级、拖走或移除。全屏属于当前的主流，
   // 因此一旦它不再是主流就立即交出 —— 包括卸载时 ——
@@ -743,7 +742,7 @@ export function MultiRoomPlayer({
 
   return (
     <article
-      ref={player.stageRef}
+      ref={playerStageRef}
       data-multi-room-player={room.key}
       data-main={main ? "true" : "false"}
       // 只有主流携带舞台标记。全屏时这条 article 从 3x3 网格中提升为固定全窗口层
@@ -772,13 +771,13 @@ export function MultiRoomPlayer({
         />
       )}
       <div
-        ref={player.playerRootRef}
+        ref={playerRootRef}
         data-player-engine-root
         className={`absolute inset-0 size-full overflow-hidden bg-black/70${audioOnly ? " invisible" : ""}`}
       >
         <video
           key={player.mediaKey}
-          ref={player.videoRef}
+          ref={playerVideoRef}
           data-player-video
           className="absolute inset-0 size-full bg-black object-contain"
           crossOrigin="anonymous"
@@ -822,8 +821,8 @@ export function MultiRoomPlayer({
       <div
         ref={hudRef}
         data-player-hud={main ? true : undefined}
-        data-visible={main ? (controlsVisibleRef.current ? "true" : "false") : undefined}
-        aria-hidden={main ? !controlsVisibleRef.current : undefined}
+        data-visible={main ? "true" : undefined}
+        aria-hidden={main ? false : undefined}
         className={cn(
           "pointer-events-none absolute inset-x-0 top-0 z-30 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity",
           main
@@ -848,7 +847,7 @@ export function MultiRoomPlayer({
           {fullscreen && (
             <OverlayIconButton
               label="退出全屏"
-              portalContainer={player.stageRef}
+              portalContainer={playerStageRef}
               onClick={() => void exitPlayerFullscreen()}
             >
               <ChevronLeft aria-hidden />
@@ -869,23 +868,23 @@ export function MultiRoomPlayer({
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-1">
           {syncMode !== "off" && (
-            <MultiRoomSyncBadge roomKey={room.key} portalContainer={player.stageRef} />
+            <MultiRoomSyncBadge roomKey={room.key} portalContainer={playerStageRef} />
           )}
           {!main && (
             <OverlayIconButton
               label="设为主画面"
-              portalContainer={player.stageRef}
+              portalContainer={playerStageRef}
               onClick={() => setMainRoom(room.key)}
             >
               <Maximize2 aria-hidden />
             </OverlayIconButton>
           )}
-          <OverlayIconButton label="刷新此路" portalContainer={player.stageRef} onClick={retry}>
+          <OverlayIconButton label="刷新此路" portalContainer={playerStageRef} onClick={retry}>
             <RefreshCw aria-hidden />
           </OverlayIconButton>
           <OverlayIconButton
             label="移除此路"
-            portalContainer={player.stageRef}
+            portalContainer={playerStageRef}
             onClick={() => removeRoom(room.key)}
           >
             <X aria-hidden />
@@ -907,8 +906,8 @@ export function MultiRoomPlayer({
           <div
             ref={controlsRef}
             data-player-controls
-            data-visible={controlsVisibleRef.current ? "true" : "false"}
-            aria-hidden={!controlsVisibleRef.current}
+            data-visible="true"
+            aria-hidden={false}
             className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
             onPointerEnter={holdControlsVisible}
             onPointerMove={(event) => {
@@ -942,7 +941,7 @@ export function MultiRoomPlayer({
         <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/85 to-transparent p-2 pt-7 text-white opacity-0 transition-opacity group-focus-within/player:opacity-100 group-hover/player:opacity-100">
           <OverlayIconButton
             label={player.paused ? "继续播放" : "暂停播放"}
-            portalContainer={player.stageRef}
+            portalContainer={playerStageRef}
             onClick={player.togglePause}
             disabled={!playback.playUrl}
           >
@@ -950,7 +949,7 @@ export function MultiRoomPlayer({
           </OverlayIconButton>
           <OverlayIconButton
             label={player.muted || player.volume === 0 ? "取消静音" : "静音"}
-            portalContainer={player.stageRef}
+            portalContainer={playerStageRef}
             onClick={toggleMute}
             disabled={!playback.playUrl}
           >

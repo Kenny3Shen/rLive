@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   LONG_PRESS_TRIGGER_MS,
   hasLongPressMovedBeyondSlop,
@@ -38,7 +44,10 @@ export function useLongPress({ enabled, onTrigger }: UseLongPressOptions) {
   /** 解除 window 守卫监听的函数；null 表示当前没有武装中的按压。 */
   const detachWindowGuardRef = useRef<(() => void) | null>(null);
   const onTriggerRef = useRef(onTrigger);
-  onTriggerRef.current = onTrigger;
+  // 渲染期不写 ref：提交后同步 latest 回调，计时器/监听器都在事件里读取。
+  useLayoutEffect(() => {
+    onTriggerRef.current = onTrigger;
+  });
 
   const detachWindowGuard = useCallback(() => {
     detachWindowGuardRef.current?.();
