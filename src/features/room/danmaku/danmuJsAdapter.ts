@@ -166,7 +166,9 @@ export function danmuTrackSpan(
 ): number {
   const hasLargeEmote = spans?.some((span) => span.type === "image" && span.large === true);
   if (!hasLargeEmote) return 1;
-  const lanes = Number.isFinite(laneCount) ? Math.floor(laneCount as number) : Number.POSITIVE_INFINITY;
+  const lanes = Number.isFinite(laneCount)
+    ? Math.floor(laneCount as number)
+    : Number.POSITIVE_INFINITY;
   return lanes >= DANMU_JS_IMAGE_TRACK_SPAN ? DANMU_JS_IMAGE_TRACK_SPAN : 1;
 }
 

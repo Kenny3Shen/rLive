@@ -122,9 +122,12 @@ export function useHorizontalSwipe<T>({
   const commitRollbackTimerRef = useRef<number | null>(null);
   /** 监视 track 的视口。每个附着节点一个，重绑时替换。 */
   const trackResizeObserverRef = useRef<ResizeObserver | null>(null);
-  itemsRef.current = items;
-  valueRef.current = value;
-  onChangeRef.current = onChange;
+  // 渲染期不写 ref：提交后同步 latest 值，读者全部在事件/效果里，时序等价。
+  useLayoutEffect(() => {
+    itemsRef.current = items;
+    valueRef.current = value;
+    onChangeRef.current = onChange;
+  });
 
   const clearCommitRollback = useCallback(() => {
     if (commitRollbackTimerRef.current === null) return;

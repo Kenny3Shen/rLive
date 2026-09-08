@@ -3,7 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -29,9 +29,8 @@ const noopSubscribe = () => () => {};
  * 对齐关闭时循环完全停止 —— 播放器的行为与没有此功能时完全一致。
  */
 export function MultiRoomLiveSyncProvider({ children }: { children: ReactNode }) {
-  const registryRef = useRef<MultiRoomLiveSyncRegistry | null>(null);
-  registryRef.current ??= createMultiRoomLiveSyncRegistry();
-  const registry = registryRef.current;
+  // useState 惰性初始化：跨渲染身份稳定，且避免渲染期读写 ref。
+  const [registry] = useState(() => createMultiRoomLiveSyncRegistry());
   const syncMode = useMultiRoomStore((state) => state.syncMode);
 
   useEffect(() => {

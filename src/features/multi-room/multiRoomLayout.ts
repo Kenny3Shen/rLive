@@ -1,4 +1,8 @@
-import { MULTI_ROOM_MAIN_SLOT, type MultiRoomFourLayout, type MultiRoomLayout } from "./multiRoomStore";
+import {
+  MULTI_ROOM_MAIN_SLOT,
+  type MultiRoomFourLayout,
+  type MultiRoomLayout,
+} from "./multiRoomStore";
 
 /** 3x3 六屏导演网格的槽位布局。 */
 export const MULTI_ROOM_SLOT_CLASSES = [

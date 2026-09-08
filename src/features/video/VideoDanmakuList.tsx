@@ -41,8 +41,7 @@ export function VideoDanmakuList({
     const viewport = viewportRef.current;
     if (!viewport) return;
     const onScroll = () => {
-      const distanceToBottom =
-        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
       userScrolledRef.current = distanceToBottom > 80;
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });
@@ -66,54 +65,52 @@ export function VideoDanmakuList({
       aria-label="视频弹幕"
       className="h-full overflow-y-auto overscroll-contain pb-2"
     >
-        {total === 0 && loading && (
-          <div className="flex items-center justify-center py-4">
-            <Spinner className="size-4" aria-label="正在加载弹幕" />
-          </div>
-        )}
-        {total === 0 && !loading && (
-          <p className="py-4 text-center text-xs text-muted-foreground">
-            当前位置附近暂无弹幕
-          </p>
-        )}
-        <ol className="flex flex-col gap-0.5 px-3 py-2 text-sm">
-          {entries.map((entry, index) => (
-            <li
-              key={`${entry.progressMs}-${index}`}
-              ref={index === followIndex ? followRef : undefined}
-              className={cn(
-                // 屏外行跳过布局与绘制：全量渲染上万条也保持滚动流畅；
-                // contain-intrinsic-size 提供 scrollHeight 估算避免滚动条抖动。
-                "[content-visibility:auto] [contain-intrinsic-size:auto_1.75rem]",
-                entry.progressMs > positionMs && "opacity-55",
-              )}
-            >
-              {/* 整行是跳转入口（含未来条目）：点了就走 seek，列表随后跟随
+      {total === 0 && loading && (
+        <div className="flex items-center justify-center py-4">
+          <Spinner className="size-4" aria-label="正在加载弹幕" />
+        </div>
+      )}
+      {total === 0 && !loading && (
+        <p className="py-4 text-center text-xs text-muted-foreground">当前位置附近暂无弹幕</p>
+      )}
+      <ol className="flex flex-col gap-0.5 px-3 py-2 text-sm">
+        {entries.map((entry, index) => (
+          <li
+            key={`${entry.progressMs}-${index}`}
+            ref={index === followIndex ? followRef : undefined}
+            className={cn(
+              // 屏外行跳过布局与绘制：全量渲染上万条也保持滚动流畅；
+              // contain-intrinsic-size 提供 scrollHeight 估算避免滚动条抖动。
+              "[content-visibility:auto] [contain-intrinsic-size:auto_1.75rem]",
+              entry.progressMs > positionMs && "opacity-55",
+            )}
+          >
+            {/* 整行是跳转入口（含未来条目）：点了就走 seek，列表随后跟随
                   新位置滚动。按钮语义让键盘/读屏也能跳。 */}
-              <button
-                type="button"
-                onClick={() => onSeek(entry.progressMs)}
-                title="跳转到此弹幕的位置"
-                className="flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
+            <button
+              type="button"
+              onClick={() => onSeek(entry.progressMs)}
+              title="跳转到此弹幕的位置"
+              className="flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
+            >
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                {formatRecordingDuration(entry.progressMs)}
+              </span>
+              <span
+                className="min-w-0 flex-1 truncate leading-relaxed"
+                style={entry.color ? { color: entry.color } : undefined}
               >
-                <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                  {formatRecordingDuration(entry.progressMs)}
-                </span>
-                <span
-                  className="min-w-0 flex-1 truncate leading-relaxed"
-                  style={entry.color ? { color: entry.color } : undefined}
-                >
-                  {entry.content}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ol>
-        {total > 0 && (
-          <p className="px-3 pt-1 text-center text-[11px] text-muted-foreground">
-            共 {formatOnline(total)} 条弹幕
-          </p>
-        )}
+                {entry.content}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ol>
+      {total > 0 && (
+        <p className="px-3 pt-1 text-center text-[11px] text-muted-foreground">
+          共 {formatOnline(total)} 条弹幕
+        </p>
+      )}
     </div>
   );
 }

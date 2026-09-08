@@ -112,11 +112,7 @@ export type MultiRoomLiveSyncRegistry = {
   subscribeSummary: (listener: () => void) => () => void;
   getSummary: () => LiveSyncSummary;
   /** 执行一次采样/校正。由 provider 的计时器调用。 */
-  tick: (input: {
-    mode: LiveSyncMode;
-    offsets: Record<string, number>;
-    nowMs: number;
-  }) => void;
+  tick: (input: { mode: LiveSyncMode; offsets: Record<string, number>; nowMs: number }) => void;
   /** 释放所有校正并清空已发布的状态。 */
   reset: () => void;
   /** manual 模式偏移量，把各流对齐到最慢流的时钟。 */

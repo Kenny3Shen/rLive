@@ -1,12 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DanmuJsBullet, DanmuJsComment, DanmuJsInstance } from "danmu.js";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
@@ -444,7 +436,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
    */
   useLayoutEffect(() => {
     const matcher = blockedUserMatcher;
-    for (const id of [...recordOrderRef.current]) {
+    // removeRecord 会在迭代中 splice recordOrderRef，先做快照避免迭代器失效；
+    // unicorn/no-useless-spread 误把必要的防御性拷贝当冗余，用 slice 表达同一意图。
+    for (const id of recordOrderRef.current.slice()) {
       const record = recordsRef.current.get(id);
       if (record && matcher(record.meta.event)) removeRecordRef.current(id, true);
     }

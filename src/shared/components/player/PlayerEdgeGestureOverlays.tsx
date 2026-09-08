@@ -25,9 +25,13 @@ export function PlayerBrightnessShade({ ref }: { ref: Ref<HTMLDivElement> }) {
  * （见 `usePlayerEdgeGesture`），这里只提供节点与自然态样式。
  */
 export function PlayerEdgeGestureFeedback({ refs }: { refs: PlayerEdgeGestureFeedbackRefs }) {
+  // 解构到局部：refs 是 ref 捆绑对象，逐属性在 JSX 里访问会触发编译器对整个
+  // 对象的 ref 污染判定；局部变量传递 ref 对象是标准用法（与 usePlayerEdgeGesture
+  // 侧 useMemo 保持同一身份）。该解构行只读取 ref 对象本身，不读 .current。
+  const { root, panel, brightnessIcon, volumeIcon, label, value, progress } = refs;
   return (
     <div
-      ref={refs.root}
+      ref={root}
       aria-hidden="true"
       data-kind="brightness"
       data-player-edge-gesture-feedback="brightness"
@@ -35,26 +39,26 @@ export function PlayerEdgeGestureFeedback({ refs }: { refs: PlayerEdgeGestureFee
       className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center opacity-0 [will-change:opacity]"
     >
       <div
-        ref={refs.panel}
+        ref={panel}
         className="flex w-44 max-w-[calc(100%-2rem)] flex-col gap-3 rounded-lg border border-white/12 bg-black/78 p-3 text-white shadow-xl [transform:scale(0.97)] [will-change:transform]"
       >
         <div className="flex items-center gap-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white/12">
-            <SunMedium ref={refs.brightnessIcon} className="size-5" />
-            <Volume2 ref={refs.volumeIcon} className="size-5" style={{ display: "none" }} />
+            <SunMedium ref={brightnessIcon} className="size-5" />
+            <Volume2 ref={volumeIcon} className="size-5" style={{ display: "none" }} />
           </span>
           <span className="flex min-w-0 flex-1 items-baseline justify-between gap-2">
-            <span ref={refs.label} className="text-sm text-white/76">
+            <span ref={label} className="text-sm text-white/76">
               亮度
             </span>
-            <strong ref={refs.value} className="text-base font-semibold tabular-nums">
+            <strong ref={value} className="text-base font-semibold tabular-nums">
               100%
             </strong>
           </span>
         </div>
         <span className="h-1 overflow-hidden rounded-full bg-white/20">
           <span
-            ref={refs.progress}
+            ref={progress}
             className="block h-full origin-left rounded-full bg-white [transform:scaleX(1)] [will-change:transform]"
           />
         </span>

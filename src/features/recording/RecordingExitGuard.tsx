@@ -70,8 +70,10 @@ export function RecordingExitGuard() {
 
   // 最后一个任务可能在关闭请求与应答之间完成。此时已无风险，
   // 立即退出，而不是就零个任务发问。
+  // 外部系统编排：组合状态满足时发起退出 IPC，exiting 是这次副作用的进行中标记。
   useEffect(() => {
     if (!open || exiting || !countKnown || activeCount > 0) return;
+    // oxlint-disable-next-line react/set-state-in-effect
     setExiting(true);
     void confirmAppExit().catch((error) => {
       notify.error("退出应用失败", recordingErrorMessage(error));

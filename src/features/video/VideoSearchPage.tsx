@@ -45,8 +45,16 @@ export function VideoSearchPage() {
     ...BROWSING_LIST_QUERY_OPTIONS,
   });
 
-  const { data, error, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage, isFetchNextPageError, refetch } =
-    listQuery;
+  const {
+    data,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetching,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    refetch,
+  } = listQuery;
 
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     fetchNextPage,
@@ -68,9 +76,7 @@ export function VideoSearchPage() {
 
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-4 pb-6">
-      {keyword && (
-        <VideoSearchFiltersBar filters={filters} onChange={changeFilters} />
-      )}
+      {keyword && <VideoSearchFiltersBar filters={filters} onChange={changeFilters} />}
 
       {error ? (
         <ErrorState error={error} title="搜索失败" onRetry={() => refetch()} />

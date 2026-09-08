@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Download, RefreshCw, Upload, X } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -69,9 +69,12 @@ export function LanSyncField() {
   const [receivePending, setReceivePending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ProfileImportResult | null>(null);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
-  activeSessionRef.current = session?.status === "waiting";
+  // latest-ref：提交后同步，卸载清理读到的仍是最新会话状态。
+  useLayoutEffect(() => {
+    activeSessionRef.current = session?.status === "waiting";
+  }, [session?.status]);
 
   useEffect(() => {
     if (session?.status !== "waiting") return;

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { CircleDot, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
@@ -51,10 +51,12 @@ export function RecordingControl({ context, className, disabled = false }: Recor
   const busy = controller.busy;
 
   // 从这个盒子（或其他地方）开始录制后，选项盒收回为
-  // 活动状态的一键停止按钮。
-  useEffect(() => {
+  // 活动状态的一键停止按钮。渲染期调整模式：active 变化的当次渲染即收起。
+  const [prevRecordingActive, setPrevRecordingActive] = useState(!active);
+  if (active !== prevRecordingActive) {
+    setPrevRecordingActive(active);
     if (active) setOpen(false);
-  }, [active]);
+  }
 
   if (!controller.supported) return null;
 

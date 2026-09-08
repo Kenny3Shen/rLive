@@ -456,12 +456,23 @@ export function PlayerControls({
     onOverlayInteractionChange?.(overlayInteractionOpen);
   }, [onOverlayInteractionChange, overlayInteractionOpen]);
 
-  useEffect(() => {
-    if (!mobilePortrait && showVolumeControl) return;
-    setVolumeOpen(false);
-    if (!mobilePortrait) return;
-    setAsrSettingsOpen(false);
-  }, [mobilePortrait, showVolumeControl]);
+  // 布局形态变化时收起不适用的浮层菜单：渲染期调整模式，当次渲染即收起。
+  // desktop+音量控件 → 全保留；desktop+无音量 → 只收音量菜单；
+  // 移动端竖屏 → 音量与 ASR 菜单都收。
+  const [prevPortraitChrome, setPrevPortraitChrome] = useState({
+    mobilePortrait,
+    showVolumeControl,
+  });
+  if (
+    mobilePortrait !== prevPortraitChrome.mobilePortrait ||
+    showVolumeControl !== prevPortraitChrome.showVolumeControl
+  ) {
+    setPrevPortraitChrome({ mobilePortrait, showVolumeControl });
+    if (!(!mobilePortrait && showVolumeControl)) {
+      setVolumeOpen(false);
+      if (mobilePortrait) setAsrSettingsOpen(false);
+    }
+  }
 
   useEffect(
     () => () => {

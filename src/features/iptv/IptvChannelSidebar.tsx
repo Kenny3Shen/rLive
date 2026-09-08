@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Tv } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IptvSearchInput } from "./IptvHeaderControls";
@@ -29,9 +29,12 @@ export function IptvChannelSidebar({
   );
   const displayed = useMemo(() => filtered.slice(0, limit), [filtered, limit]);
 
-  useEffect(() => {
+  // 搜索词变化时回到第一页：渲染期调整模式。
+  const [prevSidebarKeyword, setPrevSidebarKeyword] = useState(keyword);
+  if (keyword !== prevSidebarKeyword) {
+    setPrevSidebarKeyword(keyword);
     setLimit(SIDEBAR_CHANNEL_PAGE_SIZE);
-  }, [keyword]);
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-2 md:p-3">

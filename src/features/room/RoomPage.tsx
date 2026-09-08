@@ -67,9 +67,15 @@ function RoomPageContent() {
 
   // 普通房间导航从聊天开始，而由 FollowPanel 发起的导航保持关注选择器打开。
   // 这也覆盖了参数变化时复用 RoomPage 而不重新挂载的路由配置。
-  useEffect(() => {
+  // 渲染期调整模式：导航键或目标页签变化的当次渲染即对齐。
+  const [prevSideTabNav, setPrevSideTabNav] = useState({
+    key: location.key,
+    tab: requestedSideTab,
+  });
+  if (location.key !== prevSideTabNav.key || requestedSideTab !== prevSideTabNav.tab) {
+    setPrevSideTabNav({ key: location.key, tab: requestedSideTab });
     setSideTab(requestedSideTab);
-  }, [location.key, requestedSideTab]);
+  }
 
   const detailQuery = useQuery({
     queryKey: ["room_detail", siteId, roomId],

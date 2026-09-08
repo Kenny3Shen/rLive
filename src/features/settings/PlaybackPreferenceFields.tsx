@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, ChevronDown, ChevronRight, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { AppSettings } from "@/shared/types/live";
 import {
@@ -26,12 +26,7 @@ import {
 } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerTitle,
-} from "@/components/ui/drawer";
+import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Field, FieldContent, FieldError, FieldTitle } from "@/components/ui/field";
 import {
   InputGroup,
@@ -310,11 +305,7 @@ function SettingsEntryList({
               （桌面端 ›、移动端 ⌄），Esc/点遮罩仍可关。 */}
           <div className="flex shrink-0 items-center justify-between gap-2">
             <DrawerTitle id={dialogTitleId}>{label}</DrawerTitle>
-            <DrawerClose
-              render={
-                <Button variant="ghost" size="icon-sm" aria-label="关闭" />
-              }
-            >
+            <DrawerClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭" />}>
               {mobile ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
             </DrawerClose>
           </div>
@@ -482,7 +473,12 @@ export function AsrChunkIntervalField({
   const setChunkSeconds = useSettingsStore((state) => state.setAsrWindowSeconds);
   const [draft, setDraft] = useState(chunkSeconds);
 
-  useEffect(() => setDraft(chunkSeconds), [chunkSeconds]);
+  // 外部设置变化时同步草稿：渲染期调整模式。
+  const [prevChunkSeconds, setPrevChunkSeconds] = useState(chunkSeconds);
+  if (chunkSeconds !== prevChunkSeconds) {
+    setPrevChunkSeconds(chunkSeconds);
+    setDraft(chunkSeconds);
+  }
 
   return (
     <PreferenceSliderField

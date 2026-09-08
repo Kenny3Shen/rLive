@@ -125,13 +125,19 @@ type SwipeHandlers = {
  * 把手势处理器铺到一个 `data-horizontal-swipe-surface` 上。刻意逐项挑选：
  * swipe 对象还带 `bindPage`，整体展开会把 ref 绑定当未知 DOM 属性丢给元素。
  */
-function bindSwipe(swipe: SwipeHandlers): SwipeHandlers {
+function bindSwipe({
+  onPointerDownCapture,
+  onPointerMoveCapture,
+  onPointerUpCapture,
+  onPointerCancelCapture,
+  onClickCapture,
+}: SwipeHandlers): SwipeHandlers {
   return {
-    onPointerDownCapture: swipe.onPointerDownCapture,
-    onPointerMoveCapture: swipe.onPointerMoveCapture,
-    onPointerUpCapture: swipe.onPointerUpCapture,
-    onPointerCancelCapture: swipe.onPointerCancelCapture,
-    onClickCapture: swipe.onClickCapture,
+    onPointerDownCapture,
+    onPointerMoveCapture,
+    onPointerUpCapture,
+    onPointerCancelCapture,
+    onClickCapture,
   };
 }
 
@@ -193,40 +199,50 @@ export function Shell() {
 
   // React Router 用递增的 `idx` 记录每条 pushState 历史。跨渲染比较它可以告诉
   // 页签切换用户在历史中向哪个方向移动，从而让新页面从相应的一侧滑入。
-  // 在渲染期间幂等地写入，refs 只是镜像最后一次视图。
+  // 用渲染期状态调整维护这份导航记忆：被丢弃的并发渲染不会推进它，
+  // 比渲染期写 ref 更安全。
   const historyIndex =
     typeof window !== "undefined"
       ? ((window.history.state as { idx?: number } | null)?.idx ?? 0)
       : 0;
-  const prevPathRef = useRef(pathname);
-  const prevHistoryIndexRef = useRef(historyIndex);
-  const directSidebarPathRef = useRef<string | null>(null);
-  const sidebarDirectionRef = useRef<1 | -1>(1);
-  const tabNavigationRef = useRef<{
-    pathname: string;
-    direction: "forward" | "backward";
-  } | null>(null);
-  const pathChanged = pathname !== prevPathRef.current;
-  if (pathChanged) {
-    const directSidebarNavigation = isSidebarNavigation(navigationType, location.state);
-    directSidebarPathRef.current = directSidebarNavigation ? pathname : null;
-    if (directSidebarNavigation) {
-      sidebarDirectionRef.current = sidebarNavigationDirection(prevPathRef.current, pathname);
+  const [navMemory, setNavMemory] = useState({
+    prevPath: pathname,
+    prevHistoryIndex: historyIndex,
+    directSidebarPath: null as string | null,
+    sidebarDirection: 1 as 1 | -1,
+    tabNavigation: null as { pathname: string; direction: "forward" | "backward" } | null,
+  });
+
+  if (pathname !== navMemory.prevPath || historyIndex !== navMemory.prevHistoryIndex) {
+    const pathChanged = pathname !== navMemory.prevPath;
+    let directSidebarPath = navMemory.directSidebarPath;
+    let sidebarDirection = navMemory.sidebarDirection;
+    let tabNavigation = navMemory.tabNavigation;
+    if (pathChanged) {
+      const directSidebarNavigation = isSidebarNavigation(navigationType, location.state);
+      directSidebarPath = directSidebarNavigation ? pathname : null;
+      if (directSidebarNavigation) {
+        sidebarDirection = sidebarNavigationDirection(navMemory.prevPath, pathname);
+      }
+      const tabDirection =
+        navigationType === "POP" && historyIndex !== navMemory.prevHistoryIndex
+          ? historyIndex > navMemory.prevHistoryIndex
+            ? "forward"
+            : "backward"
+          : null;
+      tabNavigation = tabDirection ? { pathname, direction: tabDirection } : null;
     }
-    const tabDirection =
-      navigationType === "POP" && historyIndex !== prevHistoryIndexRef.current
-        ? historyIndex > prevHistoryIndexRef.current
-          ? "forward"
-          : "backward"
-        : null;
-    tabNavigationRef.current = tabDirection ? { pathname, direction: tabDirection } : null;
+    setNavMemory({
+      prevPath: pathname,
+      prevHistoryIndex: historyIndex,
+      directSidebarPath,
+      sidebarDirection,
+      tabNavigation,
+    });
   }
-  const isDirectSidebarNavigation = directSidebarPathRef.current === pathname;
-  const tabNavigation = tabNavigationRef.current;
-  const isTabNavigation = tabNavigation?.pathname === pathname;
-  const tabDirection = isTabNavigation ? tabNavigation.direction : null;
-  prevPathRef.current = pathname;
-  prevHistoryIndexRef.current = historyIndex;
+  const isDirectSidebarNavigation = navMemory.directSidebarPath === pathname;
+  const isTabNavigation = navMemory.tabNavigation?.pathname === pathname;
+  const tabDirection = isTabNavigation ? (navMemory.tabNavigation?.direction ?? null) : null;
 
   const selectedSiteId = useSettingsStore((state) => state.siteId);
   const setSiteId = useSettingsStore((state) => state.setSiteId);
@@ -297,14 +313,24 @@ export function Shell() {
     : isVideo
       ? videoTab
       : String(platformForMotion);
-  const previousGroupRef = useRef({ pathname, group: groupForMotion });
-  const previousGroup = routeScopedPreviousGroup(
-    previousGroupRef.current.pathname,
-    previousGroupRef.current.group,
+  const [groupMemory, setGroupMemory] = useState({
     pathname,
-    groupForMotion,
-  );
-  previousGroupRef.current = { pathname, group: groupForMotion };
+    group: groupForMotion,
+    previousGroup: groupForMotion,
+  });
+  if (pathname !== groupMemory.pathname || groupForMotion !== groupMemory.group) {
+    setGroupMemory({
+      pathname,
+      group: groupForMotion,
+      previousGroup: routeScopedPreviousGroup(
+        groupMemory.pathname,
+        groupMemory.group,
+        pathname,
+        groupForMotion,
+      ),
+    });
+  }
+  const previousGroup = groupMemory.previousGroup;
   // 刻意只按路由作为 key。如果在这里加入平台，站点切换时会卸载并重建整个
   // 滚动子树 —— 网格、滚动容器，全部。保持外壳存活，
   // 查询缓存就能只替换路由内容。
@@ -411,13 +437,20 @@ export function Shell() {
     layout: "track",
     animateAcrossItems: true,
   });
-  const contentSwipe = isIptv ? iptvSourceSwipe : isVideo ? videoTabSwipe : sitePlatformSwipe;
+  const {
+    bindPage: contentSwipeBindPage,
+    onPointerDownCapture: contentSwipeOnPointerDownCapture,
+    onPointerMoveCapture: contentSwipeOnPointerMoveCapture,
+    onPointerUpCapture: contentSwipeOnPointerUpCapture,
+    onPointerCancelCapture: contentSwipeOnPointerCancelCapture,
+    onClickCapture: contentSwipeOnClickCapture,
+  } = isIptv ? iptvSourceSwipe : isVideo ? videoTabSwipe : sitePlatformSwipe;
   // `PagePan` 以 pathname 为 key，回到可滑动路由时 hook 会拿到全新的 track。
   // 通过 `bindPage` 绑定才能把它重新停靠到活动平台的偏移处 ——
   // 直接赋值 `pageRef` 会让新 track 保持未变换状态，
   // 把第一个之后的所有面板推到屏幕外，
   // 连页面的滚动容器一起带走。
-  const bindContentSwipePageRef = contentSwipe.bindPage;
+  const bindContentSwipePageRef = contentSwipeBindPage;
 
   // 滚动容器过去以 platform 为 key，站点切换会因为重建而顺带重置 scrollTop。
   // 既然现在它能存活，位置就改为显式管理：
@@ -433,9 +466,11 @@ export function Shell() {
     iptvFollowGroup,
   );
   // 由下方的 scroll 监听读取，监听器的寿命超过任何单次渲染。
-  // 在渲染期间幂等写入，使其永远不会落后于已提交的表面。
+  // latest-ref：提交后同步，使其永远不会落后于已提交的表面。
   const surfaceKeyRef = useRef(surfaceKey);
-  surfaceKeyRef.current = surfaceKey;
+  useLayoutEffect(() => {
+    surfaceKeyRef.current = surfaceKey;
+  });
   const pageScrollRef = useRef<HTMLDivElement | null>(null);
   const bindPageScrollRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) return;
@@ -722,7 +757,7 @@ export function Shell() {
     </div>
   );
   const routePanDirection = isDirectSidebarNavigation
-    ? sidebarDirectionRef.current
+    ? navMemory.sidebarDirection
     : tabDirection === "backward"
       ? -1
       : 1;
@@ -902,7 +937,11 @@ export function Shell() {
                   isImmersivePlayer ? "overflow-hidden p-0" : "overflow-hidden",
                 )}
                 data-horizontal-swipe-surface
-                {...bindSwipe(contentSwipe)}
+                onPointerDownCapture={contentSwipeOnPointerDownCapture}
+                onPointerMoveCapture={contentSwipeOnPointerMoveCapture}
+                onPointerUpCapture={contentSwipeOnPointerUpCapture}
+                onPointerCancelCapture={contentSwipeOnPointerCancelCapture}
+                onClickCapture={contentSwipeOnClickCapture}
               >
                 {isImmersivePlayer ? (
                   // PageZoom 进入后会清除它的合成提示。稳定下来的播放器因此没有

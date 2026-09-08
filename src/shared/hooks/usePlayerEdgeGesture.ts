@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type PointerEvent as ReactPointerEvent,
@@ -114,14 +115,17 @@ export function usePlayerEdgeGesture({
   );
 
   // 原生桥对象身份会随节流回读变化；处理器读 ref，避免拖动中重建回调。
+  // 渲染期不写 ref：提交后同步 latest 值，而读者全部在事件/效果里，时序等价。
   const nativeRef = useRef(native);
-  nativeRef.current = native;
   const nativeStateRef = useRef(nativeState);
-  nativeStateRef.current = nativeState;
   const volumeRef = useRef(volume);
-  volumeRef.current = volume;
   const mutedRef = useRef(muted);
-  mutedRef.current = muted;
+  useLayoutEffect(() => {
+    nativeRef.current = native;
+    nativeStateRef.current = nativeState;
+    volumeRef.current = volume;
+    mutedRef.current = muted;
+  });
   const nativeActive = native !== null;
 
   const clearFeedbackTimer = useCallback(() => {

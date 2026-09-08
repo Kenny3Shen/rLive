@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -723,7 +723,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<XgPlayerInstance | null>(null);
-  const playerInstanceIdRef = useRef<string | null>(null);
+  const [playerInstanceId] = useState(createPlayerInstanceId);
   const genRef = useRef(0);
   const mediaLifecycleVersionRef = useRef(0);
   const volumeRef = useRef(initialAudio.volume);
@@ -764,47 +764,39 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const [softFallbackToken, setSoftFallbackToken] = useState(0);
   const [activeSourceKey, setActiveSourceKey] = useState("");
 
-  if (playerInstanceIdRef.current === null) {
-    playerInstanceIdRef.current = createPlayerInstanceId();
-  }
-
   const ownsFullscreen = playerOwnsFullscreen(fullscreenOwner);
 
-  qualityRef.current = quality;
+  useLayoutEffect(() => {
+    qualityRef.current = quality;
+  }, [quality]);
 
   useEffect(() => {
     volumeRef.current = volume;
     mutedRef.current = muted;
   }, [muted, volume]);
 
-  const previousSessionKeyRef = useRef(sessionKey);
-  useEffect(() => {
-    if (previousSessionKeyRef.current === sessionKey) return;
-    previousSessionKeyRef.current = sessionKey;
-    if (!profile.resetAudioOnSessionChange) return;
-    volumeRef.current = initialAudio.volume;
-    mutedRef.current = initialAudio.muted;
-    setVolume(initialAudio.volume);
-    setMuted(initialAudio.muted);
-    setPrevVolume(initialAudio.previousVolume);
-  }, [
-    initialAudio.muted,
-    initialAudio.previousVolume,
-    initialAudio.volume,
-    profile.resetAudioOnSessionChange,
-    sessionKey,
-  ]);
+  const [previousSessionKey, setPreviousSessionKey] = useState(sessionKey);
+  if (previousSessionKey !== sessionKey) {
+    setPreviousSessionKey(sessionKey);
+    if (profile.resetAudioOnSessionChange) {
+      setVolume(initialAudio.volume);
+      setMuted(initialAudio.muted);
+      setPrevVolume(initialAudio.previousVolume);
+    }
+  }
 
   const onMediaFailureRef = useRef(onMediaFailure);
   const onReadyRef = useRef(onReady);
   const onWaitingRef = useRef(onWaiting);
   const onPauseRef = useRef(onPause);
   const onPlayingRef = useRef(onPlaying);
-  onMediaFailureRef.current = onMediaFailure;
-  onReadyRef.current = onReady;
-  onWaitingRef.current = onWaiting;
-  onPauseRef.current = onPause;
-  onPlayingRef.current = onPlaying;
+  useLayoutEffect(() => {
+    onMediaFailureRef.current = onMediaFailure;
+    onReadyRef.current = onReady;
+    onWaitingRef.current = onWaiting;
+    onPauseRef.current = onPause;
+    onPlayingRef.current = onPlaying;
+  }, [onMediaFailure, onReady, onWaiting, onPause, onPlaying]);
 
   const destroyPlayer = useCallback(() => {
     // PiP 请求是异步的。在这里自增版本使其续体检测到房间切换并关闭过期的原生窗口。
@@ -864,33 +856,35 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     () => playbackSourceFromKey(playbackSourceKey),
     [playbackSourceKey],
   );
-  const retainedPlaybackSourceRef = useRef<{
+  const [retainedPlaybackSource, setRetainedPlaybackSource] = useState<{
     roomKey: string;
     sourceKey: string;
     source: PlayUrl;
   } | null>(null);
-  if (retainedPlaybackSourceRef.current?.roomKey !== sessionKey) {
-    retainedPlaybackSourceRef.current = null;
-  }
   if (playbackSource) {
-    retainedPlaybackSourceRef.current = {
-      roomKey: sessionKey,
-      sourceKey: playbackSourceKey,
-      source: playbackSource,
-    };
-  } else if (!profile.retainSourceDuringGap) {
-    retainedPlaybackSourceRef.current = null;
+    if (
+      retainedPlaybackSource?.roomKey !== sessionKey ||
+      retainedPlaybackSource.sourceKey !== playbackSourceKey
+    ) {
+      setRetainedPlaybackSource({
+        roomKey: sessionKey,
+        sourceKey: playbackSourceKey,
+        source: playbackSource,
+      });
+    }
+  } else if (
+    retainedPlaybackSource &&
+    (retainedPlaybackSource.roomKey !== sessionKey || !profile.retainSourceDuringGap)
+  ) {
+    setRetainedPlaybackSource(null);
   }
-  // 画质查询期间控制器可能短暂没有地址。保持活动来源存活，
-  // 使软切换不会在替代元数据加载时引入黑帧。
-  const effectivePlaybackSource =
-    playbackSource ??
-    (profile.retainSourceDuringGap ? retainedPlaybackSourceRef.current?.source : null) ??
-    null;
-  const effectivePlaybackSourceKey =
-    playbackSourceKey ||
-    (profile.retainSourceDuringGap ? retainedPlaybackSourceRef.current?.sourceKey : "") ||
-    "";
+  // 来源记忆只在同一房间生效；查询间隙保活，切房绝不回退到旧房间的地址。
+  const retainedSource =
+    profile.retainSourceDuringGap && retainedPlaybackSource?.roomKey === sessionKey
+      ? retainedPlaybackSource
+      : null;
+  const effectivePlaybackSource = playbackSource ?? retainedSource?.source ?? null;
+  const effectivePlaybackSourceKey = playbackSourceKey || retainedSource?.sourceKey || "";
   const effectivePlaybackKind = effectivePlaybackSource
     ? webPlaybackKind(effectivePlaybackSource)
     : null;
@@ -899,7 +893,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     effectivePlaybackKind,
   );
   const effectivePlaybackSourceRef = useRef<PlayUrl | null>(effectivePlaybackSource);
-  effectivePlaybackSourceRef.current = effectivePlaybackSource;
+  useLayoutEffect(() => {
+    effectivePlaybackSourceRef.current = effectivePlaybackSource;
+  }, [effectivePlaybackSource]);
   const hardStreamKey = softSwitchEnabled
     ? `${sessionKey}::${effectivePlaybackKind ?? "none"}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`
     : `${streamKey}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`;
@@ -908,7 +904,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   useEffect(() => {
     let cancelled = false;
     const gen = ++genRef.current;
-    const proxySessionId = `${playerInstanceIdRef.current}:${gen}`;
+    const proxySessionId = `${playerInstanceId}:${gen}`;
     let playbackSource = effectivePlaybackSourceRef.current;
     let sourceKey = playUrlKey(playbackSource);
 
@@ -924,6 +920,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
 
     if (!playbackSource) {
+      // 空来源时同步拆除媒体及代理，避免继续播放上一条流。
+      // oxlint-disable-next-line react/set-state-in-effect
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
       setLoadError(null);
@@ -1363,7 +1361,16 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
-  }, [hardStreamKey, reloadToken, destroyPlayer, liveSyncHold, mobileClient, profile, siteId]);
+  }, [
+    hardStreamKey,
+    reloadToken,
+    destroyPlayer,
+    liveSyncHold,
+    mobileClient,
+    playerInstanceId,
+    profile,
+    siteId,
+  ]);
 
   // 同协议的来源变化可以保留媒体元素与 MSE 状态。各直播 CDN 的时间戳连续性并不
   // 统一，任何初始化/切换失败都会自增硬 key 并干净重建。
@@ -1798,6 +1805,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
   useEffect(() => {
     if (!ownsFullscreen) {
+      // 全屏所有权属于原生窗口，失去所有权需同步撤销页面固定层。
+      // oxlint-disable-next-line react/set-state-in-effect
       setMode("windowed");
       // 全屏中途失去所有权（次要播放器接管）会撤掉页面内固定层，
       // 它隐藏的系统栏必须随之恢复。

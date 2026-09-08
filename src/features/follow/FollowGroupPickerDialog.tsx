@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderPlus, Heart, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -76,12 +76,16 @@ export function FollowGroupPickerDialog({
     onError: () => setError("分组创建失败，请检查名称是否重复。"),
   });
 
-  useEffect(() => {
-    if (!open) return;
-    setSelectedGroupId(UNGROUPED_FOLLOW_GROUP_ID);
-    setNewGroupName("");
-    setError(null);
-  }, [open, subjectName]);
+  // 对话框打开或对象主体变化时复位表单：渲染期调整模式。
+  const [prevPickerTarget, setPrevPickerTarget] = useState({ open, subjectName });
+  if (open !== prevPickerTarget.open || subjectName !== prevPickerTarget.subjectName) {
+    setPrevPickerTarget({ open, subjectName });
+    if (open) {
+      setSelectedGroupId(UNGROUPED_FOLLOW_GROUP_ID);
+      setNewGroupName("");
+      setError(null);
+    }
+  }
 
   function createGroup() {
     const name = newGroupName.trim();

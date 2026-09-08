@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,7 +78,12 @@ function NumberSettingField({
   const [draft, setDraft] = useState(String(value));
   const skipNextBlurCommit = useRef(false);
 
-  useEffect(() => setDraft(String(value)), [value]);
+  // 外部值变化时同步草稿：渲染期调整模式。
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setDraft(String(value));
+  }
 
   function commit() {
     if (skipNextBlurCommit.current) {
@@ -147,7 +152,12 @@ function CompactNumberInput({
   const [draft, setDraft] = useState(String(value));
   const skipNextBlurCommit = useRef(false);
 
-  useEffect(() => setDraft(String(value)), [value]);
+  // 外部值变化时同步草稿：渲染期调整模式。
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setDraft(String(value));
+  }
 
   function commit() {
     if (skipNextBlurCommit.current) {
@@ -200,8 +210,18 @@ export function RecordingAssSettingsFields() {
   const [shieldDraft, setShieldDraft] = useState(settings.shield_rules.join("\n"));
   const skipFontBlurCommit = useRef(false);
 
-  useEffect(() => setFontDraft(settings.font_name), [settings.font_name]);
-  useEffect(() => setShieldDraft(settings.shield_rules.join("\n")), [settings.shield_rules]);
+  // 外部设置变化时同步草稿：渲染期调整模式。shield_rules 按数组身份比较，
+  // 新数组即新规则集。
+  const [prevFontName, setPrevFontName] = useState(settings.font_name);
+  if (settings.font_name !== prevFontName) {
+    setPrevFontName(settings.font_name);
+    setFontDraft(settings.font_name);
+  }
+  const [prevShieldRules, setPrevShieldRules] = useState(settings.shield_rules);
+  if (settings.shield_rules !== prevShieldRules) {
+    setPrevShieldRules(settings.shield_rules);
+    setShieldDraft(settings.shield_rules.join("\n"));
+  }
 
   function commitFont() {
     if (skipFontBlurCommit.current) {

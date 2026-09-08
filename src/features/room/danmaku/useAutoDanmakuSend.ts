@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { SiteId } from "@/shared/types/live";
@@ -99,19 +99,16 @@ export function useAutoDanmakuSend({
   const [phase, setPhase] = useState<AutoDanmakuSendPhase>("off");
   const [statusMessage, setStatusMessage] = useState("已关闭。");
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState<number | null>(null);
-  const [availability, setAvailability] = useState<AvailabilitySnapshot | null>(null);
+  const [availabilityCache, setAvailabilityCache] = useState<AvailabilitySnapshot | null>(null);
   const inFlightRef = useRef(false);
   const inFlightDoneRef = useRef<Promise<void> | null>(null);
   const lastSendStartedAtRef = useRef<number | null>(null);
   const intervalMsRef = useRef(AUTO_DANMAKU_SEND_INTERVAL_MS);
   const rescheduleIntervalRef = useRef<((intervalMs: number) => void) | null>(null);
-  intervalMsRef.current = intervalSeconds * 1_000;
 
   const roomKey = roomSessionKey ?? `${siteId ?? "unknown"}:${roomId ?? ""}`;
   const latestRoomKeyRef = useRef(roomKey);
-  latestRoomKeyRef.current = roomKey;
   const latestRoomMetadataRef = useRef({ roomTitle, roomUserName });
-  latestRoomMetadataRef.current = { roomTitle, roomUserName };
 
   const availabilityKey = [
     siteId ?? "",
@@ -121,7 +118,13 @@ export function useAutoDanmakuSend({
     danmakuSendPending ? "pending" : "ready",
     String(danmakuCookieRevision),
   ].join("\u0000");
-  const currentAvailability = availability?.key === availabilityKey ? availability.status : null;
+  const [previousAvailabilityKey, setPreviousAvailabilityKey] = useState(availabilityKey);
+  if (previousAvailabilityKey !== availabilityKey) {
+    setPreviousAvailabilityKey(availabilityKey);
+    setAvailabilityCache(null);
+  }
+  const currentAvailability =
+    availabilityCache?.key === availabilityKey ? availabilityCache.status : null;
   const validation = useMemo(
     () => splitAutoDanmakuText(text, sendConfig?.maxLength ?? Number.MAX_SAFE_INTEGER),
     [sendConfig?.maxLength, text],
@@ -137,26 +140,32 @@ export function useAutoDanmakuSend({
     enabled ? "enabled" : "disabled",
   ].join("\u0000");
   const latestRunKeyRef = useRef(runKey);
-  latestRunKeyRef.current = runKey;
+  // 外部发送只跟随已提交的会话；在被动 effect 清理旧计时器前先更新围栏。
+  // 被中断、未提交的渲染不改变正在显示的会话。
+  useLayoutEffect(() => {
+    intervalMsRef.current = intervalSeconds * 1_000;
+    latestRoomKeyRef.current = roomKey;
+    latestRoomMetadataRef.current = { roomTitle, roomUserName };
+    latestRunKeyRef.current = runKey;
+  });
 
   useEffect(() => {
     let cancelled = false;
 
     if (!sendConfig || !roomId || danmakuSendPending || !danmakuSendEnabled) {
-      setAvailability(null);
+      // 前提条件缺失时无需清缓存：渲染层按 key 派生会自动回退到“未检查”。
       return () => {
         cancelled = true;
       };
     }
 
-    setAvailability(null);
     void invokeCmd<DanmakuSendStatus>(sendConfig.statusCommand)
       .then((status) => {
-        if (!cancelled) setAvailability({ key: availabilityKey, status });
+        if (!cancelled) setAvailabilityCache({ key: availabilityKey, status });
       })
       .catch(() => {
         if (!cancelled) {
-          setAvailability({
+          setAvailabilityCache({
             key: availabilityKey,
             status: {
               send_enabled: false,
@@ -192,28 +201,31 @@ export function useAutoDanmakuSend({
   );
 
   // 路由切换可能复用 PlayerPane。防止直接切换房间把会话开关带进新挂载的房间。
-  const previousRoomKeyRef = useRef(roomKey);
-  useEffect(() => {
-    if (previousRoomKeyRef.current === roomKey) return;
-    previousRoomKeyRef.current = roomKey;
+  // React 官方的渲染期调整模式：key 变化当次渲染即重置会话状态。
+  const [prevRoomKey, setPrevRoomKey] = useState(roomKey);
+  if (roomKey !== prevRoomKey) {
+    setPrevRoomKey(roomKey);
     setText("");
     setIntervalSeconds(AUTO_DANMAKU_SEND_DEFAULT_INTERVAL_SECONDS);
     setEnabled(false);
     setPhase("paused");
     setCurrentSegmentIndex(null);
-    lastSendStartedAtRef.current = null;
     setStatusMessage("已暂停：已切换直播间。");
+  }
+  // 换房后首段发送的冷启动间隔在提交后重置（渲染期不写 ref）。
+  useLayoutEffect(() => {
+    lastSendStartedAtRef.current = null;
   }, [roomKey]);
 
   // 凭据、共享授权开关与本地文本校验都是实时前提条件。失去任何一项就停止序列，
-  // 而不是让过期计时器在下一次渲染之后仍提交请求。
-  useEffect(() => {
-    if (!enabled || canEnable) return;
+  // 而不是让过期计时器在下一次渲染之后仍提交请求。渲染期调整：条件不满足的当次
+  // 渲染立即暂停，无需额外一次提交。
+  if (enabled && !canEnable) {
     setEnabled(false);
     setPhase("paused");
     setCurrentSegmentIndex(null);
     setStatusMessage(`已暂停：${validation.error ?? availabilityMessage}`);
-  }, [availabilityMessage, canEnable, enabled, validation.error]);
+  }
 
   useEffect(() => {
     if (!enabled || !canEnable || !sendConfig || !roomId || validation.segments.length === 0) {
@@ -362,6 +374,9 @@ export function useAutoDanmakuSend({
       monotonicNow(),
       intervalMs,
     );
+    // 序列启动编排：本 effect 的职责是调度计时器与后续 IPC 发送（外部系统），
+    // 这里的同步状态写入标记阶段转换，无法在渲染期派生。
+    // oxlint-disable-next-line react/set-state-in-effect
     setPhase("waiting");
     setCurrentSegmentIndex(0);
     setStatusMessage(

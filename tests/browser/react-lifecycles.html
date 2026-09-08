@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>React 生命周期回归</title>
+    <link rel="icon" type="image/svg+xml" href="/rlive.svg" />
+  </head>
+  <body>
+    <div id="fixture"></div>
+    <pre id="result">正在运行</pre>
+    <script type="module">
+      import { runReactLifecycleRegressions } from "./react-lifecycles.tsx";
+      const result = document.getElementById("result");
+      try {
+        const passed = await runReactLifecycleRegressions(document.getElementById("fixture"));
+        result.textContent = JSON.stringify({ passed }, null, 2);
+        result.dataset.status = "passed";
+      } catch (error) {
+        result.textContent = String(error.stack || error);
+        result.dataset.status = "failed";
+        console.error(error);
+      }
+    </script>
+  </body>
+</html>

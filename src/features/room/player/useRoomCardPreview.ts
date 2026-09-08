@@ -63,7 +63,9 @@ export function useCardPreview(
   );
 
   // 关掉开关或卡片被虚拟化移除时立刻释放预览(本机代理会话/取流请求)。
+  // 外部资源释放：stop 回收代理会话与取流请求，需在提交后立即执行。
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
     if (!enabled) stop();
     return stop;
   }, [enabled, stop]);

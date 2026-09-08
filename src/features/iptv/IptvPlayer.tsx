@@ -1,3 +1,4 @@
+import { usePlayerChromeVisibility } from "@/shared/hooks/usePlayerChromeVisibility";
 import {
   useCallback,
   useEffect,
@@ -223,6 +224,7 @@ export function IptvPlayer({
     onPlaying: handlePlaying,
     profile: IPTV_MEDIA_LIFECYCLE_PROFILE,
   });
+  const { videoRef: playerVideoRef, stageRef: playerStageRef, playerRootRef } = player;
   const fullscreen = player.mode === "fullscreen";
   const { exitFullscreen, exitPictureInPicture, toggleFullscreen, toggleMute, togglePause } =
     player;
@@ -284,7 +286,7 @@ export function IptvPlayer({
   // 语音字幕与直播页共用同一条 ASR 管线；sessionKey 与媒体生命周期一致，
   // 换台即换流，识别状态随之清空。
   const asr = useAsrCaptions({
-    videoRef: player.videoRef,
+    videoRef: playerVideoRef,
     mediaKey: player.mediaKey,
     sessionKey: channelId ? `iptv:${channelId}` : "iptv:none",
     featureEnabled: asrEnabled,
@@ -310,23 +312,24 @@ export function IptvPlayer({
     return () => window.removeEventListener("keydown", exitOnEscape);
   }, [fullscreen, onWebFullscreenChange, webFullscreen]);
 
-  useEffect(() => {
-    clearRetryTimer();
-    retryAttemptRef.current = 0;
+  usePlayerChromeVisibility({ controlsRef, hudRef, visibleRef: controlsVisibleRef });
+  const [previousSession, setPreviousSession] = useState({ channelId, channelUrl, reloadToken });
+  if (
+    previousSession.channelId !== channelId ||
+    previousSession.channelUrl !== channelUrl ||
+    previousSession.reloadToken !== reloadToken
+  ) {
+    setPreviousSession({ channelId, channelUrl, reloadToken });
     setTransportEnabled(true);
     setError(null);
     setStatus(channelId ? "connecting" : "idle");
-  }, [channelId, channelUrl, clearRetryTimer]);
+  }
 
-  // 手动刷新拥有全新的 IPTV 重试预算。自动重试只递增 reconnectToken，
-  // 因而保留其有界的尝试次数。
+  // 换台和手动刷新重置重试预算；自动重试只递增 reconnectToken。
   useEffect(() => {
     clearRetryTimer();
     retryAttemptRef.current = 0;
-    setTransportEnabled(true);
-    setError(null);
-    if (channelId) setStatus("connecting");
-  }, [channelId, clearRetryTimer, reloadToken]);
+  }, [channelId, channelUrl, clearRetryTimer, reloadToken]);
 
   useEffect(() => clearRetryTimer, [clearRetryTimer]);
 
@@ -450,7 +453,7 @@ export function IptvPlayer({
       )}
     >
       <div
-        ref={player.stageRef}
+        ref={playerStageRef}
         data-player-stage
         data-iptv-player-stage
         data-fullscreen={fullscreen ? "true" : undefined}
@@ -475,7 +478,7 @@ export function IptvPlayer({
         }}
       >
         <div
-          ref={player.playerRootRef}
+          ref={playerRootRef}
           data-player-engine-root
           aria-hidden={audioOnly}
           className={cn(
@@ -485,7 +488,7 @@ export function IptvPlayer({
         >
           <video
             key={player.mediaKey}
-            ref={player.videoRef}
+            ref={playerVideoRef}
             data-player-video
             playsInline
             tabIndex={-1}
@@ -568,8 +571,8 @@ export function IptvPlayer({
           <div
             ref={hudRef}
             data-player-hud
-            data-visible={controlsVisibleRef.current ? "true" : "false"}
-            aria-hidden={!controlsVisibleRef.current}
+            data-visible="true"
+            aria-hidden={false}
             className={cn(
               // 与直播/视频播放页同一画法：悬浮于顶边不占布局高度，
               // 与底部控制栏共享同一个空闲淡出。
@@ -678,7 +681,7 @@ export function IptvPlayer({
             disabled={!channel || !player.mediaAvailable || status === "error"}
             stackedBelowPlayer
             compact={compactViewport}
-            portalContainer={player.stageRef}
+            portalContainer={playerStageRef}
             onOverlayInteractionChange={handleControlsInteractionChange}
             refreshDisabled={!channel || status === "connecting"}
             loadError={player.fullscreenError}

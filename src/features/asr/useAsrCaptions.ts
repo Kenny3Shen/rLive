@@ -133,6 +133,9 @@ export function useAsrCaptions(options: {
   }, [clearCaptionTimer, enqueueTranslation]);
 
   useEffect(() => {
+    /* 功能或模型不可用时整条字幕管线复位。外部会话编排：epoch 栅栏与计时器
+       清理必须与状态写入原子地同步发生，以围栏在途识别任务。 */
+    /* oxlint-disable react/set-state-in-effect */
     if (!options.featureEnabled || !model.supported) {
       setCaptionsOn(false);
       setCaption(null);
@@ -143,9 +146,13 @@ export function useAsrCaptions(options: {
       epochRef.current += 1;
       clearCaptionTimer();
     }
+    /* oxlint-enable react/set-state-in-effect */
   }, [clearCaptionTimer, model.supported, options.featureEnabled]);
 
+  // 切房间或换媒体元素时清空流式解码状态。外部会话编排：包含 asr_reset_stream
+  // IPC 与 epoch 栅栏，状态写入与其同步发生。
   useEffect(() => {
+    /* oxlint-disable react/set-state-in-effect */
     setCaption(null);
     setPartial(null);
     setNotice(null);
@@ -154,6 +161,7 @@ export function useAsrCaptions(options: {
     epochRef.current += 1;
     chunkSetterRef.current = null;
     clearCaptionTimer();
+    /* oxlint-enable react/set-state-in-effect */
     // 流式解码跨窗口保持状态，因此切换房间或媒体元素时必须清空它，
     // 否则下一条字幕会从上一条语句中间继续。
     if (model.supported) void invokeCmd("asr_reset_stream").catch(() => {});

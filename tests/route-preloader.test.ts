@@ -78,7 +78,12 @@ describe("路由空闲预加载生命周期", () => {
   test("首屏加载完成并经过延迟后才在空闲时加载模块", async () => {
     const env = preloadEnvironment({ complete: false });
     let calls = 0;
-    const stop = env.start([async () => { calls += 1; return loadedModule; }]);
+    const stop = env.start([
+      async () => {
+        calls += 1;
+        return loadedModule;
+      },
+    ]);
     expect(env.timers.size).toBe(0);
     env.finishLoad();
     expect([...env.timers.values()].map((timer) => timer.delay)).toEqual([
@@ -112,10 +117,12 @@ describe("路由空闲预加载生命周期", () => {
   test("后台取消空闲回调，恢复时不跳过尚未加载的模块", async () => {
     const env = preloadEnvironment();
     const calls: number[] = [];
-    const stop = env.start([1, 2].map((id) => async () => {
-      calls.push(id);
-      return loadedModule;
-    }));
+    const stop = env.start(
+      [1, 2].map((id) => async () => {
+        calls.push(id);
+        return loadedModule;
+      }),
+    );
     env.runTimer();
     env.setHidden(true);
     expect(env.idleCallbacks.size).toBe(0);
@@ -134,10 +141,15 @@ describe("路由空闲预加载生命周期", () => {
     const env = preloadEnvironment();
     let resolveFirst!: (value: LazyRouteModule) => void;
     let secondCalls = 0;
-    const first = new Promise<LazyRouteModule>((resolve) => { resolveFirst = resolve; });
+    const first = new Promise<LazyRouteModule>((resolve) => {
+      resolveFirst = resolve;
+    });
     const stop = env.start([
       () => first,
-      async () => { secondCalls += 1; return loadedModule; },
+      async () => {
+        secondCalls += 1;
+        return loadedModule;
+      },
     ]);
     env.runTimer();
     env.runIdle();
@@ -160,7 +172,12 @@ describe("路由空闲预加载生命周期", () => {
   test("没有空闲 API 时仍会取消后台的回退定时器", async () => {
     const env = preloadEnvironment({ idle: false });
     let calls = 0;
-    const stop = env.start([async () => { calls += 1; return loadedModule; }]);
+    const stop = env.start([
+      async () => {
+        calls += 1;
+        return loadedModule;
+      },
+    ]);
     env.runTimer();
     expect(env.timers.size).toBe(1);
     env.setHidden(true);
@@ -175,9 +192,13 @@ describe("路由空闲预加载生命周期", () => {
   test("失败后继续预加载，清理后异步完成和可见性事件都不再排任务", async () => {
     const env = preloadEnvironment();
     let resolveLast!: (value: LazyRouteModule) => void;
-    const last = new Promise<LazyRouteModule>((resolve) => { resolveLast = resolve; });
+    const last = new Promise<LazyRouteModule>((resolve) => {
+      resolveLast = resolve;
+    });
     const stop = env.start([
-      () => { throw new Error("模块加载失败"); },
+      () => {
+        throw new Error("模块加载失败");
+      },
       () => last,
       async () => loadedModule,
     ]);
