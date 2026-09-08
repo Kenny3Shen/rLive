@@ -6,6 +6,7 @@ import {
   horizontalSwipeCommitOffset,
   horizontalSwipeDragOffset,
   horizontalSwipeProgress,
+  horizontalSwipeRetainedItems,
   horizontalSwipeSettleDuration,
   horizontalSwipeShouldCommit,
   horizontalSwipeTargetIndex,
@@ -134,6 +135,33 @@ describe("horizontal tab swipe", () => {
     expect(horizontalSwipeCommitOffset(-144, 1, 360)).toBe(216);
     expect(horizontalSwipeCommitOffset(144, -1, 360)).toBe(-216);
     expect(horizontalSwipeCommitOffset(0, 1, 360)).toBe(360);
+  });
+
+  test("retains visible source panels across rapid tab changes", () => {
+    const items = ["a", "b", "c", "d", "e"];
+    const initial = horizontalSwipeRetainedItems(items, "a", []);
+    expect(initial).toEqual(["a", "b"]);
+    const next = horizontalSwipeRetainedItems(items, "b", initial);
+    expect(next).toEqual(["a", "b", "c"]);
+    // b 还没入场完毕就切到 c，a 仍可能在屏内，不能提前卸载。
+    expect(horizontalSwipeRetainedItems(items, "c", next)).toEqual(["a", "b", "c", "d"]);
+    expect(horizontalSwipeRetainedItems(items, "b", next)).toEqual(next);
+  });
+
+  test("mounts intermediate panels before a non-adjacent transition", () => {
+    const items = ["a", "b", "c", "d", "e"];
+    expect(horizontalSwipeRetainedItems(items, "e", ["a", "b"])).toEqual(items);
+    expect(horizontalSwipeRetainedItems(items, "a", ["d", "e"])).toEqual(items);
+  });
+
+  test("drops disabled platforms and resets retention for a new route", () => {
+    expect(horizontalSwipeRetainedItems(["a", "c", "d"], "c", ["a", "b", "c"])).toEqual([
+      "a",
+      "c",
+      "d",
+    ]);
+    expect(horizontalSwipeRetainedItems(["a", "b", "c", "d"], "d", [])).toEqual(["c", "d"]);
+    expect(horizontalSwipeRetainedItems(["a", "b"], "missing", [])).toEqual([]);
   });
 
   test("positions a mounted track at each full-width page", () => {

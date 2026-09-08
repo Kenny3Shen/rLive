@@ -89,8 +89,8 @@ function GridSkeleton() {
  */
 export function VideoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const scopedTab = useVideoTabScope();
-  const tab = scopedTab ?? videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
+  const scope = useVideoTabScope();
+  const tab = scope?.tab ?? videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
 
   // UGC 分区表由后端提供以免前端硬编码 rid。只有热门页签的条带用得上它。
   const zonesQuery = useQuery({
@@ -101,7 +101,11 @@ export function VideoPage() {
   });
   const ugcZones = zonesQuery.data ?? EMPTY_ZONES;
   const chips = useMemo(() => videoZoneChips(tab, ugcZones), [tab, ugcZones]);
-  const zoneKey = resolveVideoZoneKey(tab, searchParams.get(VIDEO_ZONE_PARAM), chips);
+  const zoneKey = resolveVideoZoneKey(
+    tab,
+    scope ? scope.zone : searchParams.get(VIDEO_ZONE_PARAM),
+    chips,
+  );
 
   const listQuery = useInfiniteQuery({
     queryKey: ["video_list", tab, zoneKey ?? ""],

@@ -126,7 +126,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - 动画完成后先用 `commitStyles()` 固定旧页离屏最终位置，再同步卸载旧 subtree；不能先 cancel Animation 再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
 - 直接侧栏导航时 `RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移。
 
-`Shell` 当前映射：桌面侧栏点击按侧栏项目顺序纵向平移；移动端底部导航、浏览器前进后退（按 history index 定方向）、首页平台切换、IPTV 源切换、关注页 IPTV 分组切换均为横向平移；关注页「直播关注 / IPTV 频道」在移动端由 `useHorizontalSwipe` 驱动两个常挂载面板 track、桌面用局部补间做短距离淡入平移；设置页一级与二级共用 `PagePan`（进入分类时一级左退、二级右进，返回反转），每层在内容层内独立纵向滚动。不属于上述来源的普通内容更新直接替换，不自动加整页动画。
+`Shell` 当前映射：桌面侧栏点击按项目顺序纵向平移，桌面浏览器前进后退按 history index 横向平移；移动端主导航与前进后退直接换页。直播平台与视频四页签在两端共用保活 track，关注与历史页签也由各自的 track 驱动。IPTV 来源只由 `useHorizontalSwipe` 的单页位移处理，父级 `PagePan` 保持固定 key，避免双重平移和离场子树读取新来源。录制库保留原有的直接筛选，不添加整页动画。关注页 IPTV 分组与设置页一级/二级切换继续使用 `PagePan`，其他普通内容更新直接替换。
 
 ### 4.4 `PageZoom`：沉浸式播放页进出
 
@@ -155,11 +155,24 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 实现约束：
 
 - 跟手阶段直接在 pointermove 中写 `transform`，不合并到 `requestAnimationFrame`（合并会让每帧绘制上一帧的手指位置，就是「不跟手」的观感）。释放后由 Web Animations 接管剩余位移，不用 JS 补间：翻页会触发 React 提交，rAF ticker 与之争抢主线程会吞掉收尾帧。收尾动画必须在通知 React 之前启动，顺序不能颠倒。
-- `layout` 只有两种：`track` 按**绝对索引**把所有挂载页排在 `index × width`、整层平移到 `-活动索引 × width`（提交时无页需要位移，用于 Shell 移动端平台切换、关注页与历史页双 Tab、房间侧栏 Tab）；`page` 只承载当前一页，提交时先按 `horizontalSwipeCommitOffset` 重基到一屏外再滑入 `0`，供相邻页未挂载的条带使用。`track` 宽度取移动层父元素 `clientWidth`，因此点击 Tab 触发的切换首次交互即可动画。
+- `layout` 只有两种：`track` 按**绝对索引**把已挂载页排在 `index × width`、整层平移到 `-活动索引 × width`（用于直播平台、视频、关注、历史和房间侧栏）；`page` 只承载当前一页，提交时按 `horizontalSwipeCommitOffset` 重基到一屏外再滑入 `0`，供相邻页未挂载的 IPTV 来源等条带使用。`track` 的视口宽度取父元素 `clientWidth`，每个面板独立裁剪，Shell 的 track 面板预留稳定的滚动条槽位。
+- 视频四个面板常挂载；直播平台先挂载当前页与邻居，已经挂载的面板保留到离开当前路由，隐藏平台仍会被移除。连续点击时不能提前删除仍在屏内的上一页。视频面板同时固定页签与其最后活动时的分区，离场时不跟随新 URL 更换列表。
+- 点击通过 `selectValue` 先启动已挂载相邻页的轨道动画，再通知路由；提交到达后不重启动画。视频、直播平台和历史允许跨多项平移：视频/历史的面板已常挂载，直播跨项时先补齐途经面板再启动动画；未保证中间页存在的调用方默认直接落位。连续点击和反向切换均从当前合成位置接管，待提交时点回原页也必须通知路由取消旧请求。
+- `ResizeObserver` 只在视口宽度实际变化时重新停靠，初次通知、列表增高或高度变化不能取消横向动画；导航未提交时按待提交目标定位，不能跳回旧页。节点重绑和路由卸载要清理旧动画、延迟通知及回滚计时器。
 - 中途抓住正在收尾的页面时从其当前实际像素位置（`DOMMatrixReadOnly`）接管，不回跳。相邻平台页为无缝预览保持挂载，但用 layout/paint/style containment 隔离；完全离屏页的 CSS animation 暂停。
 - Slider、Input、Textarea、Select、可编辑区域与 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管；已识别 swipe 后短暂抑制合成 click。
-- 开始新手势、禁用 hook 或卸载时必须取消在飞 Animation、清兜底定时器并清除 transform / `will-change`；取消收尾动画前先把当前像素位置写回 inline style。
+- 手势禁用时终止在途手势；`enabled: false` 只关闭触摸，仍允许桌面点击动画。取消收尾动画前先把当前像素位置写回 inline style，结束或卸载后清理 Animation 与 `will-change`。
 - 移动层的 `transform` 会让它成为 `position: fixed` 后代的包含块：`track` 连静止时都带着 `translate3d(-活动索引 × width, 0, 0)`，落在其中的固定定位层会被整层平移（RefreshFab 曾随内容滚走，关注页 dnd-kit `DragOverlay` 曾偏移一个 track 左上角）。这类层必须 `createPortal` 到 `document.body`，不能只靠 `position: fixed`。
+
+Windows Debug 回归按[开发指南](开发指南.md#桌面端实机调试)接入真实主窗口后运行，不需要创建浏览器标签或构建 release：
+
+```bash
+playwright-cli -s=tab-fix attach --cdp=http://127.0.0.1:9223
+playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-motion.browser.js
+playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser.js
+```
+
+前者在独立临时 React root 上验证真实 hook 的生命周期，结束后自动清理；后者切换真实的视频、直播平台、历史、关注和 IPTV 页签，检查逐帧面板覆盖、即时启动和最终落位，并把截图写入 `.playwright-cli/windows-*-tabs.png`。保活窗口的纯函数回归位于 `tests/horizontal-swipe.test.ts`。
 
 ### 4.6 `useLongPress`：触摸长按
 
