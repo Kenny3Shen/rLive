@@ -1014,7 +1014,7 @@ export function VideoSidebar({
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
-  // 简介折叠态：换稿件时由 UP 信息卡 section 上的 key={bvid} 重挂载复位。
+  // 简介默认收起（卡片不先露出简介）；换稿件时由 UP 信息卡 section 上的 key={bvid} 重挂载复位。
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   // 稿件详情：UGC 的评论区 oid 兜底 + 相关视频页签顶部的作者/统计信息。
@@ -1131,7 +1131,7 @@ export function VideoSidebar({
               >
                 <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
                   {/* 右侧 pr-16 是预留位（关注/更多之类的操作），只留在头像+名称行， */}
-                  {/* 不影响下方播放/评论/发布时间那一行的可用宽度。 */}
+                  {/* 不影响下方播放/评论/发布时间与简介开关那一行的可用宽度。 */}
                   <div className="flex min-w-0 items-start gap-2.5 pr-16">
                     <button
                       type="button"
@@ -1184,63 +1184,59 @@ export function VideoSidebar({
                       </div>
                     </div>
                   </div>
-                  <dl className="mt-1.5 flex min-w-0 items-center text-xs leading-4">
-                    <div
-                      className="flex min-w-0 items-center gap-1"
-                      title={`播放：${formatOnline(archive.view)}`}
-                    >
-                      <dt className="sr-only">播放</dt>
-                      <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
-                      <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
-                        {formatOnline(archive.view)}
-                      </dd>
-                    </div>
-                    <div
-                      className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
-                      title={`评论：${formatOnline(archive.reply)}`}
-                    >
-                      <dt className="sr-only">评论</dt>
-                      <MessageSquareText
-                        aria-hidden
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                      />
-                      <dd className="font-semibold leading-4 tracking-normal tabular-nums">
-                        {formatOnline(archive.reply)}
-                      </dd>
-                    </div>
-                    {archive.pubdate > 0 && (
+                  {/* 统计行与简介开关同排：侧栏（lg 320 / xl 340）下统计三项与图标开关的
+                      开关单行放下；flex-wrap 兜底字体缩放与超长数值（发布时间换行而非
+                      截断），发布时间组因此不加 border-l，避免换行后出现孤立竖线。 */}
+                  <div className="mt-1.5 flex min-w-0 items-center gap-1">
+                    <dl className="flex min-w-0 flex-1 flex-wrap items-center gap-y-0.5 text-xs leading-4">
                       <div
-                        className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5 text-muted-foreground"
-                        title="视频发布时间"
+                        className="flex min-w-0 items-center gap-1"
+                        title={`播放：${formatOnline(archive.view)}`}
                       >
-                        <dt className="sr-only">发布时间</dt>
-                        <CalendarDays aria-hidden className="size-3.5 shrink-0" />
-                        <dd className="leading-4 tabular-nums">
-                          {formatDateTime(archive.pubdate)}
+                        <dt className="sr-only">播放</dt>
+                        <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
+                        <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
+                          {formatOnline(archive.view)}
                         </dd>
                       </div>
-                    )}
-                  </dl>
-                  {archive.desc && (
-                    <div className="mt-2">
-                      <p
-                        id="video-description"
-                        className={cn(
-                          "whitespace-pre-line text-xs leading-relaxed text-muted-foreground",
-                          !descriptionExpanded && "line-clamp-2",
-                        )}
+                      <div
+                        className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
+                        title={`评论：${formatOnline(archive.reply)}`}
                       >
-                        <LinkText text={archive.desc} />
-                      </p>
+                        <dt className="sr-only">评论</dt>
+                        <MessageSquareText
+                          aria-hidden
+                          className="size-3.5 shrink-0 text-muted-foreground"
+                        />
+                        <dd className="font-semibold leading-4 tracking-normal tabular-nums">
+                          {formatOnline(archive.reply)}
+                        </dd>
+                      </div>
+                      {archive.pubdate > 0 && (
+                        <div
+                          className="ml-2.5 flex min-w-0 items-center gap-1 text-muted-foreground"
+                          title="视频发布时间"
+                        >
+                          <dt className="sr-only">发布时间</dt>
+                          <CalendarDays aria-hidden className="size-3.5 shrink-0" />
+                          <dd className="truncate leading-4 tabular-nums">
+                            {formatDateTime(archive.pubdate)}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                    {archive.desc && (
                       <Button
                         type="button"
                         variant="ghost"
-                        size="xs"
+                        size="icon-xs"
+                        className="shrink-0 text-muted-foreground"
                         aria-expanded={descriptionExpanded}
                         aria-controls="video-description"
+                        aria-label={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
+                        title={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
                         onClick={() => setDescriptionExpanded((expanded) => !expanded)}
                       >
-                        {descriptionExpanded ? "收起简介" : "展开简介"}
                         <ChevronDown
                           aria-hidden
                           className={cn(
@@ -1249,7 +1245,18 @@ export function VideoSidebar({
                           )}
                         />
                       </Button>
-                    </div>
+                    )}
+                  </div>
+                  {/* 简介默认不展开：用 hidden 而非条件渲染，让 aria-controls 在收起态也能 */}
+                  {/* 解析到目标；display:none 同时把整段从无障碍树与布局里去掉。 */}
+                  {archive.desc && (
+                    <p
+                      id="video-description"
+                      hidden={!descriptionExpanded}
+                      className="mt-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground"
+                    >
+                      <LinkText text={archive.desc} />
+                    </p>
                   )}
                 </div>
               </section>

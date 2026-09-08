@@ -36,7 +36,6 @@ import {
   PLAYER_STAGE_DOUBLE_TAP_MS,
   PLAYER_VOLUME_KEY_STEP,
   showRoomSidePanel,
-  stageOwnsRoomTopBar,
   nextFullscreenLayerToExit,
   shouldUseLargeDanmakuActionMenu,
   shouldRetainRoomSidePanel,
@@ -211,15 +210,6 @@ describe("mobile player layout", () => {
     expect(showRoomSidePanel(true, true)).toBe(false);
     // 本来关着的面板不会被网页全屏打开。
     expect(showRoomSidePanel(false, true)).toBe(false);
-  });
-
-  test("both kinds of fullscreen take the room top bar, so both need the HUD", () => {
-    // 原生全屏把顶栏盖在 top layer 之下，网页全屏直接卸载它 —— 缺口是同一个。
-    expect(stageOwnsRoomTopBar(true, false)).toBe(true);
-    expect(stageOwnsRoomTopBar(false, true)).toBe(true);
-    // 桌面窗口化保留流内顶栏；移动端窗口化也由舞台接管。
-    expect(stageOwnsRoomTopBar(false, false)).toBe(false);
-    expect(stageOwnsRoomTopBar(false, false, true)).toBe(true);
   });
 
   test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {

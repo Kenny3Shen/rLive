@@ -16,7 +16,6 @@ import {
   Cast,
   Check,
   ChevronLeft,
-  Ellipsis,
   ExternalLink,
   FastForward,
   Home,
@@ -31,14 +30,7 @@ import { ANDROID_BACK_EVENT, dismissTopmostPopup } from "@/app/androidBackNaviga
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerScope,
-  DrawerTitle,
-  DrawerTrigger,
-  DrawerViewport,
-} from "@/components/ui/drawer";
+import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
@@ -324,8 +316,8 @@ function VideoPlayerPageContent() {
   }, [audioOnly]);
   /** 画中画进出状态（监听媒体元素事件，WebView2 支持；Android WebView 无此 API）。 */
   const [pipActive, setPipActive] = useState(false);
-  /** 投屏面板与 CC 字幕弹层的开关态。投屏面板窗口化时是顶栏 Popover，
-   *  全屏时是 HUD 溢出菜单里的二级面板 —— 两者互斥（见 `stageOwnsTopBar`）。 */
+  /** 投屏面板与 CC 字幕弹层的开关态。投屏面板住在 HUD 溢出菜单里
+   *  （`PlayerToolPanel` + `CastMenu`），窗口化与全屏同一入口。 */
   const [castOpen, setCastOpen] = useState(false);
   /** 全屏 HUD 右上角 `⋮` 溢出菜单的开关态（与直播页 HUD 同一形态）。 */
   const [hudMenuOpen, setHudMenuOpen] = useState(false);
@@ -1936,8 +1928,8 @@ function VideoPlayerPageContent() {
     return videoOriginalUrl(params.bvid, params.epId, page);
   }, [archiveQuery.data, cid, params]);
 
-  // 跳原址与复制链接：桌面端住底部 Shell、移动端住顶栏 `⋮` 抽屉（全屏时
-  // 舞台盖住两者，HUD 里另有一份镜像）；打开与回退细节见 `openExternalUrl`，
+  // 跳原址与复制链接：桌面端住底部 Shell，移动端与全屏住 HUD 的 `⋮`
+  // 溢出菜单；打开与回退细节见 `openExternalUrl`，
   // 通知反馈与直播页卡片同一套。
   const openOriginalUrl = useCallback(() => {
     if (!originalUrl) return;
@@ -1957,14 +1949,11 @@ function VideoPlayerPageContent() {
 
   const title = params?.title || "视频播放";
 
-  /** 沉浸/全屏舞台接管顶栏，工具只在顶栏或 HUD 中挂载一份。 */
-  const stageOwnsTopBar =
-    params !== null &&
-    seasonEntry === null &&
-    (mobileClient || shortVideo || fullscreen.fullscreen || webFullscreen);
+  /** 桌面普通详情（无任何沉浸/全屏层）：旧流内顶栏的返回主页与短视频
+   *  入口迁入舞台 HUD，与移动端/全屏共用同一份挂载。 */
+  const desktopDetails = !mobileClient && !shortVideo && !fullscreen.fullscreen && !webFullscreen;
 
-  /** 投屏源：顶栏 Popover 与 HUD 溢出菜单里的面板共用同一份参数，
-   *  两处互斥渲染（见 `stageOwnsTopBar`），因此不会出现两个投屏会话入口。 */
+  /** 投屏源：HUD 溢出菜单里的投屏面板（窗口化与全屏同一入口）。 */
   const castMenuProps = {
     castUrl: castQuery.data?.url ?? null,
     headers: castQuery.data?.headers ?? {},
@@ -1973,56 +1962,8 @@ function VideoPlayerPageContent() {
     onCastingDeviceChange: setCastingDevice,
   };
 
-  /** 顶栏右侧的低频工具（投屏）：与直播页顶栏右侧的定时/投屏工具同一布局
-   *  语义。复制链接/跳原址在桌面端住底部 Shell，移动端收进 `⋮` 抽屉；
-   *  全屏时顶栏被舞台吃掉，同一批入口改由 HUD 的 `⋮` 溢出菜单承载。 */
-  const topBarTools = (
-    <div className="flex items-center gap-1">
-      {!mobileClient && params?.bvid && !params.epId && !audioOnly && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="进入刷视频模式"
-          onClick={() => void enterShortVideo()}
-        >
-          <Smartphone aria-hidden />
-        </Button>
-      )}
-      <Popover open={castOpen} onOpenChange={setCastOpen}>
-        <PopoverTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="rounded-lg hover:bg-muted/70"
-              aria-label="投屏"
-              aria-expanded={castOpen}
-            />
-          }
-        >
-          <Cast data-icon="inline-start" aria-hidden className="size-4" />
-        </PopoverTrigger>
-        <PopoverContent
-          side="bottom"
-          align="end"
-          collisionPadding={12}
-          glass
-          className={cn("w-72 overflow-y-auto p-1.5", glassPanelClass())}
-        >
-          <PopoverTitle className={cn("px-2 py-1", glassTitleClass())}>投屏</PopoverTitle>
-          <CastMenu {...castMenuProps} showHeader={false} />
-        </PopoverContent>
-      </Popover>
-      {mobileClient && (
-        <VideoMobileActions
-          originalUrl={originalUrl}
-          onCopy={copyOriginalUrl}
-          onOpen={openOriginalUrl}
-        />
-      )}
-    </div>
-  );
-
+  /** 兜底顶栏：仅在无有效参数或 PGC 解析态（没有可覆盖的播放舞台）时渲染，
+   *  只留返回与标题，不挂工具。 */
   const topBar = (
     <header className="relative flex min-h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90">
       <div className="absolute left-3 flex items-center gap-1">
@@ -2070,7 +2011,6 @@ function VideoPlayerPageContent() {
           {title}
         </p>
       </div>
-      {!stageOwnsTopBar && <div className="absolute right-3 z-10">{topBarTools}</div>}
     </header>
   );
 
@@ -2300,7 +2240,6 @@ function VideoPlayerPageContent() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {!stageOwnsTopBar && topBar}
       {/* 详情页统一 16:9 舞台，不按画幅分配高度：竖屏视频与横屏视频的
           播放器/详情区占比一致，竖屏画面在舞台内居中留黑边，
           「竖屏全屏」按钮进入沉浸铺满屏幕。 */}
@@ -2446,131 +2385,170 @@ function VideoPlayerPageContent() {
             <PlayerEdgeGestureFeedback refs={edgeGesture.feedback} />
           </div>
 
-          {stageOwnsTopBar && (
+          {/* 顶部 HUD：所有模式（含桌面普通详情）共用，承载返回/标题与低频工具，
+              与底部控制栏同一套空闲显隐。 */}
+          <div
+            ref={hudRef}
+            data-player-hud
+            data-visible={chromeVisible ? "true" : "false"}
+            aria-hidden={!chromeVisible}
+            className={cn(
+              "absolute inset-x-0 top-0 z-30 transition-opacity duration-150 ease-out",
+              "motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+            )}
+            onPointerEnter={holdControlsVisible}
+            onPointerLeave={scheduleControlsHide}
+            onFocusCapture={holdControlsVisible}
+            onBlurCapture={scheduleControlsHide}
+          >
             <div
-              ref={hudRef}
-              data-player-hud
-              data-visible={chromeVisible ? "true" : "false"}
-              aria-hidden={!chromeVisible}
               className={cn(
-                "absolute inset-x-0 top-0 z-30 transition-opacity duration-150 ease-out",
-                "motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,var(--player-safe-area-top,0px))] text-white",
+                compact ? "pb-3" : "pb-6",
               )}
-              onPointerEnter={holdControlsVisible}
-              onPointerLeave={scheduleControlsHide}
-              onFocusCapture={holdControlsVisible}
-              onBlurCapture={scheduleControlsHide}
             >
-              <div
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={
+                  shortVideo
+                    ? mobileClient
+                      ? "返回视频列表"
+                      : "退出刷视频模式"
+                    : fullscreen.fullscreen
+                      ? "退出全屏"
+                      : webFullscreen
+                        ? "退出窗口全屏"
+                        : returningToShortVideo
+                          ? "返回短视频"
+                          : "返回视频列表"
+                }
                 className={cn(
-                  "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,var(--player-safe-area-top,0px))] text-white",
-                  compact ? "pb-3" : "pb-6",
+                  PLAYER_CONTROL_BUTTON_CLASS,
+                  PLAYER_CONTROL_ICON_CLASS,
+                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                  "shrink-0",
                 )}
+                // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
+                // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
+                onClick={() => {
+                  if (shortVideo) {
+                    if (mobileClient) goBack();
+                    else void openVideoDetails();
+                  } else if (fullscreen.fullscreen) void fullscreen.exit();
+                  else if (webFullscreen) setWebFullscreen(false);
+                  else handlePageBack();
+                }}
               >
+                <ChevronLeft data-icon="inline-start" aria-hidden />
+              </Button>
+              {/* 桌面普通详情：旧流内顶栏的返回主页入口。 */}
+              {desktopDetails && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={
-                    shortVideo
-                      ? mobileClient
-                        ? "返回视频列表"
-                        : "退出刷视频模式"
-                      : fullscreen.fullscreen
-                        ? "退出全屏"
-                        : webFullscreen
-                          ? "退出窗口全屏"
-                          : returningToShortVideo
-                            ? "返回短视频"
-                            : "返回视频列表"
-                  }
+                  aria-label="返回主页"
+                  title="返回主页"
                   className={cn(
                     PLAYER_CONTROL_BUTTON_CLASS,
                     PLAYER_CONTROL_ICON_CLASS,
                     PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
                     "shrink-0",
                   )}
-                  // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
-                  // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
-                  onClick={() => {
-                    if (shortVideo) {
-                      if (mobileClient) goBack();
-                      else void openVideoDetails();
-                    } else if (fullscreen.fullscreen) void fullscreen.exit();
-                    else if (webFullscreen) setWebFullscreen(false);
-                    else handlePageBack();
-                  }}
+                  onClick={() => navigate(VIDEO_HOME_PATH)}
                 >
-                  <ChevronLeft data-icon="inline-start" aria-hidden />
+                  <Home data-icon="inline-start" aria-hidden />
                 </Button>
-                {(!shortVideo || !mobileClient) && (
-                  <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
-                    {title}
-                  </p>
-                )}
-                <PlayerHudOverflowMenu
-                  label="更多操作"
-                  title="播放操作"
-                  open={hudMenuOpen}
-                  onOpenChange={(open) => {
-                    setHudMenuOpen(open);
-                    // 菜单开着时空闲计时器不能把 chrome 淡出。
-                    setOverlayInteractionOpen(open);
-                  }}
-                  compact={compact}
-                  // 固定沉浸层和画面全屏都需舞台内 portal；窗口全屏仍走默认宿主。
-                  portalContainer={shortVideo || fullscreen.fullscreen ? stageRef : undefined}
-                >
-                  <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
-                    {mobileClient && !shortVideo && (
-                      <PlayerToolTile
-                        icon={Home}
-                        label="返回主页"
-                        onClick={async () => {
-                          setHudMenuOpen(false);
-                          setOverlayInteractionOpen(false);
-                          await fullscreen.exit();
-                          navigate(VIDEO_HOME_PATH);
-                        }}
-                      />
-                    )}
-                    <PlayerToolTile
-                      icon={Cast}
-                      label={castingDevice ? "投屏中" : "投屏"}
-                      pressed={castOpen || castingDevice != null}
-                      active={castingDevice != null}
-                      onClick={() => setCastOpen((open) => !open)}
-                    />
-                    <PlayerToolTile
-                      icon={Link2}
-                      label="复制链接"
-                      disabled={!originalUrl}
-                      onClick={() => {
-                        setHudMenuOpen(false);
-                        setOverlayInteractionOpen(false);
-                        copyOriginalUrl();
-                      }}
-                    />
-                    <PlayerToolTile
-                      icon={ExternalLink}
-                      label="在浏览器中打开"
-                      disabled={!originalUrl}
-                      onClick={() => {
-                        setHudMenuOpen(false);
-                        setOverlayInteractionOpen(false);
-                        openOriginalUrl();
-                      }}
-                    />
-                  </div>
-                  {castOpen && (
-                    <PlayerToolPanel>
-                      <CastMenu {...castMenuProps} />
-                    </PlayerToolPanel>
+              )}
+              {(!shortVideo || !mobileClient) && (
+                <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
+                  {title}
+                </p>
+              )}
+              {/* 桌面普通详情：旧流内顶栏的短视频模式入口（与移动端的竖屏全屏
+                    不同，桌面这里是模式切换而非全屏层，enterShortVideo 自会退出全屏）。 */}
+              {desktopDetails && params.bvid && !params.epId && !audioOnly && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="进入刷视频模式"
+                  title="进入刷视频模式"
+                  className={cn(
+                    PLAYER_CONTROL_BUTTON_CLASS,
+                    PLAYER_CONTROL_ICON_CLASS,
+                    PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                    "shrink-0",
                   )}
-                </PlayerHudOverflowMenu>
-              </div>
+                  onClick={() => void enterShortVideo()}
+                >
+                  <Smartphone data-icon="inline-start" aria-hidden />
+                </Button>
+              )}
+              <PlayerHudOverflowMenu
+                label="更多操作"
+                title="播放操作"
+                open={hudMenuOpen}
+                onOpenChange={(open) => {
+                  setHudMenuOpen(open);
+                  // 菜单开着时空闲计时器不能把 chrome 淡出。
+                  setOverlayInteractionOpen(open);
+                }}
+                compact={compact}
+                // 固定沉浸层和画面全屏都需舞台内 portal；窗口全屏仍走默认宿主。
+                portalContainer={shortVideo || fullscreen.fullscreen ? stageRef : undefined}
+              >
+                <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
+                  {mobileClient && !shortVideo && (
+                    <PlayerToolTile
+                      icon={Home}
+                      label="返回主页"
+                      onClick={async () => {
+                        setHudMenuOpen(false);
+                        setOverlayInteractionOpen(false);
+                        await fullscreen.exit();
+                        navigate(VIDEO_HOME_PATH);
+                      }}
+                    />
+                  )}
+                  <PlayerToolTile
+                    icon={Cast}
+                    label={castingDevice ? "投屏中" : "投屏"}
+                    pressed={castOpen || castingDevice != null}
+                    active={castingDevice != null}
+                    onClick={() => setCastOpen((open) => !open)}
+                  />
+                  <PlayerToolTile
+                    icon={Link2}
+                    label="复制链接"
+                    disabled={!originalUrl}
+                    onClick={() => {
+                      setHudMenuOpen(false);
+                      setOverlayInteractionOpen(false);
+                      copyOriginalUrl();
+                    }}
+                  />
+                  <PlayerToolTile
+                    icon={ExternalLink}
+                    label="在浏览器中打开"
+                    disabled={!originalUrl}
+                    onClick={() => {
+                      setHudMenuOpen(false);
+                      setOverlayInteractionOpen(false);
+                      openOriginalUrl();
+                    }}
+                  />
+                </div>
+                {castOpen && (
+                  <PlayerToolPanel>
+                    <CastMenu {...castMenuProps} />
+                  </PlayerToolPanel>
+                )}
+              </PlayerHudOverflowMenu>
             </div>
-          )}
+          </div>
 
           {shortVideo && (
             // 这层只负责渐变底衬，不带 z-index：控制栏（z-30）要画在渐变之上，
@@ -2776,10 +2754,11 @@ function VideoPlayerPageContent() {
             tabIndex={-1}
             aria-label="视频详情"
             className={cn(
-              // 与直播播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度，
-              // 窄屏则如直播的紧凑侧栏一样列在播放器下方。
+              // 与直播/IPTV 播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度
+              // （320/340，UP 信息卡的「播放/评论/发布时间 + 简介开关」典型值
+              // 单行放下，超长数值退到第二行而非截断），窄屏则列在播放器下方。
               "relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar max-md:pb-[env(safe-area-inset-bottom)]",
-              "lg:w-[300px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[320px] lg:pb-0",
+              "lg:w-[320px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[340px] lg:pb-0",
               shortVideo && "hidden",
             )}
           >
@@ -2870,63 +2849,5 @@ function PlaybackSettingRow({
       </div>
       <span className="flex-1">{label}</span>
     </button>
-  );
-}
-
-/** 手机和平板的链接操作复用直播页顶栏抽屉形态。 */
-function VideoMobileActions({
-  originalUrl,
-  onCopy,
-  onOpen,
-}: {
-  originalUrl: string | null;
-  onCopy: () => void;
-  onOpen: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Drawer open={open} onOpenChange={setOpen}>
-      <DrawerTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="rounded-lg hover:bg-muted/70"
-            aria-label="更多视频操作"
-          />
-        }
-      >
-        <Ellipsis data-icon="inline-start" aria-hidden />
-      </DrawerTrigger>
-      <DrawerContent
-        side="bottom"
-        glass
-        className={cn("space-y-2", glassPanelClass({ overlay: true }))}
-      >
-        <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay: true }))}>
-          视频操作
-        </DrawerTitle>
-        <div className="grid grid-cols-4 gap-2">
-          <PlayerToolTile
-            icon={Link2}
-            label="复制链接"
-            disabled={!originalUrl}
-            onClick={() => {
-              setOpen(false);
-              onCopy();
-            }}
-          />
-          <PlayerToolTile
-            icon={ExternalLink}
-            label="在浏览器中打开"
-            disabled={!originalUrl}
-            onClick={() => {
-              setOpen(false);
-              onOpen();
-            }}
-          />
-        </div>
-      </DrawerContent>
-    </Drawer>
   );
 }
