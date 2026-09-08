@@ -141,6 +141,7 @@ import {
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
+import { useVideoDanmakuTopInset } from "./useVideoDanmakuTopInset";
 import { VideoSidebar, type SidebarTab } from "./VideoSidebar";
 import { UploaderDrawer } from "./UploaderDrawer";
 import {
@@ -342,6 +343,7 @@ function VideoPlayerPageContent() {
   const compact = useCompactPlayerViewport();
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
+  useVideoDanmakuTopInset(stageRef, hudRef, shortVideo && mobileClient);
   const { controlsVisibleRef, revealControls, holdControlsVisible, scheduleControlsHide } =
     usePlayerChromeIdle({
       controlsRef,
@@ -541,8 +543,8 @@ function VideoPlayerPageContent() {
 
   useEffect(() => {
     if (!shortVideo || !runningOnAndroidTauri()) return;
-    // 复用直播的页面内全屏，不走会重新挂载 WebView 表面的 HTML 全屏。
-    void setAndroidImmersive(true).catch(() => {});
+    // 竖屏画面与控制区分别避让系统栏，保持状态栏和底部手势栏可见。
+    void setAndroidImmersive(false).catch(() => {});
     void setAndroidPlayerOrientation("portrait").catch(() => {});
     return () => {
       void setAndroidImmersive(false).catch(() => {});
@@ -2256,6 +2258,7 @@ function VideoPlayerPageContent() {
           ref={stageRef}
           data-player-stage
           data-video-mode={shortVideo ? "short" : "details"}
+          data-video-portrait={shortVideo && mobileClient ? "true" : undefined}
           data-fullscreen={
             (shortVideo && mobileClient) || (fullscreen.fullscreen && fullscreen.nativeLayer)
               ? "true"
@@ -2280,373 +2283,383 @@ function VideoPlayerPageContent() {
           onKeyDown={handleStageKeyDown}
           tabIndex={0}
         >
-          <div
-            data-player-video-surface
-            className={cn(
-              "relative min-h-0 flex-1 overflow-hidden bg-black",
-              (mobileClient || portraitSwipeEnabled) && "touch-none select-none",
-            )}
-            onClick={handleSurfaceClick}
-            onDoubleClick={handleSurfaceDoubleClick}
-            onPointerDown={handleSurfacePointerDown}
-            onPointerMove={handleSurfacePointerMove}
-            onPointerUp={handleSurfacePointerUp}
-            onPointerCancel={cancelSurfacePress}
-            onLostPointerCapture={(event) => {
-              // video 的隐式捕获交给 surface 时也会冒泡 lost；只处理自身丢失捕获。
-              if (
-                event.target === event.currentTarget &&
-                surfacePressRef.current?.pointerId === event.pointerId
-              ) {
-                cancelSurfacePress();
-              }
-            }}
-            onPointerLeave={(event) => {
-              if (
-                surfacePressRef.current?.pointerId === event.pointerId &&
-                !event.currentTarget.hasPointerCapture(event.pointerId)
-              ) {
-                cancelSurfacePress();
-              }
-            }}
-            onContextMenu={(event) => {
-              // 长按倍速会触发系统的长按菜单，按住期间一律压掉。
-              if (speedHoldRef.current || speedHoldTimerRef.current !== null) {
-                event.preventDefault();
-              }
-            }}
-          >
-            <div ref={swipeTrackRef} data-video-swipe-track className="absolute inset-0">
+          <div data-video-viewport className="relative flex min-h-0 flex-1 flex-col bg-black">
+            <div data-video-frame className="relative flex min-h-0 flex-1 flex-col">
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-full h-full"
-                aria-hidden
-              >
-                <VideoSwipePreview
-                  item={prevItem}
-                  label={prevItem ? "上一个" : "已经是第一个视频"}
-                />
-              </div>
-              <div className="pointer-events-none absolute inset-x-0 top-full h-full" aria-hidden>
-                <VideoSwipePreview
-                  item={nextItem}
-                  label={nextItem ? "下一个" : "已经是最后一个视频"}
-                />
-              </div>
-              <div
-                ref={rootRef}
-                data-player-engine-root
-                className="absolute inset-0 size-full overflow-hidden bg-black"
-              >
-                <video
-                  ref={videoRef}
-                  data-player-video
-                  playsInline
-                  preload="metadata"
-                  controls={false}
-                  className="absolute inset-0 size-full bg-black object-contain"
-                />
-              </div>
-
-              {danmakuEntries.length > 0 && (
-                <VideoDanmakuLayer
-                  videoRef={videoRef}
-                  entries={danmakuEntries}
-                  active={danmakuVisible}
-                  interactive={!fullscreenLocked && !switchingItem}
-                  cid={cid}
-                  aid={aid ?? ""}
-                  title={title}
-                  large={!compact && (fullscreen.fullscreen || webFullscreen)}
-                  tapMaxDistance={LONG_PRESS_CANCEL_MOVE_PX}
-                />
-              )}
-              <PlayerBrightnessShade ref={edgeGesture.brightnessShadeRef} />
-
-              {swipePoster && <VideoSwipePreview item={swipePoster} label="正在加载视频…" />}
-
-              {speedHoldActive && (
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
-                >
-                  <FastForward className="size-3.5" aria-hidden />
-                  {LONG_PRESS_RATE.toFixed(1)}x 倍速中
-                </div>
-              )}
-
-              {(loading || waiting || playInfoQuery.isPending || switchingItem) &&
-                !playbackError &&
-                !fatalError && (
-                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
-                    <Spinner className="text-white" aria-label="正在加载视频" />
-                  </div>
-                )}
-
-              {/* 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
-                静默失败会让用户看到「在播但没声音」而无从下手。 */}
-              {(playbackError || fatalError) && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
-                  <ErrorState
-                    error={playbackError ?? fatalError}
-                    title="视频播放失败"
-                    onRetry={retryPlayback}
-                    className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
-                  />
-                </div>
-              )}
-            </div>
-            <PlayerEdgeGestureFeedback refs={edgeGesture.feedback} />
-          </div>
-
-          {/* 顶部 HUD：所有模式（含桌面普通详情）共用，承载返回/标题与低频工具，
-              与底部控制栏同一套空闲显隐。 */}
-          <div
-            ref={hudRef}
-            data-player-hud
-            data-visible={chromeVisible ? "true" : "false"}
-            aria-hidden={!chromeVisible}
-            className={cn(
-              "absolute inset-x-0 top-0 z-30 transition-opacity duration-150 ease-out",
-              "motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
-              // 标题与留白穿透到弹幕；仅可见、可用的按钮接收指针。
-              "pointer-events-none [&[data-visible=true]_button:enabled]:pointer-events-auto",
-            )}
-            onPointerEnter={holdControlsVisible}
-            onPointerLeave={scheduleControlsHide}
-            onFocusCapture={holdControlsVisible}
-            onBlurCapture={scheduleControlsHide}
-          >
-            <div
-              className={cn(
-                "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,var(--player-safe-area-top,0px))] text-white",
-                compact ? "pb-3" : "pb-6",
-              )}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={
-                  shortVideo
-                    ? mobileClient
-                      ? "返回视频列表"
-                      : "退出刷视频模式"
-                    : fullscreen.fullscreen
-                      ? "退出全屏"
-                      : webFullscreen
-                        ? "退出窗口全屏"
-                        : returningToShortVideo
-                          ? "返回短视频"
-                          : "返回视频列表"
-                }
+                data-player-video-surface
                 className={cn(
-                  PLAYER_CONTROL_BUTTON_CLASS,
-                  PLAYER_CONTROL_ICON_CLASS,
-                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                  "shrink-0",
+                  "relative min-h-0 flex-1 overflow-hidden bg-black",
+                  (mobileClient || portraitSwipeEnabled) && "touch-none select-none",
                 )}
-                // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
-                // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
-                onClick={() => {
-                  if (shortVideo) {
-                    if (mobileClient) goBack();
-                    else void openVideoDetails();
-                  } else if (fullscreen.fullscreen) void fullscreen.exit();
-                  else if (webFullscreen) setWebFullscreen(false);
-                  else handlePageBack();
+                onClick={handleSurfaceClick}
+                onDoubleClick={handleSurfaceDoubleClick}
+                onPointerDown={handleSurfacePointerDown}
+                onPointerMove={handleSurfacePointerMove}
+                onPointerUp={handleSurfacePointerUp}
+                onPointerCancel={cancelSurfacePress}
+                onLostPointerCapture={(event) => {
+                  // video 的隐式捕获交给 surface 时也会冒泡 lost；只处理自身丢失捕获。
+                  if (
+                    event.target === event.currentTarget &&
+                    surfacePressRef.current?.pointerId === event.pointerId
+                  ) {
+                    cancelSurfacePress();
+                  }
+                }}
+                onPointerLeave={(event) => {
+                  if (
+                    surfacePressRef.current?.pointerId === event.pointerId &&
+                    !event.currentTarget.hasPointerCapture(event.pointerId)
+                  ) {
+                    cancelSurfacePress();
+                  }
+                }}
+                onContextMenu={(event) => {
+                  // 长按倍速会触发系统的长按菜单，按住期间一律压掉。
+                  if (speedHoldRef.current || speedHoldTimerRef.current !== null) {
+                    event.preventDefault();
+                  }
                 }}
               >
-                <ChevronLeft data-icon="inline-start" aria-hidden />
-              </Button>
-              {/* 桌面普通详情：旧流内顶栏的返回主页入口。 */}
-              {desktopDetails && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="返回主页"
-                  title="返回主页"
-                  className={cn(
-                    PLAYER_CONTROL_BUTTON_CLASS,
-                    PLAYER_CONTROL_ICON_CLASS,
-                    PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                    "shrink-0",
-                  )}
-                  onClick={() => navigate(VIDEO_HOME_PATH)}
-                >
-                  <Home data-icon="inline-start" aria-hidden />
-                </Button>
-              )}
-              {(!shortVideo || !mobileClient) && (
-                <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
-                  {title}
-                </p>
-              )}
-              {/* 桌面普通详情：旧流内顶栏的短视频模式入口（与移动端的竖屏全屏
-                    不同，桌面这里是模式切换而非全屏层，enterShortVideo 自会退出全屏）。 */}
-              {desktopDetails && params.bvid && !params.epId && !audioOnly && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="进入刷视频模式"
-                  title="进入刷视频模式"
-                  className={cn(
-                    PLAYER_CONTROL_BUTTON_CLASS,
-                    PLAYER_CONTROL_ICON_CLASS,
-                    PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                    "shrink-0",
-                  )}
-                  onClick={() => void enterShortVideo()}
-                >
-                  <Smartphone data-icon="inline-start" aria-hidden />
-                </Button>
-              )}
-              <PlayerHudOverflowMenu
-                label="更多操作"
-                title="播放操作"
-                open={hudMenuOpen}
-                onOpenChange={(open) => {
-                  setHudMenuOpen(open);
-                  // 菜单开着时空闲计时器不能把 chrome 淡出。
-                  setOverlayInteractionOpen(open);
-                }}
-                compact={compact}
-                // 固定沉浸层和画面全屏都需舞台内 portal；窗口全屏仍走默认宿主。
-                portalContainer={shortVideo || fullscreen.fullscreen ? stageRef : undefined}
-              >
-                <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
-                  {mobileClient && !shortVideo && (
-                    <PlayerToolTile
-                      icon={Home}
-                      label="返回主页"
-                      onClick={async () => {
-                        setHudMenuOpen(false);
-                        setOverlayInteractionOpen(false);
-                        await fullscreen.exit();
-                        navigate(VIDEO_HOME_PATH);
-                      }}
+                <div ref={swipeTrackRef} data-video-swipe-track className="absolute inset-0">
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-full h-full"
+                    aria-hidden
+                  >
+                    <VideoSwipePreview
+                      item={prevItem}
+                      label={prevItem ? "上一个" : "已经是第一个视频"}
+                    />
+                  </div>
+                  <div
+                    className="pointer-events-none absolute inset-x-0 top-full h-full"
+                    aria-hidden
+                  >
+                    <VideoSwipePreview
+                      item={nextItem}
+                      label={nextItem ? "下一个" : "已经是最后一个视频"}
+                    />
+                  </div>
+                  <div
+                    ref={rootRef}
+                    data-player-engine-root
+                    className="absolute inset-0 size-full overflow-hidden bg-black"
+                  >
+                    <video
+                      ref={videoRef}
+                      data-player-video
+                      playsInline
+                      preload="metadata"
+                      controls={false}
+                      className="absolute inset-0 size-full bg-black object-contain"
+                    />
+                  </div>
+
+                  {danmakuEntries.length > 0 && (
+                    <VideoDanmakuLayer
+                      videoRef={videoRef}
+                      entries={danmakuEntries}
+                      active={danmakuVisible}
+                      interactive={!fullscreenLocked && !switchingItem}
+                      cid={cid}
+                      aid={aid ?? ""}
+                      title={title}
+                      large={!compact && (fullscreen.fullscreen || webFullscreen)}
+                      tapMaxDistance={LONG_PRESS_CANCEL_MOVE_PX}
                     />
                   )}
-                  <PlayerToolTile
-                    icon={Cast}
-                    label={castingDevice ? "投屏中" : "投屏"}
-                    pressed={castOpen || castingDevice != null}
-                    active={castingDevice != null}
-                    onClick={() => setCastOpen((open) => !open)}
-                  />
-                  <PlayerToolTile
-                    icon={Link2}
-                    label="复制链接"
-                    disabled={!originalUrl}
-                    onClick={() => {
-                      setHudMenuOpen(false);
-                      setOverlayInteractionOpen(false);
-                      copyOriginalUrl();
-                    }}
-                  />
-                  <PlayerToolTile
-                    icon={ExternalLink}
-                    label="在浏览器中打开"
-                    disabled={!originalUrl}
-                    onClick={() => {
-                      setHudMenuOpen(false);
-                      setOverlayInteractionOpen(false);
-                      openOriginalUrl();
-                    }}
-                  />
+                  <PlayerBrightnessShade ref={edgeGesture.brightnessShadeRef} />
+
+                  {swipePoster && <VideoSwipePreview item={swipePoster} label="正在加载视频…" />}
+
+                  {speedHoldActive && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
+                    >
+                      <FastForward className="size-3.5" aria-hidden />
+                      {LONG_PRESS_RATE.toFixed(1)}x 倍速中
+                    </div>
+                  )}
+
+                  {(loading || waiting || playInfoQuery.isPending || switchingItem) &&
+                    !playbackError &&
+                    !fatalError && (
+                      <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
+                        <Spinner className="text-white" aria-label="正在加载视频" />
+                      </div>
+                    )}
+
+                  {/* 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
+                静默失败会让用户看到「在播但没声音」而无从下手。 */}
+                  {(playbackError || fatalError) && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
+                      <ErrorState
+                        error={playbackError ?? fatalError}
+                        title="视频播放失败"
+                        onRetry={retryPlayback}
+                        className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
+                      />
+                    </div>
+                  )}
                 </div>
-                {castOpen && (
-                  <PlayerToolPanel>
-                    <CastMenu {...castMenuProps} />
-                  </PlayerToolPanel>
+                <PlayerEdgeGestureFeedback refs={edgeGesture.feedback} />
+              </div>
+
+              {/* 顶部 HUD：所有模式（含桌面普通详情）共用，承载返回/标题与低频工具，
+              与底部控制栏同一套空闲显隐。 */}
+              <div
+                ref={hudRef}
+                data-player-hud
+                data-visible={chromeVisible ? "true" : "false"}
+                aria-hidden={!chromeVisible}
+                className={cn(
+                  "absolute inset-x-0 top-0 z-30 transition-opacity duration-150 ease-out",
+                  "motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                  // 标题与留白穿透到弹幕；仅可见、可用的按钮接收指针。
+                  "pointer-events-none [&[data-visible=true]_button:enabled]:pointer-events-auto",
                 )}
-              </PlayerHudOverflowMenu>
+                onPointerEnter={holdControlsVisible}
+                onPointerLeave={scheduleControlsHide}
+                onFocusCapture={holdControlsVisible}
+                onBlurCapture={scheduleControlsHide}
+              >
+                <div
+                  className={cn(
+                    "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,var(--player-safe-area-top,0px))] text-white",
+                    compact ? "pb-3" : "pb-6",
+                  )}
+                >
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={
+                      shortVideo
+                        ? mobileClient
+                          ? "返回视频列表"
+                          : "退出刷视频模式"
+                        : fullscreen.fullscreen
+                          ? "退出全屏"
+                          : webFullscreen
+                            ? "退出窗口全屏"
+                            : returningToShortVideo
+                              ? "返回短视频"
+                              : "返回视频列表"
+                    }
+                    className={cn(
+                      PLAYER_CONTROL_BUTTON_CLASS,
+                      PLAYER_CONTROL_ICON_CLASS,
+                      PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                      "shrink-0",
+                    )}
+                    // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
+                    // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
+                    onClick={() => {
+                      if (shortVideo) {
+                        if (mobileClient) goBack();
+                        else void openVideoDetails();
+                      } else if (fullscreen.fullscreen) void fullscreen.exit();
+                      else if (webFullscreen) setWebFullscreen(false);
+                      else handlePageBack();
+                    }}
+                  >
+                    <ChevronLeft data-icon="inline-start" aria-hidden />
+                  </Button>
+                  {/* 桌面普通详情：旧流内顶栏的返回主页入口。 */}
+                  {desktopDetails && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="返回主页"
+                      title="返回主页"
+                      className={cn(
+                        PLAYER_CONTROL_BUTTON_CLASS,
+                        PLAYER_CONTROL_ICON_CLASS,
+                        PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                        "shrink-0",
+                      )}
+                      onClick={() => navigate(VIDEO_HOME_PATH)}
+                    >
+                      <Home data-icon="inline-start" aria-hidden />
+                    </Button>
+                  )}
+                  {(!shortVideo || !mobileClient) && (
+                    <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
+                      {title}
+                    </p>
+                  )}
+                  {/* 桌面普通详情：旧流内顶栏的短视频模式入口（与移动端的竖屏全屏
+                    不同，桌面这里是模式切换而非全屏层，enterShortVideo 自会退出全屏）。 */}
+                  {desktopDetails && params.bvid && !params.epId && !audioOnly && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="进入刷视频模式"
+                      title="进入刷视频模式"
+                      className={cn(
+                        PLAYER_CONTROL_BUTTON_CLASS,
+                        PLAYER_CONTROL_ICON_CLASS,
+                        PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                        "shrink-0",
+                      )}
+                      onClick={() => void enterShortVideo()}
+                    >
+                      <Smartphone data-icon="inline-start" aria-hidden />
+                    </Button>
+                  )}
+                  <PlayerHudOverflowMenu
+                    label="更多操作"
+                    title="播放操作"
+                    open={hudMenuOpen}
+                    onOpenChange={(open) => {
+                      setHudMenuOpen(open);
+                      // 菜单开着时空闲计时器不能把 chrome 淡出。
+                      setOverlayInteractionOpen(open);
+                    }}
+                    compact={compact}
+                    // 固定沉浸层和画面全屏都需舞台内 portal；窗口全屏仍走默认宿主。
+                    portalContainer={shortVideo || fullscreen.fullscreen ? stageRef : undefined}
+                  >
+                    <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
+                      {mobileClient && !shortVideo && (
+                        <PlayerToolTile
+                          icon={Home}
+                          label="返回主页"
+                          onClick={async () => {
+                            setHudMenuOpen(false);
+                            setOverlayInteractionOpen(false);
+                            await fullscreen.exit();
+                            navigate(VIDEO_HOME_PATH);
+                          }}
+                        />
+                      )}
+                      <PlayerToolTile
+                        icon={Cast}
+                        label={castingDevice ? "投屏中" : "投屏"}
+                        pressed={castOpen || castingDevice != null}
+                        active={castingDevice != null}
+                        onClick={() => setCastOpen((open) => !open)}
+                      />
+                      <PlayerToolTile
+                        icon={Link2}
+                        label="复制链接"
+                        disabled={!originalUrl}
+                        onClick={() => {
+                          setHudMenuOpen(false);
+                          setOverlayInteractionOpen(false);
+                          copyOriginalUrl();
+                        }}
+                      />
+                      <PlayerToolTile
+                        icon={ExternalLink}
+                        label="在浏览器中打开"
+                        disabled={!originalUrl}
+                        onClick={() => {
+                          setHudMenuOpen(false);
+                          setOverlayInteractionOpen(false);
+                          openOriginalUrl();
+                        }}
+                      />
+                    </div>
+                    {castOpen && (
+                      <PlayerToolPanel>
+                        <CastMenu {...castMenuProps} />
+                      </PlayerToolPanel>
+                    )}
+                  </PlayerHudOverflowMenu>
+                </div>
+              </div>
+
+              {shortVideo && (
+                // 这层只负责渐变底衬，不带 z-index：控制栏（z-30）要画在渐变之上，
+                // 否则它自己的 `from-black/70` 最浓端会压暗进度条与按钮。
+                // 文字/按钮各自带 `relative z-40` 逃到控制栏遮罩之上（父层一旦有
+                // z-index 就自建层叠上下文，子层再高也出不去）。
+                <div
+                  data-video-short-overlay
+                  className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-3 bg-linear-to-t from-black/70 to-transparent px-4 pt-12 pb-[calc(5.5rem+env(safe-area-inset-bottom))] text-white"
+                >
+                  <div
+                    data-video-short-info
+                    data-visible={!infoHidden}
+                    aria-hidden={infoHidden}
+                    inert={infoHidden}
+                    className="relative z-40 min-w-0 flex-1 transition-opacity duration-150 motion-reduced:transition-none data-[visible=false]:opacity-0"
+                  >
+                    {archiveQuery.data?.author && (
+                      <div className="mb-2 flex min-w-0 items-center gap-2.5">
+                        <button
+                          type="button"
+                          aria-label={`查看 ${archiveQuery.data.author} 的投稿视频`}
+                          disabled={!archiveQuery.data.author_mid}
+                          className="pointer-events-auto shrink-0 rounded-full focus-ring-overlay"
+                          onClick={() => {
+                            setUploaderOpen(true);
+                            setOverlayInteractionOpen(true);
+                          }}
+                        >
+                          <Avatar size="lg">
+                            <AvatarImage
+                              src={normalizeImageUrl(archiveQuery.data.author_face)}
+                              alt={`${archiveQuery.data.author} 的头像`}
+                              referrerPolicy="no-referrer"
+                            />
+                            <AvatarFallback>
+                              {Array.from(archiveQuery.data.author)[0] ?? "?"}
+                            </AvatarFallback>
+                          </Avatar>
+                        </button>
+                        <div className="flex min-w-0 flex-col gap-0.5">
+                          <p className="truncate text-sm font-semibold leading-5">
+                            {archiveQuery.data.author}
+                          </p>
+                          <div className="flex items-center gap-2 text-xs leading-4 text-white/70">
+                            <span
+                              className="inline-flex items-center gap-1"
+                              title={`粉丝：${formatOnline(archiveQuery.data.author_fans)}`}
+                            >
+                              <Users aria-hidden className="size-3.5" />
+                              <span className="tabular-nums">
+                                {formatOnline(archiveQuery.data.author_fans)}
+                              </span>
+                            </span>
+                            <span
+                              className="inline-flex items-center gap-1"
+                              title={`视频：${formatOnline(archiveQuery.data.author_videos)}`}
+                            >
+                              <Video aria-hidden className="size-3.5" />
+                              <span className="tabular-nums">
+                                {formatOnline(archiveQuery.data.author_videos)}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <p className="line-clamp-2 text-sm font-semibold leading-5 tracking-tight">
+                      {swipePoster?.title ?? title}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    className={cn(
+                      PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+                      "pointer-events-auto relative z-40 h-auto min-h-11 shrink-0 flex-col gap-1 px-3 py-2",
+                    )}
+                    aria-label="查看视频评论"
+                    onClick={() => void openVideoDetails("comments")}
+                  >
+                    <MessageSquareText data-icon="inline-start" aria-hidden />
+                    <span className="text-xs">评论</span>
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
-
-          {shortVideo && (
-            // 这层只负责渐变底衬，不带 z-index：控制栏（z-30）要画在渐变之上，
-            // 否则它自己的 `from-black/70` 最浓端会压暗进度条与按钮。
-            // 文字/按钮各自带 `relative z-40` 逃到控制栏遮罩之上（父层一旦有
-            // z-index 就自建层叠上下文，子层再高也出不去）。
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-3 bg-linear-to-t from-black/70 to-transparent px-4 pt-12 pb-[calc(5.5rem+env(safe-area-inset-bottom))] text-white">
-              <div
-                data-video-short-info
-                data-visible={!infoHidden}
-                aria-hidden={infoHidden}
-                inert={infoHidden}
-                className="relative z-40 min-w-0 flex-1 transition-opacity duration-150 motion-reduced:transition-none data-[visible=false]:opacity-0"
-              >
-                {archiveQuery.data?.author && (
-                  <div className="mb-2 flex min-w-0 items-center gap-2.5">
-                    <button
-                      type="button"
-                      aria-label={`查看 ${archiveQuery.data.author} 的投稿视频`}
-                      disabled={!archiveQuery.data.author_mid}
-                      className="pointer-events-auto shrink-0 rounded-full focus-ring-overlay"
-                      onClick={() => {
-                        setUploaderOpen(true);
-                        setOverlayInteractionOpen(true);
-                      }}
-                    >
-                      <Avatar size="lg">
-                        <AvatarImage
-                          src={normalizeImageUrl(archiveQuery.data.author_face)}
-                          alt={`${archiveQuery.data.author} 的头像`}
-                          referrerPolicy="no-referrer"
-                        />
-                        <AvatarFallback>
-                          {Array.from(archiveQuery.data.author)[0] ?? "?"}
-                        </AvatarFallback>
-                      </Avatar>
-                    </button>
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <p className="truncate text-sm font-semibold leading-5">
-                        {archiveQuery.data.author}
-                      </p>
-                      <div className="flex items-center gap-2 text-xs leading-4 text-white/70">
-                        <span
-                          className="inline-flex items-center gap-1"
-                          title={`粉丝：${formatOnline(archiveQuery.data.author_fans)}`}
-                        >
-                          <Users aria-hidden className="size-3.5" />
-                          <span className="tabular-nums">
-                            {formatOnline(archiveQuery.data.author_fans)}
-                          </span>
-                        </span>
-                        <span
-                          className="inline-flex items-center gap-1"
-                          title={`视频：${formatOnline(archiveQuery.data.author_videos)}`}
-                        >
-                          <Video aria-hidden className="size-3.5" />
-                          <span className="tabular-nums">
-                            {formatOnline(archiveQuery.data.author_videos)}
-                          </span>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <p className="line-clamp-2 text-sm font-semibold leading-5 tracking-tight">
-                  {swipePoster?.title ?? title}
-                </p>
-              </div>
-              <Button
-                variant="ghost"
-                className={cn(
-                  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                  "pointer-events-auto relative z-40 h-auto min-h-11 shrink-0 flex-col gap-1 px-3 py-2",
-                )}
-                aria-label="查看视频评论"
-                onClick={() => void openVideoDetails("comments")}
-              >
-                <MessageSquareText data-icon="inline-start" aria-hidden />
-                <span className="text-xs">评论</span>
-              </Button>
-            </div>
-          )}
           {shortVideo && archiveQuery.data?.author_mid && (
             <UploaderDrawer
               open={uploaderOpen}
@@ -2687,6 +2700,7 @@ function VideoPlayerPageContent() {
               refreshDisabled={loading}
               loadError={fullscreen.error}
               stackedBelowPlayer={compact}
+              systemGestureBarReserved={shortVideo && mobileClient}
               compact={compact}
               portalContainer={stageRef}
               centerSlot={

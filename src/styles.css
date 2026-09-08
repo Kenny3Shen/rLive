@@ -887,6 +887,36 @@ html[data-fullscreen-transition="true"] .app-shell {
   --player-chrome-inset: env(safe-area-inset-bottom) !important;
 }
 
+/* 移动端短视频：系统栏在舞台外观内独立占位，HUD 仅覆盖 9:16 画面。
+   viewport 先扣除流内控制栏；高度不足时按可用高度缩窄画面，保持比例与控件可达性。 */
+[data-player-stage][data-video-portrait="true"] {
+  --player-safe-area-top: 0px;
+  padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
+  padding-bottom: var(--android-safe-area-bottom, env(safe-area-inset-bottom));
+  background: var(--background);
+}
+
+[data-player-stage][data-video-portrait="true"] > [data-video-viewport] {
+  container-type: size;
+}
+
+[data-player-stage][data-video-portrait="true"] [data-video-frame] {
+  flex: none;
+  width: min(100cqw, calc(100cqh * 9 / 16));
+  aspect-ratio: 9 / 16;
+  margin-inline: auto;
+}
+
+[data-player-stage][data-video-portrait="true"] [data-video-short-overlay] {
+  padding-bottom: 1rem;
+}
+
+[data-player-stage][data-video-portrait="true"] > [data-player-controls] {
+  position: relative;
+  flex: none;
+  background: #000;
+}
+
 /* 房间与 IPTV 频道网格在无限滚动或"加载更多"后可能保留大量卡片。Chromium 可以
    对每张完整卡片跳过屏外布局/绘制，
    同时保持稳定的占位尺寸用于滚动。 */
