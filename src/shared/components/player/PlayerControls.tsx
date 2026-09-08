@@ -197,6 +197,8 @@ export type PlayerControlsProps = {
    * 也就不必为系统手势栏预留空间。
    */
   stackedBelowPlayer?: boolean;
+  /** 外层布局已预留系统底部安全区，控件内不再重复占位。 */
+  systemGestureBarReserved?: boolean;
   /** 可选内容，渲染进控制行中央的独立轨道：compact 与全屏一致可用，
    *  轨道互斥保证不与两侧按钮重叠。 */
   centerSlot?: ReactNode;
@@ -353,6 +355,7 @@ export function PlayerControls({
   pictureInPictureDisabled = false,
   disabled = false,
   stackedBelowPlayer = false,
+  systemGestureBarReserved = false,
   compact = false,
   centerSlot,
   timeline,
@@ -428,7 +431,9 @@ export function PlayerControls({
   const showVolumeControl = showPlayerVolumeControl(compact, portrait, fullscreen);
   const showSidePanelControl = showPlayerSidePanelControl(compact, portrait, fullscreen);
   const showWebFullscreenControl = showPlayerWebFullscreenControl(compact, fullscreen);
-  const avoidSystemGestureBar = playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer);
+  const avoidSystemGestureBar =
+    !systemGestureBarReserved &&
+    playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer);
   const mobilePortrait = !showSecondaryControls;
   const volumeControl = volumeControlPresentation(volume, muted);
   const isMuted = volumeControl.isMuted;

@@ -75,14 +75,20 @@ class MainActivity : TauriActivity() {
     // WebView 预绘制帧的底色跟随应用主题，避免启动窗口与页面首帧之间
     // 插入一帧白闪（见 RliveSystemBars.applyWebViewBackground）。
     RliveSystemBars.applyWebViewBackground(this, webView)
-    // WebView 的 env 在沉浸往返后可能仍为 0；外壳与 HUD 共用原生安全区。
+    // WebView 的 env 在沉浸往返后可能仍为 0；外壳与播放器共用原生安全区。
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
-      // 临时滑出的系统栏不一定改变可见 inset；始终给顶部操作保留空间。
+      // 忽略可见性以保持边界稳定；不包含 IME，键盘高度不应占用播放安全区。
       val top = insets.getInsetsIgnoringVisibility(
         WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout(),
       ).top
+      val bottom = insets.getInsetsIgnoringVisibility(
+        WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.displayCutout(),
+      ).bottom
       webView.evaluateJavascript(
-        "document.documentElement?.style.setProperty('--android-safe-area-top', ($top / window.devicePixelRatio) + 'px')",
+        """
+          document.documentElement?.style.setProperty('--android-safe-area-top', ($top / window.devicePixelRatio) + 'px');
+          document.documentElement?.style.setProperty('--android-safe-area-bottom', ($bottom / window.devicePixelRatio) + 'px');
+        """.trimIndent(),
         null,
       )
       // 保留 WebView 自身的分发，不消费底部手势栏或键盘 inset。

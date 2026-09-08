@@ -309,7 +309,8 @@ export function VideoDanmakuLayer({
         ref={containerRef}
         aria-hidden
         data-video-danmaku-layer
-        className="pointer-events-none absolute inset-0 size-full overflow-hidden"
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+        style={{ top: "var(--video-danmaku-top, 0px)" }}
       />
       {target && active && interactive && (
         <div className="pointer-events-none absolute inset-0 z-40">
