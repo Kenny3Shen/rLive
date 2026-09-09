@@ -1117,6 +1117,9 @@ function VideoPlayerPageContent() {
       syncDuration();
       syncBuffered();
       syncAspectRatio();
+      // canplay/loadedmetadata 说明数据重新流动：即使引擎没补发 playing，
+      // 也别让上一轮 waiting 的判定计时继续空转。
+      waitingRecovery.notifyResumed();
       if (media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
         setSwipePoster((poster) =>
           poster && (poster.cid > 0 ? poster.cid === reportedCid : poster.bvid === bvid)
@@ -1124,6 +1127,15 @@ function VideoPlayerPageContent() {
             : poster,
         );
       }
+    }
+    function onPlaying() {
+      if (cancelled) return;
+      setWaiting(false);
+      setLoading(false);
+      // 缓冲恢复的权威信号：waiting 判定计时必须在这里解除。play 事件只在
+      // 暂停→播放转换时触发，覆盖不了卡顿恢复；漏掉 playing 会让正常播放
+      // 中的视频被看门狗误重建、耗尽预算后弹出错误面板。
+      waitingRecovery.notifyResumed();
     }
     function onWaiting() {
       if (cancelled) return;
@@ -1191,6 +1203,7 @@ function VideoPlayerPageContent() {
     media.addEventListener("canplay", onReady);
     media.addEventListener("resize", syncAspectRatio);
     media.addEventListener("play", onPlay);
+    media.addEventListener("playing", onPlaying);
     media.addEventListener("pause", onPause);
     media.addEventListener("waiting", onWaiting);
     media.addEventListener("seeked", onSeeked);
@@ -1277,6 +1290,7 @@ function VideoPlayerPageContent() {
       media.removeEventListener("canplay", onReady);
       media.removeEventListener("resize", syncAspectRatio);
       media.removeEventListener("play", onPlay);
+      media.removeEventListener("playing", onPlaying);
       media.removeEventListener("pause", onPause);
       media.removeEventListener("waiting", onWaiting);
       media.removeEventListener("seeked", onSeeked);
