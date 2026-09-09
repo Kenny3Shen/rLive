@@ -189,7 +189,7 @@ message DanmakuElem {
 - `MainActivity` 通过 `getInsetsIgnoringVisibility` 获取状态栏/刘海顶部与导航栏/刘海底部安全区，按 `devicePixelRatio` 换成 `--android-safe-area-top` / `--android-safe-area-bottom`，不包含键盘高度。页面加载完成时重新分发 inset，避免 WebView 的 `env(safe-area-inset-*)` 残留 0。短视频外层负责上下安全区，画面内 `--player-safe-area-top` 为 `0px`，`PlayerControls.systemGestureBarReserved` 防止控制栏重复预留底部安全区；旧 APK / 浏览器仍回退到 `env`。普通画面全屏继续沿用既有隐藏系统栏行为。
 - 移动端短视频的飘屏弹幕从顶部 HUD 下方开始：播放页通过 `useVideoDanmakuTopInset` 测量画面内 HUD 的实际高度，写入舞台的 `--video-danmaku-top`，并用 `ResizeObserver` 跟随字号和布局变化；`VideoDanmakuLayer` 的底边固定在画面底边，区域比例按避让后的画面高度计算。HUD 透明隐藏不撤销避让，返回普通详情或桌面模式则恢复原有弹幕范围。
 - 用户信息使用既有 `Avatar` / `AvatarImage` / `AvatarFallback`：头像跨两行，右侧第一行用户名，第二行用 `Users` / `Video` 图标配数量，复用普通详情页的统计样式、`normalizeImageUrl` 和 `formatOnline`；下方展示视频标题。评论入口或控制栏退出全屏按钮切换为普通详情布局，不提供标题/详情按钮。`VideoSidebar` 页签由播放页控制，评论入口可直接定位。模式往返不改路由、不重新取流、不重建媒体元素；详情页返回键优先回到短视频（包括刷到的横屏项），再次返回才离开播放页。现有弹窗的返回优先级保留。
-- 头像打开挂载在 `stageRef` 的既有 `UploaderDrawer`；选择卡片后写入已加载投稿队列与非持久化 `uploader: { mid, name }`，关闭抽屉后导航。短视频只在 UP 投稿队列中显示 `x/y`。推荐/搜索等普通来源优先于稿件的多 P/合集信息；只有显式点选分 P/合集分集才切换相应队列，无有效来源的多 P 直链仍自动建立选集队列。
+- 头像打开挂载在 `stageRef` 的既有 `UploaderDrawer`；选择卡片后写入已加载投稿队列与非持久化 `uploader: { mid, name }`，关闭抽屉后导航。短视频只在 UP 投稿队列中显示 `x/y`。推荐/热门/相关流队列保留手动上下切换，但不把下一条作为自动播放下一集；普通详情播完来源流后按相关视频接口顺序继续。搜索、UP 投稿及显式点选分 P/合集分集仍可自动连播；稿件信息不会覆盖已有来源队列，无有效来源的多 P 直链仍自动建立选集队列。
 - 短视频进度条与上下控制栏不参与空闲隐藏。`infoHidden` 只控制用户/视频信息的透明度与 `aria-hidden`，评论入口、时间轴与控制栏始终可用；`PlayerControls` 通过 `infoVisible` / `onToggleInfo` 在同一位置切换信息显隐，不再提供舞台独立恢复按钮。状态随队列保持，不写入设置；普通详情仍沿用空闲自动隐藏，返回沉浸时重新显示信息。
 - 单击立即暂停/继续，双击不切换全屏；长按仍临时 3 倍速。移动端只有短视频模式接管上下换片，整面（含左右两侧）都用于换片，不划分亮度/音量区、不增加全屏手势锁。普通视频才使用直播同款左右调节。无队列也可沉浸/循环，有多项队列才可上下切换；竖屏视频的全屏按钮继续进入刷视频模式。
 - 桌面鼠标滚轮仅在舞台画面内接管纵向滚动，不受视频画幅限制；向下前进、向上后退。原生非 passive `wheel` 监听避免连带滚动页面，过滤控件/菜单、横滚和缩放；像素/行/页增量归一化后交给 `videoWheelDirection`，按静默间隔合并惯性滚动，每段只换一条。触摸与滚轮共用 `stepPlaylist`、邻项封面和动画，沿用正序/倒序及边界提示，不新增返回记录。画面上的「上滑下一个 · 下滑上一个」提示已移除。
@@ -211,7 +211,7 @@ message DanmakuElem {
 ### 播放偏好（循环播放与音量记忆）
 
 - 普通详情模式的「播放设置」弹层分为清晰度、倍速和播放偏好。「循环播放」常驻，「自动播放下一集」「倒序播放」只在列表多于一项时出现；三项由 `playlistStore` 持久化到 localStorage `video-playlist`。短视频模式以单条循环说明替代循环/连播开关，保留倒序与其他播放设置。
-- 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext)` 决定，优先级固定：循环 > 连播 > 停住。循环是「就看这一集」的显式意图，不该被连播带走；没有下一集时连播退化成停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效。
+- 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext)` 决定，优先级固定：循环 > 连播 > 停住；推荐/热门/相关流的队列邻项不计入 `hasNext`，普通详情在这类来源队列结束后转取当前视频的相关视频。循环是「就看这一集」的显式意图，不该被连播带走；没有可连播的下一集且相关视频为空时停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效。
 - 循环重播走原生 `media.currentTime = 0` + `play()`（与 seek 同一条 DASH 路径）；进度已在 `ended` 里按总时长记满，观看历史仍认定「已看完」，下次进入从头播放。
 - 音量与静音由 `src/shared/playerVolume.ts` 记在 localStorage `rlive-player-volume`，视频页、直播页、IPTV 播放页与录制回放共享同一份：初值取 `readPlayerVolume()`，音量/静音状态变化写 `rememberPlayerVolume()`（同值不重渲染，一次拖动最多写它经过的档位数，不需要节流）。不参与的两处：多画面按槽位各存一份音量（副画面默认静音是角色语义）；Android 真实音量是系统媒体音量（由 OS 记住），网页层固定 100 且不落盘，否则会把 100 写进桌面端的记忆。
 

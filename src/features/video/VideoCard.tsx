@@ -7,7 +7,12 @@ import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
-import { usePlaylistStore, type PlaylistItem, type PlaylistUploader } from "./playlistStore";
+import {
+  usePlaylistStore,
+  type PlaylistItem,
+  type PlaylistKind,
+  type PlaylistUploader,
+} from "./playlistStore";
 import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
 
@@ -84,6 +89,7 @@ function CoverImage({
 export const VideoCard = memo(function VideoCard({
   item,
   playlist,
+  playlistKind = "sequence",
   playlistUploader,
   onNavigate,
   orientation = "grid",
@@ -92,6 +98,7 @@ export const VideoCard = memo(function VideoCard({
   item: VideoItem;
   /** 列表上下文（搜索/UP 主投稿）：点击时把该列表设为播放列表，从这张卡开始连播。 */
   playlist?: readonly PlaylistItem[];
+  playlistKind?: PlaylistKind;
   /** 队列来源 UP 标记：与 `playlist` 一起写入 store（UP 投稿抽屉连播），普通列表不传。 */
   playlistUploader?: PlaylistUploader | null;
   /** 队列写入后、路由跳转前回调（如关闭来源抽屉）。 */
@@ -128,11 +135,11 @@ export const VideoCard = memo(function VideoCard({
       onFocus={() => playPath && preloadRouteModule(playPath)}
       onClick={() => {
         if (!playPath) return;
-        // 列表上下文：把点击时刻的列表快照设为播放列表（后续无限加载不影响它），
-        // 从这张卡开始连播，与 PGC 分集的「播放全部」同一套状态。
+        // 列表上下文保留点击时刻的快照；推荐流只供手动换片，不冒充下一集。
         if (playlist && playlist.some((entry) => entry.id === playListId)) {
-          // 未传来源（推荐/搜索/合集）时第三参为 undefined，store 会清掉旧 UP 标记。
-          usePlaylistStore.getState().setPlaylist([...playlist], playListId, playlistUploader);
+          usePlaylistStore
+            .getState()
+            .setPlaylist([...playlist], playListId, playlistKind, playlistUploader);
         }
         onNavigate?.();
         navigate(playPath);
@@ -268,14 +275,21 @@ export const VIDEO_GRID_CLASS =
 export const VideoGrid = memo(function VideoGrid({
   items,
   playlist,
+  playlistKind,
 }: {
   items: readonly VideoItem[];
   playlist?: readonly PlaylistItem[];
+  playlistKind?: PlaylistKind;
 }) {
   return (
     <div className={VIDEO_GRID_CLASS}>
       {items.map((item) => (
-        <VideoCard key={`${item.bvid}:${item.cid ?? ""}`} item={item} playlist={playlist} />
+        <VideoCard
+          key={`${item.bvid}:${item.cid ?? ""}`}
+          item={item}
+          playlist={playlist}
+          playlistKind={playlistKind}
+        />
       ))}
     </div>
   );
