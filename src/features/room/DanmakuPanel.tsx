@@ -84,6 +84,7 @@ const DanmakuRow = memo(function DanmakuRow({
   roomTitle,
   roomUserName,
   surface,
+  onMenuOpen,
 }: {
   line: DanmakuLine;
   siteId?: SiteId;
@@ -91,6 +92,7 @@ const DanmakuRow = memo(function DanmakuRow({
   roomTitle?: string;
   roomUserName?: string;
   surface: DanmakuListSurface;
+  onMenuOpen: () => void;
 }) {
   const { event } = line;
   if (event.kind === "system") {
@@ -109,6 +111,7 @@ const DanmakuRow = memo(function DanmakuRow({
       roomTitle={roomTitle}
       roomUserName={roomUserName}
       surface={surface}
+      onMenuOpen={onMenuOpen}
     />
   );
 });
@@ -124,6 +127,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   roomTitle,
   roomUserName,
   surface,
+  onMenuOpen,
 }: {
   event: DanmakuEvent;
   siteId?: SiteId;
@@ -131,6 +135,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
   roomTitle?: string;
   roomUserName?: string;
   surface: DanmakuListSurface;
+  onMenuOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const message = formatDanmakuClipboardText(event.content);
@@ -164,6 +169,8 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
       open={open}
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
+        // 打开操作菜单即冻结列表（由面板注入）：被点击的行与菜单停在原地。
+        if (nextOpen) onMenuOpen();
         if (!nextOpen) actions.resetStatus();
       }}
     >
@@ -578,6 +585,14 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     scrollDanmakuViewportToBottom(scrollRootRef.current);
   }, []);
 
+  // 点击弹幕行打开操作菜单即表示读者要停在那一行上：解除底部跟随，让被点击的行
+  // 与菜单固定在当前位置，新消息只累积为未读。与手动上滚一致，滚回底部
+  // （跳回控件或向下滚动）才恢复跟随。
+  const unpinFromBottom = useCallback(() => {
+    autoScroll.current = false;
+    setAtBottom(false);
+  }, []);
+
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
       <div ref={scrollRootRef} className="relative min-h-0 flex-1">
@@ -607,6 +622,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
                 roomTitle={roomTitle}
                 roomUserName={roomUserName}
                 surface={listSurface}
+                onMenuOpen={unpinFromBottom}
               />
             ))}
           </div>
