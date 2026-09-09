@@ -115,6 +115,10 @@ import {
   videoResumePosition,
   VIDEO_HISTORY_QUERY_KEY,
 } from "./videoHistory";
+import {
+  createVideoWaitingRecovery,
+  type VideoWaitingRecovery,
+} from "./videoWaitingRecovery";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { CastMenu } from "@/features/room/CastMenu";
@@ -338,6 +342,51 @@ function VideoPlayerPageContent() {
   // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
   // 否则卡加载时点暂停会被重试重新拉起，按钮状态与实际播放相反。
   const userPausedRef = useRef(false);
+
+  /**
+   * 进入下一轮播放会话。它不读取媒体 ref，既供 waiting 控制器的惰性初始化
+   * 安全持有，也作为手动重试完成现场快照后的统一重建入口。
+   */
+  const advancePlaybackSession = useCallback(() => {
+    setPlaybackError(null);
+    setWaiting(false);
+    setLoading(true);
+    setPlayerRevision((revision) => revision + 1);
+  }, []);
+
+  /** 手动重建前记录当前位置；自动恢复已在 waiting 事件发生时记录现场。 */
+  const rebuildPlaybackSession = useCallback(() => {
+    const media = videoRef.current;
+    if (media && media.currentTime > 0) {
+      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+    }
+    advancePlaybackSession();
+  }, [advancePlaybackSession]);
+
+  // 点播 waiting 自动恢复：超时判定/预算/稳定重置收在纯逻辑模块（见
+  // ./videoWaitingRecovery），页面只把媒体事件喂进去、把决策接回上面的重建
+  // 链路。惰性 state 初始化只创建一次控制器；控制器本身不参与渲染。
+  const [waitingRecovery] = useState<VideoWaitingRecovery>(() =>
+    createVideoWaitingRecovery({
+      onAutoRetry: () => advancePlaybackSession(),
+      onExhausted: () => {
+        // 自动预算耗尽：改走可见错误面板，把重试交还给用户（retryPlayback 会
+        // 清预算，手动重试不受影响）。
+        setPlaybackError("视频长时间无响应，自动恢复未成功。请点击重试，或稍后再试");
+        setLoading(false);
+        setWaiting(false);
+      },
+    }),
+  );
+
+  /**
+   * 手动重试（错误面板的重试按钮、HUD 的刷新播放）：用户亲自出手视同预算
+   * 重置，再走与自动恢复同一条重建链路。
+   */
+  const retryPlayback = useCallback(() => {
+    waitingRecovery.notifyManualRetry();
+    rebuildPlaybackSession();
+  }, [rebuildPlaybackSession, waitingRecovery]);
 
   const compact = useCompactPlayerViewport();
   const clientPlatform = getClientPlatform();
@@ -1001,6 +1050,9 @@ function VideoPlayerPageContent() {
     setCurrentTime(0);
     setBufferedTime(0);
     setDuration(playInfo?.duration ?? 0);
+    // 本轮播放器会话向 waiting 自动恢复登记：同 key 续用预算，换 key 重置；
+    // 上一会话挂起的计时在模块内随之作废。
+    waitingRecovery.beginSession(videoKey);
 
     /** 当前分集的总时长：后端算出的值优先，缺失时退回媒体元数据。 */
     function totalDuration() {
@@ -1044,12 +1096,15 @@ function VideoPlayerPageContent() {
       setPaused(false);
       setWaiting(false);
       setLoading(false);
+      waitingRecovery.notifyResumed();
     }
     function onPause() {
       if (cancelled) return;
       setPaused(true);
       // 暂停是「可能马上要走」的最强信号：立刻落盘，不等节流窗口。
       reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
+      // 用户暂停不该被自动恢复拉起：waiting 判定计时随之作废。
+      waitingRecovery.notifyPaused();
     }
     function syncAspectRatio() {
       if (!cancelled) setFrameSize({ key: videoKey, ratio: videoAspectRatio(media) });
@@ -1071,14 +1126,26 @@ function VideoPlayerPageContent() {
       }
     }
     function onWaiting() {
-      if (!cancelled && !media.ended) setWaiting(true);
+      if (cancelled) return;
+      if (!media.ended) setWaiting(true);
+      // 自动恢复回调本身不读取 ref；在真实媒体事件里保存最后可续播位置。
+      if (!media.ended && !media.paused) {
+        if (media.currentTime > 0) {
+          resumeAtRef.current = { position: media.currentTime, playing: true };
+        }
+        waitingRecovery.notifyWaiting();
+      }
     }
     function onSeeked() {
-      if (!cancelled) setWaiting(false);
+      if (cancelled) return;
+      setWaiting(false);
+      // seek 的短暂 waiting 到此解除：判定计时取消，稳定播放重新起算。
+      waitingRecovery.notifyResumed();
     }
     function onEnded() {
       if (cancelled) return;
       setPaused(true);
+      waitingRecovery.notifyEnded();
       // 播完记满进度：历史卡的进度条画到底，续播判定据此认定「已看完」并从头播。
       const total = totalDuration();
       reportProgress(total > 0 ? total : media.currentTime, true);
@@ -1111,6 +1178,8 @@ function VideoPlayerPageContent() {
       setPlaybackError(media.error.message || "视频播放失败");
       setLoading(false);
       setWaiting(false);
+      // 错误面板接管：waiting 自动恢复的计时作废，别在错误上再叠一次重建。
+      waitingRecovery.notifyError();
     }
 
     media.volume = volumeRef.current / 100;
@@ -1150,6 +1219,8 @@ function VideoPlayerPageContent() {
           setPlaybackError(xgPlayerErrorMessage(cause, "视频播放失败"));
           setLoading(false);
           setWaiting(false);
+          // 与媒体错误同一语义：错误面板接管后 waiting 自动恢复不再叠加重建。
+          waitingRecovery.notifyError();
         });
         // 进页自动起播，与直播同源：先试带声音的 play()，被自动播放策略拒绝时
         // 降级为静音起播再立刻尝试恢复声音；用户手动静音过则保持静音。
@@ -1197,6 +1268,8 @@ function VideoPlayerPageContent() {
       // 放在 `cancelled = true` 之前,让它与其它 flush 走同一条 reportProgress。
       reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
       cancelled = true;
+      // 播放器会话拆除：waiting 自动恢复的判定计时随之作废（新会话另行登记）。
+      waitingRecovery.endSession();
       media.removeEventListener("timeupdate", syncTime);
       media.removeEventListener("durationchange", syncDuration);
       media.removeEventListener("progress", syncBuffered);
@@ -1229,6 +1302,7 @@ function VideoPlayerPageContent() {
     reportVideoProgress,
     resumePending,
     videoKey,
+    waitingRecovery,
   ]);
 
   const togglePlayback = useCallback(() => {
@@ -1711,27 +1785,6 @@ function VideoPlayerPageContent() {
     setMuted(true);
     if (media) media.muted = true;
   }, [androidPlayerControls, nativePlayerControlsActive]);
-
-  /**
-   * 重试。
-   *
-   * 必须重新取一次播放信息而不是只重建播放器：失败常见于代理返回 502，而设计文档第四节
-   * 记录过那条真实故障 —— 插件走 `MPD.init` 重试路径时会把 `mediaList.audio` 换成新
-   * 数组从而**丢掉音轨**，画面在播但没有声音。重新起一轮会话是唯一能保证音轨挂回来的
-   * 做法，因此失败态必须可见、可重试，不能静默。
-   */
-  const retryPlayback = useCallback(() => {
-    setPlaybackError(null);
-    setWaiting(false);
-    setLoading(true);
-    // 记下当前位置：重建走的是换画质那条续播路径，否则会退回观看历史里的
-    // 旧位置（续播查询是进页时的快照，不随边看边上报更新）。
-    const media = videoRef.current;
-    if (media && media.currentTime > 0) {
-      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
-    }
-    setPlayerRevision((revision) => revision + 1);
-  }, []);
 
   const openVideoDetails = useCallback(
     async (tab: SidebarTab = "related") => {
