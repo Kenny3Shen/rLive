@@ -15,13 +15,22 @@ use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex as AsyncMutex, Semaphore, watch};
+use tokio::sync::{Mutex as AsyncMutex, oneshot, watch};
 use tokio::task::JoinSet;
 
 use crate::error::{AppError, AppResult};
 use crate::models::live::TwitchAdRecovery;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// 点播 Range 响应长时间没有任何新字节时中止本次请求。
+///
+/// 直播长连接允许自然静默，只有 `start_ordered` 创建的 VOD 轨道使用该边界。
+/// 超时必须短于前端的卡顿恢复看门狗，让旧请求先释放有序队列，再由播放器
+/// 换一组代理会话续播。
+#[cfg(not(test))]
+const VOD_MEDIA_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(test)]
+const VOD_MEDIA_READ_IDLE_TIMEOUT: Duration = Duration::from_millis(200);
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
 // 留出足够时间交付一份 gap 播放列表。
 const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
@@ -257,6 +266,8 @@ struct ProxyLoopContext {
     /// VOD 媒体会话按 accept 顺序串行应答（见 [`StreamProxy::start_ordered`]）。
     /// 直播会话永远为 `false`，行为完全不变。
     ordered: bool,
+    /// 仅 VOD 有序会话启用；对响应头和每个响应体 chunk 都按空闲时间重新计时。
+    media_read_idle_timeout: Option<Duration>,
 }
 
 /// [`StreamProxy::start_text`] 固定应答的内容与类型。
@@ -795,6 +806,7 @@ impl StreamProxy {
                 manifest_pin: Arc::new(ManifestPin::default()),
                 telemetry: telemetry.clone(),
                 ordered,
+                media_read_idle_timeout: ordered.then_some(VOD_MEDIA_READ_IDLE_TIMEOUT),
             };
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
             let task = tauri::async_runtime::spawn(async move {
@@ -1170,12 +1182,10 @@ mod tests {
     #[tokio::test]
     async fn ordered_session_serves_connections_in_arrival_order() {
         // 上游对第一条请求扣住一个释放闸，对后续请求立即应答：若无串行化，
-        // 第二条响应会先到。
+        // 第二条响应会先到。等待时间保持短于测试态 VOD 空闲超时。
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_address = upstream.local_addr().unwrap();
-        let (release_first, release_first_tx) = tokio::sync::watch::channel(false);
-        let release_first_rx = release_first_tx.clone();
-        drop(release_first_tx);
+        let (release_first, release_first_rx) = tokio::sync::watch::channel(false);
         let server = tokio::spawn(async move {
             let mut order = 0_u32;
             loop {
@@ -1189,7 +1199,6 @@ mod tests {
                     let mut request = [0_u8; 2048];
                     let _ = stream.read(&mut request).await;
                     if this == 1 {
-                        // 等待测试放行第一条，才把它的响应写出去。
                         while !*release.borrow_and_update() {
                             if release.changed().await.is_err() {
                                 return;
@@ -1223,20 +1232,19 @@ mod tests {
 
         async fn read_body(connect: String) -> String {
             let mut stream = tokio::net::TcpStream::connect(&connect).await.unwrap();
-            let request = "GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-            stream.write_all(request.as_bytes()).await.unwrap();
+            stream
+                .write_all(b"GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
             let mut buffer = Vec::new();
             stream.read_to_end(&mut buffer).await.unwrap();
-            String::from_utf8_lossy(&buffer).to_string()
+            String::from_utf8_lossy(&buffer).into_owned()
         }
 
         let first = tokio::spawn(read_body(connect.clone()));
-        // 稳定压到代理 accept 之后，再开第二条连接。
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        let second = tokio::spawn(read_body(connect.clone()));
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        // 上游第一条仍被扣住：串行化要求第二条连接拿不到任何字节。
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let second = tokio::spawn(read_body(connect));
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
         assert!(!first.is_finished());
         assert!(!second.is_finished());
 
@@ -1247,6 +1255,84 @@ mod tests {
         assert!(second_body.contains("resp-2"), "second: {second_body}");
 
         proxy.stop_for_session("video-x:video");
+        server.abort();
+    }
+
+    /// 第一条 Range 已返回响应头却停止发送 body 时，空闲超时必须关闭它并释放
+    /// 有序队列；否则第二条 Range 永远无法抵达上游，播放器只会持续 waiting。
+    #[tokio::test]
+    async fn ordered_session_idle_timeout_releases_the_next_connection() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = upstream.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            first.read(&mut request).await.unwrap();
+            first
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Length: 8\r\nConnection: close\r\n\r\na",
+                )
+                .await
+                .unwrap();
+
+            let (mut second, _) = upstream.accept().await.unwrap();
+            second.read(&mut request).await.unwrap();
+            second
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecond",
+                )
+                .await
+                .unwrap();
+
+            // 保持首条上游连接打开，确保是代理自己的空闲超时释放了队列。
+            std::future::pending::<()>().await;
+        });
+
+        let proxy = StreamProxy::new();
+        let local_url = proxy
+            .start_ordered(
+                format!("http://{upstream_address}/seg"),
+                HashMap::new(),
+                "video-timeout:video".into(),
+                None,
+            )
+            .await
+            .unwrap();
+        let connect = local_url
+            .trim_start_matches("http://")
+            .trim_end_matches("/live")
+            .to_string();
+
+        async fn read_body(connect: String) -> String {
+            let mut stream = tokio::net::TcpStream::connect(&connect).await.unwrap();
+            stream
+                .write_all(b"GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut buffer = Vec::new();
+            stream.read_to_end(&mut buffer).await.unwrap();
+            String::from_utf8_lossy(&buffer).into_owned()
+        }
+
+        let first = tokio::spawn(read_body(connect.clone()));
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let second = tokio::spawn(read_body(connect));
+        let second_body = tokio::time::timeout(std::time::Duration::from_secs(1), second)
+            .await
+            .expect("idle timeout should release the ordered queue")
+            .unwrap();
+        assert!(second_body.contains("second"), "second: {second_body}");
+        let first_body = first.await.unwrap();
+        assert!(first_body.ends_with('a'), "first: {first_body}");
+        assert_eq!(
+            proxy
+                .telemetry_for_session("video-timeout:video")
+                .unwrap()
+                .upstream_failures,
+            1
+        );
+
+        proxy.stop_for_session("video-timeout:video");
         server.abort();
     }
 
@@ -2275,15 +2361,32 @@ fn build_stream_client(proxy: Option<&str>) -> AppResult<Client> {
     .map_err(|_| AppError::new("stream_proxy_client", "媒体代理网络客户端初始化失败"))
 }
 
+async fn await_with_idle_timeout<F, T>(
+    future: F,
+    idle_timeout: Option<Duration>,
+) -> Result<T, &'static str>
+where
+    F: Future<Output = T>,
+{
+    match idle_timeout {
+        Some(limit) => tokio::time::timeout(limit, future)
+            .await
+            .map_err(|_| "upstream read idle timeout"),
+        None => Ok(future.await),
+    }
+}
+
 async fn run_proxy_loop(
     listener: TcpListener,
     context: ProxyLoopContext,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut handlers = JoinSet::new();
-    // 有序会话的单票门：在 accept 分支内取票——多线程运行时下任务的首次轮询
-    // 顺序不保证，唯一确定的顺序是 accept 顺序。
-    let order_gate = Arc::new(Semaphore::new(1));
+    // 有序会话用 accept 时同步建立的 oneshot 链排队。不能在 accept 分支里等待
+    // 前一条完成：那会卡住整个主循环，使 JoinSet 无法回收已经结束的 handler，
+    // 后续连接也永远无法进入队列。链的前后关系在 accept 时确定，因此不依赖
+    // 多线程运行时首次轮询各 handler 的先后顺序。
+    let mut ordered_tail: Option<oneshot::Receiver<()>> = None;
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -2294,15 +2397,11 @@ async fn run_proxy_loop(
             accept = listener.accept() => {
                 match accept {
                     Ok((mut socket, _)) => {
-                        let permit = if context.ordered {
-                            let gate = order_gate.clone();
-                            tokio::select! {
-                                permit = gate.acquire_owned() => Some(permit.expect("stream proxy order gate is never closed")),
-                                _ = wait_for_proxy_shutdown(&mut shutdown) => {
-                                    // 正在停机：不再应答新连接，直接丢弃。
-                                    continue;
-                                }
-                            }
+                        let previous = context.ordered.then(|| ordered_tail.take()).flatten();
+                        let completion = if context.ordered {
+                            let (sender, receiver) = oneshot::channel();
+                            ordered_tail = Some(receiver);
+                            Some(sender)
                         } else {
                             None
                         };
@@ -2310,6 +2409,14 @@ async fn run_proxy_loop(
                         let telemetry = context.telemetry.clone();
                         let mut handler_shutdown = shutdown.clone();
                         handlers.spawn(async move {
+                            if let Some(previous) = previous {
+                                tokio::select! {
+                                    _ = previous => {}
+                                    _ = wait_for_proxy_shutdown(&mut handler_shutdown) => {
+                                        return;
+                                    }
+                                }
+                            }
                             tokio::select! {
                                 _ = wait_for_proxy_shutdown(&mut handler_shutdown) => {}
                                 result = handle_client(&mut socket, context) => {
@@ -2319,8 +2426,10 @@ async fn run_proxy_loop(
                                     }
                                 }
                             }
-                            // permit 随任务结束释放：响应写完（或失败/中止）才放行下一条。
-                            drop(permit);
+                            // 无论成功、失败还是 sender 随任务取消而析构，下一条都能继续。
+                            if let Some(completion) = completion {
+                                let _ = completion.send(());
+                            }
                         });
                     }
                     Err(e) => {
@@ -2494,6 +2603,7 @@ async fn handle_client(
         manifest_pin,
         telemetry,
         ordered: _,
+        media_read_idle_timeout,
     } = context;
 
     // 读取请求头（只需要方法/路径；GET 不使用 body）。
@@ -2564,18 +2674,23 @@ async fn handle_client(
 
     telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
     let request_started = Instant::now();
-    let upstream = match pinned_manifest.as_deref() {
-        Some(pinned) => match build_request(pinned.to_string()).send().await {
-            Ok(response) if response.status().is_success() => Ok(response),
-            _failed_pin => {
-                // 钉扎地址已失效（签名过期或后端下线）：回退原始入口重新解析。
-                telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
-                build_request(target).send().await
-            }
-        },
-        None => build_request(target).send().await,
-    }
-    .map_err(|e| format!("upstream: {e}"))?;
+    let send = async {
+        match pinned_manifest.as_deref() {
+            Some(pinned) => match build_request(pinned.to_string()).send().await {
+                Ok(response) if response.status().is_success() => Ok(response),
+                _failed_pin => {
+                    // 钉扎地址已失效（签名过期或后端下线）：回退原始入口重新解析。
+                    telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+                    build_request(target).send().await
+                }
+            },
+            None => build_request(target).send().await,
+        }
+    };
+    let upstream = await_with_idle_timeout(send, media_read_idle_timeout)
+        .await
+        .map_err(str::to_owned)?
+        .map_err(|e| format!("upstream: {e}"))?;
     telemetry.record_response(request_started.elapsed());
     if manifest_pin_scope && upstream.status().is_success() {
         manifest_pin.set(upstream.url().to_string());
@@ -2781,7 +2896,11 @@ async fn handle_client(
     .await?;
 
     let mut stream = upstream.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let next = await_with_idle_timeout(stream.next(), media_read_idle_timeout)
+            .await
+            .map_err(str::to_owned)?;
+        let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
         telemetry.record_bytes(chunk.len());
         if chunk.is_empty() {
