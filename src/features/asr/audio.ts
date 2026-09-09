@@ -1,10 +1,12 @@
+import pcmCaptureWorkletUrl from "./pcmCapture.worklet.ts?worker&url";
+
 export const ASR_SAMPLE_RATE = 16_000;
 export const ASR_MIN_CHUNK_SECONDS = 0.2;
 export const ASR_MAX_CHUNK_SECONDS = 1;
 export const ASR_DEFAULT_CHUNK_SECONDS = 0.2;
 
 const NATIVE_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
-const PCM_CAPTURE_WORKLET_URL = new URL("./pcmCapture.worklet.js?no-inline", import.meta.url);
+const PCM_CAPTURE_WORKLET_URL = new URL(pcmCaptureWorkletUrl, import.meta.url);
 const PCM_CAPTURE_PROCESSOR_NAME = "rlive-pcm-capture";
 
 type PcmListener = (pcm: Float32Array) => void;

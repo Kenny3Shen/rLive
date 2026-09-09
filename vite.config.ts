@@ -33,6 +33,12 @@ export default defineConfig(({ command }) => ({
       "lucide-react",
     ],
   },
+  // AudioWorklet 的 addModule 按 ES module 语义加载;?worker&url 产物
+  // 走独立 worker 构建管线,显式声明 es 让构建与 dev 输出格式一致。
+  // 项目内没有其他 Worker,不受该全局设置影响。
+  worker: {
+    format: "es",
+  },
   build: {
     // WebView2 基于 Chromium，指定较新的目标可减小产物体积。
     target: "chrome120",
