@@ -143,7 +143,7 @@ function isRoomSideTab(value: string): value is RoomSideTab {
   return ROOM_SIDE_TABS.includes(value as RoomSideTab);
 }
 
-const CONTROLS_HIDE_DELAY_MS = 2_600;
+const CONTROLS_HIDE_DELAY_MS = 2_000;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
 type OverlayInteractionSource = "controls" | "composer" | "hud";
 
@@ -932,6 +932,26 @@ export function PlayerPane({
     scheduleControlsHide();
   }, [markControlsActivity, scheduleControlsHide]);
 
+  /**
+   * 鼠标离开播放器区域：两层 chrome 立即收起，不等空闲倒计时。触摸指针抬手
+   * 同样触发 pointerleave，直接忽略，保持「单击唤醒 → 空闲淡出」的原节奏，
+   * 否则松手瞬间就会吞掉刚唤醒的 chrome。
+   */
+  const handleStagePointerLeave = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== "mouse") return;
+      if (
+        !canAutoHideControls ||
+        overlayInteractionOpenRef.current ||
+        hasKeyboardFocusWithinControls()
+      ) {
+        return;
+      }
+      hideControls();
+    },
+    [canAutoHideControls, hasKeyboardFocusWithinControls, hideControls],
+  );
+
   const handleOverlayInteractionChange = useCallback(
     (source: OverlayInteractionSource, open: boolean) => {
       overlayInteractionSourcesRef.current[source] = open;
@@ -1378,6 +1398,7 @@ export function PlayerPane({
           onPointerDown={handleStagePointerDown}
           onPointerUp={handleStagePointerUp}
           onPointerCancel={handlePlayerEdgeGestureCancel}
+          onPointerLeave={handleStagePointerLeave}
           onKeyDown={handleStageKeyDown}
         >
           <div

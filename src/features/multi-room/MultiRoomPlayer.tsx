@@ -55,7 +55,7 @@ import {
 import { liveSyncDanmakuDelayMs, liveSyncFeedStatusText } from "./liveSyncRegistry";
 import { useMultiRoomStore, type MultiRoomEntry } from "./multiRoomStore";
 
-const MULTI_ROOM_CONTROLS_HIDE_DELAY_MS = 2_600;
+const MULTI_ROOM_CONTROLS_HIDE_DELAY_MS = 2_000;
 type MultiRoomOverlayInteractionSource = "controls" | "composer";
 
 function playbackErrorMessage(error: unknown): string {
@@ -670,6 +670,39 @@ export function MultiRoomPlayer({
     scheduleControlsHide();
   }, [scheduleControlsHide]);
 
+  /**
+   * 鼠标离开主画面：HUD 与控制条立即收起，不等空闲倒计时。触摸指针抬手
+   * 同样触发 pointerleave，仍走原空闲节奏，避免吞掉点按唤醒的 chrome。
+   */
+  const handleStagePointerLeave = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.pointerType !== "mouse") {
+        resumeControlsAutoHide();
+        return;
+      }
+      if (
+        !main ||
+        !player.running ||
+        player.paused ||
+        overlayInteractionOpenRef.current ||
+        hasKeyboardFocusWithinControls()
+      ) {
+        return;
+      }
+      clearControlsHideTimer();
+      setControlsVisible(false);
+    },
+    [
+      clearControlsHideTimer,
+      hasKeyboardFocusWithinControls,
+      main,
+      player.paused,
+      player.running,
+      resumeControlsAutoHide,
+      setControlsVisible,
+    ],
+  );
+
   const handleOverlayInteractionChange = useCallback(
     (source: MultiRoomOverlayInteractionSource, open: boolean) => {
       overlayInteractionSourcesRef.current[source] = open;
@@ -756,7 +789,7 @@ export function MultiRoomPlayer({
       onPointerEnter={main ? revealControls : undefined}
       onPointerMove={main ? revealControls : undefined}
       onPointerDown={main ? revealControls : undefined}
-      onPointerLeave={main ? resumeControlsAutoHide : undefined}
+      onPointerLeave={main ? handleStagePointerLeave : undefined}
       onDoubleClick={() => {
         if (!main) setMainRoom(room.key);
       }}

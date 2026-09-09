@@ -6,7 +6,7 @@ import {
 } from "./usePlayerChromeVisibility";
 
 /** 空闲多久后把 chrome 淡出。 */
-const CHROME_IDLE_DELAY_MS = 2_600;
+const CHROME_IDLE_DELAY_MS = 2_000;
 
 /**
  * 播放器 chrome 的空闲隐藏：底部控制条与顶部 HUD 共享一个倒计时，写
@@ -14,6 +14,9 @@ const CHROME_IDLE_DELAY_MS = 2_600;
  * 完成）。暂停、缓冲、失败或弹层打开时不排隐藏；键盘焦点落在 chrome 里
  * （弹幕输入框正在输入、焦点停在控制按钮上）时同样不隐藏，否则输入过程中
  * 指针划过画面就会让输入框带着未发送的草稿一起淡出。
+ *
+ * 鼠标离开播放器区域不等空闲倒计时，走 `dismissControls` 立即收起，
+ * 守卫与空闲隐藏完全一致。
  */
 export function usePlayerChromeIdle({
   controlsRef,
@@ -88,6 +91,21 @@ export function usePlayerChromeIdle({
     }, CHROME_IDLE_DELAY_MS);
   }, [clearHideTimer, hasKeyboardFocusWithinChrome, keepVisible, setChromeVisible]);
 
+  /**
+   * 立即收起 chrome：指针已离开播放器区域时不再等待空闲倒计时。
+   * 守卫与 `scheduleControlsHide` 相同（暂停、缓冲、失败、弹层打开或
+   * 键盘焦点在 chrome 里时保持可见），保证退出路径与空闲路径的可见性
+   * 契约不因触发方式不同而分叉。
+   */
+  const dismissControls = useCallback(() => {
+    clearHideTimer();
+    if (keepVisible || hasKeyboardFocusWithinChrome()) {
+      setChromeVisible(true);
+      return;
+    }
+    setChromeVisible(false);
+  }, [clearHideTimer, hasKeyboardFocusWithinChrome, keepVisible, setChromeVisible]);
+
   const revealControls = useCallback(() => {
     setChromeVisible(true);
     scheduleControlsHide();
@@ -106,5 +124,11 @@ export function usePlayerChromeIdle({
   // 卸载时不留下悬空的隐藏定时器。
   useEffect(() => clearHideTimer, [clearHideTimer]);
 
-  return { controlsVisibleRef, revealControls, holdControlsVisible, scheduleControlsHide };
+  return {
+    controlsVisibleRef,
+    revealControls,
+    holdControlsVisible,
+    scheduleControlsHide,
+    dismissControls,
+  };
 }
