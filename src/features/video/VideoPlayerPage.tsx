@@ -174,7 +174,7 @@ import { notify, setToastPortalContainer } from "@/components/ui/toast";
 const SINGLE_CLICK_DELAY_MS = 220;
 
 /** 倍速档位：菜单可选 0.5x–2x；3x 只作为长按的临时档位，不进菜单。 */
-const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+const PLAYBACK_RATES = [0.5, 0.75, 1, 1.5, 2] as const;
 
 /** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
 const LONG_PRESS_RATE = 3;
