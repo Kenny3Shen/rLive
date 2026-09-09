@@ -77,7 +77,7 @@ const RECORDING_SEEK_TIMEOUT_MS = 4_000;
 const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
 /** 派生空轨的稳定身份，避免每帧新数组使弹幕画布失效。 */
 const EMPTY_DANMAKU: RecordedDanmakuEntry[] = [];
-const RECORDING_CONTROLS_HIDE_DELAY_MS = 2_600;
+const RECORDING_CONTROLS_HIDE_DELAY_MS = 2_000;
 const RECORDING_SINGLE_CLICK_DELAY_MS = 220;
 const RECORDING_MPEGTS_CONFIG = {
   enableWorker: false,
@@ -695,6 +695,31 @@ export function RecordingPlayer({
     setChromeVisible(true);
   }, [clearControlsHideTimer, setChromeVisible]);
 
+  /**
+   * 鼠标离开播放器区域：HUD 与控制条立即收起，不等空闲倒计时。触摸指针
+   * 抬手同样触发 pointerleave，仍走原空闲节奏，避免吞掉单击唤醒的 chrome。
+   */
+  const handleStagePointerLeave = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.pointerType !== "mouse") {
+        scheduleControlsHide();
+        return;
+      }
+      if (paused || loading || error || overlayInteractionOpen) return;
+      clearControlsHideTimer();
+      setChromeVisible(false);
+    },
+    [
+      clearControlsHideTimer,
+      error,
+      loading,
+      overlayInteractionOpen,
+      paused,
+      scheduleControlsHide,
+      setChromeVisible,
+    ],
+  );
+
   const handleStagePointerActivity = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       if (isPlayerControlTarget(event.target)) holdControlsVisible();
@@ -822,7 +847,7 @@ export function RecordingPlayer({
       aria-keyshortcuts="Space K ArrowLeft ArrowRight M F"
       onPointerEnter={handleStagePointerActivity}
       onPointerMove={handleStagePointerActivity}
-      onPointerLeave={scheduleControlsHide}
+      onPointerLeave={handleStagePointerLeave}
       onKeyDown={handleStageKeyDown}
       tabIndex={0}
     >

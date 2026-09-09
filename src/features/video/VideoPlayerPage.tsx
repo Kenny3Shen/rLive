@@ -392,20 +392,21 @@ function VideoPlayerPageContent() {
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
   useVideoDanmakuTopInset(stageRef, hudRef, shortVideo && mobileClient);
-  const { revealControls, holdControlsVisible, scheduleControlsHide } = usePlayerChromeIdle({
-    controlsRef,
-    hudRef,
-    lockRef,
-    fullscreenLocked,
-    keepVisible:
-      shortVideo ||
-      paused ||
-      loading ||
-      waiting ||
-      Boolean(playbackError) ||
-      overlayInteractionOpen ||
-      subtitleOpen,
-  });
+  const { revealControls, holdControlsVisible, scheduleControlsHide, dismissControls } =
+    usePlayerChromeIdle({
+      controlsRef,
+      hudRef,
+      lockRef,
+      fullscreenLocked,
+      keepVisible:
+        shortVideo ||
+        paused ||
+        loading ||
+        waiting ||
+        Boolean(playbackError) ||
+        overlayInteractionOpen ||
+        subtitleOpen,
+    });
   const fullscreen = useRecordingPlayerFullscreen(stageRef, () => {
     if (!fullscreenLocked) return true;
     revealControls();
@@ -1856,6 +1857,22 @@ function VideoPlayerPageContent() {
     [holdControlsVisible, revealControls],
   );
 
+  /**
+   * 鼠标离开播放器区域：HUD 与控制条立即收起，不等空闲倒计时。触摸指针
+   * 抬手同样触发 pointerleave，仍走原空闲节奏，否则单击唤醒的 chrome
+   * 会在松手瞬间被吞掉。
+   */
+  const handleStagePointerLeave = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.pointerType !== "mouse") {
+        scheduleControlsHide();
+        return;
+      }
+      dismissControls();
+    },
+    [dismissControls, scheduleControlsHide],
+  );
+
   useEffect(() => {
     revealControls();
   }, [fullscreen.fullscreen, shortVideo, revealControls]);
@@ -2363,7 +2380,7 @@ function VideoPlayerPageContent() {
           }
           onPointerEnter={handleStagePointerActivity}
           onPointerMove={handleStagePointerActivity}
-          onPointerLeave={scheduleControlsHide}
+          onPointerLeave={handleStagePointerLeave}
           onKeyDown={handleStageKeyDown}
           tabIndex={0}
         >

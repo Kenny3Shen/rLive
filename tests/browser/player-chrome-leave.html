@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>播放器 chrome 离场收起</title>
+    <link rel="icon" type="image/svg+xml" href="/rlive.svg" />
+    <style>
+      body {
+        margin: 0;
+      }
+      /* 舞台四周留白，供指针移出播放器区域；两层 chrome 悬浮于舞台上下边。 */
+      [data-player-stage] {
+        position: absolute;
+        left: 40px;
+        top: 120px;
+        width: min(560px, calc(100vw - 80px));
+        height: 240px;
+        background: #111;
+      }
+      [data-player-stage] button {
+        color: #eee;
+      }
+      [data-player-hud],
+      [data-player-controls] {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 44px;
+      }
+      [data-player-hud] {
+        top: 0;
+      }
+      [data-player-controls] {
+        bottom: 0;
+      }
+      [data-player-fullscreen-lock] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="fixture"></div>
+    <script type="module" src="./player-chrome-leave.tsx"></script>
+  </body>
+</html>

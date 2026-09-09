@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { AlertCircle, ChevronLeft, Radio, Tv } from "lucide-react";
@@ -41,7 +42,7 @@ export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "
 
 export const IPTV_AUTO_RECONNECT_MAX_ATTEMPTS = 2;
 export const IPTV_AUTO_RECONNECT_DELAYS_MS = [1_000, 2_500] as const;
-const CONTROLS_HIDE_DELAY_MS = 2_600;
+const CONTROLS_HIDE_DELAY_MS = 2_000;
 export type IptvReconnectAction =
   | { type: "retry"; attempt: number; delayMs: number }
   | { type: "fail" };
@@ -380,6 +381,25 @@ export function IptvPlayer({
     setControlVisibility(true);
   }, [clearControlsHideTimer, setControlVisibility]);
 
+  /**
+   * 鼠标离开播放器区域：HUD 与控制条立即收起，不等空闲倒计时。触摸指针
+   * 抬手同样触发 pointerleave，忽略之，保持「点按唤醒 → 空闲淡出」的原节奏。
+   */
+  const handleStagePointerLeave = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== "mouse") return;
+      if (status !== "playing" || player.paused || controlsInteractionOpen) return;
+      clearControlsHideTimer();
+      setControlVisibility(false);
+    },
+    [
+      clearControlsHideTimer,
+      controlsInteractionOpen,
+      player.paused,
+      setControlVisibility,
+      status,
+    ],
+  );
   useEffect(() => {
     scheduleControlsHide();
     return clearControlsHideTimer;
@@ -476,6 +496,7 @@ export function IptvPlayer({
           if (isPlayerInteractiveTarget(event.target)) return;
           void toggleFullscreen();
         }}
+        onPointerLeave={handleStagePointerLeave}
       >
         <div
           ref={playerRootRef}
