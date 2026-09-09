@@ -949,7 +949,7 @@ export function PlayerControls({
                   className={cn(
                     "z-50 max-h-[var(--available-height,calc(100dvh-5rem))] gap-0 overflow-y-auto p-1.5",
                     hasCustomPlaybackSettings
-                      ? "w-[min(24rem,calc(100vw-1.5rem))]"
+                      ? "w-[min(20rem,calc(100vw-1.5rem))]"
                       : "w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))]",
                     glassPanelClass({ overlay: true }),
                   )}
