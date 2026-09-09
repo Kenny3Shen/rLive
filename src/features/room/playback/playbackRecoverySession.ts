@@ -1,7 +1,7 @@
 import { clampIndex } from "@/lib/playUrl";
 import type { LivePlayQuality, LiveRoomDetail, PlayUrl, SiteId } from "@/shared/types/live";
 import type { PlayerEvent, QualityLevel } from "@/shared/types/player";
-import { isXgPlayerDecodeError } from "../player/xgPlayer";
+import { isVideoJsDecodeError } from "../player/videoJsPlayer";
 import { nextFailoverAction } from "./failover";
 import {
   playbackLinePreferenceRoomKey,
@@ -273,7 +273,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     this.playingStartedAt = null;
 
     const message = event.message?.trim() ?? "";
-    const isDecodeError = event.decodeError === true || isXgPlayerDecodeError(message);
+    const isDecodeError = event.decodeError === true || isVideoJsDecodeError(message);
     if (event.kind === "error" && this.config.siteId === "twitch" && isDecodeError) {
       const fallbackQualityIndex = nextTwitchDecodeQualityIndex(
         this.snapshot.qualities,

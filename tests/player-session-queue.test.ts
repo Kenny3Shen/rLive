@@ -7,7 +7,6 @@ import {
   canSoftSwitchPlaybackSource,
   hasStartedPlayback,
   hlsResponseStatus,
-  isHlsStream,
   isTwitchCommercialBreak,
   iptvFlvPlaybackOptions,
   liveFlvPlaybackOptions,
@@ -17,7 +16,7 @@ import {
   shouldUsePlaybackSoftSwitch,
   shouldEscalateNonTwitchHlsFatal,
 } from "../src/features/room/player/useWebPlayer";
-import { webPlaybackKind } from "../src/features/room/player/xgPlayer";
+import { webPlaybackKind } from "../src/features/room/player/videoJsPlayer";
 
 describe("player session queue", () => {
   test("does not start the replacement until the prior lifecycle has finished", async () => {
@@ -196,16 +195,6 @@ describe("player session queue", () => {
       softSwitch: "disabled",
       telemetry: false,
     });
-  });
-
-  test("routes every HLS site through the same hls.js playback kind", () => {
-    expect(isHlsStream("https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one")).toBe(true);
-    expect(isHlsStream("https://cdn.example.test/live.flv")).toBe(false);
-    const source = {
-      url: "https://usher.ttvnw.net/api/channel/hls/demo.m3u8?sig=one",
-      protocol: "hls" as const,
-    };
-    expect(webPlaybackKind(source)).toBe("hls");
   });
 
   test("does not mark a play() call healthy before the first decoded frame", () => {

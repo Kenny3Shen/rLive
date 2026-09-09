@@ -331,8 +331,8 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="danmaku" data-edge-to="dmserver" data-edge-label="长连接订阅" data-edge-key="11" data-edge-id="danmaku-upstream" data-composition-points="920,442;1030,442" d="M 920 442 L 1030 442" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
 
         <!-- Components -->
-        <g id="node-player" data-node-id="player" data-node-label="WebView 播放页" tabindex="0" role="button" aria-label="聚焦WebView 播放页，React 19 + xgplayer, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="React 19 + xgplayer" data-node-context="本地进程 · Tauri 2 + Rust">
-          <title>WebView 播放页 · React 19 + xgplayer · 本地进程 · Tauri 2 + Rust</title>
+        <g id="node-player" data-node-id="player" data-node-label="WebView 播放页" tabindex="0" role="button" aria-label="聚焦WebView 播放页，React 19 + Video.js 媒体适配器, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="frontend" data-sublabel="React 19 + Video.js" data-node-context="本地进程 · Tauri 2 + Rust">
+          <title>WebView 播放页 · React 19 + Video.js 媒体适配器 · 本地进程 · Tauri 2 + Rust</title>
           <rect x="110" y="140" width="190" height="92" rx="6" class="c-mask"/>
           <rect x="110" y="140" width="190" height="92" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(116 146) scale(0.6875)">
@@ -342,7 +342,7 @@ rect.c-bg-rect { fill: var(--bg); }
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" x="205" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">WebView 播放页</text>
-        <text x="205" y="200" class="t-muted" font-size="9" text-anchor="middle">React 19 + xgplayer</text>
+        <text x="205" y="200" class="t-muted" font-size="9" text-anchor="middle">React 19 + Video.js</text>
         </g>
 
         <g id="node-commands" data-node-id="commands" data-node-label="Tauri 命令层" tabindex="0" role="button" aria-label="聚焦Tauri 命令层，commands/ + events, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="backend" data-node-sublabel="commands/ + events" data-node-context="本地进程 · Tauri 2 + Rust">

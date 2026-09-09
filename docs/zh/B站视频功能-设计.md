@@ -7,7 +7,7 @@
 - 入口：**新增侧栏「视频」目的地**，独立路由 `/video`。现有首页的直播平台条（B站/斗鱼/虎牙/抖音/Twitch）完全不动。
 - 头部整行 = 四个内容页签「推荐 / 热门 / 番剧 / 影视」；其下一条**分区条**；再下是内容网格。
 - 番剧 / 影视点进去**要能播**（PGC playurl），与 UGC 是两套播放链路。
-- 画质走 **DASH**，使用官方 `xgplayer-dash` 插件（已装 `3.0.26`，与 `xgplayer` 版本严格对齐）。
+- 画质走 **DASH**，使用 Video.js 官方 `@videojs/dash-video` 适配器（内部由 dash.js 读取 MPD）。
 - **搜索筛选一起做**（结构对齐 B 站 Web 端搜索页）：`/video/search` 结果页顶部——排序是一行可横滚的 chip（复用 `ChipStrip`，与分区条同套横滚/箭头/键盘逻辑），时长 / 分区 / 发布时间是三个独立下拉（`Select`，「当前值 ▾」形态，非默认高亮，首项即默认）。不收进单个「筛选」按钮、无重置按钮（各维度选回首项即默认）。筛选住在 URL（`?order/&duration/&zone/&pubtime=`，默认位不进 URL），换筛选替换历史（与首页换分区同取向）；头部查询条提交新关键词不带筛选参数，新搜索天然重置。分区表由后端 `video_search_zone_list` 提供（搜索 tid 与分区榜 rid 两套 ID，不能复用 `video_zone_list`）。
 
 ## 二、可直接复用的现有基础设施（不要重写）
@@ -60,7 +60,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 同一画质有多编码变体（avc1 / hvc1 / av01）并列，**选流必须按 codec 过滤**，默认取 `avc1` 兼容性最好。
 
-播放页预载所需 xgplayer 模块，与取流 IPC 并行，复用既有模块缓存；后端 `video_play_selection` 用 `tokio::join!` 并发获取音/视频两条互不依赖的 sidx，减少一次串行 CDN 往返。该链路供 UGC/PGC、横竖屏与仅音频模式共用；各轨候选 CDN 回退仍按序执行，选流、错误优先级、真实分片时间轴与媒体代理顺序不变。
+播放页使用 Video.js DASH 适配器，与取流 IPC 并行准备；后端 `video_play_selection` 用 `tokio::join!` 并发获取音/视频两条互不依赖的 sidx，减少一次串行 CDN 往返。该链路供 UGC/PGC、横竖屏与仅音频模式共用；各轨候选 CDN 回退仍按序执行，选流、错误优先级、MPD 标准分片时间轴与媒体代理顺序不变。
 
 ### 2. CDN 分主机行为不同 → 必须走代理
 
@@ -72,23 +72,19 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 不能赌 base_url 落在 mcdn 上，**一律经 `stream_proxy` 注入 Referer**。
 
-### 3. `xgplayer-dash@3.0.26` 四个硬坑（已读源码 + 浏览器验证）
+### 3. DASH MPD 与 B站分片边界
 
-- **MPD 解析器不认 `SegmentBase`**（`es/parse/box/sidx.d.ts` 是空的，只实现了 `SegmentTemplate` / `SegmentList`）→ 必须我们自己解析 sidx，合成带 `SegmentList` 的 MPD。`SegmentList` 支持 `<Initialization range>` 与 `<SegmentURL mediaRange>`，且 `resolveSegmentURL` 对 `^https?://` 直接放行，可以塞绝对代理 URL。
-- **`Task` 按 URL 去重**（`es/media/task.js`：`Task.queue.some(item => item.url === url)` 命中就直接 return，连 XHR 都不建）。Bilibili 是「一条 URL + 不同 Range」，会导致**除首片外全部被静默丢弃**、播放卡死。→ **每个分片 URL 必须拼唯一 query**（如 `&seg=<idx>`），上游忽略该参数。
-- 取 MPD 的 `es/util/xhr.js` 会给 URL **拼 `?`**，`blob:` 精确匹配因此 404 → **MPD 必须由 HTTP 提供**，不能用 blob URL。
-- **`SegmentList` 被当成等长分片展开**（`es/m4s/mpd.js`：`start = index × 标称 duration`，既不认 `SegmentTimeline` 也不解析 sidx）。B 站按关键帧切片、单片长度不等（实测 5s 片里混 2.7s 片），偏差一路累积；而 `mpd.seek(t)` 只在「`t`、`t ± 该片时长`」三个窗口里挑分片，偏差超过一片时长后就再也挑不到真正覆盖 `t` 的那片 —— seek 后媒体元素永远停在 `waiting`，插件下一轮轮询算出同样的目标、命中已下载的邻片，于是死锁。→ 两道措施：
-  - 后端标称 `duration` 取**平均槽位**（`mediaPresentationDuration / 片数`）而不是首片时长。取首片时 `片数 × 首片时长 > 总时长`，末片槽位倒挂（`start ≥ end`）、任何时刻都选不中，最后一片永远拉不到数据。
-  - 真实逐片边界由 `Sidx::segment_times`（N+1 项，分片 `k` 覆盖 `[t[k], t[k+1])`）随 play-info 下发，前端 `applyXgDashSegmentTimeline` 在插件挂上 `dash` 后（`resourceReady`/`canplay`）把分片表改写成真实时刻，选片精确到分片级。条数与边界数不符时拒绝改写（那不是这条轨的时间轴）。
+- 后端解析 `segment_base.index_range` 的 sidx box，并把每轨初始化范围、`mediaRange` 与逐片标准时间信息写入 `SegmentList`；Video.js DASH 适配器直接交给 dash.js 解析，不依赖前端私有分片表补丁。
+- 每个 `<SegmentURL>` 携带准确的 `mediaRange`，代理向上游转发 Range；不同 CDN 主机仍统一经过 `stream_proxy` 注入 Referer。
+- 视频和音频轨分别使用自己的 timescale、初始化范围和分片范围；播放器接收 HTTP `mpd_url`，不转换成 blob URL。
 
 ### 已验证的浏览器结论
 
-Python 桩服务（模拟 stream_proxy：注入 Referer + 转发 Range）+ 合成 MPD + esbuild 打包 `xgplayer` & `xgplayer-dash`，Chromium 实跑：
+Python/本地媒体服务模拟 stream_proxy（注入 Referer + 转发 Range）+ MPD + Video.js 官方适配器，Chromium 实跑：
 
-- 播放正常：`currentTime` 46.7s → 189.8s，`854x480`，`readyState: 4`。
-- **音轨已挂载**：`sourceBuffer` 同时含 `video/mp4;codecs="avc1.640033"` 与 `audio/mp4;codecs="mp4a.40.2"`，`audioBytes` 持续增长。
-- **seek 成立**：跳 180s 后在 189.8s 继续播，`buffered` 出现新区间 `[175.46, 210]`。
-- 曾观察到只挂载 video 轨：根因是桩服务单线程 502 导致插件 `MPD.init` 走重试路径、把 `mediaList.audio` 换成新数组从而丢掉 `selectedIdx`。桩服务加连接复用与重试后消失。**真实实现里 `stream_proxy` 必须稳定返回，502 会连带打掉音轨。**
+- 播放正常：`HTMLVideoElement.readyState: 4`，视频轨与音频轨均解码。
+- **seek 成立**：跳到中后段后重新出现有效 `buffered` 区间并继续播放。
+- 同一 `<video>` 的 HLS、FLV、裸 MPEG-TS、DASH 与原生 MP4 适配路径均可出画；同协议切源等待 `canplay` 后才提交，用户暂停状态保留。
 
 正式的 sidx 解析、取流与 MPD 生成实现位于 `src-tauri/src/sites/bilibili/video.rs`。
 

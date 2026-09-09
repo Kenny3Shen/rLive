@@ -7,11 +7,13 @@ import { rankPlaybackSourceIndices } from "../playback/sourceSelection";
 import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import {
-  createXgPlayer,
-  loadXgPlayerModules,
+  createVideoJsPlayer,
+  loadVideoJsModules,
   webPlaybackKind,
-  type XgPlayerInstance,
-} from "./xgPlayer";
+  type VideoJsPlayerInstance,
+  type VideoJsHlsOptions,
+  type VideoJsMpegtsOptions,
+} from "./videoJsPlayer";
 
 /** 悬停多久才开始取流。足够让鼠标扫过整行卡片而不触发任何一次预览。 */
 export const ROOM_CARD_PREVIEW_DELAY_MS = 600;
@@ -76,7 +78,7 @@ export function pickRoomCardPreviewSource(lines: readonly PlayUrl[]): PlayUrl | 
 }
 
 /** 预览缓冲窗口比房间播放器窄一个量级:只求快速出画并尽早丢弃已播片段。 */
-export function roomCardPreviewMpegtsOptions(type: "flv" | "mpegts"): Record<string, unknown> {
+export function roomCardPreviewMpegtsOptions(type: "flv" | "mpegts"): VideoJsMpegtsOptions {
   return {
     mediaDataSource: { type, isLive: true, hasAudio: false, hasVideo: true },
     mpegtsConfig: {
@@ -94,7 +96,7 @@ export function roomCardPreviewMpegtsOptions(type: "flv" | "mpegts"): Record<str
 }
 
 /** `capLevelToPlayerSize` 让 hls.js 把渲染档钉在够铺满卡片的最低档上。 */
-export function roomCardPreviewHlsOptions(): Record<string, unknown> {
+export function roomCardPreviewHlsOptions(): VideoJsHlsOptions {
   return {
     lowLatencyMode: false,
     backBufferLength: 6,
@@ -152,7 +154,7 @@ export function startRoomCardPreview(request: RoomCardPreviewRequest): CardPrevi
   const serial = previewSessionSerial;
   const sessionId = `${PREVIEW_SESSION_PREFIX}:${serial}`;
   let stopped = false;
-  let player: XgPlayerInstance | null = null;
+  let player: VideoJsPlayerInstance | null = null;
   let surface: PreviewSurface | null = null;
   let proxyStarted = false;
   let startTimer: number | null = null;
@@ -227,7 +229,7 @@ export function startRoomCardPreview(request: RoomCardPreviewRequest): CardPrevi
       }
 
       const kind = webPlaybackKind(source);
-      const modules = await loadXgPlayerModules(kind);
+      const modules = await loadVideoJsModules(kind);
       if (stopped) return;
 
       const localUrl = await invokeCmd<string>("stream_proxy_start", {
@@ -246,18 +248,17 @@ export function startRoomCardPreview(request: RoomCardPreviewRequest): CardPrevi
       surface = mounted;
       request.mount.append(mounted.root);
 
-      const instance = createXgPlayer(modules, {
-        root: mounted.root,
+      const instance = createVideoJsPlayer(modules, {
         video: mounted.video,
         url: playUrl,
         kind,
         isLive: kind !== "native",
         flv: roomCardPreviewMpegtsOptions("flv"),
         mpegts: roomCardPreviewMpegtsOptions("mpegts"),
-        hls: { hlsOpts: roomCardPreviewHlsOptions() },
+        hls: roomCardPreviewHlsOptions(),
       });
       player = instance;
-      // xgplayer 的 videoFillMode 会写成 contain;卡片要铺满而不是留黑边。
+      // Video.js 适配器不强制画面模式；卡片要铺满而不是留黑边。
       mounted.video.style.objectFit = "cover";
       mounted.video.muted = true;
 
@@ -269,9 +270,8 @@ export function startRoomCardPreview(request: RoomCardPreviewRequest): CardPrevi
       });
       instance.on("error", () => session.stop());
 
-      // xgplayer 在 `videoInit` 下 attach 媒体元素时会 load 一次，打断首个 `play()`
-      // 并抛 `AbortError`。房间播放器一直靠这个 helper 的重试吸收它，预览同样必须
-      // 重试，否则 `<video>` 永远停在 paused、`playing` 不触发、卡片只剩加载动画。
+      // Video.js 适配器初始化时可能触发一次原生 load，打断首个 play() 并抛 AbortError。
+      // 自动播放 helper 负责吸收它，否则卡片只剩加载动画。
       requestPlayerAutoplay(
         instance,
         mounted.video,

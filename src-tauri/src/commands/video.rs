@@ -119,10 +119,11 @@ fn video_stream_headers() -> HashMap<String, String> {
     ])
 }
 
-/// 取播放信息：解出分片表、拉起三个代理、合成 MPD。
+/// 取播放信息：解出分片表、拉起代理、合成 MPD。
 ///
 /// 顺序不可调换：MPD 里要写入视频/音频轨的**本机代理地址**，所以必须先把两条
 /// 媒体代理起起来拿到 URL，再合成清单，最后用文本代理把清单挂上 HTTP。
+/// 仅音频模式不起视频轨与文本代理，也不合成 MPD（听视频，见下方分支）。
 #[tauri::command]
 pub async fn video_get_play_info(
     state: State<'_, AppState>,
@@ -154,33 +155,35 @@ pub async fn video_get_play_info(
         mpd: format!("{base}-mpd"),
     };
 
-    // 仅音频模式跳过视频轨代理（听视频省流），清单只含音轨。
+    // 仅音频模式（听视频）不起视频轨代理，也不合成 MPD：音轨 fMP4 是完整
+    // 文件，代理转发 Range，前端把 audio_url 直接交给媒体元素播放。
     let video_url = if audio_only {
         String::new()
     } else {
         state
             .stream_proxy
-            .start_ordered(
+            .start(
                 selection.video.base_url.clone(),
                 headers.clone(),
                 session_ids.video.clone(),
+                false,
                 proxy.as_deref(),
+                None,
             )
             .await?
     };
     let audio_url = state
         .stream_proxy
-        .start_ordered(
+        .start(
             selection.audio.base_url.clone(),
             headers.clone(),
             session_ids.audio.clone(),
+            false,
             proxy.as_deref(),
+            None,
         )
         .await?;
 
-    // 仅音频模式（听视频）：音轨 fMP4 本身是完整文件，代理转发 Range，
-    // 直接当普通媒体地址播（xgplayer-dash 写死假设视频轨存在，纯音 MPD 会在
-    // definitions[0].selected 上崩）。不合成 MPD、不起文本代理。
     let mut mpd_url = String::new();
     if !audio_only {
         let mpd = crate::sites::bilibili::video::build_mpd(&selection, &video_url, &audio_url);
@@ -208,17 +211,6 @@ pub async fn video_get_play_info(
         quality_label: selection.quality_label,
         codecs: selection.video.codecs.clone(),
         accept_quality: selection.accept_quality,
-        // 仅音频模式走原生媒体元素而不是 DASH，没有分片表要修正。
-        video_segment_times: if audio_only {
-            Vec::new()
-        } else {
-            selection.video.sidx.segment_times()
-        },
-        audio_segment_times: if audio_only {
-            Vec::new()
-        } else {
-            selection.audio.sidx.segment_times()
-        },
         session_ids,
         audio_only,
     })

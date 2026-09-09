@@ -1,6 +1,25 @@
 import type { PlaybackProtocol, PlayUrl } from "@/shared/types/live";
 
 type PlaybackSourceLike = Pick<PlayUrl, "url" | "protocol" | "source_id" | "label" | "priority">;
+type InferredPlaybackProtocol = Exclude<PlaybackProtocol, "unknown">;
+
+export type PlaybackProtocolInferenceOptions = {
+  /** 无协议后缀时的业务默认值：直播通常按 FLV，IPTV 通常按 HLS。 */
+  fallback?: "flv" | "hls";
+};
+
+/** 从 URL 推断传输协议；显式的 PlayUrl.protocol 应由调用方优先处理。 */
+export function inferPlaybackProtocol(
+  url: string,
+  { fallback = "flv" }: PlaybackProtocolInferenceOptions = {},
+): InferredPlaybackProtocol {
+  if (/\.m3u8(?:[?#]|$)|(?:[/?&=_-])hls(?:[/?&=_-]|$)/i.test(url)) return "hls";
+  if (/\.flv(?:[?#]|$)|[?&](?:format|type)=flv(?:[&#]|$)/i.test(url)) return "flv";
+  if (/\.(?:ts|m2ts)(?:[?#]|$)|[?&](?:format|type)=(?:ts|mpegts)(?:[&#]|$)/i.test(url))
+    return "mpeg_ts";
+  if (/\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(url)) return "native";
+  return fallback;
+}
 
 export function playbackProtocol(
   source: string | Pick<PlayUrl, "url" | "protocol">,
@@ -8,10 +27,7 @@ export function playbackProtocol(
   const url = typeof source === "string" ? source : source.url;
   const explicit = typeof source === "string" ? undefined : source.protocol;
   if (explicit && explicit !== "unknown") return explicit;
-  if (/\.m3u8(?:[?#]|$)|(?:[/?&=_-])hls(?:[/?&=_-]|$)/i.test(url)) return "hls";
-  if (/\.ts(?:[?#]|$)|(?:[?&](?:format|type)=mpegts(?:&|$))/i.test(url)) return "mpeg_ts";
-  if (/\.(?:mp4|webm|m4v)(?:[?#]|$)/i.test(url)) return "native";
-  return "flv";
+  return inferPlaybackProtocol(url);
 }
 
 export function playbackSourceId(source: PlaybackSourceLike, _index: number): string {

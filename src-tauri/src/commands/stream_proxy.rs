@@ -47,7 +47,6 @@ pub async fn stream_proxy_start(
             hls.unwrap_or(false),
             proxy.as_deref(),
             twitch_ad_recovery,
-            false,
         )
         .await
 }

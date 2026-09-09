@@ -8,6 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import type Mpegts from "mpegts.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
@@ -23,14 +24,14 @@ import {
 } from "@/shared/playerVolume";
 import type { SiteId } from "@/shared/types/live";
 import {
-  createXgPlayer,
-  getXgMpegtsCore,
+  createVideoJsPlayer,
+  getVideoJsMpegtsCore,
   isInterruptedPlayRequest,
-  loadXgPlayerModules,
-  xgPlayerErrorMessage,
-  type XgPlaybackKind,
-  type XgPlayerInstance,
-} from "@/features/room/player/xgPlayer";
+  loadVideoJsModules,
+  videoJsPlayerErrorMessage,
+  type VideoJsPlaybackKind,
+  type VideoJsPlayerInstance,
+} from "@/features/room/player/videoJsPlayer";
 import { PlayerFullscreenHud, showPlayerFullscreenHud } from "@/features/room/PlayerFullscreenHud";
 import {
   isWatchProgressWorthKeeping,
@@ -54,7 +55,7 @@ import { RecordingPlaybackSettings } from "./RecordingPlaybackSettings";
 import { parseRecordedDanmakuSidecar, type RecordedDanmakuEntry } from "./recordedDanmaku";
 import { useRecordingPlayerFullscreen } from "./useRecordingPlayerFullscreen";
 
-function recordingPlaybackKind(protocol: RecordingItem["protocol"]): XgPlaybackKind {
+function recordingPlaybackKind(protocol: RecordingItem["protocol"]): VideoJsPlaybackKind {
   if (protocol === "hls") return "hls";
   if (protocol === "mpeg_ts") return "mpegts";
   if (protocol === "native") return "native";
@@ -79,7 +80,7 @@ const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
 const EMPTY_DANMAKU: RecordedDanmakuEntry[] = [];
 const RECORDING_CONTROLS_HIDE_DELAY_MS = 2_000;
 const RECORDING_SINGLE_CLICK_DELAY_MS = 220;
-const RECORDING_MPEGTS_CONFIG = {
+const RECORDING_MPEGTS_CONFIG: Mpegts.Config = {
   enableWorker: false,
   enableStashBuffer: false,
   lazyLoad: true,
@@ -110,7 +111,7 @@ export function RecordingPlayer({
   const stageRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const playerRef = useRef<XgPlayerInstance | null>(null);
+  const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const [initialAudio] = useState(readPlayerVolume);
   const volumeRef = useRef(initialAudio.volume);
   const mutedRef = useRef(initialAudio.muted);
@@ -278,7 +279,7 @@ export function RecordingPlayer({
       try {
         const protocolSeek =
           playbackKind === "flv" || playbackKind === "mpegts"
-            ? getXgMpegtsCore(playerRef.current!)?.seek?.(target)
+            ? getVideoJsMpegtsCore(playerRef.current!)?.seek?.(target)
             : false;
         if (!protocolSeek) media.currentTime = target;
       } catch {
@@ -316,8 +317,7 @@ export function RecordingPlayer({
     if (resumePending) return;
     let cancelled = false;
     const video = videoRef.current;
-    const root = rootRef.current;
-    if (!video || !root) return;
+    if (!video) return;
     const media = video;
     // 节流窗口按播放器实例重置：重建后的第一笔进度应当立刻落盘。
     reportedAtRef.current = null;
@@ -453,15 +453,6 @@ export function RecordingPlayer({
     function onSeeked() {
       if (!cancelled && seekTargetRef.current !== null) syncTime();
     }
-    function onNativeError() {
-      if (cancelled) return;
-      if (!media.error) return;
-      seekTargetRef.current = null;
-      clearSeekTimer();
-      setError(media.error.message || "录制回放失败");
-      setLoading(false);
-      setWaiting(false);
-    }
 
     video.volume = volumeRef.current / 100;
     video.muted = mutedRef.current;
@@ -477,26 +468,23 @@ export function RecordingPlayer({
     video.addEventListener("ended", onEnded);
     video.addEventListener("seeking", onSeeking);
     video.addEventListener("seeked", onSeeked);
-    video.addEventListener("error", onNativeError);
 
-    void loadXgPlayerModules(kind)
+    void loadVideoJsModules(kind)
       .then((modules) => {
         if (cancelled) return;
-        const player = createXgPlayer(modules, {
-          root,
+        const player = createVideoJsPlayer(modules, {
           video,
           url,
           kind,
           isLive: false,
+          // 录制回放非直播：关低延迟并放宽前后向缓冲，重试上限保持紧凑。
           hls: {
-            hlsOpts: {
-              lowLatencyMode: false,
-              backBufferLength: 90,
-              maxBufferLength: 90,
-              manifestLoadingMaxRetry: 2,
-              levelLoadingMaxRetry: 2,
-              fragLoadingMaxRetry: 2,
-            },
+            lowLatencyMode: false,
+            backBufferLength: 90,
+            maxBufferLength: 90,
+            manifestLoadingMaxRetry: 2,
+            levelLoadingMaxRetry: 2,
+            fragLoadingMaxRetry: 2,
           },
           flv: {
             mediaDataSource: {
@@ -528,14 +516,14 @@ export function RecordingPlayer({
           if (cancelled) return;
           seekTargetRef.current = null;
           clearSeekTimer();
-          setError(xgPlayerErrorMessage(cause, "录制回放失败"));
+          setError(videoJsPlayerErrorMessage(cause, "录制回放失败"));
           setLoading(false);
           setWaiting(false);
         });
       })
       .catch((cause) => {
         if (cancelled) return;
-        setError(xgPlayerErrorMessage(cause, "无法初始化录制播放器"));
+        setError(videoJsPlayerErrorMessage(cause, "无法初始化录制播放器"));
         setLoading(false);
       });
 
@@ -555,7 +543,6 @@ export function RecordingPlayer({
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("seeking", onSeeking);
       video.removeEventListener("seeked", onSeeked);
-      video.removeEventListener("error", onNativeError);
       seekRequestRef.current += 1;
       clearSeekTimer();
       seekTargetRef.current = null;
@@ -595,7 +582,7 @@ export function RecordingPlayer({
     if (video.paused) {
       void Promise.resolve(player.play()).catch((cause) => {
         if (isInterruptedPlayRequest(cause)) return;
-        setError(xgPlayerErrorMessage(cause, "播放录制失败"));
+        setError(videoJsPlayerErrorMessage(cause, "播放录制失败"));
       });
     } else {
       player.pause();

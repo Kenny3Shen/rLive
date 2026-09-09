@@ -91,7 +91,7 @@ bun run tauri dev
   </picture>
 </p>
 
-- **播放**：平台 CDN → Rust `stream_proxy` → localhost URL → `xgplayer`。代理负责请求头、跨域访问与 HLS 清单改写。
+- **播放**：平台 CDN → Rust `stream_proxy` → localhost URL → Video.js 媒体适配器或原生 `<video>`。代理负责请求头、同源访问与 HLS 清单改写。
 - **录制**：平台 CDN → 进程内 `ffmpeg-next` / libavformat → 本地录制目录。只重新封装，不参与前端播放。
 - **弹幕**：Rust 侧协议适配器解析并批处理，经 Tauri Events 推送到列表与画面；录制任务从同一批消息写入 `danmaku.jsonl`。
 - **字幕**：播放器音频经 Web Audio 转 16 kHz PCM，由 `asr_transcribe` 送入本机 sherpa-onnx 会话。

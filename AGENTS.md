@@ -31,7 +31,8 @@
 
 ## 播放与功能边界
 
-- 直播和 IPTV 使用 `xgplayer` 配合 FLV/HLS/MPEG-TS 插件，并统一通过 Rust `stream_proxy` 注入请求头和处理同源访问。
+- 直播和 IPTV 使用 Video.js 媒体适配器（HLS/DASH）与 `mpegts.js`，能用浏览器原生媒体能力时直接使用 `<video>`；统一通过 Rust `stream_proxy` 注入请求头和处理同源访问。
+- Video.js React 文档：https://videojs.org/docs/framework/react/llms.txt
 - 已支持 Bilibili、Huya、Douyu、Douyin、Twitch 的浏览与播放；搜索、翻页、Cookie 和弹幕能力以现有实现为准，不伪造平台不可靠的能力。抖音支持推荐/分类分页、首屏 SSR 回退、房间/播放、登录 Cookie 搜索和本地签名实时弹幕，但不提供弹幕发送；Twitch 使用 HLS 和匿名 IRC 弹幕，公开浏览接口可靠支持首屏。
 - 弹幕支持列表、Canvas、SC 叠加层及透明度、字号、速度、区域、行数、过滤和屏蔽设置。本地字幕使用 Web Audio、16 kHz PCM IPC 与 Rust sherpa-onnx Zipformer 会话，模型和音频保持本地。
 - `/iptv` 是频道发现页，`/iptv/play` 是独立播放页；进入发现页不得自动创建播放器或播放频道。

@@ -104,9 +104,8 @@ pub struct VideoQuality {
 
 /// 播放一条 VOD 所需的全部内容。
 ///
-/// `mpd_url` 是后端合成的 MPD 清单的 HTTP 地址。必须用 URL 交给播放器：
-/// `xgplayer-dash` 取清单的 XHR 会给地址拼 `?`，`blob:` URL 走精确匹配
-/// 因此 404。
+/// `mpd_url` 是后端合成的 MPD 清单的 HTTP 地址，交给 Video.js DASH 适配器
+/// （dash.js）按 URL 拉取；仅音频模式为空串。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoPlayInfo {
     pub mpd_url: String,
@@ -122,16 +121,9 @@ pub struct VideoPlayInfo {
     /// 实际选中的视频编码，如 `avc1.640033`。
     pub codecs: String,
     pub accept_quality: Vec<VideoQuality>,
-    /// 视频轨真实分片边界时刻（秒），共 N+1 项：分片 `k` 覆盖 `[t[k], t[k+1])`。
-    ///
-    /// `xgplayer-dash` 把 `SegmentList` 当等长分片展开，而 B 站按关键帧切片、长度
-    /// 不等，偏差累积后插件会选错分片（seek 后永远 waiting）。前端拿这份时间轴
-    /// 改写插件的分片表。仅音频模式不走 DASH，两条都为空。
-    pub video_segment_times: Vec<f64>,
-    /// 音频轨真实分片边界时刻（秒），同上。
-    pub audio_segment_times: Vec<f64>,
     pub session_ids: VideoSessionIds,
-    /// 仅音频模式（听视频）：MPD 只含音轨，video_url 为空。
+    /// 仅音频模式（听视频）：不走 DASH——音轨 fMP4 是完整文件，前端把
+    /// `audio_url`（代理转发 Range）直接交给媒体元素播放，`video_url` 为空串。
     pub audio_only: bool,
 }
 
@@ -154,10 +146,11 @@ pub struct VideoSubtitle {
     pub url: String,
 }
 
-/// 一次 VOD 播放占用的三个代理会话。
+/// 一次 VOD 播放占用的代理会话：视频轨 / 音轨 / MPD 清单各一条
+/// （仅音频模式只启动音轨，未启动的 id 停止时是无害的 no-op）。
 ///
 /// `StreamProxy::start` 按 `session_id` 覆盖同名代理，三条流共用一个 id 会
-/// 互相顶掉，所以必须各自独立。离开播放页时三个都要 stop，否则连接泄漏。
+/// 互相顶掉，所以必须各自独立。离开播放页时全部 stop，否则连接泄漏。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoSessionIds {
     pub video: String,
@@ -207,7 +200,7 @@ pub struct VideoPlayRequest {
     pub ep_id: Option<String>,
     /// 期望画质；缺省取当前身份可用的最高档。
     pub qn: Option<i64>,
-    /// 仅音频模式：跳过视频轨代理，MPD 只含音轨（听视频省流）。
+    /// 仅音频模式（听视频省流）：跳过视频轨代理，也不合成 MPD。
     pub audio_only: Option<bool>,
 }
 
