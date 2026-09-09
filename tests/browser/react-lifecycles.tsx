@@ -152,6 +152,90 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
     check(!host.textContent?.includes("测试消息乙"), "停用面板必须清空消息");
     passed.push("屏蔽匹配器切换、解除屏蔽与面板停用");
 
+    // 侧栏弹幕点击冻结：打开操作菜单必须解除底部跟随，被点击的行停在原位，
+    // 新消息只累积未读；跳回控件恢复跟随后新批次继续钉住底部。
+    await render(
+      <div data-danmaku-scroll-fixture>
+        <DanmakuPanel active siteId="bilibili" roomId="1" />
+      </div>,
+    );
+    const danmakuViewport = () =>
+      host.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    const emitScrollRegressionBatch = async (labels: string[]) => {
+      await act(async () => {
+        await emit("danmaku-batch", {
+          connection_epoch: 1,
+          events: labels.map((label, index) => ({
+            kind: "chat",
+            user: label,
+            content: `冻结回归 ${label}`,
+            color: null,
+            ts: 3000 + index,
+          })),
+        });
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 100);
+        await promise;
+      });
+    };
+    await emitScrollRegressionBatch(
+      Array.from({ length: 30 }, (_, index) => `观众${index}`),
+    );
+    let viewport = danmakuViewport();
+    check(Boolean(viewport), "面板必须挂载嵌套滚动视口");
+    check(
+      viewport!.scrollHeight > viewport!.clientHeight && viewport!.scrollTop > 0,
+      "钉住状态下的长列表必须溢出视口并滚到底部",
+    );
+    const rowTriggers = host.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label^="选择"]',
+    );
+    check(rowTriggers.length >= 30, "弹幕行必须呈现为可点击按钮");
+    await act(async () => {
+      rowTriggers[rowTriggers.length - 1]!.click();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 50);
+      await promise;
+    });
+    check(
+      Boolean(document.querySelector('[data-slot="popover-content"]')),
+      "点击弹幕行必须打开操作菜单",
+    );
+    const frozenScrollTop = danmakuViewport()!.scrollTop;
+    await emitScrollRegressionBatch(["新观众甲", "新观众乙"]);
+    viewport = danmakuViewport();
+    check(
+      viewport!.scrollTop === frozenScrollTop,
+      "菜单打开后新消息不得再推动视口滚动",
+    );
+    const jumpBack = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="滚动到底部"]',
+    );
+    check(Boolean(jumpBack), "解除跟随后必须出现跳回底部控件");
+    check(
+      (jumpBack!.textContent ?? "").includes("2"),
+      "冻结期间的新消息必须累积为未读计数",
+    );
+    await act(async () => {
+      jumpBack!.click();
+    });
+    viewport = danmakuViewport();
+    check(
+      Math.abs(viewport!.scrollTop - (viewport!.scrollHeight - viewport!.clientHeight)) < 1,
+      "跳回控件必须恢复钉住底部",
+    );
+    check(
+      !host.querySelector('button[aria-label="滚动到底部"]'),
+      "恢复钉住后跳回控件必须消失",
+    );
+    await emitScrollRegressionBatch(["恢复观众"]);
+    viewport = danmakuViewport();
+    check(
+      Math.abs(viewport!.scrollTop - (viewport!.scrollHeight - viewport!.clientHeight)) < 1,
+      "恢复后新批次必须继续跟随底部",
+    );
+    passed.push("弹幕行点击冻结与跳回恢复");
+
     await render(<DanmakuComposer siteId="bilibili" roomId="1" />);
     await resolveStatus();
     const input = () => host.querySelector<HTMLInputElement>("input");
