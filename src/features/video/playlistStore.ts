@@ -185,11 +185,16 @@ function adjacentItem(
  */
 export type PlaylistUploader = { mid: string; name: string };
 
+/** 推荐/热门/相关流只供手动换片；选集、合集、搜索与 UP 投稿队列可自动连播。 */
+export type PlaylistKind = "feed" | "sequence";
+
 type PlaylistState = {
   /** 当前播放列表。空数组表示无列表（单视频播放）。 */
   items: PlaylistItem[];
   /** 当前播放项的 id。 */
   currentId: string | null;
+  /** 临时队列类型，不持久化。 */
+  kind: PlaylistKind;
   /** 播放顺序：true 为倒序，false 为正序。 */
   reversed: boolean;
   /** 是否自动播放下一集（持久化到本地）。 */
@@ -201,11 +206,13 @@ type PlaylistState = {
 };
 
 type PlaylistActions = {
-  /**
-   * 设置播放列表并开始播放指定项。第三参标记队列来自某位 UP 主；
-   * 不传（普通来源）会清掉上一来源的标记，避免遗留。
-   */
-  setPlaylist: (items: PlaylistItem[], startId: string, uploader?: PlaylistUploader | null) => void;
+  /** 设置队列及其连播语义；未传 UP 来源时清除旧标记。 */
+  setPlaylist: (
+    items: PlaylistItem[],
+    startId: string,
+    kind: PlaylistKind,
+    uploader?: PlaylistUploader | null,
+  ) => void;
   /** 清空播放列表。 */
   clearPlaylist: () => void;
   /** 切换当前播放项。 */
@@ -218,6 +225,8 @@ type PlaylistActions = {
   toggleLoopPlayback: () => void;
   /** 获取下一个播放项（如果有）。 */
   getNextItem: () => PlaylistItem | null;
+  /** 获取可自动连播的下一项；推荐流的邻项不作为下一集。 */
+  getNextAutoPlayItem: () => PlaylistItem | null;
   /** 获取上一个播放项（如果有）。 */
   getPreviousItem: () => PlaylistItem | null;
   /** 获取当前播放项在列表中的位置（1-based）。 */
@@ -229,15 +238,17 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
     (set, get) => ({
       items: [],
       currentId: null,
+      kind: "sequence",
       reversed: false,
       autoPlayNext: true,
       loopPlayback: false,
       uploader: null,
 
-      setPlaylist: (items, startId, uploader) =>
+      setPlaylist: (items, startId, kind, uploader) =>
         set({
           items,
           currentId: startId,
+          kind,
           uploader: uploader ?? null,
         }),
 
@@ -245,6 +256,7 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
         set({
           items: [],
           currentId: null,
+          kind: "sequence",
           uploader: null,
         }),
 
@@ -269,6 +281,11 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
         })),
 
       getNextItem: () => adjacentItem(get(), 1),
+
+      getNextAutoPlayItem: () => {
+        const state = get();
+        return state.kind === "feed" ? null : adjacentItem(state, 1);
+      },
 
       getPreviousItem: () => adjacentItem(get(), -1),
 

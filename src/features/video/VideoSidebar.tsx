@@ -522,6 +522,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
             key={`${item.bvid}-${item.cid ?? ""}`}
             item={item}
             playlist={playlistItems}
+            playlistKind="feed"
             orientation="row"
           />
         ))
@@ -621,7 +622,7 @@ function EpisodesPanel({
       ? playlistItems[playlistItems.length - 1]
       : playlistItems[0];
     if (!firstItem) return;
-    playlistStore.setPlaylist(playlistItems, firstItem.id);
+    playlistStore.setPlaylist(playlistItems, firstItem.id, "sequence");
     onNavigate({
       bvid: firstItem.bvid,
       cid: firstItem.cid,
@@ -636,7 +637,7 @@ function EpisodesPanel({
     if (playlistItems.length === 0) return;
     const currentItem = playlistItems.find((item) => item.epId === epId);
     if (!currentItem) return;
-    playlistStore.setPlaylist(playlistItems, currentItem.id);
+    playlistStore.setPlaylist(playlistItems, currentItem.id, "sequence");
   };
 
   return (
@@ -816,7 +817,7 @@ function UgcSeasonList({
             rowRef={current ? currentRowRef : undefined}
             onNavigate={() => {
               const items = season.episodes.map(playlistItemFromSeasonEpisode);
-              usePlaylistStore.getState().setPlaylist(items, items[index].id);
+              usePlaylistStore.getState().setPlaylist(items, items[index].id, "sequence");
               onNavigate({
                 bvid: episode.bvid,
                 cid: episode.cid,
@@ -902,6 +903,7 @@ function PartsPanel({
                   usePlaylistStore.getState().setPlaylist(
                     pages.map((entry) => playlistItemFromArchivePage(bvid, aid, entry)),
                     `${bvid}_${page.cid}`,
+                    "sequence",
                   );
                   onNavigate({ bvid, cid: page.cid, title: label, aid });
                 }}

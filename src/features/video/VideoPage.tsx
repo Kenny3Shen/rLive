@@ -218,7 +218,7 @@ export function VideoPage() {
           (feedKind === "pgc" ? (
             <PgcGrid items={pgcItems} />
           ) : (
-            <VideoGrid items={ugcItems} playlist={playlistItems} />
+            <VideoGrid items={ugcItems} playlist={playlistItems} playlistKind="feed" />
           ))}
 
         {hasNextPage && (

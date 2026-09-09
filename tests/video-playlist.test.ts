@@ -118,14 +118,36 @@ test("UP 投稿队列切回普通来源或清空后不遗留来源标记", () =>
   const before = usePlaylistStore.getState();
   const item = playlistItemFromVideoItem(searchItem("BV1src", 1), 0);
   try {
-    usePlaylistStore.getState().setPlaylist([item], item.id, { mid: "42", name: "某UP" });
+    usePlaylistStore.getState().setPlaylist([item], item.id, "sequence", {
+      mid: "42",
+      name: "某UP",
+    });
     expect(usePlaylistStore.getState().uploader).toEqual({ mid: "42", name: "某UP" });
-    usePlaylistStore.getState().setPlaylist([item], item.id);
+    usePlaylistStore.getState().setPlaylist([item], item.id, "feed");
     expect(usePlaylistStore.getState().uploader).toBeNull();
-    usePlaylistStore.getState().setPlaylist([item], item.id, { mid: "42", name: "某UP" });
+    usePlaylistStore.getState().setPlaylist([item], item.id, "sequence", {
+      mid: "42",
+      name: "某UP",
+    });
     usePlaylistStore.getState().clearPlaylist();
     expect(usePlaylistStore.getState().uploader).toBeNull();
     expect(usePlaylistStore.getState().getCurrentPosition()).toBeNull();
+  } finally {
+    usePlaylistStore.setState(before, true);
+  }
+});
+
+test("推荐流结束时不把下一条当作自动播放下一集", () => {
+  const before = usePlaylistStore.getState();
+  const items = [0, 1].map((index) =>
+    playlistItemFromVideoItem(searchItem(`BV1feed${index}`, null), index),
+  );
+  try {
+    usePlaylistStore.getState().setPlaylist(items, items[0].id, "feed");
+    expect(usePlaylistStore.getState().getNextItem()).toEqual(items[1]);
+    expect(usePlaylistStore.getState().getNextAutoPlayItem()).toBeNull();
+    usePlaylistStore.getState().setPlaylist(items, items[0].id, "sequence");
+    expect(usePlaylistStore.getState().getNextAutoPlayItem()).toEqual(items[1]);
   } finally {
     usePlaylistStore.setState(before, true);
   }

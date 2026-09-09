@@ -93,6 +93,7 @@ import { formatRecordingDuration } from "@/features/recording/recording";
 import type {
   VideoHistoryItem,
   VideoHistoryKind,
+  VideoItem,
   VideoPlayInfo,
   VideoSessionIds,
 } from "@/shared/types/video";
@@ -102,6 +103,7 @@ import {
   videoGetCastUrl,
   videoGetDanmaku,
   videoGetPlayInfo,
+  videoGetRelated,
   videoGetSeason,
   videoGetSubtitle,
   videoGetSubtitles,
@@ -115,10 +117,7 @@ import {
   videoResumePosition,
   VIDEO_HISTORY_QUERY_KEY,
 } from "./videoHistory";
-import {
-  createVideoWaitingRecovery,
-  type VideoWaitingRecovery,
-} from "./videoWaitingRecovery";
+import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWaitingRecovery";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { CastMenu } from "@/features/room/CastMenu";
@@ -160,9 +159,11 @@ import {
   videoPlayPath,
 } from "./videoRoute";
 import {
-  usePlaylistStore,
+  dedupeVideoItems,
   playlistContainsCurrentItem,
   playlistItemFromArchivePage,
+  playlistItemFromVideoItem,
+  usePlaylistStore,
   videoEndedAction,
   videoSwipeDirection,
   videoWheelDirection,
@@ -181,6 +182,15 @@ const LONG_PRESS_RATE = 3;
 const LONG_PRESS_TRIGGER_MS = 500;
 /** 移动超过这个距离视为滑动手势，取消长按判定。 */
 const LONG_PRESS_CANCEL_MOVE_PX = 12;
+
+function relatedPlaylistItems(
+  items: readonly VideoItem[] | undefined,
+  currentBvid: string,
+): PlaylistItem[] {
+  return dedupeVideoItems(items?.filter((item) => item.bvid !== currentBvid) ?? []).map(
+    playlistItemFromVideoItem,
+  );
+}
 
 function isPlayerControlTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
@@ -713,8 +723,6 @@ function VideoPlayerPageContent() {
     },
     [queryClient],
   );
-
-  // 播放列表状态
   const playlistStore = usePlaylistStore();
   const nextItem = playlistStore.getNextItem();
   const prevItem = playlistStore.getPreviousItem();
@@ -738,15 +746,47 @@ function VideoPlayerPageContent() {
     [navigate],
   );
 
+  /** 来源队列没有下一项时，按相关视频接口顺序建立新的推荐队列并跳转。 */
+  const playRelatedItem = useCallback(
+    (canNavigate: () => boolean) => {
+      void queryClient
+        .fetchQuery({
+          queryKey: ["video_related", bvid ?? ""],
+          queryFn: () => videoGetRelated(bvid!),
+          staleTime: 5 * 60_000,
+        })
+        .then((page) => {
+          if (!canNavigate()) return;
+          const items = relatedPlaylistItems(page.items, bvid ?? "");
+          const target = items[0];
+          if (!target) return;
+          const state = usePlaylistStore.getState();
+          state.setPlaylist(items, target.id, "feed");
+          goToPlaylistItem(target);
+        })
+        .catch(() => undefined);
+    },
+    [bvid, goToPlaylistItem, queryClient],
+  );
+
   // 只响应路由身份变化：点相关/投稿卡片会先装新队列，再提交导航，
-  // 不能因 store 更新而拿旧路由把新队列清空或抢回旧选集。
+  // 不能因 store 更新而拿旧路由把新队列清空或抢回旧选集。若新视频不在旧队列中，
+  // 立即丢弃旧队列，避免结束事件在稿件详情到达前沿用推荐页的下一项。
   useEffect(() => {
     const list = usePlaylistStore.getState();
-    const currentId = `${bvid ?? ""}_${rawCid}`;
-    if (list.currentId !== currentId && list.items.some((item) => item.id === currentId)) {
-      list.setCurrentItem(currentId);
+    const matchesCurrent =
+      Boolean(bvid) &&
+      (playlistContainsCurrentItem(list.items, bvid, rawCid) ||
+        (cid > 0 && playlistContainsCurrentItem(list.items, bvid, cid)));
+    if (matchesCurrent) {
+      const currentId = `${bvid}_${rawCid}`;
+      if (list.currentId !== currentId && list.items.some((item) => item.id === currentId)) {
+        list.setCurrentItem(currentId);
+      }
+      return;
     }
-  }, [bvid, rawCid]);
+    if (bvid && (rawCid > 0 || cid > 0) && list.items.length > 0) list.clearPlaylist();
+  }, [bvid, cid, rawCid]);
 
   // PGC 分集不经 archiveQuery：进入的剧集不在播放列表（epId 维度，UGC
   // 列表项的 epId 恒为 null）时，那份列表是残留快照，同样清空——否则
@@ -774,6 +814,7 @@ function VideoPlayerPageContent() {
       list.setPlaylist(
         archive.pages.map((page) => playlistItemFromArchivePage(archive.bvid, archive.aid, page)),
         `${bvid}_${cid}`,
+        "sequence",
       );
     } else if (list.items.length > 0) {
       list.clearPlaylist();
@@ -1163,12 +1204,13 @@ function VideoPlayerPageContent() {
       const total = totalDuration();
       reportProgress(total > 0 ? total : media.currentTime, true);
       // 偏好可能在播放期间被改，读 store 快照而不是播放器挂载时的闭包值。
-      const { autoPlayNext, loopPlayback, getNextItem } = usePlaylistStore.getState();
-      const nextItem = getNextItem();
+      const state = usePlaylistStore.getState();
+      const nextItem = state.getNextAutoPlayItem();
+      const canPlayRelated = state.kind === "feed" && Boolean(bvid) && !epId;
       const action = videoEndedAction(
-        shortVideoRef.current || loopPlayback,
-        autoPlayNext,
-        nextItem != null,
+        shortVideoRef.current || state.loopPlayback,
+        state.autoPlayNext,
+        nextItem !== null || canPlayRelated,
       );
       if (action === "loop") {
         // 循环播放：从头重播当前集（DASH 的 seek 同样走原生 currentTime）。
@@ -1178,13 +1220,22 @@ function VideoPlayerPageContent() {
         });
         return;
       }
-      if (action === "next" && nextItem) {
-        const target = nextItem;
-        setTimeout(() => {
-          if (cancelled || shortVideoRef.current || !media.ended) return;
-          goToPlaylistItem(target);
-        }, 1_000);
-      }
+      if (action !== "next") return;
+      const canNavigate = () => {
+        const current = usePlaylistStore.getState();
+        return (
+          !cancelled &&
+          !shortVideoRef.current &&
+          media.ended &&
+          current.autoPlayNext &&
+          !current.loopPlayback
+        );
+      };
+      setTimeout(() => {
+        if (!canNavigate()) return;
+        if (nextItem) goToPlaylistItem(nextItem);
+        else playRelatedItem(canNavigate);
+      }, 1_000);
     }
     function onNativeError() {
       if (cancelled || !media.error) return;
@@ -1309,11 +1360,13 @@ function VideoPlayerPageContent() {
   }, [
     bvid,
     cid,
+    epId,
     ensureDanmakuSegments,
     goToPlaylistItem,
     playUrl,
     playInfo?.duration,
     playKind,
+    playRelatedItem,
     reportVideoProgress,
     resumePending,
     videoKey,
