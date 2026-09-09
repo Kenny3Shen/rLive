@@ -875,22 +875,6 @@ impl Sidx {
         }
     }
 
-    /// 分片边界时刻（秒），共 N+1 项：分片 `k` 覆盖 `[times[k], times[k+1])`。
-    ///
-    /// 交给前端改写 `xgplayer-dash` 自己算出的分片时间轴用（见
-    /// `applyXgDashSegmentTimeline`）：插件把 `SegmentList` 当等长分片展开，
-    /// 而 B 站按关键帧切片、长度不等。
-    pub fn segment_times(&self) -> Vec<f64> {
-        let timescale = f64::from(self.timescale.max(1));
-        let mut times = Vec::with_capacity(self.segments.len() + 1);
-        times.push(0.0);
-        times.extend(
-            self.segments
-                .iter()
-                .map(|segment| segment.t_end as f64 / timescale),
-        );
-        times
-    }
 }
 
 /// 从 `offset` 起读 N 字节大端整数（u16/u32/u64 共用，错误消息里的
@@ -904,8 +888,9 @@ fn be<const N: usize>(bytes: &[u8], offset: usize) -> AppResult<[u8; N]> {
 
 /// 解析 `segment_base.index_range` 取回的 ISO BMFF `sidx` box。
 ///
-/// `xgplayer-dash` 的 MPD 解析器不实现 `SegmentBase`（其 `sidx` 解析模块是空的），
-/// 所以分片表必须由我们自己解出来，再合成成插件认得的 `SegmentList`。
+/// 后端在 play-info 阶段就把分片表解出来：MPD 由此合成带逐片字节区间与精确
+/// 时长（`SegmentList` + `SegmentTimeline`）的清单，sidx 异常也在这一步以站点
+/// 错误模型直接报给用户，而不是把问题留到播放器缓冲阶段。
 ///
 /// `index_range_end` 是 `index_range` 的结束字节（含）。分片起始位置从
 /// `index_range_end + 1 + first_offset` 开始，按各分片大小依次累加。
@@ -1021,51 +1006,50 @@ fn xml_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// 为一条轨输出 `<SegmentList>`。
+/// 为一条轨输出 `<SegmentList>`：逐片 `mediaRange` + `<SegmentTimeline>` 精确时长。
 ///
-/// 三个不可省的细节：
-///
-/// 1. 必须用 `SegmentList` 而不是 `SegmentBase`。`xgplayer-dash@3.0.26` 只实现了
-///    `SegmentTemplate` 与 `SegmentList`，喂 `SegmentBase` 会解析不出任何分片。
-/// 2. 每个 `<SegmentURL>` 的 media 必须是**互不相同**的 URL。插件的下载队列
-///    (`es/media/task.js`) 只按 URL 去重：命中已有 URL 就直接 return，连 XHR 都不发。
-///    Bilibili 是「一条 URL + 不同 Range」的形态，若所有分片共用同一个地址，
-///    除首片外会被全部静默丢弃、播放卡死。这里给每片拼上 `seg=<idx>`，
-///    上游会忽略该参数，只用来把 URL 撑开成唯一值。
-/// 3. 标称 `duration` 取**平均槽位**（`mediaPresentationDuration / 片数`）而不是首片
-///    时长。插件把 `SegmentList` 当等长分片展开（`start = index × 标称时长`），并把
-///    末片的 `end` 钉在 `mediaPresentationDuration` 上；B 站按关键帧切片，中途会
-///    出现短片，取首片时长会让 `片数 × 标称 > 总时长` —— 末片区间倒挂
-///    （`start ≥ end`），任何时刻都选不中它，最后一片永远拉不到数据。平均槽位保证
-///    槽位铺满 `[0, 总时长]` 且不越界。真实的逐片时刻由 `Sidx::segment_times`
-///    交给前端改写（见 `applyXgDashSegmentTimeline`）。
-fn segment_list_xml(track: &VideoTrack, proxy_url: &str, presentation_secs: f64) -> String {
-    let count = track.sidx.segments.len().max(1) as f64;
-    let segment_millis = (presentation_secs * 1000.0 / count).floor().max(1.0) as i64;
-    let joiner = if proxy_url.contains('?') { '&' } else { '?' };
-
-    let mut xml = format!(r#"<SegmentList timescale="1000" duration="{segment_millis}">"#);
+/// 1. 携带 `SegmentTimeline` 的 `SegmentList` 是 dash.js 原生支持的形态：其对
+///    含 `SegmentTimeline` 的 `SegmentList` 走按时间轴取片的 getter，第 k 个
+///    `<S>` 与第 k 个 `<SegmentURL>` 一一对应——时刻来自 `t`/`d`，字节区间来自
+///    `mediaRange`。B 站按关键帧切片、片长不等，任何等长假设（固定 `duration`
+///    展开时间轴）都会让 seek 选错分片，因此逐片写出真实时长。
+/// 2. `timescale` 与 `<S>` 的 `t`/`d` 直接取该轨 sidx 的原值：视频轨与音轨的
+///    timescale 各自独立（实测 16000 / 48000），不做换算也就不引入舍入。
+/// 3. 全部分片共用同一条代理 URL，差异只在 `Range` 请求头；dash.js 按时间轴
+///    区分分片（不以 URL 去重），并为带 `mediaRange` 的分片发 `Range: bytes=a-b`，
+///    代理照头转发即可，无需给每片编造独立地址。
+fn segment_list_xml(track: &VideoTrack, proxy_url: &str) -> String {
+    let media = xml_escape(proxy_url);
+    let mut xml = format!(r#"<SegmentList timescale="{}">"#, track.sidx.timescale);
     xml.push_str(&format!(
-        r#"<Initialization sourceURL="{}" range="0-{}"/>"#,
-        xml_escape(&format!("{proxy_url}{joiner}seg=init")),
+        r#"<Initialization sourceURL="{media}" range="0-{}"/>"#,
         track.init_end
     ));
-    for (index, segment) in track.sidx.segments.iter().enumerate() {
+    for segment in &track.sidx.segments {
         xml.push_str(&format!(
-            r#"<SegmentURL media="{}" mediaRange="{}-{}"/>"#,
-            xml_escape(&format!("{proxy_url}{joiner}seg={index}")),
-            segment.start_byte,
-            segment.end_byte
+            r#"<SegmentURL media="{media}" mediaRange="{}-{}"/>"#,
+            segment.start_byte, segment.end_byte
         ));
     }
-    xml.push_str("</SegmentList>");
+    // sidx 只给逐片 t_end：分片 k 的起点是上一片的 t_end（首片为 0），
+    // 时长 = 本片 t_end − 起点。
+    let mut start = 0_u64;
+    xml.push_str("<SegmentTimeline>");
+    for segment in &track.sidx.segments {
+        xml.push_str(&format!(
+            r#"<S t="{start}" d="{}"/>"#,
+            segment.t_end - start
+        ));
+        start = segment.t_end;
+    }
+    xml.push_str("</SegmentTimeline></SegmentList>");
     xml
 }
 
 /// 用两条轨的本机代理地址合成 MPD。
 ///
-/// 清单本身也必须由 HTTP 提供：插件取 MPD 的 XHR 会给地址拼 `?`，
-/// `blob:` URL 走精确匹配因此 404。
+/// 清单经文本代理按播放会话挂到 HTTP 上，适配器按 URL 拉取；清单里的分片
+/// 地址是两条轨各自的代理绝对地址，与清单本身同在本机回环。
 pub fn build_mpd(
     selection: &VideoPlaySelection,
     video_proxy_url: &str,
@@ -1101,12 +1085,12 @@ pub fn build_mpd(
         video_codecs = xml_escape(&video.codecs),
         video_sap = video.start_with_sap,
         video_bandwidth = video.bandwidth,
-        video_segments = segment_list_xml(video, video_proxy_url, duration),
+        video_segments = segment_list_xml(video, video_proxy_url),
         audio_id = xml_escape(&audio.rep_id),
         audio_codecs = xml_escape(&audio.codecs),
         audio_sap = audio.start_with_sap,
         audio_bandwidth = audio.bandwidth,
-        audio_segments = segment_list_xml(audio, audio_proxy_url, duration),
+        audio_segments = segment_list_xml(audio, audio_proxy_url),
     )
 }
 
@@ -2202,7 +2186,7 @@ mod tests {
     }
 
     #[test]
-    fn mpd_uses_segment_list_with_unique_urls_per_segment() {
+    fn mpd_pairs_segment_list_with_precise_timelines_per_track() {
         let mut audio = track_fixture();
         audio.codecs = "mp4a.40.2".into();
         audio.rep_id = "30232".into();
@@ -2210,6 +2194,22 @@ mod tests {
         audio.height = None;
         audio.frame_rate = None;
         audio.sar = None;
+        // 音轨 timescale 与视频轨不同（实测形态 48000）：两条时间轴必须各自成立。
+        audio.sidx = Sidx {
+            timescale: 48_000,
+            segments: vec![
+                SidxSegment {
+                    start_byte: 1602,
+                    end_byte: 2000,
+                    t_end: 240_000,
+                },
+                SidxSegment {
+                    start_byte: 2001,
+                    end_byte: 3000,
+                    t_end: 480_000,
+                },
+            ],
+        };
         let selection = VideoPlaySelection {
             video: track_fixture(),
             audio,
@@ -2224,27 +2224,40 @@ mod tests {
             "http://127.0.0.1:5002/live",
         );
 
-        // 插件不认 SegmentBase，只实现了 SegmentTemplate / SegmentList。
+        // dash.js 原生支持 SegmentList + SegmentTimeline：第 k 个 <S> 与第 k 个
+        // <SegmentURL> 一一对应，逐片字节区间与时刻精确，不需要前端时间轴修补。
         assert!(mpd.contains("<SegmentList"), "必须输出 SegmentList");
-        assert!(!mpd.contains("SegmentBase"), "不得输出 SegmentBase");
+        assert!(mpd.contains("<SegmentTimeline>"), "必须输出 SegmentTimeline");
         assert!(mpd.contains(
-            r#"<Initialization sourceURL="http://127.0.0.1:5001/live?seg=init" range="0-937"/>"#
+            r#"<Initialization sourceURL="http://127.0.0.1:5001/live" range="0-937"/>"#
         ));
-        // 每片 URL 必须唯一，否则插件的 Task 队列按 URL 去重会丢掉除首片外的全部分片。
-        assert!(mpd.contains(r#"media="http://127.0.0.1:5001/live?seg=0" mediaRange="1602-2000""#));
-        assert!(mpd.contains(r#"media="http://127.0.0.1:5001/live?seg=1" mediaRange="2001-3000""#));
-        assert!(mpd.contains(r#"media="http://127.0.0.1:5002/live?seg=1" mediaRange="2001-3000""#));
-        // 标称时长取平均槽位：总时长 10s / 2 片 = 5000ms。
-        assert!(mpd.contains(r#"<SegmentList timescale="1000" duration="5000">"#));
-        // 时长取 sidx 时间轴：160000/16000 = 10s。
+        // 分片共用代理 URL，差异只在 Range；逐片 mediaRange 来自 sidx。
+        assert!(mpd.contains(
+            r#"<SegmentURL media="http://127.0.0.1:5001/live" mediaRange="1602-2000"/>"#
+        ));
+        assert!(mpd.contains(
+            r#"<SegmentURL media="http://127.0.0.1:5002/live" mediaRange="2001-3000"/>"#
+        ));
+        assert!(
+            !mpd.contains("seg="),
+            "不得再给分片拼 seg 查询参数（旧播放器补丁）"
+        );
+        // 两条轨的 timescale 各自独立：视频 16000、音频 48000。
+        assert!(mpd.contains(r#"<SegmentList timescale="16000">"#));
+        assert!(mpd.contains(r#"<SegmentList timescale="48000">"#));
+        // S 的 t/d 用该轨 sidx 原单位写出。
+        assert!(mpd.contains(r#"<S t="0" d="80000"/>"#));
+        assert!(mpd.contains(r#"<S t="80000" d="80000"/>"#));
         assert!(mpd.contains(r#"mediaPresentationDuration="PT10S""#));
         assert!(mpd.contains(r#"codecs="avc1.640033""#));
         assert!(mpd.contains(r#"codecs="mp4a.40.2""#));
     }
 
     #[test]
-    fn mpd_nominal_segment_duration_keeps_last_slot_reachable() {
+    fn mpd_segment_timeline_carries_unequal_durations() {
         // 实测形态：中途出现短片（2.7s），总时长因此小于「片数 × 首片时长」。
+        // 等长假设（固定 duration 展开时间轴）会让短片后的 seek 选错分片，
+        // 这里锁死逐片精确时长。
         let mut video = track_fixture();
         video.sidx.segments = vec![
             SidxSegment {
@@ -2277,36 +2290,15 @@ mod tests {
             "http://127.0.0.1:5002/live",
         );
 
-        // 12.7s / 3 片 = 4233ms（向下取整）。取首片的 5000ms 会让 3 × 5000 > 12700，
-        // 插件展开出的末片区间倒挂（start 15s ≥ end 12.7s）、任何时刻都选不中，
-        // 最后一片永远拉不到数据 —— seek 到尾部会永远 waiting。
-        assert!(mpd.contains(r#"<SegmentList timescale="1000" duration="4233">"#));
+        // 逐片 t/d 精确等于 sidx 边界：5s、5s、2.7s（timescale 16000）。
+        // 末片若按平均槽位（4.23s）或首片时长（5s）展开，2.7s 片内的任何时刻
+        // 都会被算进错误的分片。
+        assert!(mpd.contains(r#"<S t="160000" d="43200"/>"#));
         assert!(mpd.contains(r#"mediaPresentationDuration="PT12.7S""#));
     }
 
     #[test]
-    fn sidx_segment_times_are_inclusive_boundaries() {
-        let sidx = Sidx {
-            timescale: 16_000,
-            segments: vec![
-                SidxSegment {
-                    start_byte: 0,
-                    end_byte: 1,
-                    t_end: 80_000,
-                },
-                SidxSegment {
-                    start_byte: 2,
-                    end_byte: 3,
-                    t_end: 123_200,
-                },
-            ],
-        };
-        // N+1 项：分片 k 覆盖 [times[k], times[k+1])。
-        assert_eq!(sidx.segment_times(), vec![0.0, 5.0, 7.7]);
-    }
-
-    #[test]
-    fn mpd_escapes_xml_and_appends_to_existing_query() {
+    fn mpd_escapes_xml_special_characters_in_urls() {
         let selection = VideoPlaySelection {
             video: track_fixture(),
             audio: track_fixture(),
@@ -2316,13 +2308,13 @@ mod tests {
         };
         let mpd = build_mpd(
             &selection,
-            "http://127.0.0.1:5001/live?x=1",
+            "http://127.0.0.1:5001/live?a=1&b=<2>",
             "http://127.0.0.1:5002/live",
         );
-        // 已有 query 时用 `&`，且必须转义成 `&amp;` 才是合法 XML。
-        assert!(mpd.contains("http://127.0.0.1:5001/live?x=1&amp;seg=0"));
+        // URL 里的 & 与 < 必须转义，否则 MPD 不是合法 XML。
+        assert!(mpd.contains("http://127.0.0.1:5001/live?a=1&amp;b=&lt;2&gt;"));
         assert!(
-            !mpd.contains("live?x=1&seg=0"),
+            !mpd.contains("live?a=1&b="),
             "裸 & 会让 MPD 不是合法 XML"
         );
     }

@@ -248,7 +248,7 @@ export type AppSettings = {
   danmaku_blocked_users: string[];
   /** 偏好的起始清晰度：high | mid | low。 */
   quality_level: "high" | "mid" | "low";
-  /** 同协议 xgplayer switchURL 路径；硬刷新仍是兜底。 */
+  /** 同协议 Video.js 传输适配器的软切换路径；硬刷新仍是兜底。 */
   playback_soft_switch_enabled: boolean;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   room_card_preview_enabled: boolean;

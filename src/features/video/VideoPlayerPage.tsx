@@ -69,14 +69,13 @@ import {
 import { prefersReducedMotion, SWIPE_SETTLE_EASING } from "@/shared/motion/tokens";
 import { tween } from "@/shared/motion/tween";
 import {
-  createXgPlayer,
+  createVideoJsPlayer,
   isInterruptedPlayRequest,
-  loadXgPlayerModules,
-  xgPlayerErrorMessage,
-  type XgPlaybackKind,
-  type XgDashSegmentTimeline,
-  type XgPlayerInstance,
-} from "@/features/room/player/xgPlayer";
+  loadVideoJsModules,
+  videoJsPlayerErrorMessage,
+  type VideoJsPlaybackKind,
+  type VideoJsPlayerInstance,
+} from "@/features/room/player/videoJsPlayer";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import { useAndroidPlayerControls } from "@/features/room/player/androidPlayerControls";
 import {
@@ -265,7 +264,7 @@ function VideoPlayerPageContent() {
     committed: false,
   });
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const playerRef = useRef<XgPlayerInstance | null>(null);
+  const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const lockRef = useRef<HTMLDivElement | null>(null);
   const [fullscreenLocked, setFullscreenLocked] = useState(false);
@@ -326,7 +325,7 @@ function VideoPlayerPageContent() {
 
   useEffect(() => {
     // 播放器模块与取流 IPC 同时准备，所有画幅共用已有 import 缓存。
-    void loadXgPlayerModules(audioOnly ? "native" : "dash").catch(() => {});
+    void loadVideoJsModules(audioOnly ? "native" : "dash").catch(() => {});
   }, [audioOnly]);
   /** 画中画进出状态（监听媒体元素事件，WebView2 支持；Android WebView 无此 API）。 */
   const [pipActive, setPipActive] = useState(false);
@@ -1041,40 +1040,31 @@ function VideoPlayerPageContent() {
       sliderTargetRef.current = null;
       setCurrentTime(clamped);
       setWaiting(true);
-      // DASH 的 seek 走原生 `currentTime`：插件在 TIME_UPDATE 里按当前位置补拉分片
-      // （见 xgplayer-dash 的 `loadData`），不需要也没有单独的 seek 入口。
+      // DASH 的 seek 走原生 `currentTime`，Video.js DASH 适配器会按当前位置处理分片。
+      // 不维护播放器私有分片时间轴补丁。
       media.currentTime = clamped;
     },
     [duration],
   );
 
   const mpdUrl = playInfo?.mpd_url;
-  // 仅音频时直接播音轨地址（完整 fMP4，代理转发 Range）；xgplayer-dash 写死假设
-  // 视频轨存在，纯音 MPD 会崩，因此走 native 内核而不是 DASH。
+  // 仅音频时直接播音轨地址并使用浏览器原生媒体能力；视频轨使用 Video.js 的 DASH 适配器。
   const playUrl = playInfo?.audio_only ? playInfo.audio_url : mpdUrl;
-  const playKind: XgPlaybackKind = playInfo?.audio_only ? "native" : "dash";
-  // DASH 专用：真实分片时间轴（插件自己按等长分片算的那份会选错分片，
-  // 见 `applyXgDashSegmentTimeline`）。仅音频走原生内核，没有分片表。
-  //
-  // 存 ref 而不是进重建 effect 的依赖：它是随 play-info 一起到的新数组，放进依赖
-  // 会让任何一次 refetch（同一个 mpd_url）都重建播放器。与 `sessionIdsRef` 同一手法。
-  const dashSegmentTimelineRef = useRef<XgDashSegmentTimeline | undefined>(undefined);
-  useLayoutEffect(() => {
-    dashSegmentTimelineRef.current =
-      playInfo && !playInfo.audio_only
-        ? { video: playInfo.video_segment_times, audio: playInfo.audio_segment_times }
-        : undefined;
-  }, [playInfo]);
+  const playKind: VideoJsPlaybackKind = playInfo?.audio_only ? "native" : "dash";
+  // Video.js 的 dash.js 适配器原生处理带 SegmentList 的 MPD，不再维护私有分片时间轴补丁。
 
   useEffect(() => {
     const video = videoRef.current;
-    const root = rootRef.current;
-    if (!video || !root || !playUrl) return;
+    if (!video || !playUrl) return;
     // 续播位置还没查出来就先不建播放器：先从 0 起播再跳会让画面闪一下，
     // 而这条查询是本地 SQLite，通常早于 playUrl（网络请求）就位。
     if (resumePending) return;
     const media = video;
     let cancelled = false;
+    // 初始续播 seek：DASH 的时间轴要等清单异步解析（loadedmetadata），媒体源
+    // 就绪前写 currentTime 会被丢弃。先记下目标，等 onReady 的真实媒体事件
+    // 一次性应用；此后的用户 seek 不再被覆盖。
+    let pendingInitialSeek: { position: number; playing: boolean } | null = null;
     // 这一轮播放器对应的分集。上报前用它比对 ref 里的身份，
     // 避免换集过渡期把旧集进度记到新集身上。
     const reportedCid = cid;
@@ -1169,6 +1159,22 @@ function VideoPlayerPageContent() {
             : poster,
         );
       }
+      // 用户已在拖进度条时不应用初始续播：尊重当前落点，避免重复跳转覆盖用户。
+      if (pendingInitialSeek && sliderTargetRef.current !== null) {
+        pendingInitialSeek = null;
+      } else if (pendingInitialSeek) {
+        const initialSeek = pendingInitialSeek;
+        pendingInitialSeek = null;
+        // loadedmetadata 早于任何画面解码，在这里续播不会闪出 0 秒帧。
+        media.currentTime = initialSeek.position;
+        setCurrentTime(initialSeek.position);
+        // 用户在加载期间按过暂停就保持暂停，不被自动续播重新拉起。
+        if (initialSeek.playing && !userPausedRef.current) {
+          void media.play().catch(() => {
+            // 自动续播被策略拦截时留在暂停态，用户点一下即可。
+          });
+        }
+      }
     }
     function onPlaying() {
       if (cancelled) return;
@@ -1237,14 +1243,6 @@ function VideoPlayerPageContent() {
         else playRelatedItem(canNavigate);
       }, 1_000);
     }
-    function onNativeError() {
-      if (cancelled || !media.error) return;
-      setPlaybackError(media.error.message || "视频播放失败");
-      setLoading(false);
-      setWaiting(false);
-      // 错误面板接管：waiting 自动恢复的计时作废，别在错误上再叠一次重建。
-      waitingRecovery.notifyError();
-    }
 
     media.volume = volumeRef.current / 100;
     media.muted = mutedRef.current;
@@ -1260,52 +1258,38 @@ function VideoPlayerPageContent() {
     media.addEventListener("waiting", onWaiting);
     media.addEventListener("seeked", onSeeked);
     media.addEventListener("ended", onEnded);
-    media.addEventListener("error", onNativeError);
 
-    void loadXgPlayerModules(playKind)
+    void loadVideoJsModules(playKind)
       .then((modules) => {
         if (cancelled) return;
-        const player = createXgPlayer(modules, {
-          root,
+        const player = createVideoJsPlayer(modules, {
           video: media,
-          // 喂的是 `mpd_url`（HTTP），不是 blob：xgplayer-dash 取清单的 XHR 会给地址
-          // 拼 `?`，blob URL 走精确匹配因此 404。别「优化」成 blob。
-          // 仅音频时喂音轨代理地址并走 native 内核。
           url: playUrl,
           kind: playKind,
-          // VOD 必须显式关掉直播模式：`createXgPlayer` 默认 `isLive: true`，
-          // 那会让 xgplayer 隐藏进度条并把时长当成不确定值。
           isLive: false,
-          dashSegmentTimeline: dashSegmentTimelineRef.current,
         });
         playerRef.current = player;
         player.on("error", (cause) => {
           if (cancelled) return;
-          setPlaybackError(xgPlayerErrorMessage(cause, "视频播放失败"));
+          setPlaybackError(videoJsPlayerErrorMessage(cause, "视频播放失败"));
           setLoading(false);
           setWaiting(false);
-          // 与媒体错误同一语义：错误面板接管后 waiting 自动恢复不再叠加重建。
           waitingRecovery.notifyError();
         });
         // 进页自动起播，与直播同源：先试带声音的 play()，被自动播放策略拒绝时
         // 降级为静音起播再立刻尝试恢复声音；用户手动静音过则保持静音。
-        // 换画质重建时优先续播：恢复到切换前位置与播放状态，跳过起播策略。
+        // 续播位置不直接写 currentTime：DASH 的 MPD 清单异步解析，媒体时间轴
+        // 就绪前写入会被丢弃（画质切换/仅音频切换同走这条重建路径）。登记为
+        // pendingInitialSeek，由 onReady 的 loadedmetadata/canplay 一次性应用。
         const resume = resumeAtRef.current;
         resumeAtRef.current = null;
         if (resume) {
-          // 元数据就位前赋值 currentTime 会作为默认起播位置被采纳。
-          media.currentTime = resume.position;
+          pendingInitialSeek = { position: resume.position, playing: resume.playing };
           setCurrentTime(resume.position);
-          if (resume.playing) {
-            void Promise.resolve(player.play()).catch(() => undefined);
-          }
         } else {
-          // 观看历史续播：上次看到一半的同一分集，从那个位置起播。位置写在
-          // 起播之前，与换画质走同一条「元数据就位前赋值 currentTime」的路径；
-          // 起播仍交给自动播放策略，否则被浏览器策略拒绝时会停在续播点不动。
           const historyResumeAt = historyResumeAtRef.current;
           if (historyResumeAt > 0) {
-            media.currentTime = historyResumeAt;
+            pendingInitialSeek = { position: historyResumeAt, playing: false };
             setCurrentTime(historyResumeAt);
           }
           const recoverMutedAutoplay = () => {
@@ -1324,7 +1308,7 @@ function VideoPlayerPageContent() {
       })
       .catch((cause) => {
         if (cancelled) return;
-        setPlaybackError(xgPlayerErrorMessage(cause, "无法初始化视频播放器"));
+        setPlaybackError(videoJsPlayerErrorMessage(cause, "无法初始化视频播放器"));
         setLoading(false);
       });
 
@@ -1347,7 +1331,6 @@ function VideoPlayerPageContent() {
       media.removeEventListener("waiting", onWaiting);
       media.removeEventListener("seeked", onSeeked);
       media.removeEventListener("ended", onEnded);
-      media.removeEventListener("error", onNativeError);
       const player = playerRef.current;
       playerRef.current = null;
       try {
@@ -1381,7 +1364,7 @@ function VideoPlayerPageContent() {
       userPausedRef.current = false;
       void Promise.resolve(player.play()).catch((cause) => {
         if (isInterruptedPlayRequest(cause)) return;
-        setPlaybackError(xgPlayerErrorMessage(cause, "播放失败"));
+        setPlaybackError(videoJsPlayerErrorMessage(cause, "播放失败"));
       });
     } else {
       userPausedRef.current = true;

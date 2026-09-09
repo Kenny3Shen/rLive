@@ -1,4 +1,5 @@
-import pcmCaptureWorkletUrl from "./pcmCapture.worklet.ts?worker&url";
+// 顶层静态 import 会把 vite 专属的 `?worker&url` 查询暴露给非 vite 运行时
+// （bun test 无法解析该模块），因此推迟到真正开始采集时再取。
 
 export const ASR_SAMPLE_RATE = 16_000;
 export const ASR_MIN_CHUNK_SECONDS = 0.2;
@@ -6,8 +7,15 @@ export const ASR_MAX_CHUNK_SECONDS = 1;
 export const ASR_DEFAULT_CHUNK_SECONDS = 0.2;
 
 const NATIVE_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
-const PCM_CAPTURE_WORKLET_URL = new URL(pcmCaptureWorkletUrl, import.meta.url);
+let pcmCaptureWorkletUrlPromise: Promise<string> | null = null;
 const PCM_CAPTURE_PROCESSOR_NAME = "rlive-pcm-capture";
+
+function loadPcmCaptureWorkletUrl(): Promise<string> {
+  pcmCaptureWorkletUrlPromise ??= import("./pcmCapture.worklet.ts?worker&url").then(
+    (module) => new URL(module.default, import.meta.url).href,
+  );
+  return pcmCaptureWorkletUrlPromise;
+}
 
 type PcmListener = (pcm: Float32Array) => void;
 
@@ -326,7 +334,7 @@ async function createAudioCapturePipeline(video: HTMLVideoElement): Promise<Audi
 
   if (backend === "audio-worklet") {
     try {
-      await context.audioWorklet.addModule(PCM_CAPTURE_WORKLET_URL.href);
+      await context.audioWorklet.addModule(await loadPcmCaptureWorkletUrl());
       processor = {
         kind: "audio-worklet",
         node: new AudioWorkletNode(context, PCM_CAPTURE_PROCESSOR_NAME, {

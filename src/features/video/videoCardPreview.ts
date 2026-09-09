@@ -14,10 +14,10 @@ import {
 import { useCardPreview } from "@/features/room/player/useRoomCardPreview";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
 import {
-  createXgPlayer,
-  loadXgPlayerModules,
-  type XgPlayerInstance,
-} from "@/features/room/player/xgPlayer";
+  createVideoJsPlayer,
+  loadVideoJsModules,
+  type VideoJsPlayerInstance,
+} from "@/features/room/player/videoJsPlayer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
 import { videoGetArchive, videoGetPlayInfo, videoStopPlay } from "./videoApi";
@@ -53,7 +53,7 @@ type VideoCardPreviewRequest = {
 
 function startVideoCardPreview(request: VideoCardPreviewRequest): CardPreviewSession {
   let stopped = false;
-  let player: XgPlayerInstance | null = null;
+  let player: VideoJsPlayerInstance | null = null;
   let surface: PreviewSurface | null = null;
   let sessions: VideoSessionIds | null = null;
   let startTimer: number | null = null;
@@ -109,28 +109,18 @@ function startVideoCardPreview(request: VideoCardPreviewRequest): CardPreviewSes
       if (stopped) return;
       sessions = playInfo.session_ids;
 
-      const modules = await loadXgPlayerModules("dash");
+      const modules = await loadVideoJsModules("dash");
       if (stopped) return;
 
       const mounted = createPreviewSurface();
       surface = mounted;
       request.mount.append(mounted.root);
 
-      const instance = createXgPlayer(modules, {
-        root: mounted.root,
+      const instance = createVideoJsPlayer(modules, {
         video: mounted.video,
-        // 与播放页同一条约束：必须喂 HTTP 的 mpd_url，blob 会被插件的 XHR 拼
-        // `?` 后 404。
         url: playInfo.mpd_url,
         kind: "dash",
-        // VOD 必须显式关直播模式，否则内核按不确定时长处理。
         isLive: false,
-        // 预览只播前几秒不 seek，但分片选择走同一条链路：喂真实时间轴，
-        // 让插件按分片级精度取片（见 `applyXgDashSegmentTimeline`）。
-        dashSegmentTimeline: {
-          video: playInfo.video_segment_times,
-          audio: playInfo.audio_segment_times,
-        },
       });
       player = instance;
       // 卡片要铺满而不是留黑边；预览永远静音。
@@ -155,8 +145,8 @@ function startVideoCardPreview(request: VideoCardPreviewRequest): CardPreviewSes
       });
       instance.on("error", () => session.stop());
 
-      // 与直播预览同款：静音起播 + 吸收 xgplayer attach 时的首个 AbortError；
-      // 恢复钩子永远返回 false —— 绝不能把声音放出来。
+      // Video.js 适配器初始化时可能触发一次原生 load，自动播放 helper 会吸收 AbortError。
+      // 恢复钩子永远返回 false，预览绝不能把声音放出来。
       requestPlayerAutoplay(
         instance,
         mounted.video,

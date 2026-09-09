@@ -29,13 +29,14 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { PlayUrl } from "@/shared/types/live";
 import type { PlayerEvent } from "@/shared/types/player";
 import { cn } from "@/lib/utils";
+import { inferPlaybackProtocol } from "@/lib/playUrl";
 import { useAndroidFullscreenOrientation } from "@/features/room/player/androidOrientation";
 import { useAndroidPlayerControls } from "@/features/room/player/androidPlayerControls";
 import {
   IPTV_MEDIA_LIFECYCLE_PROFILE,
   useMediaLifecycle,
 } from "@/features/room/player/useWebPlayer";
-import type { XgLivePlaybackKind } from "@/features/room/player/xgPlayer";
+import type { VideoJsLivePlaybackKind } from "@/features/room/player/videoJsPlayer";
 import type { IptvChannel } from "./types";
 
 export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "error";
@@ -64,20 +65,6 @@ export function iptvLifecycleReloadToken(
   return `${manualReloadToken}:${automaticReconnectToken}`;
 }
 
-function isFlvStream(url: string): boolean {
-  return /\.flv(?:[?#]|$)/i.test(url) || /[?&](?:format|type)=flv(?:[&#]|$)/i.test(url);
-}
-
-function isMpegTransportStream(url: string): boolean {
-  return (
-    /\.(?:ts|m2ts)(?:[?#]|$)/i.test(url) || /[?&](?:format|type)=(?:ts|mpegts)(?:[&#]|$)/i.test(url)
-  );
-}
-
-function isProgressiveVideo(url: string): boolean {
-  return /\.(?:mp4|m4v|webm|mov)(?:[?#]|$)/i.test(url);
-}
-
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(
@@ -89,15 +76,13 @@ function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
 
 export function iptvPlaybackKind(
   source: string | Pick<IptvChannel, "url" | "protocol">,
-): XgLivePlaybackKind {
+): VideoJsLivePlaybackKind {
   const url = typeof source === "string" ? source : source.url;
   const protocol = typeof source === "string" ? undefined : source.protocol;
   if (protocol === "flv" || protocol === "hls" || protocol === "native") return protocol;
   if (protocol === "mpeg_ts") return "mpegts";
-  if (isFlvStream(url)) return "flv";
-  if (isMpegTransportStream(url)) return "mpegts";
-  if (isProgressiveVideo(url)) return "native";
-  return "hls";
+  const inferred = inferPlaybackProtocol(url, { fallback: "hls" });
+  return inferred === "mpeg_ts" ? "mpegts" : inferred;
 }
 
 export function iptvChannelPlayUrl(channel: IptvChannel): PlayUrl {
@@ -392,13 +377,7 @@ export function IptvPlayer({
       clearControlsHideTimer();
       setControlVisibility(false);
     },
-    [
-      clearControlsHideTimer,
-      controlsInteractionOpen,
-      player.paused,
-      setControlVisibility,
-      status,
-    ],
+    [clearControlsHideTimer, controlsInteractionOpen, player.paused, setControlVisibility, status],
   );
   useEffect(() => {
     scheduleControlsHide();

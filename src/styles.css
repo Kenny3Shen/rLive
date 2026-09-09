@@ -941,7 +941,7 @@ html[data-fullscreen-transition="true"] .app-shell {
   opacity: 1;
 }
 
-/* xgplayer 会把内核容器塞进挂载点，视频必须铺满卡片而不是按容器比例留边。 */
+/* Video.js 适配器不负责布局，视频必须铺满卡片而不是按容器比例留边。 */
 .room-card-preview video {
   width: 100%;
   height: 100%;

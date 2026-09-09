@@ -126,8 +126,7 @@ pub struct AppSettings {
     pub danmaku_blocked_users: Vec<String>,
     /// 偏好的起始清晰度：`high` | `mid` | `low`。
     pub quality_level: String,
-    /// 同协议的 `switchURL` 切换路径。前端对不兼容协议和切换失败
-    /// 仍保留硬刷新兜底。
+    /// 同协议媒体适配器的切换路径。前端对不兼容协议和切换失败仍保留硬刷新兜底。
     pub playback_soft_switch_enabled: bool,
     /// 在浏览页悬停直播间卡片时播放静音直播预览。
     ///

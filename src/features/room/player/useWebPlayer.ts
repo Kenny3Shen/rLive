@@ -19,17 +19,21 @@ import { videoAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import {
-  createXgPlayer,
-  getXgHlsCore,
-  getXgMpegtsCore,
-  isXgPlayerDecodeError,
-  loadXgPlayerModules,
-  switchXgPlaybackSource,
+  createVideoJsPlayer,
+  getVideoJsHlsCore,
+  getVideoJsMpegtsCore,
+  isVideoJsDecodeError,
+  loadVideoJsModules,
+  switchVideoJsPlaybackSource,
   webPlaybackKind,
-  xgPlayerErrorMessage,
-  type XgPlaybackKind,
-  type XgPlayerInstance,
-} from "./xgPlayer";
+  videoJsPlayerErrorMessage,
+  type VideoJsHlsCore,
+  type VideoJsMpegtsCore,
+  type VideoJsPlaybackKind,
+  type VideoJsPlayerInstance,
+  type VideoJsHlsOptions,
+  type VideoJsMpegtsOptions,
+} from "./videoJsPlayer";
 import {
   createPlaybackTelemetrySession,
   markTelemetryLongTask,
@@ -131,8 +135,7 @@ export async function toggleVideoPictureInPicture(
     if (documentRef.pictureInPictureElement) {
       if (typeof documentRef.exitPictureInPicture !== "function") return false;
       await documentRef.exitPictureInPicture();
-      // xgplayer-mpegts.js 在 URL_CHANGE 时重建自己的 transmuxer/MSE 状态。保留外层
-      // 播放器与媒体元素，但不要求跨相互独立的 FLV CDN 保持时间戳无缝。
+      // Video.js 适配器重建传输内核时保留外层媒体元素，但不跨独立 CDN 强求无缝。
       if (documentRef.pictureInPictureElement) return false;
     }
 
@@ -144,8 +147,8 @@ export async function toggleVideoPictureInPicture(
 }
 
 /**
- * xgplayer 从 Player.start() 启动协议插件，且插件在 URL 变化时替换 hls.js 实例。
- * 始终经由插件读取，使恢复调用与时钟读取对两者都保持有效。
+ * Video.js 适配器从 HTMLMediaElement 的原生 API 启动协议内核；HLS 的 hls.js
+ * 实例仅作为 Video.js 的受控高级能力读取。
  */
 export type FullscreenDocument = {
   fullscreenElement?: Element | null;
@@ -167,10 +170,7 @@ export function fullscreenElementFor(
   return documentRef?.fullscreenElement ?? documentRef?.webkitFullscreenElement ?? null;
 }
 
-/** Chromium 经多层上报 HLS/MSE 解码失败：原生媒体错误用 code 3，而 xgplayer 协议
-插件可能给出 code 5103 或只保留浏览器的 pipeline message。检查保持结构化，
-使 Twitch 能降级不兼容的渲染档，
-而不把网络失败当成编解码问题。 */
+/** 全屏直接使用浏览器 DOM API，保留 WebKit 兼容入口。 */
 export async function toggleElementFullscreen(
   documentRef: FullscreenDocument | null | undefined,
   target: FullscreenTarget | null | undefined,
@@ -255,7 +255,7 @@ export type WebPlayerApi = {
   /** 解码帧宽高比；首个元数据到达前为 null。 */
   aspectRatio: number | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  /** 由 xgplayer 管理的独占 DOM 根；浮层留在其外部。 */
+  /** React 管理的媒体布局容器；适配器只附着 video，不修改 DOM 树。 */
   playerRootRef: React.RefObject<HTMLDivElement | null>;
   stageRef: React.RefObject<HTMLDivElement | null>;
   togglePause: () => void;
@@ -278,7 +278,7 @@ export type MediaLifecycleProfile = Readonly<{
   resetAudioOnSessionChange: boolean;
   softSwitch: "settings" | "disabled";
   telemetry: boolean;
-  flvOptions(mobileClient: boolean, syncHold: boolean): Record<string, unknown>;
+  flvOptions(mobileClient: boolean, syncHold: boolean): VideoJsMpegtsOptions;
 }>;
 
 function clampWebPlayerVolume(value: number): number {
@@ -309,11 +309,6 @@ export function applyWebPlayerAudio(
   video.volume = normalizedVolume / 100;
   video.muted = normalizedMuted;
   return { volume: normalizedVolume, muted: normalizedMuted };
-}
-
-/** 直播地址是否需要 xgplayer 的 HLS 插件而非 FLV 插件。 */
-export function isHlsStream(url: string): boolean {
-  return /\.m3u8(?:[?#]|$)/i.test(url) || /[/?&=_-]hls(?:[/?&=_-]|$)/i.test(url);
 }
 
 /**
@@ -438,7 +433,7 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
 export function liveFlvPlaybackOptions(
   mobileClient: boolean,
   syncHold = false,
-): Record<string, unknown> {
+): VideoJsMpegtsOptions {
   return {
     mediaDataSource: {
       type: "flv",
@@ -474,7 +469,7 @@ export function liveFlvPlaybackOptions(
  * 在 `syncHold` 下与直播边缘的距离由对齐负责，hls.js 既不能在该距离增大时强行
  * 前跳，也不能丢弃对齐要 seek 进去的后向缓冲。
  */
-export function liveHlsPlaybackOptions(syncHold = false): Record<string, unknown> {
+export function liveHlsPlaybackOptions(syncHold = false): VideoJsHlsOptions {
   return {
     lowLatencyMode: false,
     backBufferLength: syncHold ? LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS : 30,
@@ -490,7 +485,7 @@ export function liveHlsPlaybackOptions(syncHold = false): Record<string, unknown
 }
 
 /** MPEG-TS（IPTV 风格）直播选项，对齐 FLV 的 sync-hold 规则。 */
-export function liveMpegtsPlaybackOptions(syncHold = false): Record<string, unknown> {
+export function liveMpegtsPlaybackOptions(syncHold = false): VideoJsMpegtsOptions {
   return {
     mediaDataSource: {
       type: "mpegts",
@@ -516,7 +511,7 @@ export function liveMpegtsPlaybackOptions(syncHold = false): Record<string, unkn
   };
 }
 
-export function iptvFlvPlaybackOptions(): Record<string, unknown> {
+export function iptvFlvPlaybackOptions(): VideoJsMpegtsOptions {
   return {
     mediaDataSource: {
       type: "flv",
@@ -575,7 +570,7 @@ export const LIVE_SYNC_ANCHOR_FRESH_BUFFER_SECONDS = 20;
 
 export function shouldUsePlaybackSoftSwitch(
   configured: boolean,
-  playbackKind: XgPlaybackKind | null,
+  playbackKind: VideoJsPlaybackKind | null,
 ): boolean {
   return (
     configured && (playbackKind === "flv" || playbackKind === "hls" || playbackKind === "mpegts")
@@ -586,8 +581,8 @@ export function canSoftSwitchPlaybackSource(input: {
   enabled: boolean;
   activeSourceKey: string;
   targetSourceKey: string;
-  activeKind: XgPlaybackKind | null;
-  targetKind: XgPlaybackKind | null;
+  activeKind: VideoJsPlaybackKind | null;
+  targetKind: VideoJsPlaybackKind | null;
 }): boolean {
   return Boolean(
     input.enabled &&
@@ -664,7 +659,7 @@ function createPlayerInstanceId(): string {
  *
  * 重进修复：每次打开都自增 `mediaKey`（新 <video>）、停止代理、等待一个 tick、
  * 再以缓存穿透参数启动全新代理 URL。避免复用的 MediaSource / 过期的 CDN URL /
- * 半销毁的 xgplayer 实例导致的黑屏。
+ * 半销毁的 Video.js 适配器导致的黑屏。
  */
 export type MediaLifecycleOptions = {
   playUrl: PlayUrl | null;
@@ -722,7 +717,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const playerRef = useRef<XgPlayerInstance | null>(null);
+  const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const [playerInstanceId] = useState(createPlayerInstanceId);
   const genRef = useRef(0);
   const mediaLifecycleVersionRef = useRef(0);
@@ -730,16 +725,18 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const mutedRef = useRef(initialAudio.muted);
   const activeProxySessionIdRef = useRef<string | null>(null);
   const activeSourceKeyRef = useRef("");
-  const activePlaybackKindRef = useRef<XgPlaybackKind | null>(null);
+  const activePlaybackKindRef = useRef<VideoJsPlaybackKind | null>(null);
   const telemetrySessionRef = useRef<PlaybackTelemetrySession | null>(null);
-  const hlsCoreRef = useRef<ReturnType<typeof getXgHlsCore>>(null);
-  const mpegtsCoreRef = useRef<ReturnType<typeof getXgMpegtsCore>>(null);
+  const hlsCoreRef = useRef<VideoJsHlsCore | null>(null);
+  const mpegtsCoreRef = useRef<VideoJsMpegtsCore | null>(null);
   /** 当前媒体时间轴的身份；下方所有锚点都属于它。 */
   const syncTimelineTokenRef = useRef("");
   const syncStreamAnchorRef = useRef<{ token: string; epochAtMediaZeroMs: number } | null>(null);
   const syncMediaTimeOriginRef = useRef<{ token: string; mediaTime: number } | null>(null);
   const softSwitchSequenceRef = useRef(0);
-  const softSwitchInFlightRef = useRef<{ player: XgPlayerInstance; sequence: number } | null>(null);
+  const softSwitchInFlightRef = useRef<{ player: VideoJsPlayerInstance; sequence: number } | null>(
+    null,
+  );
   const qualityRef = useRef<string | null>(quality);
   const nativeFullscreenSessionRef = useRef(createNativeFullscreenSession());
   /** 为没有 `mode` 的销毁路径镜像页面内全屏状态。 */
@@ -938,11 +935,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     userPausedRef.current = false;
     const playbackKind = webPlaybackKind(playbackSource);
     const hlsSource = playbackKind === "hls";
-    // 在串行化代理队列拆除上一会话的同时，开始抓取 xgplayer 与所选的唯一协议插件。
-    const xgModulesPromise = loadXgPlayerModules(playbackKind);
-    // 快速房间切换可能在到达下方 await 之前取消排队中的初始化。
-    // 保留一个 rejection 处理器，使投机预加载永远不会变成未处理的 promise 拒绝。
-    void xgModulesPromise.catch(() => {});
+    // 在串行化代理队列拆除上一会话的同时，开始加载所选的 Video.js 适配器。
+    const videoJsModulesPromise = loadVideoJsModules(playbackKind);
+    void videoJsModulesPromise.catch(() => {});
 
     void proxyLifecycleQueue
       .enqueue(async () => {
@@ -982,12 +977,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               retryable: true,
             } satisfies AppError;
           }
-          const activeVideo = video;
 
           // 模块加载期间初始来源可能已被取代。使用最新的同协议候选，
           // 而不是短暂打开一条过期线路又立即软切换。
           const latestSource = effectivePlaybackSourceRef.current;
-          if (latestSource && (playbackProtocol(latestSource) === "hls") === hlsSource) {
+          if (latestSource && webPlaybackKind(latestSource) === playbackKind) {
             playbackSource = latestSource;
             sourceKey = playUrlKey(latestSource);
           }
@@ -1038,30 +1032,18 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             return true;
           };
 
-          const modules = await xgModulesPromise;
+          const modules = await videoJsModulesPromise;
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
             return;
           }
-          const playerRoot = playerRootRef.current;
-          if (!playerRoot) {
-            throw {
-              code: "web_player_no_root",
-              message: "播放器容器尚未准备好",
-              site: null,
-              retryable: true,
-            } satisfies AppError;
-          }
 
-          const player = createXgPlayer(modules, {
-            root: playerRoot,
+          const player = createVideoJsPlayer(modules, {
             video,
             url: playLocal,
             kind: playbackKind,
             isLive: playbackKind !== "native",
-            hls: {
-              hlsOpts: liveHlsPlaybackOptions(liveSyncHold),
-            },
+            hls: liveHlsPlaybackOptions(liveSyncHold),
             flv: profile.flvOptions(mobileClient, liveSyncHold),
             mpegts: liveMpegtsPlaybackOptions(liveSyncHold),
           });
@@ -1075,9 +1057,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           activePlaybackKindRef.current = playbackKind;
           const isCurrentPlayer = () =>
             !cancelled && genRef.current === gen && playerRef.current === player;
-          const hlsCore = playbackKind === "hls" ? getXgHlsCore(player) : null;
+          const hlsCore = playbackKind === "hls" ? getVideoJsHlsCore(player) : null;
           const mpegtsCore =
-            playbackKind === "flv" || playbackKind === "mpegts" ? getXgMpegtsCore(player) : null;
+            playbackKind === "flv" || playbackKind === "mpegts"
+              ? getVideoJsMpegtsCore(player)
+              : null;
           hlsCoreRef.current = hlsCore;
           mpegtsCoreRef.current = mpegtsCore;
           // 全新传输意味着全新媒体时间轴：
@@ -1103,26 +1087,22 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             });
           }
 
-          // HLS 致命事件走下方协议专属恢复。非 HLS 错误继续经过 xgplayer 的标准事件路径。
-          if (!hlsCore) {
-            const reportPlayerError = (error: unknown) => {
-              if (!isCurrentPlayer()) return;
-              const message = xgPlayerErrorMessage(error);
-              setLoadError(message);
-              setRunning(false);
-              onMediaFailureRef.current?.({
-                epoch: gen,
-                generation: gen,
-                kind: "error",
-                message,
-                protocol: playbackKind,
-              });
-            };
-            player.on("error", reportPlayerError);
-            if (playbackKind === "flv" || playbackKind === "mpegts") {
-              player.on("mpegts_error", reportPlayerError);
-            }
-          }
+          // HlsJsAdapter 既可能委托 hls.js MSE，也可能回退到浏览器原生 HLS。
+          // 两条路径共用同一个 adapter error 事件，但只有 MSE 暴露恢复 API。
+          const reportPlayerError = (error: unknown) => {
+            if (!isCurrentPlayer()) return;
+            const message = videoJsPlayerErrorMessage(error);
+            setLoadError(message);
+            setRunning(false);
+            onMediaFailureRef.current?.({
+              epoch: gen,
+              generation: gen,
+              kind: "error",
+              message,
+              protocol: playbackKind,
+            });
+          };
+          if (!hlsCore) player.on("error", reportPlayerError);
 
           if (hlsCore && siteId !== "twitch") {
             let hlsFatalFailureCount = 0;
@@ -1134,7 +1114,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             });
             const reportHlsFailure = (cause: unknown, recoveryExhausted = false) => {
               if (!isCurrentPlayer()) return;
-              const message = xgPlayerErrorMessage(cause, "HLS 连接中断");
+              const message = videoJsPlayerErrorMessage(cause, "HLS 连接中断");
               setRunning(false);
               if (recoveryExhausted) {
                 playerRef.current = null;
@@ -1156,51 +1136,50 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 recoveryExhausted,
               });
             };
-            player.on("HLS_ERROR", (cause) => {
-              if (!isCurrentPlayer() || !cause || typeof cause !== "object") return;
-              const event = cause as {
-                errorType?: unknown;
-                errorFatal?: unknown;
-              };
-              if (event.errorFatal !== true) return;
-              const type = String(event.errorType ?? "").toLowerCase();
-              if (type !== "networkerror" && type !== "mediaerror") return;
-              // HlsJsPlugin 会为第一个致命事件立即调用 startLoad/recoverMediaError。
-              // 只有那次恢复也失败时才升级，
-              // 然后获取新的站点元数据并重建播放器。
-              hlsFatalFailureCount += 1;
-              const now = Date.now();
-              firstHlsFatalFailureAt ??= now;
-              if (
-                !shouldEscalateNonTwitchHlsFatal({
-                  siteId,
-                  failureCount: hlsFatalFailureCount,
-                  firstFailureAt: firstHlsFatalFailureAt,
-                  now,
-                })
-              ) {
+            player.on("error", (cause) => {
+              queueMicrotask(() => {
+                if (!isCurrentPlayer()) return;
+                if (!hlsCore.isMse()) {
+                  reportPlayerError(cause);
+                  return;
+                }
+                const event = cause as { fatal?: boolean; type?: string } | null;
+                if (
+                  !event?.fatal ||
+                  (event.type !== "networkError" && event.type !== "mediaError")
+                ) {
+                  reportHlsFailure(cause);
+                  return;
+                }
+                hlsFatalFailureCount += 1;
+                const now = Date.now();
+                firstHlsFatalFailureAt ??= now;
+                if (
+                  shouldEscalateNonTwitchHlsFatal({
+                    siteId,
+                    failureCount: hlsFatalFailureCount,
+                    firstFailureAt: firstHlsFatalFailureAt,
+                    now,
+                  })
+                ) {
+                  reportHlsFailure(cause, true);
+                  return;
+                }
                 setRunning(false);
-                return;
-              }
-              window.setTimeout(() => reportHlsFailure(event, true), 0);
+                // Video.js 上报终止错误但不替应用重启；使用 hls.js 的公开恢复 API。
+                if (event.type === "mediaError") hlsCore.recoverMediaError();
+                else hlsCore.startLoad();
+              });
             });
-            player.on("error", (cause) => reportHlsFailure(cause));
           }
 
           if (hlsCore && siteId === "twitch") {
             const twitchHlsCore = hlsCore;
             let hlsFatalFailureCount = 0;
             let decoderFailureReported = false;
-            if (import.meta.env.DEV) {
-              player.on("media_info", (info) => {
-                if (!isCurrentPlayer()) return;
-                console.debug("[rLive][Twitch hls.js] media info", info);
-              });
-            }
             function failDecoder() {
               if (decoderFailureReported || !isCurrentPlayer()) return;
               decoderFailureReported = true;
-              activeVideo.removeEventListener("error", onNativeMediaError);
               // 重放或续期同一渲染档无法改变浏览器的编解码决定。让控制器切换到更低的
               // Twitch 视频变体，而不是烧掉 URL 重试预算。
               playerRef.current = null;
@@ -1220,24 +1199,24 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 decodeError: true,
               });
             }
-            function onNativeMediaError() {
-              if (activeVideo.error?.code === 3) failDecoder();
-            }
-            activeVideo.addEventListener("error", onNativeMediaError);
             player.on("playing", () => {
               if (isCurrentPlayer()) hlsFatalFailureCount = 0;
             });
-            function handleFatalHlsFailure(cause: unknown, recoveryAlreadyStarted = false) {
+            function handleFatalHlsFailure(cause: unknown) {
               if (!isCurrentPlayer()) return;
+              // 原生 HLS 没有 hls.js 的 fatal/type 语义，交给统一媒体错误路径，
+              // 不要尝试对不存在的 engine 做恢复或解码降级。
+              if (!twitchHlsCore.isMse()) {
+                reportPlayerError(cause);
+                return;
+              }
 
-              const hlsJsDetails =
-                cause && typeof cause === "object" && "errorDetails" in cause
-                  ? String((cause as { errorDetails?: unknown }).errorDetails ?? "")
-                  : "";
+              const event = cause as { details?: string; type?: string } | null;
+              const hlsJsDetails = event?.details ?? "";
               const errorMessage = hlsJsDetails
                 ? `Twitch HLS ${hlsJsDetails}`
-                : xgPlayerErrorMessage(cause, "Twitch HLS 连接中断");
-              if (isXgPlayerDecodeError(cause)) {
+                : videoJsPlayerErrorMessage(cause, "Twitch HLS 连接中断");
+              if (isVideoJsDecodeError(cause)) {
                 failDecoder();
                 return;
               }
@@ -1251,12 +1230,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               );
               if (action.type === "restart") {
                 setRunning(false);
-                if (!recoveryAlreadyStarted) {
-                  try {
-                    twitchHlsCore.startLoad();
-                  } catch {
-                    // 后续的 hls.js 致命事件推进到 URL 续期。
-                  }
+                try {
+                  if (event?.type === "mediaError") twitchHlsCore.recoverMediaError();
+                  else twitchHlsCore.startLoad();
+                } catch {
+                  // 后续致命事件推进到播放地址续期。
                 }
                 return;
               }
@@ -1264,7 +1242,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               const message = commercialBreak
                 ? "Twitch 正在播放广告"
                 : `${errorMessage}，HLS 内部恢复已耗尽`;
-              activeVideo.removeEventListener("error", onNativeMediaError);
               playerRef.current = null;
               try {
                 player.destroy();
@@ -1284,25 +1261,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 commercialBreak,
               });
             }
-            player.on("HLS_ERROR", (cause) => {
-              if (!isCurrentPlayer() || !cause || typeof cause !== "object") return;
-              const event = cause as {
-                errorType?: unknown;
-                errorDetails?: unknown;
-                errorFatal?: unknown;
-              };
-              if (import.meta.env.DEV) {
-                console.debug("[rLive][Twitch hls.js] error", event);
-              }
-              if (event.errorFatal !== true) return;
-              const type = String(event.errorType ?? "").toLowerCase();
-              if (type !== "networkerror" && type !== "mediaerror") return;
-              // 插件在发出 HLS_ERROR 后立即启动其内建恢复。推迟我们的重试记账，
-              // 使销毁失败的播放器不会使那个同步回调失效。
-              window.setTimeout(() => handleFatalHlsFailure(event, true), 0);
-            });
             player.on("error", (cause) => {
-              handleFatalHlsFailure(cause);
+              queueMicrotask(() => handleFatalHlsFailure(cause));
             });
           }
 
@@ -1390,7 +1350,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
     const player = playerRef.current;
     const proxySessionId = activeProxySessionIdRef.current;
-    if (!player || !proxySessionId || typeof player.switchURL !== "function") {
+    if (!player || !proxySessionId) {
       setSoftFallbackToken((token) => token + 1);
       return;
     }
@@ -1440,7 +1400,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 switchMode: "soft",
               })
             : null;
-          await switchXgPlaybackSource(player, localSource, targetKind);
+          await switchVideoJsPlaybackSource(player, localSource, targetKind);
           if (
             cancelled ||
             sequence !== softSwitchSequenceRef.current ||
@@ -1464,7 +1424,15 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
         }
       })
       .catch(() => {
-        if (cancelled || sequence !== softSwitchSequenceRef.current) return;
+        // 硬重建或恢复耗尽可能已经销毁了这次软切换的播放器；它不再拥有
+        // 触发硬回退的资格，避免一次多余的代理重启与黑帧。
+        if (
+          cancelled ||
+          sequence !== softSwitchSequenceRef.current ||
+          playerRef.current !== player
+        ) {
+          return;
+        }
         setLoadError(null);
         setSoftFallbackToken((token) => token + 1);
       });
@@ -1766,8 +1734,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const video = videoRef.current;
     if (!video || !Number.isFinite(seconds)) return;
     const target = Math.max(0, seconds);
-    // mpegts.js 拥有自己的 seek 路径：直接写元素会让它的 seeking 处理器把这次跳转
-    // 当作无缓冲 seek 并冲刷 MSE。
+    // mpegts.js 由 Video.js 适配层托管；同步时使用适配层暴露的 seek 入口。
     if (mpegtsCoreRef.current?.seek?.(target)) return;
     try {
       video.currentTime = target;
