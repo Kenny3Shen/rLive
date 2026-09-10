@@ -6,13 +6,13 @@ import {
 import { LiveVideoHotkeys } from "./hotkeys";
 import { LiveVideoStatusIndicators } from "./status-indicators";
 
-export type DefaultLiveVideoSkinProps = PlayerSkinProps;
+export type MinimalLiveVideoSkinProps = PlayerSkinProps;
 
-/** 直播默认皮肤：标准圆角与渐变控制栏。 */
-export function DefaultLiveVideoSkin(props: DefaultLiveVideoSkinProps = {}) {
+/** 直播极简皮肤：方形控制键、更窄阴影与更靠上的字幕/进度预览。 */
+export function MinimalLiveVideoSkin(props: MinimalLiveVideoSkinProps = {}) {
   return (
     <PlayerSkinSurface
-      theme="default"
+      theme="minimal"
       preset="live-video"
       variant="live"
       hotkeys={<LiveVideoHotkeys />}

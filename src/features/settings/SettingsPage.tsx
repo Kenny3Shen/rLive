@@ -220,7 +220,7 @@ const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"]
 
 export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   appearance:
-    "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式",
+    "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式 播放器 皮肤 skin 极简 默认 圆角 方角 控制栏",
   playback:
     "播放 播放质量 清晰度 线路记忆 软切换 悬停 预览 卡片 封面 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
@@ -1413,6 +1413,8 @@ function AppearanceSettings() {
   const switchingRef = useRef(false);
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
+  const playerSkin = useSettingsStore((s) => s.playerSkin);
+  const setPlayerSkin = useSettingsStore((s) => s.setPlayerSkin);
 
   function applyThemeMode(next: ThemeMode) {
     if (next === theme || switchingRef.current) return;
@@ -1448,6 +1450,32 @@ function AppearanceSettings() {
           <ToggleGroupItem value="system">跟随系统</ToggleGroupItem>
           <ToggleGroupItem value="light">浅色</ToggleGroupItem>
           <ToggleGroupItem value="dark">深色</ToggleGroupItem>
+        </ToggleGroup>
+      </Field>
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle>
+            <span id="player-skin-label">播放器皮肤</span>
+            <FieldTip>
+              极简皮肤把控制键改为方角、收窄阴影与弹层，并抬高字幕与进度预览；直播与点播共用同一档。
+            </FieldTip>
+          </FieldTitle>
+        </FieldContent>
+        <ToggleGroup
+          aria-labelledby="player-skin-label"
+          value={[playerSkin]}
+          variant="outline"
+          size="sm"
+          spacing={1}
+          onValueChange={(values) => {
+            const next = values[0];
+            if (next === "default" || next === "minimal") {
+              setPlayerSkin(next);
+            }
+          }}
+        >
+          <ToggleGroupItem value="default">默认</ToggleGroupItem>
+          <ToggleGroupItem value="minimal">极简</ToggleGroupItem>
         </ToggleGroup>
       </Field>
     </Section>

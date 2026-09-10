@@ -5,7 +5,10 @@ import "@videojs/react/i18n/locales/zh-CN/register";
 import { liveFeature } from "@videojs/core/dom";
 import { Video, videoFeatures } from "@videojs/react/video";
 import { DefaultLiveVideoSkin } from "@/components/videojs/skins/live-video/skin";
+import { MinimalLiveVideoSkin } from "@/components/videojs/skins/live-video/minimal-skin";
 import { DefaultVideoSkin } from "@/components/videojs/skins/video/skin";
+import { MinimalVideoSkin } from "@/components/videojs/skins/video/minimal-skin";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 
 /** Video.js 原生 Player store；直播与点播皮肤共享媒体状态，控制栏由 ejected skin 组合。 */
 const videoJsPlayer = createPlayer({
@@ -26,6 +29,12 @@ type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"
   controls: ReactNode;
 };
 
+/** 皮肤矩阵：直播用 live-video 预设，点播/录制用 video 预设，各含默认与极简两档。 */
+const PLAYER_SKINS = {
+  live: { default: DefaultLiveVideoSkin, minimal: MinimalLiveVideoSkin },
+  vod: { default: DefaultVideoSkin, minimal: MinimalVideoSkin },
+} as const;
+
 /**
  * 统一播放器表面。直播默认使用 LiveVideoSkin；点播/录制显式传 `variant="vod"`
  * 使用 VideoSkin。两种皮肤保留 Video.js 原生控件、快捷键和状态提示，但**不挂原生
@@ -35,7 +44,8 @@ type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"
  */
 export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps>(
   function VideoJsContainer({ variant = "live", controls, ...props }, ref) {
-    const Skin = variant === "vod" ? DefaultVideoSkin : DefaultLiveVideoSkin;
+    const playerSkin = useSettingsStore((s) => s.playerSkin);
+    const Skin = PLAYER_SKINS[variant][playerSkin];
     return (
       // 语言包随包注册，避免首帧英文；显式 locale 让 SSR 与 `<html lang>` 走同一套文案。
       <I18nProvider locale="zh-CN">
