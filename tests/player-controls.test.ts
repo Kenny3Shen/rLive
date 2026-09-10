@@ -54,6 +54,7 @@ import {
   roomIdentityOverflowDistance,
   showPlayerFullscreenHud,
 } from "../src/features/room/PlayerFullscreenHud";
+import { tooltipTriggerLabel } from "../src/components/videojs/ui/button-tooltip";
 import {
   clampAndroidPlayerControl,
   getAndroidPlayerControls,
@@ -531,4 +532,33 @@ describe("custom player controls layout", () => {
   });
 });
 
+describe("player control tooltips", () => {
+  test("falls back to the trigger's accessible name so business buttons never show an empty box", () => {
+    // Video.js 原语（暂停、全屏）把文案写进 tooltip context，业务按钮只是普通
+    // `<button>`，context 里取到空串 —— 之前只有暂停按钮有文案，其余按钮弹空框。
+    expect(tooltipTriggerLabel(createElement("button", { "aria-label": "刷新播放" }))).toBe(
+      "刷新播放",
+    );
+  });
 
+  test("reaches the accessible name through render wrappers", () => {
+    // `PopoverTrigger render={<MediaButton aria-label=… />}`：真正的按钮下沉了一层。
+    const trigger = createElement("span", {
+      render: createElement("button", { "aria-label": "开启字幕" }),
+    });
+    expect(tooltipTriggerLabel(trigger)).toBe("开启字幕");
+  });
+
+  test("leaves the label to Video.js context when the trigger has no accessible name", () => {
+    // undefined = 交回 `Tooltip.Label`，暂停/全屏按钮连同快捷键提示照旧。
+    expect(tooltipTriggerLabel(createElement("button"))).toBeUndefined();
+    expect(tooltipTriggerLabel(createElement("button", { "aria-label": "" }))).toBeUndefined();
+    expect(tooltipTriggerLabel("不是元素")).toBeUndefined();
+  });
+
+  test("an explicit label still wins over the accessible name", () => {
+    expect(
+      tooltipTriggerLabel(createElement("button", { "aria-label": "回退" }), "播放设置"),
+    ).toBe("播放设置");
+  });
+});

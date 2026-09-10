@@ -1,5 +1,5 @@
 import { Tooltip } from "@videojs/react";
-import type { ReactElement, ReactNode } from "react";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 import { cn } from "@/components/videojs/lib/resolve-class-name";
 
@@ -8,7 +8,41 @@ export interface ButtonTooltipProps extends Omit<Tooltip.RootProps, "children"> 
   label?: ReactNode;
 }
 
+/** `render` 包装层（PopoverTrigger → MediaButton）最多下探几层去找可访问名。 */
+const MAX_TRIGGER_RENDER_DEPTH = 4;
+
+/**
+ * 从触发器自身读取 `aria-label`。
+ *
+ * Video.js 原语（PlayButton、FullscreenButton…）会把文案写进 tooltip context，
+ * `Tooltip.Label` 直接取用；业务按钮只是普通 `<button>`，context 里没有文案，
+ * `content?.label ?? ""` 取到空串就会画出一个空的 tooltip 框。这些按钮本来就必须
+ * 带可访问名，用它兜底既能补上文案，又保证 tooltip 与可访问名永远一致。
+ */
+function triggerAriaLabel(node: ReactNode, depth = 0): string | undefined {
+  if (depth > MAX_TRIGGER_RENDER_DEPTH || !isValidElement(node)) return undefined;
+  const props = node.props as { "aria-label"?: unknown; render?: ReactNode };
+  const ariaLabel = props["aria-label"];
+  if (typeof ariaLabel === "string" && ariaLabel.length > 0) return ariaLabel;
+  // `PopoverTrigger render={<MediaButton aria-label=… />}` 把真正的按钮藏在
+  // render 里，可访问名也跟着下沉一层。
+  return triggerAriaLabel(props.render, depth + 1);
+}
+
+/**
+ * tooltip 最终展示的文案，`undefined` 表示交给 Video.js context（`Tooltip.Label`）。
+ */
+export function tooltipTriggerLabel(
+  children: ReactNode,
+  label?: ReactNode,
+): ReactNode | undefined {
+  return label ?? triggerAriaLabel(children);
+}
+
 export function ButtonTooltip({ children, label, ...props }: ButtonTooltipProps) {
+  const content = tooltipTriggerLabel(children, label);
+  // 只有走 Video.js context 的原语才有快捷键提示可展示。
+  const fromMediaContext = content === undefined;
   return (
     <Tooltip.Root {...props}>
       <Tooltip.Trigger render={children} />
@@ -37,8 +71,8 @@ export function ButtonTooltip({ children, label, ...props }: ButtonTooltipProps)
           "px-2.5",
         )}
       >
-        {label ?? <Tooltip.Label />}
-        {!label && (
+        {content ?? <Tooltip.Label />}
+        {fromMediaContext && (
           <Tooltip.Shortcut
             className={
               "min-w-[1.5em] rounded-[--spacing(1)] bg-media-muted p-[0.1em] text-center text-media-sm [font-family:inherit] font-semibold leading-tight"
