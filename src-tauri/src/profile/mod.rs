@@ -304,6 +304,7 @@ pub fn merge_into_db(
     let mut settings = settings::get(&transaction)?;
     // 从配置包合并非机密的设置字段
     settings.theme = package.settings.theme.clone();
+    settings.player_skin = package.settings.player_skin.clone();
     settings.default_site = package.settings.default_site.clone();
     settings.disabled_site_ids = package.settings.disabled_site_ids.clone();
     settings.proxy = package.settings.proxy.clone();
@@ -443,6 +444,22 @@ mod tests {
         let package = decode_package(&text).unwrap();
 
         assert!(package.settings.room_card_preview_enabled);
+    }
+
+    /// 4.0.0 之前导出的配置包没有 `player_skin`，导入时按默认值补齐，
+    /// 其余便携字段仍然必填。
+    #[test]
+    fn profile_backfills_player_skin_from_older_packages() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("player_skin");
+        let text = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&text).unwrap();
+
+        assert_eq!(package.settings.player_skin, "default");
     }
 
     /// 2.12.x 导出的配置包没有 `danmaku_blocked_users`（顶层与 settings 内都没有），

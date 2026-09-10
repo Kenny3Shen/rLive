@@ -6,13 +6,13 @@ import {
 import { VideoHotkeys } from "./hotkeys";
 import { VideoStatusIndicators } from "./status-indicators";
 
-export type DefaultVideoSkinProps = PlayerSkinProps;
+export type MinimalVideoSkinProps = PlayerSkinProps;
 
-/** 点播默认皮肤：标准圆角与渐变控制栏。 */
-export function DefaultVideoSkin(props: DefaultVideoSkinProps = {}) {
+/** 点播极简皮肤：方形控制键、更窄阴影与更靠上的字幕/进度预览。 */
+export function MinimalVideoSkin(props: MinimalVideoSkinProps = {}) {
   return (
     <PlayerSkinSurface
-      theme="default"
+      theme="minimal"
       preset="video"
       variant="vod"
       hotkeys={<VideoHotkeys />}

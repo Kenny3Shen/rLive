@@ -227,8 +227,13 @@ export type RecordingAssSettings = {
   shield_regex: boolean;
 };
 
+/** 播放器皮肤：`default` 标准圆角，`minimal` 极简方角。 */
+export type PlayerSkin = "default" | "minimal";
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
+  /** 播放器皮肤，同时作用于直播与点播表面。 */
+  player_skin: PlayerSkin;
   default_site: string;
   proxy: string | null;
   danmaku_opacity: number;
