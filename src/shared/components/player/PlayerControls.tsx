@@ -214,6 +214,16 @@ export const PLAYER_CONTROL_ICON_CLASS = "[&_svg]:size-6";
 export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
   "text-media-controls-foreground hover:bg-media-accent hover:text-media-accent-foreground";
 
+/**
+ * 画面之上 HUD 图标按钮的唯一样式配方：与底部控制栏同一套 36px MediaButton、
+ * 圆角与 hover。返回箭头、溢出菜单、录制与关注共用它 —— 新增 HUD 按钮必须走
+ * 这里，否则就会像之前的录制按钮那样长出一个尺寸与配色都对不上的按钮。
+ */
+export const PLAYER_HUD_BUTTON_CLASS = `r-live-media-extension-button shrink-0 ${PLAYER_OVERLAY_CONTROL_BUTTON_CLASS}`;
+
+/** HUD 按钮内的图标尺寸，与控制栏 24px 图标对齐。 */
+export const PLAYER_HUD_ICON_CLASS = "size-6";
+
 function ExtensionButton({
   label,
   active,

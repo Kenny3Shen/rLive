@@ -7,12 +7,12 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
 } from "@/shared/components/player/PlayerControls";
 import { cn } from "@/lib/utils";
 import { resolveIptvChannel, useIptvFavoriteMutation, useIptvFavorites } from "./favorites";
@@ -258,33 +258,38 @@ export function IptvPlayerPage() {
   const hudTools =
     channel !== null ? (
       <>
-        <RecordingControl context={recordingContext} disabled={!recordingContext} />
+        <RecordingControl
+          context={recordingContext}
+          disabled={!recordingContext}
+          variant="overlay"
+        />
         {favoriteEnabled && (
-          <Button
+          <MediaButton
             type="button"
-            variant="ghost"
-            size="icon-sm"
             aria-label={isFavorite ? "取消关注频道" : "关注频道"}
             aria-pressed={isFavorite}
             title={isFavorite ? "取消关注" : "关注频道"}
+            aria-disabled={
+              (favoriteMutation.isPending &&
+                favoriteMutation.variables?.channel.url === channel.url) ||
+              undefined
+            }
             disabled={
               favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel.url
             }
-            className={cn(
-              PLAYER_CONTROL_BUTTON_CLASS,
-              PLAYER_CONTROL_ICON_CLASS,
-              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-              "shrink-0",
-            )}
+            className={PLAYER_HUD_BUTTON_CLASS}
             onClick={() => favoriteMutation.mutate({ channel, isFavorite })}
           >
             {favoriteMutation.isPending &&
             favoriteMutation.variables?.channel.url === channel.url ? (
-              <Spinner aria-hidden />
+              <Spinner className={PLAYER_HUD_ICON_CLASS} aria-hidden />
             ) : (
-              <Heart className={cn(isFavorite && "fill-current")} aria-hidden />
+              <Heart
+                className={cn(PLAYER_HUD_ICON_CLASS, isFavorite && "fill-current")}
+                aria-hidden
+              />
             )}
-          </Button>
+          </MediaButton>
         )}
       </>
     ) : null;

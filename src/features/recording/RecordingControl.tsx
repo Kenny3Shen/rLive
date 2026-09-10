@@ -1,12 +1,17 @@
 import { useId, useState } from "react";
 import { CircleDot, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
+import {
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
+} from "@/shared/components/player/PlayerControls";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import {
   RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT,
@@ -23,13 +28,23 @@ type RecordingControlProps = {
   context: RecordingContext | null;
   className?: string;
   disabled?: boolean;
+  /**
+   * `default` 是应用顶栏（IPTV 流内页顶栏），跟邻居的 shadcn 图标按钮对齐；
+   * `overlay` 是画面之上的全屏 HUD，跟返回箭头、溢出菜单同一套 36px MediaButton。
+   */
+  variant?: "default" | "overlay";
 };
 
 /**
  * 直播房间与 IPTV 共享的唯一标题栏录制入口。开始时打开与房间工具（定时关闭）
  * 相同的玻璃选项盒；停止保持一键保存动作。
  */
-export function RecordingControl({ context, className, disabled = false }: RecordingControlProps) {
+export function RecordingControl({
+  context,
+  className,
+  disabled = false,
+  variant = "default",
+}: RecordingControlProps) {
   const controller = useRecordingController(context);
   const defaultIncludeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
   const [open, setOpen] = useState(false);
@@ -61,6 +76,43 @@ export function RecordingControl({ context, className, disabled = false }: Recor
   if (!controller.supported) return null;
 
   const label = active ? "停止录制并保存" : "开始录制";
+  const overlay = variant === "overlay";
+  const triggerDisabled = disabled || busy || !context;
+
+  // 两种宿主的按钮几何与配色完全不同：HUD 在画面之上，必须用与返回箭头、
+  // 溢出菜单一致的 36px 白色 MediaButton；应用顶栏则跟随邻居的 shadcn 图标按钮。
+  const trigger = overlay ? (
+    <MediaButton
+      type="button"
+      aria-label={label}
+      aria-pressed={active}
+      // MediaButton 的禁用观感挂在 aria-disabled 上，disabled 只阻断交互。
+      aria-disabled={triggerDisabled || undefined}
+      disabled={triggerDisabled}
+      className={cn(
+        PLAYER_HUD_BUTTON_CLASS,
+        active && "text-destructive hover:text-destructive",
+        className,
+      )}
+      onClick={() => {
+        if (active) controller.stop();
+      }}
+    />
+  ) : (
+    <Button
+      type="button"
+      variant={active ? "secondary" : "ghost"}
+      size="icon-sm"
+      className={cn(active && "text-destructive hover:text-destructive", className)}
+      aria-label={label}
+      aria-pressed={active}
+      disabled={triggerDisabled}
+      onClick={() => {
+        if (active) controller.stop();
+      }}
+    />
+  );
+  const iconClass = overlay ? PLAYER_HUD_ICON_CLASS : undefined;
 
   function startRecording() {
     controller.start({
@@ -87,31 +139,12 @@ export function RecordingControl({ context, className, disabled = false }: Recor
       }}
     >
       <Tooltip>
-        <TooltipTrigger
-          render={
-            <PopoverTrigger
-              render={
-                <Button
-                  type="button"
-                  variant={active ? "secondary" : "ghost"}
-                  size="icon-sm"
-                  className={cn(active && "text-destructive hover:text-destructive", className)}
-                  aria-label={label}
-                  aria-pressed={active}
-                  disabled={disabled || busy || !context}
-                  onClick={() => {
-                    if (active) controller.stop();
-                  }}
-                />
-              }
-            />
-          }
-        >
+        <TooltipTrigger render={<PopoverTrigger render={trigger} />}>
           <span className="relative inline-flex">
             {active ? (
-              <Square data-icon="inline-start" aria-hidden />
+              <Square className={iconClass} data-icon="inline-start" aria-hidden />
             ) : (
-              <CircleDot data-icon="inline-start" aria-hidden />
+              <CircleDot className={iconClass} data-icon="inline-start" aria-hidden />
             )}
             {active && <ToolActiveDot tone="destructive" />}
           </span>

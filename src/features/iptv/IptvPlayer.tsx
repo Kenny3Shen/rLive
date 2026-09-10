@@ -12,14 +12,13 @@ import {
 } from "react";
 import { AlertCircle, ChevronLeft, Radio, Tv } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
@@ -676,17 +675,10 @@ function IptvPlayerContent({
               )}
             >
               {onBack && (
-                <Button
+                <MediaButton
                   type="button"
-                  variant="ghost"
-                  size="icon-sm"
                   aria-label={backLabel ?? "返回上一页"}
-                  className={cn(
-                    PLAYER_CONTROL_BUTTON_CLASS,
-                    PLAYER_CONTROL_ICON_CLASS,
-                    PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                    "shrink-0",
-                  )}
+                  className={PLAYER_HUD_BUTTON_CLASS}
                   // 与直播/视频页 HUD 返回箭头同一层级语义：先退全屏层，
                   // 无全屏层时返回页面。
                   onClick={() => {
@@ -695,8 +687,12 @@ function IptvPlayerContent({
                     else onBack();
                   }}
                 >
-                  <ChevronLeft data-icon="inline-start" aria-hidden />
-                </Button>
+                  <ChevronLeft
+                    className={PLAYER_HUD_ICON_CLASS}
+                    data-icon="inline-start"
+                    aria-hidden
+                  />
+                </MediaButton>
               )}
               <Badge
                 variant="destructive"
