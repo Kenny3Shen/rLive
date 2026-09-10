@@ -31,13 +31,16 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
-import { Separator } from "@/components/ui/separator";
-import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import {
+  PLAYER_CONTROL_BUTTON_CLASS,
+  PLAYER_CONTROL_ICON_CLASS,
+  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+  PlayerControls,
+} from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
@@ -77,6 +80,13 @@ import {
   type VideoJsPlayerInstance,
 } from "@/features/room/player/videoJsPlayer";
 import { requestPlayerAutoplay } from "@/features/room/player/autoplay";
+import {
+  useVideoJsPiP,
+  useVideoJsPlaybackRate,
+  VideoJsContainer,
+  VideoJsPlayerProvider,
+  VideoJsVideo,
+} from "@/features/room/player/videoJsControls";
 import { useAndroidPlayerControls } from "@/features/room/player/androidPlayerControls";
 import {
   videoAspectRatio,
@@ -88,7 +98,6 @@ import {
   setAndroidImmersive,
 } from "@/features/room/player/androidImmersive";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
-import { formatRecordingDuration } from "@/features/recording/recording";
 import type {
   VideoHistoryItem,
   VideoHistoryKind,
@@ -120,16 +129,7 @@ import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWa
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { CastMenu } from "@/features/room/CastMenu";
-import {
-  applyWebPlayerAudio,
-  getPictureInPictureDocument,
-  toggleVideoPictureInPicture,
-} from "@/features/room/player/useWebPlayer";
-import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-} from "@/shared/components/player/PlayerControls";
+import { applyWebPlayerAudio } from "@/features/room/player/useWebPlayer";
 import {
   PlayerHudOverflowMenu,
   PlayerToolPanel,
@@ -173,9 +173,6 @@ import { notify, setToastPortalContainer } from "@/components/ui/toast";
 
 const SINGLE_CLICK_DELAY_MS = 220;
 
-/** 倍速档位：菜单可选 0.5x–2x；3x 只作为长按的临时档位，不进菜单。 */
-const PLAYBACK_RATES = [0.5, 0.75, 1, 1.5, 2] as const;
-
 /** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
 const LONG_PRESS_RATE = 3;
 const LONG_PRESS_TRIGGER_MS = 500;
@@ -198,14 +195,6 @@ function isPlayerControlTarget(target: EventTarget | null): boolean {
       'button, a, input, select, textarea, [contenteditable="true"], [role="button"], [role="slider"], [role="dialog"], [data-player-controls], [data-player-hud], [data-player-fullscreen-lock]',
     ),
   );
-}
-
-function bufferedRangeEnd(video: HTMLVideoElement): number {
-  let end = 0;
-  for (let index = 0; index < video.buffered.length; index += 1) {
-    end = Math.max(end, video.buffered.end(index));
-  }
-  return Number.isFinite(end) ? end : 0;
 }
 
 function VideoSwipePreview({ item, label }: { item: PlaylistItem | null; label: string }) {
@@ -240,9 +229,11 @@ function VideoSwipePreview({ item, label }: { item: PlaylistItem | null; label: 
  */
 export function VideoPlayerPage() {
   return (
-    <DrawerScope>
-      <VideoPlayerPageContent />
-    </DrawerScope>
+    <VideoJsPlayerProvider>
+      <DrawerScope>
+        <VideoPlayerPageContent />
+      </DrawerScope>
+    </VideoJsPlayerProvider>
   );
 }
 
@@ -273,6 +264,7 @@ function VideoPlayerPageContent() {
   // 状态更新会打扰合成器），只有角标的显示与否走 state。
   const speedHoldTimerRef = useRef<number | null>(null);
   const speedHoldRef = useRef(false);
+  const speedHoldRestoreRateRef = useRef(1);
   const suppressClickRef = useRef(false);
   const surfacePressRef = useRef<{
     pointerId: number;
@@ -293,7 +285,6 @@ function VideoPlayerPageContent() {
   const volumeRef = useRef(initialAudio.volume);
   const mutedRef = useRef(initialAudio.muted);
   const previousVolumeRef = useRef(initialAudio.volume);
-  const sliderTargetRef = useRef<number | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [waiting, setWaiting] = useState(false);
@@ -303,7 +294,6 @@ function VideoPlayerPageContent() {
   const [volume, setVolume] = useState(initialAudio.volume);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [bufferedTime, setBufferedTime] = useState(0);
   const [frameSize, setFrameSize] = useState<{ key: string; ratio: number | null } | null>(null);
   const [shortVideo, setShortVideo] = useState(false);
   const [infoHidden, setInfoHidden] = useState(false);
@@ -314,8 +304,6 @@ function VideoPlayerPageContent() {
   const [swipePoster, setSwipePoster] = useState<PlaylistItem | null>(null);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
-  /** 菜单选中的倍速；长按倍速是临时覆盖，不经过这个状态。 */
-  const [playbackRate, setPlaybackRate] = useState(1);
   const [speedHoldActive, setSpeedHoldActive] = useState(false);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   /** 期望画质（null = 后端自选最高可用档）。切换后带着它重取播放信息。 */
@@ -327,8 +315,8 @@ function VideoPlayerPageContent() {
     // 播放器模块与取流 IPC 同时准备，所有画幅共用已有 import 缓存。
     void loadVideoJsModules(audioOnly ? "native" : "dash").catch(() => {});
   }, [audioOnly]);
-  /** 画中画进出状态（监听媒体元素事件，WebView2 支持；Android WebView 无此 API）。 */
-  const [pipActive, setPipActive] = useState(false);
+  const pictureInPicture = useVideoJsPiP();
+  const playbackRate = useVideoJsPlaybackRate();
   /** 投屏面板与 CC 字幕弹层的开关态。投屏面板住在 HUD 溢出菜单里
    *  （`PlayerToolPanel` + `CastMenu`），窗口化与全屏同一入口。 */
   const [castOpen, setCastOpen] = useState(false);
@@ -895,12 +883,12 @@ function VideoPlayerPageContent() {
     if (media) {
       resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
     }
-    setAudioOnly((value) => !value);
-  }, []);
-
-  const togglePictureInPicture = useCallback(() => {
-    void toggleVideoPictureInPicture(getPictureInPictureDocument(), videoRef.current);
-  }, []);
+    const nextAudioOnly = !audioOnly;
+    if (nextAudioOnly && pictureInPicture?.pip) {
+      void pictureInPicture.exitPictureInPicture().catch(() => undefined);
+    }
+    setAudioOnly(nextAudioOnly);
+  }, [audioOnly, pictureInPicture]);
 
   // CC 字幕列表：多数稿件没有，空列表/失败都按无字幕处理（按钮直接不渲染）。
   const subtitlesQuery = useQuery({
@@ -1037,7 +1025,6 @@ function VideoPlayerPageContent() {
       // 上限离时长留 0.25s 余量：跳到正正好 duration 会被媒体元素当成播放结束，
       // 留余量让最后一帧真的播出来、再自然触发 ended（自动连播走它的正常路径）。
       const clamped = Math.max(0, duration > 0 ? Math.min(target, duration - 0.25) : target);
-      sliderTargetRef.current = null;
       setCurrentTime(clamped);
       setWaiting(true);
       // DASH 的 seek 走原生 `currentTime`，Video.js DASH 适配器会按当前位置处理分片。
@@ -1080,7 +1067,6 @@ function VideoPlayerPageContent() {
     setPaused(true);
     userPausedRef.current = false;
     setCurrentTime(0);
-    setBufferedTime(0);
     setDuration(playInfo?.duration ?? 0);
     // 本轮播放器会话向 waiting 自动恢复登记：同 key 续用预算，换 key 重置；
     // 上一会话挂起的计时在模块内随之作废。
@@ -1107,7 +1093,7 @@ function VideoPlayerPageContent() {
     function syncTime() {
       if (cancelled) return;
       const actual = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : 0;
-      if (sliderTargetRef.current === null) setCurrentTime(actual);
+      setCurrentTime(actual);
       ensureDanmakuSegments(actual * 1_000);
       reportProgress(actual, false);
     }
@@ -1118,10 +1104,6 @@ function VideoPlayerPageContent() {
       const fromInfo = playInfo?.duration ?? 0;
       if (fromInfo > 0) return;
       if (Number.isFinite(media.duration) && media.duration > 0) setDuration(media.duration);
-    }
-    function syncBuffered() {
-      if (cancelled) return;
-      setBufferedTime(bufferedRangeEnd(media));
     }
     function onPlay() {
       if (cancelled) return;
@@ -1147,7 +1129,6 @@ function VideoPlayerPageContent() {
       setWaiting(false);
       syncTime();
       syncDuration();
-      syncBuffered();
       syncAspectRatio();
       // canplay/loadedmetadata 说明数据重新流动：即使引擎没补发 playing，
       // 也别让上一轮 waiting 的判定计时继续空转。
@@ -1159,10 +1140,8 @@ function VideoPlayerPageContent() {
             : poster,
         );
       }
-      // 用户已在拖进度条时不应用初始续播：尊重当前落点，避免重复跳转覆盖用户。
-      if (pendingInitialSeek && sliderTargetRef.current !== null) {
-        pendingInitialSeek = null;
-      } else if (pendingInitialSeek) {
+      // 加载态时间轴不可操作；元数据就绪后一次性应用待续播位置。
+      if (pendingInitialSeek) {
         const initialSeek = pendingInitialSeek;
         pendingInitialSeek = null;
         // loadedmetadata 早于任何画面解码，在这里续播不会闪出 0 秒帧。
@@ -1201,6 +1180,16 @@ function VideoPlayerPageContent() {
       setWaiting(false);
       // seek 的短暂 waiting 到此解除：判定计时取消，稳定播放重新起算。
       waitingRecovery.notifyResumed();
+    }
+    function syncAudio() {
+      if (cancelled) return;
+      const nextVolume = Math.round(media.volume * 100);
+      const nextMuted = media.muted || nextVolume === 0;
+      volumeRef.current = nextVolume;
+      mutedRef.current = nextMuted;
+      if (nextVolume > 0) previousVolumeRef.current = nextVolume;
+      setVolume(nextVolume);
+      setMuted(nextMuted);
     }
     function onEnded() {
       if (cancelled) return;
@@ -1248,7 +1237,6 @@ function VideoPlayerPageContent() {
     media.muted = mutedRef.current;
     media.addEventListener("timeupdate", syncTime);
     media.addEventListener("durationchange", syncDuration);
-    media.addEventListener("progress", syncBuffered);
     media.addEventListener("loadedmetadata", onReady);
     media.addEventListener("canplay", onReady);
     media.addEventListener("resize", syncAspectRatio);
@@ -1258,6 +1246,7 @@ function VideoPlayerPageContent() {
     media.addEventListener("waiting", onWaiting);
     media.addEventListener("seeked", onSeeked);
     media.addEventListener("ended", onEnded);
+    media.addEventListener("volumechange", syncAudio);
 
     void loadVideoJsModules(playKind)
       .then((modules) => {
@@ -1321,7 +1310,6 @@ function VideoPlayerPageContent() {
       waitingRecovery.endSession();
       media.removeEventListener("timeupdate", syncTime);
       media.removeEventListener("durationchange", syncDuration);
-      media.removeEventListener("progress", syncBuffered);
       media.removeEventListener("loadedmetadata", onReady);
       media.removeEventListener("canplay", onReady);
       media.removeEventListener("resize", syncAspectRatio);
@@ -1331,6 +1319,7 @@ function VideoPlayerPageContent() {
       media.removeEventListener("waiting", onWaiting);
       media.removeEventListener("seeked", onSeeked);
       media.removeEventListener("ended", onEnded);
+      media.removeEventListener("volumechange", syncAudio);
       const player = playerRef.current;
       playerRef.current = null;
       try {
@@ -1407,26 +1396,6 @@ function VideoPlayerPageContent() {
     rememberPlayerVolume(volume, muted);
   }, [muted, nativePlayerControlsActive, volume]);
 
-  // 倍速直接写到媒体元素上；换源（新播放地址）后重时应用一次。
-  useEffect(() => {
-    const media = videoRef.current;
-    if (media) media.playbackRate = playbackRate;
-  }, [playbackRate, playUrl]);
-
-  // 画中画事件在媒体元素上触发且不冒泡；挂捕获阶段监听舞台，播放器重建也能接住。
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    const onEnter = () => setPipActive(true);
-    const onLeave = () => setPipActive(false);
-    stage.addEventListener("enterpictureinpicture", onEnter, true);
-    stage.addEventListener("leavepictureinpicture", onLeave, true);
-    return () => {
-      stage.removeEventListener("enterpictureinpicture", onEnter, true);
-      stage.removeEventListener("leavepictureinpicture", onLeave, true);
-    };
-  }, []);
-
   // 选中的字幕轨 → 后端代拉 JSON → 转 VTT blob；换语言时回收旧 blob。
   const subtitleUrl = subtitles.find((item) => item.lan === subtitleLan)?.url;
   useEffect(() => {
@@ -1471,7 +1440,7 @@ function VideoPlayerPageContent() {
     !audioOnly &&
     !overlayInteractionOpen &&
     !uploaderOpen &&
-    !pipActive &&
+    !pictureInPicture?.pip &&
     playlistStore.items.length > 1 &&
     (playlistContainsCurrentItem(playlistStore.items, params?.bvid ?? null, rawCid) ||
       playlistContainsCurrentItem(playlistStore.items, params?.bvid ?? null, cid));
@@ -1593,12 +1562,13 @@ function VideoPlayerPageContent() {
     if (surfacePressRef.current) surfacePressRef.current.swipe = false;
     const media = videoRef.current;
     // DASH 的 media.duration 可能为 Infinity，使用已有的真实分片时长。
-    if (!media || duration <= 0 || loading || playbackError) return;
+    if (!media || !playbackRate || duration <= 0 || loading || playbackError) return;
     speedHoldRef.current = true;
     suppressClickRef.current = true;
-    media.playbackRate = LONG_PRESS_RATE;
+    speedHoldRestoreRateRef.current = playbackRate.playbackRate;
+    playbackRate.setPlaybackRate(LONG_PRESS_RATE);
     setSpeedHoldActive(true);
-  }, [duration, loading, playbackError]);
+  }, [duration, loading, playbackError, playbackRate]);
 
   const releaseSpeedHold = useCallback(() => {
     if (speedHoldTimerRef.current !== null) {
@@ -1607,8 +1577,7 @@ function VideoPlayerPageContent() {
     }
     if (!speedHoldRef.current) return;
     speedHoldRef.current = false;
-    const media = videoRef.current;
-    if (media) media.playbackRate = playbackRate;
+    playbackRate?.setPlaybackRate(speedHoldRestoreRateRef.current);
     setSpeedHoldActive(false);
   }, [playbackRate]);
 
@@ -2205,52 +2174,6 @@ function VideoPlayerPageContent() {
     );
   }
 
-  const playlistPosition = playlistStore.getCurrentPosition();
-  const timeline = (
-    <div className="flex min-w-0 items-center gap-2 py-0.5 text-white/85">
-      <Slider
-        value={currentTime}
-        min={0}
-        max={duration || 1}
-        step={0.1}
-        variant="player"
-        buffered={duration > 0 ? (bufferedTime / duration) * 100 : 0}
-        disabled={!duration}
-        aria-label="播放进度"
-        aria-valuetext={`${formatRecordingDuration(currentTime * 1_000)} / ${formatRecordingDuration(duration * 1_000)}`}
-        className="min-w-0 flex-1"
-        onValueChange={(value) => {
-          const next = Number(Array.isArray(value) ? value[0] : value);
-          if (!Number.isFinite(next)) return;
-          sliderTargetRef.current = next;
-          setCurrentTime(next);
-        }}
-        onValueCommitted={(value) => {
-          const next = Number(Array.isArray(value) ? value[0] : value);
-          if (Number.isFinite(next)) seekTo(next);
-        }}
-      />
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-white/80">
-        {formatRecordingDuration(currentTime * 1_000)}
-        <span className="px-1 text-white/45" aria-hidden>
-          /
-        </span>
-        {formatRecordingDuration(duration * 1_000)}
-        {(playlistStore.uploader || (!shortVideo && playlistStore.items.length > 1)) &&
-          playlistPosition && (
-            <span
-              className="pl-2 text-white/60"
-              aria-label={`${playlistStore.uploader ? "UP 主投稿" : "播放列表"}第 ${playlistPosition.current} 个，共 ${playlistPosition.total} 个`}
-            >
-              {playlistPosition.current}/{playlistPosition.total}
-            </span>
-          )}
-      </span>
-    </div>
-  );
-
-  // WebView2 桌面支持画中画；Android WebView 无此 API 时按钮由 PlayerControls 隐藏。
-  const pipSupported = document.pictureInPictureEnabled;
   /** 控制栏工具（字幕）：与内部按钮同一套样式常量；没字幕轨的稿件不渲染
    *  字幕按钮。窗口全屏/画面全屏用 PlayerControls 内置的两个按钮（网页全屏
    *  toggle 应用内全屏，全屏走元素级 top layer）。 */
@@ -2325,29 +2248,6 @@ function VideoPlayerPageContent() {
     </Popover>
   );
 
-  /** 倍速选择区：与播放列表设置同一个弹层，只有这一页需要它。 */
-  const rateSettings = (
-    <div className="flex flex-col gap-1 px-1 py-1">
-      <p className="px-2.5 py-1 text-xs text-muted-foreground">倍速</p>
-      <div className="flex flex-wrap gap-1.5 px-1.5 py-1">
-        {PLAYBACK_RATES.map((rate) => (
-          <button
-            key={rate}
-            type="button"
-            onClick={() => setPlaybackRate(rate)}
-            aria-pressed={rate === playbackRate}
-            className={cn(
-              "min-h-9 rounded-md px-2.5 text-sm tabular-nums transition-colors hover:bg-muted/50",
-              rate === playbackRate && "bg-primary text-primary-foreground hover:bg-primary",
-            )}
-          >
-            {rate === 1 ? "1.0x" : `${rate}x`}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-
   /** 短视频固定单条循环；普通详情保留原有循环/连播设置。 */
   const playbackToggles = (
     <div className="flex flex-col gap-1 px-1 py-1">
@@ -2391,7 +2291,8 @@ function VideoPlayerPageContent() {
           播放器/详情区占比一致，竖屏画面在舞台内居中留黑边，
           「竖屏全屏」按钮进入沉浸铺满屏幕。 */}
       <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
-        <section
+        <VideoJsContainer
+          variant="vod"
           ref={stageRef}
           data-player-stage
           data-video-mode={shortVideo ? "short" : "details"}
@@ -2419,6 +2320,94 @@ function VideoPlayerPageContent() {
           onPointerLeave={handleStagePointerLeave}
           onKeyDown={handleStageKeyDown}
           tabIndex={0}
+          controls={
+            <PlayerControls
+              chrome={{
+                ref: controlsRef,
+                "data-player-controls": true,
+                "data-visible": "true",
+                "aria-hidden": false,
+                className:
+                  "absolute inset-x-0 bottom-0 z-30 transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                onPointerEnter: holdControlsVisible,
+                onPointerLeave: scheduleControlsHide,
+                onFocusCapture: holdControlsVisible,
+                onBlurCapture: scheduleControlsHide,
+              }}
+              externalAudioControls={
+                nativePlayerControlsActive
+                  ? {
+                      volume: playerControlVolume,
+                      muted: playerControlMuted,
+                      onVolumeChange: setPlayerVolume,
+                      onToggleMute: toggleMute,
+                    }
+                  : undefined
+              }
+              osdOn={danmakuVisible}
+              webFullscreen={webFullscreen}
+              fullscreen={shortVideo || fullscreen.fullscreen}
+              nativeFullscreen={!shortVideo && !fullscreen.nativeLayer}
+              onToggleWebFullscreen={
+                mobilePortrait || shortVideo || returningToShortVideo
+                  ? togglePlayerFullscreen
+                  : () => setWebFullscreen((value) => !value)
+              }
+              disabled={loading}
+              pictureInPictureDisabled={loading || audioOnly || fullscreen.fullscreen}
+              refreshDisabled={loading}
+              loadError={fullscreen.error}
+              stackedBelowPlayer={compact}
+              systemGestureBarReserved={shortVideo && mobileClient}
+              compact={compact}
+              portalContainer={stageRef}
+              centerSlot={
+                <DanmakuComposer
+                  overlay
+                  portalContainer={stageRef}
+                  roomTitle={title}
+                  video={{
+                    cid,
+                    aid: aid ?? "",
+                    progressMs: Math.floor(currentTime * 1000),
+                  }}
+                  onOverlayInteractionChange={setOverlayInteractionOpen}
+                />
+              }
+              playbackSettings={playbackToggles}
+              playbackSettingsTitle="播放设置"
+              qualities={playInfo?.accept_quality.map((quality) => ({
+                quality: quality.label,
+                // 不可用档位仍列出但置灰：匿名/非大会员能直接看出画质上限的
+                // 原因，而不是以为客户端坏了。
+                disabled: !quality.available,
+                hint: quality.available ? undefined : "登录或大会员后可用",
+              }))}
+              qualityIndex={(() => {
+                if (!playInfo) return 0;
+                const index = playInfo.accept_quality.findIndex(
+                  (quality) => quality.qn === playInfo.quality,
+                );
+                return index >= 0 ? index : 0;
+              })()}
+              onQualityChange={(index) => {
+                const quality = playInfo?.accept_quality[index];
+                if (quality?.available) changeQuality(quality.qn);
+              }}
+              onOverlayInteractionChange={setOverlayInteractionOpen}
+              onRefresh={retryPlayback}
+              onNext={nextItem ? () => goToPlaylistItem(nextItem) : undefined}
+              toolsSlot={toolsSlot}
+              infoVisible={!infoHidden}
+              onToggleInfo={shortVideo ? () => setInfoHidden((hidden) => !hidden) : undefined}
+              audioOnly={audioOnly}
+              onToggleAudioOnly={toggleAudioOnly}
+              onToggleOsd={() => setDanmakuVisible((visible) => !visible)}
+              onToggleFullscreen={
+                shortVideo || fullscreen.nativeLayer ? togglePlayerFullscreen : undefined
+              }
+            />
+          }
         >
           <div data-video-viewport className="relative flex min-h-0 flex-1 flex-col bg-black">
             <div data-video-frame className="relative flex min-h-0 flex-1 flex-col">
@@ -2482,12 +2471,13 @@ function VideoPlayerPageContent() {
                     data-player-engine-root
                     className="absolute inset-0 size-full overflow-hidden bg-black"
                   >
-                    <video
+                    <VideoJsVideo
                       ref={videoRef}
                       data-player-video
                       playsInline
                       preload="metadata"
                       controls={false}
+                      disablePictureInPicture={audioOnly}
                       className="absolute inset-0 size-full bg-black object-contain"
                     />
                   </div>
@@ -2810,94 +2800,6 @@ function VideoPlayerPageContent() {
             />
           )}
 
-          <div
-            ref={controlsRef}
-            data-player-controls
-            data-visible="true"
-            aria-hidden={false}
-            className="absolute inset-x-0 bottom-0 z-30 transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
-            onPointerEnter={holdControlsVisible}
-            onPointerLeave={scheduleControlsHide}
-            onFocusCapture={holdControlsVisible}
-            onBlurCapture={scheduleControlsHide}
-          >
-            <PlayerControls
-              paused={paused}
-              volume={playerControlVolume}
-              muted={playerControlMuted}
-              osdOn={danmakuVisible}
-              webFullscreen={webFullscreen}
-              fullscreen={shortVideo || fullscreen.fullscreen}
-              onToggleWebFullscreen={
-                mobilePortrait || shortVideo || returningToShortVideo
-                  ? togglePlayerFullscreen
-                  : () => setWebFullscreen((value) => !value)
-              }
-              disabled={loading}
-              refreshDisabled={loading}
-              loadError={fullscreen.error}
-              stackedBelowPlayer={compact}
-              systemGestureBarReserved={shortVideo && mobileClient}
-              compact={compact}
-              portalContainer={stageRef}
-              centerSlot={
-                <DanmakuComposer
-                  overlay
-                  portalContainer={stageRef}
-                  roomTitle={title}
-                  video={{
-                    cid,
-                    aid: aid ?? "",
-                    progressMs: Math.floor(currentTime * 1000),
-                  }}
-                  onOverlayInteractionChange={setOverlayInteractionOpen}
-                />
-              }
-              timeline={timeline}
-              playbackSettings={
-                <>
-                  {rateSettings}
-                  <Separator className="my-1 max-md:my-0.5" />
-                  {playbackToggles}
-                </>
-              }
-              playbackSettingsTitle="播放设置"
-              qualities={playInfo?.accept_quality.map((quality) => ({
-                quality: quality.label,
-                // 不可用档位仍列出但置灰：匿名/非大会员能直接看出画质上限的
-                // 原因，而不是以为客户端坏了。
-                disabled: !quality.available,
-                hint: quality.available ? undefined : "登录或大会员后可用",
-              }))}
-              qualityIndex={(() => {
-                if (!playInfo) return 0;
-                const index = playInfo.accept_quality.findIndex(
-                  (quality) => quality.qn === playInfo.quality,
-                );
-                return index >= 0 ? index : 0;
-              })()}
-              onQualityChange={(index) => {
-                const quality = playInfo?.accept_quality[index];
-                if (quality?.available) changeQuality(quality.qn);
-              }}
-              onOverlayInteractionChange={setOverlayInteractionOpen}
-              onRefresh={retryPlayback}
-              onNext={nextItem ? () => goToPlaylistItem(nextItem) : undefined}
-              toolsSlot={toolsSlot}
-              infoVisible={!infoHidden}
-              onToggleInfo={shortVideo ? () => setInfoHidden((hidden) => !hidden) : undefined}
-              audioOnly={audioOnly}
-              onToggleAudioOnly={toggleAudioOnly}
-              pictureInPictureSupported={pipSupported}
-              pictureInPictureActive={pipActive}
-              onTogglePictureInPicture={togglePictureInPicture}
-              onTogglePause={togglePlayback}
-              onToggleMute={toggleMute}
-              onVolume={setPlayerVolume}
-              onToggleOsd={() => setDanmakuVisible((visible) => !visible)}
-              onToggleFullscreen={togglePlayerFullscreen}
-            />
-          </div>
           {fullscreenLockMounted && (
             <PlayerFullscreenLock
               ref={lockRef}
@@ -2914,7 +2816,7 @@ function VideoPlayerPageContent() {
               onBlurCapture={scheduleControlsHide}
             />
           )}
-        </section>
+        </VideoJsContainer>
         {!webFullscreen && (
           <aside
             ref={detailsRef}

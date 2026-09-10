@@ -1,12 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ComponentProps,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Captions,
   CaptionsOff,
@@ -21,9 +13,6 @@ import {
   Minimize2,
   PanelRightClose,
   PanelRightOpen,
-  Pause,
-  PictureInPicture2,
-  Play,
   RefreshCw,
   Settings,
   Shrink,
@@ -33,12 +22,9 @@ import {
   VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Spinner } from "@/components/ui/spinner";
-import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -47,19 +33,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { lineName } from "@/lib/playUrl";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
+import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
+import { DefaultLiveVideoControls } from "@/components/videojs/skins/live-video/controls";
+import { DefaultVideoControls } from "@/components/videojs/skins/video/controls";
+import type { ControlsChromeProps } from "@/components/videojs/skins/shared/controls-surface";
+import { useSkinVariant } from "@/components/videojs/skins/variant";
 import { cn } from "@/lib/utils";
-import {
-  glassMutedTextClass,
-  glassOptionClass,
-  glassOptionSelectedClass,
-  glassPanelClass,
-  glassSeparatorClass,
-  glassTitleClass,
-} from "./glassSurface";
+import { lineName } from "@/lib/playUrl";
+import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import {
   TRANSLATION_LANGUAGE_OPTIONS,
   TRANSLATION_SOURCE_LANGUAGE_OPTIONS,
@@ -69,6 +55,14 @@ import type {
   CaptionTranslationSourceLanguage,
   PlayUrl,
 } from "@/shared/types/live";
+import {
+  glassMutedTextClass,
+  glassOptionClass,
+  glassOptionSelectedClass,
+  glassPanelClass,
+  glassSeparatorClass,
+  glassTitleClass,
+} from "./glassSurface";
 
 export function danmakuControlPresentation(osdOn: boolean | undefined) {
   const enabled = Boolean(osdOn);
@@ -109,8 +103,8 @@ export function showSecondaryPlayerControls(compact: boolean, portrait: boolean)
 }
 
 /**
- * 移动端全屏已经暴露边缘滑动音量并隐藏了侧面板 chrome，
- * 因此控制条去掉这两个按钮保持舞台简洁。
+ * 只作用于绑定 Android 原生音量桥的业务音量控件（Web 路径用原生 VolumePopover）。
+ * 移动端全屏已有边缘滑动调音量，控制条去掉这个按钮保持舞台简洁。
  */
 export function showPlayerVolumeControl(
   compact: boolean,
@@ -121,38 +115,19 @@ export function showPlayerVolumeControl(
   return showSecondaryPlayerControls(compact, portrait);
 }
 
-/**
- * 侧面板开关只保留给移动端窗口化。桌面端这个位置改由「网页全屏」承担 ——
- * 后者除了收起右侧栏还会隐藏房间页的上下栏，单纯的收起按钮成了它的子集。
- */
 export function showPlayerSidePanelControl(
   compact: boolean,
   portrait: boolean,
   fullscreen: boolean,
 ): boolean {
-  if (!compact) return false;
-  if (fullscreen) return false;
+  if (!compact || fullscreen) return false;
   return showSecondaryPlayerControls(compact, portrait);
 }
 
-/**
- * 网页全屏是桌面专属：它让出的是应用窗口内的上下栏与右侧栏，而移动端窗口化没有这些栏。
- * 原生全屏时舞台已独占窗口，再显示它只会是个空操作。
- */
 export function showPlayerWebFullscreenControl(compact: boolean, fullscreen: boolean): boolean {
   return !compact && !fullscreen;
 }
 
-/**
- * 浮层 chrome 是否应为系统手势栏预留空间。
- *
- * `env(safe-area-inset-bottom)` 描述的是窗口而不是本元素。只有当控件真的位于
- * 窗口底边时 inset 才是真实的内边距：全屏状态，或播放器铺满视口直达底边时。
- * 竖屏房间的弹幕堆叠在画面之下，控件悬浮于视频底边之上，
- * 其下是面板而不是手势栏。在那里加内边距会把按钮抬高 inset 高度离开画面 ——
- * 这正是冷启动时出现（Android 上报 inset）、全屏往返后消失（WebView 使其塌缩为
- * 0）的那道缝隙：同一布局，同一 bug 的两种表现。
- */
 export function playerControlsAvoidSystemGestureBar(
   fullscreen: boolean,
   stackedBelowPlayer: boolean,
@@ -160,15 +135,20 @@ export function playerControlsAvoidSystemGestureBar(
   return fullscreen || !stackedBelowPlayer;
 }
 
-export type PlayerControlsProps = {
-  paused: boolean;
+export type ExternalPlayerAudioControls = {
   volume: number;
-  muted?: boolean;
+  muted: boolean;
+  onVolumeChange: (volume: number) => void;
+  onToggleMute: () => void;
+};
+
+export type PlayerControlsProps = {
+  /** 控制层外壳：定位类名、ref、显隐 data 属性与指针/焦点事件由播放页提供。 */
+  chrome?: ControlsChromeProps;
+  externalAudioControls?: ExternalPlayerAudioControls;
   audioOnly?: boolean;
   sidePanelOpen?: boolean;
-  /** 随响应式侧面板形态（侧栏 vs 抽屉）变化。 */
   sidePanelLabel?: string;
-  /** 桌面端网页全屏：舞台占满应用窗口，但不进入原生全屏。 */
   webFullscreen?: boolean;
   osdOn?: boolean;
   asrVisible?: boolean;
@@ -187,52 +167,23 @@ export type PlayerControlsProps = {
   lines?: PlayUrl[];
   lineIndex?: number;
   fullscreen?: boolean;
-  pictureInPictureSupported?: boolean;
-  pictureInPictureActive?: boolean;
+  nativeFullscreen?: boolean;
   pictureInPictureDisabled?: boolean;
   disabled?: boolean;
-  /**
-   * 当内容（竖屏弹幕面板、页面页脚）堆叠在播放器下方时设置，
-   * 使控件不落在窗口底边，
-   * 也就不必为系统手势栏预留空间。
-   */
   stackedBelowPlayer?: boolean;
-  /** 外层布局已预留系统底部安全区，控件内不再重复占位。 */
   systemGestureBarReserved?: boolean;
-  /** 可选内容，渲染进控制行中央的独立轨道：compact 与全屏一致可用，
-   *  轨道互斥保证不与两侧按钮重叠。 */
   centerSlot?: ReactNode;
-  /** 可选的全宽媒体时间轴，渲染在传输控制行之上。 */
-  timeline?: ReactNode;
-  /** 追加到共享播放设置菜单的功能专属控件。 */
   playbackSettings?: ReactNode;
   playbackSettingsTitle?: string;
   playbackSettingsLabel?: string;
   playbackSettingsDisabled?: boolean;
-  /**
-   * 紧凑视口（竖屏手机 + 较矮横屏）。从标签中去掉仅限桌面的键盘提示，
-   * 使 chrome 在小屏幕上读起来更短。
-   */
   compact?: boolean;
-  /**
-   * 设置/音量 popover 的 Portal 目标。`:fullscreen` 祖先之下 top layer 拥有
-   * 堆叠上下文，渲染进 <body> 的 portal 会堆在全屏元素之下 ——
-   * 改为渲染进舞台内部，popover 才能保持在控制条上方。
-   */
   portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
-  /**
-   * 菜单内容经 portal 渲染在播放器舞台之外。菜单打开时告诉舞台，
-   * 使其空闲计时器不能在菜单下面淡出。
-   */
   onOverlayInteractionChange?: (open: boolean) => void;
   refreshDisabled?: boolean;
   loadError?: string | null;
   onRefresh?: () => void;
-  /** 播放下一个（播放列表上下文）。传入才渲染该按钮。 */
   onNext?: () => void;
-  onTogglePause: () => void;
-  onVolume: (v: number) => void;
-  onToggleMute: () => void;
   onToggleAudioOnly?: () => void;
   onToggleSidePanel?: () => void;
   onToggleWebFullscreen?: () => void;
@@ -244,91 +195,146 @@ export type PlayerControlsProps = {
   onAsrSpeakerDiarizationEnabledChange?: (enabled: boolean) => void | Promise<void>;
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
-  onTogglePictureInPicture?: () => void;
-  /** 视频页专属工具（投屏/字幕等）：渲染在二级控制组画中画之前。 */
   toolsSlot?: ReactNode;
-  /** 只切换画面上的用户与视频信息，不影响播放控件。 */
   infoVisible?: boolean;
   onToggleInfo?: () => void;
-  onToggleFullscreen: () => void;
+  onToggleFullscreen?: () => void;
 };
 
-type ControlButtonProps = Omit<
-  ComponentProps<typeof Button>,
-  "aria-label" | "children" | "size"
-> & {
-  label: string;
-  children: ReactNode;
-  /** 桌面悬停提示框。紧凑触摸布局下禁用。 */
-  tooltip?: boolean;
-  tooltipContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
-};
-
-/**
- * 视频 chrome 的阅读距离比页面内按钮更远，因此图标比共享按钮默认值
- * （size-4）大一小档。
- *
- * 导出这三个是因为全屏顶部 HUD 在本控制条之外绘制自己的按钮；
- * 共享这些类使两层 chrome 的图标尺寸、命中区域和焦点处理不会漂移。
- */
-export const PLAYER_CONTROL_ICON_CLASS = "[&_svg:not([class*='size-'])]:size-4.5";
-/** 即使共享粗指针下限是 44px，播放器 chrome 也保持紧凑。 */
-export const PLAYER_CONTROL_BUTTON_CLASS =
-  "size-9 [@media(pointer:coarse)]:size-9! [@media(pointer:coarse)]:min-h-9! [@media(pointer:coarse)]:min-w-9! [@media(pointer:coarse)]:touch-manipulation";
-/** 绘制在视频上的 chrome 按钮裁剪：遮罩上的白色图标。 */
+export const PLAYER_CONTROL_BUTTON_CLASS = "shrink-0";
+export const PLAYER_CONTROL_ICON_CLASS = "[&_svg]:size-media-icon";
 export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
-  "rounded-lg text-white/90 hover:bg-white/12 hover:text-white aria-expanded:bg-white/12 aria-expanded:text-white focus-ring-overlay drop-shadow-[0_1px_2px_rgb(0_0_0_/_0.65)]";
-const CONTROL_ICON_CLASS = PLAYER_CONTROL_ICON_CLASS;
-const CONTROL_BUTTON_CLASS = PLAYER_CONTROL_BUTTON_CLASS;
-const CONTROL_GROUP_CLASS = "flex shrink-0 items-center gap-0.5";
-/** Android 沉浸(竖屏短视频/全屏)里 `env(safe-area-inset-bottom)` 塌缩为 0，
- *  底部按钮会贴死屏幕底边、被临时滑出的系统手势栏压住。粗指针设备在
- *  窗口底边的 chrome 上保底 0.75rem 净空；指针设备维持紧凑。 */
-const GESTURE_NAV_CLEARANCE_CLASS =
-  "[@media(pointer:coarse)]:pb-[max(0.75rem,env(safe-area-inset-bottom))]!";
+  "text-media-controls-foreground hover:bg-media-accent hover:text-media-accent-foreground";
 
-/** 两侧始终等宽；中心最大宽度由实际按钮占位决定，避免窄屏不对称按钮把输入栏推偏。 */
-const CONTROL_ROW_CLASS =
-  "grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,min(50%,var(--player-center-width,50%)))_minmax(0,1fr)] items-center gap-x-1";
-
-function ControlButton({
+function ExtensionButton({
   label,
-  children,
+  active,
   disabled,
-  variant = "ghost",
-  className,
   tooltip = true,
-  tooltipContainer,
-  ...props
-}: ControlButtonProps) {
+  className,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  tooltip?: boolean;
+  className?: string;
+  onClick?: () => void;
+  children: ReactNode;
+}) {
   const button = (
-    <Button
-      {...props}
-      variant={variant}
-      size="icon-sm"
-      disabled={disabled}
+    <MediaButton
+      type="button"
       aria-label={label}
-      className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, className)}
+      aria-pressed={active}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "r-live-media-extension-button",
+        active && "bg-media-primary text-media-primary-foreground",
+        className,
+      )}
     >
       {children}
-    </Button>
+    </MediaButton>
   );
+  return tooltip ? <ButtonTooltip side="top">{button}</ButtonTooltip> : button;
+}
 
-  if (!tooltip) return button;
-
+function SettingsBody({
+  qualities,
+  qualityIndex,
+  lines,
+  lineIndex,
+  playbackSettings,
+  onQualityChange,
+  onLineChange,
+  onClose,
+}: Pick<
+  PlayerControlsProps,
+  | "qualities"
+  | "qualityIndex"
+  | "lines"
+  | "lineIndex"
+  | "playbackSettings"
+  | "onQualityChange"
+  | "onLineChange"
+> & { onClose: () => void }) {
+  const optionClass = glassOptionClass();
+  const qualityLabel = (index: number) => {
+    const label = qualities?.[index]?.quality?.trim();
+    if (!label || /^(?:rate)?\d+$/i.test(label)) {
+      return ["原画", "蓝光", "超清", "高清", "流畅", "标清"][index] ?? "可用清晰度";
+    }
+    return label;
+  };
   return (
-    <Tooltip>
-      <TooltipTrigger render={button} />
-      <TooltipContent container={tooltipContainer}>{label}</TooltipContent>
-    </Tooltip>
+    <div className="flex flex-col gap-1">
+      {(qualities?.length ?? 0) > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>清晰度</span>
+          {qualities?.map((quality, index) => (
+            <Button
+              key={`${quality.quality}-${index}`}
+              variant="ghost"
+              size="sm"
+              disabled={quality.disabled}
+              title={quality.hint}
+              aria-pressed={index === qualityIndex}
+              className={cn(
+                "w-full justify-between",
+                optionClass,
+                index === qualityIndex && glassOptionSelectedClass(),
+              )}
+              onClick={() => {
+                onQualityChange?.(index);
+                onClose();
+              }}
+            >
+              <span className="truncate">{qualityLabel(index)}</span>
+              {index === qualityIndex && <Check data-icon="inline-end" aria-hidden />}
+            </Button>
+          ))}
+        </div>
+      )}
+      {(qualities?.length ?? 0) > 0 && (lines?.length ?? 0) > 0 && (
+        <Separator className={glassSeparatorClass()} />
+      )}
+      {(lines?.length ?? 0) > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>线路</span>
+          {lines?.map((line, index) => (
+            <Button
+              key={`${line.url}-${index}`}
+              variant="ghost"
+              size="sm"
+              aria-pressed={index === lineIndex}
+              className={cn(
+                "w-full justify-between",
+                optionClass,
+                index === lineIndex && glassOptionSelectedClass(),
+              )}
+              onClick={() => {
+                onLineChange?.(index);
+                onClose();
+              }}
+            >
+              <span className="truncate">{lineName(line, index)}</span>
+              {index === lineIndex && <Check data-icon="inline-end" aria-hidden />}
+            </Button>
+          ))}
+        </div>
+      )}
+      {playbackSettings}
+    </div>
   );
 }
 
-/** 与各功能媒体生命周期分离的共享 React 控件。 */
 export function PlayerControls({
-  paused,
-  volume,
-  muted = false,
+  chrome,
+  externalAudioControls,
   audioOnly = false,
   sidePanelOpen = false,
   sidePanelLabel,
@@ -350,15 +356,13 @@ export function PlayerControls({
   lines = [],
   lineIndex = 0,
   fullscreen = false,
-  pictureInPictureSupported = false,
-  pictureInPictureActive = false,
-  pictureInPictureDisabled = false,
-  disabled = false,
+  nativeFullscreen = false,
+  pictureInPictureDisabled,
   stackedBelowPlayer = false,
   systemGestureBarReserved = false,
+  disabled = false,
   compact = false,
   centerSlot,
-  timeline,
   playbackSettings,
   playbackSettingsTitle = "播放设置",
   playbackSettingsLabel,
@@ -369,9 +373,6 @@ export function PlayerControls({
   loadError,
   onRefresh,
   onNext,
-  onTogglePause,
-  onVolume,
-  onToggleMute,
   onToggleAudioOnly,
   onToggleSidePanel,
   onToggleWebFullscreen,
@@ -383,268 +384,61 @@ export function PlayerControls({
   onAsrSpeakerDiarizationEnabledChange,
   onQualityChange,
   onLineChange,
-  onTogglePictureInPicture,
   toolsSlot,
   infoVisible = true,
   onToggleInfo,
   onToggleFullscreen,
 }: PlayerControlsProps) {
-  const [volumeOpen, setVolumeOpen] = useState(false);
-  const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
-  const [asrSettingsOpen, setAsrSettingsOpen] = useState(false);
-  const [asrSettingsError, setAsrSettingsError] = useState<string | null>(null);
-  const rowRef = useRef<HTMLDivElement | null>(null);
-  const leftControlsRef = useRef<HTMLDivElement | null>(null);
-  const rightControlsRef = useRef<HTMLDivElement | null>(null);
-  const hasCenter = Boolean(centerSlot);
-  const hasTimeline = Boolean(timeline);
-  const rowClassName = cn(CONTROL_ROW_CLASS, !hasCenter && "grid-cols-[auto_1fr_auto]");
-
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    const left = leftControlsRef.current;
-    const right = rightControlsRef.current;
-    if (!hasCenter || !row || !left || !right) return;
-    const updateWidth = () => {
-      const style = getComputedStyle(row);
-      const width =
-        row.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      const occupied = 2 * Math.max(left.offsetWidth, right.offsetWidth);
-      const available = Math.max(0, width - occupied - 2 * (parseFloat(style.columnGap) || 0));
-      row.style.setProperty("--player-center-width", `${available}px`);
-    };
-    updateWidth();
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(row);
-    observer.observe(left);
-    observer.observe(right);
-    return () => {
-      observer.disconnect();
-      row.style.removeProperty("--player-center-width");
-    };
-  }, [hasCenter, hasTimeline]);
-  // 移动端设置以抽屉打开：竖屏为底部抽屉、横屏为右侧抽屉。共享 hook 在首次
-  // 绘制和变化时从单一来源解析方向，使控件密度绝不会有渲染成一帧桌面尺寸
-  // 才稳定下来的情况。
+  const variant = useSkinVariant();
   const portrait = usePortraitOrientation();
-  const showSecondaryControls = showSecondaryPlayerControls(compact, portrait);
-  const showVolumeControl = showPlayerVolumeControl(compact, portrait, fullscreen);
-  const showSidePanelControl = showPlayerSidePanelControl(compact, portrait, fullscreen);
-  const showWebFullscreenControl = showPlayerWebFullscreenControl(compact, fullscreen);
-  const avoidSystemGestureBar =
-    !systemGestureBarReserved &&
-    playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer);
-  const mobilePortrait = !showSecondaryControls;
-  const volumeControl = volumeControlPresentation(volume, muted);
-  const isMuted = volumeControl.isMuted;
-  const muteLabel = isMuted ? "取消静音" : "静音";
-  const pauseLabel = compact ? "播放" : "播放（Space / K）";
-  const pauseActiveLabel = compact ? "暂停" : "暂停（Space / K）";
-  const fullscreenLabel = compact
-    ? fullscreen
-      ? "退出全屏"
-      : "全屏"
-    : fullscreen
-      ? "退出全屏（F）"
-      : "全屏（F）";
-  const overlayButtonClass = PLAYER_OVERLAY_CONTROL_BUTTON_CLASS;
-  // 选项行来自共享玻璃模块，使播放器弹窗、设置抽屉与房间抽屉不会漂移。
-  const overlayStreamSettingsOptionClass = glassOptionClass();
-  const overlayInteractionOpen = volumeOpen || streamSettingsOpen || asrSettingsOpen;
-
-  useEffect(() => {
-    onOverlayInteractionChange?.(overlayInteractionOpen);
-  }, [onOverlayInteractionChange, overlayInteractionOpen]);
-
-  // 布局形态变化时收起不适用的浮层菜单：渲染期调整模式，当次渲染即收起。
-  // desktop+音量控件 → 全保留；desktop+无音量 → 只收音量菜单；
-  // 移动端竖屏 → 音量与 ASR 菜单都收。
-  const [prevPortraitChrome, setPrevPortraitChrome] = useState({
-    mobilePortrait,
-    showVolumeControl,
-  });
-  if (
-    mobilePortrait !== prevPortraitChrome.mobilePortrait ||
-    showVolumeControl !== prevPortraitChrome.showVolumeControl
-  ) {
-    setPrevPortraitChrome({ mobilePortrait, showVolumeControl });
-    if (!(!mobilePortrait && showVolumeControl)) {
-      setVolumeOpen(false);
-      if (mobilePortrait) setAsrSettingsOpen(false);
-    }
-  }
+  const showSecondary = showSecondaryPlayerControls(compact, portrait);
+  const showVolume = showPlayerVolumeControl(compact, portrait, fullscreen);
+  const showSidePanel = showPlayerSidePanelControl(compact, portrait, fullscreen);
+  const showWebFullscreen = showPlayerWebFullscreenControl(compact, fullscreen);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [asrOpen, setAsrOpen] = useState(false);
+  const [volumeOpen, setVolumeOpen] = useState(false);
+  const settingsVisible = qualities.length > 0 || lines.length > 0 || playbackSettings != null;
+  const settingsDisabled = playbackSettingsDisabled ?? (disabled && playbackSettings == null);
+  const danmaku = danmakuControlPresentation(osdOn);
+  const audio = audioOnlyControlPresentation(audioOnly);
+  const asr = asrControlPresentation(asrOn, asrBusy);
+  const externalVolume = volumeControlPresentation(
+    externalAudioControls?.volume ?? 0,
+    externalAudioControls?.muted,
+  );
+  const overlayOpen = settingsOpen || asrOpen || volumeOpen;
 
   useEffect(
-    () => () => {
-      onOverlayInteractionChange?.(false);
-    },
-    [onOverlayInteractionChange],
+    () => onOverlayInteractionChange?.(overlayOpen),
+    [onOverlayInteractionChange, overlayOpen],
+  );
+  useEffect(() => () => onOverlayInteractionChange?.(false), [onOverlayInteractionChange]);
+  const settingsBody = (
+    <SettingsBody
+      qualities={qualities}
+      qualityIndex={qualityIndex}
+      lines={lines}
+      lineIndex={lineIndex}
+      playbackSettings={playbackSettings}
+      onQualityChange={onQualityChange}
+      onLineChange={onLineChange}
+      onClose={() => setSettingsOpen(false)}
+    />
   );
 
-  const qualityLabel = (index: number) => {
-    const label = qualities[index]?.quality?.trim();
-    // Select 以下标作为取值。不要把这个内部取值（或上游纯数字标签）
-    // 暴露在播放器 chrome 中。
-    if (!label || /^(?:rate)?\d+$/i.test(label)) {
-      return ["原画", "蓝光", "超清", "高清", "流畅", "标清"][index] ?? "可用清晰度";
-    }
-    return label;
-  };
-
-  const hasStreamSettings = qualities.length > 0 || lines.length > 0;
-  const hasCustomPlaybackSettings = playbackSettings != null;
-  const hasPlaybackSettings = hasStreamSettings || hasCustomPlaybackSettings;
-  const streamSettingsDisabled =
-    playbackSettingsDisabled ??
-    (disabled || (!hasCustomPlaybackSettings && qualities.length <= 1 && lines.length <= 1));
-  const streamSettingsLabel = [
-    qualities.length > 0 ? `清晰度 ${qualityLabel(qualityIndex)}` : null,
-    lines.length > 0 && lines[lineIndex] ? `线路 ${lineName(lines[lineIndex], lineIndex)}` : null,
-  ]
-    .filter(Boolean)
-    .join("，");
-  const closeStreamSettings = () => setStreamSettingsOpen(false);
-  /**
-   * 共享触发图标。桌面端这个按钮*就是* popover 触发器，兼任定位锚点 ——
-   * 单独渲染锚点会让一个多余默认变体按钮留在控制条里。
-   */
-  const streamSettingsTriggerProps = {
-    variant: "ghost",
-    size: "icon-sm",
-    disabled: streamSettingsDisabled,
-    "aria-label":
-      playbackSettingsLabel ??
-      (streamSettingsLabel ? `播放设置：${streamSettingsLabel}` : playbackSettingsTitle),
-    className: cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass),
-  } as const;
-  const danmakuControl = danmakuControlPresentation(osdOn);
-  const DanmakuControlIcon =
-    danmakuControl.icon === "message-square-text" ? MessageSquareText : MessageSquareOff;
-  const asrControl = asrControlPresentation(asrOn, asrBusy);
-  const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
-  const AudioOnlyControlIcon = audioOnlyControl.icon === "headphones" ? Headphones : VideoOff;
-  const VolumeControlIcon = volumeControl.icon === "volume-x" ? VolumeX : Volume2;
-  const resolvedSidePanelLabel = sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏");
-  /** 流设置 popover/抽屉的共享主体。 */
-  const streamSettingsBody = (
-    <>
-      {qualities.length > 0 && (
-        <div className="flex flex-col gap-0.5 max-md:gap-px">
-          <span
-            className={cn(
-              "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              glassMutedTextClass(),
-            )}
-          >
-            清晰度
-          </span>
-          {qualities.map((quality, index) => {
-            const selected = index === qualityIndex;
-            return (
-              <Button
-                key={`${quality.quality}-${index}`}
-                variant="ghost"
-                size="sm"
-                disabled={quality.disabled}
-                title={quality.hint}
-                className={cn(
-                  "w-full justify-between max-md:h-10",
-                  overlayStreamSettingsOptionClass,
-                  selected && glassOptionSelectedClass(),
-                  quality.disabled && "opacity-50",
-                )}
-                aria-pressed={selected}
-                onClick={() => {
-                  if (quality.disabled) return;
-                  onQualityChange?.(index);
-                  closeStreamSettings();
-                }}
-              >
-                <span className="truncate">{qualityLabel(index)}</span>
-                {selected && <Check data-icon="inline-end" aria-hidden />}
-              </Button>
-            );
-          })}
-        </div>
-      )}
-
-      {qualities.length > 0 && lines.length > 0 && (
-        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass())} />
-      )}
-
-      {lines.length > 0 && (
-        <div className="flex flex-col gap-0.5 max-md:gap-px">
-          <span
-            className={cn(
-              "px-2 pt-1 text-xs text-muted-foreground max-md:pt-0.5",
-              glassMutedTextClass(),
-            )}
-          >
-            线路
-          </span>
-          {lines.map((line, index) => {
-            const selected = index === lineIndex;
-            return (
-              <Button
-                key={`${line.url}-${index}`}
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "w-full justify-between max-md:h-10",
-                  overlayStreamSettingsOptionClass,
-                  selected && glassOptionSelectedClass(),
-                )}
-                aria-pressed={selected}
-                onClick={() => {
-                  onLineChange?.(index);
-                  closeStreamSettings();
-                }}
-              >
-                <span className="truncate">{lineName(line, index)}</span>
-                <span className="flex shrink-0 items-center gap-1.5">
-                  {selected && <Check data-icon="inline-end" aria-hidden />}
-                </span>
-              </Button>
-            );
-          })}
-        </div>
-      )}
-
-      {hasStreamSettings && hasCustomPlaybackSettings && (
-        <Separator className={cn("my-1 max-md:my-0.5", glassSeparatorClass())} />
-      )}
-      {playbackSettings}
-    </>
-  );
-  const captionSettingsBody = (
+  const asrBody = (
     <FieldGroup className="gap-3">
-      <Field
-        orientation="horizontal"
-        data-disabled={asrSettingsPending || !onAsrSpeakerDiarizationEnabledChange || undefined}
-      >
-        <FieldLabel htmlFor="player-caption-speaker-diarization">说话人区分</FieldLabel>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-speaker-diarization">区分说话人</FieldLabel>
         <Switch
-          id="player-caption-speaker-diarization"
+          id="player-speaker-diarization"
           size="sm"
           checked={asrSpeakerDiarizationEnabled}
-          disabled={asrSettingsPending || !onAsrSpeakerDiarizationEnabledChange}
-          onCheckedChange={(checked) => {
-            setAsrSettingsError(null);
-            void Promise.resolve(onAsrSpeakerDiarizationEnabledChange?.(checked)).catch(() => {
-              setAsrSettingsError("说话人区分设置失败，请稍后重试。");
-            });
-          }}
+          disabled={!onAsrSpeakerDiarizationEnabledChange}
+          onCheckedChange={(checked) => void onAsrSpeakerDiarizationEnabledChange?.(checked)}
         />
       </Field>
-
-      {asrSettingsError && (
-        <p role="status" className="text-xs text-destructive">
-          {asrSettingsError}
-        </p>
-      )}
-
-      <Separator className={cn(glassSeparatorClass())} />
-
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
         <Switch
@@ -655,38 +449,20 @@ export function PlayerControls({
           onCheckedChange={onAsrTranslationEnabledChange}
         />
       </Field>
-
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
         <Select
           items={TRANSLATION_SOURCE_LANGUAGE_OPTIONS}
           value={asrTranslationFrom}
-          onValueChange={(value) => {
-            if (value) onAsrTranslationFromChange?.(value);
-          }}
+          onValueChange={(value) => value && onAsrTranslationFromChange?.(value)}
         >
-          <SelectTrigger
-            id="player-caption-translation-from"
-            size="sm"
-            className="w-32 hover:bg-white/12 focus-ring-overlay"
-          >
+          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent
-            container={portalContainer}
-            side="top"
-            align="end"
-            glass
-            className={cn("max-h-64", glassPanelClass({ overlay: true }))}
-          >
+          <SelectContent container={portalContainer} side="top" align="end" glass>
             <SelectGroup>
               {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem
-                  key={language.value}
-                  value={language.value}
-                  disabled={language.value !== "auto" && language.value === asrTranslationTo}
-                  className={overlayStreamSettingsOptionClass}
-                >
+                <SelectItem key={language.value} value={language.value}>
                   {language.label}
                 </SelectItem>
               ))}
@@ -694,38 +470,20 @@ export function PlayerControls({
           </SelectContent>
         </Select>
       </Field>
-
       <Field orientation="horizontal">
         <FieldLabel htmlFor="player-caption-translation-to">译文语言</FieldLabel>
         <Select
           items={TRANSLATION_LANGUAGE_OPTIONS}
           value={asrTranslationTo}
-          onValueChange={(value) => {
-            if (value) onAsrTranslationToChange?.(value);
-          }}
+          onValueChange={(value) => value && onAsrTranslationToChange?.(value)}
         >
-          <SelectTrigger
-            id="player-caption-translation-to"
-            size="sm"
-            className="w-32 hover:bg-white/12 focus-ring-overlay"
-          >
+          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent
-            container={portalContainer}
-            side="top"
-            align="end"
-            glass
-            className={cn("max-h-64", glassPanelClass({ overlay: true }))}
-          >
+          <SelectContent container={portalContainer} side="top" align="end" glass>
             <SelectGroup>
               {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem
-                  key={language.value}
-                  value={language.value}
-                  disabled={language.value !== "auto" && language.value === asrTranslationFrom}
-                  className={overlayStreamSettingsOptionClass}
-                >
+                <SelectItem key={language.value} value={language.value}>
                   {language.label}
                 </SelectItem>
               ))}
@@ -735,378 +493,275 @@ export function PlayerControls({
       </Field>
     </FieldGroup>
   );
-  return (
+
+  // 容器宽度不足时按优先级让位：与原生控件同一套 media 容器断点，
+  // 保证业务按钮行永远不会被 `overflow-hidden` 拦腰截断。
+  const secondaryClass = "media-max-sm:hidden";
+
+  const content = (
     <div
-      ref={hasTimeline ? undefined : rowRef}
-      data-slot="player-controls-bar"
-      data-compact={compact ? "true" : "false"}
-      className={cn(
-        "min-w-0 shrink-0",
-        hasTimeline ? "flex flex-col items-stretch gap-0" : rowClassName,
-        // 向上渐隐入画面的遮罩，普通视频播放器绘制底部 chrome 的方式 —— 无顶边框、
-        // 无模糊、无面板边缘。渐变铺满播放器每条边；安全区间距留在表面内部，
-        // 绝不形成沟槽。底部 inset 仅当 chrome 真正位于窗口边缘时生效
-        // （见 playerControlsAvoidSystemGestureBar）。额外的顶部内边距
-        // 给渐变留出在第一个控件之前化解的空间；触屏净空见
-        // GESTURE_NAV_CLEARANCE_CLASS。
-        cn(
-          "player-scrim-overlay bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.375rem,env(safe-area-inset-left))] text-white",
-          compact ? "pt-1.5" : "pt-3",
-          avoidSystemGestureBar
-            ? compact
-              ? cn("pb-[max(1px,env(safe-area-inset-bottom))]", GESTURE_NAV_CLEARANCE_CLASS)
-              : cn("pb-[max(0.25rem,env(safe-area-inset-bottom))]", GESTURE_NAV_CLEARANCE_CLASS)
-            : compact
-              ? "pb-px"
-              : "pb-1",
-        ),
-      )}
+      data-slot="player-extension-controls"
+      data-compact={compact || undefined}
+      className="flex min-w-0 flex-1 items-center justify-center gap-px overflow-hidden"
     >
-      {timeline && <div className="min-w-0 px-1 pt-1">{timeline}</div>}
-      <div
-        ref={hasTimeline ? rowRef : undefined}
-        className={hasTimeline ? cn(rowClassName, "w-full") : "contents"}
-      >
-        <div ref={leftControlsRef} className={cn(CONTROL_GROUP_CLASS, "justify-self-start")}>
-          {onRefresh && (
-            <ControlButton
-              label="刷新播放"
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              disabled={refreshDisabled}
-              onClick={onRefresh}
-              tooltip={!compact}
-            >
-              <RefreshCw />
-            </ControlButton>
-          )}
-          <ControlButton
-            label={paused ? pauseLabel : pauseActiveLabel}
-            className={overlayButtonClass}
-            tooltipContainer={portalContainer}
-            disabled={disabled}
-            onClick={onTogglePause}
-            tooltip={!compact}
+      {externalAudioControls && showVolume && (
+        <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
+          <PopoverTrigger
+            openOnHover
+            render={
+              <MediaButton
+                aria-label={externalVolume.label}
+                aria-pressed={externalVolume.isMuted}
+                onClick={externalAudioControls.onToggleMute}
+                className={cn("r-live-media-extension-button", secondaryClass)}
+              >
+                {externalVolume.isMuted ? <VolumeX /> : <Volume2 />}
+              </MediaButton>
+            }
+          />
+          <PopoverContent
+            container={portalContainer}
+            side="top"
+            align="start"
+            collisionPadding={12}
+            sticky
+            glass
+            className={cn("w-auto items-center gap-2 p-2.5", glassPanelClass({ overlay: true }))}
           >
-            {paused ? <Play className="fill-current" /> : <Pause className="fill-current" />}
-          </ControlButton>
-
-          {onNext && (
-            <ControlButton
-              label="播放下一个"
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              disabled={disabled}
-              onClick={onNext}
-              tooltip={!compact}
+            <PopoverTitle className="sr-only">音量</PopoverTitle>
+            <Slider
+              value={externalAudioControls.volume}
+              min={0}
+              max={100}
+              step={1}
+              orientation="vertical"
+              className={cn("h-32", compact && "h-20 [&_[data-slot=slider-control]]:min-h-20")}
+              aria-label="音量"
+              aria-valuetext={`${Math.round(externalAudioControls.volume)}%`}
+              onValueChange={(next) =>
+                externalAudioControls.onVolumeChange(
+                  Number(Array.isArray(next) ? next[0] : next),
+                )
+              }
+            />
+            <Separator className={cn("w-8", glassSeparatorClass())} />
+            <MediaButton
+              type="button"
+              aria-label={externalVolume.isMuted ? "取消静音" : "静音"}
+              aria-pressed={externalVolume.isMuted}
+              onClick={externalAudioControls.onToggleMute}
+              className={cn(
+                "r-live-media-extension-button",
+                externalVolume.isMuted && glassOptionSelectedClass(),
+              )}
             >
-              <SkipForward />
-            </ControlButton>
-          )}
-
-          {showVolumeControl && (
-            <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
-              <PopoverTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    disabled={disabled}
-                    aria-label={volumeControl.label}
-                    className={cn(CONTROL_BUTTON_CLASS, CONTROL_ICON_CLASS, overlayButtonClass)}
-                  />
-                }
-              >
-                <VolumeControlIcon aria-hidden />
-              </PopoverTrigger>
-              <PopoverContent
-                container={portalContainer}
-                side="top"
-                align="start"
-                glass
-                className={cn(
-                  "w-auto items-center gap-2 p-2.5",
-                  // 与其旁的设置弹窗相同材质，使两个控制条弹窗看起来属于同一家族。
-                  glassPanelClass({ overlay: true }),
-                )}
-              >
-                <PopoverTitle className="sr-only">音量</PopoverTitle>
-                <Slider
-                  value={volume}
-                  min={0}
-                  max={100}
-                  step={1}
-                  orientation="vertical"
-                  className={cn("h-32", compact && "h-20 [&_[data-slot=slider-control]]:min-h-20")}
-                  aria-label="音量"
-                  aria-valuetext={`${Math.round(volume)}%`}
-                  onValueChange={(nextValue) => {
-                    onVolume(Number(Array.isArray(nextValue) ? nextValue[0] : nextValue));
-                  }}
-                />
-                <Separator className={cn("w-8", glassSeparatorClass())} />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className={cn(
-                    "size-8",
-                    CONTROL_ICON_CLASS,
-                    "text-white/90 hover:bg-white/12 hover:text-white",
-                    isMuted && glassOptionSelectedClass(),
-                  )}
-                  aria-label={muteLabel}
-                  aria-pressed={isMuted}
-                  onClick={onToggleMute}
-                >
-                  <VolumeX aria-hidden />
-                </Button>
-              </PopoverContent>
-            </Popover>
-          )}
-
-          {showSecondaryControls && onToggleAudioOnly && (
-            <ControlButton
-              label={audioOnlyControl.label}
-              variant="ghost"
-              className={cn(overlayButtonClass, audioOnly && "bg-white/18 text-white")}
-              tooltipContainer={portalContainer}
-              disabled={disabled && !audioOnly}
-              aria-pressed={audioOnlyControl.enabled}
-              onClick={onToggleAudioOnly}
-              tooltip={!compact}
-            >
-              <AudioOnlyControlIcon aria-hidden />
-            </ControlButton>
-          )}
-
-          {loadError && (
-            <span className="min-w-0 max-w-28 truncate px-1 text-xs text-red-200">{loadError}</span>
-          )}
-        </div>
-
-        {centerSlot && <div className="col-start-2 flex min-w-0 justify-center">{centerSlot}</div>}
-
-        <div
-          ref={rightControlsRef}
-          className={cn(CONTROL_GROUP_CLASS, "col-start-3 justify-self-end")}
+              <VolumeX />
+            </MediaButton>
+          </PopoverContent>
+        </Popover>
+      )}
+      {onRefresh && (
+        <ExtensionButton
+          className={secondaryClass}
+          label="刷新播放"
+          disabled={refreshDisabled}
+          onClick={onRefresh}
         >
-          {hasPlaybackSettings &&
-            (compact ? (
-              <>
-                <Button
-                  {...streamSettingsTriggerProps}
-                  aria-expanded={streamSettingsOpen}
-                  onClick={() => setStreamSettingsOpen((open) => !open)}
-                >
-                  <Settings data-icon="inline-start" aria-hidden />
-                </Button>
-                <Drawer open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
-                  <DrawerContent
-                    side={portrait ? "bottom" : "right"}
-                    container={portalContainer}
-                    glass
-                    className={cn(
-                      // 视频之上抽屉需要更深色调；两种上下文现在都经由辅助函数提供材质，
-                      // 因此 `glass` 是无条件的，只去掉 `bg-popover`。
-                      glassPanelClass({ overlay: true }),
-                    )}
-                  >
-                    <DrawerTitle className={cn("px-1 pb-1", glassTitleClass({ overlay: true }))}>
-                      {playbackSettingsTitle}
-                    </DrawerTitle>
-                    {streamSettingsBody}
-                  </DrawerContent>
-                </Drawer>
-              </>
-            ) : (
-              <Popover open={streamSettingsOpen} onOpenChange={setStreamSettingsOpen}>
-                <PopoverTrigger
-                  openOnHover
-                  delay={120}
-                  closeDelay={180}
-                  render={
-                    <Button {...streamSettingsTriggerProps}>
-                      <Settings data-icon="inline-start" aria-hidden />
-                    </Button>
-                  }
-                />
-                <PopoverContent
-                  container={portalContainer}
-                  side="top"
-                  align="end"
-                  collisionBoundary={
-                    typeof document !== "undefined" ? document.documentElement : undefined
-                  }
-                  collisionPadding={{
-                    top: 24,
-                    right: 12,
-                    bottom: 12,
-                    left: 12,
-                  }}
-                  sticky
-                  glass
-                  className={cn(
-                    "z-50 max-h-[var(--available-height,calc(100dvh-5rem))] gap-0 overflow-y-auto p-1.5",
-                    hasCustomPlaybackSettings
-                      ? "w-[min(20rem,calc(100vw-1.5rem))]"
-                      : "w-56 max-md:w-[min(20rem,calc(100vw-1.5rem))]",
-                    glassPanelClass({ overlay: true }),
-                  )}
-                >
-                  <PopoverTitle
-                    className={cn("px-2 py-1 max-md:py-0.5", glassTitleClass({ overlay: true }))}
-                  >
-                    {playbackSettingsTitle}
-                  </PopoverTitle>
-                  {streamSettingsBody}
-                </PopoverContent>
-              </Popover>
-            ))}
-
-          {showSecondaryControls && onToggleOsd && (
-            <ControlButton
-              label={danmakuControl.label}
-              variant="ghost"
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              disabled={disabled}
-              data-slot="danmaku-toggle"
-              data-state={danmakuControl.enabled ? "on" : "off"}
-              aria-pressed={danmakuControl.enabled}
-              onClick={onToggleOsd}
-              tooltip={!compact}
+          <RefreshCw />
+        </ExtensionButton>
+      )}
+      {onNext && showSecondary && (
+        <ExtensionButton
+          className={secondaryClass}
+          label="播放下一个"
+          disabled={disabled}
+          onClick={onNext}
+        >
+          <SkipForward />
+        </ExtensionButton>
+      )}
+      {showSecondary && onToggleAudioOnly && (
+        <ExtensionButton
+          className={secondaryClass}
+          label={audio.label}
+          active={audio.enabled}
+          onClick={onToggleAudioOnly}
+        >
+          {audio.enabled ? <Headphones /> : <VideoOff />}
+        </ExtensionButton>
+      )}
+      {settingsVisible &&
+        (compact ? (
+          <>
+            <ExtensionButton
+              label={playbackSettingsLabel ?? playbackSettingsTitle}
+              active={settingsOpen}
+              disabled={settingsDisabled}
+              onClick={() => setSettingsOpen((open) => !open)}
             >
-              <DanmakuControlIcon aria-hidden />
-            </ControlButton>
-          )}
-          {showSecondaryControls && asrVisible && onToggleAsr && (
-            <Popover open={asrSettingsOpen} onOpenChange={setAsrSettingsOpen}>
-              <PopoverTrigger
-                openOnHover
-                delay={120}
-                closeDelay={180}
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className={cn(
-                      CONTROL_BUTTON_CLASS,
-                      CONTROL_ICON_CLASS,
-                      overlayButtonClass,
-                      asrDisabled && "pointer-events-auto opacity-50",
-                    )}
-                    aria-label={asrLabel}
-                    aria-disabled={asrDisabled}
-                    aria-pressed={asrOn}
-                    onClick={asrDisabled ? undefined : onToggleAsr}
-                  >
-                    {asrControl.icon === "spinner" ? (
-                      <Spinner aria-hidden />
-                    ) : asrControl.icon === "captions" ? (
-                      <Captions data-icon="inline-start" aria-hidden />
-                    ) : (
-                      <CaptionsOff data-icon="inline-start" aria-hidden />
-                    )}
-                  </Button>
-                }
-              />
-              <PopoverContent
+              <Settings />
+            </ExtensionButton>
+            <Drawer open={settingsOpen} onOpenChange={setSettingsOpen}>
+              <DrawerContent
+                side={portrait ? "bottom" : "right"}
                 container={portalContainer}
-                side="top"
-                align="end"
-                collisionBoundary={
-                  typeof document !== "undefined" ? document.documentElement : undefined
-                }
-                collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
-                sticky
                 glass
-                className={cn("w-72", glassPanelClass({ overlay: true }))}
+                className={glassPanelClass({ overlay: true })}
               >
-                <div className="flex items-center justify-between gap-2 px-0.5">
-                  <PopoverTitle className={glassTitleClass({ overlay: true })}>
-                    字幕设置
-                  </PopoverTitle>
-                  {(asrSettingsPending || asrTranslationBusy) && (
-                    <Spinner aria-label="正在更新字幕设置" />
-                  )}
-                </div>
-                {captionSettingsBody}
-              </PopoverContent>
-            </Popover>
-          )}
-          {showSidePanelControl && onToggleSidePanel && (
-            <ControlButton
-              label={resolvedSidePanelLabel}
-              variant="ghost"
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              aria-pressed={sidePanelOpen}
-              onClick={onToggleSidePanel}
-              tooltip={!compact}
+                <DrawerTitle className={glassTitleClass({ overlay: true })}>
+                  {playbackSettingsTitle}
+                </DrawerTitle>
+                {settingsBody}
+              </DrawerContent>
+            </Drawer>
+          </>
+        ) : (
+          <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <PopoverTrigger
+              openOnHover
+              render={
+                <MediaButton
+                  aria-label={playbackSettingsLabel ?? playbackSettingsTitle}
+                  aria-disabled={settingsDisabled || undefined}
+                  disabled={settingsDisabled}
+                  className="r-live-media-extension-button"
+                >
+                  <Settings />
+                </MediaButton>
+              }
+            />
+            <PopoverContent
+              container={portalContainer}
+              side="top"
+              align="end"
+              collisionPadding={12}
+              sticky
+              glass
+              className={cn(
+                "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto p-1.5",
+                glassPanelClass({ overlay: true }),
+              )}
             >
-              {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-            </ControlButton>
-          )}
-          {showWebFullscreenControl && onToggleWebFullscreen && (
-            <ControlButton
-              label={webFullscreen ? "退出网页全屏" : "网页全屏"}
-              variant="ghost"
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              aria-pressed={webFullscreen}
-              onClick={onToggleWebFullscreen}
-              tooltip={!compact}
-            >
-              {webFullscreen ? <Shrink /> : <Expand />}
-            </ControlButton>
-          )}
-          {showSecondaryControls && toolsSlot}
-          {showSecondaryControls && pictureInPictureSupported && onTogglePictureInPicture && (
-            <ControlButton
-              label={pictureInPictureActive ? "退出画中画" : "画中画"}
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              disabled={disabled || pictureInPictureDisabled}
-              aria-pressed={pictureInPictureActive}
-              onClick={onTogglePictureInPicture}
-              tooltip={!compact}
-            >
-              <PictureInPicture2 />
-            </ControlButton>
-          )}
-          {onToggleInfo && (
-            <ControlButton
-              label={infoVisible ? "隐藏用户和视频信息" : "显示用户和视频信息"}
-              className={overlayButtonClass}
-              tooltipContainer={portalContainer}
-              aria-pressed={!infoVisible}
-              onClick={onToggleInfo}
-              tooltip={!compact}
-            >
-              {infoVisible ? <EyeOff /> : <Eye />}
-            </ControlButton>
-          )}
-          <ControlButton
-            label={fullscreenLabel}
-            className={overlayButtonClass}
-            tooltipContainer={portalContainer}
-            disabled={disabled}
-            aria-pressed={fullscreen}
-            onClick={(event) => {
-              if (event.detail > 0) event.currentTarget.blur();
-              onToggleFullscreen();
-            }}
-            tooltip={!compact}
+              <PopoverTitle className={glassTitleClass({ overlay: true })}>
+                {playbackSettingsTitle}
+              </PopoverTitle>
+              {settingsBody}
+            </PopoverContent>
+          </Popover>
+        ))}
+      {showSecondary && onToggleOsd && (
+        <ExtensionButton
+          className={secondaryClass}
+          label={danmaku.label}
+          active={danmaku.enabled}
+          onClick={onToggleOsd}
+        >
+          {danmaku.enabled ? <MessageSquareText /> : <MessageSquareOff />}
+        </ExtensionButton>
+      )}
+      {showSecondary && asrVisible && onToggleAsr && (
+        <Popover open={asrOpen} onOpenChange={setAsrOpen}>
+          <PopoverTrigger
+            openOnHover
+            render={
+              <MediaButton
+                aria-label={asrLabel}
+                aria-pressed={asr.enabled}
+                aria-disabled={asrDisabled || undefined}
+                disabled={asrDisabled}
+                onClick={onToggleAsr}
+                className={cn("r-live-media-extension-button", secondaryClass)}
+              >
+                {asr.icon === "spinner" ? (
+                  <Spinner />
+                ) : asr.icon === "captions" ? (
+                  <Captions />
+                ) : (
+                  <CaptionsOff />
+                )}
+              </MediaButton>
+            }
+          />
+          <PopoverContent
+            container={portalContainer}
+            side="top"
+            align="end"
+            collisionPadding={12}
+            sticky
+            glass
+            className={cn("w-72", glassPanelClass({ overlay: true }))}
           >
-            {fullscreen ? (
-              <Minimize2 data-icon="inline-start" aria-hidden />
-            ) : (
-              <Maximize2 data-icon="inline-start" aria-hidden />
-            )}
-          </ControlButton>
-        </div>
-      </div>
+            <div className="flex items-center justify-between gap-2">
+              <PopoverTitle className={glassTitleClass({ overlay: true })}>字幕设置</PopoverTitle>
+              {(asrSettingsPending || asrTranslationBusy) && (
+                <Spinner aria-label="正在更新字幕设置" />
+              )}
+            </div>
+            {asrBody}
+          </PopoverContent>
+        </Popover>
+      )}
+      {showSidePanel && onToggleSidePanel && (
+        <ExtensionButton
+          className={secondaryClass}
+          label={sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏")}
+          active={sidePanelOpen}
+          onClick={onToggleSidePanel}
+        >
+          {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+        </ExtensionButton>
+      )}
+      {showWebFullscreen && onToggleWebFullscreen && (
+        <ExtensionButton
+          className={secondaryClass}
+          label={webFullscreen ? "退出网页全屏" : "网页全屏"}
+          active={webFullscreen}
+          onClick={onToggleWebFullscreen}
+        >
+          {webFullscreen ? <Shrink /> : <Expand />}
+        </ExtensionButton>
+      )}
+      {showSecondary && toolsSlot}
+      {onToggleInfo && showSecondary && (
+        <ExtensionButton
+          className={secondaryClass}
+          label={infoVisible ? "隐藏用户和视频信息" : "显示用户和视频信息"}
+          active={!infoVisible}
+          onClick={onToggleInfo}
+        >
+          {infoVisible ? <EyeOff /> : <Eye />}
+        </ExtensionButton>
+      )}
+      {!nativeFullscreen && onToggleFullscreen && (
+        <ExtensionButton
+          label={fullscreen ? "退出全屏" : "全屏"}
+          active={fullscreen}
+          onClick={onToggleFullscreen}
+        >
+          {fullscreen ? <Minimize2 /> : <Maximize2 />}
+        </ExtensionButton>
+      )}
+      {loadError && (
+        <span className="max-w-24 truncate px-1 text-xs text-red-200">{loadError}</span>
+      )}
+      {centerSlot && <div className="min-w-0 max-w-72 flex-1 overflow-hidden">{centerSlot}</div>}
     </div>
   );
+
+  const SkinControls = variant === "vod" ? DefaultVideoControls : DefaultLiveVideoControls;
+  return (
+    <SkinControls
+      chrome={chrome}
+      avoidSystemGestureBar={
+        !systemGestureBarReserved &&
+        playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)
+      }
+      pictureInPictureDisabled={pictureInPictureDisabled}
+      showVolumeControl={showVolume && !externalAudioControls}
+      showFullscreenButton={nativeFullscreen}
+    >
+      {content}
+    </SkinControls>
+  );
 }
+

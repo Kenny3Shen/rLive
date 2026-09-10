@@ -59,6 +59,12 @@ import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import type { SleepTimerController } from "./useSleepTimer";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { useWebPlayer } from "./player/useWebPlayer";
+import {
+  useVideoJsPiP,
+  VideoJsContainer,
+  VideoJsPlayerProvider,
+  VideoJsVideo,
+} from "./player/videoJsControls";
 import { useAndroidPlayerControls } from "./player/androidPlayerControls";
 import { useAndroidFullscreenOrientation } from "./player/androidOrientation";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -326,7 +332,15 @@ type PlayerPaneProps = {
  * 不使用 mpv / 原生 HWND / 伴随浮层窗口。视频与滚动弹幕共享同一 DOM 栈；
  * 离开房间卸载时全部干净停止。
  */
-export function PlayerPane({
+export function PlayerPane(props: PlayerPaneProps) {
+  return (
+    <VideoJsPlayerProvider>
+      <PlayerPaneContent {...props} />
+    </VideoJsPlayerProvider>
+  );
+}
+
+function PlayerPaneContent({
   playUrl,
   loading,
   error,
@@ -461,8 +475,8 @@ export function PlayerPane({
   const setPlayerAudio = player.setAudio;
   const changePlayerVolume = player.changeVolume;
   const togglePlayerMute = player.toggleMute;
-  const togglePlayerPictureInPicture = player.togglePictureInPicture;
   const togglePlayerFullscreen = player.toggleFullscreen;
+  const pictureInPicture = useVideoJsPiP();
   useScreenWakeLock(player.running && !player.paused && !audioOnly);
   const displayError =
     error ??
@@ -540,16 +554,15 @@ export function PlayerPane({
   );
   const handleToggleAudioOnly = useCallback(() => {
     const nextAudioOnly = !audioOnly;
-    if (nextAudioOnly && player.pictureInPictureActive) {
-      void togglePlayerPictureInPicture();
+    if (nextAudioOnly && pictureInPicture?.pip) {
+      void pictureInPicture.exitPictureInPicture();
     }
     setAudioOnly(nextAudioOnly);
-  }, [audioOnly, player.pictureInPictureActive, togglePlayerPictureInPicture]);
+  }, [audioOnly, pictureInPicture]);
   const handleToggleOsd = useCallback(() => setOsdOn((visible) => !visible), []);
-  const handleTogglePictureInPicture = useCallback(
-    () => void togglePlayerPictureInPicture(),
-    [togglePlayerPictureInPicture],
-  );
+  const handleTogglePictureInPicture = useCallback(() => {
+    void pictureInPicture?.togglePictureInPicture();
+  }, [pictureInPicture]);
   const mobileRoomActions = useMemo<readonly PlayerMobileRoomAction[]>(() => {
     const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
     const danmakuControl = danmakuControlPresentation(osdOn);
@@ -589,12 +602,12 @@ export function PlayerPane({
         onSelect: asr.toggle,
       });
     }
-    if (player.pictureInPictureSupported) {
+    if (pictureInPicture?.pipAvailability === "available") {
       actions.push({
         id: "picture-in-picture",
-        label: player.pictureInPictureActive ? "退出画中画" : "画中画",
+        label: pictureInPicture.pip ? "退出画中画" : "画中画",
         icon: PictureInPicture2,
-        pressed: player.pictureInPictureActive,
+        pressed: pictureInPicture.pip,
         disabled: transportDisabled || player.mode === "fullscreen" || audioOnly,
         onSelect: handleTogglePictureInPicture,
       });
@@ -611,9 +624,8 @@ export function PlayerPane({
     handleToggleOsd,
     handleTogglePictureInPicture,
     osdOn,
+    pictureInPicture,
     player.mode,
-    player.pictureInPictureActive,
-    player.pictureInPictureSupported,
     playerControlMuted,
     transportDisabled,
   ]);
@@ -1365,7 +1377,7 @@ export function PlayerPane({
           portraitStackedPlayer ? "w-full flex-none" : "min-h-0 flex-1",
         )}
       >
-        <div
+        <VideoJsContainer
           ref={playerStageRef}
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
@@ -1400,6 +1412,101 @@ export function PlayerPane({
           onPointerCancel={handlePlayerEdgeGestureCancel}
           onPointerLeave={handleStagePointerLeave}
           onKeyDown={handleStageKeyDown}
+          controls={
+            <PlayerControls
+              chrome={{
+                ref: controlsRef,
+                "data-player-controls": true,
+                "data-visible": "true",
+                "aria-hidden": false,
+                // chrome 悬浮于画面底边而不消耗布局高度，隐藏它即把整个舞台还给视频。
+                // 保持被滤镜的表面静止：移动的背景模糊会在过渡的每一帧重新采样视频。
+                // data 属性以命令式变更，
+                // 这种仅合成器的淡出也避免了对视频、弹幕层和侧面板的协调。
+                className:
+                  "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                onPointerEnter: holdControlsVisible,
+                onPointerDown: handleChromePointerDown,
+                onPointerLeave: resumeControlsAutoHide,
+                onFocusCapture: handleChromeFocusCapture,
+                onBlurCapture: handleChromeBlurCapture,
+              }}
+              externalAudioControls={
+                nativePlayerControlsActive
+                  ? {
+                      volume: playerControlVolume,
+                      muted: playerControlMuted,
+                      onVolumeChange: handlePlayerVolumeChange,
+                      onToggleMute: handleToggleMute,
+                    }
+                  : undefined
+              }
+              audioOnly={audioOnly}
+              sidePanelOpen={sidePanelOpen}
+              sidePanelLabel={
+                compactViewport ? (sidePanelOpen ? "收起直播间面板" : "打开直播间面板") : undefined
+              }
+              webFullscreen={webFullscreen}
+              osdOn={osdOn}
+              asrVisible={asr.desktopClient}
+              asrOn={asr.captionsOn}
+              asrLabel={asr.controlLabel}
+              asrDisabled={asr.controlDisabled}
+              asrBusy={asr.controlBusy}
+              asrTranslationEnabled={asrTranslationEnabled}
+              asrTranslationFrom={asrTranslationFrom}
+              asrTranslationTo={asrTranslationTo}
+              asrTranslationBusy={asr.translationPending}
+              asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+              asrSettingsPending={asrPending}
+              qualities={qualities}
+              qualityIndex={qualityIndex}
+              lines={lines}
+              lineIndex={lineIndex}
+              fullscreen={player.mode === "fullscreen"}
+              pictureInPictureDisabled={
+                !player.running || player.mode === "fullscreen" || audioOnly
+              }
+              loadError={loadError}
+              disabled={transportDisabled}
+              // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
+              // 那里没有手势栏 inset。
+              stackedBelowPlayer={portraitStackedPlayer}
+              compact={compactViewport}
+              portalContainer={playerStageRef}
+              centerSlot={
+                <DanmakuComposer
+                  siteId={siteId}
+                  roomId={roomId}
+                  roomTitle={roomTitle}
+                  roomUserName={roomUserName}
+                  overlay
+                  // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
+                  // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
+                  // body 级弹窗会被压在其下。
+                  portalContainer={playerStageRef}
+                  onOverlayInteractionChange={handleComposerOverlayInteractionChange}
+                />
+              }
+              onOverlayInteractionChange={handleControlsOverlayInteractionChange}
+              refreshDisabled={refreshDisabled}
+              onRefresh={onRefresh}
+              onToggleAudioOnly={handleToggleAudioOnly}
+              onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
+              onToggleWebFullscreen={
+                onWebFullscreenChange ? () => onWebFullscreenChange(!webFullscreen) : undefined
+              }
+              onToggleOsd={handleToggleOsd}
+              onToggleAsr={asr.toggle}
+              onAsrTranslationEnabledChange={setAsrTranslationEnabled}
+              onAsrTranslationFromChange={setAsrTranslationFrom}
+              onAsrTranslationToChange={setAsrTranslationTo}
+              onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
+              onQualityChange={onQualityChange ?? (() => {})}
+              onLineChange={onLineChange ?? (() => {})}
+              onToggleFullscreen={() => void player.toggleFullscreen()}
+            />
+          }
         >
           <div
             data-player-video-surface
@@ -1443,7 +1550,7 @@ export function PlayerPane({
                 )}
               >
                 {/* key=mediaKey 在离开/重进后强制一个干净的 <video>（MSE）。 */}
-                <video
+                <VideoJsVideo
                   key={player.mediaKey}
                   ref={playerVideoRef}
                   data-player-video
@@ -1593,106 +1700,6 @@ export function PlayerPane({
             </div>
           )}
 
-          <div
-            ref={controlsRef}
-            data-player-controls
-            data-visible="true"
-            aria-hidden={false}
-            className={cn(
-              // chrome 悬浮于画面底边而不消耗布局高度，隐藏它即把整个舞台还给视频。
-              // 保持被滤镜的表面静止：移动的背景模糊会在过渡的每一帧重新采样视频。
-              // data 属性以命令式变更，
-              // 这种仅合成器的淡出也避免了对视频、弹幕层和侧面板的协调。
-              "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
-            )}
-            onPointerEnter={holdControlsVisible}
-            onPointerDown={handleChromePointerDown}
-            onPointerLeave={resumeControlsAutoHide}
-            onFocusCapture={handleChromeFocusCapture}
-            onBlurCapture={handleChromeBlurCapture}
-          >
-            <PlayerControls
-              paused={player.paused}
-              volume={playerControlVolume}
-              muted={playerControlMuted}
-              audioOnly={audioOnly}
-              sidePanelOpen={sidePanelOpen}
-              sidePanelLabel={
-                compactViewport ? (sidePanelOpen ? "收起直播间面板" : "打开直播间面板") : undefined
-              }
-              webFullscreen={webFullscreen}
-              osdOn={osdOn}
-              asrVisible={asr.desktopClient}
-              asrOn={asr.captionsOn}
-              asrLabel={asr.controlLabel}
-              asrDisabled={asr.controlDisabled}
-              asrBusy={asr.controlBusy}
-              asrTranslationEnabled={asrTranslationEnabled}
-              asrTranslationFrom={asrTranslationFrom}
-              asrTranslationTo={asrTranslationTo}
-              asrTranslationBusy={asr.translationPending}
-              asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-              asrSettingsPending={asrPending}
-              qualities={qualities}
-              qualityIndex={qualityIndex}
-              lines={lines}
-              lineIndex={lineIndex}
-              fullscreen={player.mode === "fullscreen"}
-              // 能力是设备级且稳定的；保持控件挂载，
-              // 使重连循环（loading 反复切换）无法让 chrome 闪烁。
-              // transportDisabled 覆盖不可用状态。
-              pictureInPictureSupported={player.pictureInPictureSupported}
-              pictureInPictureActive={player.pictureInPictureActive}
-              pictureInPictureDisabled={
-                !player.running || player.mode === "fullscreen" || audioOnly
-              }
-              loadError={loadError}
-              disabled={transportDisabled}
-              // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
-              // 那里没有手势栏 inset。
-              stackedBelowPlayer={portraitStackedPlayer}
-              compact={compactViewport}
-              portalContainer={playerStageRef}
-              centerSlot={
-                <DanmakuComposer
-                  siteId={siteId}
-                  roomId={roomId}
-                  roomTitle={roomTitle}
-                  roomUserName={roomUserName}
-                  overlay
-                  // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
-                  // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
-                  // body 级弹窗会被压在其下。
-                  portalContainer={playerStageRef}
-                  onOverlayInteractionChange={handleComposerOverlayInteractionChange}
-                />
-              }
-              onOverlayInteractionChange={handleControlsOverlayInteractionChange}
-              refreshDisabled={refreshDisabled}
-              onRefresh={onRefresh}
-              onTogglePause={() => player.togglePause()}
-              onVolume={(value) => {
-                handlePlayerVolumeChange(value);
-              }}
-              onToggleMute={handleToggleMute}
-              onToggleAudioOnly={handleToggleAudioOnly}
-              onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
-              onToggleWebFullscreen={
-                onWebFullscreenChange ? () => onWebFullscreenChange(!webFullscreen) : undefined
-              }
-              onToggleOsd={handleToggleOsd}
-              onToggleAsr={asr.toggle}
-              onAsrTranslationEnabledChange={setAsrTranslationEnabled}
-              onAsrTranslationFromChange={setAsrTranslationFrom}
-              onAsrTranslationToChange={setAsrTranslationTo}
-              onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
-              onQualityChange={onQualityChange ?? (() => {})}
-              onLineChange={onLineChange ?? (() => {})}
-              onTogglePictureInPicture={handleTogglePictureInPicture}
-              onToggleFullscreen={() => void player.toggleFullscreen()}
-            />
-          </div>
-
           {fullscreenLockMounted && (
             <PlayerFullscreenLock
               ref={lockRef}
@@ -1706,7 +1713,7 @@ export function PlayerPane({
               onBlurCapture={handleChromeBlurCapture}
             />
           )}
-        </div>
+        </VideoJsContainer>
       </div>
 
       {mobileDrawerOpen && (
