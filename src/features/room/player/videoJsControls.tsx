@@ -28,7 +28,10 @@ type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"
 
 /**
  * 统一播放器表面。直播默认使用 LiveVideoSkin；点播/录制显式传 `variant="vod"`
- * 使用 VideoSkin。两种皮肤都保留 Video.js 原生控件、手势、快捷键和状态提示。
+ * 使用 VideoSkin。两种皮肤保留 Video.js 原生控件、快捷键和状态提示，但**不挂原生
+ * 点按/双击手势**：画面点按由各播放页自己的舞台管线拥有（长按倍速、上下/横滑、
+ * 边缘亮度音量、chrome 显隐与 `userPausedRef` 暂停记账都在那里），原生手势会把同
+ * 一次点按再执行一遍，并在页面自己的暂停记账之外改媒体状态。
  */
 export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps>(
   function VideoJsContainer({ variant = "live", controls, ...props }, ref) {

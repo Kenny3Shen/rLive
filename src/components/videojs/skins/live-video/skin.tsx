@@ -8,7 +8,6 @@ import { ErrorDialog } from "@/components/videojs/ui/error-dialog";
 import { Poster } from "@/components/videojs/ui/poster";
 import { SkinVariantProvider } from "@/components/videojs/skins/variant";
 
-import { LiveVideoGestures } from "./gestures";
 import { LiveVideoHotkeys } from "./hotkeys";
 import { LiveVideoStatusIndicators } from "./status-indicators";
 
@@ -46,7 +45,6 @@ export function DefaultLiveVideoSkin({
         <ErrorDialog />
         {controlsSlot}
         <LiveVideoHotkeys />
-        <LiveVideoGestures />
         <LiveVideoStatusIndicators />
       </SkinVariantProvider>
     </Container>
