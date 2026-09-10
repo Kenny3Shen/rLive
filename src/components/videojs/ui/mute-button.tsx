@@ -1,10 +1,6 @@
 import "../styles/theme.css";
 import { MuteButton as MuteButtonPrimitive } from "@videojs/react";
-import {
-  VolumeOffIcon as VolumeOffIconPrimitive,
-  VolumeLowIcon as VolumeLowIconPrimitive,
-  VolumeHighIcon as VolumeHighIconPrimitive,
-} from "@videojs/react/icons";
+import { Volume1, Volume2, VolumeX } from "lucide-react";
 
 import { cn, resolveClassName } from "@/components/videojs/lib/resolve-class-name";
 import { Button } from "@/components/videojs/ui/button";
@@ -15,28 +11,28 @@ export function MuteButton({ className, ...props }: MuteButtonProps = {}) {
   return (
     <MuteButtonPrimitive
       render={<Button />}
-      className={(state) => cn("group/mute", resolveClassName(className, state))}
+      className={(state) => cn("group/mute r-live-media-extension-button", resolveClassName(className, state))}
       {...props}
     >
-      <VolumeOffIconPrimitive
+      <VolumeX
         className={cn(
-          "col-start-1 row-start-1 size-media-icon drop-shadow-media-icon",
+          "col-start-1 row-start-1 size-6 drop-shadow-media-icon",
           "transition-[opacity,scale] duration-media-base ease-out",
           "opacity-0 group-data-muted/mute:scale-100 group-data-muted/mute:opacity-100",
         )}
       />
-      <VolumeLowIconPrimitive
+      <Volume1
         className={cn(
-          "col-start-1 row-start-1 size-media-icon drop-shadow-media-icon",
+          "col-start-1 row-start-1 size-6 drop-shadow-media-icon",
           "transition-[opacity,scale] duration-media-base ease-out",
           "opacity-0",
           "group-not-data-muted/mute:group-data-[volume-level=low]/mute:opacity-100",
           "group-not-data-muted/mute:group-data-[volume-level=low]/mute:scale-100",
         )}
       />
-      <VolumeHighIconPrimitive
+      <Volume2
         className={cn(
-          "col-start-1 row-start-1 size-media-icon drop-shadow-media-icon",
+          "col-start-1 row-start-1 size-6 drop-shadow-media-icon",
           "transition-[opacity,scale] duration-media-base ease-out",
           "opacity-0",
           "group-not-data-muted/mute:group-not-data-[volume-level=low]/mute:opacity-100",

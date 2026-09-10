@@ -1,13 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Car, Cast, ChevronLeft, Timer, type LucideIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { glassSeparatorClass } from "@/shared/components/player/glassSurface";
-import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-} from "@/shared/components/player/PlayerControls";
+import { PLAYER_OVERLAY_CONTROL_BUTTON_CLASS } from "@/shared/components/player/PlayerControls";
 import {
   PlayerHudOverflowMenu,
   PlayerToolPanel,
@@ -262,21 +258,17 @@ export function PlayerFullscreenHud({
       )}
     >
       {onBack && (
-        <Button
+        <MediaButton
           type="button"
-          variant="ghost"
-          size="icon-sm"
           aria-label={backLabel ?? "退出全屏"}
           className={cn(
-            PLAYER_CONTROL_BUTTON_CLASS,
-            PLAYER_CONTROL_ICON_CLASS,
+            "r-live-media-extension-button shrink-0",
             PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-            "shrink-0",
           )}
           onClick={onBack}
         >
-          <ChevronLeft data-icon="inline-start" aria-hidden />
-        </Button>
+          <ChevronLeft className="size-6" data-icon="inline-start" aria-hidden />
+        </MediaButton>
       )}
 
       <RoomIdentityLine

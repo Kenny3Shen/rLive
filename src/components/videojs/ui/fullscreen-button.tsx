@@ -1,9 +1,6 @@
 import "../styles/theme.css";
 import { FullscreenButton as FullscreenButtonPrimitive } from "@videojs/react";
-import {
-  FullscreenEnterIcon as FullscreenEnterIconPrimitive,
-  FullscreenExitIcon as FullscreenExitIconPrimitive,
-} from "@videojs/react/icons";
+import { Maximize2, Minimize2 } from "lucide-react";
 
 import { cn, resolveClassName } from "@/components/videojs/lib/resolve-class-name";
 import { Button } from "@/components/videojs/ui/button";
@@ -14,19 +11,19 @@ export function FullscreenButton({ className, ...props }: FullscreenButtonProps 
   return (
     <FullscreenButtonPrimitive
       render={<Button />}
-      className={(state) => cn("group/fullscreen", resolveClassName(className, state))}
+      className={(state) => cn("group/fullscreen r-live-media-extension-button", resolveClassName(className, state))}
       {...props}
     >
-      <FullscreenEnterIconPrimitive
+      <Maximize2
         className={cn(
-          "col-start-1 row-start-1 size-media-icon drop-shadow-media-icon",
+          "col-start-1 row-start-1 size-6 drop-shadow-media-icon",
           "transition-[opacity,scale] duration-media-base ease-out",
           "opacity-0 group-not-data-fullscreen/fullscreen:scale-100 group-not-data-fullscreen/fullscreen:opacity-100",
         )}
       />
-      <FullscreenExitIconPrimitive
+      <Minimize2
         className={cn(
-          "col-start-1 row-start-1 size-media-icon drop-shadow-media-icon",
+          "col-start-1 row-start-1 size-6 drop-shadow-media-icon",
           "transition-[opacity,scale] duration-media-base ease-out",
           "opacity-0 group-data-fullscreen/fullscreen:scale-100 group-data-fullscreen/fullscreen:opacity-100",
         )}

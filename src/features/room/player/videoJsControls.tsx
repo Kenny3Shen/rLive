@@ -4,13 +4,13 @@ import { I18nProvider } from "@videojs/react/i18n";
 import "@videojs/react/i18n/locales/zh-CN/register";
 import { liveFeature } from "@videojs/core/dom";
 import { Video, videoFeatures } from "@videojs/react/video";
-import { DefaultLiveVideoSkin } from "@/components/videojs/skins/live-video/skin";
-import { MinimalLiveVideoSkin } from "@/components/videojs/skins/live-video/minimal-skin";
-import { DefaultVideoSkin } from "@/components/videojs/skins/video/skin";
-import { MinimalVideoSkin } from "@/components/videojs/skins/video/minimal-skin";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { PlayerSkinSurface } from "@/components/videojs/skins/shared/skin-surface";
+import { LiveVideoHotkeys } from "@/components/videojs/skins/live-video/hotkeys";
+import { LiveVideoStatusIndicators } from "@/components/videojs/skins/live-video/status-indicators";
+import { VideoHotkeys } from "@/components/videojs/skins/video/hotkeys";
+import { VideoStatusIndicators } from "@/components/videojs/skins/video/status-indicators";
 
-/** Video.js 原生 Player store；直播与点播皮肤共享媒体状态，控制栏由 ejected skin 组合。 */
+/** Video.js 原生 Player store；直播与点播共享媒体状态，控制栏由自定义控制栏渲染。 */
 const videoJsPlayer = createPlayer({
   features: [...videoFeatures, liveFeature],
   displayName: "rLiveVideoPlayer",
@@ -25,31 +25,30 @@ export const useVideoJsPlaybackRate = () => videoJsPlayer.usePlayer(selectPlayba
 type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"> & {
   children?: ComponentProps<"div">["children"];
   variant?: "live" | "vod";
-  /** 控制条由皮肤渲染在媒体表面之上；业务用 PlayerControls 组合原生控件后传入。 */
+  /** 自定义控制条，由 PlayerControls 渲染在媒体表面之上。 */
   controls: ReactNode;
 };
 
-/** 皮肤矩阵：直播用 live-video 预设，点播/录制用 video 预设，各含默认与极简两档。 */
-const PLAYER_SKINS = {
-  live: { default: DefaultLiveVideoSkin, minimal: MinimalLiveVideoSkin },
-  vod: { default: DefaultVideoSkin, minimal: MinimalVideoSkin },
-} as const;
-
 /**
- * 统一播放器表面。直播默认使用 LiveVideoSkin；点播/录制显式传 `variant="vod"`
- * 使用 VideoSkin。两种皮肤保留 Video.js 原生控件、快捷键和状态提示，但**不挂原生
- * 点按/双击手势**：画面点按由各播放页自己的舞台管线拥有（长按倍速、上下/横滑、
- * 边缘亮度音量、chrome 显隐与 `userPausedRef` 暂停记账都在那里），原生手势会把同
- * 一次点按再执行一遍，并在页面自己的暂停记账之外改媒体状态。
+ * 统一播放器表面。直播使用 live 预设，点播/录制显式传 `variant="vod"`。
+ * 控制栏完全由自定义控制栏渲染，不再使用 Video.js 默认 Skin 预设矩阵及设置项。
  */
 export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps>(
   function VideoJsContainer({ variant = "live", controls, ...props }, ref) {
-    const playerSkin = useSettingsStore((s) => s.playerSkin);
-    const Skin = PLAYER_SKINS[variant][playerSkin];
+    const isVod = variant === "vod";
     return (
       // 语言包随包注册，避免首帧英文；显式 locale 让 SSR 与 `<html lang>` 走同一套文案。
       <I18nProvider locale="zh-CN">
-        <Skin {...props} controlsSlot={controls} containerRef={ref} />
+        <PlayerSkinSurface
+          theme="default"
+          preset={isVod ? "video" : "live-video"}
+          variant={variant}
+          hotkeys={isVod ? <VideoHotkeys /> : <LiveVideoHotkeys />}
+          statusIndicators={isVod ? <VideoStatusIndicators /> : <LiveVideoStatusIndicators />}
+          controlsSlot={controls}
+          containerRef={ref}
+          {...props}
+        />
       </I18nProvider>
     );
   },
