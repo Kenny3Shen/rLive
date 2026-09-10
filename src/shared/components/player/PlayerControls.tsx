@@ -248,7 +248,15 @@ function ExtensionButton({
       {children}
     </MediaButton>
   );
-  return tooltip ? <ButtonTooltip side="top">{button}</ButtonTooltip> : button;
+  return tooltip ? (
+    // 业务按钮不在 Video.js 的 tooltip context 里，文案必须显式交给 tooltip，
+    // 否则只会弹出一个空框。
+    <ButtonTooltip label={label} side="top">
+      {button}
+    </ButtonTooltip>
+  ) : (
+    button
+  );
 }
 
 function SettingsBody({
