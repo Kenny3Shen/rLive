@@ -66,86 +66,6 @@ function nextFrame(): Promise<void> {
 
 export { requestPlayerAutoplay } from "./autoplay";
 
-export type PictureInPictureDocument = {
-  pictureInPictureEnabled?: boolean;
-  pictureInPictureElement?: Element | null;
-  exitPictureInPicture?: () => Promise<void>;
-};
-
-/** 协议内核挂载时直接使用 mpegts.js 的 seek 路径。 */
-export function canUsePictureInPicture(
-  documentRef: Pick<PictureInPictureDocument, "pictureInPictureEnabled"> | null | undefined,
-  video:
-    | Pick<HTMLVideoElement, "disablePictureInPicture" | "requestPictureInPicture">
-    | null
-    | undefined,
-): boolean {
-  return Boolean(
-    documentRef?.pictureInPictureEnabled &&
-    video &&
-    !video.disablePictureInPicture &&
-    typeof video.requestPictureInPicture === "function",
-  );
-}
-
-export function getPictureInPictureDocument(): PictureInPictureDocument | null {
-  return typeof document === "undefined" ? null : (document as PictureInPictureDocument);
-}
-
-export async function exitPictureInPictureForVideo(
-  documentRef: PictureInPictureDocument | null,
-  video: HTMLVideoElement | null,
-): Promise<void> {
-  if (
-    !documentRef ||
-    !video ||
-    documentRef.pictureInPictureElement !== video ||
-    typeof documentRef.exitPictureInPicture !== "function"
-  ) {
-    return;
-  }
-
-  try {
-    await documentRef.exitPictureInPicture();
-  } catch {
-    // 按所选直播源惰性加载所需的唯一协议插件。
-  }
-}
-
-/**
- * 插件在每次 URL 变化时销毁并重建其 mpegts.js 实例。即使调用本助手时第一个
- * 内核已经存在，也要把订阅挂在当前实例上。
- */
-export async function toggleVideoPictureInPicture(
-  documentRef: PictureInPictureDocument | null | undefined,
-  video:
-    | Pick<HTMLVideoElement, "disablePictureInPicture" | "requestPictureInPicture">
-    | null
-    | undefined,
-): Promise<boolean> {
-  if (!documentRef || !video || !canUsePictureInPicture(documentRef, video)) return false;
-
-  try {
-    if (documentRef.pictureInPictureElement === (video as unknown as Element)) {
-      if (typeof documentRef.exitPictureInPicture !== "function") return false;
-      await documentRef.exitPictureInPicture();
-      return true;
-    }
-
-    if (documentRef.pictureInPictureElement) {
-      if (typeof documentRef.exitPictureInPicture !== "function") return false;
-      await documentRef.exitPictureInPicture();
-      // Video.js 适配器重建传输内核时保留外层媒体元素，但不跨独立 CDN 强求无缝。
-      if (documentRef.pictureInPictureElement) return false;
-    }
-
-    await video.requestPictureInPicture();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Video.js 适配器从 HTMLMediaElement 的原生 API 启动协议内核；HLS 的 hls.js
  * 实例仅作为 Video.js 的受控高级能力读取。
@@ -244,8 +164,6 @@ export type WebPlayerApi = {
   muted: boolean;
   mediaAvailable: boolean;
   running: boolean;
-  pictureInPictureSupported: boolean;
-  pictureInPictureActive: boolean;
   loadError: string | null;
   /** 非致命的全屏失败，绝不能替换媒体视图。 */
   fullscreenError: string | null;
@@ -264,8 +182,6 @@ export type WebPlayerApi = {
   changeVolume: (v: number) => void;
   setAudio: (volume: number, muted: boolean) => void;
   toggleMute: () => void;
-  togglePictureInPicture: () => Promise<void>;
-  exitPictureInPicture: () => Promise<void>;
   toggleFullscreen: () => Promise<void>;
   /** 退出全屏且不再切回；窗口化状态下调用是安全的。 */
   exitFullscreen: () => Promise<void>;
@@ -720,7 +636,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const [playerInstanceId] = useState(createPlayerInstanceId);
   const genRef = useRef(0);
-  const mediaLifecycleVersionRef = useRef(0);
   const volumeRef = useRef(initialAudio.volume);
   const mutedRef = useRef(initialAudio.muted);
   const activeProxySessionIdRef = useRef<string | null>(null);
@@ -752,8 +667,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const [prevVolume, setPrevVolume] = useState(initialAudio.previousVolume);
   const [mediaAvailable, setMediaAvailable] = useState(false);
   const [running, setRunning] = useState(false);
-  const [pictureInPictureSupported, setPictureInPictureSupported] = useState(false);
-  const [pictureInPictureActive, setPictureInPictureActive] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [mediaKey, setMediaKey] = useState(0);
@@ -796,16 +709,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   }, [onMediaFailure, onReady, onWaiting, onPause, onPlaying]);
 
   const destroyPlayer = useCallback(() => {
-    // PiP 请求是异步的。在这里自增版本使其续体检测到房间切换并关闭过期的原生窗口。
-    mediaLifecycleVersionRef.current += 1;
-
     const video = videoRef.current;
-    void exitPictureInPictureForVideo(getPictureInPictureDocument(), video);
-    setPictureInPictureActive(false);
-    // `pictureInPictureSupported` 是设备/文档能力，不是逐流状态。在这里清除它会让
-    // 控件在每次销毁时卸载，卡顿的重连循环会让按钮闪烁。
-    // 让它保持粘性；`togglePictureInPicture` 反正会重新检查可用性。
-
     const p = playerRef.current;
     playerRef.current = null;
     if (p) {
@@ -1459,31 +1363,14 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) {
-      // 短暂的 null（mediaKey 交换中途）不代表设备能力丢失。只有随元素走的 active
-      // 标志被重置。
-      setPictureInPictureActive(false);
-      return;
-    }
+    if (!video) return;
     const generation = genRef.current;
     const playbackKind = effectivePlaybackKind;
 
-    const pictureInPictureDocument = getPictureInPictureDocument();
     const isCurrentMedia = () =>
       videoRef.current === video &&
       genRef.current === generation &&
       playerRef.current?.media === video;
-    const syncPictureInPicture = () => {
-      // 来自刚被替换的 <video> 的 leave 事件
-      // 绝不能覆盖新 MediaSource 节点的状态。
-      if (videoRef.current !== video) return;
-      // 支持性是单调的：锁存一次即可，重连循环不会卸载控件。
-      // `canUsePictureInPicture` 把关实际切换。
-      if (canUsePictureInPicture(pictureInPictureDocument, video)) {
-        setPictureInPictureSupported(true);
-      }
-      setPictureInPictureActive(pictureInPictureDocument?.pictureInPictureElement === video);
-    };
 
     const onPlay = () => {
       if (!isCurrentMedia()) return;
@@ -1502,6 +1389,16 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       if (!isCurrentMedia()) return;
       setPaused(true);
       onPauseRef.current?.();
+    };
+    const onVolumeChange = () => {
+      if (!isCurrentMedia()) return;
+      const nextVolume = clampWebPlayerVolume(video.volume * 100);
+      const nextMuted = video.muted || nextVolume === 0;
+      volumeRef.current = nextVolume;
+      mutedRef.current = nextMuted;
+      if (nextVolume > 0) setPrevVolume(nextVolume);
+      setVolume(nextVolume);
+      setMuted(nextMuted);
     };
     const onWaiting = () => {
       if (!isCurrentMedia()) return;
@@ -1525,8 +1422,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       setPaused(video.paused);
       onReadyRef.current?.();
     };
-    const onEnterPictureInPicture = () => syncPictureInPicture();
-    const onLeavePictureInPicture = () => syncPictureInPicture();
     const onEnded = () => {
       if (!isCurrentMedia()) return;
       onMediaFailureRef.current?.({
@@ -1537,7 +1432,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
         protocol: playbackKind ?? undefined,
       });
     };
-    syncPictureInPicture();
     syncAspectRatio();
     video.addEventListener("play", onPlay);
     video.addEventListener("playing", onPlaying);
@@ -1548,8 +1442,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     video.addEventListener("ended", onEnded);
     video.addEventListener("loadedmetadata", syncAspectRatio);
     video.addEventListener("resize", syncAspectRatio);
-    video.addEventListener("enterpictureinpicture", onEnterPictureInPicture);
-    video.addEventListener("leavepictureinpicture", onLeavePictureInPicture);
+    video.addEventListener("volumechange", onVolumeChange);
     return () => {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("playing", onPlaying);
@@ -1560,8 +1453,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("loadedmetadata", syncAspectRatio);
       video.removeEventListener("resize", syncAspectRatio);
-      video.removeEventListener("enterpictureinpicture", onEnterPictureInPicture);
-      video.removeEventListener("leavepictureinpicture", onLeavePictureInPicture);
+      video.removeEventListener("volumechange", onVolumeChange);
     };
   }, [effectivePlaybackKind, mediaKey, streamKey]);
 
@@ -1907,28 +1799,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     }
   }, [muted, volume, prevVolume]);
 
-  const togglePictureInPicture = useCallback(async () => {
-    const video = videoRef.current;
-    const pictureInPictureDocument = getPictureInPictureDocument();
-    if (!video || !canUsePictureInPicture(pictureInPictureDocument, video)) return;
-
-    const lifecycleVersion = mediaLifecycleVersionRef.current;
-    const changed = await toggleVideoPictureInPicture(pictureInPictureDocument, video);
-
-    // 请求可能在画质/线路/房间切换替换了 video 节点之后才 resolve。
-    // 不要把那个已分离的源留在原生画中画窗口里。
-    if (
-      changed &&
-      (lifecycleVersion !== mediaLifecycleVersionRef.current || videoRef.current !== video)
-    ) {
-      await exitPictureInPictureForVideo(pictureInPictureDocument, video);
-    }
-  }, []);
-
-  const exitPictureInPicture = useCallback(async () => {
-    await exitPictureInPictureForVideo(getPictureInPictureDocument(), videoRef.current);
-  }, []);
-
   /**
    * 进入或离开 Android Tauri 使用的页面内全屏固定层。
    *
@@ -2080,8 +1950,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     muted,
     mediaAvailable,
     running,
-    pictureInPictureSupported,
-    pictureInPictureActive,
     loadError,
     fullscreenError,
     setLoadError,
@@ -2095,8 +1963,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     changeVolume,
     setAudio,
     toggleMute,
-    togglePictureInPicture,
-    exitPictureInPicture,
     toggleFullscreen,
     exitFullscreen,
     sync,

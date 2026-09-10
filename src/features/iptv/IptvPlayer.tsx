@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -37,6 +38,12 @@ import {
   useMediaLifecycle,
 } from "@/features/room/player/useWebPlayer";
 import type { VideoJsLivePlaybackKind } from "@/features/room/player/videoJsPlayer";
+import {
+  useVideoJsPiP,
+  VideoJsContainer,
+  VideoJsPlayerProvider,
+  VideoJsVideo,
+} from "@/features/room/player/videoJsControls";
 import type { IptvChannel } from "./types";
 
 export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "error";
@@ -113,7 +120,16 @@ type IptvPlayerProps = {
 };
 
 /** 共享浏览器媒体生命周期模块的 IPTV 页面适配器。 */
-export function IptvPlayer({
+/** Video.js Player 是所有原生 controls components 的唯一上下文。 */
+export function IptvPlayer(props: IptvPlayerProps) {
+  return (
+    <VideoJsPlayerProvider>
+      <IptvPlayerContent {...props} />
+    </VideoJsPlayerProvider>
+  );
+}
+
+function IptvPlayerContent({
   channel,
   reloadToken,
   webFullscreen = false,
@@ -212,8 +228,8 @@ export function IptvPlayer({
   });
   const { videoRef: playerVideoRef, stageRef: playerStageRef, playerRootRef } = player;
   const fullscreen = player.mode === "fullscreen";
-  const { exitFullscreen, exitPictureInPicture, toggleFullscreen, toggleMute, togglePause } =
-    player;
+  const { exitFullscreen, toggleFullscreen, toggleMute, togglePause } = player;
+  const pictureInPicture = useVideoJsPiP();
   const androidPlayerControls = useAndroidPlayerControls(
     androidClient,
     channelId ? `iptv:${channelId}` : "iptv:none",
@@ -324,9 +340,9 @@ export function IptvPlayer({
   }, [error, onStatusChange, status]);
 
   useEffect(() => {
-    if (!audioOnly) return;
-    void exitPictureInPicture();
-  }, [audioOnly, exitPictureInPicture]);
+    if (!audioOnly || !pictureInPicture?.pip) return;
+    void pictureInPicture.exitPictureInPicture();
+  }, [audioOnly, pictureInPicture]);
 
   const clearControlsHideTimer = useCallback(() => {
     if (controlsHideTimerRef.current === null) return;
@@ -451,7 +467,7 @@ export function IptvPlayer({
           : "rounded-2xl border border-border-subtle shadow-sm",
       )}
     >
-      <div
+      <VideoJsContainer
         ref={playerStageRef}
         data-player-stage
         data-iptv-player-stage
@@ -476,6 +492,76 @@ export function IptvPlayer({
           void toggleFullscreen();
         }}
         onPointerLeave={handleStagePointerLeave}
+        controls={
+          <PlayerControls
+            chrome={{
+              ref: controlsRef,
+              "data-player-controls": true,
+              "data-visible": "true",
+              "aria-hidden": "false",
+              className:
+                "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+              onPointerEnter: holdControlsVisible,
+              onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => {
+                event.stopPropagation();
+                holdControlsVisible();
+              },
+              onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
+                event.stopPropagation();
+                holdControlsVisible();
+              },
+              onPointerLeave: scheduleControlsHide,
+              onFocusCapture: holdControlsVisible,
+              onBlurCapture: (event: ReactFocusEvent<HTMLDivElement>) => {
+                const nextFocused = event.relatedTarget;
+                if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused))
+                  return;
+                scheduleControlsHide();
+              },
+            }}
+            externalAudioControls={
+              nativePlayerControlsActive
+                ? {
+                    volume: playerControlVolume,
+                    muted: playerControlMuted,
+                    onVolumeChange: handlePlayerVolumeChange,
+                    onToggleMute: handleTogglePlayerMute,
+                  }
+                : undefined
+            }
+            audioOnly={audioOnly}
+            webFullscreen={webFullscreen}
+            fullscreen={fullscreen}
+            asrVisible={asr.desktopClient}
+            asrOn={asr.captionsOn}
+            asrLabel={asr.controlLabel}
+            asrDisabled={asr.controlDisabled}
+            asrBusy={asr.controlBusy}
+            asrTranslationEnabled={asrTranslationEnabled}
+            asrTranslationFrom={asrTranslationFrom}
+            asrTranslationTo={asrTranslationTo}
+            asrTranslationBusy={asr.translationPending}
+            asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+            asrSettingsPending={asrPending}
+            pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
+            disabled={!channel || !player.mediaAvailable || status === "error"}
+            stackedBelowPlayer
+            compact={compactViewport}
+            portalContainer={playerStageRef}
+            onOverlayInteractionChange={handleControlsInteractionChange}
+            refreshDisabled={!channel || status === "connecting"}
+            loadError={player.fullscreenError}
+            onRefresh={onReconnect}
+            onToggleAudioOnly={() => setAudioOnly((current) => !current)}
+            onToggleWebFullscreen={() => onWebFullscreenChange?.(!webFullscreen)}
+            onToggleAsr={asr.toggle}
+            onAsrTranslationEnabledChange={setAsrTranslationEnabled}
+            onAsrTranslationFromChange={setAsrTranslationFrom}
+            onAsrTranslationToChange={setAsrTranslationTo}
+            onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
+            onToggleFullscreen={() => void toggleFullscreen()}
+          />
+        }
       >
         <div
           ref={playerRootRef}
@@ -486,7 +572,7 @@ export function IptvPlayer({
             audioOnly && "invisible",
           )}
         >
-          <video
+          <VideoJsVideo
             key={player.mediaKey}
             ref={playerVideoRef}
             data-player-video
@@ -634,73 +720,7 @@ export function IptvPlayer({
           </div>
         )}
 
-        <div
-          ref={controlsRef}
-          data-player-controls
-          data-visible="true"
-          aria-hidden="false"
-          className="absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
-          onPointerEnter={holdControlsVisible}
-          onPointerMove={(event) => {
-            event.stopPropagation();
-            holdControlsVisible();
-          }}
-          onPointerDown={(event) => {
-            event.stopPropagation();
-            holdControlsVisible();
-          }}
-          onPointerLeave={scheduleControlsHide}
-          onFocusCapture={holdControlsVisible}
-          onBlurCapture={(event) => {
-            const nextFocused = event.relatedTarget;
-            if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) return;
-            scheduleControlsHide();
-          }}
-        >
-          <PlayerControls
-            paused={player.paused}
-            volume={playerControlVolume}
-            muted={playerControlMuted}
-            audioOnly={audioOnly}
-            webFullscreen={webFullscreen}
-            fullscreen={fullscreen}
-            asrVisible={asr.desktopClient}
-            asrOn={asr.captionsOn}
-            asrLabel={asr.controlLabel}
-            asrDisabled={asr.controlDisabled}
-            asrBusy={asr.controlBusy}
-            asrTranslationEnabled={asrTranslationEnabled}
-            asrTranslationFrom={asrTranslationFrom}
-            asrTranslationTo={asrTranslationTo}
-            asrTranslationBusy={asr.translationPending}
-            asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-            asrSettingsPending={asrPending}
-            pictureInPictureSupported={player.pictureInPictureSupported}
-            pictureInPictureActive={player.pictureInPictureActive}
-            pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
-            disabled={!channel || !player.mediaAvailable || status === "error"}
-            stackedBelowPlayer
-            compact={compactViewport}
-            portalContainer={playerStageRef}
-            onOverlayInteractionChange={handleControlsInteractionChange}
-            refreshDisabled={!channel || status === "connecting"}
-            loadError={player.fullscreenError}
-            onRefresh={onReconnect}
-            onTogglePause={togglePause}
-            onVolume={handlePlayerVolumeChange}
-            onToggleMute={handleTogglePlayerMute}
-            onToggleAudioOnly={() => setAudioOnly((current) => !current)}
-            onTogglePictureInPicture={() => void player.togglePictureInPicture()}
-            onToggleWebFullscreen={() => onWebFullscreenChange?.(!webFullscreen)}
-            onToggleAsr={asr.toggle}
-            onAsrTranslationEnabledChange={setAsrTranslationEnabled}
-            onAsrTranslationFromChange={setAsrTranslationFrom}
-            onAsrTranslationToChange={setAsrTranslationTo}
-            onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
-            onToggleFullscreen={() => void toggleFullscreen()}
-          />
-        </div>
-      </div>
+      </VideoJsContainer>
     </section>
   );
 }

@@ -11,7 +11,6 @@ import {
 import type Mpegts from "mpegts.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -32,6 +31,11 @@ import {
   type VideoJsPlaybackKind,
   type VideoJsPlayerInstance,
 } from "@/features/room/player/videoJsPlayer";
+import {
+  VideoJsContainer,
+  VideoJsPlayerProvider,
+  VideoJsVideo,
+} from "@/features/room/player/videoJsControls";
 import { PlayerFullscreenHud, showPlayerFullscreenHud } from "@/features/room/PlayerFullscreenHud";
 import {
   isWatchProgressWorthKeeping,
@@ -40,7 +44,6 @@ import {
 } from "@/shared/watchProgress";
 import {
   clampRecordingPlaybackTime,
-  formatRecordingDuration,
   recordingDanmakuUrl,
   recordingEndedPlaybackTime,
   recordingSeekReached,
@@ -64,14 +67,6 @@ function recordingPlaybackKind(protocol: RecordingItem["protocol"]): VideoJsPlay
 
 function finiteDuration(video: HTMLVideoElement): number {
   return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
-}
-
-function bufferedRangeEnd(video: HTMLVideoElement): number {
-  let end = 0;
-  for (let index = 0; index < video.buffered.length; index += 1) {
-    end = Math.max(end, video.buffered.end(index));
-  }
-  return Number.isFinite(end) ? end : 0;
 }
 
 const RECORDING_SEEK_TIMEOUT_MS = 4_000;
@@ -99,15 +94,21 @@ function isPlayerControlTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function RecordingPlayer({
-  item,
-  url,
-  fill = false,
-}: {
+type RecordingPlayerProps = {
   item: RecordingItem;
   url: string;
   fill?: boolean;
-}) {
+};
+
+export function RecordingPlayer(props: RecordingPlayerProps) {
+  return (
+    <VideoJsPlayerProvider key={props.item.id}>
+      <RecordingPlayerContent {...props} />
+    </VideoJsPlayerProvider>
+  );
+}
+
+function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -116,7 +117,6 @@ export function RecordingPlayer({
   const volumeRef = useRef(initialAudio.volume);
   const mutedRef = useRef(initialAudio.muted);
   const previousVolumeRef = useRef(initialAudio.volume);
-  const playbackRateRef = useRef(1);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
   const controlsHideTimerRef = useRef<number | null>(null);
@@ -129,12 +129,9 @@ export function RecordingPlayer({
   const [volume, setVolume] = useState(initialAudio.volume);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [bufferedTime, setBufferedTime] = useState(0);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
-  const [playbackRate, setPlaybackRate] = useState(1);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const [playerRevision, setPlayerRevision] = useState(0);
-  const sliderTargetRef = useRef<number | null>(null);
   const seekTargetRef = useRef<number | null>(null);
   const endedRef = useRef(false);
   const recoverySeekRef = useRef<number | null>(null);
@@ -144,10 +141,6 @@ export function RecordingPlayer({
   const recordedDuration = Math.max(0, item.duration_ms / 1000);
   const compact = useCompactPlayerViewport();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
-  // latest-ref：提交后同步，读者全部在效果/事件里，时序等价。
-  useLayoutEffect(() => {
-    playbackRateRef.current = playbackRate;
-  });
   useScreenWakeLock(!paused && !loading && !error);
 
   const danmakuUrlQuery = useQuery({
@@ -211,12 +204,10 @@ export function RecordingPlayer({
     [item.id, queryClient, recordedDuration],
   );
 
-  // 换一段录制时重置单次回放状态：React 官方的渲染期调整模式。
-  // playbackRateRef 的复位由上方 latest-ref 同步在提交后一并完成。
+  // 换一段录制时重置弹幕显示；Video.js Provider 以 item.id 为 key，倍速随播放器重置。
   const [prevItemId, setPrevItemId] = useState(item.id);
   if (item.id !== prevItemId) {
     setPrevItemId(item.id);
-    setPlaybackRate(1);
     setDanmakuVisible(true);
   }
 
@@ -262,7 +253,6 @@ export function RecordingPlayer({
       );
       const request = ++seekRequestRef.current;
       endedRef.current = false;
-      sliderTargetRef.current = null;
       seekTargetRef.current = target;
       clearSeekTimer();
       setCurrentTime(target);
@@ -334,7 +324,6 @@ export function RecordingPlayer({
     setPaused(true);
     setCurrentTime(0);
     setDuration(recordedDuration);
-    setBufferedTime(0);
     endedRef.current = false;
     const kind = playbackKind;
 
@@ -344,12 +333,7 @@ export function RecordingPlayer({
       // 录制元数据具有权威性。FLV MediaSource 在重建缓冲期间可能短暂暴露 0 或 1 秒
       // 的时长。
       const nextDuration = recordedDuration > 0 ? recordedDuration : finiteDuration(media);
-      setCurrentTime((previousTime) =>
-        clampRecordingPlaybackTime(
-          sliderTargetRef.current !== null || endedRef.current ? previousTime : actualTime,
-          nextDuration,
-        ),
-      );
+      setCurrentTime(clampRecordingPlaybackTime(actualTime, nextDuration));
       setDuration((previousDuration) =>
         endedRef.current && nextDuration <= 0 ? previousDuration : nextDuration,
       );
@@ -368,15 +352,6 @@ export function RecordingPlayer({
         completeSeek();
       }
     }
-    function syncBufferedTime() {
-      if (cancelled) return;
-      setBufferedTime(
-        clampRecordingPlaybackTime(
-          bufferedRangeEnd(media),
-          recordedDuration || finiteDuration(media),
-        ),
-      );
-    }
     function onPlay() {
       if (cancelled) return;
       endedRef.current = false;
@@ -391,11 +366,9 @@ export function RecordingPlayer({
     }
     function onReady() {
       if (cancelled) return;
-      media.playbackRate = playbackRateRef.current;
       setLoading(false);
       if (seekTargetRef.current === null) setWaiting(false);
       syncTime();
-      syncBufferedTime();
       const pendingTarget = recoverySeekRef.current;
       if (pendingTarget !== null) {
         recoverySeekRef.current = null;
@@ -453,13 +426,21 @@ export function RecordingPlayer({
     function onSeeked() {
       if (!cancelled && seekTargetRef.current !== null) syncTime();
     }
+    function syncAudio() {
+      if (cancelled) return;
+      const nextVolume = Math.round(media.volume * 100);
+      const nextMuted = media.muted || nextVolume === 0;
+      volumeRef.current = nextVolume;
+      mutedRef.current = nextMuted;
+      if (nextVolume > 0) previousVolumeRef.current = nextVolume;
+      setVolume(nextVolume);
+      setMuted(nextMuted);
+    }
 
     video.volume = volumeRef.current / 100;
     video.muted = mutedRef.current;
-    video.playbackRate = playbackRateRef.current;
     video.addEventListener("timeupdate", syncTime);
     video.addEventListener("durationchange", syncTime);
-    video.addEventListener("progress", syncBufferedTime);
     video.addEventListener("loadedmetadata", onReady);
     video.addEventListener("canplay", onReady);
     video.addEventListener("play", onPlay);
@@ -468,6 +449,7 @@ export function RecordingPlayer({
     video.addEventListener("ended", onEnded);
     video.addEventListener("seeking", onSeeking);
     video.addEventListener("seeked", onSeeked);
+    video.addEventListener("volumechange", syncAudio);
 
     void loadVideoJsModules(kind)
       .then((modules) => {
@@ -534,7 +516,6 @@ export function RecordingPlayer({
       reportWatchProgress(clampRecordingPlaybackTime(media.currentTime, recordedDuration), true);
       video.removeEventListener("timeupdate", syncTime);
       video.removeEventListener("durationchange", syncTime);
-      video.removeEventListener("progress", syncBufferedTime);
       video.removeEventListener("loadedmetadata", onReady);
       video.removeEventListener("canplay", onReady);
       video.removeEventListener("play", onPlay);
@@ -543,10 +524,10 @@ export function RecordingPlayer({
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("seeking", onSeeking);
       video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("volumechange", syncAudio);
       seekRequestRef.current += 1;
       clearSeekTimer();
       seekTargetRef.current = null;
-      sliderTargetRef.current = null;
       endedRef.current = false;
       const player = playerRef.current;
       playerRef.current = null;
@@ -570,11 +551,6 @@ export function RecordingPlayer({
     url,
   ]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video) video.playbackRate = playbackRate;
-  }, [playbackRate]);
-
   const togglePlayback = useCallback(() => {
     const player = playerRef.current;
     const video = videoRef.current;
@@ -586,20 +562,6 @@ export function RecordingPlayer({
       });
     } else {
       player.pause();
-    }
-  }, []);
-
-  const setPlayerVolume = useCallback((nextVolume: number) => {
-    const video = videoRef.current;
-    const clamped = Math.max(0, Math.min(100, nextVolume));
-    volumeRef.current = clamped;
-    mutedRef.current = clamped === 0;
-    if (clamped > 0) previousVolumeRef.current = clamped;
-    setVolume(clamped);
-    setMuted(clamped === 0);
-    if (video) {
-      video.volume = clamped / 100;
-      video.muted = clamped === 0;
     }
   }, []);
 
@@ -628,13 +590,6 @@ export function RecordingPlayer({
   useEffect(() => {
     rememberPlayerVolume(volume, muted);
   }, [muted, volume]);
-
-  const changePlaybackRate = useCallback((nextRate: number) => {
-    if (!Number.isFinite(nextRate) || nextRate <= 0) return;
-    playbackRateRef.current = nextRate;
-    setPlaybackRate(nextRate);
-    if (videoRef.current) videoRef.current.playbackRate = nextRate;
-  }, []);
 
   const retryPlayback = useCallback(() => {
     const target = clampRecordingPlaybackTime(currentTime, duration || recordedDuration);
@@ -778,40 +733,6 @@ export function RecordingPlayer({
     [currentTime, fullscreen, revealControls, seekTo, toggleMute, togglePlayback],
   );
 
-  const timeline = (
-    <div className="flex min-w-0 items-center gap-2 py-0.5 text-white/85">
-      <Slider
-        value={currentTime}
-        min={0}
-        max={duration || 1}
-        step={0.1}
-        variant="player"
-        buffered={duration > 0 ? (bufferedTime / duration) * 100 : 0}
-        disabled={!duration}
-        aria-label="播放进度"
-        aria-valuetext={`${formatRecordingDuration(currentTime * 1_000)} / ${formatRecordingDuration(duration * 1_000)}`}
-        className="min-w-0 flex-1"
-        onValueChange={(value) => {
-          const next = Number(Array.isArray(value) ? value[0] : value);
-          if (!Number.isFinite(next)) return;
-          sliderTargetRef.current = next;
-          setCurrentTime(next);
-        }}
-        onValueCommitted={(value) => {
-          const next = Number(Array.isArray(value) ? value[0] : value);
-          if (Number.isFinite(next)) seekTo(next);
-        }}
-      />
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-white/80">
-        {formatRecordingDuration(currentTime * 1_000)}
-        <span className="px-1 text-white/45" aria-hidden>
-          /
-        </span>
-        {formatRecordingDuration(duration * 1_000)}
-      </span>
-    </div>
-  );
-
   const showFullscreenHud = showPlayerFullscreenHud({
     fullscreen: fullscreen.fullscreen,
     hasRoomIdentity: Boolean(item.title.trim() || item.user_name.trim()),
@@ -819,7 +740,8 @@ export function RecordingPlayer({
   });
 
   return (
-    <section
+    <VideoJsContainer
+      variant="vod"
       ref={stageRef}
       data-player-stage
       data-recording-player
@@ -837,6 +759,42 @@ export function RecordingPlayer({
       onPointerLeave={handleStagePointerLeave}
       onKeyDown={handleStageKeyDown}
       tabIndex={0}
+      controls={
+        <PlayerControls
+          chrome={{
+            ref: controlsRef,
+            "data-player-controls": true,
+            "data-visible": "true",
+            "aria-hidden": "false",
+            className:
+              "absolute inset-x-0 bottom-0 z-30 transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+            onPointerEnter: holdControlsVisible,
+            onPointerLeave: scheduleControlsHide,
+            onFocusCapture: holdControlsVisible,
+            onBlurCapture: scheduleControlsHide,
+          }}
+          osdOn={danmakuVisible}
+          fullscreen={fullscreen.fullscreen}
+          nativeFullscreen={!fullscreen.nativeLayer}
+          disabled={loading}
+          refreshDisabled={loading}
+          loadError={fullscreen.error}
+          stackedBelowPlayer={fill ? compact : true}
+          compact={compact}
+          portalContainer={stageRef}
+          playbackSettingsTitle="回放设置"
+          playbackSettingsLabel="回放设置"
+          playbackSettings={item.include_danmaku ? <RecordingPlaybackSettings /> : undefined}
+          onOverlayInteractionChange={setOverlayInteractionOpen}
+          onRefresh={retryPlayback}
+          onToggleOsd={
+            item.include_danmaku && danmakuUrlQuery.data
+              ? () => setDanmakuVisible((visible) => !visible)
+              : undefined
+          }
+          onToggleFullscreen={fullscreen.nativeLayer ? () => void fullscreen.toggle() : undefined}
+        />
+      }
     >
       <div
         data-player-video-surface
@@ -849,7 +807,7 @@ export function RecordingPlayer({
           data-player-engine-root
           className="absolute inset-0 size-full overflow-hidden bg-black"
         >
-          <video
+          <VideoJsVideo
             ref={videoRef}
             data-player-video
             playsInline
@@ -906,54 +864,6 @@ export function RecordingPlayer({
           />
         </div>
       )}
-
-      <div
-        ref={controlsRef}
-        data-player-controls
-        data-visible="true"
-        aria-hidden="false"
-        className="absolute inset-x-0 bottom-0 z-30 transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
-        onPointerEnter={holdControlsVisible}
-        onPointerLeave={scheduleControlsHide}
-        onFocusCapture={holdControlsVisible}
-        onBlurCapture={scheduleControlsHide}
-      >
-        <PlayerControls
-          paused={paused}
-          volume={volume}
-          muted={muted}
-          osdOn={danmakuVisible}
-          fullscreen={fullscreen.fullscreen}
-          disabled={loading}
-          refreshDisabled={loading}
-          loadError={fullscreen.error}
-          stackedBelowPlayer={fill ? compact : true}
-          compact={compact}
-          portalContainer={stageRef}
-          timeline={timeline}
-          playbackSettingsTitle="回放设置"
-          playbackSettingsLabel="回放设置"
-          playbackSettingsDisabled={false}
-          playbackSettings={
-            <RecordingPlaybackSettings
-              playbackRate={playbackRate}
-              onPlaybackRateChange={changePlaybackRate}
-              hasDanmaku={Boolean(item.include_danmaku)}
-            />
-          }
-          onOverlayInteractionChange={setOverlayInteractionOpen}
-          onRefresh={retryPlayback}
-          onTogglePause={togglePlayback}
-          onVolume={setPlayerVolume}
-          onToggleMute={toggleMute}
-          onToggleOsd={
-            item.include_danmaku && danmakuUrlQuery.data
-              ? () => setDanmakuVisible((visible) => !visible)
-              : undefined
-          }
-          onToggleFullscreen={() => void fullscreen.toggle()}
-        />
-      </div>
-    </section>
+    </VideoJsContainer>
   );
 }

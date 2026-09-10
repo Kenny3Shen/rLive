@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./components/videojs/styles/theme.css";
 
 /* 发布的包版本没有 `latin.css` 入口。直接声明其唯一的拉丁可变字面，
    使中日韩界面继续使用系统兜底字体，而不打包用不到的区域 Geist 子集。 */
@@ -226,6 +227,108 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
+  --color-media-accent: var(--media-accent);
+  --color-media-background: var(--media-background);
+  --color-media-border: var(--media-border);
+  --color-media-controls: var(--media-controls);
+  --color-media-controls-foreground: var(--media-controls-foreground);
+  --color-media-foreground: var(--media-foreground);
+  --color-media-live: var(--media-live-color);
+  --color-media-muted: var(--media-muted);
+  --color-media-muted-foreground: var(--media-muted-foreground);
+  --color-media-popover: var(--media-popover);
+  --color-media-popover-foreground: var(--media-popover-foreground);
+  --color-media-primary: var(--media-primary);
+  --color-media-primary-foreground: var(--media-primary-foreground);
+  --color-media-ring: var(--media-ring);
+  --color-media-backdrop: var(--media-backdrop);
+  --container-media-xs: 20rem;
+  --container-media-sm: 24rem;
+  --container-media-md: 28rem;
+  --container-media-lg: 32rem;
+  --container-media-xl: 36rem;
+  --container-media-2xl: 42rem;
+  --container-media-dialog: var(--media-dialog-max-width);
+  --text-media-xs: .7em;
+  --text-media-sm: calc(var(--media-spacing) * 2.75);
+  --text-media: calc(var(--media-spacing) * 3.25);
+  --text-media-lg: calc(var(--media-spacing) * 3.75);
+  --spacing-media-icon-sm: calc(var(--media-icon-size, calc(var(--media-spacing) * 4.5)) * 7 / 9);
+  --spacing-media-icon: var(--media-icon-size, calc(var(--media-spacing) * 4.5));
+  --spacing-media-icon-lg: calc(var(--media-icon-size, calc(var(--media-spacing) * 4.5)) * 1.5);
+  --spacing-media-icon-xl: calc(var(--media-icon-size, calc(var(--media-spacing) * 4.5)) * 2);
+  --spacing-media-control: var(--media-control-size);
+  --spacing-media-dialog-width: var(--media-dialog-width);
+  --radius-media-control: var(--media-control-radius);
+  --radius-media-controls: var(--media-controls-radius);
+  --radius-media-dialog: var(--media-dialog-radius);
+  --radius-media-menu-item: var(--media-menu-item-radius);
+  --radius-media-pill: 9999px;
+  --radius-media-player: var(--media-video-border-radius);
+  --radius-media-popup: var(--media-popup-radius);
+  --drop-shadow-media-icon: 0 1px 0 var(--media-shadow-current-color);
+  --shadow-media-hairline: 0 0 0 1px var(--media-border);
+  --shadow-media-separator: var(--media-shadow-separator);
+  --shadow-media-thumb: var(--media-shadow-thumb);
+  --shadow-media-tooltip: var(--media-shadow-tooltip);
+  --text-shadow-media: 0 1px 0 var(--media-shadow-current-color);
+  --text-shadow-media-dialog: var(--media-text-shadow-dialog);
+  --backdrop-filter-media-indicator: var(--media-backdrop-filter-indicator);
+  --backdrop-filter-media-dialog: var(--media-backdrop-filter-dialog);
+  --duration-media-instant: var(--media-duration-instant);
+  --duration-media-fast: var(--media-duration-fast);
+  --duration-media-base: var(--media-duration);
+  --duration-media-slow: var(--media-duration-slow);
+  --duration-media-slower: var(--media-duration-slower);
+  --duration-media-controls: var(--media-duration-controls);
+  --duration-media-controls-half: calc(var(--media-duration-controls) / 2);
+  --duration-media-menu: var(--media-duration-menu);
+  --duration-media-dialog: var(--media-duration-dialog);
+  --duration-media-indicator: var(--media-duration-indicator);
+  --duration-media-slider: var(--media-duration-slider);
+  --delay-media-dialog: var(--media-delay-dialog);
+  --scale-media-hidden: var(--media-hidden-scale);
+  --scale-media-hidden-indicator: var(--media-hidden-indicator-scale);
+  --scale-media-hidden-playback: var(--media-hidden-playback-scale);
+  --scale-media-hidden-icon: var(--media-hidden-icon-scale);
+  --scale-media-hidden-popup: var(--media-hidden-popup-scale);
+  --scale-media-hidden-preview: var(--media-hidden-preview-scale);
+  --blur-media-hidden: var(--media-hidden-blur);
+  --blur-media-hidden-popup: var(--media-hidden-popup-blur);
+  --spacing-media-hidden-offset: var(--media-hidden-offset);
+  --spacing-media-hidden-indicator-offset: var(--media-hidden-indicator-offset);
+  --spacing-media-hidden-preview-offset: var(--media-hidden-preview-offset);
+  --spacing-media-hidden-seek-offset: var(--media-hidden-seek-offset);
+}
+
+/* Video.js 原生 skin 承担媒体 chrome。业务按钮只作为紧凑扩展槽参与原生控制行，
+   不再绘制第二层控制栏。 */
+.r-live-player-skin {
+  --media-accent-color: var(--primary);
+  --media-accent-text-color: var(--primary-foreground);
+  --media-border-color: transparent;
+  --media-border-radius: inherit;
+  --media-font-family: var(--font-sans);
+  --media-object-fit: contain;
+  --media-scale-unit: 0.9rem;
+}
+
+/* 业务按钮行居中占据原生左右控件之间的剩余空间；窄播放器靠溢出裁剪，
+   按钮的取舍由 PlayerControls 的 compact 逻辑决定，不靠 CSS 隐藏。 */
+.r-live-player-skin [data-slot="player-extension-controls"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.r-live-player-skin .r-live-media-extension-button svg {
+  width: var(--media-icon-size);
+  height: var(--media-icon-size);
+}
+
+@container media-root (height < 16rem) {
+  .r-live-player-skin {
+    --media-scale-unit: 0.78rem;
+  }
 }
 
 html,
@@ -1119,51 +1222,22 @@ html.overlay-window #root {
 }
 
 /*
- * 底部播放器 chrome，普通视频播放器的画法：从深色底边向上渐隐入画面的遮罩，
- * 无顶边框、无模糊。控件读作视频的一部分而不是叠在其上的面板，
- * 画面一直完整可见直到按钮处。
+ * 全屏顶部 chrome（房间标题、主播、溢出菜单）：从顶边向下渐隐的遮罩，无底边框、
+ * 无模糊。底部控制条的同款遮罩已由 Video.js `Controls.Backdrop` 配合
+ * `--media-controls-gradient` 承担，应用侧只剩顶部这一层。
  *
- * 为什么用遮罩而不是玻璃材质：玻璃需要一条硬边才能读作表面，而那条边恰恰让控制
- * 条看起来像一条铆在画面底部的独立板条。这也意味着 `backdrop-filter`
- * 要在每次绘制时对一块横跨整个视频宽度的条重新采样新解码的帧。
+ * 为什么用遮罩而不是玻璃材质：玻璃需要一条硬边才能读作表面，而那条边恰恰让 chrome
+ * 看起来像一条铆在画面上的独立板条。这也意味着 `backdrop-filter` 要在每次绘制时对
+ * 一块横跨整个视频宽度的条重新采样新解码的帧。
  *
- * 渐变放在 `::before` 层上，调用方继续用 `bg-transparent` 去掉组件默认值，
- * 与玻璃工具类一致。它延伸超出控制条自身盒子（`inset: auto 0 0`，高于 100%），
- * 使渐隐在第一个控件之前很早就开始，
- * 色带边缘不会落在字形上。
+ * 渐变放在 `::before` 层上，调用方继续用 `bg-transparent` 去掉组件默认值，与玻璃
+ * 工具类一致。`inset: 0 0 auto` 把层锚定在 chrome 盒子顶部，额外高度让渐变在最后
+ * 一行文字之下化解完成；这层只承载文字，因此色标比控制条的原生渐变略浅。
  *
  * 色标使用带显式 alpha 的普通 sRGB 而不是 `in oklab`：那个语法需要较新的 Chromium，
  * 解析不了的过老 Android WebView 会丢弃整条声明，留下白色字形压在原始视频上。
  * 黑到透明黑的渐变本来就在 sRGB 中插值良好 —— 促使人们用 oklab 的中点灰化问题
  * 影响的是亮色到透明的渐变。
- */
-@utility player-scrim-overlay {
-  position: relative;
-  isolation: isolate;
-
-  &::before {
-    content: "";
-    position: absolute;
-    inset: auto 0 0;
-    /* 越过控制行使渐变更平缓，而不是一条可见色带。 */
-    height: 220%;
-    z-index: -1;
-    pointer-events: none;
-    background-image: linear-gradient(
-      to top,
-      rgb(0 0 0 / 0.82) 0%,
-      rgb(0 0 0 / 0.62) 34%,
-      rgb(0 0 0 / 0.3) 66%,
-      rgb(0 0 0 / 0) 100%
-    );
-  }
-}
-
-/*
- * 全屏顶部 chrome（房间标题、主播、溢出菜单）。与上方底部遮罩同样的材质与理由，
- * 镜像为从顶边向下渐隐：`inset: 0 0 auto` 把层锚定在控制条盒子顶部，
- * 额外高度让渐变在最后一行文字之下化解完成。色标比底部控制条略浅，
- * 因为这层只承载文字，比一排按钮大小的控件需要的遮盖更少。
  */
 @utility player-scrim-overlay-top {
   position: relative;
@@ -1255,4 +1329,260 @@ html.overlay-window #root {
   html {
     @apply font-sans;
   }
+}
+
+@utility duration-media-* {
+    transition-duration: --value(--duration-media-*);
+}
+
+@utility delay-media-* {
+    transition-delay: --value(--delay-media-*);
+}
+
+@utility backdrop-filter-media-* {
+    backdrop-filter: --value(--backdrop-filter-media-*);
+}
+
+@utility font-media {
+    font-family: var(--media-font-family, "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif);
+}
+
+@custom-variant media-opaque {
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-xs {
+
+@container media-root (width >= theme(--container-media-xs)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-max-xs {
+
+@container media-root (width < theme(--container-media-xs)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-sm {
+
+@container media-root (width >= theme(--container-media-sm)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-max-sm {
+
+@container media-root (width < theme(--container-media-sm)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-md {
+
+@container media-root (width >= theme(--container-media-md)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-max-md {
+
+@container media-root (width < theme(--container-media-md)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-lg {
+
+@container media-root (width >= theme(--container-media-lg)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-max-lg {
+
+@container media-root (width < theme(--container-media-lg)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-xl {
+
+@container media-root (width >= theme(--container-media-xl)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-max-xl {
+
+@container media-root (width < theme(--container-media-xl)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-2xl {
+
+@container media-root (width >= theme(--container-media-2xl)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-max-2xl {
+
+@container media-root (width < theme(--container-media-2xl)) {
+
+@slot ;
+  }
+}
+
+@custom-variant media-highlighted {
+  &:where(:focus-visible, [aria-expanded="true"], [data-highlighted]):where(:not([aria-disabled="true"])) {
+    @slot;
+  }
+
+@media (hover: hover) {
+  &:hover:where(:not([aria-disabled="true"])) {
+    @slot;
+    }
+  }
+}
+
+@custom-variant media-transitioning {
+  &:is([data-starting-style], [data-ending-style]) {
+    @slot;
+  }
+}
+
+@custom-variant media-anchored {
+
+@supports (top: anchor(top)) {
+
+@slot ;
+  }
+}
+
+@utility highlight-media {
+    background-color: var(--media-accent);
+    color: var(--media-accent-foreground);
+}
+
+@utility surface-media {
+    box-shadow: 0 0 0 1px var(--media-surface-border, var(--media-border)), var(--media-shadow-surface);
+    backdrop-filter: var(--media-backdrop-filter-surface);
+}
+
+@utility surface-media-inset {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+    border-radius: inherit;
+    box-shadow: var(--media-shadow-surface-inset);
+}
+
+@utility surface-media-none {
+    background-color: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+}
+
+@utility focus-ring-media {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+}
+
+@utility mask-media-volume {
+    mask-repeat: no-repeat;
+    mask-position: 100% 0;
+    transition: mask-position var(--media-duration-instant) ease-out;
+}
+
+@utility mask-media-volume-open {
+    mask-image: linear-gradient(to right, transparent 10%, black 25%, black 100%);
+    mask-position: 0 0;
+}
+
+@utility nudge-media {
+    transform: translateX(0.25px);
+    transition: transform 300ms linear(0, -24 20%, 16 40%, -8 60%, 4 80%, 1);
+}
+
+@utility layer-media {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+}
+
+@utility object-media {
+    object-fit: var(--media-object-fit, contain);
+    object-position: var(--media-object-position, center);
+}
+
+@utility transition-media-popup {
+    transition-property: opacity, filter, transform, scale;
+    transition-duration: var(--media-duration-fast);
+    transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
+}
+
+@utility transition-media-menu-resize {
+    transition-property: opacity, filter, transform, scale, width, height;
+    transition-duration: var(--media-duration-fast), var(--media-duration-fast), var(--media-duration-fast), var(--media-duration-fast), var(--media-duration-menu), var(--media-duration-menu);
+}
+
+@utility motion-media-* {
+    transition-property: --value([*]);
+    will-change: --value([*]);
+}
+
+@utility anchor-media-highlight {
+    position: absolute;
+    position-anchor: --media-menu-item-highlight-anchor;
+    inset: anchor(inside);
+    overflow-anchor: none;
+    pointer-events: none;
+    border-radius: var(--media-menu-item-radius);
+    background-color: var(--media-accent);
+    transition: inset var(--media-duration-fast) ease-in-out;
+}
+
+@utility clip-media-x-* {
+    clip-path: inset(0 calc(100% - var(--value([*]))) 0 0 round var(--media-control-radius));
+}
+
+@utility clip-media-y-* {
+    clip-path: inset(calc(100% - var(--value([*]))) 0 0 0 round var(--media-control-radius));
+}
+
+@utility clip-media-chapter-x {
+    clip-path: inset(0 calc(100% - var(--media-slider-chapter-end)) 0 var(--media-slider-chapter-start));
+}
+
+@utility clip-media-chapter-y {
+    clip-path: inset(calc(100% - var(--media-slider-chapter-end)) 0 var(--media-slider-chapter-start) 0);
+}
+
+@utility clip-media-chapter-track-x {
+    clip-path: inset( 0 calc(100% - var(--media-slider-chapter-end) + var(--media-spacing) * var(--media-chapter-inset-end)) 0 calc(var(--media-slider-chapter-start) + var(--media-spacing) * var(--media-chapter-inset-start)) round var(--media-control-radius) );
+}
+
+@utility clip-media-chapter-track-y {
+    clip-path: inset( calc(100% - var(--media-slider-chapter-end) + var(--media-spacing) * var(--media-chapter-inset-end)) 0 calc(var(--media-slider-chapter-start) + var(--media-spacing) * var(--media-chapter-inset-start)) 0 round var(--media-control-radius) );
 }

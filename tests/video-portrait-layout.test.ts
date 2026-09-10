@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PlayerControls } from "../src/shared/components/player/PlayerControls";
+import { VideoJsPlayerProvider } from "../src/features/room/player/videoJsControls";
 
 const [page, styles, activity] = await Promise.all(
   [
@@ -36,23 +37,21 @@ describe("mobile portrait video layout", () => {
     expect(activity).toContain("'--android-safe-area-bottom', ($bottom / window.devicePixelRatio)");
   });
 
-  test("a reserved system gesture bar is not counted again inside the controls", () => {
+  test("business controls render as an extension row without owning safe-area padding", () => {
     const render = (reserved: boolean) =>
       renderToStaticMarkup(
-        createElement(PlayerControls, {
-          paused: true,
-          volume: 100,
-          compact: true,
-          fullscreen: true,
-          systemGestureBarReserved: reserved,
-          onTogglePause() {},
-          onVolume() {},
-          onToggleMute() {},
-          onToggleFullscreen() {},
-        }),
+        createElement(
+          VideoJsPlayerProvider,
+          null,
+          createElement(PlayerControls, {
+            compact: true,
+            fullscreen: true,
+            systemGestureBarReserved: reserved,
+          }),
+        ),
       );
-    expect(render(true)).not.toContain("pb-[max(0.75rem,env(safe-area-inset-bottom))]");
-    expect(render(true)).toContain("pb-px");
-    expect(render(false)).toContain("pb-[max(0.75rem,env(safe-area-inset-bottom))]");
+    expect(render(true)).toContain('data-slot="player-extension-controls"');
+    expect(render(false)).toContain('data-slot="player-extension-controls"');
+    expect(render(true)).not.toContain("safe-area-inset-bottom");
   });
 });
