@@ -7,6 +7,7 @@ import { canNavigateBackInApp } from "@/shared/appHistory";
 import { copyText } from "@/shared/clipboard";
 import { supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { RoomSideTab } from "./PlayerPane";
@@ -25,7 +26,6 @@ import {
 import { usePlaybackController } from "./playback/usePlaybackController";
 import { useDanmakuConnection } from "./danmaku/useDanmakuConnection";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DrawerScope } from "@/components/ui/drawer";
@@ -288,14 +288,10 @@ function RoomPageContent() {
   }
 
   if (detailQuery.isLoading) {
-    return (
-      <div className="flex h-full flex-col">
-        <RoomFallbackHeader title="加载中…" onBack={goBack} />
-        <div className="flex flex-1 items-center justify-center">
-          <Spinner className="size-8 text-primary" />
-        </div>
-      </div>
-    );
+    // 沉浸播放页没有流内顶栏，加载态也不引入一条：否则首次进入会先闪出
+    // 一条 Shell 画法（sidebar 底色 + 下边框）的「加载中」条，播放器挂载后
+    // 它又消失。加载舞台与详情落定后的黑舞台同一视觉，只补一个返回口。
+    return <PlayerStageLoading label="正在加载直播间…" onBack={goBack} />;
   }
 
   if (detailQuery.isError) {

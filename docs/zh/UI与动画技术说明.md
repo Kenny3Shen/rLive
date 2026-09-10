@@ -288,3 +288,4 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 | `src/shared/motion/PagePan.tsx`、`PageZoom.tsx` | 整页平移与 outgoing subtree 生命周期、沉浸式播放页 Zoom |
 | `src/shared/gestures/horizontalSwipe.ts`、`longPress.ts` | swipe 与长按的阈值常量和纯判定逻辑 |
 | `src/shared/components/player/PlayerControls.tsx` | 共享播放控制条与安全区避让 |
+| `src/shared/components/player/PlayerStageLoading.tsx` | 沉浸播放页的加载舞台（黑底 + 居中指示 + 悬浮返回箭头），直播详情加载与沉浸路由 Suspense 占位共用 |

@@ -71,6 +71,7 @@ import { horizontalSwipeRetainedItems } from "@/shared/gestures/horizontalSwipe"
 import { PagePan } from "@/shared/motion/PagePan";
 import { PageZoom } from "@/shared/motion/PageZoom";
 import { isMobileClient } from "@/shared/clientPlatform";
+import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
 import { enabledSiteIds } from "@/shared/siteId";
 import { PlatformScope, type PlatformScopeValue } from "@/shared/hooks/useSiteQuery";
 import type { SiteId } from "@/shared/types/live";
@@ -145,10 +146,13 @@ function RouteOutlet({
   defer,
   outlet,
   platform,
+  immersive = false,
 }: {
   defer: boolean;
   outlet: ReactNode;
   platform: PlatformScopeValue;
+  /** 沉浸播放页：加载占位换成播放器舞台，而不是锚在顶部的一条加载条。 */
+  immersive?: boolean;
 }) {
   const [ready, setReady] = useState(!defer);
 
@@ -163,11 +167,15 @@ function RouteOutlet({
     return () => window.cancelAnimationFrame(frame);
   }, [defer]);
 
-  if (!ready) return <RouteLoadingFallback />;
+  // 沉浸播放页的加载占位与播放器同一视觉（黑舞台 + 居中指示），
+  // 否则首次进入会在顶部闪出一条应用外壳画法的加载条再被播放器顶掉。
+  const fallback = immersive ? <PlayerStageLoading /> : <RouteLoadingFallback />;
+
+  if (!ready) return fallback;
 
   return (
     <PlatformScope value={platform}>
-      <Suspense fallback={<RouteLoadingFallback />}>{outlet}</Suspense>
+      <Suspense fallback={fallback}>{outlet}</Suspense>
     </PlatformScope>
   );
 }
@@ -608,6 +616,7 @@ export function Shell() {
       defer={deferRouteOutlet}
       outlet={outlet}
       platform={platformForMotion}
+      immersive={isImmersivePlayer}
     />
   );
   const pageScrollerClassName = cn(
