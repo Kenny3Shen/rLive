@@ -1711,7 +1711,6 @@ mod tests {
                     target_height: 1080,
                     target_frame_rate_milli: 60_000,
                 }),
-                false,
             )
             .await
             .expect("recording proxy");
