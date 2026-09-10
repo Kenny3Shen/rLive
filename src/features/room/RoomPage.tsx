@@ -401,7 +401,7 @@ function RoomPageContent() {
           webFullscreen={webFullscreen}
           onWebFullscreenChange={setWebFullscreen}
           // 顶栏隐藏后录制入口会跟着消失，因此把同一个控件补进画面内的 HUD。
-          hudToolsSlot={<RecordingControl context={recordingContext} />}
+          hudToolsSlot={<RecordingControl context={recordingContext} variant="overlay" />}
           onNavigateBack={goBack}
         />
       </div>

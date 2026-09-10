@@ -55,6 +55,7 @@ import {
   showPlayerFullscreenHud,
 } from "../src/features/room/PlayerFullscreenHud";
 import { tooltipTriggerLabel } from "../src/components/videojs/ui/button-tooltip";
+import { PLAYER_HUD_BUTTON_CLASS } from "../src/shared/components/player/PlayerControls";
 import {
   clampAndroidPlayerControl,
   getAndroidPlayerControls,
@@ -529,6 +530,32 @@ describe("custom player controls layout", () => {
     );
     expect(html).toContain("r-live-media-extension-button");
     expect(html).toContain("退出全屏");
+  });
+
+  test("every fullscreen HUD button lands on the one shared overlay recipe", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlayerFullscreenHud, {
+        fullscreen: true,
+        hasRoomIdentity: true,
+        hasActions: true,
+        roomTitle: "测试房间",
+        onBack: () => {},
+        roomActions: [
+          { id: "share", label: "分享", icon: () => null, onSelect: () => {} },
+        ],
+      }),
+    );
+    // 返回箭头与溢出菜单都必须是 36px 的 MediaButton，一个都不能退回 shadcn 图标按钮。
+    expect(html.split("r-live-media-extension-button").length - 1).toBe(2);
+    // 白色前景跟着同一份配方走，否则按钮在深色遮罩上会变成深色。
+    expect(html.split("text-media-controls-foreground").length - 1).toBe(2);
+  });
+
+  test("the shared HUD recipe carries both the media button geometry and the overlay foreground", () => {
+    // 录制按钮的 overlay 变体与 IPTV HUD 的返回/关注按钮都直接用这个常量，
+    // 它就是「开始录制」不再比邻居小一圈、颜色也不再不一致的唯一保障。
+    expect(PLAYER_HUD_BUTTON_CLASS).toContain("r-live-media-extension-button");
+    expect(PLAYER_HUD_BUTTON_CLASS).toContain("text-media-controls-foreground");
   });
 });
 

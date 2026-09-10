@@ -3,7 +3,7 @@ import { Car, Cast, ChevronLeft, Timer, type LucideIcon } from "lucide-react";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { glassSeparatorClass } from "@/shared/components/player/glassSurface";
-import { PLAYER_OVERLAY_CONTROL_BUTTON_CLASS } from "@/shared/components/player/PlayerControls";
+import { PLAYER_HUD_BUTTON_CLASS, PLAYER_HUD_ICON_CLASS } from "@/shared/components/player/PlayerControls";
 import {
   PlayerHudOverflowMenu,
   PlayerToolPanel,
@@ -261,13 +261,10 @@ export function PlayerFullscreenHud({
         <MediaButton
           type="button"
           aria-label={backLabel ?? "退出全屏"}
-          className={cn(
-            "r-live-media-extension-button shrink-0",
-            PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-          )}
+          className={PLAYER_HUD_BUTTON_CLASS}
           onClick={onBack}
         >
-          <ChevronLeft className="size-6" data-icon="inline-start" aria-hidden />
+          <ChevronLeft className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
         </MediaButton>
       )}
 

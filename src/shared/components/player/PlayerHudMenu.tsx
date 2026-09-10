@@ -10,7 +10,7 @@ import {
   glassPanelClass,
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
-import { PLAYER_OVERLAY_CONTROL_BUTTON_CLASS } from "@/shared/components/player/PlayerControls";
+import { PLAYER_HUD_BUTTON_CLASS, PLAYER_HUD_ICON_CLASS } from "@/shared/components/player/PlayerControls";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { cn } from "@/lib/utils";
@@ -45,17 +45,14 @@ export function PlayerHudOverflowMenu({
   const triggerProps = {
     type: "button",
     "aria-label": label,
-    className: cn(
-      "r-live-media-extension-button shrink-0",
-      PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-    ),
+    className: PLAYER_HUD_BUTTON_CLASS,
   } as const;
 
   if (compact) {
     return (
       <>
         <MediaButton {...triggerProps} aria-expanded={open} onClick={() => onOpenChange(!open)}>
-          <Ellipsis className="size-6" data-icon="inline-start" aria-hidden />
+          <Ellipsis className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
         </MediaButton>
         <Drawer open={open} onOpenChange={onOpenChange}>
           <DrawerContent
@@ -77,7 +74,7 @@ export function PlayerHudOverflowMenu({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger render={<MediaButton {...triggerProps} />}>
-        <Ellipsis className="size-6" data-icon="inline-start" aria-hidden />
+        <Ellipsis className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
       </PopoverTrigger>
       <PopoverContent
         container={portalContainer}
