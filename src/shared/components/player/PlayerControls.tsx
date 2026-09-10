@@ -13,6 +13,7 @@ import {
   Minimize2,
   PanelRightClose,
   PanelRightOpen,
+  PictureInPicture2,
   RefreshCw,
   Settings,
   Shrink,
@@ -21,6 +22,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
+import { Time } from "@videojs/react";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -39,9 +41,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
-import { DefaultLiveVideoControls } from "@/components/videojs/skins/live-video/controls";
-import { DefaultVideoControls } from "@/components/videojs/skins/video/controls";
-import type { ControlsChromeProps } from "@/components/videojs/skins/shared/controls-surface";
+import { FullscreenButton } from "@/components/videojs/ui/fullscreen-button";
+import { PlayButton } from "@/components/videojs/ui/play-button";
+import { TimeSlider } from "@/components/videojs/ui/time-slider";
+import { VolumePopover } from "@/components/videojs/ui/volume-popover";
+import {
+  ControlsSurface,
+  type ControlsChromeProps,
+} from "@/components/videojs/skins/shared/controls-surface";
 import { useSkinVariant } from "@/components/videojs/skins/variant";
 import { cn } from "@/lib/utils";
 import { lineName } from "@/lib/playUrl";
@@ -169,6 +176,7 @@ export type PlayerControlsProps = {
   fullscreen?: boolean;
   nativeFullscreen?: boolean;
   pictureInPictureDisabled?: boolean;
+  onTogglePictureInPicture?: () => void;
   disabled?: boolean;
   stackedBelowPlayer?: boolean;
   systemGestureBarReserved?: boolean;
@@ -202,7 +210,7 @@ export type PlayerControlsProps = {
 };
 
 export const PLAYER_CONTROL_BUTTON_CLASS = "shrink-0";
-export const PLAYER_CONTROL_ICON_CLASS = "[&_svg]:size-media-icon";
+export const PLAYER_CONTROL_ICON_CLASS = "[&_svg]:size-6";
 export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
   "text-media-controls-foreground hover:bg-media-accent hover:text-media-accent-foreground";
 
@@ -358,6 +366,7 @@ export function PlayerControls({
   fullscreen = false,
   nativeFullscreen = false,
   pictureInPictureDisabled,
+  onTogglePictureInPicture,
   stackedBelowPlayer = false,
   systemGestureBarReserved = false,
   disabled = false,
@@ -498,270 +507,347 @@ export function PlayerControls({
   // 保证业务按钮行永远不会被 `overflow-hidden` 拦腰截断。
   const secondaryClass = "media-max-sm:hidden";
 
-  const content = (
-    <div
-      data-slot="player-extension-controls"
-      data-compact={compact || undefined}
-      className="flex min-w-0 flex-1 items-center justify-center gap-px overflow-hidden"
-    >
-      {externalAudioControls && showVolume && (
-        <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
-          <PopoverTrigger
-            openOnHover
-            render={
-              <MediaButton
-                aria-label={externalVolume.label}
-                aria-pressed={externalVolume.isMuted}
-                onClick={externalAudioControls.onToggleMute}
-                className={cn("r-live-media-extension-button", secondaryClass)}
-              >
-                {externalVolume.isMuted ? <VolumeX /> : <Volume2 />}
-              </MediaButton>
-            }
-          />
-          <PopoverContent
-            container={portalContainer}
-            side="top"
-            align="start"
-            collisionPadding={12}
-            sticky
-            glass
-            className={cn("w-auto items-center gap-2 p-2.5", glassPanelClass({ overlay: true }))}
-          >
-            <PopoverTitle className="sr-only">音量</PopoverTitle>
-            <Slider
-              value={externalAudioControls.volume}
-              min={0}
-              max={100}
-              step={1}
-              orientation="vertical"
-              className={cn("h-32", compact && "h-20 [&_[data-slot=slider-control]]:min-h-20")}
-              aria-label="音量"
-              aria-valuetext={`${Math.round(externalAudioControls.volume)}%`}
-              onValueChange={(next) =>
-                externalAudioControls.onVolumeChange(
-                  Number(Array.isArray(next) ? next[0] : next),
-                )
-              }
-            />
-            <Separator className={cn("w-8", glassSeparatorClass())} />
-            <MediaButton
-              type="button"
-              aria-label={externalVolume.isMuted ? "取消静音" : "静音"}
-              aria-pressed={externalVolume.isMuted}
-              onClick={externalAudioControls.onToggleMute}
-              className={cn(
-                "r-live-media-extension-button",
-                externalVolume.isMuted && glassOptionSelectedClass(),
-              )}
-            >
-              <VolumeX />
-            </MediaButton>
-          </PopoverContent>
-        </Popover>
-      )}
-      {onRefresh && (
-        <ExtensionButton
-          className={secondaryClass}
-          label="刷新播放"
-          disabled={refreshDisabled}
-          onClick={onRefresh}
-        >
-          <RefreshCw />
-        </ExtensionButton>
-      )}
-      {onNext && showSecondary && (
-        <ExtensionButton
-          className={secondaryClass}
-          label="播放下一个"
-          disabled={disabled}
-          onClick={onNext}
-        >
-          <SkipForward />
-        </ExtensionButton>
-      )}
-      {showSecondary && onToggleAudioOnly && (
-        <ExtensionButton
-          className={secondaryClass}
-          label={audio.label}
-          active={audio.enabled}
-          onClick={onToggleAudioOnly}
-        >
-          {audio.enabled ? <Headphones /> : <VideoOff />}
-        </ExtensionButton>
-      )}
-      {settingsVisible &&
-        (compact ? (
-          <>
-            <ExtensionButton
-              label={playbackSettingsLabel ?? playbackSettingsTitle}
-              active={settingsOpen}
-              disabled={settingsDisabled}
-              onClick={() => setSettingsOpen((open) => !open)}
-            >
-              <Settings />
-            </ExtensionButton>
-            <Drawer open={settingsOpen} onOpenChange={setSettingsOpen}>
-              <DrawerContent
-                side={portrait ? "bottom" : "right"}
-                container={portalContainer}
-                glass
-                className={glassPanelClass({ overlay: true })}
-              >
-                <DrawerTitle className={glassTitleClass({ overlay: true })}>
-                  {playbackSettingsTitle}
-                </DrawerTitle>
-                {settingsBody}
-              </DrawerContent>
-            </Drawer>
-          </>
-        ) : (
-          <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <PopoverTrigger
-              openOnHover
-              render={
-                <MediaButton
-                  aria-label={playbackSettingsLabel ?? playbackSettingsTitle}
-                  aria-disabled={settingsDisabled || undefined}
-                  disabled={settingsDisabled}
-                  className="r-live-media-extension-button"
-                >
-                  <Settings />
-                </MediaButton>
-              }
-            />
-            <PopoverContent
-              container={portalContainer}
-              side="top"
-              align="end"
-              collisionPadding={12}
-              sticky
-              glass
-              className={cn(
-                "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto p-1.5",
-                glassPanelClass({ overlay: true }),
-              )}
-            >
-              <PopoverTitle className={glassTitleClass({ overlay: true })}>
-                {playbackSettingsTitle}
-              </PopoverTitle>
-              {settingsBody}
-            </PopoverContent>
-          </Popover>
-        ))}
-      {showSecondary && onToggleOsd && (
-        <ExtensionButton
-          className={secondaryClass}
-          label={danmaku.label}
-          active={danmaku.enabled}
-          onClick={onToggleOsd}
-        >
-          {danmaku.enabled ? <MessageSquareText /> : <MessageSquareOff />}
-        </ExtensionButton>
-      )}
-      {showSecondary && asrVisible && onToggleAsr && (
-        <Popover open={asrOpen} onOpenChange={setAsrOpen}>
-          <PopoverTrigger
-            openOnHover
-            render={
-              <MediaButton
-                aria-label={asrLabel}
-                aria-pressed={asr.enabled}
-                aria-disabled={asrDisabled || undefined}
-                disabled={asrDisabled}
-                onClick={onToggleAsr}
-                className={cn("r-live-media-extension-button", secondaryClass)}
-              >
-                {asr.icon === "spinner" ? (
-                  <Spinner />
-                ) : asr.icon === "captions" ? (
-                  <Captions />
-                ) : (
-                  <CaptionsOff />
-                )}
-              </MediaButton>
-            }
-          />
-          <PopoverContent
-            container={portalContainer}
-            side="top"
-            align="end"
-            collisionPadding={12}
-            sticky
-            glass
-            className={cn("w-72", glassPanelClass({ overlay: true }))}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <PopoverTitle className={glassTitleClass({ overlay: true })}>字幕设置</PopoverTitle>
-              {(asrSettingsPending || asrTranslationBusy) && (
-                <Spinner aria-label="正在更新字幕设置" />
-              )}
-            </div>
-            {asrBody}
-          </PopoverContent>
-        </Popover>
-      )}
-      {showSidePanel && onToggleSidePanel && (
-        <ExtensionButton
-          className={secondaryClass}
-          label={sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏")}
-          active={sidePanelOpen}
-          onClick={onToggleSidePanel}
-        >
-          {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-        </ExtensionButton>
-      )}
-      {showWebFullscreen && onToggleWebFullscreen && (
-        <ExtensionButton
-          className={secondaryClass}
-          label={webFullscreen ? "退出网页全屏" : "网页全屏"}
-          active={webFullscreen}
-          onClick={onToggleWebFullscreen}
-        >
-          {webFullscreen ? <Shrink /> : <Expand />}
-        </ExtensionButton>
-      )}
-      {showSecondary && toolsSlot}
-      {onToggleInfo && showSecondary && (
-        <ExtensionButton
-          className={secondaryClass}
-          label={infoVisible ? "隐藏用户和视频信息" : "显示用户和视频信息"}
-          active={!infoVisible}
-          onClick={onToggleInfo}
-        >
-          {infoVisible ? <EyeOff /> : <Eye />}
-        </ExtensionButton>
-      )}
-      {!nativeFullscreen && onToggleFullscreen && (
-        <ExtensionButton
-          label={fullscreen ? "退出全屏" : "全屏"}
-          active={fullscreen}
-          onClick={onToggleFullscreen}
-        >
-          {fullscreen ? <Minimize2 /> : <Maximize2 />}
-        </ExtensionButton>
-      )}
-      {loadError && (
-        <span className="max-w-24 truncate px-1 text-xs text-red-200">{loadError}</span>
-      )}
-      {centerSlot && <div className="min-w-0 max-w-72 flex-1 overflow-hidden">{centerSlot}</div>}
-    </div>
-  );
-
-  const SkinControls = variant === "vod" ? DefaultVideoControls : DefaultLiveVideoControls;
   return (
-    <SkinControls
+    <ControlsSurface
       chrome={chrome}
       avoidSystemGestureBar={
         !systemGestureBarReserved &&
         playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)
       }
-      pictureInPictureDisabled={pictureInPictureDisabled}
-      showVolumeControl={showVolume && !externalAudioControls}
-      showFullscreenButton={nativeFullscreen}
     >
-      {content}
-    </SkinControls>
+      {/* 点播/录制回放：上方展示进度条 */}
+      {variant === "vod" && (
+        <div className="flex w-full min-w-0 items-center gap-2 px-2 pt-1 pb-0.5">
+          <Time.Value className="shrink-0 text-xs tabular-nums text-white/90" type="current" />
+          <TimeSlider className="flex-1" />
+          <Time.Value
+            className="shrink-0 text-xs tabular-nums text-white/70 hover:text-white"
+            type="remaining"
+            toggle
+          />
+        </div>
+      )}
+
+      {/* 控制条主行：左侧为暂停|刷新|音量|仅音频，中间为弹幕发送栏，右侧为设置|弹幕|字幕|画中画|窗口全屏|全屏 */}
+      <div
+        data-slot="player-extension-controls"
+        data-compact={compact || undefined}
+        className="flex w-full min-w-0 items-center justify-between gap-2 px-2 py-1"
+      >
+        {/* 左侧控制栏：暂停 | 刷新 | 音量 | 仅音频 */}
+        <div className="flex shrink-0 items-center gap-1">
+          {/* 1. 暂停 / 播放 */}
+          <ButtonTooltip side="top">
+            <PlayButton disabled={disabled} />
+          </ButtonTooltip>
+
+          {/* 2. 刷新 */}
+          {onRefresh && (
+            <ExtensionButton
+              label="刷新播放"
+              disabled={refreshDisabled}
+              onClick={onRefresh}
+            >
+              <RefreshCw className={refreshDisabled ? "animate-spin-soft" : undefined} />
+            </ExtensionButton>
+          )}
+          {onNext && showSecondary && (
+            <ExtensionButton
+              label="播放下一个"
+              disabled={disabled}
+              onClick={onNext}
+            >
+              <SkipForward />
+            </ExtensionButton>
+          )}
+
+          {/* 3. 音量 */}
+          {showVolume &&
+            (externalAudioControls ? (
+              <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
+                <PopoverTrigger
+                  openOnHover
+                  render={
+                    <MediaButton
+                      aria-label={externalVolume.label}
+                      aria-pressed={externalVolume.isMuted}
+                      onClick={externalAudioControls.onToggleMute}
+                      className="r-live-media-extension-button"
+                    >
+                      {externalVolume.isMuted ? <VolumeX /> : <Volume2 />}
+                    </MediaButton>
+                  }
+                />
+                <PopoverContent
+                  container={portalContainer}
+                  side="top"
+                  align="start"
+                  collisionPadding={12}
+                  sticky
+                  glass
+                  className={cn("w-auto items-center gap-2 p-2.5", glassPanelClass({ overlay: true }))}
+                >
+                  <PopoverTitle className="sr-only">音量</PopoverTitle>
+                  <Slider
+                    value={externalAudioControls.volume}
+                    min={0}
+                    max={100}
+                    step={1}
+                    orientation="vertical"
+                    className={cn("h-32", compact && "h-20 [&_[data-slot=slider-control]]:min-h-20")}
+                    aria-label="音量"
+                    aria-valuetext={`${Math.round(externalAudioControls.volume)}%`}
+                    onValueChange={(next) =>
+                      externalAudioControls.onVolumeChange(
+                        Number(Array.isArray(next) ? next[0] : next),
+                      )
+                    }
+                  />
+                  <Separator className={cn("w-8", glassSeparatorClass())} />
+                  <MediaButton
+                    type="button"
+                    aria-label={externalVolume.isMuted ? "取消静音" : "静音"}
+                    aria-pressed={externalVolume.isMuted}
+                    onClick={externalAudioControls.onToggleMute}
+                    className={cn(
+                      "r-live-media-extension-button",
+                      externalVolume.isMuted && glassOptionSelectedClass(),
+                    )}
+                  >
+                    <VolumeX />
+                  </MediaButton>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              <VolumePopover />
+            ))}
+
+          {/* 4. 仅音频 */}
+          {showSecondary && onToggleAudioOnly && (
+            <ExtensionButton
+              label={audio.label}
+              active={audio.enabled}
+              onClick={onToggleAudioOnly}
+            >
+              {audio.enabled ? <Headphones /> : <VideoOff />}
+            </ExtensionButton>
+          )}
+        </div>
+
+        {/* 中间：弹幕发送栏 */}
+        <div
+          data-slot="player-center-slot"
+          className="flex min-w-0 flex-1 items-center justify-center px-2"
+        >
+          {centerSlot ? (
+            <div className="w-full max-w-xl min-w-0">
+              {centerSlot}
+            </div>
+          ) : (
+            <div className="min-w-0 flex-1" />
+          )}
+          {loadError && (
+            <span className="shrink-0 max-w-36 truncate px-1 text-xs text-red-300" title={loadError}>
+              {loadError}
+            </span>
+          )}
+        </div>
+
+        {/* 右侧控制栏：设置 | 弹幕 | 字幕 | 画中画 | 窗口全屏 | 全屏 */}
+        <div className="flex shrink-0 items-center gap-1">
+          {/* 1. 设置 */}
+          {settingsVisible &&
+            (compact ? (
+              <>
+                <ExtensionButton
+                  label={playbackSettingsLabel ?? playbackSettingsTitle}
+                  active={settingsOpen}
+                  disabled={settingsDisabled}
+                  onClick={() => setSettingsOpen((open) => !open)}
+                >
+                  <Settings />
+                </ExtensionButton>
+                <Drawer open={settingsOpen} onOpenChange={setSettingsOpen}>
+                  <DrawerContent
+                    side={portrait ? "bottom" : "right"}
+                    container={portalContainer}
+                    glass
+                    className={glassPanelClass({ overlay: true })}
+                  >
+                    <DrawerTitle className={glassTitleClass({ overlay: true })}>
+                      {playbackSettingsTitle}
+                    </DrawerTitle>
+                    {settingsBody}
+                  </DrawerContent>
+                </Drawer>
+              </>
+            ) : (
+              <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
+                <PopoverTrigger
+                  openOnHover
+                  render={
+                    <MediaButton
+                      aria-label={playbackSettingsLabel ?? playbackSettingsTitle}
+                      aria-disabled={settingsDisabled || undefined}
+                      disabled={settingsDisabled}
+                      className="r-live-media-extension-button"
+                    >
+                      <Settings />
+                    </MediaButton>
+                  }
+                />
+                <PopoverContent
+                  container={portalContainer}
+                  side="top"
+                  align="end"
+                  collisionPadding={12}
+                  sticky
+                  glass
+                  className={cn(
+                    "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto p-1.5",
+                    glassPanelClass({ overlay: true }),
+                  )}
+                >
+                  <PopoverTitle className={glassTitleClass({ overlay: true })}>
+                    {playbackSettingsTitle}
+                  </PopoverTitle>
+                  {settingsBody}
+                </PopoverContent>
+              </Popover>
+            ))}
+
+          {/* 2. 弹幕 */}
+          {showSecondary && onToggleOsd && (
+            <ExtensionButton
+              label={danmaku.label}
+              active={danmaku.enabled}
+              onClick={onToggleOsd}
+            >
+              {danmaku.enabled ? <MessageSquareText /> : <MessageSquareOff />}
+            </ExtensionButton>
+          )}
+
+          {/* 3. 字幕 */}
+          {showSecondary && asrVisible && onToggleAsr && (
+            <Popover open={asrOpen} onOpenChange={setAsrOpen}>
+              <PopoverTrigger
+                openOnHover
+                render={
+                  <MediaButton
+                    aria-label={asrLabel}
+                    aria-pressed={asr.enabled}
+                    aria-disabled={asrDisabled || undefined}
+                    disabled={asrDisabled}
+                    onClick={onToggleAsr}
+                    className={cn(
+                      "r-live-media-extension-button",
+                      asr.enabled && "bg-media-primary text-media-primary-foreground",
+                    )}
+                  >
+                    {asr.icon === "spinner" ? (
+                      <Spinner />
+                    ) : asr.icon === "captions" ? (
+                      <Captions />
+                    ) : (
+                      <CaptionsOff />
+                    )}
+                  </MediaButton>
+                }
+              />
+              <PopoverContent
+                container={portalContainer}
+                side="top"
+                align="end"
+                collisionPadding={12}
+                sticky
+                glass
+                className={cn("w-72", glassPanelClass({ overlay: true }))}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <PopoverTitle className={glassTitleClass({ overlay: true })}>字幕设置</PopoverTitle>
+                  {(asrSettingsPending || asrTranslationBusy) && (
+                    <Spinner aria-label="正在更新字幕设置" />
+                  )}
+                </div>
+                {asrBody}
+              </PopoverContent>
+            </Popover>
+          )}
+
+          {/* 4. 画中画 */}
+          <ExtensionButton
+            className="media-max-xs:hidden"
+            label="画中画"
+            disabled={pictureInPictureDisabled}
+            onClick={() => {
+              if (onTogglePictureInPicture) {
+                onTogglePictureInPicture();
+              } else if (typeof document !== "undefined") {
+                const video = document.querySelector("video");
+                if (video) {
+                  if (document.pictureInPictureElement) {
+                    void document.exitPictureInPicture().catch(() => {});
+                  } else if (document.pictureInPictureEnabled) {
+                    void video.requestPictureInPicture().catch(() => {});
+                  }
+                }
+              }
+            }}
+          >
+            <PictureInPicture2 />
+          </ExtensionButton>
+
+          {/* 5. 窗口全屏 */}
+          {showWebFullscreen && onToggleWebFullscreen && (
+            <ExtensionButton
+              label={webFullscreen ? "退出网页全屏" : "网页全屏"}
+              active={webFullscreen}
+              onClick={onToggleWebFullscreen}
+            >
+              {webFullscreen ? <Shrink /> : <Expand />}
+            </ExtensionButton>
+          )}
+
+          {/* 6. 全屏 */}
+          {nativeFullscreen ? (
+            <ButtonTooltip side="top">
+              <FullscreenButton />
+            </ButtonTooltip>
+          ) : onToggleFullscreen ? (
+            <ExtensionButton
+              label={fullscreen ? "退出全屏" : "全屏"}
+              active={fullscreen}
+              onClick={onToggleFullscreen}
+            >
+              {fullscreen ? <Minimize2 /> : <Maximize2 />}
+            </ExtensionButton>
+          ) : null}
+
+          {/* 辅助扩展按钮 */}
+          {showSidePanel && onToggleSidePanel && (
+            <ExtensionButton
+              className={secondaryClass}
+              label={sidePanelLabel ?? (sidePanelOpen ? "收起右侧栏" : "展开右侧栏")}
+              active={sidePanelOpen}
+              onClick={onToggleSidePanel}
+            >
+              {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            </ExtensionButton>
+          )}
+          {onToggleInfo && showSecondary && (
+            <ExtensionButton
+              className={secondaryClass}
+              label={infoVisible ? "隐藏用户和视频信息" : "显示用户和视频信息"}
+              active={!infoVisible}
+              onClick={onToggleInfo}
+            >
+              {infoVisible ? <EyeOff /> : <Eye />}
+            </ExtensionButton>
+          )}
+          {toolsSlot}
+        </div>
+      </div>
+    </ControlsSurface>
   );
 }
 

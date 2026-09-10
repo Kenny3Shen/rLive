@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 import { Ellipsis, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -9,11 +10,7 @@ import {
   glassPanelClass,
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
-import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-} from "@/shared/components/player/PlayerControls";
+import { PLAYER_OVERLAY_CONTROL_BUTTON_CLASS } from "@/shared/components/player/PlayerControls";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { cn } from "@/lib/utils";
@@ -46,12 +43,10 @@ export function PlayerHudOverflowMenu({
 }) {
   const portrait = usePortraitOrientation();
   const triggerProps = {
-    variant: "ghost",
-    size: "icon-sm",
+    type: "button",
     "aria-label": label,
     className: cn(
-      PLAYER_CONTROL_BUTTON_CLASS,
-      PLAYER_CONTROL_ICON_CLASS,
+      "r-live-media-extension-button shrink-0",
       PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
     ),
   } as const;
@@ -59,9 +54,9 @@ export function PlayerHudOverflowMenu({
   if (compact) {
     return (
       <>
-        <Button {...triggerProps} aria-expanded={open} onClick={() => onOpenChange(!open)}>
-          <Ellipsis data-icon="inline-start" aria-hidden />
-        </Button>
+        <MediaButton {...triggerProps} aria-expanded={open} onClick={() => onOpenChange(!open)}>
+          <Ellipsis className="size-6" data-icon="inline-start" aria-hidden />
+        </MediaButton>
         <Drawer open={open} onOpenChange={onOpenChange}>
           <DrawerContent
             side={portrait ? "bottom" : "right"}
@@ -81,8 +76,8 @@ export function PlayerHudOverflowMenu({
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger render={<Button {...triggerProps} />}>
-        <Ellipsis data-icon="inline-start" aria-hidden />
+      <PopoverTrigger render={<MediaButton {...triggerProps} />}>
+        <Ellipsis className="size-6" data-icon="inline-start" aria-hidden />
       </PopoverTrigger>
       <PopoverContent
         container={portalContainer}

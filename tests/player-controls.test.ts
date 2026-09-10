@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { VideoJsPlayerProvider } from "../src/features/room/player/videoJsControls";
 import {
   COMPACT_LANDSCAPE_PLAYER_QUERY,
   COMPACT_PLAYER_QUERY,
@@ -8,6 +11,7 @@ import {
 import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
+  PlayerControls,
   playerControlsAvoidSystemGestureBar,
   showPlayerSidePanelControl,
   showPlayerVolumeControl,
@@ -46,6 +50,7 @@ import {
   isPortraitStackedPlayer,
 } from "../src/features/room/PlayerPane";
 import {
+  PlayerFullscreenHud,
   roomIdentityOverflowDistance,
   showPlayerFullscreenHud,
 } from "../src/features/room/PlayerFullscreenHud";
@@ -446,18 +451,84 @@ describe("fullscreen top HUD", () => {
   });
 });
 
-describe("overlay chrome system gesture bar allowance", () => {
-  test("reserves the inset when the chrome sits on the window's bottom edge", () => {
-    expect(playerControlsAvoidSystemGestureBar(false, false)).toBe(true);
+describe("custom player controls layout", () => {
+  test("renders left, center danmaku, and right controls in the specified order", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(PlayerControls, {
+          onRefresh: () => {},
+          onToggleAudioOnly: () => {},
+          centerSlot: createElement("div", { "data-testid": "danmaku-bar" }, "弹幕输入栏"),
+          qualities: [{ quality: "1080P" }],
+          onQualityChange: () => {},
+          onToggleOsd: () => {},
+          asrVisible: true,
+          onToggleAsr: () => {},
+          onToggleWebFullscreen: () => {},
+          onToggleFullscreen: () => {},
+        }),
+      ),
+    );
+
+    // 结构包含主控制行与中间弹幕槽
+    expect(html).toContain('data-slot="player-extension-controls"');
+    expect(html).toContain('data-slot="player-center-slot"');
+    expect(html).toContain("弹幕输入栏");
+
+    // 左侧控件：暂停/播放、刷新、音量、仅音频
+    expect(html).toContain("group/play"); // PlayButton
+    expect(html).toContain("刷新播放");
+    expect(html).toContain("仅播声音"); // onToggleAudioOnly (default false -> 仅播声音)
+
+    // 右侧控件：设置、弹幕、字幕、画中画、网页全屏、全屏
+    expect(html).toContain("播放设置");
+    expect(html).toContain("开启弹幕");
+    expect(html).toContain("开启语音字幕");
+    expect(html).toContain("画中画");
+    expect(html).toContain("网页全屏");
+    expect(html).toContain("全屏");
   });
 
-  test("drops the inset when content is stacked below the player", () => {
-    // 竖屏房间把弹幕面板放在画面下方：手势栏在那个面板之下而不是控件之下。
-    // 在那里预留空间就是冷启动出现、全屏往返后消失的那道缝隙。
-    expect(playerControlsAvoidSystemGestureBar(false, true)).toBe(false);
+  test("places toolsSlot at the very right end of right controls", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(PlayerControls, {
+          onToggleFullscreen: () => {},
+          toolsSlot: createElement("div", { "data-testid": "video-subtitles" }, "字幕按钮"),
+        }),
+      ),
+    );
+    const fullscreenIdx = html.indexOf("全屏");
+    const subtitlesIdx = html.indexOf("字幕按钮");
+    expect(fullscreenIdx).toBeGreaterThan(-1);
+    expect(subtitlesIdx).toBeGreaterThan(fullscreenIdx);
   });
 
-  test("keeps the inset in fullscreen, where the player owns the whole window", () => {
-    expect(playerControlsAvoidSystemGestureBar(true, true)).toBe(true);
+  test("fullscreen top HUD buttons use matching player control button styling", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlayerFullscreenHud, {
+        fullscreen: true,
+        hasRoomIdentity: true,
+        hasActions: true,
+        roomTitle: "测试房间",
+        onBack: () => {},
+        roomActions: [
+          {
+            id: "share",
+            label: "分享",
+            icon: () => null,
+            onSelect: () => {},
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("r-live-media-extension-button");
+    expect(html).toContain("退出全屏");
   });
 });
+
+

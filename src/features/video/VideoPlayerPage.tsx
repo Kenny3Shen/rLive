@@ -34,6 +34,8 @@ import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
 import { Spinner } from "@/components/ui/spinner";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
+import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import {
   PLAYER_CONTROL_BUTTON_CLASS,
@@ -2174,28 +2176,26 @@ function VideoPlayerPageContent() {
     );
   }
 
-  /** 控制栏工具（字幕）：与内部按钮同一套样式常量；没字幕轨的稿件不渲染
-   *  字幕按钮。窗口全屏/画面全屏用 PlayerControls 内置的两个按钮（网页全屏
-   *  toggle 应用内全屏，全屏走元素级 top layer）。 */
+  /** 控制栏工具（字幕）：与直播控制栏字幕按钮保持完全一致的几何尺寸与视觉风格；
+   *  总在控制栏最右侧展示。 */
   const toolsSlot = subtitles.length > 0 && (
     <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
-            aria-pressed={Boolean(subtitleLan)}
-            className={cn(
-              PLAYER_CONTROL_BUTTON_CLASS,
-              PLAYER_CONTROL_ICON_CLASS,
-              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-            )}
-          />
-        }
-      >
-        {subtitleLan ? <Captions aria-hidden /> : <CaptionsOff aria-hidden />}
-      </PopoverTrigger>
+      <ButtonTooltip side="top">
+        <PopoverTrigger
+          render={
+            <MediaButton
+              aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
+              aria-pressed={Boolean(subtitleLan)}
+              className={cn(
+                "r-live-media-extension-button",
+                Boolean(subtitleLan) && "bg-media-primary text-media-primary-foreground",
+              )}
+            >
+              {subtitleLan ? <Captions className="size-6" aria-hidden /> : <CaptionsOff className="size-6" aria-hidden />}
+            </MediaButton>
+          }
+        />
+      </ButtonTooltip>
       <PopoverContent
         container={stageRef}
         side="top"
