@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { VideoJsPlayerProvider } from "../src/features/room/player/videoJsControls";
@@ -34,10 +35,9 @@ import {
   showPlayerFullscreenLock,
 } from "../src/shared/components/player/PlayerFullscreenLock";
 import {
-  isPlayerStageDoubleTap,
-  isPlayerStageTap,
+  isPlayerStageTapMovement,
   playerVolumeForKeyStep,
-  PLAYER_STAGE_DOUBLE_TAP_MS,
+  PLAYER_STAGE_TAP_MAX_DISTANCE_PX,
   PLAYER_VOLUME_KEY_STEP,
   showRoomSidePanel,
   nextFullscreenLayerToExit,
@@ -166,11 +166,9 @@ describe("mobile player layout", () => {
     expect(playerVolumeForKeyStep(80, true, -1)).toBe(0);
   });
 
-  test("the fullscreen lock is mobile-fullscreen only", () => {
-    expect(showPlayerFullscreenLock(true, true)).toBe(true);
-    // 桌面没有误触问题；窗口化时随时可以直接离开。
-    expect(showPlayerFullscreenLock(false, true)).toBe(false);
-    expect(showPlayerFullscreenLock(true, false)).toBe(false);
+  test("the fullscreen lock is available on desktop and mobile fullscreen", () => {
+    expect(showPlayerFullscreenLock(true)).toBe(true);
+    expect(showPlayerFullscreenLock(false)).toBe(false);
   });
 
   test("locking suspends stage gestures", () => {
@@ -329,13 +327,12 @@ describe("mobile player edge gestures", () => {
     expect(clampAndroidPlayerControl(101)).toBe(100);
   });
 
-  test("classifies short stationary touches as stage taps and double taps", () => {
-    expect(isPlayerStageTap(0, 0, 120)).toBe(true);
-    expect(isPlayerStageTap(40, 0, 120)).toBe(false);
-    expect(isPlayerStageTap(0, 0, 500)).toBe(false);
-    expect(isPlayerStageDoubleTap(1_000, 1_000 + PLAYER_STAGE_DOUBLE_TAP_MS)).toBe(true);
-    expect(isPlayerStageDoubleTap(1_000, 1_000 + PLAYER_STAGE_DOUBLE_TAP_MS + 1)).toBe(false);
-    expect(isPlayerStageDoubleTap(0, 1_000)).toBe(false);
+  // 时长与双击窗口的判定已交给 Video.js 官方识别器，业务只留识别器不做的位移阈值。
+  test("classifies stationary touches as stage taps by movement alone", () => {
+    expect(isPlayerStageTapMovement(0, 0)).toBe(true);
+    expect(isPlayerStageTapMovement(40, 0)).toBe(false);
+    expect(isPlayerStageTapMovement(0, PLAYER_STAGE_TAP_MAX_DISTANCE_PX)).toBe(true);
+    expect(isPlayerStageTapMovement(0, PLAYER_STAGE_TAP_MAX_DISTANCE_PX + 1)).toBe(false);
   });
 });
 
@@ -485,30 +482,76 @@ describe("custom player controls layout", () => {
     expect(html).toContain("刷新播放");
     expect(html).toContain("仅播声音"); // onToggleAudioOnly (default false -> 仅播声音)
 
-    // 右侧控件：设置、弹幕、字幕、画中画、网页全屏、全屏
+    // 右侧控件：设置、弹幕、字幕、网页全屏、全屏
     expect(html).toContain("播放设置");
     expect(html).toContain("开启弹幕");
     expect(html).toContain("开启语音字幕");
-    expect(html).toContain("画中画");
     expect(html).toContain("网页全屏");
     expect(html).toContain("全屏");
   });
 
-  test("places toolsSlot at the very right end of right controls", () => {
+  test("leaves picture-in-picture to the native button, which hides itself when unavailable", () => {
+    // 画中画交给原生 `PiPButton`：它按 `pipAvailability` 自行决定是否挂载。
+    // 没有媒体（SSR）或移动端 WebView 不支持时可用性为 unavailable，整颗按钮不渲染 ——
+    // 这正是移动端不再出现一个点了没反应的画中画按钮的原因。
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(PlayerControls, { onToggleFullscreen: () => {} }),
+      ),
+    );
+    expect(html).not.toContain("画中画");
+    expect(html).not.toContain("group/pip");
+  });
+
+  test("uses the same icon geometry as the neighboring media buttons", () => {
+    // 原生 PiP 图标默认是 `size-media-icon`（约 16px）；本项目同排播放/静音/全屏
+    // 全是 24px。固定到 `size-6`，防止画中画按钮再次视觉偏小。
+    const source = readFileSync(
+      new URL("../src/components/videojs/ui/pip-button.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source.match(/"col-start-1 row-start-1 size-6 drop-shadow-media-icon"/g)?.length).toBe(
+      2,
+    );
+    expect(source).not.toContain('"col-start-1 row-start-1 size-media-icon');
+  });
+
+  test("keeps the captions button pinned to the left of fullscreen", () => {
+    // 直播与点播共用同一个契约：字幕常驻，且永远在全屏按钮左侧。此前点播把字幕塞进
+    // `toolsSlot`，于是它渲染在全屏之后 —— 有字幕的片子按钮会跑到全屏右边。
     const html = renderToStaticMarkup(
       createElement(
         VideoJsPlayerProvider,
         null,
         createElement(PlayerControls, {
           onToggleFullscreen: () => {},
-          toolsSlot: createElement("div", { "data-testid": "video-subtitles" }, "字幕按钮"),
+          captionsSlot: createElement("div", { "data-testid": "video-subtitles" }, "字幕按钮"),
         }),
       ),
     );
     const fullscreenIdx = html.indexOf("全屏");
     const subtitlesIdx = html.indexOf("字幕按钮");
+    expect(subtitlesIdx).toBeGreaterThan(-1);
+    expect(fullscreenIdx).toBeGreaterThan(subtitlesIdx);
+  });
+
+  test("still places toolsSlot at the very right end of right controls", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(PlayerControls, {
+          onToggleFullscreen: () => {},
+          toolsSlot: createElement("div", { "data-testid": "player-tools" }, "附加工具"),
+        }),
+      ),
+    );
+    const fullscreenIdx = html.indexOf("全屏");
+    const toolsIdx = html.indexOf("附加工具");
     expect(fullscreenIdx).toBeGreaterThan(-1);
-    expect(subtitlesIdx).toBeGreaterThan(fullscreenIdx);
+    expect(toolsIdx).toBeGreaterThan(fullscreenIdx);
   });
 
   test("fullscreen top HUD buttons use matching player control button styling", () => {

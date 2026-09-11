@@ -1,4 +1,5 @@
 import { usePlayerChromeVisibility } from "@/shared/hooks/usePlayerChromeVisibility";
+import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import {
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
@@ -96,11 +97,10 @@ type PlayerMobileRoomAction = {
 /** 把视觉页签顺序与触摸导航顺序保持在同一处。 */
 export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
 
-// 对齐常见的移动端舞台交互：短按切换 chrome，
-// 在此窗口内的第二次按击进入/退出全屏。
+// 对齐常见的移动端舞台交互：短按切换 chrome，紧随其后的第二次按击进入/退出全屏。
+// 单双击的时间判定已交给 Video.js 官方识别器（按下到抬手 250ms、双击窗口 200ms），
+// 这里只保留识别器不做的那一项：位移阈值。
 export const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
-export const PLAYER_STAGE_TAP_MAX_DURATION_MS = 320;
-export const PLAYER_STAGE_DOUBLE_TAP_MS = 280;
 
 /** 全屏桌面画面需要更大的目标；移动端保持紧凑胶囊，
  * 使三个操作不会遮住不成比例的视频区域。 */
@@ -115,21 +115,11 @@ type PlayerStageTapState = {
   pointerId: number;
   startX: number;
   startY: number;
-  startedAt: number;
 };
 
-/** 短促且基本不动的触摸是舞台点按，而不是拖拽手势。 */
-export function isPlayerStageTap(deltaX: number, deltaY: number, durationMs: number): boolean {
-  return (
-    durationMs >= 0 &&
-    durationMs <= PLAYER_STAGE_TAP_MAX_DURATION_MS &&
-    Math.hypot(deltaX, deltaY) <= PLAYER_STAGE_TAP_MAX_DISTANCE_PX
-  );
-}
-
-/** 双击窗口内的第二次短触摸切换全屏。 */
-export function isPlayerStageDoubleTap(lastTapAt: number, now: number): boolean {
-  return lastTapAt > 0 && now - lastTapAt <= PLAYER_STAGE_DOUBLE_TAP_MS;
+/** 基本不动的触摸才是舞台点按，而不是拖拽手势的起手。 */
+export function isPlayerStageTapMovement(deltaX: number, deltaY: number): boolean {
+  return Math.hypot(deltaX, deltaY) <= PLAYER_STAGE_TAP_MAX_DISTANCE_PX;
 }
 
 /** 方向键每次调节的音量百分点。 */
@@ -445,8 +435,13 @@ function PlayerPaneContent({
     hud: false,
   });
   const playerStageTapRef = useRef<PlayerStageTapState | null>(null);
-  const playerStageTapTimerRef = useRef<number | null>(null);
-  const lastPlayerStageTapAtRef = useRef(0);
+  /**
+   * 这次触摸是否仍算舞台点按。识别器的单击回调要等满双击窗口才触发，也就是在
+   * pointerup 之后 200ms —— 那时按压状态早已清理，所以判定只能落在一个跨得过
+   * pointerup 的标志上：按下时置位，一旦转成拖动或被音量/亮度调节认领就撤销。
+   * 它同时补上识别器唯一缺的那道关：位移阈值（识别器只看时长与目标）。
+   */
+  const stageTapEligibleRef = useRef(false);
   // 音量记忆跨会话共享：只读一次 localStorage，作为网页层音量/静音的初值。
   const [initialAudio] = useState(readPlayerVolume);
   const player = useWebPlayer({
@@ -632,11 +627,8 @@ function PlayerPaneContent({
 
   const canAutoHideControls =
     showHost && player.running && !player.paused && !overlayInteractionOpen;
-  // 锁定按钮只在移动端全屏存在，因此它的层随全屏挂载与卸载。
-  const fullscreenLockMounted = showPlayerFullscreenLock(
-    mobileClient,
-    player.mode === "fullscreen",
-  );
+  // 锁定按钮在桌面与移动端全屏都存在，因此它的层随全屏挂载与卸载。
+  const fullscreenLockMounted = showPlayerFullscreenLock(player.mode === "fullscreen");
   usePlayerChromeVisibility({
     controlsRef,
     hudRef,
@@ -745,13 +737,6 @@ function PlayerPaneContent({
     if (controlsHideTimerRef.current !== null) {
       window.clearTimeout(controlsHideTimerRef.current);
       controlsHideTimerRef.current = null;
-    }
-  }, []);
-
-  const clearPlayerStageTapTimer = useCallback(() => {
-    if (playerStageTapTimerRef.current !== null) {
-      window.clearTimeout(playerStageTapTimerRef.current);
-      playerStageTapTimerRef.current = null;
     }
   }, []);
 
@@ -868,9 +853,8 @@ function PlayerPaneContent({
 
   const hideControls = useCallback(() => {
     clearControlsHideTimer();
-    clearPlayerStageTapTimer();
     setControlVisibility(false);
-  }, [clearControlsHideTimer, clearPlayerStageTapTimer, setControlVisibility]);
+  }, [clearControlsHideTimer, setControlVisibility]);
 
   /** Simple Live 式单击：隐藏时显示，已可见时隐藏。 */
   const toggleControls = useCallback(() => {
@@ -1087,10 +1071,9 @@ function PlayerPaneContent({
 
   // 识别出的音量/亮度拖拽会取消任何待处理的舞台点按。
   const cancelPendingStageTap = useCallback(() => {
-    clearPlayerStageTapTimer();
-    lastPlayerStageTapAtRef.current = 0;
+    stageTapEligibleRef.current = false;
     playerStageTapRef.current = null;
-  }, [clearPlayerStageTapTimer]);
+  }, []);
 
   // 画面左右半边纵向滑动调亮度/音量。与视频页共用同一套阈值、反馈层与原生桥路由，
   // 因此两页手感不会分叉：Android 经原生桥控制系统媒体音量与 Activity 亮度，
@@ -1121,10 +1104,10 @@ function PlayerPaneContent({
       edgeGestureCancel(event);
       if (playerStageTapRef.current?.pointerId === event.pointerId) {
         playerStageTapRef.current = null;
+        stageTapEligibleRef.current = false;
       }
-      clearPlayerStageTapTimer();
     },
-    [clearPlayerStageTapTimer, edgeGestureCancel],
+    [edgeGestureCancel],
   );
 
   const handleStagePointerActivity = useCallback(
@@ -1157,8 +1140,8 @@ function PlayerPaneContent({
           pointerId: event.pointerId,
           startX: event.clientX,
           startY: event.clientY,
-          startedAt: Date.now(),
         };
+        stageTapEligibleRef.current = true;
         // 锁定期间按下的第一时间就把休眠的锁定按钮唤回来：这时没有别的手势会跟这次
         // 触摸抢，慢按一下也该立刻有反应，而不是等抬手后再判定是否算点按。
         if (!playerStageGesturesEnabled(fullscreenLocked)) revealControls();
@@ -1174,6 +1157,15 @@ function PlayerPaneContent({
 
   const handleStagePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      // 位移一旦越界就当场作废这次点按：识别器的单击回调要等满双击窗口才触发，
+      // 到那时按压状态已经清理，只有这个跨得过 pointerup 的标志还能否决它。
+      const tap = playerStageTapRef.current;
+      if (
+        tap?.pointerId === event.pointerId &&
+        !isPlayerStageTapMovement(event.clientX - tap.startX, event.clientY - tap.startY)
+      ) {
+        stageTapEligibleRef.current = false;
+      }
       if (edgeGestureMove(event)) return;
       handleStagePointerActivity(event);
     },
@@ -1182,7 +1174,9 @@ function PlayerPaneContent({
 
   const handleStagePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      const gestureConsumed = edgeGestureEnd(event);
+      // 已生效的音量/亮度调节把这次触摸整个吃掉：它在 onAdjustStart 时就撤销过点按
+      // 资格，这里只做收尾。
+      if (edgeGestureEnd(event)) stageTapEligibleRef.current = false;
       const tap = playerStageTapRef.current;
       if (!tap || tap.pointerId !== event.pointerId) return;
       playerStageTapRef.current = null;
@@ -1191,69 +1185,47 @@ function PlayerPaneContent({
         !isTouchPointer(event.pointerType) ||
         isPlayerEdgeGestureIgnoredTarget(event.target)
       ) {
+        stageTapEligibleRef.current = false;
         return;
       }
 
-      const durationMs = Date.now() - tap.startedAt;
-      const isTap = isPlayerStageTap(
-        event.clientX - tap.startX,
-        event.clientY - tap.startY,
-        durationMs,
-      );
-
       // 锁定期间点按不得切换 chrome 或全屏，但必须能把休眠的锁定按钮叫回来：
-      // 画面手势已全部失效时它是唯一的解锁入口。弹幕层等子级浮层认领过的点按同样
-      // 放行唤醒，否则落在弹幕上的一次点按会静默丢失。
+      // 画面手势已全部失效时它是唯一的解锁入口（识别器此时整体停用）。弹幕层等子级
+      // 浮层认领过的点按同样放行唤醒，否则落在弹幕上的一次点按会静默丢失。
       // 唤醒刻意不看 `showHost`：加载/报错态下锁定按钮仍然挂载，此时更不能让它睡死。
       if (!playerStageGesturesEnabled(fullscreenLocked)) {
         // 长按与拖动同样算有意交互：从抬手时刻重排倒计时，避免手指还在屏上按钮就先睡回去。
         // 只有点按需要 preventDefault 认领，免得祖先层把它当成自己的手势。
-        if (isTap) event.preventDefault();
+        if (stageTapEligibleRef.current) event.preventDefault();
+        stageTapEligibleRef.current = false;
         revealControls();
-        return;
       }
-
-      if (!showHost) return;
-
-      // 子级画面浮层用 preventDefault 认领已完成的点按。仍让事件到达这里以清理
-      // 待处理的边缘/点按状态，
-      // 但绝不能把那次已认领的按压变成播放或全屏 chrome 操作。
-      if (gestureConsumed || event.defaultPrevented) return;
-      if (!isTap) return;
-
-      event.preventDefault();
-      const now = Date.now();
-      if (isPlayerStageDoubleTap(lastPlayerStageTapAtRef.current, now)) {
-        clearPlayerStageTapTimer();
-        lastPlayerStageTapAtRef.current = 0;
-        // 双击切换全屏，与其他移动视频播放器一致。
-        void togglePlayerFullscreen();
-        return;
-      }
-
-      lastPlayerStageTapAtRef.current = now;
-      clearPlayerStageTapTimer();
-      // 延迟单击动作，使第二次点按能够认领双击全屏，
-      // 而不会先闪一下控制条。
-      playerStageTapTimerRef.current = window.setTimeout(() => {
-        playerStageTapTimerRef.current = null;
-        lastPlayerStageTapAtRef.current = 0;
-        toggleControls();
-      }, PLAYER_STAGE_DOUBLE_TAP_MS);
     },
-    [
-      clearPlayerStageTapTimer,
-      fullscreenLocked,
-      edgeGestureEnd,
-      mobileClient,
-      revealControls,
-      showHost,
-      toggleControls,
-      togglePlayerFullscreen,
-    ],
+    [edgeGestureEnd, fullscreenLocked, mobileClient, revealControls],
   );
 
-  useEffect(() => clearPlayerStageTapTimer, [clearPlayerStageTapTimer]);
+  /**
+   * 单击切换 chrome、双击切换全屏：识别器与判定窗口来自 Video.js 官方钩子，动作仍是
+   * 本页的 `toggleControls`（命令式写 `data-visible`，不经 React 状态）与
+   * `togglePlayerFullscreen`（Android 页内固定层 / 桌面原生窗口，刻意避开
+   * Fullscreen API）。
+   *
+   * 只在移动端触摸上启用：桌面沿用鼠标移动即显示 chrome，点画面不该把它收起来。
+   * 空 `pointerType`（部分 Android WebView 对手指输入如此上报）也必须算触摸，
+   * 因此不用识别器的 `pointer` 限定，改在 `shouldIgnore` 里判。
+   */
+  usePlayerStageTapGestures({
+    target: playerStageRef,
+    enabled: mobileClient && showHost && playerStageGesturesEnabled(fullscreenLocked),
+    onTap: toggleControls,
+    onDoubleTap: () => void togglePlayerFullscreen(),
+    shouldIgnore: (event) =>
+      !isTouchPointer(event.pointerType) ||
+      isPlayerEdgeGestureIgnoredTarget(event.target) ||
+      // 弹幕层在 document 捕获阶段认领点按，早于挂在舞台上的识别器，这里读得到。
+      event.defaultPrevented ||
+      !stageTapEligibleRef.current,
+  });
 
   const focusFirstControl = useCallback(() => {
     // 隐藏的透明 chrome 不得进入 Tab 序列。Tab 揭示它之后，
