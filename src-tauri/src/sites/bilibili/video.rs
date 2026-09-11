@@ -621,6 +621,26 @@ fn parse_archive_pages(data: &Value) -> Vec<VideoArchivePage> {
     pages
 }
 
+/// 解析稿件 Tags（`x/tag/archive/tags`），保留上游顺序并丢弃空名称。
+fn parse_archive_tags(raw: &str) -> Vec<String> {
+    let Ok(root) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    root.get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("tag_name").map(as_str).unwrap_or_default();
+                    let name = name.trim();
+                    (!name.is_empty()).then(|| name.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 解析稿件详情 `data`（WBI 签名接口 `x/web-interface/view`）。
 pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
     let root: Value =
@@ -653,6 +673,7 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
         title: data.get("title").map(as_str).unwrap_or_default(),
         cover: data.get("pic").map(as_str).unwrap_or_default(),
         desc: data.get("desc").map(as_str).unwrap_or_default(),
+        tags: Vec::new(),
         author: owner
             .and_then(|owner| owner.get("name"))
             .map(as_str)
@@ -874,7 +895,6 @@ impl Sidx {
             _ => 0.0,
         }
     }
-
 }
 
 /// 从 `offset` 起读 N 字节大端整数（u16/u32/u64 共用，错误消息里的
@@ -1632,17 +1652,23 @@ impl BilibiliSite {
         parse_uploader_videos(&text)
     }
 
-    /// 稿件详情（`x/web-interface/view`）。WBI 签名接口，未签名会被风控拦下。
+    /// 稿件详情（`x/web-interface/view`）及 Tags。详情是必需数据；Tags 是补充信息，
+    /// 请求失败时降级为空，不阻断播放与评论。
     pub async fn video_archive(&self, bvid: &str) -> AppResult<VideoArchive> {
         if bvid.is_empty() {
             return Err(video_err("稿件详情缺少 bvid"));
         }
         let mut params = BTreeMap::new();
         params.insert("bvid".into(), bvid.to_string());
-        let text = self
-            .get_json_signed("https://api.bilibili.com/x/web-interface/view", params)
-            .await?;
-        let mut archive = parse_archive(&text)?;
+        let tag_query = [("bvid", bvid.to_string())];
+        let (detail, tags) = tokio::join!(
+            self.get_json_signed("https://api.bilibili.com/x/web-interface/view", params),
+            self.get_public_json("https://api.bilibili.com/x/tag/archive/tags", &tag_query),
+        );
+        let mut archive = parse_archive(&detail?)?;
+        if let Ok(raw) = tags {
+            archive.tags = parse_archive_tags(&raw);
+        }
         if !archive.author_mid.is_empty() {
             let card_query = [
                 ("mid", archive.author_mid.clone()),
@@ -3152,6 +3178,7 @@ mod tests {
         assert_eq!(archive.aid, "117075725000671");
         assert_eq!(archive.cid, 311_001_234);
         assert_eq!(archive.desc, "简介内容");
+        assert!(archive.tags.is_empty());
         assert_eq!(archive.reply, 4986);
         assert_eq!(archive.pubdate, 1759000000);
         assert_eq!(archive.cover, "https://i0.hdslb.com/bfs/archive/x.jpg");
@@ -3170,6 +3197,24 @@ mod tests {
         assert_eq!(parse_archive(&multi_page).unwrap().cid, 998877);
 
         assert!(parse_archive("{}").is_err());
+    }
+
+    #[test]
+    fn parse_archive_tags_preserves_order_and_skips_empty_names() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": [
+                { "tag_id": 1, "tag_name": "动画" },
+                { "tag_id": 2, "tag_name": "  声优  " },
+                { "tag_id": 3, "tag_name": "" },
+                { "tag_id": 4 }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(parse_archive_tags(&raw), ["动画", "声优"]);
+        assert!(parse_archive_tags("not json").is_empty());
+        assert!(parse_archive_tags(r#"{"code":0,"data":null}"#).is_empty());
     }
 
     #[test]

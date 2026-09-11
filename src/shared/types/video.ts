@@ -276,6 +276,8 @@ export type VideoArchive = {
   /** 稿件封面（上游 `pic`）。观看历史与投屏卡片用它，播放页自身不展示。 */
   cover: string;
   desc: string;
+  /** 稿件 Tags，顺序与 B 站详情页一致；点击后用于视频关键词搜索。 */
+  tags: string[];
   author: string;
   author_face: string | null;
   /** UP 主的 mid（member ID），用于获取 UP 主的投稿列表。 */

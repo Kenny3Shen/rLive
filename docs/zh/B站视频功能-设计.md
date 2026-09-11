@@ -40,6 +40,7 @@
 | season 详情 | `GET /pgc/view/web/season?season_id=` 或 `?ep_id=` → `result.episodes[]` 有 `aid/cid/id(ep_id)` |
 | VOD 弹幕 | `GET /x/v2/dm/web/seg.so?type=1&oid=<cid>&pid=<aid>&segment_index=<n>` | **无需 cookie / UA / Referer / WBI**，返回裸 protobuf |
 | 稿件详情 | `GET /x/web-interface/view?bvid=` | **需 WBI**（未签名被风控拦下，返回 404 页）。`data` 含 `aid/desc/owner/stat/pubdate` |
+| 稿件 Tags | `GET /x/tag/archive/tags?bvid=` → `data[].tag_name` | 无 WBI、匿名可用；与稿件详情并发获取，失败降级为空，不阻断播放 |
 | 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全 |
 | 评论 | `GET /x/v2/reply/wbi/main?type=1&oid=<aid>&mode=<2\|3>&ps=20&next=<cursor>`，WBI 签名 | 签名 + **匿名时不得携带任何 cookie**：实测携带 buvid3/4 的匿名会话只回 3 条并谎称 `is_end=true`（无 cookie 才给全量 20 条）；未签名裸路径被风控后一律 -352，签名路径放行。登录态带完整 cookie 同路径。置顶有两处：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象，参考 PiliPlus 两者都解析） |
 | 二级回复 | `GET /x/v2/reply/reply?type=1&oid=<aid>&root=<rpid>&pn=&ps=20&sort=2` | 匿名可用（不受 buvid 截断影响）。**pn 翻页有效**；`data.page.count` 是总数 |
@@ -163,7 +164,7 @@ message DanmakuElem {
 ### 右侧栏（`VideoSidebar`）
 
 - UGC 页签顺序：选集（多 P 时，含折叠合集）/ 相关视频 / 评论 / 弹幕（最右）；仅合集（无分 P）时第三个页签显示为「合集」；PGC：分集 + 评论。宽屏在右（320px，xl 340px，与直播/IPTV 播放页侧栏同宽），窄屏列在播放器下方滚动。
-- 页签条之上的 UP 主信息卡：头像与 UP 名点开投稿抽屉；统计行（播放/评论/发布时间，来自稿件详情数据与 `VideoArchive.pubdate`）最右侧是简介展开/收起的纯图标开关（箭头旋转 + `aria-expanded`/`title`）。视频简介默认不显示，点开关才展开（换稿件重挂复位）；展开的简介用 `hidden` 而非条件渲染挂在卡片里，让 `aria-controls` 在收起态也能解析到目标。侧栏加宽加图标开关后统计行单行放下，`flex-wrap` 仍是字体缩放与超长数值的兑底（发布时间组因此不加 `border-l` 分隔线，避免换行后出现孤立竖线）。列表页 UGC 卡片同样显示发布时间（`VideoItem.pubdate`）：推荐/热门/搜索自带 Unix 秒，UP 主投稿列表只给 `created`（北京时间字符串 `yyyy-MM-dd HH:mm`），后端 `created_to_unix` 按 UTC 解析后减 8 小时还原，缺失为 0 前端不渲染；卡片标题恒占两行（`min-h-[2lh]`），一行标题的卡片靠占位把 UP 主行与统计行压到相同纵向位置。
+- 页签条之上的 UP 主信息卡：头像与 UP 名点开投稿抽屉；统计行（播放/评论/发布时间，来自稿件详情数据与 `VideoArchive.pubdate`）最右侧是简介展开/收起的纯图标开关（箭头旋转 + `aria-expanded`/`title`）。视频简介默认不显示，点开关才展开（换稿件重挂复位）；展开的简介用 `hidden` 而非条件渲染挂在卡片里，让 `aria-controls` 在收起态也能解析到目标。稿件 Tags 位于简介正文末尾，使用可换行的 `Badge` 展示，点击 Tag 进入 `/video/search?q=<tag_name>`；Tags 接口失败或为空时不显示。侧栏加宽加图标开关后统计行单行放下，`flex-wrap` 仍是字体缩放与超长数值的兑底（发布时间组因此不加 `border-l` 分隔线，避免换行后出现孤立竖线）。列表页 UGC 卡片同样显示发布时间（`VideoItem.pubdate`）：推荐/热门/搜索自带 Unix 秒，UP 主投稿列表只给 `created`（北京时间字符串 `yyyy-MM-dd HH:mm`），后端 `created_to_unix` 按 UTC 解析后减 8 小时还原，缺失为 0 前端不渲染；卡片标题恒占两行（`min-h-[2lh]`），一行标题的卡片靠占位把 UP 主行与统计行压到相同纵向位置。
 - 多 P 稿件（`pages` ≥ 2）自动展示「选集」页签并接管连播列表：点任意 P 跳转（同 bvid、按 cid 取流），当前 P 按 cid 高亮。选集与合集共用一个页签（`PartsSeasonPanel`）：同时存在时选集展开、合集折叠成标题行（点击展开，连播沿分 P 列表走）；无分 P 的合集直接展开、连播沿合集走。两区标题行都是收起开关（`ChevronDown` 旋转 + `aria-expanded`）：选集行左侧「选集」、右侧「共 x P」计数，点按切换列表显隐；收起态不跨稿件沿用（`PartsPanel` 以 bvid 为 key，换稿件重挂即默认展开），收起后再展开会把当前 P 重新滚回可视区。
 - 评论的 `oid` 是 aid：列表/分集链路经路由参数携带；URL 直入时 UGC 用稿件详情补齐，PGC 用 season 详情里当前集的 aid。
 - 评论列表使用游标翻页（`next`），每条主评论直接展示接口附带的部分二级回复预览与「共 N 条回复」入口；点击主评论、回复预览或入口打开以主评论为楼主的评论详情抽屉，二级回复使用 pn 翻页（首传 1）。详情从侧栏右侧进入，手机竖屏时仅覆盖播放器下方的侧栏。

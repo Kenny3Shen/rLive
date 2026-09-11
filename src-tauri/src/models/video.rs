@@ -269,6 +269,8 @@ pub struct VideoArchive {
     /// 稿件封面（上游 `pic`）。观看历史用它，播放页自身不展示。
     pub cover: String,
     pub desc: String,
+    /// 稿件 Tags，顺序与 B 站详情页一致；点击后用于视频关键词搜索。
+    pub tags: Vec<String>,
     pub author: String,
     pub author_face: Option<String>,
     /// UP 主的 mid（member ID），用于获取 UP 主的投稿列表。
