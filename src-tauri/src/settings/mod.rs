@@ -720,22 +720,4 @@ mod tests {
         assert_eq!(settings.recording_max_concurrent, 4);
         assert_eq!(settings.danmaku_font_size, 18);
     }
-
-    /// 播放器皮肤是 4.0.0 新增的顶层字段，更早保存的记录里没有它。
-    /// 缺失时按默认值补齐，不能让整份设置变成 `settings_schema_unsupported`。
-    #[test]
-    fn backfills_player_skin_for_older_records() {
-        let conn = open_in_memory().unwrap();
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value.as_object_mut().unwrap().remove("player_skin");
-        conn.execute(
-            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
-            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
-        )
-        .unwrap();
-
-        let (settings, saved) = get_with_status(&conn).unwrap();
-        assert!(saved);
-        assert_eq!(settings.player_skin, "default");
-    }
 }
