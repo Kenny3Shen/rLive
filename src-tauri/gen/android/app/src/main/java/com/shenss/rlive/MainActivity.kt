@@ -78,16 +78,19 @@ class MainActivity : TauriActivity() {
     // WebView 的 env 在沉浸往返后可能仍为 0；外壳与播放器共用原生安全区。
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
       // 忽略可见性以保持边界稳定；不包含 IME，键盘高度不应占用播放安全区。
+      // inset 属于 Android 物理像素；按 WebView 所在显示器的密度转为布局单位。
+      // 不依赖 JS 的 devicePixelRatio：远程调试覆盖它时，页面布局仍可能保持原密度。
+      val density = view.resources.displayMetrics.density
       val top = insets.getInsetsIgnoringVisibility(
         WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout(),
-      ).top
+      ).top / density
       val bottom = insets.getInsetsIgnoringVisibility(
         WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.displayCutout(),
-      ).bottom
+      ).bottom / density
       webView.evaluateJavascript(
         """
-          document.documentElement?.style.setProperty('--android-safe-area-top', ($top / window.devicePixelRatio) + 'px');
-          document.documentElement?.style.setProperty('--android-safe-area-bottom', ($bottom / window.devicePixelRatio) + 'px');
+          document.documentElement?.style.setProperty('--android-safe-area-top', '${top}px');
+          document.documentElement?.style.setProperty('--android-safe-area-bottom', '${bottom}px');
         """.trimIndent(),
         null,
       )

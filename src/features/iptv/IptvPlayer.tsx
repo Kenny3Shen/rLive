@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -261,6 +262,10 @@ function IptvPlayerContent({
   }, [nativePlayerControlsActive, player.muted, player.volume]);
 
   useScreenWakeLock(status === "playing" && !audioOnly);
+  // 舞台盒子按源画幅比开洞，16:9 以外的频道（大量 4:3 SD）就不会再被
+  // 写死的 16:9 盒子左右留黑边。纯音频无画面，保留 16:9 占位。
+  const stageAspectRatio =
+    !audioOnly && player.aspectRatio && player.aspectRatio > 0 ? player.aspectRatio : null;
   useAndroidFullscreenOrientation({
     enabled: androidClient,
     fullscreen,
@@ -459,11 +464,15 @@ function IptvPlayerContent({
 
   return (
     <section
+      style={
+        stageAspectRatio ? ({ "--stage-ar": String(stageAspectRatio) } as CSSProperties) : undefined
+      }
       className={cn(
-        "relative w-full overflow-hidden bg-black",
+        // 只有这一层持有源画幅，内层 Container 铺满；全屏由内层 fixed 舞台接管。
+        "relative flex w-full min-w-0 flex-col overflow-hidden bg-black",
         webFullscreen
           ? "h-full rounded-none border-0"
-          : "border border-border-subtle shadow-sm",
+          : "h-auto max-h-full aspect-[var(--stage-ar,16/9)] border border-border-subtle shadow-sm",
       )}
     >
       <VideoJsContainer
@@ -476,8 +485,9 @@ function IptvPlayerContent({
         aria-label={channel ? `${channel.name} 播放器` : "IPTV 播放器"}
         aria-keyshortcuts="Space K M F"
         className={cn(
-          "relative bg-muted/20 outline-none",
-          webFullscreen ? "h-full aspect-auto" : "aspect-video",
+          // 不自带 aspect-video：比值已由 section 持有，再叠一层只会算出
+          // 更短的盒子并在外层居中 → 上下等高死区（黑边）。
+          "relative min-h-0 flex-1 bg-muted/20 outline-none",
         )}
         onKeyDown={handleStageKeyDown}
         onPointerMove={scheduleControlsHide}
