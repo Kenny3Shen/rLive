@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ArrowUpDown,
@@ -47,7 +47,7 @@ import {
   videoGetSeason,
 } from "./videoApi";
 import { formatDateTime, formatRelativeTime, formatVideoDuration } from "./videoHistory";
-import { videoPlayPath } from "./videoRoute";
+import { videoPlayPath, videoSearchPath } from "./videoRoute";
 import {
   dedupeVideoItems,
   playlistItemFromVideoItem,
@@ -1227,7 +1227,7 @@ export function VideoSidebar({
                         </div>
                       )}
                     </dl>
-                    {archive.desc && (
+                    {(archive.desc || archive.tags.length > 0) && (
                       <Button
                         type="button"
                         variant="ghost"
@@ -1250,15 +1250,31 @@ export function VideoSidebar({
                     )}
                   </div>
                   {/* 简介默认不展开：用 hidden 而非条件渲染，让 aria-controls 在收起态也能 */}
-                  {/* 解析到目标；display:none 同时把整段从无障碍树与布局里去掉。 */}
-                  {archive.desc && (
-                    <p
-                      id="video-description"
-                      hidden={!descriptionExpanded}
-                      className="mt-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground"
-                    >
-                      <LinkText text={archive.desc} />
-                    </p>
+                  {/* 解析到目标；Tags 跟在正文末尾，点击进入对应的视频搜索结果。 */}
+                  {(archive.desc || archive.tags.length > 0) && (
+                    <div id="video-description" hidden={!descriptionExpanded} className="mt-2">
+                      {archive.desc && (
+                        <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                          <LinkText text={archive.desc} />
+                        </p>
+                      )}
+                      {archive.tags.length > 0 && (
+                        <div
+                          className={cn("flex flex-wrap gap-1.5", archive.desc && "mt-2")}
+                          aria-label="视频 Tags"
+                        >
+                          {archive.tags.map((tag) => (
+                            <Badge
+                              key={tag}
+                              variant="outline"
+                              render={<Link to={videoSearchPath(tag)} />}
+                            >
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </section>
