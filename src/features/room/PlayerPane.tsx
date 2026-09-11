@@ -1374,7 +1374,7 @@ function PlayerPaneContent({
         data-room-player-frame
         className={cn(
           "relative flex min-w-0 flex-col bg-black",
-          portraitStackedPlayer ? "w-full flex-none" : "min-h-0 flex-1",
+          portraitStackedPlayer ? "aspect-video w-full flex-none" : "min-h-0 flex-1",
         )}
       >
         <VideoJsContainer
@@ -1395,7 +1395,7 @@ function PlayerPaneContent({
           }
           className={cn(
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
-            portraitStackedPlayer ? "w-full" : "min-h-0 flex-1",
+            portraitStackedPlayer ? "aspect-video w-full flex-none" : "min-h-0 flex-1",
             mobileClient && showHost && "touch-none",
           )}
           tabIndex={0}

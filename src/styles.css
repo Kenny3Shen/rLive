@@ -976,6 +976,7 @@ html[data-fullscreen-transition="true"] .app-shell {
 [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"]) {
   flex: none;
   width: 100%;
+  aspect-ratio: 16 / 9;
   min-height: 0;
 }
 

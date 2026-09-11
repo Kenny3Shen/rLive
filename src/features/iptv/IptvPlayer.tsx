@@ -463,7 +463,7 @@ function IptvPlayerContent({
         "relative w-full overflow-hidden bg-black",
         webFullscreen
           ? "h-full rounded-none border-0"
-          : "rounded-2xl border border-border-subtle shadow-sm",
+          : "border border-border-subtle shadow-sm",
       )}
     >
       <VideoJsContainer
@@ -694,19 +694,21 @@ function IptvPlayerContent({
                   />
                 </MediaButton>
               )}
-              <Badge
-                variant="destructive"
-                className="shrink-0 gap-1.5 bg-destructive text-destructive-foreground"
-              >
-                <Radio data-icon="inline-start" aria-hidden />
-                直播
-              </Badge>
-              <span
-                data-mobile-static-backdrop
-                className="min-w-0 flex-1 truncate rounded-md bg-black/55 px-2 py-1 text-xs text-primary-foreground backdrop-blur"
-              >
-                {channel.name}
-              </span>
+              <div className="flex h-media-control min-w-0 flex-1 items-center gap-2">
+                <Badge
+                  variant="destructive"
+                  className="shrink-0 gap-1.5 bg-destructive text-destructive-foreground"
+                >
+                  <Radio data-icon="inline-start" aria-hidden />
+                  直播
+                </Badge>
+                <span
+                  data-mobile-static-backdrop
+                  className="inline-flex items-center min-w-0 truncate rounded-md bg-black/55 px-2 py-1 text-xs text-primary-foreground backdrop-blur leading-none"
+                >
+                  {channel.name}
+                </span>
+              </div>
               {/* 原生全屏不挂工具：RecordingControl 的 popover 默认 portal 到
                   `<body>`，会被 top layer 盖住（与直播页同一取舍）。 */}
               {!fullscreen && hudToolsSlot && (

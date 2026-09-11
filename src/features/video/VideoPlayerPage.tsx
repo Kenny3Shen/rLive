@@ -31,6 +31,7 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
+import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -38,8 +39,8 @@ import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
@@ -138,9 +139,11 @@ import {
   PlayerToolTile,
 } from "@/shared/components/player/PlayerHudMenu";
 import {
+  glassMutedTextClass,
   glassOptionClass,
   glassOptionSelectedClass,
   glassPanelClass,
+  glassSeparatorClass,
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
@@ -177,6 +180,7 @@ const SINGLE_CLICK_DELAY_MS = 220;
 
 /** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
 const LONG_PRESS_RATE = 3;
+const VOD_PLAYBACK_RATES = [0.25, 0.5, 1, 1.5, 2] as const;
 const LONG_PRESS_TRIGGER_MS = 500;
 /** 移动超过这个距离视为滑动手势，取消长按判定。 */
 const LONG_PRESS_CANCEL_MOVE_PX = 12;
@@ -562,8 +566,13 @@ function VideoPlayerPageContent() {
     setFullscreenLocked(false);
   }
 
-  // 画幅只决定首次进入；刷到横屏视频或等待首帧时都保持沉浸会话。
+  // 基于画幅与模式自动切换：
+  // 1. 遇到音频专线或 PGC 分集，退出短视频模式；
+  // 2. 解析出 16:9 横屏视频时，自动切回普通详情模式；
+  // 3. 在移动端解析出 9:16 竖屏视频时，自动切为短视频/竖屏模式（除非用户在同一个视频内明确选择了查看详情）。
   if (audioOnly || params?.epId) {
+    if (shortVideo) setShortVideo(false);
+  } else if (frameAspectRatio !== null && frameAspectRatio >= 1) {
     if (shortVideo) setShortVideo(false);
   } else if (
     mobileClient &&
@@ -2248,11 +2257,40 @@ function VideoPlayerPageContent() {
     </Popover>
   );
 
-  /** 短视频固定单条循环；普通详情保留原有循环/连播设置。 */
+  const currentPlaybackRate = playbackRate?.playbackRate ?? 1;
+
+  /** 短视频固定单条循环；普通详情保留原有循环/连播设置。包含播放倍数调节。 */
   const playbackToggles = (
-    <div className="flex flex-col gap-1 px-1 py-1">
+    <div className="flex flex-col gap-2 px-1 py-1">
+      <div className="flex flex-col gap-1.5">
+        <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>播放倍数</span>
+        <div className="grid grid-cols-5 gap-1 px-1">
+          {VOD_PLAYBACK_RATES.map((rate) => {
+            const isSelected = Math.abs(currentPlaybackRate - rate) < 0.01;
+            return (
+              <Button
+                key={rate}
+                variant="ghost"
+                size="sm"
+                aria-pressed={isSelected}
+                className={cn(
+                  "h-8 px-1 text-xs justify-center font-medium",
+                  glassOptionClass(),
+                  isSelected && glassOptionSelectedClass(),
+                )}
+                onClick={() => {
+                  playbackRate?.setPlaybackRate(rate);
+                }}
+              >
+                {rate}x
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+      <Separator className={glassSeparatorClass()} />
       {shortVideo ? (
-        <p className="px-2.5 py-1.5 text-sm">短视频模式单条循环，上下滑动切换视频。</p>
+        <p className="px-2.5 py-1 text-sm text-white/80">短视频模式单条循环，上下滑动切换视频。</p>
       ) : (
         <PlaybackSettingRow
           label="循环播放"
@@ -2306,7 +2344,9 @@ function VideoPlayerPageContent() {
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
             shortVideo || webFullscreen
               ? "aspect-auto max-h-none flex-1"
-              : "aspect-video w-full max-lg:max-h-[56%]",
+              : portraitVideo
+                ? "aspect-[9/16] w-full max-lg:max-h-[70%]"
+                : "aspect-video w-full max-lg:max-h-[56%]",
             "lg:aspect-auto lg:w-auto lg:flex-1",
             "data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
           )}
@@ -2558,10 +2598,8 @@ function VideoPlayerPageContent() {
                     compact ? "pb-3" : "pb-6",
                   )}
                 >
-                  <Button
+                  <MediaButton
                     type="button"
-                    variant="ghost"
-                    size="icon-sm"
                     aria-label={
                       shortVideo
                         ? mobileClient
@@ -2575,12 +2613,7 @@ function VideoPlayerPageContent() {
                               ? "返回短视频"
                               : "返回视频列表"
                     }
-                    className={cn(
-                      PLAYER_CONTROL_BUTTON_CLASS,
-                      PLAYER_CONTROL_ICON_CLASS,
-                      PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                      "shrink-0",
-                    )}
+                    className={PLAYER_HUD_BUTTON_CLASS}
                     // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
                     // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
                     onClick={() => {
@@ -2592,51 +2625,29 @@ function VideoPlayerPageContent() {
                       else handlePageBack();
                     }}
                   >
-                    <ChevronLeft data-icon="inline-start" aria-hidden />
-                  </Button>
+                    <ChevronLeft className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
+                  </MediaButton>
                   {/* 桌面普通详情：旧流内顶栏的返回主页入口。 */}
                   {desktopDetails && (
-                    <Button
+                    <MediaButton
                       type="button"
-                      variant="ghost"
-                      size="icon-sm"
                       aria-label="返回主页"
                       title="返回主页"
-                      className={cn(
-                        PLAYER_CONTROL_BUTTON_CLASS,
-                        PLAYER_CONTROL_ICON_CLASS,
-                        PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                        "shrink-0",
-                      )}
+                      className={PLAYER_HUD_BUTTON_CLASS}
                       onClick={() => navigate(VIDEO_HOME_PATH)}
                     >
-                      <Home data-icon="inline-start" aria-hidden />
-                    </Button>
+                      <Home className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
+                    </MediaButton>
                   )}
                   {(!shortVideo || !mobileClient) && (
-                    <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold" title={title}>
-                      {title}
-                    </p>
-                  )}
-                  {/* 桌面普通详情：旧流内顶栏的短视频模式入口（与移动端的竖屏全屏
-                    不同，桌面这里是模式切换而非全屏层，enterShortVideo 自会退出全屏）。 */}
-                  {desktopDetails && params.bvid && !params.epId && !audioOnly && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="进入刷视频模式"
-                      title="进入刷视频模式"
-                      className={cn(
-                        PLAYER_CONTROL_BUTTON_CLASS,
-                        PLAYER_CONTROL_ICON_CLASS,
-                        PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-                        "shrink-0",
-                      )}
-                      onClick={() => void enterShortVideo()}
-                    >
-                      <Smartphone data-icon="inline-start" aria-hidden />
-                    </Button>
+                    <div className="flex h-media-control min-w-0 flex-1 items-center px-1">
+                      <p
+                        className="truncate text-sm font-semibold leading-none text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]"
+                        title={title}
+                      >
+                        {title}
+                      </p>
+                    </div>
                   )}
                   <PlayerHudOverflowMenu
                     label="更多操作"

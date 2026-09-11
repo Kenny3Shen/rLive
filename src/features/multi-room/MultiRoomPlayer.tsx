@@ -21,13 +21,13 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
   PlayerControls,
   type PlayerControlsProps,
 } from "@/shared/components/player/PlayerControls";
@@ -86,16 +86,11 @@ function OverlayIconButton({
     <Tooltip>
       <TooltipTrigger
         render={
-          <Button
+          <MediaButton
             type="button"
-            variant="ghost"
-            size="icon-sm"
-            className={cn(
-              PLAYER_CONTROL_BUTTON_CLASS,
-              PLAYER_CONTROL_ICON_CLASS,
-              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-            )}
+            className={cn(PLAYER_HUD_BUTTON_CLASS, "[&_svg]:size-6")}
             aria-label={label}
+            aria-disabled={disabled || undefined}
             disabled={disabled}
             onClick={onClick}
           />
@@ -925,18 +920,18 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
         onFocusCapture={main ? handleChromeFocusCapture : undefined}
         onBlurCapture={main ? handleChromeBlurCapture : undefined}
       >
-        <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1.5">
+        <div className="pointer-events-auto flex h-media-control min-w-0 flex-1 items-center gap-1.5">
           {fullscreen && (
             <OverlayIconButton
               label="退出全屏"
               portalContainer={playerStageRef}
               onClick={() => void exitPlayerFullscreen()}
             >
-              <ChevronLeft aria-hidden />
+              <ChevronLeft className={PLAYER_HUD_ICON_CLASS} aria-hidden />
             </OverlayIconButton>
           )}
           {dragHandle}
-          {main && <Badge variant="secondary">主画面</Badge>}
+          {main && <Badge variant="secondary" className="shrink-0">主画面</Badge>}
           <RoomIdentityLine
             siteId={room.siteId}
             roomId={detail?.room_id || room.roomId}
@@ -948,7 +943,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
             className="flex-1"
           />
         </div>
-        <div className="pointer-events-auto flex shrink-0 items-center gap-1">
+        <div className="pointer-events-auto flex h-media-control shrink-0 items-center gap-1">
           {syncMode !== "off" && (
             <MultiRoomSyncBadge roomKey={room.key} portalContainer={playerStageRef} />
           )}

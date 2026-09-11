@@ -54,6 +54,7 @@ import {
   roomIdentityOverflowDistance,
   showPlayerFullscreenHud,
 } from "../src/features/room/PlayerFullscreenHud";
+import { RoomIdentityLine } from "../src/shared/components/player/RoomIdentityLine";
 import { tooltipTriggerLabel } from "../src/components/videojs/ui/button-tooltip";
 import { PLAYER_HUD_BUTTON_CLASS } from "../src/shared/components/player/PlayerControls";
 import {
@@ -556,6 +557,17 @@ describe("custom player controls layout", () => {
     // 它就是「开始录制」不再比邻居小一圈、颜色也不再不一致的唯一保障。
     expect(PLAYER_HUD_BUTTON_CLASS).toContain("r-live-media-extension-button");
     expect(PLAYER_HUD_BUTTON_CLASS).toContain("text-media-controls-foreground");
+  });
+
+  test("RoomIdentityLine centers its content within a media control line height", () => {
+    const html = renderToStaticMarkup(
+      createElement(RoomIdentityLine, {
+        title: "测试标题",
+        userName: "主播名称",
+      }),
+    );
+    expect(html).toContain("h-media-control");
+    expect(html).toContain("items-center");
   });
 });
 
