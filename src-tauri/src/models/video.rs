@@ -146,6 +146,23 @@ pub struct VideoSubtitle {
     pub url: String,
 }
 
+/// 视频缩略图（快照/storyboard）元数据，对应 B 站 videoshot 接口。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoStoryboard {
+    /// 拼版横向小图数（一般为 10）
+    pub img_x_len: u32,
+    /// 拼版纵向小图数（一般为 10）
+    pub img_y_len: u32,
+    /// 单张缩略图宽（一般为 160）
+    pub img_x_size: u32,
+    /// 单张缩略图高（一般为 90）
+    pub img_y_size: u32,
+    /// 拼版图片 URL 列表
+    pub images: Vec<String>,
+    /// 截取时间表（秒），与拼版小图一一对应
+    pub index: Vec<u32>,
+}
+
 /// 一次 VOD 播放占用的代理会话：视频轨 / 音轨 / MPD 清单各一条
 /// （仅音频模式只启动音轨，未启动的 id 停止时是无害的 no-op）。
 ///

@@ -10,6 +10,7 @@ import type {
   VideoPlayRequest,
   VideoSeason,
   VideoSessionIds,
+  VideoStoryboard,
   VideoSubtitle,
   VideoZone,
 } from "@/shared/types/video";
@@ -70,6 +71,11 @@ export function videoGetCastUrl(request: VideoPlayRequest): Promise<VideoCastSou
 /** CC 字幕轨道列表（player v2）。 */
 export function videoGetSubtitles(request: VideoPlayRequest): Promise<VideoSubtitle[]> {
   return invokeCmd<VideoSubtitle[]>("video_get_subtitles", { request });
+}
+
+/** 视频缩略图（storyboard）快照元数据。无快照时返回 null。 */
+export function videoGetStoryboard(request: VideoPlayRequest): Promise<VideoStoryboard | null> {
+  return invokeCmd<VideoStoryboard | null>("video_get_storyboard", { request });
 }
 
 /** 字幕 JSON 原文（字幕主机无 CORS 头，由本端代拉）。 */

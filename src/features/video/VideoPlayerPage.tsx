@@ -29,6 +29,7 @@ import {
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ANDROID_BACK_EVENT, dismissTopmostPopup } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
+import { preloadImageProxy } from "@/shared/api/imageProxy";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
@@ -117,6 +118,7 @@ import {
   videoGetPlayInfo,
   videoGetRelated,
   videoGetSeason,
+  videoGetStoryboard,
   videoGetSubtitle,
   videoGetSubtitles,
   videoStopPlay,
@@ -132,6 +134,7 @@ import {
 import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWaitingRecovery";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
+import { storyboardToVtt } from "./storyboardVtt";
 import { CastMenu } from "@/features/room/CastMenu";
 import { applyWebPlayerAudio } from "@/features/room/player/useWebPlayer";
 import {
@@ -913,6 +916,43 @@ function VideoPlayerPageContent() {
   });
   const subtitles = useMemo(() => subtitlesQuery.data ?? [], [subtitlesQuery.data]);
 
+  // 视频缩略图（storyboard）快照：无快照或纯音频不请求。
+  const storyboardQuery = useQuery({
+    queryKey: ["video_storyboard", cid, bvid ?? "", epId ?? ""],
+    enabled: cid > 0 && !audioOnly,
+    queryFn: async () => {
+      // 雪碧图必须经本机图片代理（videoshot CDN 拒绝非 bilibili Referer），
+      // 而代理端口是异步取回的。先等它就绪，否则 VTT 可能烧进直连 URL ——
+      // VTT 只在快照数据变化时重算，错过就是整页没有缩略图。
+      await preloadImageProxy();
+      return videoGetStoryboard({ bvid, cid, ep_id: epId });
+    },
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+
+  const [storyboardVttUrl, setStoryboardVttUrl] = useState<string | null>(null);
+  const storyboardData = storyboardQuery.data;
+  useEffect(() => {
+    if (!storyboardData) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setStoryboardVttUrl(null);
+      return;
+    }
+    const vtt = storyboardToVtt(storyboardData, duration);
+    if (!vtt) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setStoryboardVttUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+    // oxlint-disable-next-line react/set-state-in-effect
+    setStoryboardVttUrl(objectUrl);
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [storyboardData, duration]);
+
   // 投屏直链：打开弹层时才取（html5 playurl 的 MP4，与主播放链路无关）。
   const castQuery = useQuery({
     queryKey: ["video_cast_url", cid, params?.bvid ?? "", params?.epId ?? ""],
@@ -1436,7 +1476,7 @@ function VideoPlayerPageContent() {
   useEffect(() => {
     const media = videoRef.current;
     if (!media) return;
-    for (const track of media.querySelectorAll("track")) track.remove();
+    for (const track of media.querySelectorAll('track[kind="subtitles"]')) track.remove();
     if (!subtitleVttUrl) return;
     const track = document.createElement("track");
     track.kind = "subtitles";
@@ -1446,6 +1486,24 @@ function VideoPlayerPageContent() {
     media.appendChild(track);
     track.track.mode = "showing";
   }, [subtitleLan, subtitleVttUrl, playUrl, subtitles]);
+
+  // 把缩略图（storyboard）VTT 挂到媒体元素（供 Video.js TimeSlider 缩略图预览使用）。
+  useEffect(() => {
+    const media = videoRef.current;
+    if (!media) return;
+    for (const track of media.querySelectorAll('track[data-track-kind="thumbnails"]')) {
+      track.remove();
+    }
+    if (!storyboardVttUrl) return;
+    const track = document.createElement("track");
+    track.kind = "metadata";
+    track.label = "thumbnails";
+    track.default = true;
+    track.setAttribute("data-track-kind", "thumbnails");
+    track.src = storyboardVttUrl;
+    media.appendChild(track);
+    track.track.mode = "hidden";
+  }, [storyboardVttUrl, playUrl]);
 
   const playlistGestureEnabled =
     shortVideo &&
@@ -2551,6 +2609,7 @@ function VideoPlayerPageContent() {
                         playsInline
                         preload="metadata"
                         controls={false}
+                        crossOrigin="anonymous"
                         disablePictureInPicture={audioOnly}
                         className="absolute inset-0 size-full bg-black object-contain"
                       />
