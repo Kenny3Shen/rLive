@@ -1,43 +1,45 @@
-# rLive Agent 工作规范
+# rLive Agent 规范
 
-## 通用规则
+## 通用
 
-- 用户沟通、进度更新、交付说明和新增文档使用中文；代码标识符、命令、路径、库名和协议字段保留英文。
-- 唯一源码工作区是 `/home/shenss/python/rLive`。`/mnt/d/dev/rLive` 仅作为 Windows 同步镜像，不得直接编辑。
-- 每轮修改完成并通过必要检查后，交付前执行 `bash scripts/sync-to-windows.sh`；只读检查、分析或答疑无需同步。同步不等于构建，除非用户明确要求，不运行 Windows/Tauri 构建或 Windows 发布流程。
-- 按改动风险运行最聚焦的检查，如 `bun run check`、`bun test tests/`、`bun run build`、Rust 测试或本地运行验证。纯文档修改只需核对内容、命令和路径，并在交付时说明检查、同步结果和已知限制。
+- 沟通、交付和新增文档使用中文；标识符、命令、路径、库名、协议字段保留英文。
+- 仅编辑 `/home/shenss/python/rLive`；`/mnt/d/dev/rLive` 只作 Windows 镜像。
+- 修改后运行最聚焦的检查（如 `bun run check`、`bun test tests/`、`bun run build`、Rust 测试或本地验证）。纯文档修改只核对内容、命令和路径。
+- 检查通过后、交付前运行 `bash scripts/sync-to-windows.sh`。只读任务不需同步；除非用户要求，不运行 Windows/Tauri 构建或发布流程。
+- 交付时说明检查、同步结果及已知限制。
 
-## 提交规范
+## 提交
 
-- 提交标题使用 `type(scope): 中文摘要` 的 Conventional Commit 格式；`scope` 指向功能域，不使用文件名。一次提交只表达一个主题，标题直接描述结果，不写句号或模糊表述。
-- 非平凡提交在标题后空一行，用正文说明背景/根因、行为变化、关键实现和验证结果；多项改动使用项目符号。提交前检查暂存区内容与说明是否一致。
-- 提交正文使用真实换行，避免将 `\n` 写成字面量。
-- 普通提交不改版本号。`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.lock` 的版本只在打 tag 发布 release 时按 SemVer 统一递增，规则见 `docs/zh/发布流程.md`。
+- 标题使用 `type(scope): 中文摘要`；`scope` 写功能域，不写文件名。一次提交只含一个主题，表述明确且不加句号。
+- 非平凡提交须在空行后说明背景或根因、行为变化、关键实现和验证结果；多项内容使用列表，正文使用真实换行。
+- 提交前核对暂存内容与提交说明。
+- 普通提交不改版本号。仅发布 tag 时按 SemVer 同步更新 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.lock`；详见 `docs/zh/发布流程.md`。
 
-## 项目结构与实现边界
+## 架构
 
-- 技术栈为 Tauri 2、Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4 和 shadcn-style/Base UI。
-- 前端使用 TanStack Query 管理服务端/IPC 缓存，Zustand 管理设置和轻量状态；动效统一使用 Web Animations API 与 CSS 原生实现，封装在 `src/shared/motion/`，动画需尊重减少动态效果设置，并优先使用 `transform`/`opacity`。
-- `src/` 是 React/Vite 前端，`src-tauri/` 是 Tauri/Rust 后端；`src/app/` 管理路由与 Shell，`src/features/` 管理业务，`src/components/ui/` 提供通用 UI，`src/shared/` 提供跨功能代码。后端命令、站点、弹幕、数据库、IPTV 和 ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmaku/`、`db/`、`iptv/` 和 `asr.rs`。
-- 前后端通过既有 Tauri commands/events 交互。优先复用已有组件、hooks、stores 和功能边界，不在前端复制 Rust 业务逻辑或新增平行实现。
+- 技术栈：Tauri 2、Rust、React 19、TypeScript、Vite 8、Tailwind CSS 4、shadcn-style/Base UI。
+- `src/` 为前端，`src-tauri/` 为后端；`src/app/` 管路由与 Shell，`src/features/` 管业务，`src/components/ui/` 管通用 UI，`src/shared/` 管跨功能代码。
+- 后端命令、站点、弹幕、数据库、IPTV、ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmaku/`、`db/`、`iptv/`、`asr.rs`。
+- 服务端/IPC 缓存用 TanStack Query；设置和轻量状态用 Zustand。
+- 动效仅用 Web Animations API 和 CSS，封装于 `src/shared/motion/`；尊重减少动态效果设置，优先使用 `transform`、`opacity`。
+- 前后端复用现有 Tauri commands/events；优先复用现有组件、hooks、stores 和边界，不在前端复制 Rust 业务逻辑或建立平行实现。
 
 ## Android 调试
 
-- 排查 Android 端问题时优先用模拟器复现，触摸/手势类 bug 必须在真机验证（模拟器注入的输入没有真实手指微抖，且镜像 WebView 版本落后于真机）。详细流程见 `docs/zh/Android开发-Windows.md` 的「调试」一节。
-- 远程调试前端必须安装 **debug 构建且 ABI 匹配** 的 APK：真机用 `bun run tauri -- android build --debug --target aarch64`，x86_64 模拟器用 `--target x86_64`；用 `unzip -Z1 <apk> | grep lib/` 和 `adb shell pm dump com.shenss.rlive | grep primaryCpuAbi` 双向核对。release 包不会创建 `webview_devtools_remote_<pid>` socket，CDP 无法接入。
-- 连接方式：`adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com.shenss.rlive)` 后用 `playwright-cli attach --cdp=http://localhost:9222`。真机需已授权 USB 调试且保持亮屏（熄屏时 WebView 挂起）。
-- 注入手势用 `adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <y>"`（物理坐标 = CSS 坐标 × devicePixelRatio）；分析触摸问题时先在页面注入 touch/click/contextmenu/cancel 全事件探针再操作，探针模板见 Android 开发文档。
-- 模拟器用 Windows 原生 emulator（`D:\dev\android-sdk`，AVD `rlive_win`）：带窗口用 `setsid nohup /mnt/d/dev/android-sdk/emulator/emulator.exe -avd rlive_win &`，headless 必须用 PowerShell `Start-Process` 启动（`setsid` 起的进程会随 WSL 会话被回收）。Mirrored 网络下会自动出现在 WSL `adb devices`（另有模拟器占 5554 时它是 `emulator-5556`，命令需带 `-s`）；VS Code Emulate 扩展设 `"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator"`。
+- 先用模拟器复现；触摸/手势问题必须用真机验证。完整流程见 `docs/zh/Android开发-Windows.md`「调试」。
+- 远程调试必须使用 ABI 匹配的 debug APK：真机 `aarch64`，x86_64 模拟器 `x86_64`；分别检查 APK 的 `lib/` 与设备 `primaryCpuAbi`。release APK 不支持 WebView CDP。
+- CDP：先将 `webview_devtools_remote_<pid>` 转发到 `tcp:9222`，再用 `playwright-cli attach --cdp=http://localhost:9222`；真机须授权 USB 调试并保持亮屏。
+- 手势坐标按 `物理坐标 = CSS 坐标 × devicePixelRatio` 换算；排查触摸前注入 touch/click/contextmenu/cancel 事件探针。
+- 使用 Windows emulator（`D:\dev\android-sdk`，AVD `rlive_win`）；带窗口可从 WSL 启动，headless 必须用 PowerShell `Start-Process`。多设备时显式传 `-s`；VS Code 设置 `"emulator.emulatorPathWSL": "/mnt/d/dev/android-sdk/emulator"`。
 
 ## 播放与功能边界
 
-- 直播和 IPTV 使用 Video.js 媒体适配器（HLS/DASH）与 `mpegts.js`，能用浏览器原生媒体能力时直接使用 `<video>`；统一通过 Rust `stream_proxy` 注入请求头和处理同源访问。
-- Video.js React 文档：https://videojs.org/docs/framework/react/llms.txt
-- 已支持 Bilibili、Huya、Douyu、Douyin、Twitch 的浏览与播放；搜索、翻页、Cookie 和弹幕能力以现有实现为准，不伪造平台不可靠的能力。抖音支持推荐/分类分页、首屏 SSR 回退、房间/播放、登录 Cookie 搜索和本地签名实时弹幕，但不提供弹幕发送；Twitch 使用 HLS 和匿名 IRC 弹幕，公开浏览接口可靠支持首屏。
-- 弹幕支持列表、Canvas、SC 叠加层及透明度、字号、速度、区域、行数、过滤和屏蔽设置。本地字幕使用 Web Audio、16 kHz PCM IPC 与 Rust sherpa-onnx Zipformer 会话，模型和音频保持本地。
-- `/iptv` 是频道发现页，`/iptv/play` 是独立播放页；进入发现页不得自动创建播放器或播放频道。
+- 直播和 IPTV 使用 Video.js（HLS/DASH）与 `mpegts.js`；支持原生播放时直接使用 `<video>`；请求头和同源处理统一走 Rust `stream_proxy`。Video.js React 文档：https://videojs.org/docs/framework/react/llms.txt
+- 支持 Bilibili、Huya、Douyu、Douyin、Twitch；能力以现有实现为准，不伪造不可靠能力。Douyin 不发送弹幕；Twitch 使用 HLS 和匿名 IRC，公开浏览接口仅保证首屏。
+- 弹幕支持列表、Canvas、SC 叠加层及现有显示、过滤设置。本地字幕使用 Web Audio、16 kHz PCM IPC、Rust sherpa-onnx Zipformer；模型和音频不得离开本地。
+- `/iptv` 仅发现频道；`/iptv/play` 独立播放。进入 `/iptv` 不得创建播放器或自动播放。
 
 ## UI 与文档
 
 - UI 以中文为主。
-- 用户文档入口为 `README.md`、`docs/README.md`，详细中文文档位于 `docs/zh/`。功能、配置、运行方式或架构变化时同步更新相关文档。
+- 文档入口为 `README.md`、`docs/README.md`，中文详档位于 `docs/zh/`。功能、配置、运行方式或架构变化须同步更新文档。
