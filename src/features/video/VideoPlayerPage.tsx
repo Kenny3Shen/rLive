@@ -7,7 +7,6 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
@@ -49,6 +48,7 @@ import {
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
+import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import {
   PlayerBrightnessShade,
   PlayerEdgeGestureFeedback,
@@ -180,8 +180,6 @@ import {
 } from "./playlistStore";
 import { notify, setToastPortalContainer } from "@/components/ui/toast";
 
-const SINGLE_CLICK_DELAY_MS = 220;
-
 /** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
 const LONG_PRESS_RATE = 3;
 const VOD_PLAYBACK_RATES = [0.25, 0.5, 1, 1.5, 2] as const;
@@ -269,7 +267,6 @@ function VideoPlayerPageContent() {
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const lockRef = useRef<HTMLDivElement | null>(null);
   const [fullscreenLocked, setFullscreenLocked] = useState(false);
-  const clickTimerRef = useRef<number | null>(null);
   // 长按倍速的临时状态全在 ref 里：按住期间不应触发重渲染（弹幕层在动，
   // 状态更新会打扰合成器），只有角标的显示与否走 state。
   const speedHoldTimerRef = useRef<number | null>(null);
@@ -420,7 +417,15 @@ function VideoPlayerPageContent() {
     return false;
   });
   const { exit: fullscreenExit, toggle: fullscreenToggle } = fullscreen;
-  const fullscreenLockMounted = showPlayerFullscreenLock(mobileClient, fullscreen.fullscreen);
+  /**
+   * 舞台是否处于「全屏」这一形态。移动端竖屏全屏走的是短视频模式（固定沉浸层，
+   * `data-fullscreen="true"` 由 `shortVideo && mobileClient` 给出），不经过
+   * `fullscreen.fullscreen`。控制栏的 `fullscreen` 与舞台的 `data-fullscreen`
+   * 早已把两条路径合并，锁定按钮此前只看 `fullscreen.fullscreen`，于是竖屏全屏
+   * 整层不挂 —— 恰恰是最需要手势锁的那一屏。三处判定必须同源。
+   */
+  const stageFullscreen = shortVideo || fullscreen.fullscreen;
+  const fullscreenLockMounted = showPlayerFullscreenLock(stageFullscreen);
   useScreenWakeLock(!paused && !loading && !playbackError);
 
   useEffect(() => {
@@ -564,9 +569,9 @@ function VideoPlayerPageContent() {
   const returningToShortVideo =
     mobileClient && !audioOnly && !params?.epId && detailsKey === videoKey && !shortVideo;
 
-  const [lockSession, setLockSession] = useState({ fullscreen: fullscreen.fullscreen, videoKey });
-  if (lockSession.fullscreen !== fullscreen.fullscreen || lockSession.videoKey !== videoKey) {
-    setLockSession({ fullscreen: fullscreen.fullscreen, videoKey });
+  const [lockSession, setLockSession] = useState({ fullscreen: stageFullscreen, videoKey });
+  if (lockSession.fullscreen !== stageFullscreen || lockSession.videoKey !== videoKey) {
+    setLockSession({ fullscreen: stageFullscreen, videoKey });
     setFullscreenLocked(false);
   }
 
@@ -1655,10 +1660,6 @@ function VideoPlayerPageContent() {
     suppressClickRef.current = true;
     surfacePressRef.current = null;
     releaseSpeedHold();
-    if (clickTimerRef.current !== null) {
-      window.clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = null;
-    }
   }, [releaseSpeedHold]);
 
   const edgeGesture = usePlayerEdgeGesture({
@@ -1716,10 +1717,6 @@ function VideoPlayerPageContent() {
       cancel();
       swipeAnimationRef.current?.cancel();
       swipeAnimationRef.current = null;
-      if (clickTimerRef.current !== null) {
-        window.clearTimeout(clickTimerRef.current);
-        clickTimerRef.current = null;
-      }
       window.removeEventListener("pointerdown", cancelMultiTouch, true);
       window.removeEventListener("blur", cancel);
       window.removeEventListener("resize", cancel);
@@ -1790,10 +1787,6 @@ function VideoPlayerPageContent() {
         start.moved = true;
         releaseSpeedHold();
         suppressClickRef.current = true;
-        if (clickTimerRef.current !== null) {
-          window.clearTimeout(clickTimerRef.current);
-          clickTimerRef.current = null;
-        }
         if (start.swipe) event.currentTarget.setPointerCapture(event.pointerId);
       }
       if (start.swipe) {
@@ -1965,41 +1958,32 @@ function VideoPlayerPageContent() {
     revealControls();
   }, [fullscreen.fullscreen, shortVideo, revealControls]);
 
-  const handleSurfaceClick = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (event.defaultPrevented || event.detail !== 1 || isPlayerControlTarget(event.target))
-        return;
+  /**
+   * 点按暂停、双击全屏：识别器与单双击判定窗口来自 Video.js 官方钩子，动作仍是本页的
+   * `togglePlayback`（唯一更新 `userPausedRef` 记账的入口）与 `togglePlayerFullscreen`
+   * （短视频沉浸 / Android 页内层 / 桌面原生窗口三路径适配）。
+   *
+   * 短视频不注册双击绑定，识别器因此不再等第二次点按，单击立即暂停 —— 与原来
+   * `shortVideo` 分支跳过 220ms 延时是同一行为。
+   *
+   * 长按倍速与滑动的抑制沿用 `suppressClickRef`：识别器是挂在舞台上的原生监听，早于
+   * React 委托的事件，`defaultPrevented` 在这里不可靠，而该标志在 pointermove
+   * 越过 12px 或长按触发的当场就已置位。它同时充当识别器缺少的位移阈值。
+   */
+  usePlayerStageTapGestures({
+    target: stageRef,
+    onTap: () => {
       if (fullscreenLocked) {
         revealControls();
         return;
       }
-      // 长按与滑动松开后的合成点击都不是暂停意图。
-      if (suppressClickRef.current) return;
-      if (shortVideo) {
-        togglePlayback();
-        return;
-      }
-      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = window.setTimeout(() => {
-        clickTimerRef.current = null;
-        togglePlayback();
-      }, SINGLE_CLICK_DELAY_MS);
+      togglePlayback();
     },
-    [fullscreenLocked, revealControls, shortVideo, togglePlayback],
-  );
-
-  const handleSurfaceDoubleClick = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (event.defaultPrevented || shortVideo || fullscreenLocked) return;
-      if (suppressClickRef.current || isPlayerControlTarget(event.target)) return;
-      if (clickTimerRef.current !== null) {
-        window.clearTimeout(clickTimerRef.current);
-        clickTimerRef.current = null;
-      }
-      togglePlayerFullscreen();
-    },
-    [fullscreenLocked, shortVideo, togglePlayerFullscreen],
-  );
+    onDoubleTap: shortVideo || fullscreenLocked ? undefined : togglePlayerFullscreen,
+    // 锁定态要放行以便点按唤出解锁按钮，其余抑制照旧。
+    shouldIgnore: (event) =>
+      isPlayerControlTarget(event.target) || (!fullscreenLocked && suppressClickRef.current),
+  });
 
   const handleStageKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -2257,81 +2241,96 @@ function VideoPlayerPageContent() {
     );
   }
 
-  /** 控制栏工具（字幕）：与直播控制栏字幕按钮保持完全一致的几何尺寸与视觉风格；
-   *  总在控制栏最右侧展示。 */
-  const toolsSlot = subtitles.length > 0 && (
-    <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
-      <ButtonTooltip side="top">
-        <PopoverTrigger
-          render={
-            <MediaButton
-              aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
-              aria-pressed={Boolean(subtitleLan)}
-              className={cn(
-                "r-live-media-extension-button",
-                Boolean(subtitleLan) && "bg-media-primary text-media-primary-foreground",
-              )}
-            >
-              {subtitleLan ? (
-                <Captions className="size-6" aria-hidden />
-              ) : (
-                <CaptionsOff className="size-6" aria-hidden />
-              )}
-            </MediaButton>
-          }
-        />
-      </ButtonTooltip>
-      <PopoverContent
-        container={stageRef}
-        side="top"
-        align="end"
-        collisionBoundary={document.documentElement}
-        collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
-        sticky
-        glass
-        className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
-      >
-        <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
-          字幕
-        </PopoverTitle>
-        <Button
-          variant="ghost"
-          className={cn(
-            "w-full justify-between max-md:h-10",
-            glassOptionClass(),
-            !subtitleLan && glassOptionSelectedClass(),
-          )}
-          aria-pressed={!subtitleLan}
-          onClick={() => {
-            setSubtitleLan(null);
-            setSubtitleOpen(false);
-          }}
+  /**
+   * 控制栏字幕控件：与直播同一契约 —— 常驻右侧按钮组、固定在全屏按钮左侧，
+   * 由 `PlayerControls` 的 `captionsSlot` 渲染。本片没有字幕轨时给禁用按钮，
+   * 而不是把按钮整个摘掉（摘掉会让它挤到全屏按钮右侧，且位置随片源跳动）。
+   */
+  const captionsSlot =
+    subtitles.length === 0 ? (
+      <ButtonTooltip label="当前视频没有字幕" side="top">
+        <MediaButton
+          aria-label="字幕"
+          aria-disabled
+          disabled
+          className="r-live-media-extension-button"
         >
-          <span className="truncate">关闭字幕</span>
-          {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
-        </Button>
-        {subtitles.map((subtitle) => (
+          <CaptionsOff className="size-6" aria-hidden />
+        </MediaButton>
+      </ButtonTooltip>
+    ) : (
+      <Popover open={subtitleOpen} onOpenChange={setSubtitleOpen}>
+        <ButtonTooltip side="top">
+          <PopoverTrigger
+            render={
+              <MediaButton
+                aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
+                aria-pressed={Boolean(subtitleLan)}
+                className={cn(
+                  "r-live-media-extension-button",
+                  Boolean(subtitleLan) && "bg-media-primary text-media-primary-foreground",
+                )}
+              >
+                {subtitleLan ? (
+                  <Captions className="size-6" aria-hidden />
+                ) : (
+                  <CaptionsOff className="size-6" aria-hidden />
+                )}
+              </MediaButton>
+            }
+          />
+        </ButtonTooltip>
+        <PopoverContent
+          container={stageRef}
+          side="top"
+          align="end"
+          collisionBoundary={document.documentElement}
+          collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
+          sticky
+          glass
+          className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+        >
+          <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
+            字幕
+          </PopoverTitle>
           <Button
-            key={subtitle.lan}
             variant="ghost"
             className={cn(
               "w-full justify-between max-md:h-10",
               glassOptionClass(),
-              subtitleLan === subtitle.lan && glassOptionSelectedClass(),
+              !subtitleLan && glassOptionSelectedClass(),
             )}
-            aria-pressed={subtitleLan === subtitle.lan}
+            aria-pressed={!subtitleLan}
             onClick={() => {
-              setSubtitleLan(subtitle.lan);
+              setSubtitleLan(null);
               setSubtitleOpen(false);
             }}
           >
-            <span className="truncate">{subtitle.lan_doc}</span>
-            {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
+            <span className="truncate">关闭字幕</span>
+            {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
           </Button>
-        ))}
-      </PopoverContent>
-    </Popover>
-  );
+          {subtitles.map((subtitle) => (
+            <Button
+              key={subtitle.lan}
+              variant="ghost"
+              className={cn(
+                "w-full justify-between max-md:h-10",
+                glassOptionClass(),
+                subtitleLan === subtitle.lan && glassOptionSelectedClass(),
+              )}
+              aria-pressed={subtitleLan === subtitle.lan}
+              onClick={() => {
+                setSubtitleLan(subtitle.lan);
+                setSubtitleOpen(false);
+              }}
+            >
+              <span className="truncate">{subtitle.lan_doc}</span>
+              {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
+            </Button>
+          ))}
+        </PopoverContent>
+      </Popover>
+    );
 
   const currentPlaybackRate = playbackRate?.playbackRate ?? 1;
 
@@ -2478,7 +2477,7 @@ function VideoPlayerPageContent() {
                 }
                 osdOn={danmakuVisible}
                 webFullscreen={webFullscreen}
-                fullscreen={shortVideo || fullscreen.fullscreen}
+                fullscreen={stageFullscreen}
                 nativeFullscreen={!shortVideo && !fullscreen.nativeLayer}
                 onToggleWebFullscreen={
                   mobilePortrait || shortVideo || returningToShortVideo
@@ -2529,7 +2528,7 @@ function VideoPlayerPageContent() {
                 onOverlayInteractionChange={setOverlayInteractionOpen}
                 onRefresh={retryPlayback}
                 onNext={nextItem ? () => goToPlaylistItem(nextItem) : undefined}
-                toolsSlot={toolsSlot}
+                captionsSlot={captionsSlot}
                 infoVisible={!infoHidden}
                 onToggleInfo={shortVideo ? () => setInfoHidden((hidden) => !hidden) : undefined}
                 audioOnly={audioOnly}
@@ -2549,8 +2548,6 @@ function VideoPlayerPageContent() {
                     "relative min-h-0 flex-1 overflow-hidden bg-black",
                     (mobileClient || portraitSwipeEnabled) && "touch-none select-none",
                   )}
-                  onClick={handleSurfaceClick}
-                  onDoubleClick={handleSurfaceDoubleClick}
                   onPointerDown={handleSurfacePointerDown}
                   onPointerMove={handleSurfacePointerMove}
                   onPointerUp={handleSurfacePointerUp}

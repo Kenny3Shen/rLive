@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type Mpegts from "mpegts.js";
@@ -15,6 +14,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { PlayerControls } from "@/shared/components/player/PlayerControls";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import {
   DEFAULT_PLAYER_VOLUME,
@@ -74,7 +74,6 @@ const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
 /** 派生空轨的稳定身份，避免每帧新数组使弹幕画布失效。 */
 const EMPTY_DANMAKU: RecordedDanmakuEntry[] = [];
 const RECORDING_CONTROLS_HIDE_DELAY_MS = 2_000;
-const RECORDING_SINGLE_CLICK_DELAY_MS = 220;
 const RECORDING_MPEGTS_CONFIG: Mpegts.Config = {
   enableWorker: false,
   enableStashBuffer: false,
@@ -120,7 +119,6 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
   const controlsHideTimerRef = useRef<number | null>(null);
-  const clickTimerRef = useRef<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -674,37 +672,16 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     revealControls();
   }, [fullscreen.fullscreen, revealControls]);
 
-  useEffect(
-    () => () => {
-      clearControlsHideTimer();
-      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
-    },
-    [clearControlsHideTimer],
-  );
+  useEffect(() => clearControlsHideTimer, [clearControlsHideTimer]);
 
-  const handleSurfaceClick = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (event.detail !== 1 || isPlayerControlTarget(event.target)) return;
-      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
-      clickTimerRef.current = window.setTimeout(() => {
-        clickTimerRef.current = null;
-        togglePlayback();
-      }, RECORDING_SINGLE_CLICK_DELAY_MS);
-    },
-    [togglePlayback],
-  );
-
-  const handleSurfaceDoubleClick = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (isPlayerControlTarget(event.target)) return;
-      if (clickTimerRef.current !== null) {
-        window.clearTimeout(clickTimerRef.current);
-        clickTimerRef.current = null;
-      }
-      void fullscreen.toggle();
-    },
-    [fullscreen],
-  );
+  // 点按暂停、双击全屏：识别器与判定窗口来自 Video.js 官方钩子，动作仍是本页的
+  // togglePlayback / 三路径全屏适配器。
+  usePlayerStageTapGestures({
+    target: stageRef,
+    onTap: togglePlayback,
+    onDoubleTap: () => void fullscreen.toggle(),
+    shouldIgnore: (event) => isPlayerControlTarget(event.target),
+  });
 
   const handleStageKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -799,8 +776,6 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       <div
         data-player-video-surface
         className="relative min-h-0 flex-1 overflow-hidden bg-black"
-        onClick={handleSurfaceClick}
-        onDoubleClick={handleSurfaceDoubleClick}
       >
         <div
           ref={rootRef}

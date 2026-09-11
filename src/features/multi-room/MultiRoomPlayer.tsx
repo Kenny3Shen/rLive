@@ -1,4 +1,5 @@
 import { usePlayerChromeVisibility } from "@/shared/hooks/usePlayerChromeVisibility";
+import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import {
   createContext,
   useCallback,
@@ -503,6 +504,12 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
   const exitPlayerFullscreen = player.exitFullscreen;
 
   usePlayerChromeVisibility({ controlsRef, hudRef, visibleRef: controlsVisibleRef, enabled: main });
+  // 副画面双击设为主画面：识别器来自 Video.js 官方钩子，动作仍是本页的 store 操作。
+  usePlayerStageTapGestures({
+    target: playerStageRef,
+    enabled: !main,
+    onDoubleTap: () => setMainRoom(room.key),
+  });
   if (!main && audioOnly) setAudioOnly(false);
   if (!main && osdOn) setOsdOn(false);
 
@@ -788,9 +795,6 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
       onPointerMove={main ? revealControls : undefined}
       onPointerDown={main ? revealControls : undefined}
       onPointerLeave={main ? handleStagePointerLeave : undefined}
-      onDoubleClick={() => {
-        if (!main) setMainRoom(room.key);
-      }}
       controls={
         main ? (
           <MainMultiRoomControls

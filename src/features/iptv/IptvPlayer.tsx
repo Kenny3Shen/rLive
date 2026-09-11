@@ -1,4 +1,5 @@
 import { usePlayerChromeVisibility } from "@/shared/hooks/usePlayerChromeVisibility";
+import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import {
   useCallback,
   useEffect,
@@ -319,6 +320,14 @@ function IptvPlayerContent({
   }, [fullscreen, onWebFullscreenChange, webFullscreen]);
 
   usePlayerChromeVisibility({ controlsRef, hudRef, visibleRef: controlsVisibleRef });
+
+  // 双击全屏：识别器与判定窗口来自 Video.js 官方钩子，动作仍是本页的全屏适配器。
+  usePlayerStageTapGestures({
+    target: playerStageRef,
+    onDoubleTap: () => void toggleFullscreen(),
+    shouldIgnore: (event) => isPlayerInteractiveTarget(event.target),
+  });
+
   const [previousSession, setPreviousSession] = useState({ channelId, channelUrl, reloadToken });
   if (
     previousSession.channelId !== channelId ||
@@ -495,10 +504,6 @@ function IptvPlayerContent({
           if (isPlayerInteractiveTarget(event.target)) return;
           event.currentTarget.focus({ preventScroll: true });
           scheduleControlsHide();
-        }}
-        onDoubleClick={(event) => {
-          if (isPlayerInteractiveTarget(event.target)) return;
-          void toggleFullscreen();
         }}
         onPointerLeave={handleStagePointerLeave}
         controls={

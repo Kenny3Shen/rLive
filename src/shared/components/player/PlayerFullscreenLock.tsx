@@ -8,12 +8,10 @@ import {
 } from "@/shared/components/player/PlayerControls";
 import { cn } from "@/lib/utils";
 
-/**
- * 全屏锁定只在移动端全屏出现：它要挡掉的正是单击/双击/边缘滑动这套触摸手势，
- * 桌面端没有误触问题，窗口化时也随时可以直接离开。
- */
-export function showPlayerFullscreenLock(mobileClient: boolean, fullscreen: boolean): boolean {
-  return mobileClient && fullscreen;
+// 全屏锁定在桌面与移动端都可用：移动端主要防触摸手势误触，桌面端则可同时
+// 收起并冻结播放器 chrome。窗口化时不挂载，避免把锁定状态带回普通播放器。
+export function showPlayerFullscreenLock(fullscreen: boolean): boolean {
+  return fullscreen;
 }
 
 /**
@@ -33,7 +31,7 @@ export function playerChromeVisible(visible: boolean, fullscreenLocked: boolean)
 }
 
 /**
- * 移动端全屏的手势锁按钮层。
+ * 全屏的交互锁按钮层。
  *
  * 它是画面 chrome 的兄弟层，与两层 chrome 共享同一个空闲计时器 —— 锁定期间也会
  * 休眠淡出，随后由舞台点按唤回（否则用户会被困在锁定的全屏里）。`visible` 只提供
@@ -77,7 +75,7 @@ export function PlayerFullscreenLock({
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label={locked ? "解锁全屏手势" : "锁定全屏手势"}
+        aria-label={locked ? "解锁全屏操作" : "锁定全屏操作"}
         aria-pressed={locked}
         className={cn(
           PLAYER_CONTROL_BUTTON_CLASS,

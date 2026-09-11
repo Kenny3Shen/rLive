@@ -1,8 +1,9 @@
-// 画面点按只能有一个所有者：Video.js 皮肤不再挂原生点按/双击手势，播放页自己的
-// 舞台管线是唯一执行者。夹具为两套皮肤（vod / live）各挂一份真实 VideoJsContainer +
-// VideoJsVideo，舞台处理器与 VideoPlayerPage 的 handleSurfaceClick /
-// handleSurfaceDoubleClick 逐字同构，媒体元素用本地桩（`paused` / `play` / `pause`
-// 全部记账），因此「原生手势叠加一次切换」会直接表现为单击后出现两次 play/pause。
+// 画面点按只能有一个所有者：Video.js 皮肤不挂声明式原生手势，播放页统一走
+// `usePlayerStageTapGestures`（官方 `useTapGesture` / `useDoubleTapGesture` 的封装）。
+// 夹具为两套皮肤（vod / live）各挂一份真实 VideoJsContainer + VideoJsVideo，并直接
+// 调用那个真实钩子 —— 不再复刻播放页的手写判定，否则钩子本身坏掉时夹具依然会通过。
+// 媒体元素用本地桩（`paused` / `play` / `pause` 全部记账），因此「识别器与皮肤各切一次」
+// 会直接表现为单击后出现两次 play/pause。
 // 先启动 vite（bun run dev）并打开预览页，再执行：
 //   playwright-cli -s=player-surface-click open http://127.0.0.1:1420/
 //   playwright-cli -s=player-surface-click run-code --filename=tests/player-surface-click.browser.js
@@ -10,8 +11,6 @@ async (page) => {
   const assert = (condition, message) => {
     if (!condition) throw new Error(message);
   };
-  /** 与 VideoPlayerPage 的单双击判定窗口一致。 */
-  const SINGLE_CLICK_DELAY_MS = 220;
   const VARIANTS = ["vod", "live"];
 
   await page.waitForFunction(() =>
@@ -21,7 +20,7 @@ async (page) => {
   );
 
   await page.evaluate(
-    async ({ singleClickDelayMs, variants }) => {
+    async ({ variants }) => {
       const dependencyUrl = (name) => {
         const resource = performance
           .getEntriesByType("resource")
@@ -35,30 +34,33 @@ async (page) => {
       const { VideoJsContainer, VideoJsPlayerProvider, VideoJsVideo } = await import(
         "/src/features/room/player/videoJsControls.tsx"
       );
+      // 被测对象本体：播放页共用的舞台点按封装。
+      const { usePlayerStageTapGestures } = await import(
+        "/src/shared/hooks/usePlayerStageTapGestures.ts"
+      );
       const { createElement: h, createRef } = React;
       const { flushSync } = ReactDOM;
 
       const state = {};
       const hosts = [];
-      const roles = [];
+      const roots = [];
 
       variants.forEach((variant, index) => {
         const host = document.createElement("div");
         document.body.append(host);
         hosts.push(host);
         const videoRef = createRef();
-        const clickTimerRef = { current: null };
         state[variant] = {
           paused: false,
           plays: 0,
           pauses: 0,
-          clicks: 0,
-          doubleClicks: 0,
+          taps: 0,
+          doubleTaps: 0,
           fullscreens: 0,
         };
         const variantState = state[variant];
 
-        /** 与 VideoPlayerPage 的 togglePlayback 同构。 */
+        /** 与各播放页的 togglePlayback 同构。 */
         const togglePlayback = () => {
           const media = videoRef.current;
           if (!media) return;
@@ -66,27 +68,23 @@ async (page) => {
           else media.pause();
         };
 
-        const handleSurfaceClick = (event) => {
-          variantState.clicks += 1;
-          if (event.detail !== 1) return;
-          if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current);
-          clickTimerRef.current = window.setTimeout(() => {
-            clickTimerRef.current = null;
-            togglePlayback();
-          }, singleClickDelayMs);
-        };
-
-        const handleSurfaceDoubleClick = () => {
-          variantState.doubleClicks += 1;
-          if (clickTimerRef.current !== null) {
-            window.clearTimeout(clickTimerRef.current);
-            clickTimerRef.current = null;
-          }
-          variantState.fullscreens += 1;
-        };
+        // 钩子要求 Player 上下文，因此绑定发生在 VideoJsContainer 的子树内。
+        function StageGestures() {
+          usePlayerStageTapGestures({
+            onTap: () => {
+              variantState.taps += 1;
+              togglePlayback();
+            },
+            onDoubleTap: () => {
+              variantState.doubleTaps += 1;
+              variantState.fullscreens += 1;
+            },
+          });
+          return null;
+        }
 
         const root = ReactDOMClient.createRoot(host);
-        roles.push(root);
+        roots.push(root);
         flushSync(() =>
           root.render(
             h(
@@ -113,8 +111,6 @@ async (page) => {
                   {
                     [`data-surface-click-surface-${variant}`]: "",
                     style: { position: "absolute", inset: 0 },
-                    onClick: handleSurfaceClick,
-                    onDoubleClick: handleSurfaceDoubleClick,
                   },
                   h(VideoJsVideo, {
                     ref: videoRef,
@@ -122,6 +118,7 @@ async (page) => {
                     style: { position: "absolute", inset: 0, width: "100%", height: "100%" },
                   }),
                 ),
+                h(StageGestures),
               ),
             ),
           ),
@@ -156,18 +153,19 @@ async (page) => {
         state,
         dispose: () => {
           flushSync(() => {
-            for (const root of roles) root.unmount();
+            for (const root of roots) root.unmount();
           });
           for (const host of hosts) host.remove();
           delete window.__playerSurfaceClick;
         },
       };
     },
-    { singleClickDelayMs: SINGLE_CLICK_DELAY_MS, variants: VARIANTS },
+    { variants: VARIANTS },
   );
 
   const passed = [];
-  const state = (variant) => page.evaluate((name) => window.__playerSurfaceClick.state[name], variant);
+  const state = (variant) =>
+    page.evaluate((name) => window.__playerSurfaceClick.state[name], variant);
 
   try {
     for (const variant of VARIANTS) {
@@ -176,11 +174,11 @@ async (page) => {
       const box = await surface.boundingBox();
       const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 
-      // 1) 单击暂停：业务侧一次切换即止，原生手势不得再叠加一次。
+      // 1) 单击暂停：识别器等满双击窗口后只派发一次单击，业务侧一次切换即止。
       await page.mouse.click(center.x, center.y);
       await page.waitForTimeout(600);
       let current = await state(variant);
-      assert(current.clicks === 1, `${variant}：单击未到达画面（clicks=${current.clicks}）`);
+      assert(current.taps === 1, `${variant}：单击未到达画面（taps=${current.taps}）`);
       assert(
         current.pauses === 1 && current.plays === 0,
         `${variant}：单击切换次数不为 1（pause=${current.pauses}，play=${current.plays}）`,
@@ -197,14 +195,15 @@ async (page) => {
       );
       assert(current.paused === false, `${variant}：第二次单击后媒体未继续播放`);
 
-      // 3) 双击：只提交全屏意图，不切换播放状态。
+      // 3) 双击：只提交全屏意图，不得再泄漏出一次单击暂停。
       await page.mouse.dblclick(center.x, center.y);
       await page.waitForTimeout(600);
       current = await state(variant);
       assert(
-        current.doubleClicks === 1,
-        `${variant}：双击未到达画面（doubleClicks=${current.doubleClicks}）`,
+        current.doubleTaps === 1,
+        `${variant}：双击未到达画面（doubleTaps=${current.doubleTaps}）`,
       );
+      assert(current.taps === 2, `${variant}：双击泄漏成单击（taps=${current.taps}）`);
       assert(
         current.pauses === 1 && current.plays === 1,
         `${variant}：双击泄漏成播放切换（pause=${current.pauses}，play=${current.plays}）`,
@@ -214,9 +213,7 @@ async (page) => {
         `${variant}：双击全屏意图不唯一（fullscreens=${current.fullscreens}）`,
       );
 
-      passed.push(
-        `${variant} 皮肤：单击只切换一次播放状态（停在暂停 → 继续），双击只切换全屏`,
-      );
+      passed.push(`${variant} 皮肤：单击只切换一次播放状态（停在暂停 → 继续），双击只切换全屏`);
     }
 
     return { passed };

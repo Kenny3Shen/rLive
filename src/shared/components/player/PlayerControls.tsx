@@ -13,7 +13,6 @@ import {
   Minimize2,
   PanelRightClose,
   PanelRightOpen,
-  PictureInPicture2,
   RefreshCw,
   Settings,
   Shrink,
@@ -42,6 +41,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
 import { FullscreenButton } from "@/components/videojs/ui/fullscreen-button";
+import { PiPButton } from "@/components/videojs/ui/pip-button";
 import { PlayButton } from "@/components/videojs/ui/play-button";
 import { TimeSlider } from "@/components/videojs/ui/time-slider";
 import { VolumePopover } from "@/components/videojs/ui/volume-popover";
@@ -176,7 +176,8 @@ export type PlayerControlsProps = {
   fullscreen?: boolean;
   nativeFullscreen?: boolean;
   pictureInPictureDisabled?: boolean;
-  onTogglePictureInPicture?: () => void;
+  /** 字幕控件：常驻右侧按钮组、位于全屏按钮左侧，由各播放页提供具体菜单。 */
+  captionsSlot?: ReactNode;
   disabled?: boolean;
   stackedBelowPlayer?: boolean;
   systemGestureBarReserved?: boolean;
@@ -384,7 +385,7 @@ export function PlayerControls({
   fullscreen = false,
   nativeFullscreen = false,
   pictureInPictureDisabled,
-  onTogglePictureInPicture,
+  captionsSlot,
   stackedBelowPlayer = false,
   systemGestureBarReserved = false,
   disabled = false,
@@ -792,30 +793,21 @@ export function PlayerControls({
             </Popover>
           )}
 
-          {/* 4. 画中画 */}
-          <ExtensionButton
-            className="media-max-xs:hidden"
-            label="画中画"
-            disabled={pictureInPictureDisabled}
-            onClick={() => {
-              if (onTogglePictureInPicture) {
-                onTogglePictureInPicture();
-              } else if (typeof document !== "undefined") {
-                const video = document.querySelector("video");
-                if (video) {
-                  if (document.pictureInPictureElement) {
-                    void document.exitPictureInPicture().catch(() => {});
-                  } else if (document.pictureInPictureEnabled) {
-                    void video.requestPictureInPicture().catch(() => {});
-                  }
-                }
-              }
-            }}
-          >
-            <PictureInPicture2 />
-          </ExtensionButton>
+          {/* 4. 字幕：常驻控制栏，不可用时为禁用按钮（位置固定在全屏按钮左侧）。 */}
+          {captionsSlot}
 
-          {/* 5. 窗口全屏 */}
+          {/* 5. 画中画：交给原生 PiPButton —— 它按 `pipAvailability` 自行隐藏，
+              移动端 WebView 不支持画中画时不会再留下一个点了没反应的按钮。 */}
+          <ButtonTooltip side="top">
+            <PiPButton
+              className="media-max-xs:hidden"
+              // 原生标签走 Video.js 英文 i18n，这里显式给中文，与其余控件一致。
+              label={(state) => (state.pip ? "退出画中画" : "画中画")}
+              disabled={pictureInPictureDisabled}
+            />
+          </ButtonTooltip>
+
+          {/* 6. 窗口全屏 */}
           {showWebFullscreen && onToggleWebFullscreen && (
             <ExtensionButton
               label={webFullscreen ? "退出网页全屏" : "网页全屏"}
@@ -826,7 +818,7 @@ export function PlayerControls({
             </ExtensionButton>
           )}
 
-          {/* 6. 全屏 */}
+          {/* 7. 全屏 */}
           {nativeFullscreen ? (
             <ButtonTooltip side="top">
               <FullscreenButton />
