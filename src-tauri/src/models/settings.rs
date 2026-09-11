@@ -9,7 +9,6 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "room_card_preview_enabled",
     "danmaku_blocked_users",
     "recording_max_concurrent",
-    "player_skin",
 ];
 
 /// 录制弹幕伴生文件转换为 ASS 字幕时使用的外观、排版与过滤设置。
@@ -95,13 +94,9 @@ pub struct AppSettings {
     /// 9
     /// 被拒绝的原生请求仍可能通过下方 execCommand 成功。
     pub theme: String,
-    /// 播放器皮肤：`default`（标准圆角）或 `minimal`（极简方角）。
-    ///
-    /// 该字段在 4.0.0 引入，因此比它更早保存的设置记录和配置包里没有它。
-    /// 设置与 profile 的必填校验把它列入 `BACKFILLED_SETTINGS_FIELDS`，
-    /// 由这里的 serde default 补齐，避免升级后整份设置不可读。
-    #[serde(default = "default_player_skin")]
-    pub player_skin: String,
+    /// 已删除播放器皮肤设置；仅消费旧记录中的字段，下一次保存时丢弃。
+    #[serde(default, rename = "player_skin", skip_serializing)]
+    pub legacy_player_skin: Option<String>,
     pub default_site: String,
     /// 从发现页与房间导航中隐藏的平台 id。
     pub disabled_site_ids: Vec<String>,
@@ -206,10 +201,6 @@ fn default_room_card_preview_enabled() -> bool {
     true
 }
 
-fn default_player_skin() -> String {
-    "default".into()
-}
-
 fn default_recording_max_concurrent() -> u32 {
     4
 }
@@ -218,7 +209,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: "system".into(),
-            player_skin: default_player_skin(),
+            legacy_player_skin: None,
             default_site: "bilibili".into(),
             disabled_site_ids: Vec::new(),
             proxy: None,
@@ -282,6 +273,7 @@ mod tests {
         assert!(!v.contains("recording_auto_follow"));
         assert!(!back.legacy_recording_continue_after_leave);
         assert!(!v.contains("recording_continue_after_leave"));
+        assert!(!v.contains("player_skin"));
         assert_eq!(back.recording_ass.resolution_width, 1920);
         assert_eq!(back.recording_ass.font_size, 36);
         assert_eq!(back.recording_ass.scroll_duration_seconds, 12);
@@ -310,6 +302,23 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .contains_key("recording_continue_after_leave")
+        );
+    }
+
+    #[test]
+    fn settings_accept_and_drop_legacy_player_skin() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["player_skin"] = serde_json::json!("minimal");
+
+        let settings: AppSettings = serde_json::from_value(value).unwrap();
+
+        assert_eq!(settings.legacy_player_skin.as_deref(), Some("minimal"));
+        assert!(
+            !serde_json::to_value(settings)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("player_skin")
         );
     }
 

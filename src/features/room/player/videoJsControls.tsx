@@ -4,7 +4,7 @@ import { I18nProvider } from "@videojs/react/i18n";
 import "@videojs/react/i18n/locales/zh-CN/register";
 import { liveFeature } from "@videojs/core/dom";
 import { Video, videoFeatures } from "@videojs/react/video";
-import { PlayerSkinSurface } from "@/components/videojs/skins/shared/skin-surface";
+import { PlayerSurface } from "@/components/videojs/skins/shared/skin-surface";
 import { LiveVideoHotkeys } from "@/components/videojs/skins/live-video/hotkeys";
 import { LiveVideoStatusIndicators } from "@/components/videojs/skins/live-video/status-indicators";
 import { VideoHotkeys } from "@/components/videojs/skins/video/hotkeys";
@@ -29,19 +29,14 @@ type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"
   controls: ReactNode;
 };
 
-/**
- * 统一播放器表面。直播使用 live 预设，点播/录制显式传 `variant="vod"`。
- * 控制栏完全由自定义控制栏渲染，不再使用 Video.js 默认 Skin 预设矩阵及设置项。
- */
+/** 统一播放器表面。直播使用实时快捷键与状态提示，点播/录制显式传 `variant="vod"`。 */
 export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps>(
   function VideoJsContainer({ variant = "live", controls, ...props }, ref) {
     const isVod = variant === "vod";
     return (
       // 语言包随包注册，避免首帧英文；显式 locale 让 SSR 与 `<html lang>` 走同一套文案。
       <I18nProvider locale="zh-CN">
-        <PlayerSkinSurface
-          theme="default"
-          preset={isVod ? "video" : "live-video"}
+        <PlayerSurface
           variant={variant}
           hotkeys={isVod ? <VideoHotkeys /> : <LiveVideoHotkeys />}
           statusIndicators={isVod ? <VideoStatusIndicators /> : <LiveVideoStatusIndicators />}

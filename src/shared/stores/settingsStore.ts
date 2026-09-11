@@ -17,7 +17,6 @@ import type {
   AsrProvider,
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
-  PlayerSkin,
   RecordingAssOverflowPolicy,
   RecordingAssSettings,
   SiteId,
@@ -25,9 +24,6 @@ import type {
 import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
-
-/** 播放器皮肤默认值：标准圆角。 */
-export const PLAYER_SKIN_DEFAULT: PlayerSkin = "default";
 
 export const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 20;
 export const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 16;
@@ -392,7 +388,6 @@ function parseAsrWindowSeconds(value: unknown): number {
 
 type SettingsState = {
   theme: ThemeMode;
-  playerSkin: PlayerSkin;
   siteId: string;
   /** 平台停用项。 */
   disabledSiteIds: SiteId[];
@@ -447,7 +442,6 @@ type SettingsState = {
   /** 真实的 Tauri 设置/schema 错误会阻塞应用直至解决。 */
   settingsLoadError: unknown | null;
   setTheme: (theme: ThemeMode) => void;
-  setPlayerSkin: (skin: PlayerSkin) => void;
   setSiteId: (siteId: string) => void;
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
   setProxy: (proxy: string | null) => void;
@@ -486,7 +480,6 @@ type SettingsState = {
 
 const defaultSettings: AppSettings = {
   theme: "system",
-  player_skin: PLAYER_SKIN_DEFAULT,
   default_site: DEFAULT_SITE_ID,
   disabled_site_ids: [],
   proxy: null,
@@ -528,7 +521,6 @@ const defaultSettings: AppSettings = {
 function toAppSettings(state: SettingsState): AppSettings {
   return {
     theme: state.theme,
-    player_skin: state.playerSkin,
     default_site: state.siteId,
     disabled_site_ids: state.disabledSiteIds,
     proxy: state.proxy,
@@ -584,7 +576,6 @@ function forwardedSetters(
     };
   return {
     setTheme: forward("theme", "theme"),
-    setPlayerSkin: forward("playerSkin", "player_skin"),
     setProxy: forward("proxy", "proxy"),
     setQualityLevel: forward("qualityLevel", "quality_level"),
     setPlaybackSoftSwitchEnabled: forward(
@@ -643,7 +634,6 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set, get) => ({
       theme: "system",
-      playerSkin: PLAYER_SKIN_DEFAULT,
       siteId: DEFAULT_SITE_ID,
       disabledSiteIds: [],
       proxy: null,
@@ -857,7 +847,6 @@ export const useSettingsStore = create<SettingsState>()(
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
         set({
           theme,
-          playerSkin: settings.player_skin === "minimal" ? "minimal" : "default",
           siteId: resolveEnabledSiteId(settings.default_site, disabledSiteIds),
           disabledSiteIds,
           proxy: settings.proxy,

@@ -8,8 +8,8 @@ import { Container } from "@/components/videojs/ui/container";
 import { ErrorDialog } from "@/components/videojs/ui/error-dialog";
 import { Poster } from "@/components/videojs/ui/poster";
 
-/** 每种皮肤对外的 props：媒体表面内容 + 由业务组合的控制条。 */
-export interface PlayerSkinProps extends Omit<
+/** 统一播放器表面的 props：媒体内容与业务控制条。 */
+export interface PlayerSurfaceProps extends Omit<
   NonNullable<ComponentProps<typeof Container>>,
   "children"
 > {
@@ -20,23 +20,14 @@ export interface PlayerSkinProps extends Omit<
   containerRef?: Ref<HTMLDivElement>;
 }
 
-type PlayerSkinSurfaceProps = PlayerSkinProps & {
-  /** 极简皮肤传 `minimal`，对应 `styles/theme.css` 的 `[data-theme]` 规则。 */
-  theme: "default" | "minimal";
-  preset: "video" | "live-video";
+type PlayerSurfacePropsInternal = PlayerSurfaceProps & {
   variant: SkinVariant;
   hotkeys: ReactNode;
   statusIndicators: ReactNode;
 };
 
-/**
- * 四种皮肤（默认 / 极简 × 直播 / 点播）共用的媒体表面：同一层 Container 结构、
- * 同一套原生覆盖层，差异仅在 `data-theme`、`data-preset`，以及调用方注入的
- * 快捷键与状态提示。控制层按 `SkinVariant` 从 `PlayerControls` 取得对应形态。
- */
-export function PlayerSkinSurface({
-  theme,
-  preset,
+/** 直播与点播共用的媒体表面；差异仅为快捷键、状态提示与控制条形态。 */
+export function PlayerSurface({
   variant,
   hotkeys,
   statusIndicators,
@@ -46,15 +37,13 @@ export function PlayerSkinSurface({
   containerRef,
   controlsSlot,
   ...props
-}: PlayerSkinSurfaceProps) {
+}: PlayerSurfacePropsInternal) {
   return (
     <Container
       className={cn(
         "r-live-player-skin pointer-fine:not-data-controls-visible:cursor-none",
         className,
       )}
-      data-theme={theme}
-      data-preset={preset}
       ref={containerRef}
       {...props}
     >
