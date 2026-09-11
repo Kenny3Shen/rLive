@@ -193,6 +193,22 @@ export type VideoSubtitle = {
   url: string;
 };
 
+/** 视频缩略图（快照/storyboard）元数据，对应 B 站 videoshot 接口。 */
+export type VideoStoryboard = {
+  /** 拼版横向小图数（一般为 10）。 */
+  img_x_len: number;
+  /** 拼版纵向小图数（一般为 10）。 */
+  img_y_len: number;
+  /** 单张缩略图宽（一般为 160）。 */
+  img_x_size: number;
+  /** 单张缩略图高（一般为 90）。 */
+  img_y_size: number;
+  /** 拼版图片 URL 列表。 */
+  images: string[];
+  /** 截取时间表（秒），与拼版小图一一对应。 */
+  index: number[];
+};
+
 /** 一条 VOD 弹幕。 */
 export type VideoDanmakuItem = {
   /** 出现时间，毫秒（相对视频起点）。调度按这个字段。 */

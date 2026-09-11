@@ -67,6 +67,7 @@ export function TimeSlider({
       >
         <Slider.Thumbnail.Root
           className={cn(
+            "data-hidden:hidden",
             "absolute max-w-(--media-slider-preview-max-width) -translate-x-1/2 translate-y-media-hidden-preview-offset scale-media-hidden-preview opacity-0",
             "origin-bottom blur-media-hidden",
             "transition-[filter,opacity,scale] duration-media-base ease-out",

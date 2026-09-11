@@ -12,7 +12,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::models::video::{
     PgcListPage, VideoArchive, VideoCastSource, VideoCommentPage, VideoDanmakuSegment,
-    VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoSeason, VideoSessionIds, VideoSubtitle,
+    VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoSeason, VideoSessionIds, VideoStoryboard,
+    VideoSubtitle,
 };
 use crate::sites::bilibili::BilibiliSite;
 use crate::state::AppState;
@@ -239,6 +240,15 @@ pub async fn video_get_subtitles(
     request: VideoPlayRequest,
 ) -> AppResult<Vec<VideoSubtitle>> {
     resolve_bilibili(&state)?.video_subtitles(&request).await
+}
+
+/// 取视频缩略图（storyboard）快照元数据（videoshot）。
+#[tauri::command(async)]
+pub async fn video_get_storyboard(
+    state: State<'_, AppState>,
+    request: VideoPlayRequest,
+) -> AppResult<Option<VideoStoryboard>> {
+    resolve_bilibili(&state)?.video_storyboard(&request).await
 }
 
 /// 拉取字幕 JSON 原文（字幕主机无 CORS 头，由本端代拉）。

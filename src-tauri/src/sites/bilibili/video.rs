@@ -13,7 +13,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::video::{
     DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoComment,
     VideoCommentPage, VideoDanmakuSegment, VideoEmote, VideoItem, VideoListPage, VideoPlayRequest,
-    VideoQuality, VideoSeason, VideoSeasonEpisode, VideoSubtitle, VideoUgcSeason,
+    VideoQuality, VideoSeason, VideoSeasonEpisode, VideoStoryboard, VideoSubtitle, VideoUgcSeason,
 };
 
 use super::BilibiliSite;
@@ -1891,6 +1891,155 @@ impl BilibiliSite {
             )
             .await?;
         Ok(parse_subtitles(root.pointer("/data/subtitle/subtitles")))
+    }
+
+    /// 缩略图（快照/storyboard）元数据（`x/player/videoshot`）。
+    ///
+    /// 获取缩略图雪碧图 URL 列表与时间戳对应表。视频无快照或不支持时返回 `Ok(None)`。
+    pub async fn video_storyboard(
+        &self,
+        request: &VideoPlayRequest,
+    ) -> AppResult<Option<VideoStoryboard>> {
+        if request.cid <= 0 {
+            return Ok(None);
+        }
+
+        let bvid = match request.bvid.as_deref().filter(|s| !s.is_empty()) {
+            Some(bvid) => bvid.to_string(),
+            None => {
+                if let Some(ep_id) = request.ep_id.as_deref().filter(|s| !s.is_empty()) {
+                    match self.video_season(None, Some(ep_id)).await {
+                        Ok(season) => {
+                            if let Some(ep) = season.episodes.into_iter().find(|e| e.ep_id == ep_id) {
+                                ep.bvid
+                            } else {
+                                return Ok(None);
+                            }
+                        }
+                        Err(_) => return Ok(None),
+                    }
+                } else {
+                    return Ok(None);
+                }
+            }
+        };
+
+        let cid_str = request.cid.to_string();
+        let query = [
+            ("bvid", bvid.as_str()),
+            ("cid", cid_str.as_str()),
+            ("index", "1"),
+        ];
+
+        let response = match self
+            .video_fetch(
+                self.client
+                    .get("https://api.bilibili.com/x/player/videoshot")
+                    .query(&query),
+                "快照请求失败",
+                "快照请求返回",
+                false,
+                false,
+            )
+            .await
+        {
+            Ok(res) => res,
+            Err(_) => return Ok(None),
+        };
+
+        let body: Value = match response.json().await {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+
+        if body.get("code").and_then(|v| v.as_i64()) != Some(0) {
+            return Ok(None);
+        }
+
+        let data = match body.get("data").filter(|d| d.is_object()) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        let img_x_len = data.get("img_x_len").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+        let img_y_len = data.get("img_y_len").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
+        let img_x_size = data.get("img_x_size").and_then(|v| v.as_u64()).unwrap_or(160) as u32;
+        let img_y_size = data.get("img_y_size").and_then(|v| v.as_u64()).unwrap_or(90) as u32;
+
+        let images: Vec<String> = data
+            .get("image")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|s| {
+                        if s.starts_with("//") {
+                            format!("https:{s}")
+                        } else if s.starts_with("http://") {
+                            s.replacen("http://", "https://", 1)
+                        } else {
+                            s.to_string()
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if images.is_empty() {
+            return Ok(None);
+        }
+
+        let mut index: Vec<u32> = data
+            .get("index")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_u64().map(|n| n as u32))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if index.len() <= 1 {
+            if let Some(pvdata_url) = data.get("pvdata").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                let full_url = if pvdata_url.starts_with("//") {
+                    format!("https:{pvdata_url}")
+                } else if pvdata_url.starts_with("http://") {
+                    pvdata_url.replacen("http://", "https://", 1)
+                } else {
+                    pvdata_url.to_string()
+                };
+                if let Ok(res) = self
+                    .video_fetch(
+                        self.client.get(&full_url),
+                        "pvdata请求失败",
+                        "pvdata请求返回",
+                        false,
+                        false,
+                    )
+                    .await
+                {
+                    if let Ok(bytes) = res.bytes().await {
+                        index = bytes
+                            .chunks_exact(2)
+                            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]) as u32)
+                            .collect();
+                    }
+                }
+            }
+        }
+
+        if index.len() <= 1 {
+            return Ok(None);
+        }
+
+        Ok(Some(VideoStoryboard {
+            img_x_len,
+            img_y_len,
+            img_x_size,
+            img_y_size,
+            images,
+            index,
+        }))
     }
 
     /// 手写 GET 的公共骨架：站点 UA + VIDEO_REFERER + 状态码检查。
