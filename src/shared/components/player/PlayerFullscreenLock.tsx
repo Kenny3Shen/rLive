@@ -3,7 +3,6 @@ import type { FocusEvent as ReactFocusEvent, PointerEvent as ReactPointerEvent, 
 import { Button } from "@/components/ui/button";
 import {
   PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
 } from "@/shared/components/player/PlayerControls";
 import { cn } from "@/lib/utils";
@@ -64,7 +63,7 @@ export function PlayerFullscreenLock({
       data-player-fullscreen-lock
       data-visible={visible ? "true" : "false"}
       aria-hidden={!visible}
-      className="absolute top-1/2 left-[max(0.5rem,env(safe-area-inset-left))] z-40 -translate-y-1/2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
+      className="absolute top-1/2 left-[max(16px,env(safe-area-inset-left))] z-40 -translate-y-1/2 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
       onPointerEnter={onPointerEnter}
       onPointerDown={onPointerDown}
       onPointerLeave={onPointerLeave}
@@ -74,19 +73,25 @@ export function PlayerFullscreenLock({
       <Button
         type="button"
         variant="ghost"
-        size="icon-sm"
+        size="icon"
         aria-label={locked ? "解锁全屏操作" : "锁定全屏操作"}
         aria-pressed={locked}
         className={cn(
           PLAYER_CONTROL_BUTTON_CLASS,
-          PLAYER_CONTROL_ICON_CLASS,
           PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-          "bg-black/40 hover:bg-black/55",
-          locked && "bg-black/60",
+          // 流媒体全屏里的独立浮动操作要比控制栏按钮更醒目：桌面保持 48px，
+          // 粗指针设备提升到 56px，均高于 WCAG 44px 触控下限。固定 px 避免应用
+          // 根字号缩放把 rem 命中框压回 40px 左右；图标按两档同比放大但保留留白。
+          "size-[48px] rounded-full border border-white/15 bg-black/55 shadow-lg backdrop-blur-sm [@media(pointer:coarse)]:size-[56px] hover:bg-black/70",
+          locked && "bg-black/75",
         )}
         onClick={onToggle}
       >
-        {locked ? <Lock /> : <Unlock />}
+        {locked ? (
+          <Lock className="size-[28px] [@media(pointer:coarse)]:size-[30px]" />
+        ) : (
+          <Unlock className="size-[28px] [@media(pointer:coarse)]:size-[30px]" />
+        )}
       </Button>
     </div>
   );

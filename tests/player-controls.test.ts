@@ -29,6 +29,7 @@ import {
   playerEdgeGestureIntent,
   playerEdgeGestureValue,
 } from "../src/shared/gestures/playerEdgeGesture";
+import { PlayerFullscreenLock } from "../src/shared/components/player/PlayerFullscreenLock";
 import {
   playerChromeVisible,
   playerStageGesturesEnabled,
@@ -169,6 +170,23 @@ describe("mobile player layout", () => {
   test("the fullscreen lock is available on desktop and mobile fullscreen", () => {
     expect(showPlayerFullscreenLock(true)).toBe(true);
     expect(showPlayerFullscreenLock(false)).toBe(false);
+  });
+
+  test("uses streaming-sized desktop and touch targets for the fullscreen lock", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlayerFullscreenLock, {
+        ref: null,
+        visible: true,
+        locked: false,
+        onToggle: () => {},
+      }),
+    );
+    // 独立浮动锁不是控制栏里的紧凑按钮：桌面 48px，粗指针 56px，图标同步放大。
+    expect(html).toContain("size-[48px]");
+    expect(html).toContain("[@media(pointer:coarse)]:size-[56px]");
+    expect(html.split("size-[28px]").length - 1).toBe(1);
+    expect(html.split("[@media(pointer:coarse)]:size-[30px]").length - 1).toBe(1);
+    expect(html).toContain("rounded-full");
   });
 
   test("locking suspends stage gestures", () => {
