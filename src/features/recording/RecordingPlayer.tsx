@@ -750,7 +750,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         "relative flex min-w-0 flex-col overflow-hidden bg-black data-[fullscreen=true]:rounded-none data-[fullscreen=true]:border-0",
         fill
           ? "size-full min-h-0 rounded-none border-0 shadow-none"
-          : "aspect-video rounded-xl border border-border-subtle shadow-sm",
+          : "aspect-video border border-border-subtle shadow-sm",
       )}
       aria-label={`${item.title} 录制回放；按空格或 K 播放或暂停，左右方向键快退或快进，M 静音，F 全屏`}
       aria-keyshortcuts="Space K ArrowLeft ArrowRight M F"

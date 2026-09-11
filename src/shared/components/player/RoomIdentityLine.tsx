@@ -151,7 +151,7 @@ export function RoomIdentityLine({
       ref={viewportRef}
       data-room-identity-line
       data-overflowing="false"
-      className={cn("min-w-0 overflow-hidden", className)}
+      className={cn("flex h-media-control min-w-0 items-center overflow-hidden", className)}
     >
       <div
         ref={trackRef}
