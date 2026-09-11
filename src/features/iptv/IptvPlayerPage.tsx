@@ -394,30 +394,24 @@ export function IptvPlayerPage() {
       <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
         <div
           className={cn(
-            // min-w-0 解除 flex item 的 min-width:auto 下限：aspect-video + h-full
-            // 的内容最小宽 = 播放器高度×16/9，会把固定宽的频道侧栏推出视口右缘。
-            "flex min-h-0 min-w-0 flex-1 items-center justify-center",
-            webFullscreen ? "p-0" : "p-3 md:p-5",
+            // 竖屏按播放器自身画幅占位，剩余高度留给频道列表，不再把画面居中在半屏里。
+            "flex min-h-0 min-w-0 justify-center",
+            webFullscreen
+              ? "flex-1 items-stretch"
+              : "w-full flex-none items-start max-lg:max-h-[70%] lg:flex-1 lg:items-center lg:p-5",
           )}
         >
-          <div
-            className={cn(
-              "flex h-full max-h-full max-w-full items-center",
-              webFullscreen ? "w-full" : "aspect-video",
-            )}
-          >
-            <IptvPlayer
-              channel={channel}
-              reloadToken={reloadToken}
-              webFullscreen={webFullscreen}
-              onWebFullscreenChange={setWebFullscreen}
-              onStatusChange={handlePlaybackStatus}
-              onReconnect={handleReconnect}
-              onBack={goBack}
-              backLabel={directRequested ? "返回设置" : "返回频道列表"}
-              hudToolsSlot={hudTools}
-            />
-          </div>
+          <IptvPlayer
+            channel={channel}
+            reloadToken={reloadToken}
+            webFullscreen={webFullscreen}
+            onWebFullscreenChange={setWebFullscreen}
+            onStatusChange={handlePlaybackStatus}
+            onReconnect={handleReconnect}
+            onBack={goBack}
+            backLabel={directRequested ? "返回设置" : "返回频道列表"}
+            hudToolsSlot={hudTools}
+          />
         </div>
         {!webFullscreen && sidebarChannels && (
           <aside
