@@ -198,7 +198,8 @@ const PLAYBACK_HANDOFF_TTL: Duration = Duration::from_secs(15);
 /// 快速切换房间时的在途交接，同时约束长期驻留内存的签名 URL 总量。
 const PLAYBACK_HANDOFF_CAPACITY: usize = 8;
 
-static PLAYBACK_HANDOFF: LazyLock<PlaybackHandoffCache> = LazyLock::new(PlaybackHandoffCache::default);
+static PLAYBACK_HANDOFF: LazyLock<PlaybackHandoffCache> =
+    LazyLock::new(PlaybackHandoffCache::default);
 
 impl PlaybackHandoffCache {
     /// 以默认 TTL 写入一次交接，仅由 qualities 成功路径调用。
@@ -211,7 +212,9 @@ impl PlaybackHandoffCache {
     fn store_with_ttl(&self, login: &str, variants: Vec<TwitchVariant>, ttl: Duration) {
         // 交接缓存是纯优化：mutex 中毒只意味着放弃这次交接，
         // 绝不让一次已经成功的画质请求因此失败。
-        let Ok(mut entries) = self.entries.lock() else { return };
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
         let now = Instant::now();
         // 先清过期条目：既释放容量，也不让签名 URL 在内存里滞留超过 TTL。
         entries.retain(|_, entry| entry.expires_at > now);
