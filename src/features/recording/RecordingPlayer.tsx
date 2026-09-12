@@ -81,7 +81,11 @@ const RECORDING_MPEGTS_CONFIG: Mpegts.Config = {
   autoCleanupSourceBuffer: false,
   seekType: "range",
   rangeLoadZeroStart: true,
-  accurateSeek: false,
+  // 点播必须落在请求的那一秒：accurateSeek 为假时 mpegts.js 不动 currentTime，
+  // 等 RECOMMEND_SEEKPOINT 回调 directSeek 到「目标之前最近的关键帧」。录制的
+  // GOP 有 2~5 秒，欠冲量因此常常超过 RECORDING_SEEK_TOLERANCE_SECONDS；续播
+  // 又停在暂停态，currentTime 不会自己走到目标，seek 判定永远不成立。
+  accurateSeek: true,
 };
 
 function isPlayerControlTarget(target: EventTarget | null): boolean {
@@ -249,6 +253,16 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         0,
         Math.min(requestedTarget, availableDuration > 0 ? availableDuration : requestedTarget),
       );
+
+      // 无关键帧索引的旧录制（2.0 之前）根本不能随机访问：mpegts.js 会先 flush
+      // MediaSource，再在 isSeekable() 处早退，缓冲清空后没有任何补偿，回放彻底
+      // 卡死。既然跳不了，就一次也不要跳——播放继续，进度条自己弹回真实位置。
+      const core =
+        playerRef.current && (playbackKind === "flv" || playbackKind === "mpegts")
+          ? getVideoJsMpegtsCore(playerRef.current)
+          : null;
+      if (core?.isSeekable() === false) return;
+
       const request = ++seekRequestRef.current;
       endedRef.current = false;
       seekTargetRef.current = target;
@@ -265,11 +279,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       }
 
       try {
-        const protocolSeek =
-          playbackKind === "flv" || playbackKind === "mpegts"
-            ? getVideoJsMpegtsCore(playerRef.current!)?.seek?.(target)
-            : false;
-        if (!protocolSeek) media.currentTime = target;
+        if (!core?.seek(target)) media.currentTime = target;
       } catch {
         seekTargetRef.current = null;
         setWaiting(false);
