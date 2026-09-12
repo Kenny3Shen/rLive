@@ -503,10 +503,10 @@ describe("custom player controls layout", () => {
     expect(html).toContain("刷新播放");
     expect(html).toContain("仅播声音"); // onToggleAudioOnly (default false -> 仅播声音)
 
-    // 右侧控件：设置、弹幕、字幕、网页全屏、全屏
+    // 右侧控件：设置、弹幕、字幕来源菜单、网页全屏、全屏
     expect(html).toContain("播放设置");
     expect(html).toContain("开启弹幕");
-    expect(html).toContain("开启语音字幕");
+    expect(html).toContain("开启字幕");
     expect(html).toContain("网页全屏");
     expect(html).toContain("全屏");
   });
@@ -605,9 +605,7 @@ describe("custom player controls layout", () => {
         hasActions: true,
         roomTitle: "测试房间",
         onBack: () => {},
-        roomActions: [
-          { id: "share", label: "分享", icon: () => null, onSelect: () => {} },
-        ],
+        roomActions: [{ id: "share", label: "分享", icon: () => null, onSelect: () => {} }],
       }),
     );
     // 返回箭头与溢出菜单都必须是 36px 的 MediaButton，一个都不能退回 shadcn 图标按钮。
@@ -679,8 +677,8 @@ describe("player control tooltips", () => {
   });
 
   test("an explicit label still wins over the accessible name", () => {
-    expect(
-      tooltipTriggerLabel(createElement("button", { "aria-label": "回退" }), "播放设置"),
-    ).toBe("播放设置");
+    expect(tooltipTriggerLabel(createElement("button", { "aria-label": "回退" }), "播放设置")).toBe(
+      "播放设置",
+    );
   });
 });
