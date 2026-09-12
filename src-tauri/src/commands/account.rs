@@ -139,6 +139,16 @@ pub async fn account_get_profile(
                 };
             (cookie_username, status)
         }
+        // 虎牙同理：显示名来自 Cookie 的 `udb_n`，探针只决定登录态徽标。
+        SiteId::Huya if has_cookie => {
+            let status =
+                match crate::sites::huya::cookie_session_status(&cookie, proxy.as_deref()).await {
+                    Some(true) => AccountStatus::Valid,
+                    Some(false) => AccountStatus::Expired,
+                    None => AccountStatus::Unknown,
+                };
+            (cookie_username, status)
+        }
         _ => {
             let status = if has_cookie {
                 AccountStatus::Unknown

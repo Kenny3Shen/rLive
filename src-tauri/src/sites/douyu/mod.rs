@@ -1186,7 +1186,10 @@ mod tests {
     /// 否则设置页会把一个仍然有效的账号当成已失效并自动退出登录。
     #[test]
     fn session_status_only_trusts_recognizable_gateway_replies() {
-        assert_eq!(parse_session_status(r#"{"error":0,"data":{"list":[]}}"#), Some(true));
+        assert_eq!(
+            parse_session_status(r#"{"error":0,"data":{"list":[]}}"#),
+            Some(true)
+        );
         assert_eq!(
             parse_session_status(r#"{"code":-1,"error":-1,"msg":"用户未登陆或token已过期"}"#),
             Some(false)
