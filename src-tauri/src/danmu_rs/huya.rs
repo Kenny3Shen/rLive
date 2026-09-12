@@ -552,24 +552,60 @@ async fn wait_for_command(
     })?
 }
 
-fn verify_cookie_response(payload: &[u8]) -> AppResult<()> {
+/// 信令网关对 `WSVerifyCookieReq` 的裁决。`Some(true)` 表示平台接受该会话，
+/// `Some(false)` 表示明确拒绝（未登录／token 已失效），`None` 表示负载解不开——
+/// 它既不能当成一次登录确认，也不能当成一次明确的拒绝。
+///
+/// tag 0 按可选字段读取是刻意的：TARS 会省略零值字段，因此「缺 tag 0」正是裁决
+/// 为 0（已接受）的线路表示，把它当成必填会让每次成功校验都失败。
+fn verify_cookie_verdict(payload: &[u8]) -> Option<bool> {
     let mut reader = TarsReader::new(payload);
-    let validation = reader.read_i64(0, false).map_err(|_| {
-        AppError::new(
-            "huya_send_auth_response",
-            "无法确认虎牙登录状态，请重新扫码或更新 Cookie 后重试",
-        )
-        .with_site("huya")
-    })?;
-    if validation == 0 {
-        Ok(())
-    } else {
-        Err(AppError::new(
+    Some(reader.read_i64(0, false).ok()? == 0)
+}
+
+fn verify_cookie_response(payload: &[u8]) -> AppResult<()> {
+    match verify_cookie_verdict(payload) {
+        Some(true) => Ok(()),
+        Some(false) => Err(AppError::new(
             "huya_send_cookie_expired",
             "虎牙登录状态已失效，请重新保存完整 Cookie 后重试",
         )
-        .with_site("huya"))
+        .with_site("huya")),
+        None => Err(AppError::new(
+            "huya_send_auth_response",
+            "无法确认虎牙登录状态，请重新扫码或更新 Cookie 后重试",
+        )
+        .with_site("huya")),
     }
+}
+
+/// 保存的虎牙浏览器 Cookie 是否仍被平台接受。
+///
+/// 虎牙没有可匿名调用的第一方「账号资料」读接口，其 Web 业务接口也不接受浏览器
+/// Cookie 单独作为凭据（移动版关注列表恒回 `Token验证不通过！`，与会话是否有效
+/// 无关），因此这里复用发送弹幕前的同一条 `verifyCookie` 信令校验。它是平台对
+/// 该会话的权威裁决，也让设置页的登录态徽标与实际能否发送弹幕保持一致。
+///
+/// 平台接受该会话时返回 `Some(true)`；明确拒绝时返回 `Some(false)`；无法判定
+/// （缺少会话字段、连接失败、超时或响应无法解码）时返回 `None`。调用方据此提示
+/// 重新登录，因此这里对 `false` 保持保守：只有网关给出的可识别拒绝才算失效。
+///
+/// 与虎牙其余信令一致，这条探针直连网关，不经过应用代理设置；代理独占的网络下
+/// 连接失败只会留在「未知」，不会把仍然有效的账号判成已失效。
+pub async fn cookie_session_status(cookie: &str) -> Option<bool> {
+    // 缺少数字账号标识或任一登录凭据时无法构造校验请求。这是本地形状问题，
+    // 而不是平台给出的拒绝，因此留在「未知」。
+    let credentials = credentials_from_cookie(cookie)?;
+    let socket = connect_send_ws(&credentials).await.ok()?;
+    let (mut write, mut read) = socket.split();
+    write
+        .send(Message::Binary(encode_verify_cookie(&credentials).into()))
+        .await
+        .ok()?;
+    let payload = wait_for_command(&mut write, &mut read, WS_CMD_VERIFY_COOKIE_RESPONSE)
+        .await
+        .ok()?;
+    verify_cookie_verdict(&payload)
 }
 
 fn send_response_status(payload: &[u8]) -> AppResult<(i64, String)> {
@@ -870,6 +906,63 @@ async fn run_connection_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 会话判定只接受能解码的网关裁决。注意 TARS 会省略零值字段，因此缺 tag 0
+    /// 正是「裁决为 0 = 已接受」的线路表示，不能当成无法判定；只有真正解不开的
+    /// 负载才留在「未知」，否则设置页会把有效账号判成已失效并自动退出登录。
+    #[test]
+    fn verify_cookie_verdict_only_trusts_decodable_gateway_replies() {
+        let accepted = {
+            let mut writer = TarsWriter::new();
+            writer.write_i64(0, 0);
+            writer.into_bytes()
+        };
+        assert_eq!(verify_cookie_verdict(&accepted), Some(true));
+
+        // 非零裁决是网关明确拒绝该会话（未登录／token 已失效）。
+        let rejected = {
+            let mut writer = TarsWriter::new();
+            writer.write_i64(1, 0);
+            writer.into_bytes()
+        };
+        assert_eq!(verify_cookie_verdict(&rejected), Some(false));
+
+        // 省略 tag 0（只写了后续字段）与显式写 0 等价，都是已接受。
+        let omitted_zero = {
+            let mut writer = TarsWriter::new();
+            writer.write_i64(7, 1);
+            writer.into_bytes()
+        };
+        assert_eq!(verify_cookie_verdict(&omitted_zero), Some(true));
+
+        // tag 0 声明为 LONG 但负载被截断：解不开的响应必须留在「未知」。
+        assert_eq!(verify_cookie_verdict(&[0x03, 0x00]), None);
+    }
+
+    /// 实网冒烟：确认信令探针能认出一份真实有效的 Cookie，并对被篡改的凭据给出
+    /// 明确拒绝。Cookie 走文件传入而不是环境变量，避免凭据进入命令行与 shell 历史：
+    /// `HUYA_COOKIE_FILE=<含完整 Cookie 的文件> cargo test --lib huya -- --ignored`
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn cookie_session_status_smoke() {
+        let path = std::env::var("HUYA_COOKIE_FILE").expect("需要 HUYA_COOKIE_FILE 环境变量");
+        let cookie = std::fs::read_to_string(&path).expect("读取 Cookie 文件失败");
+        let cookie = cookie.trim();
+        assert_eq!(
+            cookie_session_status(cookie).await,
+            Some(true),
+            "有效 Cookie 必须判为已登录"
+        );
+        // 两个凭据都要失效，否则网关会用仍然有效的那个通过校验。
+        let tampered = cookie
+            .replace("udb_cred=", "udb_cred=X")
+            .replace("udb_biztoken=", "udb_biztoken=X");
+        assert_eq!(
+            cookie_session_status(&tampered).await,
+            Some(false),
+            "凭据被篡改后必须判为已失效"
+        );
+    }
 
     #[test]
     fn percent_encode_query_keeps_unreserved_and_uppercases_hex() {

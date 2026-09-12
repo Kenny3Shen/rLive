@@ -139,14 +139,16 @@ pub async fn account_get_profile(
                 };
             (cookie_username, status)
         }
-        // 虎牙同理：显示名来自 Cookie 的 `udb_n`，探针只决定登录态徽标。
+        // 虎牙的显示名同样来自 Cookie 的 `udb_n`，探针只决定登录态徽标。它走信令
+        // 网关的 `verifyCookie`（与发送弹幕前的校验同一条链路），因为虎牙的 Web
+        // 业务接口不接受浏览器 Cookie 单独作为凭据，恒回「Token验证不通过」，
+        // 与会话是否有效无关。该链路直连网关，因此不使用应用代理设置。
         SiteId::Huya if has_cookie => {
-            let status =
-                match crate::sites::huya::cookie_session_status(&cookie, proxy.as_deref()).await {
-                    Some(true) => AccountStatus::Valid,
-                    Some(false) => AccountStatus::Expired,
-                    None => AccountStatus::Unknown,
-                };
+            let status = match crate::danmu_rs::huya::cookie_session_status(&cookie).await {
+                Some(true) => AccountStatus::Valid,
+                Some(false) => AccountStatus::Expired,
+                None => AccountStatus::Unknown,
+            };
             (cookie_username, status)
         }
         _ => {
