@@ -1152,9 +1152,8 @@ mod tests {
                 tokio::spawn(async move {
                     let mut request = [0_u8; 2048];
                     let length = stream.read(&mut request).await.unwrap();
-                    let _ = requests_tx.send(
-                        String::from_utf8_lossy(&request[..length]).into_owned(),
-                    );
+                    let _ =
+                        requests_tx.send(String::from_utf8_lossy(&request[..length]).into_owned());
                     // 第一条扣住释放闸：若代理串行化同会话请求，
                     // 第二条就永远无法完成。
                     if this == 1 {

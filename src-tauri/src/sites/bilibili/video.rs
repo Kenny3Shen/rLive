@@ -1936,7 +1936,8 @@ impl BilibiliSite {
                 if let Some(ep_id) = request.ep_id.as_deref().filter(|s| !s.is_empty()) {
                     match self.video_season(None, Some(ep_id)).await {
                         Ok(season) => {
-                            if let Some(ep) = season.episodes.into_iter().find(|e| e.ep_id == ep_id) {
+                            if let Some(ep) = season.episodes.into_iter().find(|e| e.ep_id == ep_id)
+                            {
                                 ep.bvid
                             } else {
                                 return Ok(None);
@@ -1989,8 +1990,14 @@ impl BilibiliSite {
 
         let img_x_len = data.get("img_x_len").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
         let img_y_len = data.get("img_y_len").and_then(|v| v.as_u64()).unwrap_or(10) as u32;
-        let img_x_size = data.get("img_x_size").and_then(|v| v.as_u64()).unwrap_or(160) as u32;
-        let img_y_size = data.get("img_y_size").and_then(|v| v.as_u64()).unwrap_or(90) as u32;
+        let img_x_size = data
+            .get("img_x_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(160) as u32;
+        let img_y_size = data
+            .get("img_y_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(90) as u32;
 
         let images: Vec<String> = data
             .get("image")
@@ -2025,32 +2032,35 @@ impl BilibiliSite {
             })
             .unwrap_or_default();
 
-        if index.len() <= 1 {
-            if let Some(pvdata_url) = data.get("pvdata").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-                let full_url = if pvdata_url.starts_with("//") {
-                    format!("https:{pvdata_url}")
-                } else if pvdata_url.starts_with("http://") {
-                    pvdata_url.replacen("http://", "https://", 1)
-                } else {
-                    pvdata_url.to_string()
-                };
-                if let Ok(res) = self
-                    .video_fetch(
-                        self.client.get(&full_url),
-                        "pvdata请求失败",
-                        "pvdata请求返回",
-                        false,
-                        false,
-                    )
-                    .await
-                {
-                    if let Ok(bytes) = res.bytes().await {
-                        index = bytes
-                            .chunks_exact(2)
-                            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]) as u32)
-                            .collect();
-                    }
-                }
+        if index.len() <= 1
+            && let Some(pvdata_url) = data
+                .get("pvdata")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        {
+            let full_url = if pvdata_url.starts_with("//") {
+                format!("https:{pvdata_url}")
+            } else if pvdata_url.starts_with("http://") {
+                pvdata_url.replacen("http://", "https://", 1)
+            } else {
+                pvdata_url.to_string()
+            };
+            if let Ok(res) = self
+                .video_fetch(
+                    self.client.get(&full_url),
+                    "pvdata请求失败",
+                    "pvdata请求返回",
+                    false,
+                    false,
+                )
+                .await
+                && let Ok(bytes) = res.bytes().await
+            {
+                let (pairs, _) = bytes.as_chunks::<2>();
+                index = pairs
+                    .iter()
+                    .map(|pair| u16::from_be_bytes(*pair) as u32)
+                    .collect();
             }
         }
 
@@ -2402,10 +2412,15 @@ mod tests {
         // dash.js 原生支持 SegmentList + SegmentTimeline：第 k 个 <S> 与第 k 个
         // <SegmentURL> 一一对应，逐片字节区间与时刻精确，不需要前端时间轴修补。
         assert!(mpd.contains("<SegmentList"), "必须输出 SegmentList");
-        assert!(mpd.contains("<SegmentTimeline>"), "必须输出 SegmentTimeline");
-        assert!(mpd.contains(
-            r#"<Initialization sourceURL="http://127.0.0.1:5001/live" range="0-937"/>"#
-        ));
+        assert!(
+            mpd.contains("<SegmentTimeline>"),
+            "必须输出 SegmentTimeline"
+        );
+        assert!(
+            mpd.contains(
+                r#"<Initialization sourceURL="http://127.0.0.1:5001/live" range="0-937"/>"#
+            )
+        );
         // 分片共用代理 URL，差异只在 Range；逐片 mediaRange 来自 sidx。
         assert!(mpd.contains(
             r#"<SegmentURL media="http://127.0.0.1:5001/live" mediaRange="1602-2000"/>"#
@@ -2488,10 +2503,7 @@ mod tests {
         );
         // URL 里的 & 与 < 必须转义，否则 MPD 不是合法 XML。
         assert!(mpd.contains("http://127.0.0.1:5001/live?a=1&amp;b=&lt;2&gt;"));
-        assert!(
-            !mpd.contains("live?a=1&b="),
-            "裸 & 会让 MPD 不是合法 XML"
-        );
+        assert!(!mpd.contains("live?a=1&b="), "裸 & 会让 MPD 不是合法 XML");
     }
 
     // --- protobuf 弹幕 ---
