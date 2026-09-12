@@ -44,6 +44,16 @@ export type VideoJsHlsCore = {
 export type VideoJsMpegtsCore = {
   on: (event: "loading_complete", handler: () => void) => void;
   seek: (seconds: number) => boolean;
+  /**
+   * 这一路流能否随机访问。
+   *
+   * FLV 的 seek 靠 `onMetaData` 里的 `keyframes` 索引换算字节偏移；没有索引时
+   * mpegts.js 会先 flush MediaSource、再在 `isSeekable()` 处早退，缓冲被清空且
+   * 没有任何补偿——回放就此卡死。调用方必须在 seek 之前问过这里。
+   *
+   * `null` 表示 mediaInfo 尚未到达（无从判断），与「确认没有索引」区分开。
+   */
+  isSeekable: () => boolean | null;
 };
 type PlayerOptions = {
   video: HTMLVideoElement;
@@ -224,6 +234,14 @@ class VideoJsPlayer {
         if (!this.mpegts || !Number.isFinite(seconds)) return false;
         this.mpegts.currentTime = Math.max(0, seconds);
         return true;
+      },
+      isSeekable: () => {
+        const info = this.mpegts?.mediaInfo as
+          | { mimeType?: string; hasKeyframesIndex?: boolean | null }
+          | undefined;
+        // mimeType 是 mediaInfo 落定的标志；它还空着时索引缺失只是「还没到」。
+        if (!info?.mimeType) return null;
+        return info.hasKeyframesIndex === true;
       },
     };
   }
