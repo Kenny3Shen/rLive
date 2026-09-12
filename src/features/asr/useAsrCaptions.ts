@@ -13,7 +13,7 @@ import {
   subscribeToVideoPcm,
   type AudioCaptureSubscription,
 } from "./audio";
-import { describeAsrModelStatus, useAsrModelStatus } from "./model";
+import { describeAsrModelStatus, useAsrModelStatus, type AsrModelStatus } from "./model";
 import { useCaptionTranslation } from "./useCaptionTranslation";
 
 type AsrCaptionSegment = {
@@ -44,9 +44,11 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-export function useAsrCaptions(options: {
+export type AsrCaptionsOptions = {
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 媒体元素换代计数：递增即视为新的采集会话。 */
   mediaKey: number;
+  /** 会话身份（房间 / 频道 / 稿件）：变化时清空流式解码状态。 */
   sessionKey: string;
   featureEnabled: boolean;
   settingPending: boolean;
@@ -55,7 +57,32 @@ export function useAsrCaptions(options: {
   translationEnabled: boolean;
   translationFrom: CaptionTranslationSourceLanguage;
   translationTo: CaptionTranslationLanguage;
-}) {
+};
+
+/** 一条 ASR 管线对播放页的完整契约：叠加层内容 + 控件呈现 + 开关。 */
+export type AsrCaptions = {
+  /** 本机是否具备本地 ASR 客户端形态（桌面）。 */
+  desktopClient: boolean;
+  captionsOn: boolean;
+  /** 已定稿的可见行。 */
+  caption: string | null;
+  translatedCaption: string | null;
+  /** 在途假设文本，每个窗口替换。 */
+  partial: string | null;
+  notice: string | null;
+  translationNotice: string | null;
+  translationPending: boolean;
+  noticeIsError: boolean;
+  processing: boolean;
+  modelStatus: AsrModelStatus | null;
+  modelQueryError: string | null;
+  controlLabel: string;
+  controlDisabled: boolean;
+  controlBusy: boolean;
+  toggle: () => void;
+};
+
+export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const clientPlatform = getClientPlatform();
   const localAsrClient = clientPlatform === "desktop";
   const model = useAsrModelStatus({ enabled: options.featureEnabled });

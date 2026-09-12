@@ -138,6 +138,9 @@ import { subtitleJsonToVtt } from "./subtitleVtt";
 import { storyboardToVtt } from "./storyboardVtt";
 import { CastMenu } from "@/features/room/CastMenu";
 import { applyWebPlayerAudio } from "@/features/room/player/useWebPlayer";
+import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
+import { AsrCaptionOverlay } from "@/features/asr/AsrCaptionOverlay";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import {
   PlayerHudOverflowMenu,
   PlayerToolPanel,
@@ -341,6 +344,13 @@ function VideoPlayerPageContent() {
   const [subtitleLan, setSubtitleLan] = useState<string | null>(null);
   /** 当前字幕的 VTT blob 地址。 */
   const [subtitleVttUrl, setSubtitleVttUrl] = useState<string | null>(null);
+  const asrEnabled = useSettingsStore((state) => state.asrEnabled);
+  const asrPending = useSettingsStore((state) => state.asrPending);
+  const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
+  const asrFontSize = useSettingsStore((state) => state.asrFontSize);
+  const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
+  const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
+  const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
   // 换画质时记住切换前的位置与播放状态：播放器必然重建（新的代理端口 = 新的
   // MPD 地址），不存就会从头播。换视频（相关/分集跳转）不会碰它，天然从头播。
   const resumeAtRef = useRef<{ position: number; playing: boolean } | null>(null);
@@ -1511,6 +1521,23 @@ function VideoPlayerPageContent() {
     track.track.mode = "hidden";
   }, [storyboardVttUrl, playUrl]);
 
+  // 语音字幕（本地 ASR）：与直播间、IPTV 共用同一条管线。点播的媒体元素跨会话
+  // 复用（不按 key 重建），因此 mediaKey 取播放器换代计数、sessionKey 取稿件
+  // 身份 + 取流地址 —— 换集、换画质与切「仅音频」都会重建取流，识别状态必须
+  // 随之清空，否则下一段字幕会从上一段语句中间续写。
+  const asr = useAsrCaptions({
+    videoRef,
+    mediaKey: playerRevision,
+    sessionKey: `vod:${videoKey}:${playUrl ?? "idle"}`,
+    featureEnabled: asrEnabled,
+    settingPending: asrPending,
+    mediaAvailable: Boolean(playUrl) && !loading && !switchingItem && !playbackError,
+    chunkSeconds: asrWindowSeconds,
+    translationEnabled: asrTranslationEnabled,
+    translationFrom: asrTranslationFrom,
+    translationTo: asrTranslationTo,
+  });
+
   const playlistGestureEnabled =
     shortVideo &&
     !audioOnly &&
@@ -2244,11 +2271,42 @@ function VideoPlayerPageContent() {
 
   /**
    * 控制栏字幕控件：与直播同一契约 —— 常驻右侧按钮组、固定在全屏按钮左侧，
-   * 由 `PlayerControls` 的 `captionsSlot` 渲染。本片没有字幕轨时给禁用按钮，
-   * 而不是把按钮整个摘掉（摘掉会让它挤到全屏按钮右侧，且位置随片源跳动）。
+   * 由 `PlayerControls` 的 `captionsSlot` 渲染。片源没有 CC 轨时按钮不摘掉
+   * （摘掉会让它挤到全屏按钮右侧，且位置随片源跳动）。
+   *
+   * 菜单里「字幕（本地）」是常驻项：桌面客户端永远列出，不依赖片源有没有 CC 轨，
+   * 选中即用本地 ASR 实时识别当前音轨。三种来源互斥 —— 选 CC 轨会关掉本地识别，
+   * 选本地识别会卸掉 CC 轨（`subtitleLan` 置空后 `<track>` 随之移除）。
    */
+  const localCaptionsAvailable = asr.desktopClient;
+  const captionsActive = Boolean(subtitleLan) || asr.captionsOn;
+  /** 本地识别不可用/未就绪时把原因写在选项下方；就绪且可切换时不占行。 */
+  const localCaptionsHint =
+    asr.controlDisabled || asr.modelStatus?.state !== "ready" || asr.modelQueryError
+      ? asr.controlLabel
+      : null;
+  const selectNoCaptions = () => {
+    setSubtitleLan(null);
+    if (asr.captionsOn) asr.toggle();
+    setSubtitleOpen(false);
+  };
+  const selectSubtitleTrack = (lan: string) => {
+    setSubtitleLan(lan);
+    if (asr.captionsOn) asr.toggle();
+    setSubtitleOpen(false);
+  };
+  const selectLocalCaptions = () => {
+    if (asr.captionsOn) {
+      setSubtitleOpen(false);
+      return;
+    }
+    setSubtitleLan(null);
+    // 模型未就绪时 toggle 只做重试/无操作；此时留着弹层，让状态文案可见。
+    asr.toggle();
+    if (asr.modelStatus?.state === "ready") setSubtitleOpen(false);
+  };
   const captionsSlot =
-    subtitles.length === 0 ? (
+    subtitles.length === 0 && !localCaptionsAvailable ? (
       <ButtonTooltip label="当前视频没有字幕" side="top">
         <MediaButton
           aria-label="字幕"
@@ -2265,14 +2323,14 @@ function VideoPlayerPageContent() {
           <PopoverTrigger
             render={
               <MediaButton
-                aria-label={subtitleLan ? "关闭字幕" : "开启字幕"}
-                aria-pressed={Boolean(subtitleLan)}
+                aria-label={captionsActive ? "关闭字幕" : "开启字幕"}
+                aria-pressed={captionsActive}
                 className={cn(
                   "r-live-media-extension-button",
-                  Boolean(subtitleLan) && "bg-media-primary text-media-primary-foreground",
+                  captionsActive && "bg-media-primary text-media-primary-foreground",
                 )}
               >
-                {subtitleLan ? (
+                {captionsActive ? (
                   <Captions className="size-6" aria-hidden />
                 ) : (
                   <CaptionsOff className="size-6" aria-hidden />
@@ -2289,7 +2347,7 @@ function VideoPlayerPageContent() {
           collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
           sticky
           glass
-          className={cn("w-52 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+          className={cn("w-56 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
         >
           <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
             字幕
@@ -2299,16 +2357,13 @@ function VideoPlayerPageContent() {
             className={cn(
               "w-full justify-between max-md:h-10",
               glassOptionClass(),
-              !subtitleLan && glassOptionSelectedClass(),
+              !captionsActive && glassOptionSelectedClass(),
             )}
-            aria-pressed={!subtitleLan}
-            onClick={() => {
-              setSubtitleLan(null);
-              setSubtitleOpen(false);
-            }}
+            aria-pressed={!captionsActive}
+            onClick={selectNoCaptions}
           >
             <span className="truncate">关闭字幕</span>
-            {!subtitleLan && <Check data-icon="inline-end" aria-hidden />}
+            {!captionsActive && <Check data-icon="inline-end" aria-hidden />}
           </Button>
           {subtitles.map((subtitle) => (
             <Button
@@ -2320,15 +2375,43 @@ function VideoPlayerPageContent() {
                 subtitleLan === subtitle.lan && glassOptionSelectedClass(),
               )}
               aria-pressed={subtitleLan === subtitle.lan}
-              onClick={() => {
-                setSubtitleLan(subtitle.lan);
-                setSubtitleOpen(false);
-              }}
+              onClick={() => selectSubtitleTrack(subtitle.lan)}
             >
               <span className="truncate">{subtitle.lan_doc}</span>
               {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
             </Button>
           ))}
+          {localCaptionsAvailable && (
+            <>
+              {subtitles.length > 0 && <Separator className={cn("my-1", glassSeparatorClass())} />}
+              <Button
+                variant="ghost"
+                className={cn(
+                  "h-auto min-h-9 w-full justify-between py-1.5 max-md:min-h-10",
+                  glassOptionClass(),
+                  asr.captionsOn && glassOptionSelectedClass(),
+                )}
+                aria-pressed={asr.captionsOn}
+                aria-disabled={asr.controlDisabled || undefined}
+                disabled={asr.controlDisabled}
+                onClick={selectLocalCaptions}
+              >
+                <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+                  <span className="truncate">字幕（本地）</span>
+                  {localCaptionsHint && (
+                    <span className={cn("text-xs font-normal", glassMutedTextClass())}>
+                      {localCaptionsHint}
+                    </span>
+                  )}
+                </span>
+                {asr.controlBusy ? (
+                  <Spinner data-icon="inline-end" aria-hidden />
+                ) : asr.captionsOn ? (
+                  <Check data-icon="inline-end" aria-hidden />
+                ) : null}
+              </Button>
+            </>
+          )}
         </PopoverContent>
       </Popover>
     );
@@ -2664,6 +2747,14 @@ function VideoPlayerPageContent() {
                   </div>
                   <PlayerEdgeGestureFeedback refs={edgeGestureFeedback} />
                 </div>
+
+                {/* 语音字幕叠加层：CC 轨由 `<track>` 原生渲染，本地识别是 DOM 叠加层。
+                    两者互斥，不会同时出现。锚在画面框底边上方，位于控制栏之下。 */}
+                <AsrCaptionOverlay
+                  asr={asr}
+                  fontSize={asrFontSize}
+                  translationTo={asrTranslationTo}
+                />
 
                 {/* 顶部 HUD：所有模式（含桌面普通详情）共用，承载返回/标题与低频工具，
               与底部控制栏同一套空闲显隐。 */}

@@ -36,8 +36,13 @@ import {
 import { RoomIdentityLine } from "@/shared/components/player/RoomIdentityLine";
 import { cn, normalizeCoverUrl } from "@/lib/utils";
 import { invokeCmd } from "@/shared/api/tauri";
-import type { LiveRoomDetail } from "@/shared/types/live";
-import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
+import type {
+  CaptionTranslationLanguage,
+  CaptionTranslationSourceLanguage,
+  LiveRoomDetail,
+} from "@/shared/types/live";
+import { useAsrCaptions, type AsrCaptions } from "@/features/asr/useAsrCaptions";
+import { AsrCaptionOverlay } from "@/features/asr/AsrCaptionOverlay";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { DanmuJsDanmaku } from "@/features/room/danmaku/DanmuJsDanmaku";
 import { useDanmakuConnection } from "@/features/room/danmaku/useDanmakuConnection";
@@ -131,17 +136,17 @@ type MainMultiRoomControlsProps = {
 };
 
 type MainMultiRoomAsrContextValue = {
-  asr: ReturnType<typeof useAsrCaptions>;
+  asr: AsrCaptions;
   asrFontSize: number;
   asrPending: boolean;
   asrSpeakerDiarizationEnabled: boolean;
   asrTranslationEnabled: boolean;
-  asrTranslationFrom: Parameters<typeof useAsrCaptions>[0]["translationFrom"];
-  asrTranslationTo: Parameters<typeof useAsrCaptions>[0]["translationTo"];
+  asrTranslationFrom: CaptionTranslationSourceLanguage;
+  asrTranslationTo: CaptionTranslationLanguage;
   setAsrSpeakerDiarizationEnabled: (enabled: boolean) => void | Promise<void>;
   setAsrTranslationEnabled: (enabled: boolean) => void;
-  setAsrTranslationFrom: (from: Parameters<typeof useAsrCaptions>[0]["translationFrom"]) => void;
-  setAsrTranslationTo: (to: Parameters<typeof useAsrCaptions>[0]["translationTo"]) => void;
+  setAsrTranslationFrom: (from: CaptionTranslationSourceLanguage) => void;
+  setAsrTranslationTo: (to: CaptionTranslationLanguage) => void;
 };
 
 const MainMultiRoomAsrContext = createContext<MainMultiRoomAsrContextValue | null>(null);
@@ -276,46 +281,9 @@ function MainMultiRoomStageOverlays({
   return (
     <>
       {showHost && audioOnly && playerRunning && <AudioOnlyIndicator />}
-      {showHost &&
-        !audioOnly &&
-        (asr.captionsOn || asr.notice) &&
-        (asr.notice ||
-          asr.caption ||
-          asr.translatedCaption ||
-          asr.translationNotice ||
-          asr.partial) && (
-          <div
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            className="pointer-events-none absolute inset-x-4 bottom-[4.5rem] z-20 flex justify-center"
-          >
-            <p
-              className={`flex max-h-[min(7em,45dvh)] min-w-0 max-w-[min(48rem,92%)] flex-col justify-end overflow-hidden rounded-md bg-black/78 px-3 py-1.5 text-center leading-relaxed font-medium text-white shadow-md [text-shadow:0_1px_2px_rgb(0_0_0_/_0.9)]${asr.noticeIsError ? " border border-destructive/45 text-red-100" : ""}`}
-              style={{ fontSize: `${asrFontSize}px` }}
-            >
-              {asr.notice ?? (
-                <span className="flex shrink-0 flex-col gap-0.5 whitespace-pre-line break-words">
-                  {asr.caption ? <span>{asr.caption}</span> : null}
-                  {asr.translatedCaption ? (
-                    <span
-                      lang={asrTranslationTo === "auto" ? undefined : asrTranslationTo}
-                      className="text-white/82"
-                    >
-                      {asr.translatedCaption}
-                    </span>
-                  ) : null}
-                  {asr.translationNotice ? (
-                    <span className="text-xs font-normal text-destructive">
-                      {asr.translationNotice}
-                    </span>
-                  ) : null}
-                  {asr.partial ? <span className="text-white/60">{asr.partial}</span> : null}
-                </span>
-              )}
-            </p>
-          </div>
-        )}
+      {showHost && !audioOnly && (
+        <AsrCaptionOverlay asr={asr} fontSize={asrFontSize} translationTo={asrTranslationTo} />
+      )}
     </>
   );
 }
