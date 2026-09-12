@@ -47,14 +47,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { isMobileClient } from "@/shared/clientPlatform";
-import {
-  PLAYER_CONTROL_BUTTON_CLASS,
-  PLAYER_CONTROL_ICON_CLASS,
-  PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-} from "@/shared/components/player/PlayerControls";
 import { MultiRoomLiveSyncProvider } from "./MultiRoomLiveSyncProvider";
 import { MultiRoomPickerDialog } from "./MultiRoomPickerDialog";
-import { MultiRoomPlayer } from "./MultiRoomPlayer";
+import { MultiRoomPlayer, OverlayIconButton } from "./MultiRoomPlayer";
 import { MultiRoomSyncControl } from "./MultiRoomSyncControl";
 import {
   isMultiRoomMainSlot,
@@ -159,30 +154,16 @@ function OccupiedSlot({
     ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
     : undefined;
   const dragHandle = (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            ref={setActivatorNodeRef}
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className={cn(
-              PLAYER_CONTROL_BUTTON_CLASS,
-              PLAYER_CONTROL_ICON_CLASS,
-              PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
-              "cursor-grab active:cursor-grabbing",
-            )}
-            aria-label={`拖拽移动或交换${room.title}`}
-            {...attributes}
-            {...listeners}
-          />
-        }
-      >
-        <Grip data-icon="inline-start" aria-hidden />
-      </TooltipTrigger>
-      <TooltipContent>拖拽移动或交换画面</TooltipContent>
-    </Tooltip>
+    <OverlayIconButton
+      ref={setActivatorNodeRef}
+      label="拖拽移动或交换画面"
+      className="cursor-grab active:cursor-grabbing"
+      aria-label={`拖拽移动或交换${room.title}`}
+      {...attributes}
+      {...listeners}
+    >
+      <Grip data-icon="inline-start" aria-hidden />
+    </OverlayIconButton>
   );
 
   return (
