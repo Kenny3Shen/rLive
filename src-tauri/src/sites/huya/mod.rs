@@ -204,66 +204,6 @@ fn is_room_page_url(url: &str) -> bool {
     url.starts_with("https://m.huya.com/") || url.starts_with("https://www.huya.com/")
 }
 
-/// 只需要登录态、返回体最小的虎牙 Web 接口（实测 87 字节）。虎牙没有可匿名
-/// 调用的第一方「账号资料」读接口，因此用移动版关注列表的第一页作为会话探针。
-const SESSION_PROBE_URL: &str = "https://mp.huya.com/cache.php?m=Subscribe&do=ajaxSubscribeList";
-
-/// 保存的虎牙浏览器 Cookie 是否仍被平台接受。
-///
-/// 平台确认该会话时返回 `Some(true)`；明确拒绝（未登录／token 校验不通过）时
-/// 返回 `Some(false)`；无法判定（网络失败、风控或无法识别的响应）时返回
-/// `None`。调用方据此提示重新登录，因此这里对 `false` 保持保守：只有可识别
-/// 的拒绝才算失效。
-pub async fn cookie_session_status(cookie: &str, proxy: Option<&str>) -> Option<bool> {
-    let cookie = normalize_probe_cookie(cookie);
-    if cookie.is_empty() {
-        return Some(false);
-    }
-    let client = http_client::client_for_proxy(proxy).ok()?;
-    let response = client
-        .get(SESSION_PROBE_URL)
-        .header("user-agent", DESKTOP_UA)
-        .header("referer", "https://www.huya.com/")
-        .header("cookie", cookie)
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    parse_session_status(&response.text().await.ok()?)
-}
-
-/// 该接口用显式的 `isLogin` 标志报告会话状态：登录态为 `1`，未登录与
-/// token 校验不通过统一为 `0`（`code = 501`）。只信任这个字段：缺失、非 JSON
-/// 或其它形状都可能是风控与业务失败，不能当作会话已失效。
-fn parse_session_status(body: &str) -> Option<bool> {
-    let response: Value = serde_json::from_str(body).ok()?;
-    match json_strict_i64(response.get("isLogin")?)? {
-        0 => Some(false),
-        1 => Some(true),
-        _ => None,
-    }
-}
-
-/// 与 [`json_i64`] 不同：不把缺失或无法解析的字段折成 `0`。会话判定既不能把
-/// 无法识别的响应当成一次成功的登录确认，也不能当成一次明确的拒绝。
-fn json_strict_i64(value: &Value) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().map(|value| value as i64))
-        .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
-}
-
-fn normalize_probe_cookie(value: &str) -> String {
-    let value = value.trim();
-    value
-        .strip_prefix("Cookie:")
-        .unwrap_or(value)
-        .trim()
-        .to_owned()
-}
-
 /// 只提取对信令层有意义的桌面字段。公开资料页房间号被刻意排除：
 /// 它不是 TARS 频道 id。下播页面常把两个桌面频道字段都置零，
 /// 改用主播（`lp`）作为 Web 播放器的兜底。
@@ -1278,28 +1218,6 @@ mod tests {
             "https://live.cdn.huya.com/liveconfig/game/bussLive"
         ));
         assert!(!is_room_page_url("https://search.cdn.huya.com/?q=test"));
-    }
-
-    /// 会话判定只接受显式的 `isLogin` 标志：风控、非 JSON 或缺字段都必须留在
-    /// 「未知」，否则设置页会把一个仍然有效的账号当成已失效并自动退出登录。
-    #[test]
-    fn session_status_only_trusts_the_explicit_login_flag() {
-        assert_eq!(
-            parse_session_status(r#"{"code":200,"page":1,"isLogin":1,"list":[]}"#),
-            Some(true)
-        );
-        assert_eq!(
-            parse_session_status(
-                r#"{"code":501,"message":"Token验证不通过！","page":1,"isLogin":0}"#
-            ),
-            Some(false)
-        );
-        assert_eq!(
-            parse_session_status(r#"{"status":1401,"message":"未登录！"}"#),
-            None
-        );
-        assert_eq!(parse_session_status(r#"{"code":200,"list":[]}"#), None);
-        assert_eq!(parse_session_status("<html>404</html>"), None);
     }
 
     /// 精简 fixture：保留真实响应的结构特征（平铺 `gameList` 带 `imgUrl`、
