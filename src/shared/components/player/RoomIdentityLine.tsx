@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn, formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import type { SiteId } from "@/shared/types/live";
+import { PLAYER_HUD_TITLE_SIZE_CLASS } from "./PlayerControls";
 import { SiteLogo } from "../SiteLogo";
 
 const OVERFLOW_TOLERANCE_PX = 1;
@@ -163,7 +164,7 @@ export function RoomIdentityLine({
         <strong
           className={cn(
             "shrink-0 font-semibold text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]",
-            tile ? "text-xs" : compact ? "text-sm" : "text-base",
+            PLAYER_HUD_TITLE_SIZE_CLASS,
           )}
           title={displayTitle}
         >

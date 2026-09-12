@@ -21,6 +21,7 @@ import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicato
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
+  PLAYER_HUD_TITLE_SIZE_CLASS,
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
@@ -719,7 +720,10 @@ function IptvPlayerContent({
                 </Badge>
                 <span
                   data-mobile-static-backdrop
-                  className="inline-flex items-center min-w-0 truncate rounded-md bg-black/55 px-2 py-1 text-xs text-primary-foreground backdrop-blur leading-none"
+                  className={cn(
+                    "inline-flex items-center min-w-0 truncate rounded-md bg-black/55 px-2 py-1 text-primary-foreground backdrop-blur leading-none",
+                    PLAYER_HUD_TITLE_SIZE_CLASS,
+                  )}
                 >
                   {channel.name}
                 </span>

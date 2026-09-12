@@ -57,7 +57,10 @@ import {
 } from "../src/features/room/PlayerFullscreenHud";
 import { RoomIdentityLine } from "../src/shared/components/player/RoomIdentityLine";
 import { tooltipTriggerLabel } from "../src/components/videojs/ui/button-tooltip";
-import { PLAYER_HUD_BUTTON_CLASS } from "../src/shared/components/player/PlayerControls";
+import {
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_TITLE_SIZE_CLASS,
+} from "../src/shared/components/player/PlayerControls";
 import {
   clampAndroidPlayerControl,
   getAndroidPlayerControls,
@@ -629,6 +632,25 @@ describe("custom player controls layout", () => {
     );
     expect(html).toContain("h-media-control");
     expect(html).toContain("items-center");
+  });
+
+  test("the HUD title keeps one font size across every density", () => {
+    // 直播全屏、多画面分格、视频与 IPTV 四处顶部 HUD 的标题曾各写一套字号
+    // （`text-base` / `text-sm` / `text-xs`），同一位置的标题在四个页面之间大小对不上。
+    const densities = [
+      { density: "fullscreen", compact: false },
+      { density: "fullscreen", compact: true },
+      { density: "tile", compact: false },
+    ] as const;
+    for (const props of densities) {
+      const html = renderToStaticMarkup(
+        createElement(RoomIdentityLine, { title: "测试标题", userName: "主播名称", ...props }),
+      );
+      const titleClasses = html.slice(0, html.indexOf("测试标题"));
+      expect(titleClasses).toContain(PLAYER_HUD_TITLE_SIZE_CLASS);
+      // 分档字号一旦回归，标题就会同时带上第二个 `text-*`。
+      expect(titleClasses).not.toMatch(/text-(sm|xs|\[)/);
+    }
   });
 });
 
