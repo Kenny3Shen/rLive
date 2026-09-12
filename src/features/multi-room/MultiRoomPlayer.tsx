@@ -7,6 +7,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ComponentProps,
   type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
@@ -70,17 +71,25 @@ function playbackErrorMessage(error: unknown): string {
   return "当前直播流不可用";
 }
 
-function OverlayIconButton({
+/**
+ * 多画面分格 HUD 上图标按钮的唯一画法：与直播 HUD 同一套 36px `MediaButton`、药丸
+ * 圆角与 hover 配色。退出全屏、拖拽把手、设为主画面、刷新与移除共用它 —— 新增按钮
+ * 必须走这里，否则就会像之前的拖拽把手那样长出一个 28px、圆角也不一样的按钮。
+ *
+ * 透传 `button` 属性以支持 dnd-kit 的 `setActivatorNodeRef` 与 `attributes` /
+ * `listeners`；`label` 同时作为 tooltip 文案与默认 `aria-label`，需要更具体的读屏
+ * 文案时由调用点再传一个 `aria-label` 覆盖。
+ */
+export function OverlayIconButton({
   label,
-  onClick,
   children,
-  disabled,
   portalContainer,
-}: {
+  className,
+  disabled,
+  ...buttonProps
+}: ComponentProps<"button"> & {
   label: string;
-  onClick: () => void;
   children: ReactNode;
-  disabled?: boolean;
   portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
 }) {
   return (
@@ -89,11 +98,11 @@ function OverlayIconButton({
         render={
           <MediaButton
             type="button"
-            className={cn(PLAYER_HUD_BUTTON_CLASS, "[&_svg]:size-6")}
+            className={cn(PLAYER_HUD_BUTTON_CLASS, "[&_svg]:size-6", className)}
             aria-label={label}
             aria-disabled={disabled || undefined}
             disabled={disabled}
-            onClick={onClick}
+            {...buttonProps}
           />
         }
       >
