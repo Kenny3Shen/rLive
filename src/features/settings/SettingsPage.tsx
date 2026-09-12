@@ -619,7 +619,8 @@ function AccountCard({
         ? "已登录"
         : "未登录";
 
-  // Cookie 过期时自动登出
+  // Cookie 失效时自动登出。清除后账号状态会回到「未登录」，因此必须留下提示，
+  // 否则用户只看到登录态凭空消失，不知道需要重新登录。
   useEffect(() => {
     if (profileLoading || !expired || !hasCookie) return;
 
@@ -633,10 +634,14 @@ function AccountCard({
           setManualCookieLoaded(true);
           if (isDanmakuSendCookieSite(siteId)) markDanmakuCookieChanged();
           refreshCookieDependentQueries();
+          setNotice(`${title} Cookie 已失效，已自动退出登录。请重新扫码或输入 Cookie。`);
         }
       } catch (error) {
-        // 静默失败 —— 用户仍可手动登出
+        // 清除失败时账号仍是失效状态，徽标保持「已失效」，用户可手动退出。
         console.error("Auto logout failed:", error);
+        if (!cancelled) {
+          setNotice(`${title} Cookie 已失效，请重新扫码或输入 Cookie。`);
+        }
       }
     };
     void autoLogout();
@@ -652,6 +657,7 @@ function AccountCard({
     refreshProfile,
     markDanmakuCookieChanged,
     refreshCookieDependentQueries,
+    title,
   ]);
 
   return (

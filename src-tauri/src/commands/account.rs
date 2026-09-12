@@ -128,6 +128,17 @@ pub async fn account_get_profile(
                 BilibiliProfileLookup::Unavailable => (cookie_username, AccountStatus::Unknown),
             }
         }
+        // 斗鱼的显示名来自 Cookie 自身而不是某次查询，因此探针失败时它仍然可用；
+        // 只有平台明确拒绝该会话才报告已失效。
+        SiteId::Douyu if has_cookie => {
+            let status =
+                match crate::sites::douyu::cookie_session_status(&cookie, proxy.as_deref()).await {
+                    Some(true) => AccountStatus::Valid,
+                    Some(false) => AccountStatus::Expired,
+                    None => AccountStatus::Unknown,
+                };
+            (cookie_username, status)
+        }
         _ => {
             let status = if has_cookie {
                 AccountStatus::Unknown
