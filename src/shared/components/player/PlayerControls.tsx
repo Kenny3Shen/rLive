@@ -370,6 +370,97 @@ function SettingsBody({
   );
 }
 
+export type AsrSettingsBodyProps = {
+  portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
+  translationEnabled: boolean;
+  translationFrom: CaptionTranslationSourceLanguage;
+  translationTo: CaptionTranslationLanguage;
+  speakerDiarizationEnabled: boolean;
+  onTranslationEnabledChange?: (enabled: boolean) => void;
+  onTranslationFromChange?: (from: CaptionTranslationSourceLanguage) => void;
+  onTranslationToChange?: (to: CaptionTranslationLanguage) => void;
+  onSpeakerDiarizationEnabledChange?: (enabled: boolean) => void | Promise<void>;
+};
+
+/** 直播字幕按钮与 VOD「字幕（本地）」二级页共用的识别设置。 */
+export function AsrSettingsBody({
+  portalContainer,
+  translationEnabled,
+  translationFrom,
+  translationTo,
+  speakerDiarizationEnabled,
+  onTranslationEnabledChange,
+  onTranslationFromChange,
+  onTranslationToChange,
+  onSpeakerDiarizationEnabledChange,
+}: AsrSettingsBodyProps) {
+  return (
+    <FieldGroup className="gap-3">
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-speaker-diarization">区分说话人</FieldLabel>
+        <Switch
+          id="player-speaker-diarization"
+          size="sm"
+          checked={speakerDiarizationEnabled}
+          disabled={!onSpeakerDiarizationEnabledChange}
+          onCheckedChange={(checked) => void onSpeakerDiarizationEnabledChange?.(checked)}
+        />
+      </Field>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
+        <Switch
+          id="player-caption-translation"
+          size="sm"
+          checked={translationEnabled}
+          disabled={!onTranslationEnabledChange}
+          onCheckedChange={onTranslationEnabledChange}
+        />
+      </Field>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
+        <Select
+          items={TRANSLATION_SOURCE_LANGUAGE_OPTIONS}
+          value={translationFrom}
+          onValueChange={(value) => value && onTranslationFromChange?.(value)}
+        >
+          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent container={portalContainer} side="top" align="end" glass>
+            <SelectGroup>
+              {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
+                <SelectItem key={language.value} value={language.value}>
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation-to">译文语言</FieldLabel>
+        <Select
+          items={TRANSLATION_LANGUAGE_OPTIONS}
+          value={translationTo}
+          onValueChange={(value) => value && onTranslationToChange?.(value)}
+        >
+          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent container={portalContainer} side="top" align="end" glass>
+            <SelectGroup>
+              {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
+                <SelectItem key={language.value} value={language.value}>
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+    </FieldGroup>
+  );
+}
 export function PlayerControls({
   chrome,
   externalAudioControls,
@@ -466,71 +557,19 @@ export function PlayerControls({
     />
   );
 
+
   const asrBody = (
-    <FieldGroup className="gap-3">
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-speaker-diarization">区分说话人</FieldLabel>
-        <Switch
-          id="player-speaker-diarization"
-          size="sm"
-          checked={asrSpeakerDiarizationEnabled}
-          disabled={!onAsrSpeakerDiarizationEnabledChange}
-          onCheckedChange={(checked) => void onAsrSpeakerDiarizationEnabledChange?.(checked)}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
-        <Switch
-          id="player-caption-translation"
-          size="sm"
-          checked={asrTranslationEnabled}
-          disabled={!onAsrTranslationEnabledChange}
-          onCheckedChange={onAsrTranslationEnabledChange}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
-        <Select
-          items={TRANSLATION_SOURCE_LANGUAGE_OPTIONS}
-          value={asrTranslationFrom}
-          onValueChange={(value) => value && onAsrTranslationFromChange?.(value)}
-        >
-          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent container={portalContainer} side="top" align="end" glass>
-            <SelectGroup>
-              {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem key={language.value} value={language.value}>
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation-to">译文语言</FieldLabel>
-        <Select
-          items={TRANSLATION_LANGUAGE_OPTIONS}
-          value={asrTranslationTo}
-          onValueChange={(value) => value && onAsrTranslationToChange?.(value)}
-        >
-          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent container={portalContainer} side="top" align="end" glass>
-            <SelectGroup>
-              {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem key={language.value} value={language.value}>
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
-    </FieldGroup>
+    <AsrSettingsBody
+      portalContainer={portalContainer}
+      translationEnabled={asrTranslationEnabled}
+      translationFrom={asrTranslationFrom}
+      translationTo={asrTranslationTo}
+      speakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+      onTranslationEnabledChange={onAsrTranslationEnabledChange}
+      onTranslationFromChange={onAsrTranslationFromChange}
+      onTranslationToChange={onAsrTranslationToChange}
+      onSpeakerDiarizationEnabledChange={onAsrSpeakerDiarizationEnabledChange}
+    />
   );
 
   // 容器宽度不足时按优先级让位：与原生控件同一套 media 容器断点，
