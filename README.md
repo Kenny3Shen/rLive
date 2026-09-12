@@ -31,11 +31,11 @@ rLive 是基于 Tauri 的跨平台直播客户端。Rust 后端统一平台接�
 | ---- | ---- |
 | 五站统一入口 | 哔哩哔哩、虎牙、斗鱼、抖音、Twitch 的浏览、分类与搜索，统一管理关注和观看历史 |
 | 直播专用播放器 | 经 Rust 本机代理播放 HLS、FLV、MPEG-TS，记忆清晰度、线路与音量，协议错误和上游 EOF 时有界恢复 |
-| 视频点播与播放列表 | B 站视频推荐、热门、番剧、影视与 DASH 播放，支持分集连续播放、自动播放下一集、循环播放、正序/倒序切换 |
+| 视频点播与播放列表 | B 站推荐、热门、番剧、影视与筛选搜索，支持简介标签直达搜索；DASH 播放支持分集连播、顺序切换、CC / 本地字幕、进度缩略图、弹幕与评论 |
 | 桌面录制 | 并发路数可设（默认 4，最多 6），只重新封装不转码，支持后台录制、按主播自动录制、按时长分割、崩溃恢复和弹幕轨导出 ASS |
 | 实时弹幕 | 列表、画面弹幕和 B 站 SC，支持屏蔽、礼物过滤与重复合并 |
 | 多画面与 IPTV | 桌面 2 / 4 / 6 路布局、拖拽换位、独立音量、直播时钟同步；IPTV 支持公开频道与自有 M3U |
-| 本地字幕 | sherpa-onnx 设备端流式语音识别，模型与音频不出本机 |
+| 本地字幕 | 直播与 B 站视频均可使用 sherpa-onnx 设备端流式语音识别，模型与音频不出本机 |
 
 ## 平台能力
 
@@ -64,8 +64,8 @@ rLive 是基于 Tauri 的跨平台直播客户端。Rust 后端统一平台接�
 
 安装包以 [GitHub Releases](https://github.com/Kenny3Shen/rLive/releases) 为准，使用前请一并阅读对应 Release 说明。
 
-1. 顶部选择直播平台，从推荐、分类或搜索进入房间。
-2. 播放器中选择清晰度和线路；右侧栏管理弹幕、关注与显示设置。
+1. 顶部选择直播平台，从推荐、分类或搜索进入房间；B 站视频从「视频」页浏览或搜索。
+2. 播放器中选择清晰度、线路、字幕与弹幕；直播间右侧栏还可管理关注和显示设置。
 3. 需要账号能力时，前往「设置 → 账号」扫码登录或保存 Cookie。
 4. 桌面端从直播间标题栏开始录制，或在关注页右键主播开启后台录制。
 
@@ -85,25 +85,22 @@ bun run tauri dev
 ## 系统架构
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
-    <img src="docs/assets/architecture-light.png" width="100%" alt="rLive 高层运行时架构：WebView 播放页经 Tauri 命令层与 stream_proxy 回环取流，ASR、录制、IPTV、弹幕与 SQLite 作为旁路能力挂在命令层，站点 API、CDN 与弹幕服务器位于不可信网络">
-  </picture>
+  <img src="docs/assets/architecture.svg" width="100%" alt="rLive 高层运行时架构：直播、B 站视频与 IPTV 播放页经 Tauri 命令层和 stream_proxy 回环取流，本地字幕、录制、弹幕与 SQLite 作为旁路能力，站点 API、媒体 CDN 与弹幕服务器位于不可信网络">
 </p>
 
-- **播放**：平台 CDN → Rust `stream_proxy` → localhost URL → Video.js 媒体适配器或原生 `<video>`。代理负责请求头、同源访问与 HLS 清单改写。
+- **播放**：平台媒体 CDN → Rust `stream_proxy` → localhost URL → Video.js 媒体适配器或原生 `<video>`。代理负责请求头、同源访问、HLS 清单改写与 B 站 DASH 音视频轨回环。
 - **录制**：平台 CDN → 进程内 `ffmpeg-next` / libavformat → 本地录制目录。只重新封装，不参与前端播放。
 - **弹幕**：Rust 侧协议适配器解析并批处理，经 Tauri Events 推送到列表与画面；录制任务从同一批消息写入 `danmaku.jsonl`。
-- **字幕**：播放器音频经 Web Audio 转 16 kHz PCM，由 `asr_transcribe` 送入本机 sherpa-onnx 会话。
+- **字幕**：直播或 B 站视频的播放器音频经 Web Audio 转 16 kHz PCM，由 `asr_transcribe` 送入本机 sherpa-onnx 会话；B 站 CC 字幕则经 Rust 代拉后转为 WebVTT。
 - **IPTV**：`iptv_load_playlist` 解析 M3U 并探测可用性，播放仍复用 `stream_proxy` 回环。
 
-设置、账号、关注和历史保存在 `rlive.db`；录制媒体、`metadata.json` 与 `danmaku.jsonl` 位于独立录制目录。矢量图见 [architecture.svg](docs/assets/architecture.svg)，模块职责与生命周期见[架构说明](docs/zh/架构说明.md)。
+设置、账号、关注、直播与视频历史、IPTV 收藏和录播进度保存在 `rlive.db`；录制媒体、`metadata.json` 与 `danmaku.jsonl` 位于独立录制目录。矢量图见 [architecture.svg](docs/assets/architecture.svg)，模块职责与生命周期见[架构说明](docs/zh/架构说明.md)。
 
 ## 文档
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [用户指南](docs/zh/用户指南.md) | 安装、观看、弹幕、关注、历史、同步与常见问题 |
+| [用户指南](docs/zh/用户指南.md) | 安装、直播与视频观看、弹幕、关注、历史、同步与常见问题 |
 | [开发指南](docs/zh/开发指南.md) | 环境、检查、构建、应用图标、FFmpeg 配置与 Android 调试 |
 | [架构说明](docs/zh/架构说明.md) | 前后端分层、核心数据流、存储与平台模块 |
 | [项目文档索引](docs/README.md) | 播放器、录制、IPTV、字幕、平台接入与发布流程 |

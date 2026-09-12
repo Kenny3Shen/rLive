@@ -320,7 +320,7 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="player" data-edge-to="commands" data-edge-label="invoke IPC" data-edge-key="0" data-edge-id="player-invoke" data-composition-points="300,179;420,179" d="M 300 179 L 420 179" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="commands" data-edge-to="proxy" data-edge-label="stream_proxy_start" data-edge-key="1" data-edge-id="start-proxy" data-composition-points="610,172;730,172" d="M 610 172 L 730 172" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="proxy" data-edge-to="cdn" data-edge-label="带 Referer / UA 回源" data-edge-key="2" data-edge-id="pull-upstream" data-composition-points="920,186;1030,186" d="M 920 186 L 1030 186" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="proxy" data-edge-to="player" data-edge-label="本地回环媒体流" data-edge-key="3" data-edge-id="loopback-stream" data-composition-points="825,140;825,85;205,85;205,140" d="M 825 140 L 825 93 Q 825 85 817 85 L 213 85 Q 205 85 205 93 L 205 140" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="proxy" data-edge-to="player" data-edge-label="HLS / FLV / TS / DASH" data-edge-key="3" data-edge-id="loopback-stream" data-composition-points="825,140;825,85;205,85;205,140" d="M 825 140 L 825 93 Q 825 85 817 85 L 213 85 Q 205 85 205 93 L 205 140" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="player" data-edge-to="asr" data-edge-label="16 kHz PCM" data-edge-key="4" data-edge-id="asr-pcm" data-composition-points="205,232;205,290" d="M 205 232 L 205 290" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="commands" data-edge-to="recording" data-edge-label="recording_start" data-edge-key="5" data-edge-id="record-task" data-composition-points="515,232;515,290" d="M 515 232 L 515 290" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="commands" data-edge-to="sites" data-edge-label="解析房间 / 清晰度" data-edge-key="6" data-edge-id="resolve-room" data-composition-points="610,186;670,186;670,332;730,332" d="M 610 186 L 662 186 Q 670 186 670 194 L 670 324 Q 670 332 678 332 L 730 332" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
@@ -331,8 +331,8 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="danmaku" data-edge-to="dmserver" data-edge-label="长连接订阅" data-edge-key="11" data-edge-id="danmaku-upstream" data-composition-points="920,442;1030,442" d="M 920 442 L 1030 442" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
 
         <!-- Components -->
-        <g id="node-player" data-node-id="player" data-node-label="WebView 播放页" tabindex="0" role="button" aria-label="聚焦WebView 播放页，React 19 + Video.js 媒体适配器, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="frontend" data-sublabel="React 19 + Video.js" data-node-context="本地进程 · Tauri 2 + Rust">
-          <title>WebView 播放页 · React 19 + Video.js 媒体适配器 · 本地进程 · Tauri 2 + Rust</title>
+        <g id="node-player" data-node-id="player" data-node-label="WebView 播放器" tabindex="0" role="button" aria-label="聚焦WebView 播放器，直播 / B 站视频 / IPTV, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="直播 / B 站视频 / IPTV" data-node-context="本地进程 · Tauri 2 + Rust">
+          <title>WebView 播放器 · 直播 / B 站视频 / IPTV · 本地进程 · Tauri 2 + Rust</title>
           <rect x="110" y="140" width="190" height="92" rx="6" class="c-mask"/>
           <rect x="110" y="140" width="190" height="92" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(116 146) scale(0.6875)">
@@ -341,8 +341,8 @@ rect.c-bg-rect { fill: var(--bg); }
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="205" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">WebView 播放页</text>
-        <text x="205" y="200" class="t-muted" font-size="9" text-anchor="middle">React 19 + Video.js</text>
+          <text data-node-label="" x="205" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">WebView 播放器</text>
+        <text x="205" y="200" class="t-muted" font-size="9" text-anchor="middle">直播 / B 站视频 / IPTV</text>
         </g>
 
         <g id="node-commands" data-node-id="commands" data-node-label="Tauri 命令层" tabindex="0" role="button" aria-label="聚焦Tauri 命令层，commands/ + events, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="backend" data-node-sublabel="commands/ + events" data-node-context="本地进程 · Tauri 2 + Rust">
@@ -369,16 +369,16 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="825" y="224" class="t-security" font-size="7" text-anchor="middle">注入请求头</text>
         </g>
 
-        <g id="node-cdn" data-node-id="cdn" data-node-label="直播 CDN" tabindex="0" role="button" aria-label="聚焦直播 CDN，FLV / HLS / TS, 远端 · 不可信网络" aria-pressed="false" data-node-kind="external" data-node-sublabel="FLV / HLS / TS" data-node-context="远端 · 不可信网络">
-          <title>直播 CDN · FLV / HLS / TS · 远端 · 不可信网络</title>
+        <g id="node-cdn" data-node-id="cdn" data-node-label="媒体 CDN" tabindex="0" role="button" aria-label="聚焦媒体 CDN，HLS / FLV / TS / DASH, 远端 · 不可信网络" aria-pressed="false" data-node-kind="external" data-node-sublabel="HLS / FLV / TS / DASH" data-node-context="远端 · 不可信网络">
+          <title>媒体 CDN · HLS / FLV / TS / DASH · 远端 · 不可信网络</title>
           <rect x="1030" y="140" width="190" height="92" rx="6" class="c-mask"/>
           <rect x="1030" y="140" width="190" height="92" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1036 146) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="1125" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">直播 CDN</text>
-        <text x="1125" y="200" class="t-muted" font-size="9" text-anchor="middle">FLV / HLS / TS</text>
+          <text data-node-label="" x="1125" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">媒体 CDN</text>
+        <text x="1125" y="200" class="t-muted" font-size="9" text-anchor="middle">HLS / FLV / TS / DASH</text>
         </g>
 
         <g id="node-asr" data-node-id="asr" data-node-label="本地字幕 ASR" tabindex="0" role="button" aria-label="聚焦本地字幕 ASR，sherpa-onnx Zipformer, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="backend" data-node-sublabel="sherpa-onnx Zipformer" data-node-tag="音频不出机" data-node-context="本地进程 · Tauri 2 + Rust">
@@ -393,15 +393,15 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="205" y="366" class="t-backend" font-size="7" text-anchor="middle">音频不出机</text>
         </g>
 
-        <g id="node-recording" data-node-id="recording" data-node-label="录制引擎" tabindex="0" role="button" aria-label="聚焦录制引擎，FFmpeg + ASS 压制, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="backend" data-node-sublabel="FFmpeg + ASS 压制" data-node-tag="直连回源" data-node-context="本地进程 · Tauri 2 + Rust">
-          <title>录制引擎 · FFmpeg + ASS 压制 · 本地进程 · Tauri 2 + Rust · 直连回源</title>
+        <g id="node-recording" data-node-id="recording" data-node-label="录制引擎" tabindex="0" role="button" aria-label="聚焦录制引擎，ffmpeg-next 重新封装, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="backend" data-node-sublabel="ffmpeg-next 重新封装" data-node-tag="直连回源" data-node-context="本地进程 · Tauri 2 + Rust">
+          <title>录制引擎 · ffmpeg-next 重新封装 · 本地进程 · Tauri 2 + Rust · 直连回源</title>
           <rect x="420" y="290" width="190" height="84" rx="6" class="c-mask"/>
           <rect x="420" y="290" width="190" height="84" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(426 296) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" x="515" y="330" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">录制引擎</text>
-        <text x="515" y="346" class="t-muted" font-size="9" text-anchor="middle">FFmpeg + ASS 压制</text>
+        <text x="515" y="346" class="t-muted" font-size="9" text-anchor="middle">ffmpeg-next 重新封装</text>
         <text x="515" y="366" class="t-backend" font-size="7" text-anchor="middle">直连回源</text>
         </g>
 
@@ -440,8 +440,8 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="1125" y="346" class="t-muted" font-size="8.9" text-anchor="middle">B 站 / 虎牙 / 斗鱼 / 抖音 / Twitch</text>
         </g>
 
-        <g id="node-db" data-node-id="db" data-node-label="SQLite" tabindex="0" role="button" aria-label="聚焦SQLite，关注 / 历史 / 设置, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="database" data-node-sublabel="关注 / 历史 / 设置" data-node-context="本地进程 · Tauri 2 + Rust">
-          <title>SQLite · 关注 / 历史 / 设置 · 本地进程 · Tauri 2 + Rust</title>
+        <g id="node-db" data-node-id="db" data-node-label="SQLite" tabindex="0" role="button" aria-label="聚焦SQLite，账号 / 收藏 / 历史 / 进度, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="database" data-node-sublabel="账号 / 收藏 / 历史 / 进度" data-node-context="本地进程 · Tauri 2 + Rust">
+          <title>SQLite · 账号 / 收藏 / 历史 / 进度 · 本地进程 · Tauri 2 + Rust</title>
           <rect x="110" y="400" width="190" height="84" rx="6" class="c-mask"/>
           <rect x="110" y="400" width="190" height="84" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(116 406) scale(0.6875)">
@@ -449,7 +449,7 @@ rect.c-bg-rect { fill: var(--bg); }
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
           <text data-node-label="" x="205" y="440" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SQLite</text>
-        <text x="205" y="456" class="t-muted" font-size="9" text-anchor="middle">关注 / 历史 / 设置</text>
+        <text x="205" y="456" class="t-muted" font-size="9" text-anchor="middle">账号 / 收藏 / 历史 / 进度</text>
         </g>
 
         <g id="node-danmaku" data-node-id="danmaku" data-node-label="danmu_rs 弹幕引擎" tabindex="0" role="button" aria-label="聚焦danmu_rs 弹幕引擎，五站点会话 + 重连, 本地进程 · Tauri 2 + Rust" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="五站点会话 + 重连" data-node-context="本地进程 · Tauri 2 + Rust">
@@ -491,9 +491,9 @@ rect.c-bg-rect { fill: var(--bg); }
           <rect x="922" y="166" width="106" height="14" rx="3" class="c-mask"/>
           <text x="975" y="176" class="t-backend" font-size="8" text-anchor="middle">带 Referer / UA 回源</text>
         </g>
-        <g data-edge-from="proxy" data-edge-to="player" data-edge-label="本地回环媒体流" data-edge-key="3" data-edge-id="loopback-stream">
-          <rect x="476.4" y="65" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="515" y="75" class="t-backend" font-size="8" text-anchor="middle">本地回环媒体流</text>
+        <g data-edge-from="proxy" data-edge-to="player" data-edge-label="HLS / FLV / TS / DASH" data-edge-key="3" data-edge-id="loopback-stream">
+          <rect x="459.6" y="65" width="110.8" height="14" rx="3" class="c-mask"/>
+          <text x="515" y="75" class="t-backend" font-size="8" text-anchor="middle">HLS / FLV / TS / DASH</text>
         </g>
         <g data-edge-from="player" data-edge-to="asr" data-edge-label="16 kHz PCM" data-edge-key="4" data-edge-id="asr-pcm">
           <rect x="176" y="246" width="58" height="14" rx="3" class="c-mask"/>
