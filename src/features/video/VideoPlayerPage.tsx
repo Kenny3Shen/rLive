@@ -42,6 +42,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
+  PLAYER_HUD_TITLE_SIZE_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
@@ -2740,7 +2741,10 @@ function VideoPlayerPageContent() {
                     {(!shortVideo || !mobileClient) && (
                       <div className="flex h-media-control min-w-0 flex-1 items-center px-1">
                         <p
-                          className="truncate text-sm font-semibold leading-none text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]"
+                          className={cn(
+                            "truncate font-semibold leading-none text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]",
+                            PLAYER_HUD_TITLE_SIZE_CLASS,
+                          )}
                           title={title}
                         >
                           {title}
