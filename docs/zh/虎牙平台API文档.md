@@ -11,7 +11,7 @@
 | 房间详情 | 已支持 | 解析主播、封面、热度、直播状态、公告和播放元数据。 |
 | 播放与清晰度 | 已支持 | 处理虎牙线路、码率和防盗链参数，优先交给本机代理和网页播放器。 |
 | 实时弹幕接收 | 已支持 | 使用 TARS/WebSocket 房间流量解析普通消息和常见事件。 |
-| 账号 | 已支持 | 支持扫码登录与手动保存本机 Cookie。 |
+| 账号 | 已支持 | 支持扫码登录与手动保存本机 Cookie。设置页读取账号摘要时探测登录态，失效会提示并自动退出。 |
 | 普通弹幕发送与会话级自动发送 | 已支持 | 均需要本机发送开关、账号 Cookie 和房间元数据；自动发送只属于当前会话。 |
 
 ## rLive 接入接口
@@ -83,6 +83,18 @@
 ## 账号与弹幕发送
 
 在「设置 → 账号 → 虎牙」中可扫码登录或手动保存本机 Cookie。扫码走公开 UDB 流程（`udblgn.huya.com/qrLgn/getQrId` → `getQrImg` → `tryQrLogin`），确认后把会话 Cookie 只写入本机。
+
+### 登录态探测
+
+虎牙没有可匿名调用的第一方账号资料读接口，因此 `account_get_profile` 用返回体最小的移动版关注列表首页作为会话探针：`https://mp.huya.com/cache.php?m=Subscribe&do=ajaxSubscribeList`（实测 87 字节，对 referer 与 UA 不敏感）。它用显式的 `isLogin` 标志报告会话状态：
+
+| 响应 | 判定 |
+| --- | --- |
+| `isLogin = 1` | 会话仍被平台接受。 |
+| `isLogin = 0` | 会话已失效。未登录与 token 校验不通过共用这条应答（`code = 501`，`message` 为「Token验证不通过！」）。 |
+| 缺 `isLogin`、非 JSON、HTTP 失败或网络错误 | 一律留在「未知」，不改动已保存的 Cookie。 |
+
+只信任 `isLogin` 字段：其它形状可能是风控或业务失败，不能当作会话已失效。`www.huya.com/cache.php` 与 `i.huya.com` 的同名接口都返回 HTML 页面，不可用作探针；`fw.huya.com/dispatch?do=subscribeList` 虽然返回 JSON（未登录为 `status = 1401`），但没有区分登录态的正向字段。显示名来自 Cookie 自身的 `udb_n`，因此探针不可用时仍然可用。
 
 发送前必须同时满足：
 
