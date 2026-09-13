@@ -55,7 +55,7 @@
 - 破坏性确认用 `AlertDialog`；移动端底部面板用 `Drawer`；短上下文内容用 `Popover`。任务型 Overlay 必须有可访问标题，必要时用 `sr-only` 隐藏视觉标题。
 - Card 只用于独立、重复或需要明确边界的内容；不嵌套 Card，不把整段页面当作悬浮 Card。Base UI 通过 `render` 组合自定义 trigger，不使用 Radix 的 `asChild`。
 - 全屏图层内的 Overlay 必须传 `container`（播放器传 `player.stageRef`），否则默认 portal 到 `<body>` 会被 top layer 压住；`notify` 视口由 `setToastPortalContainer()` 在全屏期间整体移入 stage，退出后还原。
-- Video.js 的 `Popover.Popup` / `Menu.Popup` 带 `popover` 属性，进入 top layer 后由 UA 样式表画上不透明的 `Canvas` 背景与 `border: solid`。这一层实心背景会把 `backdrop-filter` 的采样源顶掉，毛玻璃直接退化成实色矩形，因此弹层必须显式清掉它：材质画在弹层元素上的（`VolumePopover`、tooltip、进度缩略图）用 `mediaPopupResetClass` + `mediaPopupSurfaceClass`；材质画在子元素上的（控制栏的播放设置、字幕菜单）弹层只挂 `mediaPopupResetClass` 与 `bg-transparent p-0`，玻璃留在 `Menu.Content` —— `mediaPopupMotionClass` 的指针桥接区占用了 `::before`，而玻璃填充也在 `::before`，两者不能共用一个元素。三类弹层共用 `src/components/videojs/lib/popup-surface.ts`，不要各自复制类串。
+- Video.js 的 `Popover.Popup` / `Menu.Popup` 带 `popover` 属性，进入 top layer 后由 UA 样式表画上不透明的 `Canvas` 背景与 `border: solid`。这一层实心背景会把 `backdrop-filter` 的采样源顶掉，毛玻璃直接退化成实色矩形，因此弹层必须显式清掉它：材质画在弹层元素上的（tooltip、进度缩略图）用 `mediaPopupResetClass` + `mediaPopupSurfaceClass`；材质画在子元素上的（音量、播放设置、字幕三个控制栏弹层）弹层只挂 `mediaPopupResetClass` 与 `bg-transparent p-0`，`glass-surface-overlay` 留在子元素上 —— `mediaPopupMotionClass` 的指针桥接区占用了 `::before`，而玻璃填充也在 `::before`，两者不能共用一个元素。三类弹层共用 `src/components/videojs/lib/popup-surface.ts`，不要各自复制类串。
 
 ### 3.2 主题与语义令牌
 
@@ -247,7 +247,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 播放页（与播放器、danmu.js 共享主线程与合成预算）：
 
 - 避免模糊、滤镜、大面积阴影变化和无限背景动画。控制栏用 `player-scrim-overlay`（由底边向上淡出的黑色渐变，画在 `::before` 上且高于控制栏自身高度，不设上边框、不用 `backdrop-filter`），自动显隐仅合成 opacity，不触发播放器 React 重渲染。
-- 音量与播放设置 Drawer / 弹层用 `glass-surface-overlay`：桌面 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层与房间卡片角标同样不采样动态背景。
+- 音量、播放设置与字幕弹层，以及播放设置 Drawer 用 `glass-surface-overlay`：桌面 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层与房间卡片角标同样不采样动态背景。
 - 浏览器回退亮度使用覆盖视频与弹幕 DOM 容器的黑色 opacity 叠层，不对整幅动态画面用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，不每步重渲染 `PlayerPane`。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，桌面端保留刷新按钮入口。fullscreen 播放器稳定后不能保留 transformed ancestor；Zoom 与页面动画完成时必须恢复普通绘制。
 

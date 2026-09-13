@@ -8,7 +8,8 @@
  * 「没有毛玻璃效果」。
  *
  * 所以弹层元素必须显式重置这三项：材质直接画在弹层上的（`mediaPopupSurfaceClass`）
- * 顺手覆盖掉背景，材质画在子元素上的（控制栏的玻璃菜单）则要自己补 `bg-transparent`。
+ * 顺手覆盖掉背景，材质画在子元素上的（音量、播放设置与字幕菜单的玻璃面板）则要自己
+ * 补 `bg-transparent`。
  *
  * `position`、`inset` 与 `margin` 已由 `usePopupPosition` 以内联样式接管，这里不重复。
  */
@@ -45,9 +46,10 @@ export const mediaPopupMotionClass = [
 ].join(" ");
 
 /**
- * Video.js 自带材质：音量、tooltip、进度缩略图与错误对话框。
+ * Video.js 自带材质：tooltip、进度缩略图与错误对话框。
  *
- * 环形描边走 `::after`，因此可以和上面的指针桥接区共存于同一个元素。
+ * 环形描边走 `::after`，因此可以和上面的指针桥接区共存于同一个元素。控制栏的玻璃
+ * 面板不用它 —— 玻璃的填充在 `::before`，与桥接区冲突，只能画在子元素上。
  */
 export const mediaPopupSurfaceClass =
   "bg-media-popover text-media-popover-foreground surface-media after:surface-media-inset";
