@@ -42,6 +42,11 @@ import { Slider } from "@/components/ui/slider";
 import { SpinnerIcon } from "@videojs/react/icons";
 import { Switch } from "@/components/ui/switch";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
+import {
+  mediaPopupMotionClass,
+  mediaPopupResetClass,
+} from "@/components/videojs/lib/popup-surface";
+import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
 import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
 import { FullscreenButton } from "@/components/videojs/ui/fullscreen-button";
 import { PiPButton } from "@/components/videojs/ui/pip-button";
@@ -601,6 +606,10 @@ export function PlayerControls({
   const [asrOpen, setAsrOpen] = useState(false);
   const [asrPanel, setAsrPanel] = useState<"sources" | "settings">("sources");
   const [volumeOpen, setVolumeOpen] = useState(false);
+  // 音量按钮的弹层是 Video.js 的 `VolumePopover`，自带 `openOnHover`；这两个菜单用
+  // `Menu.Root`，只能自己补同一套悬停时序。
+  const settingsHover = useHoverOpen(settingsOpen, setSettingsOpen);
+  const asrHover = useHoverOpen(asrOpen, setAsrOpen);
   const settingsVisible = qualities.length > 0 || lines.length > 0 || playbackSettings != null;
   const settingsDisabled = playbackSettingsDisabled ?? (disabled && playbackSettings == null);
   const danmaku = danmakuControlPresentation(osdOn);
@@ -841,24 +850,29 @@ export function PlayerControls({
                     aria-disabled={settingsDisabled || undefined}
                     disabled={settingsDisabled}
                     className="r-live-media-extension-button"
+                    {...settingsHover.trigger}
                   >
                     <Settings />
                   </Menu.Trigger>
                 </ButtonTooltip>
                 <Menu.Popup
-                  onPointerEnter={() => setSettingsOpen(true)}
-                  onPointerLeave={() => setSettingsOpen(false)}
                   keepMounted={false}
+                  /* 材质挂在 Content 上：玻璃工具的填充占用了 `::before`，而弹层要用
+                     它铺指针桥接区，两者不能共用一个元素。这里只清掉 UA 的
+                     `[popover]` 外观，让底下的视频能透到毛玻璃里。 */
+                  className={cn(
+                    mediaPopupResetClass,
+                    mediaPopupMotionClass,
+                    "bg-transparent p-0 [--media-popup-side-offset:var(--media-popover-side-offset)]",
+                  )}
+                  {...settingsHover.popup}
                 >
                   <Menu.Content
                     className={cn(
-                      "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto p-1.5",
+                      "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto rounded-media-popup p-1.5",
                       glassPanelClass({ overlay: true }),
                     )}
                   >
-                    <div className={cn("px-2 pt-1 pb-0.5 text-sm font-medium", glassTitleClass({ overlay: true }))}>
-                      {playbackSettingsTitle}
-                    </div>
                     {settingsBody}
                   </Menu.Content>
                 </Menu.Popup>
@@ -892,6 +906,7 @@ export function PlayerControls({
                     "r-live-media-extension-button",
                     asr.enabled && "bg-media-primary text-media-primary-foreground",
                   )}
+                  {...asrHover.trigger}
                 >
                   {asr.icon === "spinner" ? (
                     <SpinnerIcon className="size-4" />
@@ -902,10 +917,19 @@ export function PlayerControls({
                   )}
                 </Menu.Trigger>
               </ButtonTooltip>
-              <Menu.Popup>
+              <Menu.Popup
+                keepMounted={false}
+                /* 与播放设置菜单同构：重置 UA `[popover]` 外观，玻璃留在 Content 上。 */
+                className={cn(
+                  mediaPopupResetClass,
+                  mediaPopupMotionClass,
+                  "bg-transparent p-0 [--media-popup-side-offset:var(--media-popover-side-offset)]",
+                )}
+                {...asrHover.popup}
+              >
                 <Menu.Content
                   className={cn(
-                    "z-50 w-72 gap-0 overflow-y-auto p-1.5",
+                    "z-50 w-72 overflow-y-auto rounded-media-popup p-1.5",
                     glassPanelClass({ overlay: true }),
                   )}
                 >
@@ -920,7 +944,12 @@ export function PlayerControls({
                         >
                           <ChevronLeft aria-hidden />
                         </Button>
-                        <div className={cn("min-w-0 flex-1 text-sm font-medium", glassTitleClass({ overlay: true }))}>
+                        <div
+                          className={cn(
+                            "min-w-0 flex-1 text-sm font-medium",
+                            glassTitleClass({ overlay: true }),
+                          )}
+                        >
                           字幕设置
                         </div>
                         {(asrSettingsPending || asrTranslationBusy) && (
@@ -931,9 +960,6 @@ export function PlayerControls({
                     </>
                   ) : (
                     <>
-                      <div className={cn("px-2 py-1 text-sm font-medium", glassTitleClass({ overlay: true }))}>
-                        字幕
-                      </div>
                       <Button
                         variant="ghost"
                         className={cn(
