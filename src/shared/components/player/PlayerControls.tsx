@@ -6,6 +6,8 @@ import {
   type ReactNode,
 } from "react";
 import {
+  MessageSquareOff,
+  MessageSquareText,
   Captions,
   CaptionsOff,
   Check,
@@ -13,10 +15,6 @@ import {
   ChevronRight,
   Expand,
   Headphones,
-  Maximize2,
-  MessageSquareOff,
-  MessageSquareText,
-  Minimize2,
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
@@ -563,7 +561,6 @@ export function PlayerControls({
   lines = [],
   lineIndex = 0,
   fullscreen = false,
-  nativeFullscreen = false,
   pictureInPictureDisabled,
   captionsSlot,
   stackedBelowPlayer = false,
@@ -733,7 +730,10 @@ export function PlayerControls({
                   keepMounted={false}
                 >
                   <Menu.Content
-                    className={cn("w-auto items-center gap-2 p-2.5", glassPanelClass({ overlay: true }))}
+                    className={cn(
+                      "z-50 w-auto items-center gap-2 p-2.5",
+                      glassPanelClass({ overlay: true }),
+                    )}
                   >
                     <div className="sr-only">音量</div>
                     <Slider
@@ -904,7 +904,10 @@ export function PlayerControls({
               </ButtonTooltip>
               <Menu.Popup>
                 <Menu.Content
-                  className={cn("w-72 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+                  className={cn(
+                    "z-50 w-72 gap-0 overflow-y-auto p-1.5",
+                    glassPanelClass({ overlay: true }),
+                  )}
                 >
                   {asrPanel === "settings" ? (
                     <>
@@ -1020,18 +1023,15 @@ export function PlayerControls({
           )}
 
           {/* 7. 全屏 */}
-          {nativeFullscreen ? (
+          {/* 7. 全屏 */}
+          {onToggleFullscreen ? (
             <ButtonTooltip side="top">
-              <FullscreenButton />
+              <FullscreenButton
+                fullscreen={fullscreen}
+                onClick={onToggleFullscreen}
+                aria-label={fullscreen ? "退出全屏" : "全屏"}
+              />
             </ButtonTooltip>
-          ) : onToggleFullscreen ? (
-            <ExtensionButton
-              label={fullscreen ? "退出全屏" : "全屏"}
-              active={fullscreen}
-              onClick={onToggleFullscreen}
-            >
-              {fullscreen ? <Minimize2 /> : <Maximize2 />}
-            </ExtensionButton>
           ) : null}
 
           {/* 辅助扩展按钮 */}

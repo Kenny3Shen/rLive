@@ -1385,6 +1385,7 @@ function PlayerPaneContent({
         )}
       >
         <VideoJsContainer
+          onToggleFullscreen={() => void player.toggleFullscreen()}
           ref={playerStageRef}
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}

@@ -1,17 +1,22 @@
 import "../styles/theme.css";
-import { FullscreenButton as FullscreenButtonPrimitive } from "@videojs/react";
 import { Maximize2, Minimize2 } from "lucide-react";
 
-import { cn, resolveClassName } from "@/components/videojs/lib/resolve-class-name";
+import { cn } from "@/components/videojs/lib/resolve-class-name";
 import { Button } from "@/components/videojs/ui/button";
 
-export type FullscreenButtonProps = Omit<FullscreenButtonPrimitive.Props, "children">;
+export type FullscreenButtonProps = {
+  className?: string;
+  onClick?: () => void;
+  "aria-label"?: string;
+  disabled?: boolean;
+  fullscreen?: boolean;
+};
 
-export function FullscreenButton({ className, ...props }: FullscreenButtonProps = {}) {
+export function FullscreenButton({ className, fullscreen = false, ...props }: FullscreenButtonProps = {}) {
   return (
-    <FullscreenButtonPrimitive
-      render={<Button />}
-      className={(state) => cn("group/fullscreen r-live-media-extension-button", resolveClassName(className, state))}
+    <Button
+      className={cn("group/fullscreen r-live-media-extension-button", className)}
+      data-fullscreen={fullscreen || undefined}
       {...props}
     >
       <Maximize2
@@ -28,6 +33,6 @@ export function FullscreenButton({ className, ...props }: FullscreenButtonProps 
           "opacity-0 group-data-fullscreen/fullscreen:scale-100 group-data-fullscreen/fullscreen:opacity-100",
         )}
       />
-    </FullscreenButtonPrimitive>
+    </Button>
   );
 }
