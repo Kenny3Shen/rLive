@@ -323,7 +323,9 @@ function CommentReplies({ aid, comment }: { aid: string; comment: VideoComment }
   });
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+    // touch-pan-y：与页签面板同理，滚动容器自身必须让出横向，否则侧栏横滑切页签
+    // 在这一层上会被合成器当作滚动接走（见页签面板处的说明）。
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
       <div className="border-b border-border px-4 py-4">
         <CommentRow comment={comment} isThreadAuthor />
       </div>
@@ -709,7 +711,7 @@ function EpisodesPanel({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4 touch-pan-y">
         {seasonQuery.isPending ? (
           <div className="flex flex-col gap-2 pt-3">
             {[0, 1, 2].map((index) => (
@@ -754,11 +756,14 @@ function EpisodesPanel({
 function UgcSeasonPanel({
   season,
   currentBvid,
+  active,
   onNavigate,
 }: {
   season: VideoUgcSeason;
   /** 链接可能没带 cid，以 bvid 定位当前项。 */
   currentBvid: string;
+  /** 本页签是否选中；非活动时列表不做定位滚动。 */
+  active?: boolean;
   onNavigate: (target: {
     bvid: string;
     cid: number;
@@ -775,7 +780,12 @@ function UgcSeasonPanel({
           共 {season.episodes.length} 个
         </span>
       </div>
-      <UgcSeasonList season={season} currentBvid={currentBvid} onNavigate={onNavigate} />
+      <UgcSeasonList
+        season={season}
+        currentBvid={currentBvid}
+        active={active}
+        onNavigate={onNavigate}
+      />
     </div>
   );
 }
@@ -784,11 +794,17 @@ function UgcSeasonPanel({
 function UgcSeasonList({
   season,
   currentBvid,
+  active,
   onNavigate,
 }: {
   season: VideoUgcSeason;
   /** 链接可能没带 cid，以 bvid 定位当前项。 */
   currentBvid: string;
+  /**
+   * 本面板是否为当前选中页签。非活动时不做定位滚动：用户没在看这一页，
+   * 而连播换集会在后台改 `currentBvid`。与 `VideoDanmakuList` 的 `active` 同义。
+   */
+  active?: boolean;
   onNavigate: (target: {
     bvid: string;
     cid: number;
@@ -802,11 +818,12 @@ function UgcSeasonList({
   // 打开合集页签或连播换集时，把当前播放项滚到可视区中央：长合集（几十上百集）
   // 默认停在顶部，正在看的那集可能在视口外。仅滚动列表容器，不抖动外层。
   useEffect(() => {
+    if (!active) return;
     currentRowRef.current?.scrollIntoView({ block: "center" });
-  }, [currentBvid]);
+  }, [active, currentBvid]);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4 touch-pan-y">
       {season.episodes.map((episode, index) => {
         const current = episode.bvid === currentBvid;
         return (
@@ -844,6 +861,7 @@ function PartsPanel({
   aid,
   pages,
   currentCid,
+  active,
   onNavigate,
 }: {
   bvid: string;
@@ -851,6 +869,8 @@ function PartsPanel({
   pages: VideoArchivePage[];
   /** 链接缺 cid（搜索进入）时定位不到当前项，不高亮。 */
   currentCid: number;
+  /** 本面板是否为当前选中页签；非活动时不做定位滚动。 */
+  active?: boolean;
   onNavigate: (target: {
     bvid: string;
     cid: number;
@@ -865,8 +885,8 @@ function PartsPanel({
   // 打开选集页签或换 P 时把正在播的那 P 滚到可视区中央（与合集面板同一策略）；
   // 收起后再展开也重新定位，长列表不至于回到顶部找不到当前 P。
   useEffect(() => {
-    if (open) currentRowRef.current?.scrollIntoView({ block: "center" });
-  }, [currentCid, open]);
+    if (open && active) currentRowRef.current?.scrollIntoView({ block: "center" });
+  }, [active, currentCid, open]);
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -889,7 +909,7 @@ function PartsPanel({
         </span>
       </button>
       {open && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4 touch-pan-y">
           {pages.map((page) => {
             const current = currentCid > 0 && page.cid === currentCid;
             const label = page.part || `P${page.page}`;
@@ -926,11 +946,14 @@ function PartsSeasonPanel({
   archive,
   currentCid,
   currentBvid,
+  active,
   onNavigate,
 }: {
   archive: VideoArchive;
   currentCid: number;
   currentBvid: string;
+  /** 本页签是否选中；向下传给两份列表，非活动时不做定位滚动。 */
+  active?: boolean;
   onNavigate: (target: {
     bvid: string;
     cid: number;
@@ -955,6 +978,7 @@ function PartsSeasonPanel({
           aid={archive.aid}
           pages={archive.pages}
           currentCid={currentCid}
+          active={active}
           onNavigate={onNavigate}
         />
       )}
@@ -979,12 +1003,22 @@ function PartsSeasonPanel({
             </span>
           </button>
           {seasonOpen && (
-            <UgcSeasonList season={season} currentBvid={currentBvid} onNavigate={onNavigate} />
+            <UgcSeasonList
+              season={season}
+              currentBvid={currentBvid}
+              active={active}
+              onNavigate={onNavigate}
+            />
           )}
         </section>
       )}
       {season && !multiPart && (
-        <UgcSeasonPanel season={season} currentBvid={currentBvid} onNavigate={onNavigate} />
+        <UgcSeasonPanel
+          season={season}
+          currentBvid={currentBvid}
+          active={active}
+          onNavigate={onNavigate}
+        />
       )}
     </div>
   );
@@ -1123,6 +1157,7 @@ export function VideoSidebar({
           archive={archive}
           currentCid={cid}
           currentBvid={bvid ?? ""}
+          active={value === tab}
           onNavigate={navigateToPlay}
         />
       );
@@ -1329,8 +1364,16 @@ export function VideoSidebar({
       {/* 页签内容常驻同一条带，按选中项整体平移：滑动时相邻页签已经绘制完成，
           手指下方是真实内容而不是切换后才挂载的空白。非活动页签用 aria-hidden +
           inert 退出无障碍树与焦点序列。纵向滚动交给每个页签自己那一层，
-          条带与视口都不滚动，横滑与纵向浏览因此不争同一个指针。 */}
-      <div data-video-side-tab-viewport className="relative min-h-0 flex-1 overflow-hidden">
+          条带与视口都不滚动，横滑与纵向浏览因此不争同一个指针。
+
+          视口必须是 `overflow-clip` 而不是 `overflow-hidden`：`hidden` 仍然是滚动
+          容器，只是不给用户滚动条，`scrollIntoView` 照样能滚它。条带宽 n×100%，
+          非活动面板横向偏出视口，面板里任何 `scrollIntoView`（合集/选集定位当前项、
+          弹幕跟随进度）都会让浏览器横向滚动本视口去「露出」那个偏移过的面板，条带
+          于是停在页签之间，显示的面板与选中的页签脱同步（真机实测 scrollLeft 停在
+          304.86px，非整数正是程序化滚动而非手势的特征）。`clip` 不建立滚动容器，
+          这条不变量因此由布局本身保证，而不依赖每个面板都记得自我约束。 */}
+      <div data-video-side-tab-viewport className="relative min-h-0 flex-1 overflow-clip">
         <div
           ref={sidebarSwipeBindPage}
           data-slot="horizontal-swipe-track"
@@ -1349,7 +1392,14 @@ export function VideoSidebar({
                 "flex min-h-0 min-w-0 shrink-0 flex-col",
                 // 弹幕面板自持滚动视口（要独占滚动位置来跟随播放进度），外壳不能再套
                 // 一层纵向滚动；其余页签是普通文档流内容，由外壳负责滚动。
-                value === "danmaku" ? "overflow-hidden" : "overflow-y-auto overscroll-contain",
+                //
+                // `touch-pan-y` 必须写在滚动容器自己身上，不能只靠 Tabs 外壳那一层：
+                // Chromium 用命中元素所在的**最近滚动容器**决定手势归属，容器为默认
+                // `touch-action: auto` 时横向拖动会被合成器当作滚动接走，第一次
+                // pointermove 之后就派发 pointercancel，横滑因此永远攒不到锁定阈值。
+                value === "danmaku"
+                  ? "overflow-hidden"
+                  : "overflow-y-auto overscroll-contain touch-pan-y",
               )}
               style={{ width: `${100 / visibleTabs.length}%` }}
             >

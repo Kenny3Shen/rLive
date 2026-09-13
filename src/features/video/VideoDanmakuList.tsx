@@ -72,7 +72,9 @@ export function VideoDanmakuList({
       ref={viewportRef}
       data-slot="video-danmaku-list"
       aria-label="视频弹幕"
-      className="h-full overflow-y-auto overscroll-contain pb-2"
+      // touch-pan-y：本视口位于侧栏横滑条带内，滚动容器必须让出横向，
+      // 否则合成器会把横滑当作纵向滚动接走并 pointercancel（见 VideoSidebar 页签面板）。
+      className="h-full overflow-y-auto overscroll-contain pb-2 touch-pan-y"
     >
       {total === 0 && loading && (
         <div className="flex items-center justify-center py-4">
