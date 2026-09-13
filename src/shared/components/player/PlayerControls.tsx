@@ -1,4 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Captions,
   CaptionsOff,
@@ -23,7 +29,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { Time } from "@videojs/react";
+import { Menu, Time, useMenuContext } from "@videojs/react";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -283,6 +289,95 @@ function ExtensionButton({
   );
 }
 
+export type PlayerMenuRadioOption = {
+  value: string;
+  label: ReactNode;
+  disabled?: boolean;
+  title?: string;
+};
+
+/**
+ * 把 Video.js 的菜单键盘模型嵌进项目现有 Popover/Drawer 外壳。
+ *
+ * `Menu.Popup` 自带定位与 top-layer 生命周期，不能与现有外壳叠用；这里仅借用
+ * `Menu.Content` 的 roving tabindex、方向键、Home/End、Enter/Space 与 type-ahead。
+ */
+function EmbeddedMenuContent({ children }: { children: ReactNode }) {
+  const { menu, state, contentId, core } = useMenuContext();
+  const setContentElement = useCallback(
+    (element: HTMLDivElement | null) => menu.setContentElement(element),
+    [menu],
+  );
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    menu.contentProps.onKeyDown(
+      event.nativeEvent as Parameters<typeof menu.contentProps.onKeyDown>[0],
+    );
+    if (event.key !== "Escape") event.stopPropagation();
+  };
+
+  return (
+    <div
+      ref={setContentElement}
+      id={contentId}
+      {...core.getContentAttrs()}
+      data-open={state.open || undefined}
+      onKeyDown={handleKeyDown}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function PlayerMenuRadioGroup({
+  label,
+  value,
+  options,
+  columns,
+  onValueChange,
+}: {
+  label: string;
+  value: string;
+  options: PlayerMenuRadioOption[];
+  columns?: number;
+  onValueChange: (value: string) => void;
+}) {
+  const optionClass = glassOptionClass();
+  return (
+    <Menu.RadioGroup
+      value={value}
+      onValueChange={onValueChange}
+      aria-label={label}
+      className={columns ? "grid gap-1 px-1" : "flex flex-col gap-0.5"}
+      style={columns ? { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` } : undefined}
+    >
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <Menu.RadioItem
+            key={option.value}
+            value={option.value}
+            disabled={option.disabled}
+            title={option.title}
+            className={cn(
+              "flex min-h-7 w-full cursor-default items-center justify-between gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] font-medium outline-none select-none touch-manipulation transition-colors aria-disabled:pointer-events-none aria-disabled:opacity-50 [@media(pointer:coarse)]:min-h-11",
+              columns && "h-8 justify-center px-1 text-xs",
+              optionClass,
+              selected && glassOptionSelectedClass(),
+            )}
+          >
+            <span className="truncate">{option.label}</span>
+            {!columns && (
+              <Menu.ItemIndicator checked={selected}>
+                <Check data-icon="inline-end" aria-hidden />
+              </Menu.ItemIndicator>
+            )}
+          </Menu.RadioItem>
+        );
+      })}
+    </Menu.RadioGroup>
+  );
+}
+
 function SettingsBody({
   qualities,
   qualityIndex,
@@ -302,7 +397,6 @@ function SettingsBody({
   | "onQualityChange"
   | "onLineChange"
 > & { onClose: () => void }) {
-  const optionClass = glassOptionClass();
   const qualityLabel = (index: number) => {
     const label = qualities?.[index]?.quality?.trim();
     if (!label || /^(?:rate)?\d+$/i.test(label)) {
@@ -310,61 +404,49 @@ function SettingsBody({
     }
     return label;
   };
+  const qualityOptions: PlayerMenuRadioOption[] =
+    qualities?.map((quality, index) => ({
+      value: String(index),
+      label: qualityLabel(index),
+      disabled: quality.disabled,
+      title: quality.hint,
+    })) ?? [];
+  const lineOptions: PlayerMenuRadioOption[] =
+    lines?.map((line, index) => ({
+      value: String(index),
+      label: lineName(line, index),
+    })) ?? [];
   return (
     <div className="flex flex-col gap-1">
-      {(qualities?.length ?? 0) > 0 && (
+      {qualityOptions.length > 0 && (
         <div className="flex flex-col gap-0.5">
           <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>清晰度</span>
-          {qualities?.map((quality, index) => (
-            <Button
-              key={`${quality.quality}-${index}`}
-              variant="ghost"
-              size="sm"
-              disabled={quality.disabled}
-              title={quality.hint}
-              aria-pressed={index === qualityIndex}
-              className={cn(
-                "w-full justify-between",
-                optionClass,
-                index === qualityIndex && glassOptionSelectedClass(),
-              )}
-              onClick={() => {
-                onQualityChange?.(index);
-                onClose();
-              }}
-            >
-              <span className="truncate">{qualityLabel(index)}</span>
-              {index === qualityIndex && <Check data-icon="inline-end" aria-hidden />}
-            </Button>
-          ))}
+          <PlayerMenuRadioGroup
+            label="清晰度"
+            value={String(qualityIndex)}
+            options={qualityOptions}
+            onValueChange={(nextValue) => {
+              onQualityChange?.(Number(nextValue));
+              onClose();
+            }}
+          />
         </div>
       )}
-      {(qualities?.length ?? 0) > 0 && (lines?.length ?? 0) > 0 && (
+      {qualityOptions.length > 0 && lineOptions.length > 0 && (
         <Separator className={glassSeparatorClass()} />
       )}
-      {(lines?.length ?? 0) > 0 && (
+      {lineOptions.length > 0 && (
         <div className="flex flex-col gap-0.5">
           <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>线路</span>
-          {lines?.map((line, index) => (
-            <Button
-              key={`${line.url}-${index}`}
-              variant="ghost"
-              size="sm"
-              aria-pressed={index === lineIndex}
-              className={cn(
-                "w-full justify-between",
-                optionClass,
-                index === lineIndex && glassOptionSelectedClass(),
-              )}
-              onClick={() => {
-                onLineChange?.(index);
-                onClose();
-              }}
-            >
-              <span className="truncate">{lineName(line, index)}</span>
-              {index === lineIndex && <Check data-icon="inline-end" aria-hidden />}
-            </Button>
-          ))}
+          <PlayerMenuRadioGroup
+            label="线路"
+            value={String(lineIndex)}
+            options={lineOptions}
+            onValueChange={(nextValue) => {
+              onLineChange?.(Number(nextValue));
+              onClose();
+            }}
+          />
         </div>
       )}
       {playbackSettings}
@@ -548,16 +630,27 @@ export function PlayerControls({
   );
   useEffect(() => () => onOverlayInteractionChange?.(false), [onOverlayInteractionChange]);
   const settingsBody = (
-    <SettingsBody
-      qualities={qualities}
-      qualityIndex={qualityIndex}
-      lines={lines}
-      lineIndex={lineIndex}
-      playbackSettings={playbackSettings}
-      onQualityChange={onQualityChange}
-      onLineChange={onLineChange}
-      onClose={() => setSettingsOpen(false)}
-    />
+    <Menu.Root
+      open={settingsOpen}
+      closeOnEscape={false}
+      closeOnOutsideClick={false}
+      onOpenChange={(open) => {
+        if (!open) setSettingsOpen(false);
+      }}
+    >
+      <EmbeddedMenuContent>
+        <SettingsBody
+          qualities={qualities}
+          qualityIndex={qualityIndex}
+          lines={lines}
+          lineIndex={lineIndex}
+          playbackSettings={playbackSettings}
+          onQualityChange={onQualityChange}
+          onLineChange={onLineChange}
+          onClose={() => setSettingsOpen(false)}
+        />
+      </EmbeddedMenuContent>
+    </Menu.Root>
   );
 
   const asrBody = (

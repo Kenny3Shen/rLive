@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { Menu } from "@videojs/react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { VideoJsPlayerProvider } from "../src/features/room/player/videoJsControls";
@@ -13,6 +14,7 @@ import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
   PlayerControls,
+  PlayerMenuRadioGroup,
   playerControlsAvoidSystemGestureBar,
   showPlayerSidePanelControl,
   showPlayerVolumeControl,
@@ -473,6 +475,34 @@ describe("fullscreen top HUD", () => {
 });
 
 describe("custom player controls layout", () => {
+  test("renders native radio semantics for player option groups", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(
+          // Menu 原语必须在 Root 上下文里；PlayerControls 的设置正文使用同一层包装。
+          // 这里直接测共享选项组，避免 Popover 在 SSR 下不挂载内容。
+          Menu.Root,
+          { open: true },
+          createElement(PlayerMenuRadioGroup, {
+            label: "清晰度",
+            value: "1",
+            options: [
+              { value: "0", label: "原画" },
+              { value: "1", label: "高清" },
+            ],
+            onValueChange: () => {},
+          }),
+        ),
+      ),
+    );
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-label="清晰度"');
+    expect(html.split('role="menuitemradio"').length - 1).toBe(2);
+    expect(html).toContain('aria-checked="true"');
+  });
+
   test("renders left, center danmaku, and right controls in the specified order", () => {
     const html = renderToStaticMarkup(
       createElement(
