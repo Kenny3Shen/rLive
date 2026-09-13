@@ -14,7 +14,7 @@ type NativeOrientationInvoke = <T>(command: string, args?: Record<string, unknow
  * Android WebView 在页面进入全屏时会上报 `requestedOrientation` 提示，
  * 但 rLive 忽略它：很多房间直播竖屏视频，
  * 遵循提示会把它们横过来。改为从解码后的帧尺寸判断，
- * 16:9 的流自动旋转而竖屏流保持直立。未知比例时释放锁而不去猜。
+ * 16:9 的流自动全屏而竖屏流保持直立。未知比例时释放锁而不去猜。
  */
 export function fullscreenPlayerOrientation(
   fullscreen: boolean,
@@ -51,7 +51,7 @@ export async function setAndroidPlayerOrientation(
 }
 
 /**
- * 横屏流的 Android 全屏自动旋转。
+ * 横屏流的 Android 全屏自动全屏。
  *
  * `MainActivity` 在 `configChanges` 中声明了 `orientation|screenSize`，
  * 因此旋转既不会重建 Activity 也不会重启媒体会话。
@@ -78,4 +78,40 @@ export function useAndroidFullscreenOrientation({
       void setAndroidPlayerOrientation("auto").catch(() => {});
     };
   }, [aspectRatio, enabled, fullscreen]);
+}
+
+/**
+ * Android 横屏时自动进入全屏。
+ * 
+ * 当设备旋转到横屏且视频是横屏比例（宽高比 > 1）时，
+ * 自动触发全屏；旋转回竖屏时自动退出全屏。
+ */
+export function useAndroidAutoFullscreenOnLandscape({
+  enabled,
+  isLandscape,
+  aspectRatio,
+  fullscreen,
+  enterFullscreen,
+  exitFullscreen,
+}: {
+  enabled: boolean;
+  isLandscape: boolean;
+  aspectRatio: number | null;
+  fullscreen: boolean;
+  enterFullscreen: () => void;
+  exitFullscreen: () => void;
+}) {
+  useEffect(() => {
+    if (!enabled || !runningOnAndroidTauri()) return;
+    if (aspectRatio == null || !Number.isFinite(aspectRatio) || aspectRatio <= 0) return;
+    
+    const isLandscapeVideo = aspectRatio > 1;
+    if (!isLandscapeVideo) return;
+
+    if (isLandscape && !fullscreen) {
+      enterFullscreen();
+    } else if (!isLandscape && fullscreen) {
+      exitFullscreen();
+    }
+  }, [enabled, isLandscape, aspectRatio, fullscreen, enterFullscreen, exitFullscreen]);
 }

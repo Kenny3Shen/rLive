@@ -1411,7 +1411,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryStalled(telemetry, performance.now());
     };
-    // Android 全屏自动旋转依据解码后的帧尺寸决定，
+    // Android 全屏自动全屏依据解码后的帧尺寸决定，
     // 因此比例既要跟随首个元数据，也要跟随自适应阶梯在流中进行的后续分辨率切换。
     const syncAspectRatio = () => {
       if (videoRef.current !== video) return;
