@@ -13,6 +13,7 @@ import {
   playerEdgeGestureForStart,
   playerEdgeGestureIntent,
   playerEdgeGestureValue,
+  isTouchLikePointer,
   PLAYER_EDGE_GESTURE_HUD_LINGER_MS,
   type PlayerEdgeGesture,
 } from "@/shared/gestures/playerEdgeGesture";
@@ -259,7 +260,7 @@ export function usePlayerEdgeGesture({
     (event: ReactPointerEvent<HTMLElement>) => {
       if (
         !enabled ||
-        (event.pointerType !== "touch" && event.pointerType !== "pen") ||
+        !isTouchLikePointer(event.pointerType) ||
         !event.isPrimary ||
         isIgnoredTarget(event.target)
       ) {

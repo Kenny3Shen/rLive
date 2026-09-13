@@ -141,6 +141,13 @@ function isRoomSideTab(value: string): value is RoomSideTab {
 }
 
 const CONTROLS_HIDE_DELAY_MS = 2_000;
+/**
+ * 手势认领后封锁点按识别器的时长（ms）。
+ *
+ * 必须盖住识别器自身的双击判定窗口（约 200ms），使滑动抬手后到达的延迟单击、
+ * 以及与下一次轻点凑成的双击都被否决。与视频页取同一值。
+ */
+const STAGE_TAP_SUPPRESSION_MS = 300;
 const OVERLAY_FOCUS_RESTORE_DELAY_MS = 160;
 type OverlayInteractionSource = "controls" | "composer" | "hud";
 
@@ -857,15 +864,6 @@ function PlayerPaneContent({
     setControlVisibility(false);
   }, [clearControlsHideTimer, setControlVisibility]);
 
-  /** Simple Live 式单击：隐藏时显示，已可见时隐藏。 */
-  const toggleControls = useCallback(() => {
-    if (controlsVisibleRef.current) {
-      hideControls();
-      return;
-    }
-    revealControls();
-  }, [hideControls, revealControls]);
-
   /**
    * 上锁时收起两层 chrome 只留锁定按钮，解锁时把 chrome 带回来。
    * 两个方向都走 `revealControls`：锁定态已写入 ref，`setControlVisibility` 会据此
@@ -1070,11 +1068,25 @@ function PlayerPaneContent({
     layout: "track",
   });
 
+  /**
+   * 被手势认领过的按压对点按识别器的封锁截止时刻（`Date.now()` 毫秒）。
+   *
+   * `stageTapEligibleRef` 只描述"当前这次按压"，而识别器的单击回调要等满双击窗口、
+   * 双击回调更晚才到，届时下一次 pointerdown 已经把资格重新置为 true：一次滑动
+   * 之后紧跟的轻点会与滑动那一下凑成双击，凭空切换播放状态。这个窗口跨按压生效，
+   * 与视频页同一套做法。
+   */
+  const suppressStageTapUntilRef = useRef(0);
+  const suppressStageTaps = useCallback(() => {
+    suppressStageTapUntilRef.current = Date.now() + STAGE_TAP_SUPPRESSION_MS;
+  }, []);
+
   // 识别出的音量/亮度拖拽会取消任何待处理的舞台点按。
   const cancelPendingStageTap = useCallback(() => {
     stageTapEligibleRef.current = false;
     playerStageTapRef.current = null;
-  }, []);
+    suppressStageTaps();
+  }, [suppressStageTaps]);
 
   // 画面左右半边纵向滑动调亮度/音量。与视频页共用同一套阈值、反馈层与原生桥路由，
   // 因此两页手感不会分叉：Android 经原生桥控制系统媒体音量与 Activity 亮度，
@@ -1116,9 +1128,8 @@ function PlayerPaneContent({
       if (event.type === "pointerdown") {
         event.currentTarget.focus({ preventScroll: true });
       }
-      // 桌面/鼠标保持"总是显示"的行为。移动端触摸使用显式的单击切换，
-      // 使第二次点击可以再次隐藏 chrome，
-      // 对齐常见移动播放器，而不只是重置计时器。
+      // 桌面/鼠标保持"总是显示"的行为。移动端触摸交给点按识别器：只有判定成立的
+      // 单击才唤出 chrome，落在亮度/音量滑动或长按上的触摸不该顺带把它带出来。
       if (mobileClient && isTouchPointer(event.pointerType)) return;
       revealControls();
     },
@@ -1166,11 +1177,13 @@ function PlayerPaneContent({
         !isPlayerStageTapMovement(event.clientX - tap.startX, event.clientY - tap.startY)
       ) {
         stageTapEligibleRef.current = false;
+        // 跨按压的封锁：只清资格挡不住已经排入队列的延迟回调。
+        suppressStageTaps();
       }
       if (edgeGestureMove(event)) return;
       handleStagePointerActivity(event);
     },
-    [edgeGestureMove, handleStagePointerActivity],
+    [edgeGestureMove, handleStagePointerActivity, suppressStageTaps],
   );
 
   const handleStagePointerUp = useCallback(
@@ -1206,26 +1219,33 @@ function PlayerPaneContent({
   );
 
   /**
-   * 单击切换 chrome、双击切换全屏：识别器与判定窗口来自 Video.js 官方钩子，动作仍是
-   * 本页的 `toggleControls`（命令式写 `data-visible`，不经 React 状态）与
-   * `togglePlayerFullscreen`（Android 页内固定层 / 桌面原生窗口，刻意避开
-   * Fullscreen API）。
+   * 单击唤出 chrome、双击播放/暂停：识别器与判定窗口来自 Video.js 官方钩子，动作仍是
+   * 本页的 `revealControls`（命令式写 `data-visible`，不经 React 状态）与
+   * `player.togglePause()`（`useWebPlayer` 里唯一维护 `userPausedRef` 记账的入口）。
    *
-   * 只在移动端触摸上启用：桌面沿用鼠标移动即显示 chrome，点画面不该把它收起来。
+   * 单击刻意只唤出、不收起：`revealControls` 会刷新活动时间戳，因此已可见时再点
+   * 只是把空闲倒计时推后，chrome 不会在手指下方消失。收起交给空闲淡出。
+   * 全屏改由 chrome 上的按钮与键盘 `F` 触发，双击不再兼职。
+   *
+   * 只在移动端触摸上启用：桌面沿用鼠标移动即显示 chrome，点画面不该切播放状态。
    * 空 `pointerType`（部分 Android WebView 对手指输入如此上报）也必须算触摸，
    * 因此不用识别器的 `pointer` 限定，改在 `shouldIgnore` 里判。
    */
   usePlayerStageTapGestures({
     target: playerStageRef,
     enabled: mobileClient && showHost && playerStageGesturesEnabled(fullscreenLocked),
-    onTap: toggleControls,
-    onDoubleTap: () => void togglePlayerFullscreen(),
+    onTap: revealControls,
+    onDoubleTap: () => {
+      player.togglePause();
+      revealControls();
+    },
     shouldIgnore: (event) =>
       !isTouchPointer(event.pointerType) ||
       isPlayerEdgeGestureIgnoredTarget(event.target) ||
       // 弹幕层在 document 捕获阶段认领点按，早于挂在舞台上的识别器，这里读得到。
       event.defaultPrevented ||
-      !stageTapEligibleRef.current,
+      !stageTapEligibleRef.current ||
+      Date.now() < suppressStageTapUntilRef.current,
   });
 
   const focusFirstControl = useCallback(() => {
@@ -1374,7 +1394,7 @@ function PlayerPaneContent({
           tabIndex={0}
           aria-label={
             mobileClient
-              ? "直播播放器；单击显示或隐藏控制条，双击全屏；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
+              ? "直播播放器；单击显示控制条，双击播放或暂停；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
               : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
           }
           aria-keyshortcuts="Space K M F ArrowUp ArrowDown"

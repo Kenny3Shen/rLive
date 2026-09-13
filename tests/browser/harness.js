@@ -36,6 +36,35 @@ export const frames = async () => {
   await frame();
 };
 
+/**
+ * 在元素中心合成一次触摸点按。
+ *
+ * 桌面 WebView2 的 CDP 会话没有 `hasTouch`，`page.touchscreen.*` 会直接报错；
+ * 而手势识别器只看 pointer 事件的 `pointerType`，自己派发即可，同一份夹具
+ * 因此在桌面与 Android 上都能跑。真实手指微抖仍只有真机能覆盖。
+ */
+let touchPointerId = 1;
+export function touchTap(element) {
+  const box = element.getBoundingClientRect();
+  const init = {
+    pointerId: (touchPointerId += 1),
+    pointerType: "touch",
+    isPrimary: true,
+    clientX: box.left + box.width / 2,
+    clientY: box.top + box.height / 2,
+    bubbles: true,
+    cancelable: true,
+  };
+  element.dispatchEvent(new PointerEvent("pointerdown", init));
+  element.dispatchEvent(new PointerEvent("pointerup", init));
+}
+
+/** 让元素上进行中的收尾动画直接落位，断言终点而不是中间帧。 */
+export async function settleAnimations(element) {
+  for (const animation of element.getAnimations()) animation.finish();
+  await frames();
+}
+
 /** 轮询到条件成立；超时抛出调用方给的定位信息。 */
 export async function until(predicate, message, timeoutMs = 5000) {
   const deadline = performance.now() + timeoutMs;

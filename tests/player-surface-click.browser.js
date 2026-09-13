@@ -3,14 +3,15 @@
 // 夹具为两套皮肤（vod / live）各挂一份真实 VideoJsContainer + VideoJsVideo，并直接
 // 调用那个真实钩子 —— 不再复刻播放页的手写判定，否则钩子本身坏掉时夹具依然会通过。
 // 媒体元素用本地桩（`paused` / `play` / `pause` 全部记账），因此「识别器与皮肤各切一次」
-// 会直接表现为单击后出现两次 play/pause。
+// 会直接表现为双击后出现两次 play/pause。
+//
+// 断言的是移动端触摸语义（两页统一）：单击只唤出 HUD，不动播放状态；双击播放/暂停
+// 且不泄漏成单击，也不再兼职全屏。桌面鼠标沿用点画面暂停、双击全屏，因此夹具在页面内
+// 合成 `pointerType: "touch"` 的 pointer 事件（见下方 `tap`），不走鼠标路径。
 // 先启动 vite（bun run dev）并打开预览页，再执行：
 //   playwright-cli -s=player-surface-click open http://127.0.0.1:1420/
 //   playwright-cli -s=player-surface-click run-code --filename=tests/player-surface-click.browser.js
 async (page) => {
-  const assert = (condition, message) => {
-    if (!condition) throw new Error(message);
-  };
   const VARIANTS = ["vod", "live"];
 
   await page.waitForFunction(() =>
@@ -21,44 +22,36 @@ async (page) => {
 
   await page.evaluate(
     async ({ variants }) => {
-      const dependencyUrl = (name) => {
-        const resource = performance
-          .getEntriesByType("resource")
-          .find((item) => new URL(item.name).pathname.endsWith(`/deps/${name}.js`));
-        if (!resource) throw new Error(`请先打开 Vite 预览页：未找到 ${name}`);
-        return resource.name;
-      };
-      const { default: React } = await import(dependencyUrl("react"));
-      const { default: ReactDOMClient } = await import(dependencyUrl("react-dom_client"));
-      const { default: ReactDOM } = await import(dependencyUrl("react-dom"));
-      const { VideoJsContainer, VideoJsPlayerProvider, VideoJsVideo } = await import(
-        "/src/features/room/player/videoJsControls.tsx"
-      );
+      const { setupHarness, touchTap } = await import("/tests/browser/harness.js");
+      const { VideoJsContainer, VideoJsPlayerProvider, VideoJsVideo } =
+        await import("/src/features/room/player/videoJsControls.tsx");
       // 被测对象本体：播放页共用的舞台点按封装。
-      const { usePlayerStageTapGestures } = await import(
-        "/src/shared/hooks/usePlayerStageTapGestures.ts"
-      );
-      const { createElement: h, createRef } = React;
-      const { flushSync } = ReactDOM;
+      const { usePlayerStageTapGestures } =
+        await import("/src/shared/hooks/usePlayerStageTapGestures.ts");
 
       const state = {};
-      const hosts = [];
-      const roots = [];
+      const mounts = [];
 
-      variants.forEach((variant, index) => {
-        const host = document.createElement("div");
-        document.body.append(host);
-        hosts.push(host);
+      for (const [index, variant] of variants.entries()) {
+        // Video.js player 是一次性外部实例，StrictMode 双挂载会重建它并让下面取到的
+        // media ref 失效，因此这里退出 StrictMode。
+        const ui = await setupHarness({ strict: false });
+        mounts.push(ui);
+        const { h, createRef } = ui;
         const videoRef = createRef();
-        state[variant] = {
+        const variantState = {
           paused: false,
           plays: 0,
           pauses: 0,
           taps: 0,
           doubleTaps: 0,
+          reveals: 0,
           fullscreens: 0,
+          // 滑动确认后置位的抑制标志，与播放页 `suppressClickRef` 同一角色：
+          // 识别器的延迟回调必须读得到它。
+          suppressed: false,
         };
-        const variantState = state[variant];
+        state[variant] = variantState;
 
         /** 与各播放页的 togglePlayback 同构。 */
         const togglePlayback = () => {
@@ -71,55 +64,53 @@ async (page) => {
         // 钩子要求 Player 上下文，因此绑定发生在 VideoJsContainer 的子树内。
         function StageGestures() {
           usePlayerStageTapGestures({
+            // 单击只唤出 chrome：不碰播放状态，也不在已可见时收起。
             onTap: () => {
               variantState.taps += 1;
-              togglePlayback();
+              variantState.reveals += 1;
             },
             onDoubleTap: () => {
               variantState.doubleTaps += 1;
-              variantState.fullscreens += 1;
+              togglePlayback();
             },
+            shouldIgnore: () => variantState.suppressed,
           });
           return null;
         }
 
-        const root = ReactDOMClient.createRoot(host);
-        roots.push(root);
-        flushSync(() =>
-          root.render(
+        ui.render(
+          h(
+            VideoJsPlayerProvider,
+            null,
             h(
-              VideoJsPlayerProvider,
-              null,
-              h(
-                VideoJsContainer,
-                {
-                  variant,
-                  controls: null,
-                  [`data-surface-click-stage-${variant}`]: "",
-                  style: {
-                    position: "fixed",
-                    left: index * 500,
-                    top: 0,
-                    width: 480,
-                    height: 270,
-                    background: "#111",
-                    zIndex: 999,
-                  },
+              VideoJsContainer,
+              {
+                variant,
+                controls: null,
+                [`data-surface-click-stage-${variant}`]: "",
+                style: {
+                  position: "fixed",
+                  left: index * 500,
+                  top: 0,
+                  width: 480,
+                  height: 270,
+                  background: "#111",
+                  zIndex: 999,
                 },
-                h(
-                  "div",
-                  {
-                    [`data-surface-click-surface-${variant}`]: "",
-                    style: { position: "absolute", inset: 0 },
-                  },
-                  h(VideoJsVideo, {
-                    ref: videoRef,
-                    [`data-surface-click-video-${variant}`]: "",
-                    style: { position: "absolute", inset: 0, width: "100%", height: "100%" },
-                  }),
-                ),
-                h(StageGestures),
+              },
+              h(
+                "div",
+                {
+                  [`data-surface-click-surface-${variant}`]: "",
+                  style: { position: "absolute", inset: 0 },
+                },
+                h(VideoJsVideo, {
+                  ref: videoRef,
+                  [`data-surface-click-video-${variant}`]: "",
+                  style: { position: "absolute", inset: 0, width: "100%", height: "100%" },
+                }),
               ),
+              h(StageGestures),
             ),
           ),
         );
@@ -147,15 +138,19 @@ async (page) => {
             },
           },
         });
-      });
+      }
+
+      const tap = (variant) => {
+        const surface = document.querySelector(`[data-surface-click-surface-${variant}]`);
+        if (!surface) throw new Error(`未找到 ${variant} 画面`);
+        touchTap(surface);
+      };
 
       window.__playerSurfaceClick = {
         state,
+        tap,
         dispose: () => {
-          flushSync(() => {
-            for (const root of roots) root.unmount();
-          });
-          for (const host of hosts) host.remove();
+          for (const ui of mounts) ui.dispose();
           delete window.__playerSurfaceClick;
         },
       };
@@ -164,60 +159,102 @@ async (page) => {
   );
 
   const passed = [];
-  const state = (variant) =>
+  const readState = (variant) =>
     page.evaluate((name) => window.__playerSurfaceClick.state[name], variant);
+  const setSuppressed = (variant, value) =>
+    page.evaluate(
+      ({ name, next }) => {
+        window.__playerSurfaceClick.state[name].suppressed = next;
+      },
+      { name: variant, next: value },
+    );
+  const tap = (variant, times = 1) =>
+    page.evaluate(
+      ({ name, count }) => {
+        for (let index = 0; index < count; index += 1) window.__playerSurfaceClick.tap(name);
+      },
+      { name: variant, count: times },
+    );
 
   try {
     for (const variant of VARIANTS) {
       const surface = page.locator(`[data-surface-click-surface-${variant}]`);
       await surface.waitFor({ state: "visible" });
-      const box = await surface.boundingBox();
-      const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      /**
+       * 等满双击判定窗口后核对累计计数。断言累计值而非增量：多出来的那次切换
+       * 无论发生在哪一步都会一直显形。
+       */
+      const settle = async (label, expected) => {
+        await page.waitForTimeout(600);
+        const current = await readState(variant);
+        for (const [key, value] of Object.entries(expected)) {
+          if (current[key] !== value) {
+            throw new Error(`${variant} ${label}：${key} 期望 ${value}，实际 ${current[key]}`);
+          }
+        }
+      };
 
-      // 1) 单击暂停：识别器等满双击窗口后只派发一次单击，业务侧一次切换即止。
-      await page.mouse.click(center.x, center.y);
-      await page.waitForTimeout(600);
-      let current = await state(variant);
-      assert(current.taps === 1, `${variant}：单击未到达画面（taps=${current.taps}）`);
-      assert(
-        current.pauses === 1 && current.plays === 0,
-        `${variant}：单击切换次数不为 1（pause=${current.pauses}，play=${current.plays}）`,
-      );
-      assert(current.paused === true, `${variant}：单击后媒体未停在暂停态`);
+      // 单击只唤出 chrome：播放状态一动不动（plays / pauses / paused 全不变）。
+      await tap(variant);
+      await settle("单击显示 HUD", {
+        taps: 1,
+        reveals: 1,
+        pauses: 0,
+        plays: 0,
+        paused: false,
+      });
 
-      // 2) 再次单击继续播放：同样只有一次切换。
-      await page.mouse.click(center.x, center.y);
-      await page.waitForTimeout(600);
-      current = await state(variant);
-      assert(
-        current.pauses === 1 && current.plays === 1,
-        `${variant}：第二次单击切换次数异常（pause=${current.pauses}，play=${current.plays}）`,
-      );
-      assert(current.paused === false, `${variant}：第二次单击后媒体未继续播放`);
+      // 已可见时再点仍是唤出（刷新倒计时），不得反手收起，也仍然不碰播放状态。
+      await tap(variant);
+      await settle("再次单击保持显示", {
+        taps: 2,
+        reveals: 2,
+        pauses: 0,
+        plays: 0,
+        paused: false,
+      });
 
-      // 3) 双击：只提交全屏意图，不得再泄漏出一次单击暂停。
-      await page.mouse.dblclick(center.x, center.y);
-      await page.waitForTimeout(600);
-      current = await state(variant);
-      assert(
-        current.doubleTaps === 1,
-        `${variant}：双击未到达画面（doubleTaps=${current.doubleTaps}）`,
-      );
-      assert(current.taps === 2, `${variant}：双击泄漏成单击（taps=${current.taps}）`);
-      assert(
-        current.pauses === 1 && current.plays === 1,
-        `${variant}：双击泄漏成播放切换（pause=${current.pauses}，play=${current.plays}）`,
-      );
-      assert(
-        current.fullscreens === 1,
-        `${variant}：双击全屏意图不唯一（fullscreens=${current.fullscreens}）`,
-      );
+      // 双击恰好切换一次播放状态，且不泄漏成单击（taps 不涨）。
+      await tap(variant, 2);
+      await settle("双击暂停", {
+        taps: 2,
+        doubleTaps: 1,
+        pauses: 1,
+        plays: 0,
+        paused: true,
+        fullscreens: 0,
+      });
 
-      passed.push(`${variant} 皮肤：单击只切换一次播放状态（停在暂停 → 继续），双击只切换全屏`);
+      // 再双击回到播放：仍是一次切换，方向相反。
+      await tap(variant, 2);
+      await settle("再双击继续", {
+        taps: 2,
+        doubleTaps: 2,
+        pauses: 1,
+        plays: 1,
+        paused: false,
+      });
+
+      // 滑动确认后的抑制必须在识别器的延迟回调里生效：抬手时置位太晚，
+      // 单击回调要等满双击窗口才跑，那时按压状态已经清理。
+      await setSuppressed(variant, true);
+      await tap(variant);
+      await settle("滑动后抑制点按", {
+        taps: 2,
+        doubleTaps: 2,
+        pauses: 1,
+        plays: 1,
+        paused: false,
+      });
+      await setSuppressed(variant, false);
+
+      passed.push(
+        `${variant} 皮肤：单击只唤出 HUD 不动播放状态，双击恰好切换一次播放（不泄漏单击、不切全屏），抑制标志否决延迟回调`,
+      );
     }
 
     return { passed };
   } finally {
     await page.evaluate(() => window.__playerSurfaceClick?.dispose());
   }
-}
+};

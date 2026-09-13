@@ -47,11 +47,14 @@ import {
   PLAYER_HUD_TITLE_SIZE_CLASS,
   PLAYER_OVERLAY_CONTROL_BUTTON_CLASS,
   PlayerControls,
+  PlayerMenuRadioGroup,
+  type PlayerMenuRadioOption,
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
+import { isTouchLikePointer } from "@/shared/gestures/playerEdgeGesture";
 import {
   PlayerBrightnessShade,
   PlayerEdgeGestureFeedback,
@@ -127,6 +130,7 @@ import {
   videoStopPlay,
 } from "./videoApi";
 import {
+  formatVideoDuration,
   videoHistoryAdd,
   videoHistoryFind,
   videoPgcEntryEpisode,
@@ -134,6 +138,7 @@ import {
   videoResumePosition,
   VIDEO_HISTORY_QUERY_KEY,
 } from "./videoHistory";
+import { videoSeekGestureTarget, videoSurfaceGestureIntent } from "./videoSurfaceGesture";
 import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWaitingRecovery";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
@@ -186,12 +191,19 @@ import {
 } from "./playlistStore";
 import { notify, setToastPortalContainer } from "@/components/ui/toast";
 
+const LONG_PRESS_TRIGGER_MS = 500;
 /** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
 const LONG_PRESS_RATE = 3;
-const VOD_PLAYBACK_RATES = [0.25, 0.5, 1, 1.5, 2] as const;
-const LONG_PRESS_TRIGGER_MS = 500;
 /** 移动超过这个距离视为滑动手势，取消长按判定。 */
 const LONG_PRESS_CANCEL_MOVE_PX = 12;
+/**
+ * 手势认领后封锁点按识别器的时长（ms）。
+ *
+ * 必须盖住识别器自身的双击判定窗口（约 200ms）：滑动/长按抬手后到达的延迟单击、
+ * 以及与下一次轻点凑成的双击，都要在这段时间里被否决。取值同量级于共享横滑的
+ * click 抑制（420ms）但更短，滑动之后有意的连点仍然来得及生效。
+ */
+const SURFACE_TAP_SUPPRESSION_MS = 300;
 
 function relatedPlaylistItems(
   items: readonly VideoItem[] | undefined,
@@ -278,19 +290,46 @@ function VideoPlayerPageContent() {
   const speedHoldTimerRef = useRef<number | null>(null);
   const speedHoldRef = useRef(false);
   const speedHoldRestoreRateRef = useRef(1);
-  const suppressClickRef = useRef(false);
+  /**
+   * 被手势认领过的按压对点按识别器的封锁截止时刻（`Date.now()` 毫秒）。
+   *
+   * 用截止时刻而不是布尔量：识别器的单击回调要等满双击窗口才触发，双击回调更晚，
+   * 那时这次按压早已结束。若在下一次 pointerdown 把标志清零，一次横滑之后紧跟的
+   * 轻点就会与滑动那一下凑成「双击」，凭空切换播放状态。窗口按抬手时刻续期，
+   * 越过它的点按才重新算数。
+   */
+  const suppressTapUntilRef = useRef(0);
+  /**
+   * 画面上这一次按压的完整归属。
+   *
+   * `mode` 是显式的所有权而不是若干并列布尔量：横向 seek、短视频上下切片、
+   * 长按倍速与左右半屏亮度/音量共享同一次 pointer session，谁认领了指针必须
+   * 一眼可读，否则会出现「方向已判定却没有手势接手」的空档（横向滑动此前
+   * 既不调节也不快进就是这个空档）。
+   */
   const surfacePressRef = useRef<{
     pointerId: number;
     x: number;
     y: number;
-    swipe: boolean;
+    mode: "pending" | "seek" | "playlist";
+    /** pointerdown 时算出的候选资格，方向锁定时据此选归属。 */
+    seek: boolean;
+    playlist: boolean;
     moved: boolean;
+    width: number;
     height: number;
+    /** 本次拖动的 seek 基准：按下瞬间的媒体位置与该分集时长。 */
+    startTime: number;
+    duration: number;
+    seekTarget: number;
     index: number;
     count: number;
     reducedMotion: boolean;
     samples: HorizontalSwipeSample[];
   } | null>(null);
+  const seekPreviewRef = useRef<HTMLDivElement | null>(null);
+  const seekPreviewTimeRef = useRef<HTMLSpanElement | null>(null);
+  const seekPreviewDeltaRef = useRef<HTMLSpanElement | null>(null);
   /** 上次记住的音量与静音态：所有会话级播放表面共享一份（见 shared/playerVolume）。 */
   const [initialAudio] = useState(() =>
     runningOnAndroidTauri() ? { volume: 100, muted: false } : readPlayerVolume(),
@@ -1674,17 +1713,46 @@ function VideoPlayerPageContent() {
     }
   }, [bvid, cid, swipePoster]);
 
+  /** 横向 seek 的目标时间预览。逐帧写 DOM，不走 React 状态：弹幕层与画面都在动。 */
+  const showSeekPreview = useCallback((target: number, total: number, delta: number) => {
+    const root = seekPreviewRef.current;
+    if (!root) return;
+    root.dataset.visible = "true";
+    if (seekPreviewTimeRef.current) {
+      seekPreviewTimeRef.current.textContent = `${formatVideoDuration(target)} / ${formatVideoDuration(total)}`;
+    }
+    if (seekPreviewDeltaRef.current) {
+      const seconds = Math.round(delta);
+      seekPreviewDeltaRef.current.textContent = `${seconds >= 0 ? "+" : "-"}${Math.abs(seconds)} 秒`;
+    }
+  }, []);
+
+  const hideSeekPreview = useCallback(() => {
+    const root = seekPreviewRef.current;
+    if (root) root.dataset.visible = "false";
+  }, []);
+
+  /** 认领手势时封锁点按识别器，并在抬手时续期（延迟回调那时才到）。 */
+  const suppressSurfaceTaps = useCallback(() => {
+    suppressTapUntilRef.current = Date.now() + SURFACE_TAP_SUPPRESSION_MS;
+  }, []);
+
   const engageSpeedHold = useCallback(() => {
-    if (surfacePressRef.current) surfacePressRef.current.swipe = false;
+    // 长按已经认领这次按压：此后的位移只用来取消倍速，不再转成换片或 seek。
+    const press = surfacePressRef.current;
+    if (press) {
+      press.playlist = false;
+      press.seek = false;
+    }
     const media = videoRef.current;
     // DASH 的 media.duration 可能为 Infinity，使用已有的真实分片时长。
     if (!media || !playbackRate || duration <= 0 || loading || playbackError) return;
     speedHoldRef.current = true;
-    suppressClickRef.current = true;
+    suppressSurfaceTaps();
     speedHoldRestoreRateRef.current = playbackRate.playbackRate;
     playbackRate.setPlaybackRate(LONG_PRESS_RATE);
     setSpeedHoldActive(true);
-  }, [duration, loading, playbackError, playbackRate]);
+  }, [duration, loading, playbackError, playbackRate, suppressSurfaceTaps]);
 
   const releaseSpeedHold = useCallback(() => {
     if (speedHoldTimerRef.current !== null) {
@@ -1698,10 +1766,11 @@ function VideoPlayerPageContent() {
   }, [playbackRate]);
 
   const cancelPendingSurfaceActions = useCallback(() => {
-    suppressClickRef.current = true;
+    suppressSurfaceTaps();
     surfacePressRef.current = null;
+    hideSeekPreview();
     releaseSpeedHold();
-  }, [releaseSpeedHold]);
+  }, [hideSeekPreview, releaseSpeedHold, suppressSurfaceTaps]);
 
   const edgeGesture = usePlayerEdgeGesture({
     // 短视频保留整面上下换片，不用侧边分区抢占原有刷视频手势。
@@ -1727,11 +1796,12 @@ function VideoPlayerPageContent() {
 
   const cancelSurfacePress = useCallback(() => {
     edgeGestureCancel();
-    if (surfacePressRef.current) suppressClickRef.current = true;
+    if (surfacePressRef.current) suppressSurfaceTaps();
     surfacePressRef.current = null;
+    hideSeekPreview();
     releaseSpeedHold();
     settleSwipe(0);
-  }, [edgeGestureCancel, releaseSpeedHold, settleSwipe]);
+  }, [edgeGestureCancel, hideSeekPreview, releaseSpeedHold, settleSwipe, suppressSurfaceTaps]);
 
   /**
    * 长按倍速会改写播放倍数，`useVideoJsPlaybackRate()` 随之返回新对象，
@@ -1774,21 +1844,38 @@ function VideoPlayerPageContent() {
         return;
       }
       if (swipeAnimationRef.current || swipePoster !== null) {
-        suppressClickRef.current = true;
+        // 换片过渡中的触摸不算点按，也不建新的手势会话。
+        suppressSurfaceTaps();
         event.preventDefault();
         return;
       }
-      // 新手势开始才清除抑制，避免拖动后的 click/dblclick 暂停或全屏下一条视频。
-      suppressClickRef.current = false;
+      // 这里刻意不清除封锁：它按时刻过期，否则一次滑动之后紧跟的轻点会与滑动
+      // 那一下凑成双击。
       edgeGestureStart(event);
+      const media = videoRef.current;
+      const touchLike = isTouchLikePointer(event.pointerType);
+      // seek 基准取媒体元素的实时位置（`currentTime` state 有节流），时长用后端
+      // 算出的分集长度：DASH 的 `media.duration` 可能是 Infinity。
+      const startTime = media?.currentTime ?? 0;
       surfacePressRef.current = {
         pointerId: event.pointerId,
         x: event.clientX,
         y: event.clientY,
-        swipe:
-          portraitSwipeEnabled && (event.pointerType === "touch" || event.pointerType === "pen"),
+        mode: "pending",
+        seek:
+          touchLike &&
+          media !== null &&
+          Number.isFinite(duration) &&
+          duration > 0 &&
+          !loading &&
+          !playbackError,
+        playlist: portraitSwipeEnabled && touchLike,
         moved: false,
+        width: event.currentTarget.clientWidth,
         height: event.currentTarget.clientHeight,
+        startTime,
+        duration,
+        seekTarget: startTime,
         index: prevItem ? 1 : 0,
         count: 1 + Number(prevItem !== null) + Number(nextItem !== null),
         reducedMotion: prefersReducedMotion(),
@@ -1803,86 +1890,129 @@ function VideoPlayerPageContent() {
       }, LONG_PRESS_TRIGGER_MS);
     },
     [
+      duration,
       edgeGestureStart,
       engageSpeedHold,
       fullscreenLocked,
+      loading,
       nextItem,
+      playbackError,
       portraitSwipeEnabled,
       prevItem,
       revealControls,
+      suppressSurfaceTaps,
       swipePoster,
     ],
   );
 
   const handleSurfacePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      // 已确认为纵向的亮度/音量独占这次触摸（它在 onAdjustStart 时就作废了点按）。
       if (edgeGestureMove(event)) return;
-      const start = surfacePressRef.current;
-      if (!start || start.pointerId !== event.pointerId) return;
-      const dx = event.clientX - start.x;
-      const dy = event.clientY - start.y;
-      if (dx * dx + dy * dy <= LONG_PRESS_CANCEL_MOVE_PX * LONG_PRESS_CANCEL_MOVE_PX) return;
-      if (!start.moved) {
-        // 一旦起步为横滑就不再转成切片；长按已触发时 swipe 也已撤销。
-        start.swipe &&= videoSwipeDirection(dx, dy, LONG_PRESS_CANCEL_MOVE_PX) !== null;
-        start.moved = true;
+      const press = surfacePressRef.current;
+      if (!press || press.pointerId !== event.pointerId) return;
+      const dx = event.clientX - press.x;
+      const dy = event.clientY - press.y;
+
+      if (press.mode === "pending") {
+        const intent = videoSurfaceGestureIntent(dx, dy, {
+          seek: press.seek,
+          playlist: press.playlist,
+        });
+        if (intent === "pending") return;
+        // 方向一旦明确，无论谁接手都当场作废点按与长按：识别器的单击回调要等满
+        // 双击窗口才触发，那时按压状态已清理，只有这个封锁还能否决它。
+        press.moved = true;
         releaseSpeedHold();
-        suppressClickRef.current = true;
-        if (start.swipe) event.currentTarget.setPointerCapture(event.pointerId);
+        suppressSurfaceTaps();
+        if (intent === "reject") return;
+        press.mode = intent;
+        // 确认后才捕获指针：短促接触必须保持原始目标，弹幕层要靠它完成命中测试。
+        event.currentTarget.setPointerCapture(event.pointerId);
+        // 采样从锁定点重启，锁定前的样本描述的还不是这个手势。
+        press.samples = [
+          { x: intent === "seek" ? event.clientX : event.clientY, time: event.timeStamp },
+        ];
       }
-      if (start.swipe) {
-        // 速度采样与翻页阻尼沿用共享横滑算法，只把活动轴换成 Y。
-        start.samples.push({ x: event.clientY, time: event.timeStamp });
-        if (start.samples.length > 8) start.samples.shift();
-        const offset = horizontalSwipeDragOffset(start.index, start.count, dy, start.height);
-        swipeOffsetRef.current = offset;
-        const track = swipeTrackRef.current;
-        if (track && !start.reducedMotion) {
-          track.style.willChange = "transform";
-          track.style.transform = `translate3d(0, ${offset}px, 0)`;
-        }
+
+      if (press.mode === "seek") {
+        press.seekTarget = videoSeekGestureTarget(press.startTime, dx, press.width, press.duration);
+        showSeekPreview(press.seekTarget, press.duration, press.seekTarget - press.startTime);
         event.preventDefault();
         event.stopPropagation();
+        return;
       }
+
+      // 速度采样与翻页阻尼沿用共享横滑算法，只把活动轴换成 Y。
+      press.samples.push({ x: event.clientY, time: event.timeStamp });
+      if (press.samples.length > 8) press.samples.shift();
+      const offset = horizontalSwipeDragOffset(press.index, press.count, dy, press.height);
+      swipeOffsetRef.current = offset;
+      const track = swipeTrackRef.current;
+      if (track && !press.reducedMotion) {
+        track.style.willChange = "transform";
+        track.style.transform = `translate3d(0, ${offset}px, 0)`;
+      }
+      event.preventDefault();
+      event.stopPropagation();
     },
-    [edgeGestureMove, releaseSpeedHold],
+    [edgeGestureMove, releaseSpeedHold, showSeekPreview, suppressSurfaceTaps],
   );
 
   const handleSurfacePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.defaultPrevented) {
-        cancelPendingSurfaceActions();
-        edgeGestureCancel();
-        return;
+      const press = surfacePressRef.current;
+      const owned = press?.pointerId === event.pointerId ? press.mode : "pending";
+      // 已被本页手势认领的按压先收尾。只有仍未定归属的按压才交还给认领了
+      // pointerup 的子级浮层（弹幕层在 document 捕获阶段命中测试）。
+      if (owned === "pending") {
+        if (event.defaultPrevented) {
+          cancelPendingSurfaceActions();
+          edgeGestureCancel();
+          return;
+        }
+        // 已生效的亮度/音量把这次触摸整个吃掉。
+        if (edgeGestureEnd(event)) return;
+        if (fullscreenLocked) {
+          revealControls();
+          return;
+        }
       }
-      if (edgeGestureEnd(event)) return;
-      if (fullscreenLocked) {
-        revealControls();
-        return;
-      }
-      const start = surfacePressRef.current;
-      if (!start || start.pointerId !== event.pointerId) return;
+      if (!press || press.pointerId !== event.pointerId) return;
       surfacePressRef.current = null;
       releaseSpeedHold();
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-      if (!start.swipe || !start.moved || !portraitSwipeEnabled) {
+      // 识别器的延迟回调从抬手起算，因此封锁窗口也要从这一刻续期。
+      if (press.moved) suppressSurfaceTaps();
+
+      if (press.mode === "seek") {
+        event.preventDefault();
+        event.stopPropagation();
+        hideSeekPreview();
+        // 整个拖动只提交一次，走播放页原有的统一 seek 入口。
+        seekTo(press.seekTarget);
+        revealControls();
+        return;
+      }
+
+      if (press.mode !== "playlist" || !press.moved || !portraitSwipeEnabled) {
         settleSwipe(0);
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      start.samples.push({ x: event.clientY, time: event.timeStamp });
-      const velocity = horizontalSwipeVelocity(start.samples);
-      const deltaY = event.clientY - start.y;
+      press.samples.push({ x: event.clientY, time: event.timeStamp });
+      const velocity = horizontalSwipeVelocity(press.samples);
+      const deltaY = event.clientY - press.y;
       const direction = videoSwipeDirection(
-        event.clientX - start.x,
+        event.clientX - press.x,
         deltaY,
         LONG_PRESS_CANCEL_MOVE_PX,
       );
       const commit =
-        direction !== null && horizontalSwipeShouldCommit(deltaY, velocity, start.height);
+        direction !== null && horizontalSwipeShouldCommit(deltaY, velocity, press.height);
       if (!commit) {
         settleSwipe(0, velocity);
         return;
@@ -1894,11 +2024,14 @@ function VideoPlayerPageContent() {
       edgeGestureCancel,
       edgeGestureEnd,
       fullscreenLocked,
+      hideSeekPreview,
       portraitSwipeEnabled,
       releaseSpeedHold,
       revealControls,
+      seekTo,
       settleSwipe,
       stepPlaylist,
+      suppressSurfaceTaps,
     ],
   );
 
@@ -2000,30 +2133,48 @@ function VideoPlayerPageContent() {
   }, [fullscreen.fullscreen, shortVideo, revealControls]);
 
   /**
-   * 点按暂停、双击全屏：识别器与单双击判定窗口来自 Video.js 官方钩子，动作仍是本页的
+   * 画面点按：识别器与单双击判定窗口来自 Video.js 官方钩子，动作仍是本页的
    * `togglePlayback`（唯一更新 `userPausedRef` 记账的入口）与 `togglePlayerFullscreen`
    * （短视频沉浸 / Android 页内层 / 桌面原生窗口三路径适配）。
    *
-   * 短视频不注册双击绑定，识别器因此不再等第二次点按，单击立即暂停 —— 与原来
-   * `shortVideo` 分支跳过 220ms 延时是同一行为。
+   * 语义按指针类型分叉，与直播页一致：
+   * - 移动端触摸：单击只唤出 HUD（已可见则刷新空闲倒计时，不再收起），双击播放/暂停。
+   * - 桌面鼠标：沿用点画面暂停、双击全屏，不受移动端手势改动影响。
    *
-   * 长按倍速与滑动的抑制沿用 `suppressClickRef`：识别器是挂在舞台上的原生监听，早于
-   * React 委托的事件，`defaultPrevented` 在这里不可靠，而该标志在 pointermove
-   * 越过 12px 或长按触发的当场就已置位。它同时充当识别器缺少的位移阈值。
+   * 一个 target 上只能有一个识别器实例，因此不能按 `pointer` 分别注册两套，
+   * 只能在回调里读 `pointerType` 分流。桌面短视频保持不注册双击（单击立即生效），
+   * 移动端短视频需要双击暂停，故只在桌面短视频上关掉。
+   *
+   * 长按倍速与滑动的抑制走 `suppressTapUntilRef`：识别器是挂在舞台上的原生监听，
+   * 早于 React 委托的事件，`defaultPrevented` 在这里不可靠，而该封锁在 pointermove
+   * 锁定方向或长按触发的当场就已置位、抬手时续期。它同时充当识别器缺少的位移阈值
+   * （底层只看按压时长与交互目标，不看走了多远）。
    */
   usePlayerStageTapGestures({
     target: stageRef,
-    onTap: () => {
-      if (fullscreenLocked) {
+    onTap: (event) => {
+      // 锁定态点按只唤回解锁按钮。
+      if (fullscreenLocked || isTouchLikePointer(event.pointerType)) {
         revealControls();
         return;
       }
       togglePlayback();
     },
-    onDoubleTap: shortVideo || fullscreenLocked ? undefined : togglePlayerFullscreen,
+    onDoubleTap:
+      fullscreenLocked || (shortVideo && !mobileClient)
+        ? undefined
+        : (event) => {
+            if (isTouchLikePointer(event.pointerType)) {
+              togglePlayback();
+              revealControls();
+              return;
+            }
+            togglePlayerFullscreen();
+          },
     // 锁定态要放行以便点按唤出解锁按钮，其余抑制照旧。
     shouldIgnore: (event) =>
-      isPlayerControlTarget(event.target) || (!fullscreenLocked && suppressClickRef.current),
+      isPlayerControlTarget(event.target) ||
+      (!fullscreenLocked && Date.now() < suppressTapUntilRef.current),
   });
 
   const handleStageKeyDown = useCallback(
@@ -2484,38 +2635,29 @@ function VideoPlayerPageContent() {
       </Popover>
     );
 
-  const currentPlaybackRate = playbackRate?.playbackRate ?? 1;
+  const currentPlaybackRate = String(playbackRate?.playbackRate ?? 1);
+  const playbackRateMenuOptions: PlayerMenuRadioOption[] =
+    playbackRate?.playbackRates.map((rate) => ({
+      value: String(rate),
+      label: `${rate}x`,
+    })) ?? [];
 
   /** 短视频固定单条循环；普通详情保留原有循环/连播设置。包含播放倍数调节。 */
   const playbackToggles = (
     <div className="flex flex-col gap-2 px-1 py-1">
-      <div className="flex flex-col gap-1.5">
-        <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>播放倍数</span>
-        <div className="grid grid-cols-5 gap-1 px-1">
-          {VOD_PLAYBACK_RATES.map((rate) => {
-            const isSelected = Math.abs(currentPlaybackRate - rate) < 0.01;
-            return (
-              <Button
-                key={rate}
-                variant="ghost"
-                size="sm"
-                aria-pressed={isSelected}
-                className={cn(
-                  "h-8 px-1 text-xs justify-center font-medium",
-                  glassOptionClass(),
-                  isSelected && glassOptionSelectedClass(),
-                )}
-                onClick={() => {
-                  playbackRate?.setPlaybackRate(rate);
-                }}
-              >
-                {rate}x
-              </Button>
-            );
-          })}
+      {playbackRateMenuOptions.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>播放倍数</span>
+          <PlayerMenuRadioGroup
+            label="播放倍数"
+            value={currentPlaybackRate}
+            options={playbackRateMenuOptions}
+            columns={playbackRateMenuOptions.length}
+            onValueChange={(nextValue) => playbackRate?.setPlaybackRate(Number(nextValue))}
+          />
         </div>
-      </div>
-      <Separator className={glassSeparatorClass()} />
+      )}
+      {playbackRateMenuOptions.length > 0 && <Separator className={glassSeparatorClass()} />}
       {shortVideo ? (
         <p className="px-2.5 py-1 text-sm text-white/80">短视频模式单条循环，上下滑动切换视频。</p>
       ) : (
@@ -2596,7 +2738,15 @@ function VideoPlayerPageContent() {
             aria-label={`${title}；按空格或 K 播放或暂停，左右方向键快退或快进（Shift 加速 30 秒），上下方向键调音量，M 静音，F 全屏`}
             aria-keyshortcuts="Space K ArrowLeft ArrowRight ArrowUp ArrowDown M F"
             aria-description={
-              portraitSwipeEnabled ? "竖屏画面上滑播放下一个，下滑播放上一个" : undefined
+              mobileClient
+                ? [
+                    "单击画面显示控制层，双击播放或暂停，左右滑动快退或快进",
+                    portraitSwipeEnabled
+                      ? "竖屏画面上滑播放下一个，下滑播放上一个"
+                      : "画面左半边上下滑动调亮度，右半边调音量",
+                    "长按临时 3 倍速",
+                  ].join("；")
+                : undefined
             }
             onPointerEnter={handleStagePointerActivity}
             onPointerMove={handleStagePointerActivity}
@@ -2791,6 +2941,28 @@ function VideoPlayerPageContent() {
                         {LONG_PRESS_RATE.toFixed(1)}x 倍速中
                       </div>
                     )}
+
+                    {/* 横向拖动的目标时间预览。逐帧只改 textContent 与 data-visible，
+                        不进 React 状态；已提交的位置由控制栏时间与进度条播报，
+                        这层只是拖动中的取景器，故对辅助技术隐藏。 */}
+                    <div
+                      ref={seekPreviewRef}
+                      data-player-seek-preview
+                      data-visible="false"
+                      aria-hidden
+                      className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-black/70 px-3.5 py-2 text-center text-white opacity-0 backdrop-blur-sm transition-opacity duration-100 ease-out data-[visible=true]:opacity-100 motion-reduced:transition-none"
+                    >
+                      <span
+                        ref={seekPreviewTimeRef}
+                        data-player-seek-preview-time
+                        className="block text-base font-medium leading-5 tabular-nums"
+                      />
+                      <span
+                        ref={seekPreviewDeltaRef}
+                        data-player-seek-preview-delta
+                        className="mt-0.5 block text-xs leading-4 tabular-nums text-white/75"
+                      />
+                    </div>
 
                     {(loading || waiting || playInfoQuery.isPending || switchingItem) &&
                       !playbackError &&
