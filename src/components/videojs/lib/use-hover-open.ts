@@ -1,5 +1,33 @@
 import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 
+/** 菜单关闭后焦点归还触发器的时间窗（毫秒），见 `useFocusReturnGuard`。 */
+const FOCUS_RETURN_WINDOW_MS = 400;
+
+/**
+ * 菜单关闭后 video.js 会把焦点归还触发器（`createMenu` 的 `restoreFocus`）。tooltip 的
+ * `onFocusIn` 不区分焦点来源，指针早已离开时会把 tooltip 重新打开，且之后再没有任何
+ * 事件能关掉它 —— 表现为「播放设置」tooltip 常驻到控制条 autohide。
+ *
+ * 规避：菜单刚关闭的时间窗内触发器获得焦点、而指针又不在其上时，立即交还焦点。
+ * 键盘导航的聚焦远离该窗口，不受影响。
+ */
+export function useFocusReturnGuard(closedAt: { current: number }) {
+  // `closedAt` 是稳定的 ref 容器；exhaustive-deps 对 ref.current 的警告不影响正确性。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useCallback(
+    (event: { currentTarget: HTMLElement }) => {
+      const sinceClose = performance.now() - closedAt.current;
+      if (sinceClose > FOCUS_RETURN_WINDOW_MS) return;
+      const trigger = event.currentTarget;
+      requestAnimationFrame(() => {
+        if (document.activeElement === trigger && !trigger.matches(":hover")) trigger.blur();
+      });
+    },
+    // 依赖 ref 容器本身即可：容器引用稳定，读值发生在回调执行时。
+    [closedAt],
+  );
+}
+
 /** 与 `volume-popover.tsx` 里 `VolumePopover` 的节奏一致，三个控制栏按钮手感相同。 */
 const DEFAULT_DELAY = 200;
 const DEFAULT_CLOSE_DELAY = 100;
@@ -12,8 +40,12 @@ export interface HoverOpenOptions {
 }
 
 export interface HoverOpenHandlers {
-  /** 挂在 `Menu.Trigger` 上：停留即展开。 */
-  trigger: { onPointerEnter: () => void; onPointerLeave: () => void };
+  /** 挂在 `Menu.Trigger` 上：停留即展开；`onFocus` 兜底拦截关闭后的焦点归还。 */
+  trigger: {
+    onPointerEnter: () => void;
+    onPointerLeave: () => void;
+    onFocus: (event: { currentTarget: HTMLElement }) => void;
+  };
   /** 挂在 `Menu.Popup` 上：进入即取消待执行的收起。 */
   popup: {
     onPointerEnter: () => void;
@@ -52,6 +84,18 @@ export function useHoverOpen(
   { delay = DEFAULT_DELAY, closeDelay = DEFAULT_CLOSE_DELAY }: HoverOpenOptions = {},
 ): HoverOpenHandlers {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** `open` 翻 false 的时刻，供 `useFocusReturnGuard` 判定焦点归还是否来自菜单关闭。 */
+  const closedAtRef = useRef(0);
+  const focusReturnGuard = useFocusReturnGuard(closedAtRef);
+  // setOpen 包装：记录关闭时刻。菜单关闭动画结束后 video.js 的 restoreFocus 会把焦点
+  // 归还触发器，tooltip 随之重开且再无事件能关掉它；guard 在时间窗内把焦点交还。
+  const setOpenTracked = useCallback(
+    (next: boolean) => {
+      if (!next) closedAtRef.current = performance.now();
+      setOpen(next);
+    },
+    [setOpen],
+  );
   const clear = useCallback(() => {
     if (timer.current === null) return;
     clearTimeout(timer.current);
@@ -60,7 +104,7 @@ export function useHoverOpen(
   useEffect(() => clear, [clear]);
 
   const arm = (next: boolean, ms: number) => {
-    timer.current = setTimeout(() => setOpen(next), ms);
+    timer.current = setTimeout(() => setOpenTracked(next), ms);
   };
 
   return {
@@ -76,6 +120,7 @@ export function useHoverOpen(
         clear();
         if (open) arm(false, closeDelay);
       },
+      onFocus: focusReturnGuard,
     },
     popup: {
       onPointerEnter: () => {

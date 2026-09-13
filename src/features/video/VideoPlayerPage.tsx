@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button";
 import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
@@ -139,10 +139,10 @@ import {
   glassOptionSelectedClass,
   glassPanelClass,
   glassSeparatorClass,
-  glassTitleClass,
 } from "@/shared/components/player/glassSurface";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
 import { VideoSidebar, type SidebarTab } from "./VideoSidebar";
+import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
 import {
   mergeVideoDanmakuEntries,
   videoDanmakuEntries,
@@ -283,7 +283,10 @@ function VideoPlayerPageContent() {
   const [volume, setVolume] = useState(initialAudio.volume);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [frameSize, setFrameSize] = useState<{ key: string; ratio: number | null } | null>(null);
+  const [frameSize, setFrameSize] = useState<{
+    key: string;
+    ratio: number | null;
+  } | null>(null);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab | null>(null);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
@@ -308,6 +311,9 @@ function VideoPlayerPageContent() {
   /** 正在投屏的设备名（null = 无会话），供入口磁贴展示「投屏中」。 */
   const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const [subtitleOpen, setSubtitleOpen] = useState(false);
+  // 字幕按钮悬停展开与控制栏播放设置菜单同一套时序（useHoverOpen 带
+  // 嵌套弹层防护：本地字幕设置里的 Select 展开期间不收起）。
+  const subtitleHover = useHoverOpen(subtitleOpen, setSubtitleOpen);
   /** 字幕弹层二级页：本地字幕沿用直播字幕设置，返回后恢复来源列表。 */
   const [subtitlePanel, setSubtitlePanel] = useState<"sources" | "local-settings">("sources");
   /** 窗口全屏（应用内全屏）：隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台
@@ -356,7 +362,10 @@ function VideoPlayerPageContent() {
   const rebuildPlaybackSession = useCallback(() => {
     const media = videoRef.current;
     if (media && media.currentTime > 0) {
-      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+      resumeAtRef.current = {
+        position: media.currentTime,
+        playing: !media.paused,
+      };
     }
     advancePlaybackSession();
   }, [advancePlaybackSession]);
@@ -390,20 +399,25 @@ function VideoPlayerPageContent() {
   const portraitOrientation = usePortraitOrientation();
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
-  const { revealControls, toggleControls, holdControlsVisible, scheduleControlsHide, dismissControls } =
-    usePlayerChromeIdle({
-      controlsRef,
-      hudRef,
-      lockRef,
-      fullscreenLocked,
-      keepVisible:
-        paused ||
-        loading ||
-        waiting ||
-        Boolean(playbackError) ||
-        overlayInteractionOpen ||
-        subtitleOpen,
-    });
+  const {
+    revealControls,
+    toggleControls,
+    holdControlsVisible,
+    scheduleControlsHide,
+    dismissControls,
+  } = usePlayerChromeIdle({
+    controlsRef,
+    hudRef,
+    lockRef,
+    fullscreenLocked,
+    keepVisible:
+      paused ||
+      loading ||
+      waiting ||
+      Boolean(playbackError) ||
+      overlayInteractionOpen ||
+      subtitleOpen,
+  });
   const fullscreen = useRecordingPlayerFullscreen(stageRef, () => {
     if (!fullscreenLocked) return true;
     revealControls();
@@ -843,7 +857,10 @@ function VideoPlayerPageContent() {
       if (qn === qualityQn) return;
       const media = videoRef.current;
       if (media) {
-        resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+        resumeAtRef.current = {
+          position: media.currentTime,
+          playing: !media.paused,
+        };
       }
       setQualityQn(qn);
     },
@@ -854,7 +871,10 @@ function VideoPlayerPageContent() {
   const toggleAudioOnly = useCallback(() => {
     const media = videoRef.current;
     if (media) {
-      resumeAtRef.current = { position: media.currentTime, playing: !media.paused };
+      resumeAtRef.current = {
+        position: media.currentTime,
+        playing: !media.paused,
+      };
     }
     const nextAudioOnly = !audioOnly;
     if (nextAudioOnly && pictureInPicture?.pip) {
@@ -868,7 +888,11 @@ function VideoPlayerPageContent() {
     queryKey: ["video_subtitles", cid, params?.bvid ?? "", params?.epId ?? ""],
     enabled: cid > 0,
     queryFn: () =>
-      videoGetSubtitles({ bvid: params?.bvid ?? null, cid, ep_id: params?.epId ?? null }),
+      videoGetSubtitles({
+        bvid: params?.bvid ?? null,
+        cid,
+        ep_id: params?.epId ?? null,
+      }),
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -916,7 +940,11 @@ function VideoPlayerPageContent() {
     queryKey: ["video_cast_url", cid, params?.bvid ?? "", params?.epId ?? ""],
     enabled: castOpen && cid > 0,
     queryFn: () =>
-      videoGetCastUrl({ bvid: params?.bvid ?? null, cid, ep_id: params?.epId ?? null }),
+      videoGetCastUrl({
+        bvid: params?.bvid ?? null,
+        cid,
+        ep_id: params?.epId ?? null,
+      }),
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -1270,7 +1298,10 @@ function VideoPlayerPageContent() {
         const resume = resumeAtRef.current;
         resumeAtRef.current = null;
         if (resume) {
-          pendingInitialSeek = { position: resume.position, playing: resume.playing };
+          pendingInitialSeek = {
+            position: resume.position,
+            playing: resume.playing,
+          };
           setCurrentTime(resume.position);
         } else {
           const historyResumeAt = historyResumeAtRef.current;
@@ -2109,13 +2140,15 @@ function VideoPlayerPageContent() {
       >
         <ButtonTooltip side="top">
           <PopoverTrigger
+            {...subtitleHover.trigger}
             render={
               <MediaButton
                 aria-label={captionsActive ? "关闭字幕" : "开启字幕"}
                 aria-pressed={captionsActive}
                 className={cn(
                   "r-live-media-extension-button",
-                  captionsActive && "bg-media-primary text-media-primary-foreground",
+                  // 与控制栏其他开启态一致：中性白填充，不再用 accent 蓝。
+                  captionsActive && glassOptionSelectedClass(),
                 )}
               >
                 {captionsActive ? (
@@ -2135,26 +2168,14 @@ function VideoPlayerPageContent() {
           collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
           sticky
           glass
-          className={cn("w-56 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+          className={cn(
+            "w-72 gap-0 overflow-y-auto p-1.5 whitespace-nowrap [&_*]:whitespace-nowrap",
+            glassPanelClass({ overlay: true }),
+          )}
+          {...subtitleHover.popup}
         >
           {subtitlePanel === "local-settings" ? (
             <>
-              <div className="flex items-center gap-1 px-1 py-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="返回字幕来源"
-                  onClick={() => setSubtitlePanel("sources")}
-                >
-                  <ChevronLeft aria-hidden />
-                </Button>
-                <PopoverTitle className={cn("min-w-0 flex-1", glassTitleClass({ overlay: true }))}>
-                  本地字幕设置
-                </PopoverTitle>
-                {(asrPending || asr.translationPending) && (
-                  <Spinner aria-label="正在更新字幕设置" />
-                )}
-              </div>
               <div className="px-2 py-2">
                 <AsrSettingsBody
                   portalContainer={stageRef}
@@ -2171,9 +2192,6 @@ function VideoPlayerPageContent() {
             </>
           ) : (
             <>
-              <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
-                字幕
-              </PopoverTitle>
               <Button
                 variant="ghost"
                 className={cn(

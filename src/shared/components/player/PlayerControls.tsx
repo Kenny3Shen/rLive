@@ -11,7 +11,6 @@ import {
   Captions,
   CaptionsOff,
   Check,
-  ChevronLeft,
   ChevronRight,
   Expand,
   Headphones,
@@ -174,9 +173,7 @@ export type PlayerControlsProps = {
   asrTranslationEnabled?: boolean;
   asrTranslationFrom?: CaptionTranslationSourceLanguage;
   asrTranslationTo?: CaptionTranslationLanguage;
-  asrTranslationBusy?: boolean;
   asrSpeakerDiarizationEnabled?: boolean;
-  asrSettingsPending?: boolean;
   qualities?: { quality: string; disabled?: boolean; hint?: string }[];
   qualityIndex?: number;
   lines?: PlayUrl[];
@@ -218,7 +215,7 @@ export type PlayerControlsProps = {
 export const PLAYER_CONTROL_BUTTON_CLASS = "shrink-0";
 export const PLAYER_CONTROL_ICON_CLASS = "[&_svg]:size-6";
 export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
-  "text-media-controls-foreground hover:bg-media-accent hover:text-media-accent-foreground";
+  "text-media-controls-foreground hover:bg-media-muted hover:text-inherit";
 
 /**
  * 画面之上 HUD 图标按钮的唯一样式配方：与底部控制栏同一套 36px MediaButton、
@@ -268,7 +265,9 @@ function ExtensionButton({
       onClick={onClick}
       className={cn(
         "r-live-media-extension-button",
-        active && "bg-media-primary text-media-primary-foreground",
+        // 开启态用玻璃菜单的选中填充（中性白），不再用 accent 蓝 ——
+        // 蓝底在控制栏上太抢眼，与悬停反馈的层级也拉不开。
+        active && glassOptionSelectedClass(),
         className,
       )}
     >
@@ -504,8 +503,8 @@ export function AsrSettingsBody({
           value={translationFrom}
           onValueChange={(value) => value && onTranslationFromChange?.(value)}
         >
-          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32">
-            <SelectValue />
+          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32 min-w-0">
+            <SelectValue className="min-w-0 truncate" />
           </SelectTrigger>
           <SelectContent container={portalContainer} side="top" align="end" glass>
             <SelectGroup>
@@ -525,8 +524,8 @@ export function AsrSettingsBody({
           value={translationTo}
           onValueChange={(value) => value && onTranslationToChange?.(value)}
         >
-          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32">
-            <SelectValue />
+          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32 min-w-0">
+            <SelectValue className="min-w-0 truncate" />
           </SelectTrigger>
           <SelectContent container={portalContainer} side="top" align="end" glass>
             <SelectGroup>
@@ -542,6 +541,7 @@ export function AsrSettingsBody({
     </FieldGroup>
   );
 }
+
 export function PlayerControls({
   chrome,
   externalAudioControls,
@@ -558,9 +558,7 @@ export function PlayerControls({
   asrTranslationEnabled = false,
   asrTranslationFrom = "auto",
   asrTranslationTo = "zh-CN",
-  asrTranslationBusy = false,
   asrSpeakerDiarizationEnabled = false,
-  asrSettingsPending = false,
   qualities = [],
   qualityIndex = 0,
   lines = [],
@@ -728,7 +726,8 @@ export function PlayerControls({
                     aria-label={externalVolume.label}
                     aria-pressed={externalVolume.isMuted}
                     onClick={externalAudioControls.onToggleMute}
-                    className="r-live-media-extension-button"
+                    // 与播放设置/字幕触发器同构：render 组合 MediaButton 拿回皮肤基类。
+                    render={<MediaButton className="r-live-media-extension-button" />}
                   >
                     {externalVolume.isMuted ? <VolumeX /> : <Volume2 />}
                   </Menu.Trigger>
@@ -844,12 +843,16 @@ export function PlayerControls({
                 <ButtonTooltip
                   side="top"
                   label={playbackSettingsLabel ?? playbackSettingsTitle ?? "播放设置"}
+                  disabled={settingsOpen}
                 >
                   <Menu.Trigger
                     aria-label={playbackSettingsLabel ?? playbackSettingsTitle ?? "播放设置"}
                     aria-disabled={settingsDisabled || undefined}
                     disabled={settingsDisabled}
-                    className="r-live-media-extension-button"
+                    // 组合 MediaButton：Menu.Trigger 经 renderElement 渲染裸 <button>，
+                    // 没有 media-button 皮肤基类（hover 白底、圆角、active 缩放都不在）。
+                    // render 组合让皮肤样式与触发器行为走同一条链，与音量按钮同构。
+                    render={<MediaButton className="r-live-media-extension-button" />}
                     {...settingsHover.trigger}
                   >
                     <Settings />
@@ -898,14 +901,25 @@ export function PlayerControls({
                 onOverlayInteractionChange?.(open);
               }}
             >
-              <ButtonTooltip side="top" label={asr.enabled ? "关闭字幕" : "开启字幕"}>
+              {/* 菜单开着时收起 tooltip：group 联动本会关它，但受控 tooltip 的
+                  disabled 需要显式声明，避免关闭后焦点归还把它重新点亮。 */}
+              <ButtonTooltip
+                side="top"
+                label={asr.enabled ? "关闭字幕" : "开启字幕"}
+                disabled={asrOpen}
+              >
                 <Menu.Trigger
                   aria-label={asr.enabled ? "关闭字幕" : "开启字幕"}
                   aria-pressed={asr.enabled}
-                  className={cn(
-                    "r-live-media-extension-button",
-                    asr.enabled && "bg-media-primary text-media-primary-foreground",
-                  )}
+                  // 与播放设置触发器同构：render 组合 MediaButton 拿回皮肤基类。
+                  render={
+                    <MediaButton
+                      className={cn(
+                        "r-live-media-extension-button",
+                        asr.enabled && glassOptionSelectedClass(),
+                      )}
+                    />
+                  }
                   {...asrHover.trigger}
                 >
                   {asr.icon === "spinner" ? (
@@ -931,31 +945,12 @@ export function PlayerControls({
                   className={cn(
                     "z-50 w-72 overflow-y-auto rounded-media-popup p-1.5",
                     glassPanelClass({ overlay: true }),
+                    /* 本地字幕设置菜单整体禁止换行：长提示一律 truncate 省略。 */
+                    "whitespace-nowrap [&_*]:whitespace-nowrap",
                   )}
                 >
                   {asrPanel === "settings" ? (
                     <>
-                      <div className="flex items-center gap-1 px-1 py-1">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label="返回字幕来源"
-                          onClick={() => setAsrPanel("sources")}
-                        >
-                          <ChevronLeft aria-hidden />
-                        </Button>
-                        <div
-                          className={cn(
-                            "min-w-0 flex-1 text-sm font-medium",
-                            glassTitleClass({ overlay: true }),
-                          )}
-                        >
-                          字幕设置
-                        </div>
-                        {(asrSettingsPending || asrTranslationBusy) && (
-                          <SpinnerIcon className="size-4" aria-label="正在更新字幕设置" />
-                        )}
-                      </div>
                       <div className="px-2 py-2">{asrBody}</div>
                     </>
                   ) : (

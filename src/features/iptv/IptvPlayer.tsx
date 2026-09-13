@@ -561,9 +561,7 @@ function IptvPlayerContent({
             asrTranslationEnabled={asrTranslationEnabled}
             asrTranslationFrom={asrTranslationFrom}
             asrTranslationTo={asrTranslationTo}
-            asrTranslationBusy={asr.translationPending}
             asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-            asrSettingsPending={asrPending}
             pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
             disabled={!channel || !player.mediaAvailable || status === "error"}
             stackedBelowPlayer
@@ -702,7 +700,6 @@ function IptvPlayerContent({
             </div>
           </div>
         )}
-
       </VideoJsContainer>
     </section>
   );

@@ -1431,9 +1431,10 @@ html.overlay-window #root {
     @slot;
   }
 
-@media (hover: hover) {
-  &:hover:where(:not([aria-disabled="true"])) {
-    @slot;
+  @media (hover: hover) {
+    &:hover:where(:not([aria-disabled="true"])) {
+      background-color: var(--media-muted);
+      color: inherit;
     }
   }
 }

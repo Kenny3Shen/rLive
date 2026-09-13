@@ -1464,9 +1464,7 @@ function PlayerPaneContent({
               asrTranslationEnabled={asrTranslationEnabled}
               asrTranslationFrom={asrTranslationFrom}
               asrTranslationTo={asrTranslationTo}
-              asrTranslationBusy={asr.translationPending}
               asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-              asrSettingsPending={asrPending}
               qualities={qualities}
               qualityIndex={qualityIndex}
               lines={lines}

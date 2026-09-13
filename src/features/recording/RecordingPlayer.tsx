@@ -11,7 +11,7 @@ import type Mpegts from "mpegts.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
-import { PlayerControls } from "@/shared/components/player/PlayerControls";
+import { PlayerControls, PlayerMenuRadioGroup } from "@/shared/components/player/PlayerControls";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
@@ -35,6 +35,7 @@ import {
   VideoJsContainer,
   VideoJsPlayerProvider,
   VideoJsVideo,
+  useVideoJsPlaybackRate,
 } from "@/features/room/player/videoJsControls";
 import { PlayerFullscreenHud, showPlayerFullscreenHud } from "@/features/room/PlayerFullscreenHud";
 import {
@@ -54,7 +55,6 @@ import {
   type RecordingItem,
 } from "./recording";
 import { RecordedDanmakuCanvas } from "./RecordedDanmakuCanvas";
-import { RecordingPlaybackSettings } from "./RecordingPlaybackSettings";
 import { parseRecordedDanmakuSidecar, type RecordedDanmakuEntry } from "./recordedDanmaku";
 import { useRecordingPlayerFullscreen } from "./useRecordingPlayerFullscreen";
 
@@ -69,6 +69,8 @@ function finiteDuration(video: HTMLVideoElement): number {
   return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
 }
 
+/** 回放倍速档位（用户指定）：0.25x–2.0x，默认 1.0 居中。 */
+const RECORDING_PLAYBACK_RATES = [0.25, 0.5, 1, 1.5, 2] as const;
 const RECORDING_SEEK_TIMEOUT_MS = 4_000;
 const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
 /** 派生空轨的稳定身份，避免每帧新数组使弹幕画布失效。 */
@@ -102,6 +104,35 @@ type RecordingPlayerProps = {
   url: string;
   fill?: boolean;
 };
+
+/**
+ * 回放设置弹层里的「倍数播放」档位。弹幕设置移到右侧栏「设置」页签后，
+ * 播放设置按钮只剩倍速一项；档位挂 `RECORDING_PLAYBACK_RATES`，与
+ * `useVideoJsPlaybackRate` 的 `setPlaybackRate` 直接对接（它接受任意数值，
+ * `playbackRates` 只是 store 初始列表，不构成档位约束）。
+ */
+function RecordingRateSettings() {
+  const playbackRate = useVideoJsPlaybackRate();
+  if (!playbackRate) return null;
+  const options = RECORDING_PLAYBACK_RATES.map((rate) => ({
+    value: String(rate),
+    label: `${rate}x`,
+  }));
+  const current = String(
+    RECORDING_PLAYBACK_RATES.find((rate) => rate === playbackRate.playbackRate) ?? 1,
+  );
+  return (
+    <div className="flex flex-col gap-1.5 px-1 py-1">
+      <PlayerMenuRadioGroup
+        label="倍数播放"
+        value={current}
+        options={options}
+        columns={options.length}
+        onValueChange={(nextValue) => playbackRate.setPlaybackRate(Number(nextValue))}
+      />
+    </div>
+  );
+}
 
 export function RecordingPlayer(props: RecordingPlayerProps) {
   return (
@@ -768,10 +799,9 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
           loadError={fullscreen.error}
           stackedBelowPlayer={fill ? compact : true}
           compact={compact}
-          portalContainer={stageRef}
-          playbackSettingsTitle="回放设置"
-          playbackSettingsLabel="回放设置"
-          playbackSettings={item.include_danmaku ? <RecordingPlaybackSettings /> : undefined}
+          playbackSettingsTitle="倍数播放"
+          playbackSettingsLabel="倍数播放"
+          playbackSettings={<RecordingRateSettings />}
           onOverlayInteractionChange={setOverlayInteractionOpen}
           onRefresh={retryPlayback}
           onToggleOsd={
@@ -783,10 +813,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         />
       }
     >
-      <div
-        data-player-video-surface
-        className="relative min-h-0 flex-1 overflow-hidden bg-black"
-      >
+      <div data-player-video-surface className="relative min-h-0 flex-1 overflow-hidden bg-black">
         <div
           ref={rootRef}
           data-player-engine-root

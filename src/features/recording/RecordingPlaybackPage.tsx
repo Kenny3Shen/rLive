@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { ChevronLeft, CircleDot, MessageSquareText, Tv, Videotape } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -12,6 +13,8 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -103,6 +106,8 @@ function PlaybackDetailRow({ label, children }: { label: string; children: React
 }
 
 function PlaybackSidebar({ item }: { item: RecordingItem }) {
+  // 「信息 / 设置」页签；换录制不保留页签状态（组件随 PlaybackLayout 重挂）。
+  const [sidebarTab, setSidebarTab] = useState<"info" | "settings">("info");
   const userName = item.user_name.trim() || recordingSourceLabel(item);
   const avatar = normalizeImageUrl(item.user_avatar?.trim() || item.cover);
 
@@ -150,51 +155,83 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
         </div>
       </section>
 
-      <div className="flex h-11 shrink-0 items-center border-b border-border/80 px-3">
-        <h2 className="text-sm font-medium">录制信息</h2>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3">
-        <dl className="divide-y divide-border-subtle">
-          <PlaybackDetailRow label="开始时间">
-            {formatRecordingDate(item.started_at)}
-          </PlaybackDetailRow>
-          <PlaybackDetailRow label="时长">
-            <span className="font-mono tabular-nums">
-              {formatRecordingDuration(item.duration_ms)}
-            </span>
-          </PlaybackDetailRow>
-          <PlaybackDetailRow label="文件大小">
-            <span className="font-mono tabular-nums">{formatRecordingSize(item.size_bytes)}</span>
-          </PlaybackDetailRow>
-          <PlaybackDetailRow label="格式">
-            <Badge variant="outline">{recordingProtocolLabel(item.protocol)}</Badge>
-          </PlaybackDetailRow>
-          <PlaybackDetailRow label="弹幕">
-            {item.include_danmaku ? (
-              <span className="inline-flex items-center gap-1.5">
-                <MessageSquareText className="size-3.5 text-muted-foreground" aria-hidden />
-                {item.danmaku_count} 条
+      {/* 页签固定在侧栏顶部：「信息」保留原录制详情，「设置」复用直播弹幕偏好面板。 */}
+      <Tabs
+        value={sidebarTab}
+        onValueChange={(value) => setSidebarTab(value as "info" | "settings")}
+        className="flex h-full min-h-0 flex-col gap-0"
+      >
+        <div className="flex h-11 shrink-0 items-center border-b border-border/80">
+          <TabsList
+            variant="line"
+            className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"
+          >
+            <TabsTrigger value="info" className="px-3 text-sm">
+              录制信息
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="px-3 text-sm">
+              设置
+            </TabsTrigger>
+          </TabsList>
+        </div>
+        <div
+          role="tabpanel"
+          aria-label="录制信息"
+          aria-hidden={sidebarTab === "info" ? undefined : true}
+          inert={sidebarTab === "info" ? undefined : true}
+          className="min-h-0 flex-1 overflow-y-auto px-3"
+        >
+          <dl className="divide-y divide-border-subtle">
+            <PlaybackDetailRow label="开始时间">
+              {formatRecordingDate(item.started_at)}
+            </PlaybackDetailRow>
+            <PlaybackDetailRow label="时长">
+              <span className="font-mono tabular-nums">
+                {formatRecordingDuration(item.duration_ms)}
               </span>
-            ) : (
-              "未录制"
-            )}
-          </PlaybackDetailRow>
-          <PlaybackDetailRow label="状态">
-            <Badge variant={item.status === "failed" ? "destructive" : "secondary"}>
-              {item.status === "recording" && <CircleDot data-icon="inline-start" aria-hidden />}
-              {recordingStatusLabel(item.status)}
-            </Badge>
-          </PlaybackDetailRow>
-        </dl>
+            </PlaybackDetailRow>
+            <PlaybackDetailRow label="文件大小">
+              <span className="font-mono tabular-nums">{formatRecordingSize(item.size_bytes)}</span>
+            </PlaybackDetailRow>
+            <PlaybackDetailRow label="格式">
+              <Badge variant="outline">{recordingProtocolLabel(item.protocol)}</Badge>
+            </PlaybackDetailRow>
+            <PlaybackDetailRow label="弹幕">
+              {item.include_danmaku ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <MessageSquareText className="size-3.5 text-muted-foreground" aria-hidden />
+                  {item.danmaku_count} 条
+                </span>
+              ) : (
+                "未录制"
+              )}
+            </PlaybackDetailRow>
+            <PlaybackDetailRow label="状态">
+              <Badge variant={item.status === "failed" ? "destructive" : "secondary"}>
+                {item.status === "recording" && <CircleDot data-icon="inline-start" aria-hidden />}
+                {recordingStatusLabel(item.status)}
+              </Badge>
+            </PlaybackDetailRow>
+          </dl>
 
-        {item.error && (
-          <ErrorState
-            error={recordingErrorMessage(item.error)}
-            title={item.status === "failed" ? "录制失败" : "录制过程中断"}
-            className="my-3"
-          />
-        )}
-      </div>
+          {item.error && (
+            <ErrorState
+              error={recordingErrorMessage(item.error)}
+              title={item.status === "failed" ? "录制失败" : "录制过程中断"}
+              className="my-3"
+            />
+          )}
+        </div>
+        <div
+          role="tabpanel"
+          aria-label="设置"
+          aria-hidden={sidebarTab === "settings" ? undefined : true}
+          inert={sidebarTab === "settings" ? undefined : true}
+          className="min-h-0 flex-1 overflow-hidden"
+        >
+          <DanmakuSettingsPanel className="h-full" showAsrCard={false} />
+        </div>
+      </Tabs>
     </aside>
   );
 }
@@ -216,7 +253,10 @@ function PlaybackLayout({ item, children }: { item: RecordingItem; children: Rea
 export function RecordingPlaybackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { roomDir, sessionDir } = useParams<{ roomDir: string; sessionDir: string }>();
+  const { roomDir, sessionDir } = useParams<{
+    roomDir: string;
+    sessionDir: string;
+  }>();
   // id 跨越两个路由段，因此在这里重新拼接，
   // 而不是从单个参数读取。
   const recordingId = recordingIdFromPlaybackParams(roomDir, sessionDir);

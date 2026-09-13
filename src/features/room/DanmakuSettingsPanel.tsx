@@ -19,9 +19,12 @@ import { siteSupportsSuperChat } from "./superChat";
 export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   className,
   siteId,
+  showAsrCard = true,
 }: {
   className?: string;
   siteId?: SiteId;
+  /** 语音字幕卡开关：视频/录制播放页不渲染（本地字幕设置入口在播放器字幕菜单里）。 */
+  showAsrCard?: boolean;
 }) {
   const asrPending = useSettingsStore((s) => s.asrPending);
   const mobileClient = isMobileClient();
@@ -29,7 +32,7 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
       <div className="flex flex-col gap-3 px-3 py-3">
-        {!mobileClient && (
+        {!mobileClient && showAsrCard && (
           <Card size="sm">
             <CardHeader className="border-b">
               <CardTitle>语音字幕</CardTitle>

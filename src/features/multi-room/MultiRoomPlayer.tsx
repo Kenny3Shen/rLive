@@ -14,13 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  ChevronLeft,
-  CircleAlert,
-  Maximize2,
-  RefreshCw,
-  X,
-} from "lucide-react";
+import { ChevronLeft, CircleAlert, Maximize2, RefreshCw, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
@@ -305,7 +299,6 @@ function MainMultiRoomControls({
 }: MainMultiRoomControlsProps) {
   const {
     asr,
-    asrPending,
     asrSpeakerDiarizationEnabled,
     asrTranslationEnabled,
     asrTranslationFrom,
@@ -337,9 +330,7 @@ function MainMultiRoomControls({
       asrTranslationEnabled={asrTranslationEnabled}
       asrTranslationFrom={asrTranslationFrom}
       asrTranslationTo={asrTranslationTo}
-      asrTranslationBusy={asr.translationPending}
       asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-      asrSettingsPending={asrPending}
       qualities={playback.qualities}
       qualityIndex={playback.qualityIndex}
       lines={playback.lines}
@@ -523,15 +514,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
       return;
     }
     updateAudio(room.key, playerVolume, playerMuted);
-  }, [
-    playerMuted,
-    playerVolume,
-    room.key,
-    room.muted,
-    room.volume,
-    setPlayerAudio,
-    updateAudio,
-  ]);
+  }, [playerMuted, playerVolume, room.key, room.muted, room.volume, setPlayerAudio, updateAudio]);
 
   const detail = detailQuery.data;
   const title = detail?.title || room.title;
@@ -912,7 +895,11 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
             </OverlayIconButton>
           )}
           {dragHandle}
-          {main && <Badge variant="secondary" className="shrink-0">主画面</Badge>}
+          {main && (
+            <Badge variant="secondary" className="shrink-0">
+              主画面
+            </Badge>
+          )}
           <RoomIdentityLine
             siteId={room.siteId}
             roomId={detail?.room_id || room.roomId}

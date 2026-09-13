@@ -58,6 +58,7 @@ import {
   usePlaylistStore,
   type PlaylistItem,
 } from "./playlistStore";
+import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { UploaderDrawer } from "./UploaderDrawer";
 
 /**
@@ -67,7 +68,7 @@ import { UploaderDrawer } from "./UploaderDrawer";
  * 拆成多个文件只会让这个骨架复制多遍。评论区是其中唯一有翻页的，用游标
  * `useInfiniteQuery` + 哨兵；相关视频、分集与选集上游都是一次给全。
  */
-export type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "comments";
+export type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "comments" | "settings";
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
@@ -75,9 +76,17 @@ const TAB_LABELS: Record<SidebarTab, string> = {
   episodes: "分集",
   parts: "选集",
   comments: "评论",
+  settings: "设置",
 };
 
-const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "danmaku", "episodes", "parts", "comments"];
+const SIDEBAR_TABS: readonly SidebarTab[] = [
+  "related",
+  "danmaku",
+  "episodes",
+  "parts",
+  "comments",
+  "settings",
+];
 
 function isSidebarTab(value: string): value is SidebarTab {
   return (SIDEBAR_TABS as readonly string[]).includes(value);
@@ -1090,10 +1099,10 @@ export function VideoSidebar({
   const showDanmakuTab = !isPgc && danmaku !== undefined;
   const hasSeason = Boolean(archive?.ugc_season);
   const tabs: SidebarTab[] = isPgc
-    ? ["episodes", "comments"]
+    ? ["episodes", "comments", "settings"]
     : multiPart || hasSeason
-      ? ["related", "comments", "danmaku", "parts"]
-      : ["related", "comments", "danmaku"];
+      ? ["related", "comments", "danmaku", "parts", "settings"]
+      : ["related", "comments", "danmaku", "settings"];
   const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
   // 请求的页签在当前稿件不存在时回退到第一项（PGC 无「相关推荐」、单 P 无「选集」、
   // 没有弹幕数据时无「弹幕」）。每种组合都含「评论」，故兜底取它。
@@ -1173,6 +1182,11 @@ export function VideoSidebar({
           active={value === tab}
         />
       );
+    }
+    if (value === "settings") {
+      // 与直播侧栏「设置」页签同源的面板；VOD 不渲染语音字幕卡
+      //（本地字幕设置入口在播放器字幕菜单的二级页里）。
+      return <DanmakuSettingsPanel className="h-full" showAsrCard={false} />;
     }
     return (
       <>
