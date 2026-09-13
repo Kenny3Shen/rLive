@@ -1,37 +1,19 @@
 // 在 Vite 开发页运行：playwright-cli -s=danmaku-preview run-code --filename=tests/video-portrait-layout.browser.js
 async (page) => {
   return await page.evaluate(async () => {
-    const dependencyUrl = (name) => {
-      const entry = performance.getEntriesByType("resource").find((resource) => {
-        const url = new URL(resource.name);
-        return url.pathname.endsWith(`/deps/${name}.js`) && url.searchParams.has("v");
-      });
-      if (!entry) throw new Error(`未找到 Vite 依赖 ${name}`);
-      return entry.name;
-    };
-    const { default: React } = await import(dependencyUrl("react"));
-    const { default: ReactDOMClient } = await import(dependencyUrl("react-dom_client"));
-    const { default: ReactDOM } = await import(dependencyUrl("react-dom"));
+    const { setupHarness, assert, frames } = await import("/tests/browser/harness.js");
     const { PlayerControls } = await import("/src/shared/components/player/PlayerControls.tsx");
     const { VideoJsPlayerProvider } = await import("/src/features/room/player/videoJsControls.tsx");
     const { VideoDanmakuLayer } = await import("/src/features/video/VideoDanmakuLayer.tsx");
     const { useVideoDanmakuTopInset } =
       await import("/src/features/video/useVideoDanmakuTopInset.ts");
-    const { createElement: h, createRef } = React;
-    const { flushSync } = ReactDOM;
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = ReactDOMClient.createRoot(host);
+
+    const ui = await setupHarness();
+    const { h, createRef, query, rect } = ui;
     const stageRef = createRef();
     const hudRef = createRef();
     const videoRef = createRef();
-    const assert = (condition, message) => {
-      if (!condition) throw new Error(message);
-    };
-    const frames = async () => {
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    };
+
     function Harness({ portrait, width, height, top, bottom }) {
       useVideoDanmakuTopInset(stageRef, hudRef, portrait);
       return h(
@@ -52,10 +34,7 @@ async (page) => {
         },
         h(
           "div",
-          {
-            "data-video-viewport": true,
-            className: "relative flex min-h-0 flex-1 flex-col bg-black",
-          },
+          { "data-video-viewport": true, className: "relative flex min-h-0 flex-1 flex-col bg-black" },
           h(
             "div",
             { "data-video-frame": true, className: "relative flex min-h-0 flex-1 flex-col" },
@@ -103,10 +82,8 @@ async (page) => {
         ),
       );
     }
-    const query = (selector) => host.querySelector(selector);
-    const rect = (selector) => query(selector).getBoundingClientRect();
-    const render = (props) =>
-      flushSync(() => root.render(h(React.StrictMode, null, h(Harness, props))));
+
+    const render = (props) => ui.render(h(Harness, props));
     const cases = [
       { width: 412, height: 915, top: 48.75, bottom: 24 },
       { width: 360, height: 732, top: 24, bottom: 24 },
@@ -140,10 +117,22 @@ async (page) => {
           "底部手势栏未正确占位",
         );
         assert(Math.abs(info.bottom - picture.bottom) < 1, "用户信息未锚定画面底部");
+        // 舞台外层已预留上下安全区，画面内 HUD 与控制栏都不得再消费一次。
+        //
+        // 控制栏按类名判定：桌面浏览器里 `env(safe-area-inset-bottom)` 恒为 0，
+        // `pb-[max(0.25rem,env(...))]` 与 `pb-1` 算出的 padding 都是 4px，
+        // 用 computed 值无法区分它走了哪条分支。
+        const reserving = [...query("[data-player-controls]").querySelectorAll("*")].filter((el) =>
+          el.className.toString().includes("safe-area-inset-bottom"),
+        );
         assert(
-          parseFloat(getComputedStyle(query('[data-slot="player-controls-bar"]')).paddingBottom) <=
-            1,
-          "控制栏重复预留了安全区",
+          reserving.length === 0,
+          `控制栏在舞台已预留手势栏时又消费了一次 env(safe-area-inset-bottom)（${reserving.length} 处）`,
+        );
+        // HUD 走 `--player-safe-area-top` 变量，夹具里能取到真实值，可直接量 padding。
+        assert(
+          parseFloat(getComputedStyle(hudRef.current.firstElementChild).paddingTop) <= 6.01,
+          "画面内 HUD 重复预留了状态栏",
         );
         results.push({
           ...dimensions,
@@ -152,6 +141,7 @@ async (page) => {
           controlsTop: controls.top,
         });
       }
+
       const originalVideo = videoRef.current;
       render({ ...cases[0], portrait: false });
       await frames();
@@ -169,8 +159,7 @@ async (page) => {
       );
       return { passed: results, modeRoundTrip: true };
     } finally {
-      flushSync(() => root.unmount());
-      host.remove();
+      ui.dispose();
     }
   });
-};
+}
