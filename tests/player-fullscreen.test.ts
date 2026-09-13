@@ -6,6 +6,9 @@ import {
 } from "../src/features/room/player/useWebPlayer";
 import {
   fullscreenPlayerOrientation,
+  shouldAutoEnterFullscreenOnLandscape,
+  shouldAutoExitFullscreenOnPortrait,
+  shouldClearFullscreenRotationProvenance,
   videoAspectRatio,
 } from "../src/features/room/player/androidOrientation";
 import {
@@ -153,6 +156,221 @@ describe("Android fullscreen orientation", () => {
     expect(videoAspectRatio({ videoWidth: 0, videoHeight: 1080 })).toBeNull();
     expect(videoAspectRatio({ videoWidth: 1920, videoHeight: 0 })).toBeNull();
     expect(videoAspectRatio(null)).toBeNull();
+  });
+});
+
+describe("Android auto fullscreen on landscape", () => {
+  const landscapeVideo = { aspectRatio: 16 / 9, fullscreen: false };
+
+  test("enters fullscreen on the portrait -> landscape transition", () => {
+    expect(
+      shouldAutoEnterFullscreenOnLandscape({
+        wasLandscape: false,
+        isLandscape: true,
+        ...landscapeVideo,
+      }),
+    ).toBe(true);
+  });
+
+  test("首屏就是横屏不算跳变，否则一进页面就自动全屏", () => {
+    expect(
+      shouldAutoEnterFullscreenOnLandscape({
+        wasLandscape: null,
+        isLandscape: true,
+        ...landscapeVideo,
+      }),
+    ).toBe(false);
+  });
+
+  test("停在横屏不重复触发，手动退出全屏后不会被拽回去", () => {
+    expect(
+      shouldAutoEnterFullscreenOnLandscape({
+        wasLandscape: true,
+        isLandscape: true,
+        ...landscapeVideo,
+      }),
+    ).toBe(false);
+  });
+
+  test("已经全屏时不再触发", () => {
+    expect(
+      shouldAutoEnterFullscreenOnLandscape({
+        wasLandscape: false,
+        isLandscape: true,
+        aspectRatio: 16 / 9,
+        fullscreen: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("转回竖屏不触发，反向退出不由这里负责", () => {
+    expect(
+      shouldAutoEnterFullscreenOnLandscape({
+        wasLandscape: true,
+        isLandscape: false,
+        aspectRatio: 16 / 9,
+        fullscreen: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("竖屏画幅转横屏不铺满全屏，与方向锁同源", () => {
+    expect(
+      shouldAutoEnterFullscreenOnLandscape({
+        wasLandscape: false,
+        isLandscape: true,
+        aspectRatio: 9 / 16,
+        fullscreen: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoEnterFullscreenOnLandscape({
+        wasLandscape: false,
+        isLandscape: true,
+        aspectRatio: 1,
+        fullscreen: false,
+      }),
+    ).toBe(false);
+  });
+
+  test("比例未知时不猜，等元数据到了再说", () => {
+    for (const aspectRatio of [null, 0, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        shouldAutoEnterFullscreenOnLandscape({
+          wasLandscape: false,
+          isLandscape: true,
+          aspectRatio,
+          fullscreen: false,
+        }),
+      ).toBe(false);
+    }
+  });
+});
+
+describe("Android auto exit fullscreen on portrait", () => {
+  test("旋转带起来的全屏，转回竖屏时自动退出", () => {
+    expect(
+      shouldAutoExitFullscreenOnPortrait({
+        wasLandscape: true,
+        isLandscape: false,
+        fullscreen: true,
+        enteredByRotation: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("手动点开的全屏不替用户关掉", () => {
+    expect(
+      shouldAutoExitFullscreenOnPortrait({
+        wasLandscape: true,
+        isLandscape: false,
+        fullscreen: true,
+        enteredByRotation: false,
+      }),
+    ).toBe(false);
+  });
+
+  test("只认横屏 -> 竖屏那一次跳变", () => {
+    // 首屏就是竖屏没有基线。
+    expect(
+      shouldAutoExitFullscreenOnPortrait({
+        wasLandscape: null,
+        isLandscape: false,
+        fullscreen: true,
+        enteredByRotation: true,
+      }),
+    ).toBe(false);
+    // 停在竖屏不重复触发。
+    expect(
+      shouldAutoExitFullscreenOnPortrait({
+        wasLandscape: false,
+        isLandscape: false,
+        fullscreen: true,
+        enteredByRotation: true,
+      }),
+    ).toBe(false);
+    // 还在横屏。
+    expect(
+      shouldAutoExitFullscreenOnPortrait({
+        wasLandscape: true,
+        isLandscape: true,
+        fullscreen: true,
+        enteredByRotation: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("不在全屏时无事可做", () => {
+    expect(
+      shouldAutoExitFullscreenOnPortrait({
+        wasLandscape: true,
+        isLandscape: false,
+        fullscreen: false,
+        enteredByRotation: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("Android fullscreen rotation provenance reset", () => {
+  test("全屏结束后作废来路，下一次手动全屏才拿得到方向锁", () => {
+    expect(
+      shouldClearFullscreenRotationProvenance({
+        wasFullscreen: true,
+        fullscreen: false,
+        enteredByRotation: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("刚请求进入全屏那一帧不作废来路", () => {
+    // 来路已经记下，播放器还没报告全屏。此时擦掉来路，方向锁会按「手动」把
+    // Activity 钉在横屏，转回竖屏自动退出便永远等不到。
+    expect(
+      shouldClearFullscreenRotationProvenance({
+        wasFullscreen: false,
+        fullscreen: false,
+        enteredByRotation: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("仍在全屏时不作废来路", () => {
+    expect(
+      shouldClearFullscreenRotationProvenance({
+        wasFullscreen: true,
+        fullscreen: true,
+        enteredByRotation: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("本来就没有旋转来路时无事可做", () => {
+    expect(
+      shouldClearFullscreenRotationProvenance({
+        wasFullscreen: true,
+        fullscreen: false,
+        enteredByRotation: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("Android fullscreen orientation lock by entry path", () => {
+  test("旋转进来的全屏不上锁，否则观测不到回竖屏", () => {
+    // 上了 SENSOR_LANDSCAPE 锁，Activity 就被钉在横屏，自动退出永远等不到跳变。
+    expect(fullscreenPlayerOrientation(true, 16 / 9, true)).toBe("auto");
+  });
+
+  test("手动在竖屏下点开的全屏仍要锁成横屏", () => {
+    expect(fullscreenPlayerOrientation(true, 16 / 9, false)).toBe("landscape");
+    // 省略参数时按手动处理，保持既有行为。
+    expect(fullscreenPlayerOrientation(true, 16 / 9)).toBe("landscape");
+  });
+
+  test("竖屏画幅无论来路都不上锁", () => {
+    expect(fullscreenPlayerOrientation(true, 9 / 16, false)).toBe("auto");
+    expect(fullscreenPlayerOrientation(true, 9 / 16, true)).toBe("auto");
   });
 });
 

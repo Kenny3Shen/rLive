@@ -43,7 +43,7 @@ import {
   PlayerMenuRadioGroup,
   type PlayerMenuRadioOption,
 } from "@/shared/components/player/PlayerControls";
-import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { useCompactPlayerViewport, usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
@@ -387,6 +387,7 @@ function VideoPlayerPageContent() {
   }, [rebuildPlaybackSession, waitingRecovery]);
 
   const compact = useCompactPlayerViewport();
+  const portraitOrientation = usePortraitOrientation();
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
   const { revealControls, toggleControls, holdControlsVisible, scheduleControlsHide, dismissControls } =
@@ -543,10 +544,14 @@ function VideoPlayerPageContent() {
   const playerControlMuted = androidPlayerControls.state
     ? androidPlayerControls.state.mediaVolume <= 0
     : muted;
+  // 旋转与全屏绑定：转到横屏自动全屏，转回竖屏自动退出（仅限自动进来的那次）。
   useAndroidFullscreenOrientation({
     enabled: clientPlatform === "android",
     fullscreen: fullscreen.fullscreen,
     aspectRatio: frameAspectRatio,
+    isLandscape: !portraitOrientation,
+    enterFullscreen: fullscreenToggle,
+    exitFullscreen: fullscreenExit,
   });
 
   const [lockSession, setLockSession] = useState({

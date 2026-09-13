@@ -78,6 +78,7 @@ import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import {
   useCompactLandscapePlayerViewport,
   useCompactPlayerViewport,
+  usePortraitOrientation,
 } from "@/shared/hooks/usePlayerViewport";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { DrawerViewport } from "@/components/ui/drawer";
@@ -376,6 +377,7 @@ function PlayerPaneContent({
 }: PlayerPaneProps) {
   const compactViewport = useCompactPlayerViewport();
   const compactLandscapeViewport = useCompactLandscapePlayerViewport();
+  const roomPortraitOrientation = usePortraitOrientation();
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
   const androidClient = clientPlatform === "android";
@@ -468,11 +470,15 @@ function PlayerPaneContent({
   });
   const { videoRef: playerVideoRef, stageRef: playerStageRef, playerRootRef } = player;
   const androidPlayerControls = useAndroidPlayerControls(androidClient, roomSessionKey);
-  // 横屏流在 Android 全屏时自动旋转；竖屏流保持直立，因为方向锁由解码后的帧尺寸决定。
+  // 旋转与全屏绑定：转到横屏自动全屏、转回竖屏自动退出，并按来路决定方向锁。
+  // 只认横屏画幅，竖屏流保持直立。
   useAndroidFullscreenOrientation({
     enabled: androidClient,
     fullscreen: player.mode === "fullscreen",
     aspectRatio: player.aspectRatio,
+    isLandscape: !roomPortraitOrientation,
+    enterFullscreen: player.toggleFullscreen,
+    exitFullscreen: player.exitFullscreen,
   });
   const previewPlayerVolume = player.previewVolume;
   const setPlayerAudio = player.setAudio;

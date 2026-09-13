@@ -24,7 +24,7 @@ import {
   PLAYER_HUD_TITLE_SIZE_CLASS,
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
-import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { useCompactPlayerViewport, usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { AsrCaptionOverlay } from "@/features/asr/AsrCaptionOverlay";
@@ -158,6 +158,7 @@ function IptvPlayerContent({
   const [audioOnly, setAudioOnly] = useState(false);
   const [controlsInteractionOpen, setControlsInteractionOpen] = useState(false);
   const compactViewport = useCompactPlayerViewport();
+  const portraitOrientation = usePortraitOrientation();
   const androidClient = getClientPlatform() === "android";
 
   const playUrl = useMemo<PlayUrl | null>(() => {
@@ -269,10 +270,14 @@ function IptvPlayerContent({
   // 写死的 16:9 盒子左右留黑边。纯音频无画面，保留 16:9 占位。
   const stageAspectRatio =
     !audioOnly && player.aspectRatio && player.aspectRatio > 0 ? player.aspectRatio : null;
+  // 旋转与全屏绑定：转到横屏自动全屏，转回竖屏自动退出（仅限自动进来的那次）。
   useAndroidFullscreenOrientation({
     enabled: androidClient,
     fullscreen,
     aspectRatio: player.aspectRatio,
+    isLandscape: !portraitOrientation,
+    enterFullscreen: toggleFullscreen,
+    exitFullscreen: exitFullscreen,
   });
 
   const asrEnabled = useSettingsStore((state) => state.asrEnabled);
