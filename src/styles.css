@@ -881,7 +881,12 @@ html[data-platform="android"] .app-shell {
   padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
 }
 
-/* 普通播放的安全区由外壳预留；只有脱离文档流的全屏舞台需要内部控件再次避让。 */
+/* 舞台内的 HUD 一律以舞台顶边为基准，不再叠加系统栏预留：
+   - 窗口化：状态栏由 `.app-shell` 的 padding 预留，舞台已在其下方。
+   - 沉浸式全屏：舞台 `position: fixed` 铺满屏幕，此时系统栏已隐藏。
+   `--android-safe-area-top` 用 `getInsetsIgnoringVisibility`（MainActivity.kt）取值，
+   全屏隐藏系统栏后仍报窗口化高度，供外壳布局稳定使用；HUD 若再消费它就会多让出
+   一条状态栏高度的空白。保留该变量并置 0，供消费方的 `max()` 表达式取用。 */
 [data-player-stage] {
   --player-safe-area-top: 0px;
 }
@@ -925,7 +930,6 @@ html[data-fullscreen-transition="true"] .app-shell {
 [data-player-stage]:fullscreen,
 [data-player-stage]:-webkit-full-screen,
 [data-player-stage][data-fullscreen="true"] {
-  --player-safe-area-top: var(--android-safe-area-top, env(safe-area-inset-top));
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -994,7 +998,6 @@ html[data-fullscreen-transition="true"] .app-shell {
 /* 移动端短视频：系统栏在舞台外观内独立占位，HUD 仅覆盖 9:16 画面。
    viewport 先扣除流内控制栏；高度不足时按可用高度缩窄画面，保持比例与控件可达性。 */
 [data-player-stage][data-video-portrait="true"] {
-  --player-safe-area-top: 0px;
   padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
   padding-bottom: var(--android-safe-area-bottom, env(safe-area-inset-bottom));
   background: var(--background);

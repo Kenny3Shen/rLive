@@ -2,41 +2,15 @@
 // playwright-cli -s=danmaku-preview run-code --filename=tests/video-danmaku-layout.browser.js
 async (page) => {
   return await page.evaluate(async () => {
-    const dependencyUrl = (name) => {
-      const entry = performance.getEntriesByType("resource").find((resource) => {
-        const url = new URL(resource.name);
-        return url.pathname.endsWith(`/deps/${name}.js`) && url.searchParams.has("v");
-      });
-      if (!entry) throw new Error(`请先打开 Vite 开发预览页：未找到 ${name}`);
-      return entry.name;
-    };
-    const { default: React } = await import(dependencyUrl("react"));
-    const { default: ReactDOMClient } = await import(dependencyUrl("react-dom_client"));
-    const { default: ReactDOM } = await import(dependencyUrl("react-dom"));
+    const { setupHarness, assert, frames, until } = await import("/tests/browser/harness.js");
     const { VideoDanmakuLayer } = await import("/src/features/video/VideoDanmakuLayer.tsx");
     const { useVideoDanmakuTopInset } =
       await import("/src/features/video/useVideoDanmakuTopInset.ts");
     const { loadDanmuJs } = await import("/src/features/room/danmaku/danmuJsLoader.ts");
     await loadDanmuJs();
-    const { createElement: h, createRef } = React;
-    const { flushSync } = ReactDOM;
-    const assert = (condition, message) => {
-      if (!condition) throw new Error(message);
-    };
-    const until = async (predicate, message) => {
-      const deadline = performance.now() + 5000;
-      while (!predicate()) {
-        assert(performance.now() < deadline, message);
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-      }
-    };
-    const frames = async () => {
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    };
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = ReactDOMClient.createRoot(host);
+
+    const ui = await setupHarness();
+    const { h, createRef, rect } = ui;
     const hudRef = createRef();
     const videoRef = createRef();
     const stageRef = createRef();
@@ -48,6 +22,7 @@ async (page) => {
       color: "#ffffff",
       pool: 0,
     }));
+
     function Harness({ avoidHud }) {
       useVideoDanmakuTopInset(stageRef, hudRef, avoidHud);
       return h(
@@ -59,11 +34,7 @@ async (page) => {
           style: { "--android-safe-area-top": "48.75px", background: "#000", zIndex: 999 },
         },
         h("video", { ref: videoRef, style: { position: "absolute", inset: 0 } }),
-        h(VideoDanmakuLayer, {
-          videoRef,
-          entries,
-          active: true,
-        }),
+        h(VideoDanmakuLayer, { videoRef, entries, active: true }),
         h(
           "div",
           {
@@ -81,10 +52,9 @@ async (page) => {
         ),
       );
     }
-    const render = (avoidHud) =>
-      flushSync(() => root.render(h(React.StrictMode, null, h(Harness, { avoidHud }))));
-    const layer = () => host.querySelector("[data-video-danmaku-layer]");
-    const rect = (element) => element.getBoundingClientRect();
+
+    const render = (avoidHud) => ui.render(h(Harness, { avoidHud }));
+    const layer = () => ui.query("[data-video-danmaku-layer]");
     const aligned = () => Math.abs(rect(layer()).top - rect(hudRef.current).bottom) < 1;
     const results = [];
     try {
@@ -122,13 +92,29 @@ async (page) => {
       await frames();
       assert(aligned(), "HUD 隐藏后弹幕跳回了顶部");
       hudRef.current.style.opacity = "1";
+
+      // 全屏已隐藏系统栏，但原生 inset 按 getInsetsIgnoringVisibility 上报，
+      // 仍是窗口化的值；HUD 再消费一次就会在画面顶部留出一条空带。
+      const fullscreenHudTop = rect(hudRef.current).top;
       stageRef.current.style.setProperty("--android-safe-area-top", "72.25px");
-      await until(aligned, "安全区变化后未重新测量 HUD");
-      assert(rect(layer()).top >= 120, "未使用更新后的安全区");
+      await frames();
+      assert(
+        Math.abs(rect(hudRef.current).top - fullscreenHudTop) < 1,
+        "全屏 HUD 错误预留了系统状态栏空间",
+      );
+      assert(aligned(), "Android 安全区变化后弹幕没有继续贴合 HUD");
+
+      // 按增量断言而不是绝对像素：绝对阈值会把「HUD 是否多让一条安全区」编码进
+      // 这条与安全区无关的用例里（旧值 132 正是照修复前的 72.25+36+24 标定的）。
+      // 只有 aligned() 会在两边一起错时假通过，所以这里另取一个绝对位移量。
+      const layerTopBefore = rect(layer()).top;
       hudRef.current.style.paddingBottom = "24px";
-      await until(aligned, "HUD padding 变化未触发 border-box 观察");
-      assert(rect(layer()).top >= 132, "未避开增高后的 HUD");
-      results.push("HUD 显隐不跳动，安全区及内边距变化同步更新");
+      await until(
+        () => Math.abs(rect(layer()).top - layerTopBefore - 12) < 1,
+        "HUD 内边距增高 12px 未同步到弹幕层顶边（border-box 观察失效）",
+      );
+      assert(aligned(), "内边距变化后弹幕层未贴合 HUD 底边");
+      results.push("HUD 显隐不跳动，安全区不重复预留且内边距变化同步更新");
 
       render(false);
       await frames();
@@ -152,20 +138,15 @@ async (page) => {
       render(true);
       await until(aligned, "再次进入竖屏未恢复避让");
       const detachedStage = stageRef.current;
-      flushSync(() => root.unmount());
+      ui.dispose();
       assert(
         detachedStage.style.getPropertyValue("--video-danmaku-top") === "",
         "卸载后遗留顶部样式",
       );
       results.push("再次进入与卸载清理正常");
-      return {
-        viewport: [innerWidth, innerHeight],
-        userAgent: navigator.userAgent,
-        passed: results,
-      };
+      return { viewport: [innerWidth, innerHeight], userAgent: navigator.userAgent, passed: results };
     } finally {
-      if (host.childNodes.length) flushSync(() => root.unmount());
-      host.remove();
+      ui.dispose();
     }
   });
 }
