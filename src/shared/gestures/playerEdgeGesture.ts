@@ -18,6 +18,15 @@ const PLAYER_EDGE_GESTURE_START_GUTTER_RATIO = 0.08;
 
 export type PlayerEdgeGesture = "brightness" | "volume";
 
+/**
+ * 触摸类指针。部分 Android WebView 对手指输入上报空的 `pointerType`
+ * （`useHorizontalSwipe` 同样按空值放行），据此判定手势归属才不会在那些设备上
+ * 把整套画面手势静默关掉。
+ */
+export function isTouchLikePointer(pointerType: string): boolean {
+  return pointerType === "touch" || pointerType === "pen" || pointerType === "";
+}
+
 /** 左半边调节画面亮度；右半边调节音量。 */
 export function playerEdgeGestureForStart(
   clientX: number,
