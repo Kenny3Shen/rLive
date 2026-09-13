@@ -31,7 +31,6 @@ import { Menu, Time, useMenuContext } from "@videojs/react";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -709,66 +708,62 @@ export function PlayerControls({
           {/* 3. 音量 */}
           {showVolume &&
             (externalAudioControls ? (
-              <Popover open={volumeOpen} onOpenChange={setVolumeOpen}>
-                <PopoverTrigger
-                  openOnHover
-                  render={
-                    <MediaButton
-                      aria-label={externalVolume.label}
-                      aria-pressed={externalVolume.isMuted}
-                      onClick={externalAudioControls.onToggleMute}
-                      className="r-live-media-extension-button"
-                    >
-                      {externalVolume.isMuted ? <VolumeX /> : <Volume2 />}
-                    </MediaButton>
-                  }
-                />
-                <PopoverContent
-                  container={portalContainer}
-                  side="top"
-                  align="start"
-                  collisionPadding={12}
-                  sticky
-                  glass
-                  className={cn(
-                    "w-auto items-center gap-2 p-2.5",
-                    glassPanelClass({ overlay: true }),
-                  )}
-                >
-                  <PopoverTitle className="sr-only">音量</PopoverTitle>
-                  <Slider
-                    value={externalAudioControls.volume}
-                    min={0}
-                    max={100}
-                    step={1}
-                    orientation="vertical"
-                    className={cn(
-                      "h-32",
-                      compact && "h-20 [&_[data-slot=slider-control]]:min-h-20",
-                    )}
-                    aria-label="音量"
-                    aria-valuetext={`${Math.round(externalAudioControls.volume)}%`}
-                    onValueChange={(next) =>
-                      externalAudioControls.onVolumeChange(
-                        Number(Array.isArray(next) ? next[0] : next),
-                      )
-                    }
-                  />
-                  <Separator className={cn("w-8", glassSeparatorClass())} />
-                  <MediaButton
-                    type="button"
-                    aria-label={externalVolume.isMuted ? "取消静音" : "静音"}
+              <Menu.Root
+                open={volumeOpen}
+                onOpenChange={(open) => {
+                  setVolumeOpen(open);
+                  onOverlayInteractionChange?.(open);
+                }}
+              >
+                <ButtonTooltip side="top" label={externalVolume.label}>
+                  <Menu.Trigger
+                    aria-label={externalVolume.label}
                     aria-pressed={externalVolume.isMuted}
                     onClick={externalAudioControls.onToggleMute}
-                    className={cn(
-                      "r-live-media-extension-button",
-                      externalVolume.isMuted && glassOptionSelectedClass(),
-                    )}
+                    className="r-live-media-extension-button"
                   >
-                    <VolumeX />
-                  </MediaButton>
-                </PopoverContent>
-              </Popover>
+                    {externalVolume.isMuted ? <VolumeX /> : <Volume2 />}
+                  </Menu.Trigger>
+                </ButtonTooltip>
+                <Menu.Popup>
+                  <Menu.Content
+                    className={cn("w-auto items-center gap-2 p-2.5", glassPanelClass({ overlay: true }))}
+                  >
+                    <div className="sr-only">音量</div>
+                    <Slider
+                      value={externalAudioControls.volume}
+                      min={0}
+                      max={100}
+                      step={1}
+                      orientation="vertical"
+                      className={cn(
+                        "h-32",
+                        compact && "h-20 [&_[data-slot=slider-control]]:min-h-20",
+                      )}
+                      aria-label="音量"
+                      aria-valuetext={`${Math.round(externalAudioControls.volume)}%`}
+                      onValueChange={(next) =>
+                        externalAudioControls.onVolumeChange(
+                          Number(Array.isArray(next) ? next[0] : next),
+                        )
+                      }
+                    />
+                    <Separator className={cn("w-8", glassSeparatorClass())} />
+                    <MediaButton
+                      type="button"
+                      aria-label={externalVolume.isMuted ? "取消静音" : "静音"}
+                      aria-pressed={externalVolume.isMuted}
+                      onClick={externalAudioControls.onToggleMute}
+                      className={cn(
+                        "r-live-media-extension-button",
+                        externalVolume.isMuted && glassOptionSelectedClass(),
+                      )}
+                    >
+                      <VolumeX />
+                    </MediaButton>
+                  </Menu.Content>
+                </Menu.Popup>
+              </Menu.Root>
             ) : (
               <VolumePopover />
             ))}
@@ -822,38 +817,40 @@ export function PlayerControls({
                 </Drawer>
               </>
             ) : (
-              <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
-                <PopoverTrigger
-                  openOnHover
-                  render={
-                    <MediaButton
-                      aria-label={playbackSettingsLabel ?? playbackSettingsTitle}
-                      aria-disabled={settingsDisabled || undefined}
-                      disabled={settingsDisabled}
-                      className="r-live-media-extension-button"
-                    >
-                      <Settings />
-                    </MediaButton>
-                  }
-                />
-                <PopoverContent
-                  container={portalContainer}
+              <Menu.Root
+                open={settingsOpen}
+                onOpenChange={(open) => {
+                  setSettingsOpen(open);
+                  onOverlayInteractionChange?.(open);
+                }}
+              >
+                <ButtonTooltip
                   side="top"
-                  align="end"
-                  collisionPadding={12}
-                  sticky
-                  glass
-                  className={cn(
-                    "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto p-1.5",
-                    glassPanelClass({ overlay: true }),
-                  )}
+                  label={playbackSettingsLabel ?? playbackSettingsTitle ?? "播放设置"}
                 >
-                  <PopoverTitle className={glassTitleClass({ overlay: true })}>
-                    {playbackSettingsTitle}
-                  </PopoverTitle>
-                  {settingsBody}
-                </PopoverContent>
-              </Popover>
+                  <Menu.Trigger
+                    aria-label={playbackSettingsLabel ?? playbackSettingsTitle ?? "播放设置"}
+                    aria-disabled={settingsDisabled || undefined}
+                    disabled={settingsDisabled}
+                    className="r-live-media-extension-button"
+                  >
+                    <Settings />
+                  </Menu.Trigger>
+                </ButtonTooltip>
+                <Menu.Popup>
+                  <Menu.Content
+                    className={cn(
+                      "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto p-1.5",
+                      glassPanelClass({ overlay: true }),
+                    )}
+                  >
+                    <div className={cn("px-2 pt-1 pb-0.5 text-sm font-medium", glassTitleClass({ overlay: true }))}>
+                      {playbackSettingsTitle}
+                    </div>
+                    {settingsBody}
+                  </Menu.Content>
+                </Menu.Popup>
+              </Menu.Root>
             ))}
 
           {/* 2. 弹幕 */}
@@ -865,133 +862,122 @@ export function PlayerControls({
 
           {/* 3. 字幕：点击只打开来源菜单，不再直接启动本地识别。 */}
           {showSecondary && asrVisible && onToggleAsr && (
-            <Popover
+            <Menu.Root
               open={asrOpen}
               onOpenChange={(open) => {
                 setAsrOpen(open);
                 if (!open) setAsrPanel("sources");
+                onOverlayInteractionChange?.(open);
               }}
             >
-              <PopoverTrigger
-                openOnHover
-                render={
-                  <MediaButton
-                    aria-label={asr.enabled ? "关闭字幕" : "开启字幕"}
-                    aria-pressed={asr.enabled}
-                    className={cn(
-                      "r-live-media-extension-button",
-                      asr.enabled && "bg-media-primary text-media-primary-foreground",
-                    )}
-                  >
-                    {asr.icon === "spinner" ? (
-                      <SpinnerIcon className="size-4" />
-                    ) : asr.icon === "captions" ? (
-                      <Captions />
-                    ) : (
-                      <CaptionsOff />
-                    )}
-                  </MediaButton>
-                }
-              />
-              <PopoverContent
-                container={portalContainer}
-                side="top"
-                align="end"
-                collisionPadding={12}
-                sticky
-                glass
-                className={cn(
-                  "w-72 gap-0 overflow-y-auto p-1.5",
-                  glassPanelClass({ overlay: true }),
-                )}
-              >
-                {asrPanel === "settings" ? (
-                  <>
-                    <div className="flex items-center gap-1 px-1 py-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="返回字幕来源"
-                        onClick={() => setAsrPanel("sources")}
-                      >
-                        <ChevronLeft aria-hidden />
-                      </Button>
-                      <PopoverTitle
-                        className={cn("min-w-0 flex-1", glassTitleClass({ overlay: true }))}
-                      >
-                        字幕设置
-                      </PopoverTitle>
-                      {(asrSettingsPending || asrTranslationBusy) && (
-                        <SpinnerIcon className="size-4" aria-label="正在更新字幕设置" />
-                      )}
-                    </div>
-                    <div className="px-2 py-2">{asrBody}</div>
-                  </>
-                ) : (
-                  <>
-                    <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
-                      字幕
-                    </PopoverTitle>
-                    <Button
-                      variant="ghost"
-                      className={cn(
-                        "w-full justify-between max-md:h-10",
-                        glassOptionClass(),
-                        !asr.enabled && glassOptionSelectedClass(),
-                      )}
-                      aria-pressed={!asr.enabled}
-                      onClick={() => {
-                        if (asr.enabled) onToggleAsr();
-                        setAsrOpen(false);
-                      }}
-                    >
-                      <span className="truncate">关闭弹幕</span>
-                      {!asr.enabled && <Check data-icon="inline-end" aria-hidden />}
-                    </Button>
-                    <div className="flex min-w-0 items-stretch gap-0.5">
+              <ButtonTooltip side="top" label={asr.enabled ? "关闭字幕" : "开启字幕"}>
+                <Menu.Trigger
+                  aria-label={asr.enabled ? "关闭字幕" : "开启字幕"}
+                  aria-pressed={asr.enabled}
+                  className={cn(
+                    "r-live-media-extension-button",
+                    asr.enabled && "bg-media-primary text-media-primary-foreground",
+                  )}
+                >
+                  {asr.icon === "spinner" ? (
+                    <SpinnerIcon className="size-4" />
+                  ) : asr.icon === "captions" ? (
+                    <Captions />
+                  ) : (
+                    <CaptionsOff />
+                  )}
+                </Menu.Trigger>
+              </ButtonTooltip>
+              <Menu.Popup>
+                <Menu.Content
+                  className={cn("w-72 gap-0 overflow-y-auto p-1.5", glassPanelClass({ overlay: true }))}
+                >
+                  {asrPanel === "settings" ? (
+                    <>
+                      <div className="flex items-center gap-1 px-1 py-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="返回字幕来源"
+                          onClick={() => setAsrPanel("sources")}
+                        >
+                          <ChevronLeft aria-hidden />
+                        </Button>
+                        <div className={cn("min-w-0 flex-1 text-sm font-medium", glassTitleClass({ overlay: true }))}>
+                          字幕设置
+                        </div>
+                        {(asrSettingsPending || asrTranslationBusy) && (
+                          <SpinnerIcon className="size-4" aria-label="正在更新字幕设置" />
+                        )}
+                      </div>
+                      <div className="px-2 py-2">{asrBody}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className={cn("px-2 py-1 text-sm font-medium", glassTitleClass({ overlay: true }))}>
+                        字幕
+                      </div>
                       <Button
                         variant="ghost"
                         className={cn(
-                          "h-auto min-h-9 min-w-0 flex-1 justify-between py-1.5 max-md:min-h-10",
+                          "w-full justify-between max-md:h-10",
                           glassOptionClass(),
-                          asr.enabled && glassOptionSelectedClass(),
+                          !asr.enabled && glassOptionSelectedClass(),
                         )}
-                        aria-pressed={asr.enabled}
-                        aria-disabled={asrDisabled || undefined}
-                        disabled={asrDisabled}
+                        aria-pressed={!asr.enabled}
                         onClick={() => {
-                          if (!asr.enabled) onToggleAsr();
+                          if (asr.enabled) onToggleAsr();
                           setAsrOpen(false);
                         }}
                       >
-                        <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
-                          <span className="truncate">字幕（本地）</span>
-                          {asrDisabled && (
-                            <span className={cn("text-xs font-normal", glassMutedTextClass())}>
-                              {asrLabel}
-                            </span>
+                        <span className="truncate">关闭弹幕</span>
+                        {!asr.enabled && <Check data-icon="inline-end" aria-hidden />}
+                      </Button>
+                      <div className="flex min-w-0 items-stretch gap-0.5">
+                        <Button
+                          variant="ghost"
+                          className={cn(
+                            "h-auto min-h-9 min-w-0 flex-1 justify-between py-1.5 max-md:min-h-10",
+                            glassOptionClass(),
+                            asr.enabled && glassOptionSelectedClass(),
                           )}
-                        </span>
-                        {asrBusy ? (
-                          <SpinnerIcon className="size-4" data-icon="inline-end" aria-hidden />
-                        ) : asr.enabled ? (
-                          <Check data-icon="inline-end" aria-hidden />
-                        ) : null}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="打开字幕设置"
-                        className={glassOptionClass()}
-                        onClick={() => setAsrPanel("settings")}
-                      >
-                        <ChevronRight className="size-5" aria-hidden />
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </PopoverContent>
-            </Popover>
+                          aria-pressed={asr.enabled}
+                          aria-disabled={asrDisabled || undefined}
+                          disabled={asrDisabled}
+                          onClick={() => {
+                            if (!asr.enabled) onToggleAsr();
+                            setAsrOpen(false);
+                          }}
+                        >
+                          <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+                            <span className="truncate">字幕（本地）</span>
+                            {asrDisabled && (
+                              <span className={cn("text-xs font-normal", glassMutedTextClass())}>
+                                {asrLabel}
+                              </span>
+                            )}
+                          </span>
+                          {asrBusy ? (
+                            <SpinnerIcon className="size-4" data-icon="inline-end" aria-hidden />
+                          ) : asr.enabled ? (
+                            <Check data-icon="inline-end" aria-hidden />
+                          ) : null}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="打开字幕设置"
+                          className={glassOptionClass()}
+                          onClick={() => setAsrPanel("settings")}
+                        >
+                          <ChevronRight className="size-5" aria-hidden />
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </Menu.Content>
+              </Menu.Popup>
+            </Menu.Root>
           )}
 
           {/* 4. 字幕：常驻控制栏，不可用时为禁用按钮（位置固定在全屏按钮左侧）。 */}
