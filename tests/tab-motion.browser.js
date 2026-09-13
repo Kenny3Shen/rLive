@@ -5,35 +5,24 @@ async (page) => {
     if (!window.__TAURI_INTERNALS__ || !navigator.userAgent.includes("Windows NT")) {
       throw new Error("必须在 Windows Debug 主窗口运行，不能使用普通浏览器或 CDP 新标签。");
     }
-    // 使用页面已加载的 Vite 依赖 URL（含版本参数），避免引入第二份 React。
-    const dependencyUrl = (name) => {
-      const entry = performance.getEntriesByType("resource").find((resource) => {
-        const url = new URL(resource.name);
-        return url.pathname.endsWith(`/deps/${name}.js`) && url.searchParams.has("v");
-      });
-      if (!entry) throw new Error(`未找到页面已加载的依赖：${name}`);
-      return entry.name;
-    };
-    const { default: React } = await import(dependencyUrl("react"));
-    const { default: ReactDOMClient } = await import(dependencyUrl("react-dom_client"));
-    const { default: ReactDOM } = await import(dependencyUrl("react-dom"));
-    const { createRoot } = ReactDOMClient;
-    const { flushSync } = ReactDOM;
-    const { useHorizontalSwipe } = await import(`/src/shared/hooks/useHorizontalSwipe.ts?motion-test=${Date.now()}`);
-    const assert = (condition, message) => {
-      if (!condition) throw new Error(message);
-    };
-    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-    const frames = async () => { await frame(); await frame(); };
-    const host = document.createElement("div");
-    host.style.cssText = "position:fixed;left:80px;top:100px;width:360px;z-index:1000;background:var(--background)";
-    document.body.append(host);
-    const root = createRoot(host);
+    const { setupHarness, assert, frames } = await import("/tests/browser/harness.js");
+    // 带查询参数绕过模块缓存：每次运行都要拿到当前源码的钩子实现。
+    const { useHorizontalSwipe } = await import(
+      `/src/shared/hooks/useHorizontalSwipe.ts?motion-test=${Date.now()}`
+    );
+
+    const ui = await setupHarness({
+      style:
+        "position:fixed;left:80px;top:100px;width:360px;z-index:1000;background:var(--background)",
+    });
+    const { React, h, flushSync } = ui;
+
     let setState;
     let swipe;
     let deferChanges = false;
     let requestedValue;
     const items = ["a", "b", "c", "d"];
+
     function Harness() {
       const [state, update] = React.useState({ value: "a", key: 0 });
       setState = update;
@@ -48,15 +37,26 @@ async (page) => {
         layout: "track",
         animateAcrossItems: true,
       });
-      return React.createElement("div", { "data-test-viewport": true, style: { width: "360px", height: "160px", overflow: "hidden" } },
-        React.createElement("div", { key: state.key, ref: swipe.bindPage, "data-test-track": true, style: { display: "flex", width: "400%", height: "100%" } },
-          items.map((value) => React.createElement("div", { key: value, style: { width: "25%", flexShrink: 0 } }, value)),
+      return h(
+        "div",
+        { "data-test-viewport": true, style: { width: "360px", height: "160px", overflow: "hidden" } },
+        h(
+          "div",
+          {
+            key: state.key,
+            ref: swipe.bindPage,
+            "data-test-track": true,
+            style: { display: "flex", width: "400%", height: "100%" },
+          },
+          items.map((value) => h("div", { key: value, style: { width: "25%", flexShrink: 0 } }, value)),
         ),
       );
     }
-    const track = () => host.querySelector("[data-test-track]");
-    const viewport = () => host.querySelector("[data-test-viewport]");
+
+    const track = () => ui.query("[data-test-track]");
+    const viewport = () => ui.query("[data-test-viewport]");
     const offset = () => new DOMMatrixReadOnly(getComputedStyle(track()).transform).m41;
+    /** 暂停轨道动画并定位到指定进度，用于观察中间帧而非最终停靠位。 */
     const pauseAt = async (progress) => {
       const animation = track().getAnimations()[0];
       assert(animation, "未创建轨道动画");
@@ -65,15 +65,20 @@ async (page) => {
       await frames();
       return animation;
     };
+
     const results = [];
     const oldMatchMedia = window.matchMedia;
+    const stubReducedMotion = (matches) => {
+      window.matchMedia = (query) =>
+        query === "(prefers-reduced-motion: reduce)" ? { matches } : oldMatchMedia.call(window, query);
+    };
+
     try {
-      window.matchMedia = (query) => query === "(prefers-reduced-motion: reduce)"
-        ? { matches: false }
-        : oldMatchMedia.call(window, query);
-      flushSync(() => root.render(React.createElement(React.StrictMode, null, React.createElement(Harness))));
+      stubReducedMotion(false);
+      ui.render(h(Harness));
       await frames();
       assert(offset() === 0, "初始轨道没有停靠到第一页");
+
       flushSync(() => swipe.selectValue("b"));
       const first = await pauseAt(0.35);
       const midway = offset();
@@ -92,6 +97,7 @@ async (page) => {
       assert(Math.abs(offset() - midway) < 0.1, "连续切换从起点重播");
       assert(first.playState === "idle", "旧动画未取消");
       results.push("连续切换从当前像素接管");
+
       const forward = await pauseAt(0.45);
       const reversalStart = offset();
       flushSync(() => swipe.selectValue("b"));
@@ -101,7 +107,10 @@ async (page) => {
       reversed.finish();
       await frames();
       assert(Math.abs(offset() + 360) < 0.1, "动画结束未停靠");
-      assert(track().getAnimations().length === 0 && track().style.willChange === "", "结束后残留动画层");
+      assert(
+        track().getAnimations().length === 0 && track().style.willChange === "",
+        "结束后残留动画层",
+      );
       results.push("反向切换与结束清理");
 
       flushSync(() => swipe.selectValue("c"));
@@ -121,6 +130,7 @@ async (page) => {
       assert(Math.abs(offset() + 420) < 0.1, "重绑未停靠到活动页");
       results.push("节点重绑清理并重新定位");
 
+      // 路由未提交（onChange 不立即回写 value）时，resize 与再次点击都不能丢目的页。
       deferChanges = true;
       swipe.selectValue("c");
       await pauseAt(0.25);
@@ -141,6 +151,7 @@ async (page) => {
       await frames();
       assert(Math.abs(offset() + 800) < 0.1, "点回原页未回到原位");
       results.push("待提交时支持点回原页");
+
       deferChanges = false;
       flushSync(() => swipe.selectValue("a"));
       const across = await pauseAt(0.4);
@@ -150,17 +161,18 @@ async (page) => {
       assert(Math.abs(offset()) < 0.1, "非相邻切换未正确落位");
       results.push("非相邻页签保持连续平移");
 
-      window.matchMedia = (query) => query === "(prefers-reduced-motion: reduce)"
-        ? { matches: true }
-        : oldMatchMedia.call(window, query);
+      stubReducedMotion(true);
       flushSync(() => swipe.selectValue("b"));
       await frames();
-      assert(track().getAnimations().length === 0 && Math.abs(offset() + 400) < 0.1, "减少动态效果未立即落位");
+      assert(
+        track().getAnimations().length === 0 && Math.abs(offset() + 400) < 0.1,
+        "减少动态效果未立即落位",
+      );
       results.push("尊重减少动态效果");
+
       return { platform: navigator.userAgent, passed: results };
     } finally {
-      flushSync(() => root.unmount());
-      host.remove();
+      ui.dispose();
       window.matchMedia = oldMatchMedia;
     }
   });

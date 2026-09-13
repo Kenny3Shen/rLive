@@ -22,6 +22,7 @@ export function VideoDanmakuList({
   positionMs,
   loading,
   onSeek,
+  active = true,
 }: {
   /** 已加载并合并排序的全部弹幕条目（播放页的 danmakuEntries）。 */
   entries: readonly VideoDanmakuEntry[];
@@ -31,6 +32,14 @@ export function VideoDanmakuList({
   loading: boolean;
   /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
   onSeek: (positionMs: number) => void;
+  /**
+   * 本面板是否为当前选中页签。
+   *
+   * 侧栏把所有页签常驻在横滑条带里，非活动面板只是被移出视口而没有卸载。
+   * 此时 `scrollIntoView` 会连带滚动祖先容器去"露出"那个横向偏移过的面板，
+   * 把条带的位置搅乱；跟随播放进度也没有意义，因为用户根本没在看这一页。
+   */
+  active?: boolean;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const followRef = useRef<HTMLLIElement | null>(null);
@@ -49,9 +58,9 @@ export function VideoDanmakuList({
   }, []);
 
   useEffect(() => {
-    if (userScrolledRef.current) return;
+    if (!active || userScrolledRef.current) return;
     followRef.current?.scrollIntoView({ block: "center", behavior: "instant" });
-  }, [positionMs]);
+  }, [active, positionMs]);
 
   // 全量渲染：行级 content-visibility 让浏览器跳过屏外行的布局与绘制，
   // 滚动可以到达任意位置（进度窗口截断会让"滚动查看更多"失效）。
