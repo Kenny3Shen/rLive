@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
-import { Spinner } from "@/components/ui/spinner";
+import { SpinnerIcon } from "@videojs/react/icons";
 import { Switch } from "@/components/ui/switch";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
@@ -195,7 +195,7 @@ export type PlayerControlsProps = {
   portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
   onOverlayInteractionChange?: (open: boolean) => void;
   refreshDisabled?: boolean;
-  loadError?: string | null;
+  loadError?: string | null; // 由 ErrorDialog 展示
   onRefresh?: () => void;
   onNext?: () => void;
   onToggleAudioOnly?: () => void;
@@ -578,7 +578,7 @@ export function PlayerControls({
   portalContainer,
   onOverlayInteractionChange,
   refreshDisabled = disabled,
-  loadError,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 由 ErrorDialog 展示
   onRefresh,
   onNext,
   onToggleAudioOnly,
@@ -791,14 +791,6 @@ export function PlayerControls({
           ) : (
             <div className="min-w-0 flex-1" />
           )}
-          {loadError && (
-            <span
-              className="shrink-0 max-w-36 truncate px-1 text-xs text-red-300"
-              title={loadError}
-            >
-              {loadError}
-            </span>
-          )}
         </div>
 
         {/* 右侧控制栏：设置 | 弹幕 | 字幕 | 画中画 | 窗口全屏 | 全屏 */}
@@ -892,7 +884,7 @@ export function PlayerControls({
                     )}
                   >
                     {asr.icon === "spinner" ? (
-                      <Spinner />
+                      <SpinnerIcon className="size-4" />
                     ) : asr.icon === "captions" ? (
                       <Captions />
                     ) : (
@@ -930,7 +922,7 @@ export function PlayerControls({
                         字幕设置
                       </PopoverTitle>
                       {(asrSettingsPending || asrTranslationBusy) && (
-                        <Spinner aria-label="正在更新字幕设置" />
+                        <SpinnerIcon className="size-4" aria-label="正在更新字幕设置" />
                       )}
                     </div>
                     <div className="px-2 py-2">{asrBody}</div>
@@ -981,7 +973,7 @@ export function PlayerControls({
                           )}
                         </span>
                         {asrBusy ? (
-                          <Spinner data-icon="inline-end" aria-hidden />
+                          <SpinnerIcon className="size-4" data-icon="inline-end" aria-hidden />
                         ) : asr.enabled ? (
                           <Check data-icon="inline-end" aria-hidden />
                         ) : null}
@@ -993,7 +985,7 @@ export function PlayerControls({
                         className={glassOptionClass()}
                         onClick={() => setAsrPanel("settings")}
                       >
-                        <ChevronRight aria-hidden />
+                        <ChevronRight className="size-5" aria-hidden />
                       </Button>
                     </div>
                   </>
