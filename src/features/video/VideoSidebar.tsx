@@ -29,6 +29,8 @@ import { ImageViewer } from "@/shared/components/ImageViewer";
 import { LinkText } from "@/shared/components/LinkText";
 import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
+import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type {
   VideoArchive,
@@ -1059,7 +1061,35 @@ export function VideoSidebar({
       ? ["related", "comments", "danmaku", "parts"]
       : ["related", "comments", "danmaku"];
   const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
-  const tab = requestedTab && visibleTabs.includes(requestedTab) ? requestedTab : visibleTabs[0];
+  // 请求的页签在当前稿件不存在时回退到第一项（PGC 无「相关推荐」、单 P 无「选集」、
+  // 没有弹幕数据时无「弹幕」）。每种组合都含「评论」，故兜底取它。
+  const tab: SidebarTab =
+    requestedTab && visibleTabs.includes(requestedTab)
+      ? requestedTab
+      : (visibleTabs[0] ?? "comments");
+
+  /**
+   * 移动端左右滑动切页签，与直播间侧栏同一套算法与手感（`layout: "track"`）。
+   *
+   * `items` 必须传实际可见的页签而不是全集：条带按下标平移，PGC / 单 P / 无弹幕
+   * 数据下多传一项就会整体错位。桌面不启用手势，但 hook 依然负责把条带停靠到
+   * 选中页，因此点击切换在两端走同一条路径。
+   */
+  const {
+    selectValue: selectSidebarTab,
+    bindPage: sidebarSwipeBindPage,
+    onPointerDownCapture: sidebarSwipeOnPointerDownCapture,
+    onPointerMoveCapture: sidebarSwipeOnPointerMoveCapture,
+    onPointerUpCapture: sidebarSwipeOnPointerUpCapture,
+    onPointerCancelCapture: sidebarSwipeOnPointerCancelCapture,
+    onClickCapture: sidebarSwipeOnClickCapture,
+  } = useHorizontalSwipe({
+    items: visibleTabs,
+    value: tab,
+    onChange: onTabChange,
+    enabled: isMobileClient(),
+    layout: "track",
+  });
 
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
@@ -1067,16 +1097,222 @@ export function VideoSidebar({
     }
   };
 
+  /** 页签内容。所有页签常驻条带，因此按 value 取而不是只画当前一个。 */
+  const sidebarPanel = (value: SidebarTab): ReactNode => {
+    if (value === "comments") {
+      if (resolvedAid) return <CommentsPanel key={resolvedAid} aid={resolvedAid} />;
+      return (
+        <div className="px-3 py-6">
+          {archiveQuery.isPending || seasonQuery.isPending ? (
+            <Spinner className="mx-auto size-4" aria-label="正在加载" />
+          ) : (
+            <ErrorState
+              error={new Error("没有取到评论区的稿件信息。")}
+              title="评论不可用"
+              onRetry={() => void archiveQuery.refetch()}
+            />
+          )}
+        </div>
+      );
+    }
+    if (value === "episodes") return <EpisodesPanel epId={epId!} onNavigate={navigateToPlay} />;
+    if (value === "parts") {
+      if (!archive || !(multiPart || hasSeason)) return null;
+      return (
+        <PartsSeasonPanel
+          archive={archive}
+          currentCid={cid}
+          currentBvid={bvid ?? ""}
+          onNavigate={navigateToPlay}
+        />
+      );
+    }
+    if (value === "danmaku") {
+      if (!danmaku) return null;
+      return (
+        <VideoDanmakuList
+          entries={danmaku.entries}
+          positionMs={danmaku.positionMs}
+          loading={danmaku.loading}
+          onSeek={danmaku.onSeek}
+          active={value === tab}
+        />
+      );
+    }
+    return (
+      <>
+        {!isPgc && archive && (
+          <section
+            key={bvid}
+            className="shrink-0 border-b border-border px-2.5 py-2"
+            aria-label={`UP 主信息：${archive.author}`}
+          >
+            <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
+              {/* 右侧 pr-16 是预留位（关注/更多之类的操作），只留在头像+名称行， */}
+              {/* 不影响下方播放/评论/发布时间与简介开关那一行的可用宽度。 */}
+              <div className="flex min-w-0 items-start gap-2.5 pr-16">
+                <button
+                  type="button"
+                  onClick={handleUploaderClick}
+                  aria-label={`查看 ${archive.author} 的投稿视频`}
+                  className="shrink-0 transition-opacity hover:opacity-80"
+                >
+                  <Avatar size="lg" className="size-11 ring-1 ring-border/80">
+                    <AvatarImage
+                      src={normalizeImageUrl(archive.author_face)}
+                      alt={`${archive.author} 的头像`}
+                      referrerPolicy="no-referrer"
+                    />
+                    <AvatarFallback className="font-medium">
+                      {Array.from(archive.author)[0] ?? "?"}
+                    </AvatarFallback>
+                  </Avatar>
+                </button>
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={handleUploaderClick}
+                    className="block w-full min-w-0 text-left transition-opacity hover:opacity-80"
+                    aria-label={`查看 ${archive.author} 的投稿视频`}
+                  >
+                    <p
+                      className="truncate text-sm font-semibold leading-5 tracking-tight"
+                      title={archive.author}
+                    >
+                      {archive.author}
+                    </p>
+                  </button>
+                  <div className="mt-0.5 flex items-center gap-2 text-xs leading-4 text-muted-foreground">
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={`粉丝：${formatOnline(archive.author_fans)}`}
+                    >
+                      <Users aria-hidden className="size-3.5" />
+                      <span className="tabular-nums">{formatOnline(archive.author_fans)}</span>
+                    </span>
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={`视频：${formatOnline(archive.author_videos)}`}
+                    >
+                      <Video aria-hidden className="size-3.5" />
+                      <span className="tabular-nums">{formatOnline(archive.author_videos)}</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              {/* 统计行与简介开关同排：侧栏（lg 320 / xl 340）下统计三项与图标开关的
+                  开关单行放下；flex-wrap 兜底字体缩放与超长数值（发布时间换行而非
+                  截断），发布时间组因此不加 border-l，避免换行后出现孤立竖线。 */}
+              <div className="mt-1.5 flex min-w-0 items-center gap-1">
+                <dl className="flex min-w-0 flex-1 flex-wrap items-center gap-y-0.5 text-xs leading-4">
+                  <div
+                    className="flex min-w-0 items-center gap-1"
+                    title={`播放：${formatOnline(archive.view)}`}
+                  >
+                    <dt className="sr-only">播放</dt>
+                    <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
+                    <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
+                      {formatOnline(archive.view)}
+                    </dd>
+                  </div>
+                  <div
+                    className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
+                    title={`评论：${formatOnline(archive.reply)}`}
+                  >
+                    <dt className="sr-only">评论</dt>
+                    <MessageSquareText
+                      aria-hidden
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                    />
+                    <dd className="font-semibold leading-4 tracking-normal tabular-nums">
+                      {formatOnline(archive.reply)}
+                    </dd>
+                  </div>
+                  {archive.pubdate > 0 && (
+                    <div
+                      className="ml-2.5 flex min-w-0 items-center gap-1 text-muted-foreground"
+                      title="视频发布时间"
+                    >
+                      <dt className="sr-only">发布时间</dt>
+                      <CalendarDays aria-hidden className="size-3.5 shrink-0" />
+                      <dd className="truncate leading-4 tabular-nums">
+                        {formatDateTime(archive.pubdate)}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+                {(archive.desc || archive.tags.length > 0) && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="shrink-0 text-muted-foreground"
+                    aria-expanded={descriptionExpanded}
+                    aria-controls="video-description"
+                    aria-label={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
+                    title={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
+                    onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+                  >
+                    <ChevronDown
+                      aria-hidden
+                      className={cn(
+                        "size-3.5 transition-transform",
+                        descriptionExpanded && "rotate-180",
+                      )}
+                    />
+                  </Button>
+                )}
+              </div>
+              {/* 简介默认不展开：用 hidden 而非条件渲染，让 aria-controls 在收起态也能 */}
+              {/* 解析到目标；Tags 跟在正文末尾，点击进入对应的视频搜索结果。 */}
+              {(archive.desc || archive.tags.length > 0) && (
+                <div id="video-description" hidden={!descriptionExpanded} className="mt-2">
+                  {archive.desc && (
+                    <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                      <LinkText text={archive.desc} />
+                    </p>
+                  )}
+                  {archive.tags.length > 0 && (
+                    <div
+                      className={cn("flex flex-wrap gap-1.5", archive.desc && "mt-2")}
+                      aria-label="视频 Tags"
+                    >
+                      {archive.tags.map((tag) => (
+                        <Badge
+                          key={tag}
+                          variant="outline"
+                          render={<Link to={videoSearchPath(tag)} />}
+                        >
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+        <RelatedPanel bvid={bvid ?? ""} />
+      </>
+    );
+  };
+
   return (
     // 页签固定在右侧栏顶部；UP 主信息卡只并入「相关视频」内容区。
     <Tabs
       value={tab}
-      className="flex h-full min-h-0 flex-col gap-0"
+      data-horizontal-swipe-surface
+      className="flex h-full min-h-0 flex-col gap-0 touch-pan-y overscroll-y-contain"
       onValueChange={(value) => {
-        if (isSidebarTab(value)) {
-          onTabChange(value);
-        }
+        // 点击也走 selectValue：条带先开始平移，再通知状态更新，与拖动同一条路径。
+        if (isSidebarTab(value)) selectSidebarTab(value);
       }}
+      onPointerDownCapture={sidebarSwipeOnPointerDownCapture}
+      onPointerMoveCapture={sidebarSwipeOnPointerMoveCapture}
+      onPointerUpCapture={sidebarSwipeOnPointerUpCapture}
+      onPointerCancelCapture={sidebarSwipeOnPointerCancelCapture}
+      onClickCapture={sidebarSwipeOnClickCapture}
     >
       <div className="flex h-11 shrink-0 items-center border-b border-border/80">
         <TabsList
@@ -1090,198 +1326,37 @@ export function VideoSidebar({
           ))}
         </TabsList>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        {tab === "comments" ? (
-          resolvedAid ? (
-            <CommentsPanel key={resolvedAid} aid={resolvedAid} />
-          ) : (
-            <div className="px-3 py-6">
-              {archiveQuery.isPending || seasonQuery.isPending ? (
-                <Spinner className="mx-auto size-4" aria-label="正在加载" />
-              ) : (
-                <ErrorState
-                  error={new Error("没有取到评论区的稿件信息。")}
-                  title="评论不可用"
-                  onRetry={() => void archiveQuery.refetch()}
-                />
+      {/* 页签内容常驻同一条带，按选中项整体平移：滑动时相邻页签已经绘制完成，
+          手指下方是真实内容而不是切换后才挂载的空白。非活动页签用 aria-hidden +
+          inert 退出无障碍树与焦点序列。纵向滚动交给每个页签自己那一层，
+          条带与视口都不滚动，横滑与纵向浏览因此不争同一个指针。 */}
+      <div data-video-side-tab-viewport className="relative min-h-0 flex-1 overflow-hidden">
+        <div
+          ref={sidebarSwipeBindPage}
+          data-slot="horizontal-swipe-track"
+          className="flex h-full min-w-0"
+          style={{ width: `${visibleTabs.length * 100}%` }}
+        >
+          {visibleTabs.map((value) => (
+            <div
+              key={value}
+              role="tabpanel"
+              aria-label={sidebarTabLabel(value, multiPart)}
+              aria-hidden={value === tab ? undefined : true}
+              inert={value === tab ? undefined : true}
+              data-video-side-tab-panel={value}
+              className={cn(
+                "flex min-h-0 min-w-0 shrink-0 flex-col",
+                // 弹幕面板自持滚动视口（要独占滚动位置来跟随播放进度），外壳不能再套
+                // 一层纵向滚动；其余页签是普通文档流内容，由外壳负责滚动。
+                value === "danmaku" ? "overflow-hidden" : "overflow-y-auto overscroll-contain",
               )}
+              style={{ width: `${100 / visibleTabs.length}%` }}
+            >
+              {sidebarPanel(value)}
             </div>
-          )
-        ) : tab === "episodes" ? (
-          <EpisodesPanel epId={epId!} onNavigate={navigateToPlay} />
-        ) : tab === "parts" && archive && (multiPart || hasSeason) ? (
-          <PartsSeasonPanel
-            archive={archive}
-            currentCid={cid}
-            currentBvid={bvid ?? ""}
-            onNavigate={navigateToPlay}
-          />
-        ) : tab === "danmaku" && danmaku ? (
-          <VideoDanmakuList
-            entries={danmaku.entries}
-            positionMs={danmaku.positionMs}
-            loading={danmaku.loading}
-            onSeek={danmaku.onSeek}
-          />
-        ) : (
-          <>
-            {!isPgc && archive && (
-              <section
-                key={bvid}
-                className="shrink-0 border-b border-border px-2.5 py-2"
-                aria-label={`UP 主信息：${archive.author}`}
-              >
-                <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
-                  {/* 右侧 pr-16 是预留位（关注/更多之类的操作），只留在头像+名称行， */}
-                  {/* 不影响下方播放/评论/发布时间与简介开关那一行的可用宽度。 */}
-                  <div className="flex min-w-0 items-start gap-2.5 pr-16">
-                    <button
-                      type="button"
-                      onClick={handleUploaderClick}
-                      aria-label={`查看 ${archive.author} 的投稿视频`}
-                      className="shrink-0 transition-opacity hover:opacity-80"
-                    >
-                      <Avatar size="lg" className="size-11 ring-1 ring-border/80">
-                        <AvatarImage
-                          src={normalizeImageUrl(archive.author_face)}
-                          alt={`${archive.author} 的头像`}
-                          referrerPolicy="no-referrer"
-                        />
-                        <AvatarFallback className="font-medium">
-                          {Array.from(archive.author)[0] ?? "?"}
-                        </AvatarFallback>
-                      </Avatar>
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <button
-                        type="button"
-                        onClick={handleUploaderClick}
-                        className="block w-full min-w-0 text-left transition-opacity hover:opacity-80"
-                        aria-label={`查看 ${archive.author} 的投稿视频`}
-                      >
-                        <p
-                          className="truncate text-sm font-semibold leading-5 tracking-tight"
-                          title={archive.author}
-                        >
-                          {archive.author}
-                        </p>
-                      </button>
-                      <div className="mt-0.5 flex items-center gap-2 text-xs leading-4 text-muted-foreground">
-                        <span
-                          className="inline-flex items-center gap-1"
-                          title={`粉丝：${formatOnline(archive.author_fans)}`}
-                        >
-                          <Users aria-hidden className="size-3.5" />
-                          <span className="tabular-nums">{formatOnline(archive.author_fans)}</span>
-                        </span>
-                        <span
-                          className="inline-flex items-center gap-1"
-                          title={`视频：${formatOnline(archive.author_videos)}`}
-                        >
-                          <Video aria-hidden className="size-3.5" />
-                          <span className="tabular-nums">
-                            {formatOnline(archive.author_videos)}
-                          </span>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  {/* 统计行与简介开关同排：侧栏（lg 320 / xl 340）下统计三项与图标开关的
-                      开关单行放下；flex-wrap 兜底字体缩放与超长数值（发布时间换行而非
-                      截断），发布时间组因此不加 border-l，避免换行后出现孤立竖线。 */}
-                  <div className="mt-1.5 flex min-w-0 items-center gap-1">
-                    <dl className="flex min-w-0 flex-1 flex-wrap items-center gap-y-0.5 text-xs leading-4">
-                      <div
-                        className="flex min-w-0 items-center gap-1"
-                        title={`播放：${formatOnline(archive.view)}`}
-                      >
-                        <dt className="sr-only">播放</dt>
-                        <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
-                        <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
-                          {formatOnline(archive.view)}
-                        </dd>
-                      </div>
-                      <div
-                        className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
-                        title={`评论：${formatOnline(archive.reply)}`}
-                      >
-                        <dt className="sr-only">评论</dt>
-                        <MessageSquareText
-                          aria-hidden
-                          className="size-3.5 shrink-0 text-muted-foreground"
-                        />
-                        <dd className="font-semibold leading-4 tracking-normal tabular-nums">
-                          {formatOnline(archive.reply)}
-                        </dd>
-                      </div>
-                      {archive.pubdate > 0 && (
-                        <div
-                          className="ml-2.5 flex min-w-0 items-center gap-1 text-muted-foreground"
-                          title="视频发布时间"
-                        >
-                          <dt className="sr-only">发布时间</dt>
-                          <CalendarDays aria-hidden className="size-3.5 shrink-0" />
-                          <dd className="truncate leading-4 tabular-nums">
-                            {formatDateTime(archive.pubdate)}
-                          </dd>
-                        </div>
-                      )}
-                    </dl>
-                    {(archive.desc || archive.tags.length > 0) && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        className="shrink-0 text-muted-foreground"
-                        aria-expanded={descriptionExpanded}
-                        aria-controls="video-description"
-                        aria-label={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
-                        title={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
-                        onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-                      >
-                        <ChevronDown
-                          aria-hidden
-                          className={cn(
-                            "size-3.5 transition-transform",
-                            descriptionExpanded && "rotate-180",
-                          )}
-                        />
-                      </Button>
-                    )}
-                  </div>
-                  {/* 简介默认不展开：用 hidden 而非条件渲染，让 aria-controls 在收起态也能 */}
-                  {/* 解析到目标；Tags 跟在正文末尾，点击进入对应的视频搜索结果。 */}
-                  {(archive.desc || archive.tags.length > 0) && (
-                    <div id="video-description" hidden={!descriptionExpanded} className="mt-2">
-                      {archive.desc && (
-                        <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
-                          <LinkText text={archive.desc} />
-                        </p>
-                      )}
-                      {archive.tags.length > 0 && (
-                        <div
-                          className={cn("flex flex-wrap gap-1.5", archive.desc && "mt-2")}
-                          aria-label="视频 Tags"
-                        >
-                          {archive.tags.map((tag) => (
-                            <Badge
-                              key={tag}
-                              variant="outline"
-                              render={<Link to={videoSearchPath(tag)} />}
-                            >
-                              {tag}
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </section>
-            )}
-            <RelatedPanel bvid={bvid ?? ""} />
-          </>
-        )}
+          ))}
+        </div>
       </div>
 
       {/* UP 主投稿抽屉 */}
