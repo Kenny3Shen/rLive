@@ -710,6 +710,8 @@ export function PlayerControls({
             (externalAudioControls ? (
               <Menu.Root
                 open={volumeOpen}
+                closeOnEscape={true}
+                closeOnOutsideClick={true}
                 onOpenChange={(open) => {
                   setVolumeOpen(open);
                   onOverlayInteractionChange?.(open);
@@ -725,7 +727,11 @@ export function PlayerControls({
                     {externalVolume.isMuted ? <VolumeX /> : <Volume2 />}
                   </Menu.Trigger>
                 </ButtonTooltip>
-                <Menu.Popup>
+                <Menu.Popup
+                  onPointerEnter={() => setVolumeOpen(true)}
+                  onPointerLeave={() => setVolumeOpen(false)}
+                  keepMounted={false}
+                >
                   <Menu.Content
                     className={cn("w-auto items-center gap-2 p-2.5", glassPanelClass({ overlay: true }))}
                   >
@@ -819,6 +825,8 @@ export function PlayerControls({
             ) : (
               <Menu.Root
                 open={settingsOpen}
+                closeOnEscape={true}
+                closeOnOutsideClick={true}
                 onOpenChange={(open) => {
                   setSettingsOpen(open);
                   onOverlayInteractionChange?.(open);
@@ -837,7 +845,11 @@ export function PlayerControls({
                     <Settings />
                   </Menu.Trigger>
                 </ButtonTooltip>
-                <Menu.Popup>
+                <Menu.Popup
+                  onPointerEnter={() => setSettingsOpen(true)}
+                  onPointerLeave={() => setSettingsOpen(false)}
+                  keepMounted={false}
+                >
                   <Menu.Content
                     className={cn(
                       "z-50 max-h-[min(30rem,calc(100dvh-5rem))] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto p-1.5",
@@ -864,6 +876,8 @@ export function PlayerControls({
           {showSecondary && asrVisible && onToggleAsr && (
             <Menu.Root
               open={asrOpen}
+              closeOnEscape={true}
+              closeOnOutsideClick={true}
               onOpenChange={(open) => {
                 setAsrOpen(open);
                 if (!open) setAsrPanel("sources");
