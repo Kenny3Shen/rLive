@@ -5,9 +5,10 @@
 // 媒体元素用本地桩（`paused` / `play` / `pause` 全部记账），因此「识别器与皮肤各切一次」
 // 会直接表现为双击后出现两次 play/pause。
 //
-// 断言的是移动端触摸语义（两页统一）：单击只唤出 HUD，不动播放状态；双击播放/暂停
-// 且不泄漏成单击，也不再兼职全屏。桌面鼠标沿用点画面暂停、双击全屏，因此夹具在页面内
-// 合成 `pointerType: "touch"` 的 pointer 事件（见下方 `tap`），不走鼠标路径。
+// 断言的是移动端触摸语义（两页统一）：单击切换 HUD（隐藏时唤出、已可见时收起），
+// 不动播放状态；双击播放/暂停且不泄漏成单击，也不再兼职全屏。桌面鼠标沿用点画面暂停、
+// 双击全屏，因此夹具在页面内合成 `pointerType: "touch"` 的 pointer 事件（见下方 `tap`），
+// 不走鼠标路径。
 // 先启动 vite（bun run dev）并打开预览页，再执行：
 //   playwright-cli -s=player-surface-click open http://127.0.0.1:1420/
 //   playwright-cli -s=player-surface-click run-code --filename=tests/player-surface-click.browser.js
@@ -46,6 +47,9 @@ async (page) => {
           taps: 0,
           doubleTaps: 0,
           reveals: 0,
+          hides: 0,
+          // chrome 当前可见性，与两页 `controlsVisibleRef` 同一角色：切换语义要读它。
+          chromeVisible: false,
           fullscreens: 0,
           // 滑动确认后置位的抑制标志，与播放页 `suppressClickRef` 同一角色：
           // 识别器的延迟回调必须读得到它。
@@ -64,10 +68,17 @@ async (page) => {
         // 钩子要求 Player 上下文，因此绑定发生在 VideoJsContainer 的子树内。
         function StageGestures() {
           usePlayerStageTapGestures({
-            // 单击只唤出 chrome：不碰播放状态，也不在已可见时收起。
+            // 单击切换 chrome：隐藏时唤出、已可见时收起，两条路径都不碰播放状态。
+            // 与两页的 `toggleControls` 同构。
             onTap: () => {
               variantState.taps += 1;
+              if (variantState.chromeVisible) {
+                variantState.hides += 1;
+                variantState.chromeVisible = false;
+                return;
+              }
               variantState.reveals += 1;
+              variantState.chromeVisible = true;
             },
             onDoubleTap: () => {
               variantState.doubleTaps += 1;
@@ -194,21 +205,25 @@ async (page) => {
         }
       };
 
-      // 单击只唤出 chrome：播放状态一动不动（plays / pauses / paused 全不变）。
+      // 单击唤出 chrome：播放状态一动不动（plays / pauses / paused 全不变）。
       await tap(variant);
       await settle("单击显示 HUD", {
         taps: 1,
         reveals: 1,
+        hides: 0,
+        chromeVisible: true,
         pauses: 0,
         plays: 0,
         paused: false,
       });
 
-      // 已可见时再点仍是唤出（刷新倒计时），不得反手收起，也仍然不碰播放状态。
+      // 已可见时再点收起（真机反馈：只唤不收无法把 HUD 点掉），仍然不碰播放状态。
       await tap(variant);
-      await settle("再次单击保持显示", {
+      await settle("再次单击隐藏 HUD", {
         taps: 2,
-        reveals: 2,
+        reveals: 1,
+        hides: 1,
+        chromeVisible: false,
         pauses: 0,
         plays: 0,
         paused: false,
@@ -249,7 +264,7 @@ async (page) => {
       await setSuppressed(variant, false);
 
       passed.push(
-        `${variant} 皮肤：单击只唤出 HUD 不动播放状态，双击恰好切换一次播放（不泄漏单击、不切全屏），抑制标志否决延迟回调`,
+        `${variant} 皮肤：单击切换 HUD（唤出/收起各一次）不动播放状态，双击恰好切换一次播放（不泄漏单击、不切全屏），抑制标志否决延迟回调`,
       );
     }
 

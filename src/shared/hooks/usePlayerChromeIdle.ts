@@ -111,6 +111,35 @@ export function usePlayerChromeIdle({
     scheduleControlsHide();
   }, [scheduleControlsHide, setChromeVisible]);
 
+  /**
+   * 按用户明确意图收起 chrome（点画面），不同于 `dismissControls` 的被动退出。
+   *
+   * 刻意越过 `keepVisible`：暂停、缓冲、失败都会把它置为 true，而那几种状态正是
+   * chrome 最可能正显示、用户最想把它收掉的时候；沿用被动守卫会让「再点一下收起」
+   * 恰好在最常见的场景里失效。
+   *
+   * 键盘焦点的守卫保留：`applyPlayerChromeVisibility` 会写 `aria-hidden`，把焦点
+   * 留在隐藏子树里是无障碍缺陷。该守卫只在 `:focus-visible`（键盘导航）时成立，
+   * 触摸点按不会命中，因此不影响移动端手势。
+   */
+  const hideControls = useCallback(() => {
+    clearHideTimer();
+    if (hasKeyboardFocusWithinChrome()) {
+      setChromeVisible(true);
+      return;
+    }
+    setChromeVisible(false);
+  }, [clearHideTimer, hasKeyboardFocusWithinChrome, setChromeVisible]);
+
+  /** 单击语义：隐藏时唤出，已可见时收起。 */
+  const toggleControls = useCallback(() => {
+    if (controlsVisibleRef.current) {
+      hideControls();
+      return;
+    }
+    revealControls();
+  }, [hideControls, revealControls]);
+
   const holdControlsVisible = useCallback(() => {
     clearHideTimer();
     setChromeVisible(true);
@@ -127,6 +156,8 @@ export function usePlayerChromeIdle({
   return {
     controlsVisibleRef,
     revealControls,
+    hideControls,
+    toggleControls,
     holdControlsVisible,
     scheduleControlsHide,
     dismissControls,

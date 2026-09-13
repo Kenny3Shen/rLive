@@ -459,21 +459,26 @@ function VideoPlayerPageContent() {
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
   useVideoDanmakuTopInset(stageRef, hudRef, shortVideo && mobileClient);
-  const { revealControls, holdControlsVisible, scheduleControlsHide, dismissControls } =
-    usePlayerChromeIdle({
-      controlsRef,
-      hudRef,
-      lockRef,
-      fullscreenLocked,
-      keepVisible:
-        shortVideo ||
-        paused ||
-        loading ||
-        waiting ||
-        Boolean(playbackError) ||
-        overlayInteractionOpen ||
-        subtitleOpen,
-    });
+  const {
+    revealControls,
+    toggleControls,
+    holdControlsVisible,
+    scheduleControlsHide,
+    dismissControls,
+  } = usePlayerChromeIdle({
+    controlsRef,
+    hudRef,
+    lockRef,
+    fullscreenLocked,
+    keepVisible:
+      shortVideo ||
+      paused ||
+      loading ||
+      waiting ||
+      Boolean(playbackError) ||
+      overlayInteractionOpen ||
+      subtitleOpen,
+  });
   const fullscreen = useRecordingPlayerFullscreen(stageRef, () => {
     if (!fullscreenLocked) return true;
     revealControls();
@@ -2106,26 +2111,37 @@ function VideoPlayerPageContent() {
 
   const handleStagePointerActivity = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      if (isPlayerControlTarget(event.target)) holdControlsVisible();
-      else revealControls();
+      if (isPlayerControlTarget(event.target)) {
+        holdControlsVisible();
+        return;
+      }
+      // 桌面/鼠标保持「指针划过就显示」。移动端触摸整个交给点按识别器，与直播页一致：
+      // 只有判定成立的单击才改变 chrome 可见性。这里若顺手唤出，按下时 chrome 就已可见，
+      // 约 200ms 后（满双击窗口）才跑的单击回调会按「已可见」把它收掉，HUD 于是闪一下即灭。
+      if (mobileClient && isTouchLikePointer(event.pointerType)) return;
+      revealControls();
     },
-    [holdControlsVisible, revealControls],
+    [holdControlsVisible, mobileClient, revealControls],
   );
 
   /**
-   * 鼠标离开播放器区域：HUD 与控制条立即收起，不等空闲倒计时。触摸指针
-   * 抬手同样触发 pointerleave，仍走原空闲节奏，否则单击唤醒的 chrome
-   * 会在松手瞬间被吞掉。
+   * 鼠标离开播放器区域：HUD 与控制条立即收起，不等空闲倒计时。
+   *
+   * 触摸抬手同样派发 pointerleave，但移动端一律忽略，交给点按识别器决定可见性：
+   * 在这里排隐藏会先撞上 `scheduleControlsHide` 的 `keepVisible` 守卫——暂停、缓冲、
+   * 失败时它把 chrome 置为可见，紧随其后的单击回调便只会收起，暂停态永远点不出 HUD。
+   * chrome 的隐藏倒计时由 `revealControls` 自己续期，不依赖这条退出路径。
    */
   const handleStagePointerLeave = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
+      if (mobileClient && isTouchLikePointer(event.pointerType)) return;
       if (event.pointerType !== "mouse") {
         scheduleControlsHide();
         return;
       }
       dismissControls();
     },
-    [dismissControls, scheduleControlsHide],
+    [dismissControls, mobileClient, scheduleControlsHide],
   );
 
   useEffect(() => {
@@ -2138,7 +2154,8 @@ function VideoPlayerPageContent() {
    * （短视频沉浸 / Android 页内层 / 桌面原生窗口三路径适配）。
    *
    * 语义按指针类型分叉，与直播页一致：
-   * - 移动端触摸：单击只唤出 HUD（已可见则刷新空闲倒计时，不再收起），双击播放/暂停。
+   * - 移动端触摸：单击切换 HUD（隐藏时唤出、已可见时收起），双击播放/暂停。
+   *   收起走 `toggleControls` 里越过 `keepVisible` 的那条路径，否则暂停态点不掉。
    * - 桌面鼠标：沿用点画面暂停、双击全屏，不受移动端手势改动影响。
    *
    * 一个 target 上只能有一个识别器实例，因此不能按 `pointer` 分别注册两套，
@@ -2153,9 +2170,14 @@ function VideoPlayerPageContent() {
   usePlayerStageTapGestures({
     target: stageRef,
     onTap: (event) => {
-      // 锁定态点按只唤回解锁按钮。
-      if (fullscreenLocked || isTouchLikePointer(event.pointerType)) {
+      // 锁定态点按只唤回解锁按钮，不参与切换：此时唯一可见的是解锁按钮，
+      // 把它收起会让人无从解锁。
+      if (fullscreenLocked) {
         revealControls();
+        return;
+      }
+      if (isTouchLikePointer(event.pointerType)) {
+        toggleControls();
         return;
       }
       togglePlayback();
@@ -2740,7 +2762,7 @@ function VideoPlayerPageContent() {
             aria-description={
               mobileClient
                 ? [
-                    "单击画面显示控制层，双击播放或暂停，左右滑动快退或快进",
+                    "单击画面显示或隐藏控制层，双击播放或暂停，左右滑动快退或快进",
                     portraitSwipeEnabled
                       ? "竖屏画面上滑播放下一个，下滑播放上一个"
                       : "画面左半边上下滑动调亮度，右半边调音量",

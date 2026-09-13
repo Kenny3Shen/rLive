@@ -864,6 +864,15 @@ function PlayerPaneContent({
     setControlVisibility(false);
   }, [clearControlsHideTimer, setControlVisibility]);
 
+  /** 单击语义：隐藏时唤出，已可见时收起。与 VOD 页的 `toggleControls` 同构。 */
+  const toggleControls = useCallback(() => {
+    if (controlsVisibleRef.current) {
+      hideControls();
+      return;
+    }
+    revealControls();
+  }, [hideControls, revealControls]);
+
   /**
    * 上锁时收起两层 chrome 只留锁定按钮，解锁时把 chrome 带回来。
    * 两个方向都走 `revealControls`：锁定态已写入 ref，`setControlVisibility` 会据此
@@ -1219,13 +1228,12 @@ function PlayerPaneContent({
   );
 
   /**
-   * 单击唤出 chrome、双击播放/暂停：识别器与判定窗口来自 Video.js 官方钩子，动作仍是
-   * 本页的 `revealControls`（命令式写 `data-visible`，不经 React 状态）与
+   * 单击切换 chrome、双击播放/暂停：识别器与判定窗口来自 Video.js 官方钩子，动作仍是
+   * 本页的 `toggleControls`（命令式写 `data-visible`，不经 React 状态）与
    * `player.togglePause()`（`useWebPlayer` 里唯一维护 `userPausedRef` 记账的入口）。
    *
-   * 单击刻意只唤出、不收起：`revealControls` 会刷新活动时间戳，因此已可见时再点
-   * 只是把空闲倒计时推后，chrome 不会在手指下方消失。收起交给空闲淡出。
-   * 全屏改由 chrome 上的按钮与键盘 `F` 触发，双击不再兼职。
+   * 单击隐藏时唤出、已可见时收起（真机实测反馈：只唤不收会让人无法把 HUD 点掉，
+   * 只能等空闲淡出）。全屏改由 chrome 上的按钮与键盘 `F` 触发，双击不再兼职。
    *
    * 只在移动端触摸上启用：桌面沿用鼠标移动即显示 chrome，点画面不该切播放状态。
    * 空 `pointerType`（部分 Android WebView 对手指输入如此上报）也必须算触摸，
@@ -1234,7 +1242,7 @@ function PlayerPaneContent({
   usePlayerStageTapGestures({
     target: playerStageRef,
     enabled: mobileClient && showHost && playerStageGesturesEnabled(fullscreenLocked),
-    onTap: revealControls,
+    onTap: toggleControls,
     onDoubleTap: () => {
       player.togglePause();
       revealControls();
@@ -1394,7 +1402,7 @@ function PlayerPaneContent({
           tabIndex={0}
           aria-label={
             mobileClient
-              ? "直播播放器；单击显示控制条，双击播放或暂停；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
+              ? "直播播放器；单击显示或隐藏控制条，双击播放或暂停；左侧上下滑动调节亮度，右侧上下滑动调节音量；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
               : "直播播放器；按空格或 K 播放或暂停，M 静音，F 全屏，上下方向键调节音量"
           }
           aria-keyshortcuts="Space K M F ArrowUp ArrowDown"
