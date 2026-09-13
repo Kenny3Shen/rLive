@@ -1,11 +1,17 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Captions,
   CaptionsOff,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Expand,
-  Eye,
-  EyeOff,
   Headphones,
   Maximize2,
   MessageSquareOff,
@@ -21,7 +27,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { Time } from "@videojs/react";
+import { Menu, Time, useMenuContext } from "@videojs/react";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -180,7 +186,6 @@ export type PlayerControlsProps = {
   captionsSlot?: ReactNode;
   disabled?: boolean;
   stackedBelowPlayer?: boolean;
-  systemGestureBarReserved?: boolean;
   centerSlot?: ReactNode;
   playbackSettings?: ReactNode;
   playbackSettingsTitle?: string;
@@ -205,8 +210,6 @@ export type PlayerControlsProps = {
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
   toolsSlot?: ReactNode;
-  infoVisible?: boolean;
-  onToggleInfo?: () => void;
   onToggleFullscreen?: () => void;
 };
 
@@ -281,6 +284,95 @@ function ExtensionButton({
   );
 }
 
+export type PlayerMenuRadioOption = {
+  value: string;
+  label: ReactNode;
+  disabled?: boolean;
+  title?: string;
+};
+
+/**
+ * 把 Video.js 的菜单键盘模型嵌进项目现有 Popover/Drawer 外壳。
+ *
+ * `Menu.Popup` 自带定位与 top-layer 生命周期，不能与现有外壳叠用；这里仅借用
+ * `Menu.Content` 的 roving tabindex、方向键、Home/End、Enter/Space 与 type-ahead。
+ */
+function EmbeddedMenuContent({ children }: { children: ReactNode }) {
+  const { menu, state, contentId, core } = useMenuContext();
+  const setContentElement = useCallback(
+    (element: HTMLDivElement | null) => menu.setContentElement(element),
+    [menu],
+  );
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    menu.contentProps.onKeyDown(
+      event.nativeEvent as Parameters<typeof menu.contentProps.onKeyDown>[0],
+    );
+    if (event.key !== "Escape") event.stopPropagation();
+  };
+
+  return (
+    <div
+      ref={setContentElement}
+      id={contentId}
+      {...core.getContentAttrs()}
+      data-open={state.open || undefined}
+      onKeyDown={handleKeyDown}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function PlayerMenuRadioGroup({
+  label,
+  value,
+  options,
+  columns,
+  onValueChange,
+}: {
+  label: string;
+  value: string;
+  options: PlayerMenuRadioOption[];
+  columns?: number;
+  onValueChange: (value: string) => void;
+}) {
+  const optionClass = glassOptionClass();
+  return (
+    <Menu.RadioGroup
+      value={value}
+      onValueChange={onValueChange}
+      aria-label={label}
+      className={columns ? "grid gap-1 px-1" : "flex flex-col gap-0.5"}
+      style={columns ? { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` } : undefined}
+    >
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <Menu.RadioItem
+            key={option.value}
+            value={option.value}
+            disabled={option.disabled}
+            title={option.title}
+            className={cn(
+              "flex min-h-7 w-full cursor-default items-center justify-between gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] font-medium outline-none select-none touch-manipulation transition-colors aria-disabled:pointer-events-none aria-disabled:opacity-50 [@media(pointer:coarse)]:min-h-11",
+              columns && "h-8 justify-center px-1 text-xs",
+              optionClass,
+              selected && glassOptionSelectedClass(),
+            )}
+          >
+            <span className="truncate">{option.label}</span>
+            {!columns && (
+              <Menu.ItemIndicator checked={selected}>
+                <Check data-icon="inline-end" aria-hidden />
+              </Menu.ItemIndicator>
+            )}
+          </Menu.RadioItem>
+        );
+      })}
+    </Menu.RadioGroup>
+  );
+}
+
 function SettingsBody({
   qualities,
   qualityIndex,
@@ -300,7 +392,6 @@ function SettingsBody({
   | "onQualityChange"
   | "onLineChange"
 > & { onClose: () => void }) {
-  const optionClass = glassOptionClass();
   const qualityLabel = (index: number) => {
     const label = qualities?.[index]?.quality?.trim();
     if (!label || /^(?:rate)?\d+$/i.test(label)) {
@@ -308,61 +399,49 @@ function SettingsBody({
     }
     return label;
   };
+  const qualityOptions: PlayerMenuRadioOption[] =
+    qualities?.map((quality, index) => ({
+      value: String(index),
+      label: qualityLabel(index),
+      disabled: quality.disabled,
+      title: quality.hint,
+    })) ?? [];
+  const lineOptions: PlayerMenuRadioOption[] =
+    lines?.map((line, index) => ({
+      value: String(index),
+      label: lineName(line, index),
+    })) ?? [];
   return (
     <div className="flex flex-col gap-1">
-      {(qualities?.length ?? 0) > 0 && (
+      {qualityOptions.length > 0 && (
         <div className="flex flex-col gap-0.5">
           <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>清晰度</span>
-          {qualities?.map((quality, index) => (
-            <Button
-              key={`${quality.quality}-${index}`}
-              variant="ghost"
-              size="sm"
-              disabled={quality.disabled}
-              title={quality.hint}
-              aria-pressed={index === qualityIndex}
-              className={cn(
-                "w-full justify-between",
-                optionClass,
-                index === qualityIndex && glassOptionSelectedClass(),
-              )}
-              onClick={() => {
-                onQualityChange?.(index);
-                onClose();
-              }}
-            >
-              <span className="truncate">{qualityLabel(index)}</span>
-              {index === qualityIndex && <Check data-icon="inline-end" aria-hidden />}
-            </Button>
-          ))}
+          <PlayerMenuRadioGroup
+            label="清晰度"
+            value={String(qualityIndex)}
+            options={qualityOptions}
+            onValueChange={(nextValue) => {
+              onQualityChange?.(Number(nextValue));
+              onClose();
+            }}
+          />
         </div>
       )}
-      {(qualities?.length ?? 0) > 0 && (lines?.length ?? 0) > 0 && (
+      {qualityOptions.length > 0 && lineOptions.length > 0 && (
         <Separator className={glassSeparatorClass()} />
       )}
-      {(lines?.length ?? 0) > 0 && (
+      {lineOptions.length > 0 && (
         <div className="flex flex-col gap-0.5">
           <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>线路</span>
-          {lines?.map((line, index) => (
-            <Button
-              key={`${line.url}-${index}`}
-              variant="ghost"
-              size="sm"
-              aria-pressed={index === lineIndex}
-              className={cn(
-                "w-full justify-between",
-                optionClass,
-                index === lineIndex && glassOptionSelectedClass(),
-              )}
-              onClick={() => {
-                onLineChange?.(index);
-                onClose();
-              }}
-            >
-              <span className="truncate">{lineName(line, index)}</span>
-              {index === lineIndex && <Check data-icon="inline-end" aria-hidden />}
-            </Button>
-          ))}
+          <PlayerMenuRadioGroup
+            label="线路"
+            value={String(lineIndex)}
+            options={lineOptions}
+            onValueChange={(nextValue) => {
+              onLineChange?.(Number(nextValue));
+              onClose();
+            }}
+          />
         </div>
       )}
       {playbackSettings}
@@ -370,6 +449,97 @@ function SettingsBody({
   );
 }
 
+export type AsrSettingsBodyProps = {
+  portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
+  translationEnabled: boolean;
+  translationFrom: CaptionTranslationSourceLanguage;
+  translationTo: CaptionTranslationLanguage;
+  speakerDiarizationEnabled: boolean;
+  onTranslationEnabledChange?: (enabled: boolean) => void;
+  onTranslationFromChange?: (from: CaptionTranslationSourceLanguage) => void;
+  onTranslationToChange?: (to: CaptionTranslationLanguage) => void;
+  onSpeakerDiarizationEnabledChange?: (enabled: boolean) => void | Promise<void>;
+};
+
+/** 直播、多画面、IPTV 与 VOD「字幕（本地）」二级页共用的识别设置。 */
+export function AsrSettingsBody({
+  portalContainer,
+  translationEnabled,
+  translationFrom,
+  translationTo,
+  speakerDiarizationEnabled,
+  onTranslationEnabledChange,
+  onTranslationFromChange,
+  onTranslationToChange,
+  onSpeakerDiarizationEnabledChange,
+}: AsrSettingsBodyProps) {
+  return (
+    <FieldGroup className="gap-3">
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-speaker-diarization">区分说话人</FieldLabel>
+        <Switch
+          id="player-speaker-diarization"
+          size="sm"
+          checked={speakerDiarizationEnabled}
+          disabled={!onSpeakerDiarizationEnabledChange}
+          onCheckedChange={(checked) => void onSpeakerDiarizationEnabledChange?.(checked)}
+        />
+      </Field>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
+        <Switch
+          id="player-caption-translation"
+          size="sm"
+          checked={translationEnabled}
+          disabled={!onTranslationEnabledChange}
+          onCheckedChange={onTranslationEnabledChange}
+        />
+      </Field>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
+        <Select
+          items={TRANSLATION_SOURCE_LANGUAGE_OPTIONS}
+          value={translationFrom}
+          onValueChange={(value) => value && onTranslationFromChange?.(value)}
+        >
+          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent container={portalContainer} side="top" align="end" glass>
+            <SelectGroup>
+              {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
+                <SelectItem key={language.value} value={language.value}>
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="player-caption-translation-to">译文语言</FieldLabel>
+        <Select
+          items={TRANSLATION_LANGUAGE_OPTIONS}
+          value={translationTo}
+          onValueChange={(value) => value && onTranslationToChange?.(value)}
+        >
+          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent container={portalContainer} side="top" align="end" glass>
+            <SelectGroup>
+              {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
+                <SelectItem key={language.value} value={language.value}>
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+    </FieldGroup>
+  );
+}
 export function PlayerControls({
   chrome,
   externalAudioControls,
@@ -380,7 +550,7 @@ export function PlayerControls({
   osdOn,
   asrVisible = false,
   asrOn = false,
-  asrLabel = asrOn ? "关闭语音字幕" : "开启语音字幕",
+  asrLabel = asrOn ? "关闭字幕" : "开启字幕",
   asrDisabled = false,
   asrBusy = false,
   asrTranslationEnabled = false,
@@ -398,7 +568,6 @@ export function PlayerControls({
   pictureInPictureDisabled,
   captionsSlot,
   stackedBelowPlayer = false,
-  systemGestureBarReserved = false,
   disabled = false,
   compact = false,
   centerSlot,
@@ -424,8 +593,6 @@ export function PlayerControls({
   onQualityChange,
   onLineChange,
   toolsSlot,
-  infoVisible = true,
-  onToggleInfo,
   onToggleFullscreen,
 }: PlayerControlsProps) {
   const variant = useSkinVariant();
@@ -436,6 +603,7 @@ export function PlayerControls({
   const showWebFullscreen = showPlayerWebFullscreenControl(compact, fullscreen);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [asrOpen, setAsrOpen] = useState(false);
+  const [asrPanel, setAsrPanel] = useState<"sources" | "settings">("sources");
   const [volumeOpen, setVolumeOpen] = useState(false);
   const settingsVisible = qualities.length > 0 || lines.length > 0 || playbackSettings != null;
   const settingsDisabled = playbackSettingsDisabled ?? (disabled && playbackSettings == null);
@@ -454,83 +622,41 @@ export function PlayerControls({
   );
   useEffect(() => () => onOverlayInteractionChange?.(false), [onOverlayInteractionChange]);
   const settingsBody = (
-    <SettingsBody
-      qualities={qualities}
-      qualityIndex={qualityIndex}
-      lines={lines}
-      lineIndex={lineIndex}
-      playbackSettings={playbackSettings}
-      onQualityChange={onQualityChange}
-      onLineChange={onLineChange}
-      onClose={() => setSettingsOpen(false)}
-    />
+    <Menu.Root
+      open={settingsOpen}
+      closeOnEscape={false}
+      closeOnOutsideClick={false}
+      onOpenChange={(open) => {
+        if (!open) setSettingsOpen(false);
+      }}
+    >
+      <EmbeddedMenuContent>
+        <SettingsBody
+          qualities={qualities}
+          qualityIndex={qualityIndex}
+          lines={lines}
+          lineIndex={lineIndex}
+          playbackSettings={playbackSettings}
+          onQualityChange={onQualityChange}
+          onLineChange={onLineChange}
+          onClose={() => setSettingsOpen(false)}
+        />
+      </EmbeddedMenuContent>
+    </Menu.Root>
   );
 
   const asrBody = (
-    <FieldGroup className="gap-3">
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-speaker-diarization">区分说话人</FieldLabel>
-        <Switch
-          id="player-speaker-diarization"
-          size="sm"
-          checked={asrSpeakerDiarizationEnabled}
-          disabled={!onAsrSpeakerDiarizationEnabledChange}
-          onCheckedChange={(checked) => void onAsrSpeakerDiarizationEnabledChange?.(checked)}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation">字幕翻译</FieldLabel>
-        <Switch
-          id="player-caption-translation"
-          size="sm"
-          checked={asrTranslationEnabled}
-          disabled={!onAsrTranslationEnabledChange}
-          onCheckedChange={onAsrTranslationEnabledChange}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
-        <Select
-          items={TRANSLATION_SOURCE_LANGUAGE_OPTIONS}
-          value={asrTranslationFrom}
-          onValueChange={(value) => value && onAsrTranslationFromChange?.(value)}
-        >
-          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent container={portalContainer} side="top" align="end" glass>
-            <SelectGroup>
-              {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem key={language.value} value={language.value}>
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation-to">译文语言</FieldLabel>
-        <Select
-          items={TRANSLATION_LANGUAGE_OPTIONS}
-          value={asrTranslationTo}
-          onValueChange={(value) => value && onAsrTranslationToChange?.(value)}
-        >
-          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent container={portalContainer} side="top" align="end" glass>
-            <SelectGroup>
-              {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem key={language.value} value={language.value}>
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
-    </FieldGroup>
+    <AsrSettingsBody
+      portalContainer={portalContainer}
+      translationEnabled={asrTranslationEnabled}
+      translationFrom={asrTranslationFrom}
+      translationTo={asrTranslationTo}
+      speakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+      onTranslationEnabledChange={onAsrTranslationEnabledChange}
+      onTranslationFromChange={onAsrTranslationFromChange}
+      onTranslationToChange={onAsrTranslationToChange}
+      onSpeakerDiarizationEnabledChange={onAsrSpeakerDiarizationEnabledChange}
+    />
   );
 
   // 容器宽度不足时按优先级让位：与原生控件同一套 media 容器断点，
@@ -540,10 +666,7 @@ export function PlayerControls({
   return (
     <ControlsSurface
       chrome={chrome}
-      avoidSystemGestureBar={
-        !systemGestureBarReserved &&
-        playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)
-      }
+      avoidSystemGestureBar={playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)}
     >
       {/* 点播/录制回放：上方展示进度条 */}
       {variant === "vod" && (
@@ -573,20 +696,12 @@ export function PlayerControls({
 
           {/* 2. 刷新 */}
           {onRefresh && (
-            <ExtensionButton
-              label="刷新播放"
-              disabled={refreshDisabled}
-              onClick={onRefresh}
-            >
+            <ExtensionButton label="刷新播放" disabled={refreshDisabled} onClick={onRefresh}>
               <RefreshCw className={refreshDisabled ? "animate-spin-soft" : undefined} />
             </ExtensionButton>
           )}
           {onNext && showSecondary && (
-            <ExtensionButton
-              label="播放下一个"
-              disabled={disabled}
-              onClick={onNext}
-            >
+            <ExtensionButton label="播放下一个" disabled={disabled} onClick={onNext}>
               <SkipForward />
             </ExtensionButton>
           )}
@@ -615,7 +730,10 @@ export function PlayerControls({
                   collisionPadding={12}
                   sticky
                   glass
-                  className={cn("w-auto items-center gap-2 p-2.5", glassPanelClass({ overlay: true }))}
+                  className={cn(
+                    "w-auto items-center gap-2 p-2.5",
+                    glassPanelClass({ overlay: true }),
+                  )}
                 >
                   <PopoverTitle className="sr-only">音量</PopoverTitle>
                   <Slider
@@ -624,7 +742,10 @@ export function PlayerControls({
                     max={100}
                     step={1}
                     orientation="vertical"
-                    className={cn("h-32", compact && "h-20 [&_[data-slot=slider-control]]:min-h-20")}
+                    className={cn(
+                      "h-32",
+                      compact && "h-20 [&_[data-slot=slider-control]]:min-h-20",
+                    )}
                     aria-label="音量"
                     aria-valuetext={`${Math.round(externalAudioControls.volume)}%`}
                     onValueChange={(next) =>
@@ -654,11 +775,7 @@ export function PlayerControls({
 
           {/* 4. 仅音频 */}
           {showSecondary && onToggleAudioOnly && (
-            <ExtensionButton
-              label={audio.label}
-              active={audio.enabled}
-              onClick={onToggleAudioOnly}
-            >
+            <ExtensionButton label={audio.label} active={audio.enabled} onClick={onToggleAudioOnly}>
               {audio.enabled ? <Headphones /> : <VideoOff />}
             </ExtensionButton>
           )}
@@ -670,14 +787,15 @@ export function PlayerControls({
           className="flex min-w-0 flex-1 items-center justify-center px-2"
         >
           {centerSlot ? (
-            <div className="w-full max-w-xl min-w-0">
-              {centerSlot}
-            </div>
+            <div className="w-full max-w-xl min-w-0">{centerSlot}</div>
           ) : (
             <div className="min-w-0 flex-1" />
           )}
           {loadError && (
-            <span className="shrink-0 max-w-36 truncate px-1 text-xs text-red-300" title={loadError}>
+            <span
+              className="shrink-0 max-w-36 truncate px-1 text-xs text-red-300"
+              title={loadError}
+            >
               {loadError}
             </span>
           )}
@@ -748,27 +866,26 @@ export function PlayerControls({
 
           {/* 2. 弹幕 */}
           {showSecondary && onToggleOsd && (
-            <ExtensionButton
-              label={danmaku.label}
-              active={danmaku.enabled}
-              onClick={onToggleOsd}
-            >
+            <ExtensionButton label={danmaku.label} active={danmaku.enabled} onClick={onToggleOsd}>
               {danmaku.enabled ? <MessageSquareText /> : <MessageSquareOff />}
             </ExtensionButton>
           )}
 
-          {/* 3. 字幕 */}
+          {/* 3. 字幕：点击只打开来源菜单，不再直接启动本地识别。 */}
           {showSecondary && asrVisible && onToggleAsr && (
-            <Popover open={asrOpen} onOpenChange={setAsrOpen}>
+            <Popover
+              open={asrOpen}
+              onOpenChange={(open) => {
+                setAsrOpen(open);
+                if (!open) setAsrPanel("sources");
+              }}
+            >
               <PopoverTrigger
                 openOnHover
                 render={
                   <MediaButton
-                    aria-label={asrLabel}
+                    aria-label={asr.enabled ? "关闭字幕" : "开启字幕"}
                     aria-pressed={asr.enabled}
-                    aria-disabled={asrDisabled || undefined}
-                    disabled={asrDisabled}
-                    onClick={onToggleAsr}
                     className={cn(
                       "r-live-media-extension-button",
                       asr.enabled && "bg-media-primary text-media-primary-foreground",
@@ -791,15 +908,96 @@ export function PlayerControls({
                 collisionPadding={12}
                 sticky
                 glass
-                className={cn("w-72", glassPanelClass({ overlay: true }))}
+                className={cn(
+                  "w-72 gap-0 overflow-y-auto p-1.5",
+                  glassPanelClass({ overlay: true }),
+                )}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <PopoverTitle className={glassTitleClass({ overlay: true })}>字幕设置</PopoverTitle>
-                  {(asrSettingsPending || asrTranslationBusy) && (
-                    <Spinner aria-label="正在更新字幕设置" />
-                  )}
-                </div>
-                {asrBody}
+                {asrPanel === "settings" ? (
+                  <>
+                    <div className="flex items-center gap-1 px-1 py-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="返回字幕来源"
+                        onClick={() => setAsrPanel("sources")}
+                      >
+                        <ChevronLeft aria-hidden />
+                      </Button>
+                      <PopoverTitle
+                        className={cn("min-w-0 flex-1", glassTitleClass({ overlay: true }))}
+                      >
+                        字幕设置
+                      </PopoverTitle>
+                      {(asrSettingsPending || asrTranslationBusy) && (
+                        <Spinner aria-label="正在更新字幕设置" />
+                      )}
+                    </div>
+                    <div className="px-2 py-2">{asrBody}</div>
+                  </>
+                ) : (
+                  <>
+                    <PopoverTitle className={cn("px-2 py-1", glassTitleClass({ overlay: true }))}>
+                      字幕
+                    </PopoverTitle>
+                    <Button
+                      variant="ghost"
+                      className={cn(
+                        "w-full justify-between max-md:h-10",
+                        glassOptionClass(),
+                        !asr.enabled && glassOptionSelectedClass(),
+                      )}
+                      aria-pressed={!asr.enabled}
+                      onClick={() => {
+                        if (asr.enabled) onToggleAsr();
+                        setAsrOpen(false);
+                      }}
+                    >
+                      <span className="truncate">关闭弹幕</span>
+                      {!asr.enabled && <Check data-icon="inline-end" aria-hidden />}
+                    </Button>
+                    <div className="flex min-w-0 items-stretch gap-0.5">
+                      <Button
+                        variant="ghost"
+                        className={cn(
+                          "h-auto min-h-9 min-w-0 flex-1 justify-between py-1.5 max-md:min-h-10",
+                          glassOptionClass(),
+                          asr.enabled && glassOptionSelectedClass(),
+                        )}
+                        aria-pressed={asr.enabled}
+                        aria-disabled={asrDisabled || undefined}
+                        disabled={asrDisabled}
+                        onClick={() => {
+                          if (!asr.enabled) onToggleAsr();
+                          setAsrOpen(false);
+                        }}
+                      >
+                        <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+                          <span className="truncate">字幕（本地）</span>
+                          {asrDisabled && (
+                            <span className={cn("text-xs font-normal", glassMutedTextClass())}>
+                              {asrLabel}
+                            </span>
+                          )}
+                        </span>
+                        {asrBusy ? (
+                          <Spinner data-icon="inline-end" aria-hidden />
+                        ) : asr.enabled ? (
+                          <Check data-icon="inline-end" aria-hidden />
+                        ) : null}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="打开字幕设置"
+                        className={glassOptionClass()}
+                        onClick={() => setAsrPanel("settings")}
+                      >
+                        <ChevronRight aria-hidden />
+                      </Button>
+                    </div>
+                  </>
+                )}
               </PopoverContent>
             </Popover>
           )}
@@ -855,20 +1053,9 @@ export function PlayerControls({
               {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
             </ExtensionButton>
           )}
-          {onToggleInfo && showSecondary && (
-            <ExtensionButton
-              className={secondaryClass}
-              label={infoVisible ? "隐藏用户和视频信息" : "显示用户和视频信息"}
-              active={!infoVisible}
-              onClick={onToggleInfo}
-            >
-              {infoVisible ? <EyeOff /> : <Eye />}
-            </ExtensionButton>
-          )}
           {toolsSlot}
         </div>
       </div>
     </ControlsSurface>
   );
 }
-

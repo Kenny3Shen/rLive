@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { Menu } from "@videojs/react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { VideoJsPlayerProvider } from "../src/features/room/player/videoJsControls";
@@ -13,6 +14,7 @@ import {
   audioOnlyControlPresentation,
   danmakuControlPresentation,
   PlayerControls,
+  PlayerMenuRadioGroup,
   playerControlsAvoidSystemGestureBar,
   showPlayerSidePanelControl,
   showPlayerVolumeControl,
@@ -473,6 +475,34 @@ describe("fullscreen top HUD", () => {
 });
 
 describe("custom player controls layout", () => {
+  test("renders native radio semantics for player option groups", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(
+          // Menu 原语必须在 Root 上下文里；PlayerControls 的设置正文使用同一层包装。
+          // 这里直接测共享选项组，避免 Popover 在 SSR 下不挂载内容。
+          Menu.Root,
+          { open: true },
+          createElement(PlayerMenuRadioGroup, {
+            label: "清晰度",
+            value: "1",
+            options: [
+              { value: "0", label: "原画" },
+              { value: "1", label: "高清" },
+            ],
+            onValueChange: () => {},
+          }),
+        ),
+      ),
+    );
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-label="清晰度"');
+    expect(html.split('role="menuitemradio"').length - 1).toBe(2);
+    expect(html).toContain('aria-checked="true"');
+  });
+
   test("renders left, center danmaku, and right controls in the specified order", () => {
     const html = renderToStaticMarkup(
       createElement(
@@ -503,10 +533,10 @@ describe("custom player controls layout", () => {
     expect(html).toContain("刷新播放");
     expect(html).toContain("仅播声音"); // onToggleAudioOnly (default false -> 仅播声音)
 
-    // 右侧控件：设置、弹幕、字幕、网页全屏、全屏
+    // 右侧控件：设置、弹幕、字幕来源菜单、网页全屏、全屏
     expect(html).toContain("播放设置");
     expect(html).toContain("开启弹幕");
-    expect(html).toContain("开启语音字幕");
+    expect(html).toContain("开启字幕");
     expect(html).toContain("网页全屏");
     expect(html).toContain("全屏");
   });
@@ -605,9 +635,7 @@ describe("custom player controls layout", () => {
         hasActions: true,
         roomTitle: "测试房间",
         onBack: () => {},
-        roomActions: [
-          { id: "share", label: "分享", icon: () => null, onSelect: () => {} },
-        ],
+        roomActions: [{ id: "share", label: "分享", icon: () => null, onSelect: () => {} }],
       }),
     );
     // 返回箭头与溢出菜单都必须是 36px 的 MediaButton，一个都不能退回 shadcn 图标按钮。
@@ -679,8 +707,8 @@ describe("player control tooltips", () => {
   });
 
   test("an explicit label still wins over the accessible name", () => {
-    expect(
-      tooltipTriggerLabel(createElement("button", { "aria-label": "回退" }), "播放设置"),
-    ).toBe("播放设置");
+    expect(tooltipTriggerLabel(createElement("button", { "aria-label": "回退" }), "播放设置")).toBe(
+      "播放设置",
+    );
   });
 });

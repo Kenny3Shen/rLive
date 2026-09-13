@@ -58,15 +58,18 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/bin/aarch64-linux-android
 
 ```bash
 adb devices                          # unauthorized 则在手机上点「允许」
-PID=$(adb shell pidof com.shenss.rlive | tr -d '\r\n ')
-adb forward tcp:9222 localabstract:webview_devtools_remote_$PID
-curl -s http://localhost:9222/json/version   # 返回 Browser 版本即成功
+PID=$(adb -s "$SERIAL" shell pidof com.shenss.rlive | tr -d '\r\n ')
+adb -s "$SERIAL" forward --remove-all
+adb -s "$SERIAL" forward tcp:9222 localabstract:webview_devtools_remote_$PID
+curl -s http://localhost:9222/json/version   # 核对 Android-Package 是 com.shenss.rlive
 
-playwright-cli attach --cdp=http://localhost:9222
-playwright-cli --raw eval "location.pathname"
+playwright-cli -s=rand attach --cdp=http://localhost:9222
+playwright-cli -s=rand --raw eval "location.pathname"
 ```
 
-也可用 Chrome 打开 `chrome://inspect`。WebView 的 devtools socket 只接受一个客户端，用完执行 `playwright-cli detach`；被强杀的客户端会把 socket 占死，表现为 `curl` 挂起无响应，见排错清单。
+socket 名必须用**本应用**的 pid 拼：设备上常同时有别的 WebView（如 `com.google.android.googlequicksearchbox`）各开一个 socket，`cat /proc/net/unix | grep devtools_remote` 抓到的第一个往往不是自己的，连上后 `/json/version` 的 `Android-Package` 会露馅。
+
+也可用 Chrome 打开 `chrome://inspect`。devtools socket 只接受一个客户端，用完 `playwright-cli detach`；被强杀的客户端会把 socket 占死，表现为 `curl` 挂起，见排错清单。
 
 ### 触摸事件探针
 
@@ -86,13 +89,21 @@ playwright-cli --raw eval '(() => {
 
 读取用 `playwright-cli --raw eval "JSON.stringify(window.__ev)"`。重复注入前先刷新页面，否则监听器叠加、事件会重复记录。
 
-注入手势用 `input motionevent`：
+注入手势（物理坐标 = CSS 坐标 × `window.devicePixelRatio`，`rlive_win` 实测 dpr 2.625、CSS 视口 412×915）：
 
 ```bash
-adb shell "input motionevent DOWN <x> <y>; sleep 0.6; input motionevent UP <x> <y>"
+adb shell input tap 541 433                      # 单击
+adb shell input swipe 541 433 1081 433 260       # 横滑（末位是时长 ms；终点不要超出屏幕，否则会被 Shell 路由横滑接走）
+adb shell input swipe 541 433 541 433 700        # 长按：起终点相同、拉长时长
 ```
 
-物理坐标 = CSS 坐标 × `window.devicePixelRatio`。注入的输入没有真实手指微抖，抖动相关问题无法完全复现，必要时真机手动操作配合探针分析。
+`input motionevent DOWN/UP` 在 `rlive_win` 上实测**不派发任何指针事件**（探针数组为空），不要用它测长按。`input swipe` 即使用相同起终点也会做插值，细微位移可能越过 12px 锁定阈值，长按因此难以用注入输入覆盖，真机手动按住更可靠。双击是两次 `input tap` 连发（间隔要落在识别器的双击窗内，约 200ms）。
+
+断言读真实状态而不是截图：媒体 `currentTime`、play/pause/seeked 事件计数、HUD 的 `data-visible`、页签面板的 `inert`。视频画面走硬件层，`page.screenshot` 拍不到，要视觉证据用 `adb exec-out screencap -p > /tmp/x.png`。
+
+进被测页面要走**真实入口**（列表里 `input tap` 点进去）：`pushState` + `popstate` 直接跳 URL 会跳过沿途组件的副作用——实测同一个 `/video/play?...` URL，点卡片进入与 pushState 进入的应用状态不同（卡片点击先把播放列表写进 store 再导航），只有前者能复现依赖该状态的 bug。pushState 只适合快速到达无关页面。
+
+注入的输入没有真实手指微抖，抖动相关问题无法完全复现，必要时真机手动操作配合探针分析。
 
 ### 真机调试（USB）
 
@@ -175,6 +186,8 @@ VS Code Emulate 扩展（remote 侧 machine settings，`~/.vscode-server/data/Ma
 - **VS Code Emulate 扩展报 `Error running your Android emulator! Try running this command: <cmd>`**：照提示把那条命令在 WSL 里跑一遍（输出重定向到文件，别接管道，见下一条），真实原因几乎都是 FATAL `Running multiple emulators with the same AVD`。
 - **模拟器启动 FATAL `Running multiple emulators with the same AVD`**：阻塞者不是残留的锁文件，而是仍活着的持有进程——强杀（`Stop-Process -Force` / `taskkill /F`）后没死透的 `qemu-system-x86_64.exe` / `qemu-system-x86_64-headless.exe` / `netsimd`（两种 qemu 进程名都要查），或被关闭的输出管道孤儿化的 qemu。持有者 pid 记录在 `<avd>/hardware-qemu.ini.lock/pid`；模拟器还能响应时优先 `adb -s emulator-XXXX emu kill` 优雅关停（会自行清掉 `hardware-qemu.ini.lock`），不行再 `Stop-Process` 后 `rm -rf` `<avd>/hardware-qemu.ini.lock` 与 `multiinstance.lock`——持有者活着时 drvfs 报 Permission denied，杀干净后才能删。实测无持有者的残留锁文件不阻塞下一次启动，可不清。
 - **无 devtools socket**：装的是 release/不可调试构建（`adb shell pm dump com.shenss.rlive | grep pkgFlags` 无 `DEBUGGABLE`），或 ABI 不匹配导致仍是旧包。重新 `--debug --target aarch64`。
+- **只拿到 minified 错误码、没有组件栈**：生产 React 不带组件栈，而 `vite build --mode development` **不产出** dev React（vendor chunk 仍是生产版，错误照旧是 `Minified React error #xxx`）。要组件栈只能 `bun run tauri -- android dev`（它把 dev server 的 dev 构建喂进应用，同时保留 Tauri IPC）。
+- **`android dev` 起不来**：两种原因。一是它**不接受 `--target`**（ABI 按设备推断，硬传会报 usage 错误）；二是 1420 被占，`beforeDevCommand` 直接非零退出——占用者可能是上次没清干净的 `vite` 子进程（`pgrep -af vite` 后 kill），也可能是**正在跑的 Windows dev 会话**（镜像网络共享 loopback，二者互斥，先停 Windows 侧）。
 - **`adb install` 静默失败**：x86_64-only APK 装不进 arm64 设备，`install -r` 可能无输出且旧包仍在。用 `unzip -Z1` 核对 ABI 后重装。
 - **INSTALL_FAILED_UPDATE_INCOMPATIBLE**：换机器构建的 debug 包签名不同。保留数据可用项目 keystore 重签（`apksigner sign --ks /home/shenss/upload-keystore.jks --ks-key-alias upload`），否则先 `adb uninstall com.shenss.rlive`。
 - **触摸整体失灵（WebView 149 实测案例）**：`<img>` 上的长按会触发原生图片菜单接管（pointercancel 先于 contextmenu 到达），应用层 `preventDefault` 取消菜单后 WebView 触摸路由悬死，后续 touch 全部不派发——页面只能滚动、点击全无反应，极像应用卡死。注入探针后 touchstart 完全消失即可确诊。规避：长按交互面内不让 `<img>` 参与命中测试（`pointer-events: none`）。
@@ -199,7 +212,6 @@ unzip -Z1 "$APK" | awk '/^lib\// { print }'
 - 「设置 → 播放」、房间设置面板和播放器控制栏均无语音字幕入口，且不下载任何 ASR 模型。
 - 系统栏图标覆盖四种组合（系统浅/深 × 应用浅/深），图标与背景对比清晰；应用内切主题即时生效；冷启动（`am force-stop` 后重开）首帧图标与上次主题一致；房间全屏后下滑出的临时系统栏为白图标，退出恢复。
 - 普通直播与视频播放时，视频画面从状态栏下方开始；加载/失败态顶栏只预留一份安全区，进入全屏仍铺满窗口，退出后恢复占位。
-- 竖屏短视频保持状态栏和系统底部手势栏可见：画面从顶部安全区下方开始，保持 `9:16`；HUD 浮在画面顶部，弹幕从 HUD 下方开始且不越过画面底边；进度条和控制栏位于画面下方，不压住画面或手势栏。较短手机与平板等比缩窄画面而不压缩控件，退出/重新进入模式后边界恢复且不重建媒体元素。用原生 `adb exec-out screencap -p` 截图核对，CDP 截图可能遗漏硬件视频层。
 - 高刷设备用开发者选项的刷新率叠层确认前台刷新率与系统设置一致（60 Hz 与高刷各验证一次），再开省电模式确认系统降帧时动画速度不变。
 
 刷新率完全跟随系统：应用不请求固定显示模式或刷新率偏好，省电模式、温控与厂商动态刷新策略直接生效。已知取舍是部分厂商 ROM 只给「主动表达高刷意图」的应用高刷，这类设备上 rLive 可能稳定在 60 Hz。Web 动画和 Canvas 全部按时间基准推进（WAAPI/CSS 时长、`px/s` 弹幕速度、按媒体时间绘制的回放弹幕），因此不同刷新率下观感时长一致。

@@ -86,15 +86,19 @@
 
 ### 登录态探测
 
-虎牙没有可匿名调用的第一方账号资料读接口，因此 `account_get_profile` 用返回体最小的移动版关注列表首页作为会话探针：`https://mp.huya.com/cache.php?m=Subscribe&do=ajaxSubscribeList`（实测 87 字节，对 referer 与 UA 不敏感）。它用显式的 `isLogin` 标志报告会话状态：
+虎牙没有可匿名调用的第一方账号资料读接口，其 Web 业务接口也不接受浏览器 Cookie 单独作为凭据，因此 `account_get_profile` 复用信令网关的 `verifyCookie`（`WSVerifyCookieReq`，与发送弹幕前的校验同一条链路）作为会话探针。这样登录态徽标与「实际能否发送弹幕」始终一致。裁决取自响应的 TARS tag 0：
 
 | 响应 | 判定 |
 | --- | --- |
-| `isLogin = 1` | 会话仍被平台接受。 |
-| `isLogin = 0` | 会话已失效。未登录与 token 校验不通过共用这条应答（`code = 501`，`message` 为「Token验证不通过！」）。 |
-| 缺 `isLogin`、非 JSON、HTTP 失败或网络错误 | 一律留在「未知」，不改动已保存的 Cookie。 |
+| tag 0 为 `0`（含 TARS 省略零值即缺该字段） | 会话仍被平台接受。 |
+| tag 0 为非零 | 网关明确拒绝该会话（未登录／token 已失效）。 |
+| 缺少会话字段、连接失败、超时或负载解不开 | 一律留在「未知」，不改动已保存的 Cookie。 |
 
-只信任 `isLogin` 字段：其它形状可能是风控或业务失败，不能当作会话已失效。`www.huya.com/cache.php` 与 `i.huya.com` 的同名接口都返回 HTML 页面，不可用作探针；`fw.huya.com/dispatch?do=subscribeList` 虽然返回 JSON（未登录为 `status = 1401`），但没有区分登录态的正向字段。显示名来自 Cookie 自身的 `udb_n`，因此探针不可用时仍然可用。
+tag 0 必须按可选字段读取：TARS 会省略零值字段，把它当成必填会让每次成功校验都失败。对 `false` 保持保守，只有网关给出的可识别拒绝才算失效，否则设置页会把有效账号判成已失效并自动退出登录。
+
+不要改回 HTTP 探针：`mp.huya.com/cache.php?m=Subscribe&do=ajaxSubscribeList` 对完整有效的桌面 Cookie 也恒回 `isLogin = 0`（`code = 501`，`message` 为「Token验证不通过！」），因为它要求移动站自有的 token 而非浏览器 Cookie，据此判定会让任何 Cookie 都被判成已失效并被自动清除。`www.huya.com/cache.php` 与 `i.huya.com` 的同名接口返回 HTML 页面；`fw.huya.com/dispatch?do=subscribeList` 返回 JSON（未登录为 `status = 1401`）但没有区分登录态的正向字段；`udblgn.huya.com/web/cookie/verify` 虽能区分有效与失效凭据，但拒绝时只回 7 字节纯文本 `error!`，与网关错误、风控无法区分。
+
+与虎牙其余信令一致，这条探针直连网关，不经过应用代理设置；代理独占的网络下连接失败只会留在「未知」。显示名来自 Cookie 自身的 `udb_n`，因此探针不可用时仍然可用。
 
 发送前必须同时满足：
 
