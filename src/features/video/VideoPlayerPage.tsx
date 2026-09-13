@@ -389,7 +389,7 @@ function VideoPlayerPageContent() {
   const compact = useCompactPlayerViewport();
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
-  const { revealControls, holdControlsVisible, scheduleControlsHide, dismissControls } =
+  const { revealControls, toggleControls, holdControlsVisible, scheduleControlsHide, dismissControls } =
     usePlayerChromeIdle({
       controlsRef,
       hudRef,

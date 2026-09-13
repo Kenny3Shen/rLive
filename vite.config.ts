@@ -81,6 +81,17 @@ export default defineConfig(({ command }) => ({
           ],
         },
       },
+      onwarn(warning, warn) {
+        // dashjs 的 ESM 构建内部使用了 CommonJS exports 变量，
+        // 这是库本身的问题，构建时可以安全忽略。
+        if (
+          warning.code === "COMMONJS_VARIABLE_IN_ESM" &&
+          warning.message?.includes("dashjs")
+        ) {
+          return;
+        }
+        warn(warning);
+      },
     },
   },
   // Tauri 需要固定端口，并尽量减少 CLI 输出噪音。

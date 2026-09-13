@@ -21,6 +21,7 @@ use tokio::task::JoinSet;
 use crate::error::{AppError, AppResult};
 use crate::models::live::TwitchAdRecovery;
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
 // 留出足够时间交付一份 gap 播放列表。
