@@ -12,8 +12,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Expand,
-  Eye,
-  EyeOff,
   Headphones,
   Maximize2,
   MessageSquareOff,
@@ -188,7 +186,6 @@ export type PlayerControlsProps = {
   captionsSlot?: ReactNode;
   disabled?: boolean;
   stackedBelowPlayer?: boolean;
-  systemGestureBarReserved?: boolean;
   centerSlot?: ReactNode;
   playbackSettings?: ReactNode;
   playbackSettingsTitle?: string;
@@ -213,8 +210,6 @@ export type PlayerControlsProps = {
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
   toolsSlot?: ReactNode;
-  infoVisible?: boolean;
-  onToggleInfo?: () => void;
   onToggleFullscreen?: () => void;
 };
 
@@ -573,7 +568,6 @@ export function PlayerControls({
   pictureInPictureDisabled,
   captionsSlot,
   stackedBelowPlayer = false,
-  systemGestureBarReserved = false,
   disabled = false,
   compact = false,
   centerSlot,
@@ -599,8 +593,6 @@ export function PlayerControls({
   onQualityChange,
   onLineChange,
   toolsSlot,
-  infoVisible = true,
-  onToggleInfo,
   onToggleFullscreen,
 }: PlayerControlsProps) {
   const variant = useSkinVariant();
@@ -674,10 +666,7 @@ export function PlayerControls({
   return (
     <ControlsSurface
       chrome={chrome}
-      avoidSystemGestureBar={
-        !systemGestureBarReserved &&
-        playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)
-      }
+      avoidSystemGestureBar={playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)}
     >
       {/* 点播/录制回放：上方展示进度条 */}
       {variant === "vod" && (
@@ -1062,16 +1051,6 @@ export function PlayerControls({
               onClick={onToggleSidePanel}
             >
               {sidePanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
-            </ExtensionButton>
-          )}
-          {onToggleInfo && showSecondary && (
-            <ExtensionButton
-              className={secondaryClass}
-              label={infoVisible ? "隐藏用户和视频信息" : "显示用户和视频信息"}
-              active={!infoVisible}
-              onClick={onToggleInfo}
-            >
-              {infoVisible ? <EyeOff /> : <Eye />}
             </ExtensionButton>
           )}
           {toolsSlot}

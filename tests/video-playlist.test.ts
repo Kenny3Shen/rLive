@@ -5,9 +5,6 @@ import {
   playlistItemFromSeasonEpisode,
   playlistItemFromVideoItem,
   videoEndedAction,
-  videoSwipeDirection,
-  videoWheelDirection,
-  type VideoWheelGesture,
   type PlaylistItem,
   usePlaylistStore,
 } from "../src/features/video/playlistStore";
@@ -104,16 +101,6 @@ describe("video ended action", () => {
   });
 });
 
-test("竖屏上下滑只在越过距离阈值且方向明确时切换", () => {
-  expect(videoSwipeDirection(4, -80)).toBe(1);
-  expect(videoSwipeDirection(-4, 80)).toBe(-1);
-  expect(videoSwipeDirection(0, 47)).toBeNull();
-  expect(videoSwipeDirection(0, 48)).toBe(-1);
-  expect(videoSwipeDirection(80, -60)).toBeNull();
-  expect(videoSwipeDirection(40, 50)).toBeNull();
-  expect(videoSwipeDirection(0, 14, 12)).toBe(-1);
-});
-
 test("UP 投稿队列切回普通来源或清空后不遗留来源标记", () => {
   const before = usePlaylistStore.getState();
   const item = playlistItemFromVideoItem(searchItem("BV1src", 1), 0);
@@ -151,13 +138,4 @@ test("推荐流结束时不把下一条当作自动播放下一集", () => {
   } finally {
     usePlaylistStore.setState(before, true);
   }
-});
-
-test("滚轮累积小增量且同一段惯性只换一条，停顿后可以反向", () => {
-  const gesture: VideoWheelGesture = { lastTime: -Infinity, distance: 0, committed: false };
-  expect(videoWheelDirection(gesture, 20, 0)).toBeNull();
-  expect(videoWheelDirection(gesture, 40, 20)).toBe(1);
-  expect(videoWheelDirection(gesture, 160, 50)).toBeNull();
-  expect(videoWheelDirection(gesture, -80, 100)).toBeNull();
-  expect(videoWheelDirection(gesture, -80, 500)).toBe(-1);
 });
