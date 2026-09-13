@@ -3,16 +3,7 @@ import { createElement, createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { VideoDanmakuLayer } from "../src/features/video/VideoDanmakuLayer";
 
-const page = await Bun.file(
-  new URL("../src/features/video/VideoPlayerPage.tsx", import.meta.url),
-).text();
-
-// 实际尺寸、HUD 显隐和 ResizeObserver 回归由 video-danmaku-layout.browser.js 覆盖。
 describe("video danmaku layout", () => {
-  test("only mobile short-video mode reserves the top HUD", () => {
-    expect(page).toContain("useVideoDanmakuTopInset(stageRef, hudRef, shortVideo && mobileClient)");
-  });
-
   test("the layer stretches between its insets without forcing full height", () => {
     const html = renderToStaticMarkup(
       createElement(VideoDanmakuLayer, {

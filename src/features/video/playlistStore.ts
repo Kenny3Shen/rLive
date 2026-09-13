@@ -127,41 +127,6 @@ export function videoEndedAction(
   return autoPlayNext && hasNext ? "next" : "stop";
 }
 
-/** 上滑前进、下滑后退；短滑与斜向拖动不切片。识别起步方向时可传更小的阈值。 */
-export function videoSwipeDirection(
-  deltaX: number,
-  deltaY: number,
-  minDistance = 48,
-): 1 | -1 | null {
-  if (Math.abs(deltaY) < minDistance || Math.abs(deltaY) <= Math.abs(deltaX) * 1.25) return null;
-  return deltaY < 0 ? 1 : -1;
-}
-
-export type VideoWheelGesture = {
-  lastTime: number;
-  distance: number;
-  committed: boolean;
-};
-
-/** 向下滚轮前进、向上后退；小增量累积，一次惯性滚动只换一条。 */
-export function videoWheelDirection(
-  gesture: VideoWheelGesture,
-  deltaY: number,
-  time: number,
-): 1 | -1 | null {
-  // ponytail: 以 180ms 静默划分滚轮手势；设备误判时再接入平台手势阶段。
-  if (time - gesture.lastTime > 180) {
-    gesture.distance = 0;
-    gesture.committed = false;
-  }
-  gesture.lastTime = time;
-  if (gesture.committed) return null;
-  gesture.distance += deltaY;
-  const direction = videoSwipeDirection(0, -gesture.distance);
-  gesture.committed = direction !== null;
-  return direction;
-}
-
 /** 取当前项沿播放方向的相邻项：step=1 是「下一个」，倒序播放时方向翻转。 */
 function adjacentItem(
   state: Pick<PlaylistState, "items" | "currentId" | "reversed">,
