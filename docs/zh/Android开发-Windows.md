@@ -5,13 +5,13 @@
 
 ## 环境
 
-| 项 | 版本 |
-| --- | --- |
-| Android platform | `android-36`（compileSdk / targetSdk 36，minSdk 24） |
-| Build Tools | `36.0.0` |
-| NDK | `29.0.13846066` |
-| Rust target | `aarch64-linux-android`（真机）、`x86_64-linux-android`（模拟器） |
-| 其他 | Tauri 2、Bun、JDK 17 |
+| 项               | 版本                                                                  |
+| ---------------- | --------------------------------------------------------------------- |
+| Android platform | `android-36`（compileSdk / targetSdk 36，minSdk 24）                |
+| Build Tools      | `36.0.0`                                                            |
+| NDK              | `29.0.13846066`                                                     |
+| Rust target      | `aarch64-linux-android`（真机）、`x86_64-linux-android`（模拟器） |
+| 其他             | Tauri 2、Bun、JDK 17                                                  |
 
 ```bash
 export ANDROID_HOME="$HOME/Android/Sdk"
@@ -120,12 +120,12 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-u
 
 模拟器进程跑在 Windows（WHPX），构建、`adb`、CDP 全留在 WSL。带窗口时图形走宿主 Vulkan，H.264 硬解不依赖 `libcuda`，也能直接用 VS Code Emulate 扩展开窗。
 
-| 项 | 位置 |
-| --- | --- |
-| Windows SDK | `D:\dev\android-sdk`（emulator 36.6.11、platform-tools 37.0.0） |
-| 系统镜像 | `system-images;android-36-ext18;google_apis;x86_64` |
-| AVD 索引 | `C:\Users\shens\.android\avd\rlive_win.ini`（手机）、`rlive_tablet_win.ini`（平板） |
-| AVD 数据 | `D:\dev\android-sdk\avd\rlive_win.avd`（4G RAM、6G data、`hw.gpu.enabled=yes`、`hw.keyboard=yes`）；`rlive_tablet_win.avd` 为 2560×1600 @320dpi 的 10 寸横屏平板（CSS 视口 1280×800、dpr 2、初始横屏），4G RAM |
+| 项          | 位置                                                                                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Windows SDK | `D:\dev\android-sdk`（emulator 36.6.11、platform-tools 37.0.0）                                                                                                                                                        |
+| 系统镜像    | `system-images;android-36-ext18;google_apis;x86_64`                                                                                                                                                                    |
+| AVD 索引    | `C:\Users\shens\.android\avd\rlive_win.ini`（手机）、`rlive_tablet_win.ini`（平板）                                                                                                                                  |
+| AVD 数据    | `D:\dev\android-sdk\avd\rlive_win.avd`（4G RAM、6G data、`hw.gpu.enabled=yes`、`hw.keyboard=yes`）；`rlive_tablet_win.avd` 为 2560×1600 @320dpi 的 10 寸横屏平板（CSS 视口 1280×800、dpr 2、初始横屏），4G RAM |
 
 AVD 索引必须留在 `%USERPROFILE%\.android\avd`：WSL 里 export 的环境变量不会传进 `.exe`（除非写入 `WSLENV`），`ANDROID_AVD_HOME` 靠不住。索引 `.ini` 只有三行，镜像与 userdata 由其中的 `path=` 指到 D 盘，磁盘占用仍全在 `D:\dev`。
 
@@ -134,8 +134,7 @@ Windows SDK 的 cmdline-tools 只有 `.bat`（需要 Windows JDK），新建 AVD
 带窗口启动（日常调试）：
 
 ```bash
-cd /mnt/d/dev/android-sdk/emulator
-setsid nohup ./emulator.exe -avd rlive_win -no-boot-anim > /tmp/emu-win.log 2>&1 &
+setsid nohup cd /mnt/d/dev/android-sdk/emulator/emulator.exe -avd rlive_win -no-boot-anim > /tmp/emu-win.log 2>&1 &
 adb devices                      # 不需要 adb connect
 
 bun run tauri -- android build --debug --target x86_64
