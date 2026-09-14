@@ -8,7 +8,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::db::schema::map_db_err;
+use crate::db::schema::{VIDEO_HISTORY_RETENTION_LIMIT, map_db_err};
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -42,7 +42,9 @@ pub struct VideoHistoryRecord {
     pub watched_at: i64,
 }
 
-const LIST_LIMIT: i64 = 200;
+/// 与直播历史同理（见 `db::history::LIST_LIMIT`）：上限对齐修剪触发器，
+/// 列表页窗口化渲染，查询上限只作 IPC 负载兜底。
+const LIST_LIMIT: i64 = VIDEO_HISTORY_RETENTION_LIMIT;
 
 /// `list` / `find` 共用的 SELECT 列清单；列序与 [`map_video_history_record`] 一致。
 const VIDEO_HISTORY_COLUMNS: &str = "kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid, progress, duration, watched_at";
@@ -172,7 +174,7 @@ pub fn clear(conn: &Connection) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::{VIDEO_HISTORY_RETENTION_LIMIT, open_in_memory};
+    use crate::db::schema::open_in_memory;
 
     fn record(kind: &str, oid: &str, watched_at: i64) -> VideoHistoryRecord {
         VideoHistoryRecord {
@@ -272,6 +274,11 @@ mod tests {
             .query_row("SELECT count(*) FROM video_history", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, VIDEO_HISTORY_RETENTION_LIMIT);
+        // 列表页窗口化后交付整段保留窗口，而不是更早的 200 条查询上限。
+        assert_eq!(
+            list(&conn).unwrap().len() as i64,
+            VIDEO_HISTORY_RETENTION_LIMIT
+        );
         // 修剪掉的是最旧的那条，最新的必须留着。
         assert!(find(&conn, "ugc", "BV00000").unwrap().is_none());
         assert!(

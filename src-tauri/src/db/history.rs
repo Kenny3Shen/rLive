@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::db::schema::map_db_err;
+use crate::db::schema::{HISTORY_RETENTION_LIMIT, map_db_err};
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,7 +16,10 @@ pub struct HistoryRecord {
     pub watched_at: i64,
 }
 
-const LIST_LIMIT: i64 = 200;
+/// 列表查询的上限对齐修剪触发器：历史页用虚拟列表渲染，行数不再是渲染成本，
+/// 另设一个更小的查询上限只会让用户看不到库里明明还留着的记录。触发器把表封在
+/// 同一个数字上，因此这里的 `LIMIT` 是 IPC 负载的兜底而不是业务截断。
+const LIST_LIMIT: i64 = HISTORY_RETENTION_LIMIT;
 
 fn map_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRecord> {
     Ok(HistoryRecord {
@@ -132,7 +135,7 @@ pub fn remove(conn: &Connection, site_id: &str, room_id: &str) -> AppResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::{HISTORY_RETENTION_LIMIT, open_in_memory};
+    use crate::db::schema::open_in_memory;
 
     #[test]
     fn upsert_list_and_clear_history() {
@@ -198,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn global_list_uses_one_limit_and_site_list_remains_available() {
+    fn global_list_keeps_platforms_that_a_smaller_query_cap_would_hide() {
         let conn = open_in_memory().unwrap();
         upsert(
             &conn,
@@ -213,7 +216,11 @@ mod tests {
         )
         .unwrap();
 
-        for index in 0..=LIST_LIMIT {
+        // 比历史上的 200 条查询上限多出一截，但仍在修剪触发器之内：这些行全都
+        // 还在库里，全局时间线就必须全都给出来。上限更小的时候，最旧的虎牙那条
+        // 会被 B 站的活跃使用挤出全局视图。
+        let bilibili_rows = 250;
+        for index in 0..bilibili_rows {
             upsert(
                 &conn,
                 HistoryRecord {
@@ -229,8 +236,8 @@ mod tests {
         }
 
         let rows = list(&conn).unwrap();
-        assert_eq!(rows.len(), LIST_LIMIT as usize);
-        assert!(rows.iter().all(|record| record.site_id == "bilibili"));
+        assert_eq!(rows.len() as i64, bilibili_rows + 1);
+        assert_eq!(rows.last().unwrap().room_id, "huya-room");
 
         let huya_rows = list_for_site(&conn, "huya").unwrap();
         assert_eq!(huya_rows.len(), 1);
@@ -314,6 +321,8 @@ mod tests {
             .query_row("SELECT count(*) FROM history", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, HISTORY_RETENTION_LIMIT);
+        // 全局时间线交付整段保留窗口：历史页窗口化后不再需要更小的查询上限。
+        assert_eq!(list(&conn).unwrap().len() as i64, HISTORY_RETENTION_LIMIT);
         assert!(
             metadata_for_room(&conn, "bilibili", "room-00000")
                 .unwrap()

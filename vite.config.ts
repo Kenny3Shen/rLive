@@ -27,6 +27,7 @@ export default defineConfig(({ command }) => ({
       "react-dom",
       "react-router-dom",
       "@tanstack/react-query",
+      "@tanstack/react-virtual",
       "zustand",
       "clsx",
       "tailwind-merge",

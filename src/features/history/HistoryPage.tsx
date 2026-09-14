@@ -33,12 +33,8 @@ import {
   videoHistoryPlayPath,
   videoHistoryRemove,
 } from "@/features/video/videoHistory";
-import {
-  filterHistoryBySite,
-  groupHistoryByDate,
-  type HistoryDateGroup,
-  type HistoryPlatformFilter,
-} from "./historyGrouping";
+import { filterHistoryBySite, groupHistoryByDate, type HistoryPlatformFilter } from "./historyGrouping";
+import { HistoryTimeline } from "./HistoryTimeline";
 import {
   HISTORY_DATE_PARAM,
   HISTORY_PLATFORM_PARAM,
@@ -399,41 +395,23 @@ function DanmakuSendHistoryCard({
   );
 }
 
-/** 与条目形态无关：只用 `itemKey`/`renderItem`，因此视频历史（无 `site_id`）也能复用。 */
-type HistoryTimelineProps<T> = {
-  groups: HistoryDateGroup<T>[];
-  headingIdPrefix: string;
-  itemKey: (item: T) => string;
-  renderItem: (item: T) => React.ReactNode;
-};
+/**
+ * 行键在模块作用域定义，而不是在 JSX 里现写闭包：`HistoryTimeline` 用它拍平上千行，
+ * 每次渲染换一个函数身份会让那次记忆化彻底失效。
+ */
+const watchHistoryRowKey = (item: HistoryItem) =>
+  `${item.site_id}:${item.room_id}:${item.watched_at}`;
+const videoHistoryRowKey = (item: VideoHistoryItem) =>
+  `${item.kind}:${item.oid}:${item.watched_at}`;
+const danmakuHistoryRowKey = (item: DanmakuSendHistoryItem) =>
+  `${item.site_id}:${item.sent_at}:${item.content}`;
 
-function HistoryTimeline<T>({
-  groups,
-  headingIdPrefix,
-  itemKey,
-  renderItem,
-}: HistoryTimelineProps<T>) {
-  return (
-    <div className="flex flex-col gap-4">
-      {groups.map((group, index) => (
-        <section key={group.key} aria-labelledby={`${headingIdPrefix}-${index}`}>
-          <h2
-            id={`${headingIdPrefix}-${index}`}
-            className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground"
-          >
-            <span>{group.label}</span>
-            <span className="h-px flex-1 bg-border-subtle" />
-          </h2>
-          <ul className="flex flex-col gap-2.5">
-            {group.items.map((item) => (
-              <li key={itemKey(item)}>{renderItem(item)}</li>
-            ))}
-          </ul>
-        </section>
-      ))}
-    </div>
-  );
-}
+/**
+ * 单条记录卡的估高（px）。直播/视频卡定高（16:9 封面列 + 三行文本 + 行距）；
+ * 弹幕卡的内容会换行，估高按两行正文取，实测再校正。
+ */
+const HISTORY_CARD_ESTIMATE_PX = 98;
+const DANMAKU_CARD_ESTIMATE_PX = 132;
 
 function HistoryFilteredEmpty({ onReset }: { onReset: () => void }) {
   return (
@@ -840,8 +818,9 @@ export function HistoryPage() {
                 {watchGroups.length > 0 && (
                   <HistoryTimeline
                     groups={watchGroups}
-                    headingIdPrefix="watch-history-date"
-                    itemKey={(item) => `${item.site_id}:${item.room_id}:${item.watched_at}`}
+                    itemKey={watchHistoryRowKey}
+                    estimateItemSize={HISTORY_CARD_ESTIMATE_PX}
+                    active={activeView === "watch"}
                     renderItem={(item) => (
                       <HistoryCard
                         item={item}
@@ -905,8 +884,9 @@ export function HistoryPage() {
                 {videoGroups.length > 0 && (
                   <HistoryTimeline
                     groups={videoGroups}
-                    headingIdPrefix="video-history-date"
-                    itemKey={(item) => `${item.kind}:${item.oid}:${item.watched_at}`}
+                    itemKey={videoHistoryRowKey}
+                    estimateItemSize={HISTORY_CARD_ESTIMATE_PX}
+                    active={activeView === "video"}
                     renderItem={(item) => (
                       <VideoHistoryCard
                         item={item}
@@ -959,8 +939,9 @@ export function HistoryPage() {
                 {danmakuGroups.length > 0 && (
                   <HistoryTimeline
                     groups={danmakuGroups}
-                    headingIdPrefix="danmaku-history-date"
-                    itemKey={(item) => `${item.site_id}:${item.sent_at}:${item.content}`}
+                    itemKey={danmakuHistoryRowKey}
+                    estimateItemSize={DANMAKU_CARD_ESTIMATE_PX}
+                    active={activeView === "danmaku"}
                     renderItem={(item) => (
                       <DanmakuSendHistoryCard
                         item={item}

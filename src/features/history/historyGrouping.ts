@@ -79,3 +79,31 @@ export function groupHistoryByDate<T>(
 
   return [...groups.values()];
 }
+
+/**
+ * 窗口化渲染的一行：日期标题，或一条记录。
+ *
+ * 时间线按日分组，虚拟列表却只认线性下标——分组必须先拍平成行序列，标题才能和
+ * 记录一起参与同一次窗口计算（否则标题要么全量渲染，要么无法定位）。
+ */
+export type HistoryTimelineRow<T> =
+  | { kind: "heading"; key: string; label: string }
+  | { kind: "item"; key: string; item: T };
+
+/**
+ * 按组序、组内序拍平成行。标题键带 `date:` 前缀与记录键分开：两者同处一个键空间，
+ * 撞键会让虚拟列表把标题的测量结果复用到记录上。
+ */
+export function flattenHistoryTimeline<T>(
+  groups: readonly HistoryDateGroup<T>[],
+  itemKey: (item: T) => string,
+): HistoryTimelineRow<T>[] {
+  const rows: HistoryTimelineRow<T>[] = [];
+  for (const group of groups) {
+    rows.push({ kind: "heading", key: `date:${group.key}`, label: group.label });
+    for (const item of group.items) {
+      rows.push({ kind: "item", key: itemKey(item), item });
+    }
+  }
+  return rows;
+}
