@@ -8,10 +8,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import type { DateRange } from "react-day-picker";
 import { zhCN } from "react-day-picker/locale";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Field, FieldTitle } from "@/components/ui/field";
+import { Field, FieldDescription, FieldTitle } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -27,8 +28,9 @@ import { cn } from "@/lib/utils";
 import {
   HISTORY_DATE_PRESETS,
   type HistoryDateFilter,
+  historyDateFilterFromDays,
   historyDateFilterLabel,
-  isSpecificDayFilter,
+  historyDayRange,
 } from "./historyFilter";
 import { HISTORY_VIEWS, type HistoryView } from "./historyRoute";
 
@@ -179,23 +181,10 @@ export function HistorySearchInput({
   );
 }
 
-/** 本地日期与过滤器所用的 `YYYY-MM-DD` 之间互转，避免 UTC 偏移把日期挪走一天。 */
-function toLocalDay(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function fromLocalDay(value: HistoryDateFilter): Date | undefined {
-  if (!isSpecificDayFilter(value)) return undefined;
-  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
-  return new Date(year, month - 1, day);
-}
-
 /**
- * 日期过滤：相对预设加单个精确日期。精确日期用 shadcn `Calendar`，
- * 它在桌面和触屏上呈现同一套中文月历，产出的本地 `YYYY-MM-DD`
- * 正是过滤器已经使用的格式。历史不会落在未来，因此今天之后不可选。
+ * 日期过滤：相对预设加自定义日期范围。范围用 shadcn `Calendar` 的 `range` 模式，
+ * 它在桌面和触屏上呈现同一套中文月历；首点定起点、再点定终点，同一天点两次
+ * 表示单日。历史不会落在未来，因此今天之后不可选。
  */
 export function HistoryDateFilterControl({
   value,
@@ -209,7 +198,19 @@ export function HistoryDateFilterControl({
   const [open, setOpen] = useState(false);
   const active = value !== "all";
   const label = historyDateFilterLabel(value);
-  const selectedDay = fromLocalDay(value);
+  const committedRange = historyDayRange(value);
+  // 选到一半的范围（只有起点）不是合法过滤值，先留在本地草稿里：
+  // 提前推上去会让时间线在用户还没选完终点时就跳成单日。
+  const [draft, setDraft] = useState<DateRange | undefined>(committedRange ?? undefined);
+  // 采纳外部变更（预设、清除筛选、恢复 URL），并在关闭时丢弃未选完的草稿，
+  // 下次打开不会残留半截高亮。
+  const [prevValue, setPrevValue] = useState(value);
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (value !== prevValue || open !== prevOpen) {
+    setPrevValue(value);
+    setPrevOpen(open);
+    setDraft(committedRange ?? undefined);
+  }
   // 每次渲染取当天：挂机过夜后再打开，未来日期仍然按新的今天封锁。
   const today = new Date();
 
@@ -242,7 +243,7 @@ export function HistoryDateFilterControl({
       </Tooltip>
       <PopoverContent align="end" className="w-auto p-2">
         <ToggleGroup
-          value={isSpecificDayFilter(value) ? [] : [value]}
+          value={committedRange ? [] : [value]}
           onValueChange={(next) => {
             const preset = next[0];
             if (
@@ -266,19 +267,27 @@ export function HistoryDateFilterControl({
         </ToggleGroup>
         <Separator />
         <Field className="gap-1.5">
-          <FieldTitle className="text-xs font-normal text-muted-foreground">
-            指定日期
-          </FieldTitle>
+          <FieldTitle className="text-xs font-normal text-muted-foreground">日期范围</FieldTitle>
+          <FieldDescription className="text-xs">点两次选一段，同一天两次表示单日</FieldDescription>
           <Calendar
-            mode="single"
+            mode="range"
+            // 范围选满后再点，从被点的那天重新开始，而不是把已选范围拉长。
+            resetOnSelect
             locale={zhCN}
-            selected={selectedDay}
-            defaultMonth={selectedDay ?? today}
+            selected={draft}
+            defaultMonth={draft?.from ?? today}
             endMonth={today}
             disabled={{ after: today }}
-            onSelect={(day) => {
-              onValueChange(day ? toLocalDay(day) : "all");
-              if (day) setOpen(false);
+            onSelect={(range) => {
+              setDraft(range);
+              if (!range?.from) {
+                onValueChange("all");
+                return;
+              }
+              // 只有起点时留着弹层，等用户点第二下定终点。
+              if (!range.to) return;
+              onValueChange(historyDateFilterFromDays(range.from, range.to));
+              setOpen(false);
             }}
             className="p-0"
           />

@@ -5,20 +5,56 @@ export const HISTORY_QUERY_PARAM = "q";
 export const HISTORY_DATE_PARAM = "date";
 export const HISTORY_PLATFORM_PARAM = "platform";
 
-/** 相对预设加上表示某个本地日期的 `YYYY-MM-DD`。 */
+/** 相对预设，加上 `YYYY-MM-DD` 单日或 `YYYY-MM-DD~YYYY-MM-DD` 日期范围。 */
 export type HistoryDateFilter = "all" | "today" | "yesterday" | "7d" | "30d" | (string & {});
 
 export const HISTORY_DATE_PRESETS = ["all", "today", "yesterday", "7d", "30d"] as const;
 
-const SPECIFIC_DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** 范围分隔符。`~` 在 query 里无需转义，地址栏因此保持可读。 */
+const RANGE_SEPARATOR = "~";
 
-export function isSpecificDayFilter(value: string): boolean {
-  if (!SPECIFIC_DAY.test(value)) return false;
+const LOCAL_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 首尾都含的本地日期范围，两端对齐到当天零点。 */
+export type HistoryDayRange = { from: Date; to: Date };
+
+function parseLocalDay(value: string): Date | null {
+  if (!LOCAL_DAY.test(value)) return null;
   const [year, month, day] = value.split("-").map(Number) as [number, number, number];
   const parsed = new Date(year, month - 1, day);
-  return (
-    parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day
-  );
+  // `new Date(2026, 1, 30)` 会滑到 3 月：逐字段比对挡掉不存在的日期。
+  return parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day
+    ? parsed
+    : null;
+}
+
+function toLocalDay(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * 自定义日期范围，不是自定义范围时为 `null`。单日写法等价于首尾同日的范围，
+ * 因此旧的 `?date=YYYY-MM-DD` 链接继续可用。手工写反的范围按升序归一，
+ * 而不是整段丢弃。
+ */
+export function historyDayRange(filter: HistoryDateFilter): HistoryDayRange | null {
+  if ((HISTORY_DATE_PRESETS as readonly string[]).includes(filter)) return null;
+  const [rawFrom, rawTo, ...rest] = filter.split(RANGE_SEPARATOR);
+  if (rest.length > 0) return null;
+  const from = parseLocalDay(rawFrom ?? "");
+  const to = rawTo === undefined ? from : parseLocalDay(rawTo);
+  if (!from || !to) return null;
+  return from.getTime() <= to.getTime() ? { from, to } : { from: to, to: from };
+}
+
+/** 范围的规范写法；同一天折叠为单日，地址栏不出现 `X~X`。 */
+export function historyDateFilterFromDays(from: Date, to: Date): HistoryDateFilter {
+  const [start, end] = from.getTime() <= to.getTime() ? [from, to] : [to, from];
+  const startDay = toLocalDay(start);
+  const endDay = toLocalDay(end);
+  return startDay === endDay ? startDay : `${startDay}${RANGE_SEPARATOR}${endDay}`;
 }
 
 /**
@@ -30,7 +66,8 @@ export function historyDateFilterFromSearch(value: string | null | undefined): H
   if ((HISTORY_DATE_PRESETS as readonly string[]).includes(value)) {
     return value as HistoryDateFilter;
   }
-  return isSpecificDayFilter(value) ? value : "all";
+  const range = historyDayRange(value);
+  return range ? historyDateFilterFromDays(range.from, range.to) : "all";
 }
 
 export function historyDateFilterLabel(filter: HistoryDateFilter): string {
@@ -45,8 +82,15 @@ export function historyDateFilterLabel(filter: HistoryDateFilter): string {
       return "近 7 天";
     case "30d":
       return "近 30 天";
-    default:
-      return isSpecificDayFilter(filter) ? filter.replaceAll("-", "/") : "全部时间";
+    default: {
+      const range = historyDayRange(filter);
+      if (!range) return "全部时间";
+      const from = toLocalDay(range.from).replaceAll("-", "/");
+      if (range.from.getTime() === range.to.getTime()) return from;
+      // 同年只写一次年份，触发按钮的标签不至于被两个完整日期撑开。
+      const to = toLocalDay(range.to).replaceAll("-", "/");
+      return `${from} - ${range.to.getFullYear() === range.from.getFullYear() ? to.slice(5) : to}`;
+    }
   }
 }
 
@@ -89,10 +133,10 @@ export function historyDateWindow(
     case "30d":
       return { from: shiftLocalDay(today, -29), to: shiftLocalDay(today, 1) };
     default: {
-      if (!isSpecificDayFilter(filter)) return null;
-      const [year, month, day] = filter.split("-").map(Number) as [number, number, number];
-      const from = new Date(year, month - 1, day).getTime();
-      return { from, to: new Date(year, month - 1, day + 1).getTime() };
+      const range = historyDayRange(filter);
+      if (!range) return null;
+      // 范围两端都含：结束日推进一天换成半开右界。
+      return { from: range.from.getTime(), to: shiftLocalDay(range.to.getTime(), 1) };
     }
   }
 }

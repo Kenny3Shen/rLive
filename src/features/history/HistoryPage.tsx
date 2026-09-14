@@ -636,14 +636,14 @@ export function HistoryPage() {
   );
 
   const handleSearchChange = useCallback(
-    (next: HistoryDateFilter) => {
+    (next: string) => {
       setSearchParams((current) => withHistorySearch(current, next), { replace: true });
     },
     [setSearchParams],
   );
 
   const handleDateFilterChange = useCallback(
-    (next: string) => {
+    (next: HistoryDateFilter) => {
       setSearchParams((current) => withHistoryDateFilter(current, next), { replace: true });
     },
     [setSearchParams],
