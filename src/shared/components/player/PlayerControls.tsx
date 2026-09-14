@@ -725,10 +725,7 @@ export function PlayerControls({
                 open={volumeOpen}
                 closeOnEscape={true}
                 closeOnOutsideClick={true}
-                onOpenChange={(open) => {
-                  setVolumeOpen(open);
-                  onOverlayInteractionChange?.(open);
-                }}
+                onOpenChange={setVolumeOpen}
               >
                 <ButtonTooltip side="top" label={externalVolume.label}>
                   <Menu.Trigger
@@ -851,10 +848,7 @@ export function PlayerControls({
                 open={settingsOpen}
                 closeOnEscape={true}
                 closeOnOutsideClick={true}
-                onOpenChange={(open) => {
-                  setSettingsOpen(open);
-                  onOverlayInteractionChange?.(open);
-                }}
+                onOpenChange={settingsHover.onOpenChange}
               >
                 <Menu.Trigger
                   aria-label={playbackSettingsLabel ?? playbackSettingsTitle ?? "播放设置"}
@@ -912,10 +906,7 @@ export function PlayerControls({
               open={asrOpen}
               closeOnEscape={true}
               closeOnOutsideClick={true}
-              onOpenChange={(open) => {
-                setAsrMenuOpen(open);
-                onOverlayInteractionChange?.(open);
-              }}
+              onOpenChange={asrHover.onOpenChange}
             >
               <Menu.Trigger
                 aria-label={asr.enabled ? "关闭字幕" : "开启字幕"}

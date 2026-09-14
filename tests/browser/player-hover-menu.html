@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>播放器悬停菜单点击不收回</title>
+    <link rel="icon" type="image/svg+xml" href="/rlive.svg" />
+    <script>
+      // headless Chromium 报 `hover: none`，而被测契约只在能悬停的指针上成立
+      // （触屏仍按点击开合）。CDP 的 `Emulation.setEmulatedMedia` 改不动这一族特性，
+      // 因此在任何模块加载前把 hover / pointer 查询固定为桌面指针。
+      // 其余查询照旧交回原实现，容器断点与竖屏判定不受影响。
+      const originalMatchMedia = window.matchMedia.bind(window);
+      window.matchMedia = (query) => {
+        if (/\(\s*(any-)?hover:\s*hover\s*\)|\(\s*(any-)?pointer:\s*fine\s*\)/.test(query)) {
+          return {
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener() {},
+            removeListener() {},
+            addEventListener() {},
+            removeEventListener() {},
+            dispatchEvent() {
+              return false;
+            },
+          };
+        }
+        return originalMatchMedia(query);
+      };
+    </script>
+    <style>
+      body {
+        margin: 0;
+        background: #202020;
+      }
+      /* 控制条贴在视口底部，弹层朝上展开：与播放器舞台的实际几何一致，
+         指针要能从触发器移到弹层而不穿过其他元素。 */
+      [data-hover-menu-fixture] {
+        position: fixed;
+        inset: auto 0 0 0;
+        height: 220px;
+        background: #111;
+      }
+      [data-hover-menu-fixture] button {
+        color: #eee;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="fixture"></div>
+    <script type="module" src="./player-hover-menu.tsx"></script>
+  </body>
+</html>

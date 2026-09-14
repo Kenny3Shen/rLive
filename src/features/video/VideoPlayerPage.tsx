@@ -2134,7 +2134,7 @@ function VideoPlayerPageContent() {
         </MediaButton>
       </ButtonTooltip>
     ) : (
-      <Popover open={subtitleOpen} onOpenChange={setSubtitleMenuOpen}>
+      <Popover open={subtitleOpen} onOpenChange={subtitleHover.onOpenChange}>
         <PopoverTrigger
           {...subtitleHover.trigger}
           render={
