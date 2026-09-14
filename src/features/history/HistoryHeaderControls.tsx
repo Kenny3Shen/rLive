@@ -57,6 +57,12 @@ const CLEAR_LABELS: Record<HistoryView, string> = {
 /**
  * 时间线切换器，在 `/history` 上取代应用头部的平台条。它与平台条一样是
  * `tablist`：三个面板并排位于同一条可滑动的 track 上。
+ *
+ * md 以下只留图标：移动端头部同一行还要放返回按钮与清空按钮，留给 tablist 的
+ * `flex-1` 空间装不下三个「图标 + 四字文案」的条目，文案会被压成竖向一字一列。
+ * 文案在 md 以下隐藏（`max-md:hidden`）而非缩短或省略 —— 三种历史类型在图标上
+ * 区分度足够，而截半的「视频历…」反而更费解。可读名称仍由 `title` 与
+ * `aria-label` 提供，长按与悬浮照旧能读到完整类型。
  */
 export function HistoryViewSwitcher({
   value,
@@ -83,17 +89,18 @@ export function HistoryViewSwitcher({
             role="tab"
             data-motion-control
             aria-selected={active}
+            aria-label={VIEW_LABELS[view]}
             title={VIEW_LABELS[view]}
             onClick={() => onValueChange(view)}
             className={cn(
-              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-150 focus-ring max-md:min-w-0 max-md:flex-1 max-md:justify-center",
+              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-150 focus-ring max-md:min-w-0 max-md:flex-1 max-md:justify-center max-md:px-0",
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
             )}
           >
             <Icon className="size-4 shrink-0" aria-hidden />
-            <span>{VIEW_LABELS[view]}</span>
+            <span className="whitespace-nowrap max-md:hidden">{VIEW_LABELS[view]}</span>
             {active && (
               <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
             )}
