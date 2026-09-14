@@ -7,6 +7,7 @@ import { cn } from "@/components/videojs/lib/resolve-class-name";
 import {
   mediaPopupMotionClass,
   mediaPopupResetClass,
+  mediaPopupTriggerOpenClass,
 } from "@/components/videojs/lib/popup-surface";
 import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
 import { MuteButton } from "@/components/videojs/ui/mute-button";
@@ -31,7 +32,10 @@ export function VolumePopover({
   return (
     <VolumePopoverPrimitive.Root openOnHover delay={200} closeDelay={100} side={side} {...props}>
       <ButtonTooltip delay={0} disabled={!showTooltip} sticky side="top">
-        <VolumePopoverPrimitive.Trigger render={<MuteButton className={cn(className)} />} />
+        <VolumePopoverPrimitive.Trigger
+          className={(state) => cn(state.open && mediaPopupTriggerOpenClass)}
+          render={<MuteButton className={cn(className)} />}
+        />
       </ButtonTooltip>
       {/*
         与控制栏的播放设置、字幕菜单同构：弹层元素只负责重置 UA `[popover]` 外观并

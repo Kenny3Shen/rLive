@@ -16,6 +16,8 @@
 
 /** UA `[popover]` 外观重置。`m-0` 与定位层写入的内联值一致，保留以便单独使用。 */
 export const mediaPopupResetClass = "m-0 overflow-visible border-0 text-inherit";
+/** 自定义媒体弹层打开时的中性触发器样式，避免 `aria-expanded` 触发主色高亮。 */
+export const mediaPopupTriggerOpenClass = "!bg-media-muted !transition-none";
 
 /**
  * 开合过渡：按 `data-side` 决定缩放原点与位移方向，并用 `::before` 在弹层与触发器

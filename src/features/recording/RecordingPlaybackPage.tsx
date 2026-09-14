@@ -13,7 +13,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -159,7 +159,7 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
       <Tabs
         value={sidebarTab}
         onValueChange={(value) => setSidebarTab(value as "info" | "settings")}
-        className="flex h-full min-h-0 flex-col gap-0"
+        className="flex min-h-0 flex-1 flex-col gap-0"
       >
         <div className="flex h-11 shrink-0 items-center border-b border-border/80">
           <TabsList
@@ -174,13 +174,7 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
             </TabsTrigger>
           </TabsList>
         </div>
-        <div
-          role="tabpanel"
-          aria-label="录制信息"
-          aria-hidden={sidebarTab === "info" ? undefined : true}
-          inert={sidebarTab === "info" ? undefined : true}
-          className="min-h-0 flex-1 overflow-y-auto px-3"
-        >
+        <TabsContent value="info" className="min-h-0 flex-1 overflow-y-auto px-3">
           <dl className="divide-y divide-border-subtle">
             <PlaybackDetailRow label="开始时间">
               {formatRecordingDate(item.started_at)}
@@ -221,16 +215,10 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
               className="my-3"
             />
           )}
-        </div>
-        <div
-          role="tabpanel"
-          aria-label="设置"
-          aria-hidden={sidebarTab === "settings" ? undefined : true}
-          inert={sidebarTab === "settings" ? undefined : true}
-          className="min-h-0 flex-1 overflow-hidden"
-        >
+        </TabsContent>
+        <TabsContent value="settings" className="min-h-0 flex-1 overflow-hidden">
           <DanmakuSettingsPanel className="h-full" showAsrCard={false} />
-        </div>
+        </TabsContent>
       </Tabs>
     </aside>
   );

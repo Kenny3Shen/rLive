@@ -16,7 +16,6 @@ import {
   Cast,
   Check,
   ChevronLeft,
-  ChevronRight,
   ExternalLink,
   FastForward,
   Home,
@@ -40,6 +39,8 @@ import {
   PLAYER_HUD_ICON_CLASS,
   PLAYER_HUD_TITLE_SIZE_CLASS,
   PlayerControls,
+  VOD_PLAYBACK_RATES,
+  formatPlaybackRateLabel,
   PlayerMenuRadioGroup,
   type PlayerMenuRadioOption,
 } from "@/shared/components/player/PlayerControls";
@@ -143,6 +144,7 @@ import {
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
 import { VideoSidebar, type SidebarTab } from "./VideoSidebar";
 import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
+import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
 import {
   mergeVideoDanmakuEntries,
   videoDanmakuEntries,
@@ -311,11 +313,12 @@ function VideoPlayerPageContent() {
   /** 正在投屏的设备名（null = 无会话），供入口磁贴展示「投屏中」。 */
   const [castingDevice, setCastingDevice] = useState<string | null>(null);
   const [subtitleOpen, setSubtitleOpen] = useState(false);
+  const setSubtitleMenuOpen = useCallback((open: boolean) => {
+    setSubtitleOpen(open);
+  }, []);
   // 字幕按钮悬停展开与控制栏播放设置菜单同一套时序（useHoverOpen 带
   // 嵌套弹层防护：本地字幕设置里的 Select 展开期间不收起）。
-  const subtitleHover = useHoverOpen(subtitleOpen, setSubtitleOpen);
-  /** 字幕弹层二级页：本地字幕沿用直播字幕设置，返回后恢复来源列表。 */
-  const [subtitlePanel, setSubtitlePanel] = useState<"sources" | "local-settings">("sources");
+  const subtitleHover = useHoverOpen(subtitleOpen, setSubtitleMenuOpen);
   /** 窗口全屏（应用内全屏）：隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台
    *  撑满应用窗口，但保留系统窗口栏（最小化/最大化/关闭），与直播页的
    *  网页全屏同一语义；与画面全屏（元素级 top layer）相互独立、可叠加。 */
@@ -2101,22 +2104,22 @@ function VideoPlayerPageContent() {
   const selectNoCaptions = () => {
     setSubtitleLan(null);
     if (asr.captionsOn) asr.toggle();
-    setSubtitleOpen(false);
+    setSubtitleMenuOpen(false);
   };
   const selectSubtitleTrack = (lan: string) => {
     setSubtitleLan(lan);
     if (asr.captionsOn) asr.toggle();
-    setSubtitleOpen(false);
+    setSubtitleMenuOpen(false);
   };
   const selectLocalCaptions = () => {
     if (asr.captionsOn) {
-      setSubtitleOpen(false);
+      setSubtitleMenuOpen(false);
       return;
     }
     setSubtitleLan(null);
     // 模型未就绪时 toggle 只做重试/无操作；此时留着弹层，让状态文案可见。
     asr.toggle();
-    if (asr.modelStatus?.state === "ready") setSubtitleOpen(false);
+    if (asr.modelStatus?.state === "ready") setSubtitleMenuOpen(false);
   };
   const captionsSlot =
     subtitles.length === 0 && !localCaptionsAvailable ? (
@@ -2131,35 +2134,28 @@ function VideoPlayerPageContent() {
         </MediaButton>
       </ButtonTooltip>
     ) : (
-      <Popover
-        open={subtitleOpen}
-        onOpenChange={(open) => {
-          setSubtitleOpen(open);
-          if (!open) setSubtitlePanel("sources");
-        }}
-      >
-        <ButtonTooltip side="top">
-          <PopoverTrigger
-            {...subtitleHover.trigger}
-            render={
-              <MediaButton
-                aria-label={captionsActive ? "关闭字幕" : "开启字幕"}
-                aria-pressed={captionsActive}
-                className={cn(
-                  "r-live-media-extension-button",
-                  // 与控制栏其他开启态一致：中性白填充，不再用 accent 蓝。
-                  captionsActive && glassOptionSelectedClass(),
-                )}
-              >
-                {captionsActive ? (
-                  <Captions className="size-6" aria-hidden />
-                ) : (
-                  <CaptionsOff className="size-6" aria-hidden />
-                )}
-              </MediaButton>
-            }
-          />
-        </ButtonTooltip>
+      <Popover open={subtitleOpen} onOpenChange={setSubtitleMenuOpen}>
+        <PopoverTrigger
+          {...subtitleHover.trigger}
+          render={
+            <MediaButton
+              aria-label={captionsActive ? "关闭字幕" : "开启字幕"}
+              aria-pressed={captionsActive}
+              className={cn(
+                "r-live-media-extension-button",
+                // 与控制栏其他开启态一致：中性白填充，不再用 accent 蓝。
+                subtitleOpen && mediaPopupTriggerOpenClass,
+                captionsActive && glassOptionSelectedClass(),
+              )}
+            >
+              {captionsActive ? (
+                <Captions className="size-6" aria-hidden />
+              ) : (
+                <CaptionsOff className="size-6" aria-hidden />
+              )}
+            </MediaButton>
+          }
+        />
         <PopoverContent
           container={stageRef}
           side="top"
@@ -2169,114 +2165,100 @@ function VideoPlayerPageContent() {
           sticky
           glass
           className={cn(
-            "w-72 gap-0 overflow-y-auto p-1.5 whitespace-nowrap [&_*]:whitespace-nowrap",
+            "flex w-72 flex-col gap-0 overflow-y-auto p-1.5 whitespace-nowrap [&_*]:whitespace-nowrap",
             glassPanelClass({ overlay: true }),
           )}
           {...subtitleHover.popup}
         >
-          {subtitlePanel === "local-settings" ? (
-            <>
-              <div className="px-2 py-2">
-                <AsrSettingsBody
-                  portalContainer={stageRef}
-                  translationEnabled={asrTranslationEnabled}
-                  translationFrom={asrTranslationFrom}
-                  translationTo={asrTranslationTo}
-                  speakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-                  onTranslationEnabledChange={setAsrTranslationEnabled}
-                  onTranslationFromChange={setAsrTranslationFrom}
-                  onTranslationToChange={setAsrTranslationTo}
-                  onSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
-                />
-              </div>
-            </>
-          ) : (
-            <>
+          <>
+            <Button
+              variant="ghost"
+              className={cn(
+                "w-full justify-between max-md:h-10",
+                glassOptionClass(),
+                !captionsActive && glassOptionSelectedClass(),
+              )}
+              aria-pressed={!captionsActive}
+              onClick={selectNoCaptions}
+            >
+              <span className="truncate">关闭字幕</span>
+              {!captionsActive && <Check data-icon="inline-end" aria-hidden />}
+            </Button>
+            {subtitles.map((subtitle) => (
               <Button
+                key={subtitle.lan}
                 variant="ghost"
                 className={cn(
                   "w-full justify-between max-md:h-10",
                   glassOptionClass(),
-                  !captionsActive && glassOptionSelectedClass(),
+                  subtitleLan === subtitle.lan && glassOptionSelectedClass(),
                 )}
-                aria-pressed={!captionsActive}
-                onClick={selectNoCaptions}
+                aria-pressed={subtitleLan === subtitle.lan}
+                onClick={() => selectSubtitleTrack(subtitle.lan)}
               >
-                <span className="truncate">关闭字幕</span>
-                {!captionsActive && <Check data-icon="inline-end" aria-hidden />}
+                <span className="truncate">{subtitle.lan_doc}</span>
+                {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
               </Button>
-              {subtitles.map((subtitle) => (
+            ))}
+            {localCaptionsAvailable && (
+              <>
+                {subtitles.length > 0 && (
+                  <Separator className={cn("my-1", glassSeparatorClass())} />
+                )}
                 <Button
-                  key={subtitle.lan}
                   variant="ghost"
                   className={cn(
-                    "w-full justify-between max-md:h-10",
+                    "h-auto min-h-9 w-full justify-between py-1.5 max-md:min-h-10",
                     glassOptionClass(),
-                    subtitleLan === subtitle.lan && glassOptionSelectedClass(),
+                    asr.captionsOn && glassOptionSelectedClass(),
                   )}
-                  aria-pressed={subtitleLan === subtitle.lan}
-                  onClick={() => selectSubtitleTrack(subtitle.lan)}
+                  aria-pressed={asr.captionsOn}
+                  aria-disabled={asr.controlDisabled || undefined}
+                  disabled={asr.controlDisabled}
+                  onClick={selectLocalCaptions}
                 >
-                  <span className="truncate">{subtitle.lan_doc}</span>
-                  {subtitleLan === subtitle.lan && <Check data-icon="inline-end" aria-hidden />}
-                </Button>
-              ))}
-              {localCaptionsAvailable && (
-                <>
-                  {subtitles.length > 0 && (
-                    <Separator className={cn("my-1", glassSeparatorClass())} />
-                  )}
-                  <div className="flex min-w-0 items-stretch gap-0.5">
-                    <Button
-                      variant="ghost"
-                      className={cn(
-                        "h-auto min-h-9 min-w-0 flex-1 justify-between py-1.5 max-md:min-h-10",
-                        glassOptionClass(),
-                        asr.captionsOn && glassOptionSelectedClass(),
-                      )}
-                      aria-pressed={asr.captionsOn}
-                      aria-disabled={asr.controlDisabled || undefined}
-                      disabled={asr.controlDisabled}
-                      onClick={selectLocalCaptions}
-                    >
-                      <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
-                        <span className="truncate">字幕（本地）</span>
-                        {localCaptionsHint && (
-                          <span className={cn("text-xs font-normal", glassMutedTextClass())}>
-                            {localCaptionsHint}
-                          </span>
-                        )}
+                  <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+                    <span className="truncate">字幕（本地）</span>
+                    {localCaptionsHint && (
+                      <span className={cn("text-xs font-normal", glassMutedTextClass())}>
+                        {localCaptionsHint}
                       </span>
-                      {asr.controlBusy ? (
-                        <Spinner data-icon="inline-end" aria-hidden />
-                      ) : asr.captionsOn ? (
-                        <Check data-icon="inline-end" aria-hidden />
-                      ) : null}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="打开本地字幕设置"
-                      className={glassOptionClass()}
-                      onClick={() => setSubtitlePanel("local-settings")}
-                    >
-                      <ChevronRight aria-hidden />
-                    </Button>
-                  </div>
-                </>
-              )}
-            </>
-          )}
+                    )}
+                  </span>
+                  {asr.controlBusy ? (
+                    <Spinner data-icon="inline-end" aria-hidden />
+                  ) : asr.captionsOn ? (
+                    <Check data-icon="inline-end" aria-hidden />
+                  ) : null}
+                </Button>
+                <Separator className={cn("my-1", glassSeparatorClass())} />
+                <div className="px-2 py-2">
+                  <AsrSettingsBody
+                    portalContainer={stageRef}
+                    translationEnabled={asrTranslationEnabled}
+                    translationFrom={asrTranslationFrom}
+                    translationTo={asrTranslationTo}
+                    speakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+                    onTranslationEnabledChange={setAsrTranslationEnabled}
+                    onTranslationFromChange={setAsrTranslationFrom}
+                    onTranslationToChange={setAsrTranslationTo}
+                    onSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
+                  />
+                </div>
+              </>
+            )}
+          </>
         </PopoverContent>
       </Popover>
     );
 
-  const currentPlaybackRate = String(playbackRate?.playbackRate ?? 1);
-  const playbackRateMenuOptions: PlayerMenuRadioOption[] =
-    playbackRate?.playbackRates.map((rate) => ({
-      value: String(rate),
-      label: `${rate}x`,
-    })) ?? [];
+  const currentPlaybackRate = String(
+    VOD_PLAYBACK_RATES.find((rate) => rate === playbackRate?.playbackRate) ?? 1,
+  );
+  const playbackRateMenuOptions: PlayerMenuRadioOption[] = VOD_PLAYBACK_RATES.map((rate) => ({
+    value: String(rate),
+    label: formatPlaybackRateLabel(rate),
+  }));
 
   /** 循环/连播偏好与播放倍数调节。 */
   const playbackToggles = (

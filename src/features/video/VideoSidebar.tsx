@@ -1185,7 +1185,7 @@ export function VideoSidebar({
     }
     if (value === "settings") {
       // 与直播侧栏「设置」页签同源的面板；VOD 不渲染语音字幕卡
-      //（本地字幕设置入口在播放器字幕菜单的二级页里）。
+      //（本地字幕设置项直接显示在播放器字幕菜单中）。
       return <DanmakuSettingsPanel className="h-full" showAsrCard={false} />;
     }
     return (

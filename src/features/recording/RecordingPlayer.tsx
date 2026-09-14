@@ -11,7 +11,12 @@ import type Mpegts from "mpegts.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
-import { PlayerControls, PlayerMenuRadioGroup } from "@/shared/components/player/PlayerControls";
+import {
+  formatPlaybackRateLabel,
+  PlayerControls,
+  PlayerMenuRadioGroup,
+  VOD_PLAYBACK_RATES,
+} from "@/shared/components/player/PlayerControls";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
@@ -69,8 +74,6 @@ function finiteDuration(video: HTMLVideoElement): number {
   return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
 }
 
-/** 回放倍速档位（用户指定）：0.25x–2.0x，默认 1.0 居中。 */
-const RECORDING_PLAYBACK_RATES = [0.25, 0.5, 1, 1.5, 2] as const;
 const RECORDING_SEEK_TIMEOUT_MS = 4_000;
 const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
 /** 派生空轨的稳定身份，避免每帧新数组使弹幕画布失效。 */
@@ -107,19 +110,19 @@ type RecordingPlayerProps = {
 
 /**
  * 回放设置弹层里的「倍数播放」档位。弹幕设置移到右侧栏「设置」页签后，
- * 播放设置按钮只剩倍速一项；档位挂 `RECORDING_PLAYBACK_RATES`，与
+ * 播放设置按钮只剩倍速一项；档位挂共享的 `VOD_PLAYBACK_RATES`，与
  * `useVideoJsPlaybackRate` 的 `setPlaybackRate` 直接对接（它接受任意数值，
  * `playbackRates` 只是 store 初始列表，不构成档位约束）。
  */
 function RecordingRateSettings() {
   const playbackRate = useVideoJsPlaybackRate();
   if (!playbackRate) return null;
-  const options = RECORDING_PLAYBACK_RATES.map((rate) => ({
+  const options = VOD_PLAYBACK_RATES.map((rate) => ({
     value: String(rate),
-    label: `${rate}x`,
+    label: formatPlaybackRateLabel(rate),
   }));
   const current = String(
-    RECORDING_PLAYBACK_RATES.find((rate) => rate === playbackRate.playbackRate) ?? 1,
+    VOD_PLAYBACK_RATES.find((rate) => rate === playbackRate.playbackRate) ?? 1,
   );
   return (
     <div className="flex flex-col gap-1.5 px-1 py-1">
