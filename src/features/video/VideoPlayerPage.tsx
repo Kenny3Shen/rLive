@@ -2327,7 +2327,7 @@ function VideoPlayerPageContent() {
       {playlistStore.items.length > 1 && (
         <PlaybackSettingRow
           id="video-playback-next"
-          label="自动播放下一集"
+          label="自动切集"
           checked={playlistStore.autoPlayNext}
           onToggle={playlistStore.toggleAutoPlayNext}
         />

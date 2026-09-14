@@ -226,7 +226,7 @@ type PlaylistState = {
   currentId: string | null;
   /** 临时队列类型，不持久化。 */
   kind: PlaylistKind;
-  /** 是否自动播放下一集（持久化到本地）。 */
+  /** 是否自动切集（持久化到本地）。 */
   autoPlayNext: boolean;
   /** 是否循环播放当前视频（持久化到本地）。优先于两种连播。 */
   loopPlayback: boolean;
@@ -255,7 +255,7 @@ type PlaylistActions = {
   clearPlaylist: () => void;
   /** 切换当前播放项。 */
   setCurrentItem: (id: string) => void;
-  /** 切换自动播放下一集。 */
+  /** 切换自动切集。 */
   toggleAutoPlayNext: () => void;
   /** 切换循环播放。 */
   toggleLoopPlayback: () => void;
