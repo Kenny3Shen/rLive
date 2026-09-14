@@ -32,3 +32,4 @@
 | [虎牙](zh/虎牙平台API文档.md) | 移动端页解析、anticode、FLV 与发送条件 |
 | [抖音](zh/抖音平台API文档.md) | feed 与分区列表、`a_bogus` 验签、本地签名实时弹幕 |
 | [Twitch](zh/Twitch平台API文档.md) | 公开 GraphQL、语言分片分页、HLS 与匿名 IRC |
+| [短视频调研](zh/短视频调研-B站与抖音.md) | B 站 story feed 与抖音 `tab/feed` 的竖屏流入口、取流与登录门槛 |
