@@ -9,9 +9,7 @@ import {
   MessageSquareText,
   Play,
   ThumbsUp,
-  ListOrdered,
   Users,
-  Shuffle,
   ListMusic,
   Video,
 } from "lucide-react";
@@ -54,6 +52,7 @@ import {
   dedupeVideoItems,
   playlistItemFromVideoItem,
   playlistItemFromArchivePage,
+  playlistItemFromPgcEpisode,
   playlistItemFromSeasonEpisode,
   usePlaylistStore,
   type PlaylistItem,
@@ -620,25 +619,12 @@ function EpisodesPanel({
   const episodes = seasonQuery.data?.episodes ?? [];
   const playlistStore = usePlaylistStore();
 
-  // 将分集列表转换为播放列表项
-  const playlistItems: PlaylistItem[] = episodes.map((episode) => ({
-    id: `${episode.bvid}_${episode.cid}`,
-    bvid: episode.bvid,
-    cid: episode.cid,
-    epId: episode.ep_id,
-    aid: episode.aid,
-    title: episode.long_title || episode.title,
-    index: episode.title || "",
-    duration: episode.duration,
-    cover: episode.cover,
-  }));
+  // 分集列表与播放页共用同一份转换，避免两处映射漂移。
+  const playlistItems: PlaylistItem[] = episodes.map(playlistItemFromPgcEpisode);
 
   // 播放全部：从第一集开始
   const handlePlayAll = () => {
-    if (playlistItems.length === 0) return;
-    const firstItem = playlistStore.reversed
-      ? playlistItems[playlistItems.length - 1]
-      : playlistItems[0];
+    const firstItem = playlistItems[0];
     if (!firstItem) return;
     playlistStore.setPlaylist(playlistItems, firstItem.id, "sequence");
     onNavigate({
@@ -695,32 +681,6 @@ function EpisodesPanel({
               }
             />
             <TooltipContent>从当前集开始播放列表</TooltipContent>
-          </Tooltip>
-
-          <div className="flex-1" />
-
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className={cn(
-                    "size-8 shrink-0",
-                    playlistStore.reversed && "bg-primary/10 text-primary",
-                  )}
-                  onClick={() => playlistStore.toggleReversed()}
-                  aria-pressed={playlistStore.reversed}
-                >
-                  {playlistStore.reversed ? (
-                    <ListOrdered className="size-4" />
-                  ) : (
-                    <Shuffle className="size-4" />
-                  )}
-                </Button>
-              }
-            />
-            <TooltipContent>{playlistStore.reversed ? "正序播放" : "倒序播放"}</TooltipContent>
           </Tooltip>
         </div>
       )}

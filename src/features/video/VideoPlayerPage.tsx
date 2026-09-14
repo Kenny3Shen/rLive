@@ -26,8 +26,10 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import { preloadImageProxy } from "@/shared/api/imageProxy";
 import { Button } from "@/components/ui/button";
 import { DrawerScope, DrawerViewport } from "@/components/ui/drawer";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
@@ -159,6 +161,7 @@ import {
 } from "./videoRoute";
 import {
   dedupeVideoItems,
+  nextSelectionItem,
   playlistContainsCurrentItem,
   playlistItemFromArchivePage,
   playlistItemFromVideoItem,
@@ -171,6 +174,8 @@ import { notify, setToastPortalContainer } from "@/components/ui/toast";
 const LONG_PRESS_TRIGGER_MS = 500;
 /** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
 const LONG_PRESS_RATE = 3;
+/** 自动连播相关视频的等待时长：播完后留出反悔时间，也比换集慢一拍。 */
+const RELATED_AUTOPLAY_DELAY_MS = 3_000;
 /** 移动超过这个距离视为滑动手势，取消长按判定。 */
 const LONG_PRESS_CANCEL_MOVE_PX = 12;
 /**
@@ -343,9 +348,13 @@ function VideoPlayerPageContent() {
   const setAsrSpeakerDiarizationEnabled = useSettingsStore(
     (state) => state.setAsrSpeakerDiarizationEnabled,
   );
-  // 换画质时记住切换前的位置与播放状态：播放器必然重建（新的代理端口 = 新的
-  // MPD 地址），不存就会从头播。换视频（相关/分集跳转）不会碰它，天然从头播。
-  const resumeAtRef = useRef<{ position: number; playing: boolean } | null>(null);
+  // 记住重建前的位置与播放状态：画质/仅音频/重试都会重建播放器（新的代理端口
+  // = 新的 MPD 地址），不存就会从头播。快照带上当时的 videoKey —— 换集后旧
+  // key 的快照自动作废，否则上一集的卡顿现场（waiting）会被下一集当成续播点。
+  // 记录方在 videoKey 之前定义，经 ref 读它：进 deps 会撞 TDZ，靠闭包又会
+  // 捕获旧值（回调按其他依赖记忆），只有 ref 两边都避得开。
+  const videoKeyRef = useRef("");
+  const resumeAtRef = useRef<{ key: string; position: number; playing: boolean } | null>(null);
   // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
   // 否则卡加载时点暂停会被重试重新拉起，按钮状态与实际播放相反。
   const userPausedRef = useRef(false);
@@ -366,6 +375,7 @@ function VideoPlayerPageContent() {
     const media = videoRef.current;
     if (media && media.currentTime > 0) {
       resumeAtRef.current = {
+        key: videoKeyRef.current,
         position: media.currentTime,
         playing: !media.paused,
       };
@@ -554,6 +564,10 @@ function VideoPlayerPageContent() {
   const aid = params?.aid || archiveQuery.data?.aid || null;
 
   const videoKey = `${params?.bvid ?? params?.epId ?? ""}:${cid}`;
+  // 渲染期不读 ref：内容键同步给记录续播快照的回调。
+  useLayoutEffect(() => {
+    videoKeyRef.current = videoKey;
+  }, [videoKey]);
   const frameAspectRatio = frameSize?.key === videoKey ? frameSize.ratio : null;
   const androidPlayerControls = useAndroidPlayerControls(clientPlatform === "android", videoKey);
   const nativePlayerControlsActive = androidPlayerControls.supported;
@@ -705,6 +719,18 @@ function VideoPlayerPageContent() {
   const prevItem = playlistStore.getPreviousItem();
   const bvid = params?.bvid ?? null;
   const epId = params?.epId ?? null;
+
+  /**
+   * 控制条「播放下一个」的目标：当前视频自身选集里的下一项。它与来源队列无关，
+   * 没有选集或已在最后一集时为 null（按钮随之不出现）。
+   */
+  const selectionNextItem = nextSelectionItem({
+    epId,
+    bvid,
+    cid,
+    episodes: seasonQuery.data?.episodes,
+    archive: archiveQuery.data,
+  });
 
   /** 自动连播、控件、快捷键与滑动共用导航；滑动不往返回栈里逐条堆视频。 */
   const goToPlaylistItem = useCallback(
@@ -861,6 +887,7 @@ function VideoPlayerPageContent() {
       const media = videoRef.current;
       if (media) {
         resumeAtRef.current = {
+          key: videoKeyRef.current,
           position: media.currentTime,
           playing: !media.paused,
         };
@@ -875,6 +902,7 @@ function VideoPlayerPageContent() {
     const media = videoRef.current;
     if (media) {
       resumeAtRef.current = {
+        key: videoKeyRef.current,
         position: media.currentTime,
         playing: !media.paused,
       };
@@ -1204,7 +1232,7 @@ function VideoPlayerPageContent() {
       // 自动恢复回调本身不读取 ref；在真实媒体事件里保存最后可续播位置。
       if (!media.ended && !media.paused) {
         if (media.currentTime > 0) {
-          resumeAtRef.current = { position: media.currentTime, playing: true };
+          resumeAtRef.current = { key: videoKey, position: media.currentTime, playing: true };
         }
         waitingRecovery.notifyWaiting();
       }
@@ -1235,11 +1263,12 @@ function VideoPlayerPageContent() {
       // 偏好可能在播放期间被改，读 store 快照而不是播放器挂载时的闭包值。
       const state = usePlaylistStore.getState();
       const nextItem = state.getNextAutoPlayItem();
-      const canPlayRelated = state.kind === "feed" && Boolean(bvid) && !epId;
       const action = videoEndedAction(
         state.loopPlayback,
         state.autoPlayNext,
-        nextItem !== null || canPlayRelated,
+        nextItem !== null,
+        // PGC 剧集没有相关视频列表，也没有可定位的 bvid，开关对它不生效。
+        state.autoPlayRelated && !epId && Boolean(bvid),
       );
       if (action === "loop") {
         // 循环播放：从头重播当前集（DASH 的 seek 同样走原生 currentTime）。
@@ -1249,16 +1278,26 @@ function VideoPlayerPageContent() {
         });
         return;
       }
-      if (action !== "next") return;
-      const canNavigate = () => {
+      if (action === "stop") return;
+      /**
+       * 跳转前重读一遍状态：等待期间用户可能自己换了片、按了暂停，或关掉了
+       * 正在生效的那个连播开关。`action` 已经定下这一轮走哪条路，这里只校验
+       * 它对应开关的现值。
+       */
+      const stillWanted = () => {
         const current = usePlaylistStore.getState();
-        return !cancelled && media.ended && current.autoPlayNext && !current.loopPlayback;
+        if (cancelled || !media.ended || current.loopPlayback) return false;
+        return action === "related" ? current.autoPlayRelated : current.autoPlayNext;
       };
+      // 自动连播相关视频是「看完了随便接着看」，比换集多留两秒。
+      const delay = action === "related" ? RELATED_AUTOPLAY_DELAY_MS : 1_000;
       setTimeout(() => {
-        if (!canNavigate()) return;
-        if (nextItem) goToPlaylistItem(nextItem);
-        else playRelatedItem(canNavigate);
-      }, 1_000);
+        if (action === "next") {
+          if (stillWanted() && nextItem) goToPlaylistItem(nextItem);
+          return;
+        }
+        playRelatedItem(stillWanted);
+      }, delay);
     }
 
     media.volume = volumeRef.current / 100;
@@ -1298,8 +1337,11 @@ function VideoPlayerPageContent() {
         // 续播位置不直接写 currentTime：DASH 的 MPD 清单异步解析，媒体时间轴
         // 就绪前写入会被丢弃（画质切换/仅音频切换同走这条重建路径）。登记为
         // pendingInitialSeek，由 onReady 的 loadedmetadata/canplay 一次性应用。
-        const resume = resumeAtRef.current;
+        // 只有同一集的快照才算续播点：换集后留着的是上一集的卡顿/重试现场，
+        // 照搬会把新点开的那一集跳到错误位置（改走历史续播或从头播）。
+        const snapshot = resumeAtRef.current;
         resumeAtRef.current = null;
+        const resume = snapshot?.key === videoKey ? snapshot : null;
         if (resume) {
           pendingInitialSeek = {
             position: resume.position,
@@ -2277,23 +2319,26 @@ function VideoPlayerPageContent() {
       )}
       {playbackRateMenuOptions.length > 0 && <Separator className={glassSeparatorClass()} />}
       <PlaybackSettingRow
+        id="video-playback-loop"
         label="循环播放"
         checked={playlistStore.loopPlayback}
         onToggle={playlistStore.toggleLoopPlayback}
       />
       {playlistStore.items.length > 1 && (
-        <>
-          <PlaybackSettingRow
-            label="自动播放下一集"
-            checked={playlistStore.autoPlayNext}
-            onToggle={playlistStore.toggleAutoPlayNext}
-          />
-          <PlaybackSettingRow
-            label="倒序播放"
-            checked={playlistStore.reversed}
-            onToggle={playlistStore.toggleReversed}
-          />
-        </>
+        <PlaybackSettingRow
+          id="video-playback-next"
+          label="自动播放下一集"
+          checked={playlistStore.autoPlayNext}
+          onToggle={playlistStore.toggleAutoPlayNext}
+        />
+      )}
+      {!epId && (
+        <PlaybackSettingRow
+          id="video-playback-related"
+          label="自动连播"
+          checked={playlistStore.autoPlayRelated}
+          onToggle={playlistStore.toggleAutoPlayRelated}
+        />
       )}
     </div>
   );
@@ -2427,7 +2472,7 @@ function VideoPlayerPageContent() {
                 }}
                 onOverlayInteractionChange={setOverlayInteractionOpen}
                 onRefresh={retryPlayback}
-                onNext={nextItem ? () => goToPlaylistItem(nextItem) : undefined}
+                onNext={selectionNextItem ? () => goToPlaylistItem(selectionNextItem) : undefined}
                 captionsSlot={captionsSlot}
                 audioOnly={audioOnly}
                 onToggleAudioOnly={toggleAudioOnly}
@@ -2782,49 +2827,26 @@ function VideoPlayerPageContent() {
 }
 
 /**
- * 播放设置面板里的勾选行。三个播放偏好共用同一画法，勾选框是内联 SVG
- * 而不是 `Switch`：面板走的是紧凑列表形态，与倍速档位并排。
+ * 播放设置面板里的开关行。偏好项共用同一画法：与设置页、字幕菜单的开关
+ * 同源（`Switch` + `FieldLabel`），标签文字同样可点。
  */
 function PlaybackSettingRow({
+  id,
   label,
   checked,
   onToggle,
 }: {
+  id: string;
   label: string;
   checked: boolean;
   onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={checked}
-      className="flex min-h-9 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
-    >
-      <div
-        className={cn(
-          "flex size-4 shrink-0 items-center justify-center rounded border-2 transition-colors",
-          checked ? "border-primary bg-primary" : "border-muted-foreground/50",
-        )}
-      >
-        {checked && (
-          <svg
-            viewBox="0 0 12 12"
-            fill="none"
-            className="size-3 text-primary-foreground"
-            aria-hidden="true"
-          >
-            <path
-              d="M10 3L4.5 8.5L2 6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        )}
-      </div>
-      <span className="flex-1">{label}</span>
-    </button>
+    <Field orientation="horizontal" className="min-h-9 px-2.5 py-1.5">
+      <FieldLabel htmlFor={id} className="text-sm font-normal">
+        {label}
+      </FieldLabel>
+      <Switch id={id} size="sm" checked={checked} onCheckedChange={() => onToggle()} />
+    </Field>
   );
 }

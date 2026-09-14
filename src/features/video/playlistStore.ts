@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { VideoArchivePage, VideoItem, VideoSeasonEpisode } from "@/shared/types/video";
+import type {
+  SeasonEpisode,
+  VideoArchive,
+  VideoArchivePage,
+  VideoItem,
+  VideoSeasonEpisode,
+} from "@/shared/types/video";
 
 /**
  * 播放列表项：统一 UGC 分 P、PGC 分集与合集的抽象。
@@ -38,6 +44,63 @@ export function playlistItemFromSeasonEpisode(
     duration: episode.duration,
     cover: episode.cover,
   };
+}
+
+/**
+ * 把 PGC 分集转成播放列表项。分集自带 `ep_id`，换集与续播都以它定位。
+ */
+export function playlistItemFromPgcEpisode(episode: SeasonEpisode): PlaylistItem {
+  return {
+    id: `${episode.bvid}_${episode.cid}`,
+    bvid: episode.bvid,
+    cid: episode.cid,
+    epId: episode.ep_id,
+    aid: episode.aid,
+    title: episode.long_title || episode.title,
+    index: episode.title,
+    duration: episode.duration,
+    cover: episode.cover,
+  };
+}
+
+/**
+ * 当前视频自身的选集里，当前项的下一项。
+ *
+ * 「选集」是稿件/剧集自带的顺序，与来源队列（推荐、搜索、UP 投稿）无关：
+ * PGC 走分集表，UGC 优先多 P 分 P，其次合集分集。控制条的「播放下一个」
+ * 只沿它走，因此按钮在视频没有选集或已在最后一集时都不出现。
+ */
+export function nextSelectionItem(input: {
+  /** PGC 的 ep_id；UGC 为 null。 */
+  epId: string | null;
+  bvid: string | null;
+  cid: number;
+  /** PGC 分集表（`epId` 存在时由调用方给出）。 */
+  episodes?: readonly SeasonEpisode[] | null;
+  /** UGC 稿件详情：多 P 分 P 与合集都从这里取。 */
+  archive?: VideoArchive | null;
+}): PlaylistItem | null {
+  if (input.epId) {
+    const items = (input.episodes ?? []).map(playlistItemFromPgcEpisode);
+    const index = items.findIndex((item) => item.epId === input.epId);
+    return index < 0 ? null : (items[index + 1] ?? null);
+  }
+
+  const archive = input.archive;
+  if (!archive) return null;
+
+  if (archive.pages.length > 0) {
+    const items = archive.pages.map((page) =>
+      playlistItemFromArchivePage(archive.bvid, archive.aid, page),
+    );
+    const index = items.findIndex((item) => item.cid === input.cid);
+    return index < 0 ? null : (items[index + 1] ?? null);
+  }
+
+  const episodes = archive.ugc_season?.episodes ?? [];
+  const index = episodes.findIndex((episode) => episode.bvid === input.bvid);
+  const next = index < 0 ? undefined : episodes[index + 1];
+  return next ? playlistItemFromSeasonEpisode(next, index + 1) : null;
 }
 
 /**
@@ -115,30 +178,33 @@ export function playlistItemFromArchivePage(
 /**
  * 一集播完后做什么。
  *
- * 循环播放优先于自动连播：开着它是「就看这一集」的显式意图，不该被连播带走。
- * 没有下一集时连播退化成停住（进度已在 `ended` 里记满）。
+ * 循环播放优先于两种连播：开着它是「就看这一集」的显式意图，不该被连播带走。
+ * 队列没有下一集时退到相关连播（自动连播开关），再没有就停住（进度已在
+ * `ended` 里记满）。
  */
 export function videoEndedAction(
   loopPlayback: boolean,
   autoPlayNext: boolean,
   hasNext: boolean,
-): "loop" | "next" | "stop" {
+  autoPlayRelated: boolean,
+): "loop" | "next" | "related" | "stop" {
   if (loopPlayback) return "loop";
-  return autoPlayNext && hasNext ? "next" : "stop";
+  if (autoPlayNext && hasNext) return "next";
+  return autoPlayRelated ? "related" : "stop";
 }
 
-/** 取当前项沿播放方向的相邻项：step=1 是「下一个」，倒序播放时方向翻转。 */
+/** 取当前项沿播放方向的相邻项：step=1 是「下一个」，-1 是「上一个」。 */
 function adjacentItem(
-  state: Pick<PlaylistState, "items" | "currentId" | "reversed">,
+  state: Pick<PlaylistState, "items" | "currentId">,
   step: 1 | -1,
 ): PlaylistItem | null {
-  const { items, currentId, reversed } = state;
+  const { items, currentId } = state;
   if (items.length === 0 || !currentId) return null;
 
   const currentIndex = items.findIndex((item) => item.id === currentId);
   if (currentIndex === -1) return null;
 
-  const nextIndex = currentIndex + (reversed ? -step : step);
+  const nextIndex = currentIndex + step;
   if (nextIndex < 0 || nextIndex >= items.length) return null;
 
   return items[nextIndex] ?? null;
@@ -160,12 +226,19 @@ type PlaylistState = {
   currentId: string | null;
   /** 临时队列类型，不持久化。 */
   kind: PlaylistKind;
-  /** 播放顺序：true 为倒序，false 为正序。 */
-  reversed: boolean;
   /** 是否自动播放下一集（持久化到本地）。 */
   autoPlayNext: boolean;
-  /** 是否循环播放当前视频（持久化到本地）。优先于自动播放下一集。 */
+  /** 是否循环播放当前视频（持久化到本地）。优先于两种连播。 */
   loopPlayback: boolean;
+  /**
+   * 队列走完后是否自动连播当前视频的相关视频（持久化到本地）。连播目标是相关
+   * 视频接口的第一个；本轮列表随之换成相关流队列。PGC 剧集不适用（无相关视频
+   * 列表，也没有可定位的 bvid）。
+   *
+   * 默认开启：来源流播完接着看相关视频在引入开关前就是既有行为，这个开关是给
+   * 它一个显式出口与固定节拍，而不是把它变成要用户自己去找的选配。
+   */
+  autoPlayRelated: boolean;
   /** 队列来源 UP 标记（不持久化，重开应用即失效）。普通来源与清空队列时为 null。 */
   uploader: PlaylistUploader | null;
 };
@@ -182,12 +255,12 @@ type PlaylistActions = {
   clearPlaylist: () => void;
   /** 切换当前播放项。 */
   setCurrentItem: (id: string) => void;
-  /** 切换播放顺序。 */
-  toggleReversed: () => void;
   /** 切换自动播放下一集。 */
   toggleAutoPlayNext: () => void;
   /** 切换循环播放。 */
   toggleLoopPlayback: () => void;
+  /** 切换队列走完后自动连播相关视频。 */
+  toggleAutoPlayRelated: () => void;
   /** 获取下一个播放项（如果有）。 */
   getNextItem: () => PlaylistItem | null;
   /** 获取可自动连播的下一项；推荐流的邻项不作为下一集。 */
@@ -204,9 +277,9 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
       items: [],
       currentId: null,
       kind: "sequence",
-      reversed: false,
       autoPlayNext: true,
       loopPlayback: false,
+      autoPlayRelated: true,
       uploader: null,
 
       setPlaylist: (items, startId, kind, uploader) =>
@@ -230,11 +303,6 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
           currentId: id,
         }),
 
-      toggleReversed: () =>
-        set((state) => ({
-          reversed: !state.reversed,
-        })),
-
       toggleAutoPlayNext: () =>
         set((state) => ({
           autoPlayNext: !state.autoPlayNext,
@@ -243,6 +311,11 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
       toggleLoopPlayback: () =>
         set((state) => ({
           loopPlayback: !state.loopPlayback,
+        })),
+
+      toggleAutoPlayRelated: () =>
+        set((state) => ({
+          autoPlayRelated: !state.autoPlayRelated,
         })),
 
       getNextItem: () => adjacentItem(get(), 1),
@@ -273,7 +346,7 @@ export const usePlaylistStore = create<PlaylistState & PlaylistActions>()(
       partialize: (state) => ({
         autoPlayNext: state.autoPlayNext,
         loopPlayback: state.loopPlayback,
-        reversed: state.reversed,
+        autoPlayRelated: state.autoPlayRelated,
       }),
     },
   ),

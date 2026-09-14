@@ -195,11 +195,14 @@ message DanmakuElem {
 - 底部 Shell 仅桌面端显示链接操作，移动端统一从播放器 HUD 菜单访问。详情侧栏保留底部安全区 padding。
 
 
-### 播放偏好（循环播放与音量记忆）
+### 播放偏好（循环播放、连播与音量记忆）
 
-- 普通详情模式的「播放设置」弹层分为清晰度、倍速和播放偏好。「循环播放」常驻，「自动播放下一集」「倒序播放」只在列表多于一项时出现；三项由 `playlistStore` 持久化到 localStorage `video-playlist`。
-- 推荐/热门/相关流队列保留手动切换，但不把下一条当作自动播放下一集；普通详情播完来源流后按相关视频接口顺序继续。搜索、UP 投稿及显式点选分 P/合集分集仍可自动连播；稿件信息不覆盖已有来源队列，无有效来源的多 P 直链仍自动建立选集队列。
-- 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext)` 决定，优先级固定：循环 > 连播 > 停住；推荐/热门/相关流的队列邻项不计入 `hasNext`，普通详情在这类来源队列结束后转取当前视频的相关视频。循环是「就看这一集」的显式意图，不该被连播带走；没有可连播的下一集且相关视频为空时停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效。
+- 普通详情模式的「播放设置」弹层分为清晰度、倍速和播放偏好开关。开关行与设置页、字幕菜单同源（`Field` + `FieldLabel` + `Switch`，标签可点）；「循环播放」常驻，有列表时多一项「自动播放下一集」，UGC 多一项「自动连播」；三项由 `playlistStore` 持久化到 localStorage `video-playlist`。
+- 「播放下一个」按钮只认当前视频自身的选集：`nextSelectionItem` 按 PGC 分集表 / UGC 多 P / UGC 合集顺序取当前项的下一项，取不到（无选集或已在最后一集）就不传 `onNext`，按钮随之消失。它不沿来源队列 —— 来源队列的切换仍由键盘 `N`/`P` 与滑动承担，因此按钮在推荐、搜索、UP 投稿队列里不再出现。
+- 推荐/热门/相关流队列保留手动切换，但不把下一条当作自动播放下一集；搜索、UP 投稿及显式点选分 P/合集分集仍可自动连播；稿件信息不覆盖已有来源队列，无有效来源的多 P 直链仍自动建立选集队列。
+- 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext, autoPlayRelated)` 决定，优先级固定：循环 > 连播下一集 > 连播相关视频 > 停住。`hasNext` 只看来源队列邻项，推荐/热门/相关流的邻项不计入（`getNextAutoPlayItem` 对 `feed` 返回 null），这类队列走完即落到相关连播。循环是「就看这一集」的显式意图，不该被连播带走；`autoPlayRelated` 是 UGC 专属偏好（PGC 没有相关视频列表，也没有可定位的 bvid），关闭或相关视频为空时停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效。
+- 两条连播的等待窗口不同：换集 1 秒，相关连播 3 秒。跳转前的校验按已定下的 `action` 只查它对应的开关现值（`stillWanted`），因此等待期间关掉开关、按暂停、换片或重播都会取消这次跳转；`cancelled`/`loopPlayback` 又是两条路径共用的守卫。
+- 相关连播沿用来源队列耗尽时的同一条路径（`playRelatedItem`：取相关视频接口、按 `relatedPlaylistItems` 去重并滤掉当前视频、以 `feed` 类型装入队列、跳转第一个）。
 - 循环重播走原生 `media.currentTime = 0` + `play()`（与 seek 同一条 DASH 路径）；进度已在 `ended` 里按总时长记满，观看历史仍认定「已看完」，下次进入从头播放。
 - 音量与静音由 `src/shared/playerVolume.ts` 记在 localStorage `rlive-player-volume`，视频页、直播页、IPTV 播放页与录制回放共享同一份：初值取 `readPlayerVolume()`，音量/静音状态变化写 `rememberPlayerVolume()`（同值不重渲染，一次拖动最多写它经过的档位数，不需要节流）。不参与的两处：多画面按槽位各存一份音量（副画面默认静音是角色语义）；Android 真实音量是系统媒体音量（由 OS 记住），网页层固定 100 且不落盘，否则会把 100 写进桌面端的记忆。
 
