@@ -641,9 +641,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
             <ArrowDownToLine className="size-4.5" aria-hidden />
             {unreadCount > 0 && (
               // 抵掉 Badge 默认 h-5 与透明边框，否则角标会比原药丸大一圈
-              <Badge
-                className="absolute -top-1.5 -right-1.5 h-auto min-w-4.5 rounded-full border-0 px-1 py-px text-[10px] leading-4 font-semibold tabular-nums"
-              >
+              <Badge className="absolute -top-1.5 -right-1.5 h-auto min-w-4.5 rounded-full border-0 px-1 py-px text-[10px] leading-4 font-semibold tabular-nums">
                 {unreadCount > 99 ? "99+" : unreadCount}
               </Badge>
             )}

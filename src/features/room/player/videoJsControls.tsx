@@ -41,7 +41,13 @@ export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps
         <PlayerSurface
           ref={ref}
           variant={variant}
-          hotkeys={isVod ? <VideoHotkeys onToggleFullscreen={onToggleFullscreen} /> : <LiveVideoHotkeys onToggleFullscreen={onToggleFullscreen} />}
+          hotkeys={
+            isVod ? (
+              <VideoHotkeys onToggleFullscreen={onToggleFullscreen} />
+            ) : (
+              <LiveVideoHotkeys onToggleFullscreen={onToggleFullscreen} />
+            )
+          }
           statusIndicators={isVod ? <VideoStatusIndicators /> : <LiveVideoStatusIndicators />}
           controlsSlot={controls}
           onToggleFullscreen={onToggleFullscreen}

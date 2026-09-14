@@ -12,7 +12,11 @@ export type FullscreenButtonProps = {
   fullscreen?: boolean;
 };
 
-export function FullscreenButton({ className, fullscreen = false, ...props }: FullscreenButtonProps = {}) {
+export function FullscreenButton({
+  className,
+  fullscreen = false,
+  ...props
+}: FullscreenButtonProps = {}) {
   return (
     <Button
       className={cn("group/fullscreen r-live-media-extension-button", className)}

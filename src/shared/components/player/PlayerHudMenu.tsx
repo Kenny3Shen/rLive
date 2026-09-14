@@ -10,7 +10,10 @@ import {
   glassPanelClass,
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
-import { PLAYER_HUD_BUTTON_CLASS, PLAYER_HUD_ICON_CLASS } from "@/shared/components/player/PlayerControls";
+import {
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
+} from "@/shared/components/player/PlayerControls";
 import { ToolActiveDot } from "@/shared/components/player/ToolActiveDot";
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { cn } from "@/lib/utils";

@@ -7,7 +7,10 @@ export interface LiveVideoHotkeysProps {
   onToggleFullscreen?: () => void;
 }
 
-export function LiveVideoHotkeys({ disabled = false, onToggleFullscreen }: LiveVideoHotkeysProps = {}) {
+export function LiveVideoHotkeys({
+  disabled = false,
+  onToggleFullscreen,
+}: LiveVideoHotkeysProps = {}) {
   useEffect(() => {
     if (disabled || !onToggleFullscreen) return;
 

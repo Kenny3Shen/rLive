@@ -249,7 +249,7 @@
   --container-media-xl: 36rem;
   --container-media-2xl: 42rem;
   --container-media-dialog: var(--media-dialog-max-width);
-  --text-media-xs: .7em;
+  --text-media-xs: 0.7em;
   --text-media-sm: calc(var(--media-spacing) * 2.75);
   --text-media: calc(var(--media-spacing) * 3.25);
   --text-media-lg: calc(var(--media-spacing) * 3.75);
@@ -1307,127 +1307,110 @@ html.overlay-window #root {
 }
 
 @utility duration-media-* {
-    transition-duration: --value(--duration-media-*);
+  transition-duration: --value(--duration-media-*);
 }
 
 @utility delay-media-* {
-    transition-delay: --value(--delay-media-*);
+  transition-delay: --value(--delay-media-*);
 }
 
 @utility backdrop-filter-media-* {
-    backdrop-filter: --value(--backdrop-filter-media-*);
+  backdrop-filter: --value(--backdrop-filter-media-*);
 }
 
 @utility font-media {
-    font-family: var(--media-font-family, "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif);
+  font-family: var(
+    --media-font-family,
+    "Inter Variable",
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    sans-serif
+  );
 }
 
 @custom-variant media-opaque {
-
-@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-
-@slot ;
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    @slot;
   }
 }
 
 @custom-variant media-xs {
-
-@container media-root (width >= theme(--container-media-xs)) {
-
-@slot ;
+  @container media-root (width >= theme(--container-media-xs)) {
+    @slot;
   }
 }
 
 @custom-variant media-max-xs {
-
-@container media-root (width < theme(--container-media-xs)) {
-
-@slot ;
+  @container media-root (width < theme(--container-media-xs)) {
+    @slot;
   }
 }
 
 @custom-variant media-sm {
-
-@container media-root (width >= theme(--container-media-sm)) {
-
-@slot ;
+  @container media-root (width >= theme(--container-media-sm)) {
+    @slot;
   }
 }
 
 @custom-variant media-max-sm {
-
-@container media-root (width < theme(--container-media-sm)) {
-
-@slot ;
+  @container media-root (width < theme(--container-media-sm)) {
+    @slot;
   }
 }
 
 @custom-variant media-md {
-
-@container media-root (width >= theme(--container-media-md)) {
-
-@slot ;
+  @container media-root (width >= theme(--container-media-md)) {
+    @slot;
   }
 }
 
 @custom-variant media-max-md {
-
-@container media-root (width < theme(--container-media-md)) {
-
-@slot ;
+  @container media-root (width < theme(--container-media-md)) {
+    @slot;
   }
 }
 
 @custom-variant media-lg {
-
-@container media-root (width >= theme(--container-media-lg)) {
-
-@slot ;
+  @container media-root (width >= theme(--container-media-lg)) {
+    @slot;
   }
 }
 
 @custom-variant media-max-lg {
-
-@container media-root (width < theme(--container-media-lg)) {
-
-@slot ;
+  @container media-root (width < theme(--container-media-lg)) {
+    @slot;
   }
 }
 
 @custom-variant media-xl {
-
-@container media-root (width >= theme(--container-media-xl)) {
-
-@slot ;
+  @container media-root (width >= theme(--container-media-xl)) {
+    @slot;
   }
 }
 
 @custom-variant media-max-xl {
-
-@container media-root (width < theme(--container-media-xl)) {
-
-@slot ;
+  @container media-root (width < theme(--container-media-xl)) {
+    @slot;
   }
 }
 
 @custom-variant media-2xl {
-
-@container media-root (width >= theme(--container-media-2xl)) {
-
-@slot ;
+  @container media-root (width >= theme(--container-media-2xl)) {
+    @slot;
   }
 }
 
 @custom-variant media-max-2xl {
-
-@container media-root (width < theme(--container-media-2xl)) {
-
-@slot ;
+  @container media-root (width < theme(--container-media-2xl)) {
+    @slot;
   }
 }
 
 @custom-variant media-highlighted {
-  &:where(:focus-visible, [aria-expanded="true"], [data-highlighted]):where(:not([aria-disabled="true"])) {
+  &:where(:focus-visible, [aria-expanded="true"], [data-highlighted]):where(
+      :not([aria-disabled="true"])
+    ) {
     @slot;
   }
 
@@ -1446,119 +1429,146 @@ html.overlay-window #root {
 }
 
 @custom-variant media-anchored {
-
-@supports (top: anchor(top)) {
-
-@slot ;
+  @supports (top: anchor(top)) {
+    @slot;
   }
 }
 
 @utility highlight-media {
-    background-color: var(--media-accent);
-    color: var(--media-accent-foreground);
+  background-color: var(--media-accent);
+  color: var(--media-accent-foreground);
 }
 
 @utility surface-media {
-    box-shadow: 0 0 0 1px var(--media-surface-border, var(--media-border)), var(--media-shadow-surface);
-    backdrop-filter: var(--media-backdrop-filter-surface);
+  box-shadow:
+    0 0 0 1px var(--media-surface-border, var(--media-border)),
+    var(--media-shadow-surface);
+  backdrop-filter: var(--media-backdrop-filter-surface);
 }
 
 @utility surface-media-inset {
-    position: absolute;
-    inset: 0;
-    z-index: 10;
-    pointer-events: none;
-    border-radius: inherit;
-    box-shadow: var(--media-shadow-surface-inset);
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: var(--media-shadow-surface-inset);
 }
 
 @utility surface-media-none {
-    background-color: transparent;
-    box-shadow: none;
-    backdrop-filter: none;
+  background-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 @utility focus-ring-media {
-    outline: 2px solid transparent;
-    outline-offset: -2px;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
 }
 
 @utility mask-media-volume {
-    mask-repeat: no-repeat;
-    mask-position: 100% 0;
-    transition: mask-position var(--media-duration-instant) ease-out;
+  mask-repeat: no-repeat;
+  mask-position: 100% 0;
+  transition: mask-position var(--media-duration-instant) ease-out;
 }
 
 @utility mask-media-volume-open {
-    mask-image: linear-gradient(to right, transparent 10%, black 25%, black 100%);
-    mask-position: 0 0;
+  mask-image: linear-gradient(to right, transparent 10%, black 25%, black 100%);
+  mask-position: 0 0;
 }
 
 @utility nudge-media {
-    transform: translateX(0.25px);
-    transition: transform 300ms linear(0, -24 20%, 16 40%, -8 60%, 4 80%, 1);
+  transform: translateX(0.25px);
+  transition: transform 300ms linear(0, -24 20%, 16 40%, -8 60%, 4 80%, 1);
 }
 
 @utility layer-media {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border-radius: inherit;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
 }
 
 @utility object-media {
-    object-fit: var(--media-object-fit, contain);
-    object-position: var(--media-object-position, center);
+  object-fit: var(--media-object-fit, contain);
+  object-position: var(--media-object-position, center);
 }
 
 @utility transition-media-popup {
-    transition-property: opacity, filter, transform, scale;
-    transition-duration: var(--media-duration-fast);
-    transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
+  transition-property: opacity, filter, transform, scale;
+  transition-duration: var(--media-duration-fast);
+  transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
 
 @utility transition-media-menu-resize {
-    transition-property: opacity, filter, transform, scale, width, height;
-    transition-duration: var(--media-duration-fast), var(--media-duration-fast), var(--media-duration-fast), var(--media-duration-fast), var(--media-duration-menu), var(--media-duration-menu);
+  transition-property: opacity, filter, transform, scale, width, height;
+  transition-duration:
+    var(--media-duration-fast), var(--media-duration-fast), var(--media-duration-fast),
+    var(--media-duration-fast), var(--media-duration-menu), var(--media-duration-menu);
 }
 
 @utility motion-media-* {
-    transition-property: --value([*]);
-    will-change: --value([*]);
+  transition-property: --value([*]);
+  will-change: --value([*]);
 }
 
 @utility anchor-media-highlight {
-    position: absolute;
-    position-anchor: --media-menu-item-highlight-anchor;
-    inset: anchor(inside);
-    overflow-anchor: none;
-    pointer-events: none;
-    border-radius: var(--media-menu-item-radius);
-    background-color: var(--media-accent);
-    transition: inset var(--media-duration-fast) ease-in-out;
+  position: absolute;
+  position-anchor: --media-menu-item-highlight-anchor;
+  inset: anchor(inside);
+  overflow-anchor: none;
+  pointer-events: none;
+  border-radius: var(--media-menu-item-radius);
+  background-color: var(--media-accent);
+  transition: inset var(--media-duration-fast) ease-in-out;
 }
 
 @utility clip-media-x-* {
-    clip-path: inset(0 calc(100% - var(--value([*]))) 0 0 round var(--media-control-radius));
+  clip-path: inset(0 calc(100% - var(--value([*]))) 0 0 round var(--media-control-radius));
 }
 
 @utility clip-media-y-* {
-    clip-path: inset(calc(100% - var(--value([*]))) 0 0 0 round var(--media-control-radius));
+  clip-path: inset(calc(100% - var(--value([*]))) 0 0 0 round var(--media-control-radius));
 }
 
 @utility clip-media-chapter-x {
-    clip-path: inset(0 calc(100% - var(--media-slider-chapter-end)) 0 var(--media-slider-chapter-start));
+  clip-path: inset(
+    0 calc(100% - var(--media-slider-chapter-end)) 0 var(--media-slider-chapter-start)
+  );
 }
 
 @utility clip-media-chapter-y {
-    clip-path: inset(calc(100% - var(--media-slider-chapter-end)) 0 var(--media-slider-chapter-start) 0);
+  clip-path: inset(
+    calc(100% - var(--media-slider-chapter-end)) 0 var(--media-slider-chapter-start) 0
+  );
 }
 
 @utility clip-media-chapter-track-x {
-    clip-path: inset( 0 calc(100% - var(--media-slider-chapter-end) + var(--media-spacing) * var(--media-chapter-inset-end)) 0 calc(var(--media-slider-chapter-start) + var(--media-spacing) * var(--media-chapter-inset-start)) round var(--media-control-radius) );
+  clip-path: inset(
+    0
+      calc(
+        100% - var(--media-slider-chapter-end) + var(--media-spacing) *
+          var(--media-chapter-inset-end)
+      )
+      0
+      calc(
+        var(--media-slider-chapter-start) + var(--media-spacing) * var(--media-chapter-inset-start)
+      )
+      round var(--media-control-radius)
+  );
 }
 
 @utility clip-media-chapter-track-y {
-    clip-path: inset( calc(100% - var(--media-slider-chapter-end) + var(--media-spacing) * var(--media-chapter-inset-end)) 0 calc(var(--media-slider-chapter-start) + var(--media-spacing) * var(--media-chapter-inset-start)) 0 round var(--media-control-radius) );
+  clip-path: inset(
+    calc(
+        100% - var(--media-slider-chapter-end) + var(--media-spacing) *
+          var(--media-chapter-inset-end)
+      )
+      0
+      calc(
+        var(--media-slider-chapter-start) + var(--media-spacing) * var(--media-chapter-inset-start)
+      )
+      0 round var(--media-control-radius)
+  );
 }

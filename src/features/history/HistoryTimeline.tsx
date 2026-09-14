@@ -19,8 +19,9 @@ function offsetWithinScroller(node: HTMLElement, scroller: HTMLElement): number 
     // 定位祖先链绕过了滚动容器（理论上不会：`app-page` 是 relative），
     // 退回 rect 差值，至少不会把窗口锚到 0。
     if (!(parent instanceof HTMLElement)) {
-      return node.getBoundingClientRect().top - scroller.getBoundingClientRect().top +
-        scroller.scrollTop;
+      return (
+        node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+      );
     }
     current = parent;
   }

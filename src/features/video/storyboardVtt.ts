@@ -38,10 +38,7 @@ export function storyboardToVtt(
 
   // B 站快照 index 规范中第 0 项恒为 0，第 1 项为第 0 张图对应的时间（0 秒）。
   // 若首两项均为 0，则从第 1 项起算；否则按完整数组处理。
-  const times =
-    index.length > 1 && index[0] === 0 && index[1] === 0
-      ? index.slice(1)
-      : index;
+  const times = index.length > 1 && index[0] === 0 && index[1] === 0 ? index.slice(1) : index;
 
   if (times.length === 0) return "";
 

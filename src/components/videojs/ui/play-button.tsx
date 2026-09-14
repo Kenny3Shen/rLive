@@ -11,7 +11,9 @@ export function PlayButton({ className, ...props }: PlayButtonProps = {}) {
   return (
     <PlayButtonPrimitive
       render={<Button />}
-      className={(state) => cn("group/play r-live-media-extension-button", resolveClassName(className, state))}
+      className={(state) =>
+        cn("group/play r-live-media-extension-button", resolveClassName(className, state))
+      }
       {...props}
     >
       <RotateCcw

@@ -11,7 +11,9 @@ export function MuteButton({ className, ...props }: MuteButtonProps = {}) {
   return (
     <MuteButtonPrimitive
       render={<Button />}
-      className={(state) => cn("group/mute r-live-media-extension-button", resolveClassName(className, state))}
+      className={(state) =>
+        cn("group/mute r-live-media-extension-button", resolveClassName(className, state))
+      }
       {...props}
     >
       <VolumeX

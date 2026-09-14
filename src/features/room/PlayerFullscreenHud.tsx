@@ -3,7 +3,10 @@ import { Car, Cast, ChevronLeft, Timer, type LucideIcon } from "lucide-react";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { glassSeparatorClass } from "@/shared/components/player/glassSurface";
-import { PLAYER_HUD_BUTTON_CLASS, PLAYER_HUD_ICON_CLASS } from "@/shared/components/player/PlayerControls";
+import {
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
+} from "@/shared/components/player/PlayerControls";
 import {
   PlayerHudOverflowMenu,
   PlayerToolPanel,

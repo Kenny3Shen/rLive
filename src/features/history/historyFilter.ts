@@ -23,7 +23,9 @@ function parseLocalDay(value: string): Date | null {
   const [year, month, day] = value.split("-").map(Number) as [number, number, number];
   const parsed = new Date(year, month - 1, day);
   // `new Date(2026, 1, 30)` 会滑到 3 月：逐字段比对挡掉不存在的日期。
-  return parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day
+  return parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day
     ? parsed
     : null;
 }
