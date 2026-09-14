@@ -50,7 +50,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
-base64 = "0.22"
+base64 = "0.23"
 md-5 = "0.11"
 hex = "0.4"
 percent-encoding = "2"
@@ -63,7 +63,7 @@ native-tls = "0.2"
 socket2 = { version = "0.6", features = ["all"] }
 futures-util = "0.3"
 flate2 = "1"
-brotli = "8"
+brotli = "9"
 uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.15"
 
@@ -82,7 +82,7 @@ sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shar
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Local ASR is a desktop-only feature. Keep its model archive and data-path
 # dependencies out of the Android Rust graph as well as out of the UI.
-dirs = "6"
+dirs = "7"
 tar = "0.4"
 bzip2 = "0.6"
 
