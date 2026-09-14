@@ -2,7 +2,16 @@ import { useState } from "react";
 import { Car, Timer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -30,9 +39,12 @@ export type RoomToolMenuVariant = "default" | "overlay";
 type MenuStyle = {
   text: string;
   mutedText: string;
+  errorText: string;
   control: string;
   badge: string;
   divider: string;
+  /** 玻璃材质上的分段选择：不透明 token 会在材质上凿洞。 */
+  toggle: string;
 };
 
 function menuStyle(variant: RoomToolMenuVariant): MenuStyle {
@@ -40,18 +52,23 @@ function menuStyle(variant: RoomToolMenuVariant): MenuStyle {
     return {
       text: "text-white",
       mutedText: "text-white/65",
+      errorText: "text-red-300",
       control:
         "border-white/15 bg-black/15 text-white placeholder:text-white/45 [&_[data-slot=input-group-control]]:text-white",
       badge: "border-white/20 text-white/75",
       divider: "border-white/10",
+      toggle:
+        "text-white hover:bg-white/12 hover:text-white aria-pressed:bg-white/18 aria-pressed:text-white",
     };
   }
   return {
     text: "text-foreground",
     mutedText: "text-muted-foreground",
+    errorText: "text-destructive",
     control: "",
     badge: "",
     divider: "border-border/60",
+    toggle: "",
   };
 }
 
@@ -124,15 +141,13 @@ export function AutoDanmakuSendMenu({
   const enabledId = `${idPrefix}-enabled`;
 
   return (
-    <div className={cn("min-w-0 space-y-4", style.text)}>
+    <FieldGroup className={cn("min-w-0 gap-4", style.text)}>
       {showHeader && (
         <MenuHeader icon={Car} label="自动发送弹幕" badge={segmentLabel} variant={variant} />
       )}
 
-      <div className="space-y-2">
-        <label htmlFor={textId} className="block text-sm font-medium">
-          发送内容
-        </label>
+      <Field>
+        <FieldLabel htmlFor={textId}>发送内容</FieldLabel>
         <Textarea
           id={textId}
           value={autoSend.text}
@@ -141,12 +156,10 @@ export function AutoDanmakuSendMenu({
           className={cn("min-h-20 resize-y", style.control)}
           onChange={(event) => autoSend.onTextChange(event.target.value)}
         />
-      </div>
+      </Field>
 
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2">
-        <label htmlFor={intervalId} className="min-w-0 text-sm font-medium">
-          发送间隔
-        </label>
+      <Field orientation="horizontal" className="gap-x-4">
+        <FieldLabel htmlFor={intervalId}>发送间隔</FieldLabel>
         <InputGroup className={cn("w-28 max-w-full", style.control)}>
           <InputGroupInput
             id={intervalId}
@@ -166,37 +179,31 @@ export function AutoDanmakuSendMenu({
             秒
           </InputGroupAddon>
         </InputGroup>
-      </div>
+      </Field>
 
-      <div
-        className={cn(
-          "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-t pt-3",
-          style.divider,
-        )}
-      >
-        <div className="min-w-0">
-          <label htmlFor={enabledId} className="block text-sm font-medium">
-            自动发送
-          </label>
-          <p
-            className={cn(
-              "mt-1 break-words text-xs leading-5",
-              statusIsError ? "text-red-300" : style.mutedText,
-            )}
+      <Field orientation="horizontal" className={cn("gap-3 border-t pt-3", style.divider)}>
+        <FieldContent>
+          <FieldLabel htmlFor={enabledId}>自动发送</FieldLabel>
+          {/* 状态是运行态而非校验错误：polite 播报，不用 FieldError 的 alert。 */}
+          <FieldDescription
             role="status"
             aria-live="polite"
+            className={cn(
+              "break-words text-xs leading-5",
+              statusIsError ? style.errorText : style.mutedText,
+            )}
           >
             {autoSend.statusMessage}
-          </p>
-        </div>
+          </FieldDescription>
+        </FieldContent>
         <Switch
           id={enabledId}
           checked={autoSend.enabled}
           disabled={!autoSend.canEnable}
           onCheckedChange={autoSend.onEnabledChange}
         />
-      </div>
-    </div>
+      </Field>
+    </FieldGroup>
   );
 }
 
@@ -228,6 +235,10 @@ export function SleepTimerMenu({
     setMinutesDraft(String(timer.durationMinutes));
   }
 
+  // 手输的分钟数只有正好落在预设上才回显选中，避免 37 分钟点亮 30 分钟那颗。
+  const presetValue = SLEEP_TIMER_PRESETS.some((minutes) => String(minutes) === minutesDraft)
+    ? [minutesDraft]
+    : [];
   const startTimer = () => {
     const minutes = Number(minutesDraft);
     if (!Number.isFinite(minutes) || minutes < MIN_SLEEP_TIMER_MINUTES) {
@@ -303,35 +314,31 @@ export function SleepTimerMenu({
               </Button>
             </div>
           ) : (
-            <>
-              <div
-                className={cn("grid grid-cols-4 gap-1.5", !showTrigger && showHeader && "mt-3")}
-                role="group"
+            <Field className={cn("gap-2", !showTrigger && showHeader && "mt-3")}>
+              <ToggleGroup
+                size="sm"
+                spacing={1.5}
                 aria-label="快速设置定时"
+                value={presetValue}
+                onValueChange={(next) => {
+                  const minutes = next[0];
+                  if (!minutes) return;
+                  setMinutesDraft(minutes);
+                  setDraftError(null);
+                }}
+                className="grid w-full grid-cols-4"
               >
                 {SLEEP_TIMER_PRESETS.map((minutes) => (
-                  <Button
+                  <ToggleGroupItem
                     key={minutes}
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    className={cn(
-                      "min-w-0 px-0.5 text-xs font-medium",
-                      variant === "overlay" && glassOptionClass(),
-                      variant === "overlay" &&
-                        minutesDraft === String(minutes) &&
-                        glassOptionSelectedClass(),
-                    )}
-                    onClick={() => {
-                      setMinutesDraft(String(minutes));
-                      setDraftError(null);
-                    }}
+                    value={String(minutes)}
+                    className={cn("min-w-0 px-0.5 text-xs font-medium", style.toggle)}
                   >
                     {minutes} 分钟
-                  </Button>
+                  </ToggleGroupItem>
                 ))}
-              </div>
-              <div className="mt-2 flex min-w-0 items-start gap-2">
+              </ToggleGroup>
+              <div className="flex min-w-0 items-start gap-2">
                 <InputGroup className={cn("min-w-0 flex-1", style.control)}>
                   <InputGroupInput
                     aria-label="定时分钟数"
@@ -355,8 +362,10 @@ export function SleepTimerMenu({
                   开始
                 </Button>
               </div>
-              {draftError && <p className="mt-2 text-xs text-red-300">{draftError}</p>}
-            </>
+              {draftError && (
+                <FieldError className={cn("text-xs", style.errorText)}>{draftError}</FieldError>
+              )}
+            </Field>
           )}
         </div>
       )}

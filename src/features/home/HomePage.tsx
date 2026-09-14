@@ -273,9 +273,15 @@ export function HomePage() {
               </EmptyContent>
             </Empty>
           ) : (
-            <div className="flex flex-col items-center justify-center gap-2 py-24 text-muted-foreground">
-              <p className="text-sm">暂无 {SITE_LABELS[siteId] ?? siteId} 推荐直播</p>
-            </div>
+            <Empty className="min-h-64 py-12">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Radio aria-hidden />
+                </EmptyMedia>
+                <EmptyTitle>暂无 {SITE_LABELS[siteId] ?? siteId} 推荐直播</EmptyTitle>
+                <EmptyDescription>稍后再来，或下拉刷新试试。</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ))}
 
         {rooms.length > 0 && <RoomGrid rooms={rooms} />}

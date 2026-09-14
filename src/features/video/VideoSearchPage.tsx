@@ -12,6 +12,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import { videoSearch } from "./videoApi";
 import { VideoGrid } from "./VideoCard";
 import { VideoSearchFiltersBar } from "./VideoSearchFiltersBar";
@@ -117,7 +118,7 @@ export function VideoSearchPage() {
         </>
       ) : keyword ? (
         <div className="flex justify-center py-12">
-          <Loader2 className="size-8 animate-spin" />
+          <Spinner className="size-8" />
         </div>
       ) : (
         <Empty className="min-h-56 py-10">

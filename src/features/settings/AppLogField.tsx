@@ -28,6 +28,7 @@ import {
   FieldTitle,
 } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn, formatByteSize } from "@/lib/utils";
 import { getClientPlatform, isMobileClient } from "@/shared/clientPlatform";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -210,24 +211,21 @@ export function AppLogField() {
         </DrawerDescription>
 
         {hasPrevious && (
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant={tab === "current" ? "secondary" : "ghost"}
-              onClick={() => setTab("current")}
-            >
-              当前日志
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={tab === "previous" ? "secondary" : "ghost"}
-              onClick={() => setTab("previous")}
-            >
-              上一份日志
-            </Button>
-          </div>
+          <ToggleGroup
+            aria-label="选择要查看的日志文件"
+            className="shrink-0"
+            value={[tab]}
+            variant="outline"
+            size="sm"
+            spacing={1}
+            onValueChange={(values) => {
+              const next = values[0];
+              if (next === "current" || next === "previous") setTab(next);
+            }}
+          >
+            <ToggleGroupItem value="current">当前日志</ToggleGroupItem>
+            <ToggleGroupItem value="previous">上一份日志</ToggleGroupItem>
+          </ToggleGroup>
         )}
 
         <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/40 p-3">

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { ArrowDownToLine, Ban, Copy, MessageSquarePlus, Star } from "lucide-react";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -639,9 +640,12 @@ export const DanmakuPanel = memo(function DanmakuPanel({
           >
             <ArrowDownToLine className="size-4.5" aria-hidden />
             {unreadCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-4.5 rounded-full bg-primary px-1 py-px text-center text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums">
+              // 抵掉 Badge 默认 h-5 与透明边框，否则角标会比原药丸大一圈
+              <Badge
+                className="absolute -top-1.5 -right-1.5 h-auto min-w-4.5 rounded-full border-0 px-1 py-px text-[10px] leading-4 font-semibold tabular-nums"
+              >
                 {unreadCount > 99 ? "99+" : unreadCount}
-              </span>
+              </Badge>
             )}
           </Button>
         )}

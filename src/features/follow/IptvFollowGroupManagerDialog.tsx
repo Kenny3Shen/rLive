@@ -12,7 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -169,11 +170,7 @@ export function IptvFollowGroupManagerDialog({
                   </InputGroupButton>
                 </InputGroupAddon>
               </InputGroup>
-              {error && (
-                <p role="status" className="text-xs text-destructive">
-                  {error}
-                </p>
-              )}
+              {error && <FieldError className="text-xs">{error}</FieldError>}
             </Field>
           </FieldGroup>
 
@@ -181,7 +178,15 @@ export function IptvFollowGroupManagerDialog({
 
           <div className="flex max-h-72 flex-col overflow-y-auto">
             {groups.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">还没有自定义分组</p>
+              <Empty className="min-h-32 py-8">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Folder aria-hidden />
+                  </EmptyMedia>
+                  <EmptyTitle>还没有自定义分组</EmptyTitle>
+                  <EmptyDescription>在上方输入名称即可创建第一个分组。</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
             ) : (
               groups.map((group, index) => (
                 <div key={group.id}>

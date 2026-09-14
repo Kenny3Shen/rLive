@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowUpCircle, ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,9 +37,10 @@ export function UpdatePrompt() {
           <div className="flex items-center gap-2">
             <DialogTitle>发现新版本</DialogTitle>
             {release && (
-              <span className="rounded-full bg-primary/12 px-2 py-0.5 text-xs font-semibold tabular-nums text-primary">
+              // 版本号与上方图标容器同用 primary/12 淡色：两者是同一条视觉线索。
+              <Badge className="rounded-full border-0 bg-primary/12 font-semibold text-primary tabular-nums">
                 v{release.version}
-              </span>
+              </Badge>
             )}
           </div>
           <DialogDescription>

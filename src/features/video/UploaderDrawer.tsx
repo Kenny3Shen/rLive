@@ -1,11 +1,19 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState, type ComponentProps } from "react";
-import { CalendarClock, Loader2, TrendingUp, X } from "lucide-react";
+import { CalendarClock, TrendingUp, VideoOff, X } from "lucide-react";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import { videoUploaderVideos, type VideoUploaderOrder } from "./videoApi";
 import { VideoCard } from "./VideoCard";
 import { playlistItemFromVideoItem, dedupeVideoItems } from "./playlistStore";
@@ -116,7 +124,15 @@ export function UploaderDrawer({
             {error ? (
               <ErrorState error={error} onRetry={() => refetch()} />
             ) : isEmpty ? (
-              <p className="py-12 text-center text-sm text-muted-foreground">暂无投稿视频</p>
+              <Empty className="min-h-56 py-10">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <VideoOff aria-hidden />
+                  </EmptyMedia>
+                  <EmptyTitle>暂无投稿视频</EmptyTitle>
+                  <EmptyDescription>这位 UP 主还没有公开投稿。</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
             ) : allItems.length > 0 ? (
               <>
                 <div className={GRID_CLASS}>
@@ -134,7 +150,7 @@ export function UploaderDrawer({
                 </div>
                 {hasNextPage && (
                   <div ref={loadMoreRef} className="flex justify-center py-6">
-                    {isFetchingNextPage && <Loader2 className="size-6 animate-spin" />}
+                    {isFetchingNextPage && <Spinner className="size-6" />}
                   </div>
                 )}
                 {!supportsIntersectionObserver && hasNextPage && (
@@ -147,7 +163,7 @@ export function UploaderDrawer({
               </>
             ) : (
               <div className="flex justify-center py-12">
-                <Loader2 className="size-8 animate-spin" />
+                <Spinner className="size-8" />
               </div>
             )}
           </div>

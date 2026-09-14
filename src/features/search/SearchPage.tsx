@@ -18,7 +18,12 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import {
   Select,
   SelectContent,
@@ -149,20 +154,23 @@ export function SearchPage() {
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-5 pb-6">
       <form onSubmit={submit} className="flex w-full max-w-3xl items-center gap-2">
-        <Input
-          ref={inputRef}
-          id="search-keyword"
-          type="search"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="输入主播、房间号或标题"
-          autoComplete="off"
-          aria-label="搜索关键词"
-          className="min-w-0 flex-1"
-        />
-        <Button type="submit" size="icon" aria-label="搜索" title="搜索">
-          <Search aria-hidden />
-        </Button>
+        <InputGroup className="min-w-0 flex-1">
+          <InputGroupInput
+            ref={inputRef}
+            id="search-keyword"
+            type="search"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder="输入主播、房间号或标题"
+            autoComplete="off"
+            aria-label="搜索关键词"
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton type="submit" size="icon-xs" aria-label="搜索" title="搜索">
+              <Search aria-hidden />
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
         <Select
           value={draftScope}
           onValueChange={(value) => {

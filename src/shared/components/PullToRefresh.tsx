@@ -7,7 +7,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import {
   canStartPullToRefresh,
   findVerticalScrollParent,
@@ -261,7 +262,7 @@ export function PullToRefresh({
           className="flex size-9 items-center justify-center rounded-full border border-border-subtle bg-card/95 text-muted-foreground shadow-sm data-[armed=true]:border-primary/30 data-[armed=true]:text-primary"
         >
           {refreshing ? (
-            <Loader2 className="size-4 animate-spin motion-reduced:animate-none" aria-hidden />
+            <Spinner aria-hidden />
           ) : (
             <RefreshCw
               ref={refreshIconRef}

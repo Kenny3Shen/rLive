@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -169,11 +169,7 @@ export function FollowGroupPickerDialog({
                 </InputGroupButton>
               </InputGroupAddon>
             </InputGroup>
-            {error && (
-              <p role="status" className="text-xs text-destructive">
-                {error}
-              </p>
-            )}
+            {error && <FieldError className="text-xs">{error}</FieldError>}
           </Field>
         </FieldGroup>
 

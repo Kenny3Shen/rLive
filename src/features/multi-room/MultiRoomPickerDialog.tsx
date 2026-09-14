@@ -23,7 +23,12 @@ import {
   FieldSeparator,
   FieldSet,
 } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -189,10 +194,9 @@ export function MultiRoomPickerDialog({
 
             <Field data-invalid={manualError ? true : undefined}>
               <FieldLabel htmlFor="multi-room-id">房间号</FieldLabel>
-              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
-                <Input
+              <InputGroup>
+                <InputGroupInput
                   id="multi-room-id"
-                  className="min-w-0 flex-1"
                   value={roomId}
                   placeholder="输入平台房间号"
                   autoComplete="off"
@@ -203,19 +207,22 @@ export function MultiRoomPickerDialog({
                     if (manualError) setManualError(null);
                   }}
                 />
-                <Button
-                  type="submit"
-                  className="w-full shrink-0 sm:w-auto"
-                  disabled={manualPending || full}
-                >
-                  {manualPending ? (
-                    <Spinner data-icon="inline-start" aria-hidden />
-                  ) : (
-                    <Plus data-icon="inline-start" aria-hidden />
-                  )}
-                  添加
-                </Button>
-              </div>
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    type="submit"
+                    variant="secondary"
+                    disabled={manualPending || full}
+                  >
+                    {/* xs 按钮内图标与 Button 基础规则同权重，显式定尺寸避免加载态跳动。 */}
+                    {manualPending ? (
+                      <Spinner className="size-3.5" data-icon="inline-start" aria-hidden />
+                    ) : (
+                      <Plus className="size-3.5" data-icon="inline-start" aria-hidden />
+                    )}
+                    添加
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
               <FieldDescription>房间号会先由平台解析，成功后立即开始播放。</FieldDescription>
               {manualError && <FieldError>{manualError}</FieldError>}
             </Field>

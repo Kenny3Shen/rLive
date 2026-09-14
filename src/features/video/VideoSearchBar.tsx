@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Search, Trash2, X } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { Popover, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { VIDEO_SEARCH_QUERY_PARAM, videoSearchPath } from "./videoRoute";
 
@@ -43,6 +49,9 @@ export function VideoSearchBar({ className }: { className?: string }) {
   const [history, setHistory] = useState<string[]>(readSearchHistory);
   const [showHistory, setShowHistory] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fieldRef = useRef<HTMLDivElement>(null);
+  const inputId = useId();
+  const historyPanelId = useId();
 
   // 返回/前进到别的关键词时，草稿跟随 URL 回放：渲染期调整模式。
   const [prevKeyword, setPrevKeyword] = useState(keyword);
@@ -92,74 +101,111 @@ export function VideoSearchBar({ className }: { className?: string }) {
     setHistory(updated);
   };
 
+  // 只在空态（尚未出结果）弹出，绝不会盖住结果卡片。
+  const historyOpen = showHistory && history.length > 0 && !keyword;
+
   return (
-    <div className={cn("relative flex min-w-0 items-center", className)}>
+    <div className={cn("flex min-w-0 items-center", className)}>
       <form onSubmit={handleSubmit} className="flex h-full min-w-0 flex-1 items-center gap-2">
-        <div className="relative flex min-w-0 flex-1 items-center">
-          <Input
-            ref={inputRef}
-            type="text"
-            placeholder="搜索 B 站视频…"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={() => setShowHistory(true)}
-            className="h-9 w-full min-w-0"
-            aria-label="搜索视频"
-            autoComplete="off"
-          />
-          {draft && (
-            <button
-              type="button"
-              onClick={() => {
-                setDraft("");
-                inputRef.current?.focus();
-              }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              aria-label="清除输入"
-            >
-              <X className="size-4" />
-            </button>
-          )}
-          {/* 搜索历史下拉：只在空态（尚未出结果）弹出，绝不会盖住结果卡片。 */}
-          {showHistory && history.length > 0 && !keyword && (
-            <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-lg">
-              <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                <span className="text-xs text-muted-foreground">搜索历史</span>
-                <button
-                  type="button"
-                  onClick={handleClearHistory}
-                  className="text-xs text-primary hover:underline"
+        <Popover
+          open={historyOpen}
+          // 输入框自己就是 trigger：不套 PopoverTrigger —— 它的 useButton 会给
+          // 容器盖上 role="button"，而 button 里裹 textbox 是坏语义。用 triggerId
+          // 登记，否则受控 popup 停在 data-starting-style 上永远不过渡进场。
+          triggerId={inputId}
+          onOpenChange={(next, details) => {
+            if (next) return;
+            // 焦点始终留在输入框（浮层之外），Base UI 因此把两件事误判成关闭：
+            // 点输入框挪光标算 outside press，聚焦输入框算 focus out。
+            // 只要事件仍落在这块字段里就不是真的离开，否则光标一点历史就没了。
+            const stillInField =
+              details.reason === "outside-press" || details.reason === "focus-out"
+                ? details.event.target instanceof Node &&
+                  (fieldRef.current?.contains(details.event.target) ||
+                    fieldRef.current?.contains(document.activeElement))
+                : false;
+            if (stillInField) return;
+            setShowHistory(false);
+          }}
+        >
+          <InputGroup ref={fieldRef} className="h-9 min-w-0 flex-1">
+            <InputGroupInput
+              id={inputId}
+              ref={inputRef}
+              type="text"
+              placeholder="搜索 B 站视频…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={() => setShowHistory(true)}
+              aria-label="搜索视频"
+              aria-haspopup="dialog"
+              aria-expanded={historyOpen}
+              aria-controls={historyOpen ? historyPanelId : undefined}
+              autoComplete="off"
+            />
+            {draft && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label="清除输入"
+                  onClick={() => {
+                    setDraft("");
+                    inputRef.current?.focus();
+                  }}
                 >
-                  清空
-                </button>
-              </div>
-              <div className="max-h-60 overflow-y-auto">
-                {history.map((item) => (
-                  <div key={item} className="flex items-center gap-1 px-3 py-2 hover:bg-muted">
-                    <button
-                      type="button"
-                      onClick={() => handleHistoryClick(item)}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm"
-                    >
-                      <Search className="size-3.5 text-muted-foreground" />
-                      <span className="flex-1 truncate">{item}</span>
-                    </button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`删除搜索历史“${item}”`}
-                      onClick={() => handleRemoveHistoryItem(item)}
-                      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <Trash2 aria-hidden />
-                    </Button>
-                  </div>
-                ))}
-              </div>
+                  <X aria-hidden />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+          {/* 焦点留在输入框：下拉是提示而非取值控件，开合都不该打断打字。 */}
+          <PopoverContent
+            id={historyPanelId}
+            anchor={fieldRef}
+            align="start"
+            aria-label="搜索历史"
+            initialFocus={false}
+            finalFocus={false}
+            className="w-(--anchor-width) gap-0 overflow-hidden p-0"
+          >
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+              <span className="text-xs text-muted-foreground">搜索历史</span>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                onClick={handleClearHistory}
+                className="h-auto p-0 text-xs"
+              >
+                清空
+              </Button>
             </div>
-          )}
-        </div>
+            <div className="max-h-60 overflow-y-auto">
+              {history.map((item) => (
+                <div key={item} className="flex items-center gap-1 px-3 py-2 hover:bg-muted">
+                  <button
+                    type="button"
+                    onClick={() => handleHistoryClick(item)}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm focus-ring"
+                  >
+                    <Search className="size-3.5 text-muted-foreground" aria-hidden />
+                    <span className="flex-1 truncate">{item}</span>
+                  </button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`删除搜索历史“${item}”`}
+                    onClick={() => handleRemoveHistoryItem(item)}
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Trash2 aria-hidden />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
         <Button type="submit" className="h-9 shrink-0" disabled={!draft.trim()}>
           <Search className="size-4" aria-hidden />
           搜索

@@ -17,6 +17,7 @@ function PopoverContent({
   alignOffset = 0,
   side = "bottom",
   sideOffset = 4,
+  anchor,
   container,
   collisionBoundary = "clipping-ancestors",
   collisionPadding = 5,
@@ -26,6 +27,7 @@ function PopoverContent({
 }: PopoverPrimitive.Popup.Props &
   Pick<
     PopoverPrimitive.Positioner.Props,
+    | "anchor"
     | "align"
     | "alignOffset"
     | "side"
@@ -47,6 +49,7 @@ function PopoverContent({
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Positioner
+        anchor={anchor}
         align={align}
         alignOffset={alignOffset}
         side={side}

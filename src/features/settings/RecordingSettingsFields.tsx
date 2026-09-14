@@ -8,7 +8,12 @@ import {
   FieldLabel,
   FieldTitle,
 } from "@/components/ui/field";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+} from "@/components/ui/input-group";
 import { Textarea } from "@/components/ui/textarea";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { SwitchField } from "@/features/settings/SwitchField";
@@ -124,7 +129,9 @@ function NumberSettingField({
             }
           }}
         />
-        <InputGroupAddon align="inline-end">{unit}</InputGroupAddon>
+        <InputGroupAddon align="inline-end">
+          <InputGroupText>{unit}</InputGroupText>
+        </InputGroupAddon>
       </InputGroup>
     </Field>
   );
@@ -191,7 +198,9 @@ function CompactNumberInput({
           }
         }}
       />
-      <InputGroupAddon align="inline-end">px</InputGroupAddon>
+      <InputGroupAddon align="inline-end">
+        <InputGroupText>px</InputGroupText>
+      </InputGroupAddon>
     </InputGroup>
   );
 }

@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Tv } from "lucide-react";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { invokeCmd } from "@/shared/api/tauri";
 import { cn } from "@/lib/utils";
 import { glassOptionClass, glassTitleClass } from "@/shared/components/player/glassSurface";
@@ -186,14 +193,18 @@ export function CastMenu({
             <ErrorState error={searchError} title="设备搜索失败" onRetry={() => void search()} />
           ) : null}
           {!searching && !searchError && devices && devices.length === 0 && (
-            <p
-              className={cn(
-                "py-4 text-center text-sm",
-                overlay ? "text-white/65" : "text-muted-foreground",
-              )}
-            >
-              未发现可投屏设备，请确认电视已开启 DLNA 并接入同一网络。
-            </p>
+            <Empty className="px-0 py-4">
+              <EmptyHeader>
+                {/* overlay 变体浮在深色玻璃面板上，沿用本文件的白色文字梯度。 */}
+                <EmptyMedia variant="icon" className={cn(overlay && "bg-white/10 text-white")}>
+                  <Tv aria-hidden />
+                </EmptyMedia>
+                <EmptyTitle className={cn(overlay && "text-white")}>未发现可投屏设备</EmptyTitle>
+                <EmptyDescription className={cn(overlay && "text-white/65")}>
+                  请确认电视已开启 DLNA，并与本机接入同一局域网，然后重新搜索。
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           )}
           {devices &&
             devices.map((device) => (

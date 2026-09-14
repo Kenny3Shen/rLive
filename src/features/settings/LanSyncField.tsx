@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Download, RefreshCw, Upload, X } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
@@ -70,6 +70,8 @@ export function LanSyncField() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ProfileImportResult | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // 同页可能挂载多个实例，用 useId 生成唯一 id 供标签关联。
+  const codeInputId = useId();
 
   // latest-ref：提交后同步，卸载清理读到的仍是最新会话状态。
   useLayoutEffect(() => {
@@ -279,9 +281,10 @@ export function LanSyncField() {
                       </FieldGroup>
                     </Field>
                     <Field>
-                      <FieldLabel>配对码</FieldLabel>
+                      <FieldLabel htmlFor={codeInputId}>配对码</FieldLabel>
                       <InputGroup>
                         <InputGroupInput
+                          id={codeInputId}
                           value={session.code}
                           readOnly
                           aria-label="配对码"

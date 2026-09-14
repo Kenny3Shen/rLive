@@ -56,16 +56,20 @@ export function CategoryTile({ category, selected, onClick }: CategoryTileProps)
 
 type ExpandTileProps = {
   expanded: boolean;
+  /** 被展开/收起的磁贴网格 id：这颗按钮本身也在网格里。 */
+  controls: string;
   onClick: () => void;
 };
 
-export function ExpandTile({ expanded, onClick }: ExpandTileProps) {
+export function ExpandTile({ expanded, controls, onClick }: ExpandTileProps) {
   const Icon = expanded ? ChevronUp : ChevronDown;
   return (
     <button
       type="button"
       data-motion-press
       onClick={onClick}
+      aria-expanded={expanded}
+      aria-controls={controls}
       className="group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/65 hover:text-foreground focus-ring"
     >
       <span className="flex size-10 items-center justify-center rounded-lg bg-muted ring-1 ring-border-subtle transition-colors group-hover:bg-sidebar-active">
@@ -111,6 +115,7 @@ export function CategoryGroups({ categories, selectedKey, onSelect }: CategoryGr
         const children = categoryEntriesOf(categories, parent);
         const visibleChildren = expanded ? children : children.slice(0, INITIAL_CATEGORY_COUNT);
         const canExpand = children.length > INITIAL_CATEGORY_COUNT;
+        const gridId = `category-tiles-${parent.id}`;
 
         return (
           <section key={parent.id} aria-labelledby={`category-${parent.id}`}>
@@ -120,7 +125,10 @@ export function CategoryGroups({ categories, selectedKey, onSelect }: CategoryGr
             >
               {parent.name}
             </h2>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4">
+            <div
+              id={gridId}
+              className="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] justify-items-center gap-x-5 gap-y-4"
+            >
               {visibleChildren.map((child) => (
                 <CategoryTile
                   key={child.id}
@@ -130,7 +138,11 @@ export function CategoryGroups({ categories, selectedKey, onSelect }: CategoryGr
                 />
               ))}
               {canExpand && (
-                <ExpandTile expanded={expanded} onClick={() => toggleParent(parent.id)} />
+                <ExpandTile
+                  expanded={expanded}
+                  controls={gridId}
+                  onClick={() => toggleParent(parent.id)}
+                />
               )}
             </div>
           </section>

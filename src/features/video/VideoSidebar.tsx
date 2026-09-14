@@ -233,9 +233,14 @@ function CommentRow({
           </span>
           {isThreadAuthor && <Badge variant="secondary">楼主</Badge>}
           {comment.level > 0 && (
-            <span className="shrink-0 rounded-sm bg-muted px-1 text-[10px] leading-4 text-muted-foreground">
+            // 覆盖 Badge 默认的 h-5/py-0.5/font-medium：等级药丸要贴合 13px 昵称行。
+            // 前景保持 muted：它比同排的「楼主」更弱，不能与昵称抢注意力。
+            <Badge
+              variant="secondary"
+              className="h-auto shrink-0 rounded-sm border-0 px-1 py-0 text-[10px] leading-4 font-normal text-muted-foreground"
+            >
               Lv{comment.level}
-            </span>
+            </Badge>
           )}
         </div>
         <div className="mt-0.5 text-[11px] text-muted-foreground">

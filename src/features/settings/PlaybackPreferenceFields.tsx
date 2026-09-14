@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldContent, FieldError, FieldTitle } from "@/components/ui/field";
 import {
   InputGroup,
@@ -339,7 +340,11 @@ function SettingsEntryList({
           </InputGroup>
           {error && <FieldError role="alert">{error}</FieldError>}
           {entries.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">{emptyText}</p>
+            <Empty className="min-h-32 py-8">
+              <EmptyHeader>
+                <EmptyTitle>{emptyText}</EmptyTitle>
+              </EmptyHeader>
+            </Empty>
           ) : (
             <div className="flex max-h-72 flex-col overflow-y-auto rounded-lg border border-border-subtle">
               {entries.map((entry, index) => (
