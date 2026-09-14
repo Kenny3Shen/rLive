@@ -15,6 +15,7 @@
 | 视图 | React 19 + React Router | 页面组合、路由状态、组件生命周期 |
 | 样式 | Tailwind CSS 4 + `src/styles.css` | 响应式布局、语义颜色、状态过渡、全局关键帧 |
 | UI 组件 | shadcn-style `base-nova` + Base UI | Button、Tabs、Dialog、Drawer、Field、Select 等 |
+| 日历 | `react-day-picker@10`（shadcn `Calendar` 源码内） | 日期选择的月历网格、导航与本地化，样式全部由 Tailwind 类接管 |
 | 图标 | `lucide-react` | 导航、工具按钮、状态图标 |
 | 运行时动画 | Web Animations API（`src/shared/motion/tween.ts`） | 页面入场、Zoom、手势回弹与可中断反馈 |
 | 文档快照 | View Transition API + CSS keyframes | 亮暗主题全局淡化 |
@@ -51,6 +52,7 @@
 新增 UI 时先复用 `src/components/ui/` 现有组件，再考虑扩展 variant，最后才创建新的基础组件。
 
 - 明确命令用 `Button`；二元设置用 `Switch` / `Toggle` / `Checkbox`；有限选项用 `Select` / `ToggleGroup`；页面视图切换用 `Tabs`（`TabsTrigger` 必须在 `TabsList` 内）。
+- 选日期用 `Calendar`（配 `Popover` 组成 date picker，`locale={zhCN}` 取自 `react-day-picker/locale`），不用原生 `<input type="date">`：原生控件的弹出层由 WebView 提供，桌面与 Android 上样式、语言与暗色表现都不受项目控制。
 - 表单用 `Field` 系列；加载、空状态与通知分别用 `Skeleton`、`Empty`、`Spinner` 和项目 Base UI toast 封装导出的 `notify`。
 - 破坏性确认用 `AlertDialog`；移动端底部面板用 `Drawer`；短上下文内容用 `Popover`。任务型 Overlay 必须有可访问标题，必要时用 `sr-only` 隐藏视觉标题。
 - Card 只用于独立、重复或需要明确边界的内容；不嵌套 Card，不把整段页面当作悬浮 Card。Base UI 通过 `render` 组合自定义 trigger，不使用 Radix 的 `asChild`。

@@ -8,15 +8,16 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { zhCN } from "react-day-picker/locale";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Calendar } from "@/components/ui/calendar";
+import { Field, FieldTitle } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
@@ -178,10 +179,23 @@ export function HistorySearchInput({
   );
 }
 
+/** 本地日期与过滤器所用的 `YYYY-MM-DD` 之间互转，避免 UTC 偏移把日期挪走一天。 */
+function toLocalDay(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function fromLocalDay(value: HistoryDateFilter): Date | undefined {
+  if (!isSpecificDayFilter(value)) return undefined;
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  return new Date(year, month - 1, day);
+}
+
 /**
- * 日期过滤：相对预设加单个精确日期。使用原生 date 输入是刻意的 ——
- * 它是各平台都已为其渲染熟悉选择器的控件，
- * 且其产出的本地 `YYYY-MM-DD` 正是过滤器已经使用的格式。
+ * 日期过滤：相对预设加单个精确日期。精确日期用 shadcn `Calendar`，
+ * 它在桌面和触屏上呈现同一套中文月历，产出的本地 `YYYY-MM-DD`
+ * 正是过滤器已经使用的格式。历史不会落在未来，因此今天之后不可选。
  */
 export function HistoryDateFilterControl({
   value,
@@ -193,9 +207,11 @@ export function HistoryDateFilterControl({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const dayInputId = useId();
   const active = value !== "all";
   const label = historyDateFilterLabel(value);
+  const selectedDay = fromLocalDay(value);
+  // 每次渲染取当天：挂机过夜后再打开，未来日期仍然按新的今天封锁。
+  const today = new Date();
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -224,7 +240,7 @@ export function HistoryDateFilterControl({
         />
         <TooltipContent side="bottom">按日期筛选</TooltipContent>
       </Tooltip>
-      <PopoverContent align="end" className="w-60 p-2">
+      <PopoverContent align="end" className="w-auto p-2">
         <ToggleGroup
           value={isSpecificDayFilter(value) ? [] : [value]}
           onValueChange={(next) => {
@@ -250,18 +266,21 @@ export function HistoryDateFilterControl({
         </ToggleGroup>
         <Separator />
         <Field className="gap-1.5">
-          <FieldLabel htmlFor={dayInputId} className="text-xs text-muted-foreground">
+          <FieldTitle className="text-xs font-normal text-muted-foreground">
             指定日期
-          </FieldLabel>
-          <Input
-            id={dayInputId}
-            type="date"
-            value={isSpecificDayFilter(value) ? value : ""}
-            onChange={(event) => {
-              const next = event.target.value;
-              onValueChange(next && isSpecificDayFilter(next) ? next : "all");
-              if (next) setOpen(false);
+          </FieldTitle>
+          <Calendar
+            mode="single"
+            locale={zhCN}
+            selected={selectedDay}
+            defaultMonth={selectedDay ?? today}
+            endMonth={today}
+            disabled={{ after: today }}
+            onSelect={(day) => {
+              onValueChange(day ? toLocalDay(day) : "all");
+              if (day) setOpen(false);
             }}
+            className="p-0"
           />
         </Field>
       </PopoverContent>
