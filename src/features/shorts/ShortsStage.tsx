@@ -8,6 +8,7 @@ import {
 } from "react";
 import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
 import { formatVideoDuration } from "@/features/video/videoHistory";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
@@ -15,12 +16,18 @@ import type { VideoItem } from "@/shared/types/video";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
   SHORTS_DANMAKU_TOP_OFFSET_PX,
+  SHORTS_SAFE_AREA_BOTTOM,
+  SHORTS_SAFE_AREA_TOP,
   SHORTS_SEEK_KEY_STEP_SECONDS,
+  SHORTS_SEEK_PREVIEW_WIDTH_PX,
+  shortsFrameAlign,
   shortsMediaAspect,
   shortsMediaFrame,
+  shortsSeekPreviewLeft,
   shortsSeekRatio,
   shortsSeekTime,
 } from "./shortsFeed";
+import { shortsStoryboardTile, useArmedOnce, useShortsStoryboard } from "./shortsStoryboard";
 import type { ShortsDanmakuState } from "./useShortsDanmaku";
 import type { ShortsPlaybackState } from "./useShortsPlayback";
 
@@ -54,16 +61,21 @@ function useShortsStageSize() {
 /**
  * 画面区域：顶部安全区之下、底部操作栏之上的那块矩形。
  *
- * 用 CSS `env()` 而不是把安全区读成数字：读数字要么靠探针元素、要么靠
+ * 用 CSS 表达而不是把安全区读成数字：读数字要么靠探针元素、要么靠
  * `getComputedStyle`，两者都会在系统栏变化时慢一帧。这里只需要「画面不许越过
  * 这两条线」，交给 CSS 表达最直接，JS 只量结果。
+ *
+ * 安全区一律走 `SHORTS_SAFE_AREA_*`（原生注入的变量优先、`env()` 兜底）而不是裸
+ * `env()`：Android WebView 的 `env(safe-area-inset-*)` 会读到 0，本项目因此由
+ * `MainActivity` 注入 `--android-safe-area-*`。裸 `env()` 在那里等于不留安全区，
+ * 底部操作栏会被系统手势条压住。
  *
  * 底部让位是硬性的：操作栏（弹幕输入 + 三个按钮）占真实空间而不是浮在画面上，
  * 因此画面可用高度必须先减掉它，否则输入框会盖住画面底部。
  */
 const SHORTS_MEDIA_AREA_STYLE = {
-  top: "env(safe-area-inset-top)",
-  bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + env(safe-area-inset-bottom))`,
+  top: SHORTS_SAFE_AREA_TOP,
+  bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
 } as const;
 
 /**
@@ -76,6 +88,17 @@ function shortsFrameStyle(frame: { width: number; height: number }) {
     ? { width: `${frame.width}px`, height: `${frame.height}px` }
     : { width: "100%", height: "100%" };
 }
+
+/**
+ * 对齐语义 → flex 类名。
+ *
+ * `shortsFrameAlign` 刻意返回语义值（`"start"` / `"center"`）而不是类名：那份判定是
+ * 可单测的纯几何，不该知道用的是 Tailwind 还是别的什么。映射放在使用它的这一层。
+ */
+const SHORTS_ALIGN_CLASS = {
+  start: "items-start",
+  center: "items-center",
+} as const;
 
 /** 画面框是否小于可用区域（桌面上的居中卡片形态）：只有这时才给圆角。 */
 function shortsFrameInset(
@@ -160,12 +183,15 @@ export function ShortsStage({
       <div
         ref={measure}
         data-slot="shorts-media-area"
-        className="absolute inset-x-0 flex items-start justify-center"
+        className={cn(
+          "absolute inset-x-0 flex justify-center",
+          SHORTS_ALIGN_CLASS[shortsFrameAlign(aspect)],
+        )}
         style={SHORTS_MEDIA_AREA_STYLE}
       >
         <div
           data-slot="shorts-frame"
-          className={cn("relative shrink-0", inset && "overflow-hidden rounded-xl")}
+          className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}
           style={
             {
               ...shortsFrameStyle(frame),
@@ -238,11 +264,13 @@ export function ShortsStage({
 
           {/* 右侧操作栏：UP 主头像 + 评论。播放/静音已移到顶部菜单与点按。 */}
           <div className="absolute right-2.5 bottom-20 z-10 flex flex-col items-center gap-4">
-            <span className="size-11 overflow-hidden rounded-full border border-white/40 bg-black/30">
-              {face ? (
-                <img src={face} alt="" aria-hidden className="size-full object-cover" />
-              ) : null}
-            </span>
+            {/* 头像用 Avatar 而不是裸 img：取不到图时回落到首字，而不是留一个空圈。 */}
+            <Avatar className="size-11 after:border-white/40">
+              <AvatarImage src={face} alt="" aria-hidden referrerPolicy="no-referrer" />
+              <AvatarFallback className="bg-black/40 text-white/90">
+                {item.author?.slice(0, 1) || "U"}
+              </AvatarFallback>
+            </Avatar>
             <span className="flex flex-col items-center gap-0.5">
               <Button
                 type="button"
@@ -279,9 +307,22 @@ export function ShortsStage({
             </div>
           )}
 
+          {/*
+            进度条的时长**只**认 `playback.duration`，不退回 `item.duration`。
+
+            两者在起播前会不一致：列表下发的秒数此刻已经有了，而 `seek` 的钳位用的是
+            播放层自己那份（后端从 sidx 累加，或媒体元数据）。用列表值撑出可拖区间，
+            就会出现「拖得动、松手不跳」—— 拖动读的是一个数，落点钳的是另一个。
+            起播前这条带子因此是 `aria-disabled` 的一条静止细线，与「还不能 seek」
+            的事实一致；那段时间画面上盖着封面，本来也没有可拖的内容。
+
+            信息覆层里的时长文本仍退回 `item.duration`：那只是展示，不承诺可操作。
+          */}
           <ShortsSeekBar
+            bvid={item.bvid}
+            cid={cid}
             currentTime={playback.currentTime}
-            duration={playback.duration || item.duration}
+            duration={playback.duration}
             onSeek={playback.seek}
           />
 
@@ -317,12 +358,17 @@ export function ShortsStage({
  *
  * 拖动期间只移动视觉位置，**不**逐帧 seek：每次 seek 都会让 DASH 播放器丢弃缓冲
  * 并向本机代理重新发段请求，跟着手指发几十次等于把取流打崩。松手时落一次。
+ * 拖动中的反馈因此全靠时间气泡与缩略图，而不是画面本身。
  */
 function ShortsSeekBar({
+  bvid,
+  cid,
   currentTime,
   duration,
   onSeek,
 }: {
+  bvid: string;
+  cid: number;
   currentTime: number;
   duration: number;
   onSeek: (seconds: number) => void;
@@ -331,10 +377,24 @@ function ShortsSeekBar({
   const pointerRef = useRef<number | null>(null);
   /** 拖动中的位置比例；null = 没在拖，跟随播放进度。 */
   const [dragRatio, setDragRatio] = useState<number | null>(null);
+  /**
+   * 轨道宽度，按下时量一次。
+   *
+   * 只有预览气泡的夹取需要它。不在渲染期读 `trackRef.current.clientWidth`：渲染期读
+   * ref 不是纯函数，首帧还读不到值。按下时本来就要 `getBoundingClientRect()`，
+   * 顺手把宽度记下来是零成本。
+   */
+  const [trackWidth, setTrackWidth] = useState(0);
+  /** 缩略图快照只在用户真的动过进度条之后才取（见 `useArmedOnce`）。 */
+  const dragging = dragRatio !== null;
+  const storyboardArmed = useArmedOnce(dragging);
+  const { storyboard, sheetUrls } = useShortsStoryboard({ bvid, cid, enabled: storyboardArmed });
 
   const seekable = duration > 0;
   const playedRatio = seekable ? Math.min(1, Math.max(0, currentTime / duration)) : 0;
   const ratio = dragRatio ?? playedRatio;
+  const previewTime = ratio * duration;
+  const tile = dragging ? shortsStoryboardTile(storyboard, previewTime, sheetUrls) : null;
 
   const ratioFromEvent = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const rect = trackRef.current?.getBoundingClientRect();
@@ -346,6 +406,7 @@ function ShortsSeekBar({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!seekable || !event.isPrimary) return;
       pointerRef.current = event.pointerId;
+      setTrackWidth(trackRef.current?.getBoundingClientRect().width ?? 0);
       setDragRatio(ratioFromEvent(event));
       // 别让这次按压继续冒泡成换片手势或点按暂停。
       event.stopPropagation();
@@ -423,8 +484,9 @@ function ShortsSeekBar({
       aria-valuetext={`${formatVideoDuration(ratio * duration)} / ${formatVideoDuration(duration)}`}
       aria-disabled={seekable ? undefined : true}
       // 命中区比视觉粗细大得多；`touch-action: none` 让浏览器把纵向移动也交给我们，
-      // 否则在这条带子上拖动会被当成页面滚动。
-      className="absolute inset-x-0 bottom-0 z-20 flex h-5 cursor-pointer items-end pb-1 touch-none"
+      // 否则在这条带子上拖动会被当成页面滚动。不加底部内边距：进度条要贴在画面
+      // 底边，而命中区向上撑开。
+      className="absolute inset-x-0 bottom-0 z-20 flex h-5 cursor-pointer items-end touch-none"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={(event) => finish(event, true)}
@@ -439,12 +501,54 @@ function ShortsSeekBar({
           style={{ width: `${ratio * 100}%` }}
         />
         {/* 拖动手柄只在拖动时出现：静止时这里是一条细线，不该有额外装饰。 */}
-        {dragRatio !== null && (
+        {dragging && (
           <span
             aria-hidden
             className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow"
             style={{ left: `${ratio * 100}%` }}
           />
+        )}
+        {/*
+          拖动预览：时间 + 缩略图。
+
+          因为拖动期间画面不跟随（只在松手时 seek 一次），这个气泡是拖动中唯一的
+          位置反馈。水平位置绑手指并在两端夹住（`shortsSeekPreviewLeft`）：否则拖到
+          0% 或 100% 时气泡一半会被画面外沿裁掉。
+
+          缩略图可能永远不来（部分稿件无快照，或代理未就绪），因此时间文本不依赖它：
+          没图时这里就是一个紧凑的时间气泡。
+        */}
+        {dragging && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute bottom-3 flex flex-col items-center gap-1"
+            style={{
+              left: `${shortsSeekPreviewLeft(ratio, trackWidth, SHORTS_SEEK_PREVIEW_WIDTH_PX)}px`,
+              width: `${SHORTS_SEEK_PREVIEW_WIDTH_PX}px`,
+            }}
+          >
+            {tile && (
+              <span
+                className="block overflow-hidden rounded-sm border border-white/30 bg-black/60 shadow-lg"
+                style={{
+                  width: `${SHORTS_SEEK_PREVIEW_WIDTH_PX}px`,
+                  height: `${Math.round((SHORTS_SEEK_PREVIEW_WIDTH_PX / tile.width) * tile.height)}px`,
+                  backgroundImage: `url("${tile.url}")`,
+                  // 雪碧图整张按预览宽度缩放，再按同一倍率偏移到目标小图。
+                  backgroundSize: `${tile.sheetWidth * (SHORTS_SEEK_PREVIEW_WIDTH_PX / tile.width)}px ${
+                    tile.sheetHeight * (SHORTS_SEEK_PREVIEW_WIDTH_PX / tile.width)
+                  }px`,
+                  backgroundPosition: `-${tile.x * (SHORTS_SEEK_PREVIEW_WIDTH_PX / tile.width)}px -${
+                    tile.y * (SHORTS_SEEK_PREVIEW_WIDTH_PX / tile.width)
+                  }px`,
+                  backgroundRepeat: "no-repeat",
+                }}
+              />
+            )}
+            <span className="rounded bg-black/75 px-1.5 py-0.5 text-[11px] tabular-nums text-white">
+              {formatVideoDuration(previewTime)} / {formatVideoDuration(duration)}
+            </span>
+          </div>
         )}
       </div>
     </div>
@@ -463,7 +567,9 @@ export function ShortsPoster({ item }: { item: VideoItem }) {
   const cover = normalizeImageUrl(item.cover);
   const { size: area, measure } = useShortsStageSize();
   // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。
-  const frame = shortsMediaFrame(area.width, area.height, shortsMediaAspect(item.dimension));
+  // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。
+  const aspect = shortsMediaAspect(item.dimension);
+  const frame = shortsMediaFrame(area.width, area.height, aspect);
   const inset = shortsFrameInset(frame, area);
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
@@ -477,11 +583,14 @@ export function ShortsPoster({ item }: { item: VideoItem }) {
       )}
       <div
         ref={measure}
-        className="absolute inset-x-0 flex items-start justify-center"
+        className={cn(
+          "absolute inset-x-0 flex justify-center",
+          SHORTS_ALIGN_CLASS[shortsFrameAlign(aspect)],
+        )}
         style={SHORTS_MEDIA_AREA_STYLE}
       >
         <div
-          className={cn("relative shrink-0", inset && "overflow-hidden rounded-xl")}
+          className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}
           style={shortsFrameStyle(frame)}
         >
           {cover && (

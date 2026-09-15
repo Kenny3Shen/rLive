@@ -5,13 +5,18 @@ import {
   SHORTS_DANMAKU_TOP_OFFSET_PX,
   SHORTS_PATH,
   SHORTS_PREFETCH_REMAINING,
+  SHORTS_SAFE_AREA_BOTTOM,
+  SHORTS_SAFE_AREA_TOP,
+  SHORTS_SEEK_PREVIEW_WIDTH_PX,
   SHORTS_SWIPE_COMMIT_PROGRESS,
   SHORTS_TOP_BAR_HEIGHT_PX,
   shortsFeedItems,
+  shortsFrameAlign,
   shortsItemKey,
   shortsMediaAspect,
   shortsMediaFrame,
   shortsMountedIndexes,
+  shortsSeekPreviewLeft,
   shortsSeekRatio,
   shortsSeekTime,
   shortsShouldFetchMore,
@@ -296,6 +301,94 @@ describe("挂载窗口与补货", () => {
     expect(shortsShouldFetchMore(9, 10, true, true)).toBe(false);
     expect(shortsShouldFetchMore(9, 10, false, false)).toBe(false);
     expect(shortsShouldFetchMore(0, 0, true, false)).toBe(false);
+  });
+});
+
+describe("画面框纵向对齐", () => {
+  test("竖屏源顶对齐：上方不留黑边", () => {
+    // 9:16 放进 9:19.5 的手机视口，居中会在状态栏之下留一条黑边。
+    expect(shortsFrameAlign(9 / 16)).toBe("start");
+    expect(shortsFrameAlign(0.5625)).toBe("start");
+    // 轻微竖也算竖：判据是「是否竖」，不是「竖多少」。
+    expect(shortsFrameAlign(0.99)).toBe("start");
+  });
+
+  test("横屏源居中：上下对称留边", () => {
+    // 16:9 顶对齐会把画面按在顶部控制栏底下，下方剩一大片背景。
+    expect(shortsFrameAlign(16 / 9)).toBe("center");
+    expect(shortsFrameAlign(1.7778)).toBe("center");
+  });
+
+  test("方形归到居中一侧", () => {
+    // 正方形没有「竖屏要顶格」的诉求。
+    expect(shortsFrameAlign(1)).toBe("center");
+  });
+
+  test("宽高比未知时居中", () => {
+    // 起播前拿不到 dimension 也没有 intrinsic size：不猜竖屏。
+    expect(shortsFrameAlign(null)).toBe("center");
+    expect(shortsFrameAlign(0)).toBe("center");
+    expect(shortsFrameAlign(Number.NaN)).toBe("center");
+    expect(shortsFrameAlign(Number.POSITIVE_INFINITY)).toBe("center");
+  });
+
+  test("对齐方式与视口无关", () => {
+    // 同一条视频在手机与桌面上必须得到同样的构图，否则换设备就换画法。
+    const portrait = shortsMediaAspect({ width: 1080, height: 1920, rotate: 0 });
+    expect(shortsFrameAlign(portrait)).toBe("start");
+    // 桌面上这条竖屏正好铺满高度，对齐方式此时不产生可见差异，但结论仍一致。
+    expect(shortsMediaFrame(1440, 844, portrait).height).toBe(844);
+  });
+});
+
+describe("进度预览气泡定位", () => {
+  test("居中跟随手指", () => {
+    // 360 宽轨道、160 宽气泡，拖到一半：气泡中心对齐手指。
+    expect(shortsSeekPreviewLeft(0.5, 360, 160)).toBe(100);
+  });
+
+  test("两端夹住，不探出轨道", () => {
+    // 贴左端时居中算出 -80，会有一半飘到画面外。
+    expect(shortsSeekPreviewLeft(0, 360, 160)).toBe(0);
+    // 贴右端时夹到 track - preview。
+    expect(shortsSeekPreviewLeft(1, 360, 160)).toBe(200);
+  });
+
+  test("轨道比气泡窄时退回 0", () => {
+    // 无处可夹：任何偏移都会探出去，贴左端最不坏。
+    expect(shortsSeekPreviewLeft(0.5, 120, 160)).toBe(0);
+  });
+
+  test("尺寸缺失时退回 0", () => {
+    expect(shortsSeekPreviewLeft(0.5, 0, 160)).toBe(0);
+    expect(shortsSeekPreviewLeft(0.5, 360, 0)).toBe(0);
+  });
+
+  test("越界比例先被夹进 0~1", () => {
+    expect(shortsSeekPreviewLeft(-1, 360, 160)).toBe(0);
+    expect(shortsSeekPreviewLeft(2, 360, 160)).toBe(200);
+  });
+});
+
+describe("安全区表达式", () => {
+  test("原生注入的变量优先，env() 兜底", () => {
+    /*
+     * Android WebView 的 `env(safe-area-inset-*)` 会读到 0，本项目因此由
+     * MainActivity 把真值写成 CSS 变量。裸 env() 在那里等于不留安全区，底部操作栏
+     * 会被系统手势指示条压住 —— 这两条断言锁的就是这个顺序。
+     */
+    expect(SHORTS_SAFE_AREA_TOP).toBe("var(--android-safe-area-top, env(safe-area-inset-top))");
+    expect(SHORTS_SAFE_AREA_BOTTOM).toBe(
+      "var(--android-safe-area-bottom, env(safe-area-inset-bottom))",
+    );
+  });
+
+  test("两个方向都带回退", () => {
+    // 旧 APK 与浏览器都没有那个变量，回退不能省。
+    for (const expression of [SHORTS_SAFE_AREA_TOP, SHORTS_SAFE_AREA_BOTTOM]) {
+      expect(expression).toContain("--android-safe-area-");
+      expect(expression).toContain("env(safe-area-inset-");
+    }
   });
 });
 

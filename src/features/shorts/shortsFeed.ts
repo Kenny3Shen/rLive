@@ -47,11 +47,25 @@ export function shortsMediaAspect(
  * 底部操作栏的高度（px），不含底部安全区。
  *
  * 页面级的操作栏与每个面板内的画面区必须用同一个数：画面区按
- * `bottom: calc(此值 + env(safe-area-inset-bottom))` 收边，操作栏按同样的高度铺在
- * 下面，两者对不上就会出现画面被压住或者中间裂一条缝。因此这个常量是两个组件
- * 之间的契约，放在这里而不是各写一份字面量。
+ * `bottom: calc(此值 + 底部安全区)` 收边，操作栏按同样的高度铺在下面，两者对不上
+ * 就会出现画面被压住或者中间裂一条缝。因此这个常量是两个组件之间的契约，放在这里
+ * 而不是各写一份字面量。
  */
 export const SHORTS_BOTTOM_BAR_HEIGHT_PX = 56;
+
+/**
+ * 安全区的 CSS 表达式。
+ *
+ * 原生注入的 `--android-safe-area-*` 优先于 `env(safe-area-inset-*)`：Android
+ * WebView 的 `env()` 会读成 0（`MainActivity` 因此用 `getInsetsIgnoringVisibility`
+ * 把真值写成 CSS 变量，见 `styles.css` 里同一套写法）。直接用 `env()` 的后果是
+ * 底部操作栏压在系统手势指示条下面 —— 手势条会吃掉那一段的触摸。
+ *
+ * 保留 `env()` 作为回退：旧 APK 没有那个变量，浏览器里也没有。
+ */
+export const SHORTS_SAFE_AREA_TOP = "var(--android-safe-area-top, env(safe-area-inset-top))";
+export const SHORTS_SAFE_AREA_BOTTOM =
+  "var(--android-safe-area-bottom, env(safe-area-inset-bottom))";
 
 /**
  * 顶部控制栏的高度（px），不含顶部安全区。
@@ -81,6 +95,15 @@ export const SHORTS_DANMAKU_TOP_OFFSET_PX = SHORTS_TOP_BAR_HEIGHT_PX;
 export const SHORTS_SEEK_KEY_STEP_SECONDS = 5;
 
 /**
+ * 拖动进度时预览缩略图的宽度（px）。
+ *
+ * 取 160 是因为 B 站快照雪碧图的单格就是 160×90：按原始尺寸显示不用缩放，也就不会
+ * 出现雪碧图偏移被小数倍率放大成半像素错位（相邻格漏进来一条边）。它同时是气泡
+ * 夹边的宽度基准，见 `shortsSeekPreviewLeft`。
+ */
+export const SHORTS_SEEK_PREVIEW_WIDTH_PX = 160;
+
+/**
  * 画面在舞台里的实际显示尺寸：按宽高比等比内切，不裁切也不拉伸。
  *
  * 这是「短视频不该被强行铺满」的几何本体。竖屏源在桌面宽舞台上若按 `cover` 铺满，
@@ -105,6 +128,44 @@ export function shortsMediaFrame(
   return aspect > width / height
     ? { width, height: width / aspect }
     : { width: height * aspect, height };
+}
+
+/**
+ * 画面框在画面区里的纵向对齐方式。
+ *
+ * 竖屏源顶对齐：手机视口比 9:16 更长（9:19.5），居中会在画面**上方**留一条黑边，
+ * 而那一段正是状态栏之下最该被画面占满的位置 —— 让出来的空隙归下方，那里本来就要
+ * 放操作栏。
+ *
+ * 横屏源居中：16:9 的画面在竖屏视口里只占中间一小条，顶对齐会把它按在顶部控制栏
+ * 底下，下方剩一大片背景 —— 观感是「画面掉上去了」。上下对称留边才是横屏在竖屏
+ * 设备上的常规画法（与播放页一致）。
+ *
+ * 判据取宽高比而不是「留边有多少」：后者随视口变化，同一条视频在手机与桌面上会得到
+ * 不同的对齐方式，换设备就换构图。方形（aspect === 1）归到横屏一侧居中 —— 它没有
+ * 「竖屏要顶格」的诉求。
+ */
+export function shortsFrameAlign(aspect: number | null): "start" | "center" {
+  if (!aspect || !(aspect > 0) || !Number.isFinite(aspect)) return "center";
+  return aspect < 1 ? "start" : "center";
+}
+
+/**
+ * 拖动进度时预览气泡的左偏移（px，相对轨道左端）。
+ *
+ * 气泡跟着手指但不许探出轨道两端：缩略图有 160px 宽，在手机上贴边时会有一半飘到
+ * 画面之外。夹在 `[0, track - preview]` 里，轨道比气泡还窄时退回 0（此时无处可夹）。
+ */
+export function shortsSeekPreviewLeft(
+  ratio: number,
+  trackWidth: number,
+  previewWidth: number,
+): number {
+  if (!(trackWidth > 0) || !(previewWidth > 0)) return 0;
+  const centered = Math.max(0, Math.min(1, ratio)) * trackWidth - previewWidth / 2;
+  const max = trackWidth - previewWidth;
+  if (max <= 0) return 0;
+  return Math.max(0, Math.min(max, centered));
 }
 
 /**

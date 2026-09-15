@@ -28,6 +28,7 @@ import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive, videoGetStory } from "@/features/video/videoApi";
 import { formatRelativeTime } from "@/features/video/videoHistory";
 import { videoPlayPath } from "@/features/video/videoRoute";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -44,10 +45,12 @@ import {
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { prefersReducedMotion, SWIPE_SETTLE_EASING } from "@/shared/motion/tokens";
 import { hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
-import { formatOnline } from "@/lib/utils";
+import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import { ShortsPoster, ShortsStage } from "./ShortsStage";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
+  SHORTS_SAFE_AREA_BOTTOM,
+  SHORTS_SAFE_AREA_TOP,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
   SHORTS_TOP_BAR_HEIGHT_PX,
   shortsFeedItems,
@@ -604,8 +607,8 @@ export function ShortsPage() {
           data-slot="shorts-top-bar"
           className="absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2"
           style={{
-            height: `calc(${SHORTS_TOP_BAR_HEIGHT_PX}px + env(safe-area-inset-top))`,
-            paddingTop: "env(safe-area-inset-top)",
+            height: `calc(${SHORTS_TOP_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_TOP})`,
+            paddingTop: SHORTS_SAFE_AREA_TOP,
           }}
         >
           <ShortsBackButton onClick={goBack} inline />
@@ -656,60 +659,69 @@ export function ShortsPage() {
         */}
         <div
           data-slot="shorts-bottom-bar"
-          className="absolute inset-x-0 bottom-0 z-20 flex items-center gap-1.5 border-t border-white/10 bg-black/85 px-2"
+          className="absolute inset-x-0 bottom-0 z-20 flex items-center border-t border-white/10 bg-black/85 px-2"
           style={{
-            height: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + env(safe-area-inset-bottom))`,
-            paddingBottom: "env(safe-area-inset-bottom)",
+            height: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
+            paddingBottom: SHORTS_SAFE_AREA_BOTTOM,
           }}
         >
-          <div className="min-w-0 flex-1">
-            {current && (
-              <DanmakuComposer
-                overlay
-                roomTitle={current.title}
-                video={{
-                  cid: current.cid ?? 0,
-                  aid: current.aid,
-                  progressMs: Math.floor(playback.currentTime * 1000),
-                }}
-              />
-            )}
+          {/*
+            控件收在一个居中的定宽容器里，而不是铺满栏宽。
+
+            背景条必须通栏（它是画面区的下边界），但内容不该跟着摊开：桌面上把输入框
+            拉到 1440px 宽、按钮甩到最右角，与居中的竖屏画面完全脱节。手机上
+            `max-w` 不起作用，仍是通栏。
+          */}
+          <div className="mx-auto flex w-full max-w-lg items-center gap-1.5">
+            <div className="min-w-0 flex-1">
+              {current && (
+                <DanmakuComposer
+                  overlay
+                  roomTitle={current.title}
+                  video={{
+                    cid: current.cid ?? 0,
+                    aid: current.aid,
+                    progressMs: Math.floor(playback.currentTime * 1000),
+                  }}
+                />
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
+              title={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
+              className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+              onClick={() => setDanmakuVisible((value) => !value)}
+            >
+              {danmakuVisible ? <MessageSquare aria-hidden /> : <MessageSquareOff aria-hidden />}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={infoVisible ? "隐藏视频信息" : "显示视频信息"}
+              title={infoVisible ? "隐藏视频信息" : "显示视频信息"}
+              aria-pressed={infoVisible}
+              className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+              onClick={() => setInfoVisible((value) => !value)}
+            >
+              <Info aria-hidden />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="视频详情"
+              title="视频详情（简介、标签、UP 主）"
+              disabled={!current}
+              className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+              onClick={panels.openDetail}
+            >
+              <ScrollText aria-hidden />
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
-            title={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
-            className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-            onClick={() => setDanmakuVisible((value) => !value)}
-          >
-            {danmakuVisible ? <MessageSquare aria-hidden /> : <MessageSquareOff aria-hidden />}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={infoVisible ? "隐藏视频信息" : "显示视频信息"}
-            title={infoVisible ? "隐藏视频信息" : "显示视频信息"}
-            aria-pressed={infoVisible}
-            className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-            onClick={() => setInfoVisible((value) => !value)}
-          >
-            <Info aria-hidden />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="视频详情"
-            title="视频详情（简介、标签、UP 主）"
-            disabled={!current}
-            className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-            onClick={panels.openDetail}
-          >
-            <ScrollText aria-hidden />
-          </Button>
         </div>
       </div>
 
@@ -753,17 +765,33 @@ function ShortsDrawerContent({
   return (
     <DrawerContent
       side={compact ? "bottom" : "right"}
-      className={
+      className={cn(
+        "flex flex-col overflow-hidden p-0",
         compact
-          ? "flex h-[70dvh] max-h-[70dvh] flex-col overflow-hidden p-0"
-          : "flex h-full flex-col overflow-hidden p-0"
-      }
+          ? "h-[70dvh] max-h-[70dvh]"
+          : // 与直播页侧栏同宽（`PlayerPane` 的 `w-[min(22rem,78vw)]`）：同一套评论区
+            // 在两个表面之间换个地方出现，宽度不该变。基础组件的 `right` 变体是
+            // 20rem/60vw，这里显式覆盖（`cn` 走 twMerge，后者胜出）。
+            "h-full w-[min(22rem,78vw)]",
+      )}
     >
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
         <DrawerTitle>{title}</DrawerTitle>
       </div>
-      {/* 内容体不自带滚动容器，由这里提供。 */}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
+      {/*
+        内容体不自带滚动容器，由这里提供。
+
+        底部安全区的内边距加在滚动容器**内侧**：外壳用 `p-0` 抹掉了基础组件自带的
+        `pb-[calc(1rem+env(safe-area-inset-bottom))]`（表头要贴边，不能有外层内边距），
+        不补回来的话手机上最后一条评论会压在系统手势条下面。加在滚动容器上而不是
+        外壳上，滚到底时才让出这段距离。
+      */}
+      <div
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        style={{ paddingBottom: compact ? SHORTS_SAFE_AREA_BOTTOM : undefined }}
+      >
+        {children}
+      </div>
     </DrawerContent>
   );
 }
@@ -801,11 +829,20 @@ function ShortsDetailBody({
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="size-9 shrink-0 overflow-hidden rounded-full bg-muted">
-          {item.author_face ? (
-            <img src={item.author_face} alt="" aria-hidden className="size-full object-cover" />
-          ) : null}
-        </span>
+        {/*
+          头像必须走 `normalizeImageUrl`：它把地址改写到本机图片代理，而 B 站头像 CDN
+          对带非 bilibili Referer 的请求回 403 —— WebView 无法为 `<img>` 去掉 Referer，
+          直连一定是破图。`AvatarFallback` 再兜一层，代理未就绪时显示首字而不是破图标。
+        */}
+        <Avatar className="size-9 shrink-0">
+          <AvatarImage
+            src={normalizeImageUrl(item.author_face)}
+            alt=""
+            aria-hidden
+            referrerPolicy="no-referrer"
+          />
+          <AvatarFallback>{item.author?.slice(0, 1) || "U"}</AvatarFallback>
+        </Avatar>
         <div className="min-w-0">
           <p className="truncate text-sm">{item.author || "未知 UP 主"}</p>
           {archive && (archive.author_fans > 0 || archive.author_videos > 0) && (
