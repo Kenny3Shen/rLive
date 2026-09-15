@@ -20,6 +20,9 @@
 /* 基于类的暗色模式，供 applyTheme() 切换 html.dark */
 @custom-variant dark (&:where(.dark, .dark *));
 @custom-variant motion-reduced (&:where([data-motion="reduced"], [data-motion="reduced"] *));
+/* 仅在真实键盘导航期间成立，供焦点可见性用作前置条件。
+   标记由 watchKeyboardNavigation() 维护，判定理由见下方全局焦点规则。 */
+@custom-variant keyboard-nav (&:where([data-keyboard-nav] *));
 
 /* 平板等粗指针设备的宽视口（≥md 且主指针为触摸）。这里沿用桌面 chrome
    （左侧竖排 rail、居中头部），但触摸命中与可发现性需要移动端的待遇：
@@ -34,6 +37,14 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
+  --focus-ring-width: 2px;
+  /* 负 offset 让描边绘制在元素边缘内侧，呈现为内边框高亮：
+     不增加占位、不被祖先 overflow 裁切，也不与相邻元素重叠。 */
+  --focus-ring-offset: -2px;
+  /* 以中性描边呈现而不是蓝色强调色。描边必须在 primary、destructive 与
+     平台色调表面上同样清楚；而强调色恰恰在那些本就是蓝色的控件上
+     会被读成选中/激活状态。 */
+  --focus-ring-color: color-mix(in oklab, var(--foreground) 72%, transparent);
   --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* 浅色（很少使用 —— 应用默认深色） */
@@ -482,19 +493,70 @@ body {
   transition-property: background-color, border-color, color, box-shadow;
 }
 
-/* 界面不绘制任何可见焦点指示。
+/* 只有真实的键盘导航才绘制焦点描边。
 
-   移动端侧滑返回、以及退出全屏这类导航都会把焦点交还给上一次操作过的控件。那次
-   聚焦是程序化的，浏览器却按键盘来源处理，于是返回后总有一个控件（例如刚点过的
-   全屏按钮）带着描边或高亮停在那里。描边不是只在触摸端才多余：同一套控件在桌面
-   端必须长得一样，所以关闭是全局的，而不是按输入方式分叉。
+   `:focus-visible` 单独不够用：侧滑返回、退出全屏这类导航会把焦点交还给
+   上一次操作过的控件，那次聚焦是程序化的，浏览器却按键盘来源处理，于是
+   返回后总有一个控件（例如刚点过的全屏按钮）带着描边停在那里。输入来源在
+   `watchKeyboardNavigation()` 里跟踪（见 shared/keyboardNavigation.ts）：导航键按下
+   才挂上 data-keyboard-nav，任何指针按下立即抹除，因此点击或触摸后残留的焦点
+   不可能画出描边。
 
-   规则刻意不放进 @layer：未分层的声明胜过 Tailwind 分层的 utilities，与特异性
-   无关，组件里残留的 outline 工具类因此无法把描边带回来。`:focus-within` 不参与
-   —— 它自己从不画描边，却会在子元素获得焦点时误伤祖先的静态 outline。 */
+   两条规则都刻意不放进 @layer：未分层的声明胜过 Tailwind 分层的 utilities，与特异性
+   无关。组件里的 outline 工具类因此无法把未门禁的描边带回来，描边只有这一个
+   来源。 */
 :focus,
 :focus-visible {
   outline: none;
+}
+
+/* 零特异性的 `:where()` 选择器让刻意特化的控件可以在不改动全局颜色 token 的
+   前提下选择不同几何形态。播放器舞台不在列表内：它是快捷键的焦点入口，
+   不是需要强调的操作控件，否则按方向键调音量会在视频边缘画出一圈白框。 */
+:root[data-keyboard-nav]
+  :where(
+    a[href],
+    area[href],
+    button,
+    input:not([data-slot="input-group-control"]),
+    select,
+    textarea:not([data-slot="input-group-control"]),
+    summary,
+    [contenteditable="true"],
+    [tabindex]:not([tabindex="-1"], [data-player-stage]),
+    [role="button"],
+    [role="checkbox"],
+    [role="combobox"],
+    [role="link"],
+    [role="menuitem"],
+    [role="option"],
+    [role="radio"],
+    [role="slider"],
+    [role="switch"],
+    [role="tab"],
+    [role="treeitem"]
+  ):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+  box-shadow: none;
+}
+
+/* 复合控件把焦点绘在包装层上而真正的焦点目标是内嵌输入框，`:focus-visible`
+   匹配不到绘制的元素、上面的规则够不着它们。改为给包装层同样的描边，
+   使附加件与内联按钮留在描边之内。这里只设 outline：
+   包装层自身的静态 box-shadow（海拔）必须幸存。 */
+:root[data-keyboard-nav]
+  [data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* 播放器 chrome 直接位于视频上，以前景色派生的描边在这里没有可靠对比度：
+   背景就是屏幕上的任意一帧。按舞台一整片换色而不靠逐个组件挂工具类：
+   工具类在 @layer utilities 里，永远输给上面未分层的规则。只换 outline-color，
+   几何（内边框 inset）与全局描边完全一致。 */
+:root[data-keyboard-nav] [data-player-stage] *:focus-visible {
+  outline-color: oklch(1 0 0 / 0.75);
 }
 
 /* 完整动态是产品默认值。OS 级减少动态是隐式的无障碍覆盖，

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./app/App";
 import { applyTheme, watchSystemThemeChanges } from "./app/theme";
 import { getClientPlatform } from "./shared/clientPlatform";
+import { watchKeyboardNavigation } from "./shared/keyboardNavigation";
 import { useSettingsStore } from "./shared/stores/settingsStore";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Toaster } from "./components/ui/toast";
@@ -27,6 +28,8 @@ const queryClient = new QueryClient({
   },
 });
 const initialSettings = useSettingsStore.getState();
+// 焦点描边只在真实键盘导航时出现，所以要在首个可聚焦元素之前就开始记录输入来源。
+watchKeyboardNavigation();
 applyFullMotion();
 applyTheme(initialSettings.theme);
 useSettingsStore.subscribe((settings, previous) => {
