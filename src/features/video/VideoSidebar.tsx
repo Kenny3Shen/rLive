@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowUpDown,
   CalendarDays,
   ChevronDown,
-  ChevronRight,
   MessageSquareText,
   Play,
-  ThumbsUp,
   Users,
   ListMusic,
   Video,
@@ -16,37 +13,22 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { ImageViewer } from "@/shared/components/ImageViewer";
 import { LinkText } from "@/shared/components/LinkText";
-import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
-import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
-import type {
-  VideoArchive,
-  VideoArchivePage,
-  VideoComment,
-  VideoUgcSeason,
-} from "@/shared/types/video";
+import type { VideoArchive, VideoArchivePage, VideoUgcSeason } from "@/shared/types/video";
 import type { VideoDanmakuEntry } from "./videoDanmaku";
+import { CommentsPanel } from "./CommentsPanel";
 import { VideoDanmakuList } from "./VideoDanmakuList";
 import { VideoCard } from "./VideoCard";
-import {
-  videoGetArchive,
-  videoGetCommentReplies,
-  videoGetComments,
-  videoGetRelated,
-  videoGetSeason,
-} from "./videoApi";
-import { formatDateTime, formatRelativeTime, formatVideoDuration } from "./videoHistory";
+import { videoGetArchive, videoGetRelated, videoGetSeason } from "./videoApi";
+import { formatDateTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath, videoSearchPath } from "./videoRoute";
 import {
   dedupeVideoItems,
@@ -64,8 +46,9 @@ import { UploaderDrawer } from "./UploaderDrawer";
  * 播放页右侧栏：相关视频（UGC）/ 分集（PGC）/ 选集（多 P）/ 合集与评论区。
  *
  * 一个文件装下多种列表是刻意的 —— 它们共享同一套「页签 + 滚动容器 + 行项」骨架，
- * 拆成多个文件只会让这个骨架复制多遍。评论区是其中唯一有翻页的，用游标
- * `useInfiniteQuery` + 哨兵；相关视频、分集与选集上游都是一次给全。
+ * 拆成多个文件只会让这个骨架复制多遍。相关视频、分集与选集上游都是一次给全；
+ * 唯一有翻页的评论区已拆到 `CommentsPanel.tsx`，因为短视频竖屏舞台也要用它，
+ * 而那个表面用不上这里的相关视频 / 分集 / 选集 / 弹幕设置。
  */
 export type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "comments" | "settings";
 
@@ -95,405 +78,6 @@ function isSidebarTab(value: string): value is SidebarTab {
 function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
   if (value === "parts") return multiPart ? "选集" : "合集";
   return TAB_LABELS[value];
-}
-
-/** 把 `[大哭]` 这类占位符换成内联表情图，正文里的 URL 渲染成可点链接。 */
-function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): ReactNode {
-  if (!message) return message;
-  if (emotes.length === 0) return <LinkText text={message} />;
-  const parts: ReactNode[] = [];
-  let rest = message;
-  let key = 0;
-  while (rest) {
-    let hit: { index: number; text: string; url: string } | null = null;
-    for (const emote of emotes) {
-      if (!emote.text) continue;
-      const index = rest.indexOf(emote.text);
-      if (index !== -1 && (!hit || index < hit.index)) {
-        hit = { index, text: emote.text, url: emote.url };
-      }
-    }
-    if (!hit) {
-      parts.push(<LinkText key={key} text={rest} />);
-      key += 1;
-      break;
-    }
-    if (hit.index > 0) {
-      parts.push(<LinkText key={key} text={rest.slice(0, hit.index)} />);
-      key += 1;
-    }
-    parts.push(
-      <img
-        key={key}
-        src={normalizeImageUrl(hit.url)}
-        alt=""
-        aria-hidden
-        className="inline-block h-5 w-5 translate-y-[-2px] object-contain"
-      />,
-    );
-    key += 1;
-    rest = rest.slice(hit.index + hit.text.length);
-  }
-  return parts;
-}
-
-function CommentBody({
-  comment,
-  onOpenDetail,
-}: {
-  comment: VideoComment;
-  onOpenDetail?: () => void;
-}) {
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const [viewerIndex, setViewerIndex] = useState(0);
-
-  const handleImageClick = (index: number) => {
-    setViewerIndex(index);
-    setViewerOpen(true);
-  };
-
-  return (
-    <>
-      {onOpenDetail ? (
-        <button
-          type="button"
-          onClick={onOpenDetail}
-          aria-label={`查看 ${comment.uname} 的评论详情`}
-          className="block w-full rounded-sm text-left text-[13px] leading-relaxed whitespace-pre-line break-words [overflow-wrap:anywhere]"
-        >
-          {renderCommentMessage(comment.message, comment.emotes) || "图片评论"}
-        </button>
-      ) : (
-        <p className="whitespace-pre-line break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">
-          {renderCommentMessage(comment.message, comment.emotes)}
-        </p>
-      )}
-      {comment.pictures.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {comment.pictures.map((src, index) => (
-            <button
-              key={src}
-              type="button"
-              aria-label={`查看评论图片 ${index + 1}`}
-              onClick={() => handleImageClick(index)}
-              className="group relative overflow-hidden rounded-md transition-opacity hover:opacity-90"
-            >
-              <img
-                src={normalizeImageUrl(src)}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
-                className="h-20 w-28 object-cover"
-              />
-              <div className="absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/10" />
-            </button>
-          ))}
-        </div>
-      )}
-      {viewerOpen && (
-        <ImageViewer
-          images={comment.pictures}
-          initialIndex={viewerIndex}
-          onClose={() => setViewerOpen(false)}
-        />
-      )}
-    </>
-  );
-}
-
-function CommentRow({
-  comment,
-  onOpenDetail,
-  isThreadAuthor = false,
-}: {
-  comment: VideoComment;
-  onOpenDetail?: () => void;
-  isThreadAuthor?: boolean;
-}) {
-  return (
-    <div className="flex gap-2.5">
-      {comment.avatar ? (
-        <img
-          src={normalizeImageUrl(comment.avatar)}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          className="mt-0.5 size-8 shrink-0 rounded-full object-cover"
-        />
-      ) : (
-        <div className="mt-0.5 size-8 shrink-0 rounded-full bg-muted" aria-hidden />
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[13px] font-medium text-foreground/90">
-            {comment.uname}
-          </span>
-          {isThreadAuthor && <Badge variant="secondary">楼主</Badge>}
-          {comment.level > 0 && (
-            // 覆盖 Badge 默认的 h-5/py-0.5/font-medium：等级药丸要贴合 13px 昵称行。
-            // 前景保持 muted：它比同排的「楼主」更弱，不能与昵称抢注意力。
-            <Badge
-              variant="secondary"
-              className="h-auto shrink-0 rounded-sm border-0 px-1 py-0 text-[10px] leading-4 font-normal text-muted-foreground"
-            >
-              Lv{comment.level}
-            </Badge>
-          )}
-        </div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">
-          {formatRelativeTime(comment.ctime)}
-        </div>
-        <div className="mt-1">
-          <CommentBody comment={comment} onOpenDetail={onOpenDetail} />
-        </div>
-        <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
-          <ThumbsUp className="size-3" aria-hidden />
-          <span>{formatOnline(comment.like)}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDetail: () => void }) {
-  return (
-    <button
-      type="button"
-      className="block w-full px-2 py-1.5 text-left text-xs leading-relaxed transition-colors hover:bg-muted/70"
-      onClick={onOpenDetail}
-    >
-      <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
-        <span className="font-medium text-primary/90">{reply.uname}</span>
-        <span className="text-muted-foreground">： </span>
-        <span className="text-foreground/80">
-          {renderCommentMessage(reply.message, reply.emotes)}
-        </span>
-        {reply.pictures.length > 0 && <span className="text-muted-foreground"> [图片]</span>}
-      </span>
-    </button>
-  );
-}
-
-/** 一条一级评论与 PiliPlus 风格的二级回复预览。 */
-function CommentThread({
-  comment,
-  onOpenDetail,
-}: {
-  comment: VideoComment;
-  onOpenDetail: () => void;
-}) {
-  const previewReplies = comment.replies.slice(0, 3);
-
-  return (
-    <div className="border-b border-border/60 py-3 last:border-b-0">
-      <CommentRow comment={comment} onOpenDetail={onOpenDetail} />
-      {(comment.rcount > 0 || previewReplies.length > 0) && (
-        <div className="mt-2 pl-10.5">
-          <div className="overflow-hidden rounded-md bg-muted/40 py-1">
-            {previewReplies.map((reply) => (
-              <ReplyPreview key={reply.rpid} reply={reply} onOpenDetail={onOpenDetail} />
-            ))}
-            {previewReplies.length < comment.rcount && (
-              <button
-                type="button"
-                className="w-full px-2 py-1.5 text-left text-xs text-primary/90 hover:bg-muted/70"
-                onClick={onOpenDetail}
-              >
-                共 {formatOnline(comment.rcount)} 条回复
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CommentReplies({ aid, comment }: { aid: string; comment: VideoComment }) {
-  const repliesQuery = useInfiniteQuery({
-    queryKey: ["video_comment_replies", aid, comment.rpid],
-    initialPageParam: 1,
-    queryFn: ({ pageParam }) => videoGetCommentReplies(aid, comment.rpid, pageParam),
-    getNextPageParam: (lastPage, _, lastPageParam) =>
-      lastPage.has_more ? lastPageParam + 1 : undefined,
-  });
-  // 完整列表沿接口顺序展示，预览不插入分页数据，避免重复或打乱楼层顺序。
-  const replies = Array.from(
-    new Map(
-      repliesQuery.data?.pages.flatMap((page) =>
-        page.items.map((reply) => [reply.rpid, reply] as const),
-      ),
-    ).values(),
-  );
-  const allCount = repliesQuery.data?.pages[0]?.all_count ?? comment.rcount;
-  const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
-    hasNextPage: repliesQuery.hasNextPage,
-    isFetchingNextPage: repliesQuery.isFetchingNextPage,
-    isFetchNextPageError: repliesQuery.isFetchNextPageError,
-    fetchNextPage: () => repliesQuery.fetchNextPage(),
-  });
-
-  return (
-    // touch-pan-y：与页签面板同理，滚动容器自身必须让出横向，否则侧栏横滑切页签
-    // 在这一层上会被合成器当作滚动接走（见页签面板处的说明）。
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
-      <div className="border-b border-border px-4 py-4">
-        <CommentRow comment={comment} isThreadAuthor />
-      </div>
-      <div className="border-b border-border/60 px-4 py-3 text-xs text-muted-foreground">
-        全部回复 {formatOnline(allCount)}
-      </div>
-      {repliesQuery.isPending ? (
-        <div className="flex justify-center py-8">
-          <Spinner aria-label="正在加载回复" />
-        </div>
-      ) : repliesQuery.isError && !repliesQuery.data ? (
-        <div className="p-4">
-          <ErrorState
-            error={repliesQuery.error}
-            title="回复加载失败"
-            onRetry={() => void repliesQuery.refetch()}
-          />
-        </div>
-      ) : replies.length === 0 ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>暂无回复</EmptyTitle>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <div className="px-4">
-          {replies.map((reply) => (
-            <div key={reply.rpid} className="border-b border-border/60 py-4 last:border-b-0">
-              <CommentRow
-                comment={reply}
-                isThreadAuthor={Boolean(
-                  comment.mid && comment.mid !== "0" && reply.mid === comment.mid,
-                )}
-              />
-            </div>
-          ))}
-          <LoadMoreRow
-            scroll={{ loadMore, loadMoreRef, supportsIntersectionObserver }}
-            query={repliesQuery}
-            loadingLabel="正在加载更多回复"
-            retryLabel="重试加载更多回复"
-            loadMoreLabel="加载更多回复"
-            endLabel="没有更多回复了"
-            className="min-h-14"
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** 评论列表：排序切换 + 游标翻页。 */
-function CommentsPanel({ aid }: { aid: string }) {
-  const [mode, setMode] = useState(3);
-  const [selectedComment, setSelectedComment] = useState<VideoComment | null>(null);
-  const commentsQuery = useInfiniteQuery({
-    queryKey: ["video_comments", aid, mode],
-    enabled: aid !== "",
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => videoGetComments(aid, mode, pageParam),
-    getNextPageParam: (lastPage) => (lastPage.has_more ? lastPage.next : undefined),
-  });
-  const pages = commentsQuery.data?.pages ?? [];
-  const comments = pages.flatMap((page) => page.items);
-  const allCount = pages[0]?.all_count ?? 0;
-  const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
-    hasNextPage: commentsQuery.hasNextPage && selectedComment === null,
-    isFetchingNextPage: commentsQuery.isFetchingNextPage,
-    isFetchNextPageError: commentsQuery.isFetchNextPageError,
-    fetchNextPage: () => commentsQuery.fetchNextPage(),
-  });
-  return (
-    <div className="flex flex-col">
-      <div className="flex items-center justify-between px-3 pb-2 pt-3">
-        <span className="text-xs text-muted-foreground">
-          {allCount > 0 ? `共 ${formatOnline(allCount)} 条` : "评论"}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 gap-1 px-2 text-xs text-muted-foreground"
-          aria-label={`评论排序：${mode === 3 ? "最热" : "最新"}，点击切换`}
-          title="点击切换评论排序"
-          onClick={() => setMode(mode === 3 ? 2 : 3)}
-        >
-          {mode === 3 ? "最热" : "最新"}
-          <ArrowUpDown data-icon="inline-end" />
-        </Button>
-      </div>
-      {commentsQuery.isPending ? (
-        <div className="flex flex-col gap-4 px-3 pb-4">
-          {[0, 1, 2].map((index) => (
-            <div key={index} className="flex gap-2.5">
-              <Skeleton className="size-8 shrink-0 rounded-full" />
-              <div className="flex w-full flex-col gap-1.5">
-                <Skeleton className="h-3.5 w-24" />
-                <Skeleton className="h-3 w-full" />
-                <Skeleton className="h-3 w-2/3" />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : commentsQuery.isError && !commentsQuery.data ? (
-        <div className="px-3 pb-4">
-          <ErrorState
-            error={commentsQuery.error}
-            title="评论加载失败"
-            onRetry={() => void commentsQuery.refetch()}
-          />
-        </div>
-      ) : comments.length === 0 ? (
-        <p className="px-3 pb-6 pt-4 text-center text-xs text-muted-foreground">暂无评论</p>
-      ) : (
-        <div className="px-3 pb-4">
-          {comments.map((comment) => (
-            <CommentThread
-              key={comment.rpid}
-              comment={comment}
-              onOpenDetail={() => setSelectedComment(comment)}
-            />
-          ))}
-          <LoadMoreRow
-            scroll={{ loadMore, loadMoreRef, supportsIntersectionObserver }}
-            query={commentsQuery}
-            loadingLabel="正在加载更多评论"
-            retryLabel="重试加载更多评论"
-            loadMoreLabel="加载更多"
-            className="min-h-10"
-          />
-        </div>
-      )}
-      <Drawer
-        open={selectedComment !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelectedComment(null);
-        }}
-      >
-        <DrawerContent side="right" className="flex h-full flex-col overflow-hidden p-0">
-          <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
-            <DrawerTitle>评论详情</DrawerTitle>
-            <DrawerClose
-              render={
-                <Button variant="ghost" size="icon" aria-label="返回评论区" title="返回评论区">
-                  <ChevronRight />
-                </Button>
-              }
-            />
-          </div>
-          {selectedComment && (
-            <CommentReplies key={selectedComment.rpid} aid={aid} comment={selectedComment} />
-          )}
-        </DrawerContent>
-      </Drawer>
-    </div>
-  );
 }
 
 /** 相关视频（UGC）。 */
