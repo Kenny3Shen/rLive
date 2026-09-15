@@ -1,0 +1,278 @@
+/**
+ * 短视频（竖屏流）的纯逻辑：路由契约、画幅判定、纵向翻页几何与会话保留策略。
+ *
+ * 抽成不 import React 的模块，是为了让「滑到哪一条」「保留哪几个播放会话」这些
+ * 决策可以单测 —— 它们是竖屏消费体验的正确性核心，而竖屏舞台本身几乎全是副作用。
+ *
+ * 纵向翻页刻意不复用 `useHorizontalSwipe`：那个 hook 的 `transformFor` 硬编码
+ * `translate3d(x, 0, 0)`，且它的语义是「有序页签之间换页」（提交后由路由带入新页）。
+ * 短视频是同一条无限流内部的定位，条目数会在滑动过程中增长，两者的提交语义不同。
+ * 共用的是阈值口径与释放收尾的算法（见下方常量注释）。
+ */
+
+import type { VideoDimension, VideoItem } from "@/shared/types/video";
+
+/** 短视频页路径。刻意不挂在 `/video` 下：侧栏「视频」项按前缀匹配会跟着高亮。 */
+export const SHORTS_PATH = "/shorts";
+
+/** 媒体自己报出的原始画幅（`videoWidth` / `videoHeight`），起播后才有。 */
+export type ShortsIntrinsicSize = { width: number; height: number };
+
+/**
+ * 这一条的显示宽高比（宽 / 高）；无从得知时返回 null。
+ *
+ * 优先用媒体自报的 `videoWidth/videoHeight`：那是真正要显示的画幅，而列表下发的
+ * `dimension` 只是起播前的先验（也可能与实际取到的流不一致）。
+ *
+ * `rotate` 非 0 时宽高互换 —— B 站这个字段是 0/1 标志而不是角度（见
+ * `docs/zh/短视频调研-B站与抖音.md`），因此判定「非 0 即互换」而不是只认 90/270。
+ *
+ * 两个来源都没有时返回 null 而不是猜 9:16：猜错的代价是画面被按错误比例定框，
+ * 而 null 会让舞台退回「画面框 = 舞台」，由 `object-contain` 自己居中留边。
+ */
+export function shortsMediaAspect(
+  dimension: VideoDimension | null | undefined,
+  intrinsic?: ShortsIntrinsicSize | null,
+): number | null {
+  if (intrinsic && intrinsic.width > 0 && intrinsic.height > 0) {
+    return intrinsic.width / intrinsic.height;
+  }
+  if (!dimension) return null;
+  const { width, height, rotate } = dimension;
+  if (!(width > 0) || !(height > 0)) return null;
+  return rotate === 0 ? width / height : height / width;
+}
+
+/**
+ * 画面在舞台里的实际显示尺寸：按宽高比等比内切，不裁切也不拉伸。
+ *
+ * 这是「短视频不该被强行铺满」的几何本体。竖屏源在桌面宽舞台上若按 `cover` 铺满，
+ * 会先填满宽度再让高度溢出（1920 宽的舞台上 9:16 的画面高约 3400px），结果只看得见
+ * 画面中间一条 —— 桌面端短视频的做法是把画面按原比例居中成一张卡片，周围交给背景。
+ *
+ * 内切对竖屏和横屏一视同仁：竖屏在手机上（视口本就接近 9:16）几乎正好铺满，
+ * 在桌面上收成居中的竖卡；横屏则是常规的上下留边。
+ *
+ * 宽高比未知时退回舞台自身尺寸，让 `object-contain` 接手。
+ */
+export function shortsMediaFrame(
+  stageWidth: number,
+  stageHeight: number,
+  aspect: number | null,
+): { width: number; height: number } {
+  const width = Math.max(0, stageWidth);
+  const height = Math.max(0, stageHeight);
+  if (!(width > 0) || !(height > 0)) return { width: 0, height: 0 };
+  if (!aspect || !(aspect > 0) || !Number.isFinite(aspect)) return { width, height };
+  // 画面比舞台更「宽」则宽度先到边，否则高度先到边。
+  return aspect > width / height
+    ? { width, height: width / aspect }
+    : { width: height * aspect, height };
+}
+
+/**
+ * 跨页去重后的短视频条目。
+ *
+ * story feed 无游标：翻页就是「再拉一批轮换内容」，后端已按批去重，但跨页重复
+ * 仍会发生（轮换由服务端时间轴推进，不保证不回头）。这里同时丢掉缺取流键的条目 ——
+ * 竖屏舞台没有「先取详情补 cid」的中间态，拿不到 cid 的条目直接不该进流。
+ */
+export function shortsFeedItems(pages: readonly { items: readonly VideoItem[] }[]): VideoItem[] {
+  const seen = new Set<string>();
+  const items: VideoItem[] = [];
+  for (const page of pages) {
+    for (const item of page.items) {
+      if (!item.bvid || !item.cid || item.cid <= 0) continue;
+      if (seen.has(item.bvid)) continue;
+      seen.add(item.bvid);
+      items.push(item);
+    }
+  }
+  return items;
+}
+
+/** 一条短视频在播放/预取层里的身份。与播放列表项的 id 同构（`bvid_cid`）。 */
+export function shortsItemKey(item: Pick<VideoItem, "bvid" | "cid">): string {
+  return `${item.bvid}_${item.cid ?? 0}`;
+}
+
+/** 轴向锁定前必须走过的距离（px）。与画面表面其他手势同一口径，见 `videoSurfaceGesture`。 */
+export const SHORTS_SWIPE_LOCK_DISTANCE_PX = 12;
+/** 主轴必须超过副轴的倍数，斜向拖动一律不认领。 */
+const SHORTS_SWIPE_DIRECTION_RATIO = 1.25;
+/**
+ * 慢速拖拽提交换片所需的舞台高度比例。
+ *
+ * 比横向翻页（0.1）高一档：横滑翻页在页签之间来回是廉价的，而换片会拆掉当前
+ * 播放会话、重新取流。误触的代价不对称，因此要求更明确的位移。
+ */
+export const SHORTS_SWIPE_COMMIT_PROGRESS = 0.18;
+/** 释放速度阈值（px/ms），超过则无论进度如何都换片。与横向翻页同值。 */
+export const SHORTS_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
+/** 首尾条目上的越界阻尼：让边界可见，又不暗示这条流可以环绕。 */
+const SHORTS_SWIPE_EDGE_RESISTANCE = 0.18;
+/** 释放收尾时长的边界（ms）。 */
+export const SHORTS_SWIPE_SETTLE_MIN_MS = 170;
+export const SHORTS_SWIPE_SETTLE_MAX_MS = 400;
+const SHORTS_SWIPE_SETTLE_MIN_SPEED = 0.7;
+const SHORTS_SWIPE_SETTLE_MAX_SPEED = 3;
+/** 释放速度的采样窗口（ms），约两个合成帧。 */
+export const SHORTS_SWIPE_VELOCITY_WINDOW_MS = 32;
+
+export type ShortsSwipeSample = {
+  /** 手势轴（纵向）上的指针位置（px）。 */
+  y: number;
+  /** 采样时刻的 `performance.now()`。 */
+  time: number;
+};
+
+/**
+ * 这次按压是否交给纵向换片。
+ *
+ * 竖屏舞台上没有别的纵向手势（刻意不启用左右半屏亮度/音量：那套要求画面静止时
+ * 的精细拖动，与「上下滑动换片」在同一根轴上不可共存），因此纵向一律接手，
+ * 横向与斜向拒绝。
+ */
+export function shortsSwipeIntent(deltaX: number, deltaY: number): "pending" | "switch" | "reject" {
+  const horizontal = Math.abs(deltaX);
+  const vertical = Math.abs(deltaY);
+  if (horizontal < SHORTS_SWIPE_LOCK_DISTANCE_PX && vertical < SHORTS_SWIPE_LOCK_DISTANCE_PX) {
+    return "pending";
+  }
+  if (
+    vertical >= SHORTS_SWIPE_LOCK_DISTANCE_PX &&
+    vertical > horizontal * SHORTS_SWIPE_DIRECTION_RATIO
+  ) {
+    return "switch";
+  }
+  return "reject";
+}
+
+/** 由样本尾部计算的纵向释放速度（px/ms）。抬手前停顿过的手指上报约 0。 */
+export function shortsSwipeVelocity(
+  samples: readonly ShortsSwipeSample[],
+  windowMs: number = SHORTS_SWIPE_VELOCITY_WINDOW_MS,
+): number {
+  const latest = samples[samples.length - 1];
+  if (!latest) return 0;
+  let oldest = latest;
+  for (let index = samples.length - 2; index >= 0; index -= 1) {
+    const sample = samples[index]!;
+    if (latest.time - sample.time > windowMs) break;
+    oldest = sample;
+  }
+  const elapsed = latest.time - oldest.time;
+  if (elapsed <= 0) return 0;
+  return (latest.y - oldest.y) / elapsed;
+}
+
+/**
+ * 条带跟手时使用的纵向偏移。
+ *
+ * 有效方向上最多跟手一整个舞台高度；在第一条（上滑）与最后一条（下滑）处
+ * 大幅阻尼。`length` 是**已加载**的条目数：流还在增长，最后一条上的阻尼因此是
+ * 「暂时到底」的反馈，而不是终点声明。
+ */
+export function shortsSwipeDragOffset(
+  index: number,
+  length: number,
+  deltaY: number,
+  stageHeight: number,
+): number {
+  if (length <= 0 || index < 0 || index >= length) return 0;
+  const maxTravel = Math.max(0, stageHeight);
+  const bounded = Math.max(-maxTravel, Math.min(maxTravel, deltaY));
+  const nextIndex = index + (deltaY < 0 ? 1 : -1);
+  const atBoundary = nextIndex < 0 || nextIndex >= length;
+  return atBoundary ? bounded * SHORTS_SWIPE_EDGE_RESISTANCE : bounded;
+}
+
+/** 实时拖拽覆盖的带符号舞台比例。 */
+export function shortsSwipeProgress(dragOffset: number, stageHeight: number): number {
+  if (!(stageHeight > 0)) return 0;
+  return Math.max(-1, Math.min(1, dragOffset / stageHeight));
+}
+
+/**
+ * 指针释放后该停在哪一条；null 表示留在原处。
+ *
+ * 负偏移（手指上移）前进到下一条，正偏移回到上一条。与横向翻页同一套判定：
+ * 顺向一甩任何距离都提交，回甩任何距离都取消，否则按走过的舞台比例决定。
+ */
+export function shortsSwipeTargetIndex(
+  index: number,
+  length: number,
+  dragOffset: number,
+  velocity: number,
+  stageHeight: number,
+): number | null {
+  if (length <= 1 || index < 0 || index >= length || dragOffset === 0) return null;
+  const advancing = dragOffset < 0;
+  const fling = SHORTS_SWIPE_FLING_VELOCITY_PX_PER_MS;
+  const flingForward = advancing ? velocity <= -fling : velocity >= fling;
+  const flingBack = advancing ? velocity >= fling : velocity <= -fling;
+  let commit: boolean;
+  if (flingForward) commit = true;
+  else if (flingBack) commit = false;
+  else {
+    commit = Math.abs(shortsSwipeProgress(dragOffset, stageHeight)) >= SHORTS_SWIPE_COMMIT_PROGRESS;
+  }
+  if (!commit) return null;
+  const nextIndex = index + (advancing ? 1 : -1);
+  return nextIndex < 0 || nextIndex >= length ? null : nextIndex;
+}
+
+/** 释放后覆盖剩余距离所需的时长（ms）：延续手势而不是播一段固定动画。 */
+export function shortsSwipeSettleDuration(distance: number, velocity: number): number {
+  const remaining = Math.abs(distance);
+  if (remaining < 1) return 0;
+  const speed = Math.min(
+    SHORTS_SWIPE_SETTLE_MAX_SPEED,
+    Math.max(SHORTS_SWIPE_SETTLE_MIN_SPEED, Math.abs(velocity)),
+  );
+  return Math.round(
+    Math.min(SHORTS_SWIPE_SETTLE_MAX_MS, Math.max(SHORTS_SWIPE_SETTLE_MIN_MS, remaining / speed)),
+  );
+}
+
+/** 把条带定位到指定条目。 */
+export function shortsTrackOffset(index: number, stageHeight: number): number {
+  const normalized = Math.max(0, index);
+  const height = Math.max(0, stageHeight);
+  return normalized === 0 || height === 0 ? 0 : -normalized * height;
+}
+
+/**
+ * 当前下标周围需要挂载的条目下标（含自身）。
+ *
+ * 只挂载三个：上一条、当前、下一条。相邻条目必须真实挂载，否则跟手拖动时
+ * 手指下方是空白 —— 那正是「滑动不跟手」的观感来源。再多挂就是白付封面图的
+ * 解码与布局开销，滑动过程中看不到第二条之外的内容。
+ */
+export function shortsMountedIndexes(index: number, length: number): number[] {
+  if (length <= 0) return [];
+  const clamped = Math.max(0, Math.min(index, length - 1));
+  const first = Math.max(0, clamped - 1);
+  const last = Math.min(length - 1, clamped + 1);
+  const indexes: number[] = [];
+  for (let value = first; value <= last; value += 1) indexes.push(value);
+  return indexes;
+}
+
+/**
+ * 该在什么时候拉下一页。
+ *
+ * story feed 单批只给 4~5 条、后端一页串行取两批（约 9 条），而竖屏消费一次只看
+ * 一条：等滑到最后一条再拉必然要等。剩余不足这个数就提前补，让下一条永远已在手上。
+ */
+export const SHORTS_PREFETCH_REMAINING = 3;
+
+export function shortsShouldFetchMore(
+  index: number,
+  length: number,
+  hasNextPage: boolean,
+  isFetching: boolean,
+): boolean {
+  if (!hasNextPage || isFetching || length === 0) return false;
+  return length - index - 1 <= SHORTS_PREFETCH_REMAINING;
+}

@@ -57,6 +57,15 @@ pub async fn video_get_popular(
         .await
 }
 
+/// 短视频流（story feed）。
+///
+/// 上游无游标：`page` 不传给上游，只是前端无限列表的页号，每次调用都拉下一批
+/// 轮换内容。跳页不可能，重复由前后端各自去重（后端跨批、前端跨页）。
+#[tauri::command]
+pub async fn video_get_story(state: State<'_, AppState>) -> AppResult<VideoListPage> {
+    resolve_bilibili(&state)?.video_story().await
+}
+
 /// UGC 分区榜。`rid` 取自 [`crate::sites::bilibili::VIDEO_ZONES`]。
 #[tauri::command]
 pub async fn video_get_zone(state: State<'_, AppState>, rid: i64) -> AppResult<VideoListPage> {

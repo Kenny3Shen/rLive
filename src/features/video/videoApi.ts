@@ -31,6 +31,17 @@ export function videoGetPopular(page: number, pageSize?: number): Promise<VideoL
   return invokeCmd<VideoListPage>("video_get_popular", { page, pageSize });
 }
 
+/**
+ * 短视频流（B 站 story feed）。
+ *
+ * 上游无游标也不接页码：每次调用拉下一批轮换内容，因此没有参数。后端已做跨
+ * 批去重，但跨**页**重复仍可能，调用方必须自行去重（见 `shortsFeedItems`）。
+ * 返回的条目是混合画幅，竖屏判定靠 `dimension`。
+ */
+export function videoGetStory(): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_get_story");
+}
+
 /** UGC 分区榜。上游是榜单而非分页接口，返回的 `has_more` 恒为 false。 */
 export function videoGetZone(rid: number): Promise<VideoListPage> {
   return invokeCmd<VideoListPage>("video_get_zone", { rid });

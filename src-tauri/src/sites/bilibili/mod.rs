@@ -307,6 +307,26 @@ impl BilibiliSite {
     where
         T: Serialize,
     {
+        self.get_json_request_with(url, query, public_headers, checks, &[])
+            .await
+    }
+
+    /// [`Self::get_json_request`] 加额外请求头。
+    ///
+    /// `extra` 在标准 header 之后追加，给那些要求非 cookie 形态设备标识的接口用
+    /// （目前只有 story feed 的 `buvid` 头，见
+    /// [`Self::get_json_with_buvid_header`]）。
+    async fn get_json_request_with<T>(
+        &self,
+        url: &str,
+        query: &[T],
+        public_headers: bool,
+        checks: ResponseChecks,
+        extra: &[(&'static str, String)],
+    ) -> AppResult<String>
+    where
+        T: Serialize,
+    {
         let headers = if public_headers {
             vec![
                 ("user-agent", DEFAULT_USER_AGENT.to_string()),
@@ -318,6 +338,9 @@ impl BilibiliSite {
         let mut req = self.client.get(url);
         for (k, v) in headers {
             req = req.header(k, v);
+        }
+        for (k, v) in extra {
+            req = req.header(*k, v);
         }
         for pair in query {
             req = req.query(&[pair]);
@@ -364,6 +387,28 @@ impl BilibiliSite {
 
     async fn get_json(&self, url: &str, query: &[(&str, String)]) -> AppResult<String> {
         self.get_json_request(url, query, false, ResponseChecks::Full)
+            .await
+    }
+
+    /// 额外携带独立的 `buvid` 请求头（story feed 专用）。
+    ///
+    /// 只把 buvid3 写进 cookie 对这个接口不生效：上游按这个**请求头**决定是否启用
+    /// 推荐引擎（带头 `track_id = story_0.router-story-…`，不带则
+    /// `gateway_fallback_…`，已实测）。因为是行为观测而非上游承诺，指纹接口失败时
+    /// （[`Self::ensure_buvid`] 会缓存空串）不报错，只不带该头 —— 代价是降级流，
+    /// 仍能出内容。
+    pub(super) async fn get_json_with_buvid_header(
+        &self,
+        url: &str,
+        query: &[(&str, String)],
+    ) -> AppResult<String> {
+        let (b3, _) = self.ensure_buvid().await?;
+        let extra = if b3.is_empty() {
+            Vec::new()
+        } else {
+            vec![("buvid", b3)]
+        };
+        self.get_json_request_with(url, query, false, ResponseChecks::Full, &extra)
             .await
     }
 

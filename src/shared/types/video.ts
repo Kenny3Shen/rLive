@@ -5,6 +5,19 @@
  * 不同，混在一起会让两侧的字段含义都变模糊。
  */
 
+/**
+ * 视频画面尺寸（上游 `dimension`）。
+ *
+ * 显示画幅的依据：`rotate` 非 0 时宽高互换后再使用（见 `shortsMediaAspect`）。
+ * 只有少数列表接口下发（story feed、热门），其余接口为 null。
+ */
+export type VideoDimension = {
+  width: number;
+  height: number;
+  /** 旋转标记。非 0 表示上游给出的宽高需要互换才是实际画幅。 */
+  rotate: number;
+};
+
 /** 列表页中的一条 UGC 稿件。 */
 export type VideoItem = {
   bvid: string;
@@ -20,6 +33,8 @@ export type VideoItem = {
   title: string;
   cover: string;
   author: string;
+  /** UP 主头像（已过上游缩图参数）；上游未给时为 null。 */
+  author_face: string | null;
   /** 时长，秒。 */
   duration: number;
   view: number;
@@ -28,6 +43,8 @@ export type VideoItem = {
   pubdate: number;
   /** 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。 */
   rcmd_reason: string | null;
+  /** 画面尺寸。仅 story feed 与热门下发，用于竖屏判定；其余接口为 null。 */
+  dimension?: VideoDimension | null;
 };
 
 /** 番剧 / 影视等 PGC 剧集的列表条目。 */

@@ -40,6 +40,21 @@ describe("sidebar navigation transitions", () => {
     expect(sidebarNavigationDirection("/video", "/settings")).toBe(1);
   });
 
+  test("短视频坐在视频与 IPTV 之间", () => {
+    // 侧栏项新增时必须同步方向条带，漏了就只能回落正向。
+    expect(sidebarNavigationDirection("/video", "/shorts")).toBe(1);
+    expect(sidebarNavigationDirection("/shorts", "/video")).toBe(-1);
+    expect(sidebarNavigationDirection("/shorts", "/iptv")).toBe(1);
+    expect(sidebarNavigationDirection("/iptv", "/shorts")).toBe(-1);
+  });
+
+  test("短视频入口在移动端也可见", () => {
+    // 竖屏消费正是触摸端的主场景，它不能被当成桌面专属入口。
+    const mobile = sidebarNavItemsFor(true);
+    expect(mobile.some((item) => item.to === "/shorts")).toBe(true);
+    expect(SIDEBAR_NAV_ITEMS.find((item) => item.to === "/shorts")?.label).toBe("短视频");
+  });
+
   test("treats the video player page as part of the video destination", () => {
     // 条带按前缀匹配，`/video/play` 因此与 `/video` 同一个下标。
     expect(sidebarNavigationDirection("/video/play", "/settings")).toBe(1);
@@ -66,7 +81,7 @@ describe("sidebar nav items per client platform", () => {
     // 手机与平板横屏的视口宽度普遍超过 md 断点，
     // 视口门控（max-md:hidden）无法再阻止桌面专属入口出现在移动端。
     const mobileDestinations = sidebarNavItemsFor(true).map((item) => item.to);
-    expect(mobileDestinations).toEqual(["/", "/follow", "/video", "/iptv", "/settings"]);
+    expect(mobileDestinations).toEqual(["/", "/follow", "/video", "/shorts", "/iptv", "/settings"]);
   });
 
   test("drops the category entry now that browsing lives on the home page", () => {

@@ -12,8 +12,9 @@ use crate::danmu_rs::{ProtoReader, ProtoValue};
 use crate::error::{AppError, AppResult};
 use crate::models::video::{
     DanmakuItem, PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoComment,
-    VideoCommentPage, VideoDanmakuSegment, VideoEmote, VideoItem, VideoListPage, VideoPlayRequest,
-    VideoQuality, VideoSeason, VideoSeasonEpisode, VideoStoryboard, VideoSubtitle, VideoUgcSeason,
+    VideoCommentPage, VideoDanmakuSegment, VideoDimension, VideoEmote, VideoItem, VideoListPage,
+    VideoPlayRequest, VideoQuality, VideoSeason, VideoSeasonEpisode, VideoStoryboard,
+    VideoSubtitle, VideoUgcSeason,
 };
 
 use super::BilibiliSite;
@@ -38,6 +39,14 @@ const MAX_DANMAKU_CONTENT: usize = 512;
 
 /// VOD 弹幕分段长度：6 分钟。
 const DANMAKU_SEGMENT_MILLIS: i64 = 360_000;
+
+/// story feed 一页串行拉几批。
+///
+/// 该接口无游标、每批只给 4~5 条，且轮换游标在服务端按时间推进：实测 **串行**
+/// 连拉零重复（单批约 400ms），而 **并发** 三批 15 条只得 6~11 条唯一。因此不能
+/// 照搬抖音推荐 feed 的并发批次模式，只能串行取批。两批约 9 条，正好填满首屏
+/// 竖屏消费的预取窗口，再多给的是白等的往返。
+const STORY_FEED_BATCHES: usize = 2;
 
 fn video_err(msg: impl Into<String>) -> AppError {
     AppError::new("bilibili_video_error", msg).with_site("bilibili")
@@ -76,6 +85,21 @@ fn rcmd_reason(item: &Value) -> Option<String> {
     };
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
+}
+
+/// 读取上游 `dimension`。宽高任一为 0 时当作未下发（无法判定画幅）。
+fn video_dimension(item: &Value) -> Option<VideoDimension> {
+    let raw = item.get("dimension")?;
+    let width = raw.get("width").map(as_i64).unwrap_or(0);
+    let height = raw.get("height").map(as_i64).unwrap_or(0);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(VideoDimension {
+        width,
+        height,
+        rotate: raw.get("rotate").map(as_i64).unwrap_or(0),
+    })
 }
 
 /// 解析一条 UGC 稿件。
@@ -133,6 +157,7 @@ fn video_item(item: &Value) -> VideoItem {
             .filter(|pubdate| *pubdate > 0)
             .unwrap_or_else(|| created_to_unix(item.get("created"))),
         rcmd_reason: rcmd_reason(item),
+        dimension: video_dimension(item),
     }
 }
 
@@ -285,6 +310,118 @@ pub fn parse_zone(raw: &str) -> AppResult<VideoListPage> {
             }
         },
     )
+}
+
+/// 解析一条 story feed 条目。
+///
+/// 字段名与其他列表接口不同，故不复用 [`video_item`]：封面在 `cover`（不是 `pic`），
+/// aid 在 `param`，cid 在 `player_args.cid`。`param` 是 aid 的字符串形态，正好对应
+/// [`VideoItem::aid`] 的字符串约定（实测 `117263042742272`，超 JS 安全整数）。
+///
+/// 封面优先 `cover` 而不是首帧图 `ff_cover`：后者是竖屏播放器的预热帧，并非
+/// UP 主选定的封面，当卡片缩略图用会出现黑帧。
+fn story_item(item: &Value) -> VideoItem {
+    let owner = item.get("owner");
+    let stat = item.get("stat");
+    let cover = item
+        .get("cover")
+        .map(as_str)
+        .filter(|cover| !cover.is_empty())
+        .or_else(|| item.get("ff_cover").map(as_str))
+        .unwrap_or_default();
+    VideoItem {
+        bvid: item.get("bvid").map(as_str).unwrap_or_default(),
+        // `param` 就是 aid；`player_args.aid` 是同一个值的数字形态，缺 `param` 时回退。
+        aid: item
+            .get("param")
+            .map(as_str)
+            .filter(|aid| !aid.is_empty() && aid != "0")
+            .or_else(|| item.pointer("/player_args/aid").map(as_str))
+            .unwrap_or_default(),
+        cid: item
+            .pointer("/player_args/cid")
+            .map(as_i64)
+            .filter(|cid| *cid > 0),
+        title: item.get("title").map(as_str).unwrap_or_default(),
+        cover: video_cover(&cover),
+        author: owner
+            .and_then(|owner| owner.get("name"))
+            .map(as_str)
+            .unwrap_or_default(),
+        author_face: owner
+            .and_then(|owner| owner.get("face"))
+            .map(as_str)
+            .map(|face| avatar_thumb(&face))
+            .filter(|face| !face.is_empty()),
+        duration: video_duration(item.get("duration")),
+        view: stat
+            .and_then(|stat| stat.get("view"))
+            .map(as_i64)
+            .unwrap_or(0),
+        danmaku: stat
+            .and_then(|stat| stat.get("danmaku"))
+            .map(as_i64)
+            .unwrap_or(0),
+        pubdate: item.get("pubdate").map(as_i64).unwrap_or(0),
+        // story 条目不带 `rcmd_reason`；它自带的 `sub_title`（「N 万播放」）与 `view`
+        // 重复，不当推荐理由用。
+        rcmd_reason: None,
+        dimension: video_dimension(item),
+    }
+}
+
+/// 解析 story feed `data.items[]`（竖屏播放器入口流）。
+///
+/// 只保留 `card_goto == "vertical_av"` 且取流键（`bvid` + `cid`）齐备的条目：该流与
+/// 推荐流同构，上游可能掘入广告与非稿件卡片，而竖屏舞台拿不到 cid 就无法
+/// 直接起播。画幅**不过滤**：story 是混合流（实测 40 条中竖 22 / 横 18），横屏
+/// 条目在竖屏舞台内 contain 居中，前端按 `dimension` 自行适配。
+pub fn parse_story(raw: &str) -> AppResult<VideoListPage> {
+    json_items(
+        raw,
+        "短视频流",
+        "data.items",
+        &["/data/items"],
+        |_root, items| {
+            let items: Vec<VideoItem> = items
+                .iter()
+                .filter(|item| {
+                    item.get("card_goto")
+                        .or_else(|| item.get("goto"))
+                        .map(as_str)
+                        .as_deref()
+                        == Some("vertical_av")
+                })
+                .map(story_item)
+                .filter(|item| !item.bvid.is_empty() && item.cid.is_some_and(|cid| cid > 0))
+                .collect();
+            // 无游标的轮换流：只要这一批还有内容就能继续拉（同 [`parse_recommend`]）。
+            VideoListPage {
+                has_more: !items.is_empty(),
+                items,
+            }
+        },
+    )
+}
+
+/// 合并 story feed 的多个批次，按 `bvid` 距重。
+///
+/// 上游无游标，批与批之间只能靠服务端时间轴推进，重叠不可避（尤其是并发时）。
+/// `has_more` 保持「新条目耗尽即停」：去重后仍有内容说明轮换还在走，空则结束。
+fn combine_story_batches(batches: Vec<VideoListPage>) -> VideoListPage {
+    let mut items: Vec<VideoItem> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for batch in batches {
+        for item in batch.items {
+            if seen.insert(item.bvid.clone()) {
+                items.push(item);
+            }
+        }
+    }
+    VideoListPage {
+        has_more: !items.is_empty(),
+        items,
+    }
 }
 
 fn pgc_item(item: &Value) -> PgcItem {
@@ -1476,6 +1613,40 @@ impl BilibiliSite {
             )
             .await?;
         parse_popular(&text)
+    }
+
+    /// 短视频（story feed）。上游是竖屏播放器的入口流，与其他列表接口有三处不同：
+    ///
+    /// 1. **不需 WBI、不需 appkey/sign**，裸请求即 `code 0`（已实测）。
+    /// 2. **需要独立的 `buvid` 请求头**，只写 cookie 不生效：带头时条目的
+    ///    `track_id` 为 `story_0.router-story-…`（推荐引擎生效），不带则降级为
+    ///    `gateway_fallback_…`（已实测）。降级流仍可用，只是推荐质量下降。
+    /// 3. **无游标**，`page` 不作为上游参数（`ps`/`count` 实测无效），仅用于前端
+    ///    翻页语义；轮换由服务端时间轴推进，因此取批必须串行（见
+    ///    [`STORY_FEED_BATCHES`]）。
+    ///
+    /// `pull` 必须传 `1`/`0`，传字符串 `"true"` 会直接 -400。
+    pub async fn video_story(&self) -> AppResult<VideoListPage> {
+        let mut batches: Vec<VideoListPage> = Vec::with_capacity(STORY_FEED_BATCHES);
+        let mut last_err = None;
+        for _ in 0..STORY_FEED_BATCHES {
+            match self
+                .get_json_with_buvid_header(
+                    "https://api.bilibili.com/x/v2/feed/index/story",
+                    &[("pull", "1".to_string())],
+                )
+                .await
+                .and_then(|text| parse_story(&text))
+            {
+                Ok(page) => batches.push(page),
+                // 单批失败不否定整页：拉到一批就能继续消费。全批都败才报错。
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if batches.is_empty() {
+            return Err(last_err.unwrap_or_else(|| video_err("短视频流未返回内容")));
+        }
+        Ok(combine_story_batches(batches))
     }
 
     /// UGC 分区榜。需要 WBI，匿名可用；一次返回整张榜，没有翻页。
@@ -2676,6 +2847,116 @@ mod tests {
     }
 
     #[test]
+    fn story_maps_player_args_and_keeps_mixed_orientations() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": { "items": [
+                // 竖屏条目：cid 在 player_args、aid 在 param、封面在 cover。
+                { "card_goto": "vertical_av", "goto": "vertical_av",
+                  "param": "117263042742272", "bvid": "BV1VXYe6rEoc",
+                  "player_args": { "aid": 117_263_042_742_272_i64, "cid": 41_855_094_127_i64, "type": "av" },
+                  "title": "竖屏", "cover": "http://i1.hdslb.com/bfs/archive/a.jpg",
+                  "ff_cover": "http://i1.hdslb.com/bfs/storyff/b.jpg",
+                  "duration": 93, "pubdate": 1_789_292_152,
+                  "dimension": { "width": 1080, "height": 1920, "rotate": 0 },
+                  "owner": { "name": "up主", "face": "https://i2.hdslb.com/bfs/face/x.jpg" },
+                  "stat": { "view": 187_172, "danmaku": 24 } },
+                // 横屏条目：story 是混合流，照样保留，由前端按 dimension 适配舞台。
+                { "card_goto": "vertical_av", "param": "2", "bvid": "BV1y",
+                  "player_args": { "cid": 2 }, "title": "横屏", "cover": "",
+                  "dimension": { "width": 1920, "height": 1080, "rotate": 0 } },
+                // 非竖屏卡：card_goto 不是 vertical_av。
+                { "card_goto": "ad_av", "param": "3", "bvid": "BV1z", "player_args": { "cid": 3 } },
+                // 缺 cid：竖屏舞台无法直接起播。
+                { "card_goto": "vertical_av", "param": "4", "bvid": "BV1w", "player_args": { "aid": 4 } },
+            ]}
+        })
+        .to_string();
+
+        let page = parse_story(&raw).expect("短视频流应解析成功");
+        assert_eq!(page.items.len(), 2, "只保留取流键齐备的 vertical_av 条目");
+        let vertical = &page.items[0];
+        // aid 取 param（字符串形态），必须保持全精度。
+        assert_eq!(vertical.aid, "117263042742272");
+        assert_eq!(vertical.cid, Some(41_855_094_127));
+        assert_eq!(vertical.view, 187_172);
+        assert_eq!(vertical.duration, 93);
+        // 封面优先 cover 而不是首帧图 ff_cover，且必须升成 https。
+        assert_eq!(vertical.cover, "https://i1.hdslb.com/bfs/archive/a.jpg");
+        let dimension = vertical.dimension.expect("竖屏判定依赖 dimension");
+        assert!(dimension.height > dimension.width);
+        assert!(
+            page.items[1]
+                .dimension
+                .expect("横屏条目也带 dimension")
+                .width
+                > 1000
+        );
+        assert!(page.has_more, "无游标轮换流：非空即可继续拉");
+    }
+
+    #[test]
+    fn story_falls_back_to_first_frame_cover_and_player_args_aid() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": { "items": [
+                { "card_goto": "vertical_av", "bvid": "BV1x",
+                  "player_args": { "aid": 117_190_447_667_445_i64, "cid": 41_467_905_537_i64 },
+                  "title": "无 param 与 cover", "ff_cover": "//i0.hdslb.com/bfs/storyff/c.jpg" },
+            ]}
+        })
+        .to_string();
+
+        let page = parse_story(&raw).expect("短视频流应解析成功");
+        let item = &page.items[0];
+        assert_eq!(
+            item.aid, "117190447667445",
+            "缺 param 时回退 player_args.aid"
+        );
+        assert_eq!(item.cover, "https://i0.hdslb.com/bfs/storyff/c.jpg");
+        // 上游没有下发 dimension 时不能编造画幅。
+        assert!(item.dimension.is_none());
+    }
+
+    #[test]
+    fn story_batches_dedupe_across_rounds() {
+        // 串行取批零重复是实测结论，但上游无游标、不作任何保证，去重不能省。
+        let batch = |bvids: &[&str]| VideoListPage {
+            has_more: true,
+            items: bvids
+                .iter()
+                .map(|bvid| VideoItem {
+                    bvid: (*bvid).to_string(),
+                    aid: String::new(),
+                    cid: Some(1),
+                    title: String::new(),
+                    cover: String::new(),
+                    author: String::new(),
+                    author_face: None,
+                    duration: 0,
+                    view: 0,
+                    danmaku: 0,
+                    pubdate: 0,
+                    rcmd_reason: None,
+                    dimension: None,
+                })
+                .collect(),
+        };
+
+        let combined = combine_story_batches(vec![batch(&["a", "b"]), batch(&["b", "c"])]);
+        let bvids: Vec<&str> = combined
+            .items
+            .iter()
+            .map(|item| item.bvid.as_str())
+            .collect();
+        assert_eq!(bvids, ["a", "b", "c"], "跨批重复必须按首次出现顺序折叠");
+        assert!(combined.has_more);
+
+        let empty = combine_story_batches(vec![batch(&[]), batch(&[])]);
+        assert!(!empty.has_more, "新条目耗尽即停");
+    }
+
+    #[test]
     fn pgc_index_reads_first_ep_and_has_next() {
         let raw = serde_json::json!({
             "code": 0,
@@ -3345,5 +3626,73 @@ mod tests {
         })
         .to_string();
         assert!(!parse_comment_replies(&last, 1).unwrap().has_more);
+    }
+
+    /// story feed 的三条契约都是行为观测而非上游承诺，回归只能靠真网验证：
+    /// 匡名无 WBI 即可、取流键齐备、且串行取批后仍能出新条目。
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_story_feed_smoke() {
+        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
+        let page = site.video_story().await.expect("匿名 story feed 应放行");
+
+        assert!(!page.items.is_empty(), "story feed 未产出条目");
+        assert!(page.has_more);
+        for item in &page.items {
+            assert!(!item.bvid.is_empty(), "条目缺 bvid");
+            assert!(item.cid.is_some_and(|cid| cid > 0), "条目缺可播 cid");
+            assert!(!item.aid.is_empty(), "条目缺 aid");
+            assert!(item.cover.starts_with("https://"), "封面未升级到 https");
+        }
+        // 两批串行：上游单批约 4~5 条，去重后应明显多于一批。
+        assert!(
+            page.items.len() >= 5,
+            "串行两批去重后只得 {} 条，轮换语义可能已变",
+            page.items.len()
+        );
+    }
+
+    /// story 条目能否直接走通现有 playurl / DASH 取流链路。
+    ///
+    /// 这是短视频入口的集成前提：竖屏舞台没有自己的取流实现，它把 story 给的
+    /// `bvid`/`cid` 原样交给 [`BilibiliSite::video_play_selection`]。若上游哪天
+    /// 改成只给 story 专用的播放凭据，这条会先失败，而不是等用户看到黑屏。
+    #[tokio::test]
+    #[ignore = "live network smoke — run with --ignored"]
+    async fn live_story_item_plays_through_existing_playurl() {
+        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
+        let page = site.video_story().await.expect("匿名 story feed 应放行");
+        let item = page.items.first().expect("story feed 未产出条目");
+        let cid = item.cid.expect("story 条目应带 cid");
+
+        let selection = site
+            .video_play_selection(&VideoPlayRequest {
+                bvid: Some(item.bvid.clone()),
+                cid,
+                ep_id: None,
+                qn: None,
+                audio_only: None,
+            })
+            .await
+            .expect("story 条目应能走通现有 playurl");
+
+        // 音视频两轨都要有可播地址与解析出的分片表，MPD 合成才有输入。
+        assert!(selection.video.base_url.starts_with("https://"));
+        assert!(selection.audio.base_url.starts_with("https://"));
+        assert!(
+            selection.video.sidx.duration_secs() > 0.0,
+            "视频轨 sidx 为空"
+        );
+        assert!(
+            selection.audio.sidx.duration_secs() > 0.0,
+            "音频轨 sidx 为空"
+        );
+        assert!(!selection.accept_quality.is_empty());
+
+        // 竖屏舞台按 dimension 决定 cover/contain，缺了它整流都会当成竖屏铺满。
+        assert!(
+            page.items.iter().all(|item| item.dimension.is_some()),
+            "story 条目缺 dimension，竖屏判定会失效"
+        );
     }
 }

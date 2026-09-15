@@ -14,6 +14,7 @@ import {
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
+  loadShortsPage,
   loadVideoPage,
   loadVideoPlayerPage,
   routeModuleLoaderForPath,
@@ -74,6 +75,13 @@ describe("route module loading", () => {
     expect(routeModuleLoaderForPath("/video")).toBe(loadVideoPage);
     expect(routeModuleLoaderForPath("/video?tab=anime")).toBe(loadVideoPage);
     expect(routeModuleLoaderForPath("/video/play?cid=123&bvid=BV1")).toBe(loadVideoPlayerPage);
+  });
+
+  test("短视频是自己的目的地，不共用 `/video` 前缀", () => {
+    // 路径刻意不挂在 `/video` 下（侧栏目的地按前缀匹配，那样「视频」会跟着高亮），
+    // 因此它不能被视频任何一条路由接走。
+    expect(routeModuleLoaderForPath("/shorts")).toBe(loadShortsPage);
+    expect(routeModuleLoaderForPath("/video")).not.toBe(loadShortsPage);
   });
 
   test("resolves the desktop category page but leaves merged surfaces to the home route", () => {

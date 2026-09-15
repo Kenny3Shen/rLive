@@ -94,6 +94,10 @@ export const loadVideoSearchPage = createCachedRouteLoader(() =>
   })),
 );
 
+export const loadShortsPage = createCachedRouteLoader(() =>
+  import("../features/shorts/ShortsPage").then(({ ShortsPage }) => ({ default: ShortsPage })),
+);
+
 /** 昂贵的播放器代码放在最后，让小而常用的目的地先就绪。 */
 const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadIptvPage,
@@ -107,6 +111,8 @@ const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadIptvPlayerPage,
   loadSettingsPage,
   loadMultiRoomPage,
+  // 短视频与视频播放页同量级（同一套 Video.js DASH 内核），同样排在后面。
+  loadShortsPage,
   loadVideoPlayerPage,
   loadRoomPage,
 ];
@@ -148,6 +154,7 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/video/play") return loadVideoPlayerPage;
   if (pathname === "/video/search") return loadVideoSearchPage;
   if (pathname === "/video") return loadVideoPage;
+  if (pathname === "/shorts") return loadShortsPage;
   if (pathname === "/settings") return loadSettingsPage;
   if (pathname === "/multi-room") return loadMultiRoomPage;
   if (pathname.startsWith("/room/")) return loadRoomPage;

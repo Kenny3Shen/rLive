@@ -7,6 +7,18 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+/// 视频画面尺寸（上游 `dimension`）。
+///
+/// 竖屏判定的唯一依据：`rotate` 非 0 时宽高互换后再比较。只有少数列表接口
+/// 下发（story feed、热门），其余接口为 `None`。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct VideoDimension {
+    pub width: i64,
+    pub height: i64,
+    /// 旋转标记。非 0 表示上游给出的宽高需要互换才是实际画幅。
+    pub rotate: i64,
+}
+
 /// 列表页中的一条 UGC 稿件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoItem {
@@ -30,6 +42,9 @@ pub struct VideoItem {
     pub pubdate: i64,
     /// 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。
     pub rcmd_reason: Option<String>,
+    /// 画面尺寸。仅 story feed 与热门下发，用于竖屏判定；其余接口为 `None`。
+    #[serde(default)]
+    pub dimension: Option<VideoDimension>,
 }
 
 /// 番剧 / 影视等 PGC 剧集的列表条目。
