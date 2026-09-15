@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { isImmersivePlayerPath } from "../src/app/layout/immersiveRoutes";
 import {
+  SHORTS_BOTTOM_BAR_HEIGHT_PX,
+  SHORTS_DANMAKU_TOP_OFFSET_PX,
   SHORTS_PATH,
   SHORTS_PREFETCH_REMAINING,
   SHORTS_SWIPE_COMMIT_PROGRESS,
+  SHORTS_TOP_BAR_HEIGHT_PX,
   shortsFeedItems,
   shortsItemKey,
   shortsMediaAspect,
   shortsMediaFrame,
   shortsMountedIndexes,
+  shortsSeekRatio,
+  shortsSeekTime,
   shortsShouldFetchMore,
   shortsSwipeDragOffset,
   shortsSwipeIntent,
@@ -108,6 +113,47 @@ describe("画面框等比内切", () => {
   test("舞台还没量到尺寸时返回 0，由样式退回铺满", () => {
     expect(shortsMediaFrame(0, 0, portrait)).toEqual({ width: 0, height: 0 });
     expect(shortsMediaFrame(1920, 0, portrait)).toEqual({ width: 0, height: 0 });
+  });
+});
+
+describe("进度条换算", () => {
+  test("按进度条自身的矩形换算比例", () => {
+    // 需求是「仅在进度条区域操作有效」：换算基准必须是轨道矩形，不是画面框。
+    expect(shortsSeekRatio(100, 100, 300)).toBe(0);
+    expect(shortsSeekRatio(250, 100, 300)).toBeCloseTo(0.5);
+    expect(shortsSeekRatio(400, 100, 300)).toBe(1);
+  });
+
+  test("越出轨道两端一律夹到 0 与 1", () => {
+    // 指针捕获期间手指可以移到轨道之外，那时仍要给出可用的比例。
+    expect(shortsSeekRatio(20, 100, 300)).toBe(0);
+    expect(shortsSeekRatio(9_999, 100, 300)).toBe(1);
+  });
+
+  test("零宽轨道不产生 NaN", () => {
+    // 首帧或隐藏容器上 getBoundingClientRect 可能给出 0 宽。
+    expect(shortsSeekRatio(50, 0, 0)).toBe(0);
+  });
+
+  test("比例换算成秒数，时长未知时返回 0", () => {
+    expect(shortsSeekTime(0.5, 120)).toBeCloseTo(60);
+    expect(shortsSeekTime(1, 93)).toBeCloseTo(93);
+    // 时长未知时调用方据此不发起 seek。
+    expect(shortsSeekTime(0.5, 0)).toBe(0);
+  });
+});
+
+describe("操作栏高度契约", () => {
+  test("弹幕起始纵坐标等于顶部控制栏高度", () => {
+    // 画面框顶对齐到安全区下沿，控制栏正好压住画面框顶部这一条：两者相等，
+    // 弹幕才会从控制栏正下方开始滚而不穿过返回按钮。
+    expect(SHORTS_DANMAKU_TOP_OFFSET_PX).toBe(SHORTS_TOP_BAR_HEIGHT_PX);
+  });
+
+  test("两条栏都是正数高度", () => {
+    // 页面级操作栏与面板内画面区共用这两个数：任一为 0 会让画面区算错收边。
+    expect(SHORTS_BOTTOM_BAR_HEIGHT_PX).toBeGreaterThan(0);
+    expect(SHORTS_TOP_BAR_HEIGHT_PX).toBeGreaterThan(0);
   });
 });
 

@@ -17,7 +17,15 @@ import {
  *
  * `cid` 变化即换片：必须丢掉上一条的弹幕，否则新视频会投放旧视频的内容。
  */
-export function useShortsDanmaku(cid: number, visible: boolean) {
+
+export type ShortsDanmakuState = {
+  /** 已加载并按时间合并的弹幕。 */
+  entries: readonly VideoDanmakuEntry[];
+  /** 告知当前播放位置（毫秒），据此按需拉取所在分段。 */
+  ensure: (positionMs: number) => void;
+};
+
+export function useShortsDanmaku(cid: number, visible: boolean): ShortsDanmakuState {
   const [entries, setEntries] = useState<readonly VideoDanmakuEntry[]>([]);
   const loadedRef = useRef(new Map<number, readonly VideoDanmakuEntry[]>());
   const inFlightRef = useRef(new Set<number>());

@@ -44,6 +44,43 @@ export function shortsMediaAspect(
 }
 
 /**
+ * 底部操作栏的高度（px），不含底部安全区。
+ *
+ * 页面级的操作栏与每个面板内的画面区必须用同一个数：画面区按
+ * `bottom: calc(此值 + env(safe-area-inset-bottom))` 收边，操作栏按同样的高度铺在
+ * 下面，两者对不上就会出现画面被压住或者中间裂一条缝。因此这个常量是两个组件
+ * 之间的契约，放在这里而不是各写一份字面量。
+ */
+export const SHORTS_BOTTOM_BAR_HEIGHT_PX = 56;
+
+/**
+ * 顶部控制栏的高度（px），不含顶部安全区。
+ *
+ * 同时也是弹幕的起始纵坐标：画面框顶对齐到安全区下沿，控制栏正好占住画面框顶部
+ * 这么高一条，弹幕从它下面开始滚才不会被返回/更多按钮压住（见
+ * `--video-danmaku-top`）。
+ */
+export const SHORTS_TOP_BAR_HEIGHT_PX = 52;
+
+/**
+ * 弹幕起始纵坐标（px），相对画面框顶边。
+ *
+ * 等于顶部控制栏的高度：画面框顶对齐到安全区下沿，控制栏正好压在画面框顶部这么
+ * 高一条上。别名而不是直接用上面那个常量，是因为两者的含义在概念上可以分开 ——
+ * 「控制栏多高」与「弹幕从哪开始」只是此刻恰好相等，后者若要再留一点余量，改这里
+ * 就够，不必去动布局契约。
+ */
+export const SHORTS_DANMAKU_TOP_OFFSET_PX = SHORTS_TOP_BAR_HEIGHT_PX;
+
+/**
+ * 键盘左右方向键的单次跳转步长（秒）。
+ *
+ * 与播放页的快捷键同一口径：短视频普遍只有几十秒，5 秒是「跳过一小段」而不是
+ * 「跳到别处」。上下方向键仍归换片，两者不在同一根轴上。
+ */
+export const SHORTS_SEEK_KEY_STEP_SECONDS = 5;
+
+/**
  * 画面在舞台里的实际显示尺寸：按宽高比等比内切，不裁切也不拉伸。
  *
  * 这是「短视频不该被强行铺满」的几何本体。竖屏源在桌面宽舞台上若按 `cover` 铺满，
@@ -89,6 +126,24 @@ export function shortsFeedItems(pages: readonly { items: readonly VideoItem[] }[
     }
   }
   return items;
+}
+
+/**
+ * 进度条上某个横坐标对应的播放比例（0~1）。
+ *
+ * 只按进度条自身的矩形换算，与舞台无关：需求是「仅在进度条区域操作有效」，
+ * 因此这个函数拿到的 `left`/`width` 必须是那条轨道的矩形，不是画面框的。
+ */
+export function shortsSeekRatio(clientX: number, left: number, width: number): number {
+  if (!(width > 0)) return 0;
+  return Math.max(0, Math.min(1, (clientX - left) / width));
+}
+
+/** 比例对应的秒数。时长未知时返回 0（调用方据此不发起 seek）。 */
+export function shortsSeekTime(ratio: number, duration: number): number {
+  if (!(duration > 0)) return 0;
+  const bounded = Math.max(0, Math.min(1, ratio));
+  return bounded * duration;
 }
 
 /** 一条短视频在播放/预取层里的身份。与播放列表项的 id 同构（`bvid_cid`）。 */

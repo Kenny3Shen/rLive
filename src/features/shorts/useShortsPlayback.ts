@@ -55,6 +55,8 @@ export type ShortsPlaybackState = {
   /** 点按切换播放/暂停。 */
   togglePlay: () => void;
   toggleMuted: () => void;
+  /** 跳到指定秒数。进度条拖动释放时调用。 */
+  seek: (seconds: number) => void;
   /** 重试当前条目（重新取流并重建播放器）。 */
   retry: () => void;
 };
@@ -420,6 +422,27 @@ export function useShortsPlayback({
     setMuted(next);
   }, [videoRef]);
 
+  /**
+   * 跳转播放位置。
+   *
+   * 同步写一次 `currentTime` 并立即更新 state：媒体的 `timeupdate` 要等到 seek 完成
+   * 才会来，中间那几十毫秒里进度条必须已经停在手指抬起的位置，否则会先弹回
+   * 原处再跳过去。
+   */
+  const seek = useCallback(
+    (seconds: number) => {
+      const media = videoRef.current;
+      if (!media) return;
+      const total =
+        Number.isFinite(media.duration) && media.duration > 0 ? media.duration : duration;
+      if (!(total > 0)) return;
+      const next = Math.max(0, Math.min(total, seconds));
+      media.currentTime = next;
+      setCurrentTime(next);
+    },
+    [duration, videoRef],
+  );
+
   const retry = useCallback(() => {
     setError(null);
     setRevision((value) => value + 1);
@@ -449,6 +472,7 @@ export function useShortsPlayback({
     intrinsicSize,
     togglePlay,
     toggleMuted,
+    seek,
     retry,
   };
 }
