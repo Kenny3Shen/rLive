@@ -135,7 +135,7 @@ fn video_item(item: &Value) -> VideoItem {
             .filter(|author| !author.is_empty())
             .unwrap_or_default(),
         author_face,
-        duration: video_duration(item.get("duration")),
+        duration: item_duration(item),
         view: stat
             .and_then(|stat| stat.get("view"))
             .map(as_i64)
@@ -173,6 +173,20 @@ fn created_to_unix(value: Option<&Value>) -> i64 {
     chrono::NaiveDateTime::parse_from_str(&as_str(value), "%Y-%m-%d %H:%M")
         .map(|dt| dt.and_utc().timestamp() - 8 * 3600)
         .unwrap_or(0)
+}
+
+/// 条目时长的取值：`duration` 优先，缺失或为 0 时回退 `length`。
+///
+/// 热门/推荐/搜索/相关给 `duration`（秒或 `H:MM:SS` 字符串）；UP 主投稿列表
+/// （`x/space/wbi/arc/search` 的 `vlist[]`）**只有** `length`（字符串），
+/// 漏掉这一路会让投稿抽屉里每条都显示 0:00。
+fn item_duration(item: &Value) -> i64 {
+    let duration = video_duration(item.get("duration"));
+    if duration > 0 {
+        duration
+    } else {
+        video_duration(item.get("length"))
+    }
 }
 
 /// 条目时长。推荐/热门给秒数（数字），搜索给 `H:MM:SS` / `M:SS` 格式的字符串。
@@ -3193,9 +3207,25 @@ mod tests {
         let page = parse_uploader_videos(&raw).unwrap();
         assert!(page.has_more);
         assert_eq!(page.items.len(), 3);
+        // 投稿列表只给 `length`（`10:30`），没有 `duration`：漏掉这一路会全部显示 0:00。
+        assert_eq!(page.items[0].duration, 630);
+        assert_eq!(page.items[1].duration, 0);
         assert_eq!(page.items[0].pubdate, 1_788_235_200);
         assert_eq!(page.items[1].pubdate, 1_788_235_200);
         assert_eq!(page.items[2].pubdate, 0);
+    }
+
+    #[test]
+    fn item_duration_prefers_duration_then_falls_back_to_length() {
+        // 带 `duration` 的接口不受 `length` 影响（同时给出时以 `duration` 为准）。
+        let both = serde_json::json!({ "duration": 300, "length": "10:30" });
+        assert_eq!(item_duration(&both), 300);
+        // 投稿列表的形态：只有字符串 `length`。
+        let only_length = serde_json::json!({ "length": "1:02:03" });
+        assert_eq!(item_duration(&only_length), 3_723);
+        // 畸形与缺失都退回 0，由前端渲染成 0:00 占位。
+        assert_eq!(item_duration(&serde_json::json!({ "length": "" })), 0);
+        assert_eq!(item_duration(&serde_json::json!({})), 0);
     }
 
     /// 测试内共用的「已知本地时刻」构造（`Local::with_ymd_and_hms` 是
