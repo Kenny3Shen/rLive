@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
   ChevronDown,
-  MessageSquareText,
+  MessageCircle,
   Play,
   Users,
   ListMusic,
@@ -818,7 +818,12 @@ export function VideoSidebar({
                     title={`评论：${formatOnline(archive.reply)}`}
                   >
                     <dt className="sr-only">评论</dt>
-                    <MessageSquareText
+                    {/*
+                      评论一律用圆气泡 `MessageCircle`，方形 `MessageSquare*` 留给弹幕。
+                      这两件事在本项目里到处并列出现（播放页侧栏、短视频底栏），
+                      靠形状区分比靠位置区分可靠。
+                    */}
+                    <MessageCircle
                       aria-hidden
                       className="size-3.5 shrink-0 text-muted-foreground"
                     />

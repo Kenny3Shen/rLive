@@ -5,9 +5,9 @@ import {
   ChevronUp,
   ExternalLink,
   Info,
+  MessageCircle,
   MessageSquare,
   MessageSquareOff,
-  MoreVertical,
   RefreshCw,
   ScrollText,
   Volume2,
@@ -26,15 +26,15 @@ import { useNavigate } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive, videoGetStory } from "@/features/video/videoApi";
-import { formatRelativeTime } from "@/features/video/videoHistory";
+import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoHistory";
 import { videoPlayPath } from "@/features/video/videoRoute";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
+import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
 import {
   Empty,
   EmptyDescription,
@@ -46,9 +46,11 @@ import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { prefersReducedMotion, SWIPE_SETTLE_EASING } from "@/shared/motion/tokens";
 import { hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
+import { ShortsSeekBar } from "./ShortsSeekBar";
 import { ShortsPoster, ShortsStage } from "./ShortsStage";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
+  SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_SAFE_AREA_BOTTOM,
   SHORTS_SAFE_AREA_TOP,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
@@ -559,9 +561,27 @@ export function ShortsPage() {
       <div
         ref={viewportRef}
         data-slot="shorts-viewport"
-        className="relative h-full min-h-0 overflow-hidden bg-black"
-        // 纵向手势由本页接管，横向留给系统返回手势。
-        style={{ touchAction: "pan-x" }}
+        // `media-skin` 提供 `--media-*` 令牌（白字 + 白色半透明悬停底）。复用播放器
+        // HUD 的溢出菜单需要它：那些控件的配色走令牌，不在这个作用域里会落到应用
+        // 前景色 —— 在黑舞台上变成看不见的深色图标。
+        className="media-skin relative h-full min-h-0 overflow-hidden bg-black"
+        style={
+          {
+            // 纵向手势由本页接管，横向留给系统返回手势。
+            touchAction: "pan-x",
+            /*
+             * 媒体控件的尺寸基准。
+             *
+             * `.media-skin` 只给 `--media-scale-unit` 留了 16px 的兜底，算出来的控件是
+             * 36px —— 而这一页其他按钮都是 44px（触摸目标），同一条顶栏里两种尺寸并排
+             * 很显眼。1.2rem 让 `--media-control-size` 落到 43.2px，与它们齐平。
+             *
+             * 改这个变量而不是给按钮硬写尺寸：它就是这套令牌提供的缩放入口（播放器皮肤
+             * 设 0.9rem，窄容器里降到 0.78rem），硬写会同时绕过圆角与图标的换算。
+             */
+            "--media-scale-unit": "1.2rem",
+          } as React.CSSProperties
+        }
         onPointerDownCapture={onPointerDownCapture}
         onPointerMoveCapture={onPointerMoveCapture}
         onPointerUpCapture={onPointerUpCapture}
@@ -590,9 +610,7 @@ export function ShortsPage() {
                     videoRef={videoRef}
                     danmaku={danmaku}
                     danmakuVisible={danmakuVisible}
-                    infoVisible={infoVisible}
                     gestureActive={gestureActive}
-                    onOpenComments={panels.openComments}
                   />
                 ) : (
                   <ShortsPoster item={item} />
@@ -614,6 +632,7 @@ export function ShortsPage() {
           <ShortsBackButton onClick={goBack} inline />
           <span className="ml-auto">
             <ShortsMoreMenu
+              compact={compact}
               muted={playback.muted}
               onToggleMuted={playback.toggleMuted}
               onOpenInPlayer={current ? openInPlayer : undefined}
@@ -651,20 +670,111 @@ export function ShortsPage() {
         </div>
 
         {/*
-          底部操作栏：弹幕输入 + 弹幕开关 + 信息覆层开关 + 详情。
+          信息与评论：浮在画面上、紧贴进度条上方，属于**页面层**而不是舞台层。
+
+          这是与上一版的关键区别：它们以前长在画面框里（左下角与右侧操作栏），会随换片的
+          条带平移一起滑走，而且每个面板各有一份（相邻封面也得自带一份）。挂在页面层之后
+          只有一份，位置固定在视口上，与两条控制栏、进度条共用同一套坐标。
+
+          浮层而不占真实空间：它压在画面底部（裁切铺满后那是真画面像素），因此要自带渐变
+          垫底 —— 不然亮底画面上的白字不可读。容器不接指针（只评论按钮接），否则会在画面
+          底部挖出一块点不动的区域（那里应该能点按暂停）。
+        */}
+        <div
+          data-slot="shorts-info-float"
+          // `px-2` 与底栏控制行一致（不是 `px-3`）：浮层里的评论按钮与控制行里那几个
+          // 按钮同属右侧一条线，差 4px 就会看出错位。
+          className="pointer-events-none absolute inset-x-0 z-20 flex items-end gap-2 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8 pb-2"
+          style={{ bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})` }}
+        >
+          {/* 内容与控制行同宽同居中：桌面上两者必须对齐，否则信息在最左、输入框在中间。 */}
+          <div className="mx-auto flex w-full max-w-lg items-end gap-2">
+            {infoVisible && current && (
+              <div className="flex min-w-0 flex-1 items-end gap-2">
+                {/*
+                  头像从右侧操作栏搬到这里。
+
+                  评论按钮离开右侧栏之后那根栏只剩一个不可点的头像 —— 一根只有装饰的
+                  操作栏不如不要。放在 UP 主名前也更符合它本来的语义：这是这条的作者。
+                */}
+                <Avatar className="size-8 shrink-0 after:border-white/40">
+                  <AvatarImage
+                    src={normalizeImageUrl(current.author_face)}
+                    alt=""
+                    aria-hidden
+                    referrerPolicy="no-referrer"
+                  />
+                  <AvatarFallback className="bg-black/40 text-xs text-white/90">
+                    {current.author?.slice(0, 1) || "U"}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-white">
+                    @{current.author || "未知 UP 主"}
+                  </p>
+                  <p className="line-clamp-2 text-sm text-white/90">{current.title}</p>
+                  <p className="text-xs text-white/70">
+                    {formatOnline(current.view)} 次播放
+                    {playback.duration > 0 || current.duration > 0
+                      ? ` · ${formatVideoDuration(playback.duration || current.duration)}`
+                      : ""}
+                  </p>
+                </div>
+              </div>
+            )}
+            {/* 信息隐藏时评论按钮仍留在右侧：它不是信息，是入口。 */}
+            {!infoVisible && <span className="flex-1" />}
+            {current && (
+              <span className="pointer-events-auto flex shrink-0 flex-col items-center">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={
+                    current.danmaku > 0
+                      ? `评论与弹幕，弹幕 ${formatOnline(current.danmaku)} 条`
+                      : "评论"
+                  }
+                  title="评论"
+                  className="size-11 text-white/90 hover:bg-white/15 hover:text-white"
+                  onClick={panels.openComments}
+                >
+                  <MessageCircle className="size-6" aria-hidden />
+                </Button>
+                {current.danmaku > 0 && (
+                  <span className="text-[11px] text-white/80">{formatOnline(current.danmaku)}</span>
+                )}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/*
+          底部操作栏：进度条（上沿）+ 弹幕输入与三个开关（控制行）。
 
           占真实空间而不是浮在画面上（画面区域已经减掉了这条的高度，见
-          `SHORTS_MEDIA_AREA_STYLE`）：输入框浮在画面底部会盖住字幕与信息覆层，
+          `SHORTS_MEDIA_AREA_STYLE`）：输入框浮在画面底部会盖住字幕与信息，
           而软键盘弹起时浮层还会被顶到画面中间。
+
+          进度条是这条栏的**上边缘**，替掉了原来那条 `border-t`：两者占的是同一条
+          像素，同时存在只会让进度条看起来带了一圈描边。不被 `max-w-lg` 收窄 ——
+          它描述的是时间而不是内容，通栏才读得出比例。
         */}
         <div
           data-slot="shorts-bottom-bar"
-          className="absolute inset-x-0 bottom-0 z-20 flex items-center border-t border-white/10 bg-black/85 px-2"
+          className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-black/85"
           style={{
             height: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
             paddingBottom: SHORTS_SAFE_AREA_BOTTOM,
           }}
         >
+          <ShortsSeekBar
+            bvid={current?.bvid ?? ""}
+            cid={current?.cid ?? 0}
+            currentTime={playback.currentTime}
+            duration={playback.duration}
+            onSeek={playback.seek}
+          />
           {/*
             控件收在一个居中的定宽容器里，而不是铺满栏宽。
 
@@ -672,55 +782,60 @@ export function ShortsPage() {
             拉到 1440px 宽、按钮甩到最右角，与居中的竖屏画面完全脱节。手机上
             `max-w` 不起作用，仍是通栏。
           */}
-          <div className="mx-auto flex w-full max-w-lg items-center gap-1.5">
-            <div className="min-w-0 flex-1">
-              {current && (
-                <DanmakuComposer
-                  overlay
-                  roomTitle={current.title}
-                  video={{
-                    cid: current.cid ?? 0,
-                    aid: current.aid,
-                    progressMs: Math.floor(playback.currentTime * 1000),
-                  }}
-                />
-              )}
+          <div
+            className="flex flex-1 items-center px-2"
+            style={{ height: `${SHORTS_BOTTOM_CONTROLS_HEIGHT_PX}px` }}
+          >
+            <div className="mx-auto flex w-full max-w-lg items-center gap-1.5">
+              <div className="min-w-0 flex-1">
+                {current && (
+                  <DanmakuComposer
+                    overlay
+                    roomTitle={current.title}
+                    video={{
+                      cid: current.cid ?? 0,
+                      aid: current.aid,
+                      progressMs: Math.floor(playback.currentTime * 1000),
+                    }}
+                  />
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
+                title={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
+                className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+                onClick={() => setDanmakuVisible((value) => !value)}
+              >
+                {danmakuVisible ? <MessageSquare aria-hidden /> : <MessageSquareOff aria-hidden />}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={infoVisible ? "隐藏视频信息" : "显示视频信息"}
+                title={infoVisible ? "隐藏视频信息" : "显示视频信息"}
+                aria-pressed={infoVisible}
+                className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+                onClick={() => setInfoVisible((value) => !value)}
+              >
+                <Info aria-hidden />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="视频详情"
+                title="视频详情（简介、标签、UP 主）"
+                disabled={!current}
+                className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+                onClick={panels.openDetail}
+              >
+                <ScrollText aria-hidden />
+              </Button>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
-              title={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
-              className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-              onClick={() => setDanmakuVisible((value) => !value)}
-            >
-              {danmakuVisible ? <MessageSquare aria-hidden /> : <MessageSquareOff aria-hidden />}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={infoVisible ? "隐藏视频信息" : "显示视频信息"}
-              title={infoVisible ? "隐藏视频信息" : "显示视频信息"}
-              aria-pressed={infoVisible}
-              className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-              onClick={() => setInfoVisible((value) => !value)}
-            >
-              <Info aria-hidden />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="视频详情"
-              title="视频详情（简介、标签、UP 主）"
-              disabled={!current}
-              className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-              onClick={panels.openDetail}
-            >
-              <ScrollText aria-hidden />
-            </Button>
           </div>
         </div>
       </div>
@@ -903,13 +1018,20 @@ type VideoItemForDetail = {
  * 这三项都不该常驻画面：静音是一次性设定（不是每条都要调），播放页跳转是离开
  * 这个消费模式的出口，刷新只在取流失败时才有意义。竖屏画面上的每个常驻按钮都
  * 在挡内容，能收进菜单的就收。
+ *
+ * 外壳复用 `PlayerHudOverflowMenu` —— 直播间 HUD 与视频播放页用的是同一个组件，
+ * 短视频这里再自写一套的结果就是三个表面上的「更多操作」各长一个样（触发图标、
+ * 浮层材质、菜单项排布全都不同）。复用同时白拿两件事：紧凑视口自动换成抽屉，
+ * 以及 `⋮` 触发按钮的尺寸与配色走 `--media-*` 令牌（视口上的 `media-skin` 提供）。
  */
 function ShortsMoreMenu({
+  compact,
   muted,
   onToggleMuted,
   onOpenInPlayer,
   onRefresh,
 }: {
+  compact: boolean;
   muted: boolean;
   onToggleMuted: () => void;
   onOpenInPlayer?: (() => void) | undefined;
@@ -921,48 +1043,30 @@ function ShortsMoreMenu({
     action();
   };
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="更多操作"
-            title="更多操作"
-            className="size-11 text-white/90 hover:bg-white/15 hover:text-white"
-          >
-            <MoreVertical aria-hidden />
-          </Button>
-        }
-      />
-      <PopoverContent align="end" className="w-44 p-1">
-        <div className="flex flex-col">
-          <Button
-            variant="ghost"
-            className="justify-start gap-2"
-            onClick={runAndClose(onToggleMuted)}
-          >
-            {muted ? <VolumeX aria-hidden /> : <Volume2 aria-hidden />}
-            {muted ? "取消静音" : "静音"}
-          </Button>
-          {onOpenInPlayer && (
-            <Button
-              variant="ghost"
-              className="justify-start gap-2"
-              onClick={runAndClose(onOpenInPlayer)}
-            >
-              <ExternalLink aria-hidden />
-              在播放页打开
-            </Button>
-          )}
-          <Button variant="ghost" className="justify-start gap-2" onClick={runAndClose(onRefresh)}>
-            <RefreshCw aria-hidden />
-            重新加载
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
+    <PlayerHudOverflowMenu
+      label="更多操作"
+      title="短视频操作"
+      open={open}
+      onOpenChange={setOpen}
+      compact={compact}
+    >
+      {/* 三列而不是播放页的四列：这里只有三项，四列会空出一格。 */}
+      <div className="grid grid-cols-3 gap-1.5 max-md:gap-2">
+        <PlayerToolTile
+          icon={muted ? VolumeX : Volume2}
+          label={muted ? "取消静音" : "静音"}
+          pressed={muted}
+          onClick={runAndClose(onToggleMuted)}
+        />
+        <PlayerToolTile
+          icon={ExternalLink}
+          label="在播放页打开"
+          disabled={!onOpenInPlayer}
+          onClick={runAndClose(() => onOpenInPlayer?.())}
+        />
+        <PlayerToolTile icon={RefreshCw} label="重新加载" onClick={runAndClose(onRefresh)} />
+      </div>
+    </PlayerHudOverflowMenu>
   );
 }
 

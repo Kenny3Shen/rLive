@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { isImmersivePlayerPath } from "../src/app/layout/immersiveRoutes";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
+  SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_DANMAKU_TOP_OFFSET_PX,
+  SHORTS_FRAME_FILL_MAX_CROP,
   SHORTS_PATH,
   SHORTS_PREFETCH_REMAINING,
   SHORTS_SAFE_AREA_BOTTOM,
@@ -10,8 +12,11 @@ import {
   SHORTS_SEEK_PREVIEW_WIDTH_PX,
   SHORTS_SWIPE_COMMIT_PROGRESS,
   SHORTS_TOP_BAR_HEIGHT_PX,
+  SHORTS_SEEK_BAR_HEIGHT_PX,
   shortsFeedItems,
   shortsFrameAlign,
+  shortsFrameCrop,
+  shortsFrameFill,
   shortsItemKey,
   shortsMediaAspect,
   shortsMediaFrame,
@@ -159,6 +164,75 @@ describe("操作栏高度契约", () => {
     // 页面级操作栏与面板内画面区共用这两个数：任一为 0 会让画面区算错收边。
     expect(SHORTS_BOTTOM_BAR_HEIGHT_PX).toBeGreaterThan(0);
     expect(SHORTS_TOP_BAR_HEIGHT_PX).toBeGreaterThan(0);
+  });
+
+  test("底栏总高等于控制行加进度条", () => {
+    // 进度条移进底栏后，「底栏多高」不再是独立的设计数字而是两段之和。写死总数会在
+    // 改任一段时静默错位：画面区按总数收边，而两条栏各按自己那段绘制。
+    expect(SHORTS_BOTTOM_BAR_HEIGHT_PX).toBe(
+      SHORTS_BOTTOM_CONTROLS_HEIGHT_PX + SHORTS_SEEK_BAR_HEIGHT_PX,
+    );
+  });
+});
+
+describe("裁切铺满判定", () => {
+  test("要裁的比例与哪个更「宽」无关", () => {
+    // 同一对宽高比，无论谁当画面区谁当源，要裁掉的比例是同一个数：画面区更「高」时
+    // 裁宽、更「宽」时裁高，但相对差值不变。调用方因此不必分轴讨论。
+    expect(shortsFrameCrop(0.5, 0.5625)).toBeCloseTo(shortsFrameCrop(0.5625, 0.5), 10);
+  });
+
+  test("完全一致时无需裁切", () => {
+    expect(shortsFrameCrop(0.5625, 0.5625)).toBe(0);
+  });
+
+  test("非法输入按 0 处理", () => {
+    // 尺寸还没量到时会传 0 进来，此时不该报告「需要裁切」。
+    expect(shortsFrameCrop(0, 0.5625)).toBe(0);
+    expect(shortsFrameCrop(0.5625, 0)).toBe(0);
+    expect(shortsFrameCrop(-1, 0.5625)).toBe(0);
+  });
+
+  test("主流竖屏机型铺满，16:9 与 21:9 留边", () => {
+    // 阈值卡在 10% 的依据。画面区高度 = 视口高 − 底栏 − 底部安全区（顶栏浮在画面上，
+    // 不占空间）。9:16 的源在各机型上要裁的比例见 shortsFeed.ts 的表格。
+    const portrait = 9 / 16;
+    const area = (w: number, h: number) => shortsFrameFill(w, h, portrait);
+    // 19.5:9 与 20:9：差得少，裁两侧不到一成。
+    expect(area(390, 704)).toBe(true); // iPhone 13，裁宽 1.5%
+    expect(area(360, 673)).toBe(true); // Galaxy S22，裁宽 4.9%
+    expect(area(393, 744)).toBe(true); // Pixel 5，裁宽 6.1%
+    expect(area(412, 808)).toBe(true); // Pixel 8（20:9），裁宽 9.4%
+    // 16:9 屏：画面区比源更「宽」，铺满要裁的是**高**（竖屏视频的上下两端）11.8%。
+    expect(area(375, 588)).toBe(false);
+    // 21:9：要裁 13.7%，超阈值。
+    expect(area(393, 810)).toBe(false);
+    // 桌面：画面区是横的，与竖屏源差得极远。
+    expect(area(1440, 841)).toBe(false);
+  });
+
+  test("横屏与方形源一律不裁", () => {
+    // 横屏源在竖屏视口里差得极远（16:9 放进 9:19.5 要裁掉七成），必须留边居中。
+    // 桌面上画面区已接近 16:9，若只看差值就会转成裁切 —— 那不是这次要改的东西，
+    // 因此判据写成「竖屏 + 差值够小」而不是只看差值。
+    expect(shortsFrameFill(1440, 841, 16 / 9)).toBe(false);
+    expect(shortsFrameFill(360, 673, 16 / 9)).toBe(false);
+    expect(shortsFrameFill(500, 500, 1)).toBe(false);
+  });
+
+  test("宽高比未知或尺寸未量到时不裁", () => {
+    // 首帧 area 是 0×0；aspect 为 null 表示两个来源都没给出画幅。两种情况下
+    // 「铺满」都是在猜，宁可留边。
+    expect(shortsFrameFill(360, 673, null)).toBe(false);
+    expect(shortsFrameFill(0, 0, 9 / 16)).toBe(false);
+    expect(shortsFrameFill(360, 0, 9 / 16)).toBe(false);
+    expect(shortsFrameFill(360, 673, Number.NaN)).toBe(false);
+  });
+
+  test("阈值是一个不到两成的比例", () => {
+    // 上界是产品判断而不是几何：裁掉两成以上的画面已经在改变构图。
+    expect(SHORTS_FRAME_FILL_MAX_CROP).toBeGreaterThan(0);
+    expect(SHORTS_FRAME_FILL_MAX_CROP).toBeLessThan(0.2);
   });
 });
 

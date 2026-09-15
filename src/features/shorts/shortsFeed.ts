@@ -44,14 +44,32 @@ export function shortsMediaAspect(
 }
 
 /**
- * 底部操作栏的高度（px），不含底部安全区。
+ * 底部控制行的高度（px）：弹幕输入 + 右侧几个按钮那一行，不含进度条与安全区。
+ */
+export const SHORTS_BOTTOM_CONTROLS_HEIGHT_PX = 56;
+
+/**
+ * 进度条视觉粗细（px）。
+ *
+ * 它同时是底栏的上边缘：进度条贴在控制行顶边，替掉原来那条 `border-t`。命中区比这
+ * 粗得多（向**上**撑开到画面上，见 `ShortsSeekBar`），但只有这 3px 占布局空间 ——
+ * 命中区若也占空间，就会在画面与进度条之间凭空多出一条它自己的边距。
+ */
+export const SHORTS_SEEK_BAR_HEIGHT_PX = 3;
+
+/**
+ * 底部操作栏占掉的总高度（px），不含底部安全区。
  *
  * 页面级的操作栏与每个面板内的画面区必须用同一个数：画面区按
  * `bottom: calc(此值 + 底部安全区)` 收边，操作栏按同样的高度铺在下面，两者对不上
  * 就会出现画面被压住或者中间裂一条缝。因此这个常量是两个组件之间的契约，放在这里
  * 而不是各写一份字面量。
+ *
+ * 由两段相加而不是写字面量：进度条移进底栏之后，「底栏多高」不再是一个独立的设计
+ * 数字，而是「控制行 + 进度条」的和。改任一段都不该再去手算这个总数。
  */
-export const SHORTS_BOTTOM_BAR_HEIGHT_PX = 56;
+export const SHORTS_BOTTOM_BAR_HEIGHT_PX =
+  SHORTS_BOTTOM_CONTROLS_HEIGHT_PX + SHORTS_SEEK_BAR_HEIGHT_PX;
 
 /**
  * 安全区的 CSS 表达式。
@@ -148,6 +166,63 @@ export function shortsMediaFrame(
 export function shortsFrameAlign(aspect: number | null): "start" | "center" {
   if (!aspect || !(aspect > 0) || !Number.isFinite(aspect)) return "center";
   return aspect < 1 ? "start" : "center";
+}
+
+/**
+ * 允许为「铺满」裁掉的最大比例。
+ *
+ * 两个宽高比的相对差值超过这个数就不再裁切，改回等比留边。取 0.1 是照真实机型的
+ * 需求量定的（画面区 = 视口高 − 顶部安全区 − 底栏 59px − 底部安全区，9:16 源）：
+ *
+ * | 机型 | 屏幕比 | 要裁 | 结果 |
+ * | --- | --- | --- | --- |
+ * | iPhone 13 / 15 Pro Max | 19.5:9 | 宽 1.5% / 2.0% | 铺满 |
+ * | Galaxy S22 | 19.5:9 | 宽 4.9% | 铺满 |
+ * | Pixel 5 | 19.5:9 | 宽 6.1% | 铺满 |
+ * | Pixel 8 | 20:9 | 宽 9.4% | 铺满 |
+ * | iPhone SE | 16:9 | **高** 11.8% | 留边 |
+ * | 21:9 概念机 | 21:9 | 宽 13.7% | 留边 |
+ *
+ * 卡在 10% 而不是 12%，是为了把 iPhone SE 那一档挡在外面：它的画面区比 9:16 更
+ * 「宽」，铺满要裁的是**高**（竖屏视频的上下两端 —— 脸、字幕、贴片都在那儿），
+ * 代价比裁两侧大得多。10% 收下全部 19.5:9 与 20:9 主流机型，放过 16:9 与 21:9
+ * 这两个极端。
+ */
+export const SHORTS_FRAME_FILL_MAX_CROP = 0.1;
+
+/**
+ * 为了铺满画面区，需要裁掉源画面的比例（0~1）。
+ *
+ * 两个宽高比的相对差值，与哪个更大无关：画面区比源更「高」时裁的是宽，更「宽」时
+ * 裁的是高，但要裁掉的**比例**在两种情况下是同一个式子。调用方因此不必分轴讨论。
+ */
+export function shortsFrameCrop(areaAspect: number, sourceAspect: number): number {
+  if (!(areaAspect > 0) || !(sourceAspect > 0)) return 0;
+  return 1 - Math.min(areaAspect, sourceAspect) / Math.max(areaAspect, sourceAspect);
+}
+
+/**
+ * 这一条该不该裁切铺满画面区（而不是等比留边）。
+ *
+ * 竖屏源在手机上永远差一点点铺满：9:16 放进 9:19.5 的屏幕，等比内切之后画面与
+ * 底部操作栏之间会留一条几十像素的空隙。差得这么少的时候，裁掉两侧不到一成远比
+ * 留一条空隙好看 —— 这就是这个函数存在的理由。
+ *
+ * 只对**竖屏源**开这个口子：横屏源在竖屏视口里差得极远（16:9 放进 9:19.5 要裁掉
+ * 七成），必须留边居中（见 `shortsFrameAlign`）。把判据写成「竖屏 + 差值够小」而不是
+ * 只看差值，也让横屏在桌面上的画法保持不变 —— 那里画面区已经接近 16:9，一旦按差值
+ * 判定就会转成裁切，而那不是这次要改的东西。
+ */
+export function shortsFrameFill(
+  areaWidth: number,
+  areaHeight: number,
+  aspect: number | null,
+): boolean {
+  if (!aspect || !(aspect > 0) || !Number.isFinite(aspect)) return false;
+  // 横屏与方形源一律留边。
+  if (aspect >= 1) return false;
+  if (!(areaWidth > 0) || !(areaHeight > 0)) return false;
+  return shortsFrameCrop(areaWidth / areaHeight, aspect) <= SHORTS_FRAME_FILL_MAX_CROP;
 }
 
 /**
