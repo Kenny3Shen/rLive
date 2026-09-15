@@ -40,13 +40,47 @@ const MAX_DANMAKU_CONTENT: usize = 512;
 /// VOD 弹幕分段长度：6 分钟。
 const DANMAKU_SEGMENT_MILLIS: i64 = 360_000;
 
-/// story feed 一页串行拉几批。
+/// story feed **首屏**一页串行拉几批。
 ///
-/// 该接口无游标、每批只给 4~5 条，且轮换游标在服务端按时间推进：实测 **串行**
-/// 连拉零重复（单批约 400ms），而 **并发** 三批 15 条只得 6~11 条唯一。因此不能
-/// 照搬抖音推荐 feed 的并发批次模式，只能串行取批。两批约 9 条，正好填满首屏
-/// 竖屏消费的预取窗口，再多给的是白等的往返。
+/// 该接口无游标、每批只给 4~5 条，且轮换游标在**服务端**按时间推进。取批必须
+/// **串行**：并发拿到的不是独立几页，而是同一个游标窗口的重叠切片 —— 实测带
+/// `buvid` 并发 4 批 20 条只得 11~12 条唯一（同时发不同 buvid 也照样重叠，因此
+/// 是服务端按窗口共享游标，不是设备级会话状态）。串行连拉零重复：N=8 实测 40/40、
+/// N=12 实测 60/60。
+///
+/// 串行**不需要额外加延时**：单次往返约 335ms，本身已超过实测的重叠阈值（约
+/// 250ms）。只有把取批改成并发时才需要人为错峰，而那是反效果的 —— 并发只是把
+/// 同样的唯一条目分给更多请求。
+///
+/// 两批约 9 条，正好填满首屏竖屏消费的预取窗口，
+/// 再多给的是白等的往返（首屏多等一个是直接的流失）。要更多条走补货档，
+/// 见 [`STORY_FEED_MORE_BATCHES`]。
 const STORY_FEED_BATCHES: usize = 2;
+
+/// 一次请求允许串行拉的最大批数。
+///
+/// 上游没有公开的频控阈值，实测连续 130 轮（含 N=16 并发）未出现过非 0 code，
+/// 但这个上限是防手滑的：批数是调接口次数，涨上去的代价是线性的，而单页
+/// 收益会随去重递减。
+const STORY_FEED_MAX_BATCHES: usize = 8;
+
+/// 补货一页串行拉几批。
+///
+/// 比首屏多得多，因为代价与收益在两条路径上不对称：首屏多等一个往返是直接的流失，
+/// 而补货发生在用户已经投入之后（他正滑着，不是在等第一个画面）。约 30 条 ~2s，
+/// 而剩余 3 条在快划下大约能撑 3~6s 的跑道，因此来得及。
+const STORY_FEED_MORE_BATCHES: usize = 6;
+
+/// 把「要几批」夹到合法范围。
+///
+/// 抽成纯函数只为了能单测：传 0 或一个巨大的数都不该报错，也不该真的去打那么多次
+/// 接口。`None` 是首屏（省往返），`clamp` 的下界 1 保证「至少拉一批」—— 传 0 时
+/// 返回空列表会被上层当成取流失败。
+fn story_batch_count(requested: Option<usize>) -> usize {
+    requested
+        .unwrap_or(STORY_FEED_BATCHES)
+        .clamp(1, STORY_FEED_MAX_BATCHES)
+}
 
 fn video_err(msg: impl Into<String>) -> AppError {
     AppError::new("bilibili_video_error", msg).with_site("bilibili")
@@ -1674,10 +1708,26 @@ impl BilibiliSite {
     ///    [`STORY_FEED_BATCHES`]）。
     ///
     /// `pull` 必须传 `1`/`0`，传字符串 `"true"` 会直接 -400。
-    pub async fn video_story(&self) -> AppResult<VideoListPage> {
-        let mut batches: Vec<VideoListPage> = Vec::with_capacity(STORY_FEED_BATCHES);
+    ///
+    /// `more` 是「补货还是首屏」的粗语义，不是批数：一次扣多少次接口属于上游调用
+    /// 策略，两个档位（[`STORY_FEED_BATCHES`] / [`STORY_FEED_MORE_BATCHES`]）都住在
+    /// 这个文件里。让调用方传具体数字的话，那个数字会在两个语言里各存一份，且传大
+    /// 了就绕过了夹取。
+    pub async fn video_story(&self, more: bool) -> AppResult<VideoListPage> {
+        let batches = if more {
+            STORY_FEED_MORE_BATCHES
+        } else {
+            STORY_FEED_BATCHES
+        };
+        self.video_story_batches(batches).await
+    }
+
+    /// 按指定批数取 story feed。`batches` 会被夹到 `1..=STORY_FEED_MAX_BATCHES`。
+    async fn video_story_batches(&self, batches: usize) -> AppResult<VideoListPage> {
+        let batches = story_batch_count(Some(batches));
+        let mut pages: Vec<VideoListPage> = Vec::with_capacity(batches);
         let mut last_err = None;
-        for _ in 0..STORY_FEED_BATCHES {
+        for _ in 0..batches {
             match self
                 .get_json_with_buvid_header(
                     "https://api.bilibili.com/x/v2/feed/index/story",
@@ -1686,15 +1736,15 @@ impl BilibiliSite {
                 .await
                 .and_then(|text| parse_story(&text))
             {
-                Ok(page) => batches.push(page),
+                Ok(page) => pages.push(page),
                 // 单批失败不否定整页：拉到一批就能继续消费。全批都败才报错。
                 Err(e) => last_err = Some(e),
             }
         }
-        if batches.is_empty() {
+        if pages.is_empty() {
             return Err(last_err.unwrap_or_else(|| video_err("短视频流未返回内容")));
         }
-        Ok(combine_story_batches(batches))
+        Ok(combine_story_batches(pages))
     }
 
     /// UGC 分区榜。需要 WBI，匿名可用；一次返回整张榜，没有翻页。
@@ -3011,6 +3061,30 @@ mod tests {
     }
 
     #[test]
+    fn story_batch_count_defaults_and_clamps() {
+        // 首屏不传 = 用小的那档（少等一个往返）。
+        assert_eq!(story_batch_count(None), STORY_FEED_BATCHES);
+        // 传具体数时原值生效（补货档走这条）。
+        assert_eq!(
+            story_batch_count(Some(STORY_FEED_MORE_BATCHES)),
+            STORY_FEED_MORE_BATCHES
+        );
+        // 0 会被夹到 1：拉 0 批返回空列表，上层会当成取流失败。
+        assert_eq!(story_batch_count(Some(0)), 1);
+        // 超大值夹到上限，而不是真的打那么多次接口。
+        assert_eq!(story_batch_count(Some(usize::MAX)), STORY_FEED_MAX_BATCHES);
+    }
+
+    #[test]
+    fn story_refill_fetches_more_than_first_screen() {
+        // 两个档位的差异是设计的一部分：首屏快、补货多。写成同一个值就把这个设计
+        // 无声地取消了，而两端调用点看起来都还正常。
+        assert!(STORY_FEED_MORE_BATCHES > STORY_FEED_BATCHES);
+        // 夹取上限必须容得下补货档，否则那档会被静默截到上限。
+        assert!(STORY_FEED_MORE_BATCHES <= STORY_FEED_MAX_BATCHES);
+    }
+
+    #[test]
     fn pgc_index_reads_first_ep_and_has_next() {
         let raw = serde_json::json!({
             "code": 0,
@@ -3785,7 +3859,10 @@ mod tests {
     #[ignore = "live network smoke — run with --ignored"]
     async fn live_story_feed_smoke() {
         let site = BilibiliSite::new(reqwest::Client::new(), String::new());
-        let page = site.video_story().await.expect("匿名 story feed 应放行");
+        let page = site
+            .video_story(false)
+            .await
+            .expect("匿名 story feed 应放行");
 
         assert!(!page.items.is_empty(), "story feed 未产出条目");
         assert!(page.has_more);
@@ -3812,7 +3889,10 @@ mod tests {
     #[ignore = "live network smoke — run with --ignored"]
     async fn live_story_item_plays_through_existing_playurl() {
         let site = BilibiliSite::new(reqwest::Client::new(), String::new());
-        let page = site.video_story().await.expect("匿名 story feed 应放行");
+        let page = site
+            .video_story(false)
+            .await
+            .expect("匿名 story feed 应放行");
         let item = page.items.first().expect("story feed 未产出条目");
         let cid = item.cid.expect("story 条目应带 cid");
 

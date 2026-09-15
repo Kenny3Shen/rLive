@@ -38,8 +38,14 @@ export function videoGetPopular(page: number, pageSize?: number): Promise<VideoL
  * 批去重，但跨**页**重复仍可能，调用方必须自行去重（见 `shortsFeedItems`）。
  * 返回的条目是混合画幅，竖屏判定靠 `dimension`。
  */
-export function videoGetStory(): Promise<VideoListPage> {
-  return invokeCmd<VideoListPage>("video_get_story");
+/**
+ * 短视频流（story feed）。
+ *
+ * `more` 是「这次是补货还是首屏」的粗语义，不是批数：一次扣多少次上游接口的策略
+ * （批数档位与夹取）全在后端，前端只告诉它这是首屏还是补货。
+ */
+export function videoGetStory(more?: boolean): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_get_story", { more });
 }
 
 /** UGC 分区榜。上游是榜单而非分页接口，返回的 `has_more` 恒为 false。 */

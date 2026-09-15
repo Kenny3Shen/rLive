@@ -61,9 +61,18 @@ pub async fn video_get_popular(
 ///
 /// 上游无游标：`page` 不传给上游，只是前端无限列表的页号，每次调用都拉下一批
 /// 轮换内容。跳页不可能，重复由前后端各自去重（后端跨批、前端跨页）。
+///
+/// `more` 是「这次是补货还是首屏」的粗语义，不是批数：一次扣多少次接口属于上游
+/// 调用策略，两个档位与夹取都在 `sites/bilibili/video.rs`。让前端传具体数字的话，
+/// 那个数字会在两个语言里各存一份，而且前端改大就绕过了夹取。首屏不传即快路径。
 #[tauri::command]
-pub async fn video_get_story(state: State<'_, AppState>) -> AppResult<VideoListPage> {
-    resolve_bilibili(&state)?.video_story().await
+pub async fn video_get_story(
+    state: State<'_, AppState>,
+    more: Option<bool>,
+) -> AppResult<VideoListPage> {
+    resolve_bilibili(&state)?
+        .video_story(more.unwrap_or(false))
+        .await
 }
 
 /// UGC 分区榜。`rid` 取自 [`crate::sites::bilibili::VIDEO_ZONES`]。

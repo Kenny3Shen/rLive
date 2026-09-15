@@ -105,7 +105,10 @@ export function ShortsPage() {
   const feedQuery = useInfiniteQuery({
     queryKey: ["shorts_story"],
     initialPageParam: 1,
-    queryFn: () => videoGetStory(),
+    // 首屏小批、补货大批：两个档位与上游调用策略都在后端，前端只报语义
+    // （`more` 为 true 表示这是补货）。用 pageParam 而不是「是否已有数据」做判据：
+    // 它在查询被重置后也跟着回到 1，因此重试/重拉仍走首屏那条快路径。
+    queryFn: ({ pageParam }) => videoGetStory(pageParam > 1),
     // 上游无游标：页码只是本地的「再来一批」计数，has_more 恒为「这批非空」。
     getNextPageParam: (lastPage, allPages) => (lastPage.has_more ? allPages.length + 1 : undefined),
     // 轮换流不该被缓存复用：回到这一页应该看到新内容。
