@@ -91,6 +91,14 @@ export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
 /** 悬停直播间卡片播放静音直播预览的默认开关。 */
 export const ROOM_CARD_PREVIEW_ENABLED_DEFAULT = true;
 
+/**
+ * 模糊封面动态背景的默认开关。
+ *
+ * 默认关闭：它是纯装饰，且代价随视口面积走 —— 一张全屏封面在 `blur(40px)` 下
+ * 每帧都要重采样，手机上是白付的 GPU 开销。想要的人自己开。
+ */
+export const DYNAMIC_BACKGROUND_ENABLED_DEFAULT = false;
+
 export const RECORDING_INCLUDE_DANMAKU_DEFAULT = true;
 /**
  * 后台录制是无条件的，因此这是逐任务"离开页面后继续录制"开关的固定初始值，
@@ -407,6 +415,8 @@ type SettingsState = {
   playbackSoftSwitchEnabled: boolean;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   roomCardPreviewEnabled: boolean;
+  /** 画面之外用模糊放大的封面垫底。 */
+  dynamicBackgroundEnabled: boolean;
   danmakuSendEnabled: boolean;
   /** 本地多平台发送权限同步到后端期间为 true。 */
   danmakuSendPending: boolean;
@@ -452,6 +462,7 @@ type SettingsState = {
   /** 屏蔽一个用户；已在列表中时为无操作。 */
   blockDanmakuUser: (user: string) => void;
   setDanmakuSendEnabled: (enabled: boolean) => void;
+  setDynamicBackgroundEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
   setAsrProvider: (provider: AsrProvider) => Promise<void>;
   setAsrVadEnabled: (enabled: boolean) => Promise<void>;
@@ -496,6 +507,7 @@ const defaultSettings: AppSettings = {
   quality_level: "high",
   playback_soft_switch_enabled: true,
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
+  dynamic_background_enabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
   danmaku_send_enabled: false,
   asr_enabled: false,
   asr_provider: "auto",
@@ -537,6 +549,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     quality_level: state.qualityLevel,
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
+    dynamic_background_enabled: state.dynamicBackgroundEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_provider: state.asrProvider,
@@ -583,6 +596,7 @@ function forwardedSetters(
       "playback_soft_switch_enabled",
     ),
     setRoomCardPreviewEnabled: forward("roomCardPreviewEnabled", "room_card_preview_enabled"),
+    setDynamicBackgroundEnabled: forward("dynamicBackgroundEnabled", "dynamic_background_enabled"),
     setSuperChatEnabled: forward("superChatEnabled", "super_chat_enabled"),
     setAsrTranslationEnabled: forward("asrTranslationEnabled", "asr_translation_enabled"),
     setRecordingIncludeDanmaku: forward("recordingIncludeDanmaku", "recording_include_danmaku"),
@@ -650,6 +664,7 @@ export const useSettingsStore = create<SettingsState>()(
       qualityLevel: "high",
       playbackSoftSwitchEnabled: true,
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
+      dynamicBackgroundEnabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
       danmakuSendEnabled: false,
       danmakuSendPending: false,
       asrEnabled: false,
@@ -865,6 +880,7 @@ export const useSettingsStore = create<SettingsState>()(
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
+          dynamicBackgroundEnabled: settings.dynamic_background_enabled,
           danmakuSendEnabled: settings.danmaku_send_enabled,
           danmakuSendPending: false,
           asrEnabled: settings.asr_enabled,

@@ -252,6 +252,8 @@ export type AppSettings = {
   playback_soft_switch_enabled: boolean;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   room_card_preview_enabled: boolean;
+  /** 画面之外用模糊放大的封面垫底（目前只有短视频竖屏流用得到）。 */
+  dynamic_background_enabled: boolean;
   /** 用户手动发送单条消息功能的设备本地权限开关。 */
   danmaku_send_enabled: boolean;
   /** 下载并加载可选 ASR 模型的设备本地同意开关。 */

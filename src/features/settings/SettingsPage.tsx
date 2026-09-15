@@ -1419,6 +1419,8 @@ function AppearanceSettings() {
   const switchingRef = useRef(false);
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
+  const dynamicBackgroundEnabled = useSettingsStore((s) => s.dynamicBackgroundEnabled);
+  const setDynamicBackgroundEnabled = useSettingsStore((s) => s.setDynamicBackgroundEnabled);
 
   function applyThemeMode(next: ThemeMode) {
     if (next === theme || switchingRef.current) return;
@@ -1456,6 +1458,12 @@ function AppearanceSettings() {
           <ToggleGroupItem value="dark">深色</ToggleGroupItem>
         </ToggleGroup>
       </Field>
+      <SwitchField
+        title="动态背景效果"
+        tip="短视频画面之外的留白处用同一条封面的模糊放大铺底，而不是纯黑。关闭时留白处为纯黑。手机竖屏下画面通常已铺满，看不到差别。"
+        checked={dynamicBackgroundEnabled}
+        onCheckedChange={setDynamicBackgroundEnabled}
+      />
     </Section>
   );
 }

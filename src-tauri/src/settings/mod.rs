@@ -700,6 +700,10 @@ mod tests {
 
     /// 悬停卡片预览是 2.12.0 新增的顶层字段，2.11.x 保存的记录里没有它。
     /// 缺失时按默认值补齐，不能让整份设置变成 `settings_schema_unsupported`。
+    ///
+    /// `dynamic_background_enabled` 是 5.2.0 新增的同类字段，一并覆盖：它的默认值是
+    /// **false**，因此这里同时验证「回填」不等于「回填成 true」—— 缺字段的旧记录
+    /// 不该凭空得到一个用户没开过的效果。
     #[test]
     fn backfills_room_card_preview_for_older_records() {
         let conn = open_in_memory().unwrap();
@@ -707,6 +711,7 @@ mod tests {
         let object = value.as_object_mut().unwrap();
         object.remove("room_card_preview_enabled");
         object.remove("recording_max_concurrent");
+        object.remove("dynamic_background_enabled");
         object.insert("danmaku_font_size".into(), serde_json::json!(18));
         conn.execute(
             "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
@@ -718,6 +723,7 @@ mod tests {
         assert!(saved);
         assert!(settings.room_card_preview_enabled);
         assert_eq!(settings.recording_max_concurrent, 4);
+        assert!(!settings.dynamic_background_enabled);
         assert_eq!(settings.danmaku_font_size, 18);
     }
 }

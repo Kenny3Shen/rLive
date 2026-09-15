@@ -318,6 +318,7 @@ pub fn merge_into_db(
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
     settings.room_card_preview_enabled = package.settings.room_card_preview_enabled;
+    settings.dynamic_background_enabled = package.settings.dynamic_background_enabled;
     settings.recording_ass = package.settings.recording_ass.clone();
     // 不要复制 `danmaku_send_enabled`、`asr_enabled`、`asr_provider`、
     // `asr_vad_enabled`、`asr_punctuation_enabled`、

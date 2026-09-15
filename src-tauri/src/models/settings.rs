@@ -9,6 +9,7 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "room_card_preview_enabled",
     "danmaku_blocked_users",
     "recording_max_concurrent",
+    "dynamic_background_enabled",
 ];
 
 /// 录制弹幕伴生文件转换为 ASS 字幕时使用的外观、排版与过滤设置。
@@ -138,6 +139,14 @@ pub struct AppSettings {
     /// 由这里的 serde default 补齐，避免升级后整份设置不可读。
     #[serde(default = "default_room_card_preview_enabled")]
     pub room_card_preview_enabled: bool,
+    /// 画面之外的留白是否用内容自身的模糊放大铺底（当前只有短视频竖屏流有这种
+    /// 留白）。默认关闭：那一层是全屏尺寸的模糊合成，在低端设备上每帧都要重新
+    /// 采样，而它带来的只是观感上的一点氛围。
+    ///
+    /// 该字段在 5.2.0 引入，因此比它更早保存的设置记录和配置包里没有它，
+    /// 见 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default = "default_dynamic_background_enabled")]
+    pub dynamic_background_enabled: bool,
     /// 用户手动发送单条消息功能的本机权限开关。在用户于设置中显式启用之前
     /// 保持关闭，且不随配置导入。启用这项全局同意后，
     /// 发送仍需要 Cookie 以及各平台自身的校验。
@@ -201,6 +210,10 @@ fn default_room_card_preview_enabled() -> bool {
     true
 }
 
+fn default_dynamic_background_enabled() -> bool {
+    false
+}
+
 fn default_recording_max_concurrent() -> u32 {
     4
 }
@@ -226,6 +239,7 @@ impl Default for AppSettings {
             quality_level: "high".into(),
             playback_soft_switch_enabled: true,
             room_card_preview_enabled: default_room_card_preview_enabled(),
+            dynamic_background_enabled: default_dynamic_background_enabled(),
             danmaku_send_enabled: false,
             asr_enabled: false,
             asr_provider: "auto".into(),
@@ -268,6 +282,8 @@ mod tests {
         assert_eq!(back.recording_auto_split_minutes, 0);
         assert_eq!(back.recording_max_concurrent, 4);
         assert!(back.room_card_preview_enabled);
+        // 动态背景默认关闭：它是纯装饰，且在弱设备上是逐帧重采样的开销。
+        assert!(!back.dynamic_background_enabled);
         assert!(back.danmaku_shield_words.is_empty());
         assert!(back.danmaku_blocked_users.is_empty());
         assert!(!v.contains("recording_auto_follow"));
