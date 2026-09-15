@@ -23,7 +23,7 @@ export function FieldTip({ children }: { children: ReactNode }) {
             aria-label="查看说明"
             aria-expanded={mobile ? open : undefined}
             onClick={mobile ? () => setOpen((value) => !value) : undefined}
-            className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-ring"
+            className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
           />
         }
       >

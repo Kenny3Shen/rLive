@@ -169,7 +169,7 @@ function HistoryCardShell({
       onPointerEnter={() => preloadRouteModule(preloadPath)}
       onPointerDown={() => preloadRouteModule(preloadPath)}
       onFocus={() => preloadRouteModule(preloadPath)}
-      className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated focus-ring"
+      className="group flex w-full items-center gap-3 rounded-2xl border border-border-subtle bg-card/80 p-3 text-left transition-colors hover:border-border hover:bg-card-elevated"
     >
       <span className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-xl bg-muted ring-1 ring-border-subtle max-sm:w-20">
         {cover ? (
@@ -357,7 +357,7 @@ function DanmakuSendHistoryCard({
               type="button"
               onClick={onOpenRoom}
               title={`打开 ${roomLabel}`}
-              className="inline-flex min-w-0 items-center gap-1 rounded-md text-sm font-medium text-foreground transition-colors hover:text-primary focus-ring"
+              className="inline-flex min-w-0 items-center gap-1 rounded-md text-sm font-medium text-foreground transition-colors hover:text-primary"
             >
               <Radio className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
               <span className="truncate">{roomLabel}</span>

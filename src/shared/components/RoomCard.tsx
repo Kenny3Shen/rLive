@@ -274,7 +274,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     onContextMenu: cardDrawer.onContextMenu,
     onFocus: () => preloadRouteModule(roomPath),
     className: cn(
-      "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring",
+      "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left",
     ),
   };
 

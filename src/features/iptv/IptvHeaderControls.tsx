@@ -63,7 +63,7 @@ export function IptvSourceSwitcher({
               title={source.label}
               onClick={() => onValueChange(source.id)}
               className={cn(
-                "relative flex h-full items-center px-3 text-sm font-medium transition-colors duration-150 focus-ring",
+                "relative flex h-full items-center px-3 text-sm font-medium transition-colors duration-150",
                 "md:shrink-0 max-md:min-w-0 max-md:flex-1 max-md:justify-center max-md:px-1",
                 active
                   ? "text-foreground"

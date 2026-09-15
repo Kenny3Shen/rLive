@@ -34,14 +34,6 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
-  --focus-ring-width: 2px;
-  /* 负 offset 让描边绘制在元素边缘内侧，呈现为内边框高亮：
-     不增加占位、不被祖先 overflow 裁剪，也不与相邻元素重叠。 */
-  --focus-ring-offset: -2px;
-  /* 键盘焦点以中性描边呈现而不是蓝色强调色。ring 必须在 primary、destructive 与
-     平台色调表面上同样清晰；而强调色的 ring 恰恰在那些本就是蓝色的控件上
-     会被读成选中/激活状态。 */
-  --focus-ring-color: color-mix(in oklab, var(--foreground) 72%, transparent);
   --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* 浅色（很少使用 —— 应用默认深色） */
@@ -240,7 +232,6 @@
   --color-media-popover-foreground: var(--media-popover-foreground);
   --color-media-primary: var(--media-primary);
   --color-media-primary-foreground: var(--media-primary-foreground);
-  --color-media-ring: var(--media-ring);
   --color-media-backdrop: var(--media-backdrop);
   --container-media-xs: 20rem;
   --container-media-sm: 24rem;
@@ -345,7 +336,11 @@ body {
 
 /* 直接操作的反馈从指针按下开始。缩放幅度对密集控件足够克制；
    只有显式表面选择加入，
-   播放器视频、手势 track 和拖拽 transform 绝不会与它竞争。 */
+   播放器视频、手势 track 和拖拽 transform 绝不会与它竞争。
+
+   按下缩放不再排除 :focus-visible。过去排除是为了不和焦点描边同时动；描边已经
+   不存在，而排除本身会造成新的失灵 —— 返回后残留在控件上的焦点状态会让紧接着的
+   那一次点击没有任何按下反馈。 */
 [data-motion-press],
 .motion-card {
   transform-origin: center;
@@ -355,8 +350,7 @@ body {
 }
 
 @media (pointer: coarse) {
-  :root[data-motion="full"]
-    :is([data-motion-press], [data-motion-control]):active:not(:focus-visible) {
+  :root[data-motion="full"] :is([data-motion-press], [data-motion-control]):active {
     transform: scale(0.97);
   }
 
@@ -366,7 +360,7 @@ body {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  :root[data-motion="full"] [data-motion-control]:active:not(:focus-visible) {
+  :root[data-motion="full"] [data-motion-control]:active {
     transform: scale(0.98);
   }
 
@@ -389,10 +383,6 @@ body {
   :root[data-motion="full"] .settings-category-button:hover {
     transform: translate3d(2px, 0, 0);
   }
-}
-
-:root[data-motion="full"] :is([data-motion-press], [data-motion-control]):focus-visible {
-  transition-duration: 0s;
 }
 
 :root[data-motion="reduced"] [data-motion-press],
@@ -487,65 +477,24 @@ body {
   transition-timing-function: var(--motion-ease-out);
 }
 
-/* 聚焦不再添加强调色边框或阴影：键盘焦点由全局唯一的描边表达，
-   指针焦点不需要单独的光晕。 */
-.settings-search:focus-within {
-  border-color: var(--border);
-  box-shadow: none;
-}
-
 :root[data-motion="reduced"] .settings-category-button,
 :root[data-motion="reduced"] .settings-search {
   transition-property: background-color, border-color, color, box-shadow;
 }
 
-/* 键盘焦点刻意只有一种全局处理。组件仍可用 focus-visible 工具类做交互逻辑，
-   但可见指示本身不得因控件而异。
+/* 界面不绘制任何可见焦点指示。
 
-   源自 shadcn 的原语过去各自添加强调色边框/ring 工具类。现在这些声明被移出原语，
-   让这条规则成为键盘描边的唯一来源。零优先级的 `:where()` 选择器也让刻意特化的
-   控件可以在不改动全局颜色 token 的前提下选择不同几何形态。 */
-:where(
-  a[href],
-  area[href],
-  button,
-  input:not([data-slot="input-group-control"]),
-  select,
-  textarea:not([data-slot="input-group-control"]),
-  summary,
-  [contenteditable="true"],
-  [tabindex]:not([tabindex="-1"]),
-  [role="button"],
-  [role="checkbox"],
-  [role="combobox"],
-  [role="link"],
-  [role="menuitem"],
-  [role="option"],
-  [role="radio"],
-  [role="slider"],
-  [role="switch"],
-  [role="tab"],
-  [role="treeitem"]
-):focus-visible {
-  outline: var(--focus-ring-width) solid var(--focus-ring-color);
-  outline-offset: var(--focus-ring-offset);
-  box-shadow: none;
-}
+   移动端侧滑返回、以及退出全屏这类导航都会把焦点交还给上一次操作过的控件。那次
+   聚焦是程序化的，浏览器却按键盘来源处理，于是返回后总有一个控件（例如刚点过的
+   全屏按钮）带着描边或高亮停在那里。描边不是只在触摸端才多余：同一套控件在桌面
+   端必须长得一样，所以关闭是全局的，而不是按输入方式分叉。
 
-/* 播放器舞台本身是快捷键的焦点入口，不是需要强调的操作控件。
-   否则使用方向键等快捷键时，全局焦点规则会在视频边缘绘制一圈白框。 */
-[data-player-stage]:focus-visible {
+   规则刻意不放进 @layer：未分层的声明胜过 Tailwind 分层的 utilities，与特异性
+   无关，组件里残留的 outline 工具类因此无法把描边带回来。`:focus-within` 不参与
+   —— 它自己从不画描边，却会在子元素获得焦点时误伤祖先的静态 outline。 */
+:focus,
+:focus-visible {
   outline: none;
-}
-
-/* 复合控件把焦点绘制在包装层上而真正的焦点目标是内嵌输入框，`:focus-visible`
-   匹配不到绘制的元素、上面的规则够不着它们。改为给包装层同样的描边，
-   使附加件与内联按钮留在 ring 之内。这里只设 outline：
-   包装层自身的静态 box-shadow（海拔）必须幸存，
-   强调色光晕已在组件源头移除。 */
-[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
-  outline: var(--focus-ring-width) solid var(--focus-ring-color);
-  outline-offset: var(--focus-ring-offset);
 }
 
 /* 完整动态是产品默认值。OS 级减少动态是隐式的无障碍覆盖，
@@ -1098,30 +1047,6 @@ html.overlay-window #root {
   height: 1rem;
 }
 
-/* 保留为不在全局焦点选择器列表中的元素（自定义角色、包装层）提供的显式选择
-   入口。它现在绘制与那条规则相同的中性描边而不是强调色 ring，
-   两者不可能产生分歧。 */
-@utility focus-ring {
-  outline: none;
-
-  &:focus-visible {
-    outline: var(--focus-ring-width) solid var(--focus-ring-color);
-    outline-offset: var(--focus-ring-offset);
-  }
-}
-
-/* 播放器 chrome 直接位于视频上，应用以前景色派生的 ring 在这里没有可靠对比度：
-   背景就是屏幕上的任意一帧。这些控件只把颜色换成白色，
-   几何（内边框 inset）与全局 ring 完全一致。 */
-@utility focus-ring-overlay {
-  outline: none;
-
-  &:focus-visible {
-    outline: var(--focus-ring-width) solid oklch(1 0 0 / 0.75);
-    outline-offset: var(--focus-ring-offset);
-  }
-}
-
 /*
  * 毛玻璃控制表面。
  *
@@ -1296,7 +1221,7 @@ html.overlay-window #root {
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -1407,10 +1332,10 @@ html.overlay-window #root {
   }
 }
 
+/* 高亮属于打开/悬停/菜单游标状态。`:focus-visible` 刻意不在其中：播放器按钮共用
+   这个变体，一旦焦点参与，点过的按钮（全屏、静音）在返回后会留着强调色底色。 */
 @custom-variant media-highlighted {
-  &:where(:focus-visible, [aria-expanded="true"], [data-highlighted]):where(
-      :not([aria-disabled="true"])
-    ) {
+  &:where([aria-expanded="true"], [data-highlighted]):where(:not([aria-disabled="true"])) {
     @slot;
   }
 
@@ -1459,11 +1384,6 @@ html.overlay-window #root {
   background-color: transparent;
   box-shadow: none;
   backdrop-filter: none;
-}
-
-@utility focus-ring-media {
-  outline: 2px solid transparent;
-  outline-offset: -2px;
 }
 
 @utility mask-media-volume {

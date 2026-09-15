@@ -186,7 +186,7 @@ export function VideoSearchBar({ className }: { className?: string }) {
                   <button
                     type="button"
                     onClick={() => handleHistoryClick(item)}
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm focus-ring"
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm"
                   >
                     <Search className="size-3.5 text-muted-foreground" aria-hidden />
                     <span className="flex-1 truncate">{item}</span>

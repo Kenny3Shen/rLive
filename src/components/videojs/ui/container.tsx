@@ -19,8 +19,6 @@ export const Container = forwardRef<HTMLDivElement, ContainerProps>(function Con
         "media-skin",
         "relative isolate block h-full w-full overflow-clip bg-media-background @container/media-root [container-type:size]",
         "[--spacing:var(--media-spacing)] font-media text-media leading-normal subpixel-antialiased",
-        "outline-2 -outline-offset-4 outline-transparent transition-[outline-offset,outline-color] duration-media-fast ease-out",
-        "focus-visible:outline-media-ring focus-visible:outline-offset-2",
         "after:pointer-events-none after:absolute after:inset-0 after:z-10",
         "after:shadow-[inset_0_0_0_1px_var(--media-frame-border)] [&:fullscreen]:after:hidden",
         className,

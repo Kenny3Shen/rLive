@@ -58,7 +58,7 @@ function ToastList() {
       <ToastPrimitive.Close
         type="button"
         aria-label="关闭通知"
-        className="-mr-1 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-ring"
+        className="-mr-1 -mt-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         <X className="size-3.5" aria-hidden />
       </ToastPrimitive.Close>

@@ -1536,7 +1536,7 @@ function SettingsOverviewButton({
         if (entry.to) preloadRouteModule(entry.to);
       }}
       onClick={() => onOpen(entry)}
-      className="settings-category-button group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-[transform,background-color,color] duration-150 ease-[var(--motion-ease-out)] hover:bg-muted/40 focus-visible:bg-muted/40 focus-ring"
+      className="settings-category-button group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-[transform,background-color,color] duration-150 ease-[var(--motion-ease-out)] hover:bg-muted/40"
     >
       <span
         className={cn("flex size-10 shrink-0 items-center justify-center rounded-lg", entry.tone)}

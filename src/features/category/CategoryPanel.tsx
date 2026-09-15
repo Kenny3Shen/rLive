@@ -25,7 +25,7 @@ export function CategoryTile({ category, selected, onClick }: CategoryTileProps)
       aria-current={selected ? "true" : undefined}
       onClick={onClick}
       className={cn(
-        "group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center transition-colors focus-ring",
+        "group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center transition-colors",
         selected ? "bg-secondary text-foreground" : "text-foreground hover:bg-muted/65",
       )}
     >
@@ -70,7 +70,7 @@ export function ExpandTile({ expanded, controls, onClick }: ExpandTileProps) {
       onClick={onClick}
       aria-expanded={expanded}
       aria-controls={controls}
-      className="group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/65 hover:text-foreground focus-ring"
+      className="group flex w-full max-w-24 flex-col items-center gap-2 rounded-xl px-1 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/65 hover:text-foreground"
     >
       <span className="flex size-10 items-center justify-center rounded-lg bg-muted ring-1 ring-border-subtle transition-colors group-hover:bg-sidebar-active">
         <Icon className="size-5" aria-hidden />

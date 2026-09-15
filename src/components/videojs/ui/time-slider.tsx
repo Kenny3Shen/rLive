@@ -56,7 +56,7 @@ export function TimeSlider({
       <TimeSliderPrimitive.Thumb
         render={<SliderThumb />}
         className={
-          "opacity-0 data-interactive:opacity-100 focus-visible:opacity-100 pointer-fine:group-hover/slider:scale-100 pointer-fine:group-hover/slider:opacity-100 scale-80"
+          "opacity-0 data-interactive:opacity-100 pointer-fine:group-hover/slider:scale-100 pointer-fine:group-hover/slider:opacity-100 scale-80"
         }
       />
       <TimeSliderPrimitive.Preview
@@ -72,7 +72,6 @@ export function TimeSlider({
             "origin-bottom blur-media-hidden",
             "transition-[filter,opacity,scale] duration-media-base ease-out",
             "group-data-pointing/preview:scale-100 group-data-pointing/preview:opacity-100 group-data-pointing/preview:filter-none",
-            "group-has-focus-visible/slider:scale-100 group-has-focus-visible/slider:opacity-100 group-has-focus-visible/slider:filter-none",
             "bg-media-popover text-media-popover-foreground surface-media after:surface-media-inset",
             "group/thumbnail pointer-events-none overflow-hidden rounded-media-popup bg-media-backdrop/90",
             "bottom-[calc(100%+var(--media-slider-preview-offset))]",
@@ -99,7 +98,6 @@ export function TimeSlider({
             "origin-bottom blur-media-hidden",
             "transition-[filter,opacity,scale] duration-media-base ease-out",
             "group-data-pointing/preview:scale-100 group-data-pointing/preview:opacity-100 group-data-pointing/preview:filter-none",
-            "group-has-focus-visible/slider:scale-100 group-has-focus-visible/slider:opacity-100 group-has-focus-visible/slider:filter-none",
             "flex bottom-[calc(100%+var(--media-slider-preview-label-offset))] tabular-nums",
             "left-1/2 flex-col items-center",
           )}

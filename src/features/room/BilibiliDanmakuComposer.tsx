@@ -85,7 +85,7 @@ const COMPOSER_BUTTON_CLASS =
   "size-7 rounded-md transition-colors [@media(pointer:coarse)]:min-w-8";
 /** 匹配浮层输入框所在的透明播放器 chrome。 */
 const COMPOSER_OVERLAY_GHOST_CLASS =
-  "text-white/90 hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white focus-ring-overlay";
+  "text-white/90 hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white";
 
 type DanmakuQuickPickerProps = {
   siteId: DanmakuSendSiteId;
@@ -340,7 +340,7 @@ function DanmakuQuickPicker({
                           size="sm"
                           className={cn(
                             "min-w-0 justify-center truncate px-1 font-mono text-[11px]",
-                            overlay && "hover:bg-white/15 focus-ring-overlay",
+                            overlay && "hover:bg-white/15",
                           )}
                           aria-label={`插入 B站表情 ${emoji}`}
                           title={emoji}
@@ -375,7 +375,7 @@ function DanmakuQuickPicker({
                 onClick={() => void addFavorite(favoriteDraft)}
                 className={cn(
                   "text-muted-foreground",
-                  overlay && "text-white/70 hover:bg-white/15 hover:text-white focus-ring-overlay",
+                  overlay && "text-white/70 hover:bg-white/15 hover:text-white",
                 )}
               >
                 {favoriteAction === favoriteDraft ? (
@@ -433,7 +433,7 @@ function DanmakuQuickPicker({
                         size="sm"
                         className={cn(
                           "h-8 min-w-0 flex-1 justify-start truncate px-2 text-left text-sm font-normal",
-                          overlay && "hover:bg-white/15 hover:text-white focus-ring-overlay",
+                          overlay && "hover:bg-white/15 hover:text-white",
                         )}
                         title={item.content}
                         onClick={() => selectStoredMessage(item.content)}
@@ -450,8 +450,7 @@ function DanmakuQuickPicker({
                         onClick={() => void removeFavorite(item.content)}
                         className={cn(
                           "text-muted-foreground",
-                          overlay &&
-                            "text-white/70 hover:bg-white/15 hover:text-white focus-ring-overlay",
+                          overlay && "text-white/70 hover:bg-white/15 hover:text-white",
                         )}
                       >
                         {favoriteAction === item.content ? (
@@ -484,8 +483,7 @@ function DanmakuQuickPicker({
                   onClick={() => void clearHistory()}
                   className={cn(
                     "text-muted-foreground",
-                    overlay &&
-                      "text-white/70 hover:bg-white/15 hover:text-white focus-ring-overlay",
+                    overlay && "text-white/70 hover:bg-white/15 hover:text-white",
                   )}
                 >
                   {clearing ? (
@@ -546,7 +544,7 @@ function DanmakuQuickPicker({
                           size="sm"
                           className={cn(
                             "h-8 min-w-0 flex-1 justify-start truncate px-2 text-left text-sm font-normal",
-                            overlay && "hover:bg-white/15 hover:text-white focus-ring-overlay",
+                            overlay && "hover:bg-white/15 hover:text-white",
                           )}
                           title={item.content}
                           onClick={() => selectStoredMessage(item.content)}
@@ -563,8 +561,7 @@ function DanmakuQuickPicker({
                           onClick={() => void addFavorite(item.content)}
                           className={cn(
                             "text-muted-foreground",
-                            overlay &&
-                              "text-white/70 hover:bg-white/15 hover:text-white focus-ring-overlay",
+                            overlay && "text-white/70 hover:bg-white/15 hover:text-white",
                           )}
                         >
                           {favoriteAction === item.content ? (
@@ -792,8 +789,7 @@ export function DanmakuComposer({
       <InputGroup
         className={cn(
           "h-8 min-w-0",
-          overlay &&
-            "border-white/25 bg-black/30 text-white has-[[data-slot=input-group-control]:focus-visible]:border-white/70 has-[>input:disabled]:bg-black/20",
+          overlay && "border-white/25 bg-black/30 text-white has-[>input:disabled]:bg-black/20",
           result?.startsWith("发送失败") && "border-destructive/80",
         )}
       >
@@ -882,7 +878,7 @@ function DanmakuEmojiGrid({
           type="button"
           variant="ghost"
           size="icon"
-          className={cn("size-12", overlay && "hover:bg-white/15 focus-ring-overlay")}
+          className={cn("size-12", overlay && "hover:bg-white/15")}
           aria-label={`插入 Emoji ${emoji.label}`}
           title={emoji.label}
           onClick={() => onSelect(emoji.text)}

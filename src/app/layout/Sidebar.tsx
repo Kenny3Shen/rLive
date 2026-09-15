@@ -62,7 +62,7 @@ function SidebarLink({
       data-motion-press
       className={({ isActive }) =>
         cn(
-          "group relative flex h-10 w-10 items-center justify-center rounded-xl focus-ring",
+          "group relative flex h-10 w-10 items-center justify-center rounded-xl",
           // 平板（≥md 的粗指针）沿用竖排 rail，但按移动端待遇呈现：
           // 48px 命中区加图标下方的文字标签 —— 悬停 tooltip 在触摸上不存在，
           // 无标签的纯图标 rail 在平板上无法自解释。

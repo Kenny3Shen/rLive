@@ -25,8 +25,7 @@ import { videoPlayPath } from "./videoRoute";
  * 等一整套直播专属动作，VOD 一个都用不上。
  */
 
-const CARD_CLASS =
-  "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left focus-ring";
+const CARD_CLASS = "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left";
 const COVER_CLASS =
   "relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle";
 const COVER_IMAGE_CLASS =

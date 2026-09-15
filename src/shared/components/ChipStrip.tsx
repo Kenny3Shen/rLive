@@ -319,7 +319,7 @@ export function ChipButton({ label, parentLabel, active, tabStop, onClick }: Chi
         CHIP_HEIGHT,
         CHIP_RADIUS,
         CHIP_TOUCH_TARGET,
-        "relative flex shrink-0 items-center gap-1 px-2.5 text-[0.8rem] font-medium whitespace-nowrap transition-colors focus-ring",
+        "relative flex shrink-0 items-center gap-1 px-2.5 text-[0.8rem] font-medium whitespace-nowrap transition-colors",
         active
           ? "bg-primary text-primary-foreground"
           : "bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground",

@@ -51,7 +51,7 @@ function Slider({
           className={cn(
             "relative grow overflow-hidden rounded-full select-none data-horizontal:h-1 data-horizontal:w-full data-vertical:h-full data-vertical:w-1",
             variant === "player"
-              ? "bg-white/25 transition-[height] duration-150 group-hover/player-slider:data-horizontal:h-1.5 group-focus-within/player-slider:data-horizontal:h-1.5 motion-reduce:transition-none"
+              ? "bg-white/25 transition-[height] duration-150 group-hover/player-slider:data-horizontal:h-1.5 motion-reduce:transition-none"
               : "bg-muted",
           )}
         >
@@ -75,7 +75,7 @@ function Slider({
             className={cn(
               "relative block size-3 shrink-0 rounded-full select-none after:absolute after:-inset-2 disabled:pointer-events-none disabled:opacity-50",
               variant === "player"
-                ? "border-0 bg-white opacity-0 shadow-sm ring-white/40 transition-[opacity,box-shadow] group-hover/player-slider:opacity-100 group-focus-within/player-slider:opacity-100 hover:ring-3 active:opacity-100 active:ring-3"
+                ? "border-0 bg-white opacity-0 shadow-sm ring-white/40 transition-[opacity,box-shadow] group-hover/player-slider:opacity-100 hover:ring-3 active:opacity-100 active:ring-3"
                 : "border border-ring bg-primary-foreground ring-ring/50 transition-[color,box-shadow] hover:ring-3 active:ring-3",
             )}
           />
