@@ -3,11 +3,10 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronUp,
-  ExternalLink,
   Info,
   MessageCircle,
-  MessageSquare,
   MessageSquareOff,
+  MessageSquareText,
   RefreshCw,
   ScrollText,
   Volume2,
@@ -35,6 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
+import { danmakuControlPresentation } from "@/shared/components/player/PlayerControls";
 import {
   Empty,
   EmptyDescription,
@@ -504,14 +504,9 @@ export function ShortsPage() {
   const detailBody = useMemo(
     () =>
       current ? (
-        <ShortsDetailBody
-          key={current.bvid}
-          item={current}
-          open={panels.detailOpen}
-          onOpenInPlayer={openInPlayer}
-        />
+        <ShortsDetailBody key={current.bvid} item={current} open={panels.detailOpen} />
       ) : null,
-    [current, openInPlayer, panels.detailOpen],
+    [current, panels.detailOpen],
   );
 
   /* ---------- 渲染 ---------- */
@@ -555,6 +550,11 @@ export function ShortsPage() {
   }
 
   const mounted = shortsMountedIndexes(index, items.length);
+
+  // 弹幕开关的图标与标签：与直播间、播放页共用同一个判据，避免三处各写一对
+  // 图标后开启态长得不一样（这里曾经用裸 `MessageSquare`，另两处是
+  // `MessageSquareText`）。
+  const danmakuControl = danmakuControlPresentation(danmakuVisible);
 
   return (
     <>
@@ -635,7 +635,6 @@ export function ShortsPage() {
               compact={compact}
               muted={playback.muted}
               onToggleMuted={playback.toggleMuted}
-              onOpenInPlayer={current ? openInPlayer : undefined}
               onRefresh={playback.retry}
             />
           </span>
@@ -690,29 +689,62 @@ export function ShortsPage() {
           {/* 内容与控制行同宽同居中：桌面上两者必须对齐，否则信息在最左、输入框在中间。 */}
           <div className="mx-auto flex w-full max-w-lg items-end gap-2">
             {infoVisible && current && (
-              <div className="flex min-w-0 flex-1 items-end gap-2">
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
                 {/*
-                  头像从右侧操作栏搬到这里。
+                  UP 主块：头像跨「名字」与「粉丝数」两行。
 
-                  评论按钮离开右侧栏之后那根栏只剩一个不可点的头像 —— 一根只有装饰的
-                  操作栏不如不要。放在 UP 主名前也更符合它本来的语义：这是这条的作者。
+                  头像从右侧操作栏搬到这里。评论按钮离开右侧栏之后那根栏只剩一个不可点的
+                  头像 —— 一根只有装饰的操作栏不如不要。放在名字左边也更符合它本来的语义：
+                  这是这条的作者。
                 */}
-                <Avatar className="size-8 shrink-0 after:border-white/40">
-                  <AvatarImage
-                    src={normalizeImageUrl(current.author_face)}
-                    alt=""
-                    aria-hidden
-                    referrerPolicy="no-referrer"
-                  />
-                  <AvatarFallback className="bg-black/40 text-xs text-white/90">
-                    {current.author?.slice(0, 1) || "U"}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-white">
-                    @{current.author || "未知 UP 主"}
-                  </p>
-                  <p className="line-clamp-2 text-sm text-white/90">{current.title}</p>
+                <div className="flex items-center gap-2">
+                  <Avatar className="size-8 shrink-0 after:border-white/40">
+                    <AvatarImage
+                      src={normalizeImageUrl(current.author_face)}
+                      alt=""
+                      aria-hidden
+                      referrerPolicy="no-referrer"
+                    />
+                    <AvatarFallback className="bg-black/40 text-xs text-white/90">
+                      {current.author?.slice(0, 1) || "U"}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-white">
+                      @{current.author || "未知 UP 主"}
+                    </p>
+                    {/*
+                      粉丝数只有 story 流白带（`owner.fans`），其余列表接口不给。
+                      `null` 是「上游没说」而不是「0 个粉丝」，因此不渲染这一行。
+                    */}
+                    {current.author_fans != null && (
+                      <p className="truncate text-xs text-white/70">
+                        {formatOnline(current.author_fans)} 粉丝
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/*
+                  标题块：点标题开详情抽屉。
+
+                  详情入口从底栏搬到标题上（底栏那个改为去播放页），因此这里必须
+                  `pointer-events-auto`：整个浮层是不接指针的，否则会在画面底部挖出一块
+                  点不动的区域。箭头朝下是因为抽屉从下方推入。
+                */}
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <button
+                    type="button"
+                    aria-label={`视频详情：${current.title}`}
+                    title="视频详情"
+                    className="pointer-events-auto flex w-full items-start gap-1.5 text-left"
+                    onClick={panels.openDetail}
+                  >
+                    <span className="line-clamp-2 min-w-0 flex-1 text-sm text-white/90">
+                      {current.title}
+                    </span>
+                    <ChevronDown className="mt-0.5 size-4 shrink-0 text-white/70" aria-hidden />
+                  </button>
                   <p className="text-xs text-white/70">
                     {formatOnline(current.view)} 次播放
                     {playback.duration > 0 || current.duration > 0
@@ -800,16 +832,28 @@ export function ShortsPage() {
                   />
                 )}
               </div>
+              {/*
+                弹幕开关。
+
+                图标与标签取自与直播间、播放页**同一个** `danmakuControlPresentation`：
+                三处各自写死一对图标的结果是开启态长得不一样（这里曾经用裸
+                `MessageSquare`，另两处是 `MessageSquareText`）。
+              */}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
-                title={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
+                aria-label={danmakuControl.label}
+                title={danmakuControl.label}
+                aria-pressed={danmakuVisible}
                 className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
                 onClick={() => setDanmakuVisible((value) => !value)}
               >
-                {danmakuVisible ? <MessageSquare aria-hidden /> : <MessageSquareOff aria-hidden />}
+                {danmakuControl.icon === "message-square-text" ? (
+                  <MessageSquareText aria-hidden />
+                ) : (
+                  <MessageSquareOff aria-hidden />
+                )}
               </Button>
               <Button
                 type="button"
@@ -823,15 +867,22 @@ export function ShortsPage() {
               >
                 <Info aria-hidden />
               </Button>
+              {/*
+                详情入口：直接去播放页。
+
+                点它不再开抽屉 —— 抽屉改由信息行里的标题打开（那里是「看简介」的自然
+                位置）。保留原文案与 `ScrollText` 图标，但 tooltip 说明目的地：这里没有
+                独立的详情页，完整详情栏在播放页上。
+              */}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 aria-label="视频详情"
-                title="视频详情（简介、标签、UP 主）"
+                title="视频详情（在播放页打开）"
                 disabled={!current}
                 className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-                onClick={panels.openDetail}
+                onClick={openInPlayer}
               >
                 <ScrollText aria-hidden />
               </Button>
@@ -917,15 +968,7 @@ function ShortsDrawerContent({
  * `video_get_archive` 只在抽屉真的打开后才发（`enabled: open`）：绝大多数条目
  * 不会被点开详情，换片时预取等于给每一条都白付一次稿件请求。
  */
-function ShortsDetailBody({
-  item,
-  open,
-  onOpenInPlayer,
-}: {
-  item: VideoItemForDetail;
-  open: boolean;
-  onOpenInPlayer: () => void;
-}) {
+function ShortsDetailBody({ item, open }: { item: VideoItemForDetail; open: boolean }) {
   const archiveQuery = useQuery({
     queryKey: ["shorts_archive", item.bvid],
     enabled: open && item.bvid !== "",
@@ -992,11 +1035,6 @@ function ShortsDetailBody({
           ))}
         </ul>
       )}
-
-      <Button variant="outline" className="w-full" onClick={onOpenInPlayer}>
-        <ExternalLink aria-hidden />
-        在播放页打开
-      </Button>
     </div>
   );
 }
@@ -1013,11 +1051,13 @@ type VideoItemForDetail = {
 };
 
 /**
- * 顶部「更多操作」菜单：静音、在播放页打开、刷新。
+ * 顶部「更多操作」菜单：静音、刷新。
  *
- * 这三项都不该常驻画面：静音是一次性设定（不是每条都要调），播放页跳转是离开
- * 这个消费模式的出口，刷新只在取流失败时才有意义。竖屏画面上的每个常驻按钮都
- * 在挡内容，能收进菜单的就收。
+ * 「在播放页打开」曾经也在这里，现在只剩底栏那一个入口（`ScrollText` 图标那个按钮
+ * 直接导航）。两个入口指向同一目的地时，菜单项多一层点击却没有额外语义。
+ *
+ * 静音是一次性设定（不是每条都要调），刷新只在取流失败时才有意义 —— 竖屏画面上的
+ * 每个常驻按钮都在挡内容，能收进菜单的就收。
  *
  * 外壳复用 `PlayerHudOverflowMenu` —— 直播间 HUD 与视频播放页用的是同一个组件，
  * 短视频这里再自写一套的结果就是三个表面上的「更多操作」各长一个样（触发图标、
@@ -1028,13 +1068,11 @@ function ShortsMoreMenu({
   compact,
   muted,
   onToggleMuted,
-  onOpenInPlayer,
   onRefresh,
 }: {
   compact: boolean;
   muted: boolean;
   onToggleMuted: () => void;
-  onOpenInPlayer?: (() => void) | undefined;
   onRefresh: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1050,19 +1088,13 @@ function ShortsMoreMenu({
       onOpenChange={setOpen}
       compact={compact}
     >
-      {/* 三列而不是播放页的四列：这里只有三项，四列会空出一格。 */}
-      <div className="grid grid-cols-3 gap-1.5 max-md:gap-2">
+      {/* 两列：跳播放页的入口已经搬到底栏（那个按钮直接导航），菜单里不再重复。 */}
+      <div className="grid grid-cols-2 gap-1.5 max-md:gap-2">
         <PlayerToolTile
           icon={muted ? VolumeX : Volume2}
           label={muted ? "取消静音" : "静音"}
           pressed={muted}
           onClick={runAndClose(onToggleMuted)}
-        />
-        <PlayerToolTile
-          icon={ExternalLink}
-          label="在播放页打开"
-          disabled={!onOpenInPlayer}
-          onClick={runAndClose(() => onOpenInPlayer?.())}
         />
         <PlayerToolTile icon={RefreshCw} label="重新加载" onClick={runAndClose(onRefresh)} />
       </div>

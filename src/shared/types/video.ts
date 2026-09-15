@@ -35,6 +35,14 @@ export type VideoItem = {
   author: string;
   /** UP 主头像（已过上游缩图参数）；上游未给时为 null。 */
   author_face: string | null;
+  /**
+   * UP 主粉丝数。**只有 story feed 直接下发**（`owner.fans`，实测每条都有且与
+   * 详情接口的 `follower` 一致）；其余列表接口不给，为 null。
+   *
+   * 与 `VideoArchive.author_fans` 的区别：那个缺数据时是 0，这个用 null 区分
+   * 「上游说 0 个粉丝」与「上游没说」—— 后者不渲染粉丝数，而不是显示「0 粉丝」。
+   */
+  author_fans?: number | null;
   /** 时长，秒。 */
   duration: number;
   view: number;

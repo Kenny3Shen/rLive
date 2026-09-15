@@ -35,6 +35,14 @@ pub struct VideoItem {
     pub cover: String,
     pub author: String,
     pub author_face: Option<String>,
+    /// UP 主粉丝数。**只有 story feed 直接下发**（`owner.fans`，实测每条都有且与
+    /// `x/web-interface/card` 的 `follower` 完全一致）；其余列表接口不给，为 `None`。
+    ///
+    /// 与 [`VideoArchive::author_fans`] 的区别：那个是详情接口单独请求卡片后拿到的
+    /// 数值（缺失时是 0），这个是流里白带的；用 `Option` 区分「上游说 0 个粉丝」与
+    /// 「上游没说」，前端据此决定要不要画粉丝数。
+    #[serde(default)]
+    pub author_fans: Option<i64>,
     /// 时长，秒。
     pub duration: i64,
     pub view: i64,

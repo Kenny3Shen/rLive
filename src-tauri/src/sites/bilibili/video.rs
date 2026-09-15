@@ -135,6 +135,8 @@ fn video_item(item: &Value) -> VideoItem {
             .filter(|author| !author.is_empty())
             .unwrap_or_default(),
         author_face,
+        // 列表接口（推荐/搜索/热门/相关/投稿）都不下发粉丝数，只有 story feed 带。
+        author_fans: None,
         duration: item_duration(item),
         view: stat
             .and_then(|stat| stat.get("view"))
@@ -367,6 +369,10 @@ fn story_item(item: &Value) -> VideoItem {
             .map(as_str)
             .map(|face| avatar_thumb(&face))
             .filter(|face| !face.is_empty()),
+        // story 的 `owner.fans` 是白带的：实测 12/12 条都有，数值与
+        // `x/web-interface/card` 的 `follower` 一致（同一 mid 实测均为 11389）。
+        // 因此信息行里的粉丝数不需要额外请求。上游没给时为 `None`（不是 0）。
+        author_fans: owner.and_then(|owner| owner.get("fans")).map(as_i64),
         duration: video_duration(item.get("duration")),
         view: stat
             .and_then(|stat| stat.get("view"))
@@ -2901,7 +2907,8 @@ mod tests {
                   "ff_cover": "http://i1.hdslb.com/bfs/storyff/b.jpg",
                   "duration": 93, "pubdate": 1_789_292_152,
                   "dimension": { "width": 1080, "height": 1920, "rotate": 0 },
-                  "owner": { "name": "up主", "face": "https://i2.hdslb.com/bfs/face/x.jpg" },
+                  "owner": { "name": "up主", "face": "https://i2.hdslb.com/bfs/face/x.jpg",
+                             "fans": 12345 },
                   "stat": { "view": 187_172, "danmaku": 24 } },
                 // 横屏条目：story 是混合流，照样保留，由前端按 dimension 适配舞台。
                 { "card_goto": "vertical_av", "param": "2", "bvid": "BV1y",
@@ -2923,6 +2930,8 @@ mod tests {
         assert_eq!(vertical.cid, Some(41_855_094_127));
         assert_eq!(vertical.view, 187_172);
         assert_eq!(vertical.duration, 93);
+        // 粉丝数是 story 白带的（`owner.fans`），信息行因此不必再请求详情。
+        assert_eq!(vertical.author_fans, Some(12_345));
         // 封面优先 cover 而不是首帧图 ff_cover，且必须升成 https。
         assert_eq!(vertical.cover, "https://i1.hdslb.com/bfs/archive/a.jpg");
         let dimension = vertical.dimension.expect("竖屏判定依赖 dimension");
@@ -2958,6 +2967,8 @@ mod tests {
         assert_eq!(item.cover, "https://i0.hdslb.com/bfs/storyff/c.jpg");
         // 上游没有下发 dimension 时不能编造画幅。
         assert!(item.dimension.is_none());
+        // 没有 fans 字段时是「没说」而不是「0 个粉丝」。
+        assert_eq!(item.author_fans, None);
     }
 
     #[test]
@@ -2975,6 +2986,7 @@ mod tests {
                     cover: String::new(),
                     author: String::new(),
                     author_face: None,
+                    author_fans: None,
                     duration: 0,
                     view: 0,
                     danmaku: 0,
@@ -3768,7 +3780,7 @@ mod tests {
     }
 
     /// story feed 的三条契约都是行为观测而非上游承诺，回归只能靠真网验证：
-    /// 匡名无 WBI 即可、取流键齐备、且串行取批后仍能出新条目。
+    /// 匿名无 WBI 即可、取流键齐备、且串行取批后仍能出新条目。
     #[tokio::test]
     #[ignore = "live network smoke — run with --ignored"]
     async fn live_story_feed_smoke() {
