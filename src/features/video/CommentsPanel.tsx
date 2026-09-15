@@ -133,6 +133,35 @@ function CommentBody({
   );
 }
 
+/**
+ * 评论发布者标识：`楼主`（当前楼层主，仅在评论详情里成立）与 `UP`（稿件作者）。
+ *
+ * 两者互不排斥：UP 在自己评论区里发的一级评论会同时是楼主。UP 用平台粉强调色，
+ * 与 Lv 药丸、楼主药丸同属「弱于昵称」的一档，不抢注意力。
+ */
+function CommentAuthorBadges({
+  isThreadAuthor = false,
+  isUpper,
+}: {
+  isThreadAuthor?: boolean;
+  isUpper: boolean;
+}) {
+  return (
+    <>
+      {isThreadAuthor && <Badge variant="secondary">楼主</Badge>}
+      {isUpper && (
+        // 覆盖 Badge 默认的 h-5/py-0.5：UP 标识要与 13px 昵称行等高，不把行撑高。
+        <Badge
+          variant="secondary"
+          className="h-auto shrink-0 rounded-sm border-0 bg-accent/18 px-1 py-0 text-[10px] leading-4 font-semibold text-accent"
+        >
+          UP
+        </Badge>
+      )}
+    </>
+  );
+}
+
 function CommentRow({
   comment,
   onOpenDetail,
@@ -161,7 +190,7 @@ function CommentRow({
           <span className="truncate text-[13px] font-medium text-foreground/90">
             {comment.uname}
           </span>
-          {isThreadAuthor && <Badge variant="secondary">楼主</Badge>}
+          <CommentAuthorBadges isThreadAuthor={isThreadAuthor} isUpper={comment.is_upper} />
           {comment.level > 0 && (
             // 覆盖 Badge 默认的 h-5/py-0.5/font-medium：等级药丸要贴合 13px 昵称行。
             // 前景保持 muted：它比同排的「楼主」更弱，不能与昵称抢注意力。
@@ -197,6 +226,13 @@ function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDeta
     >
       <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
         <span className="font-medium text-primary/90">{reply.uname}</span>
+        {/* 预览是一行被裁剪的富文本，塞不进 Badge 的 20px 药丸；
+            用等高（h-4 = leading-4）的 inline-flex 小标，行高不受影响。 */}
+        {reply.is_upper && (
+          <span className="mx-0.5 inline-flex h-4 items-center rounded-sm bg-accent/18 px-1 align-middle text-[10px] leading-4 font-semibold whitespace-nowrap text-accent">
+            UP
+          </span>
+        )}
         <span className="text-muted-foreground">： </span>
         <span className="text-foreground/80">
           {renderCommentMessage(reply.message, reply.emotes)}

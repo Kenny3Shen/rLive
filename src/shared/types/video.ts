@@ -342,6 +342,13 @@ export type VideoComment = {
   rcount: number;
   /** 主接口附带的二级回复预览（前 2-3 条）。 */
   replies: VideoComment[];
+  /**
+   * 是否是稿件作者（UP 主）本人发出的评论/回复。
+   *
+   * 上游不在条目上标作者，后端解析时用页面级 `data.upper.mid` 比对 `mid` 得出；
+   * 用户身份未知（mid 为 0）时恒为 false，那类评论不显示 UP 标识。
+   */
+  is_upper: boolean;
 };
 
 /** 一页评论（游标翻页）。 */

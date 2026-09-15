@@ -892,8 +892,22 @@ fn comment_pictures(content: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// 评论区里稿件作者（UP 主）的 mid。
+///
+/// 上游在页面级 `data.upper.mid` 给出（评论首页与二级回复两个接口都有，实测）。
+/// 该字段缺失或为 0 时回退到 UP 置顶对象（`data.top.upper.member.mid`）——能置顶的
+/// 必然是作者本人。两者都拿不到时返回空串，此时**没有任何评论**会被标成 UP：
+/// 宁可少标一个标识，也不把路人标成作者。
+fn comment_upper_mid(data: &Value) -> String {
+    let non_zero = |value: Option<String>| value.filter(|mid| !mid.is_empty() && mid != "0");
+    non_zero(data.pointer("/upper/mid").map(as_str))
+        .or_else(|| non_zero(data.pointer("/top/upper/member/mid").map(as_str)))
+        .unwrap_or_default()
+}
+
 /// 评论与二级回复同构，递归解析；上游预览只嵌一层，但多余层级解析出来也无害。
-fn video_comment(item: &Value) -> VideoComment {
+/// `upper_mid` 是稿件作者 mid，用来给作者本人的评论打上 `is_upper`。
+fn video_comment(item: &Value, upper_mid: &str) -> VideoComment {
     let member = item.get("member");
     let content = item.get("content");
     let avatar = member
@@ -902,12 +916,14 @@ fn video_comment(item: &Value) -> VideoComment {
         .map(as_str)
         .map(|face| avatar_thumb(&face))
         .filter(|face| !face.is_empty());
+    let mid = member
+        .and_then(|member| member.get("mid"))
+        .map(as_str)
+        .unwrap_or_default();
     VideoComment {
+        is_upper: !upper_mid.is_empty() && mid == upper_mid,
         rpid: item.get("rpid").map(as_i64).unwrap_or_default(),
-        mid: member
-            .and_then(|member| member.get("mid"))
-            .map(as_str)
-            .unwrap_or_default(),
+        mid,
         uname: member
             .and_then(|member| member.get("uname"))
             .map(as_str)
@@ -929,7 +945,12 @@ fn video_comment(item: &Value) -> VideoComment {
         replies: item
             .get("replies")
             .and_then(Value::as_array)
-            .map(|replies| replies.iter().map(video_comment).collect())
+            .map(|replies| {
+                replies
+                    .iter()
+                    .map(|reply| video_comment(reply, upper_mid))
+                    .collect()
+            })
             .unwrap_or_default(),
     }
 }
@@ -945,12 +966,13 @@ pub fn parse_comments(raw: &str) -> AppResult<VideoCommentPage> {
         serde_json::from_str(raw).map_err(|e| video_err(format!("评论 json: {e}")))?;
     let data = root.get("data").ok_or_else(|| video_err("评论缺少 data"))?;
     let cursor = data.get("cursor");
+    let upper_mid = comment_upper_mid(data);
     let mut items: Vec<VideoComment> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let push_comment = |reply: &Value,
                         items: &mut Vec<VideoComment>,
                         seen: &mut std::collections::HashSet<i64>| {
-        let comment = video_comment(reply);
+        let comment = video_comment(reply, &upper_mid);
         if comment.rpid > 0 && seen.insert(comment.rpid) {
             items.push(comment);
         }
@@ -997,7 +1019,13 @@ pub fn parse_comment_replies(raw: &str, page: u32) -> AppResult<VideoCommentPage
     let items: Vec<VideoComment> = data
         .get("replies")
         .and_then(Value::as_array)
-        .map(|replies| replies.iter().map(video_comment).collect())
+        .map(|replies| {
+            let upper_mid = comment_upper_mid(data);
+            replies
+                .iter()
+                .map(|reply| video_comment(reply, &upper_mid))
+                .collect()
+        })
         .unwrap_or_default();
     let all_count = data
         .pointer("/page/count")
@@ -3559,6 +3587,8 @@ mod tests {
             "code": 0,
             "data": {
                 "cursor": { "is_end": false, "all_count": 4986, "next": 2 },
+                // 页面级作者 mid：置顶那条（mid 42）应因此标上 UP。
+                "upper": { "mid": 42 },
                 // UP 主置顶也可能出现在 top.upper（对象）而非 top_replies。
                 "top": { "upper": {
                     "rpid": 111, "member": { "uname": "upper 置顶", "mid": "8" },
@@ -3603,7 +3633,86 @@ mod tests {
         assert_eq!(main.replies.len(), 1);
         assert_eq!(main.replies[0].uname, "路人");
 
+        // 页面级 `upper.mid` = 42 命中置顶那条（两条同 rpid 去重后留下的是它）；
+        // 其余评论与楼中楼都不是作者，不标。
+        assert!(page.items[0].is_upper);
+        assert!(!page.items[1].is_upper);
+        assert!(!main.replies[0].is_upper);
+
         assert!(parse_comments("{}").is_err());
+    }
+
+    #[test]
+    fn parse_comments_marks_upper_author_on_comments_and_replies() {
+        let raw = serde_json::json!({
+            "data": {
+                "cursor": { "is_end": true, "all_count": 2, "next": 1 },
+                // 页面级 `upper.mid` 是作者标识的唯一来源（实测两个评论接口都下发）。
+                "upper": { "mid": 42 },
+                "replies": [
+                    {
+                        "rpid": 1, "member": { "uname": "UP 主", "mid": "42" },
+                        "content": { "message": "本人在此" },
+                        "replies": [ { "rpid": 11, "member": { "uname": "路人", "mid": "7" }, "content": { "message": "楼中楼" } } ]
+                    },
+                    {
+                        "rpid": 2, "member": { "uname": "路人甲", "mid": "7" },
+                        "content": { "message": "普通评论" },
+                        "replies": [ { "rpid": 22, "member": { "uname": "UP 主", "mid": "42" }, "content": { "message": "作者回复" } } ]
+                    }
+                ]
+            }
+        })
+        .to_string();
+        let page = parse_comments(&raw).unwrap();
+        assert!(page.items[0].is_upper, "作者本人的一级评论要标 UP");
+        assert!(!page.items[0].replies[0].is_upper);
+        assert!(!page.items[1].is_upper);
+        assert!(
+            page.items[1].replies[0].is_upper,
+            "作者在楼中楼的回复也要标 UP"
+        );
+    }
+
+    #[test]
+    fn parse_comment_replies_marks_upper_and_ignores_unknown_identity() {
+        let with_upper = serde_json::json!({
+            "data": {
+                "page": { "count": 1 },
+                "upper": { "mid": 42 },
+                "replies": [ { "rpid": 1, "member": { "uname": "UP 主", "mid": "42" }, "content": { "message": "作者回复" } } ]
+            }
+        })
+        .to_string();
+        let page = parse_comment_replies(&with_upper, 1).unwrap();
+        assert!(page.items[0].is_upper);
+
+        // mid 为 0（上游的「未登录/身份未知」形态）不能与同样为 0 的 author 相互命中。
+        let unknown = serde_json::json!({
+            "data": {
+                "page": { "count": 1 },
+                "upper": { "mid": 0 },
+                "replies": [ { "rpid": 1, "member": { "uname": "匿名", "mid": "0" }, "content": { "message": "x" } } ]
+            }
+        })
+        .to_string();
+        assert!(!parse_comment_replies(&unknown, 1).unwrap().items[0].is_upper);
+    }
+
+    #[test]
+    fn comment_upper_mid_falls_back_to_pinned_upper_object() {
+        // `upper` 缺失时用 UP 置顶对象里的 mid 兜底（能置顶的必然是作者）。
+        let data = serde_json::json!({ "top": { "upper": { "member": { "mid": "42" } } } });
+        assert_eq!(comment_upper_mid(&data), "42");
+        // 两种形态都没有、或 mid 为 0 时返回空串，后续一条不标。
+        assert!(comment_upper_mid(&serde_json::json!({})).is_empty());
+        assert!(comment_upper_mid(&serde_json::json!({ "upper": { "mid": 0 } })).is_empty());
+        // 页面级 `upper` 优先于置顶对象（两者都是作者时取哪个都一样，但要确定）。
+        let both = serde_json::json!({
+            "upper": { "mid": "9" },
+            "top": { "upper": { "member": { "mid": "42" } } }
+        });
+        assert_eq!(comment_upper_mid(&both), "9");
     }
 
     #[test]

@@ -42,8 +42,8 @@
 | 稿件详情 | `GET /x/web-interface/view?bvid=` | **需 WBI**（未签名被风控拦下，返回 404 页）。`data` 含 `aid/desc/owner/stat/pubdate` |
 | 稿件 Tags | `GET /x/tag/archive/tags?bvid=` → `data[].tag_name` | 无 WBI、匿名可用；与稿件详情并发获取，失败降级为空，不阻断播放 |
 | 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全 |
-| 评论 | `GET /x/v2/reply/wbi/main?type=1&oid=<aid>&mode=<2\|3>&ps=20&next=<cursor>`，WBI 签名 | 签名 + **匿名时不得携带任何 cookie**：实测携带 buvid3/4 的匿名会话只回 3 条并谎称 `is_end=true`（无 cookie 才给全量 20 条）；未签名裸路径被风控后一律 -352，签名路径放行。登录态带完整 cookie 同路径。置顶有两处：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象，参考 PiliPlus 两者都解析） |
-| 二级回复 | `GET /x/v2/reply/reply?type=1&oid=<aid>&root=<rpid>&pn=&ps=20&sort=2` | 匿名可用（不受 buvid 截断影响）。**pn 翻页有效**；`data.page.count` 是总数 |
+| 评论 | `GET /x/v2/reply/wbi/main?type=1&oid=<aid>&mode=<2\|3>&ps=20&next=<cursor>`，WBI 签名 | 签名 + **匿名时不得携带任何 cookie**：实测携带 buvid3/4 的匿名会话只回 3 条并谎称 `is_end=true`（无 cookie 才给全量 20 条）；未签名裸路径被风控后一律 -352，签名路径放行。登录态带完整 cookie 同路径。置顶有两处：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象，参考 PiliPlus 两者都解析）。**作者标识**：页面级 `data.upper.mid`（实测两个回复接口都下发）与评论者 `member.mid` 比对得出，条目上没有现成的作者字段 |
+| 二级回复 | `GET /x/v2/reply/reply?type=1&oid=<aid>&root=<rpid>&pn=&ps=20&sort=2` | 匿名可用（不受 buvid 截断影响）。**pn 翻页有效**；`data.page.count` 是总数；`data.upper.mid` 同主接口下发，作者标识一并标到楼中楼 |
 | 视频搜索 | `GET /x/web-interface/search/type`，`search_type=video&keyword=&page=&order=&duration=0&tids=0`；筛选位：`order`（click 播放多/pubdate 新发布/dm 弹幕多/stow 收藏多/scores 评论多，空=综合）、`duration`（0 全部/1 <10min/2 10-30/3 30-60/4 >60）、`tids` 大区 tid（0=全部，与分区榜 rid 两套 ID）、`pubtime_begin_s`/`pubtime_end_s`（day/week/halfYear 预设在后端换算成「N 天前零点 ~ 当天 23:59:59」） | 无 WBI、匿名可用。取 `data.result[]`，`numPages` 判尾页。时长为 `duration` 字符串（`H:MM:SS`） |
 | UP 主投稿 | `GET /x/space/wbi/arc/search?mid=&pn=&ps=30&tid=0&keyword=&order=<pubdate\|click>` | **需 WBI**。取 `data.list.vlist[]`，条目的时长字段是 `length`（`mm:ss` 字符串）而**不是** `duration`（实测），因此时长取值须做 `duration`→`length` 回退 |
 分区 rid（PiliPlus 硬编码，非 API）：全站 0、动画 1005、音乐 1003、舞蹈 1004、游戏 1008、知识 1010、科技 1012、运动 1018、汽车 1013、美食 1020、动物 1024、鬼畜 1007、时尚 1014、娱乐 1002、影视 1001。
@@ -168,7 +168,7 @@ message DanmakuElem {
 - 页签条之上的 UP 主信息卡：头像与 UP 名点开投稿抽屉；统计行（播放/评论/发布时间，来自稿件详情数据与 `VideoArchive.pubdate`）最右侧是简介展开/收起的纯图标开关（箭头旋转 + `aria-expanded`/`title`）。视频简介默认不显示，点开关才展开（换稿件重挂复位）；展开的简介用 `hidden` 而非条件渲染挂在卡片里，让 `aria-controls` 在收起态也能解析到目标。稿件 Tags 位于简介正文末尾，使用可换行的 `Badge` 展示，点击 Tag 进入 `/video/search?q=<tag_name>`；Tags 接口失败或为空时不显示。侧栏加宽加图标开关后统计行单行放下，`flex-wrap` 仍是字体缩放与超长数值的兑底（发布时间组因此不加 `border-l` 分隔线，避免换行后出现孤立竖线）。列表页 UGC 卡片同样显示发布时间（`VideoItem.pubdate`）：推荐/热门/搜索自带 Unix 秒，UP 主投稿列表只给 `created`（北京时间字符串 `yyyy-MM-dd HH:mm`），后端 `created_to_unix` 按 UTC 解析后减 8 小时还原，缺失为 0 前端不渲染；同一列表的时长同样要兼两种字段形状：`item_duration` 先取 `duration`，为 0 时回退 `length`（投稿列表只给 `length`，漏掉这一路会让抽屉里每条都显示 `0:00`）。卡片标题恒占两行（`min-h-[2lh]`），一行标题的卡片靠占位把 UP 主行与统计行压到相同纵向位置。
 - 多 P 稿件（`pages` ≥ 2）自动展示「选集」页签并接管连播列表：点任意 P 跳转（同 bvid、按 cid 取流），当前 P 按 cid 高亮。选集与合集共用一个页签（`PartsSeasonPanel`）：同时存在时选集展开、合集折叠成标题行（点击展开，连播沿分 P 列表走）；无分 P 的合集直接展开、连播沿合集走。两区标题行都是收起开关（`ChevronDown` 旋转 + `aria-expanded`）：选集行左侧「选集」、右侧「共 x P」计数，点按切换列表显隐；收起态不跨稿件沿用（`PartsPanel` 以 bvid 为 key，换稿件重挂即默认展开），收起后再展开会把当前 P 重新滚回可视区。
 - 评论的 `oid` 是 aid：列表/分集链路经路由参数携带；URL 直入时 UGC 用稿件详情补齐，PGC 用 season 详情里当前集的 aid。
-- 评论列表使用游标翻页（`next`），每条主评论直接展示接口附带的部分二级回复预览与「共 N 条回复」入口；点击主评论、回复预览或入口打开以主评论为楼主的评论详情抽屉，二级回复使用 pn 翻页（首传 1）。详情从侧栏右侧进入，手机竖屏时仅覆盖播放器下方的侧栏。
+- 评论列表使用游标翻页（`next`），每条主评论直接展示接口附带的部分二级回复预览与「共 N 条回复」入口；点击主评论、回复预览或入口打开以主评论为楼主的评论详情抽屉，二级回复使用 pn 翻页（首传 1）。详情从侧栏右侧进入，手机竖屏时仅覆盖播放器下方的侧栏。昵称行右侧的标识有两类：`楼主`（当前楼层主，仅详情抽屉里成立）与 `UP`（稿件作者，列表与抽屉里都标）。作者身份由后端在解析时就固化在 `VideoComment.is_upper` 上（页面级 `data.upper.mid` 与 `member.mid` 比对），前端不重算：上游身份未知（mid 为 0 或 `upper` 缺失）时一条也不标，宁可少标不可错标（具体见第六节第三坑）。UP 标识用平台粉强调色（`bg-accent/18 text-accent`）与蓝色的 Lv 药丸区分开；昵称行的药丸与回复预览里的缩写小标各自覆盖 `Badge` 默认高度与行高，不让标识把行撑高。
 - 播放页通过共享 `DrawerScope` / `DrawerViewport` 为评论、UP 投稿和播放工具提供侧栏挂载范围；局部抽屉使用容器内定位和非模态交互，遮罩不越过侧栏、不模糊播放器、不锁定全页焦点与滚动。隐藏侧栏或进入全屏时关闭已打开的局部抽屉，后续全屏工具继续使用播放器的 Portal 容器。
 - `[大哭]` 占位符按 `content.emote` 映射换成内联图。
 - 简介与评论正文里的 URL 经共享 `LinkText`（`src/shared/components/LinkText.tsx`）渲染为可点链接：点击由 opener 插件在系统浏览器打开（浏览器预览退回 `window.open`，双双失败用 toast 兜底），`stopPropagation` 避免连带触发打开评论详情；链接字符集限定 ASCII 可打印区以在无空格的中文句子里截断，裸域名仅带路径时匹配（`img.png` 之类不误判），尾随断句标点归还正文；表情占位符替换后剩余文本段同样走 `LinkText`。
@@ -216,11 +216,12 @@ message DanmakuElem {
 
 - 底部 Shell 右侧的「在浏览器中打开」按钮：与直播页同一套交互 —— 点击经 `tauri-plugin-opener` 打开系统浏览器（失败回退 `window.open`）、toast 通知结果，不在界面上展示具体地址。HUD 溢出菜单里另有图标镜像（见上节）。
 
-### 评论接口的三个坑（实测 + PiliPlus 对照）
+### 评论接口的四个坑（实测 + PiliPlus 对照）
 
 1. **匿名携带 buvid 会被截断**：只要 cookie 里有 buvid3/buvid4，主列表只回 3 条并谎称 `is_end=true`；无 cookie 才给全量。PiliPlus 同样在匿名请求里显式强制空 cookie。
 2. **裸路径会吃 -352**：未签名的 `/x/v2/reply/main` 在高频请求后会被风控拒（换 oid 也一样）；走 `/x/v2/reply/wbi/main` + WBI 签名则稳定放行。
-3. **置顶的两种形态**：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象）可能只给其一，解析时都取、按 rpid 去重。
+3. **作者标识需要自己算**：评论条目上没有「这条是 UP 发的」字段（`up_action` 只是「UP 是否点过赞/回过」）。作者 mid 在页面级 `data.upper.mid`（评论首页与二级回复两个接口都下发，实测 mid 为数字、可为 0 表示身份未知），拿它与 `member.mid` 比对得出 `VideoComment.is_upper`。`upper` 缺失时回退 `data.top.upper.member.mid`（能置顶的必是作者）；两者都拿不到时一条也不标——把路人标成作者比少标一个标识更糟。
+4. **置顶的两种形态**：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象）可能只给其一，解析时都取、按 rpid 去重。
 
 ## 七、观看历史（进度续播）
 

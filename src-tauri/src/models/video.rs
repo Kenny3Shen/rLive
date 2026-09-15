@@ -336,6 +336,13 @@ pub struct VideoComment {
     /// 主接口附带的二级回复预览（前 2-3 条）。
     #[serde(default)]
     pub replies: Vec<VideoComment>,
+    /// 是否是稿件作者（UP 主）本人发出的评论/回复。
+    ///
+    /// 上游不在条目上标作者：页面级 `data.upper.mid` 与评论者 `member.mid` 比对
+    /// 得出，因此解析时就固化成这个布尔值，前端只负责渲染标识。
+    /// `upper` 缺失或 mid 为 0（身份未知）时一律 false，宁可少标不可错标。
+    #[serde(default)]
+    pub is_upper: bool,
 }
 
 /// 一页评论（游标翻页）。
