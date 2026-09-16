@@ -306,6 +306,7 @@ pub fn merge_into_db(
     settings.theme = package.settings.theme.clone();
     settings.default_site = package.settings.default_site.clone();
     settings.disabled_site_ids = package.settings.disabled_site_ids.clone();
+    settings.hidden_home_entry_ids = package.settings.hidden_home_entry_ids.clone();
     settings.proxy = package.settings.proxy.clone();
     settings.danmaku_opacity = package.settings.danmaku_opacity;
     settings.danmaku_font_stroke = package.settings.danmaku_font_stroke;
@@ -485,6 +486,21 @@ mod tests {
 
         assert!(package.danmaku_blocked_users.is_empty());
         assert!(package.settings.danmaku_blocked_users.is_empty());
+    }
+
+    /// 5.3.x 之前的配置包没有 `hidden_home_entry_ids`，导入时按空列表补齐。
+    #[test]
+    fn profile_backfills_hidden_home_entry_ids_from_older_packages() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("hidden_home_entry_ids");
+        let text = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&text).unwrap();
+
+        assert!(package.settings.hidden_home_entry_ids.is_empty());
     }
 
     #[test]
@@ -792,6 +808,23 @@ mod tests {
         let settings = settings::get(&conn).unwrap();
         assert_eq!(settings.disabled_site_ids, vec!["huya", "douyin"]);
         assert_eq!(settings.default_site, "douyu");
+    }
+
+    /// 主页入口可见性也是可移植偏好：导入时跟随配置包，
+    /// 但持久化边界仍会丢弃包内的未知 id。
+    #[test]
+    fn merge_carries_hidden_home_entry_ids() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.settings.hidden_home_entry_ids =
+            vec!["shorts".into(), "iptv".into(), "home".into()];
+
+        merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(
+            settings::get(&conn).unwrap().hidden_home_entry_ids,
+            vec!["shorts", "iptv"]
+        );
     }
 
     #[test]

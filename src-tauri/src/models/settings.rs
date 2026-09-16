@@ -10,7 +10,14 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_blocked_users",
     "recording_max_concurrent",
     "dynamic_background_enabled",
+    "hidden_home_entry_ids",
 ];
+
+/// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
+///
+/// 存储隐藏项而不是可见项：新版本新增的入口默认可见，旧记录也不需要迁移。
+/// 首页、关注、设置是应用骨架，不在其中。
+pub const HOME_ENTRY_IDS: &[&str] = &["video", "shorts", "iptv"];
 
 /// 录制弹幕伴生文件转换为 ASS 字幕时使用的外观、排版与过滤设置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,6 +108,12 @@ pub struct AppSettings {
     pub default_site: String,
     /// 从发现页与房间导航中隐藏的平台 id。
     pub disabled_site_ids: Vec<String>,
+    /// 用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
+    ///
+    /// 该字段在 5.3.0 引入，因此比它更早保存的设置记录和配置包里没有它，
+    /// serde default 补齐空列表，见 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default)]
+    pub hidden_home_entry_ids: Vec<String>,
     /// 例如 `http://127.0.0.1:7890`
     pub proxy: Option<String>,
     /// 0.0 ..= 1.0
@@ -225,6 +238,7 @@ impl Default for AppSettings {
             legacy_player_skin: None,
             default_site: "bilibili".into(),
             disabled_site_ids: Vec::new(),
+            hidden_home_entry_ids: Vec::new(),
             proxy: None,
             danmaku_opacity: 0.8,
             danmaku_font_stroke: 0.0,
@@ -286,6 +300,7 @@ mod tests {
         assert!(!back.dynamic_background_enabled);
         assert!(back.danmaku_shield_words.is_empty());
         assert!(back.danmaku_blocked_users.is_empty());
+        assert!(back.hidden_home_entry_ids.is_empty());
         assert!(!v.contains("recording_auto_follow"));
         assert!(!back.legacy_recording_continue_after_leave);
         assert!(!v.contains("recording_continue_after_leave"));

@@ -11,10 +11,12 @@ import {
   ArrowLeft,
   ChevronRight,
   CircleDot,
+  Clapperboard,
   Database,
   Download,
   ExternalLink,
   History,
+  Home,
   Info,
   LogOut,
   MonitorPlay,
@@ -28,6 +30,8 @@ import {
   Search,
   SearchX,
   ShieldAlert,
+  Smartphone,
+  Tv,
   Upload,
   UserRound,
   X,
@@ -48,6 +52,7 @@ import {
 } from "@/shared/stores/settingsStore";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
+import { HOME_ENTRY_IDS, type HomeEntryId } from "@/shared/navEntries";
 import { PagePan } from "@/shared/motion/PagePan";
 import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
 import {
@@ -129,6 +134,7 @@ import {
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 type SettingsCategory =
+  | "home"
   | "appearance"
   | "playback"
   | "platform"
@@ -165,6 +171,12 @@ const settingsCategories: {
   icon: LucideIcon;
   tone: string;
 }[] = [
+  {
+    value: "home",
+    label: "主页入口",
+    icon: Home,
+    tone: "text-settings-home bg-settings-home/12",
+  },
   {
     value: "appearance",
     label: "外观配置",
@@ -219,6 +231,7 @@ const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
 const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
 
 export const settingsCategorySearchText: Record<SettingsCategory, string> = {
+  home: "主页 首页 入口 导航 侧栏 侧边栏 底栏 视频 短视频 IPTV 显示 隐藏 home",
   appearance:
     "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式 控制栏",
   playback:
@@ -1468,6 +1481,53 @@ function AppearanceSettings() {
   );
 }
 
+/** 主页入口开关的展示信息，与 `sidebarNavigation.ts` 的入口标签保持一致。 */
+const HOME_ENTRY_PRESENTATION: Record<HomeEntryId, { label: string; icon: LucideIcon }> = {
+  video: {
+    label: "视频",
+    icon: Clapperboard,
+  },
+  shorts: {
+    label: "短视频",
+    icon: Smartphone,
+  },
+  iptv: {
+    label: "IPTV",
+    icon: Tv,
+  },
+};
+
+function HomeEntrySettings() {
+  const hiddenHomeEntryIds = useSettingsStore((s) => s.hiddenHomeEntryIds);
+  const setHomeEntryVisible = useSettingsStore((s) => s.setHomeEntryVisible);
+  const hidden = new Set(hiddenHomeEntryIds);
+
+  return (
+    <Section title="主页入口">
+      {HOME_ENTRY_IDS.map((entryId) => {
+        const { label, icon: Icon } = HOME_ENTRY_PRESENTATION[entryId];
+        const titleId = `home-entry-${entryId}`;
+
+        return (
+          <Field key={entryId} orientation="horizontal">
+            <FieldContent>
+              <FieldTitle id={titleId}>
+                <Icon className="size-5 text-muted-foreground" aria-hidden />
+                {label}
+              </FieldTitle>
+            </FieldContent>
+            <Switch
+              aria-labelledby={titleId}
+              checked={!hidden.has(entryId)}
+              onCheckedChange={(checked) => setHomeEntryVisible(entryId, checked)}
+            />
+          </Field>
+        );
+      })}
+    </Section>
+  );
+}
+
 function settingsCategoryFromSearch(value: string | null): SettingsCategory | null {
   return settingsCategories.some((category) => category.value === value)
     ? (value as SettingsCategory)
@@ -1496,7 +1556,7 @@ const settingsCategoryGroups: {
   /** `settingsOverviewEntries` 的 key：分类面板用分类名，路由入口用自己的 key。 */
   values: string[];
 }[] = [
-  { label: "通用", values: ["appearance"] },
+  { label: "通用", values: ["home", "appearance"] },
   { label: "观看体验", values: ["playback", "platform", "network"] },
   { label: "账号与数据", values: ["history", "account", "recording", "data"] },
   { label: "应用信息", values: ["about"] },
@@ -1925,6 +1985,11 @@ export function SettingsPage() {
   }
 
   const settingsCategoryPanels: Record<SettingsCategory, ReactNode> = {
+    home: (
+      <SettingsContent title="主页入口">
+        <HomeEntrySettings />
+      </SettingsContent>
+    ),
     appearance: (
       <SettingsContent title="外观">
         <AppearanceSettings />

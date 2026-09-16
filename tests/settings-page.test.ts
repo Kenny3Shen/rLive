@@ -18,6 +18,18 @@ describe("settings platform presentation", () => {
     });
   });
 
+  test("offers the home entry section as a first-level destination", () => {
+    // 主页入口是「通用」分组下的独立一级入口，与外观配置并列。
+    expect(settingsCategoryValuesForClient(true)).toContain("home");
+    expect(settingsCategoryValuesForClient(false)).toContain("home");
+    expect(settingsOverviewKeysForClient(false)).toContain("home");
+    expect(settingsPageMotion("home", true)).toEqual({
+      category: "home",
+      key: "settings:home",
+      direction: 1,
+    });
+  });
+
   test("moves forward into a section and backward to the overview", () => {
     expect(settingsPageMotion(null)).toEqual({
       category: null,

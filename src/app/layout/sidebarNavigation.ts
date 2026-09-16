@@ -11,6 +11,7 @@ import {
   Videotape,
 } from "lucide-react";
 import { SHORTS_PATH } from "@/features/shorts/shortsFeed";
+import { normalizeHiddenHomeEntryIds, type HomeEntryId } from "@/shared/navEntries";
 
 export const SIDEBAR_NAVIGATION_STATE = {
   rliveNavigationSource: "sidebar",
@@ -26,6 +27,8 @@ export type SidebarNavItem = {
    *  手机与平板横屏的视口宽度普遍超过 md 断点，
    *  仅靠 `max-md:hidden` 这类视口门控会让它们漏进移动端底部导航。 */
   desktopOnly?: boolean;
+  /** 可由「设置 → 外观配置 → 主页入口」隐藏的内容型目的地。 */
+  homeEntry?: HomeEntryId;
   /** 桌面竖栏中归入底部分组（亮暗切换之后）的入口。数组顺序仍须与
    *  SIDEBAR_DESTINATIONS 方向条带一致：移动端底栏里它们保持行内顺序，
    *  桌面竖栏里它们被 `mt-auto` 推到底部聚类。 */
@@ -38,12 +41,12 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   { to: "/follow", label: "关注", icon: Heart },
   // B 站视频（VOD）。它不是直播平台中的一个，因此是自己的目的地而不是
   // 首页平台条上的一项 —— 首页那条条带完全不动。
-  { to: "/video", label: "视频", icon: Clapperboard },
+  { to: "/video", label: "视频", icon: Clapperboard, homeEntry: "video" },
   // 短视频（竖屏流）。不做成 `/video` 的第五个页签：那条轨道的面板常挂载、
   // 套纵向滚动容器、且横滑切页签，三者都与「上下滑动换片」直接冲突。
   // 路径也不放在 `/video` 之下：侧栏目的地按前缀匹配，那样「视频」会跟着高亮。
-  { to: SHORTS_PATH, label: "短视频", icon: Smartphone },
-  { to: "/iptv", label: "IPTV", icon: Tv },
+  { to: SHORTS_PATH, label: "短视频", icon: Smartphone, homeEntry: "shorts" },
+  { to: "/iptv", label: "IPTV", icon: Tv, homeEntry: "iptv" },
   {
     to: "/multi-room",
     label: "多画面",
@@ -71,9 +74,21 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   { to: "/settings", label: "设置", icon: Settings, footer: true },
 ];
 
-/** 按客户端平台解析可见的侧栏导航入口。 */
-export function sidebarNavItemsFor(mobileClient: boolean): SidebarNavItem[] {
-  return mobileClient ? SIDEBAR_NAV_ITEMS.filter((item) => !item.desktopOnly) : SIDEBAR_NAV_ITEMS;
+/**
+ * 按客户端平台与用户的「主页入口」偏好解析可见的侧栏导航入口。
+ *
+ * `hiddenHomeEntries` 是「设置 → 外观配置 → 主页入口」里被用户关掉的 id 集合。
+ * 缺失或畸形时视为全部可见。
+ */
+export function sidebarNavItemsFor(
+  mobileClient: boolean,
+  hiddenHomeEntries: unknown = [],
+): SidebarNavItem[] {
+  const hidden = new Set(normalizeHiddenHomeEntryIds(hiddenHomeEntries));
+  return SIDEBAR_NAV_ITEMS.filter((item) => {
+    if (mobileClient && item.desktopOnly) return false;
+    return !(item.homeEntry && hidden.has(item.homeEntry));
+  });
 }
 
 /**

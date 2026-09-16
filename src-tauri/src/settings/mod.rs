@@ -90,6 +90,23 @@ fn normalize_site_preferences(settings: &mut AppSettings) {
     settings.default_site = fallback_site_id.to_owned();
 }
 
+/// 修复手工编辑或来自未来版本的设置记录中的主页入口可见性偏好。
+///
+/// 丢弃未知 id 与重复项，并按 `HOME_ENTRY_IDS` 的固定顺序重排，
+/// 使写入结果与输入顺序无关。首页、关注、设置不在名单内，无法被隐藏。
+fn normalize_hidden_home_entry_ids(settings: &mut AppSettings) {
+    let mut seen = HashSet::new();
+    settings.hidden_home_entry_ids.retain(|entry_id| {
+        crate::models::settings::HOME_ENTRY_IDS.contains(&entry_id.as_str())
+            && seen.insert(entry_id.clone())
+    });
+    settings.hidden_home_entry_ids.sort_by_key(|entry_id| {
+        crate::models::settings::HOME_ENTRY_IDS
+            .iter()
+            .position(|known| known == entry_id)
+    });
+}
+
 fn normalize_asr_preferences(settings: &mut AppSettings) {
     if !matches!(settings.asr_provider.as_str(), "auto" | "cpu" | "cuda") {
         settings.asr_provider = "auto".to_owned();
@@ -327,6 +344,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
     };
     let mut settings = decode_saved_settings(&json)?;
     normalize_site_preferences(&mut settings);
+    normalize_hidden_home_entry_ids(&mut settings);
     normalize_danmaku_preferences(&mut settings);
     normalize_asr_preferences(&mut settings);
     normalize_recording_preferences(&mut settings);
@@ -337,6 +355,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
 pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     let mut normalized = settings.clone();
     normalize_site_preferences(&mut normalized);
+    normalize_hidden_home_entry_ids(&mut normalized);
     normalize_danmaku_preferences(&mut normalized);
     normalize_asr_preferences(&mut normalized);
     normalize_recording_preferences(&mut normalized);
@@ -673,6 +692,49 @@ mod tests {
         let error = get_with_status(&conn).unwrap_err();
         assert_eq!(error.code, "settings_schema_unsupported");
         assert!(error.message.contains("asr_enabled"));
+    }
+
+    /// `hidden_home_entry_ids` 是 5.3.0 新增的同类字段，旧记录里没有它，
+    /// 按空列表回填。
+    #[test]
+    fn backfills_hidden_home_entry_ids_for_older_records() {
+        let conn = open_in_memory().unwrap();
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("hidden_home_entry_ids");
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
+        )
+        .unwrap();
+
+        let settings = get(&conn).unwrap();
+        assert!(settings.hidden_home_entry_ids.is_empty());
+    }
+
+    /// 未知 id、重复项与乱序都在持久化边界被清理，且首页 / 关注 / 设置这类
+    /// 非内容入口无法被写入。
+    #[test]
+    fn set_normalizes_hidden_home_entry_ids() {
+        let conn = open_in_memory().unwrap();
+        let settings = AppSettings {
+            hidden_home_entry_ids: vec![
+                "iptv".into(),
+                "video".into(),
+                "iptv".into(),
+                "home".into(),
+                "settings".into(),
+            ],
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        assert_eq!(
+            get(&conn).unwrap().hidden_home_entry_ids,
+            vec!["video", "iptv"]
+        );
     }
 
     /// 溢出策略是在 2.4 之后加入的，旧记录缺少这两个字段时按默认值补齐，其余

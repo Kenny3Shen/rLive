@@ -1,3 +1,5 @@
+import type { HomeEntryId } from "../navEntries";
+
 /** 镜像 Rust `SiteId` 的 serde snake_case 取值。 */
 export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "twitch";
 
@@ -296,6 +298,8 @@ export type AppSettings = {
   recording_ass: RecordingAssSettings;
   /** 从发现页与房间导航隐藏的平台。 */
   disabled_site_ids: SiteId[];
+  /** 用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口。 */
+  hidden_home_entry_ids: HomeEntryId[];
 };
 
 export type AsrProvider = "auto" | "cpu" | "cuda";

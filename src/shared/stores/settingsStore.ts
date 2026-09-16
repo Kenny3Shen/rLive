@@ -12,6 +12,11 @@ import {
   normalizeCaptionTranslationFrom,
   normalizeCaptionTranslationTo,
 } from "../translation/languages";
+import {
+  normalizeHiddenHomeEntryIds,
+  updateHiddenHomeEntryIds,
+  type HomeEntryId,
+} from "../navEntries";
 import type {
   AppSettings,
   AsrProvider,
@@ -399,6 +404,8 @@ type SettingsState = {
   siteId: string;
   /** 平台停用项。 */
   disabledSiteIds: SiteId[];
+  /** 用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口。 */
+  hiddenHomeEntryIds: HomeEntryId[];
   proxy: string | null;
   danmakuOpacity: number;
   danmakuFontStroke: number;
@@ -454,6 +461,7 @@ type SettingsState = {
   setTheme: (theme: ThemeMode) => void;
   setSiteId: (siteId: string) => void;
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
+  setHomeEntryVisible: (entryId: HomeEntryId, visible: boolean) => void;
   setProxy: (proxy: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
@@ -493,6 +501,7 @@ const defaultSettings: AppSettings = {
   theme: "system",
   default_site: DEFAULT_SITE_ID,
   disabled_site_ids: [],
+  hidden_home_entry_ids: [],
   proxy: null,
   danmaku_opacity: DANMAKU_OPACITY_DEFAULT,
   danmaku_font_stroke: DANMAKU_FONT_STROKE_DEFAULT,
@@ -535,6 +544,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     theme: state.theme,
     default_site: state.siteId,
     disabled_site_ids: state.disabledSiteIds,
+    hidden_home_entry_ids: state.hiddenHomeEntryIds,
     proxy: state.proxy,
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_stroke: state.danmakuFontStroke,
@@ -650,6 +660,7 @@ export const useSettingsStore = create<SettingsState>()(
       theme: "system",
       siteId: DEFAULT_SITE_ID,
       disabledSiteIds: [],
+      hiddenHomeEntryIds: [],
       proxy: null,
       danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
       danmakuFontStroke: DANMAKU_FONT_STROKE_DEFAULT,
@@ -705,6 +716,15 @@ export const useSettingsStore = create<SettingsState>()(
           default_site: nextSiteId,
           disabled_site_ids: disabledSiteIds,
         });
+      },
+      setHomeEntryVisible: (entryId, visible) => {
+        const hiddenHomeEntryIds = updateHiddenHomeEntryIds(
+          get().hiddenHomeEntryIds,
+          entryId,
+          visible,
+        );
+        set({ hiddenHomeEntryIds });
+        void get().persistToBackend({ hidden_home_entry_ids: hiddenHomeEntryIds });
       },
       blockDanmakuUser: (user) => {
         const name = user.trim();
@@ -864,6 +884,7 @@ export const useSettingsStore = create<SettingsState>()(
           theme,
           siteId: resolveEnabledSiteId(settings.default_site, disabledSiteIds),
           disabledSiteIds,
+          hiddenHomeEntryIds: normalizeHiddenHomeEntryIds(settings.hidden_home_entry_ids),
           proxy: settings.proxy,
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontStroke: parseDanmakuFontStroke(settings.danmaku_font_stroke),

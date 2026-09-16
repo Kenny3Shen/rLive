@@ -226,7 +226,8 @@ export function Sidebar() {
   // `max-md:hidden` 会让它们漏进移动端底栏。移动端的亮暗切换
   // 统一放在设置页外观分区。
   const mobileClient = isMobileClient();
-  const navItems = sidebarNavItemsFor(mobileClient);
+  const hiddenHomeEntryIds = useSettingsStore((state) => state.hiddenHomeEntryIds);
+  const navItems = sidebarNavItemsFor(mobileClient, hiddenHomeEntryIds);
   // 历史/设置归入底部分组：桌面竖栏里与亮暗切换一起被 mt-auto 推到底部，
   // 移动端底栏里该分组退化为 display:contents，条目回到行内流。
   const mainNavItems = navItems.filter((item) => !item.footer);
