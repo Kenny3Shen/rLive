@@ -501,7 +501,10 @@ export function ShortsPage() {
    * 跟着进度重建。
    */
   const commentsBody = useMemo(
-    () => (panels.aid ? <CommentsPanel key={panels.aid} aid={panels.aid} /> : null),
+    () =>
+      panels.aid ? (
+<CommentsPanel key={panels.aid} aid={panels.aid} />
+      ) : null,
     [panels.aid],
   );
   const detailBody = useMemo(
@@ -674,115 +677,121 @@ export function ShortsPage() {
         {/*
           信息与评论：浮在画面上、紧贴进度条上方，属于**页面层**而不是舞台层。
 
-          这是与上一版的关键区别：它们以前长在画面框里（左下角与右侧操作栏），会随换片的
-          条带平移一起滑走，而且每个面板各有一份（相邻封面也得自带一份）。挂在页面层之后
-          只有一份，位置固定在视口上，与两条控制栏、进度条共用同一套坐标。
+          这是与上一版的关键区别：它们以前长在画面框里（会随换片的条带平移一起滑走），
+          而且每个面板各有一份（相邻封面也得自带一份）。挂在页面层之后只有一份，位置固定
+          在视口上，与两条控制栏、进度条共用同一套坐标。
+
+          左下角是信息、右下角是评论 —— 两者贴播放器的左右两边，不再收在一个居中的定宽
+          容器里。定宽居中是为了跟底栏那条输入行对齐，但代价是桌面上信息浮在画面中间偏左
+          的位置：它描述的是**这一条视频**，该贴着画面的角，而不是跟一条输入框对齐。
 
           浮层而不占真实空间：它压在画面底部（裁切铺满后那是真画面像素），因此要自带渐变
-          垫底 —— 不然亮底画面上的白字不可读。容器不接指针（只评论按钮接），否则会在画面
-          底部挖出一块点不动的区域（那里应该能点按暂停）。
+          垫底 —— 不然亮底画面上的白字不可读。容器不接指针（只标题与评论按钮接），否则会
+          在画面底部挖出一块点不动的区域（那里应该能点按暂停）。
+
+          整块跟着「信息开关」一起显隐（评论按钮也在内）：那个开关的语义是「把画面让出来」，
+          留一个按钮在角上就没让干净。渐变垫底也一起消失 —— 它只为白字可读性存在。
         */}
-        <div
-          data-slot="shorts-info-float"
-          // `px-2` 与底栏控制行一致（不是 `px-3`）：浮层里的评论按钮与控制行里那几个
-          // 按钮同属右侧一条线，差 4px 就会看出错位。
-          className="pointer-events-none absolute inset-x-0 z-20 flex items-end gap-2 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8 pb-2"
-          style={{ bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})` }}
-        >
-          {/* 内容与控制行同宽同居中：桌面上两者必须对齐，否则信息在最左、输入框在中间。 */}
-          <div className="mx-auto flex w-full max-w-lg items-end gap-2">
-            {infoVisible && current && (
-              <div className="flex min-w-0 flex-1 flex-col gap-2">
-                {/*
-                  UP 主块：头像跨「名字」与「粉丝数」两行。
+        {infoVisible && current && (
+          <div
+            data-slot="shorts-info-float"
+            // `px-2` 与顶栏一致：左边的头像与返回按钮、右边的评论与 `⋮` 各自成一条竖线。
+            className="pointer-events-none absolute inset-x-0 z-20 flex items-end justify-between gap-3 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8 pb-2"
+            style={{ bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})` }}
+          >
+            {/*
+              信息块贴左下角，但宽度封顶：桌面上视口有 1400px 宽，不封顶的话标题会拉成
+              一行到屏幕另一头（`max-w-md` ≈ 原来那个定宽容器减去评论按钮之后的可用宽度，
+              因此手机与桌面的折行位置都不变）。
+            */}
+            <div className="flex min-w-0 max-w-md flex-1 flex-col gap-2">
+              {/*
+                UP 主块：头像跨「名字」与「粉丝数」两行。
 
-                  头像从右侧操作栏搬到这里。评论按钮离开右侧栏之后那根栏只剩一个不可点的
-                  头像 —— 一根只有装饰的操作栏不如不要。放在名字左边也更符合它本来的语义：
-                  这是这条的作者。
-                */}
-                <div className="flex items-center gap-2">
-                  <Avatar className="size-8 shrink-0 after:border-white/40">
-                    <AvatarImage
-                      src={normalizeImageUrl(current.author_face)}
-                      alt=""
-                      aria-hidden
-                      referrerPolicy="no-referrer"
-                    />
-                    <AvatarFallback className="bg-black/40 text-xs text-white/90">
-                      {current.author?.slice(0, 1) || "U"}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-white">
-                      @{current.author || "未知 UP 主"}
-                    </p>
-                    {/*
-                      粉丝数只有 story 流白带（`owner.fans`），其余列表接口不给。
-                      `null` 是「上游没说」而不是「0 个粉丝」，因此不渲染这一行。
-                    */}
-                    {current.author_fans != null && (
-                      <p className="truncate text-xs text-white/70">
-                        {formatOnline(current.author_fans)} 粉丝
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/*
-                  标题块：点标题开详情抽屉。
-
-                  详情入口从底栏搬到标题上（底栏那个改为去播放页），因此这里必须
-                  `pointer-events-auto`：整个浮层是不接指针的，否则会在画面底部挖出一块
-                  点不动的区域。箭头朝下是因为抽屉从下方推入。
-                */}
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <button
-                    type="button"
-                    aria-label={`视频详情：${current.title}`}
-                    title="视频详情"
-                    className="pointer-events-auto flex w-full items-start gap-1.5 text-left"
-                    onClick={panels.openDetail}
-                  >
-                    <span className="line-clamp-2 min-w-0 flex-1 text-sm text-white/90">
-                      {current.title}
-                    </span>
-                    <ChevronDown className="mt-0.5 size-4 shrink-0 text-white/70" aria-hidden />
-                  </button>
-                  <p className="text-xs text-white/70">
-                    {formatOnline(current.view)} 次播放
-                    {playback.duration > 0 || current.duration > 0
-                      ? ` · ${formatVideoDuration(playback.duration || current.duration)}`
-                      : ""}
+                头像从右侧操作栏搬到这里。评论按钮离开右侧栏之后那根栏只剩一个不可点的
+                头像 —— 一根只有装饰的操作栏不如不要。放在名字左边也更符合它本来的语义：
+                这是这条的作者。
+              */}
+              <div className="flex items-center gap-2">
+                <Avatar className="size-8 shrink-0 after:border-white/40">
+                  <AvatarImage
+                    src={normalizeImageUrl(current.author_face)}
+                    alt=""
+                    aria-hidden
+                    referrerPolicy="no-referrer"
+                  />
+                  <AvatarFallback className="bg-black/40 text-xs text-white/90">
+                    {current.author?.slice(0, 1) || "U"}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-white">
+                    @{current.author || "未知 UP 主"}
                   </p>
+                  {/*
+                    粉丝数只有 story 流白带（`owner.fans`），其余列表接口不给。
+                    `null` 是「上游没说」而不是「0 个粉丝」，因此不渲染这一行。
+                  */}
+                  {current.author_fans != null && (
+                    <p className="truncate text-xs text-white/70">
+                      {formatOnline(current.author_fans)} 粉丝
+                    </p>
+                  )}
                 </div>
               </div>
-            )}
-            {/* 信息隐藏时评论按钮仍留在右侧：它不是信息，是入口。 */}
-            {!infoVisible && <span className="flex-1" />}
-            {current && (
-              <span className="pointer-events-auto flex shrink-0 flex-col items-center">
-                <Button
+
+              {/*
+                标题块：点标题开详情抽屉。
+
+                详情入口从底栏搬到标题上（底栏那个改为去播放页），因此这里必须
+                `pointer-events-auto`：整个浮层是不接指针的，否则会在画面底部挖出一块
+                点不动的区域。箭头朝下是因为抽屉从下方推入。
+              */}
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <button
                   type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={
-                    current.danmaku > 0
-                      ? `评论与弹幕，弹幕 ${formatOnline(current.danmaku)} 条`
-                      : "评论"
-                  }
-                  title="评论"
-                  className="size-11 text-white/90 hover:bg-white/15 hover:text-white"
-                  onClick={panels.openComments}
+                  aria-label={`视频详情：${current.title}`}
+                  title="视频详情"
+                  className="pointer-events-auto flex w-full items-start gap-1.5 text-left"
+                  onClick={panels.openDetail}
                 >
-                  <MessageCircle className="size-6" aria-hidden />
-                </Button>
-                {current.danmaku > 0 && (
-                  <span className="text-[11px] text-white/80">{formatOnline(current.danmaku)}</span>
-                )}
-              </span>
-            )}
+                  <span className="line-clamp-2 min-w-0 flex-1 text-sm text-white/90">
+                    {current.title}
+                  </span>
+                  <ChevronDown className="mt-0.5 size-4 shrink-0 text-white/70" aria-hidden />
+                </button>
+                <p className="text-xs text-white/70">
+                  {formatOnline(current.view)} 次播放
+                  {playback.duration > 0 || current.duration > 0
+                    ? ` · ${formatVideoDuration(playback.duration || current.duration)}`
+                    : ""}
+                </p>
+              </div>
+            </div>
+
+            {/* 评论贴右下角。跟信息一起显隐（外层已经判了 `infoVisible`）。 */}
+            <span className="pointer-events-auto flex shrink-0 flex-col items-center">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={
+                  current.danmaku > 0
+                    ? `评论与弹幕，弹幕 ${formatOnline(current.danmaku)} 条`
+                    : "评论"
+                }
+                title="评论"
+                className="size-11 text-white/90 hover:bg-white/15 hover:text-white"
+                onClick={panels.openComments}
+              >
+                <MessageCircle className="size-6" aria-hidden />
+              </Button>
+              {current.danmaku > 0 && (
+                <span className="text-[11px] text-white/80">{formatOnline(current.danmaku)}</span>
+              )}
+            </span>
           </div>
-        </div>
+        )}
 
         {/*
           底部操作栏：进度条（上沿）+ 弹幕输入与三个开关（控制行）。
@@ -841,6 +850,10 @@ export function ShortsPage() {
                 图标与标签取自与直播间、播放页**同一个** `danmakuControlPresentation`：
                 三处各自写死一对图标的结果是开启态长得不一样（这里曾经用裸
                 `MessageSquare`，另两处是 `MessageSquareText`）。
+
+                图标显式 `size-5`（基础组件的默认是 `size-4`）：这一行的按钮压在黑底上，
+                16px 的线图标在竖屏画面下方偏小 —— 20px 在 40px 的按钮里留 10px 的呼吸，
+                与浮层里那个 24px 的评论图标也不再差一档。
               */}
               <Button
                 type="button"
@@ -853,22 +866,29 @@ export function ShortsPage() {
                 onClick={() => setDanmakuVisible((value) => !value)}
               >
                 {danmakuControl.icon === "message-square-text" ? (
-                  <MessageSquareText aria-hidden />
+                  <MessageSquareText className="size-5" aria-hidden />
                 ) : (
-                  <MessageSquareOff aria-hidden />
+                  <MessageSquareOff className="size-5" aria-hidden />
                 )}
               </Button>
+              {/*
+                信息开关同时收起画面底部那一整块浮层 —— 信息与评论按钮一起显隐。
+
+                评论按钮曾经留在原地（当时的理由是「它不是信息，是入口」），但那样一来
+                「隐藏信息」并不能真的把画面下沿让干净：一个按钮加一行弹幕数仍然压在那儿。
+                想看清画面的人要的是**整块**让位，因此文案也一并说明范围。
+              */}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={infoVisible ? "隐藏视频信息" : "显示视频信息"}
-                title={infoVisible ? "隐藏视频信息" : "显示视频信息"}
+                aria-label={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
+                title={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
                 aria-pressed={infoVisible}
                 className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
                 onClick={() => setInfoVisible((value) => !value)}
               >
-                <Info aria-hidden />
+                <Info className="size-5" aria-hidden />
               </Button>
               {/*
                 详情入口：直接去播放页。
@@ -887,7 +907,7 @@ export function ShortsPage() {
                 className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
                 onClick={openInPlayer}
               >
-                <ScrollText aria-hidden />
+                <ScrollText className="size-5" aria-hidden />
               </Button>
             </div>
           </div>
