@@ -200,6 +200,16 @@ export type VideoPlayRequest = {
   qn?: number | null;
   /** 仅音频模式：只取音轨，由原生媒体元素播放（听视频省流）。 */
   audio_only?: boolean | null;
+  /**
+   * 是否让媒体代理把 VOD 分片字节落盘缓存。
+   *
+   * 短视频的回滑与重进会重复请求同一条的分片，缓存让它们不必再付一次 CDN 往返。
+   * 播放页不传（缺省关闭）：那里的取流只在开播时发生一次，缓存只有磁盘成本。
+   *
+   * 缓存的是**分片字节**而不是 playurl 或 MPD —— 后者带短时签名，重放会打到过期
+   * 地址。
+   */
+  media_cache?: boolean | null;
 };
 
 /** DLNA 投屏源：html5 playurl 的 MP4 直链 + 中继请求头。 */

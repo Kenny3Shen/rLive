@@ -246,6 +246,23 @@ class VideoJsPlayer {
     };
   }
 
+  /**
+   * 换源（DASH）：复用已挂载的 dash.js 引擎，只换 MPD。
+   *
+   * 短视频的双播放器槽位靠它换片 —— 一个槽位先预热下一条，换片时把它提为活动，
+   * 另一个槽位再换到新的邻居。若每次都 `destroy` + 新建，那与「复用播放器」
+   * 没有区别，预热省下的取流时间会重新花在引擎初始化上。
+   *
+   * 走 `DashAdapter` 的 `src` setter：它内部调用 dash.js 的 `attachSource`，
+   * 而 dash.js 在已挂载时会先 reset 再重新加载 —— 正是我们想要的语义。
+   * URL 未变时 setter 判断出 `src` 没变，不会重新 attach。
+   */
+  switchDashSource(url: string): void {
+    if (this.destroyed || !this.dash) return;
+    this.options.url = url;
+    this.dash.src = url;
+  }
+
   switchSource(
     url: string,
     kind: VideoJsPlaybackKind,
@@ -355,6 +372,10 @@ export function getVideoJsMpegtsCore(player: VideoJsPlayerInstance): VideoJsMpeg
 export function getVideoJsHlsCore(player: VideoJsPlayerInstance): VideoJsHlsCore | null {
   return player.getHlsCore();
 }
+export function switchVideoJsDashSource(player: VideoJsPlayerInstance, url: string): void {
+  player.switchDashSource(url);
+}
+
 export function switchVideoJsPlaybackSource(
   player: VideoJsPlayerInstance,
   url: string,

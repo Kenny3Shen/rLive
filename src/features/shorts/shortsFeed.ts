@@ -488,3 +488,114 @@ export function shortsShouldFetchMore(
   if (!hasNextPage || isFetching || length === 0) return false;
   return length - index - 1 <= SHORTS_PREFETCH_REMAINING;
 }
+
+// ---------------------------------------------------------------------------
+// 双播放器槽位
+// ---------------------------------------------------------------------------
+
+/**
+ * 两个播放器槽位的标识。
+ *
+ * 它们是**位置**而不是「当前/下一个」的角色：两个槽位轮换承担活动与预热，
+ * 因此不能叫 `current` / `next` —— 那两个名字会在角色交换的那一刻变成谎言。
+ */
+export type ShortsSlotId = "a" | "b";
+
+/** 滑动方向：1 向下（看更新的一条），-1 向上（回看）。 */
+export type ShortsSwipeDirection = 1 | -1;
+
+/**
+ * 预热该落在哪一条。
+ *
+ * 顺着当前方向的那一条优先；到边界就回头取另一侧（在最后一条上，向下无路可走，
+ * 但向上那条同样值得预热 —— 用户随时可能回滑）。只有一条时没有可预热的邻居。
+ */
+export function shortsWarmIndex(
+  index: number,
+  length: number,
+  direction: ShortsSwipeDirection,
+): number | null {
+  if (length <= 1 || index < 0 || index >= length) return null;
+  const forward = index + direction;
+  if (forward >= 0 && forward < length) return forward;
+  const backward = index - direction;
+  if (backward >= 0 && backward < length) return backward;
+  return null;
+}
+
+/** 两个槽位各自持有哪一条；null 表示该槽位空着。 */
+export type ShortsSlotAssignments = Record<ShortsSlotId, number | null>;
+
+export type ShortsSlots = {
+  held: ShortsSlotAssignments;
+  /** 承载当前条目的槽位。 */
+  active: ShortsSlotId;
+};
+
+/**
+ * 换片后的槽位分配。
+ *
+ * 角色交换而非「谁空闲谁上」：被提升的是**刚才在预热的那一个**，它已经取过流、
+ * 已经缓冲好，因此换片不需要重新取流也不需要重建播放器。刚被换下的那个接着去
+ * 预热新的邻居 —— 它手上的旧播放器正好用来换源，同样不必重建。
+ *
+ * 幂等：目标与预热目标都没变时返回**原对象**，调用方因此可以直接把它放进
+ * 依赖数组而不触发多余的重跑。
+ */
+export function shortsNextSlots(
+  index: number,
+  length: number,
+  direction: ShortsSwipeDirection,
+  current: ShortsSlots,
+): ShortsSlots {
+  if (length <= 0 || index < 0 || index >= length) return current;
+  const warm = shortsWarmIndex(index, length, direction);
+  // 活动槽优先保持不变：同一条仍在播时（重渲染、视口变化）不该换手。
+  const active: ShortsSlotId =
+    current.held[current.active] === index
+      ? current.active
+      : current.held.a === index
+        ? "a"
+        : current.held.b === index
+          ? "b"
+          : current.active === "a"
+            ? "b"
+            : "a";
+  const idle: ShortsSlotId = active === "a" ? "b" : "a";
+  if (current.held[active] === index && current.held[idle] === warm) return current;
+  return { held: { a: active === "a" ? index : warm, b: active === "b" ? index : warm }, active };
+}
+
+/**
+ * 下一次滑动的方向。
+ *
+ * 只在真的换了条时更新：同一个方向连续滑动要一直顺着它预热，而回滑一次就把
+ * 预热翻到另一侧。
+ */
+export function shortsPreloadDirection(
+  index: number,
+  nextIndex: number,
+  current: ShortsSwipeDirection,
+): ShortsSwipeDirection {
+  if (nextIndex > index) return 1;
+  if (nextIndex < index) return -1;
+  return current;
+}
+
+/** 槽位面板在条带里的位置（百分比字符串），与封面面板同一套坐标系。 */
+export function shortsSlotTop(held: number | null): string {
+  return `${Math.max(0, held ?? 0) * 100}%`;
+}
+
+/**
+ * 挂载窗口里哪些下标由槽位面板承担。
+ *
+ * 其余下标渲染封面占位：它们只需要有画面参与平移，不需要能播。
+ */
+export function shortsSlotCoveredIndexes(slots: ShortsSlots): Set<number> {
+  const covered = new Set<number>();
+  for (const value of [slots.held.a, slots.held.b]) {
+    if (value != null) covered.add(value);
+  }
+  return covered;
+}

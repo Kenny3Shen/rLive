@@ -67,16 +67,19 @@ import {
   shortsItemKey,
   shortsMountedIndexes,
   shortsShouldFetchMore,
+  shortsSlotCoveredIndexes,
+  shortsSlotTop,
   shortsSwipeDragOffset,
   shortsSwipeIntent,
   shortsSwipeSettleDuration,
   shortsSwipeTargetIndex,
   shortsSwipeVelocity,
   shortsTrackOffset,
+  type ShortsSlotId,
   type ShortsSwipeSample,
 } from "./shortsFeed";
 import { useShortsDanmaku } from "./useShortsDanmaku";
-import { useShortsPlayback } from "./useShortsPlayback";
+import { useShortsSlots } from "./useShortsSlots";
 
 /**
  * 长按倍速释放后封锁点按的时长（ms）。
@@ -99,19 +102,27 @@ const SHORTS_TAP_SUPPRESSION_MS = 300;
  * 播放与弹幕状态住在这一层而不是舞台里：顶部控制栏与底部操作栏必须固定在视口上
  * （随条带平移的话，换片时它们会跟着滑走），而它们要读 `muted`、`currentTime`
  * 与弹幕开关 —— 状态因此只能放在两者共同的祖先。舞台是纯展示层。
+ *
+ * ## 双播放器槽位
+ *
+ * 两个面板按槽位挂载（key 恒定 `slot-a` / `slot-b`），换片只改变它们各自持有哪
+ * 一条与谁在播。被提升为活动的那个槽位已经预热好，因此换片不重新取流、不重建
+ * 播放器（见 `useShortsSlots`）。
  */
 export function ShortsPage() {
   const navigate = useNavigate();
   const trackRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /**
-   * 活动条目的媒体元素。
+   * 两个槽位各自独占的媒体元素。
    *
-   * 由页面持有、传给活动舞台：起播链路（`useShortsPlayback`）也在这一层。换片时
-   * 舞台按 `shortsItemKey` 换 key 重新挂载，因此这个 ref 会指向新的 `<video>` ——
-   * 播放 effect 依赖 cid/playUrl，在 React 提交完新节点之后才重跑，读到的一定是新的。
+   * 由页面持有、传给各自的舞台。它们是**槽位**的 ref 而不是「当前条目」的 ref：
+   * 槽位面板的 key 恒定，因此这两个 `<video>` 跨换片存活，播放器得以复用
+   * （见 `useShortsSlots`）。
    */
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const slotARef = useRef<HTMLVideoElement | null>(null);
+  const slotBRef = useRef<HTMLVideoElement | null>(null);
+  const slotRefs = useMemo(() => ({ a: slotARef, b: slotBRef }), [slotARef, slotBRef]);
   const [rawIndex, setIndex] = useState(0);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [infoVisible, setInfoVisible] = useState(true);
@@ -143,10 +154,10 @@ export function ShortsPage() {
   /* ---------- 播放、弹幕与抽屉 ---------- */
 
   const danmaku = useShortsDanmaku(current?.cid ?? 0, danmakuVisible);
-  const playback = useShortsPlayback({
-    item: current,
-    videoRef,
-    active: true,
+  const { slots, slotStates, playback, noteDirection } = useShortsSlots({
+    items,
+    index,
+    refs: slotRefs,
     onProgress: danmaku.ensure,
   });
   const panels = useShortsPanels(current);
@@ -410,15 +421,22 @@ export function ShortsPage() {
     [],
   );
 
-  /** 跳到某一条：已挂载的目的条先开始平移，再通知 React。 */
+  /**
+   * 跳到某一条：已挂载的目的条先开始平移，再通知 React。
+   *
+   * 顺带记下滑动方向：预热槽位按它决定去预热哪一条邻居（`useShortsSlots`）。
+   * 放在这里而不是页面别处，是因为所有换片入口（手势、滚轮、方向键、桌面按钮）
+   * 都汇聚到这个函数 —— 方向因此不可能漏记。
+   */
   const goToIndex = useCallback(
     (next: number, velocity = 0) => {
       if (next < 0 || next >= items.length || next === index) return;
+      noteDirection(index, next);
       const target = shortsTrackOffset(next, stageHeight());
       settle(target, shortsSwipeSettleDuration(target - offsetRef.current, velocity));
       setIndex(next);
     },
-    [index, items.length, settle, stageHeight],
+    [index, items.length, noteDirection, settle, stageHeight],
   );
 
   const onPointerDownCapture = useCallback(
@@ -688,6 +706,9 @@ export function ShortsPage() {
   }
 
   const mounted = shortsMountedIndexes(index, items.length);
+  /** 挂载窗口里由槽位面板承担的下标；其余渲染封面占位。 */
+  const slotCovered = shortsSlotCoveredIndexes(slots);
+  const slotIds: ShortsSlotId[] = ["a", "b"];
 
   // 弹幕开关的图标与标签：与直播间、播放页共用同一个判据，避免三处各写一对
   // 图标后开启态长得不一样（这里曾经用裸 `MessageSquare`，另两处是
@@ -727,33 +748,65 @@ export function ShortsPage() {
         onWheel={onWheel}
       >
         <div ref={trackRef} data-slot="shorts-track" className="relative h-full">
-          {mounted.map((itemIndex) => {
-            const item = items[itemIndex];
+          {/*
+            槽位面板：key 恒定（`slot-a` / `slot-b`），换片只改变 `top` 与角色。
+
+            这是播放器复用的前提 —— key 变化会卸载重建面板与 `<video>`，那样预
+            热省下的取流时间会重新花在 DOM 与引擎的重建上。`style` 变化不触发
+            remount，因此同一份 `<video>` 与 Video.js 实例跨换片存活。
+
+            两个槽位都渲染 `ShortsStage`：预热的那一个要真的缓冲到 `canplay`，
+            换片时它才可能立刻出画。
+          */}
+          {slotIds.map((slotId) => {
+            const held = slots.held[slotId];
+            const item = held == null ? null : items[held];
             if (!item) return null;
-            const active = itemIndex === index;
+            const active = slotId === slots.active;
             return (
               <div
-                key={shortsItemKey(item)}
+                key={`slot-${slotId}`}
                 data-slot="shorts-panel"
+                data-slot-id={slotId}
                 aria-hidden={active ? undefined : true}
                 inert={active ? undefined : true}
                 className="absolute inset-x-0 h-full"
                 // 条目按绝对下标定位，换片不移动其中任何一个：收尾只动 track。
+                style={{ top: shortsSlotTop(held) }}
+              >
+                <ShortsStage
+                  item={item}
+                  playback={slotStates[slotId]}
+                  videoRef={slotRefs[slotId]}
+                  mode={active ? "play" : "warm"}
+                  danmaku={danmaku}
+                  danmakuVisible={danmakuVisible}
+                  gestureActive={gestureActive}
+                  onSurfaceTap={onSurfaceTap}
+                />
+              </div>
+            );
+          })}
+
+          {/*
+            挂载窗口里剩下的位置（第三条邻居）渲染封面占位：它们只需要有画面参与
+            平移，不需要能播 —— 一条短视频等于一次签名 playurl + 两条 sidx + 三个
+            本机代理会话，为跟手再多起一份是把上游取流成本翻倍。
+          */}
+          {mounted.map((itemIndex) => {
+            if (slotCovered.has(itemIndex)) return null;
+            const item = items[itemIndex];
+            if (!item) return null;
+            return (
+              <div
+                key={shortsItemKey(item)}
+                data-slot="shorts-panel"
+                aria-hidden
+                inert
+                className="absolute inset-x-0 h-full"
                 style={{ top: `${itemIndex * 100}%` }}
               >
-                {active ? (
-                  <ShortsStage
-                    item={item}
-                    playback={playback}
-                    videoRef={videoRef}
-                    danmaku={danmaku}
-                    danmakuVisible={danmakuVisible}
-                    gestureActive={gestureActive}
-                    onSurfaceTap={onSurfaceTap}
-                  />
-                ) : (
-                  <ShortsPoster item={item} />
-                )}
+                <ShortsPoster item={item} />
               </div>
             );
           })}

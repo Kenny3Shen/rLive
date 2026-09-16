@@ -17,7 +17,7 @@ import {
   shortsMediaFrame,
 } from "./shortsFeed";
 import type { ShortsDanmakuState } from "./useShortsDanmaku";
-import type { ShortsPlaybackState } from "./useShortsPlayback";
+import type { ShortsPlaybackState, ShortsSlotMode } from "./useShortsPlayback";
 
 /**
  * 画面区域自身的像素尺寸。
@@ -116,9 +116,14 @@ function useShortsFrameGeometry(aspect: number | null, area: { width: number; he
 /**
  * 竖屏舞台：一条短视频的画面与弹幕层。
  *
- * 只有活动条目会挂载这个组件（相邻条目渲染的是 `ShortsPoster` 封面占位）：一个
- * 竖屏舞台就是一个播放器实例加三条本机代理会话，为了滑动跟手而多起两份是把
- * 上游取流成本乘三，而滑动过程中相邻条目只需要有画面占位。
+ * 舞台挂在**槽位**上而不是条目上：两个槽位轮换承担活动与预热，换片时角色交换，
+ * 因此这里面对的是「同一个 `<video>` 上换了一条内容」而不是挂载/卸载。槽位面板
+ * 的 key 恒定（`slot-a` / `slot-b`），`<video>` 与 Video.js 实例因此跨换片存活 ——
+ * 这就是「播放器复用」的落点。
+ *
+ * 相邻条目渲染 `ShortsPoster`（封面占位）：它们只需要有画面参与平移，不需要能播。
+ * 一个槽位就是一个播放器实例加三条本机代理会话，为滑动跟手再多起一份是把上游
+ * 取流成本翻倍，而滑动过程中相邻条目只要有画面占位。
  *
  * 这一层只剩「画面本身」：进度条、信息与评论入口都住在页面的固定层里（见
  * `ShortsPage`）—— 它们不该随条带平移，否则换片时会跟着画面一起滑走。
@@ -128,6 +133,11 @@ type ShortsStageProps = {
   item: VideoItem;
   playback: ShortsPlaybackState;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /**
+   * 这一轮的角色。`"warm"` 时不渲染弹幕层、点按层与暂停图标：预热面板在屏幕外，
+   * 且它所在的面板带 `inert`，点按层挂上去只会挨一次吃掉的点击。
+   */
+  mode: ShortsSlotMode;
   danmaku: ShortsDanmakuState;
   /** 弹幕开关。关掉时不挂层。 */
   danmakuVisible: boolean;
@@ -146,6 +156,7 @@ export function ShortsStage({
   item,
   playback,
   videoRef,
+  mode,
   danmaku,
   danmakuVisible,
   gestureActive,
@@ -156,6 +167,7 @@ export function ShortsStage({
   // 起播后以媒体自报画幅为准，起播前用列表下发的 dimension 定框。
   const aspect = shortsMediaAspect(item.dimension, playback.intrinsicSize);
   const { fill, frame, inset } = useShortsFrameGeometry(aspect, area);
+  const warming = mode !== "play";
 
   const cover = normalizeImageUrl(item.cover);
 
@@ -195,6 +207,9 @@ export function ShortsStage({
           <video
             ref={videoRef}
             playsInline
+            // 预热槽位不进 Tab 序：它在屏幕外，键盘用户不该能聚焦到一个看不见的
+            // 媒体元素上（活动槽位保留默认的原生可聚焦行为）。
+            tabIndex={warming ? -1 : undefined}
             className={cn(
               "absolute inset-0 size-full",
               // 铺满形态下画面框比源画幅「窄」或「矮」一点，多出来的部分居中裁掉；
@@ -205,7 +220,7 @@ export function ShortsStage({
               playback.loading && "opacity-0",
             )}
           />
-          {danmakuVisible && (
+          {danmakuVisible && !warming && (
             <VideoDanmakuLayer
               videoRef={videoRef}
               entries={danmaku.entries}
@@ -218,12 +233,13 @@ export function ShortsStage({
             />
           )}
 
-          {(playback.loading || playback.waiting) && !playback.error && (
+          {/* 预热槽位不画加载/错误/暂停指示：它在屏幕外，画面由封面占位。 */}
+          {!warming && (playback.loading || playback.waiting) && !playback.error && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <Spinner className="size-8 text-white/90" aria-label="正在加载" />
             </div>
           )}
-          {playback.error && (
+          {!warming && playback.error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-8 text-center">
               <p className="text-sm text-white/90">{playback.error}</p>
               <Button variant="outline" size="sm" onClick={playback.retry}>
@@ -232,7 +248,7 @@ export function ShortsStage({
             </div>
           )}
           {/* 暂停图标：只在用户暂停时出现，加载中的转圈另有指示。 */}
-          {playback.paused && !playback.loading && !playback.error && (
+          {!warming && playback.paused && !playback.loading && !playback.error && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <span className="flex size-16 items-center justify-center rounded-full bg-black/40">
                 <Play className="size-8 text-white/90" aria-hidden />
@@ -249,13 +265,15 @@ export function ShortsStage({
             刻意是 div 而不是 button：铺满画面的按钮会进 Tab 序并被读屏当作一个
             巨大的控件，而它只是指针便利。键盘路径由 Space / K 承担（见 `ShortsPage`）。
           */}
-          {/* oxlint-disable-next-line click-events-have-key-events, no-static-element-interactions */}
-          <div
-            aria-hidden
-            // 手势进行中不响应：Android WebView 在识别出的滑动之后仍可能补发 click。
-            onClick={gestureActive ? undefined : onSurfaceTap}
-            className="absolute inset-0"
-          />
+          {!warming && (
+            // oxlint-disable-next-line click-events-have-key-events, no-static-element-interactions
+            <div
+              aria-hidden
+              // 手势进行中不响应：Android WebView 在识别出的滑动之后仍可能补发 click。
+              onClick={gestureActive ? undefined : onSurfaceTap}
+              className="absolute inset-0"
+            />
+          )}
         </div>
       </div>
     </div>
