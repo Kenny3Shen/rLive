@@ -3981,6 +3981,7 @@ mod tests {
                 ep_id: None,
                 qn: None,
                 audio_only: None,
+                media_cache: None,
             })
             .await
             .expect("story 条目应能走通现有 playurl");

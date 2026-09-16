@@ -16,7 +16,22 @@ use crate::models::video::{
     VideoSubtitle,
 };
 use crate::sites::bilibili::BilibiliSite;
+use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
+use crate::stream_proxy::StreamProxyStartOptions;
+
+/// 一条轨的可缓存字节区间：init 段 + 分片表逐片。
+///
+/// 只有这些区间会被落盘。任意 Range 一律不缓存 —— 否则同一个分片被不同 Range
+/// 切成无数个键，缓存碎片化且命中率归零。
+fn segment_ranges(track: &VideoTrack) -> Vec<(u64, u64)> {
+    let mut ranges = Vec::with_capacity(track.sidx.segments.len() + 1);
+    ranges.push((0, track.init_end));
+    for segment in &track.sidx.segments {
+        ranges.push((segment.start_byte, segment.end_byte));
+    }
+    ranges
+}
 
 /// 构造一个带已保存 cookie 与代理设置的 Bilibili 客户端。
 ///
@@ -206,6 +221,37 @@ pub async fn video_get_play_info(
         mpd: format!("{base}-mpd"),
     };
 
+    // 媒体分片的磁盘缓存规格。只有请求方显式开启时才给：playurl 产物带短时
+    // 签名，重放进 MPD 会打到过期地址，因此缓存的是**分片字节**而不是地址。
+    // 键按内容标识（稿件 + 分 P + 清晰度 + 轨）而不按 URL —— 同一稿件每次取流的
+    // URL 都不同，按 URL 缓存必然零命中。
+    let want_media_cache = request.media_cache.unwrap_or(false) && !audio_only;
+    let media_cache_store = want_media_cache.then(|| state.media_cache.clone());
+    let cache_prefix = format!(
+        "{}:{}:{}",
+        request
+            .bvid
+            .as_deref()
+            .or(request.ep_id.as_deref())
+            .unwrap_or_default(),
+        request.cid,
+        selection.quality,
+    );
+    let video_cache = media_cache_store.as_ref().map(|_| {
+        std::sync::Arc::new(crate::media_cache::MediaCacheSpec::new(
+            format!("{cache_prefix}:v"),
+            "video/mp4",
+            segment_ranges(&selection.video),
+        ))
+    });
+    let audio_cache = media_cache_store.as_ref().map(|_| {
+        std::sync::Arc::new(crate::media_cache::MediaCacheSpec::new(
+            format!("{cache_prefix}:a"),
+            "audio/mp4",
+            segment_ranges(&selection.audio),
+        ))
+    });
+
     // 仅音频模式（听视频）不起视频轨代理，也不合成 MPD：音轨 fMP4 是完整
     // 文件，代理转发 Range，前端把 audio_url 直接交给媒体元素播放。
     let video_url = if audio_only {
@@ -217,9 +263,12 @@ pub async fn video_get_play_info(
                 selection.video.base_url.clone(),
                 headers.clone(),
                 session_ids.video.clone(),
-                false,
-                proxy.as_deref(),
-                None,
+                StreamProxyStartOptions {
+                    proxy: proxy.as_deref(),
+                    media_cache: video_cache.clone(),
+                    media_cache_store: media_cache_store.clone(),
+                    ..Default::default()
+                },
             )
             .await?
     };
@@ -229,9 +278,12 @@ pub async fn video_get_play_info(
             selection.audio.base_url.clone(),
             headers.clone(),
             session_ids.audio.clone(),
-            false,
-            proxy.as_deref(),
-            None,
+            StreamProxyStartOptions {
+                proxy: proxy.as_deref(),
+                media_cache: audio_cache.clone(),
+                media_cache_store: media_cache_store.clone(),
+                ..Default::default()
+            },
         )
         .await?;
 

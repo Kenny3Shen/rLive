@@ -242,6 +242,16 @@ pub struct VideoPlayRequest {
     pub qn: Option<i64>,
     /// 仅音频模式（听视频省流）：跳过视频轨代理，也不合成 MPD。
     pub audio_only: Option<bool>,
+    /// 是否让媒体代理把 VOD 分片字节落盘缓存。
+    ///
+    /// 短视频的回滑与重进会重复请求同一条的分片，缓存让它们不必再付一次 CDN
+    /// 往返。播放页不传（缺省关闭）：那里的取流只在开播时发生一次，缓存只有
+    /// 磁盘成本。
+    ///
+    /// 缓存的是**分片字节**而不是 playurl 或 MPD —— 后者带短时签名，重放会打到
+    /// 过期地址。
+    #[serde(default)]
+    pub media_cache: Option<bool>,
 }
 
 /// 稿件详情（`x/web-interface/view`）。

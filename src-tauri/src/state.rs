@@ -14,6 +14,7 @@ use crate::dlna::DlnaManager;
 use crate::error::{AppError, AppResult};
 use crate::image_proxy::ImageProxy;
 use crate::lan_sync::LanSyncManager;
+use crate::media_cache::MediaCache;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use crate::recording::RecordingManager;
 use crate::stream_proxy::StreamProxy;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub dlna: DlnaManager,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
+    /// 短视频媒体分片的磁盘缓存（与图片缓存并列，预算与 TTL 各自独立）。
+    pub media_cache: MediaCache,
     /// story feed 最近发过哪些条目（进程内）。见 [`StoryFeedSeen`]。
     pub story_feed_seen: StoryFeedSeen,
 }
@@ -204,6 +207,7 @@ impl AppState {
             recording: RecordingManager::new(app_directory)?,
             dlna: DlnaManager::new(),
             image_proxy: ImageProxy::new(directories.cache.join("images")),
+            media_cache: MediaCache::new(directories.cache.join("media")),
             lan_sync: LanSyncManager::new(),
             story_feed_seen: StoryFeedSeen::new(),
         })

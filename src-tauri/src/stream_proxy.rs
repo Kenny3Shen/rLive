@@ -19,6 +19,9 @@ use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio::task::JoinSet;
 
 use crate::error::{AppError, AppResult};
+use crate::media_cache::{
+    MAX_SEGMENT_BYTES, MediaCacheSpec, SharedMediaCache, content_range_matches, parse_range_bounds,
+};
 use crate::models::live::TwitchAdRecovery;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -39,6 +42,25 @@ pub const TWITCH_RECORDING_WARMUP_BUDGET: Duration = Duration::from_secs(20);
 /// 比这更快地重复轮询不会带来尚不存在的媒体。
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const TWITCH_RECORDING_WARMUP_INTERVAL: Duration = Duration::from_millis(1_000);
+
+/// [`StreamProxy::start`] 的可选行为。
+///
+/// 这条路径原本有六个位置参数，其中三个是「这一路流是什么形态」的开关。捆成
+/// 一个结构之后，调用点能自解释，新增开关也不必改所有调用方。
+#[derive(Default)]
+pub struct StreamProxyStartOptions<'a> {
+    /// 把上游应答当 HLS 清单改写（直播与部分 IPTV 入口）。
+    pub force_hls: bool,
+    /// 上游 reqwest 客户端使用的代理设置。
+    pub proxy: Option<&'a str>,
+    /// Twitch 服务端广告插播的恢复配置。
+    pub twitch_ad_recovery: Option<TwitchAdRecovery>,
+    /// VOD 媒体分片的磁盘缓存规格：哪些字节区间可缓存、按什么键缓存。
+    /// 直播与清单代理一律不给。
+    pub media_cache: Option<Arc<MediaCacheSpec>>,
+    /// 缓存存储；与 `media_cache` 成对给出。
+    pub media_cache_store: Option<SharedMediaCache>,
+}
 
 /// 按前端播放会话索引的活动代理端点。
 ///
@@ -255,6 +277,10 @@ struct ProxyLoopContext {
     /// `/live` 主清单的 302 钉扎状态，同一代理会话内共享。
     manifest_pin: Arc<ManifestPin>,
     telemetry: Arc<ProxyTelemetryCounters>,
+    /// VOD 媒体分片的磁盘缓存规格。只有 [`StreamProxyStartOptions::media_cache`]
+    /// 给出时才非空：直播流与清单代理一律不走缓存。
+    media_cache: Option<Arc<MediaCacheSpec>>,
+    media_cache_store: Option<SharedMediaCache>,
 }
 
 /// [`StreamProxy::start_text`] 固定应答的内容与类型。
@@ -744,10 +770,15 @@ impl StreamProxy {
         url: String,
         headers: HashMap<String, String>,
         session_id: String,
-        force_hls: bool,
-        proxy: Option<&str>,
-        twitch_ad_recovery: Option<TwitchAdRecovery>,
+        options: StreamProxyStartOptions<'_>,
     ) -> AppResult<String> {
+        let StreamProxyStartOptions {
+            force_hls,
+            proxy,
+            twitch_ad_recovery,
+            media_cache,
+            media_cache_store,
+        } = options;
         let (generation, listener, port) = self.bind_session_listener(&session_id).await?;
         // 播放器可能为一场播放发出多个本机请求（直播清单轮询、VOD 并发
         // Range 分片）。在每个代理生命周期内构建一个客户端，使这些请求共享其
@@ -790,6 +821,8 @@ impl StreamProxy {
                 twitch_ad_recovery,
                 manifest_pin: Arc::new(ManifestPin::default()),
                 telemetry: telemetry.clone(),
+                media_cache,
+                media_cache_store,
             };
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
             let task = tauri::async_runtime::spawn(async move {
@@ -944,9 +977,9 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::{
-        HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, TwitchAdRecoverySession,
-        hls_path_extension, is_twitch_ad_manifest, looks_like_hls_manifest,
-        manifest_has_playable_segment, mark_all_hls_segments_as_gaps,
+        HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, StreamProxyStartOptions,
+        TwitchAdRecoverySession, hls_path_extension, is_twitch_ad_manifest,
+        looks_like_hls_manifest, manifest_has_playable_segment, mark_all_hls_segments_as_gaps,
         mark_twitch_ad_segments_as_gaps, resolve_upstream_target, rewrite_hls_manifest,
         twitch_wait_manifest,
     };
@@ -1104,9 +1137,7 @@ mod tests {
                 "https://first.invalid/live.flv".into(),
                 HashMap::new(),
                 "room-a:1".into(),
-                false,
-                None,
-                None,
+                StreamProxyStartOptions::default(),
             )
             .await
             .unwrap();
@@ -1115,9 +1146,7 @@ mod tests {
                 "https://second.invalid/live.flv".into(),
                 HashMap::new(),
                 "room-b:1".into(),
-                false,
-                None,
-                None,
+                StreamProxyStartOptions::default(),
             )
             .await
             .unwrap();
@@ -1181,9 +1210,7 @@ mod tests {
                 format!("http://{upstream_address}/media.m4s"),
                 HashMap::new(),
                 "video-range:video".into(),
-                false,
-                None,
-                None,
+                StreamProxyStartOptions::default(),
             )
             .await
             .unwrap();
@@ -1240,6 +1267,128 @@ mod tests {
 
         proxy.stop_for_session("video-range:video");
         server.abort();
+    }
+
+    /// 媒体分片缓存：同一个精确分片区间第二次请求不触达上游。
+    ///
+    /// 上游只应答一次，因此第二轮若打到上游就会超时 —— 这正是「命中缓存」的
+    /// 判据，而不是看日志。非分片区间（这里是 `0-499`）仍走上游。
+    #[tokio::test]
+    async fn media_cache_serves_cached_segments_without_upstream() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let (hits_tx, mut hits_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = upstream.accept().await {
+                let hits_tx = hits_tx.clone();
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 2048];
+                    let length = stream.read(&mut request).await.unwrap();
+                    let request = String::from_utf8_lossy(&request[..length]).into_owned();
+                    let range = request
+                        .lines()
+                        .find_map(|line| {
+                            let lower = line.to_lowercase();
+                            lower.strip_prefix("range: ").map(|value| value.to_string())
+                        })
+                        .unwrap_or_default();
+                    let _ = hits_tx.send(range.clone());
+                    let (start, end) = if range.trim() == "bytes=0-799" {
+                        (0, 799)
+                    } else {
+                        (0, 499)
+                    };
+                    let body = "SEGMENT";
+                    let response = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Range: bytes {start}-{end}/12346\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-media-cache-proxy-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = crate::media_cache::MediaCache::new(cache_root.clone());
+        let spec = std::sync::Arc::new(crate::media_cache::MediaCacheSpec::new(
+            "BV1x:1:112:v".to_string(),
+            "video/mp4",
+            vec![(0, 799)],
+        ));
+
+        let proxy = StreamProxy::new();
+        let local_url = proxy
+            .start(
+                format!("http://{upstream_address}/media.m4s"),
+                HashMap::new(),
+                "video-cache:video".into(),
+                StreamProxyStartOptions {
+                    media_cache: Some(spec),
+                    media_cache_store: Some(store.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let connect = local_url
+            .trim_start_matches("http://")
+            .trim_end_matches("/live")
+            .to_string();
+
+        async fn range_body(connect: String, range: &str) -> String {
+            let mut stream = tokio::net::TcpStream::connect(&connect).await.unwrap();
+            let request = format!(
+                "GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: {range}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut buffer = Vec::new();
+            stream.read_to_end(&mut buffer).await.unwrap();
+            String::from_utf8_lossy(&buffer).into_owned()
+        }
+
+        let first = range_body(connect.clone(), "bytes=0-799").await;
+        assert!(
+            first.contains("Content-Range: bytes 0-799/12346"),
+            "{first}"
+        );
+        assert!(first.ends_with("SEGMENT"), "{first}");
+        assert_eq!(hits_rx.recv().await.as_deref(), Some("bytes=0-799"));
+
+        // 等写盘任务落定（转发完成后才 spawn）。
+        for _ in 0..50 {
+            if store
+                .get(&crate::disk_cache::disk_cache_key("BV1x:1:112:v:0:799"))
+                .await
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let second = range_body(connect.clone(), "bytes=0-799").await;
+        assert!(second.ends_with("SEGMENT"), "{second}");
+        assert!(second.contains("206"), "缓存命中必须按 206 应答: {second}");
+
+        // 非分片区间不缓存：它仍要打到上游。
+        let partial = range_body(connect.clone(), "bytes=0-499").await;
+        assert!(partial.ends_with("SEGMENT"), "{partial}");
+
+        let mut upstream_ranges = Vec::new();
+        while let Ok(range) = hits_rx.try_recv() {
+            upstream_ranges.push(range);
+        }
+        assert_eq!(
+            upstream_ranges,
+            vec!["bytes=0-499".to_string()],
+            "第二次请求同一个分片不该触达上游"
+        );
+
+        proxy.stop_for_session("video-cache:video");
+        let _ = std::fs::remove_dir_all(cache_root);
     }
 
     #[test]
@@ -1534,9 +1683,10 @@ mod tests {
                 format!("http://{upstream_address}/live.m3u8"),
                 HashMap::new(),
                 session_id.into(),
-                true,
-                None,
-                None,
+                StreamProxyStartOptions {
+                    force_hls: true,
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -1585,9 +1735,10 @@ mod tests {
                 format!("http://{upstream_address}/live.m3u8"),
                 HashMap::new(),
                 session_id.into(),
-                true,
-                None,
-                None,
+                StreamProxyStartOptions {
+                    force_hls: true,
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -1611,9 +1762,10 @@ mod tests {
                 "http://unreachable.invalid/live.m3u8".into(),
                 HashMap::new(),
                 session_id.into(),
-                true,
-                None,
-                None,
+                StreamProxyStartOptions {
+                    force_hls: true,
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -1654,15 +1806,17 @@ mod tests {
                 variant,
                 headers,
                 session_id.into(),
-                true,
-                None,
-                Some(crate::models::live::TwitchAdRecovery {
-                    login: "dota2ti".into(),
-                    selector: "video-group:chunked".into(),
-                    target_width: 1920,
-                    target_height: 1080,
-                    target_frame_rate_milli: 60_000,
-                }),
+                StreamProxyStartOptions {
+                    force_hls: true,
+                    twitch_ad_recovery: Some(crate::models::live::TwitchAdRecovery {
+                        login: "dota2ti".into(),
+                        selector: "video-group:chunked".into(),
+                        target_width: 1920,
+                        target_height: 1080,
+                        target_frame_rate_milli: 60_000,
+                    }),
+                    ..Default::default()
+                },
             )
             .await
             .expect("recording proxy");
@@ -1702,15 +1856,17 @@ mod tests {
                 variant,
                 headers,
                 session_id.into(),
-                true,
-                None,
-                Some(crate::models::live::TwitchAdRecovery {
-                    login: "dota2ti".into(),
-                    selector: "video-group:chunked".into(),
-                    target_width: 1920,
-                    target_height: 1080,
-                    target_frame_rate_milli: 60_000,
-                }),
+                StreamProxyStartOptions {
+                    force_hls: true,
+                    twitch_ad_recovery: Some(crate::models::live::TwitchAdRecovery {
+                        login: "dota2ti".into(),
+                        selector: "video-group:chunked".into(),
+                        target_width: 1920,
+                        target_height: 1080,
+                        target_frame_rate_milli: 60_000,
+                    }),
+                    ..Default::default()
+                },
             )
             .await
             .expect("recording proxy");
@@ -1787,15 +1943,17 @@ mod tests {
                 variant,
                 headers,
                 "recording:live-smoke".into(),
-                true,
-                None,
-                Some(crate::models::live::TwitchAdRecovery {
-                    login: "dota2ti".into(),
-                    selector: "video-group:chunked".into(),
-                    target_width: 1920,
-                    target_height: 1080,
-                    target_frame_rate_milli: 60_000,
-                }),
+                StreamProxyStartOptions {
+                    force_hls: true,
+                    twitch_ad_recovery: Some(crate::models::live::TwitchAdRecovery {
+                        login: "dota2ti".into(),
+                        selector: "video-group:chunked".into(),
+                        target_width: 1920,
+                        target_height: 1080,
+                        target_frame_rate_milli: 60_000,
+                    }),
+                    ..Default::default()
+                },
             )
             .await
             .expect("recording proxy");
@@ -1977,9 +2135,10 @@ mod tests {
                 "http://twitch.invalid/live.ts".into(),
                 HashMap::new(),
                 session_id.into(),
-                false,
-                Some(&format!("http://{address}")),
-                None,
+                StreamProxyStartOptions {
+                    proxy: Some(&format!("http://{address}")),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -2037,9 +2196,7 @@ mod tests {
                 format!("http://{upstream_address}/live.ts"),
                 HashMap::new(),
                 session_id.into(),
-                false,
-                None,
-                None,
+                StreamProxyStartOptions::default(),
             )
             .await
             .unwrap();
@@ -2160,9 +2317,10 @@ mod tests {
                 format!("http://{entry_address}/live/cctv6.m3u8"),
                 HashMap::new(),
                 session_id.into(),
-                true,
-                None,
-                None,
+                StreamProxyStartOptions {
+                    force_hls: true,
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -2459,6 +2617,8 @@ async fn handle_client(
         twitch_ad_recovery,
         manifest_pin,
         telemetry,
+        media_cache,
+        media_cache_store,
     } = context;
 
     // 读取请求头（只需要方法/路径；GET 不使用 body）。
@@ -2517,6 +2677,42 @@ async fn handle_client(
         }
         req
     };
+
+    // 媒体分片缓存的读路径：命中就直接回本机 206，不触达上游。
+    //
+    // 只认 `Range` 精确覆盖一个已知分片的 GET（`force_hls` 的直播流没有分片表，
+    // 转发的也不是分片）。缓存键不是 URL —— playurl 带短时签名，同一稿件每次
+    // 取流的地址都不同。
+    let requested_range = request_header(&head, "range").and_then(parse_range_bounds);
+    if method == "GET"
+        && !force_hls
+        && is_primary_request
+        && let (Some(spec), Some(store), Some((start, end))) = (
+            media_cache.as_deref(),
+            media_cache_store.as_ref(),
+            requested_range,
+        )
+        && let Some(key) = spec.key_for_range(start, end)
+        && let Some(bytes) = store.get(&key).await
+    {
+        // 客户端按 Range 请求，因此应答也是 206 —— 尽管字节来自本机的磁盘缓存。
+        // 总长未知用 `*` 表示（RFC 7233 允许），dash.js 按请求时的区间消费响应体。
+        write_media_headers(
+            socket,
+            206,
+            "Partial Content",
+            spec.content_type(),
+            Some(&bytes.len().to_string()),
+            Some(&format!("bytes {start}-{end}/*")),
+            "no-store",
+        )
+        .await?;
+        if socket.write_all(&bytes).await.is_err() {
+            return Ok(());
+        }
+        let _ = socket.flush().await;
+        return Ok(());
+    }
 
     // 钉扎只针对 HLS 会话的主清单重载：FLV/MPEG-TS 是单条长连接，Twitch 的
     // 续期路径自带目标管理，都不需要（也不应）复用 302 之后的最终地址。
@@ -2747,7 +2943,55 @@ async fn handle_client(
     )
     .await?;
 
+    // 写路径的缓存键：只有「Range 精确覆盖一个已知分片」且「上游确认回的就是
+    // 那段（206 + 一致的 Content-Range）」才成立。上游忽略 Range 返回 200 全量
+    // 时 `content_range` 缺失，那一律不缓存 —— 写进去的字节不属于分片键。
+    let mut cache_key = match (
+        media_cache.as_deref(),
+        media_cache_store.as_ref(),
+        requested_range,
+    ) {
+        (Some(spec), Some(_store), Some((start, end)))
+            if status == 206 && content_range_matches(content_range.as_deref(), start, end) =>
+        {
+            spec.key_for_range(start, end)
+        }
+        _ => None,
+    };
+
     let mut stream = upstream.bytes_stream();
+    if cache_key.is_some() {
+        // 边转发边累积，转发完成后才落盘：写盘的耗时不该出现在首字节之前。
+        let mut buffered: Vec<u8> = Vec::new();
+        loop {
+            let next = stream.next().await;
+            let Some(chunk) = next else { break };
+            let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
+            telemetry.record_bytes(chunk.len());
+            if chunk.is_empty() {
+                continue;
+            }
+            telemetry.record_media_start();
+            if buffered.len().saturating_add(chunk.len()) as u64 <= MAX_SEGMENT_BYTES {
+                buffered.extend_from_slice(&chunk);
+            } else {
+                // 超过单分片上限：不再累积，但转发本身照旧完成。
+                buffered.clear();
+                cache_key.take();
+            }
+            if socket.write_all(&chunk).await.is_err() {
+                break; // 客户端已离开
+            }
+        }
+        let _ = socket.flush().await;
+        if let (Some(key), Some(store)) = (cache_key, media_cache_store.clone())
+            && !buffered.is_empty()
+        {
+            tauri::async_runtime::spawn(async move { store.put(&key, &buffered).await });
+        }
+        return Ok(());
+    }
+
     loop {
         let next = stream.next().await;
         let Some(chunk) = next else { break };

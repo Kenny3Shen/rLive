@@ -7,7 +7,7 @@ use tauri::State;
 use crate::error::AppResult;
 use crate::models::live::TwitchAdRecovery;
 use crate::state::AppState;
-use crate::stream_proxy::StreamProxyTelemetry;
+use crate::stream_proxy::{StreamProxyStartOptions, StreamProxyTelemetry};
 
 fn configured_proxy(state: &State<'_, AppState>) -> AppResult<Option<String>> {
     let conn = state.conn()?;
@@ -44,9 +44,12 @@ pub async fn stream_proxy_start(
             url,
             headers,
             session_id,
-            hls.unwrap_or(false),
-            proxy.as_deref(),
-            twitch_ad_recovery,
+            StreamProxyStartOptions {
+                force_hls: hls.unwrap_or(false),
+                proxy: proxy.as_deref(),
+                twitch_ad_recovery,
+                ..Default::default()
+            },
         )
         .await
 }

@@ -29,7 +29,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::http_client;
 use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol};
-use crate::stream_proxy::request_header;
+use crate::stream_proxy::{StreamProxyStartOptions, request_header};
 
 #[path = "recording_ffmpeg.rs"]
 mod ffmpeg_backend;
@@ -1950,9 +1950,12 @@ async fn run_ffmpeg_recording(
             source.url.clone(),
             source.headers.clone(),
             proxy_session_id.clone(),
-            true,
-            proxy.as_deref(),
-            twitch_recovery,
+            StreamProxyStartOptions {
+                force_hls: true,
+                proxy: proxy.as_deref(),
+                twitch_ad_recovery: twitch_recovery,
+                ..Default::default()
+            },
         )
         .await
     {

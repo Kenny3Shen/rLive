@@ -5,6 +5,7 @@ mod asr;
 mod commands;
 mod danmu_rs;
 mod db;
+mod disk_cache;
 mod dlna;
 mod error;
 mod http_client;
@@ -12,6 +13,7 @@ mod image_cache;
 mod image_proxy;
 mod iptv;
 mod lan_sync;
+mod media_cache;
 mod models;
 mod profile;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
