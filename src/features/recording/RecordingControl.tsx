@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
 import { glassPanelClass, glassTitleClass } from "@/shared/components/player/glassSurface";
 import {
   PLAYER_HUD_BUTTON_CLASS,
@@ -91,6 +92,9 @@ export function RecordingControl({
       disabled={triggerDisabled}
       className={cn(
         PLAYER_HUD_BUTTON_CLASS,
+        // 展开期间用中性填充，盖掉 MediaButton 对 `aria-expanded` 画的 accent 蓝
+        // （与音量、播放设置、字幕触发器同一条配方）。
+        open && mediaPopupTriggerOpenClass,
         active && "text-destructive hover:text-destructive",
         className,
       )}

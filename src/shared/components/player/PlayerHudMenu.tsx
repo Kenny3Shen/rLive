@@ -10,6 +10,7 @@ import {
   glassPanelClass,
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
+import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
@@ -48,7 +49,9 @@ export function PlayerHudOverflowMenu({
   const triggerProps = {
     type: "button",
     "aria-label": label,
-    className: PLAYER_HUD_BUTTON_CLASS,
+    // 展开期间用中性填充，盖掉 MediaButton 对 `aria-expanded` 画上的 accent 蓝
+    // （与音量、播放设置、字幕触发器同一条配方）。
+    className: cn(PLAYER_HUD_BUTTON_CLASS, open && mediaPopupTriggerOpenClass),
   } as const;
 
   if (compact) {

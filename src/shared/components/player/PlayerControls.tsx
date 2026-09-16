@@ -265,9 +265,14 @@ function ExtensionButton({
       onClick={onClick}
       className={cn(
         "r-live-media-extension-button",
-        // 开启态用玻璃菜单的选中填充（中性白），不再用 accent 蓝 ——
-        // 蓝底在控制栏上太抢眼，与悬停反馈的层级也拉不开。
-        active && glassOptionSelectedClass(),
+        // 开启态只用图标区分，不再铺底色。
+        //
+        // 这里曾用玻璃菜单的选中填充（中性白 18%）表示开启，但它与控制栏悬停的
+        // `--media-muted`（白 15%）几乎无法分辨：点开弹幕/仅播声音/网页全屏后移开
+        // 指针，按钮看上去仍像停在被悬停的状态。四个开关的图标本身已经区分了开与
+        // 关（弹幕 `MessageSquareText` / `MessageSquareOff`、仅播声音
+        // `Headphones` / `VideoOff`、网页全屏 `Shrink` / `Expand`、侧栏
+        // `PanelRightClose` / `PanelRightOpen`），底色只留给悬停反馈。
         className,
       )}
     >
