@@ -1,9 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { ArrowUpDown, ChevronRight, ThumbsUp } from "lucide-react";
+import { ArrowUpDown, ChevronDown, ChevronRight, ThumbsUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerTitle,
+  useDrawerScoped,
+} from "@/components/ui/drawer";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -11,8 +17,10 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
 import { LinkText } from "@/shared/components/LinkText";
 import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
+import { panelDrawerSide, panelDrawerSizeClass } from "@/shared/components/player/panelDrawer";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
-import { formatOnline, normalizeImageUrl } from "@/lib/utils";
+import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
 import { videoGetCommentReplies, videoGetComments } from "./videoApi";
 import { formatRelativeTime } from "./videoHistory";
@@ -278,7 +286,16 @@ function CommentThread({
   );
 }
 
-function CommentReplies({ aid, comment }: { aid: string; comment: VideoComment }) {
+function CommentReplies({
+  aid,
+  comment,
+  bottomInset,
+}: {
+  aid: string;
+  comment: VideoComment;
+  /** 滚动容器内侧的底部安全区，见 `CommentsPanel` 的同名参数。 */
+  bottomInset?: string;
+}) {
   const repliesQuery = useInfiniteQuery({
     queryKey: ["video_comment_replies", aid, comment.rpid],
     initialPageParam: 1,
@@ -305,7 +322,12 @@ function CommentReplies({ aid, comment }: { aid: string; comment: VideoComment }
   return (
     // touch-pan-y：与页签面板同理，滚动容器自身必须让出横向，否则侧栏横滑切页签
     // 在这一层上会被合成器当作滚动接走（见页签面板处的说明）。
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
+    <div
+      className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y"
+      // 底部安全区加在滚动容器**内侧**：底部抽屉形态下外壳用 `p-0`（表头要贴边），
+      // 不补回来的话手机上最后一条回复会压在系统手势条下面。
+      style={{ paddingBottom: bottomInset }}
+    >
       <div className="border-b border-border px-4 py-4">
         <CommentRow comment={comment} isThreadAuthor />
       </div>
@@ -363,9 +385,16 @@ function CommentReplies({ aid, comment }: { aid: string; comment: VideoComment }
  * （导出而不是另写一份：评论的三个坑 —— 游标语义、回复预览、pn 翻页 ——
  * 已经在这里跑通）。它不自带滚动容器，由调用方提供。
  */
-export function CommentsPanel({ aid }: { aid: string }) {
+export function CommentsPanel({ aid, bottomInset }: { aid: string; bottomInset?: string }) {
   const [mode, setMode] = useState(3);
   const [selectedComment, setSelectedComment] = useState<VideoComment | null>(null);
+  // 二级回复抽屉的几何跟着托管它的那一层走：播放页把抽屉挂在侧栏的
+  // `DrawerViewport` 里（scoped，基础组件自己改成 `absolute w-full`，此时不该再给尺寸），
+  // 而短视频的评论抽屉是全窗口浮层 —— 二级必须自己拿到与一级相同的宽度与侧别，
+  // 否则手机上一级是底部抽屉而二级从右侧滑入一条窄条（看上去不像同一套面板）。
+  const scoped = useDrawerScoped();
+  const compact = useCompactPlayerViewport();
+  const repliesSide = panelDrawerSide(compact, scoped);
   const commentsQuery = useInfiniteQuery({
     queryKey: ["video_comments", aid, mode],
     enabled: aid !== "",
@@ -448,19 +477,31 @@ export function CommentsPanel({ aid }: { aid: string }) {
           if (!open) setSelectedComment(null);
         }}
       >
-        <DrawerContent side="right" className="flex h-full flex-col overflow-hidden p-0">
+        <DrawerContent
+          side={repliesSide}
+          className={cn(
+            "flex flex-col overflow-hidden p-0",
+            panelDrawerSizeClass(repliesSide, scoped),
+          )}
+        >
           <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
             <DrawerTitle>评论详情</DrawerTitle>
             <DrawerClose
               render={
                 <Button variant="ghost" size="icon" aria-label="返回评论区" title="返回评论区">
-                  <ChevronRight />
+                  {/* 箭头指向抽屉退出的方向：底部形态往下收，侧边形态往右收。 */}
+                  {repliesSide === "bottom" ? <ChevronDown /> : <ChevronRight />}
                 </Button>
               }
             />
           </div>
           {selectedComment && (
-            <CommentReplies key={selectedComment.rpid} aid={aid} comment={selectedComment} />
+            <CommentReplies
+              key={selectedComment.rpid}
+              aid={aid}
+              comment={selectedComment}
+              bottomInset={repliesSide === "bottom" ? bottomInset : undefined}
+            />
           )}
         </DrawerContent>
       </Drawer>

@@ -35,6 +35,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
 import { danmakuControlPresentation } from "@/shared/components/player/PlayerControls";
+import { panelDrawerSide, panelDrawerSizeClass } from "@/shared/components/player/panelDrawer";
 import {
   Empty,
   EmptyDescription,
@@ -503,7 +504,9 @@ export function ShortsPage() {
   const commentsBody = useMemo(
     () =>
       panels.aid ? (
-<CommentsPanel key={panels.aid} aid={panels.aid} />
+        // `bottomInset` 只影响二级回复抽屉自己的滚动容器：那一层是与评论抽屉并列的
+        // 浮层（不是它的后代），因此拿不到这里外壳补的安全区，得自己让位。
+        <CommentsPanel key={panels.aid} aid={panels.aid} bottomInset={SHORTS_SAFE_AREA_BOTTOM} />
       ) : null,
     [panels.aid],
   );
@@ -938,9 +941,10 @@ export function ShortsPage() {
 /**
  * 抽屉外壳。
  *
- * 手机从底部弹出、桌面从右侧滑入：竖屏上右侧抽屉只能占屏宽的一部分，评论正文
- * 被压成两三个字一行；而桌面上底部抽屉会把画面从下方顶掉一大块。侧别按视口
- * 决定，不按内容决定。
+ * 侧别与尺寸走共享的 `panelDrawer` 几何：评论抽屉里点某条评论还会**再叠一层**
+ * 二级回复抽屉（`CommentsPanel` 自带），两层的侧别与宽度必须完全一致，否则桌面上
+ * 会露出下面那层的边。两处各写一份的结果就是不一致 —— 这里曾经是 22rem 而二级
+ * 走基础组件的 20rem，右侧露出一条 32px 的缝。
  */
 function ShortsDrawerContent({
   compact,
@@ -951,18 +955,11 @@ function ShortsDrawerContent({
   title: string;
   children: React.ReactNode;
 }) {
+  const side = panelDrawerSide(compact);
   return (
     <DrawerContent
-      side={compact ? "bottom" : "right"}
-      className={cn(
-        "flex flex-col overflow-hidden p-0",
-        compact
-          ? "h-[70dvh] max-h-[70dvh]"
-          : // 与直播页侧栏同宽（`PlayerPane` 的 `w-[min(22rem,78vw)]`）：同一套评论区
-            // 在两个表面之间换个地方出现，宽度不该变。基础组件的 `right` 变体是
-            // 20rem/60vw，这里显式覆盖（`cn` 走 twMerge，后者胜出）。
-            "h-full w-[min(22rem,78vw)]",
-      )}
+      side={side}
+      className={cn("flex flex-col overflow-hidden p-0", panelDrawerSizeClass(side))}
     >
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
         <DrawerTitle>{title}</DrawerTitle>

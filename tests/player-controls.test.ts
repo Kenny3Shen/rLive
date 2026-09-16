@@ -22,6 +22,7 @@ import {
   showSecondaryPlayerControls,
   volumeControlPresentation,
 } from "../src/shared/components/player/PlayerControls";
+import { panelDrawerSide, panelDrawerSizeClass } from "../src/shared/components/player/panelDrawer";
 import {
   canStartPlayerEdgeGesture,
   isVerticalPlayerEdgeGesture,
@@ -88,6 +89,33 @@ describe("danmaku player control", () => {
       label: "开启弹幕",
       icon: "message-square-off",
     });
+  });
+});
+
+describe("panel drawer geometry", () => {
+  test("pops up from the bottom on compact viewports", () => {
+    expect(panelDrawerSide(true, false)).toBe("bottom");
+    expect(panelDrawerSizeClass("bottom", false)).toBe("h-[70dvh] max-h-[70dvh]");
+  });
+
+  test("slides in from the right on wide viewports, at the sidebar width", () => {
+    expect(panelDrawerSide(false, false)).toBe("right");
+    expect(panelDrawerSizeClass("right", false)).toBe("h-full w-[min(22rem,78vw)]");
+  });
+
+  // 二级回复叠在一级评论抽屉之上：两层的侧别与尺寸都由这两个函数算，因此只要
+  // 输入相同就不可能错位。曾经二级走基础组件的 20rem 而一级是 22rem，桌面上
+  // 右侧露出一条 32px 的缝。
+  test("derives width from the same token the live sidebar uses", () => {
+    expect(panelDrawerSizeClass("right", false)).toContain("w-[min(22rem,78vw)]");
+  });
+
+  // 侧栏挂载点（播放页）已经把抽屉改成 absolute w-full，此时再写死高宽会把
+  // 70dvh 泄进侧栏 —— 抽屉只占侧栏上面七成，下面露出评论列表。
+  test("leaves sizing to the sidebar when scoped, and keeps sliding in from the right", () => {
+    expect(panelDrawerSide(true, true)).toBe("right");
+    expect(panelDrawerSide(false, true)).toBe("right");
+    expect(panelDrawerSizeClass("right", true)).toBe("h-full");
   });
 });
 

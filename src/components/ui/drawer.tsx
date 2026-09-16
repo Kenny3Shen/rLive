@@ -17,6 +17,17 @@ function DrawerScope({ children }: { children: React.ReactNode }) {
   return <DrawerScopeContext value={value}>{children}</DrawerScopeContext>;
 }
 
+/**
+ * 抽屉是否挂在某个 `DrawerViewport` 里（而不是整窗口）。
+ *
+ * 尺寸由此分叉：局部抽屉的高宽由侧栏决定（`DrawerContent` 会改成
+ * `absolute max-h-full w-full`），调用方此时不该再写死高度 —— 同一个面板
+ * 在播放页侧栏里和在短视频的全窗口抽屉里需要两套尺寸。
+ */
+function useDrawerScoped(): boolean {
+  return Boolean(React.useContext(DrawerScopeContext)?.container);
+}
+
 /** 放在侧栏的定位容器内，独立于滚动区和带 transform 的页签轨道。 */
 function DrawerViewport({ active = true }: { active?: boolean }) {
   const setContainer = React.useContext(DrawerScopeContext)?.setContainer;
@@ -155,4 +166,5 @@ export {
   DrawerTitle,
   DrawerTrigger,
   DrawerViewport,
+  useDrawerScoped,
 };
