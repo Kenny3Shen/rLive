@@ -57,6 +57,13 @@ pub async fn video_get_popular(
         .await
 }
 
+/// 一次 story feed 请求排除多少条「最近看过的」。
+///
+/// 观看历史按作品去重且长期保留，全表拿来排除会越用越严（老条目其实早该重新可见，
+/// 上游轮换本身也会把它们换走）。只取最近这些条：够覆盖「刚看过又刷出来」，又不会
+/// 把几个月前看过的一直挡在外面。
+const STORY_EXCLUDE_RECENT_WATCHED: usize = 200;
+
 /// 短视频流（story feed）。
 ///
 /// 上游无游标：`page` 不传给上游，只是前端无限列表的页号，每次调用都拉下一批
@@ -65,14 +72,39 @@ pub async fn video_get_popular(
 /// `more` 是「这次是补货还是首屏」的粗语义，不是批数：一次扣多少次接口属于上游
 /// 调用策略，两个档位与夹取都在 `sites/bilibili/video.rs`。让前端传具体数字的话，
 /// 那个数字会在两个语言里各存一份，而且前端改大就绕过了夹取。首屏不传即快路径。
+///
+/// **排除「最近见过的」是这条命令的职责**，不是站点层的：站点层只会说话（调接口、
+/// 解析），记忆属于应用状态。两个来源合起来传下去：
+///
+/// 1. `state.story_feed_seen` —— 本进程这次运行发过的条目（进程内环形记忆）。
+///    上游头部很黏：实测同一账号连续 6 次首屏共 60 条里只有 43 条唯一，其中一条
+///    六轮全在。没有这层记忆时，每次重新进页都是一次新查询（前端 `staleTime: 0`），
+///    于是用户看到的就是「又是那几条」。
+/// 2. 最近看过的（`video_history`）—— 跨重启仍然有效，因此重开应用不会又从那几条
+///    看过的开始。只取最近 [`STORY_EXCLUDE_RECENT_WATCHED`] 条。
 #[tauri::command]
 pub async fn video_get_story(
     state: State<'_, AppState>,
     more: Option<bool>,
 ) -> AppResult<VideoListPage> {
-    resolve_bilibili(&state)?
-        .video_story(more.unwrap_or(false))
-        .await
+    let site = resolve_bilibili(&state)?;
+    let mut seen = state.story_feed_seen.snapshot();
+    {
+        // 数据库守卫必须在 await 之前放掉：它不是 Send，跨 await 持有会编译失败，
+        // 而且那把锁是全应用共用的。
+        let conn = state.conn()?;
+        seen.extend(crate::db::video_history::recent_bvids(
+            &conn,
+            "ugc",
+            STORY_EXCLUDE_RECENT_WATCHED,
+        )?);
+    }
+    let page = site.video_story(more.unwrap_or(false), &seen).await?;
+    // 发出去的就算见过 —— 包括兜底给的重复条目，否则下一次又会挑中它们。
+    state
+        .story_feed_seen
+        .record(page.items.iter().map(|item| item.bvid.clone()));
+    Ok(page)
 }
 
 /// UGC 分区榜。`rid` 取自 [`crate::sites::bilibili::VIDEO_ZONES`]。

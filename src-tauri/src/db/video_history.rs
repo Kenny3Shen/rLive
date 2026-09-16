@@ -87,6 +87,33 @@ pub fn list(conn: &Connection) -> AppResult<Vec<VideoHistoryRecord>> {
     Ok(out)
 }
 
+/// 最近看过的 UGC 作品 id（bvid），按观看时间倒序，最多 `limit` 个。
+///
+/// 给短视频流做「别再发我看过的」用。只取 `oid` 一列而不是整行：调用方只需要一个
+/// 排除集合，取整行要多读十二列并构造一堆 `String`，而这条查询在**每次**取流前都跑。
+///
+/// UGC 的 `oid` 就是 bvid（见本模块头部的去重维度说明），因此不必读 `bvid` 列 ——
+/// 那一列存的是「最后看的那个分 P 的 bvid」，多 P 稿件里与作品 id 不是同一个值。
+pub fn recent_bvids(conn: &Connection, kind: &str, limit: usize) -> AppResult<Vec<String>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT oid
+             FROM video_history
+             WHERE kind = ?1
+             ORDER BY watched_at DESC, oid ASC
+             LIMIT ?2",
+        )
+        .map_err(map_db_err)?;
+    let rows = stmt
+        .query_map(params![kind, limit as i64], |row| row.get::<_, String>(0))
+        .map_err(map_db_err)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(map_db_err)?);
+    }
+    Ok(out)
+}
+
 /// 查单个作品的观看记录。播放页进入时用它决定是否提示续播；从未看过返回 `None`。
 pub fn find(conn: &Connection, kind: &str, oid: &str) -> AppResult<Option<VideoHistoryRecord>> {
     conn.query_row(
