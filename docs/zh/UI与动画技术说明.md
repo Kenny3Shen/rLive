@@ -179,7 +179,7 @@ playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser
 
 ### 4.6 `useLongPress`：触摸长按
 
-`src/shared/hooks/useLongPress.ts` 把「按住约半秒」翻译为一次回调，`useLongPressDrawer` 在其上封装抽屉开关、Android Back 收起与点按抑制，由 `RoomCard` 与关注页卡片共用。判定常量在 `src/shared/gestures/longPress.ts`：触发 `500ms`、漂移容忍半径 `10px`、`LONG_PRESS_CONTEXTMENU_GRACE_MS` `300ms`。
+`src/shared/hooks/useLongPress.ts` 把「按住约半秒」翻译为一次回调，`useLongPressDrawer` 在其上封装抽屉开关、Android Back 收起与点按抑制，由 `RoomCard` 与关注页卡片共用。判定常量在 `src/shared/gestures/longPress.ts`：触发 `500ms`、漂移容忍半径 `10px`、`LONG_PRESS_CONTEXTMENU_GRACE_MS` `300ms`，以及播放页与短视频共用的临时长按倍速 `LONG_PRESS_SPEED_RATE`（3x）。
 
 - 只有触摸 / 触控笔主指针参与；鼠标交给右键菜单，桌面端 `enabled: false`。触发后松手可能合成一次 click，调用方需用「触发时置位、下次 pointerdown 清零」的标记抑制。
 - 取消判定除卡片自身的 pointermove/up/cancel 外，还必须镜像到 **window 捕获阶段**：祖先横向翻页锁定手势后会 `setPointerCapture` 并 `stopPropagation`，卡片自身取消路径会失明。`HORIZONTAL_SWIPE_LOCK_DISTANCE_PX`（10px）不小于长按容忍半径，保证能锁定为翻页的手势在计时器到期前必已取消。

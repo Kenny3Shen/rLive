@@ -58,6 +58,27 @@ export const SHORTS_BOTTOM_CONTROLS_HEIGHT_PX = 56;
 export const SHORTS_SEEK_BAR_HEIGHT_PX = 3;
 
 /**
+ * 进度条命中区的高度（px）。
+ *
+ * 3px 的视觉粗细在触摸屏上按不到，命中区因此撑到 20px（约等于一个指尖）。它是绝对
+ * 定位的浮层，只向**上**长 —— 向下就压到控制行的按钮上了。
+ */
+export const SHORTS_SEEK_BAR_HIT_HEIGHT_PX = 20;
+
+/**
+ * 进度条命中区探进画面的高度（px）。
+ *
+ * 命中区只占 3px 布局空间、却向上盖住 17px，因此贴着底栏摆的浮层（信息与评论）必须
+ * 自己让开这一段，否则点在评论数字上会变成一次 seek —— 实测重叠 9px（浮层原来只留
+ * 了 8px 内边距），点评论数字会把播放位置拖到 0。
+ *
+ * 由两段相减而不是写字面量：命中区或视觉粗细任一个变了，让位距离必须跟着变，写死
+ * 会在下一次调整时静默地重新压上去。
+ */
+export const SHORTS_SEEK_BAR_HIT_OVERHANG_PX =
+  SHORTS_SEEK_BAR_HIT_HEIGHT_PX - SHORTS_SEEK_BAR_HEIGHT_PX;
+
+/**
  * 底部操作栏占掉的总高度（px），不含底部安全区。
  *
  * 页面级的操作栏与每个面板内的画面区必须用同一个数：画面区按

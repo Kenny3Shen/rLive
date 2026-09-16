@@ -51,6 +51,7 @@ import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import { isTouchLikePointer } from "@/shared/gestures/playerEdgeGesture";
+import { LONG_PRESS_SPEED_RATE, LONG_PRESS_TRIGGER_MS } from "@/shared/gestures/longPress";
 import {
   PlayerBrightnessShade,
   PlayerEdgeGestureFeedback,
@@ -171,9 +172,6 @@ import {
 } from "./playlistStore";
 import { notify, setToastPortalContainer } from "@/components/ui/toast";
 
-const LONG_PRESS_TRIGGER_MS = 500;
-/** 长按倍速：按住画面临时 3 倍速，松开回到菜单选中的档位（B 站移动端同款）。 */
-const LONG_PRESS_RATE = 3;
 /** 自动连播相关视频的等待时长：播完后留出反悔时间，也比换集慢一拍。 */
 const RELATED_AUTOPLAY_DELAY_MS = 3_000;
 /** 移动超过这个距离视为滑动手势，取消长按判定。 */
@@ -1577,7 +1575,7 @@ function VideoPlayerPageContent() {
     speedHoldRef.current = true;
     suppressSurfaceTaps();
     speedHoldRestoreRateRef.current = playbackRate.playbackRate;
-    playbackRate.setPlaybackRate(LONG_PRESS_RATE);
+    playbackRate.setPlaybackRate(LONG_PRESS_SPEED_RATE);
     setSpeedHoldActive(true);
   }, [duration, loading, playbackError, playbackRate, suppressSurfaceTaps]);
 
@@ -2556,7 +2554,7 @@ function VideoPlayerPageContent() {
                       className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
                     >
                       <FastForward className="size-3.5" aria-hidden />
-                      {LONG_PRESS_RATE.toFixed(1)}x 倍速中
+                      {LONG_PRESS_SPEED_RATE.toFixed(1)}x 倍速中
                     </div>
                   )}
 

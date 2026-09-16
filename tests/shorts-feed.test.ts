@@ -13,6 +13,8 @@ import {
   SHORTS_SWIPE_COMMIT_PROGRESS,
   SHORTS_TOP_BAR_HEIGHT_PX,
   SHORTS_SEEK_BAR_HEIGHT_PX,
+  SHORTS_SEEK_BAR_HIT_HEIGHT_PX,
+  SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
   shortsFeedItems,
   shortsFrameAlign,
   shortsFrameCrop,
@@ -172,6 +174,21 @@ describe("操作栏高度契约", () => {
     expect(SHORTS_BOTTOM_BAR_HEIGHT_PX).toBe(
       SHORTS_BOTTOM_CONTROLS_HEIGHT_PX + SHORTS_SEEK_BAR_HEIGHT_PX,
     );
+  });
+
+  test("进度条命中区探进画面的高度等于命中区减视觉粗细", () => {
+    // 贴底栏摆的浮层（信息与评论）按这个数让位。写死会在命中区或视觉粗细任一变动时
+    // 静默重新压上去，而症状是「点评论数字变成 seek 到 0」——很难反查到这里。
+    expect(SHORTS_SEEK_BAR_HIT_OVERHANG_PX).toBe(
+      SHORTS_SEEK_BAR_HIT_HEIGHT_PX - SHORTS_SEEK_BAR_HEIGHT_PX,
+    );
+  });
+
+  test("命中区比视觉粗细厚，且不超过控制行", () => {
+    // 命中区存在的理由就是 3px 按不到；同时它只向上长，厚过整条底栏就会盖到画面
+    // 中央去。
+    expect(SHORTS_SEEK_BAR_HIT_HEIGHT_PX).toBeGreaterThan(SHORTS_SEEK_BAR_HEIGHT_PX);
+    expect(SHORTS_SEEK_BAR_HIT_HEIGHT_PX).toBeLessThanOrEqual(SHORTS_BOTTOM_CONTROLS_HEIGHT_PX);
   });
 });
 

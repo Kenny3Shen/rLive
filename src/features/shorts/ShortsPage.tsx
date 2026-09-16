@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronUp,
+  FastForward,
   Info,
   MessageCircle,
   MessageSquareOff,
@@ -37,6 +38,11 @@ import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/playe
 import { danmakuControlPresentation } from "@/shared/components/player/PlayerControls";
 import { panelDrawerSide, panelDrawerSizeClass } from "@/shared/components/player/panelDrawer";
 import {
+  hasLongPressMovedBeyondSlop,
+  LONG_PRESS_SPEED_RATE,
+  LONG_PRESS_TRIGGER_MS,
+} from "@/shared/gestures/longPress";
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -54,6 +60,7 @@ import {
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_SAFE_AREA_BOTTOM,
   SHORTS_SAFE_AREA_TOP,
+  SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
   SHORTS_TOP_BAR_HEIGHT_PX,
   shortsFeedItems,
@@ -70,6 +77,14 @@ import {
 } from "./shortsFeed";
 import { useShortsDanmaku } from "./useShortsDanmaku";
 import { useShortsPlayback } from "./useShortsPlayback";
+
+/**
+ * 长按倍速释放后封锁点按的时长（ms）。
+ *
+ * 与播放页的 `SURFACE_TAP_SUPPRESSION_MS` 同量级：抬手后到达的延迟 click 必须落在这段里
+ * 被否决，否则每次倍速松手都会顺手把视频暂停。
+ */
+const SHORTS_TAP_SUPPRESSION_MS = 300;
 
 /**
  * `/shorts`：B 站短视频（story feed）的竖屏消费页。
@@ -110,7 +125,9 @@ export function ShortsPage() {
     // （`more` 为 true 表示这是补货）。用 pageParam 而不是「是否已有数据」做判据：
     // 它在查询被重置后也跟着回到 1，因此重试/重拉仍走首屏那条快路径。
     queryFn: ({ pageParam }) => videoGetStory(pageParam > 1),
-    // 上游无游标：页码只是本地的「再来一批」计数，has_more 恒为「这批非空」。
+    // 上游无游标：页码只是本地的「再来一批」计数。`has_more` 是「这批里有没见过的」
+    // ——后端按进程记忆 + 最近观看过滤（见 `video_get_story`），全是老条目就落下它。
+    // 不能理解成「上游到底了」：那只是此刻没有新内容，重进这一页仍会再试。
     getNextPageParam: (lastPage, allPages) => (lastPage.has_more ? allPages.length + 1 : undefined),
     // 轮换流不该被缓存复用：回到这一页应该看到新内容。
     staleTime: 0,
@@ -147,6 +164,112 @@ export function ShortsPage() {
       void feedQuery.fetchNextPage();
     }
   }, [feedQuery, index, items.length]);
+
+  /* ---------- 长按倍速 ---------- */
+
+  /**
+   * 按住画面临时倍速，松手回 1x —— 与播放页同一套语义、同一组常量
+   * （`LONG_PRESS_SPEED_RATE` / `LONG_PRESS_TRIGGER_MS`），因此两个表面上的手感一致。
+   *
+   * 挂在页面这条 pointer 管线里而不是另起一个识别器：换片手势会
+   * `setPointerCapture` 并 `stopPropagation`，另挂一套的取消路径会失明（与卡片长按
+   * 必须镜像到 window 捕获阶段是同一个原因）。位移容忍半径
+   * （`LONG_PRESS_CANCEL_SLOP_PX`，10px）小于换片锁定距离
+   * （`SHORTS_SWIPE_LOCK_DISTANCE_PX`，12px），因此能锁成换片的手势必定先取消倍速，
+   * 不会出现「倍速中又换了片」。
+   */
+  const speedPressRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const speedHoldTimerRef = useRef<number | null>(null);
+  const speedHoldActiveRef = useRef(false);
+  /** 倍速释放后短暂封锁点按：抬手后可能补发一次 click，那一下不该切暂停。 */
+  const suppressTapUntilRef = useRef(0);
+  /**
+   * 计时器到期时才读的资格。
+   *
+   * 不在按下时闭包捕获：按下与触发相隔 500ms，这段时间里取流可能刚好完成，也可能
+   * 刚好失败。按下那一刻的判断到期时已经过时。
+   */
+  const speedEligibleRef = useRef(false);
+  useLayoutEffect(() => {
+    speedEligibleRef.current = !playback.loading && !playback.error && !playback.paused;
+  }, [playback.error, playback.loading, playback.paused]);
+
+  const setRate = playback.setRate;
+
+  const releaseSpeedHold = useCallback(() => {
+    if (speedHoldTimerRef.current !== null) {
+      window.clearTimeout(speedHoldTimerRef.current);
+      speedHoldTimerRef.current = null;
+    }
+    speedPressRef.current = null;
+    if (!speedHoldActiveRef.current) return;
+    speedHoldActiveRef.current = false;
+    suppressTapUntilRef.current = Date.now() + SHORTS_TAP_SUPPRESSION_MS;
+    setRate(1);
+  }, [setRate]);
+
+  const armSpeedHold = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      releaseSpeedHold();
+      // 只认领画面框上的按压：框外是背景区与两条控制栏，按住它们不该改变播放速度
+      // （点按暂停层也只铺画面框，两者的命中范围刻意一致）。
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest('[data-slot="shorts-frame"]')
+      ) {
+        return;
+      }
+      speedPressRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      speedHoldTimerRef.current = window.setTimeout(() => {
+        speedHoldTimerRef.current = null;
+        if (!speedPressRef.current || !speedEligibleRef.current) return;
+        speedHoldActiveRef.current = true;
+        // 立即封锁点按：倍速期间手指仍在画面上，中途任何补发的 click 都不该切暂停。
+        suppressTapUntilRef.current = Date.now() + SHORTS_TAP_SUPPRESSION_MS;
+        setRate(LONG_PRESS_SPEED_RATE);
+      }, LONG_PRESS_TRIGGER_MS);
+    },
+    [releaseSpeedHold, setRate],
+  );
+
+  /** 手指漂移出容忍半径即取消：那是一次滑动（换片或误触），不是长按。 */
+  const trackSpeedHoldMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const press = speedPressRef.current;
+      if (!press || press.pointerId !== event.pointerId) return;
+      if (hasLongPressMovedBeyondSlop(press.x, press.y, event.clientX, event.clientY)) {
+        releaseSpeedHold();
+      }
+    },
+    [releaseSpeedHold],
+  );
+
+  /**
+   * 抬手一律在 window 捕获阶段收：指针可能在视口外结束（桌面把鼠标拖出窗口再松），
+   * Android WebView 也有丢 `pointercancel` 的先例。漏一次就会把 3x 永久留在画面上，
+   * 而界面上除了换片没有别的出口。
+   */
+  useEffect(() => {
+    const onEnd = () => releaseSpeedHold();
+    window.addEventListener("pointerup", onEnd, true);
+    window.addEventListener("pointercancel", onEnd, true);
+    return () => {
+      window.removeEventListener("pointerup", onEnd, true);
+      window.removeEventListener("pointercancel", onEnd, true);
+      releaseSpeedHold();
+    };
+  }, [releaseSpeedHold]);
+
+  /**
+   * 画面点按：切播放/暂停。
+   *
+   * 决定权归页面而不是舞台：长按倍速的抬手会补发一次 click，只有这一层知道刚才那次
+   * 按压已经被倍速认领了。
+   */
+  const onSurfaceTap = useCallback(() => {
+    if (Date.now() < suppressTapUntilRef.current) return;
+    playback.togglePlay();
+  }, [playback]);
 
   /* ---------- 纵向翻页：手指按下期间直接写 transform，释放交给合成器 ---------- */
 
@@ -301,9 +424,6 @@ export function ShortsPage() {
   const onPointerDownCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const pointerType = event.pointerType as string;
-      // 部分 Android WebView 对手指输入上报空的 pointerType。鼠标不参与换片
-      // （桌面用滚轮与方向键，见下）。
-      if ((pointerType !== "touch" && pointerType !== "") || !event.isPrimary) return;
       // 进度条上的按压归它自己：那是唯一的横向精细操作，纵向抖动不该换片。
       if (
         event.target instanceof HTMLElement &&
@@ -311,6 +431,13 @@ export function ShortsPage() {
       ) {
         return;
       }
+      // 长按倍速先于换片武装：它对鼠标也成立（桌面按住画面同样倍速），而下面那段换片
+      // 只收手指。两者共用同一次按压：位移超过容忍半径时倍速自己取消（见
+      // `trackSpeedHoldMove`），不需要在这里分他们的胜负。
+      armSpeedHold(event);
+      // 部分 Android WebView 对手指输入上报空的 pointerType。鼠标不参与换片
+      // （桌面用滚轮与方向键，见下）。
+      if ((pointerType !== "touch" && pointerType !== "") || !event.isPrimary) return;
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
@@ -324,11 +451,13 @@ export function ShortsPage() {
         samples: [{ y: event.clientY, time: performance.now() }],
       };
     },
-    [index, items.length, stageHeight],
+    [armSpeedHold, index, items.length, stageHeight],
   );
 
   const onPointerMoveCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      // 先算倍速的取消：鼠标没有 `swipeRef`，下一行就返回了。
+      trackSpeedHoldMove(event);
       const swipe = swipeRef.current;
       if (!swipe || swipe.pointerId !== event.pointerId) return;
       const deltaX = event.clientX - swipe.startX;
@@ -372,7 +501,7 @@ export function ShortsPage() {
       event.preventDefault();
       event.stopPropagation();
     },
-    [cancelSettle, writeOffset],
+    [cancelSettle, trackSpeedHoldMove, writeOffset],
   );
 
   const finishSwipe = useCallback(
@@ -620,6 +749,7 @@ export function ShortsPage() {
                     danmaku={danmaku}
                     danmakuVisible={danmakuVisible}
                     gestureActive={gestureActive}
+                    onSurfaceTap={onSurfaceTap}
                   />
                 ) : (
                   <ShortsPoster item={item} />
@@ -648,6 +778,26 @@ export function ShortsPage() {
             />
           </span>
         </div>
+
+        {/*
+          长按倍速提示。挂在顶栏之下、视口固定层里：它描述的是「当前这一条正在被
+          按住快放」，随条带平移会在换片时跟着画面滑走。
+
+          读 `playback.rate` 而不是另存一个「倍速中」布尔：倍速的真相在媒体元素上，
+          两处各存一份就会出现「提示还在、倍速已经回落」。
+        */}
+        {playback.rate > 1 && (
+          <div
+            data-slot="shorts-speed-hint"
+            role="status"
+            aria-live="polite"
+            className="pointer-events-none absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
+            style={{ top: `calc(${SHORTS_TOP_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_TOP})` }}
+          >
+            <FastForward className="size-3.5" aria-hidden />
+            {playback.rate.toFixed(1)}x 倍速中
+          </div>
+        )}
 
         {/* 桌面换片按钮：没有触摸时上下滑动无从进行，滚轮之外给一对显式入口。 */}
         <div className="absolute right-3 bottom-1/2 z-20 hidden translate-y-1/2 flex-col gap-2 md:flex">
@@ -699,8 +849,13 @@ export function ShortsPage() {
           <div
             data-slot="shorts-info-float"
             // `px-2` 与顶栏一致：左边的头像与返回按钮、右边的评论与 `⋮` 各自成一条竖线。
-            className="pointer-events-none absolute inset-x-0 z-20 flex items-end justify-between gap-3 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8 pb-2"
-            style={{ bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})` }}
+            className="pointer-events-none absolute inset-x-0 z-20 flex items-end justify-between gap-3 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8"
+            style={{
+              bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
+              // 底部内边距让开进度条的命中区：那块区域只占 3px 布局、却向上盖住 17px，
+              // 不让位的话点在评论数字上会变成一次 seek（实测会把进度拖到 0）。
+              paddingBottom: `${SHORTS_SEEK_BAR_HIT_OVERHANG_PX}px`,
+            }}
           >
             {/*
               信息块贴左下角，但宽度封顶：桌面上视口有 1400px 宽，不封顶的话标题会拉成
@@ -751,17 +906,27 @@ export function ShortsPage() {
                 点不动的区域。箭头朝下是因为抽屉从下方推入。
               */}
               <div className="flex min-w-0 flex-col gap-0.5">
+                {/*
+                  展开箭头跟在标题文字末尾而不是右边界：内层 `w-fit` 让盒子收到内容宽，
+                  短标题的箭头因此紧跟文字（而不是隔着一大片空白飘在右侧）；长标题被
+                  `max-w-full` 撑满后剪到两行，箭头落在第二行末尾，仍然是「跟着文字」。
+
+                  外层按钮仍然 `w-full`：触发区是整个标题区，只能点在字上的话命中太小。
+                */}
                 <button
                   type="button"
                   aria-label={`视频详情：${current.title}`}
                   title="视频详情"
-                  className="pointer-events-auto flex w-full items-start gap-1.5 text-left"
+                  className="pointer-events-auto block w-full text-left"
                   onClick={panels.openDetail}
                 >
-                  <span className="line-clamp-2 min-w-0 flex-1 text-sm text-white/90">
-                    {current.title}
+                  <span className="flex w-fit max-w-full items-end gap-1.5">
+                    <span className="line-clamp-2 min-w-0 text-sm text-white/90">
+                      {current.title}
+                    </span>
+                    {/* `mb-0.5` 把 16px 的箭头对到 20px 行高的文字中线上。 */}
+                    <ChevronDown className="mb-0.5 size-4 shrink-0 text-white/70" aria-hidden />
                   </span>
-                  <ChevronDown className="mt-0.5 size-4 shrink-0 text-white/70" aria-hidden />
                 </button>
                 <p className="text-xs text-white/70">
                   {formatOnline(current.view)} 次播放

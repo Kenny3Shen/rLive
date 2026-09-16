@@ -133,6 +133,13 @@ type ShortsStageProps = {
   danmakuVisible: boolean;
   /** 手势进行中：此时禁掉点按，避免滑动尾声的合成 click 误暂停。 */
   gestureActive: boolean;
+  /**
+   * 画面点按的动作。
+   *
+   * 由页面提供而不是这里直接调 `playback.togglePlay`：长按倍速松手后浏览器仍会补一次
+   * click，只有页面知道那一下该不该作废（它持有长按的抑制窗口）。
+   */
+  onSurfaceTap: () => void;
 };
 
 export function ShortsStage({
@@ -142,9 +149,9 @@ export function ShortsStage({
   danmaku,
   danmakuVisible,
   gestureActive,
+  onSurfaceTap,
 }: ShortsStageProps) {
   const cid = item.cid ?? 0;
-  const togglePlay = playback.togglePlay;
   const { size: area, measure } = useShortsStageSize();
   // 起播后以媒体自报画幅为准，起播前用列表下发的 dimension 定框。
   const aspect = shortsMediaAspect(item.dimension, playback.intrinsicSize);
@@ -246,7 +253,7 @@ export function ShortsStage({
           <div
             aria-hidden
             // 手势进行中不响应：Android WebView 在识别出的滑动之后仍可能补发 click。
-            onClick={gestureActive ? undefined : togglePlay}
+            onClick={gestureActive ? undefined : onSurfaceTap}
             className="absolute inset-0"
           />
         </div>

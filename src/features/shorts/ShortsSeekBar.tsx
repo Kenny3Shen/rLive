@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent }
 import { formatVideoDuration } from "@/features/video/videoHistory";
 import {
   SHORTS_SEEK_BAR_HEIGHT_PX,
+  SHORTS_SEEK_BAR_HIT_HEIGHT_PX,
   SHORTS_SEEK_KEY_STEP_SECONDS,
   SHORTS_SEEK_PREVIEW_WIDTH_PX,
   shortsSeekPreviewLeft,
@@ -156,7 +157,8 @@ export function ShortsSeekBar({
         aria-disabled={seekable ? undefined : true}
         // `touch-action: none` 让浏览器把纵向移动也交给我们，否则在这条带子上拖动
         // 会被当成页面滚动。
-        className="absolute inset-x-0 bottom-0 flex h-5 cursor-pointer items-end touch-none"
+        className="absolute inset-x-0 bottom-0 flex cursor-pointer items-end touch-none"
+        style={{ height: `${SHORTS_SEEK_BAR_HIT_HEIGHT_PX}px` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={(event) => finish(event, true)}

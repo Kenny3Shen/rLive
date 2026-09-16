@@ -39,7 +39,5 @@ export function panelDrawerSide(compact: boolean, scoped = false): DrawerSide {
  */
 export function panelDrawerSizeClass(side: DrawerSide, scoped = false): string {
   if (scoped) return "h-full";
-  return side === "bottom"
-    ? "h-[70dvh] max-h-[70dvh]"
-    : `h-full ${PANEL_DRAWER_WIDTH_CLASS}`;
+  return side === "bottom" ? "h-[70dvh] max-h-[70dvh]" : `h-full ${PANEL_DRAWER_WIDTH_CLASS}`;
 }

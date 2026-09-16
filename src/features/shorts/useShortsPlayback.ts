@@ -57,6 +57,15 @@ export type ShortsPlaybackState = {
   toggleMuted: () => void;
   /** 跳到指定秒数。进度条拖动释放时调用。 */
   seek: (seconds: number) => void;
+  /**
+   * 当前播放速率。长按倍速期间是 [`LONG_PRESS_SPEED_RATE`]，其余时候是 1。
+   *
+   * 暴露出来而不是只给一个「倍速中」的布尔：提示条上的那个数字必须与真正生效的
+   * 速率同源，否则显示 3.0x 而实际还是 1.0x 这种漂移没人看得出来。
+   */
+  rate: number;
+  /** 设置播放速率。长按倍速用它进出，松开时传回 1。 */
+  setRate: (rate: number) => void;
   /** 重试当前条目（重新取流并重建播放器）。 */
   retry: () => void;
 };
@@ -96,6 +105,14 @@ export function useShortsPlayback({
   const userPausedRef = useRef(false);
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const mutedRef = useRef(false);
+  /**
+   * 当前播放倍速。
+   *
+   * 短视频没有倍速菜单，这个值只由长按倍速临时改写（见 `ShortsPage`），松手即回 1。
+   * 仍然进 state 而不是只写媒体元素：界面上那枚「3.0x 倍速中」的提示读的是它，
+   * 两处各存一份就会出现「提示还在、倍速已经回落」。
+   */
+  const [rate, setRate] = useState(1);
   const [revision, setRevision] = useState(0);
 
   const cid = item?.cid ?? 0;
@@ -314,6 +331,12 @@ export function useShortsPlayback({
     }
 
     media.muted = mutedRef.current;
+    // 倍速不跨条目继承：长按倍速是临时状态，按住不放地滑动换片时这里会先于
+    // pointerup 跑，新条目必须从 1x 起。媒体元素与 state 一起归位，否则那枚
+    // 「3.0x 倍速中」的提示会留在新条目上。
+    media.playbackRate = 1;
+    // oxlint-disable-next-line react/set-state-in-effect
+    setRate(1);
     media.addEventListener("timeupdate", syncTime);
     media.addEventListener("durationchange", syncDuration);
     media.addEventListener("loadedmetadata", onReady);
@@ -443,6 +466,22 @@ export function useShortsPlayback({
     [duration, videoRef],
   );
 
+  /**
+   * 改播放倍速。
+   *
+   * 只写媒体元素而不碰 Video.js 播放器实例：短视频用的是裸 `<video>` + 本机代理，
+   * `playbackRate` 是元素自身的属性，媒体源不受影响（不会重新起播）。
+   */
+  const changeRate = useCallback(
+    (next: number) => {
+      const value = Number.isFinite(next) && next > 0 ? next : 1;
+      const media = videoRef.current;
+      if (media) media.playbackRate = value;
+      setRate(value);
+    },
+    [videoRef],
+  );
+
   const retry = useCallback(() => {
     setError(null);
     setRevision((value) => value + 1);
@@ -470,8 +509,10 @@ export function useShortsPlayback({
     duration,
     muted,
     intrinsicSize,
+    rate,
     togglePlay,
     toggleMuted,
+    setRate: changeRate,
     seek,
     retry,
   };
