@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>短视频面板抽屉与二级回复抽屉几何</title>
+    <link rel="icon" type="image/svg+xml" href="/rlive.svg" />
+    <style>
+      body {
+        margin: 0;
+        /* 被测的是抽屉的几何：外面铺一片黑，模拟短视频页的底色。 */
+        background: #000;
+      }
+      [data-drawer-geometry-fixture] {
+        position: fixed;
+        inset: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="fixture"></div>
+    <script type="module" src="./shorts-panel-drawers.tsx"></script>
+  </body>
+</html>
