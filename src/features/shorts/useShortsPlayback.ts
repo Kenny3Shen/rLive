@@ -215,12 +215,22 @@ export function useShortsPlaybackSlot({
     [],
   );
   // 上一条的会话要在新会话替换它之前停掉。
+  //
+  // 过渡期必须**保留**旧引用：换片时 queryKey 变、新数据未到，`data` 会变成
+  // `undefined`。若在这一帧把引用写成 null，等新数据到达时 `previous` 已是 null，
+  // 两个分支都进不去 —— 旧会话（三个回环监听器）永不释放。实机验证：换片 12 次
+  // `video_stop_play` 调用 0 次，进程回环监听端口线性增长（每次 +3，正是三个
+  // session 各占一个 TcpListener）。
+  //
+  // 播放页同一份逻辑是好的，因为它有 `placeholderData: keepPreviousData`，
+  // `data` 不会经历 `undefined`；短视频不能加那一行（会拿旧 MPD 打已停会话）。
   const previousSessionsRef = useRef<VideoSessionIds | null>(null);
   useEffect(() => {
-    const previous = previousSessionsRef.current;
     const current = playInfoQuery.data;
-    previousSessionsRef.current = current?.session_ids ?? null;
-    if (previous && current && previous.mpd !== current.session_ids.mpd) {
+    if (!current) return;
+    const previous = previousSessionsRef.current;
+    previousSessionsRef.current = current.session_ids;
+    if (previous && previous.mpd !== current.session_ids.mpd) {
       void videoStopPlay(previous);
     }
   }, [playInfoQuery.data]);
