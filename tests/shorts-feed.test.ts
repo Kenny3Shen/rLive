@@ -35,8 +35,11 @@ import {
   shortsNextSlots,
   shortsPreloadDirection,
   shortsSlotCoveredIndexes,
+  shortsSlotRole,
   shortsSlotTop,
+  shortsActiveSlot,
   shortsWarmIndex,
+  shortsWarmIndexes,
   type ShortsSlots,
 } from "../src/features/shorts/shortsFeed";
 import * as shortsFeed from "../src/features/shorts/shortsFeed";
@@ -508,83 +511,88 @@ describe("路由契约", () => {
   });
 });
 
-describe("双播放器槽位", () => {
-  const start: ShortsSlots = { held: { a: null, b: null }, active: "a" };
+describe("三播放器槽位", () => {
+  const start: ShortsSlots = { held: { a: null, b: null, c: null }, active: "a" };
 
   test("预热顺着滑动方向的那一条", () => {
-    expect(shortsWarmIndex(0, 5, 1)).toBe(1);
+    expect(shortsWarmIndexes(0, 5, 1)[0]).toBe(1);
+    expect(shortsWarmIndexes(2, 5, 1)[0]).toBe(3);
+    expect(shortsWarmIndexes(2, 5, -1)[0]).toBe(1);
+    // 单邻居入口与旧语义一致。
     expect(shortsWarmIndex(2, 5, 1)).toBe(3);
-    expect(shortsWarmIndex(2, 5, -1)).toBe(1);
   });
 
-  test("到边界就预热另一侧", () => {
-    // 最后一条上向下无路可走，但向上那条同样值得预热 —— 用户随时可能回滑。
-    expect(shortsWarmIndex(4, 5, 1)).toBe(3);
-    expect(shortsWarmIndex(0, 5, -1)).toBe(1);
+  test("两个邻居都要预热", () => {
+    expect(shortsWarmIndexes(2, 5, 1)).toEqual([3, 1]);
+    expect(shortsWarmIndexes(2, 5, -1)).toEqual([1, 3]);
+  });
+
+  test("到边界只剩一个邻居", () => {
+    // 最后一条上向下无路可走，只剩向上那条。
+    expect(shortsWarmIndexes(4, 5, 1)).toEqual([3, null]);
+    expect(shortsWarmIndexes(0, 5, -1)).toEqual([1, null]);
   });
 
   test("只有一条时没有可预热的邻居", () => {
-    expect(shortsWarmIndex(0, 1, 1)).toBeNull();
-    expect(shortsWarmIndex(0, 0, 1)).toBeNull();
+    expect(shortsWarmIndexes(0, 1, 1)).toEqual([null, null]);
+    expect(shortsWarmIndexes(0, 0, 1)).toEqual([null, null]);
     // 越界下标同样不该产物。
-    expect(shortsWarmIndex(9, 5, 1)).toBeNull();
+    expect(shortsWarmIndexes(9, 5, 1)).toEqual([null, null]);
   });
 
-  test("换片时角色交换：被提升的是刚预热过的那个", () => {
+  test("三个槽位按 index 取模承担角色", () => {
+    // 槽位与角色的对应随下标轮转：item j 恒定落在槽位 j % 3。
+    expect(shortsSlotRole(0, "a")).toBe("current");
+    expect(shortsSlotRole(0, "b")).toBe("next");
+    expect(shortsSlotRole(1, "a")).toBe("prev");
+    expect(shortsSlotRole(1, "b")).toBe("current");
+    expect(shortsActiveSlot(0)).toBe("a");
+    expect(shortsActiveSlot(1)).toBe("b");
+    expect(shortsActiveSlot(2)).toBe("c");
+    // 轮转回来。
+    expect(shortsActiveSlot(3)).toBe("a");
+  });
+
+  test("换片时轮转：只有新邻居那一个槽位换内容", () => {
     const first = shortsNextSlots(0, 5, 1, start);
-    expect(first.held[first.active]).toBe(0);
-    expect(first.held[first.active === "a" ? "b" : "a"]).toBe(1);
+    expect(first.active).toBe("a");
+    expect(first.held).toEqual({ a: 0, b: 1, c: null });
 
-    // 滑到下一条：原先预热的那一个成为活动，另一个去预热新的邻居。
+    // 滑到下一条：b 升为活动，a 留着刚播过的 0（prev），只有 c 去取新的 2。
+    // 「换片不重建」就落在这里 —— 被提升的 b 已经预热过，a 也还热着。
     const second = shortsNextSlots(1, 5, 1, first);
-    expect(second.held[second.active]).toBe(1);
-    expect(second.active).not.toBe(first.active);
-    expect(second.held[first.active]).toBe(2);
+    expect(second.active).toBe("b");
+    expect(second.held).toEqual({ a: 0, b: 1, c: 2 });
+
+    // 再滑一条：只有 a 换成 3。
+    const third = shortsNextSlots(2, 5, 1, second);
+    expect(third.active).toBe("c");
+    expect(third.held).toEqual({ a: 3, b: 1, c: 2 });
   });
 
-  test("方向翻转后预热翻到另一侧", () => {
+  test("回滑同样命中：上一条已经在槽位里", () => {
     const at2 = shortsNextSlots(2, 5, 1, start);
-    expect(at2.held[at2.active === "a" ? "b" : "a"]).toBe(3);
-    // 回滑到 1：预热目标改为 0。
+    expect(at2.held).toEqual({ a: 3, b: 1, c: 2 });
+    // 回滑到 1：b 本来就是 1，无需重新取流 —— 这正是两槽位做不到的。
     const back = shortsNextSlots(1, 5, -1, at2);
-    expect(back.held[back.active]).toBe(1);
-    expect(back.held[back.active === "a" ? "b" : "a"]).toBe(0);
+    expect(back.active).toBe("b");
+    expect(back.held).toEqual({ a: 0, b: 1, c: 2 });
   });
 
-  test("目标不在任何槽位里时由另一个槽位接管", () => {
-    // 跳转（方向翻转或跨条）的第一次：两个槽位都没持有目标，只能重新取流 ——
-    // 这是慢路径，预热下一次才跟上。
-    const at0 = shortsNextSlots(0, 5, 1, start);
-    expect([at0.held.a, at0.held.b]).toContain(0);
-    const jumped = shortsNextSlots(2, 5, 1, at0);
-    expect(jumped.held[jumped.active]).toBe(2);
-    // 接管的那个去预热新邻居，而不是留着旧内容。
-    expect(jumped.held[jumped.active === "a" ? "b" : "a"]).toBe(3);
-  });
-
-  test("在最后一条上预热的是上一条", () => {
+  test("结尾处 next 槽空着，prev 仍在", () => {
     const at4 = shortsNextSlots(4, 5, 1, start);
-    expect(at4.held[at4.active]).toBe(4);
-    expect(at4.held[at4.active === "a" ? "b" : "a"]).toBe(3);
+    expect(at4.held).toEqual({ a: 3, b: 4, c: null });
   });
 
-  test("同一条仍在播时不换手", () => {
-    const at1 = shortsNextSlots(1, 5, 1, start);
-    const again = shortsNextSlots(1, 5, -1, at1);
-    // 只有方向变了，活动槽位与它持有的条目都不该动。
-    expect(again.active).toBe(at1.active);
-    expect(again.held[again.active]).toBe(1);
-  });
-
-  test("幂等：目标与预热目标都没变时返回原对象", () => {
-    const at1 = shortsNextSlots(1, 5, 1, start);
-    expect(shortsNextSlots(1, 5, 1, at1)).toBe(at1);
-  });
-
-  test("只有一条时只有一个槽位有内容", () => {
+  test("只有一条时其余两个槽位空着", () => {
     const only = shortsNextSlots(0, 1, 1, start);
     expect(only.held[only.active]).toBe(0);
-    expect(only.held[only.active === "a" ? "b" : "a"]).toBeNull();
+    expect(Object.values(only.held).filter((value) => value === null)).toHaveLength(2);
+  });
+
+  test("幂等：三个槽位的持有都没变时返回原对象", () => {
+    const at1 = shortsNextSlots(1, 5, 1, start);
+    expect(shortsNextSlots(1, 5, 1, at1)).toBe(at1);
   });
 
   test("方向只在真的换了条时翻转", () => {
@@ -596,9 +604,11 @@ describe("双播放器槽位", () => {
   });
 
   test("槽位覆盖的下标集合", () => {
-    expect(shortsSlotCoveredIndexes({ held: { a: 1, b: 2 }, active: "a" })).toEqual(new Set([1, 2]));
+    expect(shortsSlotCoveredIndexes({ held: { a: 1, b: 2, c: 3 }, active: "a" })).toEqual(
+      new Set([1, 2, 3]),
+    );
     // 空槽位不该出现在集合里（它没有被渲染）。
-    expect(shortsSlotCoveredIndexes({ held: { a: 0, b: null }, active: "a" })).toEqual(
+    expect(shortsSlotCoveredIndexes({ held: { a: 0, b: null, c: null }, active: "a" })).toEqual(
       new Set([0]),
     );
   });

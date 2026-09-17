@@ -499,40 +499,95 @@ export function shortsShouldFetchMore(
 }
 
 // ---------------------------------------------------------------------------
-// 双播放器槽位
+// 三播放器槽位
 // ---------------------------------------------------------------------------
 
 /**
- * 两个播放器槽位的标识。
+ * 三个播放器槽位的标识。
  *
- * 它们是**位置**而不是「当前/下一个」的角色：两个槽位轮换承担活动与预热，
+ * 它们是**位置**而不是「当前/下一个」的角色：槽位轮换承担活动与预热，
  * 因此不能叫 `current` / `next` —— 那两个名字会在角色交换的那一刻变成谎言。
+ *
+ * 三个槽位固定承担「上一条 / 当前 / 下一条」（见 `shortsSlotRole`），换片时按
+ * `index % 3` 轮转：下标每前进一位，上一条的槽位就被改成新的下一条。
  */
-export type ShortsSlotId = "a" | "b";
+export type ShortsSlotId = "a" | "b" | "c";
+
+/** 槽位总数。轮转取模与「哪些下标被槽位覆盖」都按它算。 */
+export const SHORTS_SLOT_COUNT = 3;
+
+/** 所有槽位标识，顺序稳定。页面按它渲染槽位面板。 */
+export const SHORTS_SLOT_IDS: readonly ShortsSlotId[] = ["a", "b", "c"];
+
+/**
+ * 槽位相对当前条目承担的角色。
+ *
+ * - `"current"`：正在播的那一条。
+ * - `"next"` / `"prev"`：两个方向的邻居，各自预热到 `canplay` 待命。
+ */
+export type ShortsSlotRole = "current" | "next" | "prev";
+
+/**
+ * 某个槽位在给定下标下该承担哪个角色。
+ *
+ * 取模轮转而不是查表：下标前进一位时 `index % 3` 跟着走一格，于是原来的
+ * `prev` 变成 `current`、原来的 `current` 变成 `next`、原来的 `next` 被改派
+ * 去预热新的下一条 —— 换片因此**不换手、不重建播放器**（见 `shortsNextSlots`）。
+ */
+export function shortsSlotRole(index: number, slotId: ShortsSlotId): ShortsSlotRole {
+  const offset = (SHORTS_SLOT_IDS.indexOf(slotId) - (index % SHORTS_SLOT_COUNT) + SHORTS_SLOT_COUNT) % SHORTS_SLOT_COUNT;
+  return offset === 0 ? "current" : offset === 1 ? "next" : "prev";
+}
+
+/**
+ * 承担「当前」角色的槽位。
+ *
+ * 与 `shortsSlotRole` 同一套取模，只是反着查：给定下标返回该由谁播。
+ */
+export function shortsActiveSlot(index: number): ShortsSlotId {
+  return SHORTS_SLOT_IDS[index % SHORTS_SLOT_COUNT]!;
+}
 
 /** 滑动方向：1 向下（看更新的一条），-1 向上（回看）。 */
 export type ShortsSwipeDirection = 1 | -1;
 
 /**
- * 预热该落在哪一条。
+ * 预热该落在哪几条。
  *
- * 顺着当前方向的那一条优先；到边界就回头取另一侧（在最后一条上，向下无路可走，
- * 但向上那条同样值得预热 —— 用户随时可能回滑）。只有一条时没有可预热的邻居。
+ * 三槽位下两个邻居都要：顺着方向的那一条排前面（连刷时它先被用到），另一条
+ * 兜住回滑 —— 回滑在竖屏消费里并不罕见（没看清、想再听一遍），而两槽位方案下
+ * 第一次回滑必然是冷启动。
+ *
+ * 只有一条时没有可预热的邻居；两条时只剩一个邻居。
+ */
+export function shortsWarmIndexes(
+  index: number,
+  length: number,
+  direction: ShortsSwipeDirection,
+): (number | null)[] {
+  if (length <= 1 || index < 0 || index >= length) return [null, null];
+  const forward = index + direction;
+  const backward = index - direction;
+  const inRange = (value: number) => value >= 0 && value < length;
+  const first = inRange(forward) ? forward : inRange(backward) ? backward : null;
+  const second = first !== null && first !== backward && inRange(backward) ? backward : null;
+  return [first, second];
+}
+
+/**
+ * 单邻居预热目标：两槽位时代的入口，保留给只需要一个预热目标的场合。
+ *
+ * 语义与旧实现一致：顺方向优先，到边界就回头取另一侧。
  */
 export function shortsWarmIndex(
   index: number,
   length: number,
   direction: ShortsSwipeDirection,
 ): number | null {
-  if (length <= 1 || index < 0 || index >= length) return null;
-  const forward = index + direction;
-  if (forward >= 0 && forward < length) return forward;
-  const backward = index - direction;
-  if (backward >= 0 && backward < length) return backward;
-  return null;
+  return shortsWarmIndexes(index, length, direction)[0];
 }
 
-/** 两个槽位各自持有哪一条；null 表示该槽位空着。 */
+/** 三个槽位各自持有哪一条；null 表示该槽位空着。 */
 export type ShortsSlotAssignments = Record<ShortsSlotId, number | null>;
 
 export type ShortsSlots = {
@@ -544,35 +599,51 @@ export type ShortsSlots = {
 /**
  * 换片后的槽位分配。
  *
- * 角色交换而非「谁空闲谁上」：被提升的是**刚才在预热的那一个**，它已经取过流、
- * 已经缓冲好，因此换片不需要重新取流也不需要重建播放器。刚被换下的那个接着去
- * 预热新的邻居 —— 它手上的旧播放器正好用来换源，同样不必重建。
+ * 三个槽位按 `index % 3` 固定承担「上一条 / 当前 / 下一条」，换片时**轮转**：
+ * 下标前进一位，当前槽位跟着走一格，于是刚播完的那条留在 `prev`、刚预热好的
+ * 那条升为 `current`，只有原来 `prev` 的那个槽位被改派去预热新的下一条 —— 它
+ * 手上的旧播放器正好用来换源，同样不必重建。
  *
- * 幂等：目标与预热目标都没变时返回**原对象**，调用方因此可以直接把它放进
+ * 两个邻居同时预热，因此**回滑与前进同样命中**：任一个方向都不必重新取流。
+ *
+ * 幂等：三个槽位的持有都没变时返回**原对象**，调用方因此可以直接把它放进
  * 依赖数组而不触发多余的重跑。
  */
 export function shortsNextSlots(
   index: number,
   length: number,
-  direction: ShortsSwipeDirection,
+  // 三槽位下两个邻居同时预热，前进与回滑都命中，因此方向不再影响分配。
+  // 保留这个参数是为了调用方与 `settledKey` 不变，也为了将来按方向调整优先级。
+  _direction: ShortsSwipeDirection,
   current: ShortsSlots,
 ): ShortsSlots {
   if (length <= 0 || index < 0 || index >= length) return current;
-  const warm = shortsWarmIndex(index, length, direction);
-  // 活动槽优先保持不变：同一条仍在播时（重渲染、视口变化）不该换手。
-  const active: ShortsSlotId =
-    current.held[current.active] === index
-      ? current.active
-      : current.held.a === index
-        ? "a"
-        : current.held.b === index
-          ? "b"
-          : current.active === "a"
-            ? "b"
-            : "a";
-  const idle: ShortsSlotId = active === "a" ? "b" : "a";
-  if (current.held[active] === index && current.held[idle] === warm) return current;
-  return { held: { a: active === "a" ? index : warm, b: active === "b" ? index : warm }, active };
+
+  /**
+   * 按角色取条目：`next` / `prev` 就是下标加减一，越界即无。
+   *
+   * 刻意不用 `shortsWarmIndexes` 的「顺方向优先」结果：那个顺序是给**单**预热
+   * 目标用的，三槽位下它会把边界处仅剩的那一个邻居（实为 prev）派给 next 槽，
+   * 而槽位与条目的对应是固定的（item j → 槽位 j % 3），错位会让上一条被当成
+   * 下一条去预热。
+   */
+  const target = (role: ShortsSlotRole): number | null => {
+    const value = role === "current" ? index : role === "next" ? index + 1 : index - 1;
+    return value >= 0 && value < length ? value : null;
+  };
+
+  const active = shortsActiveSlot(index);
+  const held: ShortsSlotAssignments = { a: null, b: null, c: null };
+  for (const slotId of SHORTS_SLOT_IDS) {
+    held[slotId] = target(shortsSlotRole(index, slotId));
+  }
+
+  const unchanged =
+    current.active === active &&
+    current.held.a === held.a &&
+    current.held.b === held.b &&
+    current.held.c === held.c;
+  return unchanged ? current : { held, active };
 }
 
 /**
@@ -603,7 +674,7 @@ export function shortsSlotTop(held: number | null): string {
  */
 export function shortsSlotCoveredIndexes(slots: ShortsSlots): Set<number> {
   const covered = new Set<number>();
-  for (const value of [slots.held.a, slots.held.b]) {
+  for (const value of Object.values(slots.held)) {
     if (value != null) covered.add(value);
   }
   return covered;

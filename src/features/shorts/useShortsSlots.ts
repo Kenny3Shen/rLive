@@ -11,30 +11,31 @@ import { useShortsPlaybackSlot, type ShortsPlaybackState } from "./useShortsPlay
 import type { ShortsSessionRetention } from "./useShortsSessionRetention";
 
 /**
- * 短视频的双播放器编排层。
+ * 短视频的三播放器编排层。
  *
- * 两个槽位轮换承担「活动」与「预热」：活动槽位在播当前条目，另一个在**方向自适应**
- * 的相邻条目上预热到 `canplay`。换片时两者角色交换 —— 被提升的那一个已经取过流、
- * 已经缓冲好，因此**不重新取流、不重建播放器**，换片的取流延迟（400~700ms）在
- * 预热命中时归零。
+ * 三个槽位固定承担「上一条 / 当前 / 下一条」（见 `shortsSlotRole`），换片时按
+ * `index % 3` 轮转：当前槽位走一格，刚预热好的邻居升为活动，**不重新取流、不重建
+ * 播放器**，换片的取流延迟（400~700ms）在预热命中时归零。
  *
- * 为什么是两个而不是三个：
+ * 为什么是三个：
  *
  * - **一个**等于没有预热：每次换片都要等一次 playurl + 两条 sidx + 三个回环代理。
- * - **三个**（上一条 / 当前 / 下一条）能同时覆盖双向，代价是常驻九个本机监听器、
- *   三份取流与三份 MSE 缓冲。低端 Android WebView 上并发解码器是稀缺资源，那样
- *   做会把「偶发预热失败」变成「当前这条也起不来」。
- * - **两个**覆盖了绝大多数滑动（短视频消费是连续朝一个方向刷），回滑一次之后预热
- *   就翻到另一侧，第二次回滑同样命中。
+ * - **两个**只覆盖一个方向。短视频消费确实是连续朝一个方向刷，但回滑并不罕见
+ *   （没看清、想再听一遍），而两槽位下回滑必然冷启动 —— 预热方向翻转之后还要
+ *   再等一次完整取流。
+ * - **三个**让前进与回滑同样命中。
  *
- * 预热方向为什么「自适应」而不是固定向下：固定向下时每次回看上一条都要现取流，
- * 退化到没有预热的体验 —— 而回看在竖屏消费里并不罕见（没看清、想再听一遍）。
+ * 「常驻三份」的代价怎么收：两条预热都受 `mediaAllowed` 闸门约束（见下），它们只
+ * 跑**控制面**取流（playurl 与两条 sidx，几 KB），不附着媒体、不缓冲分片，因此不抢
+ * 当前这条的带宽，也不多占解码器。真正在下载媒体的始终只有活动槽位一条 —— 这正是
+ * 「三份取流」与「三路并发解码」的区别，后者才是低端 Android WebView 上会把「偶发
+ * 预热失败」变成「当前这条也起不来」的那种负载。
  *
- * ## 两个 hook 按**槽位**绑定，不按角色
+ * ## 三个 hook 按**槽位**绑定，不按角色
  *
- * `useShortsPlaybackSlot` 被调用两次，参数里的 `videoRef` 与 `slotId` 恒定属于
- * 某一个槽位（A 或 B），只有 `mode` 随角色变化。这一点是必须的：React 的 hook
- * 状态按**调用位置**保存，若按「活动/预热」传 ref，角色交换时两个 hook 会互换
+ * `useShortsPlaybackSlot` 被调用三次，参数里的 `videoRef` 与 `slotId` 恒定属于
+ * 某一个槽位（A / B / C），只有 `mode` 随角色变化。这一点是必须的：React 的 hook
+ * 状态按**调用位置**保存，若按「活动/预热」传 ref，角色轮转时 hook 会互换
  * 媒体元素 —— 各自的 `playerRef` 于是绑在对方的元素上，播放器复用当场失效
  * （检测到元素变了就会完整重建）。
  */
@@ -42,7 +43,7 @@ import type { ShortsSessionRetention } from "./useShortsSessionRetention";
 export type ShortsSlotRefs = Record<ShortsSlotId, React.RefObject<HTMLVideoElement | null>>;
 
 export type ShortsSlotsState = {
-  /** 两个槽位各自持有哪一条；null 表示该槽位空着。 */
+  /** 三个槽位各自持有哪一条；null 表示该槽位空着。 */
   slots: ShortsSlots;
   /**
    * 各槽位自己的状态（按槽位索引，不是按角色）。
@@ -74,7 +75,7 @@ export type UseShortsSlotsOptions = {
   retention?: ShortsSessionRetention | undefined;
 };
 
-const INITIAL_SLOTS: ShortsSlots = { held: { a: null, b: null }, active: "a" };
+const INITIAL_SLOTS: ShortsSlots = { held: { a: null, b: null, c: null }, active: "a" };
 
 export function useShortsSlots({
   items,
@@ -145,12 +146,24 @@ export function useShortsSlots({
     parkPlayInfo: retention?.park,
     onProgress: active === "b" ? onProgress : undefined,
   });
+  const slotC = useShortsPlaybackSlot({
+    item: items[slots.held.c ?? -1] ?? null,
+    videoRef: refs.c,
+    slotId: "c",
+    mode: active === "c" ? "play" : "warm",
+    mediaAllowed: active === "c" || activeReady,
+    claimPlayInfo: retention?.peek,
+    releasePlayInfo: retention?.release,
+    parkPlayInfo: retention?.park,
+    onProgress: active === "c" ? onProgress : undefined,
+  });
 
-  const nextActiveReady = active === "a" ? slotA.ready : slotB.ready;
+  const slotStates: Record<ShortsSlotId, ShortsPlaybackState> = { a: slotA, b: slotB, c: slotC };
+
+  const nextActiveReady = slotStates[active].ready;
   if (nextActiveReady !== activeReady) setActiveReady(nextActiveReady);
 
-  const playback = active === "a" ? slotA : slotB;
-  const slotStates: Record<ShortsSlotId, ShortsPlaybackState> = { a: slotA, b: slotB };
+  const playback = slotStates[active];
 
   return { slots, slotStates, playback, noteDirection };
 }

@@ -60,6 +60,7 @@ import {
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_SAFE_AREA_BOTTOM,
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
+  SHORTS_SLOT_IDS,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
   SHORTS_TOP_BAR_HEIGHT_PX,
   shortsFeedItems,
@@ -114,15 +115,19 @@ export function ShortsPage() {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /**
-   * 两个槽位各自独占的媒体元素。
+   * 三个槽位各自独占的媒体元素。
    *
    * 由页面持有、传给各自的舞台。它们是**槽位**的 ref 而不是「当前条目」的 ref：
-   * 槽位面板的 key 恒定，因此这两个 `<video>` 跨换片存活，播放器得以复用
+   * 槽位面板的 key 恒定，因此这三个 `<video>` 跨换片存活，播放器得以复用
    * （见 `useShortsSlots`）。
    */
   const slotARef = useRef<HTMLVideoElement | null>(null);
   const slotBRef = useRef<HTMLVideoElement | null>(null);
-  const slotRefs = useMemo(() => ({ a: slotARef, b: slotBRef }), [slotARef, slotBRef]);
+  const slotCRef = useRef<HTMLVideoElement | null>(null);
+  const slotRefs = useMemo(
+    () => ({ a: slotARef, b: slotBRef, c: slotCRef }),
+    [slotARef, slotBRef, slotCRef],
+  );
   const [rawIndex, setIndex] = useState(0);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [infoVisible, setInfoVisible] = useState(true);
@@ -712,7 +717,7 @@ export function ShortsPage() {
   const mounted = shortsMountedIndexes(index, items.length);
   /** 挂载窗口里由槽位面板承担的下标；其余渲染封面占位。 */
   const slotCovered = shortsSlotCoveredIndexes(slots);
-  const slotIds: ShortsSlotId[] = ["a", "b"];
+  const slotIds: ShortsSlotId[] = [...SHORTS_SLOT_IDS];
 
   // 弹幕开关的图标与标签：与直播间、播放页共用同一个判据，避免三处各写一对
   // 图标后开启态长得不一样（这里曾经用裸 `MessageSquare`，另两处是
@@ -753,14 +758,15 @@ export function ShortsPage() {
       >
         <div ref={trackRef} data-slot="shorts-track" className="relative h-full">
           {/*
-            槽位面板：key 恒定（`slot-a` / `slot-b`），换片只改变 `top` 与角色。
+            槽位面板：key 恒定（`slot-a` / `slot-b` / `slot-c`），换片只改变
+            `top` 与角色。
 
             这是播放器复用的前提 —— key 变化会卸载重建面板与 `<video>`，那样预
             热省下的取流时间会重新花在 DOM 与引擎的重建上。`style` 变化不触发
             remount，因此同一份 `<video>` 与 Video.js 实例跨换片存活。
 
-            两个槽位都渲染 `ShortsStage`：预热的那一个要真的缓冲到 `canplay`，
-            换片时它才可能立刻出画。
+            三个槽位都渲染 `ShortsStage`：两个预热槽位分别在前后邻居上缓冲到
+            `canplay`，换片与回滑时它们才可能立刻出画。
           */}
           {slotIds.map((slotId) => {
             const held = slots.held[slotId];
