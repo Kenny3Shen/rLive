@@ -1,5 +1,8 @@
 import { Play } from "lucide-react";
 import { useCallback, useState, type RefObject } from "react";
+import { Video } from "@videojs/react/video";
+import { Poster } from "@/components/videojs/ui/poster";
+import { ShortsPosterPlayer } from "./shortsPosterPlayer";
 import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -198,31 +201,40 @@ export function ShortsStage({
             } as React.CSSProperties
           }
         >
-          {/* 封面占位：与画面同尺寸同裁切方式，盖到播放器真的出画为止。 */}
-          {cover && (
-            <img
-              src={cover}
-              alt=""
-              aria-hidden
-              className="pointer-events-none absolute inset-0 size-full object-cover"
+          {/*
+            封面占位由 Video.js 的 `Poster` 承担：它读播放器 store 的 `started`
+            自己决定显隐，换源（`loadSource`）时会重新盖回来。手写 `<img>` +
+            `opacity-0` 需要舞台自己维护「何时已出画」，与本层的播放状态容易漂移。
+
+            `Player` 只为封面服务：短视频用的是自有的 `VideoJsPlayer` 传输实例
+            （dash.js），不经过 Video.js 的媒体适配器，这里挂 store 是为了让
+            `Poster` 能读到 `<video>` 的播放状态。
+          */}
+          <ShortsPosterPlayer>
+            <Video
+              ref={videoRef}
+              playsInline
+              // 预热槽位不进 Tab 序：它在屏幕外，键盘用户不该能聚焦到一个看不见的
+              // 媒体元素上（活动槽位保留默认的原生可聚焦行为）。
+              tabIndex={warming ? -1 : undefined}
+              className={cn(
+                "absolute inset-0 size-full",
+                // 铺满形态下画面框比源画幅「窄」或「矮」一点，多出来的部分居中裁掉；
+                // 留边形态下画面框已经是源画幅的比例，`contain` 只是保险 —— 媒体自报
+                // 画幅与列表下发的 dimension 不一致时，宁可留一圈黑边也不裁掉画面。
+                fill ? "object-cover" : "object-contain",
+              )}
             />
-          )}
-          <video
-            ref={videoRef}
-            playsInline
-            // 预热槽位不进 Tab 序：它在屏幕外，键盘用户不该能聚焦到一个看不见的
-            // 媒体元素上（活动槽位保留默认的原生可聚焦行为）。
-            tabIndex={warming ? -1 : undefined}
-            className={cn(
-              "absolute inset-0 size-full",
-              // 铺满形态下画面框比源画幅「窄」或「矮」一点，多出来的部分居中裁掉；
-              // 留边形态下画面框已经是源画幅的比例，`contain` 只是保险 —— 媒体自报
-              // 画幅与列表下发的 dimension 不一致时，宁可留一圈黑边也不裁掉画面。
-              fill ? "object-cover" : "object-contain",
-              // 出画前保持透明，让封面负责首帧观感；否则会闪一下黑底。
-              playback.loading && "opacity-0",
+            {cover && (
+              <Poster
+                src={cover}
+                alt=""
+                // 与画面同一套裁切：铺满形态下封面也要居中裁掉多出来的部分，
+                // 否则封面与出画后的第一帧构图不一致，换片时会跳一下。
+                imageClassName={fill ? "object-cover" : undefined}
+              />
             )}
-          />
+          </ShortsPosterPlayer>
           {danmakuVisible && !warming && (
             <VideoDanmakuLayer
               videoRef={videoRef}
