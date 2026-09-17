@@ -8,6 +8,7 @@ import {
   type ShortsSwipeDirection,
 } from "./shortsFeed";
 import { useShortsPlaybackSlot, type ShortsPlaybackState } from "./useShortsPlayback";
+import type { ShortsSessionRetention } from "./useShortsSessionRetention";
 
 /**
  * 短视频的双播放器编排层。
@@ -64,6 +65,13 @@ export type UseShortsSlotsOptions = {
   refs: ShortsSlotRefs;
   /** 播放位置推进的回调：弹幕分段按它加载。只有活动槽位会收到。 */
   onProgress?: ((positionMs: number) => void) | undefined;
+  /**
+   * 保留会话的三件套，原样转给两个槽位。
+   *
+   * 放在页面层是因为被保留的条目换片后**不属于任何一个槽位**（两个槽位被新
+   * 活动条与新预热条占着），槽位 hook 看不到它。
+   */
+  retention?: ShortsSessionRetention | undefined;
 };
 
 const INITIAL_SLOTS: ShortsSlots = { held: { a: null, b: null }, active: "a" };
@@ -73,6 +81,7 @@ export function useShortsSlots({
   index,
   refs,
   onProgress,
+  retention,
 }: UseShortsSlotsOptions): ShortsSlotsState {
   const [slots, setSlots] = useState<ShortsSlots>(INITIAL_SLOTS);
   /** 预热方向。回滑一次就翻到另一侧，此后顺着它预热。 */
@@ -120,6 +129,9 @@ export function useShortsSlots({
     mode: active === "a" ? "play" : "warm",
     // 活动槽位永远放行：它就是要播的那一条。预热槽位等活动槽位出画。
     mediaAllowed: active === "a" || activeReady,
+    claimPlayInfo: retention?.peek,
+    releasePlayInfo: retention?.release,
+    parkPlayInfo: retention?.park,
     onProgress: active === "a" ? onProgress : undefined,
   });
   const slotB = useShortsPlaybackSlot({
@@ -128,6 +140,9 @@ export function useShortsSlots({
     slotId: "b",
     mode: active === "b" ? "play" : "warm",
     mediaAllowed: active === "b" || activeReady,
+    claimPlayInfo: retention?.peek,
+    releasePlayInfo: retention?.release,
+    parkPlayInfo: retention?.park,
     onProgress: active === "b" ? onProgress : undefined,
   });
 

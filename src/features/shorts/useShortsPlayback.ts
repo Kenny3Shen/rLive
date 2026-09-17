@@ -11,8 +11,9 @@ import {
 import { videoGetPlayInfo, videoStopPlay } from "@/features/video/videoApi";
 import { VIDEO_HISTORY_QUERY_KEY, videoHistoryAdd } from "@/features/video/videoHistory";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
-import type { VideoItem, VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
+import type { VideoItem, VideoPlayInfo } from "@/shared/types/video";
 import { shortsItemKey, type ShortsIntrinsicSize, type ShortsSlotId } from "./shortsFeed";
+import { shortsShouldRetainSession } from "./shortsSessionRetention";
 
 /**
  * 竖屏舞台的起播链路 —— **一个槽位一份**。
@@ -117,6 +118,16 @@ type UseShortsPlaybackSlotOptions = {
    * 扩到约 1.1s。
    */
   mediaAllowed: boolean;
+  /**
+   * 只读查看这一条是否有可复用的保留会话（渲染期安全，幂等）。
+   *
+   * 命中时本槽位不再取流：那份 playInfo 指向的会话仍由保留位续着。
+   */
+  claimPlayInfo?: ((itemKey: string) => VideoPlayInfo | null) | undefined;
+  /** 把保留会话从保留位移出、所有权交给本槽位（幂等，**不停它**）。 */
+  releasePlayInfo?: ((itemKey: string) => void) | undefined;
+  /** 把本槽位刚丢下的会话交回保留位（只有用户看过的才值得留）。 */
+  parkPlayInfo?: ((itemKey: string, playInfo: VideoPlayInfo) => void) | undefined;
   /** 播放位置推进的回调：弹幕分段按它加载。只有活动槽位会收到。 */
   onProgress?: ((positionMs: number) => void) | undefined;
 };
@@ -140,6 +151,9 @@ export function useShortsPlaybackSlot({
   slotId,
   mode,
   mediaAllowed,
+  claimPlayInfo,
+  releasePlayInfo,
+  parkPlayInfo,
   onProgress,
 }: UseShortsPlaybackSlotOptions): ShortsPlaybackState {
   const queryClient = useQueryClient();
@@ -172,12 +186,34 @@ export function useShortsPlaybackSlot({
   const bvid = item?.bvid ?? "";
   const itemKey = item ? shortsItemKey(item) : "";
 
+  /**
+   * 接管保留会话。
+   *
+   * 渲染期只做**只读**的 `claimPlayInfo`（幂等，可被 React 丢弃后重来），并把
+   * 结果记进 ref。记进 ref 而不是每次渲染重新查，是因为接管后所有权就移交给本
+   * 槽位（见下面的 release effect），保留位里不再有这一条 —— 再查会是 null，
+   * `enabled` 会翻回 true 而白取一次流。
+   */
+  const adoptedRef = useRef<{ key: string; info: VideoPlayInfo } | null>(null);
+  /** 已因错误退回过取流的条目，保证每条只退一次，避免失败循环。 */
+  const fellBackRef = useRef<string | null>(null);
+  if (adoptedRef.current?.key !== itemKey) {
+    // 退回过取流的条目不再重新接管：保留位里那份已被 release 移出，而且它已经
+    // 表现过一次不可用（上游签名过期、后端异常、进程重启），再接管只会再失败一次。
+    const peeked =
+      fellBackRef.current === itemKey || !itemKey ? null : (claimPlayInfo?.(itemKey) ?? null);
+    adoptedRef.current = peeked ? { key: itemKey, info: peeked } : null;
+  }
+  const adopted = adoptedRef.current?.key === itemKey ? adoptedRef.current.info : null;
+
   const playInfoQuery = useQuery({
     // revision 进 key：重试就是换一份取流（旧会话已停，MPD 不可复用）。
     // slotId 进 key：两个槽位各自持有会话，绝不复用另一个槽位可能已停的 MPD。
     queryKey: ["shorts_play_info", slotId, bvid, cid, revision],
     // 取流不受闸门约束（见 `mediaAllowed`）：只有条目本身可用性的前置条件。
-    enabled: item !== null && cid > 0 && bvid !== "",
+    // 已接管保留会话时不取流 —— 那份 playInfo 指向的会话仍然存活，重取既多余
+    // 又会把新端口写进 MPD 而让旧地址作废。
+    enabled: item !== null && cid > 0 && bvid !== "" && adopted === null,
     queryFn: () =>
       videoGetPlayInfo({
         bvid,
@@ -193,47 +229,132 @@ export function useShortsPlaybackSlot({
     gcTime: 0,
     retry: false,
   });
-  const playInfo = playInfoQuery.data;
+  // 接管的那份 playInfo 与正常取回的**形状完全一致**，因此附着、换源、会话上报
+  // 全部无需区分来源。
+  const playInfo = adopted ?? playInfoQuery.data;
   const playUrl = playInfo?.mpd_url;
 
+  // 所有权移交：接管的那一刻把会话从保留位移出，此后由本槽位负责它的存亡
+  // （`heldRef` 的交接与卸载两条路径）。刻意不在渲染期做 —— 渲染可能被丢弃，
+  // 非幂等的移出会让会话被取走却没人管。
+  useEffect(() => {
+    if (!adopted) return;
+    releasePlayInfo?.(itemKey);
+  }, [adopted, itemKey, releasePlayInfo]);
+
   /**
-   * 代理会话的拆除。
+   * 接管的会话可能已经不可用（上游签名过期、后端异常、进程重启）。
    *
-   * 三条路径都必须走到：换片（itemKey 变）、槽位被清空与卸载。会话链必须 A→B
-   * 连续，因此用原始 query 数据而不是任何会在过渡期变成 undefined 的派生值。
+   * 保留位在放回时会同时停会话，因此「条目还在保留位里但会话已死」理论上不会
+   * 发生 —— 但这不是可以依赖的保证：进程重启后一切本机状态都归零。因此必须留
+   * 一条退回取流的通道：丢掉接管的 playInfo、清错，让查询重新成立。
    */
-  const sessionsRef = useRef<VideoSessionIds | null>(null);
-  useLayoutEffect(() => {
-    if (playInfoQuery.data) sessionsRef.current = playInfoQuery.data.session_ids;
-  }, [playInfoQuery.data]);
+  useEffect(() => {
+    if (!error || !adopted) return;
+    if (fellBackRef.current === itemKey) return;
+    fellBackRef.current = itemKey;
+    adoptedRef.current = null;
+    setError(null);
+    setRevision((value) => value + 1);
+  }, [error, adopted, itemKey]);
+
+  /**
+   * 本槽位当前持有的会话（**所有权归本槽位**）。
+   *
+   * 所有权必须唯一：一条会话要么属于某个槽位的活媒体，要么属于保留位，不能同时
+   * 属于两边 —— 否则会「两边都以为自己该停它」（重复停）或「两边都以为对方管」
+   * （泄漏）。因此交出去的那一刻就清空这里。
+   *
+   * 用 `playInfo`（含接管来的那份）而不是 `playInfoQuery.data`：接管的会话同样
+   * 由本槽位负责存亡。
+   */
+  const heldRef = useRef<{ key: string; playInfo: VideoPlayInfo } | null>(null);
+
+  /**
+   * 角色快照：当前条目的角色，以及**上一个条目的角色**。
+   *
+   * 为什么需要「上一份」：交接发生在条目变化后的某一帧（新 playInfo 到达时），
+   * 而那时 `mode` 早已是新条目的角色。同一次提交里两个槽位会同时换条目
+   * （方向翻转的第一次），只有「离开时在播」的那个值得保留，因此必须能读到
+   * **旧条目当时的角色**。
+   *
+   * 为什么在渲染期写：放进 effect 的话，条目变化那一帧就会把快照覆写成新条目的
+   * 角色，而交接要到新数据到达才跑 —— 快照里就没有旧条目的角色了（实测会让该
+   * 保留的那条被停掉）。渲染期写 ref 是幂等的（StrictMode 双渲染写同一个值），
+   * 与 `adoptedRef` 同一手法。
+   */
+  const roleRef = useRef<{ key: string; playing: boolean } | null>(null);
+  const previousRoleRef = useRef<{ key: string; playing: boolean } | null>(null);
+  {
+    const playing = mode === "play";
+    if (roleRef.current?.key !== itemKey) {
+      previousRoleRef.current = roleRef.current;
+      roleRef.current = itemKey ? { key: itemKey, playing } : null;
+    } else if (roleRef.current.playing !== playing) {
+      // 角色变化（预热 ↔ 活动）不换条目：只更新当前快照，不动「上一份」。
+      roleRef.current = { key: itemKey, playing };
+    }
+  }
+
   useEffect(
     () => () => {
-      const sessions = sessionsRef.current;
-      sessionsRef.current = null;
-      if (sessions) void videoStopPlay(sessions);
+      const held = heldRef.current;
+      heldRef.current = null;
+      if (held) void videoStopPlay(held.playInfo.session_ids);
     },
     [],
   );
-  // 上一条的会话要在新会话替换它之前停掉。
-  //
-  // 过渡期必须**保留**旧引用：换片时 queryKey 变、新数据未到，`data` 会变成
-  // `undefined`。若在这一帧把引用写成 null，等新数据到达时 `previous` 已是 null，
-  // 两个分支都进不去 —— 旧会话（三个回环监听器）永不释放。实机验证：换片 12 次
-  // `video_stop_play` 调用 0 次，进程回环监听端口线性增长（每次 +3，正是三个
-  // session 各占一个 TcpListener）。
-  //
-  // 播放页同一份逻辑是好的，因为它有 `placeholderData: keepPreviousData`，
-  // `data` 不会经历 `undefined`；短视频不能加那一行（会拿旧 MPD 打已停会话）。
-  const previousSessionsRef = useRef<VideoSessionIds | null>(null);
+
+  /**
+   * 会话交接：条目换了（或重试换了一份取流）时，处理上一份会话。
+   *
+   * 过渡期必须**保留**旧引用：换片时 queryKey 变、新数据未到，`data` 会变成
+   * `undefined`。若在这一帧把引用写成 null，等新数据到达时 `previous` 已是 null，
+   * 交接就永远不会发生 —— 旧会话（三个回环监听器）永不释放。实机验证过这一点：
+   * 换片 12 次 `video_stop_play` 调用 0 次，进程回环监听端口线性增长（每次 +3）。
+   *
+   * 播放页同一份逻辑是好的，因为它有 `placeholderData: keepPreviousData`；短视频
+   * 不能加那一行（会拿旧 MPD 打已停会话）。
+   *
+   * **交给保留位而不是停掉**：刚看过的那条很可能马上被回退到，停掉就得重新取流
+   * （实测 386~481ms）。只有用户真正看过（离开时在播）的才值得留 —— 只是被预载
+   * 过的那条用户没看过，而它恰好又成了新方向上的预热目标。
+   */
   useEffect(() => {
-    const current = playInfoQuery.data;
-    if (!current) return;
-    const previous = previousSessionsRef.current;
-    previousSessionsRef.current = current.session_ids;
-    if (previous && previous.mpd !== current.session_ids.mpd) {
-      void videoStopPlay(previous);
+    const previous = heldRef.current;
+    const current = playInfo;
+    if (!current || !previous) return;
+    // 同一条同一份取流：不需要交接。用 `session_ids.mpd` 比：它是本次取流的身份
+    // （重试会换一份新的 session_ids）。
+    if (
+      previous.key === itemKey &&
+      previous.playInfo.session_ids.mpd === current.session_ids.mpd
+    ) {
+      return;
     }
-  }, [playInfoQuery.data]);
+
+    const wasPlaying =
+      previousRoleRef.current?.key === previous.key && previousRoleRef.current.playing;
+    if (
+      wasPlaying &&
+      shortsShouldRetainSession(true) &&
+      previous.key !== itemKey &&
+      parkPlayInfo
+    ) {
+      // 所有权移交给保留位：此后由它的 TTL 负责停这条会话。
+      parkPlayInfo(previous.key, previous.playInfo);
+      return;
+    }
+    // 重试（同一条换了一份取流）与「只是预载过」都直接停：前者旧 MPD 已作废，
+    // 后者用户没看过。
+    void videoStopPlay(previous.playInfo.session_ids);
+  }, [playInfo, itemKey, parkPlayInfo]);
+
+  // 记下本槽位当前持有的会话（声明顺序在交接之后：交接先读上一轮的旧值）。
+  useEffect(() => {
+    if (!playInfo) return;
+    heldRef.current = { key: itemKey, playInfo };
+  }, [playInfo, itemKey]);
 
   const itemRef = useRef(item);
   useLayoutEffect(() => {
@@ -488,10 +609,10 @@ export function useShortsPlaybackSlot({
   useEffect(() => {
     if (item) return;
     teardown(true);
-    const sessions = sessionsRef.current;
-    sessionsRef.current = null;
-    previousSessionsRef.current = null;
-    if (sessions) void videoStopPlay(sessions);
+    const held = heldRef.current;
+    heldRef.current = null;
+    roleRef.current = null;
+    if (held) void videoStopPlay(held.playInfo.session_ids);
   }, [item, teardown]);
 
   /**

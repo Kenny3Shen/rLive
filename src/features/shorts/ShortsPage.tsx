@@ -79,6 +79,7 @@ import {
 } from "./shortsFeed";
 import { useShortsDanmaku } from "./useShortsDanmaku";
 import { useShortsSlots } from "./useShortsSlots";
+import { useShortsSessionRetention } from "./useShortsSessionRetention";
 
 /**
  * 长按倍速释放后封锁点按的时长（ms）。
@@ -153,11 +154,15 @@ export function ShortsPage() {
   /* ---------- 播放、弹幕与抽屉 ---------- */
 
   const danmaku = useShortsDanmaku(current?.cid ?? 0, danmakuVisible);
+  // 保留刚看过的那条的取流会话：方向翻转的第一次必然未命中预热（新目标既不在
+  // 活动槽位也不在预热槽位），那一次实测要付 386~481ms 的取流。
+  const retention = useShortsSessionRetention();
   const { slots, slotStates, playback, noteDirection } = useShortsSlots({
     items,
     index,
     refs: slotRefs,
     onProgress: danmaku.ensure,
+    retention,
   });
   const panels = useShortsPanels(current);
 
