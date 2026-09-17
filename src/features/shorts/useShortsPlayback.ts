@@ -107,11 +107,16 @@ type UseShortsPlaybackSlotOptions = {
   slotId: ShortsSlotId;
   mode: ShortsSlotMode;
   /**
-   * 是否允许取流。
+   * 是否允许**下载媒体**（附着到媒体元素、开始缓冲分片）。
    *
    * 预热槽位要等活动槽位出画之后才放行 —— 首屏与弱网下不该让第二条抢带宽。
+   *
+   * 只闸媒体、**不闸取流**：签名 playurl 与两条 sidx 是控制面请求（几 KB），
+   * 抢不走正在播的那条的媒体带宽，却是预热链路上最贵的一段（实测中位 560ms，
+   * 占总就绪时间一半）。放它先跑，就绪时间随之减半，连刷的命中窗口从约 1.7s
+   * 扩到约 1.1s。
    */
-  warmAllowed: boolean;
+  mediaAllowed: boolean;
   /** 播放位置推进的回调：弹幕分段按它加载。只有活动槽位会收到。 */
   onProgress?: ((positionMs: number) => void) | undefined;
 };
@@ -134,7 +139,7 @@ export function useShortsPlaybackSlot({
   videoRef,
   slotId,
   mode,
-  warmAllowed,
+  mediaAllowed,
   onProgress,
 }: UseShortsPlaybackSlotOptions): ShortsPlaybackState {
   const queryClient = useQueryClient();
@@ -171,7 +176,8 @@ export function useShortsPlaybackSlot({
     // revision 进 key：重试就是换一份取流（旧会话已停，MPD 不可复用）。
     // slotId 进 key：两个槽位各自持有会话，绝不复用另一个槽位可能已停的 MPD。
     queryKey: ["shorts_play_info", slotId, bvid, cid, revision],
-    enabled: item !== null && cid > 0 && bvid !== "" && warmAllowed,
+    // 取流不受闸门约束（见 `mediaAllowed`）：只有条目本身可用性的前置条件。
+    enabled: item !== null && cid > 0 && bvid !== "",
     queryFn: () =>
       videoGetPlayInfo({
         bvid,
@@ -499,6 +505,9 @@ export function useShortsPlaybackSlot({
   useEffect(() => {
     const media = videoRef.current;
     if (!media || !item || !playUrl) return;
+    // 媒体闸门（见 `mediaAllowed`）：取流已经先跑完并缓存在 query 里，等活动槽位
+    // 出画后这里立刻附着 —— 省掉的是取流那一段，媒体仍不会去抢带宽。
+    if (!mediaAllowed) return;
     // 同一条内容不重复附着：角色变化（预热 → 活动）不该动媒体。
     if (attachedUrlRef.current === playUrl && sessionRef.current.itemKey === itemKey) return;
 
@@ -587,7 +596,18 @@ export function useShortsPlaybackSlot({
      * 加进去既不会改变行为也不会更正确。
      */
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [bindListeners, cid, item, itemKey, playInfo, playUrl, reportProgress, teardown, videoRef]);
+  }, [
+    bindListeners,
+    cid,
+    item,
+    itemKey,
+    mediaAllowed,
+    playInfo,
+    playUrl,
+    reportProgress,
+    teardown,
+    videoRef,
+  ]);
 
   /**
    * 角色变化（预热 ↔ 活动）：只更新会话上下文，不动媒体。
@@ -707,7 +727,7 @@ export function useShortsPlaybackSlot({
 
   return {
     // 取流本身也算加载：封面要一直盖到播放器真的出画为止。
-    loading: loading || (warmAllowed && playInfoQuery.isFetching),
+    loading: loading || (mediaAllowed && playInfoQuery.isFetching),
     waiting,
     paused,
     error: error ?? (playInfoQuery.error ? "取流失败，请重试" : null),

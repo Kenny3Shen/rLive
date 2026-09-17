@@ -1173,6 +1173,22 @@ fn be<const N: usize>(bytes: &[u8], offset: usize) -> AppResult<[u8; N]> {
         .ok_or_else(|| video_err(format!("sidx 截断：读取 u{} 越界", N * 8)))
 }
 
+/// 把「init 段 + sidx」的合并响应切回两段。
+///
+/// 合并请求的区间是 `0-index_end`，其中 `init_end + 1` 是 sidx 的起点，因此
+/// 切片边界固定为 `init_end + 1`。截断到不足 init 段时宁可报错也不猜 —— 把半个
+/// init 段当成 init、或把 init 的尾巴当成 sidx，都会在下游变成难查的解析错误。
+fn split_init_and_sidx(bytes: &[u8], init_end: u64) -> AppResult<(Vec<u8>, Vec<u8>)> {
+    let boundary = usize::try_from(init_end)
+        .ok()
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| video_err("init 段字节区间溢出"))?;
+    if bytes.len() < boundary {
+        return Err(video_err("init 段与 sidx 的合并响应被截断"));
+    }
+    Ok((bytes[..boundary].to_vec(), bytes[boundary..].to_vec()))
+}
+
 /// 解析 `segment_base.index_range` 取回的 ISO BMFF `sidx` box。
 ///
 /// 后端在 play-info 阶段就把分片表解出来：MPD 由此合成带逐片字节区间与精确
@@ -1262,6 +1278,12 @@ pub struct VideoTrack {
     pub base_url: String,
     /// init 段字节区间的结束字节（起始恒为 0）。
     pub init_end: u64,
+    /// init 段的原始字节。
+    ///
+    /// 取流阶段它已随 sidx 一起取回（见 `video_track` 的合并 Range），在这里
+    /// 带出来供调用方预写进分片缓存：播放器起播的第一个请求就是它，命中本机
+    /// 就省掉一次完整 CDN 往返。
+    pub init_bytes: Vec<u8>,
     pub sidx: Sidx,
     pub codecs: String,
     pub bandwidth: i64,
@@ -2454,19 +2476,48 @@ impl BilibiliSite {
             return Err(video_err("representation 缺少 base_url"));
         }
         let (init_end, index_start, index_end) = segment_base_ranges(rep)?;
+        // init 段与 sidx 在字节布局上连续（`index_start == init_end + 1`）：并成
+        // 一次 Range 请求把两者一起取回，init 段就是白拿的。它只有 1KB 上下，
+        // 却要在播放器起播时单独付一次完整 CDN 往返（实测视频轨 97ms、音轨
+        // 70ms，且串在首个媒体分片之前）。不连续时退回两次请求，语义与原先一致。
+        let contiguous = index_start == init_end + 1;
         let mut last_error = video_err("representation 缺少 base_url");
         for candidate in &candidates {
-            let sidx_bytes = match self.fetch_range(candidate, index_start, index_end).await {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    last_error = error;
-                    continue;
+            let (init_bytes, sidx_bytes) = if contiguous {
+                match self.fetch_range(candidate, 0, index_end).await {
+                    Ok(bytes) => match split_init_and_sidx(&bytes, init_end) {
+                        Ok(parts) => parts,
+                        Err(error) => {
+                            last_error = error;
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        last_error = error;
+                        continue;
+                    }
+                }
+            } else {
+                let init_bytes = match self.fetch_range(candidate, 0, init_end).await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        last_error = error;
+                        continue;
+                    }
+                };
+                match self.fetch_range(candidate, index_start, index_end).await {
+                    Ok(bytes) => (init_bytes, bytes),
+                    Err(error) => {
+                        last_error = error;
+                        continue;
+                    }
                 }
             };
             let sidx = parse_sidx(&sidx_bytes, index_end)?;
             return Ok(VideoTrack {
                 base_url: candidate.clone(),
                 init_end,
+                init_bytes,
                 sidx,
                 codecs: rep.get("codecs").map(as_str).unwrap_or_default(),
                 bandwidth: rep.get("bandwidth").map(as_i64).unwrap_or_default(),
@@ -2604,6 +2655,35 @@ mod tests {
     }
 
     #[test]
+    fn split_init_and_sidx_cuts_at_the_recorded_boundary() {
+        // 对齐实测形态：init `0-937`、sidx 从 938 开始。
+        let mut merged = vec![0xAA_u8; 938];
+        merged.extend_from_slice(b"sidx");
+        merged.extend_from_slice(&[0xBB_u8; 20]);
+        let (init, sidx) = split_init_and_sidx(&merged, 937).expect("应按边界切开");
+        assert_eq!(
+            init.len(),
+            938,
+            "init 段必须含 0..=init_end 共 init_end+1 字节"
+        );
+        assert!(init.iter().all(|byte| *byte == 0xAA));
+        assert_eq!(sidx.len(), 24);
+        assert_eq!(&sidx[..4], b"sidx", "sidx 起点不能偏移");
+    }
+
+    #[test]
+    fn split_init_and_sidx_rejects_truncated_merged_response() {
+        // 上游只回了 init 的一部分：既不能把半个 init 当成 init，也不能拿它当 sidx。
+        let truncated = vec![0xAA_u8; 100];
+        assert!(split_init_and_sidx(&truncated, 937).is_err());
+        // 恰好只够 init、没有 sidx：可以切开，sidx 为空（由 parse_sidx 报错）。
+        let init_only = vec![0xAA_u8; 938];
+        let (init, sidx) = split_init_and_sidx(&init_only, 937).expect("边界上应可切开");
+        assert_eq!(init.len(), 938);
+        assert!(sidx.is_empty());
+    }
+
+    #[test]
     fn sidx_v1_yields_contiguous_byte_and_time_ranges() {
         // 对齐实测形态：version 1、timescale 16000、5s 一片。
         let bytes = build_sidx(
@@ -2659,6 +2739,8 @@ mod tests {
         VideoTrack {
             base_url: "https://upos.example.com/media.m4s".into(),
             init_end: 937,
+            // init 段字节本身与 MPD 合成无关，占位即可。
+            init_bytes: vec![0_u8; 938],
             sidx: Sidx {
                 timescale: 16_000,
                 segments: vec![

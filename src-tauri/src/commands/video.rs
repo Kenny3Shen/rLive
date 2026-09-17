@@ -20,15 +20,37 @@ use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
 use crate::stream_proxy::StreamProxyStartOptions;
 
-/// 一条轨的可缓存字节区间：init 段 + 分片表逐片。
+/// 每条轨只缓存**起播前缀**的秒数。
+///
+/// 缓存收益全部兑现在「从零到 `canplay`」这一段（init 段 + 开头几个分片）：回滑与
+/// 重进要的是马上出画，不是把整条看完。而顺向刷时写进去的字节基本不会被读回 ——
+/// 实测清空缓存后 20 分钟浏览就写满 475MB / 640 个文件，其中绝大多数是只播过一次
+/// 的条目，等于用预算换了一堆不会再读的字节。只留前缀让同样的预算覆盖多得多的
+/// **不同条目**，命中率随之上升：存得多不如存得广。
+const MEDIA_CACHE_PREFIX_SECS: f64 = 10.0;
+
+/// 一条轨的可缓存字节区间：init 段 + 起播前缀内的分片。
 ///
 /// 只有这些区间会被落盘。任意 Range 一律不缓存 —— 否则同一个分片被不同 Range
 /// 切成无数个键，缓存碎片化且命中率归零。
 fn segment_ranges(track: &VideoTrack) -> Vec<(u64, u64)> {
     let mut ranges = Vec::with_capacity(track.sidx.segments.len() + 1);
+    // init 段无条件保留：它是起播的第一个请求，也是取流阶段预取落盘的那个键。
     ranges.push((0, track.init_end));
-    for segment in &track.sidx.segments {
+    let timescale = f64::from(track.sidx.timescale);
+    // sidx 只给逐片 `t_end`：分片 k 的起点是上一片的 `t_end`（首片为 0）。
+    let mut start_time = 0_u64;
+    for (index, segment) in track.sidx.segments.iter().enumerate() {
+        // 首片无条件保留（起播就靠它）。其余只保留**起点**落在前缀窗口内的：
+        // 窗口边界落在片内时整片保留，不做半片裁剪 —— 键必须与播放器的
+        // `mediaRange` 逐字节一致，裁剪过的区间不会被命中。
+        let within_prefix = index == 0
+            || (timescale > 0.0 && start_time as f64 / timescale < MEDIA_CACHE_PREFIX_SECS);
+        if !within_prefix {
+            break;
+        }
         ranges.push((segment.start_byte, segment.end_byte));
+        start_time = segment.t_end;
     }
     ranges
 }
@@ -251,6 +273,28 @@ pub async fn video_get_play_info(
             segment_ranges(&selection.audio),
         ))
     });
+
+    // init 段预取落盘。它已随 sidx 一起取回（见 `video_track` 的合并 Range），
+    // 在这里写进分片缓存，播放器的 `<Initialization range="0-N">` 请求就命中
+    // 本机，省掉一次完整 CDN 往返（实测视频轨 97ms、音轨 70ms，且串在首个媒体
+    // 分片之前）。两条轨都要写：播放器会为视频与音频各发一次初始化段请求。
+    //
+    // 写盘与播放器请求是并发的，但它只是一次约 1KB 的 tmp 写 + rename，而播放器
+    // 要等 playurl 返回才会发起请求 —— 落空只会退回上游，不影响正确性。
+    if let Some(store) = media_cache_store.clone() {
+        for (spec, track) in [
+            (video_cache.clone(), &selection.video),
+            (audio_cache.clone(), &selection.audio),
+        ] {
+            let Some(spec) = spec else { continue };
+            let Some(key) = spec.key_for_range(0, track.init_end) else {
+                continue;
+            };
+            let bytes = track.init_bytes.clone();
+            let store = store.clone();
+            tauri::async_runtime::spawn(async move { store.put(&key, &bytes).await });
+        }
+    }
 
     // 仅音频模式（听视频）不起视频轨代理，也不合成 MPD：音轨 fMP4 是完整
     // 文件，代理转发 Range，前端把 audio_url 直接交给媒体元素播放。
@@ -532,4 +576,75 @@ pub async fn video_get_comment_replies(
     resolve_bilibili(&state)?
         .video_comment_replies(&aid, root, page.unwrap_or(1))
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::segment_ranges;
+    use crate::sites::bilibili::video::{Sidx, SidxSegment, VideoTrack};
+
+    /// 造一条轨：init `0-99`，其后每片 100 字节、每片 `segment_seconds` 秒。
+    fn track(segment_seconds: u64, count: usize) -> VideoTrack {
+        let mut segments = Vec::new();
+        let mut start = 100_u64;
+        let mut time = 0_u64;
+        for _ in 0..count {
+            time += segment_seconds * 1_000;
+            segments.push(SidxSegment {
+                start_byte: start,
+                end_byte: start + 99,
+                t_end: time,
+            });
+            start += 100;
+        }
+        VideoTrack {
+            base_url: "https://upos.example.com/media.m4s".into(),
+            init_end: 99,
+            init_bytes: vec![0_u8; 100],
+            sidx: Sidx {
+                timescale: 1_000,
+                segments,
+            },
+            codecs: "avc1.640033".into(),
+            bandwidth: 1,
+            rep_id: "32".into(),
+            width: Some(854),
+            height: Some(480),
+            frame_rate: Some("30.000".into()),
+            sar: None,
+            start_with_sap: 1,
+        }
+    }
+
+    #[test]
+    fn init_segment_is_always_cacheable() {
+        // init 段是播放器的第一个请求，也是取流阶段预写进缓存的键。
+        let ranges = segment_ranges(&track(4, 30));
+        assert_eq!(ranges.first(), Some(&(0, 99)));
+    }
+
+    #[test]
+    fn only_the_startup_prefix_is_cacheable() {
+        // 4 秒一片、前缀窗口 10s：首片（起点 0s）、第二片（4s）、第三片（8s）
+        // 在内，第四片（12s）已越出窗口。
+        let ranges = segment_ranges(&track(4, 30));
+        assert_eq!(
+            ranges,
+            vec![(0, 99), (100, 199), (200, 299), (300, 399)],
+            "init + 起点落在 10s 内的三片"
+        );
+    }
+
+    #[test]
+    fn long_segments_keep_at_least_the_first_one() {
+        // 首片本身就跨过窗口（实测有 20s 的长片）：仍必须保留，否则起播无缓存。
+        let ranges = segment_ranges(&track(20, 5));
+        assert_eq!(ranges, vec![(0, 99), (100, 199)]);
+    }
+
+    #[test]
+    fn empty_segment_table_keeps_only_init() {
+        let ranges = segment_ranges(&track(4, 0));
+        assert_eq!(ranges, vec![(0, 99)]);
+    }
 }

@@ -97,10 +97,14 @@ export function useShortsSlots({
   const active: ShortsSlotId = slots.active;
 
   /**
-   * 各槽位的「已可播」快照 —— 预热槽位的取流闸门。
+   * 各槽位的「已可播」快照 —— 预热槽位的**媒体**闸门。
    *
    * 活动槽位还没出画之前，不该让另一条去抢带宽（首屏与弱网下那会拖慢用户正在看
    * 的那条）。
+   *
+   * 它只拦「附着媒体、开始下载分片」，**不拦取流**：playurl 与两条 sidx 是控制面
+   * 请求（几 KB），抢不走带宽，却是预热链路上最贵的一段（实测中位 560ms，占就绪
+   * 时间一半）。取流因此与活动条并行跑，就绪时间减半。
    *
    * 用 state 而不是 ref：两个槽位互为对方的闸门，读 ref 是在渲染期读可变状态，
    * 既躲过了 React 的重渲染也躲过了 lint。这里需要的是「活动槽位可播」这个事实
@@ -115,7 +119,7 @@ export function useShortsSlots({
     slotId: "a",
     mode: active === "a" ? "play" : "warm",
     // 活动槽位永远放行：它就是要播的那一条。预热槽位等活动槽位出画。
-    warmAllowed: active === "a" || activeReady,
+    mediaAllowed: active === "a" || activeReady,
     onProgress: active === "a" ? onProgress : undefined,
   });
   const slotB = useShortsPlaybackSlot({
@@ -123,7 +127,7 @@ export function useShortsSlots({
     videoRef: refs.b,
     slotId: "b",
     mode: active === "b" ? "play" : "warm",
-    warmAllowed: active === "b" || activeReady,
+    mediaAllowed: active === "b" || activeReady,
     onProgress: active === "b" ? onProgress : undefined,
   });
 
