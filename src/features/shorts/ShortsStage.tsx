@@ -1,11 +1,11 @@
-import { Play } from "lucide-react";
 import { useCallback, useState, type RefObject } from "react";
 import { Video } from "@videojs/react/video";
+import { BufferingIndicator } from "@/components/videojs/ui/buffering-indicator";
+import { PlayButton } from "@/components/videojs/ui/play-button";
 import { Poster } from "@/components/videojs/ui/poster";
 import { ShortsPosterPlayer } from "./shortsPosterPlayer";
 import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn, normalizeImageUrl } from "@/lib/utils";
 import type { VideoItem } from "@/shared/types/video";
@@ -139,8 +139,8 @@ type ShortsStageProps = {
   playback: ShortsPlaybackState;
   videoRef: RefObject<HTMLVideoElement | null>;
   /**
-   * 这一轮的角色。`"warm"` 时不渲染弹幕层、点按层与暂停图标：预热面板在屏幕外，
-   * 且它所在的面板带 `inert`，点按层挂上去只会挨一次吃掉的点击。
+   * 这一轮的角色。`"warm"` 时不渲染弹幕层、点按层与两种状态指示：预热面板在屏幕
+   * 外，且它所在的面板带 `inert`，点按层挂上去只会挨一次吃掉的点击。
    */
   mode: ShortsSlotMode;
   danmaku: ShortsDanmakuState;
@@ -202,13 +202,17 @@ export function ShortsStage({
           }
         >
           {/*
-            封面占位由 Video.js 的 `Poster` 承担：它读播放器 store 的 `started`
-            自己决定显隐，换源（`loadSource`）时会重新盖回来。手写 `<img>` +
-            `opacity-0` 需要舞台自己维护「何时已出画」，与本层的播放状态容易漂移。
+            封面与两种状态指示都由 Video.js 原语承担：
 
-            `Player` 只为封面服务：短视频用的是自有的 `VideoJsPlayer` 传输实例
-            （dash.js），不经过 Video.js 的媒体适配器，这里挂 store 是为了让
-            `Poster` 能读到 `<video>` 的播放状态。
+            - `Poster` 读 store 的 `started` 自己决定显隐，换源（`loadSource`）时会
+              重新盖回来。手写 `<img>` + `opacity-0` 需要舞台自己维护「何时已出
+              画」，与本层的播放状态容易漂移。
+            - `BufferingIndicator` / `PlayButton` 读 store 的 `waiting` / `paused`，
+              与播放页控制栏同源（见下方各自的注释）。
+
+            `Player` 因此不只是封面用的：短视频的传输仍是自有的 `VideoJsPlayer`
+            （dash.js），不经过 Video.js 的媒体适配器，但这一层需要 store 来驱动
+            这三个纯展示组件，所以 `<video>` 挂在它下面。
           */}
           <ShortsPosterPlayer>
             <Video
@@ -234,40 +238,82 @@ export function ShortsStage({
                 imageClassName={fill ? "object-cover" : undefined}
               />
             )}
-          </ShortsPosterPlayer>
-          {danmakuVisible && !warming && (
-            <VideoDanmakuLayer
-              videoRef={videoRef}
-              entries={danmaku.entries}
-              active={danmakuVisible}
-              // 竖屏舞台上飘屏弹幕不接受点按：这块画面的点按语义已经归暂停。
-              interactive={false}
-              cid={cid}
-              aid={item.aid}
-              title={item.title}
-            />
-          )}
+            {danmakuVisible && !warming && (
+              <VideoDanmakuLayer
+                videoRef={videoRef}
+                entries={danmaku.entries}
+                active={danmakuVisible}
+                // 竖屏舞台上飘屏弹幕不接受点按：这块画面的点按语义已经归暂停。
+                interactive={false}
+                cid={cid}
+                aid={item.aid}
+                title={item.title}
+              />
+            )}
 
-          {/* 预热槽位不画加载/错误/暂停指示：它在屏幕外，画面由封面占位。 */}
-          {!warming && (playback.loading || playback.waiting) && !playback.error && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <Spinner className="size-8 text-white/90" aria-label="正在加载" />
-            </div>
-          )}
+            {/*
+              加载指示交给 Video.js 的 `BufferingIndicator`：它读播放器 store 的
+              `waiting`（媒体已 starved 且未暂停），并自带 500ms 延迟 —— 短暂卡顿
+              不会闪一下转圈。起播前的取流没有指示器，那段由封面遮挡（见文档
+              「预载未命中时的取流延迟」）。
+
+              它必须在 `ShortsPosterPlayer` 里：store 挂在槽位的 `<video>` 上，离开
+              这个作用域读不到播放状态。
+
+              图标尺寸走 `--media-icon-size` 令牌而不是硬写类名：转圈图标用的是
+              `size-media-icon`（读这个变量），把变量设为 2rem 与下面那颗暂停图标
+              对齐。后者的兜底是 `--media-spacing * 4.5`，在短视频视口的
+              `--media-scale-unit: 1.2rem` 下只有 21.6px，比原来小一圈。
+            */}
+            {!warming && !playback.error && (
+              <BufferingIndicator
+                data-slot="shorts-buffering-indicator"
+                style={{ "--media-icon-size": "2rem" } as React.CSSProperties}
+              />
+            )}
+
+            {/*
+              暂停/重播指示交给 Video.js 的 `PlayButton`：它按 store 的
+              `paused` / `ended` 在播放、暂停、重播三套图标间切换，与播放页控制栏
+              上的那颗是同一个组件。
+
+              这里**只当指示器用**：外层 `pointer-events-none` 让点击穿透到下面的
+              命中层，`tabIndex={-1}` 与 `aria-hidden` 把它排除出 Tab 序与读屏。
+              播放状态的切换必须走页面的 `onSurfaceTap` —— 只有页面知道长按倍速抬手
+              后浏览器补发的那次 click 该不该作废（见 `ShortsPage`）。
+
+              尺寸走 `--media-control-size` / `--media-icon-size` 两个令牌而不是硬写
+              类名：`Button` 基类的 `size-media-control` 与 PlayButton 内图标的
+              `size-6` 都写死在组件里，用令牌是这套皮肤提供的缩放入口，且后代选择器
+              覆盖图标不依赖工具类的生成顺序。
+
+              条件里带 `paused` 而不是让组件自己藏：`PlayButton` 在播放中会显示暂停
+              图标，而短视频播放中不该常驻一颗暂停按钮。`!playback.loading` 保留原
+              行为 —— 换片取流期间封面盖着画面，那时闪一下播放按钮是多余的。
+            */}
+            {!warming && playback.paused && !playback.loading && !playback.error && (
+              <div
+                aria-hidden
+                data-slot="shorts-play-indicator"
+                className="pointer-events-none absolute inset-0 grid place-items-center [&_svg]:size-media-icon"
+                style={
+                  {
+                    "--media-control-size": "4rem",
+                    "--media-icon-size": "2rem",
+                  } as React.CSSProperties
+                }
+              >
+                <PlayButton tabIndex={-1} className="bg-black/40 text-media-controls-foreground" />
+              </div>
+            )}
+          </ShortsPosterPlayer>
+
           {!warming && playback.error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-8 text-center">
               <p className="text-sm text-white/90">{playback.error}</p>
               <Button variant="outline" size="sm" onClick={playback.retry}>
                 重试
               </Button>
-            </div>
-          )}
-          {/* 暂停图标：只在用户暂停时出现，加载中的转圈另有指示。 */}
-          {!warming && playback.paused && !playback.loading && !playback.error && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <span className="flex size-16 items-center justify-center rounded-full bg-black/40">
-                <Play className="size-8 text-white/90" aria-hidden />
-              </span>
             </div>
           )}
 

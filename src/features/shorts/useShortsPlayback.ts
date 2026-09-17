@@ -58,8 +58,6 @@ export type ShortsSlotMode = "play" | "warm";
 export type ShortsPlaybackState = {
   /** 取流中或播放器尚未就绪。封面在这段时间盖住舞台。 */
   loading: boolean;
-  /** 缓冲中（媒体已就绪但数据不够）。 */
-  waiting: boolean;
   paused: boolean;
   /** 可读的失败原因；null 表示没有错误。 */
   error: string | null;
@@ -158,7 +156,6 @@ export function useShortsPlaybackSlot({
 }: UseShortsPlaybackSlotOptions): ShortsPlaybackState {
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
-  const [waiting, setWaiting] = useState(false);
   const [paused, setPaused] = useState(true);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -483,7 +480,6 @@ export function useShortsPlaybackSlot({
       }
       function onReady() {
         setLoading(false);
-        setWaiting(false);
         setReady(true);
         syncTime();
         syncDuration();
@@ -491,23 +487,15 @@ export function useShortsPlaybackSlot({
       }
       function onPlay() {
         setPaused(false);
-        setWaiting(false);
         setLoading(false);
       }
       function onPlaying() {
-        setWaiting(false);
         setLoading(false);
       }
       function onPause() {
         setPaused(true);
         // 暂停是「可能马上要走」的最强信号：立刻落盘，不等节流窗口。
         reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
-      }
-      function onWaiting() {
-        if (!media.ended) setWaiting(true);
-      }
-      function onSeeked() {
-        setWaiting(false);
       }
       function syncAudio() {
         const nextMuted = media.muted || media.volume === 0;
@@ -559,8 +547,6 @@ export function useShortsPlaybackSlot({
       media.addEventListener("play", onPlay);
       media.addEventListener("playing", onPlaying);
       media.addEventListener("pause", onPause);
-      media.addEventListener("waiting", onWaiting);
-      media.addEventListener("seeked", onSeeked);
       media.addEventListener("ended", onEnded);
       media.addEventListener("volumechange", syncAudio);
       media.addEventListener("resize", syncIntrinsicSize);
@@ -572,8 +558,6 @@ export function useShortsPlaybackSlot({
         media.removeEventListener("play", onPlay);
         media.removeEventListener("playing", onPlaying);
         media.removeEventListener("pause", onPause);
-        media.removeEventListener("waiting", onWaiting);
-        media.removeEventListener("seeked", onSeeked);
         media.removeEventListener("ended", onEnded);
         media.removeEventListener("volumechange", syncAudio);
         media.removeEventListener("resize", syncIntrinsicSize);
@@ -669,7 +653,6 @@ export function useShortsPlaybackSlot({
 
     // oxlint-disable-next-line react/set-state-in-effect
     setLoading(true);
-    setWaiting(false);
     setReady(false);
     setError(null);
     setPaused(true);
@@ -707,7 +690,6 @@ export function useShortsPlaybackSlot({
           if (sessionRef.current.token !== token) return;
           setError(videoJsPlayerErrorMessage(cause, "视频播放失败"));
           setLoading(false);
-          setWaiting(false);
         });
         if (mode === "play") requestAutoplay(player, media, token);
       })
@@ -859,7 +841,6 @@ export function useShortsPlaybackSlot({
   return {
     // 取流本身也算加载：封面要一直盖到播放器真的出画为止。
     loading: loading || (mediaAllowed && playInfoQuery.isFetching),
-    waiting,
     paused,
     error: error ?? (playInfoQuery.error ? "取流失败，请重试" : null),
     currentTime,
