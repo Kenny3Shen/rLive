@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ListFilter, Loader2, Search } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { RoomCard } from "@/shared/components/RoomCard";
+import { SearchHistoryField } from "@/shared/components/SearchHistoryField";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import type { LiveRoomDetail, LiveRoomItem, RoomListPage } from "@/shared/types/live";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { InputGroupButton } from "@/components/ui/input-group";
 import {
   Empty,
   EmptyContent,
@@ -18,12 +20,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import {
   Select,
   SelectContent,
@@ -52,6 +48,9 @@ const SEARCH_MATCH_LABELS: Record<SearchMatch, string> = {
   related: "相关",
 };
 
+/** 直播搜索历史独立成键，与视频搜索历史互不污染。 */
+const SEARCH_HISTORY_KEY = "live_search_history";
+
 export function SearchPage() {
   const navigate = useNavigate();
   const siteId = useSiteId();
@@ -60,7 +59,6 @@ export function SearchPage() {
   const scope = parseSearchScope(params.get("scope"));
   const [draft, setDraft] = useState(keyword);
   const [draftScope, setDraftScope] = useState<SearchScope>(scope);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   // 返回/前进到别的关键词时，草稿跟随 URL 回放：渲染期调整模式。
   const [prevSearchParams, setPrevSearchParams] = useState({ keyword, scope });
@@ -69,10 +67,6 @@ export function SearchPage() {
     setDraft(keyword);
     setDraftScope(scope);
   }
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
 
   const roomLookup = useQuery({
     queryKey: ["search_room", siteId, keyword],
@@ -130,9 +124,8 @@ export function SearchPage() {
     fetchNextPage: textQuery.fetchNextPage,
   });
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    navigate(searchPath(draft, draftScope));
+  function submit(nextKeyword: string) {
+    navigate(searchPath(nextKeyword, draftScope));
   }
 
   function changeScope(next: SearchScope) {
@@ -153,24 +146,22 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-5 pb-6">
-      <form onSubmit={submit} className="flex w-full max-w-3xl items-center gap-2">
-        <InputGroup className="min-w-0 flex-1">
-          <InputGroupInput
-            ref={inputRef}
-            id="search-keyword"
-            type="search"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="输入主播、房间号或标题"
-            autoComplete="off"
-            aria-label="搜索关键词"
-          />
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton type="submit" size="icon-xs" aria-label="搜索" title="搜索">
-              <Search aria-hidden />
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
+      <SearchHistoryField
+        historyKey={SEARCH_HISTORY_KEY}
+        value={draft}
+        onValueChange={setDraft}
+        onSubmit={submit}
+        committedKeyword={keyword}
+        placeholder="输入主播、房间号或标题"
+        ariaLabel="搜索关键词"
+        autoFocusWhenEmpty
+        className="mx-auto w-full max-w-3xl"
+        endAdornment={
+          <InputGroupButton type="submit" size="icon-xs" aria-label="搜索" title="搜索">
+            <Search aria-hidden />
+          </InputGroupButton>
+        }
+      >
         <Select
           value={draftScope}
           onValueChange={(value) => {
@@ -198,7 +189,7 @@ export function SearchPage() {
             </SelectGroup>
           </SelectContent>
         </Select>
-      </form>
+      </SearchHistoryField>
 
       {keyword.length === 0 && (
         <Empty className="min-h-56 border-0 py-10">
