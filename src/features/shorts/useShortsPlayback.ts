@@ -383,6 +383,16 @@ export function useShortsPlaybackSlot({
        * 短视频的默认消费语义就是循环：停在最后一帧等于内容消失，而自动跳下一条
        * 会替用户做决定 —— 换片是他上滑的手势，不是播放器的自作主张。
        * 用户自己暂停过则不重播，尊重那个暂停。
+       *
+       * **重播必须晚于 dash.js 自己的 `ended` 处理。** 适配器在媒体元素的 `ended`
+       * 上挂了它自己的处理，里面无条件 `pause()`（`DashAdapter` 内部 → dash.js
+       * `MediaPlayer` 的 `pause()`）。监听按注册顺序触发，而我们的监听先于
+       * `createVideoJsPlayer` 注册，因此直接 `play()` 会被紧随其后的 `pause()`
+       * 打断 —— 表现为 `play()` 以 `AbortError: The play() request was interrupted
+       * by a call to pause()` 拒绝，媒体停在 0 秒且暂停，也就是「播完不重播」。
+       *
+       * 用 `setTimeout(0)` 推到下一个宏任务：本次 `ended` 派发的全部监听（含
+       * dash.js 那个）都已跑完，`pause()` 不会再落到我们身上。
        */
       function onEnded() {
         const total = totalDuration();
@@ -392,10 +402,17 @@ export function useShortsPlaybackSlot({
           setPaused(true);
           return;
         }
-        media.currentTime = 0;
-        void media.play().catch(() => {
-          // 自动重播被浏览器策略拦下时留在暂停态，用户点一下即可。
-        });
+        const token = sessionRef.current.token;
+        setTimeout(() => {
+          // 延迟期间可能已经换片、卸载或用户手动暂停：那些情况下不该再起播。
+          if (sessionRef.current.token !== token) return;
+          if (sessionRef.current.userPaused) return;
+          if (media.paused === false) return;
+          media.currentTime = 0;
+          void media.play().catch(() => {
+            // 自动重播被浏览器策略拦下时留在暂停态，用户点一下即可。
+          });
+        }, 0);
       }
 
       media.addEventListener("timeupdate", syncTime);
