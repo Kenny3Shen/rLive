@@ -59,7 +59,6 @@ import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_SAFE_AREA_BOTTOM,
-  SHORTS_SAFE_AREA_TOP,
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
   SHORTS_TOP_BAR_HEIGHT_PX,
@@ -812,14 +811,15 @@ export function ShortsPage() {
           })}
         </div>
 
-        {/* 顶部控制栏：返回 + 更多操作。固定在视口上，不随条带平移。 */}
+        {/* 顶部控制栏：返回 + 更多操作。固定在视口上，不随条带平移。
+
+            紧贴视口顶边，也就是系统状态栏的下沿：状态栏的让位由 `.app-shell` 的
+            `padding-top` 统一做（见 `styles.css`），这里再补一份顶部安全区会把返回/更多
+            推到状态栏下方又一条的位置，中间空出一条谁都不用的黑带。 */}
         <div
           data-slot="shorts-top-bar"
           className="absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2"
-          style={{
-            height: `calc(${SHORTS_TOP_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_TOP})`,
-            paddingTop: SHORTS_SAFE_AREA_TOP,
-          }}
+          style={{ height: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
         >
           <ShortsBackButton onClick={goBack} inline />
           <span className="ml-auto">
@@ -845,7 +845,7 @@ export function ShortsPage() {
             role="status"
             aria-live="polite"
             className="pointer-events-none absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
-            style={{ top: `calc(${SHORTS_TOP_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_TOP})` }}
+            style={{ top: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
           >
             <FastForward className="size-3.5" aria-hidden />
             {playback.rate.toFixed(1)}x 倍速中

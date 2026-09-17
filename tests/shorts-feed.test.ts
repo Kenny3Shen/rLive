@@ -8,7 +8,6 @@ import {
   SHORTS_PATH,
   SHORTS_PREFETCH_REMAINING,
   SHORTS_SAFE_AREA_BOTTOM,
-  SHORTS_SAFE_AREA_TOP,
   SHORTS_SEEK_PREVIEW_WIDTH_PX,
   SHORTS_SWIPE_COMMIT_PROGRESS,
   SHORTS_TOP_BAR_HEIGHT_PX,
@@ -40,6 +39,7 @@ import {
   shortsWarmIndex,
   type ShortsSlots,
 } from "../src/features/shorts/shortsFeed";
+import * as shortsFeed from "../src/features/shorts/shortsFeed";
 import type { VideoItem } from "../src/shared/types/video";
 
 function item(overrides: Partial<VideoItem> = {}): VideoItem {
@@ -163,8 +163,8 @@ describe("进度条换算", () => {
 
 describe("操作栏高度契约", () => {
   test("弹幕起始纵坐标等于顶部控制栏高度", () => {
-    // 画面框顶对齐到安全区下沿，控制栏正好压住画面框顶部这一条：两者相等，
-    // 弹幕才会从控制栏正下方开始滚而不穿过返回按钮。
+    // 画面框顶对齐视口顶边（状态栏由外壳让位），控制栏正好压住画面框顶部这一条：
+    // 两者相等，弹幕才会从控制栏正下方开始滚而不穿过返回按钮。
     expect(SHORTS_DANMAKU_TOP_OFFSET_PX).toBe(SHORTS_TOP_BAR_HEIGHT_PX);
   });
 
@@ -217,8 +217,9 @@ describe("裁切铺满判定", () => {
   });
 
   test("主流竖屏机型铺满，16:9 与 21:9 留边", () => {
-    // 阈值卡在 10% 的依据。画面区高度 = 视口高 − 底栏 − 底部安全区（顶栏浮在画面上，
-    // 不占空间）。9:16 的源在各机型上要裁的比例见 shortsFeed.ts 的表格。
+    // 阈值卡在 10% 的依据。画面区高度 = 短视频视口高 − 底栏 − 底部安全区（顶栏浮在画面上，
+    // 不占空间；视口高已由外壳扣掉状态栏）。9:16 的源在各机型上要裁的比例见
+    // shortsFeed.ts 的表格。
     const portrait = 9 / 16;
     const area = (w: number, h: number) => shortsFrameFill(w, h, portrait);
     // 19.5:9 与 20:9：差得少，裁两侧不到一成。
@@ -468,24 +469,29 @@ describe("进度预览气泡定位", () => {
 });
 
 describe("安全区表达式", () => {
-  test("原生注入的变量优先，env() 兜底", () => {
+  test("底部：原生注入的变量优先，env() 兜底", () => {
     /*
      * Android WebView 的 `env(safe-area-inset-*)` 会读到 0，本项目因此由
      * MainActivity 把真值写成 CSS 变量。裸 env() 在那里等于不留安全区，底部操作栏
-     * 会被系统手势指示条压住 —— 这两条断言锁的就是这个顺序。
+     * 会被系统手势指示条压住 —— 这条断言锁的就是这个顺序。
      */
-    expect(SHORTS_SAFE_AREA_TOP).toBe("var(--android-safe-area-top, env(safe-area-inset-top))");
     expect(SHORTS_SAFE_AREA_BOTTOM).toBe(
       "var(--android-safe-area-bottom, env(safe-area-inset-bottom))",
     );
   });
 
-  test("两个方向都带回退", () => {
+  test("底部带回退", () => {
     // 旧 APK 与浏览器都没有那个变量，回退不能省。
-    for (const expression of [SHORTS_SAFE_AREA_TOP, SHORTS_SAFE_AREA_BOTTOM]) {
-      expect(expression).toContain("--android-safe-area-");
-      expect(expression).toContain("env(safe-area-inset-");
-    }
+    expect(SHORTS_SAFE_AREA_BOTTOM).toContain("--android-safe-area-");
+    expect(SHORTS_SAFE_AREA_BOTTOM).toContain("env(safe-area-inset-");
+  });
+
+  test("顶部没有对应出口：状态栏由应用外壳让位", () => {
+    // `.app-shell` 已按状态栏高度 padding-top（styles.css），短视频视口的顶边就是
+    // 状态栏下沿。这一层再消费一次顶部安全区，顶部控制栏会落到状态栏下方又一条的
+    // 位置，中间空出一条状态栏高的黑带（与画面内 HUD 把 `--player-safe-area-top`
+    // 钉成 0px 同一条约定）。锁「不存在这个出口」而不是锁某个值：加回来必须先改这条。
+    expect(Object.keys(shortsFeed)).not.toContain("SHORTS_SAFE_AREA_TOP");
   });
 });
 

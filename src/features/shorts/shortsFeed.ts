@@ -93,23 +93,31 @@ export const SHORTS_BOTTOM_BAR_HEIGHT_PX =
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX + SHORTS_SEEK_BAR_HEIGHT_PX;
 
 /**
- * 安全区的 CSS 表达式。
+ * 底部安全区的 CSS 表达式。
  *
- * 原生注入的 `--android-safe-area-*` 优先于 `env(safe-area-inset-*)`：Android
- * WebView 的 `env()` 会读成 0（`MainActivity` 因此用 `getInsetsIgnoringVisibility`
- * 把真值写成 CSS 变量，见 `styles.css` 里同一套写法）。直接用 `env()` 的后果是
- * 底部操作栏压在系统手势指示条下面 —— 手势条会吃掉那一段的触摸。
+ * 原生注入的 `--android-safe-area-bottom` 优先于 `env(safe-area-inset-bottom)`：
+ * Android WebView 的 `env()` 会读成 0（`MainActivity` 因此用
+ * `getInsetsIgnoringVisibility` 把真值写成 CSS 变量，见 `styles.css` 里同一套写法）。
+ * 直接用 `env()` 的后果是底部操作栏压在系统手势指示条下面 —— 手势条会吃掉那一段的
+ * 触摸。沉浸路由不渲染底部导航，这一段让位只能由本页自己做。
  *
  * 保留 `env()` 作为回退：旧 APK 没有那个变量，浏览器里也没有。
+ *
+ * 顶部**没有**对应常量：状态栏由应用外壳统一让位（`.app-shell` 的 `padding-top`，
+ * 见 `styles.css`），短视频视口的顶边就落在状态栏下沿。这一层再消费一次顶部安全区
+ * 会把控制栏与画面又下推一条状态栏高度，中间空出一条谁都不用的黑带 —— 与画面内
+ * HUD 把 `--player-safe-area-top` 钉成 `0px` 是同一条约定。
  */
-export const SHORTS_SAFE_AREA_TOP = "var(--android-safe-area-top, env(safe-area-inset-top))";
 export const SHORTS_SAFE_AREA_BOTTOM =
   "var(--android-safe-area-bottom, env(safe-area-inset-bottom))";
 
 /**
- * 顶部控制栏的高度（px），不含顶部安全区。
+ * 顶部控制栏的高度（px）。
  *
- * 同时也是弹幕的起始纵坐标：画面框顶对齐到安全区下沿，控制栏正好占住画面框顶部
+ * 就是这一条的全部高度：栏顶紧贴视口顶边（即状态栏下沿，外壳已让位），不再叠加
+ * 顶部安全区。
+ *
+ * 同时也是弹幕的起始纵坐标：画面框顶对齐视口顶边，控制栏正好占住画面框顶部
  * 这么高一条，弹幕从它下面开始滚才不会被返回/更多按钮压住（见
  * `--video-danmaku-top`）。
  */
@@ -118,7 +126,7 @@ export const SHORTS_TOP_BAR_HEIGHT_PX = 52;
 /**
  * 弹幕起始纵坐标（px），相对画面框顶边。
  *
- * 等于顶部控制栏的高度：画面框顶对齐到安全区下沿，控制栏正好压在画面框顶部这么
+ * 等于顶部控制栏的高度：画面框顶对齐视口顶边，控制栏正好压在画面框顶部这么
  * 高一条上。别名而不是直接用上面那个常量，是因为两者的含义在概念上可以分开 ——
  * 「控制栏多高」与「弹幕从哪开始」只是此刻恰好相等，后者若要再留一点余量，改这里
  * 就够，不必去动布局契约。
@@ -193,7 +201,8 @@ export function shortsFrameAlign(aspect: number | null): "start" | "center" {
  * 允许为「铺满」裁掉的最大比例。
  *
  * 两个宽高比的相对差值超过这个数就不再裁切，改回等比留边。取 0.1 是照真实机型的
- * 需求量定的（画面区 = 视口高 − 顶部安全区 − 底栏 59px − 底部安全区，9:16 源）：
+ * 需求量定的（画面区 = 短视频视口高 − 底栏 59px − 底部安全区，9:16 源；视口高已由
+ * 外壳的 `padding-top` 扣掉状态栏）：
  *
  * | 机型 | 屏幕比 | 要裁 | 结果 |
  * | --- | --- | --- | --- |

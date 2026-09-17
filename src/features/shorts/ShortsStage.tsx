@@ -10,7 +10,6 @@ import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
   SHORTS_DANMAKU_TOP_OFFSET_PX,
   SHORTS_SAFE_AREA_BOTTOM,
-  SHORTS_SAFE_AREA_TOP,
   shortsFrameAlign,
   shortsFrameFill,
   shortsMediaAspect,
@@ -47,24 +46,27 @@ function useShortsStageSize() {
 }
 
 /**
- * 画面区域：顶部安全区之下、底部操作栏之上的那块矩形。
+ * 画面区域：视口顶边之下、底部操作栏之上的那块矩形。
  *
  * 用 CSS 表达而不是把安全区读成数字：读数字要么靠探针元素、要么靠
  * `getComputedStyle`，两者都会在系统栏变化时慢一帧。这里只需要「画面不许越过
  * 这两条线」，交给 CSS 表达最直接，JS 只量结果。
  *
- * 安全区一律走 `SHORTS_SAFE_AREA_*`（原生注入的变量优先、`env()` 兜底）而不是裸
+ * 底部安全区走 `SHORTS_SAFE_AREA_BOTTOM`（原生注入的变量优先、`env()` 兜底）而不是裸
  * `env()`：Android WebView 的 `env(safe-area-inset-*)` 会读到 0，本项目因此由
  * `MainActivity` 注入 `--android-safe-area-*`。裸 `env()` 在那里等于不留安全区，
  * 底部操作栏会被系统手势条压住。
  *
  * 底部让位是硬性的：操作栏（进度条 + 弹幕输入 + 几个按钮）占真实空间而不是浮在
- * 画面上，因此画面可用高度必须先减掉它，否则输入框会盖住画面底部。顶部不减：
- * 顶栏是浮层，画面从安全区下沿就开始（弹幕另有起始线让位，见
- * `--video-danmaku-top`）。
+ * 画面上，因此画面可用高度必须先减掉它，否则输入框会盖住画面底部。
+ *
+ * 顶部相反，一点不减：状态栏已由 `.app-shell` 的 `padding-top` 统一预留，短视频
+ * 视口的顶边就是状态栏下沿，这里再减一次会在顶部空出一条状态栏高的黑带
+ * （见 `shortsFeed` 的安全区注释）。顶栏是浮层，压在画面顶部这一条上，弹幕另有
+ * 起始线让位（见 `--video-danmaku-top`）。
  */
 const SHORTS_MEDIA_AREA_STYLE = {
-  top: SHORTS_SAFE_AREA_TOP,
+  top: 0,
   bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
 } as const;
 
@@ -190,7 +192,8 @@ export function ShortsStage({
             {
               ...shortsFrameStyle(frame),
               // 弹幕从顶部控制栏下方开始飘，不从画面顶边开始：画面框的顶边就是
-              // 安全区下沿，而控制栏正好压在那一段上，不让位会让弹幕穿过返回按钮。
+              // 视口顶边（状态栏下沿），而控制栏正好压在那一段上，不让位会让弹幕
+              // 穿过返回按钮。
               "--video-danmaku-top": `${SHORTS_DANMAKU_TOP_OFFSET_PX}px`,
             } as React.CSSProperties
           }
