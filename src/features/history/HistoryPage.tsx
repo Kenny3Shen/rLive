@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CirclePlay,
@@ -39,6 +39,7 @@ import {
   type HistoryPlatformFilter,
 } from "./historyGrouping";
 import { HistoryTimeline } from "./HistoryTimeline";
+import { historySnapshotKey } from "./historyVirtual";
 import {
   HISTORY_DATE_PARAM,
   HISTORY_PLATFORM_PARAM,
@@ -438,6 +439,9 @@ function HistoryFilteredEmpty({ onReset }: { onReset: () => void }) {
 
 export function HistoryPage() {
   const navigate = useNavigate();
+  // `location.key` 对每条历史记录稳定：POP 回到本页时保持不变，快照因此能挺过
+  // 打开房间导致的整表卸载；与视图名拼成 snapshotKey，三条时间线各存各的位置。
+  const location = useLocation();
   const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [clearOpen, setClearOpen] = useState(false);
@@ -825,6 +829,7 @@ export function HistoryPage() {
                     itemKey={watchHistoryRowKey}
                     estimateItemSize={HISTORY_CARD_ESTIMATE_PX}
                     active={activeView === "watch"}
+                    snapshotKey={historySnapshotKey(location.key, "watch")}
                     renderItem={(item) => (
                       <HistoryCard
                         item={item}
@@ -891,6 +896,7 @@ export function HistoryPage() {
                     itemKey={videoHistoryRowKey}
                     estimateItemSize={HISTORY_CARD_ESTIMATE_PX}
                     active={activeView === "video"}
+                    snapshotKey={historySnapshotKey(location.key, "video")}
                     renderItem={(item) => (
                       <VideoHistoryCard
                         item={item}
@@ -946,6 +952,7 @@ export function HistoryPage() {
                     itemKey={danmakuHistoryRowKey}
                     estimateItemSize={DANMAKU_CARD_ESTIMATE_PX}
                     active={activeView === "danmaku"}
+                    snapshotKey={historySnapshotKey(location.key, "danmaku")}
                     renderItem={(item) => (
                       <DanmakuSendHistoryCard
                         item={item}
