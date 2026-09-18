@@ -39,7 +39,12 @@ import {
   type HistoryPlatformFilter,
 } from "./historyGrouping";
 import { HistoryTimeline } from "./HistoryTimeline";
-import { historySnapshotKey, resetHistoryScrollForRefresh } from "./historyVirtual";
+import {
+  DANMAKU_CARD_ESTIMATE_PX,
+  DANMAKU_CONTENT_MAX_HEIGHT_PX,
+  historySnapshotKey,
+  resetHistoryScrollForRefresh,
+} from "./historyVirtual";
 import {
   HISTORY_DATE_PARAM,
   HISTORY_PLATFORM_PARAM,
@@ -378,7 +383,25 @@ function DanmakuSendHistoryCard({
         </CardAction>
       </CardHeader>
       <CardContent>
-        <p className="break-words text-sm leading-relaxed text-foreground">{item.content}</p>
+        {/*
+          正文限高：弹幕内容会换行，行高因此随字数变化。窗口化列表的总高度是
+          「已测行实测高 + 未测行估高」之和，而实测发生在行进入视口时 —— 实测系统
+          性大于估高时，往下滚就不断把总高度往上抬，滚动条比滚动更快地变长，
+          表现为「怎么也滚不到底」（实机反馈的无限滚动）。
+
+          实测（浏览器夹具，400 行）：不限高时每滚 400px 内容最多增长 252px，
+          214 步里 210 步在增长，总高从 53.9k 涨到 86.5k（+61%）；限高三行后
+          增长步数为 0 —— 行高不再超出估高，内容长度在首屏即为终值。
+
+          用 max-height 而非 line-clamp：line-clamp 是截断（读不到全文），
+          这里只是把超长内容限制在一个可滚动的小区域内，全文仍可读。
+        */}
+        <p
+          className="break-words text-sm leading-relaxed text-foreground"
+          style={{ maxHeight: DANMAKU_CONTENT_MAX_HEIGHT_PX, overflowY: "auto" }}
+        >
+          {item.content}
+        </p>
         {(roomUserName || roomId) && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {roomUserName && (
@@ -412,11 +435,23 @@ const danmakuHistoryRowKey = (item: DanmakuSendHistoryItem) =>
   `${item.site_id}:${item.sent_at}:${item.content}`;
 
 /**
- * 单条记录卡的估高（px）。直播/视频卡定高（16:9 封面列 + 三行文本 + 行距）；
- * 弹幕卡的内容会换行，估高按两行正文取，实测再校正。
+ * 单条记录卡的估高（px）。直播/视频卡定高（16:9 封面列 + 三行文本 + 行距）。
+ *
+ * 弹幕卡不同：正文会换行，高度本来随字数变化，而窗口化列表的总高度是「已测行实测高
+ * + 未测行估高」之和——实测发生在行进入视口时，只要实测系统性大于估高，往下滚就会
+ * 不断把总高度往上抬，滚动条比滚动更快地变长，表现为「怎么也滚不到底」。
+ * 因此弹幕卡的正文封顶在 `DANMAKU_CONTENT_MAX_HEIGHT_PX`（约三行），估高取封顶后的
+ * 卡高 170。实测（400 行、长内容、逐屏下滚）：
+ *
+ * - 不封顶 + 估高 132：214 步里 210 步在增长，总高 53.9k → 86.5k（+61%
+ *   —— 即实机反馈的无限滚动）。
+ * - 封顶 + 估高 132：仍有 164/166 步增长（封顶后实测 168 > 估高 132）。
+ * - 封顶 + 估高 170：0 步增长。
+ *
+ * 估高必须不低于封顶后的实测高度，否则增长依旧；略高一点只是让内容反向收缩，
+ * 无害。两者要一起改。
  */
 const HISTORY_CARD_ESTIMATE_PX = 98;
-const DANMAKU_CARD_ESTIMATE_PX = 132;
 
 function HistoryFilteredEmpty({ onReset }: { onReset: () => void }) {
   return (

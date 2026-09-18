@@ -20,6 +20,25 @@ export const HISTORY_TIMELINE_OVERSCAN = 6;
 export const HISTORY_SCROLL_SNAPSHOT_LIMIT = 32;
 
 /**
+ * 弹幕卡正文的最大高度（px），约三行 `text-sm leading-relaxed`。
+ *
+ * 与 `DANMAKU_CARD_ESTIMATE_PX` 是一对：估高按「卡壳 + 三行正文」取，正文又封顶在
+ * 三行，实测高度因此不会超过估高 —— 窗口化列表的总高度是「已测行实测高 + 未测行
+ * 估高」之和，实测超出估高时往下滚会不断把总高度往上抬，滚动条比滚动更快变长，
+ * 表现为「怎么也滚不到底」。两者要一起改：只提估高会浪费空白，只压正文会让卡片
+ * 比估高矮、滚动条反向收缩。
+ */
+export const DANMAKU_CONTENT_MAX_HEIGHT_PX = 66;
+
+/**
+ * 弹幕卡的估高（px）：卡壳 + 封顶后的三行正文。
+ *
+ * 必须不低于封顶后实测出的卡高（实测 168），否则增长依旧 —— 详见
+ * `DANMAKU_CONTENT_MAX_HEIGHT_PX` 的说明。
+ */
+export const DANMAKU_CARD_ESTIMATE_PX = 170;
+
+/**
  * 判定「停在直播边缘（顶部）」的像素容差。
  *
  * 时间线按时间倒序，最新记录从顶部插入，因此顶部就是直播边缘。触摸滚动很难精确

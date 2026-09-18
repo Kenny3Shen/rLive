@@ -3,6 +3,8 @@ import type { VirtualItem } from "@tanstack/react-virtual";
 import {
   HISTORY_LIVE_EDGE_THRESHOLD_PX,
   HISTORY_SCROLL_SNAPSHOT_LIMIT,
+  DANMAKU_CARD_ESTIMATE_PX,
+  DANMAKU_CONTENT_MAX_HEIGHT_PX,
   clearHistoryScrollSnapshots,
   historyAnchorTo,
   historySnapshotKey,
@@ -187,5 +189,15 @@ describe("history refresh scroll reset", () => {
     });
     resetHistoryScrollForRefresh(9);
     expect(calls).toBe(1);
+  });
+});
+
+describe("danmaku card sizing", () => {
+  test("estimate is not below the clamped card height", () => {
+    // 窗口化列表的总高度 = 已测行实测高 + 未测行估高。实测发生在行进入视口时，
+    // 因此实测一旦系统性超过估高，往下滚就会持续把总高度往上抬：滚动条比滚动
+    // 更快变长，表现为「怎么也滚不到底」。浏览器夹具实测（400 行、长内容）：
+    // 不限高 + 估高 132 → 214 步里 211 步增长（总高 +61%）；限高 + 170 → 0 步。
+    expect(DANMAKU_CARD_ESTIMATE_PX).toBeGreaterThanOrEqual(DANMAKU_CONTENT_MAX_HEIGHT_PX);
   });
 });
