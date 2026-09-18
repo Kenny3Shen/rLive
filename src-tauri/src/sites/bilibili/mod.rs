@@ -36,6 +36,45 @@ struct Session {
     sub_key: String,
 }
 
+/// 进程级设备指纹槽（`buvid3` / `buvid4`）。
+///
+/// 为什么需要它：[`BilibiliSite`] 按 IPC 命令新建（见 `commands::video::resolve_bilibili`
+/// 与 `sites::registry`），而 [`BilibiliSite::ensure_buvid`] 的缓存挂在**实例**上 ——
+/// 没有这层进程级共享时，只要保存的 Cookie 不含 `buvid3`/`buvid4`，**每条命令都会去
+/// `/x/frontend/finger/spi` 换一个新的设备号**。
+///
+/// 实测（真机登录态 Cookie，keys 只有 SESSDATA/bili_jct/DedeUserID/…）：轮换设备号会让
+/// 匿名 story feed 每次都从同一个冷启动小池取内容，连续补货约 7~21 次后 `has_more`
+/// 变假、流在 ~100 条处枯竭；固定设备号则连续 80 次调用仍在产出（累计 2378+ 条）。
+/// 因此「同一进程内稳定设备号」是短视频能一直滑下去的前提，与 `sites::douyin` 的
+/// `WEB_SESSION_CACHE` 同一思路。
+///
+/// 只放内存、不落盘：设备号是临时指纹，且扫码登录的 Cookie 自带 `buvid3`/`buvid4`
+/// （见 `account::bilibili_qr` 的 `COOKIE_KEYS`）时根本走不到这里；跨重启换一个匿名
+/// 设备号不会重新引入本 bug —— 触发条件是**同一进程内**每条命令都换号。
+static DEVICE_BUVIDS: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+fn cached_device_buvids() -> Option<(String, String)> {
+    DEVICE_BUVIDS.lock().ok()?.clone()
+}
+
+fn store_device_buvids(ids: &(String, String)) {
+    if ids.0.is_empty() && ids.1.is_empty() {
+        return;
+    }
+    if let Ok(mut slot) = DEVICE_BUVIDS.lock() {
+        *slot = Some(ids.clone());
+    }
+}
+
+/// 清空进程级设备槽。仅测试用：多个用例共享同一进程静态量，必须显式复位。
+#[cfg(test)]
+fn reset_device_buvids() {
+    if let Ok(mut slot) = DEVICE_BUVIDS.lock() {
+        *slot = None;
+    }
+}
+
 pub struct BilibiliSite {
     client: Client,
     cookie: String,
@@ -241,6 +280,15 @@ impl BilibiliSite {
                     return (saved_b3, saved_b4);
                 }
 
+                // 进程级设备槽：站点实例按命令新建，先看这里能不能补齐缺失的一半，
+                // 否则每条命令都会换一个设备号（见 `DEVICE_BUVIDS`）。
+                let (cached_b3, cached_b4) = cached_device_buvids().unwrap_or_default();
+                let b3 = if saved_b3.is_empty() { cached_b3 } else { saved_b3 };
+                let b4 = if saved_b4.is_empty() { cached_b4 } else { saved_b4 };
+                if !b3.is_empty() && !b4.is_empty() {
+                    return (b3, b4);
+                }
+
                 let (fetched_b3, fetched_b4) = match self.fetch_buvid().await {
                     Ok(v) => v,
                     Err(e) => {
@@ -248,18 +296,12 @@ impl BilibiliSite {
                         (String::new(), String::new())
                     }
                 };
-                (
-                    if saved_b3.is_empty() {
-                        fetched_b3
-                    } else {
-                        saved_b3
-                    },
-                    if saved_b4.is_empty() {
-                        fetched_b4
-                    } else {
-                        saved_b4
-                    },
-                )
+                let merged = (
+                    if b3.is_empty() { fetched_b3 } else { b3 },
+                    if b4.is_empty() { fetched_b4 } else { b4 },
+                );
+                store_device_buvids(&merged);
+                merged
             })
             .await;
         Ok(ids.clone())
@@ -802,6 +844,15 @@ impl LiveSite for BilibiliSite {
 mod live_tests {
     use super::*;
 
+    /// 进程级设备槽（`DEVICE_BUVIDS`）是全局静态量，并行测试会互相覆盖。
+    /// 所有触碰它的用例都必须先取得这把锁。用 tokio 的 async 感知锁：
+    /// 用例体是 async 的，持有 `std::sync` 锁跨 await 会被 clippy 拦下。
+    static DEVICE_BUVID_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn lock_device_buvids() -> tokio::sync::MutexGuard<'static, ()> {
+        DEVICE_BUVID_TEST_LOCK.lock().await
+    }
+
     #[test]
     fn copied_cookie_header_is_normalized_and_missing_buvid_is_added() {
         let site = BilibiliSite::new(
@@ -823,6 +874,10 @@ mod live_tests {
     async fn failed_buvid_fetch_is_shared_and_preserves_saved_device_ids() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // 进程级设备槽是全局静态量，用例之间会互相污染，先上锁并复位。
+        let _guard = lock_device_buvids().await;
+        reset_device_buvids();
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -860,6 +915,28 @@ mod live_tests {
         .await
         .unwrap();
         assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// 站点实例按 IPC 命令新建，没有进程级设备槽时，只要 Cookie 不含设备号，
+    /// 每条命令都会重新拉指纹、换一个新的 `buvid`，匿名 story feed 因此很快枯竭。
+    /// 这里用一个不可达的代理客户端证明复用：若 `ensure_buvid` 真去拉指纹，它必然失败。
+    #[tokio::test]
+    async fn process_device_slot_is_reused_by_later_site_instances() {
+        let _guard = lock_device_buvids().await;
+        reset_device_buvids();
+        store_device_buvids(&("dev-3".into(), "dev-4".into()));
+
+        let site = BilibiliSite::new(
+            crate::http_client::client_for_proxy(Some("http://127.0.0.1:1")).unwrap(),
+            String::new(),
+        );
+        assert_eq!(
+            site.ensure_buvid().await.unwrap(),
+            ("dev-3".into(), "dev-4".into()),
+            "必须复用进程级设备槽，而不是换一个新的设备号"
+        );
+
+        reset_device_buvids();
     }
 
     #[test]

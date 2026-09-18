@@ -126,35 +126,37 @@ story feed 没有 cursor/offset/page。实测：
 
 rLive 最终选择**不过滤画幅也不限时长**（用户确认）：这一流本来就是混合画幅，舞台按原比例呈现两种都能看。
 
-### 2.7 登录态与个性化：story 已经在带 Cookie，无需改动
+### 2.7 登录态与个性化（2026-10 实测修正）
 
 问题：story feed 是否有「按 Cookie 做个性化推荐」的接口或参数？已设置 Cookie 时是否会用上？
 
-**结论：代码路径上已经在用，不需要改动。** 链路是
-`commands/video.rs` 的 `resolve_bilibili` → `account::get_cookie` → `BilibiliSite::new(client, cookie)`
-→ `headers()`（`if !cookie.is_empty() { headers.push(("cookie", cookie)) }`）。
-story 走 `get_json_with_buvid_header`，内部 `get_json_request_with(..., public_headers = false, ...)`
-—— `false` 就是走 `self.headers()`，即**带 Cookie**。这与 `video_recommend`（首页推荐）完全同一条
-路径，而后者的文档注释写着「有 cookie 才是个性化流，匿名返回通用流」。
+**修正结论：web Cookie 递上去了，但这条 APP 侧 feed 不按它个性化。** 代码路径确实是
+`resolve_bilibili` → `account::get_cookie` → `BilibiliSite::new(client, cookie)` → `headers()`
+（`if !cookie.is_empty() { headers.push(("cookie", cookie)) }`），story 走
+`get_json_with_buvid_header`（`public_headers = false`，即带 Cookie）。但真机登录态并发对照（25 轮）
+证明：**有无 Cookie 对结果集的影响落在服务端轮换噪声内**；用种子把同一条目强制塞进 anon 与
+login 响应逐字段对比，完全一致。个性化旋钮只有 `buvid`（设备轴）与种子参数。
 
-未实测的部分要区分清楚：**上游是否真的按 Cookie 改变 story 的返回内容，没有验证**（需要真实
-登录态）。只能说 rLive 把 Cookie 递上去了，没有把它拦在半路。
+（首页推荐 `x/web-interface/wbi/index/top/feed/rcmd` 的「有 cookie 才是个性化流」不适用于 story；
+两者虽同走 `headers()`，但是不同的推荐场景。）
 
-接口层面另外两件事（均已实测，匿名）：
+接口层面的四件事（均已实测）：
 
-- **`aid` + `bvid` + `display_id` 是种子参数**，官方文档写 `aid`「会影响到后续视频内容」，
-  `display_id`「第1页会得到比其他页多 aid 处所填视频」。实测：传入某个竖屏稿件的 `aid`/`bvid`
-  且 `display_id=1` 时，该稿件出现在结果首位，且与不传种子的结果集**零重叠**（两组各 20+ 条）。
-  这是「以某条视频为起点继续刷」的能力，与 Cookie 个性化是两件不同的事，rLive 目前**没用**它
-  （从播放页唤起竖屏流时可以用，但那是新交互）。
+- **`aid`/`bvid` + `display_id` 是种子参数**，官方文档写 `aid`「会影响到后续视频内容」，
+  `display_id`「第1页会得到比其他页多 aid 处所填视频」。实测：传入某个竖屏稿件的 `bvid`
+  且 `display_id=1` 时，该稿件出现在结果首位，且与不传种子的结果集**零重叠**；只传种子不带
+  `display_id` 时种子不进首位。rLive 已接（`video_story` 的 `seed`）。
 - **`buvid` 请求头本身就是一根个性化轴**：两个全新设备 id（均无 Cookie）各拉 3 批，各自 15 条
-  唯一 bvid，**交集只有 1 条**。说明匿名流也按设备 id 分化，而不只是一个开关。
+  唯一 bvid，**交集只有 1 条**。但多个新设备号的**并集**收敛到同一个共享冷启动池（8 个新 buvid
+  的并集仅 111 条）—— 因此轮换设备号会很快枯竭，必须固定（见功能文档「固定设备指纹」）。
+- **APP 参数不改变结果集**：`login_event`/`mobi_app`/`platform`/`build`/`statistics`/`fnval`/`fourk`
+  的组合实测均无显著影响。
 - `access_key` 是 APP 侧的登录 Token（`app.bilibili.com` 那一路，需 appkey + sign）；网页侧没有
-  这个参数，也不需要它 —— story 在 web 主机上匿名可用。
+  这个参数。TV 端扫码登录链路可拿到它，但 rLive **暂缓**接入（收益未验证、凭据敏感）。
 
 顺带记下另一个接口的口径差异：`x/web-interface/wbi/index/top/feed/rcmd`（首页推荐）**需要 WBI
-签名**且 Cookie 才个性化，rLive 已实现（`video_recommend`）；它的条目**不带 `dimension`**，
-想要竖屏判定得逐条再查详情 —— 成本反而比直接用 story 高。
+签名**且 Cookie 才个性化，rLive 已实现（`video_recommend`）；它的条目**不带 `dimension`**
+（实测 0/12），且混入广告/直播/番剧，无法当竖屏源。
 
 ## 三、抖音短视频
 

@@ -173,13 +173,23 @@ export function ShortsPage() {
   const chromeColumn = coarsePointer ? stageChromeColumn : 0;
   const compact = useCompactPlayerViewport();
 
+  /**
+   * 下一次取流要用的种子：当前正在消费的那条 `bvid`。
+   *
+   * 用 ref 而不是闭包捕获：`queryFn` 在 `fetchNextPage` 时才执行，那时要读的是
+   * 「此刻在看的那条」，而不是查询创建时的那条。首屏还没有条目可传（ref 为空），
+   * 后端会回退到最近观看历史当种子。
+   */
+  const storySeedRef = useRef<string | null>(null);
+
   const feedQuery = useInfiniteQuery({
     queryKey: ["shorts_story"],
     initialPageParam: 1,
     // 首屏小批、补货大批：两个档位与上游调用策略都在后端，前端只报语义
     // （`more` 为 true 表示这是补货）。用 pageParam 而不是「是否已有数据」做判据：
     // 它在查询被重置后也跟着回到 1，因此重试/重拉仍走首屏那条快路径。
-    queryFn: ({ pageParam }) => videoGetStory(pageParam > 1),
+    // `seedBvid` 让上游「从这条继续刷」，绕开黏性头部（见 `video_get_story`）。
+    queryFn: ({ pageParam }) => videoGetStory(pageParam > 1, storySeedRef.current),
     // 上游无游标：页码只是本地的「再来一批」计数。`has_more` 是「这批里有没见过的」
     // ——后端按进程记忆 + 最近观看过滤（见 `video_get_story`），全是老条目就落下它。
     // 不能理解成「上游到底了」：那只是此刻没有新内容，重进这一页仍会再试。
@@ -194,6 +204,12 @@ export function ShortsPage() {
   // 在渲染期派生而不是放进 effect：effect 里 setState 会先用越界下标渲染一帧（空舞台）。
   const index = items.length > 0 ? Math.min(rawIndex, items.length - 1) : rawIndex;
   const current = items[index] ?? null;
+
+  // 在补货 effect 之前同步种子（声明顺序即 effect 执行顺序），保证预取读到的是
+  // 当前这条而不是上一条。
+  useEffect(() => {
+    storySeedRef.current = current?.bvid ?? null;
+  }, [current?.bvid]);
 
   /**
    * 进度条的缩略图表。

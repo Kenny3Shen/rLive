@@ -92,6 +92,25 @@ fn story_batch_count(requested: Option<usize>) -> usize {
         .clamp(1, STORY_FEED_MAX_BATCHES)
 }
 
+/// 组装 story feed 的 query 参数。
+///
+/// 基础只有 `pull=1`。有种子时额外带 `bvid` 与 `display_id=1`（实测：这样才能让种子
+/// 稿件排在首位并换出一组不重叠的窗口；只带种子不带 `display_id` 时种子不进首位，
+/// `display_id=2` 是另一种语义）。用 `bvid` 而不是 `aid`：调用方（当前条目、观看历史）
+/// 天然持有 bvid，两种写法实测等价。空字符串与 `"0"` 都当无种子，避免调用方把
+/// 「没有」编码成空值传上去。
+fn story_query_params(seed: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut params = vec![("pull", "1".to_string())];
+    if let Some(bvid) = seed
+        .map(str::trim)
+        .filter(|bvid| !bvid.is_empty() && *bvid != "0")
+    {
+        params.push(("bvid", bvid.to_string()));
+        params.push(("display_id", "1".to_string()));
+    }
+    params
+}
+
 /// 逐批累积 story 条目，按「见过没见过」分两摊。
 ///
 /// 上游无游标，批与批之间只能靠服务端时间轴推进，重叠不可避，因此跨批去重是硬需求
@@ -1786,10 +1805,17 @@ impl BilibiliSite {
     /// `seen` 是「最近已经给过或已经看过的 bvid」。它存在是因为上游**头部很黏**：
     /// 不传的话同一条会在每次进页时反复出现（实测 6 轮首屏里有一条全中）。空集合
     /// 就是「不过滤」，真网烟测试用的就是那个。
+    ///
+    /// `seed` 是「以某条视频为起点继续刷」的种子（上游 `bvid` + `display_id`）。实测
+    /// （2026-09，真机登录态）带 `bvid` + `display_id=1` 时：该稿件排在结果首位，且与
+    /// 不带种子的结果集**零重叠**；只带种子不带 `display_id` 时种子不进首位，
+    /// `display_id=2` 又是另一种语义。因此这里固定发 `display_id=1`，只把 `bvid` 当旋钮。
+    /// 种子解决的是「每次都从同一个黏性头部开始」，与 `seen`（去重）是两回事。
     pub async fn video_story(
         &self,
         more: bool,
         seen: &HashSet<String>,
+        seed: Option<&str>,
     ) -> AppResult<VideoListPage> {
         let batches = story_batch_count(more.then_some(STORY_FEED_MORE_BATCHES));
         let mut pick = StoryPick::new();
@@ -1798,7 +1824,7 @@ impl BilibiliSite {
             match self
                 .get_json_with_buvid_header(
                     "https://api.bilibili.com/x/v2/feed/index/story",
-                    &[("pull", "1".to_string())],
+                    &story_query_params(seed),
                 )
                 .await
                 .and_then(|text| parse_story(&text))
@@ -3245,6 +3271,34 @@ mod tests {
     }
 
     #[test]
+    fn story_query_params_only_adds_seed_with_display_id() {
+        // 无种子：只有 pull=1（现状路径）。
+        assert_eq!(story_query_params(None), vec![("pull", "1".to_string())]);
+        // 空 / 零 / 空白当无种子，避免把「没有」编码成一个空 bvid 传上去。
+        for empty in [Some(""), Some("   "), Some("0")] {
+            assert_eq!(story_query_params(empty), vec![("pull", "1".to_string())]);
+        }
+        // 有种子：bvid + display_id=1 必须成对出现 —— 实测只有这样才能让种子排首位。
+        assert_eq!(
+            story_query_params(Some("BV1Sw8U6cEEV")),
+            vec![
+                ("pull", "1".to_string()),
+                ("bvid", "BV1Sw8U6cEEV".to_string()),
+                ("display_id", "1".to_string()),
+            ]
+        );
+        // 两侧空白要修剪，否则上游会当成非法 bvid。
+        assert_eq!(
+            story_query_params(Some(" BV1Sw8U6cEEV ")),
+            vec![
+                ("pull", "1".to_string()),
+                ("bvid", "BV1Sw8U6cEEV".to_string()),
+                ("display_id", "1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn pgc_index_reads_first_ep_and_has_next() {
         let raw = serde_json::json!({
             "code": 0,
@@ -4020,7 +4074,7 @@ mod tests {
     async fn live_story_feed_smoke() {
         let site = BilibiliSite::new(reqwest::Client::new(), String::new());
         let page = site
-            .video_story(false, &HashSet::new())
+            .video_story(false, &HashSet::new(), None)
             .await
             .expect("匿名 story feed 应放行");
 
@@ -4050,7 +4104,7 @@ mod tests {
     async fn live_story_item_plays_through_existing_playurl() {
         let site = BilibiliSite::new(reqwest::Client::new(), String::new());
         let page = site
-            .video_story(false, &HashSet::new())
+            .video_story(false, &HashSet::new(), None)
             .await
             .expect("匿名 story feed 应放行");
         let item = page.items.first().expect("story feed 未产出条目");

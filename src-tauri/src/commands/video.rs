@@ -119,24 +119,35 @@ const STORY_EXCLUDE_RECENT_WATCHED: usize = 200;
 ///    于是用户看到的就是「又是那几条」。
 /// 2. 最近看过的（`video_history`）—— 跨重启仍然有效，因此重开应用不会又从那几条
 ///    看过的开始。只取最近 [`STORY_EXCLUDE_RECENT_WATCHED`] 条。
+///
+/// `seed` 是「以某条视频为起点继续刷」的种子（上游 `bvid` + `display_id=1`）。
+/// 实测它能绕开黏性头部：种子稿件排首位，且与不带种子的结果集零重叠。前端传**当前
+/// 正在看的那条**（滑到哪就从哪继续），首屏没得传时回退到最近观看历史里的第一条。
+/// 这与 `seen`（去重）互补：`seen` 只把老条目排到后面，不改内容池；`seed` 换的是窗口。
 #[tauri::command]
 pub async fn video_get_story(
     state: State<'_, AppState>,
     more: Option<bool>,
+    seed_bvid: Option<String>,
 ) -> AppResult<VideoListPage> {
     let site = resolve_bilibili(&state)?;
     let mut seen = state.story_feed_seen.snapshot();
-    {
-        // 数据库守卫必须在 await 之前放掉：它不是 Send，跨 await 持有会编译失败，
-        // 而且那把锁是全应用共用的。
+    // 数据库守卫必须在 await 之前放掉：它不是 Send，跨 await 持有会编译失败，
+    // 而且那把锁是全应用共用的。
+    let recent = {
         let conn = state.conn()?;
-        seen.extend(crate::db::video_history::recent_bvids(
-            &conn,
-            "ugc",
-            STORY_EXCLUDE_RECENT_WATCHED,
-        )?);
-    }
-    let page = site.video_story(more.unwrap_or(false), &seen).await?;
+        crate::db::video_history::recent_bvids(&conn, "ugc", STORY_EXCLUDE_RECENT_WATCHED)?
+    };
+    // 首屏（前端还没条目可传）时用最近看过的第一条当种子，让「重进这一页」也从
+    // 一个跟上次不同的窗口开始，而不是又回到同一个黏性头部。
+    let seed = seed_bvid
+        .map(|bvid| bvid.trim().to_string())
+        .filter(|bvid| !bvid.is_empty())
+        .or_else(|| recent.first().cloned());
+    seen.extend(recent);
+    let page = site
+        .video_story(more.unwrap_or(false), &seen, seed.as_deref())
+        .await?;
     // 发出去的就算见过 —— 包括兜底给的重复条目，否则下一次又会挑中它们。
     state
         .story_feed_seen

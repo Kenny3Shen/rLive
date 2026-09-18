@@ -43,9 +43,13 @@ export function videoGetPopular(page: number, pageSize?: number): Promise<VideoL
  *
  * `more` 是「这次是补货还是首屏」的粗语义，不是批数：一次扣多少次上游接口的策略
  * （批数档位与夹取）全在后端，前端只告诉它这是首屏还是补货。
+ *
+ * `seedBvid` 是「以哪条为起点继续刷」：传当前正在看的那条，上游会把该条排在首位
+ * 并换出一组与黏性头部不重叠的窗口（实测）。首屏还没条目时传 `null`，后端会回退到
+ * 最近观看历史当种子。
  */
-export function videoGetStory(more?: boolean): Promise<VideoListPage> {
-  return invokeCmd<VideoListPage>("video_get_story", { more });
+export function videoGetStory(more?: boolean, seedBvid?: string | null): Promise<VideoListPage> {
+  return invokeCmd<VideoListPage>("video_get_story", { more, seedBvid: seedBvid ?? null });
 }
 
 /** UGC 分区榜。上游是榜单而非分页接口，返回的 `has_more` 恒为 false。 */
