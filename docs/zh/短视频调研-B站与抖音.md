@@ -111,7 +111,7 @@ story feed 没有 cursor/offset/page。实测：
 | `api.vc.bilibili.com/clip/v1/video/{index,search}`（旧「小视频」） | HTTP 404，接口已下线 |
 | `x/web-interface/dynamic/region?rid=76`（旧小视频分区） | `-404 啥都木有` |
 | `x/vertical/feed/index`、`x/web-interface/story/feed` | 非 JSON（错误页），不存在 |
-| `app.bilibili.com/x/v2/feed/index`（app 主 feed） | `code 0` 但 `card_goto` 只有 `av`/`inline_av`，**不产出 `vertical_av`**，不能当竖屏源 |
+| `app.bilibili.com/x/v2/feed/index`（app 主 feed） | `code 0`。~~不产出 `vertical_av`~~ —— **2.8 节已修正**：`card_goto` 确实只有 `av`/`inline_av`，但**竖屏标记在 `goto` 字段**（`goto=vertical_av`，实测约 20%），且**必须带 `buvid` 请求头**，否则整批降级为 `gateway_fb_*` 且竖屏归零。不需要 appkey/sign、匿名可用 |
 | `x/web-interface/wbi/index/top/feed/rcmd`（web 推荐流） | `code 0`，但条目**无 `dimension`** → 无法判定竖屏 |
 | `x/web-interface/popular`（热门） | 条目**有 `dimension`** → 可作为「竖屏热门」的补充来源，服务端过滤即可 |
 
@@ -157,6 +157,52 @@ login 响应逐字段对比，完全一致。个性化旋钮只有 `buvid`（设
 顺带记下另一个接口的口径差异：`x/web-interface/wbi/index/top/feed/rcmd`（首页推荐）**需要 WBI
 签名**且 Cookie 才个性化，rLive 已实现（`video_recommend`）；它的条目**不带 `dimension`**
 （实测 0/12），且混入广告/直播/番剧，无法当竖屏源。
+
+### 2.8 VOD 推荐流里为什么没有竖屏（2026-10 实测）
+
+问题：rLive 的 VOD 推荐流（首页「推荐」页签、播放页「相关推荐」）为什么看不到竖屏视频？
+是不是需要传 Android 设备字段之类的参数？
+
+**结论：不是参数问题，是接口不同。** 逐接口实测（真机登录态、固定 `buvid` 消除轮换噪声、
+逐条回查 `view.dimension` 判画幅）：
+
+| 接口 | 竖屏占比 | 说明 |
+| --- | --- | --- |
+| `x/web-interface/wbi/index/top/feed/rcmd`（首页推荐，rLive 的「推荐」页签） | **0 / 115** | 结构上不产竖屏 |
+| `x/web-interface/archive/related`（相关推荐，rLive 播放页右侧栏） | **40 / 200** | **有竖屏**，条目自带 `dimension` |
+| `app.bilibili.com/x/v2/feed/index`（APP 主 feed） | 约 **20%** | 竖屏用 `goto=vertical_av` 标记 |
+
+**`rcmd` 加任何参数都不产竖屏。** 扫描了 `homepage_ver`(1/2)、`fresh_type`(1/3/4/5)、`y_num`、
+`ps`(12/30)、`screen`(1/2)、`web_location`、`story_mode`、`column`、`style`、`feed_version`(V7/V8/V9)
+以及完整的 Android 字段组合（`mobi_app`/`platform`/`build`/`login_event`/`fnval`/`fourk`/`device`），
+累计 200+ 条 `av` 条目**全部是横屏**，`goto` 只出现 `av`/`ad`/`live`。原因：`rcmd` 是 **PC 首页
+推荐流**（`web_pegasus`），它的内容池面向横屏/桌面消费；竖屏内容在 **APP 的 feed 流**里，
+是另一个接口。
+
+**竖屏内容的可靠标记是 `goto=vertical_av`（不是 `card_goto`）。** 在 `app.bilibili.com/x/v2/feed/index`
+上做混淆矩阵（10 轮）：`goto=vertical_av` → 实际竖屏 **6/6**；`goto=av` → 实际横屏 **84/84**，
+零混淆。旧文档（2.5 节原表）把 `card_goto` 当成画幅标记，因此误判「app feed 不产竖屏」——
+`card_goto` 恒为 `av`，竖屏信息在 `goto`。
+
+**`app feed` 的竖屏依赖 `buvid` 请求头。** 消融实验（UA × Cookie × buvid，各 6 轮）：
+
+| buvid | 竖屏条目 | 说明 |
+| --- | --- | --- |
+| 有 | 6~11 / 54 | 推荐引擎生效（`track_id` 为 `all_*`） |
+| 无 | **0 / 60** | 整批降级为 `gateway_fb_*` 兜底流 |
+
+UA（Android / Web）与 Cookie 有无都不影响竖屏出现 —— 起作用的只有 `buvid`。这与 story feed
+的「必须带 `buvid` 请求头」是同一根轴（见功能文档「固定设备指纹」）。
+
+**接入 rLive 的取舍（未实施，仅记录）：**
+
+- `rcmd` 无法改造成竖屏源 —— 除非换接口，否则「推荐」页签永远是横屏。**不是加参数能解决的。**
+- `related` **本来就有竖屏**（rLive 已在用），但 `VideoCard` 的封面是固定 `aspect-video`（16:9），
+  竖屏稿件的封面被裁切、看不出画幅。若想让播放页相关推荐里「竖屏可辨识」，改的是**卡片渲染**
+  （按 `dimension` 换封面比例），不是取流。
+- 若要在 VOD 侧新增「竖屏推荐」入口，`app.bilibili.com/x/v2/feed/index` 是可用源：匿名可用、
+  不需签名、`goto=vertical_av` 可直接过滤；代价是引入 APP 域接口（rLive 目前只走 `api.bilibili.com`
+  与 `x/web-interface/*`），且必须带 `buvid`（已有固定设备槽）。
 
 ## 三、抖音短视频
 

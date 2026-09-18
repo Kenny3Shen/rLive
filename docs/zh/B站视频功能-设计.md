@@ -28,7 +28,7 @@
 
 | 表面 | 端点与参数 | 认证 |
 | --- | --- | --- |
-| 推荐 | `GET /x/web-interface/wbi/index/top/feed/rcmd`，`version=1&feed_version=V8&homepage_ver=1&ps=<n>&fresh_idx=<i>&brush=<i>&fresh_type=4` | **需 WBI**；有 cookie 才是个性化流，匿名返回通用流。取 `data.item[]`，只保留 `goto=="av"` 且有 `owner` |
+| 推荐 | `GET /x/web-interface/wbi/index/top/feed/rcmd`，`version=1&feed_version=V8&homepage_ver=1&ps=<n>&fresh_idx=<i>&brush=<i>&fresh_type=4` | **需 WBI**；有 cookie 才是个性化流，匿名返回通用流。取 `data.item[]`，只保留 `goto=="av"` 且有 `owner`。**不产竖屏**：实测 115/115 条 `av` 均为横屏，加 Android 设备字段/`screen`/`web_location`/`homepage_ver` 等任何参数也不变（详见[短视频调研](短视频调研-B站与抖音.md) 2.8）。竖屏内容在 APP 的 feed 流，不在这个 PC 首页接口 |
 | 热门 | `GET /x/web-interface/popular?pn=&ps=` | 无 WBI、**匿名可用**。`data.list[]`，`data.no_more` 判尾页 |
 | 番剧 | `GET /pgc/season/index/result`，`st=1&season_type=1&order=3&sort=0&pagesize=20&type=1&page=<n>`，其余筛选位一律 `-1` | 无 WBI、匿名可用。`data.list[]` 仅含 `season_id/title/cover/badge/index_show/order`，**无 ep_id** |
 | 影视 | 同上，**加 `index_type=102`** | 同上 |
@@ -41,7 +41,7 @@
 | VOD 弹幕 | `GET /x/v2/dm/web/seg.so?type=1&oid=<cid>&pid=<aid>&segment_index=<n>` | **无需 cookie / UA / Referer / WBI**，返回裸 protobuf |
 | 稿件详情 | `GET /x/web-interface/view?bvid=` | **需 WBI**（未签名被风控拦下，返回 404 页）。`data` 含 `aid/desc/owner/stat/pubdate` |
 | 稿件 Tags | `GET /x/tag/archive/tags?bvid=` → `data[].tag_name` | 无 WBI、匿名可用；与稿件详情并发获取，失败降级为空，不阻断播放 |
-| 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全 |
+| 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全。**含竖屏**（实测 40/200 条），条目自带 `dimension`，但前端 `VideoCard` 封面固定 `aspect-video`，竖屏稿件看不出画幅 |
 | 评论 | `GET /x/v2/reply/wbi/main?type=1&oid=<aid>&mode=<2\|3>&ps=20&next=<cursor>`，WBI 签名 | 签名 + **匿名时不得携带任何 cookie**：实测携带 buvid3/4 的匿名会话只回 3 条并谎称 `is_end=true`（无 cookie 才给全量 20 条）；未签名裸路径被风控后一律 -352，签名路径放行。登录态带完整 cookie 同路径。置顶有两处：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象，参考 PiliPlus 两者都解析）。**作者标识**：页面级 `data.upper.mid`（实测两个回复接口都下发）与评论者 `member.mid` 比对得出，条目上没有现成的作者字段 |
 | 二级回复 | `GET /x/v2/reply/reply?type=1&oid=<aid>&root=<rpid>&pn=&ps=20&sort=2` | 匿名可用（不受 buvid 截断影响）。**pn 翻页有效**；`data.page.count` 是总数；`data.upper.mid` 同主接口下发，作者标识一并标到楼中楼 |
 | 视频搜索 | `GET /x/web-interface/search/type`，`search_type=video&keyword=&page=&order=&duration=0&tids=0`；筛选位：`order`（click 播放多/pubdate 新发布/dm 弹幕多/stow 收藏多/scores 评论多，空=综合）、`duration`（0 全部/1 <10min/2 10-30/3 30-60/4 >60）、`tids` 大区 tid（0=全部，与分区榜 rid 两套 ID）、`pubtime_begin_s`/`pubtime_end_s`（day/week/halfYear 预设在后端换算成「N 天前零点 ~ 当天 23:59:59」） | 无 WBI、匿名可用。取 `data.result[]`，`numPages` 判尾页。时长为 `duration` 字符串（`H:MM:SS`） |
