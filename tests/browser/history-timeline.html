@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>历史时间线刷新回顶夹具</title>
+    <style>
+      /* 外部滚动容器：历史页里由 Shell 的 `app-page` 承担，夹具照它的形态造一个。 */
+      #scroller {
+        height: 400px;
+        overflow-y: auto;
+        width: 360px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="scroller" data-slot="app-page">
+      <div style="height: 120px" data-slot="history-filter-bar">筛选行占位</div>
+      <div id="fixture"></div>
+    </div>
+    <script type="module" src="./history-timeline.tsx"></script>
+  </body>
+</html>

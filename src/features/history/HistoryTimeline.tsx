@@ -8,6 +8,7 @@ import {
   observeHistoryRect,
   offsetWithinScrollElement,
   readHistoryScrollSnapshot,
+  registerHistoryRefreshScrollReset,
   resolveHistoryScrollElement,
   saveHistoryScrollSnapshot,
 } from "./historyVirtual";
@@ -46,6 +47,14 @@ type HistoryTimelineProps<T> = {
    * 位置，切视图才不会把观看历史的偏移套到弹幕历史上。
    */
   snapshotKey: string;
+  /**
+   * 刷新回顶的注册令牌。
+   *
+   * 历史页在刷新前推进它，本时间线因此把滚动位置归零 —— 见下方
+   * `scrollToTopOnRefresh`：锚定会把新记录留在视口上方，而刷新的意图正是看最新。
+   * 传 `0` 表示不参与。
+   */
+  refreshResetToken?: number;
 };
 
 /**
@@ -70,6 +79,7 @@ export function HistoryTimeline<T>({
   estimateItemSize,
   active,
   snapshotKey,
+  refreshResetToken = 0,
 }: HistoryTimelineProps<T>) {
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
   const [listNode, setListNode] = useState<HTMLDivElement | null>(null);
@@ -105,12 +115,22 @@ export function HistoryTimeline<T>({
   }, [scroller, syncScrollMargin]);
 
   const rows = useMemo(() => flattenHistoryTimeline(groups, itemKey), [groups, itemKey]);
-  // 稳定身份：虚拟列表把这两个函数放进测量记忆的依赖里，每次渲染换一个新闭包会
-  // 让整表重算。
-  const getItemKey = useCallback((index: number) => rows[index]?.key ?? index, [rows]);
+  // 虚拟列表把这两个函数放进测量记忆的依赖里，每次渲染换一个新闭包会让整表重算；
+  // 依赖又必须是「最新行集」。因此函数身份依赖 ref（永不变化），行集从 ref 里读——
+  // 渲染期同步，读取方拿到的永远是本次提交的行集。
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const estimateSizeRef = useRef(estimateItemSize);
+  estimateSizeRef.current = estimateItemSize;
+  // 稳定身份：日期标题与记录卡高度不同，标题按定值、记录按传入估高。
+  const getItemKey = useCallback(
+    (index: number) => rowsRef.current[index]?.key ?? index,
+    [],
+  );
   const estimateSize = useCallback(
-    (index: number) => (rows[index]?.kind === "heading" ? 44 : estimateItemSize),
-    [rows, estimateItemSize],
+    (index: number) =>
+      rowsRef.current[index]?.kind === "heading" ? 44 : estimateSizeRef.current,
+    [],
   );
 
   // 规则针对 React Compiler 的记忆化；本项目未启用编译器（`vite.config.ts` 的
@@ -126,6 +146,11 @@ export function HistoryTimeline<T>({
     getItemKey,
     // 触摸滚动一甩就是几屏，默认 1 行缓冲会露白。
     overscan: HISTORY_TIMELINE_OVERSCAN,
+    // React 19 下 `flushSync` 会从生命周期里警告（"flushSync was called from inside
+    // a lifecycle method"），且每次滚动都同步刷新会拖慢低端设备。虚拟列表的滚动更新
+    // 不是关键路径——差一帧只是行位置晚一帧落位——因此关掉它，让 React 自然批处理。
+    // 文档把它列为 React 19 兼容与低端设备性能两个场景的推荐做法。
+    useFlushSync: false,
     // 时间倒序：最新记录从顶部插入。停在顶部（直播边缘）时用 `start`，新记录顶上来
     // 后视口仍停在 0；向下滚动后切到 `end`，按稳定行键把当前可见行钉在原位。
     anchorTo,
@@ -147,6 +172,26 @@ export function HistoryTimeline<T>({
     scroller.addEventListener("scroll", onScroll, { passive: true });
     return () => scroller.removeEventListener("scroll", onScroll);
   }, [active, scroller]);
+
+  // 刷新回顶：用户主动刷新＝想看最新，而锚定会把新记录留在视口上方。
+  //
+  // `anchorTo:"end"` 锚定的语义是「把旧的第一条可见行钉在原位」：新记录从顶部插入
+  // 后，虚拟列表把 scrollTop 加上新记录的高度，锚点行看着没动，真正新的那几条却落
+  // 在视口上方（负偏移）——刷新于是像什么都没发生。下拉刷新只能在 scrollTop <= 0
+  // 起手，而 8px 容差允许用户在 5px 处就已切到 "end"，这个窗口真实存在。
+  // 归零后由 onScroll 把锚点方向一并带回 "start"，视口停在 0，新记录自然可见。
+  const scrollToTopOnRefresh = useCallback(() => {
+    if (!scroller) return;
+    // 先于 scrollTo 写 ref：滚动事件异步派发，晚写会让快照的清理逻辑
+    // 记下归零前的旧偏移。
+    offsetRef.current = 0;
+    setAnchorTo(historyAnchorTo(0));
+    scroller.scrollTo({ top: 0 });
+  }, [scroller]);
+  useEffect(() => {
+    registerHistoryRefreshScrollReset(refreshResetToken, scrollToTopOnRefresh);
+    return () => registerHistoryRefreshScrollReset(refreshResetToken, null);
+  }, [refreshResetToken, scrollToTopOnRefresh]);
 
   // 离开或切视图前拍下快照。偏移取持续跟踪的值而不是此刻的 `scrollTop`：
   // 面板高度收为 0 之后浏览器会把滚动位置钳到 0，那时再读就丢了用户真实位置。

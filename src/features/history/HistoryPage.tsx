@@ -39,7 +39,7 @@ import {
   type HistoryPlatformFilter,
 } from "./historyGrouping";
 import { HistoryTimeline } from "./HistoryTimeline";
-import { historySnapshotKey } from "./historyVirtual";
+import { historySnapshotKey, resetHistoryScrollForRefresh } from "./historyVirtual";
 import {
   HISTORY_DATE_PARAM,
   HISTORY_PLATFORM_PARAM,
@@ -443,6 +443,9 @@ export function HistoryPage() {
   // 打开房间导致的整表卸载；与视图名拼成 snapshotKey，三条时间线各存各的位置。
   const location = useLocation();
   const qc = useQueryClient();
+  // 刷新回顶的令牌：时间线按它登记回顶回调。用 state 而不是 ref —— 它参与渲染
+  // （作为 prop 传入时间线），渲染期读 ref 会让组件不随其变化更新。
+  const [refreshToken] = useState(() => 1);
   const [searchParams, setSearchParams] = useSearchParams();
   const [clearOpen, setClearOpen] = useState(false);
   const disabledSiteIds = useSettingsStore((state) => state.disabledSiteIds);
@@ -724,7 +727,12 @@ export function HistoryPage() {
   );
   useHistoryHeaderState(headerState);
 
-  const refreshActiveHistory = () => activeHistoryQuery[activeView].refetch();
+  const refreshActiveHistory = () => {
+    // 先把时间线滚回顶部再抓取：锚定会把新记录留在视口上方，
+    // 而用户刷新的意图正是看最新的那几条。
+    resetHistoryScrollForRefresh(refreshToken);
+    return activeHistoryQuery[activeView].refetch();
+  };
   const historyRefreshing = activeHistoryQuery[activeView].isRefetching;
 
   return (
@@ -830,6 +838,7 @@ export function HistoryPage() {
                     estimateItemSize={HISTORY_CARD_ESTIMATE_PX}
                     active={activeView === "watch"}
                     snapshotKey={historySnapshotKey(location.key, "watch")}
+                    refreshResetToken={refreshToken}
                     renderItem={(item) => (
                       <HistoryCard
                         item={item}
@@ -897,6 +906,7 @@ export function HistoryPage() {
                     estimateItemSize={HISTORY_CARD_ESTIMATE_PX}
                     active={activeView === "video"}
                     snapshotKey={historySnapshotKey(location.key, "video")}
+                    refreshResetToken={refreshToken}
                     renderItem={(item) => (
                       <VideoHistoryCard
                         item={item}
@@ -953,6 +963,7 @@ export function HistoryPage() {
                     estimateItemSize={DANMAKU_CARD_ESTIMATE_PX}
                     active={activeView === "danmaku"}
                     snapshotKey={historySnapshotKey(location.key, "danmaku")}
+                    refreshResetToken={refreshToken}
                     renderItem={(item) => (
                       <DanmakuSendHistoryCard
                         item={item}

@@ -59,8 +59,36 @@ export function readHistoryScrollSnapshot(key: string): HistoryScrollSnapshot | 
   return snapshots.get(key) ?? null;
 }
 
+/**
+ * 「刷新回顶」的回调登记表。
+ *
+ * 刷新是页面层的事（下拉刷新与桌面刷新按钮），要归零的却是时间线内部的滚动位置。
+ * 与其把虚拟列表实例或滚动容器上抛给页面，不如让时间线登记一个回调：页面推进令牌
+ * 后调用它，谁也不必知道对方的实现。按令牌分键，同一时刻多条时间线各自登记也不
+ * 会互相顶掉。
+ */
+const refreshResets = new Map<number, () => void>();
+
+/**
+ * 登记（或撤销）某个令牌的回顶回调。
+ *
+ * 令牌为 0 表示「不参与」——历史页之外的使用者不传这个 prop，登记空操作没有意义。
+ */
+export function registerHistoryRefreshScrollReset(token: number, reset: (() => void) | null): void {
+  if (!token) return;
+  if (reset) refreshResets.set(token, reset);
+  else refreshResets.delete(token);
+}
+
+/** 页面在刷新前调用：把所有登记在该令牌下的时间线滚回顶部。 */
+export function resetHistoryScrollForRefresh(token: number): void {
+  if (!token) return;
+  for (const reset of refreshResets.values()) reset();
+}
+
 export function clearHistoryScrollSnapshots(): void {
   snapshots.clear();
+  refreshResets.clear();
 }
 
 /**
