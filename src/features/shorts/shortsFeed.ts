@@ -189,6 +189,25 @@ export function shortsFrameAlign(aspect: number | null): "start" | "center" {
 }
 
 /**
+ * 页面层控件要对齐的「画面列」宽度（px）。
+ *
+ * 宽屏上竖屏画面会收成居中的竖卡（`shortsMediaFrame` 按高度内切），而顶栏、信息/
+ * 评论、换片箭头与进度条如果还按**视口**的边摆放，就会与画面隔着一大片黑，读起来
+ * 像两个不相干的层。这里给出画面框的宽度，让那几个控件按它收窄并居中。
+ *
+ * 返回 0 表示「不需要收窄」：画面框与画面区同宽（竖屏手机上就是这种），或者两侧
+ * 剩下的空隙不够窄到值得收（画面几乎铺满时，收窄反而会把控件挤到画面之外）。
+ * 留一个像素的容差是因为 `clientWidth` 取整，「铺满」时画面框可能比画面区小不到
+ * 1px。
+ */
+export const SHORTS_CHROME_MIN_SIDE_INSET_PX = 48;
+
+export function shortsChromeColumn(frameWidth: number, areaWidth: number): number {
+  if (!(frameWidth > 0) || !(areaWidth > 0)) return 0;
+  return areaWidth - frameWidth >= SHORTS_CHROME_MIN_SIDE_INSET_PX * 2 ? frameWidth : 0;
+}
+
+/**
  * 允许为「铺满」裁掉的最大比例。
  *
  * 两个宽高比的相对差值超过这个数就不再裁切，改回等比留边。取 0.1 是照真实机型的

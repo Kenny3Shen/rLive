@@ -23,6 +23,8 @@ import {
   shortsItemKey,
   shortsMediaAspect,
   shortsMediaFrame,
+  SHORTS_CHROME_MIN_SIDE_INSET_PX,
+  shortsChromeColumn,
   shortsMountedIndexes,
   shortsPanelDepth,
   shortsShouldFetchMore,
@@ -441,6 +443,38 @@ describe("画面框纵向对齐", () => {
     expect(shortsFrameAlign(portrait)).toBe("start");
     // 桌面上这条竖屏正好铺满高度，对齐方式此时不产生可见差异，但结论仍一致。
     expect(shortsMediaFrame(1440, 844, portrait).height).toBe(844);
+  });
+});
+
+describe("宽屏控件列宽", () => {
+  test("画面为居中竖卡时，控件按画面宽收窄", () => {
+    // 平板横屏 1280×800：9:16 竖屏画面在 1280×685 的画面区里收成 385 宽。
+    const frame = shortsMediaFrame(1280, 685, 9 / 16);
+    expect(Math.round(frame.width)).toBe(385);
+    expect(shortsChromeColumn(frame.width, 1280)).toBe(frame.width);
+  });
+
+  test("画面铺满时退回通栏（返回 0）", () => {
+    // 手机竖屏：9:16 画面在接近同比例的画面区里基本铺满，两侧让不出值得收的宽度。
+    expect(shortsChromeColumn(390, 390)).toBe(0);
+    // 差不到一个像素（`clientWidth` 取整）也算铺满。
+    expect(shortsChromeColumn(389, 390)).toBe(0);
+  });
+
+  test("两侧让位不够时也退回通栏", () => {
+    // 画面几乎铺满、但还差几十像素：收窄会把控件挤到画面之外，不如保持通栏。
+    expect(shortsChromeColumn(1200, 1280)).toBe(0);
+    expect(shortsChromeColumn(1280 - SHORTS_CHROME_MIN_SIDE_INSET_PX * 2 + 1, 1280)).toBe(0);
+    // 刚好够让位就收。
+    expect(shortsChromeColumn(1280 - SHORTS_CHROME_MIN_SIDE_INSET_PX * 2, 1280)).toBe(
+      1280 - SHORTS_CHROME_MIN_SIDE_INSET_PX * 2,
+    );
+  });
+
+  test("尺寸缺失时不收窄", () => {
+    // 首帧尺寸未量到：宁可通栏也不要拿 0 去算出一个负宽度。
+    expect(shortsChromeColumn(0, 1280)).toBe(0);
+    expect(shortsChromeColumn(385, 0)).toBe(0);
   });
 });
 

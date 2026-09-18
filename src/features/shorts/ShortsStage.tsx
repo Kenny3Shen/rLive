@@ -1,4 +1,4 @@
-import { useCallback, useState, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useState, type RefObject } from "react";
 import { Video } from "@videojs/react/video";
 import { BufferingIndicator } from "@/components/videojs/ui/buffering-indicator";
 import { PlayButton } from "@/components/videojs/ui/play-button";
@@ -14,6 +14,7 @@ import {
   SHORTS_SAFE_AREA_BOTTOM,
   shortsFrameAlign,
   shortsFrameFill,
+  shortsChromeColumn,
   shortsMediaAspect,
   shortsMediaFrame,
 } from "./shortsFeed";
@@ -154,6 +155,17 @@ type ShortsStageProps = {
    * click，只有页面知道那一下该不该作废（它持有长按的抑制窗口）。
    */
   onSurfaceTap: () => void;
+  /**
+   * 把「页面层控件该多宽」上报给页面。
+   *
+   * 宽屏上画面会收成居中的竖卡，顶栏/信息/评论/换片箭头/进度条如果还按视口边摆放
+   * 就会与画面隔着大片黑。舞台知道画面框的真实宽度（它自己量的），页面只负责用这个
+   * 数字去收窄那几层控件。传 0 表示「铺满，控件退回通栏」。
+   *
+   * 只有活动舞台上报（`mode === "play"`）：预热槽位在屏幕外，它的画面框宽不是当前
+   * 看到的那一条。
+   */
+  onChromeColumn?: (width: number) => void;
 };
 
 export function ShortsStage({
@@ -165,6 +177,7 @@ export function ShortsStage({
   danmakuVisible,
   gestureActive,
   onSurfaceTap,
+  onChromeColumn,
 }: ShortsStageProps) {
   const cid = item.cid ?? 0;
   const { size: area, measure } = useShortsStageSize();
@@ -172,6 +185,14 @@ export function ShortsStage({
   const aspect = shortsMediaAspect(item.dimension, playback.intrinsicSize);
   const { fill, frame, inset } = useShortsFrameGeometry(aspect, area);
   const warming = mode !== "play";
+
+  // 页面层控件的收窄宽度。只由活动舞台报，且只报「比画面区窄」的那些：铺满时给 0，
+  // 页面据此退回通栏，手机竖屏的观感与从前完全一致。`useLayoutEffect` 在浏览器绘制前
+  // 跑，宽屏第一帧就不会先画一遍通栏控件再跳成收窄 —— 那一下闪跳比不优化还显眼。
+  useLayoutEffect(() => {
+    if (mode !== "play") return;
+    onChromeColumn?.(shortsChromeColumn(frame.width, area.width));
+  }, [area.width, frame.width, mode, onChromeColumn]);
 
   const cover = normalizeImageUrl(item.cover);
 

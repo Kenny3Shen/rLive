@@ -55,6 +55,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { useCoarsePointer } from "@/shared/hooks/useCoarsePointer";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
@@ -156,6 +157,20 @@ export function ShortsPage() {
   const [gestureActive, setGestureActive] = useState(false);
   /** 进度条是否被交互过：悬停或按下一次后就去取快照。 */
   const [seekArmed, setSeekArmed] = useState(false);
+  /**
+   * 页面层控件要对齐的宽度（px）。
+   *
+   * 平板（粗指针）上竖屏画面收成居中的竖卡，顶栏/信息/评论/换片箭头/进度条要跟着它
+   * 收窄，否则控件贴屏幕边、画面在中间，读起来像两个不相干的层。0 表示铺满（手机
+   * 竖屏），此时控件保持通栏。由活动舞台上报（见 `ShortsStage` 的 `onChromeColumn`）。
+   *
+   * 只在粗指针（平板/触摸）上启用：桌面（细指针鼠标）上竖屏也是居中的竖卡，但那里
+   * 的既有设计是把信息与评论贴**屏幕**两角（避免又收成一条居中的定宽容器，见下方的
+   * 说明与浏览器夹具），因此不动。这与 `styles.css` 的 `touch-wide` variant 同一判据。
+   */
+  const [stageChromeColumn, setStageChromeColumn] = useState(0);
+  const coarsePointer = useCoarsePointer();
+  const chromeColumn = coarsePointer ? stageChromeColumn : 0;
   const compact = useCompactPlayerViewport();
 
   const feedQuery = useInfiniteQuery({
@@ -1004,6 +1019,7 @@ export function ShortsPage() {
                   danmakuVisible={danmakuVisible}
                   gestureActive={gestureActive}
                   onSurfaceTap={onSurfaceTap}
+                  onChromeColumn={setStageChromeColumn}
                 />
               </div>
             );
@@ -1042,11 +1058,38 @@ export function ShortsPage() {
         */}
         <ShortsSeekBridge videoRef={slotRefs[slots.active]} active={slots.active} />
 
+        {/*
+          页面层控件列：顶栏、信息与评论、换片箭头都收进这一层。
+
+          宽屏（平板横屏、桌面）上竖屏画面会收成居中的竖卡，控件若还贴**屏幕**的边，
+          就与画面隔着一大片黑，读起来像两个不相干的层。这里按舞台上报的
+          `chromeColumn` 把本层收窄到画面宽度并居中（0 表示铺满，退回通栏 —— 手机
+          竖屏与横屏源都是这一档，观感与从前一致）。
+
+          本层不接指针（`pointer-events-none`）：它盖在画面上，接了就会把点按暂停
+          那一整块挖掉。真正需要交互的子层（顶栏、换片箭头、信息浮层里的按钮）各自
+          开 `pointer-events-auto`。
+        */}
+        <div
+          data-slot="shorts-chrome-column"
+          className={cn(
+            "pointer-events-none absolute inset-y-0 z-20",
+            chromeColumn === 0 && "inset-x-0",
+          )}
+          style={
+            chromeColumn > 0
+              ? { left: `calc(50% - ${chromeColumn / 2}px)`, width: `${chromeColumn}px` }
+              : undefined
+          }
+        >
         {/* 顶部控制栏：返回 + 更多操作。固定在视口上，不随条带平移。
 
             紧贴视口顶边，也就是系统状态栏的下沿：状态栏的让位由 `.app-shell` 的
             `padding-top` 统一做（见 `styles.css`），这里再补一份顶部安全区会把返回/更多
-            推到状态栏下方又一条的位置，中间空出一条谁都不用的黑带。 */}
+            推到状态栏下方又一条的位置，中间空出一条谁都不用的黑带。
+
+            收进控件列后，返回/更多就落在画面框的左右两条竖线上，与信息浮层的头像、
+            评论按钮对齐。 */}
         <div
           data-slot="shorts-top-bar"
           className={cn(
@@ -1086,8 +1129,16 @@ export function ShortsPage() {
           </div>
         )}
 
-        {/* 桌面换片按钮：没有触摸时上下滑动无从进行，滚轮之外给一对显式入口。 */}
-        <div className="absolute right-3 bottom-1/2 z-20 hidden translate-y-1/2 flex-col gap-2 md:flex">
+        {/* 桌面换片按钮：没有触摸时上下滑动无从进行，滚轮之外给一对显式入口。
+
+            贴着控件列的外侧：宽屏上画面居中、两侧本来就有黑边，箭头放那儿不会盖住
+            画面；铺满时（`chromeColumn === 0`）退回原来的贴屏幕右边。 */}
+        <div
+          className={cn(
+            "pointer-events-auto absolute bottom-1/2 z-20 hidden translate-y-1/2 flex-col gap-2 md:flex",
+            chromeColumn > 0 ? "left-full ml-3" : "right-3",
+          )}
+        >
           <Button
             type="button"
             variant="ghost"
@@ -1247,6 +1298,7 @@ export function ShortsPage() {
             </span>
           </div>
         )}
+        </div>
 
         {/*
           底部操作栏：进度条（上沿）+ 弹幕输入与三个开关（控制行）。
@@ -1267,7 +1319,18 @@ export function ShortsPage() {
             paddingBottom: SHORTS_SAFE_AREA_BOTTOM,
           }}
         >
-          <ShortsSeekBar thumbnails={thumbnails} onArmed={armSeek} />
+          {/* 进度条也跟着控件列收窄；铺满时 `w-full` 铺满，与从前一致。
+
+              包一层相对定位：进度条的命中层是 `absolute inset-x-0`，需要以这一层为
+              定位基准，否则会去对齐整条底栏、又与画面错位。`mx-auto` 只在设了定宽时
+              用 —— 它对一个 flex 交叉轴项会把宽度收成内容宽（进度条内容都是绝对定位，
+              因此是 0），手机竖屏上会把进度条压成一条 0 宽的线。 */}
+          <div
+            className={cn("relative", chromeColumn > 0 ? "mx-auto" : "w-full")}
+            style={chromeColumn > 0 ? { width: `${chromeColumn}px` } : undefined}
+          >
+            <ShortsSeekBar thumbnails={thumbnails} onArmed={armSeek} />
+          </div>
           {/*
             控件收在一个居中的定宽容器里，而不是铺满栏宽。
 
@@ -1279,7 +1342,15 @@ export function ShortsPage() {
             className="flex flex-1 items-center px-2"
             style={{ height: `${SHORTS_BOTTOM_CONTROLS_HEIGHT_PX}px` }}
           >
-            <div className="mx-auto flex w-full max-w-lg items-center gap-1.5">
+            <div
+              className={cn(
+                "mx-auto flex w-full items-center gap-1.5",
+                // 宽屏上控件列宽就是画面宽，不再另设 `max-w-lg` —— 两者同时存在时较小的那个
+                // 生效，会在画面比 512px 略宽时对不齐（实测差 2px）。
+                chromeColumn === 0 && "max-w-lg",
+              )}
+              style={chromeColumn > 0 ? { width: `${chromeColumn}px` } : undefined}
+            >
               <div className="min-w-0 flex-1">
                 {current && (
                   <DanmakuComposer
