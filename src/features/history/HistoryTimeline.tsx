@@ -214,6 +214,11 @@ export function HistoryTimeline<T>({
   }, [active, scroller]);
 
   const virtualRows = virtualizer.getVirtualItems();
+  // 非活动面板一行都不渲染：高度收为 0 只缩掉了盒子，行是绝对定位的，
+  // 仍然待在原偏移上（实测第 20 行 translateY(6672px)）。祖先 overflow 为
+  // visible 时它们照样参与滚动范围，把容器 scrollHeight 一路抬上去 ——
+  // 页面因此永远滚不到底（实机反馈的「无限滚动」）。收起高度的同时必须连行一起摘掉。
+  const visibleRows = active ? virtualRows : [];
 
   return (
     <div
@@ -222,7 +227,7 @@ export function HistoryTimeline<T>({
       className="relative w-full"
       style={{ height: active ? virtualizer.getTotalSize() : 0 }}
     >
-      {virtualRows.map((virtualRow: VirtualItem) => {
+      {visibleRows.map((virtualRow: VirtualItem) => {
         const row = rows[virtualRow.index];
         if (!row) return null;
         const previous = rows[virtualRow.index - 1];
