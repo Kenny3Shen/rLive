@@ -1,10 +1,14 @@
-// 在 Vite 预览页测量短视频页画面底部浮层的位置与显隐（IPC 为本地桩）：
-// playwright-cli -s=shorts-layout run-code --filename=tests/shorts-info-layout.browser.js
+// 换片过渡必须是连续动画，而不是硬切。
+// playwright-cli -s=shorts-settle run-code --filename=tests/shorts-settle-continuity.browser.js
 //
-// 验证三件事：
-//   1. 信息贴播放器左下角、评论按钮贴右下角（改前两者收在居中的 512px 容器里）；
-//   3. 点「隐藏视频信息」时评论按钮一起消失；
-//   4. 底部控制行三个按钮的图标尺寸（改前 16px，现 20px）。
+// 回归的真 bug：视口高度 `ResizeObserver` 每次换片都重建、且把「已应用高度」从 0 起算，
+// 它的首次回调被当成真实的高度变化，刚好取消掉刚启动的收尾动画 —— 观感就是
+// 「先瞬间跳过去、再滑一下」（硬切 + 补滑）。这里按一次 ↓ 并逐帧采样条带位移：
+// 必须读到中途帧（硬切只会读到起点与终点），且终点停在下一屏。
+//
+// 注意：本夹具刻意只做「采样」这一件事，不混入点击隐藏/显示信息浮层的步骤。
+// 实测（在干净 HEAD 上同样复现）点过信息开关之后再跑任何含 `await` 的 `page.evaluate`
+// 都会让渲染进程空转、`page.evaluate` 永久挂起；把采样单独拆出来可稳定通过。
 async (page) => {
   const assert = (condition, message) => {
     if (!condition) throw new Error(message);
@@ -148,105 +152,45 @@ async (page) => {
       },
     };
   });
-
   // 端口不写死：用已打开页面（Vite 预览页）的 origin。
   const origin = page.url().replace(/\/[^/]*$/, "");
-  // 自己把视口固定成桌面宽，不依赖外部会话的初始尺寸：
-  // `shorts-panel-drawers` 会把同一个会话改成 390px 手机宽且不还原，若这里不自设，
-  // 在它之后运行就会出现「信息块与评论按钮挤在中间」的假失败。
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto(`${origin}/shorts`);
   await page.reload();
-  await page.waitForSelector('[data-slot="shorts-info-float"]', { timeout: 15000 });
+  await page.waitForSelector('[data-slot="shorts-track"]', { timeout: 15000 });
   await settle(800);
 
-  const measure = () =>
-    page.evaluate(() => {
-      const float = document.querySelector('[data-slot="shorts-info-float"]');
-      const avatar = float?.querySelector("img, span[class*='rounded-full']");
-      const infoBlock = float?.firstElementChild;
-      const comment = [...(float?.querySelectorAll("button") ?? [])].find((b) =>
-        (b.getAttribute("aria-label") ?? "").startsWith("评论"),
-      );
-      const viewport = document.querySelector('[data-slot="shorts-viewport"]');
-      const bottomBar = document.querySelector('[data-slot="shorts-bottom-bar"]');
-      const controlRow = bottomBar?.querySelector(".max-w-lg") ?? bottomBar;
-      const controlButtons = [...(controlRow?.querySelectorAll("button") ?? [])].filter(
-        (b) => b.className.includes("size-10"),
-      );
-      const rect = (node) => {
-        if (!node) return null;
-        const { x, y, width, height } = node.getBoundingClientRect();
-        return { x, y, width, height };
-      };
-      return {
-        viewport: rect(viewport),
-        float: rect(float),
-        infoBlock: rect(infoBlock),
-        comment: rect(comment),
-        seek: rect(document.querySelector('[data-slot="shorts-seek"]')),
-        controlRow: rect(controlRow),
-        iconSizes: controlButtons.map((button) => {
-          const svg = button.querySelector("svg");
-          const box = svg?.getBoundingClientRect();
-          return box ? Math.round(box.width) : null;
-        }),
-        commentButtonCount: comment ? 1 : 0,
-      };
-    });
-
-  const report = {};
-  report.desktop = await measure();
-
-  /* ---------- 1. 左下角 / 右下角 ---------- */
-  const d = report.desktop;
-  assert(d.infoBlock && d.comment, "桌面：信息块与评论按钮都应存在");
-  // 左边缘贴住播放器左侧（`px-2` = 8px）。
-  assert(
-    Math.abs(d.infoBlock.x - d.viewport.x - 8) < 2,
-    `信息块应贴播放器左下角，实测 x=${d.infoBlock.x}（视口 ${d.viewport.x}）`,
-  );
-  // 右边缘贴住播放器右侧。
-  const commentRight = d.comment.x + d.comment.width;
-  const viewportRight = d.viewport.x + d.viewport.width;
-  assert(
-    Math.abs(viewportRight - commentRight - 8) < 2,
-    `评论按钮应贴播放器右下角，实测右边距 ${viewportRight - commentRight}`,
-  );
-  // 信息在最左、评论在最右 —— 两者之间必须拉开，而不是挤在中间的一条。
-  assert(
-    d.comment.x - (d.infoBlock.x + d.infoBlock.width) > 100,
-    "信息块与评论按钮应分居两侧，实测间距太小",
+  const viewportHeight = await page.evaluate(
+    () => document.querySelector('[data-slot="shorts-viewport"]').getBoundingClientRect().height,
   );
 
-  /* ---------- 4. 底栏图标 20px ---------- */
-  assert(
-    d.iconSizes.length === 3,
-    `底栏应有 3 个开关按钮，实测 ${d.iconSizes.length}`,
-  );
-  assert(
-    d.iconSizes.every((size) => size === 20),
-    `底栏图标应为 20px，实测 ${d.iconSizes.join("/")}`,
-  );
+  const offsets = await page.evaluate(async () => {
+    const track = document.querySelector('[data-slot="shorts-track"]');
+    const read = () => {
+      const computed = getComputedStyle(track).transform;
+      if (!computed || computed === "none") return 0;
+      try {
+        return new DOMMatrixReadOnly(computed).m42;
+      } catch {
+        return 0;
+      }
+    };
+    const frames = [];
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    for (let i = 0; i < 25; i++) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      frames.push(read());
+    }
+    return frames;
+  });
 
-  /* ---------- 3. 隐藏信息时评论按钮一起消失 ---------- */
-  await page.click('button[aria-label="隐藏视频信息与评论按钮"]');
-  await settle(400);
-  const hidden = await measure();
-  report.hidden = hidden;
-  assert(hidden.float === null, "隐藏后整块浮层（含渐变垫底）都应消失");
-  assert(hidden.commentButtonCount === 0, "隐藏后评论按钮不应还在");
+  const report = { viewportHeight, frames: offsets.map((value) => Math.round(value)) };
+  const mid = offsets.filter((value) => value < -1 && value > offsets.at(-1) + 1);
+  assert(mid.length >= 1, `换片应读作连续动画（存在中途帧），实测轨迹 ${JSON.stringify(report.frames)}`);
+  const end = offsets.at(-1);
   assert(
-    hidden.comment === null,
-    "隐藏后评论按钮应一起消失（改前它会留在右下角）",
+    end < -1 && Math.abs(end + viewportHeight) < 2,
+    `换片应停在下一屏，实测终点 ${end}（视口高 ${viewportHeight}）`,
   );
-
-  // 再点一次要能恢复。
-  await page.click('button[aria-label="显示视频信息与评论按钮"]');
-  await settle(400);
-  const restored = await measure();
-  report.restored = restored;
-  assert(restored.commentButtonCount === 1 && restored.float, "再次点击应恢复信息与评论按钮");
-
   return report;
 }

@@ -119,6 +119,11 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 | `SWIPE_SETTLE_EASING` | 同 `EASE_OUT` | 手势释放收尾曲线 |
 | 手势收尾时长 | `horizontalSwipeSettleDuration()`，钳制 `170ms ~ 400ms` | 由剩余距离与释放速度推导，不是常量 |
 
+短视频换片不共用上面这条曲线的时长：它的行程只有一条画面且叠了纵深，因此另用
+`SHORTS_SWIPE_SETTLE_EASING`（`cubic-bezier(0.22, 1, 0.36, 1)`，比 `EASE_OUT`
+在释放点更早离开、更快落定）与更短的 `150ms ~ 320ms` 钳制，见
+`docs/zh/短视频功能.md`。
+
 `src/shared/motion/preference.ts` 只做系统 `prefers-reduced-motion` 检测，不解析或持久化动效模式。
 
 ### 4.3 `PagePan`：路由与平台平移

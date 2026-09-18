@@ -8,12 +8,14 @@ import {
   SHORTS_PATH,
   SHORTS_PREFETCH_REMAINING,
   SHORTS_SAFE_AREA_BOTTOM,
-  SHORTS_SEEK_PREVIEW_WIDTH_PX,
   SHORTS_SWIPE_COMMIT_PROGRESS,
   SHORTS_TOP_BAR_HEIGHT_PX,
   SHORTS_SEEK_BAR_HEIGHT_PX,
   SHORTS_SEEK_BAR_HIT_HEIGHT_PX,
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
+  SHORTS_SWIPE_SETTLE_EASING,
+  SHORTS_SWIPE_SETTLE_MAX_MS,
+  SHORTS_SWIPE_SETTLE_MIN_MS,
   shortsFeedItems,
   shortsFrameAlign,
   shortsFrameCrop,
@@ -22,9 +24,7 @@ import {
   shortsMediaAspect,
   shortsMediaFrame,
   shortsMountedIndexes,
-  shortsSeekPreviewLeft,
-  shortsSeekRatio,
-  shortsSeekTime,
+  shortsPanelDepth,
   shortsShouldFetchMore,
   shortsSwipeDragOffset,
   shortsSwipeIntent,
@@ -134,33 +134,6 @@ describe("画面框等比内切", () => {
   test("舞台还没量到尺寸时返回 0，由样式退回铺满", () => {
     expect(shortsMediaFrame(0, 0, portrait)).toEqual({ width: 0, height: 0 });
     expect(shortsMediaFrame(1920, 0, portrait)).toEqual({ width: 0, height: 0 });
-  });
-});
-
-describe("进度条换算", () => {
-  test("按进度条自身的矩形换算比例", () => {
-    // 需求是「仅在进度条区域操作有效」：换算基准必须是轨道矩形，不是画面框。
-    expect(shortsSeekRatio(100, 100, 300)).toBe(0);
-    expect(shortsSeekRatio(250, 100, 300)).toBeCloseTo(0.5);
-    expect(shortsSeekRatio(400, 100, 300)).toBe(1);
-  });
-
-  test("越出轨道两端一律夹到 0 与 1", () => {
-    // 指针捕获期间手指可以移到轨道之外，那时仍要给出可用的比例。
-    expect(shortsSeekRatio(20, 100, 300)).toBe(0);
-    expect(shortsSeekRatio(9_999, 100, 300)).toBe(1);
-  });
-
-  test("零宽轨道不产生 NaN", () => {
-    // 首帧或隐藏容器上 getBoundingClientRect 可能给出 0 宽。
-    expect(shortsSeekRatio(50, 0, 0)).toBe(0);
-  });
-
-  test("比例换算成秒数，时长未知时返回 0", () => {
-    expect(shortsSeekTime(0.5, 120)).toBeCloseTo(60);
-    expect(shortsSeekTime(1, 93)).toBeCloseTo(93);
-    // 时长未知时调用方据此不发起 seek。
-    expect(shortsSeekTime(0.5, 0)).toBe(0);
   });
 });
 
@@ -375,9 +348,38 @@ describe("跟手偏移与条带定位", () => {
     expect(shortsSwipeSettleDuration(0.5, 1)).toBe(0);
     const slow = shortsSwipeSettleDuration(800, 0.1);
     const fast = shortsSwipeSettleDuration(800, 5);
-    expect(slow).toBeLessThanOrEqual(400);
-    expect(fast).toBeGreaterThanOrEqual(170);
+    expect(slow).toBeLessThanOrEqual(SHORTS_SWIPE_SETTLE_MAX_MS);
+    expect(fast).toBeGreaterThanOrEqual(SHORTS_SWIPE_SETTLE_MIN_MS);
     expect(fast).toBeLessThanOrEqual(slow);
+  });
+});
+
+describe("换片纵深", () => {
+  test("正在看的那条不缩放不淡出", () => {
+    expect(shortsPanelDepth(0)).toEqual({ scale: 1, opacity: 1 });
+    // 负数与 NaN 视为 0，除零后的比例可能落到这里。
+    expect(shortsPanelDepth(-1)).toEqual({ scale: 1, opacity: 1 });
+    expect(shortsPanelDepth(Number.NaN)).toEqual({ scale: 1, opacity: 1 });
+  });
+
+  test("越远越后退且单调", () => {
+    const near = shortsPanelDepth(0.5);
+    const far = shortsPanelDepth(1);
+    expect(near.scale).toBeLessThan(1);
+    expect(far.scale).toBeLessThan(near.scale);
+    expect(near.opacity).toBeLessThan(1);
+    expect(far.opacity).toBeLessThan(near.opacity);
+  });
+
+  test("偏差封顶在 distance = 1", () => {
+    // 视口外的条目再远也一样，重要的是从边缘进入时的手感。
+    expect(shortsPanelDepth(5)).toEqual(shortsPanelDepth(1));
+    expect(shortsPanelDepth(1)).toEqual({ scale: 0.92, opacity: 0.5 });
+  });
+
+  test("收尾缓动是独立的短促曲线", () => {
+    // 与横向翻页的 `EASE_OUT` 分开：换片需要在释放点更早离开、更快落定。
+    expect(SHORTS_SWIPE_SETTLE_EASING).toBe("cubic-bezier(0.22, 1, 0.36, 1)");
   });
 });
 
@@ -439,35 +441,6 @@ describe("画面框纵向对齐", () => {
     expect(shortsFrameAlign(portrait)).toBe("start");
     // 桌面上这条竖屏正好铺满高度，对齐方式此时不产生可见差异，但结论仍一致。
     expect(shortsMediaFrame(1440, 844, portrait).height).toBe(844);
-  });
-});
-
-describe("进度预览气泡定位", () => {
-  test("居中跟随手指", () => {
-    // 360 宽轨道、160 宽气泡，拖到一半：气泡中心对齐手指。
-    expect(shortsSeekPreviewLeft(0.5, 360, 160)).toBe(100);
-  });
-
-  test("两端夹住，不探出轨道", () => {
-    // 贴左端时居中算出 -80，会有一半飘到画面外。
-    expect(shortsSeekPreviewLeft(0, 360, 160)).toBe(0);
-    // 贴右端时夹到 track - preview。
-    expect(shortsSeekPreviewLeft(1, 360, 160)).toBe(200);
-  });
-
-  test("轨道比气泡窄时退回 0", () => {
-    // 无处可夹：任何偏移都会探出去，贴左端最不坏。
-    expect(shortsSeekPreviewLeft(0.5, 120, 160)).toBe(0);
-  });
-
-  test("尺寸缺失时退回 0", () => {
-    expect(shortsSeekPreviewLeft(0.5, 0, 160)).toBe(0);
-    expect(shortsSeekPreviewLeft(0.5, 360, 0)).toBe(0);
-  });
-
-  test("越界比例先被夹进 0~1", () => {
-    expect(shortsSeekPreviewLeft(-1, 360, 160)).toBe(0);
-    expect(shortsSeekPreviewLeft(2, 360, 160)).toBe(200);
   });
 });
 

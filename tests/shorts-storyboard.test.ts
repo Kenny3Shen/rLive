@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { shortsStoryboardTile } from "../src/features/shorts/shortsStoryboard";
+import {
+  shortsStoryboardSheetUrls,
+  shortsStoryboardThumbnails,
+} from "../src/features/shorts/shortsStoryboard";
 import type { VideoStoryboard } from "../src/shared/types/video";
 
 /**
- * 短视频进度条的缩略图取格。
+ * 短视频进度条的缩略图表。
  *
- * 与 `storyboardVtt.ts` 的区别是这里按秒数直接取一格（自绘进度条要的），
- * 而那边生成 WebVTT 交给 Video.js 自己解析。两者共用的只有雪碧图排布规则，
- * 因此这份测试重点锁「排布算得对」与「边界不越界」。
+ * 这份测试锁「雪碧图排布算得对」与「边界不越界」：整表交给 Video.js 的
+ * `Slider.Thumbnail` 之后，按秒取格由原语承担，但每个采样点落在哪张图的哪一格
+ * 仍然是我们算的。与 `storyboardVtt.ts` 共用的只有排布规则，那份另有测试。
  */
 
 /** 2×2 一张图、每格 160×90 的最小快照。 */
@@ -26,35 +29,32 @@ function board(overrides: Partial<VideoStoryboard> = {}): VideoStoryboard {
 
 const SHEETS = ["https://proxy.local/img?url=sheet0"];
 
-describe("缩略图取格", () => {
-  test("按时间取最后一个不晚于目标的采样", () => {
-    const b = board();
+describe("缩略图表", () => {
+  test("逐采样点铺出整表，时间与格位一一对应", () => {
     // 采样点（去掉首个占位后）是 0/10/20/30，各对应第 0~3 格。
-    expect(shortsStoryboardTile(b, 0, SHEETS)).toMatchObject({ x: 0, y: 0 });
-    expect(shortsStoryboardTile(b, 9.9, SHEETS)).toMatchObject({ x: 0, y: 0 });
-    // 第 1 格：同一行右移一格。
-    expect(shortsStoryboardTile(b, 10, SHEETS)).toMatchObject({ x: 160, y: 0 });
-    expect(shortsStoryboardTile(b, 19, SHEETS)).toMatchObject({ x: 160, y: 0 });
-    // 第 2 格：换行。
-    expect(shortsStoryboardTile(b, 20, SHEETS)).toMatchObject({ x: 0, y: 90 });
-    expect(shortsStoryboardTile(b, 30, SHEETS)).toMatchObject({ x: 160, y: 90 });
+    expect(shortsStoryboardThumbnails(board(), SHEETS)).toEqual([
+      { url: SHEETS[0], startTime: 0, width: 160, height: 90, coords: { x: 0, y: 0 } },
+      { url: SHEETS[0], startTime: 10, width: 160, height: 90, coords: { x: 160, y: 0 } },
+      { url: SHEETS[0], startTime: 20, width: 160, height: 90, coords: { x: 0, y: 90 } },
+      { url: SHEETS[0], startTime: 30, width: 160, height: 90, coords: { x: 160, y: 90 } },
+    ]);
   });
 
-  test("超过最后一个采样点时停在最后一格", () => {
-    // 拖到结尾（或时长比采样表长）不该返回 null，否则气泡里的图会在末尾消失。
-    expect(shortsStoryboardTile(board(), 9999, SHEETS)).toMatchObject({ x: 160, y: 90 });
-  });
-
-  test("负数与 0 都取第一格", () => {
-    expect(shortsStoryboardTile(board(), -5, SHEETS)).toMatchObject({ x: 0, y: 0 });
+  test("表中每个采样都不晚于自己的时间，且升序", () => {
+    // `ThumbnailCore.findActiveThumbnail` 依赖升序与 startTime 语义，取到的必须是
+    // 「最后一个不晚于目标时间的采样」。
+    const list = shortsStoryboardThumbnails(board(), SHEETS);
+    for (let i = 1; i < list.length; i += 1) {
+      expect(list[i]!.startTime).toBeGreaterThanOrEqual(list[i - 1]!.startTime);
+    }
   });
 
   test("首两项不都为 0 时按完整数组起算", () => {
     // 不是所有稿件都带那个占位项；此时第 0 项就是第 0 格的时间。
-    const b = board({ index: [0, 10, 20] });
-    expect(shortsStoryboardTile(b, 0, SHEETS)).toMatchObject({ x: 0, y: 0 });
-    expect(shortsStoryboardTile(b, 10, SHEETS)).toMatchObject({ x: 160, y: 0 });
-    expect(shortsStoryboardTile(b, 20, SHEETS)).toMatchObject({ x: 0, y: 90 });
+    const list = shortsStoryboardThumbnails(board({ index: [0, 10, 20] }), SHEETS);
+    expect(list.map((item) => item.startTime)).toEqual([0, 10, 20]);
+    expect(list[1]).toMatchObject({ coords: { x: 160, y: 0 } });
+    expect(list[2]).toMatchObject({ coords: { x: 0, y: 90 } });
   });
 
   test("跨雪碧图：格数超过一张就换图", () => {
@@ -64,52 +64,52 @@ describe("缩略图取格", () => {
       images: ["//a/0.jpg", "//a/1.jpg"],
     });
     const sheets = ["https://proxy/0", "https://proxy/1"];
-    expect(shortsStoryboardTile(b, 30, sheets)).toMatchObject({
-      url: "https://proxy/0",
-      x: 160,
-      y: 90,
-    });
-    expect(shortsStoryboardTile(b, 40, sheets)).toMatchObject({
-      url: "https://proxy/1",
-      x: 0,
-      y: 0,
-    });
+    const list = shortsStoryboardThumbnails(b, sheets);
+    expect(list).toHaveLength(5);
+    expect(list[4]).toMatchObject({ url: "https://proxy/1", startTime: 40, coords: { x: 0, y: 0 } });
   });
 
-  test("整张雪碧图的尺寸一并给出", () => {
-    // CSS background-size 需要整张图的尺寸才能把某一格摆正。
-    expect(shortsStoryboardTile(board(), 0, SHEETS)).toMatchObject({
-      width: 160,
-      height: 90,
-      sheetWidth: 320,
-      sheetHeight: 180,
-    });
+  test("缺字段时按规范默认值兜底（10×10、160×90）", () => {
+    // 字段为 0 时不该整块失效：2×2 的图按默认的 10×10 排布。
+    const list = shortsStoryboardThumbnails(
+      board({ img_x_len: 0, img_y_len: 0, img_x_size: 0, img_y_size: 0 }),
+      SHEETS,
+    );
+    expect(list).toHaveLength(4);
+    // 10 列：第 2 格（时间 10）在第二列，x=160。
+    expect(list[1]).toMatchObject({ width: 160, height: 90, coords: { x: 160, y: 0 } });
   });
 
-  test("缺字段时按规范默认值兜底", () => {
-    // 10×10、160×90 是 B 站快照的常见排布；字段为 0 时不该整块失效。
-    const b = board({ img_x_len: 0, img_y_len: 0, img_x_size: 0, img_y_size: 0 });
-    expect(shortsStoryboardTile(b, 10, SHEETS)).toMatchObject({
-      x: 160,
-      y: 0,
-      width: 160,
-      height: 90,
-      sheetWidth: 1600,
-      sheetHeight: 900,
-    });
-  });
-
-  test("没有快照或没有图时返回 null", () => {
+  test("没有快照、没有图或没有采样时给空表", () => {
     // 调用方据此只显示时间气泡：部分稿件确实没有快照。
-    expect(shortsStoryboardTile(null, 5, SHEETS)).toBeNull();
-    expect(shortsStoryboardTile(undefined, 5, SHEETS)).toBeNull();
-    expect(shortsStoryboardTile(board(), 5, [])).toBeNull();
-    expect(shortsStoryboardTile(board({ index: [] }), 5, SHEETS)).toBeNull();
+    expect(shortsStoryboardThumbnails(null, SHEETS)).toEqual([]);
+    expect(shortsStoryboardThumbnails(undefined, SHEETS)).toEqual([]);
+    expect(shortsStoryboardThumbnails(board(), [])).toEqual([]);
+    expect(shortsStoryboardThumbnails(board({ index: [] }), SHEETS)).toEqual([]);
   });
 
-  test("图片下标越界时返回 null 而不是取到 undefined", () => {
-    // 采样表比图片列表长（上游数据不一致）时，末尾几格没有对应的图。
+  test("采样表比图片列表长时在缺图处截断", () => {
+    // 第 5 个采样没有对应的雪碧图：整表停在能画出来的最后一格，不显示加载失败。
     const b = board({ index: [0, 0, 10, 20, 30, 40, 50] });
-    expect(shortsStoryboardTile(b, 50, SHEETS)).toBeNull();
+    const list = shortsStoryboardThumbnails(b, SHEETS);
+    expect(list.map((item) => item.startTime)).toEqual([0, 10, 20, 30]);
+  });
+
+  test("空地址的雪碧图同样截断", () => {
+    // 归一化时原始 URL 为空的项会留下 ""，不能让播放器拿它去发请求。
+    const b = board({ images: ["", "//a/1.jpg"] });
+    expect(shortsStoryboardThumbnails(b, ["", "https://proxy/1"])).toEqual([]);
+  });
+});
+
+describe("雪碧图地址归一", () => {
+  test("没有快照或图片时给空数组", () => {
+    expect(shortsStoryboardSheetUrls(null)).toEqual([]);
+    expect(shortsStoryboardSheetUrls(undefined)).toEqual([]);
+  });
+
+  test("协议相对地址补 https", () => {
+    // 代理就绪前会回退直连，因此这里能直接读到归一后的绝对地址。
+    expect(shortsStoryboardSheetUrls(board())).toEqual(["https://i0.hdslb.com/sheet0.jpg"]);
   });
 });

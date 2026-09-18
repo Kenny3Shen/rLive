@@ -142,15 +142,6 @@ export const SHORTS_DANMAKU_TOP_OFFSET_PX = SHORTS_TOP_BAR_HEIGHT_PX;
 export const SHORTS_SEEK_KEY_STEP_SECONDS = 5;
 
 /**
- * 拖动进度时预览缩略图的宽度（px）。
- *
- * 取 160 是因为 B 站快照雪碧图的单格就是 160×90：按原始尺寸显示不用缩放，也就不会
- * 出现雪碧图偏移被小数倍率放大成半像素错位（相邻格漏进来一条边）。它同时是气泡
- * 夹边的宽度基准，见 `shortsSeekPreviewLeft`。
- */
-export const SHORTS_SEEK_PREVIEW_WIDTH_PX = 160;
-
-/**
  * 画面在舞台里的实际显示尺寸：按宽高比等比内切，不裁切也不拉伸。
  *
  * 这是「短视频不该被强行铺满」的几何本体。竖屏源在桌面宽舞台上若按 `cover` 铺满，
@@ -256,24 +247,6 @@ export function shortsFrameFill(
 }
 
 /**
- * 拖动进度时预览气泡的左偏移（px，相对轨道左端）。
- *
- * 气泡跟着手指但不许探出轨道两端：缩略图有 160px 宽，在手机上贴边时会有一半飘到
- * 画面之外。夹在 `[0, track - preview]` 里，轨道比气泡还窄时退回 0（此时无处可夹）。
- */
-export function shortsSeekPreviewLeft(
-  ratio: number,
-  trackWidth: number,
-  previewWidth: number,
-): number {
-  if (!(trackWidth > 0) || !(previewWidth > 0)) return 0;
-  const centered = Math.max(0, Math.min(1, ratio)) * trackWidth - previewWidth / 2;
-  const max = trackWidth - previewWidth;
-  if (max <= 0) return 0;
-  return Math.max(0, Math.min(max, centered));
-}
-
-/**
  * 跨页去重后的短视频条目。
  *
  * story feed 无游标：翻页就是「再拉一批轮换内容」，后端已按批去重，但跨页重复
@@ -292,24 +265,6 @@ export function shortsFeedItems(pages: readonly { items: readonly VideoItem[] }[
     }
   }
   return items;
-}
-
-/**
- * 进度条上某个横坐标对应的播放比例（0~1）。
- *
- * 只按进度条自身的矩形换算，与舞台无关：需求是「仅在进度条区域操作有效」，
- * 因此这个函数拿到的 `left`/`width` 必须是那条轨道的矩形，不是画面框的。
- */
-export function shortsSeekRatio(clientX: number, left: number, width: number): number {
-  if (!(width > 0)) return 0;
-  return Math.max(0, Math.min(1, (clientX - left) / width));
-}
-
-/** 比例对应的秒数。时长未知时返回 0（调用方据此不发起 seek）。 */
-export function shortsSeekTime(ratio: number, duration: number): number {
-  if (!(duration > 0)) return 0;
-  const bounded = Math.max(0, Math.min(1, ratio));
-  return bounded * duration;
 }
 
 /** 一条短视频在播放/预取层里的身份。与播放列表项的 id 同构（`bvid_cid`）。 */
@@ -333,8 +288,8 @@ export const SHORTS_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
 /** 首尾条目上的越界阻尼：让边界可见，又不暗示这条流可以环绕。 */
 const SHORTS_SWIPE_EDGE_RESISTANCE = 0.18;
 /** 释放收尾时长的边界（ms）。 */
-export const SHORTS_SWIPE_SETTLE_MIN_MS = 170;
-export const SHORTS_SWIPE_SETTLE_MAX_MS = 400;
+export const SHORTS_SWIPE_SETTLE_MIN_MS = 150;
+export const SHORTS_SWIPE_SETTLE_MAX_MS = 320;
 const SHORTS_SWIPE_SETTLE_MIN_SPEED = 0.7;
 const SHORTS_SWIPE_SETTLE_MAX_SPEED = 3;
 /** 释放速度的采样窗口（ms），约两个合成帧。 */
@@ -367,6 +322,38 @@ export function shortsSwipeIntent(deltaX: number, deltaY: number): "pending" | "
     return "switch";
   }
   return "reject";
+}
+
+/**
+ * 换片收尾的缓动曲线。
+ *
+ * 刻意不复用共享的 `SWIPE_SETTLE_EASING`（`EASE_OUT`）：横向翻页是一整屏的位移，
+ * 需要温和的减速；短视频换片只有一条画面的行程，且上面叠了纵深缩放，因此收尾要在
+ * 释放点更早离开、更快落定，避免「滑完了还在慢悠悠地动」。
+ */
+export const SHORTS_SWIPE_SETTLE_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+/** 换片纵深：邻条后退的缩放比例与淡出比例（相对 1 的最大偏差）。 */
+export const SHORTS_DEPTH_SCALE = 0.08;
+export const SHORTS_DEPTH_FADE = 0.5;
+
+/**
+ * 一个面板相对视口中心的纵深。
+ *
+ * `distance` 是面板中心离视口中心的距离，以舞台高为单位（0 = 正在看的那条）。
+ * 返回的 `scale` / `opacity` 直接写到面板的内联样式上：换片时离场的一条后退并
+ * 淡出、入场的一条浮上来，给平移叠一层纵深。
+ *
+ * 两个偏差都封顶在 `distance = 1`，因此再远的条目也不会缩成一片 —— 它们本来就在
+ * 视口外，重要的是从边缘进入时的手感，而不是远处的精确值。
+ */
+export function shortsPanelDepth(distance: number): { scale: number; opacity: number } {
+  if (!(distance > 0)) return { scale: 1, opacity: 1 };
+  const bounded = Math.min(1, distance);
+  return {
+    scale: 1 - SHORTS_DEPTH_SCALE * bounded,
+    opacity: 1 - SHORTS_DEPTH_FADE * bounded,
+  };
 }
 
 /** 由样本尾部计算的纵向释放速度（px/ms）。抬手前停顿过的手指上报约 0。 */

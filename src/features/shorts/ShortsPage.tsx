@@ -55,10 +55,11 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
-import { prefersReducedMotion, SWIPE_SETTLE_EASING } from "@/shared/motion/tokens";
+import { prefersReducedMotion } from "@/shared/motion/tokens";
 import { hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import { ShortsSeekBar } from "./ShortsSeekBar";
+import { ShortsSeekBridge, ShortsSeekPlayer } from "./shortsSeekPlayer";
 import { ShortsPoster, ShortsStage } from "./ShortsStage";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
@@ -66,11 +67,13 @@ import {
   SHORTS_SAFE_AREA_BOTTOM,
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
   SHORTS_SLOT_IDS,
+  SHORTS_SWIPE_SETTLE_EASING,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
   SHORTS_TOP_BAR_HEIGHT_PX,
   shortsFeedItems,
   shortsItemKey,
   shortsMountedIndexes,
+  shortsPanelDepth,
   shortsShouldFetchMore,
   shortsSlotCoveredIndexes,
   shortsSlotTop,
@@ -83,6 +86,7 @@ import {
   type ShortsSlotId,
   type ShortsSwipeSample,
 } from "./shortsFeed";
+import { useShortsStoryboard } from "./shortsStoryboard";
 import { useShortsDanmaku } from "./useShortsDanmaku";
 import { useShortsSlots } from "./useShortsSlots";
 import { useShortsSessionRetention } from "./useShortsSessionRetention";
@@ -150,6 +154,8 @@ export function ShortsPage() {
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [infoVisible, setInfoVisible] = useState(true);
   const [gestureActive, setGestureActive] = useState(false);
+  /** 进度条是否被交互过：悬停或按下一次后就去取快照。 */
+  const [seekArmed, setSeekArmed] = useState(false);
   const compact = useCompactPlayerViewport();
 
   const feedQuery = useInfiniteQuery({
@@ -173,6 +179,19 @@ export function ShortsPage() {
   // 在渲染期派生而不是放进 effect：effect 里 setState 会先用越界下标渲染一帧（空舞台）。
   const index = items.length > 0 ? Math.min(rawIndex, items.length - 1) : rawIndex;
   const current = items[index] ?? null;
+
+  /**
+   * 进度条的缩略图表。
+   *
+   * 查询放在页面层而不是进度条里：换片时要拿到**当前条**的快照，而进度条只负责画。
+   * `seekArmed` 一旦为真不再回落 —— 同一条视频里第二次交互应该立刻有图。
+   */
+  const { thumbnails } = useShortsStoryboard({
+    bvid: current?.bvid ?? "",
+    cid: current?.cid ?? 0,
+    enabled: seekArmed,
+  });
+  const armSeek = useCallback(() => setSeekArmed(true), []);
 
   /* ---------- 播放、弹幕与抽屉 ---------- */
 
@@ -313,7 +332,24 @@ export function ShortsPage() {
 
   const offsetRef = useRef(0);
   const animationRef = useRef<Animation | null>(null);
+  /**
+   * 收尾动画是否在跑。
+   *
+   * 换片提交时 `parkTrack` 会因 `index` 变化重跑；若它照常取消动画，就会把刚启动的
+   * 收尾取消成一次硬切（正是「先瞬间切换、再滑一下」的根因）。它期间必须让位。
+   */
+  const settlingRef = useRef(false);
   const stageHeightRef = useRef(0);
+  /**
+   * 每个面板的纵深基准。
+   *
+   * 面板的 `top` 是绝对下标 × 舞台高，而条带在平移，因此「离视口中心多远」是
+   * `offset + top`。拖动开始与每次停靠时重采：面板集合会随换片增减，高度会随旋转变化。
+   */
+  const depthPanelsRef = useRef<{ el: HTMLElement; top: number }[]>([]);
+  const depthAnimationsRef = useRef<Animation[]>([]);
+  /** 本手势内是否要跳过纵深（系统设置）。在采样时定下，不在每帧重读 matchMedia。 */
+  const depthReducedRef = useRef(false);
   const swipeRef = useRef<{
     pointerId: number;
     startX: number;
@@ -339,8 +375,63 @@ export function ShortsPage() {
     if (el) el.style.transform = `translate3d(0, ${offset}px, 0)`;
   }, []);
 
+  /** 重采面板的纵深基准（拖动锁定、停靠、尺寸变化时）。 */
+  const collectDepthPanels = useCallback(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    depthReducedRef.current = prefersReducedMotion();
+    depthPanelsRef.current = Array.from(
+      track.querySelectorAll<HTMLElement>('[data-slot="shorts-panel"]'),
+    ).map((el) => ({ el, top: el.offsetTop }));
+  }, []);
+
+  /**
+   * 把纵深写进每个面板的内联样式。
+   *
+   * 只碰 `transform` 与 `opacity`：拖动期间每个 pointermove 都会走这里，写成别的属性
+   * 会拉着布局一起重算。系统开启「减弱动态效果」时不写任何缩放，构图保持原样。
+   */
+  /* oxlint-disable react/immutability */
+  const writeDepth = useCallback(
+    (offset: number) => {
+      const height = stageHeight();
+      if (!(height > 0)) return;
+      const reduced = depthReducedRef.current;
+      for (const panel of depthPanelsRef.current) {
+        if (reduced) {
+          panel.el.style.transform = "";
+          panel.el.style.opacity = "";
+          continue;
+        }
+        const depth = shortsPanelDepth(Math.abs(offset + panel.top) / height);
+        // 恒等值用空字符串表达：静止时不给正在看的那条平白加一层 stacking context，
+        // 也不会因 `scale(1)` 之外的写入让 React 的样式 diff 多一项。
+        panel.el.style.transform = depth.scale === 1 ? "" : `scale(${depth.scale})`;
+        panel.el.style.opacity = depth.opacity === 1 ? "" : String(depth.opacity);
+      }
+    },
+    [stageHeight],
+  );
+  /* oxlint-enable react/immutability */
+
+  /** 拖动中的每帧路径：条带平移与面板纵深一起写。 */
+  const writePlacement = useCallback(
+    (offset: number) => {
+      writeOffset(offset);
+      writeDepth(offset);
+    },
+    [writeDepth, writeOffset],
+  );
+
   /** 在当前位置停止收尾，把该偏移留下作为内联样式。 */
   const cancelSettle = useCallback(() => {
+    settlingRef.current = false;
+    const depthAnimations = depthAnimationsRef.current;
+    if (depthAnimations.length > 0) {
+      depthAnimationsRef.current = [];
+      // 不在中途提交纵深值：下一次 writeDepth / 手势会按同一 offset 重写，比取矩阵可靠。
+      for (const animation of depthAnimations) animation.cancel();
+    }
     const animation = animationRef.current;
     if (!animation) return;
     const el = trackRef.current;
@@ -361,25 +452,70 @@ export function ShortsPage() {
   }, [writeOffset]);
 
   /**
+   * 纵深收尾动画。
+   *
+   * 按每个面板**自己的**距离分别补间，而不是把条带整体缩放：那样会让正在看的这条也跟
+   * 着缩一下。面板集合按开始时的快照取值（`depthPanelsRef`），因为这条动画要跨过
+   * `setIndex` 的那次提交 —— 提交只改 `top`，不动我们已经写在面板上的内联样式。
+   *
+   * 在 `settle` 之前声明：后者引用它。
+   */
+  const animateDepth = useCallback(
+    (from: number, target: number, duration: number): Animation[] => {
+      const height = stageHeight();
+      // 注意：`reduced` 在采集时已定，若中途切换系统设置则这一步动画仍会起，但下一次
+      // 停靠/拖动就会回到原样——比每帧重读 matchMedia 便宜。
+      if (!(height > 0) || depthReducedRef.current) return [];
+      const animations: Animation[] = [];
+      for (const panel of depthPanelsRef.current) {
+        const at = (offset: number) => shortsPanelDepth(Math.abs(offset + panel.top) / height);
+        const start = at(from);
+        const end = at(target);
+        animations.push(
+          panel.el.animate(
+            [
+              { transform: `scale(${start.scale})`, opacity: start.opacity },
+              { transform: `scale(${end.scale})`, opacity: end.opacity },
+            ],
+            { duration, easing: SHORTS_SWIPE_SETTLE_EASING, fill: "both" },
+          ),
+        );
+      }
+      depthAnimationsRef.current = animations;
+      return animations;
+    },
+    [stageHeight],
+  );
+
+  /**
    * 把剩余行程交给合成器。
    *
    * 刻意用 Web Animations 而不是 rAF 补间：换片会触发一次 React 提交（拆旧播放器、
    * 建新播放器），主线程上的补间会被那次提交吞掉大部分帧 —— 那正是「先瞬间切换、
    * 再滑一下」的观感来源。`fill: both` 让第一个关键帧立即生效，条带不会绘制出
    * 未变换的一帧。
+   *
+   * 面板纵深用等长同缓动的第二条动画一起跑：条带平移与缩放淡出必须同时到达，否则
+   * 会看到画面先滑到位再「啪」地缩一下。
    */
   const settle = useCallback(
     (target: number, duration: number) => {
       const el = trackRef.current;
       if (!el) return;
       cancelSettle();
+      // 面板集合与高度可能在上一轮换片/旋转后变了：收尾前重采一次，纵深动画才有正确的基准。
+      collectDepthPanels();
       const from = offsetRef.current;
       if (duration <= 0 || from === target || prefersReducedMotion()) {
+        settlingRef.current = false;
         offsetRef.current = target;
         el.style.transform = `translate3d(0, ${target}px, 0)`;
         el.style.willChange = "";
+        // 瞬时路径没有动画，纵深必须直接落到位，否则会停在上一手势的中间值。
+        writeDepth(target);
         return;
       }
+      settlingRef.current = true;
       offsetRef.current = target;
       el.style.willChange = "transform";
       const animation = el.animate(
@@ -387,13 +523,15 @@ export function ShortsPage() {
           { transform: `translate3d(0, ${from}px, 0)` },
           { transform: `translate3d(0, ${target}px, 0)` },
         ],
-        { duration, easing: SWIPE_SETTLE_EASING, fill: "both" },
+        { duration, easing: SHORTS_SWIPE_SETTLE_EASING, fill: "both" },
       );
       animationRef.current = animation;
+      const depthAnimations = animateDepth(from, target, duration);
       void animation.finished
         .then(() => {
           if (animationRef.current !== animation) return;
           animationRef.current = null;
+          settlingRef.current = false;
           // 先写内联样式再取消动画：顺序颠倒会让部分 Android 合成器画出一帧未变换的层。
           el.style.transform = `translate3d(0, ${target}px, 0)`;
           animation.cancel();
@@ -402,19 +540,32 @@ export function ShortsPage() {
         .catch(() => {
           // 新手势或新下标打断时预期会取消。
         });
+      void Promise.all(depthAnimations.map((item) => item.finished.catch(() => undefined))).then(
+        () => {
+          if (depthAnimationsRef.current !== depthAnimations) return;
+          depthAnimationsRef.current = [];
+          // 同样先写内联再取消，避免最后一帧回退成未缩放的构图。
+          writeDepth(target);
+          for (const item of depthAnimations) item.cancel();
+        },
+      );
     },
-    [cancelSettle],
+    [animateDepth, cancelSettle, collectDepthPanels, writeDepth],
   );
 
   /** 把条带停靠在当前下标处，不做运动（挂载、尺寸变化、下标被外部改动）。 */
   const parkTrack = useCallback(() => {
     if (swipeRef.current?.vertical) return;
+    // 收尾进行中就让它跑到终点：这里取消动画会变成一次硬切（目标与收尾目标相同）。
+    if (settlingRef.current) return;
     cancelSettle();
     const target = shortsTrackOffset(index, stageHeight());
+    collectDepthPanels();
     writeOffset(target);
+    writeDepth(target);
     const el = trackRef.current;
     if (el) el.style.willChange = "";
-  }, [cancelSettle, index, stageHeight, writeOffset]);
+  }, [cancelSettle, collectDepthPanels, index, stageHeight, writeDepth, writeOffset]);
 
   useLayoutEffect(() => {
     parkTrack();
@@ -425,25 +576,34 @@ export function ShortsPage() {
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || typeof ResizeObserver === "undefined") return;
-    let applied = 0;
+    // 初值取当前高度，而不是 0：这条 effect 依赖 `index`，每次换片都会重建观察器，
+    // 而观察器首次回调几乎必然带着「和现在一样」的高度。若从 0 起步，那次回调会被
+    // 当成一次真实的高度变化，恰好落在刚启动的收尾上把它取消成硬切 —— 正是这个 bug
+    // 的主因。取当前高度后，首次回调自然是无操作。
+    let applied = viewport.clientHeight;
     const observer = new ResizeObserver(() => {
       const height = viewport.clientHeight;
-      // 只有高度变化才重建：手势进行中一律不动，避免把运行中的动画跳到终点。
+      // 只有高度变化才重建：手势与收尾进行中一律不动，避免把运行中的动画跳到终点。
       if (height <= 0 || height === applied || swipeRef.current?.vertical) return;
+      if (settlingRef.current) return;
       applied = height;
       stageHeightRef.current = height;
       cancelSettle();
+      collectDepthPanels();
       writeOffset(shortsTrackOffset(index, height));
+      writeDepth(shortsTrackOffset(index, height));
     });
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [cancelSettle, index, writeOffset]);
+  }, [cancelSettle, collectDepthPanels, index, writeDepth, writeOffset]);
 
   useEffect(
     () => () => {
       const animation = animationRef.current;
       animationRef.current = null;
       animation?.cancel();
+      for (const depthAnimation of depthAnimationsRef.current) depthAnimation.cancel();
+      depthAnimationsRef.current = [];
     },
     [],
   );
@@ -483,6 +643,10 @@ export function ShortsPage() {
       // 部分 Android WebView 对手指输入上报空的 pointerType。鼠标不参与换片
       // （桌面用滚轮与方向键，见下）。
       if ((pointerType !== "touch" && pointerType !== "") || !event.isPrimary) return;
+      // 这是页面级换片手势的起点：面板此刻的纵深基准就是「用手势接管之前」的静态画像，
+      // 必须在这里采。一旦开始拖动，`offsetTop` 会被条带平移影响（这里读到的仍是布局值，
+      // 但集合本身会在换片提交时增减），所以基准就该在按下时定下。
+      collectDepthPanels();
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
@@ -496,7 +660,7 @@ export function ShortsPage() {
         samples: [{ y: event.clientY, time: performance.now() }],
       };
     },
-    [armSpeedHold, index, items.length, stageHeight],
+    [armSpeedHold, collectDepthPanels, index, items.length, stageHeight],
   );
 
   const onPointerMoveCapture = useCallback(
@@ -521,8 +685,9 @@ export function ShortsPage() {
         cancelSettle();
         swipe.startOffset = offsetRef.current;
         const el = trackRef.current;
-        // 只有确认纵向后才提升层。
+        // 只有确认纵向后才提升层；面板的纵深基准也在这一刻采一次（集合与高度都还新鲜）。
         if (el) el.style.willChange = "transform";
+        collectDepthPanels();
         // 指针捕获是增强而不是前提：`touchAction: pan-x` 已经把纵向移动交给我们，
         // 捕获只是让手指滑出元素后仍然收到事件。它会在指针已经结束时抛
         // NotFoundError（Android WebView 上真实发生过），不接住的话这一帧剩下的
@@ -538,7 +703,7 @@ export function ShortsPage() {
 
       swipe.samples.push({ y: event.clientY, time: performance.now() });
       if (swipe.samples.length > 8) swipe.samples.shift();
-      writeOffset(
+      writePlacement(
         swipe.startOffset +
           shortsSwipeDragOffset(swipe.index, swipe.length, deltaY, swipe.stageHeight),
       );
@@ -546,7 +711,7 @@ export function ShortsPage() {
       event.preventDefault();
       event.stopPropagation();
     },
-    [cancelSettle, trackSpeedHoldMove, writeOffset],
+    [cancelSettle, collectDepthPanels, trackSpeedHoldMove, writePlacement],
   );
 
   const finishSwipe = useCallback(
@@ -621,6 +786,44 @@ export function ShortsPage() {
    *
    * 抽屉打开时全部让路：评论列表与详情都是滚动容器，方向键和空格是它们的翻页。
    * `panels.anyOpen` 因此是这一整段的前置条件，而不是逐个键判断。
+   *
+   * 上下键必须在**捕获阶段**抢先认领：进度条用的是 Video.js `TimeSlider`，它把
+   * ↑/↓/PageUp/PageDown 也当 seek，而它的可聚焦元素是进度条里的 Thumb —— 用户碰过
+   * 进度条后焦点就留在那里，冒泡阶段的监听（下面那个）已经先被它处理过了。捕获阶段
+   * 先一步认领这四个键并阻止事件下传；←/→ 继续放行给进度条做 ±5s。
+   */
+  useEffect(() => {
+    function onKeyDownCapture(event: KeyboardEvent) {
+      if (event.defaultPrevented || panels.anyOpen) return;
+      const target = event.target;
+      // 输入态（弹幕输入框等）、按钮与浮层不劫持这些键。
+      if (
+        target instanceof HTMLElement &&
+        target.closest(
+          'input, textarea, button, [contenteditable="true"], [data-slot="drawer-content"]',
+        )
+      ) {
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "PageDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        goToIndex(index + 1);
+      } else if (event.key === "ArrowUp" || event.key === "PageUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        goToIndex(index - 1);
+      }
+    }
+    window.addEventListener("keydown", onKeyDownCapture, true);
+    return () => window.removeEventListener("keydown", onKeyDownCapture, true);
+  }, [goToIndex, index, panels.anyOpen]);
+
+  /**
+   * 播放暂停热键。
+   *
+   * 与换片方向键分开成两个监听：暂停键属于冒泡阶段（没有被原语抢），而方向键必须
+   * 在捕获阶段先于进度条认领。
    */
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -635,20 +838,14 @@ export function ShortsPage() {
       ) {
         return;
       }
-      if (event.key === "ArrowDown" || event.key === "PageDown") {
-        event.preventDefault();
-        goToIndex(index + 1);
-      } else if (event.key === "ArrowUp" || event.key === "PageUp") {
-        event.preventDefault();
-        goToIndex(index - 1);
-      } else if (event.key === " " || event.key === "k" || event.key === "K") {
+      if (event.key === " " || event.key === "k" || event.key === "K") {
         event.preventDefault();
         playback.togglePlay();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [goToIndex, index, panels.anyOpen, playback]);
+  }, [panels.anyOpen, playback]);
 
   const goBack = useCallback(() => {
     if (hasBrowserHistoryEntry(window.history.state)) navigate(-1);
@@ -748,7 +945,7 @@ export function ShortsPage() {
   const danmakuControl = danmakuControlPresentation(danmakuVisible);
 
   return (
-    <>
+    <ShortsSeekPlayer>
       <div
         ref={viewportRef}
         data-slot="shorts-viewport"
@@ -836,6 +1033,15 @@ export function ShortsPage() {
           })}
         </div>
 
+        {/*
+          把活动槽位的 `<video>` 桥接进进度条的播放器 store。
+
+          必须渲染在槽位面板**之外**：面板里还有一层 `ShortsPosterPlayer`（封面与
+          状态指示用），渲染在它里面会被那个更近的 Player 上下文截走。也不属于条带，
+          否则换片时会跟着平移一起被变换。
+        */}
+        <ShortsSeekBridge videoRef={slotRefs[slots.active]} active={slots.active} />
+
         {/* 顶部控制栏：返回 + 更多操作。固定在视口上，不随条带平移。
 
             紧贴视口顶边，也就是系统状态栏的下沿：状态栏的让位由 `.app-shell` 的
@@ -845,7 +1051,7 @@ export function ShortsPage() {
           data-slot="shorts-top-bar"
           className={cn(
             SHORTS_TOP_CONTROLS_CLASS,
-            "absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2",
+            "pointer-events-auto absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2",
           )}
           style={{ height: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
         >
@@ -1061,13 +1267,7 @@ export function ShortsPage() {
             paddingBottom: SHORTS_SAFE_AREA_BOTTOM,
           }}
         >
-          <ShortsSeekBar
-            bvid={current?.bvid ?? ""}
-            cid={current?.cid ?? 0}
-            currentTime={playback.currentTime}
-            duration={playback.duration}
-            onSeek={playback.seek}
-          />
+          <ShortsSeekBar thumbnails={thumbnails} onArmed={armSeek} />
           {/*
             控件收在一个居中的定宽容器里，而不是铺满栏宽。
 
@@ -1180,7 +1380,7 @@ export function ShortsPage() {
           {detailBody}
         </ShortsDrawerContent>
       </Drawer>
-    </>
+    </ShortsSeekPlayer>
   );
 }
 
