@@ -20,6 +20,7 @@ import {
   FastForward,
   Home,
   Link2,
+  Smartphone,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -160,6 +161,7 @@ import {
   videoOriginalUrl,
   videoPlayPath,
 } from "./videoRoute";
+import { shortsPath } from "@/features/shorts/shortsFeed";
 import {
   dedupeVideoItems,
   nextSelectionItem,
@@ -2044,6 +2046,18 @@ function VideoPlayerPageContent() {
     });
   }, [originalUrl]);
 
+  /**
+   * 进入短视频流，并以当前这条为种子（上游据此换出一组从本片开始的新窗口）。
+   * bvid 缺失（PGC 分集）时退回裸 `/shorts`，由后端用最近观看历史当种子。
+   * 先把全屏收干净再走：短视频页是沉浸路由，留着元素全屏会盖在它上面。
+   */
+  const openShorts = useCallback(async () => {
+    setHudMenuOpen(false);
+    setOverlayInteractionOpen(false);
+    await fullscreenExit();
+    navigate(shortsPath(bvid));
+  }, [bvid, fullscreenExit, navigate]);
+
   const title = params?.title || "视频播放";
 
   /** 桌面普通详情（无任何沉浸/全屏层）：旧流内顶栏的返回主页入口迁入
@@ -2710,6 +2724,22 @@ function VideoPlayerPageContent() {
                         {title}
                       </p>
                     </div>
+                    {/* 短视频入口：以当前这条为种子进入竖屏流（滑到哪就从哪继续）。
+                        与 `⋮` 同级常驻，不藏进溢出菜单 —— 它是这一页的消费方式切换，
+                        不是低频工具。bvid 缺失（PGC）时后端退回最近观看历史。 */}
+                    <MediaButton
+                      type="button"
+                      aria-label="以当前视频为种子进入短视频"
+                      title="看短视频"
+                      className={PLAYER_HUD_BUTTON_CLASS}
+                      onClick={() => void openShorts()}
+                    >
+                      <Smartphone
+                        className={PLAYER_HUD_ICON_CLASS}
+                        data-icon="inline-start"
+                        aria-hidden
+                      />
+                    </MediaButton>
                     <PlayerHudOverflowMenu
                       label="更多操作"
                       title="播放操作"

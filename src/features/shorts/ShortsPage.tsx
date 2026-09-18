@@ -22,7 +22,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive, videoGetStory } from "@/features/video/videoApi";
@@ -67,6 +67,7 @@ import {
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_SAFE_AREA_BOTTOM,
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
+  SHORTS_SEED_PARAM,
   SHORTS_SLOT_IDS,
   SHORTS_SWIPE_SETTLE_EASING,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
@@ -135,6 +136,12 @@ const SHORTS_TOP_CONTROLS_CLASS =
  */
 export function ShortsPage() {
   const navigate = useNavigate();
+  /**
+   * 入口种子：从播放页「短视频」进来时带 `?seed=<bvid>`，以那条为起点开流。
+   * 只作首屏初值；条目到位后由下面的 effect 接手，改成「当前正在看的那条」。
+   */
+  const [searchParams] = useSearchParams();
+  const entrySeed = searchParams.get(SHORTS_SEED_PARAM);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -177,10 +184,10 @@ export function ShortsPage() {
    * 下一次取流要用的种子：当前正在消费的那条 `bvid`。
    *
    * 用 ref 而不是闭包捕获：`queryFn` 在 `fetchNextPage` 时才执行，那时要读的是
-   * 「此刻在看的那条」，而不是查询创建时的那条。首屏还没有条目可传（ref 为空），
-   * 后端会回退到最近观看历史当种子。
+   * 「此刻在看的那条」，而不是查询创建时的那条。初值是入口种子（`?seed=`）；
+   * 首屏还没有条目可传时，后端会拿它当起点，没有它才回退到最近观看历史。
    */
-  const storySeedRef = useRef<string | null>(null);
+  const storySeedRef = useRef<string | null>(entrySeed);
 
   const feedQuery = useInfiniteQuery({
     queryKey: ["shorts_story"],
@@ -206,9 +213,10 @@ export function ShortsPage() {
   const current = items[index] ?? null;
 
   // 在补货 effect 之前同步种子（声明顺序即 effect 执行顺序），保证预取读到的是
-  // 当前这条而不是上一条。
+  // 当前这条而不是上一条。只在有条目时覆盖：首屏尚未到货时保留入口种子，
+  // 别把「从播放页带进来的起点」冲成 null。
   useEffect(() => {
-    storySeedRef.current = current?.bvid ?? null;
+    if (current?.bvid) storySeedRef.current = current.bvid;
   }, [current?.bvid]);
 
   /**

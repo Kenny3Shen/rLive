@@ -15,6 +15,28 @@ import type { VideoDimension, VideoItem } from "@/shared/types/video";
 /** 短视频页路径。刻意不挂在 `/video` 下：侧栏「视频」项按前缀匹配会跟着高亮。 */
 export const SHORTS_PATH = "/shorts";
 
+/**
+ * 进入短视频流时的种子参数：以这条 `bvid` 为起点。
+ *
+ * 由播放页的「短视频」入口带上（见 `shortsPath`）。带种子时上游把该稿件排在首位
+ * 并换出一组与黏性头部不重叠的窗口；不带则由后端回退到最近观看历史。
+ */
+export const SHORTS_SEED_PARAM = "seed";
+
+/**
+ * 短视频页链接。`seedBvid` 给定时以该稿件为起点，否则就是裸 `/shorts`
+ * （后端用最近观看历史当种子）。
+ *
+ * 只编码 bvid：`encodeURIComponent` 对 `BV` 串是恒等的，写上是为了不把
+ * 「参数值来自别处」这条假设留成隐患。
+ */
+export function shortsPath(seedBvid?: string | null): string {
+  const bvid = seedBvid?.trim();
+  return bvid
+    ? `${SHORTS_PATH}?${SHORTS_SEED_PARAM}=${encodeURIComponent(bvid)}`
+    : SHORTS_PATH;
+}
+
 /** 媒体自己报出的原始画幅（`videoWidth` / `videoHeight`），起播后才有。 */
 export type ShortsIntrinsicSize = { width: number; height: number };
 

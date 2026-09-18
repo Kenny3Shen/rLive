@@ -35,6 +35,7 @@ import {
   shortsSwipeVelocity,
   shortsTrackOffset,
   shortsNextSlots,
+  shortsPath,
   shortsPreloadDirection,
   shortsSlotCoveredIndexes,
   shortsSlotRole,
@@ -515,6 +516,24 @@ describe("路由契约", () => {
     // 侧栏目的地按前缀匹配，挂进去会让「视频」项跟着高亮。
     expect(SHORTS_PATH.startsWith("/video")).toBe(false);
     expect(SHORTS_PATH).toBe("/shorts");
+  });
+
+  test("带种子时拼出 seed 查询参数", () => {
+    // 播放页「短视频」入口用它把当前稿件交给竖屏流当起点。
+    expect(shortsPath("BV1Sw8U6cEEV")).toBe("/shorts?seed=BV1Sw8U6cEEV");
+  });
+
+  test("无种子/空白种子退回裸路径", () => {
+    // 裸路径让后端用最近观看历史当种子；不能拼出 `?seed=` 或 `?seed=  `
+    // 让后端把空白当成一个非法 bvid。
+    expect(shortsPath()).toBe(SHORTS_PATH);
+    expect(shortsPath(null)).toBe(SHORTS_PATH);
+    expect(shortsPath("")).toBe(SHORTS_PATH);
+    expect(shortsPath("   ")).toBe(SHORTS_PATH);
+  });
+
+  test("种子两侧空白被修剪", () => {
+    expect(shortsPath("  BV1Sw8U6cEEV  ")).toBe("/shorts?seed=BV1Sw8U6cEEV");
   });
 });
 

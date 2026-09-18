@@ -185,6 +185,7 @@ message DanmakuElem {
 - `MainActivity` 通过 `getInsetsIgnoringVisibility` 获取状态栏/刘海顶部与导航栏/刘海底部安全区，按 `devicePixelRatio` 换成 `--android-safe-area-top` / `--android-safe-area-bottom`，不包含键盘高度。页面加载完成时重新分发 inset，避免 WebView 的 `env(safe-area-inset-*)` 残留 0；旧 APK / 浏览器仍回退到 `env`。普通画面全屏继续沿用既有隐藏系统栏行为。
 - 桌面与移动端统一取消流内顶栏：返回、标题和工具都改在播放器顶部 HUD 显示，与底部控制栏共用空闲显隐（鼠标移出播放器区域即收起）；画面占满原顶栏空间，HUD 自行避让状态栏/刘海。桌面普通详情在 HUD 里保留返回主页（旧流内顶栏的迁移），低频工具（投屏/复制链接/在浏览器中打开）收进 `⋮` 溢出菜单；桌面底部 Shell 仍常驻链接操作。
 - 低频工具统一由 `PlayerHudOverflowMenu` 承载（含桌面普通详情）：投屏 / 复制链接 / 在浏览器中打开；移动端普通视频还保留返回主页入口。投屏使用 `PlayerToolPanel` 与 `CastMenu`，进行中显示「投屏中」。
+- **短视频入口**：顶部 HUD 在 `⋮` 旁常驻一个「看短视频」按钮（`Smartphone` 图标），点击跳 `/shorts?seed=<bvid>`，以当前稿件为种子进入竖屏流。它不放进 `⋮`：这是消费方式切换而不是低频工具。跳转前先 `await fullscreenExit()`（短视频页是沉浸路由）；bvid 缺失（PGC 分集）时退回裸 `/shorts`，由后端用最近观看历史当种子。详见[短视频功能](短视频功能.md)第三节。
 - 投屏只有 HUD 溢出菜单一个入口（`castOpen` + `castMenuProps`），窗口化与全屏同一形态，不存在双入口。无有效参数、PGC 解析态（没有可覆盖的播放舞台）继续渲染流内兜底顶栏，只留返回与标题，不挂工具。
 - **窗口全屏**（`webFullscreen`）隐藏页面顶栏、侧栏和底部操作栏，保留系统窗口栏；**画面全屏**（`useRecordingPlayerFullscreen`）盖住页面。桌面 Tauri 使用原生窗口全屏，Android 对齐直播使用页内固定层与沉浸式系统栏，其他浏览器使用 HTML Fullscreen API。Android 普通视频复用直播的 `useAndroidFullscreenOrientation`：横屏画幅（宽高比 > 1）转到横屏时自动进入全屏、转回竖屏自动退出，手动点开的全屏才按帧比例上横屏方向锁，退出释放（契约见 `docs/zh/播放器技术文档.md` 6.4）。两层叠加时返回/Escape 一次只退一层；全屏往返不重建媒体元素。
 - 控制栏保留高频播放控制与字幕按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏居中槽位是弹幕输入条（见第五节「弹幕发送」）。
