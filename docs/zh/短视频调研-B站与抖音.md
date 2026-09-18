@@ -17,7 +17,7 @@
 | 取流 | 完全复用现有 `x/player/wbi/playurl` + DASH 链路 | `play_addr.url_list` / `bit_rate[]` 直给渐进式 MP4 |
 | 媒体代理 | 必须（现有 `stream_proxy` 注 Referer 即可） | 必须（`Referer: https://www.douyin.com/`，无 Referer 403） |
 | 弹幕 | 有，`seg.so` 按 cid 复用现有实现 | 无点播弹幕概念 |
-| 主要缺口 | 无 UP 主竖屏列表（`space/story/cursor` 一律 -400） | 作者作品列表与搜索需登录 Cookie |
+| 主要缺口 | ~~无 UP 主竖屏列表~~ —— **2.9 节已修正：`space/story/cursor` 现可用**（`aid` 游标真翻页） | 作者作品列表与搜索需登录 Cookie |
 
 一句话：**B 站短视频是纯增量**——列表解析之外的取流、弹幕、评论、历史全部已在 `video.rs` 里；**抖音短视频是新表面**——需要新建点播侧实现，且受登录门槛与 `a_bogus` 脆弱性约束。
 
@@ -107,7 +107,7 @@ story feed 没有 cursor/offset/page。实测：
 
 | 候选 | 实测结果 |
 | --- | --- |
-| `app.bilibili.com/x/v2/feed/index/space/story/cursor`（UP 主竖屏流） | 一律 `-400`，即使按 PiliPlus 注释里的全参数（`vmid/aid/cid/before_size/after_size/contain/index` + `statistics`）+ appkey 签名。PiliPlus 自身也已把这段代码注释掉。**[INFERENCE]** 推测已迁至 gRPC 或需要 `access_key`（登录态），未验证 |
+| `app.bilibili.com/x/v2/feed/index/space/story/cursor`（UP 主竖屏流） | ~~一律 `-400`~~ —— **2.9 节已修正：现在可用**。实测 `vmid` + `before_size=0` + `after_size≤10` 返回该 UP 的竖屏投稿（`owner.mid` 全部一致，10/10 竖屏），`aid` 游标可连续翻页（5 批 50 条零重复）。匿名 + `buvid` 头可用，不需 appkey 签名。旧结论（含 PiliPlus 注释）已过时 |
 | `api.vc.bilibili.com/clip/v1/video/{index,search}`（旧「小视频」） | HTTP 404，接口已下线 |
 | `x/web-interface/dynamic/region?rid=76`（旧小视频分区） | `-404 啥都木有` |
 | `x/vertical/feed/index`、`x/web-interface/story/feed` | 非 JSON（错误页），不存在 |
@@ -204,6 +204,56 @@ UA（Android / Web）与 Cookie 有无都不影响竖屏出现 —— 起作用�
   不需签名、`goto=vertical_av` 可直接过滤；代价是引入 APP 域接口（rLive 目前只走 `api.bilibili.com`
   与 `x/web-interface/*`），且必须带 `buvid`（已有固定设备槽）。
 
+### 2.9 VOD 接入竖屏流的方案（2026-10 实测）
+
+目标：在 VOD 侧（视频页 / 播放页）提供「竖屏流」入口，并能一直刷下去。
+
+**先排除三个错误方向：**
+
+- `rcmd` 换参数——不行（2.8 节：结构上不产竖屏）。
+- 只用 `related` 过滤——不行：它只有 40/200 竖屏，且是「当前视频相关」，不是一条可无限
+  下刷的流；过滤后单次只剩 8 条，且每次用同一 `bvid` 结果高度固定（实测 3 轮完全一样）。
+- `popular` 过滤——不行：它是榜单（无游标、`no_more` 即尽），竖屏 36/150，刷不深。
+
+**两个可用竖屏源（均已实测）：**
+
+| 源 | 接口 | 竖屏占比 | 翻页 | 取流键 | 代价 |
+| --- | --- | --- | --- | --- | --- |
+| APP 主 feed | `app.bilibili.com/x/v2/feed/index` | 约 20% | 无游标，但**每轮都出新**（20 轮 179 唯一） | 只有 `aid`+`cid`（无 bvid） | 需 `buvid` 头；匿名可用、免签名 |
+| UP 主竖屏流 | `app.bilibili.com/x/v2/feed/index/space/story/cursor` | **100%** | **`aid` 游标真翻页**（5 批 50 条零重复） | 完整字段（`bvid`/`cid`/`dimension`/`owner`/`stat`） | 需先知道 `vmid`；需 `buvid` 头 |
+
+两条的关键实测细节：
+
+- **APP 主 feed 的 `vertical_av` 条目没有 `bvid`**，但 `uri`（`bilibili://story/<aid>?cid=<cid>`）
+  与 `player_args{aid,cid,duration}` 直接给出取流键；`aid` 可无损当字符串用。要展示/播放
+  还得回查 `view` 拿 `bvid`（或直接用 aid 走 playurl）。
+- **UP 主竖屏流的游标是 `aid`**：`vmid=<mid>&before_size=0&after_size=10&aid=<上一批最后一条的 aid>`
+  返回紧接着的下一批；`after_size` 上限 10；`page.total` 是该 UP 竖屏作品总数（如 553）。
+  返回条目字段完整，**能直接喂现有 `VideoItem`**，不用回查。
+- 两条都**必须带 `buvid` 请求头**（无则 `-400` 或降级）；都**匿名可用、不需 appkey 签名**
+  （签名也能用，但不必要）。
+- `login_event=1` 能小幅提高 APP feed 的竖屏占比（23% → 30%），但幅度小，不值得为此引入登录态语义。
+
+**推荐落地方案（按优先级）：**
+
+1. **UP 主竖屏流 → 「UP 主竖屏」抽屉/页签**（性价比最高）。数据源质量最好：100% 竖屏、真翻页、
+   字段完整、可直接复用 `parse_story` 的映射与竖屏舞台。播放页侧栏已有 UP 主卡片
+   （`VideoSidebar` 的 `UploaderDrawer`），在那里加一个「竖屏」入口，`vmid` 现成
+   （`VideoArchive.author_mid`）。取流、弹幕、评论、历史全部零改动复用。
+2. **APP 主 feed → 「竖屏推荐」页签或独立入口**。好处是不依赖某个 UP；坏处是混流（需按
+   `goto=vertical_av` 过滤，产出约 2 条/轮），且条目缺 `bvid`（要回查 `view`，多一次请求）。
+   适合作为侧栏「短视频」之外的第二个发现入口。
+3. **`related` 画幅可见性修复**（最小改动）。`related` 本来就有竖屏，只是 `VideoCard` 封面
+   固定 `aspect-video` 看不出。给 `VideoCard` 增加「按 `dimension` 切封面比例」即可，
+   不动取流。这是独立的小改进，不依赖上面两条。
+
+**不建议做的：**
+
+- 把 `rcmd` 加 `goto=vertical_av` 过滤 —— 结果恒为空。
+- 为竖屏流引入 `access_key` —— 两条源都匿名可用，没必要引入敏感凭据。
+- 复用 `/shorts` 路由 —— 竖屏舞台与 story 流强绑定（`StoryFeedSeen`、种子、取批串行），
+  另开一条流更干净。
+
 ## 三、抖音短视频
 
 ### 3.1 `a_bogus` 是硬门槛，无签名旁路
@@ -276,6 +326,8 @@ CDN 行为（`v11-web-prime.douyinvod.com` / `v26-web.douyinvod.com`）实测：
 ## 四、接入 rLive 的边界
 
 ### 4.1 B 站（纯增量）
+
+> 本节是**第一版落地时的清单**（已完成）。VOD 侧接入竖屏流的后续方案见 2.9 节。
 
 复用（不要重写）：`x/player/wbi/playurl` 取流与 sidx/MPD 合成、`seg.so` 弹幕、评论、`video_history` 观看历史、`stream_proxy`。
 
