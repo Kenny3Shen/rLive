@@ -1,7 +1,7 @@
 import { memo } from "react";
 import type { RefObject } from "react";
 import { useNavigate } from "react-router-dom";
-import { CalendarDays, MessageSquare, Play } from "lucide-react";
+import { CalendarDays, MessageSquareText, Play } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
 import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
@@ -215,7 +215,13 @@ export const VideoCard = memo(function VideoCard({
             |
           </span>
           <span className="inline-flex items-center gap-0.5">
-            <MessageSquare className="size-3" aria-hidden />
+            {/*
+              弹幕条数用**开启态**那个符号（`MessageSquareText`），与播放器三处弹幕
+              开关（`danmakuControlPresentation`）的开启态同形 —— 卡片说的是"这条有多少
+              弹幕"而不是"弹幕关着"，因此不用关闭态那个。这里曾经用不带字的方气泡，
+              于是卡片上的弹幕与播放器里的弹幕看起来是两种东西。
+            */}
+            <MessageSquareText className="size-3" aria-hidden />
             {formatOnline(item.danmaku)}
           </span>
         </p>

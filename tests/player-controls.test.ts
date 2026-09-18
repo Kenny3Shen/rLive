@@ -92,6 +92,33 @@ describe("danmaku player control", () => {
   });
 });
 
+describe("danmaku icon vocabulary", () => {
+  // 弹幕的符号只有两个：`MessageSquareText`（开）与 `MessageSquareOff`（关），
+  // 由 `danmakuControlPresentation` 单点定义。裸 `MessageSquare` 曾在视频卡的
+  // 弹幕数上出现过一次，于是卡片上的弹幕与播放器里的弹幕看起来是两种东西。
+  test("video cards mark danmaku counts with the enabled-state icon", () => {
+    const source = readFileSync(
+      new URL("../src/features/video/VideoCard.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("MessageSquareText");
+    // 裸方气泡（既不带 Text 也不带 Off）不允许再出现：它与播放器里的弹幕不是一个
+    // 符号。注释里提到关闭态不算，故按标识符边界判定。
+    expect(source).not.toMatch(/MessageSquare(?![A-Za-z])/);
+    expect(source).toContain('<MessageSquareText className="size-3"');
+  });
+
+  test("the live room action row reuses the same two symbols", () => {
+    const source = readFileSync(
+      new URL("../src/features/room/PlayerPane.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("MessageSquareText");
+    expect(source).toContain("MessageSquareOff");
+    expect(source).not.toMatch(/MessageSquare(?![A-Za-z])/);
+  });
+});
+
 describe("panel drawer geometry", () => {
   test("pops up from the bottom on compact viewports", () => {
     expect(panelDrawerSide(true, false)).toBe("bottom");
