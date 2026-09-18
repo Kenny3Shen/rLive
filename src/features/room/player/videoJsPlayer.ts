@@ -97,6 +97,7 @@ class VideoJsPlayer {
   private destroyed = false;
   private playRequested = false;
   private pendingSwitch: AbortController | null = null;
+  private endedAt: number | null = null;
 
   constructor(
     private readonly modules: VideoJsPlayerModules,
@@ -104,6 +105,22 @@ class VideoJsPlayer {
   ) {
     this.media = options.video;
     try {
+      const onEnded = () => this.reportEnded();
+      const onPlay = () => {
+        this.endedAt = null;
+      };
+      const onSeeking = () => {
+        // dash.js 补发结束时也会 seek 到终点；只有离开该位置才算取消结束。
+        if (this.media.currentTime !== this.endedAt) this.endedAt = null;
+      };
+      this.media.addEventListener("ended", onEnded);
+      this.media.addEventListener("play", onPlay);
+      this.media.addEventListener("seeking", onSeeking);
+      this.listeners.add(() => {
+        this.media.removeEventListener("ended", onEnded);
+        this.media.removeEventListener("play", onPlay);
+        this.media.removeEventListener("seeking", onSeeking);
+      });
       if (options.kind === "hls") {
         if (!modules.HlsJsAdapter) throw new Error("Video.js HLS 适配器尚未加载");
         const adapter = (this.hls = new modules.HlsJsAdapter());
@@ -126,6 +143,13 @@ class VideoJsPlayer {
         const onError = (event: { error: unknown }) => this.reportError(event.error);
         adapter.engine.on("error", onError);
         this.listeners.add(() => adapter.engine.off("error", onError));
+        // dash.js 的终点兜底只触发 playbackEnded 并暂停，不保证原生 ended。
+        // 多 Period 的中间结束交给引擎续播，只上报整部内容的结束。
+        const onDashEnded = (event: { isLast: boolean }) => {
+          if (event.isLast) this.reportEnded();
+        };
+        adapter.engine.on("playbackEnded", onDashEnded);
+        this.listeners.add(() => adapter.engine.off("playbackEnded", onDashEnded));
         adapter.source = { src: options.url };
       } else {
         this.listenForMediaErrors(this.media);
@@ -175,6 +199,17 @@ class VideoJsPlayer {
     if (!this.destroyed) this.events.dispatchEvent(new CustomEvent("error", { detail: error }));
   }
 
+  /** 原生媒体与 DASH 引擎共用的结束状态，重播或离开终点后清除。 */
+  get ended(): boolean {
+    return this.endedAt !== null;
+  }
+
+  private reportEnded(): void {
+    if (this.destroyed || this.ended) return;
+    this.endedAt = this.media.currentTime;
+    this.events.dispatchEvent(new Event("ended"));
+  }
+
   private createMpegts(url: string): void {
     const library = this.modules.mpegts;
     if (!library) throw new Error("mpegts.js 尚未加载");
@@ -213,7 +248,10 @@ class VideoJsPlayer {
 
   on(event: PlayerEvent, handler: EventHandler): () => void {
     if (this.destroyed) return () => {};
-    const target = event === "error" || event === "loading_complete" ? this.events : this.media;
+    const target =
+      event === "error" || event === "loading_complete" || event === "ended"
+        ? this.events
+        : this.media;
     const callback = (value: Event) => handler(value instanceof CustomEvent ? value.detail : value);
     target.addEventListener(event, callback);
     const off = () => {
@@ -259,6 +297,7 @@ class VideoJsPlayer {
    */
   switchDashSource(url: string): void {
     if (this.destroyed || !this.dash) return;
+    this.endedAt = null;
     this.options.url = url;
     this.dash.src = url;
   }
@@ -273,6 +312,7 @@ class VideoJsPlayer {
       return Promise.reject(new Error("当前协议不支持软切换"));
     }
     this.pendingSwitch?.abort();
+    this.endedAt = null;
     const controller = (this.pendingSwitch = new AbortController());
     this.playRequested ||= !this.media.paused;
     return new Promise<void>((resolve, reject) => {

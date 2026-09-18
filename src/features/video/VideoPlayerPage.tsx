@@ -1115,6 +1115,8 @@ function VideoPlayerPageContent() {
     if (resumePending) return;
     const media = video;
     let cancelled = false;
+    let endedTimer: ReturnType<typeof setTimeout> | null = null;
+    let endedSequence = 0;
     // 初始续播 seek：DASH 的时间轴要等清单异步解析（loadedmetadata），媒体源
     // 就绪前写 currentTime 会被丢弃。先记下目标，等 onReady 的真实媒体事件
     // 一次性应用；此后的用户 seek 不再被覆盖。
@@ -1174,6 +1176,7 @@ function VideoPlayerPageContent() {
     }
     function onPlay() {
       if (cancelled) return;
+      endedSequence += 1;
       setPaused(false);
       setWaiting(false);
       setLoading(false);
@@ -1253,7 +1256,11 @@ function VideoPlayerPageContent() {
     }
     function onEnded() {
       if (cancelled) return;
+      if (endedTimer !== null) clearTimeout(endedTimer);
+      const sequence = ++endedSequence;
       setPaused(true);
+      setWaiting(false);
+      setLoading(false);
       waitingRecovery.notifyEnded();
       // 播完记满进度：历史卡的进度条画到底，续播判定据此认定「已看完」并从头播。
       const total = totalDuration();
@@ -1269,11 +1276,21 @@ function VideoPlayerPageContent() {
         state.autoPlayRelated && !epId && Boolean(bvid),
       );
       if (action === "loop") {
-        // 循环播放：从头重播当前集（DASH 的 seek 同样走原生 currentTime）。
-        media.currentTime = 0;
-        void media.play().catch(() => {
-          // 自动重播被浏览器策略拦下时留在暂停态，用户点一下即可。
-        });
+        // 等 dash.js 本轮结束处理里的 pause 完成，再从头播放。
+        endedTimer = setTimeout(() => {
+          if (
+            cancelled ||
+            sequence !== endedSequence ||
+            !playerRef.current?.ended ||
+            userPausedRef.current ||
+            !usePlaylistStore.getState().loopPlayback
+          )
+            return;
+          media.currentTime = 0;
+          void media.play().catch(() => {
+            // 自动重播被浏览器策略拦下时留在暂停态，用户点一下即可。
+          });
+        }, 0);
         return;
       }
       if (action === "stop") return;
@@ -1284,12 +1301,19 @@ function VideoPlayerPageContent() {
        */
       const stillWanted = () => {
         const current = usePlaylistStore.getState();
-        if (cancelled || !media.ended || current.loopPlayback) return false;
+        if (
+          cancelled ||
+          sequence !== endedSequence ||
+          !playerRef.current?.ended ||
+          userPausedRef.current ||
+          current.loopPlayback
+        )
+          return false;
         return action === "related" ? current.autoPlayRelated : current.autoPlayNext;
       };
       // 自动连播相关视频是「看完了随便接着看」，比换集多留两秒。
       const delay = action === "related" ? RELATED_AUTOPLAY_DELAY_MS : 1_000;
-      setTimeout(() => {
+      endedTimer = setTimeout(() => {
         if (action === "next") {
           if (stillWanted() && nextItem) goToPlaylistItem(nextItem);
           return;
@@ -1310,7 +1334,6 @@ function VideoPlayerPageContent() {
     media.addEventListener("pause", onPause);
     media.addEventListener("waiting", onWaiting);
     media.addEventListener("seeked", onSeeked);
-    media.addEventListener("ended", onEnded);
     media.addEventListener("volumechange", syncAudio);
 
     void loadVideoJsModules(playKind)
@@ -1323,6 +1346,7 @@ function VideoPlayerPageContent() {
           isLive: false,
         });
         playerRef.current = player;
+        player.on("ended", onEnded);
         player.on("error", (cause) => {
           if (cancelled) return;
           setPlaybackError(videoJsPlayerErrorMessage(cause, "视频播放失败"));
@@ -1377,6 +1401,7 @@ function VideoPlayerPageContent() {
       // 放在 `cancelled = true` 之前,让它与其它 flush 走同一条 reportProgress。
       reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
       cancelled = true;
+      if (endedTimer !== null) clearTimeout(endedTimer);
       // 播放器会话拆除：waiting 自动恢复的判定计时随之作废（新会话另行登记）。
       waitingRecovery.endSession();
       media.removeEventListener("timeupdate", syncTime);
@@ -1389,7 +1414,6 @@ function VideoPlayerPageContent() {
       media.removeEventListener("pause", onPause);
       media.removeEventListener("waiting", onWaiting);
       media.removeEventListener("seeked", onSeeked);
-      media.removeEventListener("ended", onEnded);
       media.removeEventListener("volumechange", syncAudio);
       const player = playerRef.current;
       playerRef.current = null;
