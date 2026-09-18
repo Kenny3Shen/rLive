@@ -2,7 +2,6 @@ import { useCallback, useState, type RefObject } from "react";
 import { Video } from "@videojs/react/video";
 import { BufferingIndicator } from "@/components/videojs/ui/buffering-indicator";
 import { PlayButton } from "@/components/videojs/ui/play-button";
-import { Poster } from "@/components/videojs/ui/poster";
 import { ShortsPosterPlayer } from "./shortsPosterPlayer";
 import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
 import { Button } from "@/components/ui/button";
@@ -202,17 +201,13 @@ export function ShortsStage({
           }
         >
           {/*
-            封面与两种状态指示都由 Video.js 原语承担：
+            槽位直接显示视频，不叠加 Poster：预热只缓冲、不播放，store 的 `started`
+            仍为 false。若按它显示封面，已经解码的首帧也会被挡住，换片时就会先闪
+            封面再出画。没有首帧时由视频的黑底等待媒体就绪。
 
-            - `Poster` 读 store 的 `started` 自己决定显隐，换源（`loadSource`）时会
-              重新盖回来。手写 `<img>` + `opacity-0` 需要舞台自己维护「何时已出
-              画」，与本层的播放状态容易漂移。
-            - `BufferingIndicator` / `PlayButton` 读 store 的 `waiting` / `paused`，
-              与播放页控制栏同源（见下方各自的注释）。
-
-            `Player` 因此不只是封面用的：短视频的传输仍是自有的 `VideoJsPlayer`
-            （dash.js），不经过 Video.js 的媒体适配器，但这一层需要 store 来驱动
-            这三个纯展示组件，所以 `<video>` 挂在它下面。
+            `BufferingIndicator` / `PlayButton` 仍通过 store 的 `waiting` / `paused`
+            驱动。传输沿用自有的 `VideoJsPlayer`（dash.js），所以保留包住 `<video>`
+            的 Player，为这两种状态指示提供上下文。
           */}
           <ShortsPosterPlayer>
             <Video
@@ -222,22 +217,13 @@ export function ShortsStage({
               // 媒体元素上（活动槽位保留默认的原生可聚焦行为）。
               tabIndex={warming ? -1 : undefined}
               className={cn(
-                "absolute inset-0 size-full",
+                "absolute inset-0 size-full bg-black",
                 // 铺满形态下画面框比源画幅「窄」或「矮」一点，多出来的部分居中裁掉；
                 // 留边形态下画面框已经是源画幅的比例，`contain` 只是保险 —— 媒体自报
                 // 画幅与列表下发的 dimension 不一致时，宁可留一圈黑边也不裁掉画面。
                 fill ? "object-cover" : "object-contain",
               )}
             />
-            {cover && (
-              <Poster
-                src={cover}
-                alt=""
-                // 与画面同一套裁切：铺满形态下封面也要居中裁掉多出来的部分，
-                // 否则封面与出画后的第一帧构图不一致，换片时会跳一下。
-                imageClassName={fill ? "object-cover" : undefined}
-              />
-            )}
             {danmakuVisible && !warming && (
               <VideoDanmakuLayer
                 videoRef={videoRef}
@@ -254,7 +240,7 @@ export function ShortsStage({
             {/*
               加载指示交给 Video.js 的 `BufferingIndicator`：它读播放器 store 的
               `waiting`（媒体已 starved 且未暂停），并自带 500ms 延迟 —— 短暂卡顿
-              不会闪一下转圈。起播前的取流没有指示器，那段由封面遮挡（见文档
+              不会闪一下转圈。起播前的取流没有指示器，那段显示视频黑底（见文档
               「预载未命中时的取流延迟」）。
 
               它必须在 `ShortsPosterPlayer` 里：store 挂在槽位的 `<video>` 上，离开
@@ -289,7 +275,7 @@ export function ShortsStage({
 
               条件里带 `paused` 而不是让组件自己藏：`PlayButton` 在播放中会显示暂停
               图标，而短视频播放中不该常驻一颗暂停按钮。`!playback.loading` 保留原
-              行为 —— 换片取流期间封面盖着画面，那时闪一下播放按钮是多余的。
+              行为 —— 换片取流期间尚未就绪，那时闪一下播放按钮是多余的。
             */}
             {!warming && playback.paused && !playback.loading && !playback.error && (
               <div

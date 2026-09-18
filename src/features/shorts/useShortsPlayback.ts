@@ -56,7 +56,7 @@ import { shortsShouldRetainSession } from "./shortsSessionRetention";
 export type ShortsSlotMode = "play" | "warm";
 
 export type ShortsPlaybackState = {
-  /** 取流中或播放器尚未就绪。封面在这段时间盖住舞台。 */
+  /** 取流中或播放器尚未就绪，此时不显示暂停指示。 */
   loading: boolean;
   paused: boolean;
   /** 可读的失败原因；null 表示没有错误。 */
@@ -839,7 +839,7 @@ export function useShortsPlaybackSlot({
   }
 
   return {
-    // 取流本身也算加载：封面要一直盖到播放器真的出画为止。
+    // 取流本身也算加载，避免就绪前闪现暂停指示。
     loading: loading || (mediaAllowed && playInfoQuery.isFetching),
     paused,
     error: error ?? (playInfoQuery.error ? "取流失败，请重试" : null),
