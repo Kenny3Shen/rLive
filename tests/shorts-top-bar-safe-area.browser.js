@@ -1,4 +1,4 @@
-// 在 Vite 页上测量短视频顶部控制栏与系统状态栏的相对位置（IPC 为本地桩）：
+// 在 Vite 页上测量短视频顶部控制栏、安全区及圆形按钮样式（IPC 为本地桩）：
 // playwright-cli -s=shorts-safe-area open --mobile http://localhost:1420/
 // playwright-cli -s=shorts-safe-area run-code --filename=tests/shorts-top-bar-safe-area.browser.js
 //
@@ -20,6 +20,9 @@ async (page) => {
   await page.addInitScript(() => {
     // `isTauri()` 读 `window.isTauri`；缺了它 `invokeCmd` 会在发请求前就抛「未连接客户端」。
     window.isTauri = true;
+    // 事件插件的内部桩：缺了它，页面卸载时 `unlisten` 会在控制台抛一串
+    // `unregisterListener of undefined`（夹具不需要事件，给个空实现即可）。
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     let nextCallback = 1;
     const story = [
       {
@@ -64,7 +67,8 @@ async (page) => {
         if (command === "settings_get") {
           throw { code: "tauri_unavailable", message: "夹具无后端", site: null, retryable: false };
         }
-        if (command === "video_get_story") return { has_more: true, items: story };
+        // 固定夹具只有两条，不可宣称还有下一页，否则预取会无限重复同一批。
+        if (command === "video_get_story") return { has_more: false, items: story };
         if (command === "video_get_danmaku") return { segment_index: 0, entries: [] };
         if (command === "video_get_play_info") throw "测试环境不取流";
         return null;
@@ -105,15 +109,28 @@ async (page) => {
       topBar: rect(topBar),
       back: rect(topBar?.querySelector('button[aria-label="返回上一页"]')),
       more: rect(topBar?.querySelector('button[aria-label="更多操作"]')),
+      topIcons: [...topBar.querySelectorAll("button svg")].map(rect),
       // 条带里每个槽位/占位面板各有一块画面区（相邻条目在视口之外等着被滑进来），
       // 因此全量量出来，由断言挑当前可见的那一块。
       mediaAreas: [...document.querySelectorAll('[data-slot="shorts-media-area"]')].map(rect),
       bottomBar: rect(document.querySelector('[data-slot="shorts-bottom-bar"]')),
+      // 底栏那颗图标按钮与它左边的弹幕输入框：顶部按钮要与它们同高。
+      composerInput: rect(document.querySelector('[data-slot="shorts-bottom-bar"] input')),
+      bottomIconButtons: [
+        ...document.querySelectorAll('[data-slot="shorts-bottom-bar"] button'),
+      ]
+        .filter((button) => button.getBoundingClientRect().width > 36)
+        .map((button) => ({ label: button.getAttribute("aria-label"), ...rect(button) })),
       innerHeight: window.innerHeight,
     };
   });
 
   const near = (actual, expected, tolerance = 1.5) => Math.abs(actual - expected) <= tolerance;
+
+  // 触摸设备上底栏按钮会被基础组件的 `[@media(pointer:coarse)]:min-h-11` 抬到 44px，
+  // 顶部按钮与它们同档：断言因此要跟着设备能力走。
+  const coarsePointer = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+  const controlSize = coarsePointer ? 44 : 40;
 
   /* ---------- 1. 外壳让位一次，且只有一次 ---------- */
   assert(
@@ -156,6 +173,17 @@ async (page) => {
     `更多按钮应与返回箭头同高，实测 ${JSON.stringify(report.more)}`,
   );
 
+  for (const [label, button] of [["返回", report.back], ["更多", report.more]]) {
+    assert(
+      button && near(button.width, controlSize) && near(button.height, controlSize),
+      `${label}按钮应与底栏控件同为 ${controlSize}px，实测 ${JSON.stringify(button)}`,
+    );
+  }
+  assert(
+    report.topIcons.length === 2 && report.topIcons.every((icon) => near(icon.width, 24) && near(icon.height, 24)),
+    `顶部图标应统一为 24px，实测 ${JSON.stringify(report.topIcons)}`,
+  );
+
   /* ---------- 3. 画面区从视口顶边开始 ---------- */
   const activeMedia = report.mediaAreas.find(
     (area) => area.y < report.viewport.y + report.viewport.height && area.y + area.height > report.viewport.y,
@@ -176,6 +204,77 @@ async (page) => {
   assert(
     near(bottomBarBottom - report.bottomBar.y, 59 + GESTURE_BAR_PX),
     `底栏应把手势条高度算进自己的高度，实测 ${report.bottomBar.height}`,
+  );
+
+  /* ---------- 5. 图标按钮的悬停背景必须是圆形 ---------- */
+  const labels = [
+    "返回上一页",
+    "更多操作",
+    "评论与弹幕，弹幕 24 条",
+    "关闭弹幕",
+    "隐藏视频信息与评论按钮",
+    "视频详情",
+  ];
+  const hoverSupported = await page.evaluate(() => matchMedia("(hover: hover)").matches);
+  report.buttons = [];
+  for (const label of labels) {
+    const button = page.getByRole("button", { name: label, exact: true });
+    if (hoverSupported) await button.hover();
+    const measure = () => button.evaluate((node) => {
+      const { width, height } = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      const icon = node.querySelector("svg")?.getBoundingClientRect();
+      return {
+        width,
+        height,
+        radii: [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomLeftRadius, style.borderBottomRightRadius],
+        background: style.backgroundColor,
+        icon: icon ? { width: icon.width, height: icon.height } : null,
+      };
+    });
+    // 等 hover 的颜色过渡结束，再比较左右两个 HUD 按钮的反馈。
+    if (hoverSupported) {
+      await page.waitForFunction((label) => {
+        const node = [...document.querySelectorAll("button")].find((node) => node.getAttribute("aria-label") === label);
+        return node && getComputedStyle(node).backgroundColor !== "rgba(0, 0, 0, 0)";
+      }, label);
+      await button.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+    }
+    const style = await measure();
+    assert(near(style.width, style.height), `${label}按钮应为正方形命中区`);
+    assert(
+      style.radii.every((radius) => Number.parseFloat(radius) >= style.width / 2),
+      `${label}按钮悬停背景应为圆形，实测 ${JSON.stringify(style)}`,
+    );
+    const expectedSize = label === "评论与弹幕，弹幕 24 条" ? 44 : controlSize;
+    assert(near(style.width, expectedSize), `${label}按钮应保持 ${expectedSize}px`);
+    report.buttons.push({ label, ...style });
+  }
+  if (hoverSupported) {
+    assert(report.buttons[0].background === report.buttons[1].background, "返回与更多的悬停填充应一致");
+  }
+
+  // 上下的尺寸对齐：顶栏的返回/更多就是底栏图标按钮那一档，也与弹幕输入框同高。
+  assert(report.composerInput, "底栏应有弹幕输入框");
+  for (const [label, button] of [["返回", report.back], ["更多", report.more]]) {
+    assert(
+      near(button.height, report.composerInput.height),
+      `${label}按钮应与弹幕输入框同高，实测 ${button.height} vs ${report.composerInput.height}`,
+    );
+  }
+  for (const bottom of report.bottomIconButtons) {
+    assert(
+      near(bottom.height, report.back.height) && near(bottom.height, report.more.height),
+      `底栏「${bottom.label}」应与顶部按钮同高，实测 ${bottom.height} vs ${report.back.height}`,
+    );
+  }
+
+  // 确认放大后桌面 Popover 与紧凑抽屉触发器仍能打开菜单。
+  await page.getByRole("button", { name: "更多操作", exact: true }).click();
+  await page.getByRole("button", { name: "静音", exact: true }).waitFor({ state: "visible" });
+  assert(
+    await page.locator('[data-slot="shorts-top-bar"] button[aria-label="更多操作"]').getAttribute("aria-expanded") === "true",
+    "更多菜单应能正常展开",
   );
 
   return report;

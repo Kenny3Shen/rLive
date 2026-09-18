@@ -30,12 +30,17 @@ import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoH
 import { videoPlayPath } from "@/features/video/videoRoute";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
-import { danmakuControlPresentation } from "@/shared/components/player/PlayerControls";
+import {
+  danmakuControlPresentation,
+  PLAYER_HUD_BUTTON_CLASS,
+  PLAYER_HUD_ICON_CLASS,
+} from "@/shared/components/player/PlayerControls";
 import { panelDrawerSide, panelDrawerSizeClass } from "@/shared/components/player/panelDrawer";
 import {
   hasLongPressMovedBeyondSlop,
@@ -89,6 +94,19 @@ import { useShortsSessionRetention } from "./useShortsSessionRetention";
  * 被否决，否则每次倍速松手都会顺手把视频暂停。
  */
 const SHORTS_TAP_SUPPRESSION_MS = 300;
+
+/**
+ * 顶部按钮的尺寸基准。
+ *
+ * 取 40px，触摸设备抬到 44px —— 与底部操作栏那颗按钮（`size-10` 加基础组件的
+ * `[@media(pointer:coarse)]:min-h-11`）以及它左边的弹幕输入框完全同高。
+ *
+ * 播放页与直播页也是这个做法：顶栏 HUD 与底栏控件共用同一套尺寸，一条画面上不会
+ * 出现「上面比下面大一圈」。只收窄 `--media-control-size`，不动 `--media-scale-unit`
+ * （进度条与它的悬停预览挂在那个变量上）。
+ */
+const SHORTS_TOP_CONTROLS_CLASS =
+  "media-skin [--media-control-size:2.5rem] [@media(pointer:coarse)]:[--media-control-size:2.75rem]";
 
 /**
  * `/shorts`：B 站短视频（story feed）的竖屏消费页。
@@ -677,7 +695,12 @@ export function ShortsPage() {
   /* ---------- 渲染 ---------- */
 
   if (feedQuery.isPending) {
-    return <PlayerStageLoading onBack={goBack} label="正在加载短视频…" />;
+    return (
+      <div className="relative h-full min-h-0">
+        <ShortsBackButton onClick={goBack} />
+        <PlayerStageLoading label="正在加载短视频…" />
+      </div>
+    );
   }
 
   if (feedQuery.isError && items.length === 0) {
@@ -737,16 +760,7 @@ export function ShortsPage() {
           {
             // 纵向手势由本页接管，横向留给系统返回手势。
             touchAction: "pan-x",
-            /*
-             * 媒体控件的尺寸基准。
-             *
-             * `.media-skin` 只给 `--media-scale-unit` 留了 16px 的兜底，算出来的控件是
-             * 36px —— 而这一页其他按钮都是 44px（触摸目标），同一条顶栏里两种尺寸并排
-             * 很显眼。1.2rem 让 `--media-control-size` 落到 43.2px，与它们齐平。
-             *
-             * 改这个变量而不是给按钮硬写尺寸：它就是这套令牌提供的缩放入口（播放器皮肤
-             * 设 0.9rem，窄容器里降到 0.78rem），硬写会同时绕过圆角与图标的换算。
-             */
+            // 进度条与悬停预览保持现有缩放；顶栏按钮另有自己的尺寸作用域。
             "--media-scale-unit": "1.2rem",
           } as React.CSSProperties
         }
@@ -829,7 +843,10 @@ export function ShortsPage() {
             推到状态栏下方又一条的位置，中间空出一条谁都不用的黑带。 */}
         <div
           data-slot="shorts-top-bar"
-          className="absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2"
+          className={cn(
+            SHORTS_TOP_CONTROLS_CLASS,
+            "absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2",
+          )}
           style={{ height: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
         >
           <ShortsBackButton onClick={goBack} inline />
@@ -1013,7 +1030,7 @@ export function ShortsPage() {
                     : "评论"
                 }
                 title="评论"
-                className="size-11 text-white/90 hover:bg-white/15 hover:text-white"
+                className="size-11 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
                 onClick={panels.openComments}
               >
                 <MessageCircle className="size-6" aria-hidden />
@@ -1094,7 +1111,7 @@ export function ShortsPage() {
                 aria-label={danmakuControl.label}
                 title={danmakuControl.label}
                 aria-pressed={danmakuVisible}
-                className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+                className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
                 onClick={() => setDanmakuVisible((value) => !value)}
               >
                 {danmakuControl.icon === "message-square-text" ? (
@@ -1117,7 +1134,7 @@ export function ShortsPage() {
                 aria-label={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
                 title={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
                 aria-pressed={infoVisible}
-                className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+                className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
                 onClick={() => setInfoVisible((value) => !value)}
               >
                 <Info className="size-5" aria-hidden />
@@ -1136,7 +1153,7 @@ export function ShortsPage() {
                 aria-label="视频详情"
                 title="视频详情（在播放页打开）"
                 disabled={!current}
-                className="size-10 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
+                className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
                 onClick={openInPlayer}
               >
                 <ScrollText className="size-5" aria-hidden />
@@ -1394,22 +1411,19 @@ function useShortsPanels(item: { aid: string } | null) {
 
 function ShortsBackButton({ onClick, inline }: { onClick: () => void; inline?: boolean }) {
   return (
-    <Button
+    <MediaButton
       type="button"
-      variant="ghost"
-      size="icon"
       aria-label="返回上一页"
       title="返回上一页"
-      // 黑舞台上不在播放器皮肤内，`--media-*` 令牌会落到应用前景色，
-      // 图标必须自带白字与白色悬停底（与 PlayerStageLoading 同一画法）。
-      className={
-        inline
-          ? "size-11 shrink-0 text-white/90 hover:bg-white/15 hover:text-white"
-          : "absolute top-3 left-3 z-10 size-11 text-white/90 hover:bg-white/15 hover:text-white"
-      }
+      // 加载、错误和空态没有外层皮肤，需自行提供同一套尺寸与颜色令牌。
+      className={cn(
+        PLAYER_HUD_BUTTON_CLASS,
+        !inline && SHORTS_TOP_CONTROLS_CLASS,
+        !inline && "absolute top-3 left-3 z-10",
+      )}
       onClick={onClick}
     >
-      <ChevronLeft aria-hidden />
-    </Button>
+      <ChevronLeft className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
+    </MediaButton>
   );
 }
