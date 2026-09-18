@@ -1117,7 +1117,10 @@ pub fn parse_comments(raw: &str) -> AppResult<VideoCommentPage> {
 }
 
 /// 解析二级回复（`x/v2/reply/reply`，pn 翻页实测可用）。
-pub fn parse_comment_replies(raw: &str, page: u32) -> AppResult<VideoCommentPage> {
+///
+/// `page_size` 必须与本次请求实际用的 `ps` 一致：上游不给 `is_end`，
+/// `has_more` 只能由「已经取过多少条」推导（见下）。
+pub fn parse_comment_replies(raw: &str, page: u32, page_size: i64) -> AppResult<VideoCommentPage> {
     let root: Value =
         serde_json::from_str(raw).map_err(|e| video_err(format!("二级回复 json: {e}")))?;
     let data = root
@@ -1139,16 +1142,18 @@ pub fn parse_comment_replies(raw: &str, page: u32) -> AppResult<VideoCommentPage
         .and_then(Value::as_i64)
         .or_else(|| data.pointer("/page/acount").and_then(Value::as_i64))
         .unwrap_or(items.len() as i64);
+    let page_size = page_size.max(1);
     Ok(VideoCommentPage {
         all_count,
         next: page as i64,
-        // 上游不给 is_end：按「本页取满且未到总数」推导。
-        has_more: (page as i64) * COMMENT_REPLIES_PAGE_SIZE < all_count,
+        // 上游不给 is_end：按「已取过的条数未到总数」推导。按传入的 `ps` 算而不是
+        // 写死默认页大小 —— 桌面端的回复分页用更小的页（10），套 20 会提前宣布到尾。
+        has_more: (page as i64) * page_size < all_count,
         items,
     })
 }
 
-/// 二级回复每页条数（与前端哨兵约定一致）。
+/// 二级回复每页条数（移动端无限滚动的页大小；桌面端分页传自己的更小值）。
 pub const COMMENT_REPLIES_PAGE_SIZE: i64 = 20;
 
 // ---------------------------------------------------------------------------
@@ -2080,11 +2085,15 @@ impl BilibiliSite {
     }
 
     /// 二级回复（`x/v2/reply/reply`，pn 翻页）。匿名可用。
+    ///
+    /// `page_size` 缺省走 [`COMMENT_REPLIES_PAGE_SIZE`]（移动端无限滚动的页大小）；
+    /// 桌面端的回复分页传自己的 10，请求与 `has_more` 推导共用同一个值。
     pub async fn video_comment_replies(
         &self,
         aid: &str,
         root: i64,
         page: u32,
+        page_size: Option<u32>,
     ) -> AppResult<VideoCommentPage> {
         if aid.is_empty() {
             return Err(video_err("二级回复缺少 aid"));
@@ -2092,6 +2101,9 @@ impl BilibiliSite {
         if root <= 0 {
             return Err(video_err("二级回复缺少 root"));
         }
+        let page_size = page_size
+            .map(|size| (size as i64).max(1))
+            .unwrap_or(COMMENT_REPLIES_PAGE_SIZE);
         let text = self
             .get_json(
                 "https://api.bilibili.com/x/v2/reply/reply",
@@ -2100,12 +2112,12 @@ impl BilibiliSite {
                     ("oid", aid.to_string()),
                     ("root", root.to_string()),
                     ("pn", page.max(1).to_string()),
-                    ("ps", COMMENT_REPLIES_PAGE_SIZE.to_string()),
+                    ("ps", page_size.to_string()),
                     ("sort", "2".to_string()),
                 ],
             )
             .await?;
-        parse_comment_replies(&text, page.max(1))
+        parse_comment_replies(&text, page.max(1), page_size)
     }
 
     /// PGC/UGC 双链路的公共骨架：`ep_id` 非空走 PGC 端点，否则要求 `bvid`
@@ -3984,7 +3996,7 @@ mod tests {
             }
         })
         .to_string();
-        let page = parse_comment_replies(&with_upper, 1).unwrap();
+        let page = parse_comment_replies(&with_upper, 1, COMMENT_REPLIES_PAGE_SIZE).unwrap();
         assert!(page.items[0].is_upper);
 
         // mid 为 0（上游的「未登录/身份未知」形态）不能与同样为 0 的 author 相互命中。
@@ -3996,7 +4008,7 @@ mod tests {
             }
         })
         .to_string();
-        assert!(!parse_comment_replies(&unknown, 1).unwrap().items[0].is_upper);
+        assert!(!parse_comment_replies(&unknown, 1, COMMENT_REPLIES_PAGE_SIZE).unwrap().items[0].is_upper);
     }
 
     #[test]
@@ -4052,7 +4064,7 @@ mod tests {
             }
         })
         .to_string();
-        let page = parse_comment_replies(&raw, 1).unwrap();
+        let page = parse_comment_replies(&raw, 1, COMMENT_REPLIES_PAGE_SIZE).unwrap();
         assert_eq!(page.all_count, 86);
         assert!(page.has_more);
         assert_eq!(page.items[0].message, "回复内容");
@@ -4064,7 +4076,24 @@ mod tests {
             "data": { "page": { "count": 5 }, "replies": [ { "rpid": 2, "member": { "uname": "乙", "mid": "2" }, "content": { "message": "x" } } ] }
         })
         .to_string();
-        assert!(!parse_comment_replies(&last, 1).unwrap().has_more);
+        assert!(!parse_comment_replies(&last, 1, COMMENT_REPLIES_PAGE_SIZE).unwrap().has_more);
+    }
+
+    /// 桌面端分页用更小的 `ps`：`has_more` 必须按实际页大小推导，套默认的 20
+    /// 会在 pn=5 就误报「没有更多」（5*20=100 >= 86，而实际才取了 50 条）。
+    #[test]
+    fn parse_comment_replies_derives_has_more_from_requested_page_size() {
+        let raw = serde_json::json!({
+            "data": { "page": { "count": 86 }, "replies": [ {
+                "rpid": 1, "member": { "uname": "甲", "mid": "1" }, "content": { "message": "x" }
+            } ] }
+        })
+        .to_string();
+        assert!(parse_comment_replies(&raw, 8, 10).unwrap().has_more);
+        assert!(!parse_comment_replies(&raw, 9, 10).unwrap().has_more);
+        // 同一页号在 20 条页大小下才是最后一页：页大小参与推导而非写死。
+        assert!(parse_comment_replies(&raw, 4, 20).unwrap().has_more);
+        assert!(!parse_comment_replies(&raw, 5, 20).unwrap().has_more);
     }
 
     /// story feed 的三条契约都是行为观测而非上游承诺，回归只能靠真网验证：

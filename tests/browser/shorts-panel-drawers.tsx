@@ -11,6 +11,9 @@
  *
  * 真组件 + 只桩 IPC：抽屉外壳用 `ShortsPage` 的那个（不导出，因此这里按同样的
  * 几何参数走一遍 `DrawerContent`），评论区用真 `CommentsPanel`。
+ *
+ * 二级抽屉只在**触摸客户端**存在（`isMobileClient()`）：桌面端同一份状态改成就地
+ * 展开分页，不叠第二层浮层。因此驱动脚本必须把 UA 桩成移动端，否则量不到第二层。
  */
 const { default: React } = await import("react");
 const { createRoot } = await import("react-dom/client");
@@ -77,10 +80,18 @@ if (!host) throw new Error("缺少 #fixture 挂载点");
 
 /** 供驱动脚本调用：`render(false)` 切桌面、`render(true)` 切手机。 */
 window.__drawerGeometry = {
+  /**
+   * 供驱动脚本调用：`render(false)` 切桌面、`render(true)` 切手机。
+   *
+   * 每次都**重新挂载**（先卸载）：桌面端与移动端共用一份「选中评论」状态，
+   * 复用同一个 root 会把上一阶段的展开态带进下一阶段 —— 于是「共 N 条回复」
+   * 入口已经消失，下一阶段点不开任何东西。
+   */
   render(compact) {
-    React.startTransition?.(() => {});
-    window.__drawerGeometryRoot ??= createRoot(host);
-    window.__drawerGeometryRoot.render(h(Fixture, { compact }));
+    window.__drawerGeometryRoot?.unmount();
+    const root = createRoot(host);
+    window.__drawerGeometryRoot = root;
+    root.render(h(Fixture, { compact }));
   },
   /** 打开二级抽屉：点第一条评论的「共 N 条回复」。 */
   async openReplies() {
@@ -89,6 +100,43 @@ window.__drawerGeometry = {
     );
     if (!button) throw new Error("未找到回复入口，评论接口桩可能没返回数据");
     button.click();
+  },
+  /** 切换 UA：`true` = Android（有二级抽屉），`false` = 桌面（就地展开）。 */
+  setMobile(on) {
+    window.__mobileUA = on
+      ? "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
+      : null;
+  },
+  /**
+   * 点某个 aria-label 的按钮（分页条的上一页 / 下一页）。
+   * 按 aria-label 找比按文案找稳：文案里还夹着页码。
+   */
+  clickPageButton(labelPattern) {
+    const button = [...document.querySelectorAll("button")].find((node) =>
+      labelPattern.test(node.getAttribute("aria-label") ?? ""),
+    );
+    if (!button) throw new Error(`未找到按钮：${labelPattern}`);
+    button.click();
+  },
+  /** 展开入口「共 N 条回复」是否还在（只有收起态才有）。 */
+  hasRepliesEntry() {
+    return [...document.querySelectorAll("button")].some((node) =>
+      /共 .* 条回复/.test(node.textContent ?? ""),
+    );
+  },
+  /** 桌面端就地展开的回复块（`role=group`）。 */
+  inlineReplies() {
+    const group = document.querySelector('[role="group"][aria-label*="的回复"]');
+    if (!group) return null;
+    return {
+      inDrawer: Boolean(group.closest('[role="dialog"]')),
+      text: group.textContent ?? "",
+      hasPager: /第 \d+ \/ \d+ 页/.test(group.textContent ?? ""),
+      buttons: [...group.querySelectorAll("button")].map((node) => ({
+        label: node.getAttribute("aria-label"),
+        disabled: node.disabled,
+      })),
+    };
   },
   /** 两个抽屉的矩形，按 DOM 顺序：一级在前、二级在后。 */
   boxes() {

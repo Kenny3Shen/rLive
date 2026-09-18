@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { ArrowUpDown, ChevronDown, ChevronRight, ThumbsUp } from "lucide-react";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ThumbsUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,13 +20,21 @@ import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
 import { panelDrawerSide, panelDrawerSizeClass } from "@/shared/components/player/panelDrawer";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
 import { videoGetCommentReplies, videoGetComments } from "./videoApi";
 import { formatRelativeTime } from "./videoHistory";
 
 /**
- * B 站评论区：一级评论列表（游标翻页）+ 二级回复抽屉（pn 翻页）。
+ * B 站评论区：一级评论列表（游标翻页）+ 二级回复（pn 翻页）。
+ *
+ * 二级回复的形状**按客户端分端**，判据是 `isMobileClient()`（与侧栏横滑手势、
+ * 弹幕设置面板同一判据：按输入模态分野，不按视口宽度）：
+ * - 移动端（触摸）：抽屉二级页 + 无限滚动，页大小用后端默认（20）。
+ * - 桌面端（指针）：**就地展开**在该条评论下方，上一页 / 下一页分页，每页 10 条。
+ *   侧栏只有 320/340px，再叠一层抽屉会把一级列表整个盖住；展开 + 翻页让一级
+ *   评论始终留在视野里，也不需要第二层浮层的几何对齐。
  *
  * 从 `VideoSidebar` 拆出来的原因是复用面：播放页右侧栏与短视频竖屏舞台都要它，
  * 而侧栏那个文件还装着相关视频、分集、选集、合集与弹幕设置 —— 短视频只为评论
@@ -35,6 +43,9 @@ import { formatRelativeTime } from "./videoHistory";
  * 评论接口的三个坑（游标语义、回复预览、pn 翻页）见 `docs/zh/B站视频功能-设计.md`
  * 第六节，实现在这里，不要在别处再写一份。
  */
+
+/** 桌面端回复分页的页大小：请求与「共几页」的推导共用它。 */
+const DESKTOP_REPLIES_PAGE_SIZE = 10;
 
 /** 把 `[大哭]` 这类占位符换成内联表情图，正文里的 URL 渲染成可点链接。 */
 function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): ReactNode {
@@ -251,30 +262,37 @@ function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDeta
   );
 }
 
-/** 一条一级评论与 PiliPlus 风格的二级回复预览。 */
+/** 一条一级评论与 PiliPlus 风格的二级回复预览（收起态）。 */
 function CommentThread({
+  aid,
   comment,
-  onOpenDetail,
+  expanded,
+  onToggleDetail,
 }: {
+  aid: string;
   comment: VideoComment;
-  onOpenDetail: () => void;
+  /** 桌面端：本条是否就地展开了完整回复；移动端恒为 false。 */
+  expanded: boolean;
+  onToggleDetail: () => void;
 }) {
   const previewReplies = comment.replies.slice(0, 3);
+  // 展开态不再画预览与入口：完整列表就在下面，重复一份只会把楼层拉长。
+  const showPreview = !expanded && (comment.rcount > 0 || previewReplies.length > 0);
 
   return (
     <div className="border-b border-border/60 py-3 last:border-b-0">
-      <CommentRow comment={comment} onOpenDetail={onOpenDetail} />
-      {(comment.rcount > 0 || previewReplies.length > 0) && (
+      <CommentRow comment={comment} onOpenDetail={onToggleDetail} />
+      {showPreview && (
         <div className="mt-2 pl-10.5">
           <div className="overflow-hidden rounded-md bg-muted/40 py-1">
             {previewReplies.map((reply) => (
-              <ReplyPreview key={reply.rpid} reply={reply} onOpenDetail={onOpenDetail} />
+              <ReplyPreview key={reply.rpid} reply={reply} onOpenDetail={onToggleDetail} />
             ))}
             {previewReplies.length < comment.rcount && (
               <button
                 type="button"
                 className="w-full px-2 py-1.5 text-left text-xs text-primary/90 hover:bg-muted/70"
-                onClick={onOpenDetail}
+                onClick={onToggleDetail}
               >
                 共 {formatOnline(comment.rcount)} 条回复
               </button>
@@ -282,10 +300,117 @@ function CommentThread({
           </div>
         </div>
       )}
+      {expanded && (
+        <div className="mt-2 pl-10.5">
+          {/* key 换楼层即重挂：翻到第 3 页再展开另一条，不该停在那一页。 */}
+          <InlineCommentReplies key={comment.rpid} aid={aid} comment={comment} />
+        </div>
+      )}
     </div>
   );
 }
 
+/**
+ * 桌面端的就地回复列表：展开在一级评论下方，按页切换，每页 10 条。
+ *
+ * 用 `useQuery` 而不是 `useInfiniteQuery`：这里是**翻页**（换页即换内容）而不是
+ * 无限累积，累积式会把「回到第 1 页」变成一次全量重取。`keepPreviousData` 让
+ * 翻页期间旧页留在原地，列表不闪空也不跳高。
+ *
+ * 不自带滚动容器 —— 与 `CommentsPanel` 整体的约定一致（滚动由调用方提供）；
+ * 也不需要安全区让位：它不是浮层，不存在压住系统手势条的问题。
+ */
+function InlineCommentReplies({ aid, comment }: { aid: string; comment: VideoComment }) {
+  const [page, setPage] = useState(1);
+  const repliesQuery = useQuery({
+    queryKey: ["video_comment_replies", aid, comment.rpid, page, DESKTOP_REPLIES_PAGE_SIZE],
+    queryFn: () => videoGetCommentReplies(aid, comment.rpid, page, DESKTOP_REPLIES_PAGE_SIZE),
+    placeholderData: keepPreviousData,
+  });
+  const data = repliesQuery.data;
+  const replies = data?.items ?? [];
+  const allCount = data?.all_count ?? comment.rcount;
+  const pageCount = Math.max(1, Math.ceil(allCount / DESKTOP_REPLIES_PAGE_SIZE));
+  // 末页以「本页之后的剩余」为准，同时不越过按总数推出的页数：
+  // 上游总数与条目数不一致时（删除、风控）少走一次空页。
+  const hasPrev = page > 1;
+  const hasNext = page < pageCount && (data?.has_more ?? false);
+  const pending = repliesQuery.isPending;
+
+  return (
+    <div role="group" aria-label={`${comment.uname} 的评论的回复`}>
+      <div className="text-xs text-muted-foreground">全部回复 {formatOnline(allCount)}</div>
+      {pending ? (
+        <div className="flex justify-center py-6">
+          <Spinner aria-label="正在加载回复" />
+        </div>
+      ) : repliesQuery.isError && !data ? (
+        <div className="py-2">
+          <ErrorState
+            error={repliesQuery.error}
+            title="回复加载失败"
+            onRetry={() => void repliesQuery.refetch()}
+          />
+        </div>
+      ) : replies.length === 0 ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>暂无回复</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <div className={cn(repliesQuery.isFetching && "opacity-60")}>
+          {replies.map((reply) => (
+            <div key={reply.rpid} className="border-b border-border/60 py-3 last:border-b-0">
+              <CommentRow
+                comment={reply}
+                isThreadAuthor={Boolean(
+                  comment.mid && comment.mid !== "0" && reply.mid === comment.mid,
+                )}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      {pageCount > 1 && (
+        <div className="flex items-center justify-between gap-2 pt-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+            aria-label={hasPrev ? `上一页回复，第 ${page - 1} 页` : "上一页回复"}
+            disabled={!hasPrev || repliesQuery.isFetching}
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+          >
+            <ChevronLeft data-icon="inline-start" aria-hidden />
+            上一页
+          </Button>
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            第 {page} / {pageCount} 页
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+            aria-label={hasNext ? `下一页回复，第 ${page + 1} 页` : "下一页回复"}
+            disabled={!hasNext || repliesQuery.isFetching}
+            onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+          >
+            下一页
+            <ChevronRight data-icon="inline-end" aria-hidden />
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 移动端抽屉里的完整回复列表（pn 无限滚动）。
+ *
+ * 页大小走后端默认（20）：这一层是浮层里的长列表，滑动到底自动续，
+ * 桌面端那个 10 条一翻的节奏在这里没有意义。
+ */
 function CommentReplies({
   aid,
   comment,
@@ -381,13 +506,16 @@ function CommentReplies({
 
 /** 评论列表：排序切换 + 游标翻页。 */
 /**
- * 评论区。自带二级回复抽屉，只需一个 `aid`，因此短视频的评论抽屉直接复用它
- * （导出而不是另写一份：评论的三个坑 —— 游标语义、回复预览、pn 翻页 ——
- * 已经在这里跑通）。它不自带滚动容器，由调用方提供。
+ * 评论区。自带二级回复（形状按客户端分端，见文件头），只需一个 `aid`，因此
+ * 短视频的评论抽屉直接复用它（导出而不是另写一份：评论的三个坑 —— 游标语义、
+ * 回复预览、pn 翻页 —— 已经在这里跑通）。它不自带滚动容器，由调用方提供。
  */
 export function CommentsPanel({ aid, bottomInset }: { aid: string; bottomInset?: string }) {
   const [mode, setMode] = useState(3);
   const [selectedComment, setSelectedComment] = useState<VideoComment | null>(null);
+  const mobile = isMobileClient();
+  // 抽屉只在移动端成立；桌面端同一份状态驱动「就地展开」。
+  const repliesDrawerOpen = mobile && selectedComment !== null;
   // 二级回复抽屉的几何跟着托管它的那一层走：播放页把抽屉挂在侧栏的
   // `DrawerViewport` 里（scoped，基础组件自己改成 `absolute w-full`，此时不该再给尺寸），
   // 而短视频的评论抽屉是全窗口浮层 —— 二级必须自己拿到与一级相同的宽度与侧别，
@@ -411,6 +539,16 @@ export function CommentsPanel({ aid, bottomInset }: { aid: string; bottomInset?:
     isFetchNextPageError: commentsQuery.isFetchNextPageError,
     fetchNextPage: () => commentsQuery.fetchNextPage(),
   });
+  /**
+   * 一次只展开一条：点同一条即收起（桌面端就地展开 / 移动端抽屉共用这个语义）。
+   *
+   * 三个入口（正文、回复预览、「共 N 条回复」）都走它 —— 它们是同一件事的
+   * 三个落点，分开各写一遍会各自演化出不同的开关规则。
+   */
+  const toggleDetail = (comment: VideoComment) => {
+    setSelectedComment((current) => (current?.rpid === comment.rpid ? null : comment));
+  };
+
   return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-3 pb-2 pt-3">
@@ -457,8 +595,10 @@ export function CommentsPanel({ aid, bottomInset }: { aid: string; bottomInset?:
           {comments.map((comment) => (
             <CommentThread
               key={comment.rpid}
+              aid={aid}
               comment={comment}
-              onOpenDetail={() => setSelectedComment(comment)}
+              expanded={!mobile && selectedComment?.rpid === comment.rpid}
+              onToggleDetail={() => toggleDetail(comment)}
             />
           ))}
           <LoadMoreRow
@@ -472,7 +612,18 @@ export function CommentsPanel({ aid, bottomInset }: { aid: string; bottomInset?:
         </div>
       )}
       <Drawer
-        open={selectedComment !== null}
+        open={repliesDrawerOpen}
+        // 移动端：二级回复开着时点播放器只做播放器自己的事（切 HUD、播放/暂停、
+        // 双击全屏），不再被 base-ui 非模态形态的 outside-press 收掉 —— 退回一级
+        // 只留表头返回按钮与系统/手势返回两条路。
+        //
+        // 播放页把抽屉挂在侧栏 `DrawerViewport` 里（`scoped`），本组件的 `Drawer`
+        // 此时传 `modal={false}`，base-ui 的 `outsidePress` 于是在非模态分支直接
+        // 放行：任何落在抽屉与遮罩之外的点按都会关掉它，而播放器正是那个区域。
+        //
+        // Escape 与 close-press 不受它影响：Android 返回键经 `dismissTopmostPopup`
+        // 派发的是合成 Escape，滑动关闭走 `store.setOpen`，两者照旧能收起抽屉。
+        disablePointerDismissal={mobile}
         onOpenChange={(open) => {
           if (!open) setSelectedComment(null);
         }}
@@ -495,7 +646,7 @@ export function CommentsPanel({ aid, bottomInset }: { aid: string; bottomInset?:
               }
             />
           </div>
-          {selectedComment && (
+          {selectedComment && mobile && (
             <CommentReplies
               key={selectedComment.rpid}
               aid={aid}

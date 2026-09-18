@@ -577,15 +577,19 @@ pub async fn video_get_comments(
 }
 
 /// 二级回复（pn 翻页，首传 page = 1）。
+///
+/// `page_size` 缺省为 [`COMMENT_REPLIES_PAGE_SIZE`]（移动端无限滚动的页大小）；
+/// 桌面端的回复分页传 10，请求与 `has_more` 推导共用它。
 #[tauri::command]
 pub async fn video_get_comment_replies(
     state: State<'_, AppState>,
     aid: String,
     root: i64,
     page: Option<u32>,
+    page_size: Option<u32>,
 ) -> AppResult<VideoCommentPage> {
     resolve_bilibili(&state)?
-        .video_comment_replies(&aid, root, page.unwrap_or(1))
+        .video_comment_replies(&aid, root, page.unwrap_or(1), page_size)
         .await
 }
 

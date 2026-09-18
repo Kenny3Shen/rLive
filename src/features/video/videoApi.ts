@@ -176,6 +176,12 @@ export function videoGetCommentReplies(
   aid: string,
   root: number,
   page: number,
+  pageSize?: number,
 ): Promise<VideoCommentPage> {
-  return invokeCmd<VideoCommentPage>("video_get_comment_replies", { aid, root, page });
+  return invokeCmd<VideoCommentPage>("video_get_comment_replies", {
+    aid,
+    root,
+    page,
+    pageSize,
+  });
 }
