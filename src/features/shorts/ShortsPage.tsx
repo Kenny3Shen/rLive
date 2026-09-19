@@ -124,7 +124,7 @@ const SHORTS_TOP_CONTROLS_CLASS =
  * 不是终点声明；剩余不足 `SHORTS_PREFETCH_REMAINING` 条就提前补货。
  *
  * 播放与弹幕状态住在这一层而不是舞台里：顶部控制栏与底部操作栏必须固定在视口上
- * （随条带平移的话，换片时它们会跟着滑走），而它们要读 `muted`、`currentTime`
+ * （随条带平移的话，换片时它们会跟着滑走），而它们要读 `muted`、播放状态
  * 与弹幕开关 —— 状态因此只能放在两者共同的祖先。舞台是纯展示层。
  *
  * ## 双播放器槽位
@@ -162,7 +162,7 @@ export function ShortsPage() {
   const [infoVisible, setInfoVisible] = useState(true);
   const [gestureActive, setGestureActive] = useState(false);
   /** 进度条是否被交互过：悬停或按下一次后就去取快照。 */
-  const [seekArmed, setSeekArmed] = useState(false);
+  const [seekArmedKey, setSeekArmedKey] = useState<string | null>(null);
   /**
    * 页面层控件要对齐的宽度（px）。
    *
@@ -187,14 +187,15 @@ export function ShortsPage() {
    * 进度条的缩略图表。
    *
    * 查询放在页面层而不是进度条里：换片时要拿到**当前条**的快照，而进度条只负责画。
-   * `seekArmed` 一旦为真不再回落 —— 同一条视频里第二次交互应该立刻有图。
+   * 武装状态绑定内容身份，换片不会为未交互的条目继续请求快照。
    */
+  const seekItemKey = current ? shortsItemKey(current) : "";
   const { thumbnails } = useShortsStoryboard({
     bvid: current?.bvid ?? "",
     cid: current?.cid ?? 0,
-    enabled: seekArmed,
+    enabled: !!seekItemKey && seekArmedKey === seekItemKey,
   });
-  const armSeek = useCallback(() => setSeekArmed(true), []);
+  const armSeek = useCallback(() => setSeekArmedKey(seekItemKey), [seekItemKey]);
 
   /* ---------- 播放、弹幕与抽屉 ---------- */
 
@@ -915,9 +916,8 @@ export function ShortsPage() {
   /**
    * 评论与详情的内容体经 memo 固定。
    *
-   * 这一页每秒随播放进度重渲染数次（`currentTime` 住在这里）。评论区是可能上百
-   * 个节点的长列表，详情抽屉要发一次稿件请求 —— 两者都只跟条目身份有关，不该
-   * 跟着进度重建。
+   * 评论区可能包含上百条记录，避免舞台/手势状态变化带动整份评论树重渲染。
+   * 详情抽屉也只跟条目身份有关，不该跟着舞台状态重建。
    */
   const commentsBody = useMemo(
     () =>
@@ -1448,7 +1448,7 @@ export function ShortsPage() {
                     video={{
                       cid: current.cid ?? 0,
                       aid: current.aid,
-                      progressMs: Math.floor(playback.currentTime * 1000),
+                      progressMs: Math.floor(playback.getCurrentTime() * 1000),
                     }}
                   />
                 )}

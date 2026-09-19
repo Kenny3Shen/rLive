@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { VideoItem } from "@/shared/types/video";
 import {
   shortsNextSlots,
@@ -25,11 +25,9 @@ import type { ShortsSessionRetention } from "./useShortsSessionRetention";
  *   再等一次完整取流。
  * - **三个**让前进与回滑同样命中。
  *
- * 「常驻三份」的代价怎么收：两条预热都受 `mediaAllowed` 闸门约束（见下），它们只
- * 跑**控制面**取流（playurl 与两条 sidx，几 KB），不附着媒体、不缓冲分片，因此不抢
- * 当前这条的带宽，也不多占解码器。真正在下载媒体的始终只有活动槽位一条 —— 这正是
- * 「三份取流」与「三路并发解码」的区别，后者才是低端 Android WebView 上会把「偶发
- * 预热失败」变成「当前这条也起不来」的那种负载。
+ * 两个邻居可先取控制面数据；只有下一条在当前可播且页面可见时深预热。
+ * 预热到 canplay 后关闭暂停态分片调度；上一条保留已有缓冲，不主动扩充。
+ * 三槽只约束播放器数量，不代表三路无限缓冲；缓冲目标由共享 Video.js 封装管理。
  *
  * ## 三个 hook 按**槽位**绑定，不按角色
  *
@@ -122,6 +120,25 @@ export function useShortsSlots({
    * 变化一次，不会形成循环。
    */
   const [activeReady, setActiveReady] = useState(false);
+  const [foreground, setForeground] = useState(() => !document.hidden);
+  useEffect(() => {
+    const sync = () => setForeground(!document.hidden);
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+  const activeKey = `${active}:${index}:${items[index]?.bvid ?? ""}:${items[index]?.cid ?? 0}`;
+  const [readyKey, setReadyKey] = useState(activeKey);
+  const connection = (
+    navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }
+  ).connection;
+  const allowWarm =
+    readyKey === activeKey &&
+    activeReady &&
+    foreground &&
+    !connection?.saveData &&
+    !["slow-2g", "2g"].includes(connection?.effectiveType ?? "");
+  const allowMedia = (slot: ShortsSlotId) =>
+    slot === active || (allowWarm && slots.held[slot] === index + 1);
 
   const slotA = useShortsPlaybackSlot({
     item: items[slots.held.a ?? -1] ?? null,
@@ -129,7 +146,7 @@ export function useShortsSlots({
     slotId: "a",
     mode: active === "a" ? "play" : "warm",
     // 活动槽位永远放行：它就是要播的那一条。预热槽位等活动槽位出画。
-    mediaAllowed: active === "a" || activeReady,
+    mediaAllowed: allowMedia("a"),
     claimPlayInfo: retention?.peek,
     releasePlayInfo: retention?.release,
     parkPlayInfo: retention?.park,
@@ -140,7 +157,7 @@ export function useShortsSlots({
     videoRef: refs.b,
     slotId: "b",
     mode: active === "b" ? "play" : "warm",
-    mediaAllowed: active === "b" || activeReady,
+    mediaAllowed: allowMedia("b"),
     claimPlayInfo: retention?.peek,
     releasePlayInfo: retention?.release,
     parkPlayInfo: retention?.park,
@@ -151,7 +168,7 @@ export function useShortsSlots({
     videoRef: refs.c,
     slotId: "c",
     mode: active === "c" ? "play" : "warm",
-    mediaAllowed: active === "c" || activeReady,
+    mediaAllowed: allowMedia("c"),
     claimPlayInfo: retention?.peek,
     releasePlayInfo: retention?.release,
     parkPlayInfo: retention?.park,
@@ -161,6 +178,7 @@ export function useShortsSlots({
   const slotStates: Record<ShortsSlotId, ShortsPlaybackState> = { a: slotA, b: slotB, c: slotC };
 
   const nextActiveReady = slotStates[active].ready;
+  if (readyKey !== activeKey) setReadyKey(activeKey);
   if (nextActiveReady !== activeReady) setActiveReady(nextActiveReady);
 
   const playback = slotStates[active];

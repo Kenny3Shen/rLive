@@ -4,6 +4,7 @@ import { flattenHistoryTimeline, type HistoryDateGroup } from "./historyGrouping
 import {
   HISTORY_TIMELINE_OVERSCAN,
   historyAnchorTo,
+  historyStableRowKeys,
   observeHistoryOffset,
   observeHistoryRect,
   offsetWithinScrollElement,
@@ -97,39 +98,39 @@ export function HistoryTimeline<T>({
   }, []);
 
   const syncScrollMargin = useCallback(() => {
-    if (!listNode || !scroller) return;
+    if (!active || !listNode || !scroller) return;
     const next = offsetWithinScrollElement(listNode, scroller);
     setScrollMargin((current) => (current === next ? current : next));
-  }, [listNode, scroller]);
+  }, [active, listNode, scroller]);
 
   // 无依赖：筛选行会随视图增减控件、随宽度换行，列表起点因此在任意一次提交后都可能
   // 移动。测量只读几个 offsetTop，值没变就不置 state，不会自激。
   useLayoutEffect(syncScrollMargin);
 
   useLayoutEffect(() => {
-    if (!scroller || typeof ResizeObserver === "undefined") return;
+    if (!active || !scroller || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(syncScrollMargin);
     // 文档滚动元素由 `observeHistoryRect` 的窗口 resize 负责。
     observer.observe(scroller);
     return () => observer.disconnect();
-  }, [scroller, syncScrollMargin]);
+  }, [active, scroller, syncScrollMargin]);
 
   const rows = useMemo(() => flattenHistoryTimeline(groups, itemKey), [groups, itemKey]);
-  // 虚拟列表把这两个函数放进测量记忆的依赖里，每次渲染换一个新闭包会让整表重算；
-  // 依赖又必须是「最新行集」。因此函数身份依赖 ref（永不变化），行集从 ref 里读——
-  // 渲染期同步，读取方拿到的永远是本次提交的行集。
+  // 只有行身份序列变化时更换 getItemKey；count 不变的替换也必须失效缓存。
+  const incomingKeys = useMemo(() => rows.map((row) => row.key), [rows]);
+  const keysRef = useRef<readonly string[]>(incomingKeys);
+  const keys = useMemo(() => {
+    keysRef.current = historyStableRowKeys(keysRef.current, incomingKeys);
+    return keysRef.current;
+  }, [incomingKeys]);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const estimateSizeRef = useRef(estimateItemSize);
   estimateSizeRef.current = estimateItemSize;
   // 稳定身份：日期标题与记录卡高度不同，标题按定值、记录按传入估高。
-  const getItemKey = useCallback(
-    (index: number) => rowsRef.current[index]?.key ?? index,
-    [],
-  );
+  const getItemKey = useCallback((index: number) => keys[index] ?? index, [keys]);
   const estimateSize = useCallback(
-    (index: number) =>
-      rowsRef.current[index]?.kind === "heading" ? 44 : estimateSizeRef.current,
+    (index: number) => (rowsRef.current[index]?.kind === "heading" ? 44 : estimateSizeRef.current),
     [],
   );
 
@@ -139,7 +140,8 @@ export function HistoryTimeline<T>({
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer({
     count: rows.length,
-    getScrollElement: () => scroller,
+    // 返回 null 会解除订阅但保留实测缓存；enabled:false 会清空缓存，不采用。
+    getScrollElement: () => (active ? scroller : null),
     ...virtualizerObservers,
     scrollMargin,
     estimateSize,
@@ -186,8 +188,8 @@ export function HistoryTimeline<T>({
     // 记下归零前的旧偏移。
     offsetRef.current = 0;
     setAnchorTo(historyAnchorTo(0));
-    scroller.scrollTo({ top: 0 });
-  }, [scroller]);
+    if (active) scroller.scrollTo({ top: 0 });
+  }, [active, scroller]);
   useEffect(() => {
     registerHistoryRefreshScrollReset(refreshResetToken, scrollToTopOnRefresh);
     return () => registerHistoryRefreshScrollReset(refreshResetToken, null);
@@ -210,7 +212,7 @@ export function HistoryTimeline<T>({
   useLayoutEffect(() => {
     if (!active || !scroller) return;
     const offset = offsetRef.current;
-    if (offset > 0) scroller.scrollTop = offset;
+    scroller.scrollTop = offset;
   }, [active, scroller]);
 
   const virtualRows = virtualizer.getVirtualItems();

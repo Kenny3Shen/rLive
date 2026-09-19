@@ -8,12 +8,17 @@ import {
 } from "@tanstack/react-virtual";
 import { findVerticalScrollParent } from "@/shared/gestures/pullToRefresh";
 
-/**
- * 可视区外多渲染的行数。
- *
- * 历史页在触摸设备上一甩就是几屏，默认 1 行缓冲会露白；6 行足够覆盖合成器
- * 追赶期间的一帧，也不会把 DOM 行数拉回与记录数同阶。
- */
+/** 保持等价行序列的引用稳定，同时让同数量替换真正使虚拟器行键缓存失效。 */
+export function historyStableRowKeys(
+  previous: readonly string[],
+  next: readonly string[],
+): readonly string[] {
+  return previous.length === next.length && previous.every((key, index) => key === next[index])
+    ? previous
+    : next;
+}
+
+/** 可视区外多渲染 6 行，给触摸惯性滚动留余量而不恢复全量 DOM。 */
 export const HISTORY_TIMELINE_OVERSCAN = 6;
 
 /** 快照记忆上限，避免长时间浏览无限累积。 */

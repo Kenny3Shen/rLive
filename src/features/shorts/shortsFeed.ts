@@ -33,9 +33,7 @@ export const SHORTS_SEED_PARAM = "seed";
  */
 export function shortsPath(seedBvid?: string | null): string {
   const bvid = seedBvid?.trim();
-  return bvid
-    ? `${SHORTS_PATH}?${SHORTS_SEED_PARAM}=${encodeURIComponent(bvid)}`
-    : SHORTS_PATH;
+  return bvid ? `${SHORTS_PATH}?${SHORTS_SEED_PARAM}=${encodeURIComponent(bvid)}` : SHORTS_PATH;
 }
 
 /** 媒体自己报出的原始画幅（`videoWidth` / `videoHeight`），起播后才有。 */
@@ -292,18 +290,36 @@ export function shortsFrameFill(
  * 仍会发生（轮换由服务端时间轴推进，不保证不回头）。这里同时丢掉缺取流键的条目 ——
  * 竖屏舞台没有「先取详情补 cid」的中间态，拿不到 cid 的条目直接不该进流。
  */
-export function shortsFeedItems(pages: readonly { items: readonly VideoItem[] }[]): VideoItem[] {
-  const seen = new Set<string>();
-  const items: VideoItem[] = [];
-  for (const page of pages) {
-    for (const item of page.items) {
-      if (!item.bvid || !item.cid || item.cid <= 0) continue;
-      if (seen.has(item.bvid)) continue;
-      seen.add(item.bvid);
-      items.push(item);
+type ShortsFeedPage = { items: readonly VideoItem[] };
+
+/** 追加时只去重新页；刷新、替换或截断页序列时重建，旧视图数组不会被原位修改。 */
+export function createShortsFeedMerger() {
+  let previous: readonly ShortsFeedPage[] = [];
+  let seen = new Set<string>();
+  let merged: VideoItem[] = [];
+  return (pages: readonly ShortsFeedPage[]): VideoItem[] => {
+    if (pages.length < previous.length || previous.some((page, index) => pages[index] !== page)) {
+      previous = [];
+      seen = new Set();
+      merged = [];
     }
-  }
-  return items;
+    if (pages.length === previous.length) return merged;
+    const added: VideoItem[] = [];
+    for (let index = previous.length; index < pages.length; index++) {
+      for (const item of pages[index]!.items) {
+        if (!item.bvid || !item.cid || item.cid <= 0 || seen.has(item.bvid)) continue;
+        seen.add(item.bvid);
+        added.push(item);
+      }
+    }
+    previous = pages.slice();
+    if (added.length) merged = [...merged, ...added];
+    return merged;
+  };
+}
+
+export function shortsFeedItems(pages: readonly ShortsFeedPage[]): VideoItem[] {
+  return createShortsFeedMerger()(pages);
 }
 
 /** 一条短视频在播放/预取层里的身份。与播放列表项的 id 同构（`bvid_cid`）。 */
@@ -561,7 +577,9 @@ export type ShortsSlotRole = "current" | "next" | "prev";
  * 去预热新的下一条 —— 换片因此**不换手、不重建播放器**（见 `shortsNextSlots`）。
  */
 export function shortsSlotRole(index: number, slotId: ShortsSlotId): ShortsSlotRole {
-  const offset = (SHORTS_SLOT_IDS.indexOf(slotId) - (index % SHORTS_SLOT_COUNT) + SHORTS_SLOT_COUNT) % SHORTS_SLOT_COUNT;
+  const offset =
+    (SHORTS_SLOT_IDS.indexOf(slotId) - (index % SHORTS_SLOT_COUNT) + SHORTS_SLOT_COUNT) %
+    SHORTS_SLOT_COUNT;
   return offset === 0 ? "current" : offset === 1 ? "next" : "prev";
 }
 

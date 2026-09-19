@@ -2,7 +2,11 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/r
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { videoGetStory, videoGetUploaderStory } from "@/features/video/videoApi";
 import type { VideoItem, VideoUploaderStoryPage } from "@/shared/types/video";
-import { shortsFeedItems, shortsShouldFetchMore, SHORTS_PREFETCH_REMAINING } from "./shortsFeed";
+import {
+  createShortsFeedMerger,
+  shortsShouldFetchMore,
+  SHORTS_PREFETCH_REMAINING,
+} from "./shortsFeed";
 import {
   shortsAnchoredIndex,
   shortsUploaderCounter,
@@ -42,9 +46,10 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
+  const mergeRecommendation = useMemo(() => createShortsFeedMerger(), []);
   const recommendationItems = useMemo(
-    () => shortsFeedItems(feedQuery.data?.pages ?? []),
-    [feedQuery.data],
+    () => mergeRecommendation(feedQuery.data?.pages ?? []),
+    [feedQuery.data, mergeRecommendation],
   );
   const queryKey = ["shorts_uploader_story", target?.mid, target?.aid, target?.session] as const;
   const uploaderQuery = useInfiniteQuery({
@@ -77,6 +82,11 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
   const uploaderItems = useMemo(
     () => shortsUploaderItems(uploaderQuery.data?.pages ?? []),
     [uploaderQuery.data],
+  );
+
+  const uploaderIndex = useMemo(
+    () => new Map(uploaderItems.map((item) => [item.aid, item])),
+    [uploaderItems],
   );
 
   // 手势按下与收尾期间保持整份视图不变。响应可进查询缓存，但不能移动舞台坐标。
@@ -158,13 +168,12 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
   );
 
   useEffect(() => {
-    if (motionActive) return;
     if (!target) {
       if (
         !feedQuery.isFetchNextPageError &&
         shortsShouldFetchMore(
           view.index,
-          view.items.length,
+          recommendationItems.length,
           feedQuery.hasNextPage,
           feedQuery.isFetching,
         )
@@ -174,8 +183,10 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
       return;
     }
     if (view.source !== target.session || uploaderQuery.isFetching) return;
+    // 已进缓存但尚未提交的前插/追加也算补货余量，避免长按时因旧坐标持续拉页。
+    const loadedIndex = shortsAnchoredIndex(uploaderItems, current, view.index);
     if (
-      view.index <= SHORTS_PREFETCH_REMAINING &&
+      loadedIndex <= SHORTS_PREFETCH_REMAINING &&
       uploaderQuery.hasPreviousPage &&
       !directionFailures?.prev
     ) {
@@ -183,20 +194,27 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
       // oxlint-disable-next-line react/set-state-in-effect
       void load("prev");
     } else if (
-      shortsShouldFetchMore(view.index, view.items.length, uploaderQuery.hasNextPage, false) &&
+      shortsShouldFetchMore(loadedIndex, uploaderItems.length, uploaderQuery.hasNextPage, false) &&
       !directionFailures?.next
     ) {
       void load("next");
     }
-  }, [directionFailures, feedQuery, load, motionActive, target, uploaderQuery, view]);
+  }, [
+    current,
+    directionFailures,
+    feedQuery,
+    load,
+    recommendationItems.length,
+    target,
+    uploaderItems,
+    uploaderQuery,
+    view,
+  ]);
 
   const uploaderReady = !!target && view.source === target.session;
   const total = uploaderQuery.data?.pages[0]?.total ?? 0;
   const counter = uploaderReady
-    ? shortsUploaderCounter(
-        uploaderItems.find((item) => item.aid === current?.aid),
-        total,
-      )
+    ? shortsUploaderCounter(current ? uploaderIndex.get(current.aid) : undefined, total)
     : null;
   return {
     items: view.items,

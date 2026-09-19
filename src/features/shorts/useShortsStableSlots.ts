@@ -16,6 +16,7 @@ export function useShortsStableSlots(options: UseShortsSlotsOptions) {
   if (key !== anchor.key || index !== anchor.index) setAnchor({ key, index, padding });
 
   const paddedItems = useMemo(() => {
+    if (padding === 0) return items;
     // 空前缀只供现有槽位查询；其越界邻居读到 undefined，与列表首尾一致。
     const padded: VideoItem[] = [];
     padded.length = padding + items.length;

@@ -1,5 +1,5 @@
 import type { HlsEngineConfig, HlsJsAdapter } from "@videojs/hlsjs-video";
-import type { DashAdapter } from "@videojs/dash-video";
+import type { DashAdapter, DashEngineConfig } from "@videojs/dash-video";
 import type Mpegts from "mpegts.js";
 import { playbackProtocol } from "@/lib/playUrl";
 import type { PlayUrl } from "@/shared/types/live";
@@ -21,6 +21,25 @@ export function webPlaybackKind(
     default:
       return "flv";
   }
+}
+
+export type VideoJsDashOptions = NonNullable<DashEngineConfig["dashJs"]>;
+export type VideoJsDashBufferMode = "active" | "warm" | "paused";
+
+/** 预热预算是缓冲目标，不裁切上游完整分片；paused 禁止新增调度。 */
+export function videoJsDashBufferSettings(mode: VideoJsDashBufferMode): VideoJsDashOptions {
+  const target = mode === "active" ? 18 : 2;
+  return {
+    streaming: {
+      scheduling: { scheduleWhilePaused: mode !== "paused" },
+      buffer: {
+        bufferTimeDefault: target,
+        bufferTimeAtTopQuality: mode === "active" ? 30 : target,
+        bufferTimeAtTopQualityLongForm: mode === "active" ? 60 : target,
+        bufferToKeep: mode === "active" ? 10 : 2,
+      },
+    },
+  };
 }
 
 export type VideoJsHlsOptions = NonNullable<HlsEngineConfig["hlsJs"]>;
@@ -61,6 +80,7 @@ type PlayerOptions = {
   kind: VideoJsPlaybackKind;
   isLive?: boolean;
   hls?: VideoJsHlsOptions;
+  dash?: VideoJsDashOptions;
   flv?: VideoJsMpegtsOptions;
   mpegts?: VideoJsMpegtsOptions;
 };
@@ -150,7 +170,7 @@ class VideoJsPlayer {
         };
         adapter.engine.on("playbackEnded", onDashEnded);
         this.listeners.add(() => adapter.engine.off("playbackEnded", onDashEnded));
-        adapter.source = { src: options.url };
+        adapter.source = { src: options.url, engine: { dashJs: options.dash } };
       } else {
         this.listenForMediaErrors(this.media);
         if (options.kind === "flv" || options.kind === "mpegts") {
@@ -295,6 +315,15 @@ class VideoJsPlayer {
    * 而 dash.js 在已挂载时会先 reset 再重新加载 —— 正是我们想要的语义。
    * URL 未变时 setter 判断出 `src` 没变，不会重新 attach。
    */
+  /** 只改公开 DASH 配置，不换源、不清掉已预热的媒体缓冲。 */
+  setDashBufferMode(mode: VideoJsDashBufferMode): void {
+    if (this.destroyed || !this.dash) return;
+    this.dash.source = {
+      ...this.dash.source,
+      engine: { dashJs: videoJsDashBufferSettings(mode) },
+    };
+  }
+
   switchDashSource(url: string): void {
     if (this.destroyed || !this.dash) return;
     this.endedAt = null;

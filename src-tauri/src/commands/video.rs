@@ -18,7 +18,48 @@ use crate::models::video::{
 use crate::sites::bilibili::BilibiliSite;
 use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
-use crate::stream_proxy::StreamProxyStartOptions;
+use crate::stream_proxy::{StreamProxy, StreamProxyStartOptions};
+
+/// 播放代理的创建事务；部分失败或 future 被取消时只回滚本次实例。
+/// ID 必须由调用方新建，不能使用会被其他播放者复用的内容键。
+pub(super) struct PlaybackProxyLease<'a> {
+    proxy: &'a StreamProxy,
+    ids: Vec<String>,
+    committed: bool,
+}
+
+impl<'a> PlaybackProxyLease<'a> {
+    pub(super) fn new(proxy: &'a StreamProxy, ids: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            proxy,
+            ids: ids.into_iter().collect(),
+            committed: false,
+        }
+    }
+
+    pub(super) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PlaybackProxyLease<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            for id in &self.ids {
+                self.proxy.stop_for_session(id);
+            }
+        }
+    }
+}
+
+fn video_session_ids(content_key: &str) -> VideoSessionIds {
+    let base = format!("{content_key}-{}", uuid::Uuid::new_v4().simple());
+    VideoSessionIds {
+        video: format!("{base}-video"),
+        audio: format!("{base}-audio"),
+        mpd: format!("{base}-mpd"),
+    }
+}
 
 /// 每条轨只缓存**起播前缀**的秒数。
 ///
@@ -269,11 +310,15 @@ pub async fn video_get_play_info(
         (_, Some(bvid)) => format!("video-{bvid}-{}", request.cid),
         _ => format!("video-cid{}", request.cid),
     };
-    let session_ids = VideoSessionIds {
-        video: format!("{base}-video"),
-        audio: format!("{base}-audio"),
-        mpd: format!("{base}-mpd"),
-    };
+    let session_ids = video_session_ids(&base);
+    let lease = PlaybackProxyLease::new(
+        &state.stream_proxy,
+        [
+            session_ids.video.clone(),
+            session_ids.audio.clone(),
+            session_ids.mpd.clone(),
+        ],
+    );
 
     // 媒体分片的磁盘缓存规格。只有请求方显式开启时才给：playurl 产物带短时
     // 签名，重放进 MPD 会打到过期地址，因此缓存的是**分片字节**而不是地址。
@@ -376,6 +421,7 @@ pub async fn video_get_play_info(
             .await?;
     }
 
+    lease.commit();
     Ok(VideoPlayInfo {
         mpd_url,
         video_url,
@@ -616,7 +662,82 @@ pub async fn video_get_comment_replies(
 
 #[cfg(test)]
 mod tests {
-    use super::segment_ranges;
+    use super::{PlaybackProxyLease, segment_ranges, video_session_ids};
+    use crate::stream_proxy::StreamProxy;
+
+    #[tokio::test]
+    async fn playback_instances_are_isolated_and_partial_start_rolls_back() {
+        let proxy = StreamProxy::new();
+        let old = video_session_ids("same-content");
+        let new = video_session_ids("same-content");
+        assert_ne!(old.mpd, new.mpd);
+        proxy
+            .start_text("old".into(), "text/plain".into(), old.mpd.clone())
+            .await
+            .unwrap();
+        {
+            let _lease = PlaybackProxyLease::new(
+                &proxy,
+                [new.video.clone(), new.audio.clone(), new.mpd.clone()],
+            );
+            proxy
+                .start_text("new".into(), "text/plain".into(), new.video.clone())
+                .await
+                .unwrap();
+            assert!(proxy.telemetry_for_session(&new.video).is_some());
+            assert!(
+                proxy
+                    .start(
+                        "https://example.com/media".into(),
+                        std::collections::HashMap::new(),
+                        new.audio.clone(),
+                        crate::stream_proxy::StreamProxyStartOptions {
+                            proxy: Some("http://["),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .is_err()
+            );
+            // 第二条轨道客户端创建失败：离开作用域回滚已创建的第一条。
+        }
+        assert!(proxy.telemetry_for_session(&new.video).is_none());
+        assert!(proxy.telemetry_for_session(&old.mpd).is_some());
+        let lease = PlaybackProxyLease::new(&proxy, [new.mpd.clone()]);
+        proxy
+            .start_text("new".into(), "text/plain".into(), new.mpd.clone())
+            .await
+            .unwrap();
+        lease.commit();
+        proxy.stop_for_session(&old.mpd);
+        assert!(proxy.telemetry_for_session(&new.mpd).is_some());
+        proxy.stop_for_session(&new.mpd);
+    }
+    #[tokio::test]
+    async fn cancelled_playback_creation_rolls_back() {
+        let proxy = std::sync::Arc::new(StreamProxy::new());
+        let id = video_session_ids("cancelled").mpd;
+        let (ready, started) = tokio::sync::oneshot::channel();
+        let task = {
+            let proxy = proxy.clone();
+            let id = id.clone();
+            tokio::spawn(async move {
+                let _lease = PlaybackProxyLease::new(&proxy, [id.clone()]);
+                proxy
+                    .start_text("pending".into(), "text/plain".into(), id)
+                    .await
+                    .unwrap();
+                ready.send(()).unwrap();
+                std::future::pending::<()>().await;
+            })
+        };
+        started.await.unwrap();
+        assert!(proxy.telemetry_for_session(&id).is_some());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(proxy.telemetry_for_session(&id).is_none());
+    }
+
     use crate::sites::bilibili::video::{Sidx, SidxSegment, VideoTrack};
 
     /// 造一条轨：init `0-99`，其后每片 100 字节、每片 `segment_seconds` 秒。
