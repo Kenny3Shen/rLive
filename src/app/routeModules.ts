@@ -98,6 +98,12 @@ export const loadShortsPage = createCachedRouteLoader(() =>
   import("../features/shorts/ShortsPage").then(({ ShortsPage }) => ({ default: ShortsPage })),
 );
 
+export const loadDouyinVideoPage = createCachedRouteLoader(() =>
+  import("../features/shorts/DouyinVideoPage").then(({ DouyinVideoPage }) => ({
+    default: DouyinVideoPage,
+  })),
+);
+
 /** 昂贵的播放器代码放在最后，让小而常用的目的地先就绪。 */
 const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadIptvPage,
@@ -155,6 +161,7 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/video/search") return loadVideoSearchPage;
   if (pathname === "/video") return loadVideoPage;
   if (pathname === "/shorts") return loadShortsPage;
+  if (pathname === "/shorts/douyin") return loadDouyinVideoPage;
   if (pathname === "/settings") return loadSettingsPage;
   if (pathname === "/multi-room") return loadMultiRoomPage;
   if (pathname.startsWith("/room/")) return loadRoomPage;

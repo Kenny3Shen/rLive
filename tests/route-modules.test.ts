@@ -15,6 +15,7 @@ import {
   loadSearchPage,
   loadSettingsPage,
   loadShortsPage,
+  loadDouyinVideoPage,
   loadVideoPage,
   loadVideoPlayerPage,
   routeModuleLoaderForPath,
@@ -81,6 +82,7 @@ describe("route module loading", () => {
     // 路径刻意不挂在 `/video` 下（侧栏目的地按前缀匹配，那样「视频」会跟着高亮），
     // 因此它不能被视频任何一条路由接走。
     expect(routeModuleLoaderForPath("/shorts")).toBe(loadShortsPage);
+    expect(routeModuleLoaderForPath("/shorts/douyin")).toBe(loadDouyinVideoPage);
     expect(routeModuleLoaderForPath("/video")).not.toBe(loadShortsPage);
   });
 

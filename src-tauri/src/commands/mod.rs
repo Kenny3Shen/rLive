@@ -12,6 +12,7 @@ pub mod danmaku_favorite;
 pub mod danmaku_send_history;
 pub mod diagnostics;
 pub mod dlna;
+pub mod douyin_video;
 pub mod follow;
 pub mod history;
 pub mod image_proxy;

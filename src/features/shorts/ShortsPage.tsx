@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronUp,
   FastForward,
+  Film,
   Info,
   MessageCircle,
   MessageSquareOff,
@@ -22,14 +23,14 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive } from "@/features/video/videoApi";
 import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoHistory";
 import { videoPlayPath } from "@/features/video/videoRoute";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1702,6 +1703,7 @@ function ShortsMoreMenu({
   onRefresh: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   const runAndClose = (action: () => void) => () => {
     setOpen(false);
     action();
@@ -1723,6 +1725,7 @@ function ShortsMoreMenu({
           onClick={runAndClose(onToggleMuted)}
         />
         <PlayerToolTile icon={RefreshCw} label="重新加载" onClick={runAndClose(onRefresh)} />
+        <PlayerToolTile icon={Film} label="抖音作品（实验）" onClick={runAndClose(() => navigate("/shorts/douyin"))} />
       </div>
     </PlayerHudOverflowMenu>
   );
@@ -1771,6 +1774,12 @@ function useShortsPanels(item: { aid: string } | null) {
 
 function ShortsBackButton({ onClick, inline, label = "返回上一页" }: { onClick: () => void; inline?: boolean; label?: string }) {
   return (
+    <>
+    {!inline && (
+      <Link to="/shorts/douyin" className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "absolute top-3 right-3 z-10")}>
+        抖音作品（实验）
+      </Link>
+    )}
     <MediaButton
       type="button"
       aria-label={label}
@@ -1785,5 +1794,6 @@ function ShortsBackButton({ onClick, inline, label = "返回上一页" }: { onCl
     >
       <ChevronLeft className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
     </MediaButton>
+    </>
   );
 }

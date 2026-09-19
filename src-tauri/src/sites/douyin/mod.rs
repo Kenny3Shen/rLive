@@ -8,6 +8,7 @@
 //! 调用方未提供 `ttwid` 会话时，从直播首页获取一份。
 
 mod a_bogus;
+pub mod video;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
