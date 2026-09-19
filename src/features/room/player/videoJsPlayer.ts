@@ -315,19 +315,67 @@ class VideoJsPlayer {
    * 而 dash.js 在已挂载时会先 reset 再重新加载 —— 正是我们想要的语义。
    * URL 未变时 setter 判断出 `src` 没变，不会重新 attach。
    */
-  /** 只改公开 DASH 配置，不换源、不清掉已预热的媒体缓冲。 */
+  /** 上一次应用的预热闸门；`null` 表示这台播放器还没有被闸门控制过。 */
+  private dashBufferMode: VideoJsDashBufferMode | null = null;
+
+  /**
+   * 只改公开 DASH 配置，不换源、不清掉已预热的媒体缓冲。
+   *
+   * **解除 `paused` 闸门时必须显式重启调度**（见下）。
+   */
   setDashBufferMode(mode: VideoJsDashBufferMode): void {
     if (this.destroyed || !this.dash) return;
+    const resumed = this.dashBufferMode === "paused" && mode !== "paused";
+    this.dashBufferMode = mode;
     this.dash.source = {
       ...this.dash.source,
       engine: { dashJs: videoJsDashBufferSettings(mode) },
     };
+    // `scheduleWhilePaused: false` 不只是「暂停时不新增调度」：dash.js 在
+    // `ScheduleController._schedule` 里据此清掉调度定时器并直接返回，而把该设置
+    // 改回 true 只是改一个值 —— 那条定时器不会被重建。于是槽位在预热到 canplay
+    // 后被 `paused` 闸停的分片调度再也不会恢复：媒体元素照常 `play()`、照常播完
+    // 已缓冲的 2 秒，然后停在 `waiting` 上等一个永远不会发出的第二分片请求。
+    //
+    // dash.js 只在 `PLAYBACK_STARTED` 且 `scheduleWhilePaused` 为**假**时重启调度
+    // （`_onPlaybackStarted`），这条路径恰好不在短视频的序列里：回升到 `active` 的
+    // 那一刻媒体还在暂停中，`play()` 又必然在闸门解除之后，因此只能显式补一次。
+    if (resumed) this.restartDashScheduling();
+  }
+
+  /**
+   * 重新启动活跃流的逐轨调度定时器。
+   *
+   * 只在 `paused` → 非 `paused` 的那一次转换调用：dash.js 的
+   * `startScheduleTimer` 会取消并重建自己的定时器，重复调用等于让 `_schedule`
+   * 在分片请求在途时再跑一轮（`lastSegment` 已推进，会多取下一片）。
+   *
+   * 不改变清晰度，也不清掉已缓冲内容：dash.js 会跳过已完成的缓冲
+   * （`getIsBufferingCompleted`），并只按当前缓冲水位决定是否取下一片。
+   */
+  private restartDashScheduling(): void {
+    try {
+      // `getStreamProcessors()` 是公开 API，但数组在流初始化过程中可能带空洞
+      // （dash.js 自己遍历时也用 `for (… && streamProcessors[i]; …)`）：逐个跳过
+      // 空位，别让一个未就绪的轨道挡住其余轨道的调度。
+      const processors = this.dash?.engine.getActiveStream()?.getStreamProcessors() ?? [];
+      for (const processor of processors) {
+        processor?.getScheduleController()?.startScheduleTimer(0);
+      }
+    } catch {
+      // 引擎尚未完成清单加载（`getActiveStream` 抛错或为空）时无调度可恢复：首次
+      // 调度由 dash.js 自己在流初始化时启动，不需要这里介入。
+    }
   }
 
   switchDashSource(url: string): void {
     if (this.destroyed || !this.dash) return;
     this.endedAt = null;
+    this.dashBufferMode = null;
     this.options.url = url;
+    // dash.js 的 `attachSource` 会同步重置旧流的播放控制器（含调度定时器），
+    // 再为新清单重新初始化并自行启动调度；闸门状态因此必须一并作废，否则
+    // `warm → paused → 换源` 这条路上一次转换会被误判成「解除闸门」。
     this.dash.src = url;
   }
 
