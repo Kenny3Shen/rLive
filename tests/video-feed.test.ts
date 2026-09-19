@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { videoCoverAspect, videoDimensionAspect } from "../src/shared/videoDimension";
+import { videoMasonryRowSpan } from "../src/features/video/VideoMasonry";
 import { nextRecommendPage } from "../src/features/video/videoFeed";
 import type { VideoItem, VideoListPage } from "../src/shared/types/video";
 
@@ -41,6 +42,22 @@ describe("VideoCard 画幅", () => {
       expect(videoDimensionAspect(dimension)).toBeNull();
       expect(videoCoverAspect(dimension)).toBe(16 / 9);
     }
+  });
+});
+
+describe("VOD 瀑布流跨度", () => {
+  test("高度向上取整，不截断卡片与底部间距", () => {
+    expect(videoMasonryRowSpan(204)).toBe(51);
+    expect(videoMasonryRowSpan(204.1)).toBe(52);
+    expect(videoMasonryRowSpan(1)).toBe(1);
+    for (const height of [125.7, 398.25, 999.9]) {
+      const allocated = videoMasonryRowSpan(height) * 4;
+      expect(allocated).toBeGreaterThanOrEqual(height);
+      expect(allocated - height).toBeLessThan(4);
+    }
+  });
+  test("隐藏、空内容与异常测量保留合法行跨度", () => {
+    for (const height of [0, -1, NaN, Infinity]) expect(videoMasonryRowSpan(height)).toBe(1);
   });
 });
 

@@ -234,7 +234,7 @@ story，从当前稿件开始播放，顶部显示真实位置；卡片根据 di
 - 尺寸优先 `dimension`，其次 URI 的 `player_width/player_height/player_rotate`；没有可靠尺寸
   就返回 null，不把 `goto` 当作具体尺寸。`cover_left_text_*` 的「万/亿」统计是显示近似值。
 - 每次最多三批串行请求，单次目标条数有上限；不能把曾经“连续出新”的样本当作无限供应承诺。
-- `VideoCard` 的 grid/row 均按画幅显示封面，非零 rotate 交换宽高；未知尺寸与 PGC 回退 16:9。
+- `VideoCard` 默认按画幅显示封面，非零 rotate 交换宽高；未知尺寸与 PGC 回退 16:9。后续 VOD 发现/搜索改为瀑布流，相关视频区则显式固定 16:9 缩略图，详见《B站视频功能-设计》「推荐源与画幅适配」。
 
 #### 从当前位置进入作者流
 

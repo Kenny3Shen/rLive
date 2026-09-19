@@ -125,6 +125,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
             playlist={playlistItems}
             playlistKind="feed"
             orientation="row"
+            coverAspect="landscape"
           />
         ))
       )}

@@ -16,6 +16,7 @@ import {
 } from "./playlistStore";
 import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
+import { VideoMasonry } from "./VideoMasonry";
 
 /**
  * 视频卡片。
@@ -100,6 +101,7 @@ export const VideoCard = memo(function VideoCard({
   playlistUploader,
   onNavigate,
   orientation = "grid",
+  coverAspect = "source",
   showAuthor = true,
 }: {
   item: VideoItem;
@@ -112,6 +114,8 @@ export const VideoCard = memo(function VideoCard({
   onNavigate?: () => void;
   /** `row`：缩略图在左、文本列在右（相关视频与 UP 主投稿列表）。 */
   orientation?: "grid" | "row";
+  /** 默认遵循视频画幅；相关视频以 landscape 固定为 16:9 缩略图。 */
+  coverAspect?: "source" | "landscape";
   /** 是否在发布日期旁显示 UP 主名；投稿抽屉按 PiliPlus 语义只显示发布日期。 */
   showAuthor?: boolean;
 }) {
@@ -160,7 +164,7 @@ export const VideoCard = memo(function VideoCard({
       )}
     >
       <CoverImage
-        aspectRatio={videoCoverAspect(item.dimension)}
+        aspectRatio={coverAspect === "landscape" ? 16 / 9 : videoCoverAspect(item.dimension)}
         cover={item.cover}
         // 封面按列宽取比例而不是固定 w-40:侧栏只有 300px,固定宽度会把文本列
         // 挤到 90 px 出头，标题每行只剩几个字。
@@ -281,11 +285,7 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
   );
 });
 
-/** 发现页与搜索结果页共用的网格列数与间距。 */
-export const VIDEO_GRID_CLASS =
-  "grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 [@media(min-width:80rem)_and_(pointer:coarse)]:grid-cols-5!";
-
-/** 视频卡片网格。带 `playlist` 时（搜索/UP 主列表）点击卡片即从该卡连播。 */
+/** 视频卡片瀑布流。带 `playlist` 时点击卡片即从该卡连播。 */
 export const VideoGrid = memo(function VideoGrid({
   items,
   playlist,
@@ -296,7 +296,7 @@ export const VideoGrid = memo(function VideoGrid({
   playlistKind?: PlaylistKind;
 }) {
   return (
-    <div className={VIDEO_GRID_CLASS}>
+    <VideoMasonry>
       {items.map((item) => (
         <VideoCard
           key={`${item.bvid}:${item.cid ?? ""}`}
@@ -305,6 +305,6 @@ export const VideoGrid = memo(function VideoGrid({
           playlistKind={playlistKind}
         />
       ))}
-    </div>
+    </VideoMasonry>
   );
 });

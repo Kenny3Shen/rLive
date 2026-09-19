@@ -5,7 +5,7 @@
 ## 一、已锁定的产品决策
 
 - 入口：**新增侧栏「视频」目的地**，独立路由 `/video`。现有首页的直播平台条（B站/斗鱼/虎牙/抖音/Twitch）完全不动。
-- 头部整行 = 四个内容页签「推荐 / 热门 / 番剧 / 影视」；其下一条**分区条**；再下是内容网格。
+- 头部整行 = 四个内容页签「推荐 / 热门 / 番剧 / 影视」；其下一条**分区条**；再下是内容瀑布流。
 - 番剧 / 影视点进去**要能播**（PGC playurl），与 UGC 是两套播放链路。
 - 画质走 **DASH**，使用 Video.js 官方 `@videojs/dash-video` 适配器（内部由 dash.js 读取 MPD）。
 - **搜索筛选一起做**（结构对齐 B 站 Web 端搜索页）：`/video/search` 结果页顶部——排序是一行可横滚的 chip（复用 `ChipStrip`，与分区条同套横滚/箭头/键盘逻辑），时长 / 分区 / 发布时间是三个独立下拉（`Select`，「当前值 ▾」形态，非默认高亮，首项即默认）。不收进单个「筛选」按钮、无重置按钮（各维度选回首项即默认）。筛选住在 URL（`?order/&duration/&zone/&pubtime=`，默认位不进 URL），换筛选替换历史（与首页换分区同取向）；头部查询条提交新关键词不带筛选参数，新搜索天然重置。分区表由后端 `video_search_zone_list` 提供（搜索 tid 与分区榜 rid 两套 ID，不能复用 `video_zone_list`）。
@@ -41,7 +41,7 @@
 | VOD 弹幕 | `GET /x/v2/dm/web/seg.so?type=1&oid=<cid>&pid=<aid>&segment_index=<n>` | **无需 cookie / UA / Referer / WBI**，返回裸 protobuf |
 | 稿件详情 | `GET /x/web-interface/view?bvid=` | **需 WBI**（未签名被风控拦下，返回 404 页）。`data` 含 `aid/desc/owner/stat/pubdate` |
 | 稿件 Tags | `GET /x/tag/archive/tags?bvid=` → `data[].tag_name` | 无 WBI、匿名可用；与稿件详情并发获取，失败降级为空，不阻断播放 |
-| 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全。**含竖屏**（实测 40/200 条），条目自带 `dimension`，前端 `VideoCard` 按实际画幅显示封面（含旋转），不再一律裁成 16:9 |
+| 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全。**含竖屏**（实测 40/200 条），条目自带 `dimension`；相关视频区固定 16:9 缩略图，不因源视频竖屏而拉高列表行 |
 | 评论 | `GET /x/v2/reply/wbi/main?type=1&oid=<aid>&mode=<2\|3>&ps=20&next=<cursor>`，WBI 签名 | 签名 + **匿名时不得携带任何 cookie**：实测携带 buvid3/4 的匿名会话只回 3 条并谎称 `is_end=true`（无 cookie 才给全量 20 条）；未签名裸路径被风控后一律 -352，签名路径放行。登录态带完整 cookie 同路径。置顶有两处：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象，参考 PiliPlus 两者都解析）。**作者标识**：页面级 `data.upper.mid`（实测两个回复接口都下发）与评论者 `member.mid` 比对得出，条目上没有现成的作者字段 |
 | 二级回复 | `GET /x/v2/reply/reply?type=1&oid=<aid>&root=<rpid>&pn=&ps=<20\|10>&sort=2` | 匿名可用（不受 buvid 截断影响）。**pn 翻页有效**；`data.page.count` 是总数；`data.upper.mid` 同主接口下发，作者标识一并标到楼中楼。`ps` 由前端按需给：移动端无限滚动用默认 20，桌面端分页用 10（`video_get_comment_replies` 的可选 `pageSize`）；**`has_more` 必须按本次实际 `ps` 推导**（上游不给 `is_end`），套 20 会让 10 条一页的翻页在 pn=5 就误报到尾 |
 | 视频搜索 | `GET /x/web-interface/search/type`，`search_type=video&keyword=&page=&order=&duration=0&tids=0`；筛选位：`order`（click 播放多/pubdate 新发布/dm 弹幕多/stow 收藏多/scores 评论多，空=综合）、`duration`（0 全部/1 <10min/2 10-30/3 30-60/4 >60）、`tids` 大区 tid（0=全部，与分区榜 rid 两套 ID）、`pubtime_begin_s`/`pubtime_end_s`（day/week/halfYear 预设在后端换算成「N 天前零点 ~ 当天 23:59:59」） | 无 WBI、匿名可用。取 `data.result[]`，`numPages` 判尾页。时长为 `duration` 字符串（`H:MM:SS`） |
@@ -56,7 +56,9 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 - VOD 推荐只使用 APP 主 feed，不保留 `rcmd` 作为并行实现或静默回退。`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
 - APP 返回的播放/弹幕统计常是「万/亿」格式的显示近似数，映射结果不是精确计数；作者 UID、标题、画幅与取流键在 Rust 统一归一化。
-- `VideoCard` 的网格与行式封面都按 `dimension` 设置比例；旋转标记非零时交换宽高。未知尺寸与 PGC 保持原来的 16:9。混合网格保持原有行序、顶部对齐，不引入改变阅读顺序的瀑布流。
+- VOD 发现页四个页签与搜索结果使用 `VideoMasonry` 瀑布流，沿用响应式 2–6 列。以细网格行跨度承载卡片自然高度，追加分页不重新分列，保留 DOM / 键盘顺序、滚动锚点与卡片身份。`ResizeObserver` 在列宽、字体和内容变化时更新跨度；不支持时退回普通网格。分页哨兵仍在完整列表之后。
+- VOD 列表与 UP 投稿抽屉的 `VideoCard` 默认按 `dimension` 设置封面比例；旋转标记非零时交换宽高，未知尺寸与 PGC 保持 16:9。**相关视频**显式使用 `coverAspect="landscape"`，桌面侧栏和移动端相关页签均固定为横屏缩略图，源内容不被过滤。
+- 回归：`tests/video-masonry.browser.js` 验证补位、分页追加不移位、尺寸变化与底部哨兵；`tests/video-card-aspect.browser.js` 验证源画幅、横屏覆盖及真实相关视频区。
 - 推荐、通用 story、作者 story 统一通过 `get_app_feed` → `get_json_with_buvid_header`，共用 Cookie、代理、设备槽和错误处理。**不等于所有 B 站接口都换域**：详情、搜索、热门、播放、评论、弹幕仍使用已验证的 `api.bilibili.com` 端点；APP 域同路径 `/x/web-interface/view` 实测 404，APP `/x/v2/view` 在本次免签名参数下返回 -400，不能仅替换 host。未验证的 APP 等价能力不替换既有播放与账号权限链路。
 - `/shorts` 点头像/用户名可进入作者 story，从当前稿件继续，上方居中显示上游 `index/total`；详见[短视频功能](短视频功能.md)「UP 主竖屏流」。
 

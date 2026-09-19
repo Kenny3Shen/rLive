@@ -24,7 +24,8 @@ import {
   videoGetZone,
   videoZoneList,
 } from "./videoApi";
-import { PgcCard, VIDEO_GRID_CLASS, VideoGrid } from "./VideoCard";
+import { PgcCard, VideoGrid } from "./VideoCard";
+import { VideoMasonry } from "./VideoMasonry";
 import { VideoZoneBar } from "./VideoZoneBar";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
 import {
@@ -56,17 +57,17 @@ type VideoFeedPage = ({ kind: "ugc" } & VideoListPage) | ({ kind: "pgc" } & PgcL
 
 const PgcGrid = memo(function PgcGrid({ items }: { items: readonly PgcItem[] }) {
   return (
-    <div className={VIDEO_GRID_CLASS}>
+    <VideoMasonry>
       {items.map((item) => (
         <PgcCard key={item.season_id} item={item} />
       ))}
-    </div>
+    </VideoMasonry>
   );
 });
 
 function GridSkeleton() {
   return (
-    <div className={VIDEO_GRID_CLASS} aria-hidden>
+    <VideoMasonry aria-hidden>
       {Array.from({ length: 12 }).map((_, index) => (
         <div key={index} className="flex flex-col gap-2">
           <Skeleton className="aspect-video w-full rounded-xl" />
@@ -74,7 +75,7 @@ function GridSkeleton() {
           <Skeleton className="h-3 w-1/2" />
         </div>
       ))}
-    </div>
+    </VideoMasonry>
   );
 }
 
