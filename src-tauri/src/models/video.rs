@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 /// 视频画面尺寸（上游 `dimension`）。
 ///
-/// 竖屏判定的唯一依据：`rotate` 非 0 时宽高互换后再比较。只有少数列表接口
-/// 下发（story feed、热门），其余接口为 `None`。
+/// 画幅依据：`rotate` 非 0 时宽高互换后再比较。APP feed、story 与部分列表
+/// 下发尺寸（APP URI 尺寸也在后端归一化到此字段）；未知时为 `None`。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct VideoDimension {
     pub width: i64,
@@ -23,11 +23,7 @@ pub struct VideoDimension {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoItem {
     pub bvid: String,
-    /// 稿件 av 号，**刻意是字符串**。
-    ///
-    /// Bilibili 的新 aid 已是超大整数（实测 `117191437455648`），
-    /// 超出 JS `number` 的安全整数范围，按数字过 IPC 必然静默丢精度。
-    /// 前端只把它当不透明标识符透传，禁止参与算术。
+    /// 稿件 av 号，按字符串透传，避免 ID 在跨语言转换时被当作浮点数处理。
     pub aid: String,
     /// 首个分 P 的 cid。列表接口通常直接给出；缺失时必须先取稿件详情才能播放。
     pub cid: Option<i64>,
@@ -35,6 +31,9 @@ pub struct VideoItem {
     pub cover: String,
     pub author: String,
     pub author_face: Option<String>,
+    /// 作者 UID。列表未提供时为空，不用作者名反查或猜测。
+    #[serde(default)]
+    pub author_mid: Option<String>,
     /// UP 主粉丝数。**只有 story feed 直接下发**（`owner.fans`，实测每条都有且与
     /// `x/web-interface/card` 的 `follower` 完全一致）；其余列表接口不给，为 `None`。
     ///
@@ -50,7 +49,7 @@ pub struct VideoItem {
     pub pubdate: i64,
     /// 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。
     pub rcmd_reason: Option<String>,
-    /// 画面尺寸。仅 story feed 与热门下发，用于竖屏判定；其余接口为 `None`。
+    /// 画面尺寸，供卡片与竖屏舞台共用；上游未提供可靠尺寸时为 `None`。
     #[serde(default)]
     pub dimension: Option<VideoDimension>,
 }
@@ -74,6 +73,32 @@ pub struct PgcItem {
 pub struct VideoListPage {
     pub has_more: bool,
     pub items: Vec<VideoItem>,
+}
+
+/// UP 主 story 流中的一条稿件；index 是上游全列表的 1-based 位置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoUploaderStoryItem {
+    #[serde(flatten)]
+    pub video: VideoItem,
+    pub index: u64,
+}
+
+/// 有真实双向游标的作者列表，不与推荐流的本地页号/seen 记忆混用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoUploaderStoryPage {
+    pub items: Vec<VideoUploaderStoryItem>,
+    pub total: u64,
+    pub next_cursor: Option<String>,
+    pub prev_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoStoryDirection {
+    #[default]
+    Initial,
+    Next,
+    Prev,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -13,6 +13,7 @@ import type {
   VideoStoryboard,
   VideoSubtitle,
   VideoZone,
+  VideoUploaderStoryPage,
 } from "@/shared/types/video";
 import type { VideoSearchFilters } from "./videoRoute";
 
@@ -50,6 +51,19 @@ export function videoGetPopular(page: number, pageSize?: number): Promise<VideoL
  */
 export function videoGetStory(more?: boolean, seedBvid?: string | null): Promise<VideoListPage> {
   return invokeCmd<VideoListPage>("video_get_story", { more, seedBvid: seedBvid ?? null });
+}
+
+/** UP 主 story 列表：初次包含当前 aid，后续使用后端返回的双向游标。 */
+export function videoGetUploaderStory(
+  mid: string,
+  cursorAid?: string | null,
+  direction: "initial" | "next" | "prev" = "initial",
+): Promise<VideoUploaderStoryPage> {
+  return invokeCmd<VideoUploaderStoryPage>("video_get_uploader_story", {
+    mid,
+    cursorAid: cursorAid ?? null,
+    direction,
+  });
 }
 
 /** UGC 分区榜。上游是榜单而非分页接口，返回的 `has_more` 恒为 false。 */

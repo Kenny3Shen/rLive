@@ -9,7 +9,7 @@
  * 视频画面尺寸（上游 `dimension`）。
  *
  * 显示画幅的依据：`rotate` 非 0 时宽高互换后再使用（见 `shortsMediaAspect`）。
- * 只有少数列表接口下发（story feed、热门），其余接口为 null。
+ * APP feed、story 与部分列表下发；后端也将 APP URI 的尺寸归一化到此字段，未知时为 null。
  */
 export type VideoDimension = {
   width: number;
@@ -21,18 +21,15 @@ export type VideoDimension = {
 /** 列表页中的一条 UGC 稿件。 */
 export type VideoItem = {
   bvid: string;
-  /**
-   * 稿件 av 号，**刻意是字符串**。
-   *
-   * Bilibili 的新 aid 已是超大整数（实测 `117191437455648`），超出 JS `number` 的
-   * 安全整数范围。只当不透明标识符透传，禁止参与算术。
-   */
+  /** 稿件 av 号。只当不透明标识符透传，不参与浮点算术。 */
   aid: string;
   /** 首个分 P 的 cid。列表接口通常直接给出；缺失时必须先取稿件详情才能播放。 */
   cid: number | null;
   title: string;
   cover: string;
   author: string;
+  /** UP 主 UID；老缓存或上游缺失时为空。 */
+  author_mid?: string | null;
   /** UP 主头像（已过上游缩图参数）；上游未给时为 null。 */
   author_face: string | null;
   /**
@@ -51,7 +48,7 @@ export type VideoItem = {
   pubdate: number;
   /** 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。 */
   rcmd_reason: string | null;
-  /** 画面尺寸。仅 story feed 与热门下发，用于竖屏判定；其余接口为 null。 */
+  /** 卡片与竖屏舞台共用的画面尺寸；上游未提供可靠尺寸时为 null。 */
   dimension?: VideoDimension | null;
 };
 
@@ -69,6 +66,18 @@ export type PgcItem = {
 export type VideoListPage = {
   has_more: boolean;
   items: VideoItem[];
+};
+
+export type VideoUploaderStoryItem = VideoItem & {
+  /** 上游作者列表中的真实 1-based 位置，不是本地加载条数。 */
+  index: number;
+};
+
+export type VideoUploaderStoryPage = {
+  items: VideoUploaderStoryItem[];
+  total: number;
+  next_cursor: string | null;
+  prev_cursor: string | null;
 };
 
 export type PgcListPage = {

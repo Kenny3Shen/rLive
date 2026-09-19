@@ -283,8 +283,16 @@ impl BilibiliSite {
                 // 进程级设备槽：站点实例按命令新建，先看这里能不能补齐缺失的一半，
                 // 否则每条命令都会换一个设备号（见 `DEVICE_BUVIDS`）。
                 let (cached_b3, cached_b4) = cached_device_buvids().unwrap_or_default();
-                let b3 = if saved_b3.is_empty() { cached_b3 } else { saved_b3 };
-                let b4 = if saved_b4.is_empty() { cached_b4 } else { saved_b4 };
+                let b3 = if saved_b3.is_empty() {
+                    cached_b3
+                } else {
+                    saved_b3
+                };
+                let b4 = if saved_b4.is_empty() {
+                    cached_b4
+                } else {
+                    saved_b4
+                };
                 if !b3.is_empty() && !b4.is_empty() {
                     return (b3, b4);
                 }
@@ -432,7 +440,7 @@ impl BilibiliSite {
             .await
     }
 
-    /// 额外携带独立的 `buvid` 请求头（story feed 专用）。
+    /// 额外携带独立的 `buvid` 请求头（APP 推荐、story 与作者 story 共用）。
     ///
     /// 只把 buvid3 写进 cookie 对这个接口不生效：上游按这个**请求头**决定是否启用
     /// 推荐引擎（带头 `track_id = story_0.router-story-…`，不带则

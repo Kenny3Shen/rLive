@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
   ChevronLeft,
@@ -25,7 +25,7 @@ import {
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
-import { videoGetArchive, videoGetStory } from "@/features/video/videoApi";
+import { videoGetArchive } from "@/features/video/videoApi";
 import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoHistory";
 import { videoPlayPath } from "@/features/video/videoRoute";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -57,7 +57,7 @@ import {
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useCoarsePointer } from "@/shared/hooks/useCoarsePointer";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
-import { hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
+import { ANDROID_BACK_EVENT, DISMISSIBLE_POPUP_SELECTOR, hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import { ShortsSeekBar } from "./ShortsSeekBar";
 import { ShortsSeekBridge, ShortsSeekPlayer } from "./shortsSeekPlayer";
@@ -72,11 +72,9 @@ import {
   SHORTS_SWIPE_SETTLE_EASING,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
   SHORTS_TOP_BAR_HEIGHT_PX,
-  shortsFeedItems,
   shortsItemKey,
   shortsMountedIndexes,
   shortsPanelDepth,
-  shortsShouldFetchMore,
   shortsSlotCoveredIndexes,
   shortsSlotTop,
   shortsSwipeDragOffset,
@@ -90,7 +88,8 @@ import {
 } from "./shortsFeed";
 import { useShortsStoryboard } from "./shortsStoryboard";
 import { useShortsDanmaku } from "./useShortsDanmaku";
-import { useShortsSlots } from "./useShortsSlots";
+import { useShortsStableSlots } from "./useShortsStableSlots";
+import { useShortsFeed } from "./useShortsFeed";
 import { useShortsSessionRetention } from "./useShortsSessionRetention";
 
 /**
@@ -158,7 +157,7 @@ export function ShortsPage() {
     () => ({ a: slotARef, b: slotBRef, c: slotCRef }),
     [slotARef, slotBRef, slotCRef],
   );
-  const [rawIndex, setIndex] = useState(0);
+  const [feedMotionActive, setFeedMotionActive] = useState(false);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [infoVisible, setInfoVisible] = useState(true);
   const [gestureActive, setGestureActive] = useState(false);
@@ -180,44 +179,9 @@ export function ShortsPage() {
   const chromeColumn = coarsePointer ? stageChromeColumn : 0;
   const compact = useCompactPlayerViewport();
 
-  /**
-   * 下一次取流要用的种子：当前正在消费的那条 `bvid`。
-   *
-   * 用 ref 而不是闭包捕获：`queryFn` 在 `fetchNextPage` 时才执行，那时要读的是
-   * 「此刻在看的那条」，而不是查询创建时的那条。初值是入口种子（`?seed=`）；
-   * 首屏还没有条目可传时，后端会拿它当起点，没有它才回退到最近观看历史。
-   */
-  const storySeedRef = useRef<string | null>(entrySeed);
-
-  const feedQuery = useInfiniteQuery({
-    queryKey: ["shorts_story"],
-    initialPageParam: 1,
-    // 首屏小批、补货大批：两个档位与上游调用策略都在后端，前端只报语义
-    // （`more` 为 true 表示这是补货）。用 pageParam 而不是「是否已有数据」做判据：
-    // 它在查询被重置后也跟着回到 1，因此重试/重拉仍走首屏那条快路径。
-    // `seedBvid` 让上游「从这条继续刷」，绕开黏性头部（见 `video_get_story`）。
-    queryFn: ({ pageParam }) => videoGetStory(pageParam > 1, storySeedRef.current),
-    // 上游无游标：页码只是本地的「再来一批」计数。`has_more` 是「这批里有没见过的」
-    // ——后端按进程记忆 + 最近观看过滤（见 `video_get_story`），全是老条目就落下它。
-    // 不能理解成「上游到底了」：那只是此刻没有新内容，重进这一页仍会再试。
-    getNextPageParam: (lastPage, allPages) => (lastPage.has_more ? allPages.length + 1 : undefined),
-    // 轮换流不该被缓存复用：回到这一页应该看到新内容。
-    staleTime: 0,
-    gcTime: 0,
-  });
-
-  const items = shortsFeedItems(feedQuery.data?.pages ?? []);
-  // 流缩短（重新拉取）时把下标收回范围内，避免指向不存在的条目。
-  // 在渲染期派生而不是放进 effect：effect 里 setState 会先用越界下标渲染一帧（空舞台）。
-  const index = items.length > 0 ? Math.min(rawIndex, items.length - 1) : rawIndex;
+  const feed = useShortsFeed(entrySeed, feedMotionActive);
+  const { items, index, setIndex, feedQuery } = feed;
   const current = items[index] ?? null;
-
-  // 在补货 effect 之前同步种子（声明顺序即 effect 执行顺序），保证预取读到的是
-  // 当前这条而不是上一条。只在有条目时覆盖：首屏尚未到货时保留入口种子，
-  // 别把「从播放页带进来的起点」冲成 null。
-  useEffect(() => {
-    if (current?.bvid) storySeedRef.current = current.bvid;
-  }, [current?.bvid]);
 
   /**
    * 进度条的缩略图表。
@@ -238,7 +202,7 @@ export function ShortsPage() {
   // 保留刚看过的那条的取流会话：方向翻转的第一次必然未命中预热（新目标既不在
   // 活动槽位也不在预热槽位），那一次实测要付 386~481ms 的取流。
   const retention = useShortsSessionRetention();
-  const { slots, slotStates, playback, noteDirection } = useShortsSlots({
+  const { slots, slotStates, playback, noteDirection } = useShortsStableSlots({
     items,
     index,
     refs: slotRefs,
@@ -246,20 +210,6 @@ export function ShortsPage() {
     retention,
   });
   const panels = useShortsPanels(current);
-
-  // 提前补货：等滑到最后一条再拉必然要等（story 单批只给 4~5 条）。
-  useEffect(() => {
-    if (
-      shortsShouldFetchMore(
-        index,
-        items.length,
-        feedQuery.hasNextPage,
-        feedQuery.isFetchingNextPage,
-      )
-    ) {
-      void feedQuery.fetchNextPage();
-    }
-  }, [feedQuery, index, items.length]);
 
   /* ---------- 长按倍速 ---------- */
 
@@ -401,6 +351,22 @@ export function ShortsPage() {
     vertical: boolean;
     samples: ShortsSwipeSample[];
   } | null>(null);
+
+  // 轴锁前尚未 capture 指针，抬手可能落在视口外；不能把分页接入门永久锁住。
+  useEffect(() => {
+    const finishPending = (event: PointerEvent) => {
+      const swipe = swipeRef.current;
+      if (!swipe || swipe.pointerId !== event.pointerId || swipe.vertical) return;
+      swipeRef.current = null;
+      if (!settlingRef.current) setFeedMotionActive(false);
+    };
+    window.addEventListener("pointerup", finishPending, true);
+    window.addEventListener("pointercancel", finishPending, true);
+    return () => {
+      window.removeEventListener("pointerup", finishPending, true);
+      window.removeEventListener("pointercancel", finishPending, true);
+    };
+  }, []);
 
   const stageHeight = useCallback(() => {
     const measured = viewportRef.current?.clientHeight ?? 0;
@@ -547,6 +513,7 @@ export function ShortsPage() {
       const from = offsetRef.current;
       if (duration <= 0 || from === target || prefersReducedMotion()) {
         settlingRef.current = false;
+        setFeedMotionActive(false);
         offsetRef.current = target;
         el.style.transform = `translate3d(0, ${target}px, 0)`;
         el.style.willChange = "";
@@ -555,6 +522,7 @@ export function ShortsPage() {
         return;
       }
       settlingRef.current = true;
+      setFeedMotionActive(true);
       offsetRef.current = target;
       el.style.willChange = "transform";
       const animation = el.animate(
@@ -571,6 +539,7 @@ export function ShortsPage() {
           if (animationRef.current !== animation) return;
           animationRef.current = null;
           settlingRef.current = false;
+          setFeedMotionActive(false);
           // 先写内联样式再取消动画：顺序颠倒会让部分 Android 合成器画出一帧未变换的层。
           el.style.transform = `translate3d(0, ${target}px, 0)`;
           animation.cancel();
@@ -608,7 +577,7 @@ export function ShortsPage() {
 
   useLayoutEffect(() => {
     parkTrack();
-  }, [parkTrack]);
+  }, [items, parkTrack]);
 
   // 视口高度变化（旋转、系统栏、软键盘）要重建纵向基准，否则第一条之后的
   // 条目会整个被推出屏幕。
@@ -656,13 +625,18 @@ export function ShortsPage() {
    */
   const goToIndex = useCallback(
     (next: number, velocity = 0) => {
-      if (next < 0 || next >= items.length || next === index) return;
+      if (feed.navigationLocked) return;
+      if (next < 0 || next >= items.length) {
+        if (feed.uploaderMode) void feed.load(next < 0 ? "prev" : "next");
+        return;
+      }
+      if (next === index) return;
       noteDirection(index, next);
       const target = shortsTrackOffset(next, stageHeight());
       settle(target, shortsSwipeSettleDuration(target - offsetRef.current, velocity));
       setIndex(next);
     },
-    [index, items.length, noteDirection, settle, stageHeight],
+    [feed, index, items.length, noteDirection, setIndex, settle, stageHeight],
   );
 
   const onPointerDownCapture = useCallback(
@@ -681,7 +655,8 @@ export function ShortsPage() {
       armSpeedHold(event);
       // 部分 Android WebView 对手指输入上报空的 pointerType。鼠标不参与换片
       // （桌面用滚轮与方向键，见下）。
-      if ((pointerType !== "touch" && pointerType !== "") || !event.isPrimary) return;
+      if ((pointerType !== "touch" && pointerType !== "") || !event.isPrimary || feed.navigationLocked) return;
+      setFeedMotionActive(true);
       // 这是页面级换片手势的起点：面板此刻的纵深基准就是「用手势接管之前」的静态画像，
       // 必须在这里采。一旦开始拖动，`offsetTop` 会被条带平移影响（这里读到的仍是布局值，
       // 但集合本身会在换片提交时增减），所以基准就该在按下时定下。
@@ -699,7 +674,7 @@ export function ShortsPage() {
         samples: [{ y: event.clientY, time: performance.now() }],
       };
     },
-    [armSpeedHold, collectDepthPanels, index, items.length, stageHeight],
+    [armSpeedHold, collectDepthPanels, feed.navigationLocked, index, items.length, stageHeight],
   );
 
   const onPointerMoveCapture = useCallback(
@@ -716,6 +691,7 @@ export function ShortsPage() {
         if (intent === "pending") return;
         if (intent === "reject") {
           swipeRef.current = null;
+          if (!settlingRef.current) setFeedMotionActive(false);
           return;
         }
         swipe.vertical = true;
@@ -761,7 +737,10 @@ export function ShortsPage() {
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-      if (!swipe.vertical) return;
+      if (!swipe.vertical) {
+        if (!settlingRef.current) setFeedMotionActive(false);
+        return;
+      }
       setGestureActive(false);
 
       if (cancelled) {
@@ -793,7 +772,7 @@ export function ShortsPage() {
       settle(target, shortsSwipeSettleDuration(target - offsetRef.current, velocity));
       setIndex(next);
     },
-    [settle],
+    [setIndex, settle],
   );
 
   const onPointerUpCapture = useCallback(
@@ -887,9 +866,38 @@ export function ShortsPage() {
   }, [panels.anyOpen, playback]);
 
   const goBack = useCallback(() => {
+    if (feed.uploaderMode) {
+      releaseSpeedHold();
+      swipeRef.current = null;
+      cancelSettle();
+      setGestureActive(false);
+      setFeedMotionActive(false);
+      feed.exitUploader();
+      return;
+    }
     if (hasBrowserHistoryEntry(window.history.state)) navigate(-1);
     else navigate("/", { replace: true });
-  }, [navigate]);
+  }, [cancelSettle, feed, navigate, releaseSpeedHold]);
+
+  // 作者模式是页内的一层：系统 Back / Escape 与顶栏返回采用相同优先级。
+  // 评论和菜单先消费返回，不一次关闭两层。
+  useEffect(() => {
+    if (!feed.uploaderMode) return;
+    const onBack = (event: Event) => {
+      if (event.defaultPrevented || document.querySelector(DISMISSIBLE_POPUP_SELECTOR)) return;
+      event.preventDefault();
+      goBack();
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onBack(event);
+    };
+    window.addEventListener(ANDROID_BACK_EVENT, onBack);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener(ANDROID_BACK_EVENT, onBack);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [feed.uploaderMode, goBack]);
 
   const openInPlayer = useCallback(() => {
     if (!current) return;
@@ -988,6 +996,8 @@ export function ShortsPage() {
       <div
         ref={viewportRef}
         data-slot="shorts-viewport"
+        data-feed-mode={feed.uploaderMode ? "uploader" : "recommendation"}
+        data-current-aid={current?.aid}
         // `media-skin` 提供 `--media-*` 令牌（白字 + 白色半透明悬停底）。复用播放器
         // HUD 的溢出菜单需要它：那些控件的配色走令牌，不在这个作用域里会落到应用
         // 前景色 —— 在黑舞台上变成看不见的深色图标。
@@ -1122,7 +1132,17 @@ export function ShortsPage() {
           )}
           style={{ height: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
         >
-          <ShortsBackButton onClick={goBack} inline />
+          <ShortsBackButton onClick={goBack} inline label={feed.uploaderMode ? "返回推荐流" : "返回上一页"} />
+          {feed.uploaderMode && (
+            <span
+              data-slot="shorts-uploader-position"
+              role="status"
+              aria-label={feed.counter ? `UP 主列表，第 ${feed.counter.replace("/", " 条，共 ")} 条` : "UP 主列表"}
+              className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-sm font-medium text-white tabular-nums"
+            >
+              {feed.counter ?? (feed.uploaderQuery.isError ? "UP 主列表" : "加载中…")}
+            </span>
+          )}
           <span className="ml-auto">
             <ShortsMoreMenu
               compact={compact}
@@ -1132,6 +1152,41 @@ export function ShortsPage() {
             />
           </span>
         </div>
+
+        {feed.uploaderMode && (
+          <div
+            data-slot="shorts-uploader-status"
+            className="pointer-events-auto absolute inset-x-12 z-20 flex flex-col items-center gap-1 text-center text-xs text-white"
+            style={{ top: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
+          >
+            {!feed.uploaderReady && feed.uploaderQuery.isError && (
+              <ErrorState
+                error={feed.uploaderQuery.error}
+                title="UP 主列表加载失败"
+                onRetry={() => {
+                  if (!feed.uploaderQuery.isFetching) void feed.uploaderQuery.refetch({ cancelRefetch: false });
+                }}
+                className="bg-black/90 px-3 py-2"
+              />
+            )}
+            {(["prev", "next"] as const).map((direction) => {
+              const error = feed.directionFailures?.[direction];
+              if (!error) return null;
+              return (
+                <ErrorState
+                  key={direction}
+                  error={error}
+                  title={`${direction === "prev" ? "前面" : "后面"}的条目加载失败`}
+                  onRetry={() => void feed.load(direction, true)}
+                  className="bg-black/90 px-3 py-2"
+                />
+              );
+            })}
+            {(feed.uploaderQuery.isFetchingPreviousPage || feed.uploaderQuery.isFetchingNextPage) && (
+              <span role="status" className="rounded-md bg-black/75 px-3 py-1">正在加载{feed.uploaderQuery.isFetchingPreviousPage ? "前面" : "后面"}的条目…</span>
+            )}
+          </div>
+        )}
 
         {/*
           长按倍速提示。挂在顶栏之下、视口固定层里：它描述的是「当前这一条正在被
@@ -1169,7 +1224,7 @@ export function ShortsPage() {
             size="icon"
             aria-label="上一条"
             title="上一条（↑）"
-            disabled={index === 0}
+            disabled={feed.navigationLocked || (index === 0 && !feed.hasPreviousPage)}
             className="size-10 rounded-full bg-black/40 text-white/90 hover:bg-white/20 hover:text-white disabled:opacity-30"
             onClick={() => goToIndex(index - 1)}
           >
@@ -1181,7 +1236,7 @@ export function ShortsPage() {
             size="icon"
             aria-label="下一条"
             title="下一条（↓）"
-            disabled={index >= items.length - 1 && !feedQuery.hasNextPage}
+            disabled={feed.navigationLocked || (index >= items.length - 1 && !feed.hasNextPage)}
             className="size-10 rounded-full bg-black/40 text-white/90 hover:bg-white/20 hover:text-white disabled:opacity-30"
             onClick={() => goToIndex(index + 1)}
           >
@@ -1232,7 +1287,16 @@ export function ShortsPage() {
                 头像 —— 一根只有装饰的操作栏不如不要。放在名字左边也更符合它本来的语义：
                 这是这条的作者。
               */}
-              <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                data-slot="shorts-uploader-entry"
+                aria-label={`查看 ${current.author || "该 UP 主"} 的竖屏流`}
+                title={current.author_mid?.trim() ? "从当前稿件浏览此 UP 主的竖屏流" : "UP 主标识缺失，暂不可查看列表"}
+                disabled={!current.author_mid?.trim() || feed.navigationLocked}
+                className="pointer-events-auto h-auto max-w-full justify-start gap-2 self-start rounded-md px-0 py-1 text-left text-white hover:bg-white/15 hover:text-white"
+                onClick={feed.enterUploader}
+              >
                 <Avatar className="size-8 shrink-0 after:border-white/40">
                   <AvatarImage
                     src={normalizeImageUrl(current.author_face)}
@@ -1244,21 +1308,22 @@ export function ShortsPage() {
                     {current.author?.slice(0, 1) || "U"}
                   </AvatarFallback>
                 </Avatar>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-white">
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-white">
                     @{current.author || "未知 UP 主"}
-                  </p>
+                  </span>
                   {/*
                     粉丝数只有 story 流白带（`owner.fans`），其余列表接口不给。
                     `null` 是「上游没说」而不是「0 个粉丝」，因此不渲染这一行。
                   */}
                   {current.author_fans != null && (
-                    <p className="truncate text-xs text-white/70">
+                    <span className="block truncate text-xs text-white/70">
                       {formatOnline(current.author_fans)} 粉丝
-                    </p>
+                    </span>
                   )}
-                </div>
-              </div>
+                </span>
+              </Button>
+              {!current.author_mid?.trim() && <p className="text-xs text-white/70">UP 主标识缺失，暂不可查看列表</p>}
 
               {/*
                 标题块：点标题开详情抽屉。
@@ -1704,12 +1769,12 @@ function useShortsPanels(item: { aid: string } | null) {
   );
 }
 
-function ShortsBackButton({ onClick, inline }: { onClick: () => void; inline?: boolean }) {
+function ShortsBackButton({ onClick, inline, label = "返回上一页" }: { onClick: () => void; inline?: boolean; label?: string }) {
   return (
     <MediaButton
       type="button"
-      aria-label="返回上一页"
-      title="返回上一页"
+      aria-label={label}
+      title={label}
       // 加载、错误和空态没有外层皮肤，需自行提供同一套尺寸与颜色令牌。
       className={cn(
         PLAYER_HUD_BUTTON_CLASS,

@@ -12,8 +12,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::models::video::{
     PgcListPage, VideoArchive, VideoCastSource, VideoCommentPage, VideoDanmakuSegment,
-    VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoSeason, VideoSessionIds, VideoStoryboard,
-    VideoSubtitle,
+    VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoSeason, VideoSessionIds,
+    VideoStoryDirection, VideoStoryboard, VideoSubtitle, VideoUploaderStoryPage,
 };
 use crate::sites::bilibili::BilibiliSite;
 use crate::sites::bilibili::video::VideoTrack;
@@ -131,6 +131,10 @@ pub async fn video_get_story(
     seed_bvid: Option<String>,
 ) -> AppResult<VideoListPage> {
     let site = resolve_bilibili(&state)?;
+    let pin_entry = !more.unwrap_or(false)
+        && seed_bvid
+            .as_deref()
+            .is_some_and(|seed| !seed.trim().is_empty());
     let mut seen = state.story_feed_seen.snapshot();
     // 数据库守卫必须在 await 之前放掉：它不是 Send，跨 await 持有会编译失败，
     // 而且那把锁是全应用共用的。
@@ -145,6 +149,10 @@ pub async fn video_get_story(
         .filter(|bvid| !bvid.is_empty())
         .or_else(|| recent.first().cloned());
     seen.extend(recent);
+    // 从 VOD 显式带入的首条不能被刚写入的观看历史过滤掉；补货仍按原规则去重。
+    if pin_entry && let Some(seed) = seed.as_ref() {
+        seen.remove(seed);
+    }
     let page = site
         .video_story(more.unwrap_or(false), &seen, seed.as_deref())
         .await?;
@@ -153,6 +161,19 @@ pub async fn video_get_story(
         .story_feed_seen
         .record(page.items.iter().map(|item| item.bvid.clone()));
     Ok(page)
+}
+
+/// 作者 story 使用真实双向游标，不经过推荐流的历史排除与进程 seen。
+#[tauri::command]
+pub async fn video_get_uploader_story(
+    state: State<'_, AppState>,
+    mid: String,
+    cursor_aid: Option<String>,
+    direction: Option<VideoStoryDirection>,
+) -> AppResult<VideoUploaderStoryPage> {
+    resolve_bilibili(&state)?
+        .video_uploader_story(&mid, cursor_aid.as_deref(), direction.unwrap_or_default())
+        .await
 }
 
 /// UGC 分区榜。`rid` 取自 [`crate::sites::bilibili::VIDEO_ZONES`]。

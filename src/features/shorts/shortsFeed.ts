@@ -10,6 +10,7 @@
  * 共用的是阈值口径与释放收尾的算法（见下方常量注释）。
  */
 
+import { videoDimensionAspect } from "@/shared/videoDimension";
 import type { VideoDimension, VideoItem } from "@/shared/types/video";
 
 /** 短视频页路径。刻意不挂在 `/video` 下：侧栏「视频」项按前缀匹配会跟着高亮。 */
@@ -59,10 +60,7 @@ export function shortsMediaAspect(
   if (intrinsic && intrinsic.width > 0 && intrinsic.height > 0) {
     return intrinsic.width / intrinsic.height;
   }
-  if (!dimension) return null;
-  const { width, height, rotate } = dimension;
-  if (!(width > 0) || !(height > 0)) return null;
-  return rotate === 0 ? width / height : height / width;
+  return videoDimensionAspect(dimension);
 }
 
 /**

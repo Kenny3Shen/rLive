@@ -28,7 +28,7 @@
 
 | 表面 | 端点与参数 | 认证 |
 | --- | --- | --- |
-| 推荐 | `GET /x/web-interface/wbi/index/top/feed/rcmd`，`version=1&feed_version=V8&homepage_ver=1&ps=<n>&fresh_idx=<i>&brush=<i>&fresh_type=4` | **需 WBI**；有 cookie 才是个性化流，匿名返回通用流。取 `data.item[]`，只保留 `goto=="av"` 且有 `owner`。**不产竖屏**：实测 115/115 条 `av` 均为横屏，加 Android 设备字段/`screen`/`web_location`/`homepage_ver` 等任何参数也不变（详见[短视频调研](短视频调研-B站与抖音.md) 2.8）。竖屏内容在 APP 的 feed 流，不在这个 PC 首页接口 |
+| 推荐 | `GET https://app.bilibili.com/x/v2/feed/index`，`build=8130300&mobi_app=android&platform=android&device=phone&style=2&column=4` | 匿名可用、免 WBI/appkey 签名，必须带 `buvid` 头。保留 `goto=av/vertical_av` 的横竖混合稿件，过滤广告/直播/PGC。`aid` 在 Rust 本地转换为 `bvid`，无逐条详情回查；画幅取 `dimension` 或 URI 的 `player_width/player_height/player_rotate`。有限串行取批、批内去重；前端无新增批次即停，刷新可重试。不承诺 Web Cookie 带来账号级个性化 |
 | 热门 | `GET /x/web-interface/popular?pn=&ps=` | 无 WBI、**匿名可用**。`data.list[]`，`data.no_more` 判尾页 |
 | 番剧 | `GET /pgc/season/index/result`，`st=1&season_type=1&order=3&sort=0&pagesize=20&type=1&page=<n>`，其余筛选位一律 `-1` | 无 WBI、匿名可用。`data.list[]` 仅含 `season_id/title/cover/badge/index_show/order`，**无 ep_id** |
 | 影视 | 同上，**加 `index_type=102`** | 同上 |
@@ -41,7 +41,7 @@
 | VOD 弹幕 | `GET /x/v2/dm/web/seg.so?type=1&oid=<cid>&pid=<aid>&segment_index=<n>` | **无需 cookie / UA / Referer / WBI**，返回裸 protobuf |
 | 稿件详情 | `GET /x/web-interface/view?bvid=` | **需 WBI**（未签名被风控拦下，返回 404 页）。`data` 含 `aid/desc/owner/stat/pubdate` |
 | 稿件 Tags | `GET /x/tag/archive/tags?bvid=` → `data[].tag_name` | 无 WBI、匿名可用；与稿件详情并发获取，失败降级为空，不阻断播放 |
-| 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全。**含竖屏**（实测 40/200 条），条目自带 `dimension`，但前端 `VideoCard` 封面固定 `aspect-video`，竖屏稿件看不出画幅 |
+| 相关视频 | `GET /x/web-interface/archive/related?bvid=` | 无 WBI、匿名可用。`data[]` 与热门条目同构，一次给全。**含竖屏**（实测 40/200 条），条目自带 `dimension`，前端 `VideoCard` 按实际画幅显示封面（含旋转），不再一律裁成 16:9 |
 | 评论 | `GET /x/v2/reply/wbi/main?type=1&oid=<aid>&mode=<2\|3>&ps=20&next=<cursor>`，WBI 签名 | 签名 + **匿名时不得携带任何 cookie**：实测携带 buvid3/4 的匿名会话只回 3 条并谎称 `is_end=true`（无 cookie 才给全量 20 条）；未签名裸路径被风控后一律 -352，签名路径放行。登录态带完整 cookie 同路径。置顶有两处：`data.top_replies[]` 与 `data.top.upper`（UP 主置顶对象，参考 PiliPlus 两者都解析）。**作者标识**：页面级 `data.upper.mid`（实测两个回复接口都下发）与评论者 `member.mid` 比对得出，条目上没有现成的作者字段 |
 | 二级回复 | `GET /x/v2/reply/reply?type=1&oid=<aid>&root=<rpid>&pn=&ps=<20\|10>&sort=2` | 匿名可用（不受 buvid 截断影响）。**pn 翻页有效**；`data.page.count` 是总数；`data.upper.mid` 同主接口下发，作者标识一并标到楼中楼。`ps` 由前端按需给：移动端无限滚动用默认 20，桌面端分页用 10（`video_get_comment_replies` 的可选 `pageSize`）；**`has_more` 必须按本次实际 `ps` 推导**（上游不给 `is_end`），套 20 会让 10 条一页的翻页在 pn=5 就误报到尾 |
 | 视频搜索 | `GET /x/web-interface/search/type`，`search_type=video&keyword=&page=&order=&duration=0&tids=0`；筛选位：`order`（click 播放多/pubdate 新发布/dm 弹幕多/stow 收藏多/scores 评论多，空=综合）、`duration`（0 全部/1 <10min/2 10-30/3 30-60/4 >60）、`tids` 大区 tid（0=全部，与分区榜 rid 两套 ID）、`pubtime_begin_s`/`pubtime_end_s`（day/week/halfYear 预设在后端换算成「N 天前零点 ~ 当天 23:59:59」） | 无 WBI、匿名可用。取 `data.result[]`，`numPages` 判尾页。时长为 `duration` 字符串（`H:MM:SS`） |
@@ -51,6 +51,14 @@
 season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7。
 
 **`aid` 已是超大整数**（实测 `117191437455648`），Rust 必须 `i64`；跨 IPC 建议序列化为字符串，前端只当标识符，禁止参与算术。
+
+### 推荐源与画幅适配
+
+- VOD 推荐只使用 APP 主 feed，不保留 `rcmd` 作为并行实现或静默回退。`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
+- APP 返回的播放/弹幕统计常是「万/亿」格式的显示近似数，映射结果不是精确计数；作者 UID、标题、画幅与取流键在 Rust 统一归一化。
+- `VideoCard` 的网格与行式封面都按 `dimension` 设置比例；旋转标记非零时交换宽高。未知尺寸与 PGC 保持原来的 16:9。混合网格保持原有行序、顶部对齐，不引入改变阅读顺序的瀑布流。
+- 推荐、通用 story、作者 story 统一通过 `get_app_feed` → `get_json_with_buvid_header`，共用 Cookie、代理、设备槽和错误处理。**不等于所有 B 站接口都换域**：详情、搜索、热门、播放、评论、弹幕仍使用已验证的 `api.bilibili.com` 端点；APP 域同路径 `/x/web-interface/view` 实测 404，APP `/x/v2/view` 在本次免签名参数下返回 -400，不能仅替换 host。未验证的 APP 等价能力不替换既有播放与账号权限链路。
+- `/shorts` 点头像/用户名可进入作者 story，从当前稿件继续，上方居中显示上游 `index/total`；详见[短视频功能](短视频功能.md)「UP 主竖屏流」。
 
 ## 四、DASH：三个关键实测结论
 

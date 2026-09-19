@@ -40,6 +40,7 @@ import {
   videoZoneChips,
 } from "./videoRoute";
 import { useVideoTabScope } from "./videoTabScope";
+import { nextRecommendPage } from "./videoFeed";
 
 /** 分区列表未就绪时的稳定空值，避免每次渲染换一个数组引用。 */
 const EMPTY_ZONES: readonly VideoZone[] = [];
@@ -108,7 +109,7 @@ export function VideoPage() {
   );
 
   const listQuery = useInfiniteQuery({
-    queryKey: ["video_list", tab, zoneKey ?? ""],
+    queryKey: ["video_list", tab, zoneKey ?? "", tab === "recommend" ? "app" : "web"],
     initialPageParam: 1,
     queryFn: async ({ pageParam }): Promise<VideoFeedPage> => {
       const page = pageParam as number;
@@ -126,9 +127,14 @@ export function VideoPage() {
       const indexType = tab === "cinema" ? 102 : null;
       return { kind: "pgc", ...(await videoGetPgcIndex(seasonType, indexType, page)) };
     },
-    // 分页语义完全信后端的 `has_more`：分区/排行榜类接口是榜单，它恒为 false，
-    // 前端不去猜「返回条数少于 pageSize 就是最后一页」。
-    getNextPageParam: (lastPage, allPages) => (lastPage.has_more ? allPages.length + 1 : undefined),
+    // APP 推荐没有真实页号。无新增条目的批次停止补货，避免去重后长度不变而空转。
+    // 热门/PGC 仍以各自上游的 has_more 为准，不按本地剩余条数猜结束。
+    getNextPageParam: (lastPage, allPages) =>
+      tab === "recommend"
+        ? nextRecommendPage(allPages.filter((page) => page.kind === "ugc"))
+        : lastPage.has_more
+          ? allPages.length + 1
+          : undefined,
     ...BROWSING_LIST_QUERY_OPTIONS,
     placeholderData: keepPreviousData,
   });

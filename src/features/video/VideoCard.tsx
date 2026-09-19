@@ -5,6 +5,7 @@ import { CalendarDays, MessageSquareText, Play } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
 import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
+import { videoCoverAspect } from "@/shared/videoDimension";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
 import {
@@ -25,11 +26,12 @@ import { videoPlayPath } from "./videoRoute";
  * 等一整套直播专属动作，VOD 一个都用不上。
  */
 
-const CARD_CLASS = "group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left";
+const CARD_CLASS =
+  "group flex w-full self-start flex-col overflow-hidden rounded-xl bg-transparent text-left";
 const COVER_CLASS =
-  "relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle";
+  "relative w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle";
 const COVER_IMAGE_CLASS =
-  "h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none";
+  "absolute inset-0 h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none";
 const BADGE_CLASS =
   "absolute inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm";
 
@@ -45,16 +47,22 @@ function CoverImage({
   previewMount,
   previewLoading,
   className,
+  aspectRatio = 16 / 9,
 }: {
   cover: string;
   overlay?: React.ReactNode;
   previewMount?: RefObject<HTMLDivElement | null>;
   previewLoading?: boolean;
   className?: string;
+  aspectRatio?: number;
 }) {
   const normalized = normalizeVideoCoverUrl(cover);
   return (
-    <div className={cn(COVER_CLASS, className)}>
+    <div
+      data-slot="video-card-cover"
+      className={cn(COVER_CLASS, className)}
+      style={{ aspectRatio }}
+    >
       {normalized ? (
         <img
           src={normalized}
@@ -152,8 +160,9 @@ export const VideoCard = memo(function VideoCard({
       )}
     >
       <CoverImage
+        aspectRatio={videoCoverAspect(item.dimension)}
         cover={item.cover}
-        // 封面按列宽取比例而不是固定 w-40：侧栏只有 300px，固定宽度会把文本列
+        // 封面按列宽取比例而不是固定 w-40:侧栏只有 300px,固定宽度会把文本列
         // 挤到 90 px 出头，标题每行只剩几个字。
         className={orientation === "row" ? "w-2/5 shrink-0 rounded-md" : undefined}
         previewMount={preview.mountRef}

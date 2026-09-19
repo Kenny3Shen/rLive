@@ -4,6 +4,9 @@
 //! 其他站点没有对应概念。因此这里作为 [`BilibiliSite`] 的 inherent impl 追加，
 //! 复用同一份 cookie、buvid 与 WBI 签名，而不去污染跨站点的 trait。
 
+mod app_feed;
+mod uploader_story;
+
 use std::collections::{BTreeMap, HashSet};
 
 use serde_json::Value;
@@ -256,6 +259,11 @@ fn video_item(item: &Value) -> VideoItem {
             .filter(|author| !author.is_empty())
             .unwrap_or_default(),
         author_face,
+        author_mid: owner
+            .and_then(|owner| owner.get("mid"))
+            .or_else(|| item.get("mid"))
+            .map(as_str)
+            .filter(|mid| !mid.is_empty() && mid != "0"),
         // 列表接口（推荐/搜索/热门/相关/投稿）都不下发粉丝数，只有 story feed 带。
         author_fans: None,
         duration: item_duration(item),
@@ -383,33 +391,6 @@ fn json_items<T>(
     Ok(build(&root, items))
 }
 
-/// 解析推荐流 `data.item[]`。
-///
-/// 该接口会混入直播、番剧等非稿件条目，只有 `goto == "av"` 且带 `owner` 的
-/// 才是可播的 UGC 稿件。
-pub fn parse_recommend(raw: &str) -> AppResult<VideoListPage> {
-    json_items(
-        raw,
-        "推荐流",
-        "data.item",
-        &["/data/item"],
-        |_root, items| {
-            let items: Vec<VideoItem> = items
-                .iter()
-                .filter(|item| item.get("goto").map(as_str).as_deref() == Some("av"))
-                .filter(|item| item.get("owner").is_some())
-                .map(video_item)
-                .filter(|item| !item.bvid.is_empty())
-                .collect();
-            // 推荐流是无限刷新的，只要这一刷还有内容就认为可以继续。
-            VideoListPage {
-                has_more: !items.is_empty(),
-                items,
-            }
-        },
-    )
-}
-
 /// 解析热门 `data.list[]`。尾页由 `data.no_more` 明确告知。
 pub fn parse_popular(raw: &str) -> AppResult<VideoListPage> {
     json_items(
@@ -493,6 +474,10 @@ fn story_item(item: &Value) -> VideoItem {
         // story 的 `owner.fans` 是白带的：实测 12/12 条都有，数值与
         // `x/web-interface/card` 的 `follower` 一致（同一 mid 实测均为 11389）。
         // 因此信息行里的粉丝数不需要额外请求。上游没给时为 `None`（不是 0）。
+        author_mid: owner
+            .and_then(|owner| owner.get("mid"))
+            .map(as_str)
+            .filter(|mid| !mid.is_empty() && mid != "0"),
         author_fans: owner.and_then(|owner| owner.get("fans")).map(as_i64),
         duration: video_duration(item.get("duration")),
         view: stat
@@ -536,7 +521,7 @@ pub fn parse_story(raw: &str) -> AppResult<VideoListPage> {
                 .map(story_item)
                 .filter(|item| !item.bvid.is_empty() && item.cid.is_some_and(|cid| cid > 0))
                 .collect();
-            // 无游标的轮换流：只要这一批还有内容就能继续拉（同 [`parse_recommend`]）。
+            // 无游标轮换流：此批有内容仍可继续请求，跨批去重由调用层负责。
             VideoListPage {
                 has_more: !items.is_empty(),
                 items,
@@ -1754,27 +1739,18 @@ fn search_filter_query(
     query
 }
 impl BilibiliSite {
-    /// 首页推荐流。
-    ///
-    /// 有 cookie 才是个性化流，匿名返回通用流。`fresh_idx`/`brush` 跟着页码走，
-    /// 上游据此吐出不重复的下一刷。
-    pub async fn video_recommend(&self, page: u32, page_size: u32) -> AppResult<VideoListPage> {
-        let page = page.max(1);
-        let mut params = BTreeMap::new();
-        params.insert("version".into(), "1".into());
-        params.insert("feed_version".into(), "V8".into());
-        params.insert("homepage_ver".into(), "1".into());
-        params.insert("ps".into(), page_size.clamp(1, 30).to_string());
-        params.insert("fresh_idx".into(), page.to_string());
-        params.insert("brush".into(), page.to_string());
-        params.insert("fresh_type".into(), "4".into());
-        let text = self
-            .get_json_signed(
-                "https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd",
-                params,
-            )
-            .await?;
-        parse_recommend(&text)
+    /// APP 的推荐、story 与作者 story 共用请求层，不建立第二套 Cookie/设备状态。
+    async fn get_app_feed(&self, path: &str, query: &[(&str, String)]) -> AppResult<String> {
+        self.get_json_with_buvid_header(
+            &format!("https://app.bilibili.com/x/v2/feed/index{path}"),
+            query,
+        )
+        .await
+    }
+
+    /// 横竖混合的 APP 推荐。page 只保留 IPC 兼容性，不冒充上游游标。
+    pub async fn video_recommend(&self, _page: u32, page_size: u32) -> AppResult<VideoListPage> {
+        self.video_app_recommend(page_size).await
     }
 
     /// 热门。该接口不需要 WBI，匿名可用。
@@ -1827,10 +1803,7 @@ impl BilibiliSite {
         let mut last_err = None;
         for _ in 0..batches {
             match self
-                .get_json_with_buvid_header(
-                    "https://api.bilibili.com/x/v2/feed/index/story",
-                    &story_query_params(seed),
-                )
+                .get_app_feed("/story", &story_query_params(seed))
                 .await
                 .and_then(|text| parse_story(&text))
             {
@@ -3063,35 +3036,6 @@ mod tests {
     // --- 列表解析 ---
 
     #[test]
-    fn recommend_keeps_only_playable_ugc_items() {
-        let raw = serde_json::json!({
-            "code": 0,
-            "data": { "item": [
-                { "goto": "av", "id": 117_191_437_455_648_i64, "bvid": "BV1x", "cid": 41_473_934_959_i64,
-                  "title": "标题", "pic": "http://i1.hdslb.com/a.jpg", "duration": 258, "pubdate": 1_788_226_200,
-                  "owner": { "name": "up主", "face": "https://i0.hdslb.com/bfs/face/x.jpg" },
-                  "stat": { "view": 1_465_320, "danmaku": 547 }, "rcmd_reason": null },
-                // 直播卡：没有 owner，不可播。
-                { "goto": "live", "id": 5, "title": "直播" },
-                // 番剧卡：goto 不是 av。
-                { "goto": "bangumi", "id": 6, "bvid": "BV1y", "owner": { "name": "x" } },
-            ]}
-        })
-        .to_string();
-
-        let page = parse_recommend(&raw).expect("推荐流应解析成功");
-        assert_eq!(page.items.len(), 1);
-        let item = &page.items[0];
-        // aid 必须是字符串且保持全精度：按 f64 走会丢到 117191437455648 之外。
-        assert_eq!(item.aid, "117191437455648");
-        assert_eq!(item.cid, Some(41_473_934_959));
-        assert_eq!(item.view, 1_465_320);
-        // http 封面必须升级成 https，否则 WebView 按混合内容拦掉。
-        assert_eq!(item.cover, "https://i1.hdslb.com/a.jpg");
-        assert!(page.has_more);
-    }
-
-    #[test]
     fn popular_reads_object_rcmd_reason_and_no_more_flag() {
         let raw = serde_json::json!({
             "code": 0,
@@ -3196,6 +3140,7 @@ mod tests {
             title: String::new(),
             cover: String::new(),
             author: String::new(),
+            author_mid: None,
             author_face: None,
             author_fans: None,
             duration: 0,
@@ -4008,7 +3953,12 @@ mod tests {
             }
         })
         .to_string();
-        assert!(!parse_comment_replies(&unknown, 1, COMMENT_REPLIES_PAGE_SIZE).unwrap().items[0].is_upper);
+        assert!(
+            !parse_comment_replies(&unknown, 1, COMMENT_REPLIES_PAGE_SIZE)
+                .unwrap()
+                .items[0]
+                .is_upper
+        );
     }
 
     #[test]
@@ -4076,7 +4026,11 @@ mod tests {
             "data": { "page": { "count": 5 }, "replies": [ { "rpid": 2, "member": { "uname": "乙", "mid": "2" }, "content": { "message": "x" } } ] }
         })
         .to_string();
-        assert!(!parse_comment_replies(&last, 1, COMMENT_REPLIES_PAGE_SIZE).unwrap().has_more);
+        assert!(
+            !parse_comment_replies(&last, 1, COMMENT_REPLIES_PAGE_SIZE)
+                .unwrap()
+                .has_more
+        );
     }
 
     /// 桌面端分页用更小的 `ps`：`has_more` 必须按实际页大小推导，套默认的 20
