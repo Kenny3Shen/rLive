@@ -26,6 +26,13 @@ use crate::models::live::TwitchAdRecovery;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// 媒体转发的逐读间隔超时（相邻两次读之间，不是总时长）。
+///
+/// CDN 对某个分片中途 stall 时，没有它连接会永久挂起且被留在连接池里，后续重取
+/// 复用到它就再次挂死。取 15 秒：足以容忍慢速 CDN 的单块抵达延迟（实测健康
+/// 分片块间隔远低于此），又足以在播放卡住时把死连接及时报错丢出池外，让
+/// dash.js/原生媒体元素的重取拿到新连接而自愈。
+const SEGMENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
 // 留出足够时间交付一份 gap 播放列表。
 const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
@@ -2403,11 +2410,19 @@ mod tests {
 
 /// 流式传输刻意不设整体请求超时：健康的直播响应可以无限期保持打开。
 /// 连接到该代理实例的所有客户端仍共享相同的传输层限制。
+///
+/// 但设一个 `read_timeout`（相邻两次读之间的最大间隔，不是总时长）：CDN 对某个
+/// 分片中途 stall（既不发字节也不关连接）时，没有它 reqwest 会永久挂起，那条死
+/// 连接还会被留在连接池里 —— dash.js 重取同一分片复用到它就再次挂死，表现为
+/// 第二分片「卡死失败」。读超时让 stall 的读在 `SEGMENT_READ_TIMEOUT` 后报错，
+/// 死连接随即被丢出池外，dash.js 的下一次重取拿到新连接即可自愈。健康的直播/
+/// VOD 流字节持续到达，永远不会触及这个间隔上限，因此对正常播放无影响。
 fn build_stream_client(proxy: Option<&str>) -> AppResult<Client> {
     crate::http_client::with_proxy(
         Client::builder()
             .use_native_tls()
             .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(SEGMENT_READ_TIMEOUT)
             .pool_max_idle_per_host(2)
             .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT),
         proxy,

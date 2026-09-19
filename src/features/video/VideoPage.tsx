@@ -1,5 +1,10 @@
-import { memo, useMemo } from "react";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { memo, useMemo, useState } from "react";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Loader2, Video } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
@@ -109,8 +114,14 @@ export function VideoPage() {
     chips,
   );
 
+  const listQueryKey = [
+    "video_list",
+    tab,
+    zoneKey ?? "",
+    tab === "recommend" ? "app" : "web",
+  ] as const;
   const listQuery = useInfiniteQuery({
-    queryKey: ["video_list", tab, zoneKey ?? "", tab === "recommend" ? "app" : "web"],
+    queryKey: listQueryKey,
     initialPageParam: 1,
     queryFn: async ({ pageParam }): Promise<VideoFeedPage> => {
       const page = pageParam as number;
@@ -162,13 +173,24 @@ export function VideoPage() {
     isFetchNextPageError,
   });
 
-  const refreshing = listQuery.isRefetching && !listQuery.isFetchingNextPage;
+  // 刷新是一个手动动作，用独立 state 表达它的进行中状态：不能复用 `isRefetching`，
+  // 因为 `resetQueries` 把查询抹成初始态后重取首页，那是 `isLoading` 而不是 `isRefetching`。
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const refreshing = manualRefreshing || (listQuery.isRefetching && !listQuery.isFetchingNextPage);
   const title = `${VIDEO_TAB_LABELS[tab]}视频`;
+  const queryClient = useQueryClient();
 
   const refresh = () => {
     // 分区表失败后条带是空的；一次下拉理应把它一起救回来。
     if (zonesQuery.isError) void zonesQuery.refetch();
-    void listQuery.refetch();
+    // infinite query 的 `refetch()` 会把已加载的每一页按顺序**串行重取**（实测翻到
+    // 第 5 页后刷新 = 5 次串行 IPC 往返，约 8.7s）。而“刷新”的语义是把信息流从
+    // 头重拉，旧的尾页本就该丢掉。`resetQueries` 把查询重置到 `initialPageParam` 并
+    // 只重取首页，把刷新成本从 O(已加载页数) 降回 O(1)。
+    setManualRefreshing(true);
+    void queryClient
+      .resetQueries({ queryKey: listQueryKey })
+      .finally(() => setManualRefreshing(false));
   };
 
   const selectZone = (key: string) => {

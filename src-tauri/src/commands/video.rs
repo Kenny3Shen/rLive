@@ -375,27 +375,38 @@ pub async fn video_get_play_info(
 
     // 仅音频模式（听视频）不起视频轨代理，也不合成 MPD：音轨 fMP4 是完整
     // 文件，代理转发 Range，前端把 audio_url 直接交给媒体元素播放。
-    let video_url = if audio_only {
-        String::new()
-    } else {
-        state
+    //
+    // video 与 audio 两条代理互不依赖（各绑一个回环端口 + 各建一个 TLS 客户端），
+    // 并发启动省掉一次串行的本地开销；mpd 依赖两者返回的本机 URL，必须最后串行。
+    let (video_url, audio_url) = if audio_only {
+        let audio_url = state
             .stream_proxy
             .start(
-                selection.video.base_url.clone(),
+                selection.audio.base_url.clone(),
                 headers.clone(),
-                session_ids.video.clone(),
+                session_ids.audio.clone(),
                 StreamProxyStartOptions {
                     proxy: proxy.as_deref(),
-                    media_cache: video_cache.clone(),
+                    media_cache: audio_cache.clone(),
                     media_cache_store: media_cache_store.clone(),
                     ..Default::default()
                 },
             )
-            .await?
-    };
-    let audio_url = state
-        .stream_proxy
-        .start(
+            .await?;
+        (String::new(), audio_url)
+    } else {
+        let video_start = state.stream_proxy.start(
+            selection.video.base_url.clone(),
+            headers.clone(),
+            session_ids.video.clone(),
+            StreamProxyStartOptions {
+                proxy: proxy.as_deref(),
+                media_cache: video_cache.clone(),
+                media_cache_store: media_cache_store.clone(),
+                ..Default::default()
+            },
+        );
+        let audio_start = state.stream_proxy.start(
             selection.audio.base_url.clone(),
             headers.clone(),
             session_ids.audio.clone(),
@@ -405,8 +416,10 @@ pub async fn video_get_play_info(
                 media_cache_store: media_cache_store.clone(),
                 ..Default::default()
             },
-        )
-        .await?;
+        );
+        let (video_url, audio_url) = tokio::join!(video_start, audio_start);
+        (video_url?, audio_url?)
+    };
 
     let mut mpd_url = String::new();
     if !audio_only {
