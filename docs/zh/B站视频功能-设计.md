@@ -212,10 +212,10 @@ message DanmakuElem {
 
 ### 播放偏好（循环播放、连播与音量记忆）
 
-- 普通详情模式的「播放设置」弹层分为清晰度、倍速和播放偏好开关。开关行与设置页、字幕菜单同源（`Field` + `FieldLabel` + `Switch`，标签可点）；「循环播放」常驻，有列表时多一项「自动切集」，UGC 多一项「自动连播」；三项由 `playlistStore` 持久化到 localStorage `video-playlist`。
-- 「播放下一个」按钮只认当前视频自身的选集：`nextSelectionItem` 按 PGC 分集表 / UGC 多 P / UGC 合集顺序取当前项的下一项，取不到（无选集或已在最后一集）就不传 `onNext`，按钮随之消失。它不沿来源队列 —— 来源队列的切换仍由键盘 `N`/`P` 与滑动承担，因此按钮在推荐、搜索、UP 投稿队列里不再出现。
-- 推荐/热门/相关流队列保留手动切换，但不把下一条当作自动切集；搜索、UP 投稿及显式点选分 P/合集分集仍可自动连播；稿件信息不覆盖已有来源队列，无有效来源的多 P 直链仍自动建立选集队列。
-- 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext, autoPlayRelated)` 决定，优先级固定：循环 > 连播下一集 > 连播相关视频 > 停住。`hasNext` 只看来源队列邻项，推荐/热门/相关流的邻项不计入（`getNextAutoPlayItem` 对 `feed` 返回 null），这类队列走完即落到相关连播。循环是「就看这一集」的显式意图，不该被连播带走；`autoPlayRelated` 是 UGC 专属偏好（PGC 没有相关视频列表，也没有可定位的 bvid），关闭或相关视频为空时停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效。
+- 普通详情模式的「播放设置」弹层分为清晰度、倍速和播放偏好开关。开关行与设置页、字幕菜单同源（`Field` + `FieldLabel` + `Switch`，标签可点）；「循环播放」常驻，列表多于一项或当前视频自身有选集时多一项「自动切集」，UGC 多一项「自动连播」；三项由 `playlistStore` 持久化到 localStorage `video-playlist`。
+- 「播放下一个」按钮与自动切集共用同一个目标：`nextSelectionItem` 按 PGC 分集表 / UGC 多 P / UGC 合集顺序取当前项的下一项，取不到（无选集或已在最后一集）就不传 `onNext`，按钮随之消失。
+- 推荐/热门/相关流队列保留手动切换，但不把下一条当作自动切集；搜索、UP 投稿队列保留为选集之后的退路；稿件信息不覆盖已有来源队列，无有效来源的多 P 直链仍自动建立选集队列。
+- 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext, autoPlayRelated)` 决定，优先级固定：循环 > 连播下一集 > 连播相关视频 > 停住。`hasNext` 的目标经 `videoEndedTarget(selectionNext, queueNext)` 选出：当前视频自身选集的下一项优先，没有才退回来源队列邻项（搜索/UP 投稿）；推荐/热门/相关流的邻项不计入（`getNextAutoPlayItem` 对 `feed` 返回 null），这类队列走完即落到相关连播。搜索/投稿队列的条目没有 cid（列表项以 0 占位），取流键由历史续播/稿件详情补出，若沿队列邻项走就会切到另一个视频，因此选集优先。循环是「就看这一集」的显式意图，不该被连播带走；`autoPlayRelated` 是 UGC 专属偏好（PGC 没有相关视频列表，也没有可定位的 bvid），关闭或相关视频为空时停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效；选集经 `selectionNextItemRef` 读取，因为分集表/稿件详情晚于播放器就位，延迟窗口里还会再取一次。
 - 两条连播的等待窗口不同：换集 1 秒，相关连播 3 秒。跳转前的校验按已定下的 `action` 只查它对应的开关现值（`stillWanted`），因此等待期间关掉开关、按暂停、换片或重播都会取消这次跳转；`cancelled`/`loopPlayback` 又是两条路径共用的守卫。
 - 相关连播沿用来源队列耗尽时的同一条路径（`playRelatedItem`：取相关视频接口、按 `relatedPlaylistItems` 去重并滤掉当前视频、以 `feed` 类型装入队列、跳转第一个）。
 - 循环重播走原生 `media.currentTime = 0` + `play()`（与 seek 同一条 DASH 路径）；进度已在 `ended` 里按总时长记满，观看历史仍认定「已看完」，下次进入从头播放。

@@ -170,6 +170,7 @@ import {
   playlistItemFromVideoItem,
   usePlaylistStore,
   videoEndedAction,
+  videoEndedTarget,
   type PlaylistItem,
 } from "./playlistStore";
 import { notify, setToastPortalContainer } from "@/components/ui/toast";
@@ -731,6 +732,18 @@ function VideoPlayerPageContent() {
     episodes: seasonQuery.data?.episodes,
     archive: archiveQuery.data,
   });
+  /**
+   * 播完后的跳转目标：当前视频自身选集的下一项优先于来源队列的邻项。
+   *
+   * 播放器实例跨多集存活，而稿件详情/分集表晚于它就位，结束回调因此经 ref 读
+   * 最新选集。否则从搜索/投稿队列进入的多 P 稿件（列表项 cid 为 0 占位、取流键
+   * 由历史续播或详情补出）播完时会沿来源队列跳到另一个视频；从推荐/相关流进入
+   * 的（`feed` 队列不自动连播）则直接落到相关视频。
+   */
+  const selectionNextItemRef = useRef<PlaylistItem | null>(null);
+  useLayoutEffect(() => {
+    selectionNextItemRef.current = selectionNextItem;
+  }, [selectionNextItem]);
 
   /** 自动连播、控件、快捷键与滑动共用导航；滑动不往返回栈里逐条堆视频。 */
   const goToPlaylistItem = useCallback(
@@ -1269,7 +1282,8 @@ function VideoPlayerPageContent() {
       reportProgress(total > 0 ? total : media.currentTime, true);
       // 偏好可能在播放期间被改，读 store 快照而不是播放器挂载时的闭包值。
       const state = usePlaylistStore.getState();
-      const nextItem = state.getNextAutoPlayItem();
+      // 选集（分 P/合集/分集）的下一集优先于来源队列的邻项，见 videoEndedTarget。
+      const nextItem = videoEndedTarget(selectionNextItemRef.current, state.getNextAutoPlayItem());
       const action = videoEndedAction(
         state.loopPlayback,
         state.autoPlayNext,
@@ -1317,7 +1331,12 @@ function VideoPlayerPageContent() {
       const delay = action === "related" ? RELATED_AUTOPLAY_DELAY_MS : 1_000;
       endedTimer = setTimeout(() => {
         if (action === "next") {
-          if (stillWanted() && nextItem) goToPlaylistItem(nextItem);
+          // 等待窗口里选集可能才就位（详情/分集表晚于播放器），重取一次目标。
+          const target = videoEndedTarget(
+            selectionNextItemRef.current,
+            usePlaylistStore.getState().getNextAutoPlayItem(),
+          );
+          if (stillWanted() && target) goToPlaylistItem(target);
           return;
         }
         playRelatedItem(stillWanted);
@@ -2360,7 +2379,7 @@ function VideoPlayerPageContent() {
         checked={playlistStore.loopPlayback}
         onToggle={playlistStore.toggleLoopPlayback}
       />
-      {playlistStore.items.length > 1 && (
+      {(playlistStore.items.length > 1 || selectionNextItem !== null) && (
         <PlaybackSettingRow
           id="video-playback-next"
           label="自动切集"

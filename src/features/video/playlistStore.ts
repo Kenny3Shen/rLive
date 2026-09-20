@@ -193,6 +193,22 @@ export function videoEndedAction(
   return autoPlayRelated ? "related" : "stop";
 }
 
+/**
+ * 播完后「下一集」该往哪去：当前视频自身选集的下一项优先于来源队列的邻项。
+ *
+ * 来源队列的邻项是「用户点开时那个列表里的下一条」，它不是这部作品的下文：
+ * 搜索/投稿队列的条目没有 cid（列表项以 0 占位），推荐/热门/相关流队列本就
+ * 不自动连播。沿它们走会把播完的选集切到另一个视频上（搜索队列的下一条，
+ * 或相关视频的第一个）。选集（分 P / UGC 合集 / PGC 分集）才是「下一集」的
+ * 正确回答；没有下一集时才退回来源队列，仍没有才轮到相关连播。
+ */
+export function videoEndedTarget(
+  selectionNext: PlaylistItem | null,
+  queueNext: PlaylistItem | null,
+): PlaylistItem | null {
+  return selectionNext ?? queueNext;
+}
+
 /** 取当前项沿播放方向的相邻项：step=1 是「下一个」，-1 是「上一个」。 */
 function adjacentItem(
   state: Pick<PlaylistState, "items" | "currentId">,
