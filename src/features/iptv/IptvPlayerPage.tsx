@@ -395,10 +395,12 @@ export function IptvPlayerPage() {
         <div
           className={cn(
             // 竖屏按播放器自身画幅占位，剩余高度留给频道列表，不再把画面居中在半屏里。
+            // 宽屏（lg）改为拉伸填满：舞台占满整个左列（与直播/视频页一致），
+            // 不再居中在定宽盒子里，也不留 padding。
             "flex min-h-0 min-w-0 justify-center",
             webFullscreen
               ? "flex-1 items-stretch"
-              : "w-full flex-none items-start max-lg:max-h-[70%] lg:flex-1 lg:items-center lg:p-5",
+              : "w-full flex-none items-start max-lg:max-h-[70%] lg:flex-1 lg:items-stretch",
           )}
         >
           <IptvPlayer

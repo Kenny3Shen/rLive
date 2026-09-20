@@ -488,7 +488,13 @@ function IptvPlayerContent({
         "relative flex w-full min-w-0 flex-col overflow-hidden bg-black",
         webFullscreen
           ? "h-full rounded-none border-0"
-          : "h-auto max-h-full aspect-[var(--stage-ar,16/9)] border border-border-subtle shadow-sm",
+          : cn(
+              // 窄屏（竖屏堆叠）保持定宽画幅盒子，画面之下接频道列表。
+              "h-auto max-h-full aspect-[var(--stage-ar,16/9)] border border-border-subtle shadow-sm",
+              // 宽屏与直播/视频页一致：舞台填满整个左列，去掉盒子的边框/阴影，
+              // 画幅比让位给 contain 居中（右侧频道栏自带分隔边线）。
+              "lg:aspect-auto lg:h-full lg:max-h-full lg:border-0 lg:shadow-none",
+            ),
       )}
     >
       <VideoJsContainer
