@@ -11,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { AlertCircle, ChevronLeft, Radio, Tv } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -118,8 +119,15 @@ type IptvPlayerProps = {
   /** 页面返回：挂在顶部 HUD 的返回箭头上；全屏时先退全屏层。 */
   onBack?: () => void;
   backLabel?: string;
-  /** 顶部 HUD 右侧的低频工具（关注/录制），由页面层提供。 */
-  hudToolsSlot?: ReactNode;
+  /**
+   * 顶部 HUD 右侧的低频工具（关注/录制），由页面层提供。
+   *
+   * 传入渲染函数而非现成节点：原生全屏时录制 popover 默认 portal 到 `<body>` 会被
+   * top layer 盖住，因此把舞台作为 portal 容器（`portalContainer`）回传给页面，
+   * 非全屏时为 null 继续走默认 body 宿主。 */
+  hudToolsSlot?: (options: {
+    portalContainer: RefObject<HTMLDivElement | null> | null;
+  }) => ReactNode;
 };
 
 /** 共享浏览器媒体生命周期模块的 IPTV 页面适配器。 */
@@ -689,19 +697,23 @@ function IptvPlayerContent({
                   直播
                 </Badge>
                 <span
-                  data-mobile-static-backdrop
                   className={cn(
-                    "inline-flex items-center min-w-0 truncate rounded-md bg-black/55 px-2 py-1 text-primary-foreground backdrop-blur leading-none",
+                    // 与直播/视频页同一画法：标题直接用白字 + 阴影抛在 scrim 上，
+                    // 不再包一层黑色背景盒。
+                    "min-w-0 flex-1 truncate font-semibold leading-none text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]",
                     PLAYER_HUD_TITLE_SIZE_CLASS,
                   )}
+                  title={channel.name}
                 >
                   {channel.name}
                 </span>
               </div>
-              {/* 原生全屏不挂工具：RecordingControl 的 popover 默认 portal 到
-                  `<body>`，会被 top layer 盖住（与直播页同一取舍）。 */}
-              {!fullscreen && hudToolsSlot && (
-                <div className="flex shrink-0 items-center gap-1">{hudToolsSlot}</div>
+              {/* 工具槽在全屏与窗口化下都渲染；原生全屏时把舞台作为 portal 容器传下，
+                  使录制选项盒不被 top layer 盖住（关注按钮无 popover，无所谓）。 */}
+              {hudToolsSlot && (
+                <div className="flex shrink-0 items-center gap-1">
+                  {hudToolsSlot({ portalContainer: fullscreen ? playerStageRef : null })}
+                </div>
               )}
             </div>
           </div>

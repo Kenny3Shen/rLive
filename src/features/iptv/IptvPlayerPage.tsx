@@ -255,44 +255,50 @@ export function IptvPlayerPage() {
     </>
   );
   // 顶部 HUD 右侧工具：关注与录制（旧流内顶栏的迁移，遮罩上的白色图标画法）。
-  const hudTools =
-    channel !== null ? (
-      <>
-        <RecordingControl
-          context={recordingContext}
-          disabled={!recordingContext}
-          variant="overlay"
-        />
-        {favoriteEnabled && (
-          <MediaButton
-            type="button"
-            aria-label={isFavorite ? "取消关注频道" : "关注频道"}
-            aria-pressed={isFavorite}
-            title={isFavorite ? "取消关注" : "关注频道"}
-            aria-disabled={
-              (favoriteMutation.isPending &&
-                favoriteMutation.variables?.channel.url === channel.url) ||
-              undefined
-            }
-            disabled={
-              favoriteMutation.isPending && favoriteMutation.variables?.channel.url === channel.url
-            }
-            className={PLAYER_HUD_BUTTON_CLASS}
-            onClick={() => favoriteMutation.mutate({ channel, isFavorite })}
-          >
-            {favoriteMutation.isPending &&
-            favoriteMutation.variables?.channel.url === channel.url ? (
-              <Spinner className={PLAYER_HUD_ICON_CLASS} aria-hidden />
-            ) : (
-              <Heart
-                className={cn(PLAYER_HUD_ICON_CLASS, isFavorite && "fill-current")}
-                aria-hidden
-              />
+  // 传入渲染函数：原生全屏时把播放器舞台作为 portal 容器交给录制选项盒，
+  // 使其不被 top layer 盖住（关注按钮无 popover，portalContainer 对它无影响）。
+  const renderHudTools: React.ComponentProps<typeof IptvPlayer>["hudToolsSlot"] =
+    channel !== null
+      ? ({ portalContainer }) => (
+          <>
+            <RecordingControl
+              context={recordingContext}
+              disabled={!recordingContext}
+              variant="overlay"
+              portalContainer={portalContainer}
+            />
+            {favoriteEnabled && (
+              <MediaButton
+                type="button"
+                aria-label={isFavorite ? "取消关注频道" : "关注频道"}
+                aria-pressed={isFavorite}
+                title={isFavorite ? "取消关注" : "关注频道"}
+                aria-disabled={
+                  (favoriteMutation.isPending &&
+                    favoriteMutation.variables?.channel.url === channel.url) ||
+                  undefined
+                }
+                disabled={
+                  favoriteMutation.isPending &&
+                  favoriteMutation.variables?.channel.url === channel.url
+                }
+                className={PLAYER_HUD_BUTTON_CLASS}
+                onClick={() => favoriteMutation.mutate({ channel, isFavorite })}
+              >
+                {favoriteMutation.isPending &&
+                favoriteMutation.variables?.channel.url === channel.url ? (
+                  <Spinner className={PLAYER_HUD_ICON_CLASS} aria-hidden />
+                ) : (
+                  <Heart
+                    className={cn(PLAYER_HUD_ICON_CLASS, isFavorite && "fill-current")}
+                    aria-hidden
+                  />
+                )}
+              </MediaButton>
             )}
-          </MediaButton>
-        )}
-      </>
-    ) : null;
+          </>
+        )
+      : undefined;
 
   // 侧栏频道列表：常规来源用当前播放列表；收藏快照来源（无 HTTP 播放列表）用收藏列表。
   const sidebarChannels = useMemo(() => {
@@ -412,7 +418,7 @@ export function IptvPlayerPage() {
             onReconnect={handleReconnect}
             onBack={goBack}
             backLabel={directRequested ? "返回设置" : "返回频道列表"}
-            hudToolsSlot={hudTools}
+            hudToolsSlot={renderHudTools}
           />
         </div>
         {!webFullscreen && sidebarChannels && (

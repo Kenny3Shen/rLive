@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type RefObject } from "react";
 import { CircleDot, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
@@ -34,6 +34,11 @@ type RecordingControlProps = {
    * `overlay` 是画面之上的全屏 HUD，跟返回箭头、溢出菜单同一套 36px MediaButton。
    */
   variant?: "default" | "overlay";
+  /**
+   * Popover portal 目标。默认 <body>；原生全屏下 body 弹层会被 top layer 盖住，
+   * 此时传入播放器舞台，使录制选项盒渲染进全屏元素内部（与 PlayerControls 同一取舍）。
+   */
+  portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
 };
 
 /**
@@ -45,6 +50,7 @@ export function RecordingControl({
   className,
   disabled = false,
   variant = "default",
+  portalContainer,
 }: RecordingControlProps) {
   const controller = useRecordingController(context);
   const defaultIncludeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
@@ -158,6 +164,7 @@ export function RecordingControl({
       <PopoverContent
         side="bottom"
         align="end"
+        container={portalContainer}
         collisionPadding={12}
         glass
         className={cn(
