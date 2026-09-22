@@ -132,7 +132,7 @@ impl DouyinSite {
     fn login_required() -> AppError {
         AppError::new(
             "douyin_login_required",
-            "抖音直播搜索需要登录，请在账号管理中配置完整的抖音 Cookie",
+            "抖音此功能需要登录，请在账号管理中扫码登录或配置完整的抖音 Cookie",
         )
         .with_site("douyin")
     }

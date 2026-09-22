@@ -405,6 +405,7 @@ pub fn run() {
             video_get_pgc_zone,
             video_get_season,
             video_get_play_info,
+            commands::douyin_video::douyin_video_feed,
             commands::douyin_video::douyin_video_resolve,
             commands::douyin_video::douyin_video_stop,
             video_get_cast_url,

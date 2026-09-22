@@ -1,82 +1,31 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useId, useMemo, useState } from "react";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Play } from "lucide-react";
+import { ArrowLeft, ArrowRight, Play, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { PendingPlaybackRequests } from "./pendingPlaybackRequests";
-import { douyinVideoResolve, douyinVideoStop, type DouyinVideoPlayback } from "./douyinVideoApi";
+import { DouyinVideoPlayer } from "./DouyinVideoPlayer";
+import { douyinVideoFeed } from "./douyinVideoApi";
+import { DOUYIN_FEED_MAX_BATCHES, mergeDouyinFeed, nextDouyinFeedBatch } from "./douyinFeed";
 
-/**
- * 实验入口只消费单作品，不伪装成 B 站条目，也不复制三槽/Feed/弹幕实现。
- * MP4 直接走原生媒体，请求头与 Range 交给既有 Rust stream_proxy。
- */
+/** 默认关闭、仅本次进入生效的灰度入口；不新增账号存储或平行播放器。 */
 export function DouyinVideoPage() {
   const [input, setInput] = useState("");
   const [request, setRequest] = useState<{ input: string; revision: number } | null>(null);
-  const [mediaError, setMediaError] = useState<string | null>(null);
-  const ownerId = useId();
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const release = (info: DouyinVideoPlayback) => {
-    void douyinVideoStop(info).catch(() => undefined);
-  };
-  const pending = useMemo(
-    () => new PendingPlaybackRequests<DouyinVideoPlayback>(release),
-    // 每次显式打开/重试是新的所有权范围。
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [request],
-  );
-  useEffect(() => () => pending.clear(), [pending]);
-  const query = useQuery({
-    queryKey: ["douyin_video", ownerId, request],
-    enabled: request !== null,
-    queryFn: ({ signal }) => pending.acquire(signal, () => douyinVideoResolve(request!.input)),
-    retry: false,
-    gcTime: 0,
-    staleTime: Infinity,
-    structuralSharing: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-  const info = query.data;
-  const currentLease = useRef<DouyinVideoPlayback | null>(null);
-  useEffect(() => {
-    if (!info) return;
-    pending.claim(info);
-    currentLease.current = info;
-    const media = videoRef.current;
-    if (media) {
-      media.src = info.play_url;
-      media.load();
-      // 自动播放受浏览器策略限制时保留原生播放按钮，不把它当成取流失败。
-      void media.play().catch(() => undefined);
-    }
-    return () => {
-      media?.pause();
-      media?.removeAttribute("src");
-      media?.load();
-      currentLease.current = null;
-      // StrictMode 重新运行 setup 时不误停重新接管的同一会话。
-      queueMicrotask(() => {
-        // oxlint-disable-next-line react-hooks/exhaustive-deps
-        if (currentLease.current !== info) release(info);
-      });
-    };
-    // release 只使用模块级 API，无渲染闭包。
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [info, pending]);
-
-  const open = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    setMediaError(null);
-    setRequest((previous) => ({ input: trimmed, revision: (previous?.revision ?? 0) + 1 }));
-  };
-
+  const [feedEnabled, setFeedEnabled] = useState(false);
+  const [feedRevision, setFeedRevision] = useState(0);
   return (
     <section
       className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 py-5"
@@ -89,72 +38,190 @@ export function DouyinVideoPage() {
         <h1 className="text-lg font-semibold">抖音作品</h1>
         <Badge variant="secondary">实验性</Badge>
       </header>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          open(input);
-        }}
-      >
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="douyin-video-input">作品链接或分享文字</FieldLabel>
-            <Input
-              id="douyin-video-input"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="粘贴抖音作品链接、分享文字或作品 ID"
-              autoComplete="off"
-              maxLength={4096}
-              required
-              aria-describedby="douyin-video-help"
-            />
-            <FieldDescription id="douyin-video-help">
-              支持公开视频作品，不支持图集和直播。访问验证或作品不可见时无法播放；暂不提供推荐流、评论、点赞与观看历史。
+      <FieldGroup>
+        <Field orientation="horizontal">
+          <FieldContent>
+            <FieldLabel htmlFor="douyin-cookie-feed">Cookie 推荐流（灰度）</FieldLabel>
+            <FieldDescription id="douyin-feed-help">
+              默认关闭，仅本次进入生效。开启后使用本机保存的抖音登录 Cookie
+              请求推荐；不保证个性化效果，不绕过访问验证。关闭可恢复单作品播放。
             </FieldDescription>
-          </Field>
-          <Field orientation="horizontal">
-            <Button type="submit" disabled={!input.trim() || query.isFetching}>
-              {query.isFetching ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <Play data-icon="inline-start" />
-              )}
-              {query.isFetching ? "正在解析" : "打开作品"}
-            </Button>
-          </Field>
-        </FieldGroup>
-      </form>
+          </FieldContent>
+          <Switch
+            id="douyin-cookie-feed"
+            checked={feedEnabled}
+            aria-describedby="douyin-feed-help"
+            onCheckedChange={(enabled) => {
+              setRequest(null);
+              setFeedEnabled(enabled);
+            }}
+          />
+        </Field>
+      </FieldGroup>
+      <Link
+        to="/settings?section=account"
+        className={buttonVariants({ variant: "link", size: "sm", className: "self-start" })}
+      >
+        前往设置管理抖音账号
+      </Link>
+      {feedEnabled ? (
+        <DouyinRecommendation
+          key={feedRevision}
+          onRefresh={() => setFeedRevision((value) => value + 1)}
+        />
+      ) : (
+        <>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const trimmed = input.trim();
+              if (trimmed)
+                setRequest((previous) => ({
+                  input: trimmed,
+                  revision: (previous?.revision ?? 0) + 1,
+                }));
+            }}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="douyin-video-input">作品链接或分享文字</FieldLabel>
+                <Input
+                  id="douyin-video-input"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder="粘贴抖音作品链接、分享文字或作品 ID"
+                  autoComplete="off"
+                  maxLength={4096}
+                  required
+                  aria-describedby="douyin-video-help"
+                />
+                <FieldDescription id="douyin-video-help">
+                  支持公开视频作品，不支持图集和直播。访问验证或作品不可见时无法播放；暂不提供评论、点赞与观看历史。
+                </FieldDescription>
+              </Field>
+              <Field orientation="horizontal">
+                <Button type="submit" disabled={!input.trim()}>
+                  <Play data-icon="inline-start" />
+                  打开作品
+                </Button>
+              </Field>
+            </FieldGroup>
+          </form>
+          {request && <DouyinVideoPlayer key={request.revision} input={request.input} />}
+        </>
+      )}
+    </section>
+  );
+}
+
+function DouyinRecommendation({ onRefresh }: { onRefresh: () => void }) {
+  const ownerId = useId();
+  const [index, setIndex] = useState(0);
+  const query = useInfiniteQuery({
+    queryKey: ["douyin_video_feed", "douyin", ownerId],
+    initialPageParam: 1,
+    queryFn: async ({ signal }) => {
+      const page = await douyinVideoFeed();
+      // invoke 不可撤回，但关闭/刷新后的迟到元数据不可重新发布到查询。
+      signal.throwIfAborted();
+      return page;
+    },
+    getNextPageParam: nextDouyinFeedBatch,
+    retry: false,
+    gcTime: 0,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const items = useMemo(() => mergeDouyinFeed(query.data?.pages ?? []), [query.data]);
+  const current = items[index];
+  return (
+    <div className="flex flex-col gap-4" data-slot="douyin-recommendation">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-base font-medium">登录 Cookie 推荐</h2>
+        <Button variant="outline" size="sm" onClick={onRefresh}>
+          <RefreshCw data-icon="inline-start" />
+          刷新推荐
+        </Button>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        推荐包含横竖屏视频；只请求一批，后续由你手动加载。图集、广告和不支持的媒体会跳过。
+      </p>
+      {query.isFetching && (
+        <p role="status" className="flex items-center gap-2 text-sm">
+          <Spinner />
+          正在加载推荐
+        </p>
+      )}
       {query.isError && (
         <ErrorState
           error={query.error}
-          title="作品解析失败"
-          onRetry={() => request && open(request.input)}
+          title="推荐加载失败"
+          onRetry={
+            query.isFetchNextPageError
+              ? () => {
+                  void query.fetchNextPage({ cancelRefetch: false });
+                }
+              : onRefresh
+          }
         />
       )}
-      {mediaError && (
-        <ErrorState
-          error={mediaError}
-          title="作品播放失败"
-          onRetry={() => request && open(request.input)}
-        />
+      {current && (
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="outline"
+              disabled={index === 0}
+              onClick={() => setIndex((value) => value - 1)}
+            >
+              <ArrowLeft data-icon="inline-start" />
+              上一条
+            </Button>
+            <p role="status" className="text-sm text-muted-foreground">
+              {index + 1} / {items.length} 条已加载
+            </p>
+            <Button
+              variant="outline"
+              disabled={index >= items.length - 1}
+              onClick={() => setIndex((value) => value + 1)}
+            >
+              下一条
+              <ArrowRight data-icon="inline-end" />
+            </Button>
+          </div>
+          <DouyinVideoPlayer key={current.id} input={current.id} requireLogin />
+        </>
       )}
-      {info && (
-        <div className="flex flex-col gap-3">
-          <video
-            ref={videoRef}
-            key={info.session_id}
-            controls
-            playsInline
-            loop
-            preload="metadata"
-            aria-label={info.item.title || "抖音视频作品"}
-            className="max-h-[65dvh] w-full rounded-lg bg-black object-contain"
-            onError={() => setMediaError("媒体地址可能已过期或当前设备无法解码，请重试重新取流。")}
-          />
-          <h2 className="text-base font-medium break-words">{info.item.title || "未命名作品"}</h2>
-          <p className="text-sm text-muted-foreground">{info.item.author || "未知作者"}</p>
-        </div>
+      {query.isSuccess && !items.length && (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>暂无可播放推荐</EmptyTitle>
+            <EmptyDescription>
+              本批没有支持的公开视频，可能只有图集或受限作品。可稍后刷新，或关闭推荐流使用作品链接。
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )}
-    </section>
+      {query.hasNextPage ? (
+        <Button
+          variant="outline"
+          disabled={query.isFetching}
+          onClick={() => {
+            void query.fetchNextPage({ cancelRefetch: false });
+          }}
+        >
+          加载更多推荐
+        </Button>
+      ) : (
+        query.data &&
+        items.length > 0 && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {query.data.pages.length >= DOUYIN_FEED_MAX_BATCHES
+              ? "已达到本轮 20 批上限，请刷新开始新一轮。"
+              : "本轮暂无更多新作品（上游结束或重复批次），可稍后刷新。"}
+          </p>
+        )
+      )}
+    </div>
   );
 }

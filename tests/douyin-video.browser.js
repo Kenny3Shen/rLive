@@ -20,7 +20,8 @@ async (page) => {
       const harness = await setupHarness();
       const stopped = [];
       const issued = [];
-      let late;
+      const late = [];
+      let phase = "error";
       let attempt = 0;
       const original = window.__TAURI_INTERNALS__.invoke;
       const result = () => {
@@ -32,8 +33,8 @@ async (page) => {
         if (command === "douyin_video_resolve") {
           assert(args.input === "7520000000000000001", "作品 ID 被转成数字或丢失精度");
           attempt++;
-          if (attempt === 1) throw { code: "douyin_browser_verification", message: "测试：请先完成访问验证" };
-          if (attempt === 4) return new Promise((resolve) => { late = () => resolve(result()); });
+          if (phase === "error") throw { code: "douyin_browser_verification", message: "测试：请先完成访问验证" };
+          if (phase === "late") return new Promise((resolve) => { late.push(() => resolve(result())); });
           return result();
         }
         if (command === "douyin_video_stop") { stopped.push(args.sessionId); return; }
@@ -42,23 +43,26 @@ async (page) => {
       try {
         harness.render(harness.h(QueryClientProvider, { client }, harness.h(MemoryRouter, null, harness.h(DouyinVideoPage))));
         assert(harness.host.textContent.includes("实验性"), "实验标识缺失");
-        const input = harness.host.querySelector("input");
+        const input = harness.host.querySelector("#douyin-video-input");
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "7520000000000000001");
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await frames();
         harness.host.querySelector("form").requestSubmit();
         await until(() => harness.host.textContent.includes("请先完成访问验证"), "上游结构化错误未显示");
+        phase = "ready";
         harness.host.querySelector('[role="alert"] button').click();
         await until(() => !!harness.host.querySelector("video"), "重试未打开原生媒体");
         const media = harness.host.querySelector("video");
         assert(media.controls && media.loop && media.playsInline, "原生媒体能力未配置");
         assert(media.src.includes("/__douyin_fixture.mp4"), "未使用后端代理地址");
+        const beforeReplace = issued.length;
         harness.host.querySelector("form").requestSubmit();
-        await until(() => issued.length === 2 && stopped.includes(issued[0]), "替换作品未释放旧代理");
+        await until(() => issued.length > beforeReplace && stopped.includes(issued[beforeReplace - 1]), "替换作品未释放旧代理");
+        phase = "late";
         harness.host.querySelector("form").requestSubmit();
-        await until(() => !!late, "没有在途解析");
+        await until(() => late.length > 0, "没有在途解析");
         harness.dispose();
-        late();
+        late.forEach((resolve) => resolve());
         await until(() => issued.every((id) => stopped.includes(id)), "退出后的迟到解析未释放");
         assert(new Set(stopped).size === stopped.length, "同一代理重复释放");
         return { passed: true, errorsVisible: true, retries: attempt, issued: issued.length, stopped: stopped.length };

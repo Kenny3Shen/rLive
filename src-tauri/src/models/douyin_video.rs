@@ -14,6 +14,13 @@ pub struct DouyinVideoItem {
 }
 
 #[derive(Debug, Serialize)]
+pub struct DouyinVideoFeedPage {
+    pub items: Vec<DouyinVideoItem>,
+    /// 轮换批次而非分页游标；前端还须在全重复批次时停止。
+    pub has_more: bool,
+}
+
+#[derive(Debug, Serialize)]
 pub struct DouyinVideoPlayback {
     pub item: DouyinVideoItem,
     pub play_url: String,
