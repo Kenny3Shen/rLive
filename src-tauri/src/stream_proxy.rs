@@ -972,6 +972,10 @@ impl StreamProxy {
 }
 
 #[cfg(test)]
+#[path = "stream_proxy/cache_tests.rs"]
+mod cache_tests;
+
+#[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use std::collections::HashMap;
@@ -1278,14 +1282,14 @@ mod tests {
 
     /// 媒体分片缓存：同一个精确分片区间第二次请求不触达上游。
     ///
-    /// 上游只应答一次，因此第二轮若打到上游就会超时 —— 这正是「命中缓存」的
-    /// 判据，而不是看日志。非分片区间（这里是 `0-499`）仍走上游。
+    /// 以完整的 800 字节夹具逐字节验证命中，并计数上游请求。
+    /// 非分片区间（这里是 `0-499`）仍走上游。
     #[tokio::test]
     async fn media_cache_serves_cached_segments_without_upstream() {
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_address = upstream.local_addr().unwrap();
         let (hits_tx, mut hits_rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
+        let server = tokio::spawn(async move {
             while let Ok((mut stream, _)) = upstream.accept().await {
                 let hits_tx = hits_tx.clone();
                 tokio::spawn(async move {
@@ -1305,7 +1309,8 @@ mod tests {
                     } else {
                         (0, 499)
                     };
-                    let body = "SEGMENT";
+                    let body = "01234567".repeat((end - start + 1) / 8 + 1);
+                    let body = &body[..end - start + 1];
                     let response = format!(
                         "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Range: bytes {start}-{end}/12346\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
@@ -1361,7 +1366,8 @@ mod tests {
             first.contains("Content-Range: bytes 0-799/12346"),
             "{first}"
         );
-        assert!(first.ends_with("SEGMENT"), "{first}");
+        let expected = "01234567".repeat(100);
+        assert_eq!(first.split_once("\r\n\r\n").unwrap().1, expected);
         assert_eq!(hits_rx.recv().await.as_deref(), Some("bytes=0-799"));
 
         // 等写盘任务落定（转发完成后才 spawn）。
@@ -1377,12 +1383,12 @@ mod tests {
         }
 
         let second = range_body(connect.clone(), "bytes=0-799").await;
-        assert!(second.ends_with("SEGMENT"), "{second}");
+        assert_eq!(second.split_once("\r\n\r\n").unwrap().1, expected);
         assert!(second.contains("206"), "缓存命中必须按 206 应答: {second}");
 
         // 非分片区间不缓存：它仍要打到上游。
         let partial = range_body(connect.clone(), "bytes=0-499").await;
-        assert!(partial.ends_with("SEGMENT"), "{partial}");
+        assert_eq!(partial.split_once("\r\n\r\n").unwrap().1, &expected[..500]);
 
         let mut upstream_ranges = Vec::new();
         while let Ok(range) = hits_rx.try_recv() {
@@ -1395,6 +1401,8 @@ mod tests {
         );
 
         proxy.stop_for_session("video-cache:video");
+        server.abort();
+        let _ = server.await;
         let _ = std::fs::remove_dir_all(cache_root);
     }
 
@@ -2709,6 +2717,8 @@ async fn handle_client(
         )
         && let Some(key) = spec.key_for_range(start, end)
         && let Some(bytes) = store.get(&key).await
+        // 旧版本或异常写入可能留下前缀：长度不符必须回源，不能伪装成完整 206。
+        && (end - start).checked_add(1) == Some(bytes.len() as u64)
     {
         // 客户端按 Range 请求，因此应答也是 206 —— 尽管字节来自本机的磁盘缓存。
         // 总长未知用 `*` 表示（RFC 7233 允许），dash.js 按请求时的区间消费响应体。
@@ -2961,66 +2971,58 @@ async fn handle_client(
     // 写路径的缓存键：只有「Range 精确覆盖一个已知分片」且「上游确认回的就是
     // 那段（206 + 一致的 Content-Range）」才成立。上游忽略 Range 返回 200 全量
     // 时 `content_range` 缺失，那一律不缓存 —— 写进去的字节不属于分片键。
-    let mut cache_key = match (
+    let cache_target = match (
         media_cache.as_deref(),
         media_cache_store.as_ref(),
         requested_range,
     ) {
         (Some(spec), Some(_store), Some((start, end)))
-            if status == 206 && content_range_matches(content_range.as_deref(), start, end) =>
+            if is_primary_request
+                && status == 206
+                && content_range_matches(content_range.as_deref(), start, end) =>
         {
-            spec.key_for_range(start, end)
+            spec.key_for_range(start, end).and_then(|key| {
+                let expected_bytes = end.checked_sub(start)?.checked_add(1)?;
+                (expected_bytes <= MAX_SEGMENT_BYTES).then_some((key, expected_bytes))
+            })
         }
         _ => None,
     };
 
     let mut stream = upstream.bytes_stream();
-    if cache_key.is_some() {
-        // 边转发边累积，转发完成后才落盘：写盘的耗时不该出现在首字节之前。
-        let mut buffered: Vec<u8> = Vec::new();
-        loop {
-            let next = stream.next().await;
-            let Some(chunk) = next else { break };
-            let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
-            telemetry.record_bytes(chunk.len());
-            if chunk.is_empty() {
-                continue;
-            }
-            telemetry.record_media_start();
-            if buffered.len().saturating_add(chunk.len()) as u64 <= MAX_SEGMENT_BYTES {
-                buffered.extend_from_slice(&chunk);
-            } else {
-                // 超过单分片上限：不再累积，但转发本身照旧完成。
-                buffered.clear();
-                cache_key.take();
-            }
-            if socket.write_all(&chunk).await.is_err() {
-                break; // 客户端已离开
-            }
-        }
-        let _ = socket.flush().await;
-        if let (Some(key), Some(store)) = (cache_key, media_cache_store.clone())
-            && !buffered.is_empty()
-        {
-            tauri::async_runtime::spawn(async move { store.put(&key, &buffered).await });
-        }
-        return Ok(());
-    }
-
-    loop {
-        let next = stream.next().await;
-        let Some(chunk) = next else { break };
+    // 缓冲只属于这一次完整转发：超长时释放并永久放弃本次缓存，不再重新累积。
+    let mut buffered = cache_target.as_ref().map(|_| Vec::new());
+    while let Some(chunk) = stream.next().await {
+        // 读失败直接退出，不提交已经读到的前缀。
         let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
         telemetry.record_bytes(chunk.len());
         if chunk.is_empty() {
             continue;
         }
         telemetry.record_media_start();
+        if let (Some(bytes), Some((_, expected_bytes))) = (buffered.as_mut(), cache_target.as_ref()) {
+            if bytes.len().saturating_add(chunk.len()) as u64 <= *expected_bytes {
+                bytes.extend_from_slice(&chunk);
+            } else {
+                buffered = None;
+            }
+        }
         if socket.write_all(&chunk).await.is_err() {
-            break; // 客户端已离开
+            return Ok(()); // 客户端已离开：丢弃缓冲，不能走正常 EOF 的提交路径。
         }
     }
-    let _ = socket.flush().await;
+    if socket.flush().await.is_err() {
+        return Ok(());
+    }
+    // 只有正常 EOF、全部下游写入成功且长度精确匹配时才落盘。
+    // Content-Length 可能缺失或与 Range 矛盾，不能用它代替分片表的长度。
+    if let (Some((key, expected_bytes)), Some(bytes), Some(store)) =
+        (cache_target, buffered, media_cache_store)
+        && bytes.len() as u64 == expected_bytes
+    {
+        // 写盘的耗时不进入首字节路径；后台任务仅持有已经验证完整的分片。
+        tauri::async_runtime::spawn(async move { store.put(&key, &bytes).await });
+    }
     Ok(())
 }
 

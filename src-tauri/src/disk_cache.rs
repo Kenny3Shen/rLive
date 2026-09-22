@@ -7,8 +7,8 @@
 //! 2. **`usage` 是纯读路径**：它绝不能回收任何东西，否则会删掉别人正在写的临时
 //!    文件，让那次 `put` 的 rename 静默拿到 NotFound。回收只属于 `sweep`。
 //! 3. **`sweep` 带孤儿年龄阈值**：早于阈值的临时文件才是中断写入的残余。
-//! 4. **Windows 的 rename 会拒绝已存在的目标**：赢得竞争的那个已经提交了，
-//!    输的那个丢弃自己的临时文件即可，不算错误。
+//! 4. **每次写入独占临时文件**：完整写入并关闭后才 rename，失败只清理自身临时文件。
+//!    Windows 的 rename 同样支持替换已存在的文件，不应先删除目标再提交。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,6 +16,8 @@ use std::time::{Duration, SystemTime};
 
 use md5::{Digest, Md5};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
+use uuid::Uuid;
 
 /// 每写过这么多次就清扫一次。
 const SWEEP_WRITE_INTERVAL: u64 = 64;
@@ -123,8 +125,29 @@ impl DiskCache {
             return;
         }
 
-        let temporary = parent.join(format!("{key}.tmp"));
-        if let Err(error) = fs::write(&temporary, bytes).await {
+        // UUID 隔离同键并发写入；create_new 确保只有创建成功者拥有该临时文件。
+        let temporary = parent.join(format!("{key}.{}.tmp", Uuid::new_v4().simple()));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await
+        {
+            Ok(file) => file,
+            Err(error) => {
+                // 创建失败时尚未取得所有权，不得清理可能属于其他写入者的文件。
+                tracing::debug!(error = %error, "create disk cache temporary file failed");
+                return;
+            }
+        };
+        let written = async {
+            file.write_all(bytes).await?;
+            file.flush().await
+        }
+        .await;
+        // 等待 Tokio 的后台文件操作结束并关闭句柄，再提交或清理（含 Windows）。
+        drop(file.into_std().await);
+        if let Err(error) = written {
             tracing::debug!(error = %error, "write disk cache temporary file failed");
             let _ = fs::remove_file(&temporary).await;
             return;
@@ -133,14 +156,11 @@ impl DiskCache {
         let committed = match fs::rename(&temporary, &path).await {
             Ok(()) => true,
             Err(error) => {
-                // Windows 上 rename 会拒绝已存在的目标。如果是另一个请求赢得了竞争，
-                // 期望的缓存条目已经存在，直接丢弃临时文件即可。
-                let target_exists = fs::metadata(&path).await.is_ok();
-                if !target_exists {
-                    tracing::debug!(error = %error, "commit disk cache file failed");
-                }
+                // std::fs::rename 在 Windows 上也支持替换已有文件。
+                // 权限或共享冲突等失败只丢弃自身临时文件，绝不先删除已提交目标。
+                tracing::debug!(error = %error, "commit disk cache file failed");
                 let _ = fs::remove_file(&temporary).await;
-                target_exists
+                false
             }
         };
 
@@ -351,7 +371,10 @@ async fn remove_entry(path: &Path) -> bool {
 mod tests {
     use super::{DiskCache, DiskCacheConfig, disk_cache_key, is_committed_cache_name};
     use std::fs::OpenOptions;
+    use std::sync::Arc;
     use std::time::{Duration, SystemTime};
+    use tokio::sync::Barrier;
+    use tokio::task::JoinSet;
     use uuid::Uuid;
 
     fn test_root() -> std::path::PathBuf {
@@ -406,6 +429,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_replaces_existing_entry_with_complete_contents() {
+        let root = test_root();
+        let cache = cache(root.clone());
+        let key = disk_cache_key("replaced");
+        for bytes in [vec![1; 4096], vec![2; 1], vec![3; 2047]] {
+            cache.put(&key, &bytes).await;
+            assert_eq!(cache.get(&key).await, Some(bytes));
+            let entries = cache.snapshot().await;
+            assert_eq!(entries.len(), 1, "提交后不得残留临时文件");
+            assert!(entries[0].committed);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_same_key_puts_and_reads_keep_complete_candidates() {
+        let root = test_root();
+        let cache = Arc::new(cache(root.clone()));
+        let key = disk_cache_key("concurrent");
+        let candidates = Arc::new(
+            [1, 17, 127, 255, 1023, 2047, 4095, 4096]
+                .into_iter()
+                .enumerate()
+                .map(|(index, len)| vec![index as u8 + 1; len])
+                .collect::<Vec<_>>(),
+        );
+        // 先提交一个候选，让并发读不仅检查完整性，也检查替换期间没有缺失窗口。
+        cache.put(&key, &candidates[0]).await;
+        let barrier = Arc::new(Barrier::new(candidates.len() + 1));
+        let mut writers = JoinSet::new();
+        for index in 0..candidates.len() {
+            let cache = Arc::clone(&cache);
+            let candidates = Arc::clone(&candidates);
+            let barrier = Arc::clone(&barrier);
+            let key = key.clone();
+            writers.spawn(async move {
+                barrier.wait().await;
+                for _ in 0..16 {
+                    cache.put(&key, &candidates[index]).await;
+                    let bytes = cache.get(&key).await.expect("提交后缓存条目不得缺失");
+                    assert!(candidates.contains(&bytes), "提交后读到了截断或混合内容");
+                }
+            });
+        }
+        barrier.wait().await;
+        while !writers.is_empty() {
+            let bytes = cache.get(&key).await.expect("并发替换时缓存条目不得缺失");
+            assert!(candidates.contains(&bytes), "并发读到了截断或混合内容");
+            while let Some(result) = writers.try_join_next() {
+                result.unwrap();
+            }
+        }
+        let bytes = cache.get(&key).await.unwrap();
+        assert!(candidates.contains(&bytes), "最终条目不是完整候选");
+        let entries = cache.snapshot().await;
+        assert_eq!(entries.len(), 1, "并发提交后不得残留临时文件");
+        assert!(entries[0].committed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_commit_only_removes_its_own_temporary_file() {
+        let root = test_root();
+        let cache = cache(root.clone());
+        let key = disk_cache_key("blocked");
+        let target = cache.path_for(&key);
+        // 以目录阻止文件提交，确保失败路径不会删除目标或其他写入者的临时文件。
+        std::fs::create_dir_all(&target).unwrap();
+        let foreign = target
+            .parent()
+            .unwrap()
+            .join(format!("{key}.{}.tmp", Uuid::new_v4().simple()));
+        std::fs::write(&foreign, b"in-flight").unwrap();
+
+        cache.put(&key, b"cannot-commit").await;
+
+        assert!(target.is_dir(), "提交失败不得删除目标");
+        assert_eq!(std::fs::read(&foreign).unwrap(), b"in-flight");
+        let entries = cache.snapshot().await;
+        assert_eq!(entries.len(), 1, "提交失败未清理自身临时文件");
+        assert_eq!(entries[0].path, foreign);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn expired_entries_read_as_misses_but_survive_until_sweep() {
         let root = test_root();
         let cache = cache(root.clone());
@@ -442,22 +550,27 @@ mod tests {
         let fresh_key = disk_cache_key("in-flight");
         let directory = root.join(&stale_key[..2]);
         std::fs::create_dir_all(&directory).unwrap();
-        let stale = directory.join(format!("{stale_key}.tmp"));
-        let fresh = directory.join(format!("{fresh_key}.tmp"));
+        let stale = directory.join(format!("{stale_key}.{}.tmp", Uuid::new_v4().simple()));
+        let fresh = directory.join(format!("{fresh_key}.{}.tmp", Uuid::new_v4().simple()));
+        let legacy = directory.join(format!("{stale_key}.tmp"));
         let unrelated = directory.join("keep-me.txt");
-        for path in [&stale, &fresh, &unrelated] {
+        for path in [&stale, &fresh, &legacy, &unrelated] {
             std::fs::write(path, b"partial").unwrap();
         }
         set_modified(&stale, Duration::from_secs(120));
+        set_modified(&legacy, Duration::from_secs(120));
         set_modified(&unrelated, Duration::from_secs(120));
 
         let usage = cache.usage().await;
         assert_eq!(usage.files, 1, "usage 不得把临时文件计入已提交条目");
+        assert_eq!(usage.bytes, b"kept-bytes".len() as u64);
         assert!(stale.exists(), "usage 回收了陈旧临时文件");
+        assert!(legacy.exists(), "usage 回收了旧命名临时文件");
         assert!(fresh.exists(), "usage 删掉了正在写入的临时文件");
 
         cache.sweep().await;
         assert!(!stale.exists(), "陈旧临时文件未被 sweep 回收");
+        assert!(!legacy.exists(), "旧命名临时文件未被 sweep 回收");
         assert!(fresh.exists(), "sweep 回收了可能正在写入的新鲜临时文件");
         // 与图片缓存不同，磁盘缓存的目录是本模块独占的：无缓存命名的陈旧文件
         // 同样是写入中断留下的残余，sweep 一并回收。
