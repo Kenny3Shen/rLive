@@ -17,6 +17,7 @@ import { useFullscreenInsetFreeze } from "@/shared/hooks/useFullscreenInsetFreez
 import { runningOnAndroidTauri, setAndroidImmersive } from "./androidImmersive";
 import { videoAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
+import { watchDesktopFullscreen } from "./desktopFullscreenWatcher";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import {
   createVideoJsPlayer,
@@ -1730,35 +1731,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     // 次要播放器共享这个窗口，其全屏状态说明不了它们各自的情况。
     // 在这里读取它会把所有次要播放器同时标记为全屏。
     if (!ownsFullscreen || !isTauriDesktop()) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const appWindow = getCurrentWindow();
-        const sync = async () => {
-          try {
-            const fullscreen = await appWindow.isFullscreen();
-            if (!fullscreen) {
-              await restoreNativePlayerMaximizedState(
-                appWindow,
-                nativeFullscreenSessionRef.current,
-              );
-            }
-            if (!disposed) setMode(fullscreen ? "fullscreen" : "windowed");
-          } catch {
-            /* 路由变更期间窗口可能正在拆除。 */
-          }
-        };
-        await sync();
-        unlisten = await appWindow.onResized(() => void sync());
-      } catch {
-        // 没有原生窗口的浏览器预览继续使用上方的 HTML 路径。
-      }
-    })();
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return watchDesktopFullscreen({
+      getWindow: getCurrentWindow,
+      restoreMaximized: (appWindow) =>
+        restoreNativePlayerMaximizedState(appWindow, nativeFullscreenSessionRef.current),
+      setMode,
+    });
   }, [ownsFullscreen]);
 
   const togglePause = useCallback(() => {
