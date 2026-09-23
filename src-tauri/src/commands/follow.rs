@@ -221,21 +221,31 @@ async fn refresh_follows(
 
     let mut updated = Vec::new();
     {
-        let conn = state.conn()?;
+        let mut conn = state.conn()?;
+        // 网络等待结束后重读：期间用户可能已经改过标签、自动录制或删了关注。
         let mut list = if auto_record_only {
             follow::list_auto_record(&conn)?
         } else {
             follow::list(&conn)?
         };
         let now = chrono::Utc::now().timestamp_millis();
+        let mut batch = Vec::new();
         for rec in &mut list {
             if let Some(live_status) = status_map.get(&(rec.site_id.clone(), rec.room_id.clone())) {
                 apply_live_status(rec, *live_status);
                 rec.updated_at = now;
-                let _ = follow::upsert(&conn, rec.clone());
+                batch.push(follow::FollowLiveStatusUpdate {
+                    site_id: rec.site_id.clone(),
+                    room_id: rec.room_id.clone(),
+                    live_status: rec.live_status,
+                    live_started_at: rec.live_started_at,
+                    updated_at: now,
+                });
             }
             updated.push(FollowUserDto::from(rec.clone()));
         }
+        // 一轮刷新一个事务；只写状态字段，不覆盖用户修改也不复活已删除的关注。
+        follow::apply_live_status_batch(&mut conn, &batch)?;
     }
     Ok(updated)
 }
