@@ -555,10 +555,6 @@ function playbackSourceFromKey(key: string): PlayUrl | null {
   }
 }
 
-// 串行化前端生命周期命令，使销毁与同会话软切换无法交错。原生代理为每个会话
-// 维护独立监听器，此队列不在播放器实例之间转移所有权。
-const proxyLifecycleQueue = createSerialTaskQueue();
-
 let nextPlayerInstanceId = 0;
 
 function createPlayerInstanceId(): string {
@@ -635,6 +631,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const [playerInstanceId] = useState(createPlayerInstanceId);
+  // 每个实例持有稳定队列：自己的启动、切源与清理仍串行，其他画面不必等待
+  // 本实例的 DOM、IPC 或 canplay。重渲染和 generation 变化不能重建队列。
+  const [proxyLifecycleQueue] = useState(createSerialTaskQueue);
   const genRef = useRef(0);
   const volumeRef = useRef(initialAudio.volume);
   const mutedRef = useRef(initialAudio.muted);
@@ -1233,6 +1232,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     mobileClient,
     playerInstanceId,
     profile,
+    proxyLifecycleQueue,
     siteId,
   ]);
 
@@ -1350,6 +1350,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     effectivePlaybackSource,
     effectivePlaybackSourceKey,
     profile,
+    proxyLifecycleQueue,
     siteId,
     softSwitchEnabled,
   ]);
