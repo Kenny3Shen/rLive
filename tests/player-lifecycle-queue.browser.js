@@ -118,6 +118,7 @@ async (page) => {
       const ready = (adapter) => {
         if (adapter.destroyed) return;
         mediaState.get(adapter.media).ready = true;
+        log("readied", adapter.info);
         adapter.media.dispatchEvent(new Event("canplay"));
       };
       class Adapter extends EventTarget {
@@ -276,14 +277,20 @@ async (page) => {
         timings.otherLifecyclesWhileAWaitsMs = Math.round(performance.now() - stallAt);
         passed.push("A 不产生 canplay 时，B 停止、G 启动、C 软切换均不等待其 12s 超时");
 
-        // 同实例仍串行；等待期间连续切源，只让最后一个有效请求执行。
+        // 同实例的后续切源不再等前一次的 canplay；取消项不得发出 IPC。
+        // 两次 change 中间不让微任务落地，第一次入队后就被取代。
         change("a", "superseded");
-        await frames();
         change("a", "latest");
-        await frames();
-        assert(starts("a", "latest").length === 0, "本阶段不应改变同实例串行约束");
-        ready(currentAdapter("a"));
-        await until(() => hasSource("a", "latest"), "最新切源未执行");
+        await until(
+          () => hasSource("a", "latest"),
+          "同实例的新切源仍在等待前一次 canplay",
+          deadlineMs,
+        );
+        // 结构证据：被阻塞的那次切源从未就绪，而它的 12s 预算远未到期。
+        assert(
+          !calls.some((call) => call.type === "readied" && call.version === "stall-switch"),
+          "被阻塞的切源意外就绪，本用例不再能证明未等待",
+        );
         assert(starts("a", "superseded").length === 0, "已取消的排队切源仍发出 IPC");
         assert(apis.get("a").videoRef.current === aMedia, "连续同协议切换丢失媒体所有权");
         assert(
@@ -292,7 +299,28 @@ async (page) => {
           ),
           "软切换意外创建新 generation",
         );
-        passed.push("连续切源跳过取消项，最新来源复用原媒体和 session");
+        ready(currentAdapter("a"));
+        await frames();
+        assert(apis.get("a").loadError === null, "切源就绪后仍留错误态");
+        assert(apis.get("a").videoRef.current === aMedia, "切源提交后发生了硬回退");
+        passed.push("连续切源不等前一次 canplay，跳过取消项并复用原媒体和 session");
+
+        // 硬重建同样不得被未完成的 canplay 等待拖住。
+        change("a", "stall-rebuild");
+        await until(() => hasSource("a", "stall-rebuild"), "未进入受控等待");
+        const beforeRebuild = starts("a").length;
+        model = model.map((item) => (item.id === "a" ? { ...item, reload: 2 } : item));
+        render();
+        await until(
+          () => starts("a").length > beforeRebuild && apis.get("a").videoRef.current !== aMedia,
+          "硬重建被未完成的 canplay 等待阻塞",
+          deadlineMs,
+        );
+        assert(
+          !calls.some((call) => call.type === "readied" && call.version === "stall-rebuild"),
+          "被阻塞的切源意外就绪",
+        );
+        passed.push("硬重建不等待上一次未完成的软切换，并重建媒体节点");
 
         change("a", "stall-exit");
         await until(() => hasSource("a", "stall-exit"), "退出前未进入受控等待");

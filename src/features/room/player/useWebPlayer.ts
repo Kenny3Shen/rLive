@@ -1273,11 +1273,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           playerRef.current !== player ||
           activeProxySessionIdRef.current !== proxySessionId
         ) {
-          return;
+          return null;
         }
 
         const inFlight = { player, sequence };
         softSwitchInFlightRef.current = inFlight;
+        let handedOff = false;
         try {
           const localUrl = await invokeCmd<string>("stream_proxy_start", {
             url: targetSource.url,
@@ -1291,7 +1292,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             sequence !== softSwitchSequenceRef.current ||
             playerRef.current !== player
           ) {
-            return;
+            return null;
           }
           const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
           telemetrySessionRef.current = profile.telemetry
@@ -1304,7 +1305,30 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 switchMode: "soft",
               })
             : null;
-          await switchVideoJsPlaybackSource(player, localSource, targetKind);
+          // 换源在队列内发起，与代理所有权变更保持有序；媒体就绪的等待放到队列外。
+          // 它最长 12 秒，把它留在队列里会让本实例后续的切源、硬重建和退出一起等。
+          const ready = switchVideoJsPlaybackSource(player, localSource, targetKind);
+          // 真正的处理在队列外，这里立刻吸收拒绝，避免中间的微任务窗口产生
+          // 未处理拒绝告警；取消与超时仍按下方 settled 的结果走原有分支。
+          const settled = ready.then(
+            () => null,
+            (error: unknown) => ({ error }),
+          );
+          handedOff = true;
+          return { inFlight, settled };
+        } finally {
+          // 只有交接失败（IPC 抛错或已被取代）才在这里清理；否则所有权随媒体等待转出。
+          if (!handedOff && softSwitchInFlightRef.current === inFlight) {
+            softSwitchInFlightRef.current = null;
+          }
+        }
+      })
+      .then(async (prepared) => {
+        if (!prepared) return;
+        const { inFlight, settled } = prepared;
+        try {
+          const failure = await settled;
+          if (failure) throw failure.error;
           if (
             cancelled ||
             sequence !== softSwitchSequenceRef.current ||
