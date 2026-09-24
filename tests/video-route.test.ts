@@ -26,6 +26,16 @@ import {
   videoDanmakuSegmentIndex,
   videoDanmakuSegmentsFor,
 } from "../src/features/video/videoDanmaku";
+import {
+  isVideoDanmakuSeek,
+  isVideoDanmakuUserScroll,
+  isVideoDanmakuVerticalDrag,
+  VIDEO_DANMAKU_DRAG_INTENT_PX,
+  VIDEO_DANMAKU_FOLLOW_DRIFT_PX,
+  VIDEO_DANMAKU_SEEK_THRESHOLD_MS,
+  videoDanmakuFollowIndex,
+  videoDanmakuFollowScrollTop,
+} from "../src/features/video/videoDanmakuFollow";
 import type { VideoDanmakuItem } from "../src/shared/types/video";
 
 const UGC_ZONES: readonly (readonly [string, number])[] = [
@@ -409,5 +419,107 @@ describe("VOD danmaku scheduling", () => {
     // 反向 seek 回到开头后应重新投放最早那几条，而不是接着旧游标继续。
     const backward = nextVideoDanmakuBatch(timeline, firstVideoDanmakuAtOrAfter(timeline, 0), 0);
     expect(backward.batch.map((item) => item.progressMs)).toEqual([0]);
+  });
+});
+
+// 侧栏弹幕列表的跟随滚动。回归的是「滚到底部会回弹」：旧实现照搬直播列表的
+// 「贴底即恢复跟随」，而 VOD 的跟随行在列表中部，于是滚到底就重新武装跟随、
+// 下一个 timeupdate 又把列表拽回播放头。
+describe("VOD danmaku follow", () => {
+  const timeline = [entry(0), entry(1_000), entry(2_000), entry(3_000)];
+
+  test("follows the last bullet that already appeared", () => {
+    // 跟随行取播放头**之前**那一条：用户在列表里看到的与画面上刚飘过的是同一条。
+    expect(videoDanmakuFollowIndex(timeline, 0)).toBe(0);
+    expect(videoDanmakuFollowIndex(timeline, 1_500)).toBe(1);
+    expect(videoDanmakuFollowIndex(timeline, 2_000)).toBe(1);
+    expect(videoDanmakuFollowIndex(timeline, 9_999)).toBe(3);
+  });
+
+  test("reports no follow row for an empty list", () => {
+    expect(videoDanmakuFollowIndex([], 1_000)).toBe(-1);
+  });
+
+  test("centres the follow row within the scrollable range", () => {
+    // 视口 200 高、内容 1000 高：可滚区间是 [0, 800]。
+    const metrics = { rowHeight: 28, viewportHeight: 200, scrollHeight: 1_000 };
+    expect(videoDanmakuFollowScrollTop({ rowTop: 500, ...metrics })).toBe(414);
+    // 越界目标必须夹紧：写进去夹不住的值会让回读与期望不一致，程序化滚动
+    // 就被自己的 scroll 事件误判成用户滚动。
+    expect(videoDanmakuFollowScrollTop({ rowTop: 0, ...metrics })).toBe(0);
+    expect(videoDanmakuFollowScrollTop({ rowTop: 990, ...metrics })).toBe(800);
+  });
+
+  test("never returns a negative or non-finite scroll target", () => {
+    // 内容比视口短（只有几条弹幕）时没有可滚范围。
+    expect(
+      videoDanmakuFollowScrollTop({
+        rowTop: 10,
+        rowHeight: 28,
+        viewportHeight: 400,
+        scrollHeight: 100,
+      }),
+    ).toBe(0);
+    expect(
+      videoDanmakuFollowScrollTop({
+        rowTop: Number.NaN,
+        rowHeight: 28,
+        viewportHeight: 200,
+        scrollHeight: 1_000,
+      }),
+    ).toBe(0);
+  });
+
+  test("treats scroll-anchoring drift as our own scroll, not the user's", () => {
+    // content-visibility 让屏内行实现真实高度后微调 scrollTop 几 px，那不是用户操作。
+    expect(isVideoDanmakuUserScroll(414, 414)).toBe(false);
+    expect(isVideoDanmakuUserScroll(420, 414)).toBe(false);
+    expect(isVideoDanmakuUserScroll(414 - VIDEO_DANMAKU_FOLLOW_DRIFT_PX, 414)).toBe(false);
+    expect(isVideoDanmakuUserScroll(414 + VIDEO_DANMAKU_FOLLOW_DRIFT_PX + 1, 414)).toBe(true);
+    // 两个方向都算：往回翻历史与往前翻未来同样是用户滚动。
+    expect(isVideoDanmakuUserScroll(0, 414)).toBe(true);
+  });
+
+  test("accumulates slow drags against a fixed anchor", () => {
+    // 锚点不随漂移更新，否则慢速拖动的每一小步都落在容差内、永远判不出用户滚动。
+    const anchor = 400;
+    const steps = [410, 420, 430, 440, 450];
+    expect(steps.map((top) => isVideoDanmakuUserScroll(top, anchor))).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+    ]);
+  });
+
+  test("only a vertical touch drag counts as scrolling away", () => {
+    // 本视口同时是侧栏横滑切页签的起手区：横滑不该顺带把跟随关掉。
+    expect(isVideoDanmakuVerticalDrag(0, 40)).toBe(true);
+    expect(isVideoDanmakuVerticalDrag(0, -40)).toBe(true);
+    // 横向为主 —— 那是在切页签。
+    expect(isVideoDanmakuVerticalDrag(60, 20)).toBe(false);
+    expect(isVideoDanmakuVerticalDrag(-60, 20)).toBe(false);
+    // 按住没动、以及还没过抖动阈值的犹豫都不算表态。
+    expect(isVideoDanmakuVerticalDrag(0, 0)).toBe(false);
+    expect(isVideoDanmakuVerticalDrag(0, VIDEO_DANMAKU_DRAG_INTENT_PX)).toBe(false);
+    expect(isVideoDanmakuVerticalDrag(0, VIDEO_DANMAKU_DRAG_INTENT_PX + 1)).toBe(true);
+    // 斜向 45 度不算：留给 scroll 那条按实际滚动位移兜底。
+    expect(isVideoDanmakuVerticalDrag(40, 40)).toBe(false);
+    expect(isVideoDanmakuVerticalDrag(Number.NaN, 40)).toBe(false);
+  });
+
+  test("tells a progress-bar seek apart from normal playback ticks", () => {
+    // positionMs 由 timeupdate 驱动，约 250ms 一跳。
+    expect(isVideoDanmakuSeek(10_000, 10_250)).toBe(false);
+    expect(isVideoDanmakuSeek(10_000, 10_000 + VIDEO_DANMAKU_SEEK_THRESHOLD_MS)).toBe(false);
+    expect(isVideoDanmakuSeek(10_000, 60_000)).toBe(true);
+    // 后退同样是 seek：正常播放不会倒退。
+    expect(isVideoDanmakuSeek(60_000, 10_000)).toBe(true);
+  });
+
+  test("ignores non-finite positions rather than reporting a seek", () => {
+    expect(isVideoDanmakuSeek(Number.NaN, 1_000)).toBe(false);
+    expect(isVideoDanmakuSeek(1_000, Number.NaN)).toBe(false);
   });
 });

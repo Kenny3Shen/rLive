@@ -733,6 +733,8 @@ export function VideoSidebar({
       if (!danmaku) return null;
       return (
         <VideoDanmakuList
+          // 按 cid 重挂：换视频后跟随状态（上一条视频用户是否翻过历史）不该留下来。
+          key={cid}
           entries={danmaku.entries}
           positionMs={danmaku.positionMs}
           loading={danmaku.loading}
