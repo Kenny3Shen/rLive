@@ -113,18 +113,14 @@ pub async fn account_get_profile(
     let (username, status) = match site_id {
         SiteId::Bilibili if has_cookie => {
             match bilibili_profile_lookup(&cookie, proxy.as_deref()).await {
-                // 完成的第一方查询具有权威性：不能让已过期的 Cookie
-                // 继续显示旧的缓存名称。
-                BilibiliProfileLookup::Verified(username) => {
-                    let status = if username.is_some() {
-                        AccountStatus::Valid
-                    } else {
-                        AccountStatus::Expired
-                    };
-                    (username, status)
+                // 平台确认登录：显示名可能缺失，但状态是确定的 Valid。
+                BilibiliProfileLookup::Valid(username) => {
+                    (username.or(cookie_username), AccountStatus::Valid)
                 }
+                // 只有平台明确说未登录才降为 Expired；前端据此清理 Cookie。
+                BilibiliProfileLookup::Rejected => (None, AccountStatus::Expired),
                 // 网络或验证挑战导致的失败不应遮蔽部分浏览器导出中
-                // 存在的可选字段 DedeUserName。
+                // 存在的可选字段 DedeUserName，也不应升级成“已登录”的确定事实。
                 BilibiliProfileLookup::Unavailable => (cookie_username, AccountStatus::Unknown),
             }
         }
@@ -275,11 +271,14 @@ fn qr_login_site_name(site_id: &SiteId) -> &'static str {
 }
 
 enum BilibiliProfileLookup {
-    /// 上游响应有效。`None` 表示它明确报告了未认证／已过期的会话，
-    /// 或者没有给出可用的显示名。
-    Verified(Option<String>),
-    /// 请求未能完成，或者不是可识别的 API 响应。
-    /// 调用方可以安全地改用从 Cookie 推导的兜底值。
+    /// 平台确认了会话。`None` 仅表示它没给出可展示的显示名
+    /// （例如接口只回 `isLogin` 而不回 `uname`），**不是**失效。
+    Valid(Option<String>),
+    /// 平台明确报告未登录／会话已过期（`-101` 或 `isLogin=false`）。
+    /// 这是唯一允许把状态降为 `Expired` 的结果。
+    Rejected,
+    /// 请求未能完成，或者应答不是可识别的登录判定（风控、限流、
+    /// 异常结构、未知业务码）。调用方保留 Cookie 并报告 `Unknown`。
     Unavailable,
 }
 
@@ -337,9 +336,14 @@ fn parse_bilibili_profile(body: &str) -> BilibiliProfileLookup {
         return BilibiliProfileLookup::Unavailable;
     };
     if code != 0 {
-        // Bilibili 用非零 API code（常见为 -101）表示会话被拒绝或已过期。
-        // 这属于一次完成的应答，而不是网络失败。
-        return BilibiliProfileLookup::Verified(None);
+        // 只有 -101（账号未登录）是明确的会话失效证据。其余非零码
+        // （-412 风控、-509 限流、-400 参数、-403 权限、未知码）都可能
+        // 在会话仍有效时出现，把任何一个当成失效都会误删可用凭据。
+        return if code == -101 {
+            BilibiliProfileLookup::Rejected
+        } else {
+            BilibiliProfileLookup::Unavailable
+        };
     }
     let Some(data) = response.get("data") else {
         return BilibiliProfileLookup::Unavailable;
@@ -348,9 +352,11 @@ fn parse_bilibili_profile(body: &str) -> BilibiliProfileLookup {
         return BilibiliProfileLookup::Unavailable;
     };
     if !is_logged_in {
-        return BilibiliProfileLookup::Verified(None);
+        return BilibiliProfileLookup::Rejected;
     }
-    BilibiliProfileLookup::Verified(json_display_name(data.get("uname")))
+    // `isLogin=true` 已经足以确认登录；`uname` 只是展示字段，
+    // 缺失或不可展示不构成失效。
+    BilibiliProfileLookup::Valid(json_display_name(data.get("uname")))
 }
 
 fn json_bool(value: Option<&Value>) -> Option<bool> {
@@ -376,14 +382,67 @@ mod tests {
         let result = parse_bilibili_profile(r#"{"code":0,"data":{"isLogin":true,"uname":"小明"}}"#);
         assert!(matches!(
             result,
-            BilibiliProfileLookup::Verified(Some(name)) if name == "小明"
+            BilibiliProfileLookup::Valid(Some(name)) if name == "小明"
         ));
     }
 
     #[test]
-    fn recognizes_an_expired_bilibili_session() {
-        let result = parse_bilibili_profile(r#"{"code":-101,"message":"账号未登录"}"#);
-        assert!(matches!(result, BilibiliProfileLookup::Verified(None)));
+    fn a_logged_in_session_without_a_display_name_is_still_valid() {
+        // `isLogin=true` 但 uname 缺失/不可展示：登录成立，只是没有名字。
+        // 旧行为把它归入 Verified(None)，上层当失效处理并清 Cookie。
+        for body in [
+            r#"{"code":0,"data":{"isLogin":true}}"#,
+            r#"{"code":0,"data":{"isLogin":1,"uname":""}}"#,
+            r#"{"code":0,"data":{"isLogin":true,"uname":"\u0000bad"}}"#,
+            r#"{"code":0,"data":{"isLogin":true,"uname":"x"}}"#,
+        ] {
+            assert!(
+                matches!(
+                    parse_bilibili_profile(body),
+                    BilibiliProfileLookup::Valid(_)
+                ),
+                "isLogin=true 但无可展示名字不应判为失效: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_an_explicit_not_logged_in_answer_expires_the_session() {
+        assert!(matches!(
+            parse_bilibili_profile(r#"{"code":-101,"message":"账号未登录"}"#),
+            BilibiliProfileLookup::Rejected
+        ));
+        assert!(matches!(
+            parse_bilibili_profile(r#"{"code":0,"data":{"isLogin":false}}"#),
+            BilibiliProfileLookup::Rejected
+        ));
+    }
+
+    #[test]
+    fn risk_control_and_unknown_codes_do_not_count_as_expiry() {
+        // 风控/限流/参数错误/未知业务码都可能在会话仍有效时出现；
+        // 把它们当成失效会误删可用凭据。
+        for body in [
+            r#"{"code":-412,"message":"请求被拦截"}"#,
+            r#"{"code":-509,"message":"请求过于频繁"}"#,
+            r#"{"code":-400,"message":"请求错误"}"#,
+            r#"{"code":-403,"message":"访问权限不足"}"#,
+            r#"{"code":-9999,"message":"未知"}"#,
+            // 结构异常：缺 code、缺 data、isLogin 类型不对。
+            r#"{"message":"no code"}"#,
+            r#"{"code":0}"#,
+            r#"{"code":0,"data":{}}"#,
+            r#"{"code":0,"data":{"isLogin":"yes"}}"#,
+            "not json at all",
+        ] {
+            assert!(
+                matches!(
+                    parse_bilibili_profile(body),
+                    BilibiliProfileLookup::Unavailable
+                ),
+                "非登录证据不得判为失效: {body}"
+            );
+        }
     }
 
     #[test]

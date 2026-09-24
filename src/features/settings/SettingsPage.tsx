@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { invokeCmd } from "@/shared/api/tauri";
+import { accountPresentation } from "@/features/settings/accountPresentation";
 import { fadeTheme } from "@/app/theme";
 import { preloadRouteModule } from "@/app/routeModules";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
@@ -477,7 +478,7 @@ function QrLogin({
   );
 }
 
-function AccountCard({
+export function AccountCard({
   siteId,
   title,
   placeholder,
@@ -623,19 +624,13 @@ function AccountCard({
 
   const displayName = profile?.username ?? null;
   const hasCookie = profile?.has_cookie ?? false;
-  const expired = profile?.status === "expired";
-  const accountState = profileLoading
-    ? "读取中"
-    : expired
-      ? "已失效"
-      : hasCookie
-        ? "已登录"
-        : "未登录";
+  const account = accountPresentation(profile?.status ?? "none", hasCookie, profileLoading);
+  const accountState = account.label;
 
-  // Cookie 失效时自动登出。清除后账号状态会回到「未登录」，因此必须留下提示，
-  // 否则用户只看到登录态凭空消失，不知道需要重新登录。
+  // 只有平台明确拒绝会话时才自动登出。Unknown（网络失败、风控、平台不支持验证）
+  // 只是“没能确认”，删掉 Cookie 会丢掉用户可能仍然可用的凭据。
   useEffect(() => {
-    if (profileLoading || !expired || !hasCookie) return;
+    if (profileLoading || !account.autoClearCookie || !hasCookie) return;
 
     let cancelled = false;
     const autoLogout = async () => {
@@ -663,7 +658,7 @@ function AccountCard({
       cancelled = true;
     };
   }, [
-    expired,
+    account.autoClearCookie,
     hasCookie,
     profileLoading,
     siteId,
@@ -682,13 +677,17 @@ function AccountCard({
               <SiteLogo siteId={siteId} className="size-5" />
               {title}
             </FieldTitle>
-            <Badge variant={expired ? "destructive" : hasCookie ? "secondary" : "outline"}>
-              {accountState}
-            </Badge>
+            <Badge variant={account.tone}>{accountState}</Badge>
             {displayName && (
               <span className="min-w-0 truncate text-sm text-muted-foreground">{displayName}</span>
             )}
           </div>
+          {account.showUnverifiedHint && (
+            <FieldDescription className="text-muted-foreground">
+              已保存 Cookie，但未能向{title}确认登录状态（网络失败、风控或该平台不支持验证）。
+              弹幕与登录内容仍会尝试使用它；可稍后重试。
+            </FieldDescription>
+          )}
           {notice && <FieldDescription role="status">{notice}</FieldDescription>}
           {profileError && <FieldError>{profileError}</FieldError>}
           <div className="mt-3 flex flex-wrap items-center gap-2 sm:hidden">
