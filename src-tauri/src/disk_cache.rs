@@ -9,9 +9,12 @@
 //! 3. **`sweep` 带孤儿年龄阈值**：早于阈值的临时文件才是中断写入的残余。
 //! 4. **每次写入独占临时文件**：完整写入并关闭后才 rename，失败只清理自身临时文件。
 //!    Windows 的 rename 同样支持替换已存在的文件，不应先删除目标再提交。
+//! 5. **清扫按字节触发且单飞**：预算是字节，用提交次数当触发器会让大小悬殊的条目
+//!    在两次清扫之间积累出远超预算的占用；同时只允许一个清扫在跑，其余写入直接返回，
+//!    不排队。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use md5::{Digest, Md5};
@@ -19,8 +22,6 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
-/// 每写过这么多次就清扫一次。
-const SWEEP_WRITE_INTERVAL: u64 = 64;
 /// 超预算时清扫到预算的这个百分比，避免每次只删一点点而反复触发。
 const SWEEP_TARGET_PERCENT: u64 = 80;
 
@@ -31,6 +32,11 @@ pub struct DiskCacheConfig {
     pub root: PathBuf,
     /// 已提交条目的总字节上限。
     pub budget_bytes: u64,
+    /// 自上次清扫起新提交多少字节就再清扫一次。
+    ///
+    /// 为什么是字节而不是次数：单条目上限可以比平均条目大上两三个数量级，
+    /// 按次数触发时「两次清扫之间的最大占用」是 `间隔 × 单条上限`，与预算无关。
+    pub sweep_interval_bytes: u64,
     /// 已提交条目的生存期。
     pub ttl: Duration,
     /// 单个临时文件被视为「中断写入的残余」所需的年龄。
@@ -50,7 +56,13 @@ pub struct DiskCacheUsage {
 #[derive(Debug)]
 pub struct DiskCache {
     config: DiskCacheConfig,
-    writes: AtomicU64,
+    /// 自上次清扫起新提交的字节数。
+    pending_bytes: AtomicU64,
+    /// 清扫单飞门：同时只让一个清扫遍历目录。
+    sweeping: AtomicBool,
+    /// 仅测试：读取缓存正文的次数，用于证明 TTL 判定在读正文之前。
+    #[cfg(test)]
+    body_reads: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -67,7 +79,10 @@ impl DiskCache {
     pub fn new(config: DiskCacheConfig) -> Self {
         Self {
             config,
-            writes: AtomicU64::new(0),
+            pending_bytes: AtomicU64::new(0),
+            sweeping: AtomicBool::new(false),
+            #[cfg(test)]
+            body_reads: AtomicU64::new(0),
         }
     }
 
@@ -90,25 +105,27 @@ impl DiskCache {
             }
         };
 
-        let bytes = match fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(error) => {
-                tracing::debug!(error = %error, "disk cache read failed");
-                return None;
-            }
-        };
-
         if metadata
             .modified()
             .ok()
             .and_then(|modified| SystemTime::now().duration_since(modified).ok())
             .is_some_and(|age| age > self.config.ttl)
         {
-            // 过期条目当作未命中：读路径不删文件，回收留给 sweep。
+            // 在读正文**之前**就判过期：否则一个 32MiB 的过期分片会先被完整读进内存
+            // 再丢掉。过期条目当作未命中：读路径不删文件，回收留给 sweep。
             return None;
         }
-        Some(bytes)
+
+        #[cfg(test)]
+        self.body_reads.fetch_add(1, Ordering::Relaxed);
+        match fs::read(&path).await {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                tracing::debug!(error = %error, "disk cache read failed");
+                None
+            }
+        }
     }
 
     pub async fn put(&self, key: &str, bytes: &[u8]) {
@@ -165,11 +182,38 @@ impl DiskCache {
         };
 
         if committed {
-            let writes = self.writes.fetch_add(1, Ordering::Relaxed) + 1;
-            if writes.is_multiple_of(SWEEP_WRITE_INTERVAL) {
-                self.sweep().await;
+            let pending = self
+                .pending_bytes
+                .fetch_add(bytes.len() as u64, Ordering::Relaxed)
+                + bytes.len() as u64;
+            if pending >= self.config.sweep_interval_bytes {
+                self.sweep_if_idle().await;
             }
         }
+    }
+
+    /// 按字节触发的单飞清扫。
+    ///
+    /// 已有清扫在跑时直接返回：本方法在写入路径上，排队等另一次目录遍历
+    /// 只会把后台写队堆得更长，而待清扫字节不清零，下一次写入会再试。
+    async fn sweep_if_idle(&self) {
+        if self
+            .sweeping
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        // 守卫而不是手写释放：后台写任务可能被 abort，这个 future 会被直接 drop。
+        struct Guard<'a>(&'a AtomicBool);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _guard = Guard(&self.sweeping);
+        self.pending_bytes.store(0, Ordering::Relaxed);
+        self.sweep().await;
     }
 
     /// 只报告已提交的缓存条目。中断写入留下的临时文件不计入：
@@ -198,7 +242,7 @@ impl DiskCache {
         }
         // 重建（现已为空的）目录，使 `usage` 报告的路径仍可从设置页打开浏览。
         self.ensure_root().await;
-        self.writes.store(0, Ordering::Relaxed);
+        self.pending_bytes.store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -369,9 +413,12 @@ async fn remove_entry(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DiskCache, DiskCacheConfig, disk_cache_key, is_committed_cache_name};
+    use super::{
+        DiskCache, DiskCacheConfig, SWEEP_TARGET_PERCENT, disk_cache_key, is_committed_cache_name,
+    };
     use std::fs::OpenOptions;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, SystemTime};
     use tokio::sync::Barrier;
     use tokio::task::JoinSet;
@@ -385,6 +432,7 @@ mod tests {
         DiskCache::new(DiskCacheConfig {
             root,
             budget_bytes: 1 << 20,
+            sweep_interval_bytes: 1 << 20,
             ttl: Duration::from_secs(3600),
             orphan_ttl: Duration::from_secs(60),
             max_entry_bytes: 4096,
@@ -602,6 +650,161 @@ mod tests {
         assert_eq!(cache.get(&old).await, None);
         assert_eq!(cache.get(&middle).await, None);
         assert!(cache.get(&new).await.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sweep_is_triggered_by_bytes_written_not_by_entry_count() {
+        let root = test_root();
+        let mut cache = cache(root.clone());
+        // 预算保持宽裕，只观察「字节累计到阈值才清扫」这一行为；
+        // 过期条目是清扫是否真的发生的可观测证据（读路径不删文件）。
+        cache.config.sweep_interval_bytes = 4096;
+
+        let expired = disk_cache_key("expired");
+        cache.put(&expired, b"old").await;
+        set_modified(
+            &root.join(&expired[..2]).join(&expired),
+            Duration::from_secs(7200),
+        );
+        assert_eq!(cache.usage().await.files, 1);
+
+        // 未达触发阈值：即使条数在增长也不清扫。
+        for (index, bytes) in [(0_u8, 1024_usize), (1, 1024)] {
+            cache
+                .put(&disk_cache_key(&format!("k{index}")), &vec![index; bytes])
+                .await;
+            assert_eq!(
+                cache.usage().await.files,
+                index as u64 + 2,
+                "未达字节阈值就触发了清扫（写第 {index} 条后）"
+            );
+        }
+
+        // 累计到 4096 字节：本次 put 内触发清扫，过期条目被回收。
+        // 若未清扫，这里会是 4 条（过期条 + k0 + k1 + k2）。
+        cache.put(&disk_cache_key("k2"), &vec![2_u8; 2048]).await;
+        assert_eq!(
+            cache.usage().await.files,
+            3,
+            "达到字节阈值仍未清扫：过期条目未被回收"
+        );
+        assert!(
+            !root.join(&expired[..2]).join(&expired).exists(),
+            "过期条目文件未被清扫删除"
+        );
+        assert_eq!(
+            cache.pending_bytes.load(Ordering::Relaxed),
+            0,
+            "清扫后待清扫字节应归零"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn concurrent_sweeps_do_not_stack_up() {
+        let root = test_root();
+        let mut owned = cache(root.clone());
+        owned.config.sweep_interval_bytes = 1;
+        let cache = Arc::new(owned);
+        for index in 0..8_u8 {
+            cache
+                .put(&disk_cache_key(&format!("k{index}")), &[index; 16])
+                .await;
+        }
+
+        // 单飞门已在前面串行写入中释放；这里直接验证并发调用不会互相卡住。
+        let barrier = Arc::new(Barrier::new(6));
+        let mut sweeps = JoinSet::new();
+        for _ in 0..6 {
+            let cache = Arc::clone(&cache);
+            let barrier = Arc::clone(&barrier);
+            sweeps.spawn(async move {
+                barrier.wait().await;
+                cache.sweep_if_idle().await;
+            });
+        }
+        while let Some(result) = sweeps.join_next().await {
+            result.unwrap();
+        }
+        assert!(!cache.sweeping.load(Ordering::Acquire), "清扫门未释放");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn expired_entries_are_rejected_before_reading_the_body() {
+        let root = test_root();
+        let cache = cache(root.clone());
+        let key = disk_cache_key("expired-body");
+        cache.put(&key, b"stale-bytes").await;
+        set_modified(&root.join(&key[..2]).join(&key), Duration::from_secs(7200));
+        let reads_before = cache.body_reads.load(Ordering::Relaxed);
+
+        assert_eq!(cache.get(&key).await, None);
+
+        assert_eq!(
+            cache.body_reads.load(Ordering::Relaxed),
+            reads_before,
+            "过期条目不得先读正文再丢弃"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 清扫开销与占用规模的关系。默认 ignore：绝对耗时依赖机器与磁盘。
+    ///
+    /// `cargo test -p rlive sweep_cost_scaling --lib -- --ignored --nocapture`
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "规模测量，手动跑"]
+    async fn sweep_cost_scaling() {
+        // 每轮从空目录开始，使打印的耗时确实对应“目录里有 count 个条目时的清扫开销”。
+        for count in [500_usize, 2_000, 8_000] {
+            let root = test_root();
+            let mut cache = cache(root.clone());
+            // 预算故意设小，让每次清扫都要真的删一批而不是空跑。
+            cache.config.budget_bytes = 128 * 1024;
+            for index in 0..count {
+                cache
+                    .put(&disk_cache_key(&format!("entry-{index}")), &[7_u8; 512])
+                    .await;
+            }
+            let at = std::time::Instant::now();
+            cache.sweep().await;
+            let elapsed = at.elapsed().as_secs_f64() * 1000.0;
+            let usage = cache.usage().await;
+            println!(
+                "entries={count} sweep={elapsed:.1}ms remaining_bytes={} remaining_files={}",
+                usage.bytes, usage.files
+            );
+            assert!(
+                usage.bytes <= cache.config.budget_bytes * SWEEP_TARGET_PERCENT / 100,
+                "清扫后未回到预算目标线"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_single_oversized_entry_cannot_overshoot_the_budget_by_a_full_interval() {
+        // 旧形态用「每 64 次提交」触发清扫，两次清扫间最多新增 63 × 单条上限；
+        // 现在触发量是字节，写满一个间隔就会清扫。
+        let root = test_root();
+        let mut cache = cache(root.clone());
+        cache.config.max_entry_bytes = 1024;
+        cache.config.budget_bytes = 1024;
+        cache.config.sweep_interval_bytes = 2048;
+
+        for index in 0..4_u8 {
+            cache
+                .put(&disk_cache_key(&format!("big{index}")), &[index; 1024])
+                .await;
+        }
+
+        let usage = cache.usage().await;
+        assert!(
+            usage.bytes <= 2048,
+            "两次清扫之间的占用超出触发间隔: {} 字节",
+            usage.bytes
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

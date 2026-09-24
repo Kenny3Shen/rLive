@@ -14,6 +14,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::disk_cache::{DiskCache, DiskCacheConfig, disk_cache_key, is_committed_cache_name};
@@ -34,6 +35,120 @@ const MEDIA_CACHE_ORPHAN_TTL: Duration = Duration::from_secs(60 * 60);
 /// 单个分片的上限。超过它只转发不缓存：那要么不是分片（上游忽略了 Range 返回
 /// 全量），要么大得不值得为一个 Range 缓存。
 pub const MAX_SEGMENT_BYTES: u64 = 32 * 1024 * 1024;
+
+/// 自上次清扫起新提交多少字节就再清扫一次（预算的 1/8）。
+///
+/// 取 1/8 而不是更小的值：清扫要遍历两层目录并取每个文件的 metadata，太频繁会把
+/// 开销压到写入路径上；取更大的值则让超预算的窗口变宽。
+const MEDIA_CACHE_SWEEP_INTERVAL_BYTES: u64 = MEDIA_CACHE_BUDGET_BYTES / 8;
+
+/// 在途缓存字节的共享上限。
+///
+/// 它管的是内存，不是磁盘：转发路径为每个待缓存分片持一份完整缓冲，写盘又在后台
+/// 任务里继续持有它。没有额度时，6 路并发 × 32MiB 分片 × 慢盘堆积的写队可以把 RSS
+/// 推到任意高。Android 取得更紧，与它更小的磁盘预算一致。
+#[cfg(target_os = "android")]
+const MEDIA_CACHE_IN_FLIGHT_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(not(target_os = "android"))]
+const MEDIA_CACHE_IN_FLIGHT_BYTES: u64 = 128 * 1024 * 1024;
+
+/// 同时在途的待缓存分片数上限。
+///
+/// 字节额度已经抦住大分片，这个计数抦的是另一端：大量小分片同时入队时，
+/// 每个后台写任务自身的开销（任务、临时文件、rename）也不应无界。
+const MEDIA_CACHE_IN_FLIGHT_WRITES: u64 = 16;
+
+/// 在途缓存字节与写任务的共享额度。
+///
+/// 语义是**试预留**：额度不足就让这次转发不缓存，绝不让前台转发排队等额度。
+/// 缓存是尽力而为的，少缓存一个分片只是下次多一次 CDN 往返，而让分片转发等内存
+/// 额度会直接变成卡顿。
+#[derive(Debug)]
+pub struct CacheWriteBudget {
+    max_bytes: u64,
+    max_writes: u64,
+    bytes: AtomicU64,
+    writes: AtomicU64,
+}
+
+/// 一笔已批准的在途额度，drop 时归还。
+#[derive(Debug)]
+pub struct CacheWriteReservation {
+    budget: Arc<CacheWriteBudget>,
+    bytes: u64,
+}
+
+impl Drop for CacheWriteReservation {
+    fn drop(&mut self) {
+        self.budget.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+        self.budget.writes.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl CacheWriteBudget {
+    pub fn new(max_bytes: u64, max_writes: u64) -> Self {
+        Self {
+            max_bytes,
+            max_writes,
+            bytes: AtomicU64::new(0),
+            writes: AtomicU64::new(0),
+        }
+    }
+
+    /// 当前已预留的（字节，笔数）。仅用于观测与测试。
+    #[cfg(test)]
+    pub fn in_flight(&self) -> (u64, u64) {
+        (
+            self.bytes.load(Ordering::Acquire),
+            self.writes.load(Ordering::Acquire),
+        )
+    }
+
+    /// 试着预留 `bytes`。不阻塞；额度不足返回 `None`。
+    fn try_reserve(self: &Arc<Self>, bytes: u64) -> Option<CacheWriteReservation> {
+        if bytes > self.max_bytes {
+            return None;
+        }
+        // 字节与笔数分开 CAS：先拿笔数名额，再拿字节，失败则退回笔数。
+        let mut current = self.writes.load(Ordering::Acquire);
+        loop {
+            if current >= self.max_writes {
+                return None;
+            }
+            match self.writes.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+
+        let mut current = self.bytes.load(Ordering::Acquire);
+        loop {
+            if current + bytes > self.max_bytes {
+                self.writes.fetch_sub(1, Ordering::AcqRel);
+                return None;
+            }
+            match self.bytes.compare_exchange_weak(
+                current,
+                current + bytes,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(CacheWriteReservation {
+                        budget: Arc::clone(self),
+                        bytes,
+                    });
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
+}
 
 /// 一个媒体代理可以缓存的字节区间集合。
 ///
@@ -89,20 +204,42 @@ impl MediaCacheSpec {
 #[derive(Debug, Clone)]
 pub struct MediaCache {
     inner: Arc<DiskCache>,
+    budget: Arc<CacheWriteBudget>,
 }
 
 impl MediaCache {
     pub fn new(root: PathBuf) -> Self {
+        Self::with_write_budget(
+            root,
+            CacheWriteBudget::new(MEDIA_CACHE_IN_FLIGHT_BYTES, MEDIA_CACHE_IN_FLIGHT_WRITES),
+        )
+    }
+
+    /// 自定义在途额度（供测试构造“额度耗尽”与“单笔额度”等边界）。
+    pub fn with_write_budget(root: PathBuf, budget: CacheWriteBudget) -> Self {
         Self {
             inner: Arc::new(DiskCache::new(DiskCacheConfig {
                 root,
                 budget_bytes: MEDIA_CACHE_BUDGET_BYTES,
+                sweep_interval_bytes: MEDIA_CACHE_SWEEP_INTERVAL_BYTES,
                 ttl: MEDIA_CACHE_TTL,
                 orphan_ttl: MEDIA_CACHE_ORPHAN_TTL,
                 max_entry_bytes: MAX_SEGMENT_BYTES,
                 committed_name: is_committed_cache_name,
             })),
+            budget: Arc::new(budget),
         }
+    }
+
+    /// 试着为一个待缓存分片预留在途字节。不足则本次只转发不缓存。
+    pub fn try_reserve(&self, bytes: u64) -> Option<CacheWriteReservation> {
+        self.budget.try_reserve(bytes)
+    }
+
+    /// 当前在途的（字节，笔数）。
+    #[cfg(test)]
+    pub fn in_flight(&self) -> (u64, u64) {
+        self.budget.in_flight()
     }
 
     pub fn root(&self) -> &std::path::Path {
@@ -175,8 +312,94 @@ pub fn content_range_matches(content_range: Option<&str>, start: u64, end: u64) 
 pub type SharedMediaCache = MediaCache;
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
-    use super::{MediaCacheSpec, content_range_matches, parse_range_bounds};
+    use super::{
+        CacheWriteBudget, MediaCache, MediaCacheSpec, content_range_matches, parse_range_bounds,
+    };
+
+    fn cache_with_budget(max_bytes: u64, max_writes: u64) -> (MediaCache, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "rlive-media-cache-budget-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        (
+            MediaCache::with_write_budget(
+                root.clone(),
+                CacheWriteBudget::new(max_bytes, max_writes),
+            ),
+            root,
+        )
+    }
+
+    #[test]
+    fn write_budget_grants_until_a_limit_is_hit_and_returns_on_drop() {
+        let (cache, root) = cache_with_budget(100, 3);
+
+        let first = cache.try_reserve(40).expect("额度内应获批");
+        let second = cache.try_reserve(60).expect("刚好用满应获批");
+        assert_eq!(cache.in_flight(), (100, 2));
+
+        // 字节用满：不阻塞、直接拒绝，调用方本次不缓存。
+        assert!(cache.try_reserve(1).is_none(), "超字节额度仍获批");
+        drop(first);
+        assert_eq!(cache.in_flight(), (60, 1));
+        assert!(cache.try_reserve(40).is_some(), "归还后额度应可再用");
+
+        // 笔数上限：字节还宽裕也要拦。
+        let (small, small_root) = cache_with_budget(1 << 20, 2);
+        let a = small.try_reserve(1).unwrap();
+        let b = small.try_reserve(1).unwrap();
+        assert!(small.try_reserve(1).is_none(), "超出在途笔数仍获批");
+        drop((a, b));
+        assert_eq!(small.in_flight(), (0, 0));
+
+        // 单笔大于总额度：一开始就不该获批，也不占用笔数。
+        let (tiny, tiny_root) = cache_with_budget(64, 4);
+        assert!(tiny.try_reserve(65).is_none());
+        assert_eq!(tiny.in_flight(), (0, 0));
+
+        drop((second, cache));
+        for root in [root, small_root, tiny_root] {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[tokio::test]
+    async fn reserved_segment_is_released_only_after_the_write_finishes() {
+        let (cache, root) = cache_with_budget(64, 2);
+        let reservation = cache.try_reserve(32).unwrap();
+        assert_eq!(cache.in_flight(), (32, 1));
+
+        // 额度持有的就是缓冲的生命周期：写盘结束、缓冲释放后才归还。
+        cache
+            .put("0123456789abcdef0123456789abcdef", &[7_u8; 32])
+            .await;
+        assert_eq!(cache.in_flight(), (32, 1), "写盘期间不得提前归还额度");
+        drop(reservation);
+        assert_eq!(cache.in_flight(), (0, 0));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn budget_exhaustion_skips_caching_instead_of_blocking_the_caller() {
+        let (cache, root) = cache_with_budget(16, 1);
+        let held = cache.try_reserve(16).unwrap();
+
+        // 额度耗尽时只应拿到 None（转发路径据此不缓存），而不是等待。
+        let started = std::time::Instant::now();
+        assert!(cache.try_reserve(16).is_none());
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(50),
+            "额度不足不得阻塞调用方"
+        );
+
+        drop(held);
+        assert!(cache.try_reserve(16).is_some());
+        drop(cache);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn spec() -> MediaCacheSpec {
         MediaCacheSpec::new(

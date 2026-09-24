@@ -1406,6 +1406,352 @@ mod tests {
         let _ = std::fs::remove_dir_all(cache_root);
     }
 
+    /// 在途额度耗尽时，分片转发必须照常完成，只是不落盘。
+    ///
+    /// 这是 P-05 的关键边界：缓存是尽力而为的，额度不足只能降低命中率，
+    /// 不能让前台转发等额度、变慢或失败。
+    #[tokio::test]
+    async fn exhausted_write_budget_still_forwards_and_simply_skips_caching() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = upstream.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 2048];
+                    let length = stream.read(&mut request).await.unwrap();
+                    let request = String::from_utf8_lossy(&request[..length]).into_owned();
+                    let range = request
+                        .lines()
+                        .find_map(|line| {
+                            let lower = line.to_lowercase();
+                            lower.strip_prefix("range: ").map(|value| value.to_string())
+                        })
+                        .unwrap_or_default();
+                    let (start, end) = if range.trim() == "bytes=0-799" {
+                        (0, 799)
+                    } else {
+                        (0, 499)
+                    };
+                    let body = "01234567".repeat((end - start + 1) / 8 + 1);
+                    let body = &body[..end - start + 1];
+                    let response = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Range: bytes {start}-{end}/12346\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-media-cache-budget-proxy-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        // 额度小到装不下一个 800 字节分片，且预先占满：任何转发都拿不到额度。
+        let store = crate::media_cache::MediaCache::with_write_budget(
+            cache_root.clone(),
+            crate::media_cache::CacheWriteBudget::new(64, 1),
+        );
+        let spec = std::sync::Arc::new(crate::media_cache::MediaCacheSpec::new(
+            "BV1x:1:112:v".to_string(),
+            "video/mp4",
+            vec![(0, 799)],
+        ));
+
+        let proxy = StreamProxy::new();
+        let local_url = proxy
+            .start(
+                format!("http://{upstream_address}/media.m4s"),
+                HashMap::new(),
+                "video-cache:no-budget".into(),
+                StreamProxyStartOptions {
+                    media_cache: Some(spec),
+                    media_cache_store: Some(store.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let connect = local_url
+            .trim_start_matches("http://")
+            .trim_end_matches("/live")
+            .to_string();
+
+        async fn range_body(connect: String, range: &str) -> String {
+            let mut stream = tokio::net::TcpStream::connect(&connect).await.unwrap();
+            let request = format!(
+                "GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: {range}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut buffer = Vec::new();
+            stream.read_to_end(&mut buffer).await.unwrap();
+            String::from_utf8_lossy(&buffer).into_owned()
+        }
+
+        let expected = "01234567".repeat(100);
+        let first = range_body(connect.clone(), "bytes=0-799").await;
+        assert_eq!(
+            first.split_once("\r\n\r\n").unwrap().1,
+            expected,
+            "额度不足不得影响分片正文"
+        );
+        assert_eq!(store.in_flight(), (0, 0), "未获批的转发不应占用额度");
+
+        // 第二次仍走上游（未缓存），且依然完整返回。
+        let second = range_body(connect.clone(), "bytes=0-799").await;
+        assert_eq!(second.split_once("\r\n\r\n").unwrap().1, expected);
+        assert!(
+            store
+                .get(&crate::disk_cache::disk_cache_key("BV1x:1:112:v:0:799"))
+                .await
+                .is_none(),
+            "额度不足时不得写入缓存条目"
+        );
+
+        proxy.stop_for_session("video-cache:no-budget");
+        server.abort();
+        let _ = server.await;
+        let _ = std::fs::remove_dir_all(cache_root);
+    }
+
+    /// P-05 规模测量：多路并发分片下，在途额度的峰值与前台转发耗时。
+    ///
+    /// 默认 ignore：绝对耗时与调度依赖机器，不适合当断言。它证明的是
+    /// 「额度耗尽的那些路只丢失缓存、没有丢字节，也没有等待额度」。手动跑：
+    /// `cargo test -p rlive write_budget_scaling --lib -- --ignored --nocapture`
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "规模测量，手动跑"]
+    async fn write_budget_scaling() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+        const CONCURRENCY: u64 = 6;
+        const SEGMENT_BYTES: usize = 1 << 20;
+        const BUDGET_BYTES: u64 = 4 * SEGMENT_BYTES as u64;
+
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let upstream_requests = Arc::new(AtomicU64::new(0));
+        let served = Arc::clone(&upstream_requests);
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = upstream.accept().await {
+                let served = Arc::clone(&served);
+                tokio::spawn(async move {
+                    served.fetch_add(1, AtomicOrdering::Relaxed);
+                    let mut request = [0_u8; 2048];
+                    let length = stream.read(&mut request).await.unwrap();
+                    let request = String::from_utf8_lossy(&request[..length]).into_owned();
+                    // 必须按请求的 Range 回对应的 Content-Range，否则只有第一个
+                    // 分片能通过 content_range_matches，其余根本不会尝试预留额度。
+                    let range = request
+                        .lines()
+                        .find_map(|line| {
+                            let lower = line.to_lowercase();
+                            lower.strip_prefix("range: ").map(|value| value.to_string())
+                        })
+                        .unwrap_or_default();
+                    let (start, end) = crate::media_cache::parse_range_bounds(&range)
+                        .unwrap_or((0, SEGMENT_BYTES as u64 - 1));
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Range: bytes {start}-{end}/12346\r\nContent-Length: {SEGMENT_BYTES}\r\nConnection: close\r\n\r\n"
+                    );
+                    if stream.write_all(header.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    // 每块之间小睡，让上游与写盘都处在“慢”的一侧。
+                    let chunk = vec![9_u8; 64 * 1024];
+                    let mut written = 0;
+                    while written < SEGMENT_BYTES {
+                        if stream.write_all(&chunk).await.is_err() {
+                            return;
+                        }
+                        written += chunk.len();
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                    }
+                });
+            }
+        });
+
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-media-cache-scaling-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        // 额度只容得下 4 路分片：第 5、6 路必然拿不到额度。
+        let store = crate::media_cache::MediaCache::with_write_budget(
+            cache_root.clone(),
+            crate::media_cache::CacheWriteBudget::new(BUDGET_BYTES, 8),
+        );
+        let segments: Vec<(u64, u64)> = (0..CONCURRENCY)
+            .map(|index| {
+                let start = index * SEGMENT_BYTES as u64;
+                (start, start + SEGMENT_BYTES as u64 - 1)
+            })
+            .collect();
+        let spec = Arc::new(crate::media_cache::MediaCacheSpec::new(
+            "BV1x:scaling:112:v".to_string(),
+            "video/mp4",
+            segments.clone(),
+        ));
+
+        let proxy = StreamProxy::new();
+        let local_url = proxy
+            .start(
+                format!("http://{upstream_address}/media.m4s"),
+                HashMap::new(),
+                "video-cache:scaling".into(),
+                StreamProxyStartOptions {
+                    media_cache: Some(spec),
+                    media_cache_store: Some(store.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let connect = local_url
+            .trim_start_matches("http://")
+            .trim_end_matches("/live")
+            .to_string();
+
+        let mut requests = tokio::task::JoinSet::new();
+        for (start, end) in segments {
+            let connect = connect.clone();
+            requests.spawn(async move {
+                let at = std::time::Instant::now();
+                let mut stream = tokio::net::TcpStream::connect(&connect).await.unwrap();
+                let request = format!(
+                    "GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes={start}-{end}\r\nConnection: close\r\n\r\n"
+                );
+                stream.write_all(request.as_bytes()).await.unwrap();
+                let mut buffer = Vec::new();
+                stream.read_to_end(&mut buffer).await.unwrap();
+                let body = String::from_utf8_lossy(&buffer)
+                    .split_once("\r\n\r\n")
+                    .map(|(_, body)| body.len())
+                    .unwrap_or_default();
+                (at.elapsed().as_secs_f64() * 1000.0, body)
+            });
+        }
+        // 转发期间采样在途额度峰值。
+        let mut peak_bytes = 0_u64;
+        let mut peak_writes = 0_u64;
+        let mut slowest_ms = 0.0_f64;
+        while !requests.is_empty() {
+            let (bytes, writes) = store.in_flight();
+            peak_bytes = peak_bytes.max(bytes);
+            peak_writes = peak_writes.max(writes);
+            while let Some(result) = requests.try_join_next() {
+                let (ms, body_bytes) = result.unwrap();
+                slowest_ms = slowest_ms.max(ms);
+                assert_eq!(body_bytes, SEGMENT_BYTES, "额度不足的路丢失了分片字节");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+
+        let (in_flight_bytes, in_flight_writes) = store.in_flight();
+        let usage = store.usage().await;
+        println!(
+            "routes={CONCURRENCY} segment={SEGMENT_BYTES}B budget={BUDGET_BYTES}B \
+             peak_in_flight={peak_bytes}B/{peak_writes} slowest={slowest_ms:.1}ms \
+             cached_bytes={} cached_files={} upstream={}",
+            usage.bytes,
+            usage.files,
+            upstream_requests.load(AtomicOrdering::Relaxed)
+        );
+        assert_eq!(in_flight_bytes, 0, "转发结束后仍有未归还的在途额度");
+        assert_eq!(in_flight_writes, 0, "转发结束后仍有未归还的在途笔数");
+        assert!(peak_bytes <= BUDGET_BYTES, "在途字节超出额度: {peak_bytes}");
+        assert!(usage.bytes <= BUDGET_BYTES, "落盘字节超出额度");
+
+        proxy.stop_for_session("video-cache:scaling");
+        server.abort();
+        let _ = server.await;
+        let _ = std::fs::remove_dir_all(cache_root);
+    }
+
+    /// 额度足够时正常缓存，且转发期间在途额度被占用，写完后归还。
+    #[tokio::test]
+    async fn forwarded_segment_holds_and_releases_its_reservation() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = upstream.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 2048];
+                    let length = stream.read(&mut request).await.unwrap();
+                    let _ = String::from_utf8_lossy(&request[..length]);
+                    let body = "01234567".repeat(100);
+                    let response = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Range: bytes 0-799/12346\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-media-cache-reserve-proxy-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = crate::media_cache::MediaCache::with_write_budget(
+            cache_root.clone(),
+            crate::media_cache::CacheWriteBudget::new(4096, 2),
+        );
+        let spec = std::sync::Arc::new(crate::media_cache::MediaCacheSpec::new(
+            "BV1x:2:112:v".to_string(),
+            "video/mp4",
+            vec![(0, 799)],
+        ));
+
+        let proxy = StreamProxy::new();
+        let local_url = proxy
+            .start(
+                format!("http://{upstream_address}/media.m4s"),
+                HashMap::new(),
+                "video-cache:reserve".into(),
+                StreamProxyStartOptions {
+                    media_cache: Some(spec),
+                    media_cache_store: Some(store.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let connect = local_url
+            .trim_start_matches("http://")
+            .trim_end_matches("/live")
+            .to_string();
+
+        let mut stream = tokio::net::TcpStream::connect(&connect).await.unwrap();
+        let request = "GET /live HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=0-799\r\nConnection: close\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buffer = Vec::new();
+        stream.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&buffer)
+                .split_once("\r\n\r\n")
+                .unwrap()
+                .1,
+            "01234567".repeat(100)
+        );
+
+        // 写盘任务完成后额度应归还；条目应可命中。
+        let key = crate::disk_cache::disk_cache_key("BV1x:2:112:v:0:799");
+        for _ in 0..50 {
+            if store.get(&key).await.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(store.get(&key).await.is_some(), "额度充足时应正常落盘");
+        assert_eq!(store.in_flight(), (0, 0), "写盘结束后额度未归还");
+
+        proxy.stop_for_session("video-cache:reserve");
+        server.abort();
+        let _ = server.await;
+        let _ = std::fs::remove_dir_all(cache_root);
+    }
+
     #[test]
     fn hls_manifest_rewrites_relative_segments_and_uri_attributes() {
         let resources = HlsResources::new();
@@ -2976,14 +3322,20 @@ async fn handle_client(
         media_cache_store.as_ref(),
         requested_range,
     ) {
-        (Some(spec), Some(_store), Some((start, end)))
+        (Some(spec), Some(store), Some((start, end)))
             if is_primary_request
                 && status == 206
                 && content_range_matches(content_range.as_deref(), start, end) =>
         {
             spec.key_for_range(start, end).and_then(|key| {
                 let expected_bytes = end.checked_sub(start)?.checked_add(1)?;
-                (expected_bytes <= MAX_SEGMENT_BYTES).then_some((key, expected_bytes))
+                if expected_bytes > MAX_SEGMENT_BYTES {
+                    return None;
+                }
+                // 在途额度在转发开始前一次性拿定，全程持有：从缓冲的第一块到后台
+                // 写任务结束。拿不到就本次不缓存 —— 绝不让转发排队等内存额度。
+                let reservation = store.try_reserve(expected_bytes)?;
+                Some((key, expected_bytes, reservation))
             })
         }
         _ => None,
@@ -3000,7 +3352,9 @@ async fn handle_client(
             continue;
         }
         telemetry.record_media_start();
-        if let (Some(bytes), Some((_, expected_bytes))) = (buffered.as_mut(), cache_target.as_ref()) {
+        if let (Some(bytes), Some((_, expected_bytes, _))) =
+            (buffered.as_mut(), cache_target.as_ref())
+        {
             if bytes.len().saturating_add(chunk.len()) as u64 <= *expected_bytes {
                 bytes.extend_from_slice(&chunk);
             } else {
@@ -3016,12 +3370,16 @@ async fn handle_client(
     }
     // 只有正常 EOF、全部下游写入成功且长度精确匹配时才落盘。
     // Content-Length 可能缺失或与 Range 矛盾，不能用它代替分片表的长度。
-    if let (Some((key, expected_bytes)), Some(bytes), Some(store)) =
+    if let (Some((key, expected_bytes, reservation)), Some(bytes), Some(store)) =
         (cache_target, buffered, media_cache_store)
         && bytes.len() as u64 == expected_bytes
     {
-        // 写盘的耗时不进入首字节路径；后台任务仅持有已经验证完整的分片。
-        tauri::async_runtime::spawn(async move { store.put(&key, &bytes).await });
+        // 写盘的耗时不进入首字节路径；后台任务仅持有已经验证完整的分片，
+        // 并把在途额度一起带到写任务结束（drop 时归还）。
+        tauri::async_runtime::spawn(async move {
+            store.put(&key, &bytes).await;
+            drop(reservation);
+        });
     }
     Ok(())
 }
