@@ -98,9 +98,13 @@ function RelatedPanel({ bvid }: { bvid: string }) {
       {relatedQuery.isPending ? (
         <div className="flex flex-col gap-1 pt-1.5">
           {[0, 1, 2].map((index) => (
-            // 与行式 VideoCard 同几何：封面占 2/5 列宽，右侧三行文本。
-            <div key={index} className="flex items-start gap-2.5 p-1.5">
-              <Skeleton className="aspect-video w-2/5 shrink-0 rounded-md" />
+            // 与行式 VideoCard 同几何与同表面：卡片底色 + 细描边，封面占 2/5 列宽，
+            // 右侧三行文本。
+            <div
+              key={index}
+              className="flex items-start gap-2.5 rounded-xl bg-card p-1.5 shadow-md shadow-black/30 ring-1 ring-border-subtle"
+            >
+              <Skeleton className="aspect-video w-2/5 shrink-0 rounded-md ring-1 ring-border-subtle" />
               <div className="flex min-w-0 flex-1 flex-col gap-1.5 py-0.5">
                 <Skeleton className="h-3.5 w-full" />
                 <Skeleton className="h-3 w-3/5" />
@@ -118,16 +122,20 @@ function RelatedPanel({ bvid }: { bvid: string }) {
       ) : items.length === 0 ? (
         <p className="pt-4 text-center text-xs text-muted-foreground">暂无相关视频</p>
       ) : (
-        items.map((item) => (
-          <VideoCard
-            key={`${item.bvid}-${item.cid ?? ""}`}
-            item={item}
-            playlist={playlistItems}
-            playlistKind="feed"
-            orientation="row"
-            coverAspect="landscape"
-          />
-        ))
+        // 卡片现在自带底色，行与行之间必须留缝：紧贴时相邻两张卡的底色连成一整块，
+        // 反而比透明卡片更读不出边界。间距与上面的骨架一致，数据到达时列表不跳。
+        <div className="flex flex-col gap-1 pt-1.5">
+          {items.map((item) => (
+            <VideoCard
+              key={`${item.bvid}-${item.cid ?? ""}`}
+              item={item}
+              playlist={playlistItems}
+              playlistKind="feed"
+              orientation="row"
+              coverAspect="landscape"
+            />
+          ))}
+        </div>
       )}
     </div>
   );

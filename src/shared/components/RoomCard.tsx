@@ -201,7 +201,9 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
 
   const cardBody = (
     <>
-      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle">
+      {/* 封面满幅顶到卡片的上边与两侧：圆角与描边由卡片外壳给（见 cardButtonProps），
+          封面自己不再带圆角/描边/投影，否则会在卡片边界内侧再画一圈，读成两层边框。 */}
+      <div className="relative aspect-video w-full overflow-hidden bg-muted">
         {normalizedCover ? (
           <img
             src={normalizedCover}
@@ -245,7 +247,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
           )
         )}
       </div>
-      <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
+      <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2 pb-2.5">
         <p className="line-clamp-1 text-[13px] font-medium leading-snug text-foreground">
           {primaryText}
         </p>
@@ -274,7 +276,14 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     onContextMenu: cardDrawer.onContextMenu,
     onFocus: () => preloadRouteModule(roomPath),
     className: cn(
-      "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-transparent text-left",
+      // 卡片自带底色与细描边：网格里相邻卡片之间只有 12px 间隙，纯透明卡片的
+      // 边界完全由封面撑出，标题与下一张封面之间读不出归属。
+      //
+      // 底色从封面自然向下延伸，而不是给封面套一层内边距：封面满幅占住卡片顶部，
+      // 卡片的圆角与描边正好落在封面边缘上，读作封面自己的边界继续包住下面的文字。
+      // 封面不参与内边距，因此这里不能加 padding —— 文字区自己带内边距。
+      "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-card text-left shadow-md shadow-black/30 ring-1 ring-border-subtle",
+      "hover:bg-card-elevated hover:ring-foreground/20",
     ),
   };
 

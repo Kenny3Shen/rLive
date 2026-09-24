@@ -27,10 +27,17 @@ import { VideoMasonry } from "./VideoMasonry";
  * 等一整套直播专属动作，VOD 一个都用不上。
  */
 
+// 卡片自带底色与细描边（与直播 `RoomCard` 同步）：瀑布流里相邻卡片只隔 12px，
+// 透明卡片的边界完全由封面撑出，横竖画幅混排时读不出标题归属上一张还是下一张。
+//
+// 底色从封面自然向下延伸：封面满幅占住卡片顶部，卡片的圆角与描边正好落在封面边缘，
+// 于是读作封面自己的边界继续包住下面的文字，而不是把封面又套进一层内边距。因此
+// 外壳不带 padding，圆角/描边/投影整体上移到外壳 —— 原先挂在封面上的那一圈若留着，
+// 会在卡片边界内侧再画一道，读成两层边框。
+// 行式卡片是例外：文本块高于 16:9 缩略图且垂直居中，缩略图无法满幅，仍走内边距画法。
 const CARD_CLASS =
-  "group flex w-full self-start flex-col overflow-hidden rounded-xl bg-transparent text-left";
-const COVER_CLASS =
-  "relative w-full overflow-hidden rounded-xl bg-muted shadow-md shadow-black/30 ring-1 ring-border-subtle";
+  "group flex w-full self-start flex-col overflow-hidden rounded-xl bg-card text-left shadow-md shadow-black/30 ring-1 ring-border-subtle hover:bg-card-elevated hover:ring-foreground/20";
+const COVER_CLASS = "relative w-full overflow-hidden bg-muted";
 const COVER_IMAGE_CLASS =
   "absolute inset-0 h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none";
 const BADGE_CLASS =
@@ -158,8 +165,8 @@ export const VideoCard = memo(function VideoCard({
       className={cn(
         CARD_CLASS,
         // row 下缩略图与文本块垂直居中：侧栏里三行文本高于 16:9 封面，
-        // 顶对齐会在封面下方留一段空白。
-        orientation === "row" && "flex-row items-center gap-2.5 p-1.5 hover:bg-muted/50",
+        // 顶对齐会在封面下方留一段空白。缩略图因此不满幅，用内边距把它收进卡片。
+        orientation === "row" && "flex-row items-center gap-2.5 p-1.5",
         !playable && "cursor-not-allowed opacity-60",
       )}
     >
@@ -167,8 +174,10 @@ export const VideoCard = memo(function VideoCard({
         aspectRatio={coverAspect === "landscape" ? 16 / 9 : videoCoverAspect(item.dimension)}
         cover={item.cover}
         // 封面按列宽取比例而不是固定 w-40:侧栏只有 300px,固定宽度会把文本列
-        // 挤到 90 px 出头，标题每行只剩几个字。
-        className={orientation === "row" ? "w-2/5 shrink-0 rounded-md" : undefined}
+        // 挤到 90 px 出头，标题每行只剩几个字。行式缩略图不贴卡片边，自带圆角与描边。
+        className={
+          orientation === "row" ? "w-2/5 shrink-0 rounded-md ring-1 ring-border-subtle" : undefined
+        }
         previewMount={preview.mountRef}
         previewLoading={preview.phase === "loading"}
         overlay={
@@ -195,7 +204,7 @@ export const VideoCard = memo(function VideoCard({
       <div
         className={cn(
           "flex min-w-0 flex-1 flex-col gap-0.5",
-          orientation === "row" ? "py-0.5" : "px-0.5 pt-2.5 pb-1",
+          orientation === "row" ? "py-0.5 pr-0.5" : "px-2 pt-2 pb-2.5",
         )}
       >
         {/* 标题固定两行；第二行发布日期（竖线接 UP 主，投稿抽屉隐藏），第三行播放与弹幕。 */}
@@ -275,7 +284,7 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
           ) : null
         }
       />
-      <div className="flex flex-1 flex-col gap-0.5 px-0.5 pt-2.5 pb-1">
+      <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2 pb-2.5">
         <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
           {item.title}
         </p>

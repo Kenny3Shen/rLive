@@ -74,10 +74,16 @@ function GridSkeleton() {
   return (
     <VideoMasonry aria-hidden>
       {Array.from({ length: 12 }).map((_, index) => (
-        <div key={index} className="flex flex-col gap-2">
-          <Skeleton className="aspect-video w-full rounded-xl" />
-          <Skeleton className="h-3.5 w-4/5" />
-          <Skeleton className="h-3 w-1/2" />
+        // 骨架屏复制 VideoCard 的卡片表面：封面满幅顶到卡片边缘，文字区自带内边距。
+        <div
+          key={index}
+          className="flex flex-col overflow-hidden rounded-xl bg-card shadow-md shadow-black/30 ring-1 ring-border-subtle"
+        >
+          <Skeleton className="aspect-video w-full rounded-none" />
+          <div className="flex flex-col gap-2 px-2 pt-2 pb-2.5">
+            <Skeleton className="h-3.5 w-4/5" />
+            <Skeleton className="h-3 w-1/2" />
+          </div>
         </div>
       ))}
     </VideoMasonry>

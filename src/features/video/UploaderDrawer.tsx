@@ -19,7 +19,8 @@ import { VideoCard } from "./VideoCard";
 import { playlistItemFromVideoItem, dedupeVideoItems } from "./playlistStore";
 
 // 行式卡片（缩略图在左）比网格卡宽，列宽下限随之放大到 22rem。
-const GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,22rem),1fr))] gap-x-3 gap-y-1";
+// 卡片带底色后纵向间隙从 1 提到 2：4px 下相邻两块表面几乎连成一片。
+const GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,22rem),1fr))] gap-x-3 gap-y-2";
 
 /** 排序标签：按钮显示当前排序，aria 宣告点击后的目标排序。 */
 const ORDER_LABELS: Record<VideoUploaderOrder, string> = {
