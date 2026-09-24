@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CircleCheck, CircleDot, CircleX, Folder, Inbox, Layers3, Tv, X } from "lucide-react";
+import { CircleCheck, CircleX, Folder, Inbox, Layers3, Tv, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
@@ -249,8 +249,8 @@ function IptvCardAvailability({
     return <Spinner className="size-4 text-muted-foreground" aria-label="检测中" />;
   }
   if (availability.status === "available") {
-    // 只有深探测确认过首个媒体资源，才用实心对勾与「已验证」的语义；
-    // 浅探测的结论是「网络可达」，不能读成「能播」。
+    // 两级结论都画绿色对勾，差别只留在无障碍文案与悬浮提示里：
+    // 浅探测的结论是「网络可达」，深探测才代表媒体已验证，不能读成同一件事。
     const verified = availability.level === "media_verified";
     const label = verified
       ? `媒体已验证，响应 ${formatLatency(availability.latencyMs)}`
@@ -267,11 +267,7 @@ function IptvCardAvailability({
           (verified ? "首个媒体资源已确认可读" : "清单可达，未验证其引用的媒体")
         }
       >
-        {verified ? (
-          <CircleCheck className="size-4 text-success" aria-hidden />
-        ) : (
-          <CircleDot className="size-4" aria-hidden />
-        )}
+        <CircleCheck className="size-4 text-success" aria-hidden />
         {formatLatency(availability.latencyMs)}
       </span>
     );
