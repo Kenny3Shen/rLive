@@ -20,8 +20,10 @@ import {
   Home,
   Inbox,
   Layers3,
+  RefreshCw,
   Star,
   Trash2,
+  TriangleAlert,
   UserRoundX,
 } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
@@ -82,7 +84,7 @@ import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { enabledSiteIds, isSiteEnabled } from "@/shared/siteId";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import type { FollowUser } from "@/shared/types/live";
+import type { FollowRefreshTarget, FollowUser } from "@/shared/types/live";
 import {
   FOLLOW_AUTO_RECORD_QUERY_KEY,
   useFollowRecordingController,
@@ -128,7 +130,13 @@ import {
   UNGROUPED_FOLLOW_GROUP_ID,
   type FollowGroup,
 } from "./followGroups";
-import { FOLLOW_LIST_QUERY_KEY, refreshFollows, useFollowStatusRefresh } from "./followRefresh";
+import {
+  FOLLOW_LIST_QUERY_KEY,
+  refreshFollows,
+  retryFailedFollows,
+  useFollowStatusRefresh,
+  type FollowRefreshOutcome,
+} from "./followRefresh";
 import {
   FOLLOW_PLATFORM_PARAM,
   FOLLOW_VIEW_PARAM,
@@ -605,9 +613,26 @@ export function FollowPage() {
     setSearchParams,
   ]);
 
+  // 最近一轮刷新摘要。失败项只影响提示与定向重试，不清空列表。
+  const [lastRefresh, setLastRefresh] = useState<FollowRefreshOutcome | null>(null);
+
   const refreshMutation = useMutation({
     mutationFn: () => refreshFollows(queryClient),
+    onSuccess: (outcome) => setLastRefresh(outcome),
     onError: () => notify.error("刷新关注列表失败", "请检查网络后重试。"),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: (targets: FollowRefreshTarget[]) => retryFailedFollows(queryClient, targets),
+    onSuccess: (outcome) => {
+      setLastRefresh(outcome);
+      if (outcome.failures.length === 0) {
+        notify.success("失败项已重新确认");
+      } else {
+        notify.error("部分条目仍未确认", "可稍后再试。");
+      }
+    },
+    onError: () => notify.error("重试失败", "请检查网络后重试。"),
   });
 
   const removeMutation = useMutation({
@@ -1169,6 +1194,32 @@ export function FollowPage() {
                                 </Button>
                               </EmptyContent>
                             </Empty>
+                          )}
+
+                          {lastRefresh && lastRefresh.failures.length > 0 && (
+                            <div
+                              role="status"
+                              className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm"
+                            >
+                              <TriangleAlert aria-hidden className="size-4 shrink-0" />
+                              <span className="min-w-0 flex-1">
+                                本轮刷新有 {lastRefresh.failures.length} 个关注未能确认状态 （共{" "}
+                                {lastRefresh.total} 个），它们保留上一次的结论。
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={retryMutation.isPending}
+                                onClick={() => retryMutation.mutate(lastRefresh.failures)}
+                              >
+                                {retryMutation.isPending ? (
+                                  <Spinner data-icon="inline-start" aria-hidden />
+                                ) : (
+                                  <RefreshCw data-icon="inline-start" aria-hidden />
+                                )}
+                                重试这 {lastRefresh.failures.length} 个
+                              </Button>
+                            </div>
                           )}
 
                           {items.length > 0 && (

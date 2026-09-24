@@ -81,6 +81,15 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
 
   const refreshMutation = useMutation({
     mutationFn: () => refreshFollows(queryClient),
+    onSuccess: (outcome) => {
+      // 部分失败不是整体失败：列表仍然可用，只把未确认的条数与重试入口说出来。
+      if (outcome.failures.length > 0) {
+        notify.error(
+          `${outcome.failures.length} 个关注未能确认状态`,
+          "它们保留上一次的结论，可再次刷新重试。",
+        );
+      }
+    },
     onError: () => {
       notify.error("刷新关注列表失败", "请检查网络后重试。");
     },

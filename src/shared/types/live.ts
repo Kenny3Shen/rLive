@@ -146,6 +146,39 @@ export type FollowUser = {
   updated_at: number;
 };
 
+/** 一轮关注刷新里单个房间的失败记录（与后端 `FollowRefreshFailure` 对应）。 */
+export type FollowRefreshFailure = {
+  site_id: SiteId;
+  room_id: string;
+  user_name: string;
+  /** 安全错误类别，不带上游正文、URL 或 Cookie。 */
+  code: string;
+  retryable: boolean;
+};
+
+/** 一轮关注刷新的摘要（与后端 `FollowRefreshSummary` 对应）。 */
+export type FollowRefreshSummary = {
+  total: number;
+  refreshed: number;
+  /** 本轮成功确认状态的房间键 `{site_id}:{room_id}`。 */
+  refreshed_keys: string[];
+  failures: FollowRefreshFailure[];
+  checked_at: number;
+};
+
+/** 刷新命令的返回值：完整列表加上本轮摘要。 */
+export type FollowRefreshResult = {
+  follows: FollowUser[];
+  summary: FollowRefreshSummary;
+};
+
+/** 定向重试的目标。 */
+export type FollowRefreshTarget = {
+  siteId: SiteId;
+  roomId: string;
+  userName?: string;
+};
+
 export type HistoryItem = {
   site_id: SiteId;
   room_id: string;

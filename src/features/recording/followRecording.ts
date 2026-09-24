@@ -10,7 +10,13 @@ import {
 import { nextDanmakuConnectionEpoch } from "@/features/room/danmaku/connectionEpoch";
 import { invokeCmd } from "@/shared/api/tauri";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import type { FollowUser, LivePlayQuality, LiveRoomDetail, PlayUrl } from "@/shared/types/live";
+import type {
+  FollowRefreshResult,
+  FollowUser,
+  LivePlayQuality,
+  LiveRoomDetail,
+  PlayUrl,
+} from "@/shared/types/live";
 import type { QualityLevel } from "@/shared/types/player";
 import {
   FOLLOW_LIST_QUERY_KEY,
@@ -221,10 +227,13 @@ export function useFollowAutoRecording() {
   const enabled = hydrated && supported;
   const autoFollows = useQuery({
     queryKey: FOLLOW_AUTO_RECORD_QUERY_KEY,
-    queryFn: () => invokeCmd<FollowUser[]>("follow_refresh_auto_record"),
+    queryFn: () => invokeCmd<FollowRefreshResult>("follow_refresh_auto_record"),
     enabled,
     refetchInterval: FOLLOW_STATUS_REFRESH_INTERVAL_MS,
     retry: false,
+    // 自动录制只关心成功确认的条目；这里不做部分失败提示，
+    // 失败项与上一轮结论相同。
+    select: (result) => result.follows,
   });
   const recordings = useRecordings(enabled && (autoFollows.data?.length ?? 0) > 0);
   const autoRunRef = useRef(false);

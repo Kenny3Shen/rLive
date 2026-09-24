@@ -67,8 +67,8 @@ use commands::danmaku_send_history::{
 use commands::diagnostics::{app_log_clear, app_log_snapshot};
 use commands::dlna::{dlna_cast, dlna_search_devices, dlna_status, dlna_stop};
 use commands::follow::{
-    follow_add, follow_list, follow_refresh, follow_refresh_auto_record, follow_remove,
-    follow_set_auto_record, follow_set_tags, tag_list, tag_remove, tag_upsert,
+    follow_add, follow_list, follow_refresh, follow_refresh_auto_record, follow_refresh_selected,
+    follow_remove, follow_set_auto_record, follow_set_tags, tag_list, tag_remove, tag_upsert,
 };
 use commands::history::{history_add, history_clear, history_list, history_remove};
 use commands::image_proxy::image_proxy_url;
@@ -452,6 +452,7 @@ pub fn run() {
             follow_set_auto_record,
             follow_refresh,
             follow_refresh_auto_record,
+            follow_refresh_selected,
             tag_list,
             tag_upsert,
             tag_remove,
