@@ -63,7 +63,11 @@ POST https://api.live.bilibili.com/msg/send
 
 ## 代码位置
 
-- 站点与播放：`src-tauri/src/sites/bilibili/`
+- 站点与直播：`src-tauri/src/sites/bilibili/mod.rs`、`api.rs`
+- 点播业务：`src-tauri/src/sites/bilibili/video.rs`
+- 点播信息流：`src-tauri/src/sites/bilibili/video/app_feed.rs`、`uploader_story.rs`
+- DASH 解析与 MPD 合成：`src-tauri/src/sites/bilibili/video/dash.rs`
+- VOD 弹幕分段与解码：`src-tauri/src/sites/bilibili/video/danmaku.rs`
 - 弹幕接收与发送：`src-tauri/src/danmu_rs/bilibili.rs`
 - 扫码登录：`src-tauri/src/account/bilibili_qr.rs`
 - Tauri command 与本机冷却：`src-tauri/src/commands/danmaku.rs`

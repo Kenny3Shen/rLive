@@ -108,7 +108,9 @@ loginreq → loginres → getEncryption → livreq → livres → lsigreq → ch
 
 ## 代码位置
 
-- 站点与播放：`src-tauri/src/sites/douyu/`（签名 `sign.rs`）
+- 站点与播放：`src-tauri/src/sites/douyu/mod.rs`
+- 播放签名：`src-tauri/src/sites/douyu/sign.rs`
+- Cookie 处理与会话有效性探针：`src-tauri/src/sites/douyu/session.rs`（入口仍为 `sites::douyu::cookie_session_status`）
 - 弹幕接收与发送状态机：`src-tauri/src/danmu_rs/douyu.rs`
 - 扫码登录：`src-tauri/src/account/douyu_qr.rs`
 - command、授权与本机冷却：`src-tauri/src/commands/danmaku.rs`

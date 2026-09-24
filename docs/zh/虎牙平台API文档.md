@@ -120,7 +120,8 @@ tag 0 必须按可选字段读取：TARS 会省略零值字段，把它当成必
 
 ## 代码位置
 
-- 站点与播放：`src-tauri/src/sites/huya/`
+- 站点、房间与播放编排：`src-tauri/src/sites/huya/mod.rs`
+- 播放地址 anticode 签名与编码：`src-tauri/src/sites/huya/sign.rs`
 - 扫码登录：`src-tauri/src/account/huya_qr.rs`
 - 弹幕与 TARS 编解码：`src-tauri/src/danmu_rs/huya.rs`、`src-tauri/src/danmu_rs/tars.rs`
 - command、授权与本机冷却：`src-tauri/src/commands/danmaku.rs`

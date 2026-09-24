@@ -1,5 +1,6 @@
 //! 实验性抖音公开作品；不经过直播 LiveSite trait。
-use super::{DEFAULT_USER_AGENT, DouyinSite, generate_ms_token};
+use super::DouyinSite;
+use super::api::{DEFAULT_USER_AGENT, cookie_pairs, generate_ms_token, normalize_cookie};
 use crate::error::{AppError, AppResult};
 use crate::models::douyin_video::{DouyinVideoFeedPage, DouyinVideoItem};
 use reqwest::{Client, Url};
@@ -13,7 +14,7 @@ const FEED_COUNT: usize = 10;
 /// ttwid/msToken 只代表匿名设备会话，不能当作用户登录同意的凭据。
 /// 存在登录字段也不代表它仍有效；上游拒绝时不降级为匿名流。
 pub fn require_feed_cookie(cookie: &str) -> AppResult<()> {
-    let pairs = super::cookie_pairs(&super::normalize_cookie(cookie));
+    let pairs = cookie_pairs(&normalize_cookie(cookie));
     if pairs.iter().any(|(key, value)| {
         (key.eq_ignore_ascii_case("sessionid") || key.eq_ignore_ascii_case("sessionid_ss"))
             && !value.trim().is_empty()

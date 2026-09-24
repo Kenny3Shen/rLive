@@ -129,8 +129,20 @@ BTTV 与 FrankerFaceZ 未接入；它们需要另两套接口和缓存，而 7TV
 
 ## 代码位置
 
-- 站点、语言分片分页与播放：`src-tauri/src/sites/twitch.rs`
-- 匿名 IRC 弹幕：`src-tauri/src/danmu_rs/twitch.rs`
+目录 `src-tauri/src/sites/twitch/` 按职责分层：
+
+| 文件 | 职责 |
+| --- | --- |
+| `mod.rs` | `TwitchSite` 入口、`LiveSite` 接口委派与对外导出 |
+| `api.rs` | 公开网页初始化、客户端标识缓存、GraphQL 请求与错误映射 |
+| `browse.rs` | 分类树、标签聚合、语言分片分页、搜索与列表解析 |
+| `room.rs` | 频道名规范化、房间详情与直播状态 |
+| `playback.rs` | 播放令牌、Usher 请求、画质到地址的交接缓存与广告备用地址 |
+| `hls.rs` | HLS 主清单解析、稳定画质标识、排序与最接近画质选择 |
+| `parse.rs` | 站点内部共用的 JSON 字段转换 |
+| `tests.rs` | 跨模块外网冒烟测试（默认忽略）与播放列表诊断辅助测试 |
+
+单元测试随各职责模块维护；对外调用仍通过 `sites::twitch`，播放代理无需了解内部布局。匿名 IRC 弹幕位于 `src-tauri/src/danmu_rs/twitch.rs`。
 
 ## 参考
 

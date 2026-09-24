@@ -98,9 +98,11 @@ Python/本地媒体服务模拟 stream_proxy（注入 Referer + 转发 Range）+
 - **seek 成立**：跳到中后段后重新出现有效 `buffered` 区间并继续播放。
 - 同一 `<video>` 的 HLS、FLV、裸 MPEG-TS、DASH 与原生 MP4 适配路径均可出画；同协议切源等待 `canplay` 后才提交，用户暂停状态保留。
 
-正式的 sidx 解析、取流与 MPD 生成实现位于 `src-tauri/src/sites/bilibili/video.rs`。
+sidx 解析、DASH 选流与 MPD 生成位于 `src-tauri/src/sites/bilibili/video/dash.rs`；网络取流与点播业务编排仍在 `src-tauri/src/sites/bilibili/video.rs`。对外类型与函数通过 `sites::bilibili::video` 重导出，命令层沿用原调用路径。
 
 ## 五、VOD 弹幕
+
+分段索引与 protobuf 解码位于 `src-tauri/src/sites/bilibili/video/danmaku.rs`，HTTP 请求保留在 `video.rs`，复用现有站点客户端。
 
 - 6 分钟一段：`segment_index = floor(ms / 360000) + 1`。
 - **越界返回 HTTP 304 + `bili-status-code: -304`**，这就是停止条件（不是空 body）。

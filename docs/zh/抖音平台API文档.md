@@ -80,7 +80,8 @@
 
 ## 代码位置
 
-- 站点与播放：`src-tauri/src/sites/douyin/mod.rs`
+- 站点与直播业务：`src-tauri/src/sites/douyin/mod.rs`
+- 直播与点播共用的请求、匿名会话、Cookie 作用域及签名 query 编码：`src-tauri/src/sites/douyin/api.rs`
 - 点播推荐/详情：`src-tauri/src/sites/douyin/video.rs`、`src-tauri/src/commands/douyin_video.rs`
 - 灰度入口/共享原生播放：`src/features/shorts/DouyinVideoPage.tsx`、`DouyinVideoPlayer.tsx`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
