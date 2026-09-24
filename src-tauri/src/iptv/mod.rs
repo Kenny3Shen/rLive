@@ -23,6 +23,8 @@ const MAX_STREAM_HEADER_VALUE_BYTES: usize = 2_048;
 const MAX_CHANNEL_CHECKS: usize = 32;
 const CHANNEL_CHECK_CONCURRENCY: usize = 12;
 const CHANNEL_CHECK_TIMEOUT: Duration = Duration::from_secs(7);
+/// 深探测的单个媒体资源预算；比清单本身更短，避免拖长整批检测。
+const CHANNEL_CHECK_MEDIA_TIMEOUT: Duration = Duration::from_secs(5);
 const CHANNEL_CHECK_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CHANNEL_CHECK_BYTES: usize = 64 * 1024;
 
@@ -45,16 +47,38 @@ pub struct IptvChannel {
 pub struct IptvChannelCheck {
     pub url: String,
     pub headers: HashMap<String, String>,
+    /// 是否在「网络可达」之外继续验证媒体：拉取清单引用的首个分片/子播放列表。
+    ///
+    /// 默认 false —— 深探测要额外字节与并发，只在用户主动要求时开启。
+    /// 缺少该字段时按 false 处理，旧调用方行为不变。
+    #[serde(default)]
+    pub deep: bool,
+}
+
+/// 探测强度。分级的原因是「HTTP 200 + #EXTM3U」只说明清单本身可达，
+/// 不代表它引用的媒体还能播（常见于分片 403、清单已轮换）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IptvProbeLevel {
+    /// 上游给了可识别的媒体清单，但未验证其引用的媒体。
+    Reachable,
+    /// 已取到清单引用的首个媒体分片或子播放列表。
+    MediaVerified,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IptvChannelAvailability {
     pub url: String,
+    /// 是否至少网络可达。保留旧字段名，避免既有调用方同时改两处语义。
     pub available: bool,
     pub latency_ms: u64,
     pub http_status: Option<u16>,
     pub message: Option<String>,
+    /// 本次实际达到的探测强度；失败时为 `None`。
+    pub level: Option<IptvProbeLevel>,
+    /// 深探测失败的原因（例如首个分片 403）。浅探测下恒为 `None`。
+    pub media_message: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -137,10 +161,13 @@ pub async fn check_channels(
     }
 
     let client = crate::http_client::client_for_proxy(proxy)?;
+    // 按**完整播放配置**去重，而不是只看 URL：同一 URL 配不同的 Referer/UA
+    // 是 IPTV 列表里的常见写法（同一 CDN 路径在不同站点下返回 403 或 200），
+    // 按 URL 去重会让第二个条目的结果被第一个冒名顶替。
     let mut seen = HashSet::new();
     let checks = checks
         .into_iter()
-        .filter(|check| seen.insert(check.url.clone()))
+        .filter(|check| seen.insert(channel_check_identity(check)))
         .enumerate();
     let mut results = stream::iter(checks)
         .map(|(index, check)| {
@@ -171,7 +198,7 @@ async fn probe_channel(client: &Client, check: IptvChannelCheck) -> IptvChannelA
             ACCEPT,
             "application/vnd.apple.mpegurl, application/x-mpegurl, video/*, */*;q=0.8",
         );
-    for (name, value) in check.headers {
+    for (name, value) in &check.headers {
         let header_name = match name.trim().to_ascii_lowercase().as_str() {
             "user-agent" => USER_AGENT,
             "referer" => REFERER,
@@ -261,13 +288,113 @@ async fn probe_channel(client: &Client, check: IptvChannelCheck) -> IptvChannelA
         );
     }
 
+    // 浅探测到此为止：清单本身可达。深探测再验证它引用的首个媒体资源。
+    let (level, media_message) = if check.deep {
+        match verify_first_media(client, &response_url, &payload, &check.headers).await {
+            MediaCheck::Verified => (IptvProbeLevel::MediaVerified, None),
+            // 清单里没有可验证的引用（只有注释、空行或非 HTTP 地址）：
+            // 没有证据说它不可播，但也**没有**验证过媒体，因此留在「网络可达」。
+            MediaCheck::NothingToVerify => (IptvProbeLevel::Reachable, None),
+            MediaCheck::Failed(reason) => (IptvProbeLevel::Reachable, Some(reason)),
+        }
+    } else {
+        (IptvProbeLevel::Reachable, None)
+    };
+
     IptvChannelAvailability {
         url,
         available: true,
         latency_ms: elapsed_millis(started),
         http_status: Some(status.as_u16()),
         message: None,
+        level: Some(level),
+        media_message,
     }
+}
+
+/// 深探测对首个媒体资源的验证结论。
+///
+/// 必须把「验证成功」与「没有可验证的引用」分开：后者不是失败，但也**不是**
+/// 验证过，把它当成 `Verified` 会让「清单里只有注释」显示成「媒体已验证」。
+enum MediaCheck {
+    Verified,
+    NothingToVerify,
+    Failed(String),
+}
+
+/// 取清单引用的首个媒体资源，确认它真的可读。
+///
+/// 只取**一个**子播放列表或分片，且只读首字节块：目的是把「清单可达」
+/// 升级成「至少有一段媒体可读」，而不是完整下载频道内容。
+/// 拿不到就返回人类可读的原因，调用方仍会把它标为「网络可达」而非失败。
+async fn verify_first_media(
+    client: &Client,
+    manifest_url: &Url,
+    payload: &[u8],
+    headers: &HashMap<String, String>,
+) -> MediaCheck {
+    let text = String::from_utf8_lossy(payload);
+    let Some(reference) = first_media_reference(&text) else {
+        return MediaCheck::NothingToVerify;
+    };
+    let Ok(target) = manifest_url.join(reference.trim()) else {
+        return MediaCheck::Failed("清单中的媒体地址无效".to_string());
+    };
+    if target.scheme() != "http" && target.scheme() != "https" {
+        return MediaCheck::NothingToVerify;
+    }
+
+    let mut request = client
+        .get(target)
+        .timeout(CHANNEL_CHECK_MEDIA_TIMEOUT)
+        .header(ACCEPT, "application/vnd.apple.mpegurl, video/*, */*;q=0.8");
+    for (name, value) in headers {
+        let header_name = match name.trim().to_ascii_lowercase().as_str() {
+            "user-agent" => USER_AGENT,
+            "referer" => REFERER,
+            _ => continue,
+        };
+        if let Ok(value) = HeaderValue::from_str(value.trim()) {
+            request = request.header(header_name, value);
+        }
+    }
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            return MediaCheck::Failed(if error.is_timeout() {
+                "首个媒体资源连接超时".to_string()
+            } else {
+                "首个媒体资源无法连接".to_string()
+            });
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        return MediaCheck::Failed(format!("首个媒体资源返回 HTTP {}", status.as_u16()));
+    }
+    // 只要首块字节可读即可；不解码、不缓存。
+    let mut body = response.bytes_stream();
+    match tokio::time::timeout(CHANNEL_CHECK_FIRST_BYTE_TIMEOUT, body.next()).await {
+        Ok(Some(Ok(chunk))) if !chunk.is_empty() => MediaCheck::Verified,
+        Ok(Some(Ok(_))) => MediaCheck::Failed("首个媒体资源未返回数据".to_string()),
+        Ok(Some(Err(_))) => MediaCheck::Failed("读取首个媒体资源失败".to_string()),
+        Ok(None) => MediaCheck::Failed("首个媒体资源未返回数据".to_string()),
+        Err(_) => MediaCheck::Failed("等待首个媒体资源超时".to_string()),
+    }
+}
+
+/// 从清单里取第一个非注释、非空行的引用。
+///
+/// 对 HLS 来说这通常是子播放列表（主清单）或分片（媒体清单）；
+/// 两种都能证明「清单之后的链路」是可用的。
+fn first_media_reference(manifest: &str) -> Option<&str> {
+    manifest.lines().find_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        Some(line)
+    })
 }
 
 fn unavailable_check(
@@ -282,7 +409,34 @@ fn unavailable_check(
         latency_ms: elapsed_millis(started),
         http_status,
         message: Some(message.to_string()),
+        level: None,
+        media_message: None,
     }
+}
+
+/// 播放配置身份：URL + 白名单播放头。用于去重与前端结果索引。
+///
+/// 只包含实际会随请求发送的头（user-agent / referer），且大小写归一：
+/// 其余字段既不影响请求，也不应影响身份。
+pub fn channel_check_identity(check: &IptvChannelCheck) -> String {
+    let mut headers: Vec<(String, String)> = check
+        .headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let name = name.trim().to_ascii_lowercase();
+            matches!(name.as_str(), "user-agent" | "referer")
+                .then(|| (name, value.trim().to_string()))
+        })
+        .collect();
+    headers.sort();
+    let mut identity = check.url.trim().to_string();
+    for (name, value) in headers {
+        identity.push('\n');
+        identity.push_str(&name);
+        identity.push(':');
+        identity.push_str(&value);
+    }
+    identity
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -481,28 +635,99 @@ mod tests {
 
     use reqwest::Url;
 
-    use super::{IptvChannelAvailability, IptvChannelCheck, parse_m3u, probe_channel};
+    use super::{
+        IptvChannelAvailability, IptvChannelCheck, IptvProbeLevel, channel_check_identity,
+        first_media_reference, parse_m3u, probe_channel,
+    };
     use crate::models::live::PlaybackProtocol;
 
     async fn probe_local_response(path: &str, response: &'static [u8]) -> IptvChannelAvailability {
+        probe_local(path, response, false, None).await
+    }
+
+    /// 可控上游：按顺序依次应答 `responses`（每项一次请求）。
+    /// 深探测会发起第二次请求，因此第二项就是「首个媒体资源」的应答。
+    async fn probe_local(
+        path: &str,
+        manifest: &'static [u8],
+        deep: bool,
+        media: Option<&'static [u8]>,
+    ) -> IptvChannelAvailability {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request);
-            stream.write_all(response).unwrap();
+            for response in [Some(manifest), media].into_iter().flatten() {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(response);
+            }
         });
         let result = probe_channel(
             &crate::http_client::default_client(),
             IptvChannelCheck {
                 url: format!("http://{address}/{path}"),
                 headers: HashMap::new(),
+                deep,
             },
         )
         .await;
-        server.join().unwrap();
+        let _ = server.join();
         result
+    }
+
+    #[test]
+    fn playback_identity_separates_same_url_with_different_headers() {
+        let base = IptvChannelCheck {
+            url: "https://cdn.example/live.m3u8".into(),
+            headers: HashMap::new(),
+            deep: false,
+        };
+        let mut with_referer = base.clone();
+        with_referer
+            .headers
+            .insert("Referer".into(), "https://site-a.example".into());
+        let mut other_referer = base.clone();
+        other_referer
+            .headers
+            .insert("referer".into(), "https://site-b.example".into());
+
+        // 同 URL 不同请求头必须被当作两个检测目标：一个可能 403，另一个 200。
+        assert_ne!(
+            channel_check_identity(&base),
+            channel_check_identity(&with_referer)
+        );
+        assert_ne!(
+            channel_check_identity(&with_referer),
+            channel_check_identity(&other_referer)
+        );
+        // 大小写与顺序归一后必须稳定。
+        let mut reordered = other_referer.clone();
+        reordered.headers.insert("User-Agent".into(), "UA".into());
+        let mut same = other_referer.clone();
+        same.headers.insert("user-agent".into(), "UA".into());
+        assert_eq!(
+            channel_check_identity(&reordered),
+            channel_check_identity(&same)
+        );
+        // 不参与请求的字段不影响身份。
+        let mut ignored = with_referer.clone();
+        ignored
+            .headers
+            .insert("X-Ignored".into(), "whatever".into());
+        assert_eq!(
+            channel_check_identity(&with_referer),
+            channel_check_identity(&ignored)
+        );
+    }
+
+    #[test]
+    fn first_media_reference_skips_comments_and_blank_lines() {
+        let manifest = "#EXTM3U\n#EXT-X-VERSION:3\n\n  segment-001.ts  \nsegment-002.ts\n";
+        assert_eq!(first_media_reference(manifest), Some("segment-001.ts"));
+        assert_eq!(first_media_reference("#EXTM3U\n#EXT-X-ENDLIST\n"), None);
     }
 
     #[test]
@@ -572,6 +797,60 @@ https://media.example.test/manifest.mpd
         assert!(result.available);
         assert_eq!(result.http_status, Some(200));
         assert!(result.message.is_none());
+        // 浅探测只能说「清单可达」，不能声称媒体已验证。
+        assert_eq!(result.level, Some(IptvProbeLevel::Reachable));
+        assert!(result.media_message.is_none());
+    }
+
+    #[tokio::test]
+    async fn deep_probe_verifies_the_first_media_resource() {
+        let result = probe_local(
+            "live.m3u8",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: 44\r\nConnection: close\r\n\r\n#EXTM3U\n#EXT-X-VERSION:3\nsegment-001.ts\n",
+            true,
+            Some(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbytes"),
+        )
+        .await;
+
+        assert!(result.available);
+        assert_eq!(result.level, Some(IptvProbeLevel::MediaVerified));
+        assert!(result.media_message.is_none());
+    }
+
+    #[tokio::test]
+    async fn deep_probe_reports_reachable_when_the_first_segment_is_forbidden() {
+        // 清单有效但分片 403：这正是「可用但播不了」的典型形态，
+        // 不能显示为已验证可播。
+        let result = probe_local(
+            "live.m3u8",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: 44\r\nConnection: close\r\n\r\n#EXTM3U\n#EXT-X-VERSION:3\nsegment-001.ts\n",
+            true,
+            Some(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+
+        assert!(result.available, "清单可达仍应算网络可达");
+        assert_eq!(result.level, Some(IptvProbeLevel::Reachable));
+        assert_eq!(
+            result.media_message.as_deref(),
+            Some("首个媒体资源返回 HTTP 403")
+        );
+    }
+
+    #[tokio::test]
+    async fn deep_probe_without_a_verifiable_reference_stays_reachable() {
+        // 清单只有注释：没有可验证的引用，不因此判失败。
+        let result = probe_local(
+            "live.m3u8",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: 21\r\nConnection: close\r\n\r\n#EXTM3U\n#EXT-X-VERSION:3\n",
+            true,
+            None,
+        )
+        .await;
+
+        assert!(result.available);
+        assert_eq!(result.level, Some(IptvProbeLevel::Reachable));
+        assert!(result.media_message.is_none());
     }
 
     #[tokio::test]

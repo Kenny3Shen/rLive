@@ -37,7 +37,7 @@ export type IptvController = {
   filteredChannels: IptvChannel[];
   availabilityFilter: IptvAvailabilityFilter;
   setAvailabilityFilter: (filter: IptvAvailabilityFilter) => void;
-  availabilityByUrl: ReadonlyMap<string, IptvAvailabilityState>;
+  availabilityByIdentity: ReadonlyMap<string, IptvAvailabilityState>;
   availabilityProgress: { completed: number; total: number } | null;
   hasFilters: boolean;
   isCheckingAvailability: boolean;
@@ -49,7 +49,10 @@ export type IptvController = {
   clearFilters: () => void;
   openChannel: (channel: IptvChannel) => void;
   updateSource: () => Promise<void>;
+  /** 浅探测：只确认网络可达与清单可识别。 */
   checkChannelAvailability: () => Promise<IptvChannelAvailability[] | null>;
+  /** 深探测：额外验证清单引用的首个媒体资源。 */
+  checkChannelAvailabilityDeep: () => Promise<IptvChannelAvailability[] | null>;
 };
 
 const IptvControllerContext = createContext<IptvController | null>(null);
@@ -73,7 +76,7 @@ export function IptvControllerProvider({
   const selectedGroup = searchParams.get("group") ?? "all";
   const keyword = searchParams.get("q") ?? "";
   const [availabilityFilter, setAvailabilityFilter] = useState<IptvAvailabilityFilter>("all");
-  const availabilityByUrl = useIptvAvailabilityStore((state) => state.byUrl);
+  const availabilityByIdentity = useIptvAvailabilityStore((state) => state.byIdentity);
   const availabilityProgress = useIptvAvailabilityStore((state) => state.progress);
   const activeSourceRef = useRef<string | null>(null);
 
@@ -91,8 +94,13 @@ export function IptvControllerProvider({
     [channels, keyword, selectedGroup],
   );
   const filteredChannels = useMemo(
-    () => filterIptvChannelsByAvailability(matchingChannels, availabilityByUrl, availabilityFilter),
-    [availabilityByUrl, availabilityFilter, matchingChannels],
+    () =>
+      filterIptvChannelsByAvailability(
+        matchingChannels,
+        availabilityByIdentity,
+        availabilityFilter,
+      ),
+    [availabilityByIdentity, availabilityFilter, matchingChannels],
   );
   const hasFilters =
     selectedGroup !== "all" || keyword.trim().length > 0 || availabilityFilter !== "all";
@@ -185,6 +193,16 @@ export function IptvControllerProvider({
     [matchingChannels, source.url],
   );
 
+  const checkChannelAvailabilityDeep = useCallback(
+    () =>
+      probeIptvAvailability(matchingChannels, {
+        sourceUrl: source.url,
+        notify: true,
+        deep: true,
+      }),
+    [matchingChannels, source.url],
+  );
+
   const value = useMemo<IptvController>(
     () => ({
       source,
@@ -196,7 +214,7 @@ export function IptvControllerProvider({
       filteredChannels,
       availabilityFilter,
       setAvailabilityFilter,
-      availabilityByUrl,
+      availabilityByIdentity,
       availabilityProgress,
       hasFilters,
       isCheckingAvailability,
@@ -206,13 +224,15 @@ export function IptvControllerProvider({
       openChannel,
       updateSource,
       checkChannelAvailability,
+      checkChannelAvailabilityDeep,
     }),
     [
-      availabilityByUrl,
+      availabilityByIdentity,
       availabilityFilter,
       availabilityProgress,
       channels,
       checkChannelAvailability,
+      checkChannelAvailabilityDeep,
       clearFilters,
       filteredChannels,
       groupOptions,

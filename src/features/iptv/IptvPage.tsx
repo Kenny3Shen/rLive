@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { CircleCheck, CircleX, Folder, Inbox, Layers3, Tv, X } from "lucide-react";
+import { CircleCheck, CircleDot, CircleX, Folder, Inbox, Layers3, Tv, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
@@ -19,7 +20,7 @@ import { preloadRouteModule } from "@/app/routeModules";
 import { useIptvController } from "./IptvController";
 import { IptvAvailabilityFab, IptvContentToolbar, IptvRailControls } from "./IptvHeaderControls";
 import type { IptvGroupOption } from "./filterChannels";
-import type { IptvAvailabilityState } from "./availability";
+import { iptvCheckIdentity, type IptvAvailabilityState } from "./availability";
 import type { IptvChannel } from "./types";
 
 const CHANNEL_PAGE_SIZE = 120;
@@ -85,7 +86,7 @@ export function IptvPage() {
     groupOptions,
     availabilityFilter,
     filteredChannels,
-    availabilityByUrl,
+    availabilityByIdentity,
     playlistQuery,
     hasFilters,
     updateSource,
@@ -184,7 +185,7 @@ export function IptvPage() {
                       <IptvChannelCard
                         key={`${channel.id}:${channel.url}`}
                         channel={channel}
-                        availability={availabilityByUrl.get(channel.url)}
+                        availability={availabilityByIdentity.get(iptvCheckIdentity(channel))}
                         onOpen={openChannel}
                       />
                     ))}
@@ -248,12 +249,29 @@ function IptvCardAvailability({
     return <Spinner className="size-4 text-muted-foreground" aria-label="检测中" />;
   }
   if (availability.status === "available") {
+    // 只有深探测确认过首个媒体资源，才用实心对勾与「已验证」的语义；
+    // 浅探测的结论是「网络可达」，不能读成「能播」。
+    const verified = availability.level === "media_verified";
+    const label = verified
+      ? `媒体已验证，响应 ${formatLatency(availability.latencyMs)}`
+      : `网络可达，未验证媒体，响应 ${formatLatency(availability.latencyMs)}`;
     return (
       <span
-        className="flex items-center gap-1 text-xs tabular-nums text-muted-foreground"
-        aria-label={`可用，响应 ${formatLatency(availability.latencyMs)}`}
+        className={cn(
+          "flex items-center gap-1 text-xs tabular-nums",
+          verified ? "text-success" : "text-muted-foreground",
+        )}
+        aria-label={label}
+        title={
+          availability.mediaMessage ??
+          (verified ? "首个媒体资源已确认可读" : "清单可达，未验证其引用的媒体")
+        }
       >
-        <CircleCheck className="size-4 text-success" aria-hidden />
+        {verified ? (
+          <CircleCheck className="size-4 text-success" aria-hidden />
+        ) : (
+          <CircleDot className="size-4" aria-hidden />
+        )}
         {formatLatency(availability.latencyMs)}
       </span>
     );

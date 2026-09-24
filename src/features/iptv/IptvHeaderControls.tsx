@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Activity, ListFilter, Search, X } from "lucide-react";
+import { Activity, ListFilter, Search, ShieldCheck, X } from "lucide-react";
 import {
   InputGroup,
   InputGroupAddon,
@@ -154,9 +154,10 @@ export function IptvSearchInput({ keyword, onChange, className }: IptvSearchInpu
 }
 
 function availabilityFilterLabel(filter: IptvAvailabilityFilter): string {
-  if (filter === "available") return "仅看可用";
+  if (filter === "available") return "仅看可达";
   if (filter === "unavailable") return "仅看不可用";
   if (filter === "unchecked") return "仅看未检测";
+  if (filter === "stale") return "仅看已陈旧";
   return "全部状态";
 }
 
@@ -198,9 +199,11 @@ export function IptvAvailabilitySelect({
       <SelectContent align={iconOnly ? "end" : "start"}>
         <SelectGroup>
           <SelectItem value="all">全部状态</SelectItem>
-          <SelectItem value="available">可用</SelectItem>
+          {/* 「可达」不是「可播」：浅探测只确认清单可读。 */}
+          <SelectItem value="available">网络可达</SelectItem>
           <SelectItem value="unavailable">不可用</SelectItem>
           <SelectItem value="unchecked">未检测</SelectItem>
+          <SelectItem value="stale">结果已陈旧</SelectItem>
         </SelectGroup>
       </SelectContent>
     </Select>
@@ -304,7 +307,13 @@ export function IptvContentToolbar({ className }: IptvContentToolbarProps) {
   );
 }
 
-/** 手动 IPTV 可看性探测放在内容区角落，保持 Shell 侧栏紧凑。 */
+/**
+ * 手动 IPTV 可看性探测放在内容区角落，保持 Shell 侧栏紧凑。
+ *
+ * 两个入口：默认是轻量探测（只确认清单可达），长按/右键菜单提供深探测
+ * （额外验证清单引用的首个媒体资源）。深探测会为每个条目多发一次请求，
+ * 因此不设为默认。
+ */
 export function IptvAvailabilityFab() {
   const {
     matchingChannels,
@@ -312,38 +321,64 @@ export function IptvAvailabilityFab() {
     availabilityProgress,
     isCheckingAvailability,
     checkChannelAvailability,
+    checkChannelAvailabilityDeep,
   } = useIptvController();
   const pending = playlistQuery.isFetching || isCheckingAvailability;
   const label = availabilityProgress
     ? `检测频道可用性（${availabilityProgress.completed}/${availabilityProgress.total}）`
     : "检测频道可用性";
+  const deepLabel = availabilityProgress
+    ? `深探测媒体可用性（${availabilityProgress.completed}/${availabilityProgress.total}）`
+    : "深探测媒体可用性";
 
   return createPortal(
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            variant="default"
-            size="icon-lg"
-            aria-label={label}
-            disabled={matchingChannels.length === 0 || pending}
-            onClick={() => void checkChannelAvailability()}
-            className={cn(
-              "fixed right-4 bottom-[4.5rem] z-30 size-11 rounded-full p-0 shadow-lg shadow-black/25 md:right-5 md:bottom-[4.25rem]",
-              "max-md:bottom-[calc(8.5rem+env(safe-area-inset-bottom))]",
-            )}
-          />
-        }
-      >
-        {pending ? (
-          <Spinner className="size-5" aria-hidden />
-        ) : (
-          <Activity className="size-5" aria-hidden />
-        )}
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>,
+    <div className="fixed right-4 bottom-[4.5rem] z-30 flex flex-col items-end gap-2 md:right-5 md:bottom-[4.25rem] max-md:bottom-[calc(8.5rem+env(safe-area-inset-bottom))]">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-lg"
+              aria-label={deepLabel}
+              disabled={matchingChannels.length === 0 || pending}
+              onClick={() => void checkChannelAvailabilityDeep()}
+              className="size-11 rounded-full p-0 shadow-lg shadow-black/25"
+            />
+          }
+        >
+          {pending ? (
+            <Spinner className="size-5" aria-hidden />
+          ) : (
+            <ShieldCheck className="size-5" aria-hidden />
+          )}
+        </TooltipTrigger>
+        <TooltipContent>深探测：额外验证首个媒体资源</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="default"
+              size="icon-lg"
+              aria-label={label}
+              disabled={matchingChannels.length === 0 || pending}
+              onClick={() => void checkChannelAvailability()}
+              className="size-11 rounded-full p-0 shadow-lg shadow-black/25"
+            />
+          }
+        >
+          {pending ? (
+            <Spinner className="size-5" aria-hidden />
+          ) : (
+            <Activity className="size-5" aria-hidden />
+          )}
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </div>,
     document.body,
   );
 }
