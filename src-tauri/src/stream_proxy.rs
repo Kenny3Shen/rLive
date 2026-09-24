@@ -169,6 +169,19 @@ impl ProxyTelemetryCounters {
     }
 }
 
+/// 所有活动代理会话的聚合计数器（诊断用，不含标识与 URL）。
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct StreamProxyTelemetryTotals {
+    pub sessions: u64,
+    pub upstream_requests: u64,
+    pub upstream_failures: u64,
+    pub bytes_forwarded: u64,
+    /// 有首响应耗时的会话数。
+    pub first_response_samples: u64,
+    pub first_response_ms_sum: u64,
+    pub first_response_ms_max: u64,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StreamProxyTelemetry {
     pub started_at_ms: u64,
@@ -707,6 +720,30 @@ impl StreamProxy {
             .map(|inner| inner.telemetry.snapshot())
     }
 
+    /// 所有活动会话的聚合计数器，供诊断摘要使用。
+    ///
+    /// 只返回计数与耗时，**不含** session id、URL 或请求头：
+    /// session id 是匿名标识，但聚合后连它也不需要。
+    pub fn telemetry_totals(&self) -> StreamProxyTelemetryTotals {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut totals = StreamProxyTelemetryTotals {
+            sessions: state.active.len() as u64,
+            ..Default::default()
+        };
+        for inner in state.active.values() {
+            let snapshot = inner.telemetry.snapshot();
+            totals.upstream_requests += snapshot.upstream_requests;
+            totals.upstream_failures += snapshot.upstream_failures;
+            totals.bytes_forwarded += snapshot.bytes_forwarded;
+            if let Some(ms) = snapshot.first_response_ms {
+                totals.first_response_samples += 1;
+                totals.first_response_ms_sum += ms;
+                totals.first_response_ms_max = totals.first_response_ms_max.max(ms);
+            }
+        }
+        totals
+    }
+
     /// [`Self::start`] / [`Self::start_text`] 共用的前置：预订会话所有权
     /// 并绑定一个回环临时端口，失败时释放预订。
     async fn bind_session_listener(&self, session_id: &str) -> AppResult<(u64, TcpListener, u16)> {
@@ -1042,6 +1079,62 @@ mod tests {
             1
         );
         proxy.stop();
+    }
+
+    #[test]
+    fn diagnostic_totals_include_only_active_counters() {
+        let proxy = StreamProxy::new();
+        assert_eq!(
+            proxy.telemetry_totals(),
+            super::StreamProxyTelemetryTotals::default()
+        );
+        // 尚在启动的会话不是活动计数样本。
+        proxy.reserve_start("pending-private-room");
+        for (id, requests, failures, bytes, response) in [
+            ("private-room-a", 3, 1, 100, 20),
+            ("private-room-b", 7, 2, 300, 0),
+            ("private-room-c", 2, 0, 50, 40),
+        ] {
+            let telemetry = Arc::new(ProxyTelemetryCounters::new());
+            telemetry
+                .upstream_requests
+                .store(requests, Ordering::Relaxed);
+            telemetry
+                .upstream_failures
+                .store(failures, Ordering::Relaxed);
+            telemetry.bytes_forwarded.store(bytes, Ordering::Relaxed);
+            telemetry
+                .first_response_ms
+                .store(response, Ordering::Relaxed);
+            let (shutdown, _) = watch::channel(false);
+            let task = tauri::async_runtime::spawn(std::future::pending());
+            proxy.state.lock().unwrap().active.insert(
+                id.into(),
+                ProxyInner {
+                    shutdown,
+                    task,
+                    telemetry,
+                },
+            );
+        }
+        let totals = proxy.telemetry_totals();
+        assert_eq!(totals.sessions, 3);
+        assert_eq!(totals.upstream_requests, 12);
+        assert_eq!(totals.upstream_failures, 3);
+        assert_eq!(totals.bytes_forwarded, 450);
+        assert_eq!(totals.first_response_samples, 2);
+        assert_eq!(totals.first_response_ms_sum, 60);
+        assert_eq!(totals.first_response_ms_max, 40);
+        let json = serde_json::to_string(&totals).unwrap();
+        assert!(!json.contains("private-room"));
+        assert!(!json.contains("session_id"));
+        proxy.stop_for_session("private-room-a");
+        assert_eq!(proxy.telemetry_totals().upstream_requests, 9);
+        proxy.stop();
+        assert_eq!(
+            proxy.telemetry_totals(),
+            super::StreamProxyTelemetryTotals::default()
+        );
     }
 
     #[test]

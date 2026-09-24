@@ -71,9 +71,8 @@ type LogTab = "current" | "previous";
 /**
  * “关于”面板的日志查看器。
  *
- * Windows 发布版没有控制台，`rlive.log` 是用户反馈失败时唯一能引用的记录。
- * 该日志在设计上只记录失败 —— `init_logging` 绝不写 Cookie 值、token 或聊天文本 ——
- * 因此在这里展示它不会暴露凭据。
+ * 日志只记录警告与错误，但底层错误仍可能夹带地址或本地路径。
+ * 此处是原始日志本机查看器；对外反馈优先使用白名单诊断摘要。
  */
 export function AppLogField() {
   const queryClient = useQueryClient();
@@ -167,7 +166,7 @@ export function AppLogField() {
           <FieldTitle id="app-log-title">
             <span>运行日志</span>
             <FieldTip>
-              仅记录警告和错误，不含 Cookie、账号凭据和弹幕内容。反馈问题时可复制这里的内容。
+              原始警告和错误可能包含地址或本地路径，复制前请自行检查。对外反馈建议使用下方的诊断摘要。
             </FieldTip>
           </FieldTitle>
         </FieldContent>

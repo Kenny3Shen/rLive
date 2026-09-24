@@ -5,6 +5,7 @@ mod asr;
 mod commands;
 mod danmu_rs;
 mod db;
+mod diagnostics_summary;
 mod disk_cache;
 mod dlna;
 mod error;
@@ -64,7 +65,9 @@ use commands::danmaku_send_history::{
     danmaku_send_history_clear, danmaku_send_history_clear_all, danmaku_send_history_list,
     danmaku_send_history_list_all,
 };
-use commands::diagnostics::{app_log_clear, app_log_snapshot};
+use commands::diagnostics::{
+    app_diagnostic_export, app_diagnostic_snapshot, app_log_clear, app_log_snapshot,
+};
 use commands::dlna::{dlna_cast, dlna_search_devices, dlna_status, dlna_stop};
 use commands::follow::{
     follow_add, follow_list, follow_refresh, follow_refresh_auto_record, follow_refresh_selected,
@@ -479,6 +482,8 @@ pub fn run() {
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             app_confirm_exit,
             app_log_snapshot,
+            app_diagnostic_snapshot,
+            app_diagnostic_export,
             app_log_clear,
         ])
         .build(tauri::generate_context!())
