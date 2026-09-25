@@ -5,6 +5,7 @@ import { CalendarDays, MessageSquareText, Play } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
 import { Spinner } from "@/components/ui/spinner";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
+import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
 import { videoCoverAspect } from "@/shared/videoDimension";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
@@ -27,16 +28,20 @@ import { VideoMasonry } from "./VideoMasonry";
  * 等一整套直播专属动作，VOD 一个都用不上。
  */
 
-// 卡片自带底色与细描边（与直播 `RoomCard` 同步）：瀑布流里相邻卡片只隔 12px，
-// 透明卡片的边界完全由封面撑出，横竖画幅混排时读不出标题归属上一张还是下一张。
+// 卡片自带底色与细描边（表面定义见 `shared/components/cardSurface.ts`，与直播
+// `RoomCard`、关注页卡片共用）：瀑布流里相邻卡片只隔 12px，透明卡片的边界完全
+// 由封面撑出，横竖画幅混排时读不出标题归属上一张还是下一张。
 //
 // 底色从封面自然向下延伸：封面满幅占住卡片顶部，卡片的圆角与描边正好落在封面边缘，
 // 于是读作封面自己的边界继续包住下面的文字，而不是把封面又套进一层内边距。因此
 // 外壳不带 padding，圆角/描边/投影整体上移到外壳 —— 原先挂在封面上的那一圈若留着，
 // 会在卡片边界内侧再画一道，读成两层边框。
 // 行式卡片是例外：文本块高于 16:9 缩略图且垂直居中，缩略图无法满幅，仍走内边距画法。
-const CARD_CLASS =
-  "group flex w-full self-start flex-col overflow-hidden rounded-xl bg-card text-left shadow-md shadow-black/30 ring-1 ring-border-subtle hover:bg-card-elevated hover:ring-foreground/20";
+const CARD_CLASS = cn(
+  "group flex w-full self-start flex-col overflow-hidden rounded-xl text-left",
+  CARD_SURFACE_CLASS,
+  CARD_SURFACE_HOVER_CLASS,
+);
 const COVER_CLASS = "relative w-full overflow-hidden bg-muted";
 const COVER_IMAGE_CLASS =
   "absolute inset-0 h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none";

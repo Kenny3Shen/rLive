@@ -21,6 +21,8 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
+import { cn } from "@/lib/utils";
 import type { PgcItem, PgcListPage, VideoListPage, VideoZone } from "@/shared/types/video";
 import {
   videoGetPgcIndex,
@@ -77,7 +79,7 @@ function GridSkeleton() {
         // 骨架屏复制 VideoCard 的卡片表面：封面满幅顶到卡片边缘，文字区自带内边距。
         <div
           key={index}
-          className="flex flex-col overflow-hidden rounded-xl bg-card shadow-md shadow-black/30 ring-1 ring-border-subtle"
+          className={cn("flex flex-col overflow-hidden rounded-xl", CARD_SURFACE_CLASS)}
         >
           <Skeleton className="aspect-video w-full rounded-none" />
           <div className="flex flex-col gap-2 px-2 pt-2 pb-2.5">

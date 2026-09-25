@@ -14,6 +14,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { RoomCard } from "@/shared/components/RoomCard";
+import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import type { LiveCategory, LiveRoomItem, LiveSubCategory } from "@/shared/types/live";
@@ -27,7 +28,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SITE_LABELS } from "@/lib/utils";
+import { SITE_LABELS, cn } from "@/lib/utils";
 import { preloadRouteModule } from "@/app/routeModules";
 import { CategoryBar } from "@/features/category/CategoryBar";
 import { CategoryPanel } from "@/features/category/CategoryPanel";
@@ -241,7 +242,10 @@ export function HomePage() {
               // 数据到达时不会整屏改一次几何。
               <div
                 key={i}
-                className="flex flex-col overflow-hidden rounded-xl bg-card shadow-md shadow-black/30 ring-1 ring-border-subtle"
+                className={cn(
+                  "flex flex-col overflow-hidden rounded-xl",
+                  CARD_SURFACE_CLASS,
+                )}
               >
                 <Skeleton className="aspect-video w-full rounded-none" />
                 <div className="flex flex-col gap-2 px-2 pt-2 pb-2.5">

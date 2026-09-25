@@ -36,6 +36,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { preloadRouteModule } from "@/app/routeModules";
 import { useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
+import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
 import { formatOnline, normalizeCoverUrl, cn } from "@/lib/utils";
 import { roomCardLabels } from "./roomCardLabels";
 
@@ -282,8 +283,9 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
       // 底色从封面自然向下延伸，而不是给封面套一层内边距：封面满幅占住卡片顶部，
       // 卡片的圆角与描边正好落在封面边缘上，读作封面自己的边界继续包住下面的文字。
       // 封面不参与内边距，因此这里不能加 padding —— 文字区自己带内边距。
-      "room-card group flex w-full flex-col overflow-hidden rounded-xl bg-card text-left shadow-md shadow-black/30 ring-1 ring-border-subtle",
-      "hover:bg-card-elevated hover:ring-foreground/20",
+      "room-card group flex w-full flex-col overflow-hidden rounded-xl text-left",
+      CARD_SURFACE_CLASS,
+      CARD_SURFACE_HOVER_CLASS,
     ),
   };
 

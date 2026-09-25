@@ -19,6 +19,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { LinkText } from "@/shared/components/LinkText";
+import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
@@ -102,7 +103,10 @@ function RelatedPanel({ bvid }: { bvid: string }) {
             // 右侧三行文本。
             <div
               key={index}
-              className="flex items-start gap-2.5 rounded-xl bg-card p-1.5 shadow-md shadow-black/30 ring-1 ring-border-subtle"
+              className={cn(
+                "flex items-start gap-2.5 rounded-xl p-1.5",
+                CARD_SURFACE_CLASS,
+              )}
             >
               <Skeleton className="aspect-video w-2/5 shrink-0 rounded-md ring-1 ring-border-subtle" />
               <div className="flex min-w-0 flex-1 flex-col gap-1.5 py-0.5">

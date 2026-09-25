@@ -77,6 +77,7 @@ import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PlatformFilterSelect } from "@/shared/components/PlatformFilterSelect";
+import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { isMobileClient } from "@/shared/clientPlatform";
@@ -310,7 +311,13 @@ function FollowCard({
   ];
 
   const cardClassName = cn(
-    "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity] hover:bg-card-elevated hover:ring-foreground/20",
+    // 表面与直播/视频卡片共用同一个常量（见 shared/components/cardSurface.ts）：
+    // 底色、海拔与描边由它提供，`Card` 原语默认的 `ring-foreground/10` 会被
+    // 常量里的 `ring-border-subtle` 覆盖。过渡由这里给：卡片本身不是按钮，
+    // 拿不到 `[data-motion-press]` 的过渡声明。
+    "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity]",
+    CARD_SURFACE_CLASS,
+    CARD_SURFACE_HOVER_CLASS,
     live &&
       "before:absolute before:inset-y-3 before:left-0 before:w-0.5 before:rounded-r-full before:bg-success",
     moving && "opacity-60",
@@ -1132,7 +1139,11 @@ export function FollowPage() {
                           {loading && (
                             <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
                               {Array.from({ length: 10 }).map((_, index) => (
-                                <Card key={index} size="sm" className="gap-2">
+                                <Card
+                                  key={index}
+                                  size="sm"
+                                  className={cn("gap-2", CARD_SURFACE_CLASS)}
+                                >
                                   <CardHeader className="items-center gap-x-2.5">
                                     <div className="flex min-w-0 items-center gap-2.5">
                                       <Skeleton className="size-10 shrink-0 rounded-full" />

@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   type IptvFavorite,
@@ -211,7 +212,12 @@ function IptvFavoriteCard({
   ];
 
   const cardClassName = cn(
-    "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity] hover:bg-card-elevated hover:ring-foreground/20",
+    // 与直播关注卡（FollowPage）保持同一表面：两者在关注页的两个页签里并列，
+    // 样式不能分家，因此共用 shared/components/cardSurface.ts 的常量。
+    // 过渡由这里给：卡片本身不是按钮，拿不到 `[data-motion-press]` 的过渡声明。
+    "relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity]",
+    CARD_SURFACE_CLASS,
+    CARD_SURFACE_HOVER_CLASS,
     moving && "opacity-60",
   );
 
@@ -406,7 +412,7 @@ function IptvFollowSkeleton() {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
       {Array.from({ length: 10 }).map((_, index) => (
-        <Card key={index} size="sm" className="gap-2">
+        <Card key={index} size="sm" className={cn("gap-2", CARD_SURFACE_CLASS)}>
           <CardHeader className="items-center gap-x-2.5">
             <div className="flex min-w-0 items-center gap-2.5">
               <Skeleton className="size-10 shrink-0 rounded-lg" />
