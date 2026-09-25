@@ -1,0 +1,556 @@
+{
+  "date": "2026-09-24",
+  "environment": "Windows 11 / WebView2 153 / Tauri Debug + React dev / 已配置网络代理",
+  "video": {
+    "bvid": "BV1cSec6tEux",
+    "cid": 42166259485,
+    "quality": 120
+  },
+  "notes": [
+    "首帧为实际卡片点击至 requestVideoFrameCallback。所有主样本均启用 CPU Profiler。",
+    "同后端对照在相同优化后端上，交错加载旧/新 VideoPlayerPage；所有媒体与 IPC 均为真实请求。",
+    "完整优化续播组包含重启后第一轮，不删除较慢样本。",
+    "追加观察 after-steady-2 在40秒时超时；下一轮被外层命令截止中断，未产出完整JSON，不计入成功样本。",
+    "探索的 Range 改写未形成有效旧后端对照，full-old/full-new 文件不用于定量结论。"
+  ],
+  "samples": [
+    {
+      "group": "完整基线-续播",
+      "sample": "before-1",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 3099.6,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 316,
+      "playInfoReadyMs": 480.9,
+      "firstTargetRequestMs": 1301.6,
+      "targetTransferMs": 628.7,
+      "videoInitMs": [
+        89.4,
+        148.8
+      ],
+      "audioInitMs": [
+        149.1,
+        201.1
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整基线-续播",
+      "sample": "before-2",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 4255.3,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1404.9,
+      "playInfoReadyMs": 1587.1,
+      "firstTargetRequestMs": 2396.1,
+      "targetTransferMs": 800.7,
+      "videoInitMs": [
+        142.5,
+        110.3
+      ],
+      "audioInitMs": [
+        208.9,
+        208.5
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整基线-续播",
+      "sample": "before-3",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 2970.7,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 315.8,
+      "playInfoReadyMs": 460.6,
+      "firstTargetRequestMs": 1284.6,
+      "targetTransferMs": 623.1,
+      "videoInitMs": [
+        122.8,
+        160.5
+      ],
+      "audioInitMs": [
+        134.3,
+        171.7
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整基线-续播",
+      "sample": "before-4",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 3825.7,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 578.1,
+      "playInfoReadyMs": 775.7,
+      "firstTargetRequestMs": 1858,
+      "targetTransferMs": 836.9,
+      "videoInitMs": [
+        151.8,
+        387.4
+      ],
+      "audioInitMs": [
+        123.2,
+        45.1
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整基线-续播",
+      "sample": "before-5",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 2960.7,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 315.3,
+      "playInfoReadyMs": 479.4,
+      "firstTargetRequestMs": 1265.2,
+      "targetTransferMs": 647.7,
+      "videoInitMs": [
+        124.2,
+        115.2
+      ],
+      "audioInitMs": [
+        68.7,
+        21.5
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-续播",
+      "sample": "after-1",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 7729.5,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1542.4,
+      "playInfoReadyMs": 1644.3,
+      "firstTargetRequestMs": 2033.2,
+      "targetTransferMs": 4596.4,
+      "videoInitMs": [
+        1.9
+      ],
+      "audioInitMs": [
+        2.3
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-续播",
+      "sample": "after-2",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 7919.1,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1107.1,
+      "playInfoReadyMs": 1242.9,
+      "firstTargetRequestMs": 1574.4,
+      "targetTransferMs": 5273.7,
+      "videoInitMs": [
+        1.9
+      ],
+      "audioInitMs": [
+        2
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-续播",
+      "sample": "after-3",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 7780.7,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1081.1,
+      "playInfoReadyMs": 1221.2,
+      "firstTargetRequestMs": 1573.4,
+      "targetTransferMs": 5178.9,
+      "videoInitMs": [
+        2.2
+      ],
+      "audioInitMs": [
+        2.5
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-续播",
+      "sample": "after-4",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 8256,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1188.7,
+      "playInfoReadyMs": 1322.6,
+      "firstTargetRequestMs": 1599.6,
+      "targetTransferMs": 5619.2,
+      "videoInitMs": [
+        6.8
+      ],
+      "audioInitMs": [
+        7.7
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-续播",
+      "sample": "after-5",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 7645.4,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 968,
+      "playInfoReadyMs": 1103.6,
+      "firstTargetRequestMs": 1445.3,
+      "targetTransferMs": 5003,
+      "videoInitMs": [
+        2.2
+      ],
+      "audioInitMs": [
+        2.3
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整基线-从头",
+      "sample": "before-zero-1",
+      "positionSeconds": 0,
+      "timeout": false,
+      "firstFrameMs": 1965.6,
+      "firstFrameMediaTime": 0,
+      "playInfoMs": 394.7,
+      "playInfoReadyMs": 539.6,
+      "firstTargetRequestMs": 1003,
+      "targetTransferMs": 918,
+      "videoInitMs": [
+        167.8
+      ],
+      "audioInitMs": [
+        278.3
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整基线-从头",
+      "sample": "before-zero-2",
+      "positionSeconds": 0,
+      "timeout": false,
+      "firstFrameMs": 2112.4,
+      "firstFrameMediaTime": 0,
+      "playInfoMs": 522.5,
+      "playInfoReadyMs": 699.5,
+      "firstTargetRequestMs": 1109.2,
+      "targetTransferMs": 954.1,
+      "videoInitMs": [
+        100.6
+      ],
+      "audioInitMs": [
+        431.6
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整基线-从头",
+      "sample": "before-zero-3",
+      "positionSeconds": 0,
+      "timeout": false,
+      "firstFrameMs": 1773.4,
+      "firstFrameMediaTime": 0,
+      "playInfoMs": 330.2,
+      "playInfoReadyMs": 494.5,
+      "firstTargetRequestMs": 903.7,
+      "targetTransferMs": 823.5,
+      "videoInitMs": [
+        110.8
+      ],
+      "audioInitMs": [
+        134
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-从头",
+      "sample": "after-zero-1",
+      "positionSeconds": 0,
+      "timeout": false,
+      "firstFrameMs": 1838,
+      "firstFrameMediaTime": 0.06675,
+      "playInfoMs": 318.2,
+      "playInfoReadyMs": 443.5,
+      "firstTargetRequestMs": 774.7,
+      "targetTransferMs": 919.6,
+      "videoInitMs": [
+        2.7
+      ],
+      "audioInitMs": [
+        4
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-从头",
+      "sample": "after-zero-2",
+      "positionSeconds": 0,
+      "timeout": false,
+      "firstFrameMs": 2015.1,
+      "firstFrameMediaTime": 0,
+      "playInfoMs": 700.9,
+      "playInfoReadyMs": 847.5,
+      "firstTargetRequestMs": 1072.7,
+      "targetTransferMs": 903.1,
+      "videoInitMs": [
+        2.4
+      ],
+      "audioInitMs": [
+        2.5
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "完整优化-从头",
+      "sample": "after-zero-3",
+      "positionSeconds": 0,
+      "timeout": false,
+      "firstFrameMs": 1721.5,
+      "firstFrameMediaTime": 0,
+      "playInfoMs": 335.5,
+      "playInfoReadyMs": 492.5,
+      "firstTargetRequestMs": 778.5,
+      "targetTransferMs": 904.2,
+      "videoInitMs": [
+        2.5
+      ],
+      "audioInitMs": [
+        2.3
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-旧前端",
+      "sample": "ab-old-1",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 9140.2,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1402.8,
+      "playInfoReadyMs": 1845.5,
+      "firstTargetRequestMs": 2351,
+      "targetTransferMs": 5756.9,
+      "videoInitMs": [
+        3.6,
+        3.5
+      ],
+      "audioInitMs": [
+        4.3,
+        4
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-旧前端",
+      "sample": "ab-old-2",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 8539.8,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1222.3,
+      "playInfoReadyMs": 1689.8,
+      "firstTargetRequestMs": 2175.4,
+      "targetTransferMs": 5282.4,
+      "videoInitMs": [
+        3.3,
+        2.7
+      ],
+      "audioInitMs": [
+        3.3,
+        3
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-旧前端",
+      "sample": "ab-old-3",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 4118.8,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 739.9,
+      "playInfoReadyMs": 1345.9,
+      "firstTargetRequestMs": 1918.1,
+      "targetTransferMs": 1151.9,
+      "videoInitMs": [
+        5.2,
+        5.3
+      ],
+      "audioInitMs": [
+        6.5,
+        6.1
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-旧前端",
+      "sample": "ab-old-4",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 4899.4,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1452.3,
+      "playInfoReadyMs": 2013.5,
+      "firstTargetRequestMs": 2602.6,
+      "targetTransferMs": 761.5,
+      "videoInitMs": [
+        6,
+        40.8
+      ],
+      "audioInitMs": [
+        6.3,
+        40.8
+      ],
+      "cancelledOpeningVideo": 1,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-新前端",
+      "sample": "ab-new-1",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 8874.3,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1346.1,
+      "playInfoReadyMs": 1892.2,
+      "firstTargetRequestMs": 2283.2,
+      "targetTransferMs": 5369.7,
+      "videoInitMs": [
+        3.7
+      ],
+      "audioInitMs": [
+        4.5
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-新前端",
+      "sample": "ab-new-2",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 3819.4,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 526.6,
+      "playInfoReadyMs": 1048.8,
+      "firstTargetRequestMs": 1516.4,
+      "targetTransferMs": 878.9,
+      "videoInitMs": [
+        4.4
+      ],
+      "audioInitMs": [
+        4.3
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-新前端",
+      "sample": "ab-new-3",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 3754.4,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 446.2,
+      "playInfoReadyMs": 897.6,
+      "firstTargetRequestMs": 1293.8,
+      "targetTransferMs": 1284.8,
+      "videoInitMs": [
+        4.3
+      ],
+      "audioInitMs": [
+        4.3
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "同后端-新前端",
+      "sample": "ab-new-4",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 3343.3,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 488.4,
+      "playInfoReadyMs": 1046.7,
+      "firstTargetRequestMs": 1423.9,
+      "targetTransferMs": 869.6,
+      "videoInitMs": [
+        4.7
+      ],
+      "audioInitMs": [
+        6.5
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "追加观察",
+      "sample": "after-steady-1",
+      "positionSeconds": 600,
+      "timeout": false,
+      "firstFrameMs": 4400.1,
+      "firstFrameMediaTime": 599.999375,
+      "playInfoMs": 1273.6,
+      "playInfoReadyMs": 1404,
+      "firstTargetRequestMs": 1740.5,
+      "targetTransferMs": 868.5,
+      "videoInitMs": [
+        4.9
+      ],
+      "audioInitMs": [
+        4.9
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    },
+    {
+      "group": "追加观察",
+      "sample": "after-steady-2",
+      "positionSeconds": 600,
+      "timeout": true,
+      "firstFrameMs": null,
+      "firstFrameMediaTime": null,
+      "playInfoMs": 1664.7,
+      "playInfoReadyMs": 1793.1,
+      "firstTargetRequestMs": 2144.5,
+      "targetTransferMs": 20001.7,
+      "videoInitMs": [
+        2.2
+      ],
+      "audioInitMs": [
+        2.8
+      ],
+      "cancelledOpeningVideo": 0,
+      "pageErrors": 0
+    }
+  ]
+}
