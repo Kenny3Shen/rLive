@@ -115,6 +115,9 @@ usePlaylistStore.getState().setPlaylist(searchQueue, "BV1parts_0", "sequence");
 const router = createMemoryRouter(
   [
     { path: "/video/play", element: <VideoPlayerPage /> },
+    // 「返回主页」的落点：HUD 那个入口跳 `VIDEO_HOME_PATH`，缺了这条路由会让
+    // 导航在 react-router 内部报错，夹具因此无法断言点击结果。
+    { path: "/video", element: <p>视频首页</p> },
     { path: "/away", element: <p>已离开播放页</p> },
   ],
   // 点搜索卡：链接只带 bvid（条目没有 cid），cid 由历史续播补成 P2。

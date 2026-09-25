@@ -717,7 +717,7 @@ export function PlayerControls({
               <RefreshCw className={refreshDisabled ? "animate-spin-soft" : undefined} />
             </ExtensionButton>
           )}
-          {onNext && showSecondary && (
+          {onNext && (
             <ExtensionButton label="播放下一个" disabled={disabled} onClick={onNext}>
               <SkipForward />
             </ExtensionButton>

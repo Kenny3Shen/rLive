@@ -204,8 +204,8 @@ message DanmakuElem {
 
 - 详情页不按画幅分配舞台高度：竖屏视频与横屏视频共用 `aspect-video` 舞台与 `max-lg:max-h-[56%]` 上限，播放器与详情区的空间占比一致，竖屏画面在舞台内居中留黑边。
 - `MainActivity` 通过 `getInsetsIgnoringVisibility` 获取状态栏/刘海顶部与导航栏/刘海底部安全区，按 `devicePixelRatio` 换成 `--android-safe-area-top` / `--android-safe-area-bottom`，不包含键盘高度。页面加载完成时重新分发 inset，避免 WebView 的 `env(safe-area-inset-*)` 残留 0；旧 APK / 浏览器仍回退到 `env`。普通画面全屏继续沿用既有隐藏系统栏行为。
-- 桌面与移动端统一取消流内顶栏：返回、标题和工具都改在播放器顶部 HUD 显示，与底部控制栏共用空闲显隐（鼠标移出播放器区域即收起）；画面占满原顶栏空间，HUD 自行避让状态栏/刘海。桌面普通详情在 HUD 里保留返回主页（旧流内顶栏的迁移），低频工具（投屏/复制链接/在浏览器中打开）收进 `⋮` 溢出菜单；桌面底部 Shell 仍常驻链接操作。
-- 低频工具统一由 `PlayerHudOverflowMenu` 承载（含桌面普通详情）：投屏 / 复制链接 / 在浏览器中打开；移动端普通视频还保留返回主页入口。投屏使用 `PlayerToolPanel` 与 `CastMenu`，进行中显示「投屏中」。
+- 桌面与移动端统一取消流内顶栏：返回、标题和工具都改在播放器顶部 HUD 显示，与底部控制栏共用空闲显隐（鼠标移出播放器区域即收起）；画面占满原顶栏空间，HUD 自行避让状态栏/刘海。返回主页在两端都常驻 HUD（返回箭头右侧），与只回上一层的返回箭头分工；窗口全屏不挂它（那一层由返回箭头退出）。低频工具（投屏/复制链接/在浏览器中打开）收进 `⋮` 溢出菜单；桌面底部 Shell 仍常驻链接操作。
+- 低频工具统一由 `PlayerHudOverflowMenu` 承载（含桌面普通详情）：投屏 / 复制链接 / 在浏览器中打开。返回主页**不**走菜单 —— 它是高频导航，两端都在 HUD 上直接可见。投屏使用 `PlayerToolPanel` 与 `CastMenu`，进行中显示「投屏中」。
 - **短视频入口**：顶部 HUD 在 `⋮` 旁常驻一个「看短视频」按钮（`Smartphone` 图标），点击跳 `/shorts?seed=<bvid>`，以当前稿件为种子进入竖屏流。它不放进 `⋮`：这是消费方式切换而不是低频工具。跳转前先 `await fullscreenExit()`（短视频页是沉浸路由）；bvid 缺失（PGC 分集）时退回裸 `/shorts`，由后端用最近观看历史当种子。详见[短视频功能](短视频功能.md)第三节。
 - 投屏只有 HUD 溢出菜单一个入口（`castOpen` + `castMenuProps`），窗口化与全屏同一形态，不存在双入口。无有效参数、PGC 解析态（没有可覆盖的播放舞台）继续渲染流内兜底顶栏，只留返回与标题，不挂工具。
 - **窗口全屏**（`webFullscreen`）隐藏页面顶栏、侧栏和底部操作栏，保留系统窗口栏；**画面全屏**（`useRecordingPlayerFullscreen`）盖住页面。桌面 Tauri 使用原生窗口全屏，Android 对齐直播使用页内固定层与沉浸式系统栏，其他浏览器使用 HTML Fullscreen API。Android 普通视频复用直播的 `useAndroidFullscreenOrientation`：横屏画幅（宽高比 > 1）转到横屏时自动进入全屏、转回竖屏自动退出，手动点开的全屏才按帧比例上横屏方向锁，退出释放（契约见 `docs/zh/播放器技术文档.md` 6.4）。两层叠加时返回/Escape 一次只退一层；全屏往返不重建媒体元素。
@@ -221,7 +221,7 @@ message DanmakuElem {
 ### 播放偏好（循环播放、连播与音量记忆）
 
 - 普通详情模式的「播放设置」弹层分为清晰度、倍速和播放偏好开关。开关行与设置页、字幕菜单同源（`Field` + `FieldLabel` + `Switch`，标签可点）；「循环播放」常驻，列表多于一项或当前视频自身有选集时多一项「自动切集」，UGC 多一项「自动连播」；三项由 `playlistStore` 持久化到 localStorage `video-playlist`。
-- 「播放下一个」按钮与自动切集共用同一个目标：`nextSelectionItem` 按 PGC 分集表 / UGC 多 P / UGC 合集顺序取当前项的下一项，取不到（无选集或已在最后一集）就不传 `onNext`，按钮随之消失。
+- 「播放下一个」按钮与自动切集共用同一个目标：`nextSelectionItem` 按 PGC 分集表 / UGC 多 P / UGC 合集顺序取当前项的下一项，取不到（无选集或已在最后一集）就不传 `onNext`，按钮随之消失。该按钮**不受** `showSecondaryPlayerControls` 约束：它和「仅音频/弹幕/字幕」不同，是主播放动作，移动端竖屏也要在场（`f7ed6c27` 误将它归入次级组，曾让它在移动端整段消失）。
 - 推荐/热门/相关流队列保留手动切换，但不把下一条当作自动切集；搜索、UP 投稿队列保留为选集之后的退路；稿件信息不覆盖已有来源队列，无有效来源的多 P 直链仍自动建立选集队列。
 - 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext, autoPlayRelated)` 决定，优先级固定：循环 > 连播下一集 > 连播相关视频 > 停住。`hasNext` 的目标经 `videoEndedTarget(selectionNext, queueNext)` 选出：当前视频自身选集的下一项优先，没有才退回来源队列邻项（搜索/UP 投稿）；推荐/热门/相关流的邻项不计入（`getNextAutoPlayItem` 对 `feed` 返回 null），这类队列走完即落到相关连播。搜索/投稿队列的条目没有 cid（列表项以 0 占位），取流键由历史续播/稿件详情补出，若沿队列邻项走就会切到另一个视频，因此选集优先。循环是「就看这一集」的显式意图，不该被连播带走；`autoPlayRelated` 是 UGC 专属偏好（PGC 没有相关视频列表，也没有可定位的 bvid），关闭或相关视频为空时停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效；选集经 `selectionNextItemRef` 读取，因为分集表/稿件详情晚于播放器就位，延迟窗口里还会再取一次。
 - 两条连播的等待窗口不同：换集 1 秒，相关连播 3 秒。跳转前的校验按已定下的 `action` 只查它对应的开关现值（`stillWanted`），因此等待期间关掉开关、按暂停、换片或重播都会取消这次跳转；`cancelled`/`loopPlayback` 又是两条路径共用的守卫。

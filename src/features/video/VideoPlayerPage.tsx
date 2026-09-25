@@ -2073,9 +2073,13 @@ function VideoPlayerPageContent() {
 
   const title = params?.title || "视频播放";
 
-  /** 桌面普通详情（无任何沉浸/全屏层）：旧流内顶栏的返回主页入口迁入
-   *  舞台 HUD，与移动端/全屏共用同一份挂载。 */
-  const desktopDetails = !mobileClient && !fullscreen.fullscreen && !webFullscreen;
+  /**
+   * HUD 的「返回主页」入口。桌面与移动端都常驻在返回箭头旁：这一页没有流内
+   * 顶栏，而返回箭头只回上一层（全屏时先退全屏、否则回上一页），想直接回视频
+   * 首页就只剩进 `⋮` 菜单一条路 —— 那是低频工具的收纳处，不该藏一个高频导航。
+   * 窗口全屏不挂：那一层由返回箭头退出，HUD 上再放一个整页跳转是另一层语义。
+   */
+  const showHomeInHud = !webFullscreen;
 
   /** 投屏源：HUD 溢出菜单里的投屏面板（窗口化与全屏同一入口）。 */
   const castMenuProps = {
@@ -2710,14 +2714,19 @@ function VideoPlayerPageContent() {
                         aria-hidden
                       />
                     </MediaButton>
-                    {/* 桌面普通详情：旧流内顶栏的返回主页入口。 */}
-                    {desktopDetails && (
+                    {/* 返回主页：桌面与移动端共用同一份挂载，与只回上一层的返回箭头
+                        分工。先收干净全屏层再走，否则固定层会盖在首页上。 */}
+                    {showHomeInHud && (
                       <MediaButton
                         type="button"
                         aria-label="返回主页"
                         title="返回主页"
                         className={PLAYER_HUD_BUTTON_CLASS}
-                        onClick={() => navigate(VIDEO_HOME_PATH)}
+                        onClick={async () => {
+                          setOverlayInteractionOpen(false);
+                          await fullscreenExit();
+                          navigate(VIDEO_HOME_PATH);
+                        }}
                       >
                         <Home
                           className={PLAYER_HUD_ICON_CLASS}
@@ -2767,18 +2776,6 @@ function VideoPlayerPageContent() {
                       portalContainer={fullscreen.fullscreen ? stageRef : undefined}
                     >
                       <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
-                        {mobileClient && (
-                          <PlayerToolTile
-                            icon={Home}
-                            label="返回主页"
-                            onClick={async () => {
-                              setHudMenuOpen(false);
-                              setOverlayInteractionOpen(false);
-                              await fullscreenExit();
-                              navigate(VIDEO_HOME_PATH);
-                            }}
-                          />
-                        )}
                         <PlayerToolTile
                           icon={Cast}
                           label={castingDevice ? "投屏中" : "投屏"}
