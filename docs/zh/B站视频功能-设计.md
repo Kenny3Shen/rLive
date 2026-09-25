@@ -72,7 +72,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 同一画质有多编码变体（avc1 / hvc1 / av01）并列，**选流必须按 codec 过滤**，默认取 `avc1` 兼容性最好。
 
-播放页使用 Video.js DASH 适配器，与取流 IPC 并行准备；后端 `video_play_selection` 用 `tokio::join!` 并发获取音/视频两条互不依赖的 sidx，减少一次串行 CDN 往返。该链路供 UGC/PGC、横竖屏与仅音频模式共用；各轨候选 CDN 回退仍按序执行，选流、错误优先级、MPD 标准分片时间轴与媒体代理顺序不变。
+播放页使用 Video.js DASH 适配器，与取流 IPC 并行准备；后端 `video_play_selection` 用 `tokio::join!` 并发获取音/视频两条互不依赖的 sidx，减少一次串行 CDN 往返。取流时一并取得的 init 字节保留在对应代理会话内：播放器精确请求整个 init Range 时直接返回本机 206，无需开启磁盘缓存；其他 Range、无 Range 或带 `If-Range` 的请求照常回源。字节随会话释放，不缓存完整媒体文件。该链路供 UGC/PGC、横竖屏与仅音频模式共用；各轨候选 CDN 回退仍按序执行，选流、错误优先级、MPD 标准分片时间轴与媒体代理顺序不变。
 
 ### 2. CDN 分主机行为不同 → 必须走代理
 
@@ -177,7 +177,7 @@ message DanmakuElem {
 ### 清晰度
 
 - 菜单复用 `PlayerControls` 既有的 `qualities/qualityIndex/onQualityChange` 约定（录制回放同源），不可用档位列出但置灰并提示「登录或大会员后可用」。
-- 切换 = 记录当前位置与播放状态 → 带 `qn` 重取 play-info。新的代理端口 = 新的 MPD 地址，播放器必然重建；重建后 `currentTime` 直接赋续播点（元数据就位前赋值会作为默认起播位置被采纳），原播放状态恢复。
+- 切换 = 记录当前位置与播放状态 → 带 `qn` 重取 play-info。新的代理端口 = 新的 MPD 地址，播放器必然重建；DASH 在首次 source 上携带 `#t=秒` 的 MPD anchor，让引擎直接调度目标分片，metadata 回调只恢复播放意图、不再二次 seek。仅音频的原生媒体仍在 metadata 就绪后赋 `currentTime`。
 - 重取期间 `keepPreviousData` 保留旧数据：旧播放器继续播到新信息就位，不黑屏。
 
 ### 右侧栏（`VideoSidebar`）
@@ -252,7 +252,7 @@ message DanmakuElem {
 前端约定(`videoHistory.ts` 纯逻辑 + 播放页接线)。三个阈值(最小进度 3s、上报间隔 5s、片尾容差 5s)与「该续播到第几秒」的判定住在 `src/shared/watchProgress.ts`，与本地录制回放共用一份：两个表面的落盘方式不同，但「多短算没看、多久写一次盘、离结尾多近算看完」是同一套语义，各写一份只会让阈值随时间漂移。
 
 - **上报节流**:播放中经 `timeupdate` 上报,间隔 ≥ 5s 且进度 ≥ 3s(点开就退/拖动预览不污染历史);首次越过 3s 立即落一笔「打开过」。暂停、ended(记满时长)、离开播放页(effect 清理)三个时机强制 flush。
-- **续播判定**:`videoResumePosition` 只在「历史停在当前分集(`cid` 比对,取流键 UGC/PGC 都有)且未看完(距片尾 > 5s)」时返回旧位置,否则从 0 起播。续播位置写在元数据就位前(`media.currentTime` 直接赋值),与换画质续播同一条路径;续播查询未落定前不建播放器,避免「先播 0 秒再跳」闪帧。
+- **续播判定**:`videoResumePosition` 只在「历史停在当前分集(`cid` 比对,取流键 UGC/PGC 都有)且未看完(距片尾 > 5s)」时返回旧位置,否则从 0 起播。DASH 在创建播放器前确定续播位置，并通过 MPD `#t` anchor 交给引擎；避免先下载开头分片再取消、重取 init。仅音频仍等 metadata 后执行原生 seek。两者与换画质续播共用快照和播放意图；续播查询未落定前不建播放器。
 - **跨分 P 续播**:URL 不带 `cid`(首页/搜索/UP 主卡片进入)时,取流键不再一律取详情给的 P1，而是 `videoResumeCid(record, archive)` 给的「上次看的那一 P」——「上次退出的地方」包含「上次看的是哪一 P」。它要求那一 P 确实在 `archive.pages` 里(合集换稿件与脏数据不算)且 `videoResumePosition` 认定有续播位置,否则退回 P1;稿件详情未到时返回 0。`cid <= 0` 期间播放器、播放列表与侧栏 effect 全部按「取流键未就绪」直接返回,否则会先按 P1 建列表再切、把播放列表锚在错误的一集上。落到非首 P 时提示一次「已续播上次观看的 P{n}」(`crossPartNoticeRef` 按 cid 去重,重建播放器不重复提示)。用户明确点过某一集(选集/播放列表/历史卡)时链接一定带 `cid`,这条路径不介入。
 - **身份错位防线**:`historyEntry` 经渲染期 ref 供给播放器 effect(稿件标题/封面晚于播放器就位,闭包捕获会写成空);但只在非空时覆盖——离开播放页的路由切换会先以 `params=null` 再渲染一次,直接赋值会让卸载 flush 读到 null、丢掉最后一段进度。换集后 ref 指向新集,旧实例的 flush 由 `reportedCid` 比对丢弃,不会把旧集进度记到新集身上。
 - **历史页第三视图**:「观看历史 / 视频历史 / 弹幕历史」三态切换(`view` search 参数)。视频卡片显示封面(缺省回退图标)、时长标签、底边进度条、「已看到 X / Y」与分集副行;点击整卡带着 `cid` 续播进播放页;单条删除乐观更新,清空有确认弹窗。视频只有 B 站一个来源,不参与平台筛选,`historyGrouping` 因此拆成 `filterHistoryBySite`(带 `site_id` 的时间线用)+ `groupHistoryByDate`(通用按日分组)。

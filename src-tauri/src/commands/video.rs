@@ -18,7 +18,7 @@ use crate::models::video::{
 use crate::sites::bilibili::BilibiliSite;
 use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
-use crate::stream_proxy::{StreamProxy, StreamProxyStartOptions};
+use crate::stream_proxy::{PrefetchedInitialization, StreamProxy, StreamProxyStartOptions};
 
 /// 播放代理的创建事务；部分失败或 future 被取消时只回滚本次实例。
 /// ID 必须由调用方新建，不能使用会被其他播放者复用的内容键。
@@ -373,6 +373,13 @@ pub async fn video_get_play_info(
         }
     }
 
+    // 会话内保留已预取的 init：普通 VOD 即使关闭磁盘缓存，也无需再向 CDN 取一次。
+    // 原生媒体元素的非精确 Range 仍由代理正常回源。
+    let audio_initialization = PrefetchedInitialization {
+        bytes: selection.audio.init_bytes.as_slice().into(),
+        content_type: "audio/mp4",
+    };
+
     // 仅音频模式（听视频）不起视频轨代理，也不合成 MPD：音轨 fMP4 是完整
     // 文件，代理转发 Range，前端把 audio_url 直接交给媒体元素播放。
     //
@@ -389,6 +396,7 @@ pub async fn video_get_play_info(
                     proxy: proxy.as_deref(),
                     media_cache: audio_cache.clone(),
                     media_cache_store: media_cache_store.clone(),
+                    initialization: Some(audio_initialization),
                     ..Default::default()
                 },
             )
@@ -403,6 +411,10 @@ pub async fn video_get_play_info(
                 proxy: proxy.as_deref(),
                 media_cache: video_cache.clone(),
                 media_cache_store: media_cache_store.clone(),
+                initialization: Some(PrefetchedInitialization {
+                    bytes: selection.video.init_bytes.as_slice().into(),
+                    content_type: "video/mp4",
+                }),
                 ..Default::default()
             },
         );
@@ -414,6 +426,7 @@ pub async fn video_get_play_info(
                 proxy: proxy.as_deref(),
                 media_cache: audio_cache.clone(),
                 media_cache_store: media_cache_store.clone(),
+                initialization: Some(audio_initialization),
                 ..Default::default()
             },
         );

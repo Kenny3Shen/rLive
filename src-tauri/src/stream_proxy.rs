@@ -50,6 +50,13 @@ pub const TWITCH_RECORDING_WARMUP_BUDGET: Duration = Duration::from_secs(20);
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const TWITCH_RECORDING_WARMUP_INTERVAL: Duration = Duration::from_millis(1_000);
 
+/// 已在取流阶段获取的初始化段；只供当前代理会话复用，不写入分片缓存。
+#[derive(Clone)]
+pub struct PrefetchedInitialization {
+    pub bytes: Arc<[u8]>,
+    pub content_type: &'static str,
+}
+
 /// [`StreamProxy::start`] 的可选行为。
 ///
 /// 这条路径原本有六个位置参数，其中三个是「这一路流是什么形态」的开关。捆成
@@ -67,6 +74,8 @@ pub struct StreamProxyStartOptions<'a> {
     pub media_cache: Option<Arc<MediaCacheSpec>>,
     /// 缓存存储；与 `media_cache` 成对给出。
     pub media_cache_store: Option<SharedMediaCache>,
+    /// 与磁盘缓存开关无关，仅精确覆盖整个初始化段的 Range 可命中。
+    pub initialization: Option<PrefetchedInitialization>,
 }
 
 /// 按前端播放会话索引的活动代理端点。
@@ -301,6 +310,7 @@ struct ProxyLoopContext {
     /// 给出时才非空：直播流与清单代理一律不走缓存。
     media_cache: Option<Arc<MediaCacheSpec>>,
     media_cache_store: Option<SharedMediaCache>,
+    initialization: Option<PrefetchedInitialization>,
 }
 
 /// [`StreamProxy::start_text`] 固定应答的内容与类型。
@@ -822,6 +832,7 @@ impl StreamProxy {
             twitch_ad_recovery,
             media_cache,
             media_cache_store,
+            initialization,
         } = options;
         let (generation, listener, port) = self.bind_session_listener(&session_id).await?;
         // 播放器可能为一场播放发出多个本机请求（直播清单轮询、VOD 并发
@@ -867,6 +878,7 @@ impl StreamProxy {
                 telemetry: telemetry.clone(),
                 media_cache,
                 media_cache_store,
+                initialization,
             };
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
             let task = tauri::async_runtime::spawn(async move {
@@ -3081,6 +3093,7 @@ async fn handle_client(
         telemetry,
         media_cache,
         media_cache_store,
+        initialization,
     } = context;
 
     // 读取请求头（只需要方法/路径；GET 不使用 body）。
@@ -3139,6 +3152,44 @@ async fn handle_client(
         }
         req
     };
+
+    // 取流阶段已拿到的 init 只在本会话内复用，无须开启或等待磁盘缓存。
+    // 严格匹配单个完整 Range，不把前缀当全文件，也不处理条件 Range。
+    let mut range_headers = head
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim()
+                .eq_ignore_ascii_case("range")
+                .then(|| value.trim())
+        });
+    if method == "GET"
+        && is_primary_request
+        && !force_hls
+        && request_header(&head, "if-range").is_none()
+        && let Some(init) = initialization.as_ref()
+        && let Some(end) = init.bytes.len().checked_sub(1)
+        && range_headers.next() == Some(format!("bytes=0-{end}").as_str())
+        && range_headers.next().is_none()
+    {
+        write_media_headers(
+            socket,
+            206,
+            "Partial Content",
+            init.content_type,
+            Some(&init.bytes.len().to_string()),
+            Some(&format!("bytes 0-{end}/*")),
+            "no-store",
+        )
+        .await?;
+        if socket.write_all(&init.bytes).await.is_err() {
+            return Ok(());
+        }
+        let _ = socket.flush().await;
+        return Ok(());
+    }
 
     // 媒体分片缓存的读路径：命中就直接回本机 206，不触达上游。
     //

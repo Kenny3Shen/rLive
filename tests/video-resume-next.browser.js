@@ -25,8 +25,11 @@ async (page) => {
       attach(media) {
         this.media = media;
         let time = 0, paused = true;
+        this.nativeSeeks = 0;
+        this.setEngineTime = value => { time = value; };
         Object.defineProperties(media, {
           currentTime: { configurable: true, get: () => time, set: value => {
+            this.nativeSeeks++;
             time = value; media.dispatchEvent(new Event('seeking'));
             media.dispatchEvent(new Event('seeked'));
           } },
@@ -44,7 +47,11 @@ async (page) => {
         window.resumeNextEngine = this;
       }
       set source(value) {
+        this.sourceUrl = value.src;
         queueMicrotask(() => {
+          // 引擎按 MPD anchor 首次定位，不借用页面 metadata 后的 seek。
+          const anchor = new URL(value.src, location.href).hash.slice(1);
+          this.setEngineTime(Number(new URLSearchParams(anchor).get('t') || 0));
           this.media.dispatchEvent(new Event('loadedmetadata'));
           this.media.dispatchEvent(new Event('canplay'));
         });
@@ -95,7 +102,15 @@ async (page) => {
       queueNext === "BV1other",
       `来源队列的下一项应是别的稿件（修复前它会把人带走）：${queueNext}`,
     );
+    await page.waitForFunction(() => window.resumeNextEngine.media.currentTime === 4);
+    const startup = await page.evaluate(() => ({
+      source: window.resumeNextEngine.sourceUrl,
+      nativeSeeks: window.resumeNextEngine.nativeSeeks,
+    }));
+    assert(startup.source.endsWith("#t=4"), `首次取流应带续播锚点：${startup.source}`);
+    assert(startup.nativeSeeks === 0, "metadata 后不应再发起重复的原生 seek");
     passed.push("搜索队列 + 续播到 P2：队列邻项确实是另一个稿件（复现条件成立）");
+    passed.push("首次 DASH source 已定位到历史位置，metadata 不再触发二次 seek");
 
     // 2) 播完 → 必须进同稿件的 P3，而不是搜索队列的下一条 BV1other。
     await page.evaluate(() => window.resumeNextEngine.end());

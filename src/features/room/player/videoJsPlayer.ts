@@ -79,6 +79,8 @@ type PlayerOptions = {
   url: string;
   kind: VideoJsPlaybackKind;
   isLive?: boolean;
+  /** DASH 在首次调度前定位；使用 MPD 时间锚点，不等待 metadata 后再 seek。 */
+  startTime?: number;
   hls?: VideoJsHlsOptions;
   dash?: VideoJsDashOptions;
   flv?: VideoJsMpegtsOptions;
@@ -170,7 +172,17 @@ class VideoJsPlayer {
         };
         adapter.engine.on("playbackEnded", onDashEnded);
         this.listeners.add(() => adapter.engine.off("playbackEnded", onDashEnded));
-        adapter.source = { src: options.url, engine: { dashJs: options.dash } };
+        // dash.js 按 DASH MPD anchor（#t=秒）选择第一片，片段不发送到代理。
+        // 等 loadedmetadata 再写 currentTime 会先取开头分片，再 abort 并重取 init。
+        let src = options.url;
+        const startTime = options.startTime;
+        if (startTime !== undefined && Number.isFinite(startTime) && startTime > 0) {
+          const hash = src.indexOf("#");
+          const anchor = new URLSearchParams(hash < 0 ? "" : src.slice(hash + 1));
+          anchor.set("t", String(startTime));
+          src = `${hash < 0 ? src : src.slice(0, hash)}#${anchor}`;
+        }
+        adapter.source = { src, engine: { dashJs: options.dash } };
       } else {
         this.listenForMediaErrors(this.media);
         if (options.kind === "flv" || options.kind === "mpegts") {

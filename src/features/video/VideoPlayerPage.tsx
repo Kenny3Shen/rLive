@@ -1132,10 +1132,9 @@ function VideoPlayerPageContent() {
     let cancelled = false;
     let endedTimer: ReturnType<typeof setTimeout> | null = null;
     let endedSequence = 0;
-    // 初始续播 seek：DASH 的时间轴要等清单异步解析（loadedmetadata），媒体源
-    // 就绪前写 currentTime 会被丢弃。先记下目标，等 onReady 的真实媒体事件
-    // 一次性应用；此后的用户 seek 不再被覆盖。
-    let pendingInitialSeek: { position: number; playing: boolean } | null = null;
+    // DASH 在建播放器时通过 MPD anchor 定位；原生音频仍需等 metadata 才能 seek。
+    // 两条路径都在 onReady 一次性恢复本次快照的播放/暂停意图。
+    let pendingInitialResume: { position: number; playing: boolean } | null = null;
     // 这一轮播放器对应的分集。上报前用它比对 ref 里的身份，
     // 避免换集过渡期把旧集进度记到新集身上。
     const reportedCid = cid;
@@ -1219,14 +1218,14 @@ function VideoPlayerPageContent() {
       // 也别让上一轮 waiting 的判定计时继续空转。
       waitingRecovery.notifyResumed();
       // 加载态时间轴不可操作；元数据就绪后一次性应用待续播位置。
-      if (pendingInitialSeek) {
-        const initialSeek = pendingInitialSeek;
-        pendingInitialSeek = null;
-        // loadedmetadata 早于任何画面解码，在这里续播不会闪出 0 秒帧。
-        media.currentTime = initialSeek.position;
-        setCurrentTime(initialSeek.position);
+      if (pendingInitialResume) {
+        const initialResume = pendingInitialResume;
+        pendingInitialResume = null;
+        // DASH 已从目标分片开始调度，不能再 seek，否则会取消在途分片并重取 init。
+        if (playKind !== "dash") media.currentTime = initialResume.position;
+        setCurrentTime(initialResume.position);
         // 用户在加载期间按过暂停就保持暂停，不被自动续播重新拉起。
-        if (initialSeek.playing && !userPausedRef.current) {
+        if (initialResume.playing && !userPausedRef.current) {
           void media.play().catch(() => {
             // 自动续播被策略拦截时留在暂停态，用户点一下即可。
           });
@@ -1360,11 +1359,24 @@ function VideoPlayerPageContent() {
     void loadVideoJsModules(playKind)
       .then((modules) => {
         if (cancelled) return;
+        // 必须在设置 DASH source 之前交付起播位置，避免先调度 0 秒分片。
+        // 同集的画质/恢复快照优先；别的分集快照不能污染本集历史续播。
+        const snapshot = resumeAtRef.current;
+        resumeAtRef.current = null;
+        const resume = snapshot?.key === videoKey ? snapshot : null;
+        const historyResumeAt = historyResumeAtRef.current;
+        pendingInitialResume = resume
+          ? { position: resume.position, playing: resume.playing }
+          : historyResumeAt > 0
+            ? { position: historyResumeAt, playing: false }
+            : null;
+        if (pendingInitialResume) setCurrentTime(pendingInitialResume.position);
         const player = createVideoJsPlayer(modules, {
           video: media,
           url: playUrl,
           kind: playKind,
           isLive: false,
+          startTime: playKind === "dash" ? pendingInitialResume?.position : undefined,
         });
         playerRef.current = player;
         player.on("ended", onEnded);
@@ -1377,26 +1389,8 @@ function VideoPlayerPageContent() {
         });
         // 进页自动起播，与直播同源：先试带声音的 play()，被自动播放策略拒绝时
         // 降级为静音起播再立刻尝试恢复声音；用户手动静音过则保持静音。
-        // 续播位置不直接写 currentTime：DASH 的 MPD 清单异步解析，媒体时间轴
-        // 就绪前写入会被丢弃（画质切换/仅音频切换同走这条重建路径）。登记为
-        // pendingInitialSeek，由 onReady 的 loadedmetadata/canplay 一次性应用。
-        // 只有同一集的快照才算续播点：换集后留着的是上一集的卡顿/重试现场，
-        // 照搬会把新点开的那一集跳到错误位置（改走历史续播或从头播）。
-        const snapshot = resumeAtRef.current;
-        resumeAtRef.current = null;
-        const resume = snapshot?.key === videoKey ? snapshot : null;
-        if (resume) {
-          pendingInitialSeek = {
-            position: resume.position,
-            playing: resume.playing,
-          };
-          setCurrentTime(resume.position);
-        } else {
-          const historyResumeAt = historyResumeAtRef.current;
-          if (historyResumeAt > 0) {
-            pendingInitialSeek = { position: historyResumeAt, playing: false };
-            setCurrentTime(historyResumeAt);
-          }
+        // 快照的播放意图由 onReady 恢复；普通进页继续走统一自动播放策略。
+        if (!resume) {
           const recoverMutedAutoplay = () => {
             if (mutedRef.current) return false;
             mutedRef.current = false;

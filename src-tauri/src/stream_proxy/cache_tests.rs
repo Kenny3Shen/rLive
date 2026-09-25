@@ -10,7 +10,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-use super::{HlsResources, ManifestPin, ProxyLoopContext, ProxyTelemetryCounters, handle_client};
+use super::{
+    HlsResources, ManifestPin, PrefetchedInitialization, ProxyLoopContext, ProxyTelemetryCounters,
+    StreamProxy, StreamProxyStartOptions, handle_client, request_header,
+};
 use crate::media_cache::{MediaCache, MediaCacheSpec};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -40,15 +43,19 @@ fn complete_response() -> Vec<u8> {
     )
 }
 
-async fn read_request(stream: &mut TcpStream) {
+async fn read_request_head(stream: &mut TcpStream) -> String {
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         head.push(stream.read_u8().await.unwrap());
         assert!(head.len() < 4096);
     }
+    String::from_utf8(head).unwrap()
+}
+
+async fn read_request(stream: &mut TcpStream) {
     assert!(
-        String::from_utf8(head)
-            .unwrap()
+        read_request_head(stream)
+            .await
             .to_lowercase()
             .contains("range: bytes=0-799")
     );
@@ -60,6 +67,7 @@ struct Fixture {
     key: String,
     root: PathBuf,
     reply: Arc<Mutex<Vec<u8>>>,
+    requests: Arc<Mutex<Vec<String>>>,
     server: JoinHandle<()>,
 }
 
@@ -69,9 +77,12 @@ impl Fixture {
         let upstream_address = upstream.local_addr().unwrap();
         let reply = Arc::new(Mutex::new(reply));
         let server_reply = reply.clone();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
         let server = tokio::spawn(async move {
             while let Ok((mut stream, _)) = upstream.accept().await {
-                read_request(&mut stream).await;
+                let request = read_request_head(&mut stream).await;
+                server_requests.lock().unwrap().push(request);
                 let bytes = server_reply.lock().unwrap().clone();
                 let _ = stream.write_all(&bytes).await;
             }
@@ -101,6 +112,7 @@ impl Fixture {
             telemetry: Arc::new(ProxyTelemetryCounters::new()),
             media_cache: Some(spec),
             media_cache_store: Some(store.clone()),
+            initialization: None,
         };
         Self {
             context,
@@ -108,12 +120,16 @@ impl Fixture {
             key,
             root,
             reply,
+            requests,
             server,
         }
     }
 
     /// 每次请求都等待真实 handle_client 结束，避免以“客户端收完”代替正常 EOF。
-    async fn start_request(&self) -> (TcpStream, JoinHandle<Result<(), String>>) {
+    async fn start_request_with(
+        &self,
+        request: &[u8],
+    ) -> (TcpStream, JoinHandle<Result<(), String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap())
             .await
@@ -121,13 +137,17 @@ impl Fixture {
         let (mut socket, _) = listener.accept().await.unwrap();
         let context = self.context.clone();
         let handler = tokio::spawn(async move { handle_client(&mut socket, context).await });
-        client.write_all(RANGE_REQUEST).await.unwrap();
+        client.write_all(request).await.unwrap();
         (client, handler)
     }
 
     async fn fetch(&self) -> (Vec<u8>, Result<(), String>) {
+        self.fetch_request(RANGE_REQUEST).await
+    }
+
+    async fn fetch_request(&self, request: &[u8]) -> (Vec<u8>, Result<(), String>) {
         timeout(WAIT, async {
-            let (mut client, handler) = self.start_request().await;
+            let (mut client, handler) = self.start_request_with(request).await;
             let mut bytes = Vec::new();
             client.read_to_end(&mut bytes).await.unwrap();
             let result = handler.await.unwrap();
@@ -205,6 +225,217 @@ fn body(response: &[u8]) -> &[u8] {
         .unwrap()
         + 4;
     &response[start..]
+}
+
+#[tokio::test]
+async fn prefetched_initialization_is_session_local_without_disk_cache() {
+    let fixture = Fixture::new(complete_response()).await;
+    let proxy = StreamProxy::new();
+    let client = fixture.context.client.clone();
+    let bytes: Arc<[u8]> = complete_body().into();
+    let weak_bytes = Arc::downgrade(&bytes);
+    let video_url = proxy
+        .start(
+            fixture.context.url.to_string(),
+            HashMap::new(),
+            "init-video".into(),
+            StreamProxyStartOptions {
+                initialization: Some(PrefetchedInitialization {
+                    bytes,
+                    content_type: "video/mp4",
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let audio_bytes = vec![42; 800];
+    let audio_url = proxy
+        .start(
+            fixture.context.url.to_string(),
+            HashMap::new(),
+            "init-audio".into(),
+            StreamProxyStartOptions {
+                initialization: Some(PrefetchedInitialization {
+                    bytes: audio_bytes.clone().into(),
+                    content_type: "audio/mp4",
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    for (url, expected, content_type) in [
+        (&video_url, complete_body(), "video/mp4"),
+        (&audio_url, audio_bytes, "audio/mp4"),
+    ] {
+        for _ in 0..2 {
+            let response = client
+                .get(url)
+                .header("Range", "bytes=0-799")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 206);
+            assert_eq!(response.headers()["content-length"], "800");
+            assert_eq!(response.headers()["content-range"], "bytes 0-799/*");
+            assert_eq!(response.headers()["content-type"], content_type);
+            assert_eq!(response.bytes().await.unwrap().as_ref(), expected);
+        }
+    }
+    assert!(fixture.requests.lock().unwrap().is_empty());
+    assert_eq!(proxy.telemetry_totals().upstream_requests, 0);
+
+    // 相同上游地址的新会话没有传 init 时必须回源，不能借用另一会话的字节。
+    let other_url = proxy
+        .start(
+            fixture.context.url.to_string(),
+            HashMap::new(),
+            "init-other".into(),
+            StreamProxyStartOptions::default(),
+        )
+        .await
+        .unwrap();
+    let response = client
+        .get(&other_url)
+        .header("Range", "bytes=0-799")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["content-range"], "bytes 0-799/1600");
+    assert_eq!(response.bytes().await.unwrap().as_ref(), complete_body());
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+    assert_eq!(proxy.telemetry_totals().upstream_requests, 1);
+    assert!(!fixture.root.exists(), "关闭磁盘缓存不得创建缓存目录");
+
+    proxy.stop_for_session("init-video");
+    proxy.stop_for_session("init-audio");
+    proxy.stop_for_session("init-other");
+    timeout(WAIT, async {
+        while weak_bytes.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("代理停止后应释放会话内 init");
+}
+
+#[tokio::test]
+async fn prefetched_initialization_forwards_non_exact_and_conditional_requests() {
+    let upstream_body = vec![42; 800];
+    let mut fixture = Fixture::new(response(
+        206,
+        "bytes 800-1599/1600",
+        "Content-Length: 800",
+        &upstream_body,
+    ))
+    .await;
+    fixture.context.media_cache = None;
+    fixture.context.media_cache_store = None;
+    fixture.context.initialization = Some(PrefetchedInitialization {
+        bytes: complete_body().into(),
+        content_type: "video/mp4",
+    });
+    let resource = fixture
+        .context
+        .hls_resources
+        .register(fixture.context.url.to_string());
+    let resource = format!("/hls/{resource}");
+    for (method, path, headers, range) in [
+        ("GET", "/live", "", None),
+        ("GET", "/live", "Range: bytes=0-\r\n", Some("bytes=0-")),
+        ("GET", "/live", "Range: bytes=-800\r\n", Some("bytes=-800")),
+        (
+            "GET",
+            "/live",
+            "Range: bytes=0-798\r\n",
+            Some("bytes=0-798"),
+        ),
+        (
+            "GET",
+            "/live",
+            "Range: bytes=0-800\r\n",
+            Some("bytes=0-800"),
+        ),
+        (
+            "GET",
+            "/live",
+            "Range: bytes=800-1599\r\n",
+            Some("bytes=800-1599"),
+        ),
+        (
+            "GET",
+            "/live",
+            "Range: bytes=800-1599\r\n",
+            Some("bytes=800-1599"),
+        ),
+        (
+            "GET",
+            "/live",
+            "Range: bytes=0-799,800-1599\r\n",
+            Some("bytes=0-799,800-1599"),
+        ),
+        (
+            "GET",
+            "/live",
+            "Range: bytes=0-799\r\nRange: bytes=800-1599\r\n",
+            Some("bytes=0-799"),
+        ),
+        (
+            "GET",
+            "/live",
+            "Range: bytes=0-799\r\nIf-Range: \"etag\"\r\n",
+            Some("bytes=0-799"),
+        ),
+        (
+            "HEAD",
+            "/live",
+            "Range: bytes=0-799\r\n",
+            Some("bytes=0-799"),
+        ),
+        (
+            "GET",
+            resource.as_str(),
+            "Range: bytes=0-799\r\n",
+            Some("bytes=0-799"),
+        ),
+    ] {
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{headers}Connection: close\r\n\r\n"
+        );
+        let before = fixture.requests.lock().unwrap().len();
+        let (bytes, result) = fixture.fetch_request(request.as_bytes()).await;
+        result.unwrap();
+        assert_eq!(
+            body(&bytes),
+            if method == "HEAD" {
+                &[][..]
+            } else {
+                &upstream_body
+            }
+        );
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), before + 1, "必须回源: {request}");
+        assert_eq!(request_header(requests.last().unwrap(), "range"), range);
+    }
+    assert!(!fixture.root.exists());
+}
+
+#[tokio::test]
+async fn prefetched_initialization_does_not_override_hls_or_serve_empty_bytes() {
+    let mut fixture = Fixture::new(complete_response()).await;
+    fixture.context.media_cache = None;
+    fixture.context.media_cache_store = None;
+    for (force_hls, bytes) in [(true, complete_body()), (false, Vec::new())] {
+        fixture.context.force_hls = force_hls;
+        fixture.context.initialization = Some(PrefetchedInitialization {
+            bytes: bytes.into(),
+            content_type: "video/mp4",
+        });
+        let before = fixture.requests.lock().unwrap().len();
+        fixture.fetch().await.1.unwrap();
+        assert_eq!(fixture.requests.lock().unwrap().len(), before + 1);
+    }
 }
 
 #[tokio::test]
