@@ -51,7 +51,7 @@
 
 新增 UI 时先复用 `src/components/ui/` 现有组件，再考虑扩展 variant，最后才创建新的基础组件。
 
-- 明确命令用 `Button`；二元设置用 `Switch` / `Toggle` / `Checkbox`；有限选项用 `Select` / `ToggleGroup`；页面视图切换用 `Tabs`（`TabsTrigger` 必须在 `TabsList` 内）。
+- 明确命令用 `Button`；二元设置用 `Switch` / `Toggle` / `Checkbox`；有限选项用 `Select` / `ToggleGroup`；页面视图切换用 `Tabs`（`TabsTrigger` 必须在 `TabsList` 内）。`variant="line"` 的选中指示条画在页签自己的底边上（水平方向 `-bottom-px`，与 `SiteSwitcher` / `VideoTabSwitcher` 同一画法），因此该变体的 `TabsList` 不保留纵向内边距、页签在水平方向撑满页签条：`TabsList` 的 3px 内边距会把页签底边抬高，而窄屏 `max-md:min-h-11` 又把页签撑满，同一份相对页签的偏移在两种页签高度下无法都对齐（曾让 401px 宽的安卓上整条指示条落到页签栏下方）。回归：`tests/tabs-indicator.browser.js`。
 - 选日期用 `Calendar`（配 `Popover` 组成 date picker，`locale={zhCN}` 取自 `react-day-picker/locale`），不用原生 `<input type="date">`：原生控件的弹出层由 WebView 提供，桌面与 Android 上样式、语言与暗色表现都不受项目控制。
 - 表单用 `Field` 系列；加载、空状态与通知分别用 `Skeleton`、`Empty`、`Spinner` 和项目 Base UI toast 封装导出的 `notify`。
 - 破坏性确认用 `AlertDialog`；移动端底部面板用 `Drawer`；短上下文内容用 `Popover`。任务型 Overlay 必须有可访问标题，必要时用 `sr-only` 隐藏视觉标题。

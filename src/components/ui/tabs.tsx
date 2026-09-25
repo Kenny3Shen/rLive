@@ -22,7 +22,11 @@ const tabsListVariants = cva(
     variants: {
       variant: {
         default: "bg-muted",
-        line: "gap-1 bg-transparent",
+        // line 变体的指示条画在页签自己的底边上（见 TabsTrigger），页签因此必须占满
+        // 页签条的高度。留着纵向内边距会把页签底边抬高 3px，指示条跟着悬在页签条内部
+        // 与底边框之间露出缝隙；窄屏（max-md:min-h-11）下页签虽被撑满，指示条仍按
+        // 页签底边再外推，整条落到页签条下方（真机 401px 宽实测越界 3.5px）。
+        line: "gap-1 bg-transparent py-0",
       },
     },
     defaultVariants: {
@@ -55,7 +59,11 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
         "relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 rounded-md border border-transparent px-1.5 py-0.5 text-sm font-medium whitespace-nowrap text-muted-foreground transition-[transform,background-color,border-color,color,box-shadow,opacity] duration-150 ease-[var(--motion-ease-out)] outline-none touch-manipulation group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1 has-data-[icon=inline-start]:pl-1 aria-disabled:pointer-events-none aria-disabled:opacity-50 max-md:min-h-11 motion-reduced:transition-colors group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         "group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent",
         "data-active:bg-background data-active:text-foreground",
-        "after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100",
+        // line 变体的页签占满页签条：底边即页签条的底边框，指示条因此压在该段边框上
+        // （与 SiteSwitcher / VideoTabSwitcher 同一画法），不会外推到页签条下方。
+        // 只限水平方向：垂直页签条的高度是内容撑出来的，撑满会变成循环依赖。
+        "group-data-horizontal/tabs:group-data-[variant=line]/tabs-list:h-full",
+        "after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:-bottom-px group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100",
         className,
       )}
       {...props}
