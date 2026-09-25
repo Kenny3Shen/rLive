@@ -694,7 +694,7 @@ mod tests {
         assert!(error.message.contains("asr_enabled"));
     }
 
-    /// `hidden_home_entry_ids` 是 5.3.0 新增的同类字段，旧记录里没有它，
+    /// `hidden_home_entry_ids` 是 6.0.0 新增的同类字段，旧记录里没有它，
     /// 按空列表回填。
     #[test]
     fn backfills_hidden_home_entry_ids_for_older_records() {
@@ -763,7 +763,7 @@ mod tests {
     /// 悬停卡片预览是 2.12.0 新增的顶层字段，2.11.x 保存的记录里没有它。
     /// 缺失时按默认值补齐，不能让整份设置变成 `settings_schema_unsupported`。
     ///
-    /// `dynamic_background_enabled` 是 5.2.0 新增的同类字段，一并覆盖：它的默认值是
+    /// `dynamic_background_enabled` 是 6.0.0 新增的同类字段，一并覆盖：它的默认值是
     /// **false**，因此这里同时验证「回填」不等于「回填成 true」—— 缺字段的旧记录
     /// 不该凭空得到一个用户没开过的效果。
     #[test]

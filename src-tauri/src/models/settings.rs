@@ -110,7 +110,7 @@ pub struct AppSettings {
     pub disabled_site_ids: Vec<String>,
     /// 用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
     ///
-    /// 该字段在 5.3.0 引入，因此比它更早保存的设置记录和配置包里没有它，
+    /// 该字段在 6.0.0 引入，因此比它更早保存的设置记录和配置包里没有它，
     /// serde default 补齐空列表，见 `BACKFILLED_SETTINGS_FIELDS`。
     #[serde(default)]
     pub hidden_home_entry_ids: Vec<String>,
@@ -156,7 +156,7 @@ pub struct AppSettings {
     /// 留白）。默认关闭：那一层是全屏尺寸的模糊合成，在低端设备上每帧都要重新
     /// 采样，而它带来的只是观感上的一点氛围。
     ///
-    /// 该字段在 5.2.0 引入，因此比它更早保存的设置记录和配置包里没有它，
+    /// 该字段在 6.0.0 引入，因此比它更早保存的设置记录和配置包里没有它，
     /// 见 `BACKFILLED_SETTINGS_FIELDS`。
     #[serde(default = "default_dynamic_background_enabled")]
     pub dynamic_background_enabled: bool,
