@@ -3532,7 +3532,7 @@ dependencies = [
 
 [[package]]
 name = "rlive"
-version = "5.2.0"
+version = "6.0.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
