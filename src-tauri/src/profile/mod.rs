@@ -318,6 +318,8 @@ pub fn merge_into_db(
     settings.super_chat_enabled = package.settings.super_chat_enabled;
     settings.asr_font_size = package.settings.asr_font_size;
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
+    settings.video_recommend_api = package.settings.video_recommend_api;
+    settings.video_next_episode_preload = package.settings.video_next_episode_preload;
     settings.room_card_preview_enabled = package.settings.room_card_preview_enabled;
     settings.dynamic_background_enabled = package.settings.dynamic_background_enabled;
     settings.recording_ass = package.settings.recording_ass.clone();

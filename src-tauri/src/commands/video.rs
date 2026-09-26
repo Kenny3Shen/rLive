@@ -96,6 +96,17 @@ fn segment_ranges(track: &VideoTrack) -> Vec<(u64, u64)> {
     ranges
 }
 
+/// 下一分集预加载只碰**起播最小集**：init 段 + 首个媒体分片。
+///
+/// 复用 [`segment_ranges`] 的前两项而不是另写一套字节区间：播放器切换分集时
+/// 发出的 Range 必须与这里的键逐字节一致，两套规则早晚会漂移。窗口大小由
+/// [`MEDIA_CACHE_PREFIX_SECS`] 决定，这里只截断到「首片」。
+fn first_segment_ranges(track: &VideoTrack) -> Vec<(u64, u64)> {
+    let mut ranges = segment_ranges(track);
+    ranges.truncate(2);
+    ranges
+}
+
 /// 构造一个带已保存 cookie 与代理设置的 Bilibili 客户端。
 ///
 /// 与 `site.rs::resolve_site` 取的是同一份快照，因此登录态天然复用；
@@ -113,14 +124,22 @@ fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
     Ok(BilibiliSite::new(client, cookie.unwrap_or_default()))
 }
 
+/// 读取推荐接口偏好。设置读取失败向上报错：这是用户显式选择的上游，
+/// 静默换一个流会让「切换无效」变成无法排查的现象。
+fn recommend_api(state: &AppState) -> AppResult<crate::models::settings::VideoRecommendApi> {
+    let conn = state.conn()?;
+    Ok(crate::settings::get(&conn)?.video_recommend_api)
+}
+
 #[tauri::command]
 pub async fn video_get_recommend(
     state: State<'_, AppState>,
     page: u32,
     page_size: Option<u32>,
 ) -> AppResult<VideoListPage> {
+    let api = recommend_api(&state)?;
     resolve_bilibili(&state)?
-        .video_recommend(page, page_size.unwrap_or(20))
+        .video_recommend(api, page, page_size.unwrap_or(20))
         .await
 }
 
@@ -278,6 +297,155 @@ fn video_stream_headers() -> HashMap<String, String> {
             crate::sites::bilibili::video::VIDEO_REFERER.to_string(),
         ),
     ])
+}
+
+/// 为下一分集预热起播字节。
+///
+/// 它**不拉起任何播放代理**，也不合成 MPD：只把该分集的 init 段与首个音视频分片
+/// 写进与正常播放完全相同的分片缓存键。用户在选集里点下一集时，播放器的头两个
+/// Range 请求就落在本机。
+///
+/// 只取这两段是刻意的：切集要的是「马上出画」，后续分片由播放器按需拉；顺带预取
+/// 整段会变成一次未经确认的大额流量，而这只是预加载。失败一律返回 `Ok(false)`，
+/// 调用方不得因预热失败影响当前播放。
+///
+/// 开关在后端也查一次：预加载是会产生流量的行为，设置是它的唯一授权来源，
+/// 不能只靠调用方自觉。
+#[tauri::command]
+pub async fn video_preload_next(
+    state: State<'_, AppState>,
+    request: VideoPlayRequest,
+) -> AppResult<bool> {
+    {
+        let conn = state.conn()?;
+        if !crate::settings::get(&conn)?.video_next_episode_preload {
+            return Ok(false);
+        }
+    }
+    let site = match resolve_bilibili(&state) {
+        Ok(site) => site,
+        Err(_) => return Ok(false),
+    };
+    let selection = match site.video_play_selection(&request).await {
+        Ok(selection) => selection,
+        Err(_) => return Ok(false),
+    };
+
+    let cache_prefix = format!(
+        "{}:{}:{}",
+        request
+            .bvid
+            .as_deref()
+            .or(request.ep_id.as_deref())
+            .unwrap_or_default(),
+        request.cid,
+        selection.quality,
+    );
+    let store = state.media_cache.clone();
+    let headers = video_stream_headers();
+    let proxy = {
+        let conn = state.conn()?;
+        crate::settings::get(&conn)?.proxy
+    };
+    let client = match crate::http_client::client_for_proxy(proxy.as_deref()) {
+        Ok(client) => client,
+        Err(_) => return Ok(false),
+    };
+
+    // 两条轨并发：它们是完全独立的 CDN 请求。
+    let video_prefix = format!("{cache_prefix}:v");
+    let audio_prefix = format!("{cache_prefix}:a");
+    let video = preload_track(
+        &client,
+        &store,
+        &headers,
+        &video_prefix,
+        "video/mp4",
+        &selection.video,
+    );
+    let audio = preload_track(
+        &client,
+        &store,
+        &headers,
+        &audio_prefix,
+        "audio/mp4",
+        &selection.audio,
+    );
+    let (video, audio) = tokio::join!(video, audio);
+    Ok(video && audio)
+}
+
+/// 把一条轨的 init 段与首个媒体分片写进分片缓存。
+///
+/// 键由 [`MediaCacheSpec`] 生成，与转发路径写入时用的是同一套区间规则，
+/// 因此播放器后续请求必然命中；任意一段失败只返回 `false`，不把部分结果当成功。
+async fn preload_track(
+    client: &reqwest::Client,
+    store: &crate::media_cache::SharedMediaCache,
+    headers: &HashMap<String, String>,
+    prefix: &str,
+    content_type: &'static str,
+    track: &VideoTrack,
+) -> bool {
+    let ranges = first_segment_ranges(track);
+    let spec =
+        crate::media_cache::MediaCacheSpec::new(prefix.to_string(), content_type, ranges.clone());
+    for (start, end) in ranges {
+        let Some(key) = spec.key_for_range(start, end) else {
+            return false;
+        };
+        // 已命中就不用再打一次 CDN：同一分集被反复预热是常态。
+        if store.get(&key).await.is_some() {
+            continue;
+        }
+        let Some(bytes) = fetch_range_with(client, headers, &track.base_url, start, end)
+            .await
+            .ok()
+        else {
+            return false;
+        };
+        if bytes.len() as u64 != end.saturating_sub(start).saturating_add(1) {
+            return false;
+        }
+        store.put(&key, &bytes).await;
+    }
+    true
+}
+
+/// 按 Range 拉一段字节。预热不走站点客户端：那里要保证 `buvid` 与重试语义，
+/// 而这里只是尽力而为的预取，用与代理一致的头即可。
+async fn fetch_range_with(
+    client: &reqwest::Client,
+    headers: &HashMap<String, String>,
+    url: &str,
+    start: u64,
+    end: u64,
+) -> AppResult<Vec<u8>> {
+    let mut request = client
+        .get(url)
+        .header("range", format!("bytes={start}-{end}"));
+    for (key, value) in headers {
+        request = request.header(key, value);
+    }
+    let response = request.send().await.map_err(|error| {
+        AppError::new("video_preload_failed", format!("预加载请求失败: {error}"))
+    })?;
+    if !response.status().is_success() {
+        return Err(AppError::new(
+            "video_preload_failed",
+            format!("预加载返回 HTTP {}", response.status().as_u16()),
+        ));
+    }
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|error| {
+            AppError::new(
+                "video_preload_failed",
+                format!("预加载响应读取失败: {error}"),
+            )
+        })
 }
 
 /// 取播放信息：解出分片表、拉起代理、合成 MPD。
@@ -688,7 +856,7 @@ pub async fn video_get_comment_replies(
 
 #[cfg(test)]
 mod tests {
-    use super::{PlaybackProxyLease, segment_ranges, video_session_ids};
+    use super::{PlaybackProxyLease, first_segment_ranges, segment_ranges, video_session_ids};
     use crate::stream_proxy::StreamProxy;
 
     #[tokio::test]
@@ -829,5 +997,18 @@ mod tests {
     fn empty_segment_table_keeps_only_init() {
         let ranges = segment_ranges(&track(4, 0));
         assert_eq!(ranges, vec![(0, 99)]);
+    }
+
+    #[test]
+    fn preload_keeps_only_init_and_the_first_segment() {
+        // 预加载不把 10s 窗口整个写盘：只取 init + 首片，其余留给正常播放。
+        let ranges = first_segment_ranges(&track(4, 30));
+        assert_eq!(ranges, vec![(0, 99), (100, 199)]);
+    }
+
+    #[test]
+    fn preload_without_segments_still_writes_init() {
+        // 分片表为空时不能把预加载变成空操作：init 段仍是起播的第一个请求。
+        assert_eq!(first_segment_ranges(&track(4, 0)), vec![(0, 99)]);
     }
 }

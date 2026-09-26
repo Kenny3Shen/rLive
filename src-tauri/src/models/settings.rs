@@ -11,6 +11,8 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "recording_max_concurrent",
     "dynamic_background_enabled",
     "hidden_home_entry_ids",
+    "video_recommend_api",
+    "video_next_episode_preload",
 ];
 
 /// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
@@ -95,6 +97,15 @@ impl Default for RecordingAssSettings {
     }
 }
 
+/// 视频点播推荐接口的全局偏好。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoRecommendApi {
+    #[default]
+    App,
+    Web,
+}
+
 /// 持久化的应用偏好设置（`settings_kv` 中 key 为 `app_settings` 的 JSON）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -145,6 +156,13 @@ pub struct AppSettings {
     pub quality_level: String,
     /// 同协议媒体适配器的切换路径。前端对不兼容协议和切换失败仍保留硬刷新兜底。
     pub playback_soft_switch_enabled: bool,
+    /// 视频点播推荐接口；旧记录回填 App API，见 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default)]
+    pub video_recommend_api: VideoRecommendApi,
+    /// 只预加载下一分集的初始化段与首个音视频分片，不预载相关视频。
+    /// 默认关闭，避免新安装或升级后自动额外消耗流量；旧记录同样回填关闭。
+    #[serde(default)]
+    pub video_next_episode_preload: bool,
     /// 在浏览页悬停直播间卡片时播放静音直播预览。
     ///
     /// 该字段在 2.12.0 引入，因此比它更早保存的设置记录和配置包里没有它。
@@ -252,6 +270,8 @@ impl Default for AppSettings {
             danmaku_blocked_users: Vec::new(),
             quality_level: "high".into(),
             playback_soft_switch_enabled: true,
+            video_recommend_api: VideoRecommendApi::default(),
+            video_next_episode_preload: false,
             room_card_preview_enabled: default_room_card_preview_enabled(),
             dynamic_background_enabled: default_dynamic_background_enabled(),
             danmaku_send_enabled: false,
@@ -295,6 +315,8 @@ mod tests {
         assert!(back.recording_include_danmaku);
         assert_eq!(back.recording_auto_split_minutes, 0);
         assert_eq!(back.recording_max_concurrent, 4);
+        assert_eq!(back.video_recommend_api, VideoRecommendApi::App);
+        assert!(!back.video_next_episode_preload);
         assert!(back.room_card_preview_enabled);
         // 动态背景默认关闭：它是纯装饰，且在弱设备上是逐帧重采样的开销。
         assert!(!back.dynamic_background_enabled);

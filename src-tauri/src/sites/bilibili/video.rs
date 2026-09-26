@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, HashSet};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
+use crate::models::settings::VideoRecommendApi;
 use crate::models::video::{
     PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoComment,
     VideoCommentPage, VideoDanmakuSegment, VideoDimension, VideoEmote, VideoItem, VideoListPage,
@@ -357,6 +358,34 @@ fn json_items<T>(
         .and_then(Value::as_array)
         .ok_or_else(|| video_err(format!("{name}缺少 {what}")))?;
     Ok(build(&root, items))
+}
+
+/// 解析 Web 首页推荐 `data.item[]`。
+///
+/// 该流混入广告/直播/番剧卡片，只保留 `goto == "av"` 且带 `owner` 的 UGC 条目：
+/// 其他卡片没有可播的 bvid/cid。它由 `video_recommend` 在用户显式选择 Web API 时
+/// 使用，与 APP 主 feed 互斥，不静默回退。
+pub fn parse_web_recommend(raw: &str) -> AppResult<VideoListPage> {
+    json_items(
+        raw,
+        "推荐流",
+        "data.item",
+        &["/data/item"],
+        |_root, items| {
+            let items: Vec<VideoItem> = items
+                .iter()
+                .filter(|item| item.get("goto").map(as_str).as_deref() == Some("av"))
+                .filter(|item| item.get("owner").is_some())
+                .map(video_item)
+                .filter(|item| !item.bvid.is_empty())
+                .collect();
+            // 推荐流是无限刷新的，只要这一刷还有内容就认为可以继续。
+            VideoListPage {
+                has_more: !items.is_empty(),
+                items,
+            }
+        },
+    )
 }
 
 /// 解析热门 `data.list[]`。尾页由 `data.no_more` 明确告知。
@@ -1230,9 +1259,41 @@ impl BilibiliSite {
         .await
     }
 
-    /// 横竖混合的 APP 推荐。page 只保留 IPC 兼容性，不冒充上游游标。
-    pub async fn video_recommend(&self, _page: u32, page_size: u32) -> AppResult<VideoListPage> {
-        self.video_app_recommend(page_size).await
+    /// 首页推荐流。`api` 决定走哪条上游，两条链路互斥且不静默回退：
+    ///
+    /// - `App`（默认）：APP 主 feed，横竖混合、匿名可用、无真游标。
+    /// - `Web`：`x/web-interface/wbi/index/top/feed/rcmd`，需要 WBI 签名，
+    ///   有 Cookie 才是个性化流，`fresh_idx`/`brush` 跟着页码走。
+    pub async fn video_recommend(
+        &self,
+        api: VideoRecommendApi,
+        page: u32,
+        page_size: u32,
+    ) -> AppResult<VideoListPage> {
+        match api {
+            VideoRecommendApi::App => self.video_app_recommend(page_size).await,
+            VideoRecommendApi::Web => self.video_web_recommend(page, page_size).await,
+        }
+    }
+
+    /// Web 首页推荐。`page` 同时作 `fresh_idx` 与 `brush`，上游据此换一刷。
+    async fn video_web_recommend(&self, page: u32, page_size: u32) -> AppResult<VideoListPage> {
+        let page = page.max(1);
+        let mut params = BTreeMap::new();
+        params.insert("version".into(), "1".into());
+        params.insert("feed_version".into(), "V8".into());
+        params.insert("homepage_ver".into(), "1".into());
+        params.insert("ps".into(), page_size.clamp(1, 30).to_string());
+        params.insert("fresh_idx".into(), page.to_string());
+        params.insert("brush".into(), page.to_string());
+        params.insert("fresh_type".into(), "4".into());
+        let text = self
+            .get_json_signed(
+                "https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd",
+                params,
+            )
+            .await?;
+        parse_web_recommend(&text)
     }
 
     /// 热门。该接口不需要 WBI，匿名可用。
@@ -2112,6 +2173,35 @@ impl BilibiliSite {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_recommend_keeps_only_playable_ugc_items() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "data": { "item": [
+                { "goto": "av", "id": 117_191_437_455_648_i64, "bvid": "BV1x", "cid": 41_473_934_959_i64,
+                  "title": "标题", "pic": "http://i1.hdslb.com/a.jpg", "duration": 258, "pubdate": 1_788_226_200,
+                  "owner": { "name": "up主", "face": "https://i0.hdslb.com/bfs/face/x.jpg" },
+                  "stat": { "view": 1_465_320, "danmaku": 547 }, "rcmd_reason": null },
+                // 直播卡：没有 owner，不可播。
+                { "goto": "live", "id": 5, "title": "直播" },
+                // 番剧卡：goto 不是 av。
+                { "goto": "bangumi", "id": 6, "bvid": "BV1y", "owner": { "name": "x" } },
+            ]}
+        })
+        .to_string();
+
+        let page = parse_web_recommend(&raw).expect("推荐流应解析成功");
+        assert_eq!(page.items.len(), 1);
+        let item = &page.items[0];
+        // aid 必须是字符串且保持全精度：按 f64 走会丢到 117191437455648 之外。
+        assert_eq!(item.aid, "117191437455648");
+        assert_eq!(item.cid, Some(41_473_934_959));
+        assert_eq!(item.view, 1_465_320);
+        // http 封面必须升级成 https，否则 WebView 按混合内容拦掉。
+        assert_eq!(item.cover, "https://i1.hdslb.com/a.jpg");
+        assert!(page.has_more);
+    }
 
     #[test]
     fn popular_reads_object_rcmd_reason_and_no_more_flag() {

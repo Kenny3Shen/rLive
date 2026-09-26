@@ -112,6 +112,7 @@ import {
   videoGetStoryboard,
   videoGetSubtitle,
   videoGetSubtitles,
+  videoPreloadNext,
   videoStopPlay,
 } from "./videoApi";
 import {
@@ -740,6 +741,14 @@ function VideoPlayerPageContent() {
    * 由历史续播或详情补出）播完时会沿来源队列跳到另一个视频；从推荐/相关流进入
    * 的（`feed` 队列不自动连播）则直接落到相关视频。
    */
+  /** 下一分集预加载：只写下一集的 init 段与首个音视频分片，见 `videoPreloadNext`。 */
+  const videoNextEpisodePreload = useSettingsStore((state) => state.videoNextEpisodePreload);
+  /**
+   * 已预热的下一集身份。用 ref 而不是 state：预热是副作用，不驱动渲染；
+   * 换集后 cid 变，自然就允许对新的一集再预热一次。
+   */
+  const preloadedNextRef = useRef<string | null>(null);
+
   const selectionNextItemRef = useRef<PlaylistItem | null>(null);
   useLayoutEffect(() => {
     selectionNextItemRef.current = selectionNextItem;
@@ -862,6 +871,10 @@ function VideoPlayerPageContent() {
         ep_id: params?.epId ?? null,
         qn: qualityQn,
         audio_only: audioOnly,
+        // 开启「预加载下一分集」后，本集也启用分片缓存：预热的字节写在同一个
+        // 缓存键空间里，不打开读路径的话预热就白做了。仅音频模式不写缓存
+        // （后端忽略该位），因为那时没有视频轨要加速。
+        media_cache: videoNextEpisodePreload && !audioOnly,
       }),
     // 换画质/重试期间保留旧数据：旧播放器继续播到新信息就位，而不是先黑屏等请求。
     placeholderData: keepPreviousData,
@@ -992,6 +1005,40 @@ function VideoPlayerPageContent() {
     staleTime: 5 * 60_000,
     retry: false,
   });
+
+  /**
+   * 下一分集预加载。
+   *
+   * 只在「当前集已就绪」后发起：开播前的带宽应该全部给正在看的那一集。
+   * 只做一次（按下一集身份 + 画质去重），失败不重试也不上报 —— 预热是尽力而为
+   * 的加速，切集时自然会走正常取流。
+   */
+  const nextPreloadKey = selectionNextItem
+    ? `${selectionNextItem.bvid}:${selectionNextItem.cid}:${selectionNextItem.epId ?? ""}:${qualityQn ?? ""}`
+    : null;
+  useEffect(() => {
+    // 仅音频模式不启用分片缓存（后端忽略该位），预热也不会被读回，直接不做。
+    if (!videoNextEpisodePreload || audioOnly || loading || playbackError) return;
+    if (!nextPreloadKey || preloadedNextRef.current === nextPreloadKey) return;
+    const next = selectionNextItem;
+    if (!next) return;
+    preloadedNextRef.current = nextPreloadKey;
+    void videoPreloadNext({
+      bvid: next.bvid || null,
+      cid: next.cid,
+      ep_id: next.epId,
+      qn: qualityQn,
+      audio_only: false,
+    }).catch(() => undefined);
+  }, [
+    videoNextEpisodePreload,
+    audioOnly,
+    loading,
+    playbackError,
+    nextPreloadKey,
+    selectionNextItem,
+    qualityQn,
+  ]);
 
   const sessionIdsRef = useRef<VideoSessionIds | null>(null);
   // 用 query 的原始数据而不是上面换集时被抹成 undefined 的 `playInfo`：

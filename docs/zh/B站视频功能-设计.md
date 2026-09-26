@@ -28,7 +28,8 @@
 
 | 表面 | 端点与参数 | 认证 |
 | --- | --- | --- |
-| 推荐 | `GET https://app.bilibili.com/x/v2/feed/index`，`build=8130300&mobi_app=android&platform=android&device=phone&style=2&column=4` | 匿名可用、免 WBI/appkey 签名，必须带 `buvid` 头。保留 `goto=av/vertical_av` 的横竖混合稿件，过滤广告/直播/PGC。`aid` 在 Rust 本地转换为 `bvid`，无逐条详情回查；画幅取 `dimension` 或 URI 的 `player_width/player_height/player_rotate`。有限串行取批、批内去重；前端无新增批次即停，刷新可重试。不承诺 Web Cookie 带来账号级个性化 |
+| 推荐（App API，默认） | `GET https://app.bilibili.com/x/v2/feed/index`，`build=8130300&mobi_app=android&platform=android&device=phone&style=2&column=4` | 匿名可用、免 WBI/appkey 签名，必须带 `buvid` 头。保留 `goto=av/vertical_av` 的横竖混合稿件，过滤广告/直播/PGC。`aid` 在 Rust 本地转换为 `bvid`，无逐条详情回查；画幅取 `dimension` 或 URI 的 `player_width/player_height/player_rotate`。有限串行取批、批内去重；前端无新增批次即停，刷新可重试。**实测不按 Cookie 个性化**：有无 Cookie 的 `track_id` 前缀、竖屏占比与卡片结构一致，旋钮是设备 `buvid` |
+| 推荐（Web API，可选） | `GET /x/web-interface/wbi/index/top/feed/rcmd`，`version=1&feed_version=V8&homepage_ver=1&ps=&fresh_idx=<page>&brush=<page>&fresh_type=4` | **需 WBI**；有 Cookie 才是个性化流，匿名返回通用流。取 `data.item[]`，只保留 `goto=av` 且带 `owner` 的 UGC 条目（其余是直播/番剧/广告卡） |
 | 热门 | `GET /x/web-interface/popular?pn=&ps=` | 无 WBI、**匿名可用**。`data.list[]`，`data.no_more` 判尾页 |
 | 番剧 | `GET /pgc/season/index/result`，`st=1&season_type=1&order=3&sort=0&pagesize=20&type=1&page=<n>`，其余筛选位一律 `-1` | 无 WBI、匿名可用。`data.list[]` 仅含 `season_id/title/cover/badge/index_show/order`，**无 ep_id** |
 | 影视 | 同上，**加 `index_type=102`** | 同上 |
@@ -54,11 +55,14 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 ### 推荐源与画幅适配
 
-- VOD 推荐只使用 APP 主 feed，不保留 `rcmd` 作为并行实现或静默回退。`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
+- VOD 推荐默认使用 APP 主 feed；用户可在「设置 → 播放 → 视频点播」切到 Web API（`x/web-interface/wbi/index/top/feed/rcmd`，需 WBI、`fresh_idx`/`brush` 跟页码）。两条链路**互斥且不静默回退**：切到哪条就用哪条，失败直接报错。
+- **App 推荐不基于 Cookie（2026-09 实机消融）**：同设备 `buvid` 下只切换 Cookie，5 轮各 45~47 条的唯一集合交集为 0、`track_id` 前缀恒为 `all`、竖屏占比与卡片结构一致；去掉 `buvid` 头后（无论有无 Cookie）立即降级为 `gateway_fb_*` 兜底流、竖屏恒为 0。因此**个性化旋钮是设备轴 `buvid`，不是账号 Cookie**。Web API 推荐则相反：有 Cookie 才是个性化流。两条链路的这个差异是设置项存在的理由。
+- APP 主 feed：`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
 - APP 返回的播放/弹幕统计常是「万/亿」格式的显示近似数，映射结果不是精确计数；作者 UID、标题、画幅与取流键在 Rust 统一归一化。
 - VOD 发现页四个页签与搜索结果使用 `VideoMasonry` 瀑布流，沿用响应式 2–6 列。以细网格行跨度承载卡片自然高度，追加分页不重新分列，保留 DOM / 键盘顺序、滚动锚点与卡片身份。`ResizeObserver` 在列宽、字体和内容变化时更新跨度；不支持时退回普通网格。分页哨兵仍在完整列表之后。
 - VOD 列表与 UP 投稿抽屉的 `VideoCard` 默认按 `dimension` 设置封面比例；旋转标记非零时交换宽高，未知尺寸与 PGC 保持 16:9。**相关视频**显式使用 `coverAspect="landscape"`，桌面侧栏和移动端相关页签均固定为横屏缩略图，源内容不被过滤。
 - 回归：`tests/video-masonry.browser.js` 验证补位、分页追加不移位、尺寸变化与底部哨兵；`tests/video-card-aspect.browser.js` 验证源画幅、横屏覆盖及真实相关视频区。
+- 推荐页签的列表 query key 带推荐源（`video_list/recommend/…/app|web`），切换设置后旧缓存不被当作新鲜数据复用；Cookie 变更只失效 `video_list` 的推荐页签（`cookieQueryInvalidation`），热门/番剧/影视不随之重取。
 - 推荐、通用 story、作者 story 统一通过 `get_app_feed` → `get_json_with_buvid_header`，共用 Cookie、代理、设备槽和错误处理。**不等于所有 B 站接口都换域**：详情、搜索、热门、播放、评论、弹幕仍使用已验证的 `api.bilibili.com` 端点；APP 域同路径 `/x/web-interface/view` 实测 404，APP `/x/v2/view` 在本次免签名参数下返回 -400，不能仅替换 host。未验证的 APP 等价能力不替换既有播放与账号权限链路。
 - `/shorts` 点头像/用户名可进入作者 story，从当前稿件继续，上方居中显示上游 `index/total`；详见[短视频功能](短视频功能.md)「UP 主竖屏流」。
 
@@ -228,6 +232,16 @@ message DanmakuElem {
 - 相关连播沿用来源队列耗尽时的同一条路径（`playRelatedItem`：取相关视频接口、按 `relatedPlaylistItems` 去重并滤掉当前视频、以 `feed` 类型装入队列、跳转第一个）。
 - 循环重播走原生 `media.currentTime = 0` + `play()`（与 seek 同一条 DASH 路径）；进度已在 `ended` 里按总时长记满，观看历史仍认定「已看完」，下次进入从头播放。
 - 音量与静音由 `src/shared/playerVolume.ts` 记在 localStorage `rlive-player-volume`，视频页、直播页、IPTV 播放页与录制回放共享同一份：初值取 `readPlayerVolume()`，音量/静音状态变化写 `rememberPlayerVolume()`（同值不重渲染，一次拖动最多写它经过的档位数，不需要节流）。不参与的两处：多画面按槽位各存一份音量（副画面默认静音是角色语义）；Android 真实音量是系统媒体音量（由 OS 记住），网页层固定 100 且不落盘，否则会把 100 写进桌面端的记忆。
+
+### 下一分集预加载（默认关闭）
+
+- 开关住「设置 → 播放 → 视频点播」，默认**关闭**：它会额外下载下一集的 init 段与首个音视频分片，不能在升级或首次启动后未经选择就产生流量。
+- 实现复用现有分片缓存而不是另建预热通道：`video_preload_next` 用与正常播放相同的 `video_play_selection` 解出分集轨道，再以 `first_segment_ranges`（`segment_ranges` 的前两项：init + 首片）写入与转发路径**逐字节相同**的缓存键（`{bvid|ep}:{cid}:{qn}:{v|a}:{start}:{end}`）。它不拉起播放代理、不合成 MPD、不占 session；已命中就跳过，失败返回 `Ok(false)` 且调用方忽略。
+- 为什么只取首片：切集要的是「马上出画」，后续分片由播放器按需拉；顺带预取整段就变成一次未经确认的大额流量。`MEDIA_CACHE_PREFIX_SECS`（10s）仍管普通播放写盘的前缀宽度，预热只截到首片。
+- 触发时机是「当前集已就绪（`!loading && !playbackError`）之后」，开播前带宽全部留给正在看的那一集；按「下一集身份 + 画质」去重只做一次，换集后自然对新的一集再预热。仅音频模式不预热。
+- 开启后播放页自身的 `video_get_play_info` 才带 `media_cache: true`：预热的字节写在同一个缓存键空间里，不打开读路径预热就白做。默认关闭时保持原有行为（播放页不写分片缓存，见 `VideoPlayRequest.media_cache` 的注释）。
+- 实机验证（Windows Debug，真实 CDN）：预热后 `initRange` 与首片 Range 经代理均返回 206 且 `upstream_requests` 不增长，只有第二个分片才触发 1 次上游请求；重复预热因命中已写盘分片而从 1550ms 降到 796ms。
+- 单测：`commands::video::tests` 的 `preload_keeps_only_init_and_the_first_segment` / `preload_without_segments_still_writes_init` 钉住首片截断与空分片表行为；`tests/video-settings.test.ts` 钉住两条偏好的默认值与回填。
 
 ### 换集过渡与 seek 边界
 

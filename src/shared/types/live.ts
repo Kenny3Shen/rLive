@@ -262,6 +262,9 @@ export type RecordingAssSettings = {
   shield_regex: boolean;
 };
 
+/** 镜像 Rust `VideoRecommendApi` 的 serde snake_case 取值。 */
+export type VideoRecommendApi = "app" | "web";
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
   default_site: string;
@@ -285,6 +288,10 @@ export type AppSettings = {
   quality_level: "high" | "mid" | "low";
   /** 同协议 Video.js 传输适配器的软切换路径；硬刷新仍是兜底。 */
   playback_soft_switch_enabled: boolean;
+  /** 视频点播推荐接口；默认 App API。 */
+  video_recommend_api: VideoRecommendApi;
+  /** 只预加载下一分集的起播数据；默认关闭，避免额外流量。 */
+  video_next_episode_preload: boolean;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   room_card_preview_enabled: boolean;
   /** 画面之外用模糊放大的封面垫底（目前只有短视频竖屏流用得到）。 */

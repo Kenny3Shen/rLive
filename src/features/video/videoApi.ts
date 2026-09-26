@@ -98,6 +98,16 @@ export function videoGetPlayInfo(request: VideoPlayRequest): Promise<VideoPlayIn
   return invokeCmd<VideoPlayInfo>("video_get_play_info", { request });
 }
 
+/**
+ * 为下一分集预热起播字节（init 段 + 首个音视频分片）。
+ *
+ * 只写分片缓存，不拉起播放代理、不合成 MPD；返回是否两条轨都写成功。
+ * 调用方把它当尽力而为的后台动作：失败不得影响当前播放，也不重试。
+ */
+export function videoPreloadNext(request: VideoPlayRequest): Promise<boolean> {
+  return invokeCmd<boolean>("video_preload_next", { request });
+}
+
 /** DLNA 投屏源：html5 playurl 的 MP4 直链 + 中继请求头（电视经中继可直连）。 */
 export function videoGetCastUrl(request: VideoPlayRequest): Promise<VideoCastSource> {
   return invokeCmd<VideoCastSource>("video_get_cast_url", { request });

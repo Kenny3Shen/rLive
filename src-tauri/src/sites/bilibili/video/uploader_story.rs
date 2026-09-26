@@ -159,6 +159,7 @@ impl BilibiliSite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::settings::VideoRecommendApi;
     use serde_json::json;
 
     fn item(aid: &str, index: u64) -> Value {
@@ -288,7 +289,10 @@ mod tests {
             .build()
             .unwrap();
         let site = BilibiliSite::new(client, String::new());
-        let recommended = site.video_recommend(1, 20).await.unwrap();
+        let recommended = site
+            .video_recommend(VideoRecommendApi::App, 1, 20)
+            .await
+            .unwrap();
         assert!(!recommended.items.is_empty());
         // 本地转换得到的 bvid 必须指向同一稿件，而不仅是形状像 BV 字符串。
         let first = &recommended.items[0];

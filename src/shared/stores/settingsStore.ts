@@ -25,6 +25,7 @@ import type {
   RecordingAssOverflowPolicy,
   RecordingAssSettings,
   SiteId,
+  VideoRecommendApi,
 } from "../types/live";
 import type { QualityLevel } from "../types/player";
 
@@ -82,6 +83,10 @@ function parseQualityLevel(value: unknown): QualityLevel {
   return "high";
 }
 
+function parseVideoRecommendApi(value: unknown): VideoRecommendApi {
+  return value === "web" ? "web" : VIDEO_RECOMMEND_API_DEFAULT;
+}
+
 function parseAsrProvider(value: unknown): AsrProvider {
   return value === "cpu" || value === "cuda" ? value : "auto";
 }
@@ -92,6 +97,10 @@ export const ASR_FONT_SIZE_DEFAULT = 20;
 const ASR_WINDOW_SECONDS_MIN = 0.2;
 const ASR_WINDOW_SECONDS_MAX = 1;
 export const ASR_WINDOW_SECONDS_DEFAULT = 0.2;
+
+export const VIDEO_RECOMMEND_API_DEFAULT: VideoRecommendApi = "app";
+/** 默认关闭，避免升级后未经选择就额外消耗下一分集的预加载流量。 */
+export const VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT = false;
 
 /** 悬停直播间卡片播放静音直播预览的默认开关。 */
 export const ROOM_CARD_PREVIEW_ENABLED_DEFAULT = true;
@@ -420,6 +429,8 @@ type SettingsState = {
   danmakuBlockedUsers: string[];
   qualityLevel: QualityLevel;
   playbackSoftSwitchEnabled: boolean;
+  videoRecommendApi: VideoRecommendApi;
+  videoNextEpisodePreload: boolean;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   roomCardPreviewEnabled: boolean;
   /** 画面之外用模糊放大的封面垫底。 */
@@ -465,6 +476,8 @@ type SettingsState = {
   setProxy: (proxy: string | null) => void;
   setQualityLevel: (level: QualityLevel) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
+  setVideoRecommendApi: (api: VideoRecommendApi) => void;
+  setVideoNextEpisodePreload: (enabled: boolean) => void;
   setRoomCardPreviewEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
   /** 屏蔽一个用户；已在列表中时为无操作。 */
@@ -515,6 +528,8 @@ const defaultSettings: AppSettings = {
   danmaku_blocked_users: [],
   quality_level: "high",
   playback_soft_switch_enabled: true,
+  video_recommend_api: VIDEO_RECOMMEND_API_DEFAULT,
+  video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   dynamic_background_enabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
   danmaku_send_enabled: false,
@@ -558,6 +573,8 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_blocked_users: state.danmakuBlockedUsers,
     quality_level: state.qualityLevel,
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
+    video_recommend_api: state.videoRecommendApi,
+    video_next_episode_preload: state.videoNextEpisodePreload,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
@@ -605,6 +622,8 @@ function forwardedSetters(
       "playbackSoftSwitchEnabled",
       "playback_soft_switch_enabled",
     ),
+    setVideoRecommendApi: forward("videoRecommendApi", "video_recommend_api"),
+    setVideoNextEpisodePreload: forward("videoNextEpisodePreload", "video_next_episode_preload"),
     setRoomCardPreviewEnabled: forward("roomCardPreviewEnabled", "room_card_preview_enabled"),
     setDynamicBackgroundEnabled: forward("dynamicBackgroundEnabled", "dynamic_background_enabled"),
     setSuperChatEnabled: forward("superChatEnabled", "super_chat_enabled"),
@@ -674,6 +693,8 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuBlockedUsers: [],
       qualityLevel: "high",
       playbackSoftSwitchEnabled: true,
+      videoRecommendApi: VIDEO_RECOMMEND_API_DEFAULT,
+      videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
       dynamicBackgroundEnabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
       danmakuSendEnabled: false,
@@ -900,6 +921,8 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuBlockedUsers: normalizeDanmakuBlockedUsers(settings.danmaku_blocked_users),
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
+          videoRecommendApi: parseVideoRecommendApi(settings.video_recommend_api),
+          videoNextEpisodePreload: settings.video_next_episode_preload === true,
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
           dynamicBackgroundEnabled: settings.dynamic_background_enabled,
           danmakuSendEnabled: settings.danmaku_send_enabled,

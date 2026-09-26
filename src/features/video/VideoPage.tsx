@@ -35,6 +35,7 @@ import { PgcCard, VideoGrid } from "./VideoCard";
 import { VideoMasonry } from "./VideoMasonry";
 import { VideoZoneBar } from "./VideoZoneBar";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import {
   PGC_SEASON_TYPES,
   VIDEO_POPULAR_ALL_ZONE_KEY,
@@ -106,6 +107,8 @@ export function VideoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const scope = useVideoTabScope();
   const tab = scope?.tab ?? videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
+  // 推荐接口是后端设置；这里只把它纳入 query key，切换后旧页签的缓存不再被当新鲜数据复用。
+  const videoRecommendApi = useSettingsStore((state) => state.videoRecommendApi);
 
   // UGC 分区表由后端提供以免前端硬编码 rid。只有热门页签的条带用得上它。
   const zonesQuery = useQuery({
@@ -126,7 +129,7 @@ export function VideoPage() {
     "video_list",
     tab,
     zoneKey ?? "",
-    tab === "recommend" ? "app" : "web",
+    tab === "recommend" ? videoRecommendApi : "web",
   ] as const;
   const listQuery = useInfiniteQuery({
     queryKey: listQueryKey,

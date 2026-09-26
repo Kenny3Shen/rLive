@@ -155,8 +155,35 @@ login 响应逐字段对比，完全一致。个性化旋钮只有 `buvid`（设
   这个参数。TV 端扫码登录链路可拿到它，但 rLive **暂缓**接入（收益未验证、凭据敏感）。
 
 顺带记下另一个接口的口径差异：`x/web-interface/wbi/index/top/feed/rcmd`（首页推荐）**需要 WBI
-签名**且 Cookie 才个性化，rLive 原先使用它（已由 2.9 的 APP 混合推荐替换）；它的条目**不带 `dimension`**
-（实测 0/12），且混入广告/直播/番剧，无法当竖屏源。
+签名**且 Cookie 才个性化；它的条目**不带 `dimension`**（实测 0/12），且混入广告/直播/番剧。
+rLive 默认已改用 APP 混合推荐，但保留了它作为可选的 Web API（设置 → 播放 → 视频点播），
+因此上面这条差异现在直接决定切到 Web API 时推荐会随账号变化、切回 App API 则不会。
+
+### 2.7.1 APP 主 feed 的 Cookie 消融（2026-09 实机）
+
+问题：VOD 推荐（`app.bilibili.com/x/v2/feed/index`）是否基于 Cookie 做个性化？
+
+**结论：不基于 Cookie。个性化旋钮是设备轴 `buvid`，账号 Cookie 不参与。**
+
+同一固定 `buvid`、仅切换 Cookie 的 5 轮对照（Windows Debug 主窗口，真实登录态 `SESSDATA`，
+并已用 `x/web-interface/nav` 核实该 Cookie 确实有效）：
+
+| 观测项 | 有 Cookie | 无 Cookie |
+| --- | --- | --- |
+| `track_id` 前缀 | 恒为 `all`（推荐引擎生效） | 恒为 `all` |
+| 竖屏条目（`goto=vertical_av`） | 0~2 / 9 | 0~2 / 9 |
+| 卡片类型集合 | `large_cover_v9` + `small_cover_v2` | 完全相同 |
+| 5 轮唯一 bvid 并集 | 47 | 45 |
+| 两集合交集 | **0** | — |
+
+同 Cookie 的相邻两轮之间交集也是 0（服务端按时间轮换），所以「交集为 0」本身不是证据；
+**证据是 `track_id` 前缀、卡片结构与竖屏占比在两个单元格完全一致**。
+真正决定是否启用推荐引擎的是 `buvid` 头：去掉它之后（无论有无 Cookie）立即降级为
+`gateway_fb_*` 兜底流、竖屏恒为 0、卡片只剩 `small_cover_v2`。这与 story feed 的结论同轴。
+
+复现：固定 `buvid`（`x/frontend/finger/spi` 取一对并写进 Cookie 与 `buvid` 头），
+只增删登录 Cookie，比 `track_id` 前缀与卡片字段。设置里的「推荐接口」因此默认 App API，
+并把 Web API 留给「希望推荐随账号个性化」的用户。
 
 ### 2.8 VOD 推荐流里为什么没有竖屏（2026-10 实测）
 
@@ -218,9 +245,10 @@ story，从当前稿件开始播放，顶部显示真实位置；卡片根据 di
 | UP 主竖屏浏览 | 同主机 `/x/v2/feed/index/space/story/cursor` | 按 `aid` 双向翻页，无推荐历史过滤，保留作者列表真实顺序 |
 
 三种 feed 统一 `get_app_feed` → `get_json_with_buvid_header`，共用已有客户端、Cookie、代理、
-固定设备槽与错误映射，不建立 APP 专用登录状态。旧 `rcmd` 推荐请求与解析删除，不维护两套
-推荐源，也不静默回退成全横屏。未验证账号级个性化收益，不把 `login_event=1` 的单次比例差异
-当作因果；不新增 `access_key`。
+固定设备槽与错误映射，不建立 APP 专用登录状态。App API 是默认推荐源；旧 `rcmd` 请求与解析
+后来作为可选的 Web API 重新接回（设置 → 播放 → 视频点播），两条链路互斥、不静默回退，
+也不同时维护两套请求（同一 `video_recommend(api, page, size)` 按枚举分叉）。
+不把 `login_event=1` 的单次比例差异当作因果；不新增 `access_key`。
 
 **不能仅替换域名统一所有功能**：APP 域 `/x/web-interface/view` 实测 404，APP `/x/v2/view`
 在本次免签名参数下返回 -400。详情、热门、搜索、UGC/PGC 播放、评论、弹幕继续使用已验证的

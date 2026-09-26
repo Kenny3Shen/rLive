@@ -48,6 +48,8 @@ import {
   ASR_FONT_SIZE_DEFAULT,
   ASR_WINDOW_SECONDS_DEFAULT,
   ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
+  VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
+  VIDEO_RECOMMEND_API_DEFAULT,
   useSettingsStore,
   type ThemeMode,
 } from "@/shared/stores/settingsStore";
@@ -237,7 +239,7 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   appearance:
     "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式 控制栏",
   playback:
-    "播放 播放质量 清晰度 线路记忆 软切换 悬停 预览 卡片 封面 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
+    "播放 播放质量 清晰度 线路记忆 软切换 视频 点播 推荐 接口 App API Web API 预加载 下一分集 初始化段 音视频 分片 额外流量 相关视频 悬停 预览 卡片 封面 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   recording:
@@ -900,6 +902,8 @@ function PlaybackSettingsResetField() {
       useSettingsStore.setState({
         qualityLevel: "high",
         playbackSoftSwitchEnabled: true,
+        videoRecommendApi: VIDEO_RECOMMEND_API_DEFAULT,
+        videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
         danmakuShieldWords: [],
         danmakuBlockedUsers: [],
         superChatEnabled: true,
@@ -919,6 +923,8 @@ function PlaybackSettingsResetField() {
       await store.persistToBackend({
         quality_level: "high",
         playback_soft_switch_enabled: true,
+        video_recommend_api: VIDEO_RECOMMEND_API_DEFAULT,
+        video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
         danmaku_shield_words: [],
         danmaku_blocked_users: [],
         super_chat_enabled: true,
@@ -1851,6 +1857,10 @@ export function SettingsPage() {
   const setQualityLevel = useSettingsStore((s) => s.setQualityLevel);
   const playbackSoftSwitchEnabled = useSettingsStore((s) => s.playbackSoftSwitchEnabled);
   const setPlaybackSoftSwitchEnabled = useSettingsStore((s) => s.setPlaybackSoftSwitchEnabled);
+  const videoRecommendApi = useSettingsStore((s) => s.videoRecommendApi);
+  const setVideoRecommendApi = useSettingsStore((s) => s.setVideoRecommendApi);
+  const videoNextEpisodePreload = useSettingsStore((s) => s.videoNextEpisodePreload);
+  const setVideoNextEpisodePreload = useSettingsStore((s) => s.setVideoNextEpisodePreload);
   const roomCardPreviewEnabled = useSettingsStore((s) => s.roomCardPreviewEnabled);
   const setRoomCardPreviewEnabled = useSettingsStore((s) => s.setRoomCardPreviewEnabled);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
@@ -2024,6 +2034,31 @@ export function SettingsPage() {
             tip="同协议换源时保留播放器；FLV 会重建内部流内核，失败时自动完整重建。"
             checked={playbackSoftSwitchEnabled}
             onCheckedChange={setPlaybackSoftSwitchEnabled}
+          />
+        </Section>
+        <Section title="视频点播">
+          <Field orientation="horizontal">
+            <FieldTitle id="video-recommend-api-label">推荐接口</FieldTitle>
+            <ToggleGroup
+              aria-labelledby="video-recommend-api-label"
+              value={[videoRecommendApi]}
+              variant="outline"
+              size="sm"
+              spacing={1}
+              onValueChange={(values) => {
+                const next = values[0];
+                if (next === "app" || next === "web") setVideoRecommendApi(next);
+              }}
+            >
+              <ToggleGroupItem value="app">App API</ToggleGroupItem>
+              <ToggleGroupItem value="web">Web API</ToggleGroupItem>
+            </ToggleGroup>
+          </Field>
+          <SwitchField
+            title="预加载下一分集"
+            tip="默认关闭。开启后只加载下一分集的初始化段与首个音视频分片，会产生额外流量；不预载相关视频。"
+            checked={videoNextEpisodePreload}
+            onCheckedChange={setVideoNextEpisodePreload}
           />
         </Section>
         {!mobileClient && (
