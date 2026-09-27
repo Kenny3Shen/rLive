@@ -43,8 +43,8 @@ export function BilibiliAppAuthStartupCheck() {
           // 丢弃旧账号的列表缓存，否则推荐页仍会拿它当新鲜数据。
           void invalidateBilibiliAppQueries(queryClient);
           notify.error(
-            "B站 App 授权已失效",
-            "个性化推荐已不可用。请到「设置 → 账号 → B站 App 个性化推荐」重新扫码。",
+            "Bilibili TV 授权已失效",
+            "个性化推荐已不可用。请到「设置 → 账号 → 平台账号」重新扫码。",
           );
         })
         .catch(() => {

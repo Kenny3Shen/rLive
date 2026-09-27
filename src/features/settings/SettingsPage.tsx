@@ -182,20 +182,57 @@ export function bilibiliAppAuthPresentation(
   failed = false,
 ) {
   const hasToken = profile?.has_token ?? false;
-  // 凭据存在且校验通过即生效；没有单独开关，授权就是唯一事实来源。
-  const active = hasToken && profile?.status === "valid" && !loading && !failed;
-  const label = loading
-    ? "正在读取…"
-    : failed || !profile
-      ? "状态待确认"
-      : !hasToken
-        ? "未授权"
-        : profile.status === "valid"
-          ? "已启用个性化"
-          : profile.status === "expired"
-            ? "已失效"
-            : "状态待确认";
-  return { hasToken, active, label };
+  // 标签、tone 与「未验证」提示刻意对齐平台账号行（`accountPresentation`）：
+  // 两行并排在同一个分区里，用户应该用同一套词读它们的状态，而不是
+  // 「已登录 / 已启用个性化」两套。`active` 只在 valid 分支为真。
+  if (loading)
+    return {
+      hasToken,
+      active: false,
+      label: "读取中",
+      tone: "outline" as const,
+      showUnverifiedHint: false,
+    };
+  if (failed || !profile)
+    return {
+      hasToken,
+      active: false,
+      label: "状态待确认",
+      tone: "outline" as const,
+      showUnverifiedHint: false,
+    };
+  if (!hasToken)
+    return {
+      hasToken: false,
+      active: false,
+      label: "未授权",
+      tone: "outline" as const,
+      showUnverifiedHint: false,
+    };
+  if (profile.status === "valid")
+    return {
+      hasToken: true,
+      active: true,
+      label: "已授权",
+      tone: "secondary" as const,
+      showUnverifiedHint: false,
+    };
+  if (profile.status === "expired")
+    return {
+      hasToken: true,
+      active: false,
+      label: "已失效",
+      tone: "destructive" as const,
+      showUnverifiedHint: false,
+    };
+  // unknown：没能确认，不等于失效。凭据仍在、个性化可能仍在生效，不能引导重扫。
+  return {
+    hasToken: true,
+    active: false,
+    label: "已授权，未验证",
+    tone: "outline" as const,
+    showUnverifiedHint: true,
+  };
 }
 
 const settingsCategories: {
@@ -274,7 +311,7 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   recording:
     "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 ASS 导出 分辨率 字体 不透明度 描边 阴影 粗体 屏蔽 正则 FFmpeg 超时 重连 HLS 分片 重试",
   account:
-    "账号 发送权限 平台账号 bilibili 哔哩哔哩 B站 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码 授权 TV App 个性化 推荐 story 短视频 UID 到期",
+    "账号 发送权限 平台账号 bilibili 哔哩哔哩 B站 Bilibili TV douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码 授权 App 个性化 推荐 story 短视频 UID 到期 移除",
   data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案 缓存 图片缓存 图片 头像 封面 清除 清理 占用 空间 cache",
   about: "关于 rLive 当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断",
 };
@@ -527,6 +564,7 @@ export function BilibiliAppAuthField() {
   const bumpRevision = useSettingsStore((s) => s.bumpBilibiliAppAuthRevision);
   const [qrOpen, setQrOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const operationRef = useRef(0);
@@ -548,7 +586,7 @@ export function BilibiliAppAuthField() {
       await invalidateBilibiliAppQueries(queryClient);
     } catch (error) {
       // 凭据已写入；推荐刷新失败不能反过来冒充授权失败。
-      notify.error("App 推荐刷新失败", `可在推荐页重试：${errorMessage(error)}`);
+      notify.error("推荐刷新失败", `可在推荐页重试：${errorMessage(error)}`);
     }
   }, [queryClient]);
 
@@ -556,7 +594,7 @@ export function BilibiliAppAuthField() {
     const operation = ++operationRef.current;
     flushSync(() => setQrOpen(false));
     setActionError(null);
-    setNotice("App 授权已保存，个性化推荐已按新账号生效。");
+    setNotice("TV 授权已保存，个性化推荐已按新账号生效。");
     bumpRevision();
     // 取消旧账号的在途状态请求，避免刷新时复用扫码前的结果。
     await queryClient.cancelQueries({ queryKey: BILIBILI_APP_PROFILE_QUERY_KEY });
@@ -578,15 +616,16 @@ export function BilibiliAppAuthField() {
     try {
       await invokeCmd<void>("account_bilibili_app_clear");
       removed = true;
+      setLogoutOpen(false);
       await queryClient.cancelQueries({ queryKey: BILIBILI_APP_PROFILE_QUERY_KEY });
       queryClient.setQueryData(BILIBILI_APP_PROFILE_QUERY_KEY, EMPTY_BILIBILI_APP_PROFILE);
       bumpRevision();
       await refreshAppQueries();
-      setNotice("已移除 App 授权，推荐恢复匿名流；Web Cookie 不变。");
-      notify.success("已移除 App 授权");
+      setNotice("已移除 Bilibili TV 授权，推荐恢复匿名流；Web Cookie 不变。");
+      notify.success("已移除 Bilibili TV 授权");
     } catch (error) {
       setActionError(
-        `${removed ? "授权已移除，但推荐刷新失败" : "移除 App 授权失败"}：${errorMessage(error)}`,
+        `${removed ? "授权已移除，但推荐刷新失败" : "移除 Bilibili TV 授权失败"}：${errorMessage(error)}`,
       );
     } finally {
       setClearing(false);
@@ -595,30 +634,28 @@ export function BilibiliAppAuthField() {
 
   return (
     <>
-      <Field data-invalid={profileError || actionError ? true : undefined}>
+      <Field orientation="horizontal" data-invalid={profileError || actionError ? true : undefined}>
         <FieldContent>
           <div className="flex flex-wrap items-center gap-2">
-            <FieldTitle>独立 TV 账号</FieldTitle>
-            <Badge variant={auth.active ? "default" : "secondary"}>{auth.label}</Badge>
+            <FieldTitle className="min-h-7">
+              <SiteLogo siteId="bilibili" className="size-5" />
+              Bilibili TV 账号
+            </FieldTitle>
+            <Badge variant={auth.tone}>{auth.label}</Badge>
+            {profile?.mid && (
+              <span className="min-w-0 truncate text-sm text-muted-foreground">
+                UID {profile.mid}
+                {profile.expires_at
+                  ? ` · 到期 ${new Date(profile.expires_at * 1_000).toLocaleDateString("zh-CN")}`
+                  : ""}
+              </span>
+            )}
           </div>
-          <FieldDescription>
-            UID：{profile?.mid ?? "—"} · 到期日期：
-            {profile?.expires_at
-              ? new Date(profile.expires_at * 1_000).toLocaleDateString("zh-CN")
-              : "—"}
-          </FieldDescription>
-          <FieldDescription>
-            使用哔哩哔哩 App 扫码完成 TV 授权；授权后立即用于 App 推荐与 story
-            短视频个性化，不影响 Web 推荐，不会替换 Web Cookie。
-          </FieldDescription>
-          <FieldDescription>
-            凭据仅保存在本机 SQLite，与 Cookie 一样未额外加密，不随配置导出或同步。 授权有效期
-            180 天，临近到期或失效时会自动用刷新令牌续期，无需重新扫码。
-          </FieldDescription>
-          <FieldDescription>
-            只有刷新令牌也失效时才需重新扫码，且会提示而不会静默降级为匿名流；
-            状态待确认时可刷新重试，不会自动删除已保存的凭据。想回到匿名推荐就点「移除 App 授权」。
-          </FieldDescription>
+          {auth.showUnverifiedHint && (
+            <FieldDescription className="text-muted-foreground">
+              {"已保存凭据，但未能向哔哩哔哩确认状态（网络失败或服务故障）。个性化可能仍在生效；可点「刷新状态」重试。"}
+            </FieldDescription>
+          )}
           {profileError && (
             <FieldError>授权状态读取失败，请刷新重试：{errorMessage(profileError)}</FieldError>
           )}
@@ -628,7 +665,7 @@ export function BilibiliAppAuthField() {
               {notice}
             </FieldDescription>
           )}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2 sm:hidden">
             <Button
               variant="outline"
               size="sm"
@@ -641,11 +678,6 @@ export function BilibiliAppAuthField() {
               <QrCode data-icon="inline-start" aria-hidden />
               {auth.hasToken ? "重新扫码" : "扫码授权"}
             </Button>
-            {qrOpen && (
-              <Button variant="outline" size="sm" onClick={() => setQrOpen(false)}>
-                取消扫码
-              </Button>
-            )}
             <Button
               variant="outline"
               size="sm"
@@ -657,28 +689,113 @@ export function BilibiliAppAuthField() {
               ) : (
                 <RefreshCw data-icon="inline-start" aria-hidden />
               )}
-              刷新状态
+              刷新
             </Button>
+            {auth.hasToken && (
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={clearing}
+                onClick={() => setLogoutOpen(true)}
+              >
+                <LogOut data-icon="inline-start" aria-hidden />
+                移除
+              </Button>
+            )}
+          </div>
+        </FieldContent>
+        <div className="hidden shrink-0 flex-wrap items-center justify-end gap-2 sm:flex">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={clearing || qrOpen}
+            onClick={() => {
+              setNotice(null);
+              setQrOpen(true);
+            }}
+          >
+            <QrCode data-icon="inline-start" aria-hidden />
+            {auth.hasToken ? "重新扫码" : "扫码授权"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={profileLoading || clearing}
+            onClick={() => void refreshProfile()}
+          >
+            {profileLoading ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <RefreshCw data-icon="inline-start" aria-hidden />
+            )}
+            刷新状态
+          </Button>
+          {auth.hasToken && (
             <Button
               variant="destructive"
               size="sm"
               disabled={clearing}
-              onClick={() => void clearAuthorization()}
+              onClick={() => setLogoutOpen(true)}
             >
-              {clearing ? <Spinner data-icon="inline-start" /> : null}
-              移除 App 授权
+              <LogOut data-icon="inline-start" aria-hidden />
+              移除授权
             </Button>
-          </div>
-        </FieldContent>
+          )}
+        </div>
       </Field>
-      {qrOpen && (
-        <QrLogin
-          siteId="bilibili"
-          siteName="哔哩哔哩"
-          loginKind="bilibili_app"
-          onSaved={onAppSaved}
-        />
-      )}
+      {/* 弹窗只挂一个：移动行与桌面行都靠 `setLogoutOpen(true)` 打开它。
+          若把弹窗塞进两个响应式分支，两个实例会同时挂载 —— 弹窗走 portal，
+          `hidden sm:flex` 拦不住它，屏幕阅读器与 Tab 会看到两个同标题对话框。 */}
+      <ConfirmDialog
+        open={logoutOpen}
+        onOpenChange={(open) => {
+          if (clearing) return;
+          setLogoutOpen(open);
+        }}
+        icon={<LogOut aria-hidden />}
+        title="移除 Bilibili TV 授权？"
+        description={
+          <>
+            App 推荐、story 短视频与直播首页推荐将恢复匿名流；Web Cookie 不受影响。之后可重新扫码。
+          </>
+        }
+        // 失败时弹窗刻意不关：错误必须出现在用户正看着的这个弹窗里，
+        // 而不是被它挡住的行的 FieldError 中（`actionError` 两处都渲染）。
+        error={logoutOpen ? actionError : null}
+        busy={clearing}
+        busyText="正在移除…"
+        actionIcon={<LogOut data-icon="inline-start" aria-hidden />}
+        confirmText="确认移除"
+        onConfirm={() => void clearAuthorization()}
+      />
+      {/* 与平台账号行一致：二维码放进对话框，而不是在账号列表里展开一整块。
+          两行并排时，一个弹窗、一个内联展开会让「扫码」这个词看起来是两件事。 */}
+      <Dialog
+        open={qrOpen}
+        onOpenChange={(open) => {
+          if (!open && !clearing) setQrOpen(false);
+        }}
+      >
+        {qrOpen && (
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Bilibili TV 账号扫码授权</DialogTitle>
+              <DialogDescription>请使用哔哩哔哩 App 扫描二维码并在手机上确认。</DialogDescription>
+            </DialogHeader>
+            <QrLogin
+              siteId="bilibili"
+              siteName="哔哩哔哩"
+              loginKind="bilibili_app"
+              onSaved={onAppSaved}
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setQrOpen(false)}>
+                取消
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
     </>
   );
 }
@@ -907,33 +1024,18 @@ export function AccountCard({
               输入
             </Button>
             {hasCookie && (
-              <ConfirmDialog
-                open={logoutOpen}
-                onOpenChange={(open) => {
-                  if (clearing) return;
-                  setLogoutOpen(open);
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={clearing}
+                onClick={() => {
                   setLogoutError(null);
+                  setLogoutOpen(true);
                 }}
-                trigger={
-                  <Button variant="destructive" size="sm">
-                    <LogOut data-icon="inline-start" aria-hidden />
-                    退出
-                  </Button>
-                }
-                icon={<LogOut aria-hidden />}
-                title={`退出${title}登录？`}
-                description={
-                  <>
-                    将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
-                  </>
-                }
-                error={logoutError}
-                busy={clearing}
-                busyText="正在退出…"
-                actionIcon={<LogOut data-icon="inline-start" aria-hidden />}
-                confirmText="确认退出"
-                onConfirm={() => void clearCookie()}
-              />
+              >
+                <LogOut data-icon="inline-start" aria-hidden />
+                退出
+              </Button>
             )}
           </div>
         </FieldContent>
@@ -949,36 +1051,44 @@ export function AccountCard({
             手动输入
           </Button>
           {hasCookie && (
-            <ConfirmDialog
-              open={logoutOpen}
-              onOpenChange={(open) => {
-                if (clearing) return;
-                setLogoutOpen(open);
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={clearing}
+              onClick={() => {
                 setLogoutError(null);
+                setLogoutOpen(true);
               }}
-              trigger={
-                <Button variant="destructive" size="sm">
-                  <LogOut data-icon="inline-start" aria-hidden />
-                  退出登录
-                </Button>
-              }
-              icon={<LogOut aria-hidden />}
-              title={`退出${title}登录？`}
-              description={
-                <>
-                  将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
-                </>
-              }
-              error={logoutError}
-              busy={clearing}
-              busyText="正在退出…"
-              actionIcon={<LogOut data-icon="inline-start" aria-hidden />}
-              confirmText="确认退出"
-              onConfirm={() => void clearCookie()}
-            />
+            >
+              <LogOut data-icon="inline-start" aria-hidden />
+              退出登录
+            </Button>
           )}
         </div>
       </Field>
+      {/* 与 Bilibili TV 行同理：弹窗唯一挂载，两个响应式行都只放触发按钮。
+          塞进 `sm:hidden` 也拦不住 portal，会叠出两个同标题对话框。 */}
+      <ConfirmDialog
+        open={logoutOpen}
+        onOpenChange={(open) => {
+          if (clearing) return;
+          setLogoutOpen(open);
+          setLogoutError(null);
+        }}
+        icon={<LogOut aria-hidden />}
+        title={`退出${title}登录？`}
+        description={
+          <>
+            将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
+          </>
+        }
+        error={logoutError}
+        busy={clearing}
+        busyText="正在退出…"
+        actionIcon={<LogOut data-icon="inline-start" aria-hidden />}
+        confirmText="确认退出"
+        onConfirm={() => void clearCookie()}
+      />
 
       <Dialog
         open={loginMethod === "qr"}
@@ -2356,10 +2466,8 @@ export function SettingsPage() {
         <Section title="发送权限">
           <DanmakuSendField />
         </Section>
-        <Section title="B站 App 个性化推荐">
-          <BilibiliAppAuthField />
-        </Section>
         <Section title="平台账号">
+          <BilibiliAppAuthField />
           <AccountCard
             siteId="bilibili"
             title="哔哩哔哩"

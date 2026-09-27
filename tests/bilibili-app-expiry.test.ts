@@ -110,7 +110,7 @@ describe("启动期失效检查", () => {
   });
 
   test("提示给出可执行的下一步", () => {
-    expect(startupSource).toContain("B站 App 授权已失效");
+    expect(startupSource).toContain("Bilibili TV 授权已失效");
     expect(startupSource).toContain("设置 → 账号");
   });
 
