@@ -218,49 +218,7 @@ pub fn account_bilibili_app_clear(state: State<'_, AppState>) -> AppResult<()> {
         .map_err(crate::db::schema::map_db_err)?;
     bilibili_app::cancel_all()?;
     bilibili_app::clear(&tx)?;
-    let mut settings = crate::settings::get(&tx)?;
-    settings.bilibili_app_personalization = false;
-    crate::settings::set(&tx, &settings)?;
     tx.commit().map_err(crate::db::schema::map_db_err)?;
-    state.story_feed_seen.clear();
-    Ok(())
-}
-
-#[tauri::command(async)]
-pub async fn account_bilibili_app_set_enabled(
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> AppResult<()> {
-    let verified = if enabled {
-        let credential = {
-            let conn = state.conn()?;
-            bilibili_app::load(&conn)?
-        }
-        .ok_or_else(|| {
-            crate::error::AppError::new(
-                "bilibili_app_auth_required",
-                "请先在设置 → 账号中扫码授权 B站 App 个性化推荐",
-            )
-        })?;
-        bilibili_app::validate(&credential).await?;
-        Some(credential)
-    } else {
-        None
-    };
-    let conn = state.conn()?;
-    // 校验期间用户可能移除或切换授权，不把旧校验结果写到新账号上。
-    if let Some(verified) = verified {
-        let current = bilibili_app::load(&conn)?;
-        if !current.is_some_and(|current| current.access_token == verified.access_token) {
-            return Err(crate::error::AppError::new(
-                "bilibili_app_auth_required",
-                "App 授权已变化，请重新确认后开启",
-            ));
-        }
-    }
-    let mut settings = crate::settings::get(&conn)?;
-    settings.bilibili_app_personalization = enabled;
-    crate::settings::set(&conn, &settings)?;
     state.story_feed_seen.clear();
     Ok(())
 }

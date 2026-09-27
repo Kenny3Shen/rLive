@@ -191,7 +191,8 @@ export function bilibiliAppAuthPresentation(
   failed = false,
 ) {
   const hasToken = profile?.has_token ?? false;
-  const canEnable = hasToken && profile?.status === "valid" && !loading && !failed;
+  // 凭据存在且校验通过即生效；没有单独开关，授权就是唯一事实来源。
+  const active = hasToken && profile?.status === "valid" && !loading && !failed;
   const label = loading
     ? "正在读取…"
     : failed || !profile
@@ -199,11 +200,11 @@ export function bilibiliAppAuthPresentation(
       : !hasToken
         ? "未授权"
         : profile.status === "valid"
-          ? "授权有效"
+          ? "已启用个性化"
           : profile.status === "expired"
             ? "已失效"
             : "状态待确认";
-  return { hasToken, canEnable, label };
+  return { hasToken, active, label };
 }
 
 const settingsCategories: {
@@ -532,14 +533,9 @@ function QrLogin({
 
 export function BilibiliAppAuthField() {
   const queryClient = useQueryClient();
-  const enabled = useSettingsStore((s) => s.bilibiliAppPersonalization);
-  const pending = useSettingsStore((s) => s.bilibiliAppPersonalizationPending);
-  const setEnabled = useSettingsStore((s) => s.setBilibiliAppPersonalization);
   const bumpRevision = useSettingsStore((s) => s.bumpBilibiliAppAuthRevision);
-  const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
   const [qrOpen, setQrOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const [switchError, setSwitchError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const operationRef = useRef(0);
@@ -558,7 +554,6 @@ export function BilibiliAppAuthField() {
     retry: false,
   });
   const auth = bilibiliAppAuthPresentation(profile, profileLoading, Boolean(profileError));
-  const switchDisabled = pending || clearing || (!enabled && !auth.canEnable);
 
   const refreshAppQueries = useCallback(async () => {
     try {
@@ -573,7 +568,7 @@ export function BilibiliAppAuthField() {
     const operation = ++operationRef.current;
     flushSync(() => setQrOpen(false));
     setActionError(null);
-    setNotice("App 授权已保存，个性化开关保持原状，请按需开启。");
+    setNotice("App 授权已保存，个性化推荐已按新账号生效。");
     bumpRevision();
     // 取消旧账号的在途状态请求，避免刷新时复用扫码前的结果。
     await queryClient.cancelQueries({ queryKey: BILIBILI_APP_PROFILE_QUERY_KEY });
@@ -581,22 +576,8 @@ export function BilibiliAppAuthField() {
     await Promise.all([refreshProfile(), refreshAppQueries()]);
   }, [bumpRevision, queryClient, refreshProfile, refreshAppQueries]);
 
-  async function changeEnabled(next: boolean) {
-    if (pending || clearing) return;
-    setSwitchError(null);
-    if (next && !auth.canEnable) {
-      setSwitchError("请先扫码取得有效的 App 授权，或刷新状态后重试。");
-      return;
-    }
-    try {
-      await setEnabled(next);
-    } catch (error) {
-      setSwitchError(`个性化设置保存失败：${errorMessage(error)}`);
-    }
-  }
-
   async function clearAuthorization() {
-    if (clearing || pending) return;
+    if (clearing) return;
     operationRef.current += 1;
     // 先卸载二维码使轮询失效，再清凭据；迟到的扫码回调不能覆盖移除结果。
     flushSync(() => {
@@ -604,7 +585,6 @@ export function BilibiliAppAuthField() {
       setClearing(true);
     });
     setActionError(null);
-    setSwitchError(null);
     setNotice(null);
     let removed = false;
     try {
@@ -613,12 +593,12 @@ export function BilibiliAppAuthField() {
       await queryClient.cancelQueries({ queryKey: BILIBILI_APP_PROFILE_QUERY_KEY });
       queryClient.setQueryData(BILIBILI_APP_PROFILE_QUERY_KEY, EMPTY_BILIBILI_APP_PROFILE);
       bumpRevision();
-      await Promise.all([loadFromBackend(), refreshAppQueries()]);
-      setNotice("已移除 App 授权并关闭个性化推荐，Web Cookie 不变。");
+      await refreshAppQueries();
+      setNotice("已移除 App 授权，推荐恢复匿名流；Web Cookie 不变。");
       notify.success("已移除 App 授权");
     } catch (error) {
       setActionError(
-        `${removed ? "授权已移除，但设置同步失败，请重试移除操作" : "移除 App 授权失败"}：${errorMessage(error)}`,
+        `${removed ? "授权已移除，但推荐刷新失败" : "移除 App 授权失败"}：${errorMessage(error)}`,
       );
     } finally {
       setClearing(false);
@@ -631,7 +611,7 @@ export function BilibiliAppAuthField() {
         <FieldContent>
           <div className="flex flex-wrap items-center gap-2">
             <FieldTitle>独立 TV 账号</FieldTitle>
-            <Badge variant={auth.canEnable ? "default" : "secondary"}>{auth.label}</Badge>
+            <Badge variant={auth.active ? "default" : "secondary"}>{auth.label}</Badge>
           </div>
           <FieldDescription>
             UID：{profile?.mid ?? "—"} · 到期日期：
@@ -640,16 +620,16 @@ export function BilibiliAppAuthField() {
               : "—"}
           </FieldDescription>
           <FieldDescription>
-            使用哔哩哔哩 App 扫码完成 TV 授权；仅用于 App 推荐与 story 短视频个性化， 不影响 Web
-            推荐，不会替换 Web Cookie。扫码成功不会自动开启个性化。
+            使用哔哩哔哩 App 扫码完成 TV 授权；授权后立即用于 App 推荐与 story
+            短视频个性化，不影响 Web 推荐，不会替换 Web Cookie。
           </FieldDescription>
           <FieldDescription>
             凭据仅保存在本机 SQLite，与 Cookie 一样未额外加密，不随配置导出或同步。 授权 180
             天到期后需重新扫码；尚未实现 token 刷新协议。
           </FieldDescription>
           <FieldDescription>
-            开启后如 token 失效，需重新扫码，不会静默降级为匿名推荐；
-            状态待确认时可刷新重试，不会自动删除已保存的凭据。
+            token 失效时推荐会提示重新扫码，不会静默降级为匿名流；
+            状态待确认时可刷新重试，不会自动删除已保存的凭据。想回到匿名推荐就点「移除 App 授权」。
           </FieldDescription>
           {profileError && (
             <FieldError>授权状态读取失败，请刷新重试：{errorMessage(profileError)}</FieldError>
@@ -694,7 +674,7 @@ export function BilibiliAppAuthField() {
             <Button
               variant="destructive"
               size="sm"
-              disabled={clearing || pending}
+              disabled={clearing}
               onClick={() => void clearAuthorization()}
             >
               {clearing ? <Spinner data-icon="inline-start" /> : null}
@@ -711,33 +691,6 @@ export function BilibiliAppAuthField() {
           onSaved={onAppSaved}
         />
       )}
-      <Field
-        orientation="horizontal"
-        data-invalid={switchError ? true : undefined}
-        data-disabled={switchDisabled || undefined}
-      >
-        <FieldContent>
-          <FieldTitle id="bilibili-app-personalization-title">启用 App 个性化推荐</FieldTitle>
-          <FieldDescription id="bilibili-app-personalization-description">
-            默认关闭。仅授权有效时可开启；已开启时即使授权失效也可关闭。
-          </FieldDescription>
-          {switchError && (
-            <FieldError id="bilibili-app-personalization-error">{switchError}</FieldError>
-          )}
-        </FieldContent>
-        <Switch
-          aria-labelledby="bilibili-app-personalization-title"
-          aria-describedby={
-            switchError
-              ? "bilibili-app-personalization-description bilibili-app-personalization-error"
-              : "bilibili-app-personalization-description"
-          }
-          aria-invalid={switchError ? true : undefined}
-          checked={enabled}
-          disabled={switchDisabled}
-          onCheckedChange={(next) => void changeEnabled(next)}
-        />
-      </Field>
     </>
   );
 }
@@ -1159,14 +1112,10 @@ function PlaybackSettingsResetField() {
       if (!mobileClient && store.asrEnabled) {
         await store.setAsrEnabled(false);
       }
-      if (store.bilibiliAppPersonalization) {
-        await store.setBilibiliAppPersonalization(false);
-      }
       resetDanmakuAppearanceSettings();
       useSettingsStore.setState({
         qualityLevel: "high",
         playbackSoftSwitchEnabled: true,
-        bilibiliAppPersonalization: false,
         videoRecommendApi: VIDEO_RECOMMEND_API_DEFAULT,
         videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
         danmakuShieldWords: [],
@@ -1188,7 +1137,6 @@ function PlaybackSettingsResetField() {
       await store.persistToBackend({
         quality_level: "high",
         playback_soft_switch_enabled: true,
-        bilibili_app_personalization: false,
         video_recommend_api: VIDEO_RECOMMEND_API_DEFAULT,
         video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
         danmaku_shield_words: [],

@@ -319,8 +319,9 @@ story，从当前稿件开始播放，顶部显示真实位置；卡片根据 di
   不进配置包）、`validate`（本地到期 + `oauth2/info` 双重校验）、`AppAuth`（禁重定向、
   显式代理、错误脱敏、拒绝任意 URL）。
 - 请求层只在 `/x/v2/feed/index` 与 `/story` 注入 `access_key`；作者 story 保持匿名。
-- 设置项「B站 App 个性化推荐」默认关；开启时后端先验证凭据再落设置，凭据失效报错
-  `bilibili_app_auth_required` 而不静默降级；关闭随时可用。
+- 设置项「B站 App 个性化推荐」只有扫码与「移除 App 授权」：**授权即生效，没有单独开关**
+  （本机存在凭据就用，移除即回匿名）。凭据失效报错 `bilibili_app_auth_required`
+  而不静默降级；旧的 `bilibili_app_personalization` 布尔字段已删除，仅作为遗留字段被丢弃。
 - 未解决：`refresh_token` 刷新协议未验证，180 天后需重新扫码；`/x/feed/dislike` 确切参数未知，
   未接“不感兴趣”上报。
 

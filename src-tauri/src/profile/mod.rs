@@ -21,7 +21,6 @@ const PROFILE_VERSION: u32 = 2;
 /// 导出时由 `portable_profile_value` 剔除。
 const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_send_enabled",
-    "bilibili_app_personalization",
     "asr_enabled",
     "asr_provider",
     "asr_vad_enabled",
@@ -87,7 +86,6 @@ impl ProfilePackage {
 /// 导入的配置不得替用户决定其中任何一项。
 fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.danmaku_send_enabled = false;
-    settings.bilibili_app_personalization = false;
     settings.asr_enabled = false;
     settings.asr_provider = "auto".into();
     settings.asr_vad_enabled = true;
@@ -437,6 +435,27 @@ mod tests {
             !serde_json::to_string(&package)
                 .unwrap()
                 .contains("player_skin")
+        );
+    }
+
+    /// 旧配置包可能仍带有已删除的 `bilibili_app_personalization`；
+    /// 该开关已由「本机有 TV 凭据即生效」取代，导入时消费字段、导出时丢弃。
+    #[test]
+    fn profile_accepts_and_drops_removed_app_personalization() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]["bilibili_app_personalization"] = serde_json::json!(true);
+        let text = serde_json::to_string(&value).unwrap();
+
+        let package = decode_package(&text).unwrap();
+
+        assert_eq!(
+            package.settings.legacy_bilibili_app_personalization,
+            Some(true)
+        );
+        assert!(
+            !serde_json::to_string(&package)
+                .unwrap()
+                .contains("bilibili_app_personalization")
         );
     }
 

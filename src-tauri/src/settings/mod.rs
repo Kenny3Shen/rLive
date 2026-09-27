@@ -694,6 +694,44 @@ mod tests {
         assert!(error.message.contains("asr_enabled"));
     }
 
+    /// 旧记录里已删字段（`bilibili_app_personalization`）必须在解码前剔除。
+    ///
+    /// `AppSettings` 是 `deny_unknown_fields`，残留字段会让升级用户的整份设置
+    /// 直接变成 `settings_schema_unsupported`。这不是理论风险：任何在本版本前
+    /// 保存过设置的机器都会带着这个字段。
+    #[test]
+    fn drops_retired_fields_instead_of_rejecting_saved_settings() {
+        let conn = open_in_memory().unwrap();
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert(
+            "bilibili_app_personalization".into(),
+            serde_json::json!(true),
+        );
+        // 非默认值：证明记录被真正读出来，而不是整份回退成默认值。
+        object.insert("danmaku_font_size".into(), serde_json::json!(22));
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
+        )
+        .unwrap();
+
+        let (settings, saved) = get_with_status(&conn).unwrap();
+        assert!(saved);
+        // 其余字段照常解出，说明只是剔除了旧字段而不是整份回退默认值。
+        assert_eq!(settings.danmaku_font_size, 22);
+        // 重新写回时旧字段不会复活。
+        set(&conn, &settings).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM settings_kv WHERE key = ?1",
+                params![SETTINGS_KEY],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!raw.contains("bilibili_app_personalization"));
+    }
+
     /// `hidden_home_entry_ids` 是 6.0.0 新增的同类字段，旧记录里没有它，
     /// 按空列表回填。
     #[test]

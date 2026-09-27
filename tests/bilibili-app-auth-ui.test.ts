@@ -50,70 +50,66 @@ function renderProfile(profile: Profile, error?: Error) {
   }
 }
 
-function switchMarkup(html: string) {
-  const control = html.match(/<(?:button|span)\b[^>]*role="switch"[^>]*>/)?.[0];
-  expect(control).toBeDefined();
-  return control!;
-}
-
+/**
+ * 「授权即启用」是这次改动的核心契约：没有单独开关，凭据就是唯一事实来源。
+ *
+ * 这里的 `active` 决定 UI 是否宣称个性化正在生效。它必须同时要求「有凭据」与
+ * 「校验通过」——只看 `has_token` 会让过期凭据被显示成可用，而只看状态会在
+ * 网络失败时把未知当成有效。
+ */
 describe("B站 App 授权状态", () => {
-  test("未取得状态或未保存凭据时不能开启", () => {
-    expect(bilibiliAppAuthPresentation(undefined).canEnable).toBe(false);
+  test("未取得状态或未保存凭据时都不算生效", () => {
+    expect(bilibiliAppAuthPresentation(undefined).active).toBe(false);
     expect(
       bilibiliAppAuthPresentation({ ...validProfile, has_token: false, status: "none" }),
-    ).toEqual({ hasToken: false, canEnable: false, label: "未授权" });
-    expect(bilibiliAppAuthPresentation({ ...validProfile, has_token: false }).canEnable).toBe(
-      false,
-    );
+    ).toEqual({ hasToken: false, active: false, label: "未授权" });
+    expect(bilibiliAppAuthPresentation({ ...validProfile, has_token: false }).active).toBe(false);
   });
 
-  test("只有明确有效且已保存的凭据允许开启", () => {
+  test("只有明确有效且已保存的凭据算生效", () => {
     expect(bilibiliAppAuthPresentation(validProfile)).toEqual({
       hasToken: true,
-      canEnable: true,
-      label: "授权有效",
+      active: true,
+      label: "已启用个性化",
     });
     for (const status of ["none", "expired", "unknown"] as const) {
       const result = bilibiliAppAuthPresentation({ ...validProfile, status });
       expect(result.hasToken).toBe(true);
-      expect(result.canEnable).toBe(false);
-      expect(result.label).not.toBe("授权有效");
+      expect(result.active).toBe(false);
+      expect(result.label).not.toBe("已启用个性化");
     }
   });
 
-  test("刷新中或网络失败不冒充有效，也不丢失已有凭据状态", () => {
+  test("刷新中或网络失败不冒充生效，也不丢失已有凭据状态", () => {
     expect(bilibiliAppAuthPresentation(validProfile, true)).toEqual({
       hasToken: true,
-      canEnable: false,
+      active: false,
       label: "正在读取…",
     });
     expect(bilibiliAppAuthPresentation(validProfile, false, true)).toEqual({
       hasToken: true,
-      canEnable: false,
+      active: false,
       label: "状态待确认",
     });
   });
 
-  test("默认关且无授权时禁用开启，保留扫码与刷新入口", () => {
+  test("无授权时展示扫码与刷新入口，且不存在个性化开关", () => {
     const html = renderProfile({ status: "none", has_token: false, mid: null, expires_at: null });
-    expect(switchMarkup(html)).toContain('aria-checked="false"');
-    expect(switchMarkup(html)).toContain('aria-disabled="true"');
     expect(html).toContain("未授权");
     expect(html).toContain("扫码授权");
     expect(html).toContain("刷新状态");
+    expect(html).not.toContain("启用 App 个性化推荐");
+    expect(html).not.toContain('role="switch"');
   });
 
-  test("有效账号展示独立 UID、日期，但不会自动开启", () => {
+  test("有效账号展示独立 UID、日期，并声明个性化已启用", () => {
     const html = renderProfile(validProfile);
     expect(html).toContain("独立 TV 账号");
     expect(html).toContain(validProfile.mid);
     expect(html).toContain(new Date(validProfile.expires_at * 1_000).toLocaleDateString("zh-CN"));
-    expect(html).toContain("授权有效");
+    expect(html).toContain("已启用个性化");
     expect(html).toContain("重新扫码");
-    expect(switchMarkup(html)).toContain('aria-checked="false"');
-    // 类名里的 `data-disabled:` 变体不是禁用标记，只看真实属性。
-    expect(switchMarkup(html)).not.toContain('data-disabled=""');
-    expect(switchMarkup(html)).not.toContain('aria-disabled="true"');
+    expect(html).not.toContain('role="switch"');
   });
 
   test("已失效或未知授权仍显示账号信息及重新扫码入口", () => {
@@ -122,17 +118,17 @@ describe("B站 App 授权状态", () => {
       expect(html).toContain(status === "expired" ? "已失效" : "状态待确认");
       expect(html).toContain(validProfile.mid);
       expect(html).toContain("重新扫码");
-      expect(switchMarkup(html)).toContain('aria-disabled="true"');
+      expect(html).not.toContain("已启用个性化");
     }
   });
 
-  test("状态刷新失败展示 FieldError，保留 UID 并阻止使用旧有效状态开启", () => {
+  test("状态刷新失败展示 FieldError，保留 UID 且不宣称生效", () => {
     const html = renderProfile(validProfile, new Error("网络暂不可用"));
     expect(html).toContain("网络暂不可用");
     expect(html).toContain('data-slot="field-error"');
     expect(html).toContain(validProfile.mid);
     expect(html).toContain("状态待确认");
-    expect(switchMarkup(html)).toContain('aria-disabled="true"');
+    expect(html).not.toContain("已启用个性化");
   });
 
   test("明确告知影响范围、存储和到期限制", () => {
@@ -141,13 +137,14 @@ describe("B站 App 授权状态", () => {
       "App 推荐与 story",
       "不影响 Web 推荐",
       "不会替换 Web Cookie",
-      "扫码成功不会自动开启",
+      "授权后立即用于",
       "SQLite",
       "未额外加密",
       "不随配置导出或同步",
       "180 天",
       "尚未实现 token 刷新协议",
-      "不会静默降级为匿名推荐",
+      "不会静默降级为匿名流",
+      "移除 App 授权",
     ]) {
       expect(html).toContain(text);
     }
@@ -187,16 +184,15 @@ describe("B站 App 授权接线边界", () => {
     expect(appFieldSource.match(/bumpRevision\(\)/g)).toHaveLength(2);
   });
 
-  test("已开启时不因凭据状态阻止关闭，持久化异常显示 FieldError", () => {
-    expect(appFieldSource).toContain("pending || clearing || (!enabled && !auth.canEnable)");
-    expect(appFieldSource).toContain("if (next && !auth.canEnable)");
-    expect(appFieldSource).toContain("await setEnabled(next)");
-    expect(appFieldSource).toContain("个性化设置保存失败");
-    expect(appFieldSource).toContain('<FieldError id="bilibili-app-personalization-error">');
-    expect(appFieldSource).toContain("aria-invalid={switchError ? true : undefined}");
+  test("扫码成功即生效，不再需要写个性化开关", () => {
+    // 旧的严格开关提交路径整体删除：授权变更后只刷新凭据与推荐缓存。
+    expect(appFieldSource).not.toContain("setBilibiliAppPersonalization");
+    expect(appFieldSource).not.toContain("account_bilibili_app_set_enabled");
+    expect(appFieldSource).not.toContain("switchError");
+    expect(appFieldSource).toContain("个性化推荐已按新账号生效");
   });
 
-  test("清除前卸载扫码，成功后回读设置", () => {
+  test("清除前卸载扫码，成功后刷新凭据与推荐缓存", () => {
     const clearSource = appFieldSource.slice(
       appFieldSource.indexOf("async function clearAuthorization"),
     );
@@ -206,14 +202,15 @@ describe("B站 App 授权接线边界", () => {
     expect(clearSource.indexOf("setQrOpen(false)")).toBeLessThan(
       clearSource.indexOf('"account_bilibili_app_clear"'),
     );
-    expect(clearSource).toContain("loadFromBackend()");
     expect(clearSource).toContain('notify.success("已移除 App 授权")');
+    expect(clearSource).toContain("refreshAppQueries()");
+    // 清凭据不再联动设置；设置项已删除，回读设置会变成无意义的额外 IPC。
+    expect(clearSource).not.toContain("loadFromBackend()");
   });
 
-  test("重置包含关闭个性化，搜索能定位到授权入口", () => {
-    expect(source).toContain("await store.setBilibiliAppPersonalization(false)");
-    expect(source).toContain("bilibiliAppPersonalization: false");
-    expect(source).toContain("bilibili_app_personalization: false");
+  test("恢复默认设置不再处理已删除的个性化开关", () => {
+    expect(source).not.toContain("setBilibiliAppPersonalization");
+    expect(source).not.toContain("bilibili_app_personalization");
     for (const word of ["TV", "App", "story", "个性化", "授权"]) {
       expect(settingsCategorySearchText.account).toContain(word);
     }

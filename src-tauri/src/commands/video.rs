@@ -124,32 +124,18 @@ fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
     Ok(BilibiliSite::new(client, cookie.unwrap_or_default()))
 }
 
-/// 只有两条推荐流检查本机 APP 授权；其他播放／搜索／Web 请求不受影响。
+/// 本机存有 TV 凭据就启用个性化：授权是唯一事实来源，不再有单独开关。
+/// 扫码即生效、移除授权即回匿名，两套状态合并成一套。
 async fn resolve_app_feed(state: &AppState) -> AppResult<BilibiliSite> {
-    let (enabled, credential, proxy) = {
+    let (credential, proxy) = {
         let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
-        let credential = if settings.bilibili_app_personalization {
-            account::bilibili_app::load(&conn)?
-        } else {
-            None
-        };
-        (
-            settings.bilibili_app_personalization,
-            credential,
-            settings.proxy,
-        )
+        (account::bilibili_app::load(&conn)?, settings.proxy)
     };
     let site = resolve_bilibili(state)?;
-    if !enabled {
+    let Some(credential) = credential else {
         return Ok(site);
-    }
-    let credential = credential.ok_or_else(|| {
-        AppError::new(
-            "bilibili_app_auth_required",
-            "App 个性化推荐尚未授权，请在设置 → 账号中重新扫码，或关闭个性化开关",
-        )
-    })?;
+    };
     let auth = account::bilibili_app::AppAuth::new(credential, proxy.as_deref()).await?;
     Ok(site.with_app_auth(auth))
 }

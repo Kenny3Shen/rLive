@@ -109,7 +109,7 @@ export function VideoPage() {
   const tab = scope?.tab ?? videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
   // 推荐接口是后端设置；这里只把它纳入 query key，切换后旧页签的缓存不再被当新鲜数据复用。
   const videoRecommendApi = useSettingsStore((state) => state.videoRecommendApi);
-  const appPersonalization = useSettingsStore((state) => state.bilibiliAppPersonalization);
+  // 本机是否有 TV 授权由后端决定；这里只用授权变更计数隔离新旧账号的推荐缓存。
   const appAuthRevision = useSettingsStore((state) => state.bilibiliAppAuthRevision);
 
   // UGC 分区表由后端提供以免前端硬编码 rid。只有热门页签的条带用得上它。
@@ -132,7 +132,6 @@ export function VideoPage() {
     tab,
     zoneKey ?? "",
     tab === "recommend" ? videoRecommendApi : "web",
-    tab === "recommend" && videoRecommendApi === "app" ? appPersonalization : false,
     tab === "recommend" && videoRecommendApi === "app" ? appAuthRevision : 0,
   ] as const;
   const listQuery = useInfiniteQuery({

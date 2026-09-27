@@ -57,7 +57,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 
 - VOD 推荐默认使用 APP 主 feed；用户可在「设置 → 播放 → 视频点播」切到 Web API（`x/web-interface/wbi/index/top/feed/rcmd`，需 WBI、`fresh_idx`/`brush` 跟页码）。两条链路**互斥且不静默回退**：切到哪条就用哪条，失败直接报错。
 - **App 推荐不基于 Cookie（2026-09 实机消融）**：同设备 `buvid` 下只切换 Cookie，5 轮各 45~47 条的唯一集合交集为 0、`track_id` 前缀恒为 `all`、竖屏占比与卡片结构一致；去掉 `buvid` 头后（无论有无 Cookie）立即降级为 `gateway_fb_*` 兜底流、竖屏恒为 0。因此**设备轴的旋钮是 `buvid`，不是账号 Cookie**。Web API 推荐则相反：有 Cookie 才是个性化流。两条链路的这个差异是设置项存在的理由。
-- **App 推荐的账号轴是 `access_key`（2026-10 实机扫码验证）**：`app.bilibili.com` 是 APP 域，账号个性化只认 APP 登录 token（`access_key` 参数 + appkey/`sign`），与 web 的 `SESSDATA` 互不相通。用户可在「设置 → 账号 → B站 App 个性化推荐」用 TV 扫码取得独立凭据并开启；开启后 App 推荐与 story 两条流都带 `access_key`，其余接口不受影响。未授权/失效时直接报错，**不静默回退匿名**。凭据存本机 SQLite（`bilibili_app_auth`，与 Cookie 一样未额外加密）、不随配置导出，180 天到期需重新扫码（未实现刷新协议）。
+- **App 推荐的账号轴是 `access_key`（2026-10 实机扫码验证）**：`app.bilibili.com` 是 APP 域，账号个性化只认 APP 登录 token（`access_key` 参数 + appkey/`sign`），与 web 的 `SESSDATA` 互不相通。用户可在「设置 → 账号 → B站 App 个性化推荐」用 TV 扫码取得独立凭据；**授权即生效，没有单独开关**（本机存在凭据就用，移除授权就回匿名，两套状态合并成一套）。生效后 App 推荐与 story 两条流都带 `access_key`，其余接口不受影响。凭据失效时直接报错，**不静默回退匿名**。凭据存本机 SQLite（`bilibili_app_auth`，与 Cookie 一样未额外加密）、不随配置导出，180 天到期需重新扫码（未实现刷新协议）。
 - APP 主 feed：`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
 - APP 返回的播放/弹幕统计常是「万/亿」格式的显示近似数，映射结果不是精确计数；作者 UID、标题、画幅与取流键在 Rust 统一归一化。
 - VOD 发现页四个页签与搜索结果使用 `VideoMasonry` 瀑布流，沿用响应式 2–6 列。以细网格行跨度承载卡片自然高度，追加分页不重新分列，保留 DOM / 键盘顺序、滚动锚点与卡片身份。`ResizeObserver` 在列宽、字体和内容变化时更新跨度；不支持时退回普通网格。分页哨兵仍在完整列表之后。
