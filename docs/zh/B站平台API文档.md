@@ -11,7 +11,7 @@
 | 房间详情 | 已支持 | 解析真实房间号、主播、封面、热度、开播状态与公告。 |
 | 播放与清晰度 | 已支持 | 获取可用协议、格式、编码与清晰度，并经本机 `stream_proxy` 交给网页播放器。 |
 | 实时弹幕与 SC | 已支持 | 连接房间 WebSocket，展示普通消息、图片表情与醒目留言。 |
-| 账号 | 已支持 | 可扫码登录或手动保存 Cookie；Cookie 仅保存在本机。 |
+| 账号 | 已支持 | 可扫码登录或手动保存 Cookie；Cookie 仅保存在本机。「设置 → 账号 → 平台账号」的「Bilibili TV 账号」另用 TV 扫码取得 APP 凭据（与 Cookie 分离，用于 App 推荐、短视频与直播首页推荐）。 |
 | 普通弹幕发送与会话级自动发送 | 已支持 | 均需本机发送开关和有效登录态；自动发送只属于当前房间会话。 |
 
 ## rLive 接入接口
@@ -29,10 +29,14 @@
 
 分类、房间列表、搜索、房间详情、弹幕连接信息和播放信息来自网页使用的直播接口。部分读取请求需要网页环境字段或 WBI 签名，属于适配器内部实现细节，不是稳定的第三方应用契约。
 
+- 首页推荐有两条通道：**未授权／匿名**走 `second/getListByArea`（WBI 签名 + 设备 cookie），**本机有 TV 授权**时优先走 `index/getList`（第 1 页，含「我的关注」模块）与 `webMain/getMoreRecList`（第 2 页起，真游标）。后者**只带 query `access_key`、不带 Web Cookie**：实测这两条接口的身份完全由该参数决定，而 Cookie 形态的 `access_key` 完全无效。凭据失效时上游返回 `code=0` 的匿名流（`trackid` 为空或 `rec-fallback-live-*`），因此本机以 `trackid` 前缀 `live_feed_0.router-live` 判定个性化是否真的生效，不成立就回落到匿名路径。
+- **TV 凭据不得发给 web-room 系房间接口**：`web-room/v1/index/getInfoByRoom`、`web-room/v2/index/getRoomPlayInfo` 对有效 TV 凭据一律 `-663 鉴权失败`（实测裸 `access_key` 与 appkey+sign 两种形态相同），`nav`／`relation/followings` 等 Web API 则返回 `-101`。触发条件是「有效 TV 凭据 + web-room」，**不是「缺 Web Cookie」**：同一批端点匿名或仅 WBI 签名访问均正常。因此端点白名单在 `account/bilibili_app.rs`（`live_recommend_endpoint`），凭据注入只发生在 `site_get_recommend` 这一条命令路径上（`commands/site.rs` 的 `resolve_recommend_site`）；房间详情、播放、弹幕与发送继续只认 Web Cookie。
+- **房间详情与弹幕另有一条接受 TV 凭据的 app-room 变体，但不采用**：`app-room/v1/index/getInfoByRoom` 与 `app-room/v1/index/getDanmuInfo` 带 appkey+sign 签名可用（实测 `code=0`；弹幕路径还不需 `nav`/WBI 密钥）。不切的原因：房间详情版比 web-room 少 `is_studio`／`live_id`／`live_id_str`、多出一批 APP 专用字段，且必须带 `platform`+`device`+`build` 三件套否则 `-400`，要额外维护一套字段兼容；弹幕现路径（WBI `getDanmuInfo` → legacy `getConf`）工作正常，切过去只省一次 `nav`，不值得多一层条件分支。播放地址无 app-room 可用变体（`getRoomPlayInfo` 一律 `-400`）。
+- 若 Web Cookie 与 TV 凭据属于不同账号，首页推荐按 **TV 凭据的账号**呈现，其余链路仍按 Web Cookie。
 - 搜索用 `x/web-interface/search/type?search_type=live`，响应里 `data.result.live_room` 是在播房间、`data.result.live_user` 是命中关键词的主播（多数未开播）。两个数组都收，按 `roomid` 去重，开播状态取条目自身的 `live_status == 1` 而不是按它来自哪个数组。`live_user` 不带直播标题和封面，封面退回主播头像 `uface`，标题留空。`live_user` 不受 `page` 影响（实测同一关键词第 1~3 页返回完全相同的一批主播），因此只在第一页读它，翻页也只看 `live_room` 的条数，否则滚动永不停止。
 - 房间详情会解析真实 `room_id`，因此短号、展示号和发送所需的真实房间号不会混用。
 - 播放地址与短时签名不进入前端持久化缓存；刷新房间或切换清晰度时重新获取。
-- 可用清晰度与线路以上游下发为准，会随直播状态、账号、地区和平台策略变化。
+- 可用清晰度与线路以上游下发为准，会随直播状态、账号、地区和平台策略变化。**播放地址会受登录态影响**：实测同一房间匿名请求 `current_qn=250`（最低档），带 Web Cookie 才默认 `current_qn=10000`（原画），因此这条链路必须保留 Web Cookie。
 
 ## 账号与弹幕发送
 

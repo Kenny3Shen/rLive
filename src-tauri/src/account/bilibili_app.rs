@@ -38,6 +38,11 @@ const OAUTH_REFRESH_URL: &str =
     "https://passport.bilibili.com/x/passport-login/oauth2/refresh_token";
 const FEED_URL: &str = "https://app.bilibili.com/x/v2/feed/index";
 const STORY_URL: &str = "https://app.bilibili.com/x/v2/feed/index/story";
+/// 直播首页推荐所在的 Web 域前缀；路径由 [`live_recommend_endpoint`] 白名单收窄。
+const LIVE_RECOMMEND_BASE: &str = "https://api.live.bilibili.com/xlive/web-interface/v1";
+/// 直播首页推荐的两个固定端点（相对 [`LIVE_RECOMMEND_BASE`]）。
+const LIVE_HOME_PATH: &str = "/index/getList";
+const LIVE_MORE_PATH: &str = "/webMain/getMoreRecList";
 const REFERER_VALUE: &str = "https://www.bilibili.com/";
 const USER_AGENT_VALUE: &str = "Mozilla/5.0 BiliDroid/8.0.0 (Linux; Android 13)";
 const MAX_TOKEN_LEN: usize = 512;
@@ -420,6 +425,56 @@ impl AppAuth {
         self.renewed.take()
     }
 
+    /// 直播首页推荐：只请求 [`LIVE_HOME_PATH`] 与 [`LIVE_MORE_PATH`] 两个固定地址。
+    ///
+    /// 为什么单独一条而不是复用 [`Self::feed`]：
+    ///
+    /// - **凭据形态不同**。这两条直播接口只认 **query 里的 `access_key`**（实测：
+    ///   Cookie 形态完全无效），而 APP feed 走 appkey/sign 签名；虽然同一份签名
+    ///   参数也被直播接口接受（实测 `code=0`），但把「可签名域」放大到直播域
+    ///   会让将来误用凭据成为可能。
+    ///
+    /// 误用的真实代价见 [`live_recommend_endpoint`]：**web-room 系**房间接口
+    /// 对有效 TV 凭据一律 `-663`（实测 `web-room/v1/index/getInfoByRoom`、
+    /// `web-room/v2/index/getRoomPlayInfo`，裸 `access_key` 与 appkey+sign 相同）。
+    /// 这个 `-663` 由「有效 TV 凭据 + web-room」触发，不是「缺 Web Cookie」——
+    /// 同一批端点匿名或仅 WBI 签名访问都正常。
+    /// - **不携带 Web Cookie**。身份由 `access_key` 决定，而 Web Cookie 只属于
+    ///   另一条账号轴；这条路径刻意只带凭据。
+    ///
+    /// 失败绝不回退匿名请求：调用方据此决定是否回落到 Cookie／匿名路径。
+    pub async fn live_recommend(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> AppResult<String> {
+        let endpoint = live_recommend_endpoint(path)?;
+        if self.expires_at.is_some_and(|at| expiry_reached(at, now())) {
+            return Err(auth_required());
+        }
+        let query = sign_params(query, Some(&self.access_token), now());
+        let response = self
+            .client
+            .get(endpoint)
+            .header(USER_AGENT, USER_AGENT_VALUE)
+            .header(REFERER, REFERER_VALUE)
+            .header(ACCEPT, "application/json")
+            .query(&query)
+            .send()
+            .await
+            .map_err(|_| auth_unavailable())?;
+        if !response.status().is_success() {
+            return Err(auth_unavailable());
+        }
+        let body = response.text().await.map_err(|_| auth_unavailable())?;
+        let value: Value = serde_json::from_str(&body).map_err(|_| auth_unavailable())?;
+        // 这两条接口对无效令牌同样静默返回 `code=0`（见 `live_recommend_is_personalized`
+        // 在站点层的用法），因此这里只拦真正的错误码：风控 `-352`、`-663` 等一律
+        // 归为可重试，不能据此断言凭据失效。
+        require_success_code(&value, false)?;
+        Ok(body)
+    }
+
     /// 仅请求 APP 推荐与短视频推荐两个固定地址；失败绝不回退匿名请求。
     pub async fn feed(
         &self,
@@ -644,6 +699,20 @@ fn feed_endpoint(path: &str) -> AppResult<&'static str> {
         "/story" => Ok(STORY_URL),
         _ => Err(
             AppError::new("bilibili_app_feed_path", "不支持的 APP 推荐路径").with_site("bilibili"),
+        ),
+    }
+}
+
+/// 直播首页推荐端点白名单。
+///
+/// 与 [`feed_endpoint`] 分开而不是合成一张表：两张表的**凭据形态不同**
+/// （这里只认 query `access_key`），合成之后「某个新路径该用哪种形态」
+/// 会变成靠调用点记忆的隐式约定。
+fn live_recommend_endpoint(path: &str) -> AppResult<String> {
+    match path {
+        LIVE_HOME_PATH | LIVE_MORE_PATH => Ok(format!("{LIVE_RECOMMEND_BASE}{path}")),
+        _ => Err(
+            AppError::new("bilibili_app_live_path", "不支持的直播推荐路径").with_site("bilibili"),
         ),
     }
 }
@@ -1159,6 +1228,86 @@ mod tests {
         assert!(check_feed_body(r#"{"code":0,"data":{}}"#).is_ok());
         assert!(check_feed_body(r#"{"code":-412}"#).is_err());
         assert!(check_feed_body(r#"{"data":{}}"#).is_err());
+    }
+
+    /// 直播首页推荐只能走两个白名单路径。
+    ///
+    /// 这条白名单是「凭据不得外流」的唯一执行点：把有效 TV 凭据发给 web-room
+    /// 系房间接口会得到 `-663`，一旦能拼出任意路径，误用就只会被上游拦住而不是
+    /// 被本机拦住。
+    #[test]
+    fn live_recommend_endpoints_are_a_closed_allowlist() {
+        assert_eq!(
+            live_recommend_endpoint(LIVE_HOME_PATH).unwrap(),
+            format!("{LIVE_RECOMMEND_BASE}{LIVE_HOME_PATH}")
+        );
+        assert_eq!(
+            live_recommend_endpoint(LIVE_MORE_PATH).unwrap(),
+            format!("{LIVE_RECOMMEND_BASE}{LIVE_MORE_PATH}")
+        );
+        for path in [
+            "",
+            "/",
+            "/index/getList/",
+            "/../index/getList",
+            "/web-room/v2/index/getRoomPlayInfo",
+            "/index/getRoomPlayInfo",
+            "https://evil.test/",
+            "//evil.test/",
+            "/index/getList?x=1",
+        ] {
+            assert_eq!(
+                error_of(live_recommend_endpoint(path)).code,
+                "bilibili_app_live_path",
+                "路径必须被拒：{path}"
+            );
+        }
+    }
+
+    /// 直播推荐与 APP feed 是两条独立通道，各自的过期守卫都必须生效。
+    #[tokio::test]
+    async fn expired_credential_never_reaches_the_live_recommend_endpoint() {
+        let auth = AppAuth {
+            client: Client::builder().no_proxy().build().unwrap(),
+            access_token: TEST_TOKEN.into(),
+            expires_at: Some(1),
+            renewed: None,
+        };
+        assert_eq!(
+            error_of(auth.live_recommend(LIVE_HOME_PATH, &[]).await).code,
+            "bilibili_app_auth_required"
+        );
+        // 无寿命（服务端未给）时不设本地期限，但仍要过路径白名单。
+        let unknown_expiry = AppAuth {
+            client: Client::builder().no_proxy().build().unwrap(),
+            access_token: TEST_TOKEN.into(),
+            expires_at: None,
+            renewed: None,
+        };
+        assert_eq!(
+            error_of(unknown_expiry.live_recommend("/index/getRoomPlayInfo", &[]).await).code,
+            "bilibili_app_live_path"
+        );
+    }
+
+    /// 直播接口对无效凭据静默降级（`code=0`），因此业务码不能当失效判据；
+    /// 但真正的错误码（风控 `-352`、`-663`）必须原样上报，不能被当成「成功」。
+    #[test]
+    fn live_recommend_body_codes_are_classified_without_claiming_invalidity() {
+        for (body, expected) in [
+            (r#"{"code":0,"data":{"recommend_room_list":[]}}"#, None),
+            (r#"{"code":-352,"message":"-352"}"#, Some("bilibili_app_auth_unavailable")),
+            (r#"{"code":-663,"message":"-663"}"#, Some("bilibili_app_auth_unavailable")),
+            // 服务端明确拒绝登录态时仍归为需重新授权，与 feed 同一套分类。
+            (r#"{"code":-101}"#, Some("bilibili_app_auth_required")),
+            (r#"{"code":61000}"#, Some("bilibili_app_auth_required")),
+        ] {
+            let value: Value = serde_json::from_str(body).unwrap();
+            match require_success_code(&value, false) {
+                Ok(()) => assert_eq!(expected, None, "不应报错：{body}"),
+                Err(error) => assert_eq!(Some(error.code.as_str()), expected, "分类不符：{body}"),
+            }
+        }
     }
 
     /// 刷新协议的错误分类（实测依据见 `refresh` 的文档注释）。

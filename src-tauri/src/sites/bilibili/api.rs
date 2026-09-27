@@ -204,6 +204,92 @@ pub fn parse_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
     Ok(RoomListPage { has_more, items })
 }
 
+/// 解析直播首页推荐 `webMain/getMoreRecList` body。
+///
+/// 与 [`parse_account_recommend_rooms`] 的区别：这条接口只有一条扁平列表，
+/// 但**有真游标**（`page` 逐页推进，实测相邻页互斥），因此 `has_more` 反映
+/// 上游是否还能继续给货，而不是「恒为假」。
+///
+/// 实测该接口可能返回空列表（已见 `n=1` 与 `n=0`），此时 `has_more` 为假，
+/// 前端无限滚动会正常停下。
+///
+/// 设备端与已关注主播的置顶条目混在同一列表里，不做额外分组：rLive 首页是
+/// 单一房间网格，保持上游顺序即可。
+pub fn parse_live_more_recommend_rooms(raw: &str) -> AppResult<RoomListPage> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| json_err(format!("live more recommend: {e}")))?;
+    let list = root
+        .pointer("/data/recommend_room_list")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut seen_room_ids = std::collections::HashSet::new();
+    let mut items = Vec::new();
+    for room in &list {
+        let item = room_item_from_list_obj(room);
+        if !item.room_id.is_empty() && seen_room_ids.insert(item.room_id.clone()) {
+            items.push(item);
+        }
+    }
+
+    Ok(RoomListPage {
+        has_more: !list.is_empty(),
+        items,
+    })
+}
+
+/// 判断直播首页推荐负载是否真的走了账号推荐引擎。
+///
+/// 这两条接口对**无效令牌也返回 `code=0`**（静默降级为匿名／回退流，与
+/// `app.bilibili.com` 的 feed 同一行为，已实测），因此业务码无法用于判定
+/// 凭据好坏。唯一可靠的观测是每条的 `trackid`：推荐引擎命中时以
+/// `live_feed_0.router-live-…` 开头，降级流则是 `rec-fallback-live-…` 或空串。
+///
+/// 返回 `false` 时调用方应当回退到不需要凭据的路径，而不是把匿名流当成
+/// 个性化结果展示给用户。
+pub fn live_recommend_is_personalized(raw: &str) -> bool {
+    const PERSONALIZED_PREFIX: &str = "live_feed_0.router-live";
+    let Ok(root) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    let Some(data) = root.get("data") else {
+        return false;
+    };
+    let mut lists: Vec<&Vec<Value>> = Vec::new();
+    if let Some(list) = data.get("recommend_room_list").and_then(Value::as_array) {
+        lists.push(list);
+    }
+    if let Some(modules) = data.get("room_list").and_then(Value::as_array) {
+        for module in modules {
+            if let Some(list) = module.get("list").and_then(Value::as_array) {
+                lists.push(list);
+            }
+        }
+    }
+    lists.into_iter().flatten().any(|room| {
+        room.get("trackid")
+            .and_then(Value::as_str)
+            .is_some_and(|track| track.starts_with(PERSONALIZED_PREFIX))
+    })
+}
+
+/// 解析凭据路径的直播首页推荐（`index/getList`）。
+///
+/// 与 [`parse_account_recommend_rooms`] 只差一个字段：**`has_more` 翻成真**。
+/// 该接口本身无游标，但凭据路径的续页走另一条有真游标的接口
+/// （`webMain/getMoreRecList`），因此首页不宣告「还有下一页」时，前端无限滚动
+/// 永远走不到第 2 页 —— 续页实现会变成死代码（Windows debug 实机踩过：
+/// 表现是「授权了但只能看一屏」）。
+///
+/// 这个转换刻意放在站点层而不是解析器里：匿名与 Cookie 路径仍是单页，
+/// 解析器保持上游语义不变。
+pub fn parse_live_credential_home_rooms(raw: &str) -> AppResult<RoomListPage> {
+    let mut page = parse_account_recommend_rooms(raw)?;
+    page.has_more = !page.items.is_empty();
+    Ok(page)
+}
+
 /// 解析 Bilibili 直播已登录首页的 `index/getList` 负载。
 ///
 /// 首页由顶部一小条推荐位加个性化模块组成。rLive 首页是单一房间网格，
@@ -705,8 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_account_recommend_fixture_flattens_and_deduplicates_home_modules() {
-        let raw = include_str!("../../../tests/fixtures/bilibili_account_recommend.json");
+    fn parse_account_recommend_fixture_flattens_and_deduplicates_home_modules() {        let raw = include_str!("../../../tests/fixtures/bilibili_account_recommend.json");
         let page = parse_account_recommend_rooms(raw).unwrap();
 
         assert!(!page.has_more);
@@ -715,6 +800,79 @@ mod tests {
         assert_eq!(page.items[1].room_id, "102");
         assert_eq!(page.items[2].room_id, "103");
         assert_eq!(page.items[2].online, 321);
+        // 匿名／Cookie 路径是单页：解析器保持上游语义，不宣告还有下一页。
+        assert!(!page.has_more);
+    }
+
+    /// 凭据路径的首页必须宣告还有下一页，否则前端永远翻不到续页。
+    ///
+    /// 这是 Windows debug 实机踩到的真实问题：`index/getList` 无游标、
+    /// `has_more` 恒为假，`getMoreRecList` 续页因此永远不被请求，
+    /// 表现是「授权了但只能看一屏」。
+    #[test]
+    fn credential_home_rooms_report_more_while_anonymous_stays_single_page() {
+        let raw = include_str!("../../../tests/fixtures/bilibili_account_recommend.json");
+        let credential = parse_live_credential_home_rooms(raw).unwrap();
+        assert!(credential.has_more);
+        assert_eq!(credential.items.len(), 3);
+
+        // 空页不宣告继续，避免上游给出空响应时无限翻页。
+        let empty = parse_live_credential_home_rooms(r#"{"code":0,"data":{}}"#).unwrap();
+        assert!(!empty.has_more);
+        assert!(empty.items.is_empty());
+
+        assert!(!parse_account_recommend_rooms(raw).unwrap().has_more);
+    }
+
+    #[test]
+    fn parse_live_more_recommend_fixture_keeps_order_and_reports_more() {
+        let raw = include_str!("../../../tests/fixtures/bilibili_live_more_recommend.json");
+        let page = parse_live_more_recommend_rooms(raw).unwrap();
+
+        // 本页非空即宣告还能继续翻：上游从不主动宣告耗尽，空页才是终点。
+        assert!(page.has_more);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].room_id, "201");
+        assert_eq!(page.items[0].online, 4321);
+        assert_eq!(page.items[1].room_id, "202");
+        assert_eq!(page.items[1].online, 876);
+        assert!(page.items[0].cover.contains("@400w.jpg"));
+    }
+
+    #[test]
+    fn empty_live_more_recommend_page_stops_paging() {
+        let page = parse_live_more_recommend_rooms(r#"{"code":0,"data":{"recommend_room_list":[]}}"#)
+            .unwrap();
+        assert!(!page.has_more);
+        assert!(page.items.is_empty());
+        // 缺 data 对象也不报错：上游偶发只回 code，不应让首页整页失败。
+        let page = parse_live_more_recommend_rooms(r#"{"code":0}"#).unwrap();
+        assert!(!page.has_more);
+    }
+
+    /// 无效令牌会静默降级为匿名／回退流（`code=0`），`trackid` 是唯一可观测信号。
+    /// 误判的代价很具体：用户看到「已授权」却拿着匿名流，且无从判断。
+    #[test]
+    fn live_recommend_personalization_is_detected_from_trackid() {
+        let router = r#"{"code":0,"data":{"recommend_room_list":[{"roomid":1,"trackid":"live_feed_0.router-live-2589629-jx44n.1.2"}]}}"#;
+        assert!(live_recommend_is_personalized(router));
+        // 首页负载里引擎标记也可能只在模块列表里。
+        let in_module = r#"{"code":0,"data":{"recommend_room_list":[],"room_list":[{"list":[{"roomid":1,"trackid":"live_feed_0.router-live-1.2.3"}]}]}}"#;
+        assert!(live_recommend_is_personalized(in_module));
+
+        for fallback in [
+            r#"{"code":0,"data":{"recommend_room_list":[{"roomid":1,"trackid":"rec-fallback-live-1828944-lzd8v.1"}]}}"#,
+            r#"{"code":0,"data":{"recommend_room_list":[{"roomid":1}]}}"#,
+            r#"{"code":0,"data":{"recommend_room_list":[{"roomid":1,"trackid":""}]}}"#,
+            r#"{"code":0,"data":{"recommend_room_list":[]}}"#,
+            r#"{"code":-352,"message":"-352"}"#,
+            "not json",
+        ] {
+            assert!(
+                !live_recommend_is_personalized(fallback),
+                "不应把降级流当成个性化：{fallback}"
+            );
+        }
     }
 
     #[test]

@@ -92,15 +92,19 @@ describe("推荐缓存与账号的耦合", () => {
 });
 
 /**
- * APP 授权变更影响的范围：两条 APP 推荐流（主推荐与 story）。
+ * APP 授权变更影响的范围：三条流 —— VOD 主推荐、story、直播首页推荐。
  *
  * 开启、关闭或换授权后旧身份的在途结果必须丢弃，否则用户会看到「切了没变」；
- * 反过来 Web 推荐、热门、作者 story 不应被顺带重置。
+ * 反过来 Web 推荐、热门、作者 story 与其他站点不应被顺带重置。
+ *
+ * 直播首页推荐容易漏：它的凭据是同一份 TV 凭据而不是 Web Cookie，
+ * 因此 `isCookieDependentSiteQuery` 覆盖不到它。
  */
 describe("APP 授权缓存失效范围", () => {
-  test("App 推荐页与 story 都属于 APP 授权范围", () => {
+  test("App 推荐页、story 与直播首页都属于 APP 授权范围", () => {
     expect(isBilibiliAppQuery(["video_list", "recommend", "", "app", true, 1])).toBe(true);
     expect(isBilibiliAppQuery(["shorts_story"])).toBe(true);
+    expect(isBilibiliAppQuery(["recommend", "bilibili", 3])).toBe(true);
   });
 
   test("Web 推荐与其他页签不受 APP 授权影响", () => {
@@ -108,6 +112,9 @@ describe("APP 授权缓存失效范围", () => {
     expect(isBilibiliAppQuery(["video_list", "popular", "", "web", false, 0])).toBe(false);
     expect(isBilibiliAppQuery(["shorts_uploader_story", "1", "2", 3])).toBe(false);
     expect(isBilibiliAppQuery(["video_zone_list"])).toBe(false);
+    // 其他平台的首页推荐不带 TV 凭据，换授权不该让它们的缓存失效。
+    expect(isBilibiliAppQuery(["recommend", "douyin", 0])).toBe(false);
+    expect(isBilibiliAppQuery(["recommend", "huya", 0])).toBe(false);
   });
 });
 

@@ -219,7 +219,11 @@ export function Sidebar() {
   const recordings = useRecordings();
   const activeRecordings = activeRecordingCount(recordings.data);
   const preloadHome = useCallback(() => {
-    prefetchHomeRecommendations(queryClient, siteId);
+    prefetchHomeRecommendations(
+      queryClient,
+      siteId,
+      useSettingsStore.getState().bilibiliAppAuthRevision,
+    );
   }, [queryClient, siteId]);
   // 桌面专属入口（多画面/录制）、更新入口与亮暗模式快捷切换都按客户端平台门控，
   // 而不是只靠视口断点：手机/平板横屏宽度普遍超过 md，

@@ -6,9 +6,10 @@ pub mod video;
 pub use video::{VIDEO_SEARCH_ZONES, VIDEO_ZONES};
 
 pub use api::{
-    DEFAULT_REFERER, DEFAULT_USER_AGENT, now_unix, parse_account_recommend_rooms, parse_categories,
-    parse_category_rooms, parse_play_qualities, parse_play_urls, parse_recommend_rooms,
-    parse_search_rooms, parse_wbi_keys, wbi_sign_params,
+    DEFAULT_REFERER, DEFAULT_USER_AGENT, live_recommend_is_personalized, now_unix,
+    parse_account_recommend_rooms, parse_categories, parse_category_rooms,
+    parse_live_credential_home_rooms, parse_live_more_recommend_rooms, parse_play_qualities,
+    parse_play_urls, parse_recommend_rooms, parse_search_rooms, parse_wbi_keys, wbi_sign_params,
 };
 
 use std::collections::BTreeMap;
@@ -28,6 +29,13 @@ use crate::models::live::{
 use crate::sites::traits::LiveSite;
 
 use api::{buvid_from_cookie, parse_buvid, parse_room_detail_from_data, parse_room_live_status};
+
+/// 直播首页推荐的两个白名单路径。
+///
+/// 路径常量放在站点层而具体 URL 在凭据层（[`crate::account::bilibili_app`]）的白名单里：
+/// 「哪些路径可以带凭据」只能有一个真相，站点层只负责选路径，不拼接域名。
+const LIVE_HOME_PATH: &str = "/index/getList";
+const LIVE_MORE_PATH: &str = "/webMain/getMoreRecList";
 
 /// 跨请求共享的 WBI 签名密钥。
 #[derive(Default)]
@@ -79,6 +87,11 @@ pub struct BilibiliSite {
     client: Client,
     /// 只由 App 推荐／story 命令显式注入，不改变 Web Cookie 或其他请求。
     app_auth: Option<crate::account::bilibili_app::AppAuth>,
+    /// 只由直播首页推荐注入的 TV 凭据：只出现在
+    /// [`crate::account::bilibili_app::AppAuth::live_recommend`] 的白名单 query 里，
+    /// 不进 Cookie、不进 web-room 系房间接口（后者对有效 TV 凭据一律 `-663`，
+    /// 与是否带 Web Cookie 无关）。
+    live_auth: Option<crate::account::bilibili_app::AppAuth>,
     cookie: String,
     session: Mutex<Session>,
     /// 指纹接口失败时也缓存空结果，避免同一次房间加载并发发起重复请求。
@@ -267,6 +280,7 @@ impl BilibiliSite {
         Self {
             client,
             app_auth: None,
+            live_auth: None,
             cookie: normalize_cookie_header(&cookie),
             session: Mutex::new(Session::default()),
             buvids: OnceCell::const_new(),
@@ -276,6 +290,14 @@ impl BilibiliSite {
 
     pub fn with_app_auth(mut self, auth: crate::account::bilibili_app::AppAuth) -> Self {
         self.app_auth = Some(auth);
+        self
+    }
+
+    /// 为直播首页推荐注入 TV 凭据。与 [`Self::with_app_auth`] 分开而不是共用：
+    /// 两者请求的域、凭据形态与白名单都不同，共用会让「哪些接口能拿到凭据」
+    /// 变成一个只能靠阅读调用点才能回答的问题。
+    pub fn with_live_auth(mut self, auth: crate::account::bilibili_app::AppAuth) -> Self {
+        self.live_auth = Some(auth);
         self
     }
 
@@ -683,6 +705,100 @@ impl BilibiliSite {
             .await?;
         parse_account_recommend_rooms(&text)
     }
+
+    /// 带 TV 凭据的直播首页推荐（`index/getList`，单页无游标）。
+    ///
+    /// 凭据形态与身份语义见 [`crate::account::bilibili_app::AppAuth::live_recommend`]：
+    /// 这条路径**只带 `access_key`、不带 Web Cookie**（实测身份完全由前者决定：
+    /// 有效凭据 + 坏 Cookie 仍是登录态，反之则掉匿名）。
+    async fn get_live_credential_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
+        if page.max(1) > 1 {
+            return Ok(RoomListPage::empty());
+        }
+        let auth = self.live_auth.as_ref().expect("调用方已确认存在直播凭据");
+        // 无效令牌会静默降级为匿名流（`code=0`、无 `trackid`），不能把它当作
+        // 个性化结果返回：用户会看到「授权了但推荐没变」且无从判断。
+        let text = self
+            .live_recommend_text(auth, LIVE_HOME_PATH, &[("platform", "web".to_string())])
+            .await?;
+        parse_live_credential_home_rooms(&text)
+    }
+
+    /// 带 TV 凭据的直播推荐续页（`webMain/getMoreRecList`，真游标）。
+    ///
+    /// 上游对本页没有页码上限，也从不宣告耗尽，因此 `has_more` 以「本页非空」
+    /// 为准；空页由前端无限滚动自然停下（见 [`parse_live_more_recommend_rooms`]）。
+    async fn get_live_credential_more_rooms(&self, page: u32) -> AppResult<RoomListPage> {
+        let auth = self.live_auth.as_ref().expect("调用方已确认存在直播凭据");
+        let query = [
+            ("platform", "web".to_string()),
+            // 缺这个字段时上游偶发只回 1 条（实测 3 次里 1 次），补上后稳定 12 条。
+            ("web_location", "333.1007".to_string()),
+            ("page", page.max(1).to_string()),
+        ];
+        let text = self.live_recommend_text(auth, LIVE_MORE_PATH, &query).await?;
+        parse_live_more_recommend_rooms(&text)
+    }
+
+    /// 直播推荐请求 + 「个性化真的生效」校验，带一次有界重试。
+    async fn live_recommend_text(
+        &self,
+        auth: &crate::account::bilibili_app::AppAuth,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> AppResult<String> {
+        live_recommend_with_retry(path, || auth.live_recommend(path, query)).await
+    }
+}
+
+/// 直播推荐请求的重试策略；`fetch` 只负责取一次响应文本。
+///
+/// 重试的必要性来自实测：这两条接口偶尔返回 `rec-fallback-live-*` 回退流
+/// （实测约 1/15~1/20 概率，经代理时更明显），而回退流内容与个性化流不同、
+/// 也可能为空。**续页为空会让首页永久停在那里**（前端把空页当上游耗尽），
+/// 用户看到的是「滚到一半就不动了」。重试一次能把绝大多数抖动挡回去，
+/// 同时不会把真正的失效拖成无限重试。
+///
+/// 刻意不重试 `auth_required`：重试不会让被服务端拒绝的令牌变好，
+/// 只会把「需要重新扫码」这条明确结论拖慢两倍。
+///
+/// 抽成只依赖闭包的函数是为了能离线验证次数与错误分类（同 `collect_app_feed`），
+/// 而不是为了复用 —— 调用点只有 [`BilibiliSite::live_recommend_text`] 一处。
+async fn live_recommend_with_retry<F, Fut>(path: &str, mut fetch: F) -> AppResult<String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = AppResult<String>>,
+{
+    const ATTEMPTS: usize = 2;
+    let mut last_error = None;
+    for attempt in 0..ATTEMPTS {
+        match fetch().await {
+            Ok(text) if live_recommend_is_personalized(&text) => return Ok(text),
+            Ok(_) => {
+                last_error = Some(live_recommend_not_personalized());
+                tracing::debug!(path, attempt, "bilibili live recommend returned a fallback feed");
+            }
+            Err(error) => {
+                if error.code == "bilibili_app_auth_required" {
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(live_recommend_not_personalized))
+}
+
+/// 直播推荐接口对无效凭据静默降级，因此「返回成功但没有推荐引擎标记」
+/// 必须当成一次失败上报：调用方据此回落到 Cookie／匿名路径，而不是把
+/// 匿名流冒充个性化结果。错误本身可重试（凭据可能只是暂时未被接受）。
+fn live_recommend_not_personalized() -> AppError {
+    AppError::new(
+        "bilibili_live_recommend_anonymous",
+        "直播推荐未按当前 TV 账号生效，已回退到默认推荐",
+    )
+    .with_site("bilibili")
+    .retryable()
 }
 
 fn map_http(e: reqwest::Error) -> AppError {
@@ -717,6 +833,26 @@ impl LiveSite for BilibiliSite {
     }
 
     async fn get_recommend_rooms(&self, page: u32) -> AppResult<RoomListPage> {
+        // TV 凭据优先：它是本机唯一的「独立于 Web Cookie」的账号轴，且实测
+        // 身份完全由 query `access_key` 决定（有效凭据 + 坏 Cookie 仍是登录态，
+        // 反之则掉匿名）。第 1 页取首页模块（含已关注主播），后续页走真游标
+        // 接口。任一步失败或降级为匿名流都回落到原有路径，不把匿名流当个性化。
+        if self.live_auth.is_some() {
+            let result = if page.max(1) <= 1 {
+                self.get_live_credential_recommend_rooms(page).await
+            } else {
+                self.get_live_credential_more_rooms(page).await
+            };
+            match result {
+                Ok(rooms) => return Ok(rooms),
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    page,
+                    "bilibili live credential recommendation failed; falling back"
+                ),
+            }
+        }
+
         if self.cookie.is_empty() {
             return self.get_public_recommend_rooms(page).await;
         }
@@ -867,6 +1003,61 @@ mod live_tests {
 
     async fn lock_device_buvids() -> tokio::sync::MutexGuard<'static, ()> {
         DEVICE_BUVID_TEST_LOCK.lock().await
+    }
+
+    /// 续页偶发回退流时不能把「空页」当成上游耗尽。
+    ///
+    /// 实测：`getMoreRecList` 约 1/15~1/20 次返回 `rec-fallback-live-*` 回退流。
+    /// 若直接采信，前端会把空页当「没有更多」而永久停止翻页。
+    #[tokio::test]
+    async fn live_recommend_retries_a_fallback_feed_once() {
+        use std::cell::Cell;
+
+        const PERSONALIZED: &str =
+            r#"{"code":0,"data":{"recommend_room_list":[{"roomid":9,"trackid":"live_feed_0.router-live-1.2.3"}]}}"#;
+        const FALLBACK: &str = r#"{"code":0,"data":{"recommend_room_list":[]}}"#;
+
+        let calls = Cell::new(0);
+        let text = live_recommend_with_retry("/webMain/getMoreRecList", || {
+            calls.set(calls.get() + 1);
+            let body = if calls.get() == 1 { FALLBACK } else { PERSONALIZED };
+            std::future::ready(Ok(body.to_string()))
+        })
+        .await
+        .unwrap();
+        assert!(live_recommend_is_personalized(&text));
+        assert_eq!(calls.get(), 2, "回退流必须被重试掉");
+    }
+
+    /// 重试仍失败时按错误上报，而不是返回空页让前端以为流已耗尽。
+    #[tokio::test]
+    async fn persistent_fallback_is_reported_as_an_error_not_an_empty_page() {
+        let calls = std::cell::Cell::new(0);
+        let error = live_recommend_with_retry("/webMain/getMoreRecList", || {
+            calls.set(calls.get() + 1);
+            std::future::ready(Ok(r#"{"code":0,"data":{"recommend_room_list":[]}}"#.to_string()))
+        })
+        .await
+        .expect_err("持续回退流不能返回空页");
+        assert_eq!(error.code, "bilibili_live_recommend_anonymous");
+        assert_eq!(calls.get(), 2, "重试次数必须有界");
+    }
+
+    /// 凭据被服务端拒绝时立即失败：重试不会让被拒的令牌变好。
+    #[tokio::test]
+    async fn auth_required_is_never_retried() {
+        let calls = std::cell::Cell::new(0);
+        let error = live_recommend_with_retry("/index/getList", || {
+            calls.set(calls.get() + 1);
+            std::future::ready(Err(AppError::new(
+                "bilibili_app_auth_required",
+                "APP 登录已失效或未授权，请重新扫码登录",
+            )))
+        })
+        .await
+        .expect_err("失效凭据应直接失败");
+        assert_eq!(error.code, "bilibili_app_auth_required");
+        assert_eq!(calls.get(), 1, "失效结论不该被重试拖慢");
     }
 
     #[test]

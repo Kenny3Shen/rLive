@@ -372,7 +372,12 @@ export function Shell() {
   const preloadHomePlatform = useCallback(
     (nextSiteId: SiteId | "all") => {
       if (nextSiteId === "all" || pathname !== "/" || nextSiteId === activeSiteId) return;
-      prefetchHomeRecommendations(queryClient, nextSiteId);
+      // 预取必须用与目标平台相同的授权版本，否则写进缓存的键与首页读取的键不一致。
+      prefetchHomeRecommendations(
+        queryClient,
+        nextSiteId,
+        useSettingsStore.getState().bilibiliAppAuthRevision,
+      );
     },
     [activeSiteId, pathname, queryClient],
   );

@@ -17,6 +17,7 @@ import { RoomCard } from "@/shared/components/RoomCard";
 import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { LiveCategory, LiveRoomItem, LiveSubCategory } from "@/shared/types/live";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,7 +45,10 @@ import {
   parseCategorySelection,
   resolveSelectedCategory,
 } from "@/features/category/categorySelection";
-import { homeRecommendationsQueryOptions, trimRotatingRecommendPages } from "./homeQuery";
+import {
+  homeRecommendationsQueryOptions,
+  trimRotatingRecommendPages,
+} from "./homeQuery";
 import { mergeRoomPages } from "./pagination";
 
 type RoomGridProps = {
@@ -82,6 +86,9 @@ export function HomePage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  // 本机 TV 授权版本：B 站首页推荐会带这份凭据，换账号后必须让旧缓存失效。
+  // 其他平台不使用它（查询键里恒为 0，见 `homeQuery.ts`）。
+  const appAuthRevision = useSettingsStore((state) => state.bilibiliAppAuthRevision);
   // 「全部分类」按客户端分派到两种呈现：触摸端就地开底部抽屉（拇指可达、接系统
   // 返回键），桌面端跳独立的 `/category` 页（几百个分区铺在首页内容栏里会把房间
   // 网格挤到折叠之下，而桌面有完整的返回栈可用）。判定按客户端而不是视口宽度：
@@ -115,10 +122,10 @@ export function HomePage() {
   );
 
   const recommendQuery = useInfiniteQuery({
-    ...homeRecommendationsQueryOptions(siteId),
+    ...homeRecommendationsQueryOptions(siteId, appAuthRevision),
     enabled: !selection,
     // 在从未访问过的平台拉取首页时保持当前网格可见。避免页签切换期间用空白表面
-    // 替换可用内容；查询缓存仍按 ["recommend", siteId] 分别存储各平台。
+    // 替换可用内容；查询缓存仍按 ["recommend", siteId, 授权版本] 分别存储。
     placeholderData: keepPreviousData,
   });
 
@@ -153,7 +160,7 @@ export function HomePage() {
     }
     // 轮换型信息流（如抖音）只需要一批新数据；先裁剪可以把对所有已存页面的串行
     // 重新抓取变成单次请求。
-    trimRotatingRecommendPages(queryClient, siteId);
+    trimRotatingRecommendPages(queryClient, siteId, appAuthRevision);
     void recommendQuery.refetch();
   };
 

@@ -192,15 +192,16 @@ describe("Bilibili TV 账号状态", () => {
     expect(html).toContain("刷新状态");
   });
 
-  test("更名后的账号名在文档里可查", () => {
-    // 设置行删掉文案不等于丢掉这个事实：文档必须能查到新名称。
+  test("双账号错位写进文档而不是设置行", () => {
+    // 设置行删掉文案不等于丢掉这个事实：用户会踩到的坑必须在文档里。
     const design = readFileSync(
       new URL("../docs/zh/B站视频功能-设计.md", import.meta.url),
       "utf8",
     );
     const guide = readFileSync(new URL("../docs/zh/用户指南.md", import.meta.url), "utf8");
-    expect(design).toContain("Bilibili TV 账号");
-    expect(guide).toContain("Bilibili TV 账号");
+    expect(design).toContain("双账号错位");
+    expect(guide).toContain("直播首页推荐");
+    expect(guide).toContain("Web Cookie");
   });
 });
 

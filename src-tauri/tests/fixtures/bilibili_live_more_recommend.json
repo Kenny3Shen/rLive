@@ -1,0 +1,32 @@
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "recommend_room_list": [
+      {
+        "roomid": 201,
+        "title": "续页推荐一",
+        "cover": "https://i0.hdslb.com/bfs/live/cover-201.jpg",
+        "uname": "主播甲",
+        "online": 4321,
+        "trackid": "live_feed_0.router-live-2589629-jx44n.1790518714571.556"
+      },
+      {
+        "roomid": 202,
+        "title": "续页推荐二",
+        "cover": "https://i0.hdslb.com/bfs/live/cover-202.jpg",
+        "uname": "主播乙",
+        "online": "876",
+        "trackid": "live_feed_0.router-live-2589629-jx44n.1790518714571.556"
+      },
+      {
+        "roomid": 202,
+        "title": "重复的续页推荐",
+        "cover": "https://i0.hdslb.com/bfs/live/cover-202.jpg",
+        "uname": "主播乙",
+        "online": 876
+      }
+    ],
+    "top_room_id": 0
+  }
+}
