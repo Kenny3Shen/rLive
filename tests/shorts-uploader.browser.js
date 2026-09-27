@@ -74,7 +74,7 @@ async (page) => {
     await frames();
   };
   try {
-    harness.render(h(QueryClientProvider, { client }, h(MemoryRouter, { initialEntries: ["/shorts"] }, h(ShortsPage))));
+    harness.render(h(QueryClientProvider, { client }, h(MemoryRouter, { initialEntries: ["/shorts/bilibili"] }, h(ShortsPage))));
     await until(() => viewport()?.dataset.currentAid === "900", "推荐首条未出现");
     click('button[aria-label="下一条"]');
     await until(() => viewport()?.dataset.currentAid === "56", "未切到入口稿件");

@@ -52,6 +52,7 @@ import {
   videoTabFromSearch,
 } from "@/features/video/videoRoute";
 import { CATEGORY_BROWSE_PATH } from "@/features/category/categorySelection";
+import { SHORTS_PATH } from "@/features/shorts/shortsFeed";
 import { canNavigateBackInApp } from "@/shared/appHistory";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
@@ -191,6 +192,7 @@ export function Shell() {
   const isIptv = pathname === "/iptv";
   const isVideo = pathname === "/video";
   const isVideoSearch = pathname === "/video/search";
+  const isShortsHome = pathname === SHORTS_PATH;
   const isImmersivePlayer = isImmersivePlayerPath(pathname);
   const isSearch = pathname === "/search";
   const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
@@ -788,7 +790,7 @@ export function Shell() {
           {!isImmersivePlayer && <Sidebar />}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <IptvControllerProvider source={iptvSource} active={isIptv}>
-              {!isImmersivePlayer && !isSettings && (
+              {!isImmersivePlayer && !isSettings && !isShortsHome && (
                 <header
                   data-slot="app-header"
                   data-mobile-empty={showTopNavigation ? undefined : "true"}

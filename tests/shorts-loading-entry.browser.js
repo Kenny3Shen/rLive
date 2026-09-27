@@ -45,7 +45,7 @@ async (page) => {
         finishFeed = undefined;
         mode = next;
         client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-        harness.render(harness.h(QueryClientProvider, { client }, harness.h(MemoryRouter, { initialEntries: ["/shorts"] }, harness.h(ShortsPage))));
+        harness.render(harness.h(QueryClientProvider, { client }, harness.h(MemoryRouter, { initialEntries: ["/shorts/bilibili"] }, harness.h(ShortsPage))));
         await frames();
       };
       const platformEntry = () => harness.host.querySelector('a[href="/shorts/douyin"]');

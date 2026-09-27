@@ -153,9 +153,9 @@ async (page) => {
     };
   });
   // 端口不写死：用已打开页面（Vite 预览页）的 origin。
-  const origin = page.url().replace(/\/[^/]*$/, "");
+  const origin = page.url().match(/^https?:\/\/[^/]+/)[0];
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto(`${origin}/shorts`);
+  await page.goto(`${origin}/shorts/bilibili`);
   await page.reload();
   await page.waitForSelector('[data-slot="shorts-track"]', { timeout: 15000 });
   await settle(800);

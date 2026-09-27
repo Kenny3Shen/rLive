@@ -30,6 +30,7 @@ import {
   loadVideoPlayerPage,
   loadVideoSearchPage,
   loadShortsPage,
+  loadShortsHomePage,
   loadDouyinVideoPage,
 } from "./routeModules";
 import { HomePage } from "../features/home/HomePage";
@@ -56,6 +57,7 @@ const MultiRoomPage = lazy(loadMultiRoomPage);
 const VideoPage = lazy(loadVideoPage);
 const VideoPlayerPage = lazy(loadVideoPlayerPage);
 const VideoSearchPage = lazy(loadVideoSearchPage);
+const ShortsHomePage = lazy(loadShortsHomePage);
 const ShortsPage = lazy(loadShortsPage);
 const DouyinVideoPage = lazy(loadDouyinVideoPage);
 const RoomPage = lazy(loadRoomPage);
@@ -142,7 +144,8 @@ const router = createBrowserRouter(
         <Route path="video/play" element={<VideoPlayerPage />} />
         <Route path="video/search" element={<VideoSearchPage />} />
         <Route path="video" element={<VideoPage />} />
-        <Route path="shorts" element={<ShortsPage />} />
+        <Route path="shorts" element={<ShortsHomePage />} />
+        <Route path="shorts/bilibili" element={<ShortsPage />} />
         <Route path="shorts/douyin" element={<DouyinVideoPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="multi-room" element={<MultiRoomPage />} />

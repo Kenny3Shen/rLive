@@ -165,8 +165,8 @@ async (page) => {
     };
   });
 
-  const origin = page.url().replace(/\/[^/]*$/, "");
-  await page.goto(`${origin}/shorts`);
+  const origin = page.url().match(/^https?:\/\/[^/]+/)[0];
+  await page.goto(`${origin}/shorts/bilibili`);
   await page.reload();
   await page.waitForSelector('[data-slot="shorts-frame"]', { timeout: 15000 });
   await page.waitForTimeout(900);

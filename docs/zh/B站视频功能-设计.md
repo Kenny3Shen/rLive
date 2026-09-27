@@ -70,7 +70,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 - 回归：`tests/video-masonry.browser.js` 验证补位、分页追加不移位、尺寸变化与底部哨兵；`tests/video-card-aspect.browser.js` 验证源画幅、横屏覆盖及真实相关视频区。
 - 推荐页签的列表 query key 带推荐源（`video_list/recommend/…/app|web`）与 App 授权状态（`appPersonalization`/`appAuthRevision`），切换设置或换授权后旧缓存不被当作新鲜数据复用；story 的 `shorts_story` 由 `bilibiliAppQueryInvalidation` 在授权变更时取消并重置。Cookie 变更只失效 `video_list` 的推荐页签（`cookieQueryInvalidation`），热门/番剧/影视不随之重取；App 授权变更也不触碰 Web 推荐缓存。
 - 推荐、通用 story、作者 story 统一通过 `get_app_feed` 分发：默认走 `get_json_with_buvid_header`，**仅当**「App 个性化推荐」开启且路径是主推荐或 `/story` 时改走 `AppAuth::feed`（TV appkey 签名 + `access_key`、禁止重定向、脱敏错误、绝不携带 Web Cookie）；作者 story 是普通游标列表，即使站点实例持有凭据也保持匿名路径。三条流共用 Cookie、代理、设备槽和错误处理。**不等于所有 B 站接口都换域**：详情、搜索、热门、播放、评论、弹幕仍使用已验证的 `api.bilibili.com` 端点；APP 域同路径 `/x/web-interface/view` 实测 404，APP `/x/v2/view` 在本次免签名参数下返回 -400，不能仅替换 host。未验证的 APP 等价能力不替换既有播放与账号权限链路。
-- `/shorts` 点头像/用户名可进入作者 story，从当前稿件继续，上方居中显示上游 `index/total`；详见[短视频功能](短视频功能.md)「UP 主竖屏流」。
+- `/shorts/bilibili` 点头像/用户名可进入作者 story，从当前稿件继续，上方居中显示上游 `index/total`；详见[短视频功能](短视频功能.md)「UP 主竖屏流」。
 
 ## 四、DASH：三个关键实测结论
 
@@ -216,7 +216,7 @@ message DanmakuElem {
 - `MainActivity` 通过 `getInsetsIgnoringVisibility` 获取状态栏/刘海顶部与导航栏/刘海底部安全区，按 `devicePixelRatio` 换成 `--android-safe-area-top` / `--android-safe-area-bottom`，不包含键盘高度。页面加载完成时重新分发 inset，避免 WebView 的 `env(safe-area-inset-*)` 残留 0；旧 APK / 浏览器仍回退到 `env`。普通画面全屏继续沿用既有隐藏系统栏行为。
 - 桌面与移动端统一取消流内顶栏：返回、标题和工具都改在播放器顶部 HUD 显示，与底部控制栏共用空闲显隐（鼠标移出播放器区域即收起）；画面占满原顶栏空间，HUD 自行避让状态栏/刘海。返回主页在两端都常驻 HUD（返回箭头右侧），与只回上一层的返回箭头分工；窗口全屏不挂它（那一层由返回箭头退出）。低频工具（投屏/复制链接/在浏览器中打开）收进 `⋮` 溢出菜单；桌面底部 Shell 仍常驻链接操作。
 - 低频工具统一由 `PlayerHudOverflowMenu` 承载（含桌面普通详情）：投屏 / 复制链接 / 在浏览器中打开。返回主页**不**走菜单 —— 它是高频导航，两端都在 HUD 上直接可见。投屏使用 `PlayerToolPanel` 与 `CastMenu`，进行中显示「投屏中」。
-- **短视频入口**：顶部 HUD 在 `⋮` 旁常驻一个「看短视频」按钮（`Smartphone` 图标），点击跳 `/shorts?seed=<bvid>`，以当前稿件为种子进入竖屏流。它不放进 `⋮`：这是消费方式切换而不是低频工具。跳转前先 `await fullscreenExit()`（短视频页是沉浸路由）；bvid 缺失（PGC 分集）时退回裸 `/shorts`，由后端用最近观看历史当种子。详见[短视频功能](短视频功能.md)第三节。
+- **短视频入口**：顶部 HUD 在 `⋮` 旁常驻一个「看短视频」按钮（`Smartphone` 图标），点击跳 `/shorts/bilibili?seed=<bvid>`，以当前稿件为种子进入竖屏流。它不放进 `⋮`：这是消费方式切换而不是低频工具。跳转前先 `await fullscreenExit()`（短视频页是沉浸路由）；bvid 缺失（PGC 分集）时退回裸 `/shorts`，由后端用最近观看历史当种子。详见[短视频功能](短视频功能.md)第三节。
 - 投屏只有 HUD 溢出菜单一个入口（`castOpen` + `castMenuProps`），窗口化与全屏同一形态，不存在双入口。无有效参数、PGC 解析态（没有可覆盖的播放舞台）继续渲染流内兜底顶栏，只留返回与标题，不挂工具。
 - **窗口全屏**（`webFullscreen`）隐藏页面顶栏、侧栏和底部操作栏，保留系统窗口栏；**画面全屏**（`useRecordingPlayerFullscreen`）盖住页面。桌面 Tauri 使用原生窗口全屏，Android 对齐直播使用页内固定层与沉浸式系统栏，其他浏览器使用 HTML Fullscreen API。Android 普通视频复用直播的 `useAndroidFullscreenOrientation`：横屏画幅（宽高比 > 1）转到横屏时自动进入全屏、转回竖屏自动退出，手动点开的全屏才按帧比例上横屏方向锁，退出释放（契约见 `docs/zh/播放器技术文档.md` 6.4）。两层叠加时返回/Escape 一次只退一层；全屏往返不重建媒体元素。
 - 控制栏保留高频播放控制与字幕按钮；字幕弹层改为 `PlayerControls` 内置弹窗同族的 Popover（`side="top" align="end"` + glass + `portalContainer` 指向舞台），替代原先手工绝对定位的面板。控制栏居中槽位是弹幕输入条（见第五节「弹幕发送」）。

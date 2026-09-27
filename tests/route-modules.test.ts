@@ -15,6 +15,7 @@ import {
   loadSearchPage,
   loadSettingsPage,
   loadShortsPage,
+  loadShortsHomePage,
   loadDouyinVideoPage,
   loadVideoPage,
   loadVideoPlayerPage,
@@ -81,7 +82,11 @@ describe("route module loading", () => {
   test("短视频是自己的目的地，不共用 `/video` 前缀", () => {
     // 路径刻意不挂在 `/video` 下（侧栏目的地按前缀匹配，那样「视频」会跟着高亮），
     // 因此它不能被视频任何一条路由接走。
-    expect(routeModuleLoaderForPath("/shorts")).toBe(loadShortsPage);
+    expect(routeModuleLoaderForPath("/shorts")).toBe(loadShortsHomePage);
+    expect(routeModuleLoaderForPath("/shorts?seed=BV1")).toBe(loadShortsHomePage);
+    expect(routeModuleLoaderForPath("/shorts/bilibili")).toBe(loadShortsPage);
+    expect(routeModuleLoaderForPath("/shorts/bilibili?seed=BV1")).toBe(loadShortsPage);
+    expect(routeModuleLoaderForPath("/shorts/bilibili/unknown")).toBeNull();
     expect(routeModuleLoaderForPath("/shorts/douyin")).toBe(loadDouyinVideoPage);
     expect(routeModuleLoaderForPath("/video")).not.toBe(loadShortsPage);
   });
@@ -105,6 +110,7 @@ describe("idle route preloading policy", () => {
       expect(loaders).not.toContain(loadMultiRoomPage);
       for (const loader of [
         loadFollowPage,
+        loadShortsHomePage,
         loadHistoryPage,
         loadIptvPlayerPage,
         loadRoomPage,

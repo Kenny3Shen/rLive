@@ -150,12 +150,12 @@ async (page) => {
   });
 
   // 端口不写死：用已打开页面（Vite 预览页）的 origin。
-  const origin = page.url().replace(/\/[^/]*$/, "");
+  const origin = page.url().match(/^https?:\/\/[^/]+/)[0];
   // 自己把视口固定成桌面宽，不依赖外部会话的初始尺寸：
   // `shorts-panel-drawers` 会把同一个会话改成 390px 手机宽且不还原，若这里不自设，
   // 在它之后运行就会出现「信息块与评论按钮挤在中间」的假失败。
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto(`${origin}/shorts`);
+  await page.goto(`${origin}/shorts/bilibili`);
   await page.reload();
   await page.waitForSelector('[data-slot="shorts-info-float"]', { timeout: 15000 });
   await settle(800);

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ANDROID_BACK_EVENT,
+  androidBackFallbackPath,
   dispatchAndroidBackEvent,
   hasBrowserHistoryEntry,
   isAndroidHomeTabRoot,
@@ -53,6 +54,16 @@ describe("Android Back navigation", () => {
     expect(isAndroidHomeTabRoot("/history", "")).toBe(false);
     expect(isAndroidHomeTabRoot("/iptv/play", "")).toBe(false);
     expect(isAndroidHomeTabRoot("/recordings", "")).toBe(false);
+  });
+
+  test("短视频深链无历史时返回平台选择页", () => {
+    expect(androidBackFallbackPath("/shorts/bilibili")).toBe("/shorts");
+    expect(androidBackFallbackPath("/shorts/douyin")).toBe("/shorts");
+    expect(androidBackFallbackPath("/shorts")).toBe("/");
+    expect(androidBackFallbackPath("/video/play")).toBe("/");
+    for (const path of ["/shorts", "/shorts/bilibili", "/shorts/douyin"]) {
+      expect(isAndroidHomeTabRoot(path, "")).toBe(false);
+    }
   });
 
   test("allows overlays to consume Back before navigation", () => {

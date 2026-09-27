@@ -6,6 +6,8 @@ import {
   SHORTS_DANMAKU_TOP_OFFSET_PX,
   SHORTS_FRAME_FILL_MAX_CROP,
   SHORTS_PATH,
+  BILIBILI_SHORTS_PATH,
+  DOUYIN_SHORTS_PATH,
   SHORTS_PREFETCH_REMAINING,
   SHORTS_SAFE_AREA_BOTTOM,
   SHORTS_SWIPE_COMMIT_PROGRESS,
@@ -507,10 +509,11 @@ describe("安全区表达式", () => {
 });
 
 describe("路由契约", () => {
-  test("短视频是沉浸式路由", () => {
-    // 外壳的顶栏与侧栏会把 9:16 舞台挤成一条；返回口由页内 HUD 提供。
-    expect(isImmersivePlayerPath(SHORTS_PATH)).toBe(true);
-    expect(isImmersivePlayerPath("/shorts/douyin")).toBe(true);
+  test("平台选择保留外壳，两个推荐流独立沉浸", () => {
+    expect(isImmersivePlayerPath(SHORTS_PATH)).toBe(false);
+    expect(isImmersivePlayerPath(BILIBILI_SHORTS_PATH)).toBe(true);
+    expect(isImmersivePlayerPath(DOUYIN_SHORTS_PATH)).toBe(true);
+    expect(isImmersivePlayerPath("/shorts/bilibili/unknown")).toBe(false);
     expect(isImmersivePlayerPath("/shorts/douyin/unknown")).toBe(false);
   });
 
@@ -522,20 +525,20 @@ describe("路由契约", () => {
 
   test("带种子时拼出 seed 查询参数", () => {
     // 播放页「短视频」入口用它把当前稿件交给竖屏流当起点。
-    expect(shortsPath("BV1Sw8U6cEEV")).toBe("/shorts?seed=BV1Sw8U6cEEV");
+    expect(shortsPath("BV1Sw8U6cEEV")).toBe("/shorts/bilibili?seed=BV1Sw8U6cEEV");
   });
 
   test("无种子/空白种子退回裸路径", () => {
     // 裸路径让后端用最近观看历史当种子；不能拼出 `?seed=` 或 `?seed=  `
     // 让后端把空白当成一个非法 bvid。
-    expect(shortsPath()).toBe(SHORTS_PATH);
-    expect(shortsPath(null)).toBe(SHORTS_PATH);
-    expect(shortsPath("")).toBe(SHORTS_PATH);
-    expect(shortsPath("   ")).toBe(SHORTS_PATH);
+    expect(shortsPath()).toBe(BILIBILI_SHORTS_PATH);
+    expect(shortsPath(null)).toBe(BILIBILI_SHORTS_PATH);
+    expect(shortsPath("")).toBe(BILIBILI_SHORTS_PATH);
+    expect(shortsPath("   ")).toBe(BILIBILI_SHORTS_PATH);
   });
 
   test("种子两侧空白被修剪", () => {
-    expect(shortsPath("  BV1Sw8U6cEEV  ")).toBe("/shorts?seed=BV1Sw8U6cEEV");
+    expect(shortsPath("  BV1Sw8U6cEEV  ")).toBe("/shorts/bilibili?seed=BV1Sw8U6cEEV");
   });
 });
 

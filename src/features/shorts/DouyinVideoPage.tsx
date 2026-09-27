@@ -20,7 +20,7 @@ export function DouyinVideoPage() {
           <section className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 py-5">
             <header className="flex flex-wrap items-center gap-3">
               <Link to="/shorts" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-                <ArrowLeft data-icon="inline-start" />B 站短视频
+                <ArrowLeft data-icon="inline-start" />短视频
               </Link>
               <h1 className="text-lg font-semibold">抖音短视频</h1>
             </header>

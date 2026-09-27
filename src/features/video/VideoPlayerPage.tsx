@@ -2108,7 +2108,7 @@ function VideoPlayerPageContent() {
 
   /**
    * 进入短视频流，并以当前这条为种子（上游据此换出一组从本片开始的新窗口）。
-   * bvid 缺失（PGC 分集）时退回裸 `/shorts`，由后端用最近观看历史当种子。
+   * bvid 缺失（PGC 分集）时退回裸 `/shorts/bilibili`，由后端用最近观看历史当种子。
    * 先把全屏收干净再走：短视频页是沉浸路由，留着元素全屏会盖在它上面。
    */
   const openShorts = useCallback(async () => {

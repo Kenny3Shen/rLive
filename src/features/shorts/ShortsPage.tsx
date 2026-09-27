@@ -91,7 +91,7 @@ const SHORTS_TOP_CONTROLS_CLASS =
   "media-skin [--media-control-size:2.5rem] [@media(pointer:coarse)]:[--media-control-size:2.75rem]";
 
 /**
- * `/shorts`：B 站短视频（story feed）的竖屏消费页。
+ * `/shorts/bilibili`：B 站短视频（story feed）的竖屏消费页。
  *
  * 沉浸式路由（无侧栏、无顶栏，见 `immersiveRoutes`），返回口是顶部控制栏的
  * 悬浮箭头，与其他沉浸播放页同一位置同一画法。
@@ -221,7 +221,7 @@ export function ShortsPage() {
       return;
     }
     if (hasBrowserHistoryEntry(window.history.state)) navigate(-1);
-    else navigate("/", { replace: true });
+    else navigate("/shorts", { replace: true });
   }, [feed, navigate, resetInteraction]);
 
   // 作者模式是页内的一层：系统 Back / Escape 与顶栏返回采用相同优先级。

@@ -4,9 +4,8 @@ export function isImmersivePlayerPath(pathname: string): boolean {
     pathname.startsWith("/recordings/play/") ||
     pathname === "/iptv/play" ||
     pathname === "/video/play" ||
-    // 短视频是竖屏满屏消费：外壳的顶栏与侧栏会把 9:16 舞台挤成一条，
-    // 返回口由页内 HUD 提供（与其他沉浸播放页同一位置同一画法）。
-    pathname === "/shorts" ||
+    // 平台选择页保留导航外壳；只有两个推荐流使用满屏舞台与页内返回口。
+    pathname === "/shorts/bilibili" ||
     pathname === "/shorts/douyin" ||
     pathname === "/multi-room"
   );

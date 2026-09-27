@@ -94,6 +94,10 @@ export const loadVideoSearchPage = createCachedRouteLoader(() =>
   })),
 );
 
+export const loadShortsHomePage = createCachedRouteLoader(() =>
+  import("../features/shorts/ShortsHomePage").then(({ ShortsHomePage }) => ({ default: ShortsHomePage })),
+);
+
 export const loadShortsPage = createCachedRouteLoader(() =>
   import("../features/shorts/ShortsPage").then(({ ShortsPage }) => ({ default: ShortsPage })),
 );
@@ -111,6 +115,7 @@ const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadCategoryBrowsePage,
   loadFollowPage,
   loadVideoPage,
+  loadShortsHomePage,
   loadVideoSearchPage,
   loadHistoryPage,
   loadRecordingsPage,
@@ -160,7 +165,8 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/video/play") return loadVideoPlayerPage;
   if (pathname === "/video/search") return loadVideoSearchPage;
   if (pathname === "/video") return loadVideoPage;
-  if (pathname === "/shorts") return loadShortsPage;
+  if (pathname === "/shorts") return loadShortsHomePage;
+  if (pathname === "/shorts/bilibili") return loadShortsPage;
   if (pathname === "/shorts/douyin") return loadDouyinVideoPage;
   if (pathname === "/settings") return loadSettingsPage;
   if (pathname === "/multi-room") return loadMultiRoomPage;

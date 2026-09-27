@@ -107,7 +107,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
   });
   const goBack = () => {
     if (hasBrowserHistoryEntry(window.history.state)) navigate(-1);
-    else navigate("/", { replace: true });
+    else navigate("/shorts", { replace: true });
   };
   const run = (action: () => void) => () => {
     setMenuOpen(false);
@@ -276,7 +276,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
                     <PlayerToolTile
                       icon={Film}
                       label="B 站短视频"
-                      onClick={run(() => navigate("/shorts"))}
+                      onClick={run(() => navigate("/shorts/bilibili"))}
                     />
                     <PlayerToolTile
                       icon={Settings}

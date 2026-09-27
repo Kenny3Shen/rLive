@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { CATEGORY_PARAM } from "@/features/category/categorySelection";
 import { VIDEO_SEARCH_QUERY_PARAM, videoSearchPath } from "@/features/video/videoRoute";
+import { BILIBILI_SHORTS_PATH, DOUYIN_SHORTS_PATH, SHORTS_PATH } from "@/features/shorts/shortsFeed";
 
 /**
  * 可取消的应用内事件，在 Android 返回键进入路由导航之前触发。
@@ -68,6 +69,11 @@ export function hasBrowserHistoryEntry(state: unknown): boolean {
   if (!state || typeof state !== "object") return false;
   const index = Reflect.get(state, "idx");
   return typeof index === "number" && index > 0;
+}
+
+/** 没有应用内历史的推荐流先返回平台选择，其余深链仍回首页。 */
+export function androidBackFallbackPath(pathname: string): string {
+  return pathname === BILIBILI_SHORTS_PATH || pathname === DOUYIN_SHORTS_PATH ? SHORTS_PATH : "/";
 }
 
 /**
@@ -169,7 +175,7 @@ export function AndroidBackNavigator() {
       } else {
         // 直接打开的深链接没有应用内历史记录。让 Back 保持有用，
         // 同时不暴露空的浏览器历史栈。
-        navigate("/", { replace: true });
+        navigate(androidBackFallbackPath(location.pathname), { replace: true });
       }
     })
       .then((registered) => {
