@@ -33,6 +33,7 @@ function item(
     duration: 10,
     view: 0,
     danmaku: 0,
+    reply: null,
     pubdate: 0,
     rcmd_reason: null,
     index,

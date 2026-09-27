@@ -27,7 +27,7 @@ async (page) => {
   const makeItem = (index, mid = "42") => ({
     bvid: `BVtest${index}`, aid: String(index), cid: index, title: `测试稿件 ${index}`,
     cover: "", author: "测试作者", author_mid: mid, author_face: null, author_fans: 100,
-    duration: 60, view: 1, danmaku: 0, pubdate: 0, rcmd_reason: null,
+    duration: 60, view: 1, danmaku: 0, reply: 3, pubdate: 0, rcmd_reason: null,
     dimension: { width: 1080, height: 1920, rotate: 0 }, index,
   });
   const recommendations = [makeItem(900, "99"), makeItem(56), makeItem(901, "99")];

@@ -46,6 +46,20 @@ pub struct VideoItem {
     pub duration: i64,
     pub view: i64,
     pub danmaku: i64,
+    /// 评论数。上游字段名随接口而异（`stat.reply` / `comment` / `review`，
+    /// 解析顺序见 [`crate::sites::bilibili::video`] 的 `video_item`）：
+    ///
+    /// - story feed：`stat.reply`，实测每条都有，且与 `x/web-interface/view` 的
+    ///   `stat.reply`、评论接口的 `cursor.all_count` 三方一致。
+    /// - 热门 / 相关 / 分区榜：`stat.reply`。
+    /// - UP 主投稿列表：`comment`（它的 `review` 是恒为 0 的诱饵，不能读）。
+    /// - 搜索：扁平字段 `review`。
+    /// - 推荐流（web rcmd 与 APP 卡片流）：不下发，为 `None`。
+    ///
+    /// 用 `Option` 而不是 0：竖屏底栏的评论按钮要显示评论数，而「上游说 0 条评论」
+    /// 与「上游没说」是两件事 —— 后者应该退回不显示数字，而不是显示「0」。
+    #[serde(default)]
+    pub reply: Option<i64>,
     pub pubdate: i64,
     /// 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。
     pub rcmd_reason: Option<String>,

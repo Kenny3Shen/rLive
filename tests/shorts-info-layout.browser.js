@@ -28,6 +28,7 @@ async (page) => {
         duration: 93,
         view: 187_172,
         danmaku: 24,
+        reply: 56,
         pubdate: 1_789_292_152,
         rcmd_reason: null,
         dimension: { width: 1080, height: 1920, rotate: 0 },
@@ -44,6 +45,7 @@ async (page) => {
         duration: 61,
         view: 1024,
         danmaku: 3,
+        reply: 9,
         pubdate: 1_789_292_200,
         rcmd_reason: null,
         dimension: { width: 1080, height: 1920, rotate: 0 },
@@ -192,6 +194,9 @@ async (page) => {
           return box ? Math.round(box.width) : null;
         }),
         commentButtonCount: comment ? 1 : 0,
+        // 评论按钮下的数字必须是评论数（reply=56），不是弹幕数（danmaku=24）。
+        commentLabel: comment?.getAttribute("aria-label") ?? null,
+        commentNumber: comment?.parentElement?.querySelector("span")?.textContent ?? null,
       };
     });
 
@@ -201,6 +206,13 @@ async (page) => {
   /* ---------- 1. 左下角 / 右下角 ---------- */
   const d = report.desktop;
   assert(d.infoBlock && d.comment, "桌面：信息块与评论按钮都应存在");
+  // 评论按钮读 `reply`（夹具 56），不是 `danmaku`（夹具 24）：这两个数在夹具里
+  // 刻意不同，混淆时「评论 24」会当场失败。
+  assert(d.commentNumber === "56", `评论按钮下应显示评论数 56，实测 ${d.commentNumber}`);
+  assert(
+    d.commentLabel === "评论，56 条",
+    `评论按钮的 aria-label 应报评论数，实测 ${d.commentLabel}`,
+  );
   // 左边缘贴住播放器左侧（`px-2` = 8px）。
   assert(
     Math.abs(d.infoBlock.x - d.viewport.x - 8) < 2,

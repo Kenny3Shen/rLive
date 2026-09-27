@@ -25,7 +25,7 @@ async (page) => {
       let client;
       const items = Array.from({ length: 6 }, (_, i) => ({
         aid: String(i + 1), bvid: `BVfixture${i + 1}`, cid: i + 1, title: "加载入口夹具",
-        author: "测试作者", cover: "", duration: 10, view: 0, danmaku: 0, pubdate: 0,
+        author: "测试作者", cover: "", duration: 10, view: 0, danmaku: 0, reply: 5, pubdate: 0,
       }));
       window.__shortsLoadingInvoke = async (cmd, args) => {
         if (cmd === "video_get_story") {

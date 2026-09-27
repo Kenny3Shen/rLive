@@ -711,15 +711,22 @@ export function ShortsPage() {
               </div>
             </div>
 
-            {/* 评论贴右下角。跟信息一起显隐（外层已经判了 `infoVisible`）。 */}
+            {/*
+              评论贴右下角。跟信息一起显隐（外层已经判了 `infoVisible`）。
+
+              数字取 `reply`（评论数），不是 `danmaku`（弹幕数）：这个按钮开的是评论区，
+              底下那行数字必须是评论数。此前误用了 `danmaku`，于是「评论 5」实际是
+              「弹幕 5 条」—— 与评论区里真实条数（同一稿件 56 条）对不上。
+              弹幕数在底部操作栏与信息行里各自有位置，不需要在这里重复一遍。
+            */}
             <span className="pointer-events-auto flex shrink-0 flex-col items-center">
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 aria-label={
-                  current.danmaku > 0
-                    ? `评论与弹幕，弹幕 ${formatOnline(current.danmaku)} 条`
+                  current.reply != null && current.reply > 0
+                    ? `评论，${formatOnline(current.reply)} 条`
                     : "评论"
                 }
                 title="评论"
@@ -728,8 +735,8 @@ export function ShortsPage() {
               >
                 <MessageCircle className="size-6" aria-hidden />
               </Button>
-              {current.danmaku > 0 && (
-                <span className="text-[11px] text-white/80">{formatOnline(current.danmaku)}</span>
+              {current.reply != null && current.reply > 0 && (
+                <span className="text-[11px] text-white/80">{formatOnline(current.reply)}</span>
               )}
             </span>
           </div>

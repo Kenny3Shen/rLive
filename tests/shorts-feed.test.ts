@@ -62,6 +62,7 @@ function item(overrides: Partial<VideoItem> = {}): VideoItem {
     duration: 93,
     view: 100,
     danmaku: 2,
+    reply: 11,
     pubdate: 1_789_292_152,
     rcmd_reason: null,
     dimension: { width: 1080, height: 1920, rotate: 0 },

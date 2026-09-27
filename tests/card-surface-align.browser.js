@@ -80,6 +80,7 @@ async (page) => {
     duration: 30,
     view: 1,
     danmaku: 1,
+    reply: 2,
     pubdate: 0,
     rcmd_reason: null,
     dimension: { width: 1920, height: 1080, rotate: 0 },

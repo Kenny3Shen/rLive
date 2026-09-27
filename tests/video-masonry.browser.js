@@ -19,7 +19,7 @@ async (page) => {
       const items = Array.from({ length: 30 }, (_, index) => {
         const dim = dimensions[index % dimensions.length];
         return { bvid: `BVmasonry${index}`, aid: String(index + 1), cid: index + 1, title: `瀑布流稿件 ${index + 1}：横竖内容混排`,
-          cover: "", author: "布局回归", author_face: null, duration: 30, view: 100, danmaku: 1, pubdate: 0, rcmd_reason: null,
+          cover: "", author: "布局回归", author_face: null, duration: 30, view: 100, danmaku: 1, reply: 4, pubdate: 0, rcmd_reason: null,
           dimension: dim ? { width: dim[0], height: dim[1], rotate: 0 } : null };
       });
       const render = (count) => harness.render(harness.h(QueryClientProvider, { client }, harness.h(MemoryRouter, null,

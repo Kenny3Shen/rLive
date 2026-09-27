@@ -37,6 +37,7 @@ async (page) => {
         duration: 93,
         view: 187_172,
         danmaku: 24,
+        reply: 56,
         pubdate: 1_789_292_152,
         rcmd_reason: null,
         dimension: { width: 1080, height: 1920, rotate: 0 },
@@ -53,6 +54,7 @@ async (page) => {
         duration: 61,
         view: 1024,
         danmaku: 3,
+        reply: 9,
         pubdate: 1_789_292_200,
         rcmd_reason: null,
         dimension: { width: 1080, height: 1920, rotate: 0 },
@@ -210,7 +212,7 @@ async (page) => {
   const labels = [
     "返回上一页",
     "更多操作",
-    "评论与弹幕，弹幕 24 条",
+    "评论，56 条",
     "关闭弹幕",
     "隐藏视频信息与评论按钮",
     "视频详情",
@@ -246,7 +248,7 @@ async (page) => {
       style.radii.every((radius) => Number.parseFloat(radius) >= style.width / 2),
       `${label}按钮悬停背景应为圆形，实测 ${JSON.stringify(style)}`,
     );
-    const expectedSize = label === "评论与弹幕，弹幕 24 条" ? 44 : controlSize;
+    const expectedSize = label === "评论，56 条" ? 44 : controlSize;
     assert(near(style.width, expectedSize), `${label}按钮应保持 ${expectedSize}px`);
     report.buttons.push({ label, ...style });
   }

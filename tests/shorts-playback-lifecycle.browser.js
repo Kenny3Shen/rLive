@@ -111,6 +111,7 @@ async (page) => {
         duration: 60,
         view: 0,
         danmaku: 0,
+        reply: 7,
         pubdate: 0,
       });
       function Slot({ id, mode, allowed }) {

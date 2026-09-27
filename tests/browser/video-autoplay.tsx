@@ -24,6 +24,7 @@ const archive: VideoArchive = {
   author_videos: 0,
   view: 0,
   danmaku: 0,
+  reply: 0,
   pubdate: 0,
   reply: 0,
   ugc_season: null,

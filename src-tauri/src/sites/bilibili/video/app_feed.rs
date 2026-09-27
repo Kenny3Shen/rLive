@@ -308,6 +308,9 @@ fn app_video_item(item: &Value) -> Option<VideoItem> {
         // 这些是展示文案还原的近似量，而非精确 stat；不补造低位、不发额外请求。
         view: cover_count(item, 1),
         danmaku: cover_count(item, 3),
+        // APP 卡片流不下发评论数：封面角标只有播放/弹幕/时长三类（实测），
+        // 补一个近似值会与详情页对不上，因此保持「没说」。
+        reply: None,
         pubdate: item
             .get("pubdate")
             .and_then(json_u64)

@@ -44,6 +44,19 @@ export type VideoItem = {
   duration: number;
   view: number;
   danmaku: number;
+  /**
+   * 评论数。上游字段名随接口而异，后端已归一到这一个字段：
+   *
+   * - story feed / 热门 / 相关 / 分区榜：`stat.reply`（story 的实测与稿件详情的
+   *   `stat.reply`、评论接口的 `cursor.all_count` 三方一致）。
+   * - UP 主投稿列表：`comment`（**不能读它的 `review`，那是恒为 0 的诱饵**）。
+   * - 搜索：扁平字段 `review`。
+   * - 推荐流（web rcmd 与 APP 卡片流）：不下发，为 `null`。
+   *
+   * 用 `number | null` 而不是 0：竖屏底栏的评论按钮要显示它，而「上游说 0 条评论」
+   * 与「上游没说」是两件事 —— 后者不显示数字，而不是显示「0」。
+   */
+  reply: number | null;
   /** 发布时间，Unix 秒；UP 主投稿列表由上游 `created` 字符串换算，缺失为 0。 */
   pubdate: number;
   /** 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。 */

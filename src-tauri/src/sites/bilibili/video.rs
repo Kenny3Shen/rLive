@@ -277,6 +277,25 @@ fn video_item(item: &Value) -> VideoItem {
             .filter(|danmaku| *danmaku > 0)
             .or_else(|| item.get("video_review").map(as_i64))
             .unwrap_or(0),
+        // 评论数有三路来源，顺序不能换：
+        //   1. `stat.reply` —— 热门/相关/分区榜（实测 705、65、5369）。
+        //   2. `comment`     —— UP 主投稿列表，与详情 `stat.reply` 逐条一致
+        //      （实测 9827/9827、2053/2053、2237/2237）。
+        //   3. `review`      —— 搜索条目的扁平字段，与详情逐条一致（28/28）。
+        // **`comment` 必须排在 `review` 前面**：投稿列表两个字段都有，而它的
+        // `review` 是个恒为 0 的诱饵（60 条样本全为 0），照 `review` 读会把每条
+        // 都显示成「0 条评论」；搜索条目没有 `comment`，回退到 `review` 才正确。
+        // 推荐流（web rcmd / APP 卡片流）三路都没有，保持 `None`。
+        reply: stat
+            .and_then(|stat| stat.get("reply"))
+            .map(as_i64)
+            .filter(|reply| *reply >= 0)
+            .or_else(|| {
+                item.get("comment")
+                    .map(as_i64)
+                    .filter(|comment| *comment >= 0)
+            })
+            .or_else(|| item.get("review").map(as_i64).filter(|review| *review >= 0)),
         // 推荐流/搜索/热门给 Unix 秒；UP 主投稿列表的 `created` 当前也是 Unix 秒
         // （数字），老接口返回过北京时间字符串，两种形状都收。都没有时为 0，
         // 前端不渲染日期。
@@ -485,6 +504,13 @@ fn story_item(item: &Value) -> VideoItem {
             .and_then(|stat| stat.get("danmaku"))
             .map(as_i64)
             .unwrap_or(0),
+        // 评论数：story 的 `stat.reply` 实测每条都有，且与 `x/web-interface/view`
+        // 的 `stat.reply`、评论接口的 `cursor.all_count` 三方一致（同一稿件实测
+        // 56/56/56、141/141/141）。竖屏底栏的评论按钮读它。
+        reply: stat
+            .and_then(|stat| stat.get("reply"))
+            .map(as_i64)
+            .filter(|reply| *reply >= 0),
         pubdate: item.get("pubdate").map(as_i64).unwrap_or(0),
         // story 条目不带 `rcmd_reason`；它自带的 `sub_title`（「N 万播放」）与 `view`
         // 重复，不当推荐理由用。
@@ -2219,7 +2245,7 @@ mod tests {
             "data": { "no_more": true, "list": [
                 { "aid": 117_191_437_455_648_i64, "bvid": "BV1x", "cid": 41_473_934_959_i64, "title": "t",
                   "pic": "https://i1.hdslb.com/a.jpg", "duration": 258, "pubdate": 1,
-                  "owner": { "name": "up", "face": "" }, "stat": { "view": 10, "danmaku": 2 },
+                  "owner": { "name": "up", "face": "" }, "stat": { "view": 10, "danmaku": 2, "reply": 705 },
                   "rcmd_reason": { "content": "百万播放", "corner_mark": 0 } }
             ]}
         })
@@ -2229,6 +2255,9 @@ mod tests {
         assert!(!page.has_more, "no_more=true 必须终止翻页");
         assert_eq!(page.items[0].rcmd_reason.as_deref(), Some("百万播放"));
         assert_eq!(page.items[0].author_face, None, "空头像不应产出无效 URL");
+        // 热门带 stat.reply（实测 705 这类量级），评论数与弹幕数必须各归各位。
+        assert_eq!(page.items[0].reply, Some(705));
+        assert_eq!(page.items[0].danmaku, 2);
     }
 
     #[test]
@@ -2246,7 +2275,7 @@ mod tests {
                   "dimension": { "width": 1080, "height": 1920, "rotate": 0 },
                   "owner": { "name": "up主", "face": "https://i2.hdslb.com/bfs/face/x.jpg",
                              "fans": 12345 },
-                  "stat": { "view": 187_172, "danmaku": 24 } },
+                  "stat": { "view": 187_172, "danmaku": 24, "reply": 56 } },
                 // 横屏条目：story 是混合流，照样保留，由前端按 dimension 适配舞台。
                 { "card_goto": "vertical_av", "param": "2", "bvid": "BV1y",
                   "player_args": { "cid": 2 }, "title": "横屏", "cover": "",
@@ -2267,6 +2296,10 @@ mod tests {
         assert_eq!(vertical.cid, Some(41_855_094_127));
         assert_eq!(vertical.view, 187_172);
         assert_eq!(vertical.duration, 93);
+        // 评论数必须来自 `stat.reply`，不是 `stat.danmaku`：竖屏底栏的评论按钮
+        // 读这个值，两者混淆会让「评论 24」实际显示的是弹幕数（真实评论 56 条）。
+        assert_eq!(vertical.reply, Some(56));
+        assert_ne!(vertical.reply, Some(vertical.danmaku));
         // 粉丝数是 story 白带的（`owner.fans`），信息行因此不必再请求详情。
         assert_eq!(vertical.author_fans, Some(12_345));
         // 封面优先 cover 而不是首帧图 ff_cover，且必须升成 https。
@@ -2306,6 +2339,8 @@ mod tests {
         assert!(item.dimension.is_none());
         // 没有 fans 字段时是「没说」而不是「0 个粉丝」。
         assert_eq!(item.author_fans, None);
+        // 同理：没有 stat.reply 时是「没说」，不能编造 0 条评论。
+        assert_eq!(item.reply, None);
     }
 
     /// 只有 bvid 有意义的 story 条目：取批/去重的测试都只看 bvid。
@@ -2323,6 +2358,7 @@ mod tests {
             duration: 0,
             view: 0,
             danmaku: 0,
+            reply: None,
             pubdate: 0,
             rcmd_reason: None,
             dimension: None,
@@ -2516,6 +2552,7 @@ mod tests {
                         "duration": "1:02:03",
                         "play": "13856",
                         "video_review": "58",
+                        "review": "37",
                         "pubdate": 1759000000
                     },
                     // 同 bvid 重复返回，前端网格的 key 会冲突，这里应去重。
@@ -2538,6 +2575,9 @@ mod tests {
         assert_eq!(first.author, "UP 主甲");
         assert_eq!(first.view, 13_856);
         assert_eq!(first.danmaku, 58);
+        // 搜索条目是扁平结构：评论数在 `review`，弹幕数在 `video_review`。
+        // 实测 `review` 与详情 `stat.reply` 逐条一致（418/418、669/669）。
+        assert_eq!(first.reply, Some(37));
         // 搜索条目自带 Unix 秒发布时间。
         assert_eq!(first.pubdate, 1_759_000_000);
         // 字符串时长 H:MM:SS → 秒。
@@ -2545,6 +2585,8 @@ mod tests {
         // 搜索条目没有 cid —— 可播性由播放页用稿件详情补齐。
         assert_eq!(first.cid, None);
         assert_eq!(page.items[1].duration, 389);
+        // 该条没有 `review`：是「没说」而不是「0 条评论」。
+        assert_eq!(page.items[1].reply, None);
 
         let last = parse_search_videos(&raw, 2).unwrap();
         assert!(!last.has_more);
@@ -2568,6 +2610,10 @@ mod tests {
                             "length": "10:30",
                             "play": 100,
                             "video_review": 5,
+                            // 投稿列表的 `comment` 才是评论数；`review` 恒为 0，
+                            // 解析器若照 `review` 读就会把这里显示成「0 条评论」。
+                            "comment": 9827,
+                            "review": 0,
                             "created": 1_788_235_200
                         },
                         // 老接口形状：北京时间字符串，按 UTC 解析再减 8 小时
@@ -2590,6 +2636,11 @@ mod tests {
         assert_eq!(page.items[0].pubdate, 1_788_235_200);
         assert_eq!(page.items[1].pubdate, 1_788_235_200);
         assert_eq!(page.items[2].pubdate, 0);
+        // 评论数取 `comment`（9827），不取恒为 0 的 `review`；弹幕数仍是 video_review。
+        assert_eq!(page.items[0].reply, Some(9827));
+        assert_eq!(page.items[0].danmaku, 5);
+        // 没有 comment/review 时是「没说」。
+        assert_eq!(page.items[1].reply, None);
     }
 
     #[test]
