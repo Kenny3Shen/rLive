@@ -78,19 +78,19 @@ import type { VideoPlayInfo } from "@/shared/types/video";
 export const SHORTS_SESSION_RETENTION_MS = 15_000;
 
 /** 保留位里的一条：会话仍在代理侧存活，playInfo 因此仍可用。 */
-export type ShortsParkedSession = {
+export type ShortsParkedSession<Info = VideoPlayInfo> = {
   itemKey: string;
-  playInfo: VideoPlayInfo;
+  playInfo: Info;
   /** 放进保留位的时刻，用于 TTL 判定。 */
   parkedAtMs: number;
 };
 
 /** 保留位。K = 1，因此只有一个槽（理由见模块头注）。 */
-export type ShortsRetentionState = {
-  parked: ShortsParkedSession | null;
+export type ShortsRetentionState<Info = VideoPlayInfo> = {
+  parked: ShortsParkedSession<Info> | null;
 };
 
-export const SHORTS_RETENTION_EMPTY: ShortsRetentionState = { parked: null };
+export const SHORTS_RETENTION_EMPTY: ShortsRetentionState<never> = { parked: null };
 
 /** 保留策略：只有用户真正看过的那条值得留（预热过的没看过）。 */
 export function shortsShouldRetainSession(wasPlaying: boolean): boolean {
@@ -112,12 +112,12 @@ export function shortsRetentionExpired(
  * **不改变状态**，因此可以在渲染期安全调用（幂等）。到期的不交出：定时器在后台
  * 标签页会被节流而没跑，此时保留位里的会话可能已经该死了。
  */
-export function shortsRetentionPeek(
-  state: ShortsRetentionState,
+export function shortsRetentionPeek<Info = VideoPlayInfo>(
+  state: ShortsRetentionState<Info>,
   itemKey: string,
   nowMs: number,
   ttlMs: number = SHORTS_SESSION_RETENTION_MS,
-): VideoPlayInfo | null {
+): Info | null {
   const parked = state.parked;
   if (!parked || parked.itemKey !== itemKey) return null;
   if (shortsRetentionExpired(parked.parkedAtMs, nowMs, ttlMs)) return null;
@@ -130,10 +130,10 @@ export function shortsRetentionPeek(
  * 幂等：不在保留位里时是空操作。这样槽位可以放心地在 layout effect 里调它，
  * 不必担心重复执行。
  */
-export function shortsRetentionRelease(
-  state: ShortsRetentionState,
+export function shortsRetentionRelease<Info = VideoPlayInfo>(
+  state: ShortsRetentionState<Info>,
   itemKey: string,
-): { state: ShortsRetentionState; released: ShortsParkedSession | null } {
+): { state: ShortsRetentionState<Info>; released: ShortsParkedSession<Info> | null } {
   if (state.parked?.itemKey !== itemKey) {
     return { state, released: null };
   }
@@ -146,12 +146,12 @@ export function shortsRetentionRelease(
  * 幂等：同一条重复放入返回原状态与 `null`（不产生需要停掉的会话），这样调用方
  * 在换片与角色变化两条路径上都调它也不会重复停。
  */
-export function shortsRetentionPark(
-  state: ShortsRetentionState,
+export function shortsRetentionPark<Info = VideoPlayInfo>(
+  state: ShortsRetentionState<Info>,
   itemKey: string,
-  playInfo: VideoPlayInfo,
+  playInfo: Info,
   nowMs: number,
-): { state: ShortsRetentionState; displaced: ShortsParkedSession | null } {
+): { state: ShortsRetentionState<Info>; displaced: ShortsParkedSession<Info> | null } {
   if (state.parked?.itemKey === itemKey) {
     return { state, displaced: null };
   }
@@ -167,11 +167,11 @@ export function shortsRetentionPark(
  *
  * 定时器与取用路径共用：定时器负责按时触发，取用路径负责兜住被节流漏掉的触发。
  */
-export function shortsRetentionExpire(
-  state: ShortsRetentionState,
+export function shortsRetentionExpire<Info = VideoPlayInfo>(
+  state: ShortsRetentionState<Info>,
   nowMs: number,
   ttlMs: number = SHORTS_SESSION_RETENTION_MS,
-): { state: ShortsRetentionState; expired: ShortsParkedSession | null } {
+): { state: ShortsRetentionState<Info>; expired: ShortsParkedSession<Info> | null } {
   const parked = state.parked;
   if (!parked || !shortsRetentionExpired(parked.parkedAtMs, nowMs, ttlMs)) {
     return { state, expired: null };

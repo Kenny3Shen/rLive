@@ -391,6 +391,30 @@ class VideoJsPlayer {
     this.dash.src = url;
   }
 
+  /**
+   * 共用短视频缓冲门控：DASH 保留精确预算及调度恢复，原生只改 preload 提示。
+   *
+   * 原生 preload 由浏览器自行解释，不保证精确预热 2 秒或立即停止网络；切角色时
+   * 绝不清 src 或调用 load，否则已经预热的缓冲会丢失。
+   */
+  setShortsBufferMode(mode: VideoJsDashBufferMode): void {
+    if (this.destroyed) return;
+    if (this.dash) {
+      this.setDashBufferMode(mode);
+    } else if (this.options.kind === "native") {
+      this.media.preload = mode === "paused" ? "none" : "auto";
+    }
+  }
+
+  /** 原生点播槽位换源：保留媒体与监听；同 URL 是空操作，不丢预热缓冲。 */
+  switchNativeSource(url: string): void {
+    if (this.destroyed || this.options.kind !== "native" || this.options.url === url) return;
+    this.endedAt = null;
+    this.options.url = url;
+    this.media.src = url;
+    this.media.load();
+  }
+
   switchSource(
     url: string,
     kind: VideoJsPlaybackKind,

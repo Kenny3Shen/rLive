@@ -18,11 +18,10 @@ import {
   videoJsDashBufferSettings,
   type VideoJsPlayerInstance,
 } from "@/features/room/player/videoJsPlayer";
-import { videoGetPlayInfo, videoStopPlay } from "@/features/video/videoApi";
-import { VIDEO_HISTORY_QUERY_KEY, videoHistoryAdd } from "@/features/video/videoHistory";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import type { VideoItem, VideoPlayInfo } from "@/shared/types/video";
-import { shortsItemKey, type ShortsIntrinsicSize, type ShortsSlotId } from "./shortsFeed";
+import { type ShortsIntrinsicSize, type ShortsSlotId } from "./shortsFeed";
+import { BILIBILI_SHORTS_SOURCE, type ShortsPlaybackSource } from "./shortsPlaybackSource";
 import { shortsShouldRetainSession } from "./shortsSessionRetention";
 import { PendingPlaybackRequests } from "./pendingPlaybackRequests";
 
@@ -35,11 +34,10 @@ import { PendingPlaybackRequests } from "./pendingPlaybackRequests";
  * 短视频这一版一条都不需要，照搬会把两个表面绑在同一份高风险 effect 上。
  * 这里保留的是不可省的四件事，其余全部去掉：
  *
- * 1. `video_get_play_info` 取流（DASH + 本机代理），`gcTime: 0` —— 缓存命中会返回
- *    指向**已经停掉**的代理会话的 MPD。
- * 2. 换片与卸载都必须 `video_stop_play`，否则每滑一条泄漏三个本机监听器。
+ * 1. 由平台适配器取流，`gcTime: 0` —— 缓存命中会返回指向**已经停掉**的代理会话。
+ * 2. 换片与卸载都必须停止平台会话，否则每滑一条都会泄漏本机资源。
  * 3. 播完从头重播（短视频的默认消费语义是循环，不是停在最后一帧）。
- * 4. 观看历史上报，与播放页同一套节流与身份约定。
+ * 4. 适配器可选的观看历史上报，使用共用节流与身份约定。
  *
  * 不做续播定位：短视频从头看是唯一合理的起点，上次停在第 8 秒不构成「续播」。
  * 历史仍然记 —— 它是「看过什么」的账，与要不要跳位无关。
@@ -51,7 +49,7 @@ import { PendingPlaybackRequests } from "./pendingPlaybackRequests";
  * 而不是「挂载/卸载」：
  *
  * - `<video>` 元素与 Video.js 实例都属于槽位，**不随条目销毁重建**。换片走
- *   `switchVideoJsDashSource`（dash.js 的 `attachSource`），省掉引擎与 DOM 的重建。
+ *   DASH 的 `attachSource` 或原生 `switchNativeSource`，省掉引擎与 DOM 的重建。
  * - 事件监听同样只绑一次（绑在媒体元素上），通过 `sessionRef` 读当次会话的
  *   上下文，因此换源不需要重新注册。
  * - `mode` 决定这一轮要不要真的起播：`"warm"` 只取流 + 缓冲到 `canplay`，
@@ -108,9 +106,11 @@ export type ShortsPlaybackState = {
   retry: () => void;
 };
 
-type UseShortsPlaybackSlotOptions = {
+export type UseShortsMediaPlaybackSlotOptions<Item, Info extends object> = {
+  /** 槽位生命周期内保持稳定的平台适配器，使用模块级常量。 */
+  source: ShortsPlaybackSource<Item, Info>;
   /** 槽位当前持有的条目；null 表示这一轮没有内容（此时拆除播放器）。 */
-  item: VideoItem | null;
+  item: Item | null;
   /** 槽位独占的媒体元素。跨条目稳定，是播放器复用的前提。 */
   videoRef: RefObject<HTMLVideoElement | null>;
   /** 槽位标识。进 queryKey：三个槽位的取流互不复用（各自的会话生命周期独立）。 */
@@ -132,21 +132,26 @@ type UseShortsPlaybackSlotOptions = {
    *
    * 命中时本槽位不再取流：那份 playInfo 指向的会话仍由保留位续着。
    */
-  claimPlayInfo?: ((itemKey: string) => VideoPlayInfo | null) | undefined;
+  claimPlayInfo?: ((itemKey: string) => Info | null) | undefined;
   /** 把保留会话从保留位移出、所有权交给本槽位（幂等，**不停它**）。 */
   releasePlayInfo?: ((itemKey: string) => void) | undefined;
   /** 把本槽位刚丢下的会话交回保留位（只有用户看过的才值得留）。 */
-  parkPlayInfo?: ((itemKey: string, playInfo: VideoPlayInfo) => void) | undefined;
+  parkPlayInfo?: ((itemKey: string, playInfo: Info) => void) | undefined;
   /** 播放位置推进的回调：弹幕分段按它加载。只有活动槽位会收到。 */
   onProgress?: ((positionMs: number) => void) | undefined;
 };
 
+type UseShortsPlaybackSlotOptions = Omit<
+  UseShortsMediaPlaybackSlotOptions<VideoItem, VideoPlayInfo>,
+  "source"
+>;
+
 /** 监听闭包读的会话上下文。换源时整体替换，因此监听不必重新注册。 */
-type SlotSession = {
-  item: VideoItem | null;
-  cid: number;
+type SlotSession<Item, Info> = {
+  source: ShortsPlaybackSource<Item, Info>;
+  item: Item | null;
   itemKey: string;
-  playInfo: VideoPlayInfo | null;
+  playInfo: Info | null;
   mode: ShortsSlotMode;
   onProgress: ((positionMs: number) => void) | undefined;
   reportedAt: number | null;
@@ -155,7 +160,13 @@ type SlotSession = {
   token: number;
 };
 
-export function useShortsPlaybackSlot({
+/** 保持原 B 站调用入口；没有第二份平台专属槽位实现。 */
+export function useShortsPlaybackSlot(options: UseShortsPlaybackSlotOptions): ShortsPlaybackState {
+  return useShortsMediaPlaybackSlot({ ...options, source: BILIBILI_SHORTS_SOURCE });
+}
+
+export function useShortsMediaPlaybackSlot<Item, Info extends object>({
+  source,
   item,
   videoRef,
   slotId,
@@ -165,7 +176,7 @@ export function useShortsPlaybackSlot({
   releasePlayInfo,
   parkPlayInfo,
   onProgress,
-}: UseShortsPlaybackSlotOptions): ShortsPlaybackState {
+}: UseShortsMediaPlaybackSlotOptions<Item, Info>): ShortsPlaybackState {
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
   const [paused, setPaused] = useState(true);
@@ -191,9 +202,7 @@ export function useShortsPlaybackSlot({
   const [rate, setRate] = useState(1);
   const [revision, setRevision] = useState(0);
 
-  const cid = item?.cid ?? 0;
-  const bvid = item?.bvid ?? "";
-  const itemKey = item ? shortsItemKey(item) : "";
+  const itemKey = item ? source.key(item) : "";
 
   /**
    * 接管保留会话。
@@ -203,7 +212,7 @@ export function useShortsPlaybackSlot({
    * 槽位（见下面的 release effect），保留位里不再有这一条 —— 再查会是 null，
    * `enabled` 会翻回 true 而白取一次流。
    */
-  const adoptedRef = useRef<{ key: string; info: VideoPlayInfo } | null>(null);
+  const adoptedRef = useRef<{ key: string; info: Info } | null>(null);
   /** 已因错误退回过取流的条目，保证每条只退一次，避免失败循环。 */
   const fellBackRef = useRef<string | null>(null);
   if (adoptedRef.current?.key !== itemKey) {
@@ -218,35 +227,27 @@ export function useShortsPlaybackSlot({
   // 每个查询身份独立管理未交接的资源，旧查询清理不会误停新查询。
   const pendingRequests = useMemo(
     () =>
-      new PendingPlaybackRequests<VideoPlayInfo>((info) => {
-        void videoStopPlay(info.session_ids).catch(() => undefined);
+      new PendingPlaybackRequests<Info>((info) => {
+        void source.stop(info).catch(() => undefined);
       }),
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [ownerId, bvid, cid, revision],
+    [source, ownerId, slotId, itemKey, revision],
   );
   useEffect(() => () => pendingRequests.clear(), [pendingRequests]);
 
   const playInfoQuery = useQuery({
     // revision 进 key：重试就是换一份取流（旧会话已停，MPD 不可复用）。
     // slotId 进 key：三个槽位各自持有会话，绝不复用另一个槽位可能已停的 MPD。
-    queryKey: ["shorts_play_info", ownerId, slotId, bvid, cid, revision],
+    queryKey: ["shorts_play_info", source.id, ownerId, slotId, itemKey, revision],
     // 取流不受闸门约束（见 `mediaAllowed`）：只有条目本身可用性的前置条件。
     // 已接管保留会话时不取流 —— 那份 playInfo 指向的会话仍然存活，重取既多余
     // 又会把新端口写进 MPD 而让旧地址作废。
-    enabled: item !== null && cid > 0 && bvid !== "" && adopted === null,
+    enabled: item !== null && source.canPlay(item) && adopted === null,
     queryFn: ({ signal }) =>
-      pendingRequests.acquire(signal, () =>
-        videoGetPlayInfo({
-          bvid,
-          cid,
-          ep_id: null,
-          qn: null,
-          audio_only: false,
-          // 短视频的回滑与重进会重复请求同一条的分片，让代理把它们落盘。
-          // 播放页不传：那里的取流只在开播时发生一次，缓存只有磁盘成本。
-          media_cache: true,
-        }),
-      ),
+      pendingRequests.acquire(signal, () => {
+        if (item === null || !source.canPlay(item)) throw new Error("视频条目不可播放");
+        return source.load(item);
+      }),
     // 实例不是可自动刷新的数据；重试必须显式推进 revision。
     staleTime: Infinity,
     refetchOnWindowFocus: false,
@@ -259,7 +260,7 @@ export function useShortsPlaybackSlot({
   // 接管的那份 playInfo 与正常取回的**形状完全一致**，因此附着、换源、会话上报
   // 全部无需区分来源。
   const playInfo = adopted ?? playInfoQuery.data;
-  const playUrl = playInfo?.mpd_url;
+  const playUrl = playInfo ? source.url(playInfo) : undefined;
 
   // 所有权移交：接管的那一刻把会话从保留位移出，此后由本槽位负责它的存亡
   // （`heldRef` 的交接与卸载两条路径）。刻意不在渲染期做 —— 渲染可能被丢弃，
@@ -295,7 +296,7 @@ export function useShortsPlaybackSlot({
    * 用 `playInfo`（含接管来的那份）而不是 `playInfoQuery.data`：接管的会话同样
    * 由本槽位负责存亡。
    */
-  const heldRef = useRef<{ key: string; playInfo: VideoPlayInfo } | null>(null);
+  const heldRef = useRef<{ key: string; playInfo: Info } | null>(null);
 
   /**
    * 角色快照：当前条目的角色，以及**上一个条目的角色**。
@@ -342,9 +343,11 @@ export function useShortsPlaybackSlot({
     const previous = heldRef.current;
     const current = playInfo;
     if (!current || !previous) return;
-    // 同一条同一份取流：不需要交接。用 `session_ids.mpd` 比：它是本次取流的身份
-    // （重试会换一份新的 session_ids）。
-    if (previous.key === itemKey && previous.playInfo.session_ids.mpd === current.session_ids.mpd) {
+    // 同一条同一份取流不需要交接；重试的会话身份由平台适配器给出。
+    if (
+      previous.key === itemKey &&
+      source.sessionId(previous.playInfo) === source.sessionId(current)
+    ) {
       return;
     }
 
@@ -357,8 +360,8 @@ export function useShortsPlaybackSlot({
     }
     // 重试（同一条换了一份取流）与「只是预载过」都直接停：前者旧 MPD 已作废，
     // 后者用户没看过。
-    void videoStopPlay(previous.playInfo.session_ids);
-  }, [playInfo, itemKey, parkPlayInfo]);
+    void source.stop(previous.playInfo).catch(() => undefined);
+  }, [playInfo, itemKey, parkPlayInfo, source]);
 
   // 记下本槽位当前持有的会话（声明顺序在交接之后：交接先读上一轮的旧值）。
   useEffect(() => {
@@ -375,12 +378,12 @@ export function useShortsPlaybackSlot({
   /**
    * 监听闭包读的会话上下文。
    *
-   * 监听绑在媒体元素上、只绑一次，因此它不能闭包捕获 cid/playInfo —— 那些在换源
+   * 监听绑在媒体元素上、只绑一次，因此它不能闭包捕获条目/playInfo —— 那些在换源
    * 之后就过期了。全部经这个 ref 读取。
    */
-  const sessionRef = useRef<SlotSession>({
+  const sessionRef = useRef<SlotSession<Item, Info>>({
+    source,
     item: null,
-    cid: 0,
     itemKey: "",
     playInfo: null,
     mode: "warm",
@@ -394,7 +397,7 @@ export function useShortsPlaybackSlot({
   /** 已经绑过监听的媒体元素；元素换了（面板重挂载）就必须重新绑。 */
   const boundMediaRef = useRef<HTMLVideoElement | null>(null);
   const unbindRef = useRef<(() => void) | null>(null);
-  /** 当前附着的 MPD 地址：没变就不重新 attach。 */
+  /** 当前附着的媒体地址：没变就不重新 attach。 */
   const attachedUrlRef = useRef<string | null>(null);
   const expectedItemRef = useRef(itemKey);
   useLayoutEffect(() => {
@@ -402,14 +405,15 @@ export function useShortsPlaybackSlot({
   }, [itemKey]);
   const attachTokenRef = useRef(0);
 
-  /** 记下进度：身份经 ref 读取，并用 cid 比对挡住错位。 */
+  /** 记下进度：身份经 ref 读取，并用平台条目键比对挡住错位。 */
   const reportProgress = useCallback(
     (position: number, force: boolean) => {
       const session = sessionRef.current;
       // 预热不记账：它从未播放过，写进历史等于把没看的条目记成看过。
-      if (session.mode !== "play") return;
+      // 未提供平台历史能力时直接退出；抖音绝不调用 B 站的历史接口。
+      if (session.mode !== "play" || !session.source.reportProgress) return;
       const current = session.item;
-      if (!current || (current.cid ?? 0) !== session.cid) return;
+      if (!current || session.source.key(current) !== session.itemKey) return;
       const now = Date.now();
       if (force) {
         if (!isWatchProgressWorthKeeping(position)) return;
@@ -417,25 +421,7 @@ export function useShortsPlaybackSlot({
         return;
       }
       session.reportedAt = now;
-      void videoHistoryAdd({
-        kind: "ugc",
-        // UGC 的 oid 就是 bvid，两个字段同源。
-        oid: current.bvid,
-        title: current.title,
-        cover: current.cover,
-        author: current.author,
-        // 短视频都是单 P，分 P 标题留空。
-        part_title: "",
-        bvid: current.bvid,
-        cid: current.cid ?? 0,
-        ep_id: "",
-        aid: current.aid,
-        progress: position,
-        duration: session.playInfo?.duration ?? 0,
-        watched_at: now,
-      })
-        .then(() => queryClient.invalidateQueries({ queryKey: VIDEO_HISTORY_QUERY_KEY }))
-        .catch(() => undefined);
+      session.source.reportProgress(current, session.playInfo, position, now, queryClient);
     },
     [queryClient],
   );
@@ -470,8 +456,12 @@ export function useShortsPlaybackSlot({
   /** 绑定媒体监听。每个媒体元素只绑一次，跨换源保留。 */
   const bindListeners = useCallback(
     (media: HTMLVideoElement) => {
+      function infoDuration() {
+        const session = sessionRef.current;
+        return session.playInfo ? session.source.duration(session.playInfo) : 0;
+      }
       function totalDuration() {
-        const fromInfo = sessionRef.current.playInfo?.duration ?? 0;
+        const fromInfo = infoDuration();
         if (fromInfo > 0) return fromInfo;
         return Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
       }
@@ -481,8 +471,8 @@ export function useShortsPlaybackSlot({
         reportProgress(actual, false);
       }
       function syncDuration() {
-        // 后端从 sidx 累加出的时长更早可用也更精确，只有它缺失才退回媒体元数据。
-        if ((sessionRef.current.playInfo?.duration ?? 0) > 0) return;
+        // 平台取流元数据的时长更早可用，缺失时退回媒体元数据。
+        if (infoDuration() > 0) return;
         if (Number.isFinite(media.duration) && media.duration > 0) setDuration(media.duration);
       }
       /** 画幅：`loadedmetadata` 时首次可得，`resize` 在换轨/旋转后再报。 */
@@ -503,7 +493,7 @@ export function useShortsPlaybackSlot({
         if (sessionRef.current.itemKey !== expectedItemRef.current || media.readyState < 3) return;
         setLoading(false);
         setReady(true);
-        if (sessionRef.current.mode === "warm") playerRef.current?.setDashBufferMode("paused");
+        if (sessionRef.current.mode === "warm") playerRef.current?.setShortsBufferMode("paused");
         syncTime();
         syncDuration();
         syncIntrinsicSize();
@@ -633,10 +623,10 @@ export function useShortsPlaybackSlot({
         // oxlint-disable-next-line react-hooks/exhaustive-deps
         if (mountEpochRef.current !== epoch) return;
         heldRef.current = null;
-        if (held) void videoStopPlay(held.playInfo.session_ids).catch(() => undefined);
+        if (held) void source.stop(held.playInfo).catch(() => undefined);
       });
     };
-  }, [teardown]);
+  }, [teardown, source]);
 
   // 条目变了就停止旧媒体；新取流到达前不能让旧条目继续出声或上报。
   useEffect(() => {
@@ -654,16 +644,16 @@ export function useShortsPlaybackSlot({
     const held = heldRef.current;
     heldRef.current = null;
     roleRef.current = null;
-    if (held) void videoStopPlay(held.playInfo.session_ids);
-  }, [item, teardown]);
+    if (held) void source.stop(held.playInfo).catch(() => undefined);
+  }, [item, teardown, source]);
 
   /**
    * 取流完成 → 附着到媒体元素。
    *
    * 两种进入方式，只有第二种真正建播放器：
    *
-   * - **换源**（槽位已有播放器）：`switchVideoJsDashSource` 走 dash.js 的
-   *   `attachSource`，引擎、媒体元素与监听全部保留。这就是「播放器复用」。
+   * - **换源**（槽位已有播放器）：DASH `attachSource` 或原生 `switchNativeSource`，
+   *   引擎、媒体元素与监听全部保留。这就是「播放器复用」。
    * - **首次/媒体元素已换**：`createVideoJsPlayer` 新建。
    *
    * 刻意**不**在清理函数里拆播放器：这个函数会在每次依赖变化时跑，而换片正是
@@ -699,8 +689,8 @@ export function useShortsPlaybackSlot({
     attachTokenRef.current = token;
     attachedUrlRef.current = playUrl;
     sessionRef.current = {
+      source,
       item,
-      cid,
       itemKey,
       playInfo: playInfo ?? null,
       mode,
@@ -715,7 +705,7 @@ export function useShortsPlaybackSlot({
     setReady(false);
     setError(null);
     setPaused(true);
-    setDuration(playInfo?.duration ?? 0);
+    setDuration(playInfo ? source.duration(playInfo) : 0);
     setIntrinsicSize(null);
     media.muted = mutedRef.current;
     // 倍速不跨条目继承：长按倍速是临时状态，按住不放地滑动换片时这里会先于
@@ -727,25 +717,33 @@ export function useShortsPlaybackSlot({
     if (!media.paused) media.pause();
 
     if (reused && playerRef.current) {
-      playerRef.current.setDashBufferMode(mode === "play" ? "active" : "warm");
-      switchVideoJsDashSource(playerRef.current, playUrl);
+      playerRef.current.setShortsBufferMode(mode === "play" ? "active" : "warm");
+      if (source.kind === "dash") switchVideoJsDashSource(playerRef.current, playUrl);
+      else playerRef.current.switchNativeSource(playUrl);
       return;
     }
 
     boundMediaRef.current = media;
     unbindRef.current = bindListeners(media);
     let cancelled = false;
-    void loadVideoJsModules("dash")
+    void loadVideoJsModules(source.kind)
       .then((modules) => {
         if (cancelled || sessionRef.current.token !== token || playerRef.current) return;
         const player = createVideoJsPlayer(modules, {
           video: media,
           url: playUrl,
-          kind: "dash",
+          kind: source.kind,
           isLive: false,
-          dash: videoJsDashBufferSettings(sessionRef.current.mode === "play" ? "active" : "warm"),
+          ...(source.kind === "dash"
+            ? {
+                dash: videoJsDashBufferSettings(
+                  sessionRef.current.mode === "play" ? "active" : "warm",
+                ),
+              }
+            : {}),
         });
         playerRef.current = player;
+        player.setShortsBufferMode(sessionRef.current.mode === "play" ? "active" : "warm");
         player.on("error", (cause) => {
           if (
             playerRef.current !== player ||
@@ -778,7 +776,7 @@ export function useShortsPlaybackSlot({
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     bindListeners,
-    cid,
+    source,
     item,
     itemKey,
     mediaAllowed,
@@ -800,10 +798,10 @@ export function useShortsPlaybackSlot({
     sessionRef.current.onProgress = onProgressRef.current;
   }, [mode, itemKey]);
 
-  // 已附着的邻居也受门控，而不是只挡首次 attach。停止新分片调度，保留已有缓冲。
+  // 已附着邻居也受门控：DASH 停新增调度；原生只改 preload 提示，均保留已有缓冲。
   useEffect(() => {
     const currentSource = sessionRef.current.itemKey === itemKey;
-    playerRef.current?.setDashBufferMode(
+    playerRef.current?.setShortsBufferMode(
       !currentSource || !mediaAllowed
         ? "paused"
         : mode === "play"
@@ -927,7 +925,11 @@ export function useShortsPlaybackSlot({
     // 取流本身也算加载，避免就绪前闪现暂停指示。
     loading: loading || (mediaAllowed && playInfoQuery.isFetching),
     paused,
-    error: error ?? (playInfoQuery.error ? "取流失败，请重试" : null),
+    error:
+      error ??
+      (playInfoQuery.error
+        ? videoJsPlayerErrorMessage(playInfoQuery.error, "取流失败，请重试")
+        : null),
     getCurrentTime,
     duration,
     muted,

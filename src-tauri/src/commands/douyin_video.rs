@@ -1,4 +1,4 @@
-//! 实验性抖音推荐与单作品播放，不写入 B 站观看历史。
+//! 抖音短视频推荐与单作品播放，不写入 B 站观看历史。
 use super::video::PlaybackProxyLease;
 use crate::error::{AppError, AppResult};
 use crate::models::{
@@ -48,7 +48,7 @@ fn require_same_account(current: &str, expected: &str) -> AppResult<()> {
     if current != expected {
         return Err(AppError::new(
             "douyin_account_changed",
-            "抖音账号已变化，请关闭推荐流后重新开启",
+            "抖音账号已变化，请刷新推荐或重新进入抖音推荐页",
         )
         .with_site("douyin"));
     }
@@ -60,7 +60,7 @@ fn require_feed_consent(consent: bool) -> AppResult<()> {
         Ok(())
     } else {
         Err(
-            AppError::new("douyin_feed_disabled", "请先手动开启实验性 Cookie 推荐流")
+            AppError::new("douyin_feed_disabled", "请从抖音推荐页发起推荐请求")
                 .with_site("douyin"),
         )
     }
@@ -141,7 +141,9 @@ mod tests {
     use super::*;
     #[test]
     fn feed_requires_explicit_consent() {
-        assert!(require_feed_consent(false).is_err());
+        let error = require_feed_consent(false).unwrap_err();
+        assert_eq!(error.code, "douyin_feed_disabled");
+        assert!(error.message.contains("抖音推荐页"));
         assert!(require_feed_consent(true).is_ok());
     }
 
@@ -151,6 +153,7 @@ mod tests {
         for current in ["", "sessionid=second"] {
             let error = require_same_account(current, "sessionid=first").unwrap_err();
             assert_eq!(error.code, "douyin_account_changed");
+            assert!(error.message.contains("刷新推荐"));
             assert!(!error.message.contains("sessionid"));
         }
     }

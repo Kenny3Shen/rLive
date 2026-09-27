@@ -12,8 +12,8 @@
 | 房间详情与播放 | 已支持 | 解析网页和回流接口，提供上游实际下发的清晰度与播放地址。 |
 | 账号 | 已支持 | 可扫码登录或手动保存 Cookie；匿名浏览会建立短时网页会话。 |
 | 实时弹幕接收 | 已支持 | 本地计算短时 MSSDK 签名，直连官方 WSS，接收聊天、礼物、点赞、进场等事件。 |
-| 短视频推荐 | 实验灰度 | `/shorts/douyin` 手动开启后携带本机登录 Cookie 请求 `tab/feed`，默认关闭、仅本次进入；无账号级个性化保证，不自动降级匿名。 |
-| 公开作品 | 实验性 | 作品 ID/链接/分享短链，经详情接口选可信 H.264，用原生 MP4 与本机代理播放。 |
+| 短视频推荐 | 已支持 | `/shorts/douyin` 沉浸式滑动流，携带本机登录 Cookie 请求 `tab/feed`，三槽预热并临近末尾自动补货；无账号级个性化保证，不自动降级匿名。 |
+| 公开作品 | 已支持 | 「作品链接」页签支持作品 ID/链接/分享短链，经详情接口选可信 H.264，用原生 MP4 与本机代理播放。 |
 | 弹幕发送 | 未支持 | 仅接收实时弹幕，不提供手动或会话级自动发送。 |
 
 ## rLive 接入接口
@@ -27,15 +27,16 @@
 - 翻页终止：该接口不下发 `has_more`，只有在「返回满页」且「上游 `offset` 确实前进」时才认为还有下一页，避免无限滚动反复拉取同一批房间。
 - 性能：匿名 `ttwid` 引导结果在进程内缓存（30 分钟 TTL），站点实例按命令创建时直接复用，避免每个列表请求重新下载约 1 MB 的直播首页；缓存只保存首页响应新增的匿名 Cookie，绝不缓存账号 Cookie，且已保存的登录值始终优先于缓存值。
 
-## 短视频 Cookie 推荐灰度
+## 短视频推荐
 
 与直播 `webcast/feed` 不同，点播推荐使用
 `GET https://www.douyin.com/aweme/v1/web/tab/feed/`，必须沿用本地 `a_bogus` 签名。
-`douyin_video_feed` 在显式同意并检查保存的登录 Cookie 字段后才发请求；复用当前账号、临时 `ttwid`
+进入推荐舞台时调用 `douyin_video_feed(consent: true)`，后端检查保存的登录 Cookie 字段后才发请求；复用当前账号、临时 `ttwid`
 和应用代理。接口无可靠分页游标，每次一批，前端批内/跨批去重并在全重复时停止；每轮最多 20 批。
 没有图集、广告或不支持编码的占位卡，也不为整批作品建立代理。
 
-`DouyinVideoFeedPage` 只返回元数据，选中作品才走已有详情与 `stream_proxy`。
+`DouyinVideoFeedPage` 只返回元数据，当前作品和两个邻居经共享三槽调用详情与 `stream_proxy`；
+当前可播后仅下一条预热媒体，原生 MP4 不加载 DASH 内核。
 登录态检查不是有效性认证，不将 Cookie 存在或推荐返回成功描述为个性化已经生效；不采集 Cookie
 用于 A/B，不绕过验证。产品行为、错误恢复、生命周期与测试入口见[短视频功能](短视频功能.md)。
 
@@ -83,7 +84,8 @@
 - 站点与直播业务：`src-tauri/src/sites/douyin/mod.rs`
 - 直播与点播共用的请求、匿名会话、Cookie 作用域及签名 query 编码：`src-tauri/src/sites/douyin/api.rs`
 - 点播推荐/详情：`src-tauri/src/sites/douyin/video.rs`、`src-tauri/src/commands/douyin_video.rs`
-- 灰度入口/共享原生播放：`src/features/shorts/DouyinVideoPage.tsx`、`DouyinVideoPlayer.tsx`
+- 推荐入口/共享舞台与媒体适配器：`src/features/shorts/DouyinVideoPage.tsx`、`DouyinShortsFeed.tsx`、`shortsPlaybackSource.ts`
+- 独立作品链接播放：`src/features/shorts/DouyinVideoPlayer.tsx`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
 - 扫码登录：`src-tauri/src/account/douyin_qr.rs`
 - 弹幕连接与帧解析：`src-tauri/src/danmu_rs/douyin.rs`

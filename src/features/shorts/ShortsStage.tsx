@@ -134,8 +134,12 @@ function useShortsFrameGeometry(aspect: number | null, area: { width: number; he
  * `ShortsPage`）—— 它们不该随条带平移，否则换片时会跟着画面一起滑走。
  */
 
+export type ShortsStageItem = Pick<VideoItem, "title" | "cover" | "dimension"> &
+  Partial<Pick<VideoItem, "aid" | "cid">>;
+
 type ShortsStageProps = {
-  item: VideoItem;
+  /** 仅依赖展示字段；抖音不伪造 B 站 aid/cid，弹幕由能力参数控制。 */
+  item: ShortsStageItem;
   playback: ShortsPlaybackState;
   videoRef: RefObject<HTMLVideoElement | null>;
   /**
@@ -143,9 +147,9 @@ type ShortsStageProps = {
    * 外，且它所在的面板带 `inert`，点按层挂上去只会挨一次吃掉的点击。
    */
   mode: ShortsSlotMode;
-  danmaku: ShortsDanmakuState;
-  /** 弹幕开关。关掉时不挂层。 */
-  danmakuVisible: boolean;
+  danmaku?: ShortsDanmakuState;
+  /** 弹幕开关。未提供弹幕能力或关掉时不挂层。 */
+  danmakuVisible?: boolean;
   /** 手势进行中：此时禁掉点按，避免滑动尾声的合成 click 误暂停。 */
   gestureActive: boolean;
   /**
@@ -245,7 +249,7 @@ export function ShortsStage({
                 fill ? "object-cover" : "object-contain",
               )}
             />
-            {danmakuVisible && !warming && (
+            {danmakuVisible && danmaku && item.aid && !warming && (
               <VideoDanmakuLayer
                 videoRef={videoRef}
                 entries={danmaku.entries}
@@ -333,15 +337,16 @@ export function ShortsStage({
             刻意是 div 而不是 button：铺满画面的按钮会进 Tab 序并被读屏当作一个
             巨大的控件，而它只是指针便利。键盘路径由 Space / K 承担（见 `ShortsPage`）。
           */}
-          {!warming && (
-            // oxlint-disable-next-line click-events-have-key-events, no-static-element-interactions
-            <div
-              aria-hidden
-              // 手势进行中不响应：Android WebView 在识别出的滑动之后仍可能补发 click。
-              onClick={gestureActive ? undefined : onSurfaceTap}
-              className="absolute inset-0"
-            />
-          )}
+          {!warming &&
+            !playback.error && (
+              // oxlint-disable-next-line click-events-have-key-events, no-static-element-interactions
+              <div
+                aria-hidden
+                // 手势进行中不响应：Android WebView 在识别出的滑动之后仍可能补发 click。
+                onClick={gestureActive ? undefined : onSurfaceTap}
+                className="absolute inset-0"
+              />
+            )}
         </div>
       </div>
     </div>
@@ -381,7 +386,7 @@ function ShortsDynamicBackground({ cover }: { cover: string | undefined }) {
  * 不画信息与操作入口：那些住在页面的固定层里，只描述**当前**条目。占位上再画一份
  * 会在滑动过程中出现两套信息。
  */
-export function ShortsPoster({ item }: { item: VideoItem }) {
+export function ShortsPoster({ item }: { item: Pick<ShortsStageItem, "cover" | "dimension"> }) {
   const cover = normalizeImageUrl(item.cover);
   const { size: area, measure } = useShortsStageSize();
   // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。

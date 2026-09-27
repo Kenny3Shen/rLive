@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { videoStopPlay } from "@/features/video/videoApi";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { VideoPlayInfo } from "@/shared/types/video";
+import { BILIBILI_SHORTS_SOURCE } from "./shortsPlaybackSource";
 import {
   SHORTS_RETENTION_EMPTY,
   SHORTS_SESSION_RETENTION_MS,
@@ -27,22 +27,35 @@ import {
  * 放在页面层而不是槽位 hook 里：被保留的条目在换片后**不属于任何一个槽位**
  * （两个槽位被新活动条与新预热条占着）。
  */
-export type ShortsSessionRetention = {
+export type ShortsSessionRetention<Info = VideoPlayInfo> = {
   /** 只读查看：这一条是否有可复用的会话（渲染期安全）。 */
-  peek: (itemKey: string) => VideoPlayInfo | null;
+  peek: (itemKey: string) => Info | null;
   /** 把会话移出保留位交给槽位，**不停它**（effect 里调，幂等）。 */
   release: (itemKey: string) => void;
   /** 放入保留位；会停掉被顶掉的那条。 */
-  park: (itemKey: string, playInfo: VideoPlayInfo) => void;
+  park: (itemKey: string, playInfo: Info) => void;
 };
 
+/** B 站兼容入口；抖音与后续来源共用下面的保留位生命周期。 */
 export function useShortsSessionRetention(
   ttlMs: number = SHORTS_SESSION_RETENTION_MS,
 ): ShortsSessionRetention {
-  const [state, setState] = useState<ShortsRetentionState>(SHORTS_RETENTION_EMPTY);
+  return useShortsMediaSessionRetention(BILIBILI_SHORTS_SOURCE.stop, ttlMs);
+}
+
+export function useShortsMediaSessionRetention<Info>(
+  stopPlayInfo: (info: Info) => Promise<void>,
+  ttlMs: number = SHORTS_SESSION_RETENTION_MS,
+): ShortsSessionRetention<Info> {
+  const [state, setState] = useState<ShortsRetentionState<Info>>(SHORTS_RETENTION_EMPTY);
   // 定时器与回调要读最新状态，而状态更新是异步的：用一个镜像 ref 给它们读。
   const stateRef = useRef(state);
   const timerRef = useRef<number | null>(null);
+  // 调用方的函数引用变化不应触发卸载清理、误停保留会话。
+  const stopPlayInfoRef = useRef(stopPlayInfo);
+  useLayoutEffect(() => {
+    stopPlayInfoRef.current = stopPlayInfo;
+  }, [stopPlayInfo]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -52,11 +65,11 @@ export function useShortsSessionRetention(
   }, []);
 
   /** 停掉一条保留会话（本机资源，必须显式释放）。 */
-  const stop = useCallback((parked: ShortsParkedSession | null) => {
-    if (parked) void videoStopPlay(parked.playInfo.session_ids);
+  const stop = useCallback((parked: ShortsParkedSession<Info> | null) => {
+    if (parked) void stopPlayInfoRef.current(parked.playInfo).catch(() => undefined);
   }, []);
 
-  const commit = useCallback((next: ShortsRetentionState) => {
+  const commit = useCallback((next: ShortsRetentionState<Info>) => {
     stateRef.current = next;
     setState(next);
   }, []);
@@ -71,7 +84,7 @@ export function useShortsSessionRetention(
   }, [clearTimer, commit, stop, ttlMs]);
 
   const peek = useCallback(
-    (itemKey: string): VideoPlayInfo | null =>
+    (itemKey: string): Info | null =>
       shortsRetentionPeek(stateRef.current, itemKey, Date.now(), ttlMs),
     [ttlMs],
   );
@@ -89,7 +102,7 @@ export function useShortsSessionRetention(
   );
 
   const park = useCallback(
-    (itemKey: string, playInfo: VideoPlayInfo) => {
+    (itemKey: string, playInfo: Info) => {
       const { state: next, displaced } = shortsRetentionPark(
         stateRef.current,
         itemKey,
@@ -111,9 +124,11 @@ export function useShortsSessionRetention(
     () => () => {
       clearTimer();
       const parked = stateRef.current.parked;
-      if (parked) void videoStopPlay(parked.playInfo.session_ids);
+      // 先清所有权再释放，重复清理（含 StrictMode）不会重复停同一条。
+      stateRef.current = SHORTS_RETENTION_EMPTY;
+      stop(parked);
     },
-    [clearTimer],
+    [clearTimer, stop],
   );
 
   return { peek, release, park };

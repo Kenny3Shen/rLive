@@ -1,4 +1,4 @@
-//! 实验性抖音公开作品；不经过直播 LiveSite trait。
+//! 抖音短视频推荐与公开作品；不经过直播 LiveSite trait。
 use super::DouyinSite;
 use super::api::{DEFAULT_USER_AGENT, cookie_pairs, generate_ms_token, normalize_cookie};
 use crate::error::{AppError, AppResult};
@@ -194,7 +194,7 @@ fn parse_video_item(
             .is_some_and(|images| !images.is_empty())
         || matches!(detail["aweme_type"].as_i64(), Some(68 | 101))
     {
-        return Err(invalid("实验入口暂不支持图集或直播作品"));
+        return Err(invalid("暂不支持广告、图集或直播作品"));
     }
     let video = &detail["video"];
     let mut url = media_url(&video["play_addr_h264"]);

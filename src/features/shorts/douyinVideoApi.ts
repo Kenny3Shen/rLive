@@ -24,7 +24,7 @@ export type DouyinVideoPlayback = {
 };
 
 export function douyinVideoFeed(): Promise<DouyinVideoFeedPage> {
-  // 只能从用户显式开启后挂载的推荐组件调用，不传 Cookie 或伪分页游标。
+  // 仅进入抖音推荐页后请求，不传 Cookie 或伪分页游标；保留后端显式请求契约。
   return invokeCmd("douyin_video_feed", { consent: true });
 }
 

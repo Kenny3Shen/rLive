@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { VideoItem } from "@/shared/types/video";
+import type { VideoItem, VideoPlayInfo } from "@/shared/types/video";
 import {
   shortsNextSlots,
   shortsPreloadDirection,
@@ -7,7 +7,8 @@ import {
   type ShortsSlots,
   type ShortsSwipeDirection,
 } from "./shortsFeed";
-import { useShortsPlaybackSlot, type ShortsPlaybackState } from "./useShortsPlayback";
+import { BILIBILI_SHORTS_SOURCE, type ShortsPlaybackSource } from "./shortsPlaybackSource";
+import { useShortsMediaPlaybackSlot, type ShortsPlaybackState } from "./useShortsPlayback";
 import type { ShortsSessionRetention } from "./useShortsSessionRetention";
 
 /**
@@ -57,8 +58,9 @@ export type ShortsSlotsState = {
   noteDirection: (from: number, to: number) => void;
 };
 
-export type UseShortsSlotsOptions = {
-  items: readonly VideoItem[];
+export type UseShortsMediaSlotsOptions<Item, Info extends object> = {
+  source: ShortsPlaybackSource<Item, Info>;
+  items: readonly Item[];
   /** 当前条目下标。 */
   index: number;
   refs: ShortsSlotRefs;
@@ -70,19 +72,33 @@ export type UseShortsSlotsOptions = {
    * 放在页面层是因为被保留的条目换片后**不属于任何一个槽位**（两个槽位被新
    * 活动条与新预热条占着），槽位 hook 看不到它。
    */
-  retention?: ShortsSessionRetention | undefined;
+  retention?: ShortsSessionRetention<Info> | undefined;
 };
+
+export type UseShortsSlotsOptions = Omit<
+  UseShortsMediaSlotsOptions<VideoItem, VideoPlayInfo>,
+  "source"
+>;
 
 const INITIAL_SLOTS: ShortsSlots = { held: { a: null, b: null, c: null }, active: "a" };
 
-export function useShortsSlots({
+/** 原 B 站入口保持兼容，平台差异只由适配器注入。 */
+export function useShortsSlots(options: UseShortsSlotsOptions): ShortsSlotsState {
+  return useShortsMediaSlots({ ...options, source: BILIBILI_SHORTS_SOURCE });
+}
+
+export function useShortsMediaSlots<Item, Info extends object>({
+  source,
   items,
   index,
   refs,
   onProgress,
   retention,
-}: UseShortsSlotsOptions): ShortsSlotsState {
-  const [slots, setSlots] = useState<ShortsSlots>(INITIAL_SLOTS);
+}: UseShortsMediaSlotsOptions<Item, Info>): ShortsSlotsState {
+  // 查询缓存可能让首次渲染就有条目；不能等 length/index 再变一次才分配槽位。
+  const [slots, setSlots] = useState<ShortsSlots>(() =>
+    shortsNextSlots(index, items.length, 1, INITIAL_SLOTS),
+  );
   /** 预热方向。回滑一次就翻到另一侧，此后顺着它预热。 */
   const [direction, setDirection] = useState<ShortsSwipeDirection>(1);
 
@@ -126,21 +142,31 @@ export function useShortsSlots({
     document.addEventListener("visibilitychange", sync);
     return () => document.removeEventListener("visibilitychange", sync);
   }, []);
-  const activeKey = `${active}:${index}:${items[index]?.bvid ?? ""}:${items[index]?.cid ?? 0}`;
+  const activeItem = items[index];
+  const activeKey = `${source.id}:${active}:${index}:${activeItem ? source.key(activeItem) : ""}`;
   const [readyKey, setReadyKey] = useState(activeKey);
   const connection = (
-    navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }
+    navigator as Navigator & {
+      connection?: EventTarget & { saveData?: boolean; effectiveType?: string };
+    }
   ).connection;
-  const allowWarm =
-    readyKey === activeKey &&
-    activeReady &&
-    foreground &&
-    !connection?.saveData &&
-    !["slow-2g", "2g"].includes(connection?.effectiveType ?? "");
+  const [networkAllowed, setNetworkAllowed] = useState(
+    () => !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType ?? ""),
+  );
+  useEffect(() => {
+    const sync = () =>
+      setNetworkAllowed(
+        !connection?.saveData && !["slow-2g", "2g"].includes(connection?.effectiveType ?? ""),
+      );
+    connection?.addEventListener?.("change", sync);
+    return () => connection?.removeEventListener?.("change", sync);
+  }, [connection]);
+  const allowWarm = readyKey === activeKey && activeReady && foreground && networkAllowed;
   const allowMedia = (slot: ShortsSlotId) =>
     slot === active || (allowWarm && slots.held[slot] === index + 1);
 
-  const slotA = useShortsPlaybackSlot({
+  const slotA = useShortsMediaPlaybackSlot({
+    source,
     item: items[slots.held.a ?? -1] ?? null,
     videoRef: refs.a,
     slotId: "a",
@@ -152,7 +178,8 @@ export function useShortsSlots({
     parkPlayInfo: retention?.park,
     onProgress: active === "a" ? onProgress : undefined,
   });
-  const slotB = useShortsPlaybackSlot({
+  const slotB = useShortsMediaPlaybackSlot({
+    source,
     item: items[slots.held.b ?? -1] ?? null,
     videoRef: refs.b,
     slotId: "b",
@@ -163,7 +190,8 @@ export function useShortsSlots({
     parkPlayInfo: retention?.park,
     onProgress: active === "b" ? onProgress : undefined,
   });
-  const slotC = useShortsPlaybackSlot({
+  const slotC = useShortsMediaPlaybackSlot({
+    source,
     item: items[slots.held.c ?? -1] ?? null,
     videoRef: refs.c,
     slotId: "c",

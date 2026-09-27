@@ -1,9 +1,11 @@
-// 抖音实验入口：只模拟 IPC，不访问真实作品或账号。
+// 抖音作品链接入口：只模拟 IPC，不访问真实作品、推荐或账号。
 // playwright-cli -s=rwin run-code --filename=tests/douyin-video.browser.js
+// oxlint-disable-next-line no-unused-expressions -- run-code 要求顶层函数表达式。
 async (page) => {
   const pattern = "**/src/shared/api/tauri.ts*";
   await page.unroute(pattern);
-  await page.reload();
+  // 默认入口会请求推荐，先离开作品页再加载待注入源码。
+  await page.goto(`${page.url().match(/^https?:\/\/[^/]+/)[0]}/settings`);
   const source = await page.evaluate(async () => (await fetch("/src/shared/api/tauri.ts")).text());
   const signature = "async function invokeCmd(cmd, args) {";
   if (!source.includes(signature)) throw new Error("IPC 测试注入点已改变");
@@ -23,15 +25,22 @@ async (page) => {
       const late = [];
       let phase = "error";
       let attempt = 0;
+      let feedCalls = 0;
       const original = window.__TAURI_INTERNALS__.invoke;
+      const previousHook = window.__douyinInvoke;
       const result = () => {
         const session_id = `douyin-video-test-${issued.length}`;
         issued.push(session_id);
         return { session_id, play_url: `${location.origin}/__douyin_fixture.mp4?id=${session_id}`, item: { id: "7520000000000000001", title: "测试公开作品", author: "测试作者", cover: "", width: 1080, height: 1920, duration: 10, share_url: "https://www.douyin.com/video/7520000000000000001" } };
       };
       window.__douyinInvoke = async (command, args) => {
+        if (command === "douyin_video_feed") {
+          feedCalls++;
+          throw new Error("作品链接模式不应请求推荐，禁止透传真实推荐");
+        }
         if (command === "douyin_video_resolve") {
           assert(args.input === "7520000000000000001", "作品 ID 被转成数字或丢失精度");
+          assert(args.requireLogin === false, "作品链接取流不应强制登录");
           attempt++;
           if (phase === "error") throw { code: "douyin_browser_verification", message: "测试：请先完成访问验证" };
           if (phase === "late") return new Promise((resolve) => { late.push(() => resolve(result())); });
@@ -41,8 +50,13 @@ async (page) => {
         return original(command, args);
       };
       try {
-        harness.render(harness.h(QueryClientProvider, { client }, harness.h(MemoryRouter, null, harness.h(DouyinVideoPage))));
-        assert(harness.host.textContent.includes("实验性"), "实验标识缺失");
+        harness.render(harness.h(QueryClientProvider, { client }, harness.h(MemoryRouter,
+          { initialEntries: ["/shorts/douyin?tab=link"] }, harness.h(DouyinVideoPage))));
+        await frames();
+        assert(!/实验|灰度/.test(harness.host.textContent), "作品入口仍保留实验标识");
+        assert(harness.host.querySelector('[role="tab"][aria-selected="true"]')?.textContent === "作品链接", "深链未选中作品链接页签");
+        assert(!harness.host.querySelector('[data-slot="douyin-recommendation"]'), "作品链接深链不应挂载推荐");
+        assert(feedCalls === 0, "进入作品链接模式请求了推荐");
         const input = harness.host.querySelector("#douyin-video-input");
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "7520000000000000001");
         input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -62,14 +76,19 @@ async (page) => {
         harness.host.querySelector("form").requestSubmit();
         await until(() => late.length > 0, "没有在途解析");
         harness.dispose();
-        late.forEach((resolve) => resolve());
+        late.splice(0).forEach((resolve) => resolve());
         await until(() => issued.every((id) => stopped.includes(id)), "退出后的迟到解析未释放");
         assert(new Set(stopped).size === stopped.length, "同一代理重复释放");
-        return { passed: true, errorsVisible: true, retries: attempt, issued: issued.length, stopped: stopped.length };
+        assert(feedCalls === 0, "作品链接生命周期中发起了推荐请求");
+        return { passed: true, errorsVisible: true, feedCalls, retries: attempt, issued: issued.length, stopped: stopped.length };
       } finally {
         harness.dispose();
+        late.splice(0).forEach((resolve) => resolve());
         client.clear();
-        delete window.__douyinInvoke;
+        // 卸载后的释放微任务仍由夹具接管，不能把夹具会话传给真实后端。
+        await frames();
+        if (previousHook === undefined) delete window.__douyinInvoke;
+        else window.__douyinInvoke = previousHook;
       }
     });
   } finally {

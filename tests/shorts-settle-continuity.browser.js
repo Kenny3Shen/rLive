@@ -176,10 +176,13 @@ async (page) => {
       }
     };
     const frames = [];
+    const started = performance.now();
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    for (let i = 0; i < 25; i++) {
+    // 按动画完成采样，不把 25 帧当作固定时长：高刷新率 WebView 中 25 帧不足以收尾。
+    while (performance.now() - started < 2000) {
       await new Promise((resolve) => requestAnimationFrame(resolve));
       frames.push(read());
+      if (frames.length > 1 && !track.getAnimations().some(animation => animation.playState === "running")) break;
     }
     return frames;
   });

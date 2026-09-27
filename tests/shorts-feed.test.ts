@@ -510,6 +510,8 @@ describe("路由契约", () => {
   test("短视频是沉浸式路由", () => {
     // 外壳的顶栏与侧栏会把 9:16 舞台挤成一条；返回口由页内 HUD 提供。
     expect(isImmersivePlayerPath(SHORTS_PATH)).toBe(true);
+    expect(isImmersivePlayerPath("/shorts/douyin")).toBe(true);
+    expect(isImmersivePlayerPath("/shorts/douyin/unknown")).toBe(false);
   });
 
   test("路径不挂在 /video 之下", () => {
