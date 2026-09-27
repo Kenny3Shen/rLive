@@ -72,7 +72,7 @@ import { horizontalSwipeRetainedItems } from "@/shared/gestures/horizontalSwipe"
 import { PagePan } from "@/shared/motion/PagePan";
 import { PageZoom } from "@/shared/motion/PageZoom";
 import { isMobileClient } from "@/shared/clientPlatform";
-import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
+import { PlayerStageSkeleton } from "@/shared/components/player/PlayerStageSkeleton";
 import { enabledSiteIds } from "@/shared/siteId";
 import { PlatformScope, type PlatformScopeValue } from "@/shared/hooks/useSiteQuery";
 import type { SiteId } from "@/shared/types/live";
@@ -168,9 +168,12 @@ function RouteOutlet({
     return () => window.cancelAnimationFrame(frame);
   }, [defer]);
 
-  // 沉浸播放页的加载占位与播放器同一视觉（黑舞台 + 居中指示），
+  // 沉浸播放页的加载占位：与成品同构的骨架（纯黑画面 + HUD 行 + 控制条），
   // 否则首次进入会在顶部闪出一条应用外壳画法的加载条再被播放器顶掉。
-  const fallback = immersive ? <PlayerStageLoading /> : <RouteLoadingFallback />;
+  // 这里刻意不按路由分叉：路由模块本身还没就绪，此时既不知道是哪一页、也拿不到
+  // 它的数据；一套通用的播放器骨架已经能给出正确的形状，且不会把各页自己的
+  // 重依赖（播放器、弹幕、评论）拖进外壳这条关键路径。
+  const fallback = immersive ? <PlayerStageSkeleton /> : <RouteLoadingFallback />;
 
   if (!ready) return fallback;
 

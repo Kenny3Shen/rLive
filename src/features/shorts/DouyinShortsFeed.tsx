@@ -17,7 +17,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
+import { ShortsInfoSkeleton } from "./ShortsStageSkeleton";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
 import {
   PLAYER_HUD_BUTTON_CLASS,
@@ -183,11 +183,20 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
             active={current ? slots.active : "empty"}
           />
 
-          {!current && (
+          {!current && query.isPending && (
+            // 推荐元数据未到：顶部控制栏与底部操作栏已经是真的，只补左下角那块
+            // 信息浮层的位置（作品到达后它就在那里）。画面区留黑。
+            <>
+              <span role="status" className="sr-only">
+                正在加载抖音推荐…
+              </span>
+              <ShortsInfoSkeleton />
+            </>
+          )}
+
+          {!current && !query.isPending && (
             <div className="absolute inset-x-0 inset-y-16 flex flex-col items-center justify-center gap-4 px-6">
-              {query.isPending ? (
-                <PlayerStageLoading label="正在加载抖音推荐…" />
-              ) : query.isError ? (
+              {query.isError ? (
                 <ErrorState
                   error={query.error}
                   title="推荐加载失败"

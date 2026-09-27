@@ -49,12 +49,44 @@ async (page) => {
         await frames();
       };
       const platformEntry = () => harness.host.querySelector('a[href="/shorts/douyin"]');
+      /** 骨架里的块与底栏，用于断言加载态与成品同构。 */
+      const skeleton = () => harness.host.querySelector("[data-slot=shorts-stage-skeleton]");
+      const skeletonBlocks = () => [...(skeleton()?.querySelectorAll("[data-slot=skeleton]") ?? [])];
       try {
         await mount("pending");
         await until(() => !!finishFeed, "首屏没有开始加载");
         assert(harness.host.textContent.includes("正在加载短视频"), "加载提示缺失");
         assert(harness.host.querySelector('button[aria-label="返回上一页"]'), "加载时返回按钮缺失");
         assert(!platformEntry() && !harness.host.textContent.includes("抖音推荐"), "首次加载闪现抖音推荐按钮");
+        // 加载态是骨架而不是纯黑加转圈：底栏与信息浮层的位置先画出来，
+        // 数据到达时只有内容替换。断言几何而不是类名。
+        const stage = skeleton();
+        assert(stage, "首屏不是骨架（未渲染 ShortsStageSkeleton）");
+        const blocks = skeletonBlocks();
+        assert(blocks.length >= 10, `骨架块数量不足：${blocks.length}`);
+        assert(stage.querySelector("[role=status]"), "加载文案未挂在 role=status 上");
+        const boxes = blocks.map((el) => el.getBoundingClientRect());
+        const host = harness.host.getBoundingClientRect();
+        // 底部操作栏：骨架块落在底栏那 59px（进度条 3px + 控制行 56px）的带子里，
+        // 而不是散在画面中央。按钮是 40px、在 56px 行里居中，所以不要求贴死底边。
+        const bottomBarBand = 59;
+        const inBottomBar = boxes.filter((box) => box.bottom > host.bottom - bottomBarBand - 1);
+        assert(
+          inBottomBar.length >= 4,
+          `底栏带里只有 ${inBottomBar.length} 块骨架（应有进度条 + 输入框 + 三颗按钮）`,
+        );
+        // 左下角信息浮层：头像/作者/标题那一块。
+        const lowerLeft = boxes.filter(
+          (box) => box.left < host.left + host.width * 0.45 && box.top > host.top + host.height * 0.5,
+        );
+        assert(lowerLeft.length >= 4, `左下信息浮层只有 ${lowerLeft.length} 块骨架`);
+        // 画面区保持纯黑：骨架只画周边，不铺一块占满画面的灰块。
+        assert(
+          boxes.every(
+            (box) => box.height < host.height * 0.5 || box.width < host.width * 0.5,
+          ),
+          "骨架里有一块占满半个画面以上的灰块，画面区应保持纯黑",
+        );
         await mount("empty");
         await until(() => harness.host.textContent.includes("暂时没有短视频"), "空态未出现");
         assert(platformEntry(), "空态丢失抖音备用入口");
@@ -66,7 +98,7 @@ async (page) => {
         assert(!platformEntry(), "正常舞台多出悬浮抖音入口");
         harness.host.querySelector('button[aria-label="更多操作"]').click();
         await until(() => [...document.querySelectorAll("button")].some(el => el.textContent.trim() === "抖音推荐"), "更多操作中丢失抖音推荐入口");
-        return { passed: true, loadingHasOnlyBack: true, fallbackEntriesKept: true, menuEntryKept: true };
+        return { passed: true, loadingHasOnlyBack: true, loadingIsSkeleton: true, fallbackEntriesKept: true, menuEntryKept: true };
       } finally {
         harness.dispose();
         finishFeed?.({ items: [], has_more: false });

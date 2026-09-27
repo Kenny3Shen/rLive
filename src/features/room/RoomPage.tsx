@@ -7,7 +7,7 @@ import { canNavigateBackInApp } from "@/shared/appHistory";
 import { copyText } from "@/shared/clipboard";
 import { supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
-import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
+import { RoomStageSkeleton } from "./RoomStageSkeleton";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { PlayerPane } from "./PlayerPane";
 import type { RoomSideTab } from "./PlayerPane";
@@ -290,8 +290,9 @@ function RoomPageContent() {
   if (detailQuery.isLoading) {
     // 沉浸播放页没有流内顶栏，加载态也不引入一条：否则首次进入会先闪出
     // 一条 Shell 画法（sidebar 底色 + 下边框）的「加载中」条，播放器挂载后
-    // 它又消失。加载舞台与详情落定后的黑舞台同一视觉，只补一个返回口。
-    return <PlayerStageLoading label="正在加载直播间…" onBack={goBack} />;
+    // 它又消失。骨架与详情落定后的布局同构（舞台 + 侧栏 + 底部操作行），
+    // 因此到达时只有内容替换，不会整页重新排布。
+    return <RoomStageSkeleton onBack={goBack} />;
   }
 
   if (detailQuery.isError) {

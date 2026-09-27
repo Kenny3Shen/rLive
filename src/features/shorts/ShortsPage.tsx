@@ -34,7 +34,7 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { BilibiliAppAuthAction } from "@/shared/components/BilibiliAppAuthAction";
-import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
+import { ShortsStageSkeleton } from "./ShortsStageSkeleton";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
 import {
   danmakuControlPresentation,
@@ -283,10 +283,12 @@ export function ShortsPage() {
   /* ---------- 渲染 ---------- */
 
   if (feedQuery.isPending) {
+    // 首屏加载：画面区留黑（视频本来就在那里），只把左下信息浮层与底部操作栏
+    // 先画出来。返回口用与成品同一个 `ShortsBackButton`，加载完成时不会换一颗。
     return (
       <div className="relative h-full min-h-0">
         <ShortsBackButton onClick={goBack} />
-        <PlayerStageLoading label="正在加载短视频…" />
+        <ShortsStageSkeleton label="正在加载短视频…" />
       </div>
     );
   }
