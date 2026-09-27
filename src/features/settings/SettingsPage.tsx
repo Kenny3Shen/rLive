@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openFileDialog, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -42,6 +42,7 @@ import { accountPresentation } from "@/features/settings/accountPresentation";
 import { fadeTheme } from "@/app/theme";
 import { preloadRouteModule } from "@/app/routeModules";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
+import { invalidateBilibiliAppQueries } from "@/shared/api/bilibiliAppQueryInvalidation";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { AsrProvider, SiteId } from "@/shared/types/live";
 import {
@@ -169,6 +170,42 @@ type AccountProfile = {
   status: "none" | "valid" | "expired" | "unknown";
 };
 
+type BilibiliAppProfile = {
+  status: "none" | "valid" | "expired" | "unknown";
+  has_token: boolean;
+  mid: string | null;
+  expires_at: number | null;
+};
+
+const BILIBILI_APP_PROFILE_QUERY_KEY = ["bilibili_app_profile"] as const;
+const EMPTY_BILIBILI_APP_PROFILE: BilibiliAppProfile = {
+  status: "none",
+  has_token: false,
+  mid: null,
+  expires_at: null,
+};
+
+export function bilibiliAppAuthPresentation(
+  profile: BilibiliAppProfile | undefined,
+  loading = false,
+  failed = false,
+) {
+  const hasToken = profile?.has_token ?? false;
+  const canEnable = hasToken && profile?.status === "valid" && !loading && !failed;
+  const label = loading
+    ? "正在读取…"
+    : failed || !profile
+      ? "状态待确认"
+      : !hasToken
+        ? "未授权"
+        : profile.status === "valid"
+          ? "授权有效"
+          : profile.status === "expired"
+            ? "已失效"
+            : "状态待确认";
+  return { hasToken, canEnable, label };
+}
+
 const settingsCategories: {
   value: SettingsCategory;
   label: string;
@@ -245,7 +282,7 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   recording:
     "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 ASS 导出 分辨率 字体 不透明度 描边 阴影 粗体 屏蔽 正则 FFmpeg 超时 重连 HLS 分片 重试",
   account:
-    "账号 发送权限 平台账号 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码",
+    "账号 发送权限 平台账号 bilibili 哔哩哔哩 B站 douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码 授权 TV App 个性化 推荐 story 短视频 UID 到期",
   data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案 缓存 图片缓存 图片 头像 封面 清除 清理 占用 空间 cache",
   about: "关于 rLive 当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断",
 };
@@ -345,58 +382,70 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function QrLogin({
   siteId,
   siteName,
+  loginKind = "web",
   onSaved,
 }: {
   siteId: SiteId;
   siteName: string;
+  loginKind?: "web" | "bilibili_app";
   onSaved: () => Promise<void>;
 }) {
   const [session, setSession] = useState<AccountQrLoginStart | null>(null);
   const [status, setStatus] = useState("正在获取二维码…");
   const [loading, setLoading] = useState(false);
+  const epochRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const epoch = ++epochRef.current;
     setLoading(true);
     setSession(null);
     setStatus("正在获取二维码…");
     try {
       const next = await invokeCmd<AccountQrLoginStart>("account_qr_login_start", {
         siteId,
+        loginKind,
       });
+      if (epoch !== epochRef.current) return;
       setSession(next);
       setStatus(`请使用${siteName} App 扫描二维码`);
     } catch (error) {
+      if (epoch !== epochRef.current) return;
       const message =
         typeof error === "object" && error && "message" in error
           ? String((error as { message: string }).message)
           : String(error);
       setStatus(`获取二维码失败：${message}`);
     } finally {
-      setLoading(false);
+      if (epoch === epochRef.current) setLoading(false);
     }
-  }, [siteId, siteName]);
+  }, [siteId, siteName, loginKind]);
 
   useEffect(() => {
     // 挂载时获取登录二维码（外部 IPC）；refresh 内的同步写入是加载标记。
     // oxlint-disable-next-line react/set-state-in-effect
     void refresh();
+    return () => {
+      epochRef.current += 1;
+    };
   }, [refresh]);
 
   useEffect(() => {
     if (!session) return;
+    const epoch = epochRef.current;
     let cancelled = false;
     let polling = false;
     let interval: number | null = null;
 
     const poll = async () => {
-      if (cancelled || polling) return;
+      if (cancelled || polling || epoch !== epochRef.current) return;
       polling = true;
       try {
         const result = await invokeCmd<AccountQrLoginPoll>("account_qr_login_poll", {
           siteId,
+          loginKind,
           qrKey: session.qr_key,
         });
-        if (cancelled) return;
+        if (cancelled || epoch !== epochRef.current) return;
         setStatus(result.message);
         if (result.status === "success") {
           await onSaved();
@@ -405,7 +454,7 @@ function QrLogin({
           if (interval !== null) window.clearInterval(interval);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && epoch === epochRef.current) {
           const message =
             typeof error === "object" && error && "message" in error
               ? String((error as { message: string }).message)
@@ -423,7 +472,7 @@ function QrLogin({
       cancelled = true;
       if (interval !== null) window.clearInterval(interval);
     };
-  }, [onSaved, session, siteId]);
+  }, [onSaved, session, siteId, loginKind]);
 
   return (
     <Field>
@@ -478,6 +527,218 @@ function QrLogin({
         </div>
       </FieldContent>
     </Field>
+  );
+}
+
+export function BilibiliAppAuthField() {
+  const queryClient = useQueryClient();
+  const enabled = useSettingsStore((s) => s.bilibiliAppPersonalization);
+  const pending = useSettingsStore((s) => s.bilibiliAppPersonalizationPending);
+  const setEnabled = useSettingsStore((s) => s.setBilibiliAppPersonalization);
+  const bumpRevision = useSettingsStore((s) => s.bumpBilibiliAppAuthRevision);
+  const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const operationRef = useRef(0);
+  const {
+    data: profile,
+    isFetching: profileLoading,
+    error: profileError,
+    refetch: refreshProfile,
+  } = useQuery({
+    queryKey: BILIBILI_APP_PROFILE_QUERY_KEY,
+    queryFn: () =>
+      isTauri()
+        ? invokeCmd<BilibiliAppProfile>("account_bilibili_app_profile")
+        : Promise.resolve(EMPTY_BILIBILI_APP_PROFILE),
+    enabled: !clearing,
+    retry: false,
+  });
+  const auth = bilibiliAppAuthPresentation(profile, profileLoading, Boolean(profileError));
+  const switchDisabled = pending || clearing || (!enabled && !auth.canEnable);
+
+  const refreshAppQueries = useCallback(async () => {
+    try {
+      await invalidateBilibiliAppQueries(queryClient);
+    } catch (error) {
+      // 凭据已写入；推荐刷新失败不能反过来冒充授权失败。
+      notify.error("App 推荐刷新失败", `可在推荐页重试：${errorMessage(error)}`);
+    }
+  }, [queryClient]);
+
+  const onAppSaved = useCallback(async () => {
+    const operation = ++operationRef.current;
+    flushSync(() => setQrOpen(false));
+    setActionError(null);
+    setNotice("App 授权已保存，个性化开关保持原状，请按需开启。");
+    bumpRevision();
+    // 取消旧账号的在途状态请求，避免刷新时复用扫码前的结果。
+    await queryClient.cancelQueries({ queryKey: BILIBILI_APP_PROFILE_QUERY_KEY });
+    if (operation !== operationRef.current) return;
+    await Promise.all([refreshProfile(), refreshAppQueries()]);
+  }, [bumpRevision, queryClient, refreshProfile, refreshAppQueries]);
+
+  async function changeEnabled(next: boolean) {
+    if (pending || clearing) return;
+    setSwitchError(null);
+    if (next && !auth.canEnable) {
+      setSwitchError("请先扫码取得有效的 App 授权，或刷新状态后重试。");
+      return;
+    }
+    try {
+      await setEnabled(next);
+    } catch (error) {
+      setSwitchError(`个性化设置保存失败：${errorMessage(error)}`);
+    }
+  }
+
+  async function clearAuthorization() {
+    if (clearing || pending) return;
+    operationRef.current += 1;
+    // 先卸载二维码使轮询失效，再清凭据；迟到的扫码回调不能覆盖移除结果。
+    flushSync(() => {
+      setQrOpen(false);
+      setClearing(true);
+    });
+    setActionError(null);
+    setSwitchError(null);
+    setNotice(null);
+    let removed = false;
+    try {
+      await invokeCmd<void>("account_bilibili_app_clear");
+      removed = true;
+      await queryClient.cancelQueries({ queryKey: BILIBILI_APP_PROFILE_QUERY_KEY });
+      queryClient.setQueryData(BILIBILI_APP_PROFILE_QUERY_KEY, EMPTY_BILIBILI_APP_PROFILE);
+      bumpRevision();
+      await Promise.all([loadFromBackend(), refreshAppQueries()]);
+      setNotice("已移除 App 授权并关闭个性化推荐，Web Cookie 不变。");
+      notify.success("已移除 App 授权");
+    } catch (error) {
+      setActionError(
+        `${removed ? "授权已移除，但设置同步失败，请重试移除操作" : "移除 App 授权失败"}：${errorMessage(error)}`,
+      );
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  return (
+    <>
+      <Field data-invalid={profileError || actionError ? true : undefined}>
+        <FieldContent>
+          <div className="flex flex-wrap items-center gap-2">
+            <FieldTitle>独立 TV 账号</FieldTitle>
+            <Badge variant={auth.canEnable ? "default" : "secondary"}>{auth.label}</Badge>
+          </div>
+          <FieldDescription>
+            UID：{profile?.mid ?? "—"} · 到期日期：
+            {profile?.expires_at
+              ? new Date(profile.expires_at * 1_000).toLocaleDateString("zh-CN")
+              : "—"}
+          </FieldDescription>
+          <FieldDescription>
+            使用哔哩哔哩 App 扫码完成 TV 授权；仅用于 App 推荐与 story 短视频个性化， 不影响 Web
+            推荐，不会替换 Web Cookie。扫码成功不会自动开启个性化。
+          </FieldDescription>
+          <FieldDescription>
+            凭据仅保存在本机 SQLite，与 Cookie 一样未额外加密，不随配置导出或同步。 授权 180
+            天到期后需重新扫码；尚未实现 token 刷新协议。
+          </FieldDescription>
+          <FieldDescription>
+            开启后如 token 失效，需重新扫码，不会静默降级为匿名推荐；
+            状态待确认时可刷新重试，不会自动删除已保存的凭据。
+          </FieldDescription>
+          {profileError && (
+            <FieldError>授权状态读取失败，请刷新重试：{errorMessage(profileError)}</FieldError>
+          )}
+          {actionError && <FieldError>{actionError}</FieldError>}
+          {notice && (
+            <FieldDescription role="status" aria-live="polite">
+              {notice}
+            </FieldDescription>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={clearing || qrOpen}
+              onClick={() => {
+                setNotice(null);
+                setQrOpen(true);
+              }}
+            >
+              <QrCode data-icon="inline-start" aria-hidden />
+              {auth.hasToken ? "重新扫码" : "扫码授权"}
+            </Button>
+            {qrOpen && (
+              <Button variant="outline" size="sm" onClick={() => setQrOpen(false)}>
+                取消扫码
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={profileLoading || clearing}
+              onClick={() => void refreshProfile()}
+            >
+              {profileLoading ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <RefreshCw data-icon="inline-start" aria-hidden />
+              )}
+              刷新状态
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={clearing || pending}
+              onClick={() => void clearAuthorization()}
+            >
+              {clearing ? <Spinner data-icon="inline-start" /> : null}
+              移除 App 授权
+            </Button>
+          </div>
+        </FieldContent>
+      </Field>
+      {qrOpen && (
+        <QrLogin
+          siteId="bilibili"
+          siteName="哔哩哔哩"
+          loginKind="bilibili_app"
+          onSaved={onAppSaved}
+        />
+      )}
+      <Field
+        orientation="horizontal"
+        data-invalid={switchError ? true : undefined}
+        data-disabled={switchDisabled || undefined}
+      >
+        <FieldContent>
+          <FieldTitle id="bilibili-app-personalization-title">启用 App 个性化推荐</FieldTitle>
+          <FieldDescription id="bilibili-app-personalization-description">
+            默认关闭。仅授权有效时可开启；已开启时即使授权失效也可关闭。
+          </FieldDescription>
+          {switchError && (
+            <FieldError id="bilibili-app-personalization-error">{switchError}</FieldError>
+          )}
+        </FieldContent>
+        <Switch
+          aria-labelledby="bilibili-app-personalization-title"
+          aria-describedby={
+            switchError
+              ? "bilibili-app-personalization-description bilibili-app-personalization-error"
+              : "bilibili-app-personalization-description"
+          }
+          aria-invalid={switchError ? true : undefined}
+          checked={enabled}
+          disabled={switchDisabled}
+          onCheckedChange={(next) => void changeEnabled(next)}
+        />
+      </Field>
+    </>
   );
 }
 
@@ -898,10 +1159,14 @@ function PlaybackSettingsResetField() {
       if (!mobileClient && store.asrEnabled) {
         await store.setAsrEnabled(false);
       }
+      if (store.bilibiliAppPersonalization) {
+        await store.setBilibiliAppPersonalization(false);
+      }
       resetDanmakuAppearanceSettings();
       useSettingsStore.setState({
         qualityLevel: "high",
         playbackSoftSwitchEnabled: true,
+        bilibiliAppPersonalization: false,
         videoRecommendApi: VIDEO_RECOMMEND_API_DEFAULT,
         videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
         danmakuShieldWords: [],
@@ -923,6 +1188,7 @@ function PlaybackSettingsResetField() {
       await store.persistToBackend({
         quality_level: "high",
         playback_soft_switch_enabled: true,
+        bilibili_app_personalization: false,
         video_recommend_api: VIDEO_RECOMMEND_API_DEFAULT,
         video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
         danmaku_shield_words: [],
@@ -2153,6 +2419,9 @@ export function SettingsPage() {
       <SettingsContent title="账号">
         <Section title="发送权限">
           <DanmakuSendField />
+        </Section>
+        <Section title="B站 App 个性化推荐">
+          <BilibiliAppAuthField />
         </Section>
         <Section title="平台账号">
           <AccountCard

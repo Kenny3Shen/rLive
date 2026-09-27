@@ -124,6 +124,36 @@ fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
     Ok(BilibiliSite::new(client, cookie.unwrap_or_default()))
 }
 
+/// 只有两条推荐流检查本机 APP 授权；其他播放／搜索／Web 请求不受影响。
+async fn resolve_app_feed(state: &AppState) -> AppResult<BilibiliSite> {
+    let (enabled, credential, proxy) = {
+        let conn = state.conn()?;
+        let settings = crate::settings::get(&conn)?;
+        let credential = if settings.bilibili_app_personalization {
+            account::bilibili_app::load(&conn)?
+        } else {
+            None
+        };
+        (
+            settings.bilibili_app_personalization,
+            credential,
+            settings.proxy,
+        )
+    };
+    let site = resolve_bilibili(state)?;
+    if !enabled {
+        return Ok(site);
+    }
+    let credential = credential.ok_or_else(|| {
+        AppError::new(
+            "bilibili_app_auth_required",
+            "App 个性化推荐尚未授权，请在设置 → 账号中重新扫码，或关闭个性化开关",
+        )
+    })?;
+    let auth = account::bilibili_app::AppAuth::new(credential, proxy.as_deref()).await?;
+    Ok(site.with_app_auth(auth))
+}
+
 /// 读取推荐接口偏好。设置读取失败向上报错：这是用户显式选择的上游，
 /// 静默换一个流会让「切换无效」变成无法排查的现象。
 fn recommend_api(state: &AppState) -> AppResult<crate::models::settings::VideoRecommendApi> {
@@ -138,8 +168,12 @@ pub async fn video_get_recommend(
     page_size: Option<u32>,
 ) -> AppResult<VideoListPage> {
     let api = recommend_api(&state)?;
-    resolve_bilibili(&state)?
-        .video_recommend(api, page, page_size.unwrap_or(20))
+    let site = if api == crate::models::settings::VideoRecommendApi::App {
+        resolve_app_feed(&state).await?
+    } else {
+        resolve_bilibili(&state)?
+    };
+    site.video_recommend(api, page, page_size.unwrap_or(20))
         .await
 }
 
@@ -190,7 +224,7 @@ pub async fn video_get_story(
     more: Option<bool>,
     seed_bvid: Option<String>,
 ) -> AppResult<VideoListPage> {
-    let site = resolve_bilibili(&state)?;
+    let site = resolve_app_feed(&state).await?;
     let pin_entry = !more.unwrap_or(false)
         && seed_bvid
             .as_deref()

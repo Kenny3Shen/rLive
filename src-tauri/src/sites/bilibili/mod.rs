@@ -77,6 +77,8 @@ fn reset_device_buvids() {
 
 pub struct BilibiliSite {
     client: Client,
+    /// 只由 App 推荐／story 命令显式注入，不改变 Web Cookie 或其他请求。
+    app_auth: Option<crate::account::bilibili_app::AppAuth>,
     cookie: String,
     session: Mutex<Session>,
     /// 指纹接口失败时也缓存空结果，避免同一次房间加载并发发起重复请求。
@@ -264,11 +266,17 @@ impl BilibiliSite {
     pub fn new(client: Client, cookie: String) -> Self {
         Self {
             client,
+            app_auth: None,
             cookie: normalize_cookie_header(&cookie),
             session: Mutex::new(Session::default()),
             buvids: OnceCell::const_new(),
             play_gate: AsyncMutex::new(None),
         }
+    }
+
+    pub fn with_app_auth(mut self, auth: crate::account::bilibili_app::AppAuth) -> Self {
+        self.app_auth = Some(auth);
+        self
     }
 
     async fn ensure_buvid(&self) -> AppResult<(String, String)> {

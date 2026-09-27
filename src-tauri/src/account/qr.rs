@@ -154,6 +154,31 @@ impl<P: Clone + Send + 'static> QrSessionStore<P> {
         Ok(())
     }
 
+    /// 原子消费句柄，防止重复确认或已取消的登录重新写回凭据。
+    pub fn take(&self, key: &str) -> AppResult<P> {
+        let mut sessions = self
+            .map()
+            .lock()
+            .map_err(|_| self.site.error("session", "二维码登录会话读取失败，请重试"))?;
+        Self::prune(&mut sessions);
+        sessions
+            .remove(key)
+            .map(|(payload, _)| payload)
+            .ok_or_else(|| {
+                self.site
+                    .error("expired", "二维码登录会话已过期或已取消，请刷新二维码")
+            })
+    }
+
+    /// 退出账号时使尚未完成的登录全部失效。
+    pub fn clear(&self) -> AppResult<()> {
+        self.map()
+            .lock()
+            .map_err(|_| self.site.error("session", "二维码登录会话清理失败，请重试"))?
+            .clear();
+        Ok(())
+    }
+
     fn prune(sessions: &mut HashMap<String, (P, Instant)>) {
         let now = Instant::now();
         sessions.retain(|_, (_, created_at)| now.duration_since(*created_at) < SESSION_TTL);

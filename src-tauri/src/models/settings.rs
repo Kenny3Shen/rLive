@@ -13,6 +13,7 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "hidden_home_entry_ids",
     "video_recommend_api",
     "video_next_episode_preload",
+    "bilibili_app_personalization",
 ];
 
 /// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
@@ -163,6 +164,10 @@ pub struct AppSettings {
     /// 默认关闭，避免新安装或升级后自动额外消耗流量；旧记录同样回填关闭。
     #[serde(default)]
     pub video_next_episode_preload: bool,
+    /// 主动开启后，App 推荐和 story 使用本机 TV 登录凭据；不影响 Web 推荐。
+    /// 缺失或失效时报错，不静默降级匿名。旧设置默认关闭。
+    #[serde(default)]
+    pub bilibili_app_personalization: bool,
     /// 在浏览页悬停直播间卡片时播放静音直播预览。
     ///
     /// 该字段在 2.12.0 引入，因此比它更早保存的设置记录和配置包里没有它。
@@ -272,6 +277,7 @@ impl Default for AppSettings {
             playback_soft_switch_enabled: true,
             video_recommend_api: VideoRecommendApi::default(),
             video_next_episode_preload: false,
+            bilibili_app_personalization: false,
             room_card_preview_enabled: default_room_card_preview_enabled(),
             dynamic_background_enabled: default_dynamic_background_enabled(),
             danmaku_send_enabled: false,
@@ -317,6 +323,7 @@ mod tests {
         assert_eq!(back.recording_max_concurrent, 4);
         assert_eq!(back.video_recommend_api, VideoRecommendApi::App);
         assert!(!back.video_next_episode_preload);
+        assert!(!back.bilibili_app_personalization);
         assert!(back.room_card_preview_enabled);
         // 动态背景默认关闭：它是纯装饰，且在弱设备上是逐帧重采样的开销。
         assert!(!back.dynamic_background_enabled);

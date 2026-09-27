@@ -21,6 +21,7 @@ const PROFILE_VERSION: u32 = 2;
 /// 导出时由 `portable_profile_value` 剔除。
 const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
     "danmaku_send_enabled",
+    "bilibili_app_personalization",
     "asr_enabled",
     "asr_provider",
     "asr_vad_enabled",
@@ -86,6 +87,7 @@ impl ProfilePackage {
 /// 导入的配置不得替用户决定其中任何一项。
 fn clear_local_only_settings(settings: &mut AppSettings) {
     settings.danmaku_send_enabled = false;
+    settings.bilibili_app_personalization = false;
     settings.asr_enabled = false;
     settings.asr_provider = "auto".into();
     settings.asr_vad_enabled = true;

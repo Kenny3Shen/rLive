@@ -431,6 +431,10 @@ type SettingsState = {
   playbackSoftSwitchEnabled: boolean;
   videoRecommendApi: VideoRecommendApi;
   videoNextEpisodePreload: boolean;
+  bilibiliAppPersonalization: boolean;
+  bilibiliAppPersonalizationPending: boolean;
+  /** 仅用于隔离授权变更前后的推荐缓存，不包含凭据。 */
+  bilibiliAppAuthRevision: number;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   roomCardPreviewEnabled: boolean;
   /** 画面之外用模糊放大的封面垫底。 */
@@ -477,6 +481,8 @@ type SettingsState = {
   setQualityLevel: (level: QualityLevel) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
   setVideoRecommendApi: (api: VideoRecommendApi) => void;
+  setBilibiliAppPersonalization: (enabled: boolean) => Promise<void>;
+  bumpBilibiliAppAuthRevision: () => void;
   setVideoNextEpisodePreload: (enabled: boolean) => void;
   setRoomCardPreviewEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
@@ -529,6 +535,7 @@ const defaultSettings: AppSettings = {
   quality_level: "high",
   playback_soft_switch_enabled: true,
   video_recommend_api: VIDEO_RECOMMEND_API_DEFAULT,
+  bilibili_app_personalization: false,
   video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   dynamic_background_enabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
@@ -574,6 +581,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     quality_level: state.qualityLevel,
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     video_recommend_api: state.videoRecommendApi,
+    bilibili_app_personalization: state.bilibiliAppPersonalization,
     video_next_episode_preload: state.videoNextEpisodePreload,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
@@ -694,6 +702,9 @@ export const useSettingsStore = create<SettingsState>()(
       qualityLevel: "high",
       playbackSoftSwitchEnabled: true,
       videoRecommendApi: VIDEO_RECOMMEND_API_DEFAULT,
+      bilibiliAppPersonalization: false,
+      bilibiliAppPersonalizationPending: false,
+      bilibiliAppAuthRevision: 0,
       videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
       dynamicBackgroundEnabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
@@ -898,6 +909,24 @@ export const useSettingsStore = create<SettingsState>()(
         set({ recordingAssSettings });
         void get().persistToBackend({ recording_ass: recordingAssSettings });
       },
+      setBilibiliAppPersonalization: async (enabled) => {
+        if (get().bilibiliAppPersonalizationPending) return;
+        set({ bilibiliAppPersonalizationPending: true });
+        const write = settingsWriteQueue.catch(() => {}).then(async () => {
+          // 授权开关不能套用忽略写入失败的普通偏好路径；后端验证成功才发布新状态。
+          await invokeCmd<void>("account_bilibili_app_set_enabled", { enabled });
+          set((state) => ({
+            bilibiliAppPersonalization: enabled,
+            bilibiliAppAuthRevision: state.bilibiliAppAuthRevision + 1,
+          }));
+        });
+        settingsWriteQueue = write.catch(() => {});
+        try { await write; }
+        finally { set({ bilibiliAppPersonalizationPending: false }); }
+      },
+      bumpBilibiliAppAuthRevision: () => set((state) => ({
+        bilibiliAppAuthRevision: state.bilibiliAppAuthRevision + 1,
+      })),
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
@@ -922,6 +951,10 @@ export const useSettingsStore = create<SettingsState>()(
           qualityLevel: parseQualityLevel(settings.quality_level),
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
           videoRecommendApi: parseVideoRecommendApi(settings.video_recommend_api),
+          bilibiliAppPersonalization: settings.bilibili_app_personalization === true,
+          bilibiliAppAuthRevision: get().bilibiliAppAuthRevision + (
+            get().bilibiliAppPersonalization !== (settings.bilibili_app_personalization === true) ? 1 : 0
+          ),
           videoNextEpisodePreload: settings.video_next_episode_preload === true,
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
           dynamicBackgroundEnabled: settings.dynamic_background_enabled,
@@ -981,7 +1014,12 @@ export const useSettingsStore = create<SettingsState>()(
           .catch(() => {})
           .then(async () => {
             try {
-              await invokeCmd<void>("settings_set", { settings: next });
+              await invokeCmd<void>("settings_set", { settings: {
+                ...next,
+                // 授权开关有自己的严格提交路径；普通偏好快照可能在排队期间变得陈旧，
+                // 因此在真正执行时读取当前值，不把刚提交的授权状态覆盖回旧值。
+                bilibili_app_personalization: get().bilibiliAppPersonalization,
+              } });
             } catch {
               // 非 Tauri 环境下忽略。
             }

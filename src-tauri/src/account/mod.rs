@@ -1,3 +1,4 @@
+pub mod bilibili_app;
 pub mod bilibili_qr;
 pub mod douyin_qr;
 pub mod douyu_qr;

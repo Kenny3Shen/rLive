@@ -56,14 +56,15 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 ### 推荐源与画幅适配
 
 - VOD 推荐默认使用 APP 主 feed；用户可在「设置 → 播放 → 视频点播」切到 Web API（`x/web-interface/wbi/index/top/feed/rcmd`，需 WBI、`fresh_idx`/`brush` 跟页码）。两条链路**互斥且不静默回退**：切到哪条就用哪条，失败直接报错。
-- **App 推荐不基于 Cookie（2026-09 实机消融）**：同设备 `buvid` 下只切换 Cookie，5 轮各 45~47 条的唯一集合交集为 0、`track_id` 前缀恒为 `all`、竖屏占比与卡片结构一致；去掉 `buvid` 头后（无论有无 Cookie）立即降级为 `gateway_fb_*` 兜底流、竖屏恒为 0。因此**个性化旋钮是设备轴 `buvid`，不是账号 Cookie**。Web API 推荐则相反：有 Cookie 才是个性化流。两条链路的这个差异是设置项存在的理由。
+- **App 推荐不基于 Cookie（2026-09 实机消融）**：同设备 `buvid` 下只切换 Cookie，5 轮各 45~47 条的唯一集合交集为 0、`track_id` 前缀恒为 `all`、竖屏占比与卡片结构一致；去掉 `buvid` 头后（无论有无 Cookie）立即降级为 `gateway_fb_*` 兜底流、竖屏恒为 0。因此**设备轴的旋钮是 `buvid`，不是账号 Cookie**。Web API 推荐则相反：有 Cookie 才是个性化流。两条链路的这个差异是设置项存在的理由。
+- **App 推荐的账号轴是 `access_key`（2026-10 实机扫码验证）**：`app.bilibili.com` 是 APP 域，账号个性化只认 APP 登录 token（`access_key` 参数 + appkey/`sign`），与 web 的 `SESSDATA` 互不相通。用户可在「设置 → 账号 → B站 App 个性化推荐」用 TV 扫码取得独立凭据并开启；开启后 App 推荐与 story 两条流都带 `access_key`，其余接口不受影响。未授权/失效时直接报错，**不静默回退匿名**。凭据存本机 SQLite（`bilibili_app_auth`，与 Cookie 一样未额外加密）、不随配置导出，180 天到期需重新扫码（未实现刷新协议）。
 - APP 主 feed：`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
 - APP 返回的播放/弹幕统计常是「万/亿」格式的显示近似数，映射结果不是精确计数；作者 UID、标题、画幅与取流键在 Rust 统一归一化。
 - VOD 发现页四个页签与搜索结果使用 `VideoMasonry` 瀑布流，沿用响应式 2–6 列。以细网格行跨度承载卡片自然高度，追加分页不重新分列，保留 DOM / 键盘顺序、滚动锚点与卡片身份。`ResizeObserver` 在列宽、字体和内容变化时更新跨度；不支持时退回普通网格。分页哨兵仍在完整列表之后。
 - VOD 列表与 UP 投稿抽屉的 `VideoCard` 默认按 `dimension` 设置封面比例；旋转标记非零时交换宽高，未知尺寸与 PGC 保持 16:9。**相关视频**显式使用 `coverAspect="landscape"`，桌面侧栏和移动端相关页签均固定为横屏缩略图，源内容不被过滤。
 - 回归：`tests/video-masonry.browser.js` 验证补位、分页追加不移位、尺寸变化与底部哨兵；`tests/video-card-aspect.browser.js` 验证源画幅、横屏覆盖及真实相关视频区。
-- 推荐页签的列表 query key 带推荐源（`video_list/recommend/…/app|web`），切换设置后旧缓存不被当作新鲜数据复用；Cookie 变更只失效 `video_list` 的推荐页签（`cookieQueryInvalidation`），热门/番剧/影视不随之重取。
-- 推荐、通用 story、作者 story 统一通过 `get_app_feed` → `get_json_with_buvid_header`，共用 Cookie、代理、设备槽和错误处理。**不等于所有 B 站接口都换域**：详情、搜索、热门、播放、评论、弹幕仍使用已验证的 `api.bilibili.com` 端点；APP 域同路径 `/x/web-interface/view` 实测 404，APP `/x/v2/view` 在本次免签名参数下返回 -400，不能仅替换 host。未验证的 APP 等价能力不替换既有播放与账号权限链路。
+- 推荐页签的列表 query key 带推荐源（`video_list/recommend/…/app|web`）与 App 授权状态（`appPersonalization`/`appAuthRevision`），切换设置或换授权后旧缓存不被当作新鲜数据复用；story 的 `shorts_story` 由 `bilibiliAppQueryInvalidation` 在授权变更时取消并重置。Cookie 变更只失效 `video_list` 的推荐页签（`cookieQueryInvalidation`），热门/番剧/影视不随之重取；App 授权变更也不触碰 Web 推荐缓存。
+- 推荐、通用 story、作者 story 统一通过 `get_app_feed` 分发：默认走 `get_json_with_buvid_header`，**仅当**「App 个性化推荐」开启且路径是主推荐或 `/story` 时改走 `AppAuth::feed`（TV appkey 签名 + `access_key`、禁止重定向、脱敏错误、绝不携带 Web Cookie）；作者 story 是普通游标列表，即使站点实例持有凭据也保持匿名路径。三条流共用 Cookie、代理、设备槽和错误处理。**不等于所有 B 站接口都换域**：详情、搜索、热门、播放、评论、弹幕仍使用已验证的 `api.bilibili.com` 端点；APP 域同路径 `/x/web-interface/view` 实测 404，APP `/x/v2/view` 在本次免签名参数下返回 -400，不能仅替换 host。未验证的 APP 等价能力不替换既有播放与账号权限链路。
 - `/shorts` 点头像/用户名可进入作者 story，从当前稿件继续，上方居中显示上游 `index/total`；详见[短视频功能](短视频功能.md)「UP 主竖屏流」。
 
 ## 四、DASH：三个关键实测结论

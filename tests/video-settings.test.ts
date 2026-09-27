@@ -5,6 +5,7 @@ import {
   useSettingsStore,
 } from "../src/shared/stores/settingsStore";
 import { isCookieDependentSiteQuery } from "../src/shared/api/cookieQueryInvalidation";
+import { isBilibiliAppQuery } from "../src/shared/api/bilibiliAppQueryInvalidation";
 
 /**
  * 两条 VOD 偏好的默认值本身就是行为契约：
@@ -87,6 +88,26 @@ describe("推荐缓存与账号的耦合", () => {
 
   test("站点不匹配时不失效", () => {
     expect(isCookieDependentSiteQuery(["video_list", "recommend", "", "app"], "douyu")).toBe(false);
+  });
+});
+
+/**
+ * APP 授权变更影响的范围：两条 APP 推荐流（主推荐与 story）。
+ *
+ * 开启、关闭或换授权后旧身份的在途结果必须丢弃，否则用户会看到「切了没变」；
+ * 反过来 Web 推荐、热门、作者 story 不应被顺带重置。
+ */
+describe("APP 授权缓存失效范围", () => {
+  test("App 推荐页与 story 都属于 APP 授权范围", () => {
+    expect(isBilibiliAppQuery(["video_list", "recommend", "", "app", true, 1])).toBe(true);
+    expect(isBilibiliAppQuery(["shorts_story"])).toBe(true);
+  });
+
+  test("Web 推荐与其他页签不受 APP 授权影响", () => {
+    expect(isBilibiliAppQuery(["video_list", "recommend", "", "web", false, 0])).toBe(false);
+    expect(isBilibiliAppQuery(["video_list", "popular", "", "web", false, 0])).toBe(false);
+    expect(isBilibiliAppQuery(["shorts_uploader_story", "1", "2", 3])).toBe(false);
+    expect(isBilibiliAppQuery(["video_zone_list"])).toBe(false);
   });
 });
 

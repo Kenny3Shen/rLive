@@ -152,7 +152,7 @@ login 响应逐字段对比，完全一致。个性化旋钮只有 `buvid`（设
 - **APP 参数不改变结果集**：`login_event`/`mobi_app`/`platform`/`build`/`statistics`/`fnval`/`fourk`
   的组合实测均无显著影响。
 - `access_key` 是 APP 侧的登录 Token（`app.bilibili.com` 那一路，需 appkey + sign）；网页侧没有
-  这个参数。TV 端扫码登录链路可拿到它，但 rLive **暂缓**接入（收益未验证、凭据敏感）。
+  这个参数。TV 端扫码登录链路可拿到它，rLive **已接入**（见 2.10）。
 
 顺带记下另一个接口的口径差异：`x/web-interface/wbi/index/top/feed/rcmd`（首页推荐）**需要 WBI
 签名**且 Cookie 才个性化；它的条目**不带 `dimension`**（实测 0/12），且混入广告/直播/番剧。
@@ -279,6 +279,50 @@ story，从当前稿件开始播放，顶部显示真实位置；卡片根据 di
   不做画幅过滤，才能保留真实位置；横屏视频由既有竖屏舞台等比呈现。
 
 实现细节与使用方式见 [短视频功能](短视频功能.md) 和 [B 站视频设计](B站视频功能-设计.md)。
+
+### 2.10 App 推荐账号个性化：`access_key` 已实机验证并接入
+
+问题：既然 Cookie 无效，App 推荐（`/x/v2/feed/index`）与 story 能否按账号个性化？
+
+**结论：能。账号轴是 `access_key`，且已用真实扫码 token 对照验证；两条流均已接入。**
+
+协议链路（均已实测）：
+
+| 步骤 | 端点 | 关键点 |
+| --- | --- | --- |
+| 申请二维码 | `POST passport.bilibili.com/x/passport-tv-login/qrcode/auth_code` | TV appkey `4409e2ce8ffd12b8`，`local_id=0`，MD5 签名 |
+| 轮询状态 | `POST .../qrcode/poll` | `86039` 未扫 / `86090` 已扫待确认 / `86038` 过期 / `0` 成功 |
+| 成功载荷 | `data.token_info` | `access_token` + `refresh_token` + `mid` + `expires_in=15552000`（180 天） |
+| 令牌校验 | `GET passport.bilibili.com/x/passport-login/oauth2/info` | 有效 `code=0` 且 `data.mid` 与扫码一致；假 token `61000` |
+
+签名算法：参数剔除外来 `sign/appkey/ts/access_key` 后补上受控值，按 key 排序，
+`form_urlencoded` 编码，`md5(query + appsec)` 小写 32 位。
+
+对照实验（固定同一随机 `buvid`，三组各 20 轮、每轮旋转顺序，共 120 次请求全部 `code=0`）：
+
+| 观测项 | 匿名 | 无效 token | 有效 token |
+| --- | ---: | ---: | ---: |
+| App 主推荐出现 `banner` 的批次 | 0/20 | 0/20 | **20/20** |
+| App 技术关键词命中视频数 | 0/182 | 0/180 | **33/184** |
+| story 特定游戏关键词命中视频数 | 0/100 | 0/100 | **21/96** |
+
+证据分级：**主推荐识别有效 token 已验证**（`banner` 稳定只出现在有效组，对照组全无）；
+**story 有强内容个性化信号但无结构标记**（`track_id` 前缀恒为 `story`、字段不变，
+不能把主推荐的 `banner` 判据套过去）；匿名与无效 token 之间内容也完全不重叠，
+所以“内容不同”本身不是个性化证据，关键词也只是看过样本后选定的描述性统计。
+有效组的主题方向经用户核对符合其常看偏好。
+
+落地方案（已实现）：
+
+- 新增 `account/bilibili_app.rs`：TV 扫码会话（复用 `QrSessionStore`，成功句柄原子消费，
+  退出/取消后迟到响应不能写回）、凭据表 `bilibili_app_auth`（单行、与 `cookies` 分离、
+  不进配置包）、`validate`（本地到期 + `oauth2/info` 双重校验）、`AppAuth`（禁重定向、
+  显式代理、错误脱敏、拒绝任意 URL）。
+- 请求层只在 `/x/v2/feed/index` 与 `/story` 注入 `access_key`；作者 story 保持匿名。
+- 设置项「B站 App 个性化推荐」默认关；开启时后端先验证凭据再落设置，凭据失效报错
+  `bilibili_app_auth_required` 而不静默降级；关闭随时可用。
+- 未解决：`refresh_token` 刷新协议未验证，180 天后需重新扫码；`/x/feed/dislike` 确切参数未知，
+  未接“不感兴趣”上报。
 
 ## 三、抖音短视频
 

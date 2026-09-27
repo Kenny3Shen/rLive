@@ -13,7 +13,7 @@ pub const VIDEO_HISTORY_RETENTION_LIMIT: i64 = 500;
 /// 上限主要防的是用户在应用外删掉录像目录后留下的孤行——没有可依赖的
 /// 扫描联动去清它们，只能靠容量兜底让旧进度最终被汰汰。
 pub const RECORDING_WATCH_PROGRESS_RETENTION_LIMIT: i64 = 1_000;
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DB_CACHE_SIZE_KIB: i64 = 8 * 1_024;
@@ -150,6 +150,17 @@ CREATE INDEX IF NOT EXISTS idx_recording_watch_progress_recent
   ON recording_watch_progress (watched_at DESC, id ASC);
 "#;
 
+/// APP 登录凭据与 Web Cookie、可导出设置分离；只允许一个本机账号。
+const BILIBILI_APP_AUTH_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS bilibili_app_auth (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  access_token TEXT NOT NULL,
+  refresh_token TEXT NOT NULL,
+  mid TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+"#;
+
 pub struct Db;
 
 impl Db {
@@ -226,18 +237,20 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         return Ok(());
     }
 
-    // v3/v4→v5 都是纯增量（v3 起补 `video_history`，再补 `recording_watch_progress`），
-    // 没有任何破坏性改动。下面的 table_count 分支会拒绝一切非当前版本的库，
-    // 所以这里必须做增量迁移：少了它，v3/v4 存量用户升级后都会打不开自己
-    // 的数据库。版本再递增时，要在这里补上对应的建表一步。
-    if version == 3 || version == 4 {
+    // v3→v6 均为增量建表，保留原有 Cookie、设置及观看历史。
+    if (3..SCHEMA_VERSION).contains(&version) {
         let transaction = conn
             .unchecked_transaction()
             .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
         if version < 4 {
             create_video_history_objects(&transaction)?;
         }
-        create_recording_watch_progress_objects(&transaction)?;
+        if version < 5 {
+            create_recording_watch_progress_objects(&transaction)?;
+        }
+        transaction
+            .execute_batch(BILIBILI_APP_AUTH_SCHEMA)
+            .map_err(map_db_err)?;
         transaction
             .pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
@@ -271,6 +284,9 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
     create_video_history_objects(&transaction)?;
     create_recording_watch_progress_objects(&transaction)?;
+    transaction
+        .execute_batch(BILIBILI_APP_AUTH_SCHEMA)
+        .map_err(map_db_err)?;
     transaction
         .execute_batch(&prune_trigger_sql(
             "history",
@@ -530,6 +546,54 @@ mod tests {
             )
             .unwrap();
         assert_eq!(title, "sentinel");
+    }
+
+    #[test]
+    fn migrates_v5_databases_by_adding_the_app_auth_table() {
+        // v5 形态：v4 加上 recording_watch_progress；没有 APP 凭据表。
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        create_video_history_objects(&conn).unwrap();
+        create_recording_watch_progress_objects(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO cookies (site_id, cookie, updated_at)
+             VALUES ('bilibili', 'SESSDATA=sentinel', 1);
+             PRAGMA user_version = 5;",
+        )
+        .unwrap();
+
+        initialize_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // 单行约束：第二次插入必须被拒绝，避免同账号多份凭据。
+        conn.execute(
+            "INSERT INTO bilibili_app_auth (singleton, access_token, refresh_token, mid, expires_at)
+             VALUES (1, 'a', 'r', '42', 1)",
+            [],
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "INSERT INTO bilibili_app_auth (singleton, access_token, refresh_token, mid, expires_at)
+                 VALUES (1, 'b', 's', '43', 2)",
+                [],
+            )
+            .is_err()
+        );
+
+        // 迁移不得动存量 Web Cookie。
+        let cookie: String = conn
+            .query_row(
+                "SELECT cookie FROM cookies WHERE site_id = 'bilibili'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cookie, "SESSDATA=sentinel");
     }
 
     #[test]

@@ -292,6 +292,8 @@ export type AppSettings = {
   video_recommend_api: VideoRecommendApi;
   /** 只预加载下一分集的起播数据；默认关闭，避免额外流量。 */
   video_next_episode_preload: boolean;
+  /** 本机 TV 授权用于 App 推荐与 story；默认关闭，不随配置导出。 */
+  bilibili_app_personalization: boolean;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   room_card_preview_enabled: boolean;
   /** 画面之外用模糊放大的封面垫底（目前只有短视频竖屏流用得到）。 */

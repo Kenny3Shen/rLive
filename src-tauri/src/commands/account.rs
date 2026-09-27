@@ -1,10 +1,10 @@
 use reqwest::header::{COOKIE, REFERER, USER_AGENT};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
 
 use crate::account::qr::QrLoginPoll;
-use crate::account::{bilibili_qr, douyin_qr, douyu_qr, huya_qr};
+use crate::account::{bilibili_app, bilibili_qr, douyin_qr, douyu_qr, huya_qr};
 use crate::error::AppResult;
 use crate::models::live::SiteId;
 use crate::state::AppState;
@@ -164,11 +164,123 @@ pub async fn account_get_profile(
     })
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountLoginKind {
+    #[default]
+    Web,
+    BilibiliApp,
+}
+
+/// APP 凭据只返回身份摘要；不复用可读取 Web Cookie 的 IPC。
+#[derive(Serialize)]
+pub struct BilibiliAppProfile {
+    pub status: AccountStatus,
+    pub has_token: bool,
+    pub mid: Option<String>,
+    pub expires_at: Option<i64>,
+}
+
+#[tauri::command(async)]
+pub async fn account_bilibili_app_profile(
+    state: State<'_, AppState>,
+) -> AppResult<BilibiliAppProfile> {
+    let credential = {
+        let conn = state.conn()?;
+        bilibili_app::load(&conn)?
+    };
+    let Some(credential) = credential else {
+        return Ok(BilibiliAppProfile {
+            status: AccountStatus::None,
+            has_token: false,
+            mid: None,
+            expires_at: None,
+        });
+    };
+    let status = match bilibili_app::validate(&credential).await {
+        Ok(()) => AccountStatus::Valid,
+        Err(error) if error.code == "bilibili_app_auth_required" => AccountStatus::Expired,
+        Err(_) => AccountStatus::Unknown,
+    };
+    Ok(BilibiliAppProfile {
+        status,
+        has_token: true,
+        mid: Some(credential.mid),
+        expires_at: Some(credential.expires_at),
+    })
+}
+
+#[tauri::command]
+pub fn account_bilibili_app_clear(state: State<'_, AppState>) -> AppResult<()> {
+    let conn = state.conn()?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(crate::db::schema::map_db_err)?;
+    bilibili_app::cancel_all()?;
+    bilibili_app::clear(&tx)?;
+    let mut settings = crate::settings::get(&tx)?;
+    settings.bilibili_app_personalization = false;
+    crate::settings::set(&tx, &settings)?;
+    tx.commit().map_err(crate::db::schema::map_db_err)?;
+    state.story_feed_seen.clear();
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub async fn account_bilibili_app_set_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> AppResult<()> {
+    let verified = if enabled {
+        let credential = {
+            let conn = state.conn()?;
+            bilibili_app::load(&conn)?
+        }
+        .ok_or_else(|| {
+            crate::error::AppError::new(
+                "bilibili_app_auth_required",
+                "请先在设置 → 账号中扫码授权 B站 App 个性化推荐",
+            )
+        })?;
+        bilibili_app::validate(&credential).await?;
+        Some(credential)
+    } else {
+        None
+    };
+    let conn = state.conn()?;
+    // 校验期间用户可能移除或切换授权，不把旧校验结果写到新账号上。
+    if let Some(verified) = verified {
+        let current = bilibili_app::load(&conn)?;
+        if !current.is_some_and(|current| current.access_token == verified.access_token) {
+            return Err(crate::error::AppError::new(
+                "bilibili_app_auth_required",
+                "App 授权已变化，请重新确认后开启",
+            ));
+        }
+    }
+    let mut settings = crate::settings::get(&conn)?;
+    settings.bilibili_app_personalization = enabled;
+    crate::settings::set(&conn, &settings)?;
+    state.story_feed_seen.clear();
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub async fn account_qr_login_start(
     state: State<'_, AppState>,
     site_id: SiteId,
+    login_kind: Option<AccountLoginKind>,
 ) -> AppResult<AccountQrLoginStart> {
+    if matches!(login_kind, Some(AccountLoginKind::BilibiliApp)) {
+        if site_id != SiteId::Bilibili {
+            return Err(qr_login_unsupported(&site_id));
+        }
+        let session = bilibili_app::start().await?;
+        return Ok(AccountQrLoginStart {
+            qr_code_url: session.qr_code_url,
+            qr_key: session.qr_key,
+        });
+    }
     match &site_id {
         SiteId::Bilibili => {
             let session = bilibili_qr::start().await?;
@@ -218,7 +330,41 @@ pub async fn account_qr_login_poll(
     state: State<'_, AppState>,
     site_id: SiteId,
     qr_key: String,
+    login_kind: Option<AccountLoginKind>,
 ) -> AppResult<AccountQrLoginPoll> {
+    if matches!(login_kind, Some(AccountLoginKind::BilibiliApp)) {
+        if site_id != SiteId::Bilibili {
+            return Err(qr_login_unsupported(&site_id));
+        }
+        let (status, message) = match bilibili_app::poll(&qr_key).await? {
+            bilibili_app::AppQrPoll::Pending => (
+                AccountQrLoginStatus::Pending,
+                "请使用 B站 App 扫码，并确认 TV 登录",
+            ),
+            bilibili_app::AppQrPoll::Scanned => (
+                AccountQrLoginStatus::Scanned,
+                "已扫码，请在手机确认 TV 登录",
+            ),
+            bilibili_app::AppQrPoll::Expired => (
+                AccountQrLoginStatus::Expired,
+                "二维码已失效，请刷新后重新扫描",
+            ),
+            bilibili_app::AppQrPoll::Success(credential) => {
+                let conn = state.conn()?;
+                bilibili_app::finish(&qr_key)?;
+                bilibili_app::save(&conn, &credential)?;
+                state.story_feed_seen.clear();
+                (
+                    AccountQrLoginStatus::Success,
+                    "App 授权已保存到本机，原有 Web Cookie 未改动",
+                )
+            }
+        };
+        return Ok(AccountQrLoginPoll {
+            status,
+            message: message.into(),
+        });
+    }
     let result = match &site_id {
         SiteId::Bilibili => bilibili_qr::poll(&qr_key).await?,
         SiteId::Douyin => douyin_qr::poll(&qr_key).await?,

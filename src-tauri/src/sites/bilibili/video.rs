@@ -1252,6 +1252,15 @@ fn search_filter_query(
 impl BilibiliSite {
     /// APP 的推荐、story 与作者 story 共用请求层，不建立第二套 Cookie/设备状态。
     async fn get_app_feed(&self, path: &str, query: &[(&str, String)]) -> AppResult<String> {
+        // 只有两条个性化推荐流使用 APP 凭据；作者 story 是普通游标列表，
+        // 即使站点实例带了凭据也不改走签名请求。
+        if let Some(auth) = &self.app_auth
+            && matches!(path, "" | "/story")
+        {
+            let (buvid, _) = self.ensure_buvid().await?;
+            // 复用设备标识与解析逻辑；带敏感凭据的请求禁重定向、统一脱敏错误。
+            return auth.feed(path, query, &buvid).await;
+        }
         self.get_json_with_buvid_header(
             &format!("https://app.bilibili.com/x/v2/feed/index{path}"),
             query,

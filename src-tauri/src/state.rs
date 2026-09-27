@@ -87,6 +87,13 @@ impl StoryFeedSeen {
         }
     }
 
+    /// 授权切换时清空匿名／旧账号的进程内去重记忆。
+    pub fn clear(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            *inner = StoryFeedSeenInner::default();
+        }
+    }
+
     /// 记下这次发出去的条目（含兜底重复的那些：它们确实被端上去了）。
     pub fn record<I: IntoIterator<Item = String>>(&self, bvids: I) {
         let Ok(mut inner) = self.inner.lock() else {

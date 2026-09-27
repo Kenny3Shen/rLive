@@ -33,6 +33,7 @@ use chrono::Local;
 
 use app_paths::AppDirectories;
 use commands::account::{
+    account_bilibili_app_clear, account_bilibili_app_profile, account_bilibili_app_set_enabled,
     account_clear_cookie, account_get_cookie, account_get_profile, account_qr_login_poll,
     account_qr_login_start, account_set_cookie,
 };
@@ -370,6 +371,9 @@ pub fn run() {
             recording_watch_progress_report,
             account_get_cookie,
             account_get_profile,
+            account_bilibili_app_profile,
+            account_bilibili_app_clear,
+            account_bilibili_app_set_enabled,
             account_set_cookie,
             account_clear_cookie,
             account_qr_login_start,
