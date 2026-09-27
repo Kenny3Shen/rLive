@@ -45,6 +45,15 @@ const CARD_CLASS = cn(
 const COVER_CLASS = "relative w-full overflow-hidden bg-muted";
 const COVER_IMAGE_CLASS =
   "absolute inset-0 h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none";
+// 封面角标分两类，视觉上不能混：
+//
+// - `COVER_METRIC_CLASS`（播放/弹幕/时长）：事实数字，**无底色**，靠 `text-shadow-cover`
+//   投影把白字从任意封面上拉出来（见 styles.css）。曾经用 `bg-black/65` 药丸：底排
+//   三个角标各自一块黑块，读起来比封面本身还重，在深色封面上又几乎看不出边界。
+// - `BADGE_CLASS`（推荐理由）：平台给的运营标签，需要读作「一块标签」而不是一个数字，
+//   保留药丸底色与圆角。
+const COVER_METRIC_CLASS =
+  "inline-flex items-center gap-1.5 text-[11px] font-medium text-white tabular-nums text-shadow-cover";
 const BADGE_CLASS =
   "absolute inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm";
 
@@ -187,8 +196,8 @@ export const VideoCard = memo(function VideoCard({
         previewLoading={preview.phase === "loading"}
         overlay={
           <>
-            {/* 推荐理由是平台给的运营文案（如「百万播放」），放左上与右下的时长
-                分开，两者都靠边而不互相挤。 */}
+            {/* 推荐理由是平台给的运营文案（如「百万播放」），放左上与底排的统计、
+                时长分开，三者都靠边而不互相挤。 */}
             {item.rcmd_reason && (
               <span
                 data-mobile-static-backdrop
@@ -197,12 +206,36 @@ export const VideoCard = memo(function VideoCard({
                 {item.rcmd_reason}
               </span>
             )}
-            <span
-              data-mobile-static-backdrop
-              className={cn(BADGE_CLASS, "bottom-2 right-2 tabular-nums")}
-            >
-              {formatVideoDuration(item.duration)}
-            </span>
+            {orientation === "grid" ? (
+              // 播放/弹幕搬到封面左下、与右下时长同一排：卡片少一行文字，瀑布流更紧凑，
+              // 统计也贴着封面读。行式卡的缩略图只有 2/5 列宽，放不下这一排，
+              // 统计仍留在文本块第三行（见下方）。
+              //
+              // 播放与弹幕之间不用竖线：三个角标都无底色，竖线会成为这一排里最重的
+              // 一道黑，反而把两个数字拆成两件事；用固定间距分组更轻、也更好读。
+              //
+              // 窄卡（xl 六列约 184px）遇上两个六位数统计会超宽：统计可收缩，
+              // 两个数字各自 ellipsis，时长固定不缩 —— 宁肯截尾也不把时长挤出封面。
+              <div className="absolute inset-x-2 bottom-2 flex items-center justify-between gap-2">
+                <span className={cn(COVER_METRIC_CLASS, "min-w-0 gap-2")}>
+                  <span className="inline-flex min-w-0 items-center gap-0.5">
+                    <Play className="size-3 shrink-0" aria-hidden />
+                    <span className="min-w-0 truncate">{formatOnline(item.view)}</span>
+                  </span>
+                  <span className="inline-flex min-w-0 items-center gap-0.5">
+                    <MessageSquareText className="size-3 shrink-0" aria-hidden />
+                    <span className="min-w-0 truncate">{formatOnline(item.danmaku)}</span>
+                  </span>
+                </span>
+                <span className={cn(COVER_METRIC_CLASS, "shrink-0")}>
+                  {formatVideoDuration(item.duration)}
+                </span>
+              </div>
+            ) : (
+              <span className={cn(COVER_METRIC_CLASS, "absolute bottom-2 right-2 shrink-0")}>
+                {formatVideoDuration(item.duration)}
+              </span>
+            )}
           </>
         }
       />
@@ -212,7 +245,8 @@ export const VideoCard = memo(function VideoCard({
           orientation === "row" ? "py-0.5 pr-0.5" : "px-2 pt-2 pb-2.5",
         )}
       >
-        {/* 标题固定两行；第二行发布日期（竖线接 UP 主，投稿抽屉隐藏），第三行播放与弹幕。 */}
+        {/* 标题固定两行；第二行发布日期（竖线接 UP 主，投稿抽屉隐藏）。播放与弹幕
+            只在行式卡留在这里：网格卡已把它们搬到封面左下、与时长同一排。 */}
         <p className="line-clamp-2 min-h-[2lh] text-[13px] font-medium leading-snug text-foreground">
           {item.title}
         </p>
@@ -233,25 +267,27 @@ export const VideoCard = memo(function VideoCard({
           )}
           {showAuthor && <span className="min-w-0 truncate">{item.author}</span>}
         </p>
-        <p className="flex min-h-4 items-center gap-1.5 text-[11px] text-muted-foreground/85">
-          <span className="inline-flex items-center gap-0.5">
-            <Play className="size-3" aria-hidden />
-            {formatOnline(item.view)}
-          </span>
-          <span aria-hidden className="text-border">
-            |
-          </span>
-          <span className="inline-flex items-center gap-0.5">
-            {/*
-              弹幕条数用**开启态**那个符号（`MessageSquareText`），与播放器三处弹幕
-              开关（`danmakuControlPresentation`）的开启态同形 —— 卡片说的是"这条有多少
-              弹幕"而不是"弹幕关着"，因此不用关闭态那个。这里曾经用不带字的方气泡，
-              于是卡片上的弹幕与播放器里的弹幕看起来是两种东西。
-            */}
-            <MessageSquareText className="size-3" aria-hidden />
-            {formatOnline(item.danmaku)}
-          </span>
-        </p>
+        {orientation === "row" && (
+          <p className="flex min-h-4 items-center gap-1.5 text-[11px] text-muted-foreground/85">
+            <span className="inline-flex items-center gap-0.5">
+              <Play className="size-3" aria-hidden />
+              {formatOnline(item.view)}
+            </span>
+            <span aria-hidden className="text-border">
+              |
+            </span>
+            <span className="inline-flex items-center gap-0.5">
+              {/*
+                弹幕条数用**开启态**那个符号（`MessageSquareText`），与播放器三处弹幕
+                开关（`danmakuControlPresentation`）的开启态同形 —— 卡片说的是"这条有多少
+                弹幕"而不是"弹幕关着"，因此不用关闭态那个。这里曾经用不带字的方气泡，
+                于是卡片上的弹幕与播放器里的弹幕看起来是两种东西。
+              */}
+              <MessageSquareText className="size-3" aria-hidden />
+              {formatOnline(item.danmaku)}
+            </span>
+          </p>
+        )}
       </div>
     </button>
   );

@@ -278,6 +278,9 @@
   --shadow-media-tooltip: var(--media-shadow-tooltip);
   --text-shadow-media: 0 1px 0 var(--media-shadow-current-color);
   --text-shadow-media-dialog: var(--media-text-shadow-dialog);
+  /* 封面角标（播放/弹幕/时长）没有底色，靠两层投影把白字从任意封面上拉出来：
+     贴边一层给出轮廓，外扩一层压住封面的花纹与高光。 */
+  --text-shadow-cover: 0 1px 2px oklch(0 0 0 / 0.85), 0 0 6px oklch(0 0 0 / 0.45);
   --backdrop-filter-media-indicator: var(--media-backdrop-filter-indicator);
   --backdrop-filter-media-dialog: var(--media-backdrop-filter-dialog);
   --duration-media-instant: var(--media-duration-instant);
