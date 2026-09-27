@@ -183,33 +183,50 @@ pub struct BilibiliAppProfile {
 
 /// 供设置界面与启动期检查共用的状态判定。
 ///
-/// 远端确认有效时用服务端寿命校正本地 `expires_at`：本机时钟偏差不会让凭据
-/// 提前失效或延后失效。校正失败（如数据库锁冲突）不影响本次状态结论。
+/// 先走 [`bilibili_app::authorize`]：临近到期或已被服务端拒绝时会自动续期，
+/// 续期结果落库（轮换了 `refresh_token`，不落库下次仍用旧值重试）。续期让
+/// 「已过期」不再等于「必须重新扫码」：只有 `refresh_token` 也失效时才报失效。
+///
+/// 服务端确认有效时用权威寿命校正本地 `expires_at`；校正失败（如数据库锁冲突）
+/// 不影响本次状态结论。
 async fn app_profile_from_credential(
     state: &AppState,
     credential: &bilibili_app::AppCredential,
 ) -> BilibiliAppProfile {
-    let (status, authoritative) = match bilibili_app::validate(credential).await {
-        Ok(validation) => (AccountStatus::Valid, validation.expires_at),
-        Err(error) if error.code == "bilibili_app_auth_required" => (AccountStatus::Expired, None),
-        Err(_) => (AccountStatus::Unknown, None),
-    };
-    let mut expires_at = credential.expires_at;
-    if let Some(authoritative) = authoritative
-        && authoritative != expires_at
-        && let Ok(conn) = state.conn()
-    {
-        let mut corrected = credential.clone();
-        corrected.expires_at = authoritative;
-        if bilibili_app::save(&conn, &corrected).is_ok() {
-            expires_at = authoritative;
+    let (status, expires_at) = match bilibili_app::authorize(credential.clone()).await {
+        Ok(authorization) => {
+            let mut expires_at = authorization.credential.expires_at;
+            if let Ok(conn) = state.conn() {
+                // 续期已轮换凭据，必须落库；否则下次仍拿旧 `refresh_token` 重试。
+                let to_save = if authorization.renewed {
+                    Some(authorization.credential)
+                } else if let Some(authoritative) = authorization.expires_at
+                    && authoritative != credential.expires_at
+                {
+                    let mut corrected = credential.clone();
+                    corrected.expires_at = authoritative;
+                    Some(corrected)
+                } else {
+                    None
+                };
+                if let Some(next) = to_save
+                    && bilibili_app::save(&conn, &next).is_ok()
+                {
+                    expires_at = next.expires_at;
+                }
+            }
+            (AccountStatus::Valid, Some(expires_at))
         }
-    }
+        Err(error) if error.code == "bilibili_app_auth_required" => {
+            (AccountStatus::Expired, Some(credential.expires_at))
+        }
+        Err(_) => (AccountStatus::Unknown, Some(credential.expires_at)),
+    };
     BilibiliAppProfile {
         status,
         has_token: true,
         mid: Some(credential.mid.clone()),
-        expires_at: Some(expires_at),
+        expires_at,
     }
 }
 

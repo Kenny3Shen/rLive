@@ -4,6 +4,7 @@
 //! APP 令牌只交给 Rust 调用方；错误信息不包含请求、响应或任何凭据。
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use md5::{Digest, Md5};
@@ -31,6 +32,10 @@ const APP_SECRET: &str = "59b43e04ad6965f34319062b478f83dd";
 const AUTH_CODE_URL: &str = "https://passport.bilibili.com/x/passport-tv-login/qrcode/auth_code";
 const POLL_URL: &str = "https://passport.bilibili.com/x/passport-tv-login/qrcode/poll";
 const OAUTH_INFO_URL: &str = "https://passport.bilibili.com/x/passport-login/oauth2/info";
+/// 刷新端点（实测确认）。注意与 `api/v2/oauth2/refresh_token` 区分：后者恒返回
+/// `-101 账号未登录`，只有本路径接受 TV 凭据的 `refresh_token`。
+const OAUTH_REFRESH_URL: &str =
+    "https://passport.bilibili.com/x/passport-login/oauth2/refresh_token";
 const FEED_URL: &str = "https://app.bilibili.com/x/v2/feed/index";
 const STORY_URL: &str = "https://app.bilibili.com/x/v2/feed/index/story";
 const REFERER_VALUE: &str = "https://www.bilibili.com/";
@@ -48,6 +53,12 @@ pub struct AppCredential {
     pub(crate) mid: String,
     pub(crate) expires_at: i64,
 }
+
+/// 距到期不足该时长时主动续期，而不是等失败后才补救。
+///
+/// 取一天：足够覆盖长时间运行的会话跨过到期点，又不会在每次启动时都白跑一次
+/// 刷新（刷新会轮换 `refresh_token`，属于写操作）。
+pub const REFRESH_AHEAD_SECS: i64 = 24 * 60 * 60;
 
 /// 到达截止秒即过期；非法的非正截止时间也视为过期。
 ///
@@ -210,6 +221,80 @@ pub struct AppValidation {
     pub expires_at: Option<i64>,
 }
 
+/// 可用的授权结果。
+///
+/// 不落库：续期会轮换 `refresh_token`，保存由调用方负责（见 [`AppAuthorization::renewed`]）。
+pub struct AppAuthorization {
+    /// 用于后续请求的凭据；发生续期时是新的那一份。
+    pub credential: AppCredential,
+    /// 服务端权威到期秒；服务端未给寿命时为 `None`。
+    pub expires_at: Option<i64>,
+    /// 凭据是否被续期轮换。为 `true` 时调用方**必须**落库，否则下次仍用旧值。
+    pub renewed: bool,
+}
+
+/// 距到期不足 [`REFRESH_AHEAD_SECS`] 时应当主动续期。
+///
+/// 只作为优化：本机时钟可能不准，因此「临近到期」不意味着凭据已失效，
+/// 真正的权威判断仍在服务端。
+fn needs_refresh(credential: &AppCredential, now: i64) -> bool {
+    credential.expires_at > 0 && credential.expires_at - now <= REFRESH_AHEAD_SECS
+}
+
+/// 上次主动续期的时刻。用于避免本机时钟大幅偏快时每个请求都续期一次。
+static LAST_PROACTIVE_REFRESH: AtomicI64 = AtomicI64::new(0);
+
+/// 同一进程内两次主动续期的最小间隔。
+const PROACTIVE_REFRESH_MIN_INTERVAL_SECS: i64 = 60 * 60;
+
+fn proactive_refresh_allowed(now: i64) -> bool {
+    let last = LAST_PROACTIVE_REFRESH.load(Ordering::Relaxed);
+    last == 0 || now - last >= PROACTIVE_REFRESH_MIN_INTERVAL_SECS
+}
+
+/// 校验凭据，并在必要时用 `refresh_token` 续期。
+///
+/// 最多续期一次，两种触发条件：
+/// 1. **主动**：本机时间显示临近到期 —— 省掉一次注定被拒的校验；
+/// 2. **被动**：服务端明确拒绝了 access_token —— 此时 `refresh_token` 可能仍然
+///    有效（实测：access_token 即使被换成垃圾值，刷新仍能取回可用凭据），
+///    续期可以避免用户重新扫码。
+///
+/// 主动续期带进程内限速：本机时钟大幅偏快时 `needs_refresh` 会恒为真，
+/// 不限速就会变成每个请求续期一次。被限速时直接走远端校验，凭据真失效时
+/// 仍会由被动路径续期，因此限速不影响正确性。
+pub async fn authorize(credential: AppCredential) -> AppResult<AppAuthorization> {
+    if !valid_credential_fields(&credential) {
+        return Err(auth_required());
+    }
+    let now = now();
+    if needs_refresh(&credential, now) && proactive_refresh_allowed(now) {
+        let refreshed = refresh(&credential).await?;
+        LAST_PROACTIVE_REFRESH.store(now, Ordering::Relaxed);
+        return Ok(AppAuthorization {
+            expires_at: Some(refreshed.expires_at),
+            credential: refreshed,
+            renewed: true,
+        });
+    }
+    match validate(&credential).await {
+        Ok(validation) => Ok(AppAuthorization {
+            credential,
+            expires_at: validation.expires_at,
+            renewed: false,
+        }),
+        Err(error) if error.code == "bilibili_app_auth_required" => {
+            let refreshed = refresh(&credential).await?;
+            Ok(AppAuthorization {
+                expires_at: Some(refreshed.expires_at),
+                credential: refreshed,
+                renewed: true,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// 校验凭据是否仍被服务端接受，并取得权威到期时间。
 ///
 /// 刻意不用本机时钟做前置判断：时钟被调快时本地判断会把仍然有效的凭据报成
@@ -242,22 +327,74 @@ async fn fetch_oauth_info(credential: &AppCredential) -> AppResult<AppValidation
     parse_oauth_info(&value, credential, now())
 }
 
-/// 已验证的 APP 请求上下文；不持有 Web Cookie 或用于续期的令牌。
+/// 用 `refresh_token` 换取新的凭据对。
+///
+/// 实测确认的协议（见模块内测试注释）：
+/// - 端点是 `x/passport-login/oauth2/refresh_token`，不是 `api/v2/oauth2/refresh_token`
+///   （后者对 TV 凭据恒返回 `-101 账号未登录`）。
+/// - 只需 `refresh_token` 一个业务参数（`access_key` 可省略），其余为 appkey/ts/sign。
+/// - 成功后返回 `data.token_info`，字段与扫码一致，**`access_token` 会轮换**。
+///
+/// 失败分类：`-101`（不存在的 refresh_token）与 `-400`（缺参数／空值）都表明该
+/// 刷新令牌不可用，需要重新扫码；`-3`（签名错误）与本方参数构造有关，属可重试。
+/// 实测旧 `refresh_token` 在轮换后仍然可用，因此「刷新成功但落库失败」可以安全重试。
+pub async fn refresh(credential: &AppCredential) -> AppResult<AppCredential> {
+    if !valid_opaque(&credential.refresh_token, MAX_TOKEN_LEN) {
+        return Err(auth_required());
+    }
+    let query = sign_params(
+        &[("refresh_token", credential.refresh_token.clone())],
+        None,
+        now(),
+    );
+    let response = login_client()
+        .map_err(|_| auth_unavailable())?
+        .post(OAUTH_REFRESH_URL)
+        .header(USER_AGENT, USER_AGENT_VALUE)
+        .header(REFERER, REFERER_VALUE)
+        .header(ACCEPT, "application/json")
+        .form(&query)
+        .send()
+        .await
+        .map_err(|_| auth_unavailable())?;
+    if !response.status().is_success() {
+        return Err(auth_unavailable());
+    }
+    let value: Value = response.json().await.map_err(|_| auth_unavailable())?;
+    parse_refresh(&value, credential, now())
+}
+
+fn parse_refresh(value: &Value, previous: &AppCredential, now: i64) -> AppResult<AppCredential> {
+    // 刷新路径的 -400 与 oauth2/info 同理：请求参数由本方保证，能走到这里说明
+    // 服务端拒绝的是 refresh_token 本身。但**不能**复用 require_success_code 的
+    // `-400 → auth_required`：实测空串/过短值也返回 -400，而那属于本地就该拦下的
+    // 输入；这里已被 valid_opaque 过滤，所以 -400 只剩「该刷新令牌不可用」一种解释。
+    match api_code(value) {
+        Some(0) => {}
+        Some(-101 | -400) => return Err(auth_required()),
+        _ => return Err(auth_unavailable()),
+    }
+    let refreshed = parse_credential(&value["data"], now).map_err(|_| auth_unavailable())?;
+    // mid 变化意味着服务端把凭据发给了另一个账号，不能默默替换本机授权。
+    if refreshed.mid != previous.mid {
+        return Err(auth_required());
+    }
+    Ok(refreshed)
+}
+/// 已验证的 APP 请求上下文；不持有 Web Cookie。
 pub struct AppAuth {
     client: Client,
     access_token: String,
     /// 已知的权威到期秒；服务端未给寿命时为 `None`，表示不设本地期限。
     expires_at: Option<i64>,
+    /// 续期轮换后的凭据；非空时调用方应落库，否则下次仍用旧值。
+    renewed: Option<AppCredential>,
 }
 
 impl AppAuth {
-    /// 先直连验证一次，再为推荐请求应用显式代理；禁止环境代理与重定向。
+    /// 校验并在必要时续期，再为推荐请求应用显式代理；禁止环境代理与重定向。
     pub async fn new(credential: AppCredential, proxy: Option<&str>) -> AppResult<Self> {
-        let validation = validate(&credential).await?;
-        // 服务端寿命是权威值。服务端确认有效但未给寿命时**不**回退本地值：
-        // 本机时钟可能偏快，拿一个已过的本地期限会让紧随其后的 feed 立刻拒绝
-        // 一个刚刚被服务端接受的令牌。
-        let expires_at = validation.expires_at;
+        let authorization = authorize(credential).await?;
         let builder = Client::builder()
             .use_native_tls()
             .no_proxy()
@@ -272,9 +409,15 @@ impl AppAuth {
             .map_err(|_| auth_unavailable())?;
         Ok(Self {
             client,
-            access_token: credential.access_token,
-            expires_at,
+            access_token: authorization.credential.access_token.clone(),
+            expires_at: authorization.expires_at,
+            renewed: authorization.renewed.then_some(authorization.credential),
         })
+    }
+
+    /// 取出续期后的凭据供落库；只能取一次。
+    pub fn take_renewed(&mut self) -> Option<AppCredential> {
+        self.renewed.take()
     }
 
     /// 仅请求 APP 推荐与短视频推荐两个固定地址；失败绝不回退匿名请求。
@@ -981,6 +1124,7 @@ mod tests {
             client: Client::builder().no_proxy().build().unwrap(),
             access_token: TEST_TOKEN.into(),
             expires_at: Some(1),
+            renewed: None,
         };
         assert_eq!(
             error_of(auth.feed("", &[], "safe").await).code,
@@ -991,6 +1135,7 @@ mod tests {
             client: Client::builder().no_proxy().build().unwrap(),
             access_token: TEST_TOKEN.into(),
             expires_at: None,
+            renewed: None,
         };
         // 路径校验仍生效，说明只是不做过期判断而不是整体放行。
         assert_eq!(
@@ -1014,5 +1159,108 @@ mod tests {
         assert!(check_feed_body(r#"{"code":0,"data":{}}"#).is_ok());
         assert!(check_feed_body(r#"{"code":-412}"#).is_err());
         assert!(check_feed_body(r#"{"data":{}}"#).is_err());
+    }
+
+    /// 刷新协议的错误分类（实测依据见 `refresh` 的文档注释）。
+    ///
+    /// 关键区分：`-101`/`-400` 表示该 `refresh_token` 不可用（需重新扫码），
+    /// `-3`（签名）与其他未知码只说明本次请求没成，不应让用户重扫。
+    #[tokio::test]
+    async fn refresh_classifies_expired_refresh_token_separately_from_retryable_failures() {
+        let previous = credential();
+        let token_info = |overrides: Value| {
+            let mut token = token_data();
+            if let Some(object) = overrides.as_object() {
+                for (key, value) in object {
+                    token[key] = value.clone();
+                }
+            }
+            json!({"code": 0, "data": {"token_info": token}})
+        };
+
+        // 成功：返回轮换后的凭据。
+        let refreshed = parse_refresh(&token_info(json!({})), &previous, NOW).unwrap();
+        assert_eq!(refreshed.mid, previous.mid);
+        assert_eq!(refreshed.expires_at, NOW + LIFETIME);
+
+        for response in [
+            json!({"code": -101}),
+            json!({"code": -400}),
+            // mid 变化说明凭据被发给了另一个账号，不能默默替换本机授权。
+            token_info(json!({"mid": 43})),
+        ] {
+            let error = error_of(parse_refresh(&response, &previous, NOW));
+            assert_eq!(error.code, "bilibili_app_auth_required");
+            assert!(!error.retryable);
+        }
+        for response in [
+            // 签名错误由本方参数构造引起，不是凭据问题。
+            json!({"code": -3}),
+            json!({"code": -412}),
+            json!({"code": -500}),
+            json!({"code": 0, "data": {}}),
+            json!({"code": 0, "data": {"token_info": {"access_token": "bad!"}}}),
+            json!({}),
+        ] {
+            let error = error_of(parse_refresh(&response, &previous, NOW));
+            assert_eq!(error.code, "bilibili_app_auth_unavailable");
+            assert!(error.retryable);
+        }
+        // 本地就能判定格式非法的 refresh_token 不必联网。
+        let broken = AppCredential {
+            refresh_token: "bad!token".into(),
+            ..credential()
+        };
+        assert_eq!(
+            error_of(refresh(&broken).await).code,
+            "bilibili_app_auth_required"
+        );
+    }
+
+    /// 刷新后的 `access_token` 实测为 220 字符（含连字符），必须通过本地校验，
+    /// 否则续期成功却会被自己的格式检查拒绝。
+    #[test]
+    fn refresh_accepts_the_longer_rotated_access_token_shape() {
+        let mut token = token_data();
+        token["access_token"] = json!(format!("{}-{}", "a".repeat(217), "b".repeat(2)));
+        let refreshed = parse_refresh(
+            &json!({"code": 0, "data": {"token_info": token}}),
+            &credential(),
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(refreshed.access_token.len(), 220);
+        assert!(valid_credential_fields(&refreshed));
+    }
+
+    /// 主动续期只在临近到期时触发，且带进程内限速。
+    #[test]
+    fn proactive_refresh_only_triggers_near_expiry_and_is_rate_limited() {
+        let now = NOW;
+        let mut far = credential();
+        far.expires_at = now + REFRESH_AHEAD_SECS + 1;
+        assert!(!needs_refresh(&far, now));
+
+        let mut near = credential();
+        near.expires_at = now + REFRESH_AHEAD_SECS;
+        assert!(needs_refresh(&near, now));
+
+        // 非正到期时间视为「没有权威寿命」，交由远端判断。
+        let mut unknown = credential();
+        unknown.expires_at = 0;
+        assert!(!needs_refresh(&unknown, now));
+
+        // 限速：首次允许，间隔内拒绝，超过间隔后再次允许。
+        let base = now + 1_000_000;
+        LAST_PROACTIVE_REFRESH.store(0, Ordering::Relaxed);
+        assert!(proactive_refresh_allowed(base));
+        LAST_PROACTIVE_REFRESH.store(base, Ordering::Relaxed);
+        assert!(!proactive_refresh_allowed(
+            base + PROACTIVE_REFRESH_MIN_INTERVAL_SECS - 1
+        ));
+        assert!(proactive_refresh_allowed(
+            base + PROACTIVE_REFRESH_MIN_INTERVAL_SECS
+        ));
+        LAST_PROACTIVE_REFRESH.store(0, Ordering::Relaxed);
     }
 }

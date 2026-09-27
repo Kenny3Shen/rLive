@@ -126,6 +126,9 @@ fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
 
 /// 本机存有 TV 凭据就启用个性化：授权是唯一事实来源，不再有单独开关。
 /// 扫码即生效、移除授权即回匿名，两套状态合并成一套。
+///
+/// 凭据临近到期或已被服务端拒绝时会自动续期；续期轮换了 `refresh_token`，
+/// 因此新凭据必须落库，否则下一次请求仍拿旧值重试。
 async fn resolve_app_feed(state: &AppState) -> AppResult<BilibiliSite> {
     let (credential, proxy) = {
         let conn = state.conn()?;
@@ -136,7 +139,11 @@ async fn resolve_app_feed(state: &AppState) -> AppResult<BilibiliSite> {
     let Some(credential) = credential else {
         return Ok(site);
     };
-    let auth = account::bilibili_app::AppAuth::new(credential, proxy.as_deref()).await?;
+    let mut auth = account::bilibili_app::AppAuth::new(credential, proxy.as_deref()).await?;
+    if let Some(renewed) = auth.take_renewed() {
+        let conn = state.conn()?;
+        account::bilibili_app::save(&conn, &renewed)?;
+    }
     Ok(site.with_app_auth(auth))
 }
 

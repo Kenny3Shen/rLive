@@ -612,11 +612,11 @@ export function BilibiliAppAuthField() {
             短视频个性化，不影响 Web 推荐，不会替换 Web Cookie。
           </FieldDescription>
           <FieldDescription>
-            凭据仅保存在本机 SQLite，与 Cookie 一样未额外加密，不随配置导出或同步。 授权 180
-            天到期后需重新扫码；尚未实现 token 刷新协议。
+            凭据仅保存在本机 SQLite，与 Cookie 一样未额外加密，不随配置导出或同步。 授权有效期
+            180 天，临近到期或失效时会自动用刷新令牌续期，无需重新扫码。
           </FieldDescription>
           <FieldDescription>
-            token 失效时推荐会提示重新扫码，不会静默降级为匿名流；
+            只有刷新令牌也失效时才需重新扫码，且会提示而不会静默降级为匿名流；
             状态待确认时可刷新重试，不会自动删除已保存的凭据。想回到匿名推荐就点「移除 App 授权」。
           </FieldDescription>
           {profileError && (
