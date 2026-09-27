@@ -9,6 +9,7 @@ import { Loader2, Video } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { BilibiliAppAuthAction } from "@/shared/components/BilibiliAppAuthAction";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
@@ -242,6 +243,7 @@ export function VideoPage() {
             error={listQuery.error}
             title={`${title}加载失败`}
             onRetry={() => void listQuery.refetch()}
+            action={<BilibiliAppAuthAction error={listQuery.error} />}
           />
         )}
 

@@ -35,6 +35,7 @@ import {
 import { HomePage } from "../features/home/HomePage";
 import { homeCategoryPath } from "../features/category/categorySelection";
 import { IptvStartupWarmup } from "../features/iptv/IptvStartupWarmup";
+import { BilibiliAppAuthStartupCheck } from "../features/settings/BilibiliAppAuthStartupCheck";
 import { useFollowAutoRecording } from "../features/recording/followRecording";
 import { RecordingExitGuard } from "../features/recording/RecordingExitGuard";
 import { UpdateChecker } from "../features/update/UpdatePrompt";
@@ -110,6 +111,7 @@ function AppRuntime() {
     <>
       <AndroidBackNavigator />
       <UpdateChecker />
+      <BilibiliAppAuthStartupCheck />
       <IptvStartupWarmup />
       <RouteModulePreloader />
       <RecordingExitGuard />

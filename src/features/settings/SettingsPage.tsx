@@ -43,6 +43,12 @@ import { fadeTheme } from "@/app/theme";
 import { preloadRouteModule } from "@/app/routeModules";
 import { invalidateCookieDependentSiteQueries } from "@/shared/api/cookieQueryInvalidation";
 import { invalidateBilibiliAppQueries } from "@/shared/api/bilibiliAppQueryInvalidation";
+import {
+  BILIBILI_APP_PROFILE_QUERY_KEY,
+  EMPTY_BILIBILI_APP_PROFILE,
+  fetchBilibiliAppProfile,
+  type BilibiliAppProfile,
+} from "@/shared/api/bilibiliAppProfile";
 import { enabledSiteIds, LIVE_SITE_IDS } from "@/shared/siteId";
 import type { AsrProvider, SiteId } from "@/shared/types/live";
 import {
@@ -168,21 +174,6 @@ type AccountProfile = {
   username: string | null;
   has_cookie: boolean;
   status: "none" | "valid" | "expired" | "unknown";
-};
-
-type BilibiliAppProfile = {
-  status: "none" | "valid" | "expired" | "unknown";
-  has_token: boolean;
-  mid: string | null;
-  expires_at: number | null;
-};
-
-const BILIBILI_APP_PROFILE_QUERY_KEY = ["bilibili_app_profile"] as const;
-const EMPTY_BILIBILI_APP_PROFILE: BilibiliAppProfile = {
-  status: "none",
-  has_token: false,
-  mid: null,
-  expires_at: null,
 };
 
 export function bilibiliAppAuthPresentation(
@@ -546,10 +537,7 @@ export function BilibiliAppAuthField() {
     refetch: refreshProfile,
   } = useQuery({
     queryKey: BILIBILI_APP_PROFILE_QUERY_KEY,
-    queryFn: () =>
-      isTauri()
-        ? invokeCmd<BilibiliAppProfile>("account_bilibili_app_profile")
-        : Promise.resolve(EMPTY_BILIBILI_APP_PROFILE),
+    queryFn: fetchBilibiliAppProfile,
     enabled: !clearing,
     retry: false,
   });

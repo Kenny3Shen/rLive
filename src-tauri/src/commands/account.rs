@@ -181,6 +181,38 @@ pub struct BilibiliAppProfile {
     pub expires_at: Option<i64>,
 }
 
+/// 供设置界面与启动期检查共用的状态判定。
+///
+/// 远端确认有效时用服务端寿命校正本地 `expires_at`：本机时钟偏差不会让凭据
+/// 提前失效或延后失效。校正失败（如数据库锁冲突）不影响本次状态结论。
+async fn app_profile_from_credential(
+    state: &AppState,
+    credential: &bilibili_app::AppCredential,
+) -> BilibiliAppProfile {
+    let (status, authoritative) = match bilibili_app::validate(credential).await {
+        Ok(validation) => (AccountStatus::Valid, validation.expires_at),
+        Err(error) if error.code == "bilibili_app_auth_required" => (AccountStatus::Expired, None),
+        Err(_) => (AccountStatus::Unknown, None),
+    };
+    let mut expires_at = credential.expires_at;
+    if let Some(authoritative) = authoritative
+        && authoritative != expires_at
+        && let Ok(conn) = state.conn()
+    {
+        let mut corrected = credential.clone();
+        corrected.expires_at = authoritative;
+        if bilibili_app::save(&conn, &corrected).is_ok() {
+            expires_at = authoritative;
+        }
+    }
+    BilibiliAppProfile {
+        status,
+        has_token: true,
+        mid: Some(credential.mid.clone()),
+        expires_at: Some(expires_at),
+    }
+}
+
 #[tauri::command(async)]
 pub async fn account_bilibili_app_profile(
     state: State<'_, AppState>,
@@ -197,17 +229,7 @@ pub async fn account_bilibili_app_profile(
             expires_at: None,
         });
     };
-    let status = match bilibili_app::validate(&credential).await {
-        Ok(()) => AccountStatus::Valid,
-        Err(error) if error.code == "bilibili_app_auth_required" => AccountStatus::Expired,
-        Err(_) => AccountStatus::Unknown,
-    };
-    Ok(BilibiliAppProfile {
-        status,
-        has_token: true,
-        mid: Some(credential.mid),
-        expires_at: Some(credential.expires_at),
-    })
+    Ok(app_profile_from_credential(&state, &credential).await)
 }
 
 #[tauri::command]

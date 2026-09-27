@@ -49,11 +49,13 @@ pub struct AppCredential {
     pub(crate) expires_at: i64,
 }
 
-impl AppCredential {
-    /// 到达截止秒即过期；非法的非正截止时间也视为过期。
-    pub fn is_expired(&self, now: i64) -> bool {
-        self.expires_at <= 0 || now >= self.expires_at
-    }
+/// 到达截止秒即过期；非法的非正截止时间也视为过期。
+///
+/// 仅作为会话中途的廉价守卫（见 [`AppAuth::feed`]）：上游 feed 对无效令牌也返回
+/// `code=0`（静默降级匿名流），本地检查是长时间运行期间唯一能在令牌到期后报错
+/// 而非静默换流的机制。凭据是否仍被接受以服务端结论为准。
+fn expiry_reached(expires_at: i64, now: i64) -> bool {
+    expires_at <= 0 || now >= expires_at
 }
 
 /// 从独立凭据表读取，不访问 Cookie、设置或配置导出数据。
@@ -200,9 +202,27 @@ pub fn cancel_all() -> AppResult<()> {
     SESSIONS.clear()
 }
 
-/// 使用独立、无代理的受限登录客户端验证，不改变数据库中的凭据。
-pub async fn validate(credential: &AppCredential) -> AppResult<()> {
-    check_local_credential(credential, now())?;
+/// 远端校验结果。
+///
+/// `expires_at` 是服务端权威的绝对到期秒（按本机时钟换算），仅在服务端
+/// 返回 `expires_in` 时存在。不包含任何凭据值。
+pub struct AppValidation {
+    pub expires_at: Option<i64>,
+}
+
+/// 校验凭据是否仍被服务端接受，并取得权威到期时间。
+///
+/// 刻意不用本机时钟做前置判断：时钟被调快时本地判断会把仍然有效的凭据报成
+/// 过期，用户为一个时钟问题白跑一次扫码。凭据**格式**仍在此拒绝，非法格式
+/// 不必联网。是否真的过期以服务端结论为准。
+pub async fn validate(credential: &AppCredential) -> AppResult<AppValidation> {
+    if !valid_credential_fields(credential) {
+        return Err(auth_required());
+    }
+    fetch_oauth_info(credential).await
+}
+
+async fn fetch_oauth_info(credential: &AppCredential) -> AppResult<AppValidation> {
     let query = sign_params(&[], Some(&credential.access_token), now());
     let response = login_client()
         .map_err(|_| auth_unavailable())?
@@ -226,13 +246,18 @@ pub async fn validate(credential: &AppCredential) -> AppResult<()> {
 pub struct AppAuth {
     client: Client,
     access_token: String,
-    expires_at: i64,
+    /// 已知的权威到期秒；服务端未给寿命时为 `None`，表示不设本地期限。
+    expires_at: Option<i64>,
 }
 
 impl AppAuth {
     /// 先直连验证一次，再为推荐请求应用显式代理；禁止环境代理与重定向。
     pub async fn new(credential: AppCredential, proxy: Option<&str>) -> AppResult<Self> {
-        validate(&credential).await?;
+        let validation = validate(&credential).await?;
+        // 服务端寿命是权威值。服务端确认有效但未给寿命时**不**回退本地值：
+        // 本机时钟可能偏快，拿一个已过的本地期限会让紧随其后的 feed 立刻拒绝
+        // 一个刚刚被服务端接受的令牌。
+        let expires_at = validation.expires_at;
         let builder = Client::builder()
             .use_native_tls()
             .no_proxy()
@@ -248,7 +273,7 @@ impl AppAuth {
         Ok(Self {
             client,
             access_token: credential.access_token,
-            expires_at: credential.expires_at,
+            expires_at,
         })
     }
 
@@ -260,7 +285,7 @@ impl AppAuth {
         buvid: &str,
     ) -> AppResult<String> {
         let endpoint = feed_endpoint(path)?;
-        if self.expires_at <= 0 || now() >= self.expires_at {
+        if self.expires_at.is_some_and(|at| expiry_reached(at, now())) {
             return Err(auth_required());
         }
         if !valid_opaque(buvid, 256) {
@@ -404,33 +429,63 @@ fn parse_credential(data: &Value, now: i64) -> AppResult<AppCredential> {
     })
 }
 
-fn parse_oauth_info(value: &Value, credential: &AppCredential, now: i64) -> AppResult<()> {
-    check_local_credential(credential, now)?;
-    require_success_code(value)?;
+/// 解析 `oauth2/info` 响应。`expires_in` 是服务端给的**剩余**寿命，实测每秒递减
+/// （相隔 45 秒的两次请求差 47 秒），换算成本机时钟下的绝对到期即为权威值，
+/// 可以纠正本机时钟偏差。
+fn parse_oauth_info(
+    value: &Value,
+    credential: &AppCredential,
+    now: i64,
+) -> AppResult<AppValidation> {
+    require_success_code(value, true)?;
     let data = &value["data"];
     let mid = parse_mid(&data["mid"]).ok_or_else(auth_unavailable)?;
     if mid != credential.mid {
         return Err(auth_required());
     }
-    if let Some(expires_in) = data.get("expires_in") {
-        let expires_in = nonnegative_integer(expires_in).ok_or_else(auth_unavailable)?;
-        if expires_in == 0 {
-            return Err(auth_required());
-        }
+    let Some(raw_expires_in) = data.get("expires_in") else {
+        return Ok(AppValidation { expires_at: None });
+    };
+    let expires_in = nonnegative_integer(raw_expires_in).ok_or_else(auth_unavailable)?;
+    if expires_in == 0 {
+        return Err(auth_required());
     }
-    Ok(())
+    // 超过上限只截断、不拒绝：上游延长寿命时功能应当继续可用，
+    // 而每次使用前都会重新做远端校验，截断不会让凭据被滥用。
+    let expires_in = i64::try_from(expires_in)
+        .unwrap_or(MAX_EXPIRES_IN)
+        .min(MAX_EXPIRES_IN);
+    let expires_at = now
+        .checked_add(expires_in)
+        .filter(|value| now >= 0 && *value > now)
+        .ok_or_else(auth_unavailable)?;
+    Ok(AppValidation {
+        expires_at: Some(expires_at),
+    })
 }
 
 fn check_feed_body(body: &str) -> AppResult<()> {
     let value: Value = serde_json::from_str(body).map_err(|_| auth_unavailable())?;
-    require_success_code(&value)
+    require_success_code(&value, false)
 }
 
-fn require_success_code(value: &Value) -> AppResult<()> {
+/// 把上游业务码映射成错误。
+///
+/// `bad_request_means_invalid` 用于 `oauth2/info`：实测它对**格式合法但不存在**的
+/// access_key（含随机 32 位字符串）一律返回 `-400`，与真正的参数错误（缺 `ts`、
+/// 空 `appkey`）同码。区分依据是凭据格式：能走到这里的凭据已通过
+/// [`valid_credential_fields`]，而请求参数由 [`sign_params`] 保证，因此 `-400`
+/// 只能来自服务端拒绝该凭据。不区分时随机坏 token 会被报成「服务暂不可用」，
+/// 用户重试永远不会成功。
+///
+/// feed 端点实测对无效令牌、错签名、错 appkey 都返回 `code=0`（静默降级匿名流），
+/// 无法用于检测，因此只有 `oauth2/info` 传 `true`。
+fn require_success_code(value: &Value, bad_request_means_invalid: bool) -> AppResult<()> {
     match api_code(value) {
         Some(0) => Ok(()),
         // 61000 是已验证的无效令牌响应，-101 明确表示未登录。
         Some(61_000 | -101) => Err(auth_required()),
+        Some(-400) if bad_request_means_invalid => Err(auth_required()),
         // 风控、签名问题、服务故障和未知协议都不能断言凭据已失效。
         _ => Err(auth_unavailable()),
     }
@@ -448,13 +503,6 @@ fn feed_endpoint(path: &str) -> AppResult<&'static str> {
             AppError::new("bilibili_app_feed_path", "不支持的 APP 推荐路径").with_site("bilibili"),
         ),
     }
-}
-
-fn check_local_credential(credential: &AppCredential, now: i64) -> AppResult<()> {
-    if credential.is_expired(now) || !valid_credential_fields(credential) {
-        return Err(auth_required());
-    }
-    Ok(())
 }
 
 fn valid_credential_fields(credential: &AppCredential) -> bool {
@@ -775,14 +823,14 @@ mod tests {
         let mut data = token_data();
         data["expires_in"] = json!("1");
         let credential = parse_credential(&data, NOW).unwrap();
-        assert!(!credential.is_expired(NOW));
-        assert!(credential.is_expired(NOW + 1));
-        assert!(credential.is_expired(i64::MAX));
+        assert!(!expiry_reached(credential.expires_at, NOW));
+        assert!(expiry_reached(credential.expires_at, NOW + 1));
+        assert!(expiry_reached(credential.expires_at, i64::MAX));
         let invalid = AppCredential {
             expires_at: 0,
             ..credential
         };
-        assert!(invalid.is_expired(-1));
+        assert!(expiry_reached(invalid.expires_at, -1));
     }
 
     #[test]
@@ -857,13 +905,16 @@ mod tests {
             json!({"code": -101}),
             json!({"code": 0, "data": {"mid": 43}}),
             json!({"code": 0, "data": {"mid": 42, "expires_in": 0}}),
+            // 实测：格式合法但不存在的 access_key（含随机 32 位字符串）返回 -400，
+            // 与真正的参数错误同码。凭据已通过格式校验，所以只能判为已失效；
+            // 否则用户会看到「稍后重试」而重试永远不会成功。
+            json!({"code": -400}),
         ] {
             let error = error_of(parse_oauth_info(&response, &credential, NOW));
             assert_eq!(error.code, "bilibili_app_auth_required");
             assert!(!error.retryable);
         }
         for response in [
-            json!({"code": -400}),
             json!({"code": -412}),
             json!({"code": 61001}),
             json!({"code": -500}),
@@ -877,12 +928,39 @@ mod tests {
             assert_eq!(error.code, "bilibili_app_auth_unavailable");
             assert!(error.retryable);
         }
-        let error = error_of(parse_oauth_info(
-            &json!({"code": 0, "data": {"mid": 42}}),
+        // feed 路径不启用 -400 判定：实测它对无效令牌、错签名、错 appkey 都返回
+        // code=0，任何非 0 码都不足以断言凭据失效。
+        assert_eq!(
+            error_of(check_feed_body(r#"{"code":-400}"#)).code,
+            "bilibili_app_auth_unavailable"
+        );
+    }
+
+    /// 服务端返回的剩余寿命是权威值：换算后写入 `expires_at`，可纠正本机时钟偏差。
+    #[test]
+    fn oauth_returns_authoritative_expiry_from_server_lifetime() {
+        let credential = credential();
+        let validation = parse_oauth_info(
+            &json!({"code": 0, "data": {"mid": 42, "expires_in": 3600}}),
             &credential,
-            credential.expires_at,
-        ));
-        assert_eq!(error.code, "bilibili_app_auth_required");
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(validation.expires_at, Some(NOW + 3600));
+
+        // 缺少 expires_in 时不猜测，交给调用方沿用本地值。
+        let validation =
+            parse_oauth_info(&json!({"code": 0, "data": {"mid": 42}}), &credential, NOW).unwrap();
+        assert_eq!(validation.expires_at, None);
+
+        // 上游延长寿命时截断到上限，而不是判为不可用。
+        let validation = parse_oauth_info(
+            &json!({"code": 0, "data": {"mid": 42, "expires_in": MAX_EXPIRES_IN * 2}}),
+            &credential,
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(validation.expires_at, Some(NOW + MAX_EXPIRES_IN));
     }
 
     #[tokio::test]
@@ -902,11 +980,22 @@ mod tests {
         let auth = AppAuth {
             client: Client::builder().no_proxy().build().unwrap(),
             access_token: TEST_TOKEN.into(),
-            expires_at: 1,
+            expires_at: Some(1),
         };
         assert_eq!(
             error_of(auth.feed("", &[], "safe").await).code,
             "bilibili_app_auth_required"
+        );
+        // 服务端未给寿命时不设本地期限：已通过的远端校验不应被本机时钟推翻。
+        let unknown_expiry = AppAuth {
+            client: Client::builder().no_proxy().build().unwrap(),
+            access_token: TEST_TOKEN.into(),
+            expires_at: None,
+        };
+        // 路径校验仍生效，说明只是不做过期判断而不是整体放行。
+        assert_eq!(
+            error_of(unknown_expiry.feed("/../story", &[], "safe").await).code,
+            "bilibili_app_feed_path"
         );
         for path in [
             "/story/",

@@ -35,6 +35,7 @@ import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { BilibiliAppAuthAction } from "@/shared/components/BilibiliAppAuthAction";
 import { PlayerStageLoading } from "@/shared/components/player/PlayerStageLoading";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
 import {
@@ -956,6 +957,7 @@ export function ShortsPage() {
           error={feedQuery.error}
           title="短视频加载失败"
           onRetry={() => void feedQuery.refetch()}
+          action={<BilibiliAppAuthAction error={feedQuery.error} />}
           className="max-w-md"
         />
       </div>

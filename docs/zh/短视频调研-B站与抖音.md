@@ -316,12 +316,18 @@ story，从当前稿件开始播放，顶部显示真实位置；卡片根据 di
 
 - 新增 `account/bilibili_app.rs`：TV 扫码会话（复用 `QrSessionStore`，成功句柄原子消费，
   退出/取消后迟到响应不能写回）、凭据表 `bilibili_app_auth`（单行、与 `cookies` 分离、
-  不进配置包）、`validate`（本地到期 + `oauth2/info` 双重校验）、`AppAuth`（禁重定向、
-  显式代理、错误脱敏、拒绝任意 URL）。
+  不进配置包）、`validate`（格式校验 + `oauth2/info` 远端校验，返回服务端权威寿命）、
+  `AppAuth`（禁重定向、显式代理、错误脱敏、拒绝任意 URL）。
 - 请求层只在 `/x/v2/feed/index` 与 `/story` 注入 `access_key`；作者 story 保持匿名。
 - 设置项「B站 App 个性化推荐」只有扫码与「移除 App 授权」：**授权即生效，没有单独开关**
   （本机存在凭据就用，移除即回匿名）。凭据失效报错 `bilibili_app_auth_required`
   而不静默降级；旧的 `bilibili_app_personalization` 布尔字段已删除，仅作为遗留字段被丢弃。
+- **失效检测（2026-10 实测）**：`feed/index` 对无效令牌／错签名／错 appkey 都返回 `code=0`，
+  不能用作判据；只能靠 `oauth2/info`。该端点对格式合法但不存在的 access_key（含随机 32 位串）
+  返回 `-400`（与参数错误同码）、对篡改字符与 refresh_token 冒充返回 `61000`，两者都归为失效；
+  `-412`/未知码仍可重试。其 `expires_in` 是**剩余**寿命（45 秒内递减 47 秒），校验成功时换算成
+  绝对到期写回本地，可纠正本机时钟偏差。检测时机：启动期后台校验一次（失效则 toast 提示）
+  + 推荐/story 失败时错误码给出「去重新授权」入口（仅 `auth_required`，网络失败不引导重扫）。
 - 未解决：`refresh_token` 刷新协议未验证，180 天后需重新扫码；`/x/feed/dislike` 确切参数未知，
   未接“不感兴趣”上报。
 
