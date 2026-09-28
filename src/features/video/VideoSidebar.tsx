@@ -81,6 +81,52 @@ function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
   return TAB_LABELS[value];
 }
 
+/**
+ * 稿件详情未落定时的 UP 主信息卡骨架。
+ *
+ * 几何与真卡逐项对齐（`section` 的 `px-2.5 py-2`、卡壳的 `rounded-xl` + 同底同描边、
+ * 40px 头像、名称行 `pr-16`、统计行 `mt-1.5`），数据到达时只有内容替换、不重新排布。
+ *
+ * 必须和真卡一样画在 `RelatedPanel` 里：UP 主卡属于「相关视频」内容区而不是页签之外，
+ * 所以首屏加载时它是列表的第一块 —— 从前只在 `archive` 到位后才渲染，移动端冷启动
+ * （`archive` 与 `related` 同时 pending）会先看到一条没有 UP 主卡的相关列表，
+ * 数据到达后整块内容再被往下推一次。
+ */
+function UpCardSkeleton() {
+  return (
+    <section
+      data-slot="video-up-card-skeleton"
+      aria-hidden
+      className="shrink-0 border-b border-border px-2.5 py-2"
+    >
+      <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
+        <div className="flex min-w-0 items-start gap-2.5 pr-16">
+          {/* 头像按 `Avatar size="lg"` 的实际渲染尺寸（40px）：真卡的 `size-11`
+              与 `data-[size=lg]:size-10` 同时存在时后者胜出，因此量到的是 40。 */}
+          <Skeleton className="size-10 shrink-0 rounded-full ring-1 ring-border/80" />
+          <div className="min-w-0 flex-1">
+            {/* 名称行与粉丝/视频行：真卡是 20px 名称 + 4px 间距 + 16px 元信息。 */}
+            <Skeleton className="h-5 w-32" />
+            <div className="mt-0.5 flex items-center gap-2">
+              <Skeleton className="h-4 w-14" />
+              <Skeleton className="h-4 w-12" />
+            </div>
+          </div>
+        </div>
+        {/* 统计行（播放/评论/发布时间）与简介开关同排，与真卡的 `mt-1.5` 同高。 */}
+        <div className="mt-1.5 flex min-w-0 items-center gap-1">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-4 w-14" />
+            <Skeleton className="h-4 w-28" />
+          </div>
+          <Skeleton className="size-6 shrink-0 rounded-md" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /** 相关视频（UGC）。 */
 function RelatedPanel({ bvid }: { bvid: string }) {
   const relatedQuery = useQuery({
@@ -754,6 +800,7 @@ export function VideoSidebar({
     }
     return (
       <>
+        {!isPgc && archiveQuery.isPending && <UpCardSkeleton />}
         {!isPgc && archive && (
           <section
             key={bvid}
