@@ -36,7 +36,12 @@ async (page) => {
       const { QueryClient, QueryClientProvider } = await import(
         dependencyUrl("@tanstack_react-query")
       );
-      const { useShortsPlaybackSlot } = await import("/src/features/shorts/useShortsPlayback.ts");
+      const { useShortsMediaPlaybackSlot } = await import(
+        "/src/features/shorts/useShortsPlayback.ts"
+      );
+      const { BILIBILI_SHORTS_SOURCE } = await import(
+        "/src/features/shorts/shortsPlaybackSource.ts"
+      );
       const harness = await setupHarness();
       const { h, React } = harness;
       const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -116,7 +121,8 @@ async (page) => {
       });
       function Slot({ id, mode, allowed }) {
         const ref = React.useRef(null);
-        state = useShortsPlaybackSlot({
+        state = useShortsMediaPlaybackSlot({
+          source: BILIBILI_SHORTS_SOURCE,
           item: React.useMemo(() => item(id), [id]),
           slotId: "a",
           videoRef: ref,

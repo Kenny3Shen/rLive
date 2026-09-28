@@ -169,7 +169,7 @@ describe("前插与切模式保持三槽播放器所有权", () => {
   });
   test("进入 UP 从本地下标 8 切到 0，也留在原媒体槽位", () => {
     const padding = shortsStableSlotPadding(8, 0, 0);
-    const padded = shortsNextSlots(padding, padding + 11, 1, emptySlots);
+    const padded = shortsNextSlots(padding, padding + 11, emptySlots);
     const slots = shortsUnpadSlots(padded, padding);
     expect(slots.active).toBe(shortsActiveSlot(8));
     expect(slots.held[slots.active]).toBe(0);
@@ -180,11 +180,11 @@ describe("前插与切模式保持三槽播放器所有权", () => {
     ).toEqual([0, 1]);
   });
   test("前插后邻居也留在原槽位，空前缀不进入浏览范围", () => {
-    const before = shortsNextSlots(1, 5, 1, emptySlots);
+    const before = shortsNextSlots(1, 5, emptySlots);
     const afterIndex = 6;
     const padding = shortsStableSlotPadding(1, 0, afterIndex);
     const after = shortsUnpadSlots(
-      shortsNextSlots(afterIndex + padding, 10 + padding, 1, before),
+      shortsNextSlots(afterIndex + padding, 10 + padding, before),
       padding,
     );
     for (const id of ["a", "b", "c"] as const) {

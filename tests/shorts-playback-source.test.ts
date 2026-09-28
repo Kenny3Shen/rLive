@@ -52,7 +52,6 @@ const douyin: DouyinVideoItem = {
   width: 720,
   height: 1280,
   duration: 13.5,
-  share_url: "https://www.douyin.com/video/test",
 };
 const native: DouyinVideoPlayback = {
   item: douyin,

@@ -578,32 +578,6 @@ pub fn parse_pgc_index(raw: &str) -> AppResult<PgcListPage> {
     )
 }
 
-/// 解析 PGC 排行榜。
-///
-/// 番剧走 `pgc/web/rank/list`，结果在 `result.list`；其他 season_type 走
-/// `pgc/season/rank/web/list`，结果在 `data.list`。两处结构相同，
-/// 因此按存在的那个键取。
-pub fn parse_pgc_rank(raw: &str) -> AppResult<PgcListPage> {
-    json_items(
-        raw,
-        "PGC 榜单",
-        "list",
-        &["/result/list", "/data/list"],
-        |_root, items| {
-            let items: Vec<PgcItem> = items
-                .iter()
-                .map(pgc_item)
-                .filter(|item| !item.season_id.is_empty())
-                .collect();
-            // 榜单是固定长度的快照，没有下一页。
-            PgcListPage {
-                has_more: false,
-                items,
-            }
-        },
-    )
-}
-
 /// 解析 season 详情 `result`。
 pub fn parse_season(raw: &str) -> AppResult<VideoSeason> {
     let root: Value =
@@ -1424,24 +1398,6 @@ impl BilibiliSite {
     }
 
     /// PGC 排行榜。番剧与其他 season_type 走不同端点，响应结构相同。
-    pub async fn video_pgc_zone(&self, season_type: i64) -> AppResult<PgcListPage> {
-        let url = if season_type == 1 {
-            "https://api.bilibili.com/pgc/web/rank/list"
-        } else {
-            "https://api.bilibili.com/pgc/season/rank/web/list"
-        };
-        let text = self
-            .get_json(
-                url,
-                &[
-                    ("day", "3".to_string()),
-                    ("season_type", season_type.to_string()),
-                ],
-            )
-            .await?;
-        parse_pgc_rank(&text)
-    }
-
     /// season 详情。`season_id` 与 `ep_id` 至少给一个。
     pub async fn video_season(
         &self,
@@ -2434,29 +2390,6 @@ mod tests {
         // 缺 first_ep 时留空，由调用方回退 season 详情。
         assert_eq!(page.items[1].ep_id, None);
         assert_eq!(page.items[1].badge, None);
-    }
-
-    #[test]
-    fn pgc_rank_accepts_both_result_and_data_envelopes() {
-        let result_shaped = serde_json::json!({
-            "code": 0, "result": { "list": [ { "season_id": 1, "title": "番剧榜", "cover": "" } ] }
-        })
-        .to_string();
-        let data_shaped = serde_json::json!({
-            "code": 0, "data": { "list": [ { "season_id": 2, "title": "影视榜", "cover": "" } ] }
-        })
-        .to_string();
-
-        assert_eq!(
-            parse_pgc_rank(&result_shaped).unwrap().items[0].season_id,
-            "1"
-        );
-        assert_eq!(
-            parse_pgc_rank(&data_shaped).unwrap().items[0].season_id,
-            "2"
-        );
-        // 榜单是固定快照，没有下一页。
-        assert!(!parse_pgc_rank(&result_shaped).unwrap().has_more);
     }
 
     #[test]

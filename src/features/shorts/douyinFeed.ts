@@ -1,6 +1,6 @@
 import type { DouyinVideoFeedPage, DouyinVideoItem } from "./douyinVideoApi";
 
-/** 实验阶段限制单轮常驻元数据；达到上限后用户显式刷新，不在后台无限拉取。 */
+/** 限制单轮常驻元数据；达到上限后用户显式刷新，不在后台无限拉取。 */
 export const DOUYIN_FEED_MAX_BATCHES = 20;
 
 export function mergeDouyinFeed(pages: readonly DouyinVideoFeedPage[]): DouyinVideoItem[] {

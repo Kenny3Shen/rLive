@@ -1,12 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { VideoItem, VideoPlayInfo } from "@/shared/types/video";
-import {
-  shortsNextSlots,
-  shortsPreloadDirection,
-  type ShortsSlotId,
-  type ShortsSlots,
-  type ShortsSwipeDirection,
-} from "./shortsFeed";
+import { shortsNextSlots, type ShortsSlotId, type ShortsSlots } from "./shortsFeed";
 import { BILIBILI_SHORTS_SOURCE, type ShortsPlaybackSource } from "./shortsPlaybackSource";
 import { useShortsMediaPlaybackSlot, type ShortsPlaybackState } from "./useShortsPlayback";
 import type { ShortsSessionRetention } from "./useShortsSessionRetention";
@@ -21,10 +15,9 @@ import type { ShortsSessionRetention } from "./useShortsSessionRetention";
  * 为什么是三个：
  *
  * - **一个**等于没有预热：每次换片都要等一次 playurl + 两条 sidx + 三个回环代理。
- * - **两个**只覆盖一个方向。短视频消费确实是连续朝一个方向刷，但回滑并不罕见
- *   （没看清、想再听一遍），而两槽位下回滑必然冷启动 —— 预热方向翻转之后还要
- *   再等一次完整取流。
- * - **三个**让前进与回滑同样命中。
+ * - **两个**只覆盖一个方向，而回滑在竖屏消费里并不罕见（没看清、想再听一遍），
+ *   两槽位下它必然冷启动。
+ * - **三个**让前进与回滑同样命中：两个邻居同时占着槽位，分配与滑动方向无关。
  *
  * 两个邻居可先取控制面数据；只有下一条在当前可播且页面可见时深预热。
  * 预热到 canplay 后关闭暂停态分片调度；上一条保留已有缓冲，不主动扩充。
@@ -32,9 +25,9 @@ import type { ShortsSessionRetention } from "./useShortsSessionRetention";
  *
  * ## 三个 hook 按**槽位**绑定，不按角色
  *
- * `useShortsPlaybackSlot` 被调用三次，参数里的 `videoRef` 与 `slotId` 恒定属于
- * 某一个槽位（A / B / C），只有 `mode` 随角色变化。这一点是必须的：React 的 hook
- * 状态按**调用位置**保存，若按「活动/预热」传 ref，角色轮转时 hook 会互换
+ * `useShortsMediaPlaybackSlot` 被调用三次，参数里的 `videoRef` 与 `slotId` 恒定
+ * 属于某一个槽位（A / B / C），只有 `mode` 随角色变化。这一点是必须的：React 的
+ * hook 状态按**调用位置**保存，若按「活动/预热」传 ref，角色轮转时 hook 会互换
  * 媒体元素 —— 各自的 `playerRef` 于是绑在对方的元素上，播放器复用当场失效
  * （检测到元素变了就会完整重建）。
  */
@@ -54,8 +47,6 @@ export type ShortsSlotsState = {
   slotStates: Record<ShortsSlotId, ShortsPlaybackState>;
   /** 活动槽位的状态。页面上的进度条、暂停图标与错误面板都只描述它。 */
   playback: ShortsPlaybackState;
-  /** 换片时先调它：预热方向只影响槽位分配，与手势管线无关。 */
-  noteDirection: (from: number, to: number) => void;
 };
 
 export type UseShortsMediaSlotsOptions<Item, Info extends object> = {
@@ -67,10 +58,10 @@ export type UseShortsMediaSlotsOptions<Item, Info extends object> = {
   /** 播放位置推进的回调：弹幕分段按它加载。只有活动槽位会收到。 */
   onProgress?: ((positionMs: number) => void) | undefined;
   /**
-   * 保留会话的三件套，原样转给两个槽位。
+   * 保留会话的三件套，原样转给三个槽位。
    *
-   * 放在页面层是因为被保留的条目换片后**不属于任何一个槽位**（两个槽位被新
-   * 活动条与新预热条占着），槽位 hook 看不到它。
+   * 放在页面层是因为被保留的条目换片后**不属于任何一个槽位**（三个槽位被新
+   * 活动条、新预热条与刚播完的那条占着），槽位 hook 看不到它。
    */
   retention?: ShortsSessionRetention<Info> | undefined;
 };
@@ -97,26 +88,20 @@ export function useShortsMediaSlots<Item, Info extends object>({
 }: UseShortsMediaSlotsOptions<Item, Info>): ShortsSlotsState {
   // 查询缓存可能让首次渲染就有条目；不能等 length/index 再变一次才分配槽位。
   const [slots, setSlots] = useState<ShortsSlots>(() =>
-    shortsNextSlots(index, items.length, 1, INITIAL_SLOTS),
+    shortsNextSlots(index, items.length, INITIAL_SLOTS),
   );
-  /** 预热方向。回滑一次就翻到另一侧，此后顺着它预热。 */
-  const [direction, setDirection] = useState<ShortsSwipeDirection>(1);
 
   /**
    * 在渲染期重排槽位（与 `useShortsPlayback` 的 `settledKey` 同一手法）：
    * 放进 effect 会先用旧分配提交一帧，那一帧里活动槽位指向的是上一条 —— 于是
    * 弹幕层与进度条会短暂读到错误条目的状态。
    */
-  const settledKey = `${index}:${items.length}:${direction}`;
+  const settledKey = `${index}:${items.length}`;
   const [settled, setSettled] = useState(settledKey);
   if (settled !== settledKey) {
     setSettled(settledKey);
-    setSlots((current) => shortsNextSlots(index, items.length, direction, current));
+    setSlots((current) => shortsNextSlots(index, items.length, current));
   }
-
-  const noteDirection = useCallback((from: number, to: number) => {
-    setDirection((current) => shortsPreloadDirection(from, to, current));
-  }, []);
 
   const active: ShortsSlotId = slots.active;
 
@@ -130,10 +115,10 @@ export function useShortsMediaSlots<Item, Info extends object>({
    * 请求（几 KB），抢不走带宽，却是预热链路上最贵的一段（实测中位 560ms，占就绪
    * 时间一半）。取流因此与活动条并行跑，就绪时间减半。
    *
-   * 用 state 而不是 ref：两个槽位互为对方的闸门，读 ref 是在渲染期读可变状态，
-   * 既躲过了 React 的重渲染也躲过了 lint。这里需要的是「活动槽位可播」这个事实
-   * 传播到下一次渲染 —— 用 state 表达才是诚实的；它只会在 `ready` 真的翻转时
-   * 变化一次，不会形成循环。
+   * 用 state 而不是 ref：预热闸门要把「活动槽位可播」这个事实传播到下一次渲染，
+   * 读 ref 是在渲染期读可变状态，既躲过了 React 的重渲染也躲过了 lint。这里需要
+   * 的正是「传播到下一次渲染」—— 用 state 表达才是诚实的；它只会在 `ready` 真的
+   * 翻转时变化一次，不会形成循环。
    */
   const [activeReady, setActiveReady] = useState(false);
   const [foreground, setForeground] = useState(() => !document.hidden);
@@ -211,5 +196,5 @@ export function useShortsMediaSlots<Item, Info extends object>({
 
   const playback = slotStates[active];
 
-  return { slots, slotStates, playback, noteDirection };
+  return { slots, slotStates, playback };
 }

@@ -14,7 +14,6 @@ const item = (id: string): DouyinVideoItem => ({
   width: 1080,
   height: 1920,
   duration: 10,
-  share_url: `https://www.douyin.com/video/${id}`,
 });
 const page = (ids: string[], more = true): DouyinVideoFeedPage => ({
   items: ids.map(item),

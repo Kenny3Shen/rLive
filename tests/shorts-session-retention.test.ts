@@ -7,7 +7,6 @@ import {
   shortsRetentionPark,
   shortsRetentionPeek,
   shortsRetentionRelease,
-  shortsShouldRetainSession,
   type ShortsParkedSession,
   type ShortsRetentionState,
 } from "../src/features/shorts/shortsSessionRetention";
@@ -38,14 +37,6 @@ function park(
 ): { state: ShortsRetentionState; displaced: ShortsParkedSession | null } {
   return shortsRetentionPark(state, key, playInfo(mpd), nowMs);
 }
-
-describe("保留策略", () => {
-  test("只有用户真正看过的那条值得留", () => {
-    // 预热过的没看过：它恰好又是新方向上的预热目标，两边都不值得留。
-    expect(shortsShouldRetainSession(true)).toBe(true);
-    expect(shortsShouldRetainSession(false)).toBe(false);
-  });
-});
 
 describe("放入与查看", () => {
   test("放入后可以查到", () => {
@@ -155,7 +146,7 @@ describe("TTL", () => {
 
 describe("往复滑动", () => {
   test("A→B→A：每次保留的正是下一次要回退到的那条", () => {
-    // 这是 K=1 的结构性依据：一个保留位 + 一个预热槽位覆盖换片后的两个方向。
+    // 这是 K=1 的结构性依据：一次跳变把刚看过的条目甩出槽位窗口后，回跳它命中。
     //
     // 模型必须包含**消费**这一步：命中保留位时会话被 `release` 移出（所有权交给
     // 槽位），保留位随之空出，离开的那条再填进去。漏掉这一步的循环会误判失败。
@@ -178,8 +169,8 @@ describe("往复滑动", () => {
   });
 
   test("只往下刷：保留位始终是刚离开的那条，回退一次必命中", () => {
-    // 顺向刷时每次都只有活动条被丢下（预热条刚好成为新的活动条），
-    // 因此保留位覆盖的正是「回退一步」。
+    // 相邻换片由三槽位的预热覆盖，模型里仍验证保留位本身的行为：
+    // 连续放入会把更早的顶掉，只有最后放进去的那条可回退。
     let state = SHORTS_RETENTION_EMPTY;
     let now = 0;
     for (const leaving of ["A", "B", "C"]) {

@@ -37,7 +37,7 @@ async (page) => {
       const stopped = [];
       const errors = [];
       const covered = [];
-      const item = (key) => ({ id: String(7520000000000000000n + BigInt(key.charCodeAt(0))), title: `夹具${key}`, author: "测试作者", cover: "", width: 160, height: 90, duration: 10, share_url: "" });
+      const item = (key) => ({ id: String(7520000000000000000n + BigInt(key.charCodeAt(0))), title: `夹具${key}`, author: "测试作者", cover: "", width: 160, height: 90, duration: 10 });
       const items = Object.fromEntries("abcdefghijklmnx".split("").map(key => [key, item(key)]));
       const batch = (keys, has_more = true) => ({ items: [...keys].map(key => items[key]), has_more });
       const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -68,7 +68,7 @@ async (page) => {
       };
       window.__douyinFeedInvoke = async (command, args) => {
         if (command === "douyin_video_feed") {
-          check(args?.consent === true && Object.keys(args).length === 1, "推荐参数必须只传显式请求标志");
+          check(Object.keys(args ?? {}).length === 0, "推荐请求不接受调用方参数");
           const step = steps[feedCalls.length];
           feedCalls.push(feedCalls.length + 1);
           check(!!step, "出现非预期推荐请求，禁止透传实网");

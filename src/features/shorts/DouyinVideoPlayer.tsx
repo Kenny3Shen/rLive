@@ -10,13 +10,7 @@ function release(info: DouyinVideoPlayback) {
 }
 
 /** 单作品与推荐流共用一个原生播放器；代理所有权不进入 Feed 缓存。 */
-export function DouyinVideoPlayer({
-  input,
-  requireLogin = false,
-}: {
-  input: string;
-  requireLogin?: boolean;
-}) {
+export function DouyinVideoPlayer({ input }: { input: string }) {
   const [revision, setRevision] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const ownerId = useId();
@@ -25,12 +19,12 @@ export function DouyinVideoPlayer({
     () => new PendingPlaybackRequests<DouyinVideoPlayback>(release),
     // 每次换片/重试是新的所有权范围；迟到的 invoke 结果仍由旧范围释放。
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [input, requireLogin, revision],
+    [input, revision],
   );
   useEffect(() => () => pending.clear(), [pending]);
   const query = useQuery({
-    queryKey: ["douyin_video", "douyin", ownerId, input, requireLogin, revision],
-    queryFn: ({ signal }) => pending.acquire(signal, () => douyinVideoResolve(input, requireLogin)),
+    queryKey: ["douyin_video", "douyin", ownerId, input, revision],
+    queryFn: ({ signal }) => pending.acquire(signal, () => douyinVideoResolve(input)),
     retry: false,
     gcTime: 0,
     staleTime: Infinity,

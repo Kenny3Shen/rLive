@@ -9,7 +9,7 @@
 // 短视频序列。少了显式补调度，媒体播完已缓冲的约 2 秒就永久停在 `waiting`：
 // `buffered` 停在首片、`readyState` 掉回 2、`currentTime` 不再前进。
 //
-// 走真实 `useShortsPlaybackSlot`（含取流 → 附着 → 闸门 → 提升），只桩 IPC 与媒体源：
+// 走真实 `useShortsMediaPlaybackSlot`（含取流 → 附着 → 闸门 → 提升），只桩 IPC 与媒体源：
 // 取流返回 `tests/assets/shorts-dash/out.mpd`（ffmpeg 生成的 10 秒 fMP4 DASH，
 // 5 个 2 秒分片，无音轨）。夹具必须由本项目 Vite 服务提供（`/tests/assets/...`），
 // 否则适配器会撞上跨域与 MIME 问题。样本重生成：
@@ -66,6 +66,9 @@ async (page) => {
           await import("/tests/browser/harness.js");
         const harness = await setupHarness();
         const mod = await import("/src/features/shorts/useShortsPlayback.ts");
+        const { BILIBILI_SHORTS_SOURCE } = await import(
+          "/src/features/shorts/shortsPlaybackSource.ts"
+        );
         const { QueryClient, QueryClientProvider } = await import(
           dependencyUrl("@tanstack_react-query")
         );
@@ -87,7 +90,8 @@ async (page) => {
         };
         function App({ mode }) {
           const ref = React.useRef(null);
-          state = mod.useShortsPlaybackSlot({
+          state = mod.useShortsMediaPlaybackSlot({
+            source: BILIBILI_SHORTS_SOURCE,
             item: ITEM,
             slotId: "a",
             videoRef: ref,

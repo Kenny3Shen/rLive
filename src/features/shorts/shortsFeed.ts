@@ -286,6 +286,22 @@ export function shortsFrameFill(
 }
 
 /**
+ * 顶部按钮的尺寸基准。
+ *
+ * 取 40px，触摸设备抬到 44px —— 与底部操作栏那颗按钮（`size-10` 加基础组件的
+ * `[@media(pointer:coarse)]:min-h-11`）以及它左边的弹幕输入框完全同高。
+ *
+ * 播放页与直播页也是这个做法：顶栏 HUD 与底栏控件共用同一套尺寸，一条画面上不会
+ * 出现「上面比下面大一圈」。只收窄 `--media-control-size`，不动 `--media-scale-unit`
+ * （进度条与它的悬停预览挂在那个变量上）。
+ *
+ * B 站与抖音两个竖屏流共用这一份：两处顶栏按钮的尺寸契约是同一条，各留一份常量
+ * 会在改其中一处时悄悄分叉。
+ */
+export const SHORTS_TOP_CONTROLS_CLASS =
+  "media-skin [--media-control-size:2.5rem] [@media(pointer:coarse)]:[--media-control-size:2.75rem]";
+
+/**
  * 跨页去重后的短视频条目。
  *
  * story feed 无游标：翻页就是「再拉一批轮换内容」，后端已按批去重，但跨页重复
@@ -318,10 +334,6 @@ export function createShortsFeedMerger() {
     if (added.length) merged = [...merged, ...added];
     return merged;
   };
-}
-
-export function shortsFeedItems(pages: readonly ShortsFeedPage[]): VideoItem[] {
-  return createShortsFeedMerger()(pages);
 }
 
 /** 一条短视频在播放/预取层里的身份。与播放列表项的 id 同构（`bvid_cid`）。 */
@@ -594,45 +606,6 @@ export function shortsActiveSlot(index: number): ShortsSlotId {
   return SHORTS_SLOT_IDS[index % SHORTS_SLOT_COUNT]!;
 }
 
-/** 滑动方向：1 向下（看更新的一条），-1 向上（回看）。 */
-export type ShortsSwipeDirection = 1 | -1;
-
-/**
- * 预热该落在哪几条。
- *
- * 三槽位下两个邻居都要：顺着方向的那一条排前面（连刷时它先被用到），另一条
- * 兜住回滑 —— 回滑在竖屏消费里并不罕见（没看清、想再听一遍），而两槽位方案下
- * 第一次回滑必然是冷启动。
- *
- * 只有一条时没有可预热的邻居；两条时只剩一个邻居。
- */
-export function shortsWarmIndexes(
-  index: number,
-  length: number,
-  direction: ShortsSwipeDirection,
-): (number | null)[] {
-  if (length <= 1 || index < 0 || index >= length) return [null, null];
-  const forward = index + direction;
-  const backward = index - direction;
-  const inRange = (value: number) => value >= 0 && value < length;
-  const first = inRange(forward) ? forward : inRange(backward) ? backward : null;
-  const second = first !== null && first !== backward && inRange(backward) ? backward : null;
-  return [first, second];
-}
-
-/**
- * 单邻居预热目标：两槽位时代的入口，保留给只需要一个预热目标的场合。
- *
- * 语义与旧实现一致：顺方向优先，到边界就回头取另一侧。
- */
-export function shortsWarmIndex(
-  index: number,
-  length: number,
-  direction: ShortsSwipeDirection,
-): number | null {
-  return shortsWarmIndexes(index, length, direction)[0];
-}
-
 /** 三个槽位各自持有哪一条；null 表示该槽位空着。 */
 export type ShortsSlotAssignments = Record<ShortsSlotId, number | null>;
 
@@ -650,7 +623,8 @@ export type ShortsSlots = {
  * 那条升为 `current`，只有原来 `prev` 的那个槽位被改派去预热新的下一条 —— 它
  * 手上的旧播放器正好用来换源，同样不必重建。
  *
- * 两个邻居同时预热，因此**回滑与前进同样命中**：任一个方向都不必重新取流。
+ * 两个邻居同时预热，因此**回滑与前进同样命中**：任一个方向都不必重新取流，
+ * 分配也就不需要滑动方向这个输入。
  *
  * 幂等：三个槽位的持有都没变时返回**原对象**，调用方因此可以直接把它放进
  * 依赖数组而不触发多余的重跑。
@@ -658,9 +632,6 @@ export type ShortsSlots = {
 export function shortsNextSlots(
   index: number,
   length: number,
-  // 三槽位下两个邻居同时预热，前进与回滑都命中，因此方向不再影响分配。
-  // 保留这个参数是为了调用方与 `settledKey` 不变，也为了将来按方向调整优先级。
-  _direction: ShortsSwipeDirection,
   current: ShortsSlots,
 ): ShortsSlots {
   if (length <= 0 || index < 0 || index >= length) return current;
@@ -668,10 +639,9 @@ export function shortsNextSlots(
   /**
    * 按角色取条目：`next` / `prev` 就是下标加减一，越界即无。
    *
-   * 刻意不用 `shortsWarmIndexes` 的「顺方向优先」结果：那个顺序是给**单**预热
-   * 目标用的，三槽位下它会把边界处仅剩的那一个邻居（实为 prev）派给 next 槽，
-   * 而槽位与条目的对应是固定的（item j → 槽位 j % 3），错位会让上一条被当成
-   * 下一条去预热。
+   * 角色到槽位的对应是固定的（item j → 槽位 j % 3），因此这里只按角色取下标，
+   * 不按「顺方向优先」排序 —— 后者是给单预热目标用的，用在槽位分配上会让边界处
+   * 仅剩的那一个邻居错派给另一侧的槽位。
    */
   const target = (role: ShortsSlotRole): number | null => {
     const value = role === "current" ? index : role === "next" ? index + 1 : index - 1;
@@ -690,22 +660,6 @@ export function shortsNextSlots(
     current.held.b === held.b &&
     current.held.c === held.c;
   return unchanged ? current : { held, active };
-}
-
-/**
- * 下一次滑动的方向。
- *
- * 只在真的换了条时更新：同一个方向连续滑动要一直顺着它预热，而回滑一次就把
- * 预热翻到另一侧。
- */
-export function shortsPreloadDirection(
-  index: number,
-  nextIndex: number,
-  current: ShortsSwipeDirection,
-): ShortsSwipeDirection {
-  if (nextIndex > index) return 1;
-  if (nextIndex < index) return -1;
-  return current;
 }
 
 /** 槽位面板在条带里的位置（百分比字符串），与封面面板同一套坐标系。 */

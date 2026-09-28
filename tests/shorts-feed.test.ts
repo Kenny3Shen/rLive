@@ -18,7 +18,6 @@ import {
   SHORTS_SWIPE_SETTLE_EASING,
   SHORTS_SWIPE_SETTLE_MAX_MS,
   SHORTS_SWIPE_SETTLE_MIN_MS,
-  shortsFeedItems,
   shortsFrameAlign,
   shortsFrameCrop,
   shortsFrameFill,
@@ -38,13 +37,11 @@ import {
   shortsTrackOffset,
   shortsNextSlots,
   shortsPath,
-  shortsPreloadDirection,
   shortsSlotCoveredIndexes,
   shortsSlotRole,
   shortsSlotTop,
   shortsActiveSlot,
-  shortsWarmIndex,
-  shortsWarmIndexes,
+  createShortsFeedMerger,
   type ShortsSlots,
 } from "../src/features/shorts/shortsFeed";
 import * as shortsFeed from "../src/features/shorts/shortsFeed";
@@ -245,7 +242,7 @@ describe("裁切铺满判定", () => {
 describe("跨页去重与可播性过滤", () => {
   test("同一 bvid 只保留首次出现", () => {
     // 上游无游标：翻页就是再拉一批轮换内容，跨页重复由这里折叠。
-    const items = shortsFeedItems([
+    const items = createShortsFeedMerger()([
       { items: [item({ bvid: "a" }), item({ bvid: "b" })] },
       { items: [item({ bvid: "b" }), item({ bvid: "c" })] },
     ]);
@@ -254,7 +251,7 @@ describe("跨页去重与可播性过滤", () => {
 
   test("丢掉缺取流键的条目", () => {
     // 竖屏舞台没有「先取详情补 cid」的中间态，拿不到 cid 就不该进流。
-    const items = shortsFeedItems([
+    const items = createShortsFeedMerger()([
       { items: [item({ bvid: "ok" }), item({ bvid: "no-cid", cid: null })] },
       { items: [item({ bvid: "", cid: 1 }), item({ bvid: "zero-cid", cid: 0 })] },
     ]);
@@ -530,8 +527,8 @@ describe("路由契约", () => {
   });
 
   test("无种子/空白种子退回裸路径", () => {
-    // 裸路径让后端用最近观看历史当种子；不能拼出 `?seed=` 或 `?seed=  `
-    // 让后端把空白当成一个非法 bvid。
+    // 裸路径就是「不带种子」的正式形态，后端不再自己拼种子；不能拼出 `?seed=` 或
+    // `?seed=  ` 让后端把空白当成一个非法 bvid。
     expect(shortsPath()).toBe(BILIBILI_SHORTS_PATH);
     expect(shortsPath(null)).toBe(BILIBILI_SHORTS_PATH);
     expect(shortsPath("")).toBe(BILIBILI_SHORTS_PATH);
@@ -545,32 +542,6 @@ describe("路由契约", () => {
 
 describe("三播放器槽位", () => {
   const start: ShortsSlots = { held: { a: null, b: null, c: null }, active: "a" };
-
-  test("预热顺着滑动方向的那一条", () => {
-    expect(shortsWarmIndexes(0, 5, 1)[0]).toBe(1);
-    expect(shortsWarmIndexes(2, 5, 1)[0]).toBe(3);
-    expect(shortsWarmIndexes(2, 5, -1)[0]).toBe(1);
-    // 单邻居入口与旧语义一致。
-    expect(shortsWarmIndex(2, 5, 1)).toBe(3);
-  });
-
-  test("两个邻居都要预热", () => {
-    expect(shortsWarmIndexes(2, 5, 1)).toEqual([3, 1]);
-    expect(shortsWarmIndexes(2, 5, -1)).toEqual([1, 3]);
-  });
-
-  test("到边界只剩一个邻居", () => {
-    // 最后一条上向下无路可走，只剩向上那条。
-    expect(shortsWarmIndexes(4, 5, 1)).toEqual([3, null]);
-    expect(shortsWarmIndexes(0, 5, -1)).toEqual([1, null]);
-  });
-
-  test("只有一条时没有可预热的邻居", () => {
-    expect(shortsWarmIndexes(0, 1, 1)).toEqual([null, null]);
-    expect(shortsWarmIndexes(0, 0, 1)).toEqual([null, null]);
-    // 越界下标同样不该产物。
-    expect(shortsWarmIndexes(9, 5, 1)).toEqual([null, null]);
-  });
 
   test("三个槽位按 index 取模承担角色", () => {
     // 槽位与角色的对应随下标轮转：item j 恒定落在槽位 j % 3。
@@ -586,53 +557,45 @@ describe("三播放器槽位", () => {
   });
 
   test("换片时轮转：只有新邻居那一个槽位换内容", () => {
-    const first = shortsNextSlots(0, 5, 1, start);
+    const first = shortsNextSlots(0, 5, start);
     expect(first.active).toBe("a");
     expect(first.held).toEqual({ a: 0, b: 1, c: null });
 
     // 滑到下一条：b 升为活动，a 留着刚播过的 0（prev），只有 c 去取新的 2。
     // 「换片不重建」就落在这里 —— 被提升的 b 已经预热过，a 也还热着。
-    const second = shortsNextSlots(1, 5, 1, first);
+    const second = shortsNextSlots(1, 5, first);
     expect(second.active).toBe("b");
     expect(second.held).toEqual({ a: 0, b: 1, c: 2 });
 
     // 再滑一条：只有 a 换成 3。
-    const third = shortsNextSlots(2, 5, 1, second);
+    const third = shortsNextSlots(2, 5, second);
     expect(third.active).toBe("c");
     expect(third.held).toEqual({ a: 3, b: 1, c: 2 });
   });
 
   test("回滑同样命中：上一条已经在槽位里", () => {
-    const at2 = shortsNextSlots(2, 5, 1, start);
+    const at2 = shortsNextSlots(2, 5, start);
     expect(at2.held).toEqual({ a: 3, b: 1, c: 2 });
-    // 回滑到 1：b 本来就是 1，无需重新取流 —— 这正是两槽位做不到的。
-    const back = shortsNextSlots(1, 5, -1, at2);
+    // 回滑到 1：b 本来就是 1，无需重新取流。
+    const back = shortsNextSlots(1, 5, at2);
     expect(back.active).toBe("b");
     expect(back.held).toEqual({ a: 0, b: 1, c: 2 });
   });
 
   test("结尾处 next 槽空着，prev 仍在", () => {
-    const at4 = shortsNextSlots(4, 5, 1, start);
+    const at4 = shortsNextSlots(4, 5, start);
     expect(at4.held).toEqual({ a: 3, b: 4, c: null });
   });
 
   test("只有一条时其余两个槽位空着", () => {
-    const only = shortsNextSlots(0, 1, 1, start);
+    const only = shortsNextSlots(0, 1, start);
     expect(only.held[only.active]).toBe(0);
     expect(Object.values(only.held).filter((value) => value === null)).toHaveLength(2);
   });
 
   test("幂等：三个槽位的持有都没变时返回原对象", () => {
-    const at1 = shortsNextSlots(1, 5, 1, start);
-    expect(shortsNextSlots(1, 5, 1, at1)).toBe(at1);
-  });
-
-  test("方向只在真的换了条时翻转", () => {
-    expect(shortsPreloadDirection(2, 3, -1)).toBe(1);
-    expect(shortsPreloadDirection(2, 1, 1)).toBe(-1);
-    // 原地不动（越界被拒）保持原方向。
-    expect(shortsPreloadDirection(2, 2, -1)).toBe(-1);
-    expect(shortsPreloadDirection(2, 2, 1)).toBe(1);
+    const at1 = shortsNextSlots(1, 5, start);
+    expect(shortsNextSlots(1, 5, at1)).toBe(at1);
   });
 
   test("槽位覆盖的下标集合", () => {

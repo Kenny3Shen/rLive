@@ -19,10 +19,8 @@ import {
   type VideoJsPlayerInstance,
 } from "@/features/room/player/videoJsPlayer";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
-import type { VideoItem, VideoPlayInfo } from "@/shared/types/video";
 import { type ShortsIntrinsicSize, type ShortsSlotId } from "./shortsFeed";
-import { BILIBILI_SHORTS_SOURCE, type ShortsPlaybackSource } from "./shortsPlaybackSource";
-import { shortsShouldRetainSession } from "./shortsSessionRetention";
+import type { ShortsPlaybackSource } from "./shortsPlaybackSource";
 import { PendingPlaybackRequests } from "./pendingPlaybackRequests";
 
 /**
@@ -92,14 +90,13 @@ export type ShortsPlaybackState = {
   /**
    * 媒体已可播（`canplay` 到达过）。
    *
-   * 编排层用它放行预热槽位的取流：当前这条还没出画之前，不该让另一条去抢带宽。
+   * 编排层用它给预热槽位开闸（只闸**媒体**，不闸取流 —— 见 `mediaAllowed`）：
+   * 当前这条还没出画之前，不该让另一条去抢带宽。
    */
   ready: boolean;
   /** 点按切换播放/暂停。 */
   togglePlay: () => void;
   toggleMuted: () => void;
-  /** 跳到指定秒数。进度条拖动释放时调用。 */
-  seek: (seconds: number) => void;
   /** 设置播放速率。长按倍速用它进出，松开时传回 1。 */
   setRate: (rate: number) => void;
   /** 重试当前条目（重新取流并重建播放器）。 */
@@ -141,11 +138,6 @@ export type UseShortsMediaPlaybackSlotOptions<Item, Info extends object> = {
   onProgress?: ((positionMs: number) => void) | undefined;
 };
 
-type UseShortsPlaybackSlotOptions = Omit<
-  UseShortsMediaPlaybackSlotOptions<VideoItem, VideoPlayInfo>,
-  "source"
->;
-
 /** 监听闭包读的会话上下文。换源时整体替换，因此监听不必重新注册。 */
 type SlotSession<Item, Info> = {
   source: ShortsPlaybackSource<Item, Info>;
@@ -153,17 +145,11 @@ type SlotSession<Item, Info> = {
   itemKey: string;
   playInfo: Info | null;
   mode: ShortsSlotMode;
-  onProgress: ((positionMs: number) => void) | undefined;
   reportedAt: number | null;
   userPaused: boolean;
   /** 本次 attach 的代号。迟到的事件（换源之前发出）据此作废。 */
   token: number;
 };
-
-/** 保持原 B 站调用入口；没有第二份平台专属槽位实现。 */
-export function useShortsPlaybackSlot(options: UseShortsPlaybackSlotOptions): ShortsPlaybackState {
-  return useShortsMediaPlaybackSlot({ ...options, source: BILIBILI_SHORTS_SOURCE });
-}
 
 export function useShortsMediaPlaybackSlot<Item, Info extends object>({
   source,
@@ -302,8 +288,8 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
    * 角色快照：当前条目的角色，以及**上一个条目的角色**。
    *
    * 为什么需要「上一份」：交接发生在条目变化后的某一帧（新 playInfo 到达时），
-   * 而那时 `mode` 早已是新条目的角色。同一次提交里两个槽位会同时换条目
-   * （方向翻转的第一次），只有「离开时在播」的那个值得保留，因此必须能读到
+   * 而那时 `mode` 早已是新条目的角色。一次跳变会让多个槽位同时换条目（如进出
+   * UP 主模式），只有「离开时在播」的那个值得保留，因此必须能读到
    * **旧条目当时的角色**。
    *
    * 为什么在渲染期写：放进 effect 的话，条目变化那一帧就会把快照覆写成新条目的
@@ -337,7 +323,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
    *
    * **交给保留位而不是停掉**：刚看过的那条很可能马上被回退到，停掉就得重新取流
    * （实测 386~481ms）。只有用户真正看过（离开时在播）的才值得留 —— 只是被预载
-   * 过的那条用户没看过，而它恰好又成了新方向上的预热目标。
+   * 过的那条用户没看过。
    */
   useEffect(() => {
     const previous = heldRef.current;
@@ -353,7 +339,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
 
     const wasPlaying =
       previousRoleRef.current?.key === previous.key && previousRoleRef.current.playing;
-    if (wasPlaying && shortsShouldRetainSession(true) && previous.key !== itemKey && parkPlayInfo) {
+    if (wasPlaying && previous.key !== itemKey && parkPlayInfo) {
       // 所有权移交给保留位：此后由它的 TTL 负责停这条会话。
       parkPlayInfo(previous.key, previous.playInfo);
       return;
@@ -387,7 +373,6 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     itemKey: "",
     playInfo: null,
     mode: "warm",
-    onProgress: undefined,
     reportedAt: null,
     userPaused: false,
     token: 0,
@@ -694,7 +679,6 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
       itemKey,
       playInfo: playInfo ?? null,
       mode,
-      onProgress: onProgressRef.current,
       reportedAt: null,
       userPaused: false,
       token,
@@ -795,7 +779,6 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
    */
   useEffect(() => {
     if (sessionRef.current.itemKey === itemKey) sessionRef.current.mode = mode;
-    sessionRef.current.onProgress = onProgressRef.current;
   }, [mode, itemKey]);
 
   // 已附着邻居也受门控：DASH 停新增调度；原生只改 preload 提示，均保留已有缓冲。
@@ -863,24 +846,6 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
   }, [videoRef]);
 
   /**
-   * 跳转播放位置。
-   *
-   * 媒体元素立即更新位置，独立 Video.js store 更新进度条，不驱动整页渲染。
-   */
-  const seek = useCallback(
-    (seconds: number) => {
-      const media = videoRef.current;
-      if (!media) return;
-      const total =
-        Number.isFinite(media.duration) && media.duration > 0 ? media.duration : duration;
-      if (!(total > 0)) return;
-      const next = Math.max(0, Math.min(total, seconds));
-      media.currentTime = next;
-    },
-    [duration, videoRef],
-  );
-
-  /**
    * 改播放倍速。
    *
    * 只写媒体元素而不碰 Video.js 播放器实例：短视频用的是裸 `<video>` + 本机代理，
@@ -939,7 +904,6 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     togglePlay,
     toggleMuted,
     setRate: changeRate,
-    seek,
     retry,
   };
 }

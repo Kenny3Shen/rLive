@@ -14,12 +14,9 @@ use crate::stream_proxy::StreamProxyStartOptions;
 use std::collections::HashMap;
 use tauri::State;
 
+/// 抖音推荐流。只看本机保存的登录 Cookie，不接受调用方指定的账号或代理。
 #[tauri::command]
-pub async fn douyin_video_feed(
-    state: State<'_, AppState>,
-    consent: bool,
-) -> AppResult<DouyinVideoFeedPage> {
-    require_feed_consent(consent)?;
+pub async fn douyin_video_feed(state: State<'_, AppState>) -> AppResult<DouyinVideoFeedPage> {
     let (cookie, proxy) = {
         let conn = state.conn()?;
         (
@@ -53,14 +50,6 @@ fn require_same_account(current: &str, expected: &str) -> AppResult<()> {
         .with_site("douyin"));
     }
     Ok(())
-}
-
-fn require_feed_consent(consent: bool) -> AppResult<()> {
-    if consent {
-        Ok(())
-    } else {
-        Err(AppError::new("douyin_feed_disabled", "请从抖音推荐页发起推荐请求").with_site("douyin"))
-    }
 }
 
 #[tauri::command]
@@ -136,13 +125,6 @@ fn valid_session_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn feed_requires_explicit_consent() {
-        let error = require_feed_consent(false).unwrap_err();
-        assert_eq!(error.code, "douyin_feed_disabled");
-        assert!(error.message.contains("抖音推荐页"));
-        assert!(require_feed_consent(true).is_ok());
-    }
 
     #[test]
     fn rejects_cleared_or_replaced_account_without_echoing_credentials() {

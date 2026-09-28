@@ -252,15 +252,6 @@ pub async fn video_get_pgc_index(
         .await
 }
 
-/// PGC 排行榜（番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7）。
-#[tauri::command]
-pub async fn video_get_pgc_zone(
-    state: State<'_, AppState>,
-    season_type: i64,
-) -> AppResult<PgcListPage> {
-    resolve_bilibili(&state)?.video_pgc_zone(season_type).await
-}
-
 #[tauri::command]
 pub async fn video_get_season(
     state: State<'_, AppState>,

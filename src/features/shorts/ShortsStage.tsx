@@ -121,9 +121,9 @@ function useShortsFrameGeometry(aspect: number | null, area: { width: number; he
 /**
  * 竖屏舞台：一条短视频的画面与弹幕层。
  *
- * 舞台挂在**槽位**上而不是条目上：两个槽位轮换承担活动与预热，换片时角色交换，
+ * 舞台挂在**槽位**上而不是条目上：三个槽位轮换承担活动与两个方向的预热，换片时角色交换，
  * 因此这里面对的是「同一个 `<video>` 上换了一条内容」而不是挂载/卸载。槽位面板
- * 的 key 恒定（`slot-a` / `slot-b`），`<video>` 与 Video.js 实例因此跨换片存活 ——
+ * 的 key 恒定（`slot-a` / `slot-b` / `slot-c`），`<video>` 与 Video.js 实例因此跨换片存活 ——
  * 这就是「播放器复用」的落点。
  *
  * 相邻条目渲染 `ShortsPoster`（封面占位）：它们只需要有画面参与平移，不需要能播。

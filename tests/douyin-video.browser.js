@@ -31,7 +31,7 @@ async (page) => {
       const result = () => {
         const session_id = `douyin-video-test-${issued.length}`;
         issued.push(session_id);
-        return { session_id, play_url: `${location.origin}/__douyin_fixture.mp4?id=${session_id}`, item: { id: "7520000000000000001", title: "测试公开作品", author: "测试作者", cover: "", width: 1080, height: 1920, duration: 10, share_url: "https://www.douyin.com/video/7520000000000000001" } };
+        return { session_id, play_url: `${location.origin}/__douyin_fixture.mp4?id=${session_id}`, item: { id: "7520000000000000001", title: "测试公开作品", author: "测试作者", cover: "", width: 1080, height: 1920, duration: 10 } };
       };
       window.__douyinInvoke = async (command, args) => {
         if (command === "douyin_video_feed") {

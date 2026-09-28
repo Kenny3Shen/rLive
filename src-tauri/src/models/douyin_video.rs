@@ -10,7 +10,6 @@ pub struct DouyinVideoItem {
     pub width: u64,
     pub height: u64,
     pub duration: f64,
-    pub share_url: String,
 }
 
 #[derive(Debug, Serialize)]

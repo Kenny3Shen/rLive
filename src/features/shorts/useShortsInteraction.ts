@@ -45,7 +45,6 @@ type ShortsInteractionOptions = {
   navigationLocked: boolean;
   blocked: boolean;
   onMotionActiveChange: (active: boolean) => void;
-  noteDirection: (from: number, to: number) => void;
   onBoundary?: (next: number) => void;
 };
 
@@ -60,7 +59,6 @@ export function useShortsInteraction({
   navigationLocked,
   blocked,
   onMotionActiveChange,
-  noteDirection,
   onBoundary,
 }: ShortsInteractionOptions) {
   const [gestureActive, setGestureActive] = useState(false);
@@ -476,9 +474,8 @@ export function useShortsInteraction({
   /**
    * 跳到某一条：已挂载的目的条先开始平移，再通知 React。
    *
-   * 顺带记下滑动方向：预热槽位按它决定去预热哪一条邻居（`useShortsSlots`）。
-   * 放在这里而不是页面别处，是因为所有换片入口（手势、滚轮、方向键、桌面按钮）
-   * 都汇聚到这个函数 —— 方向因此不可能漏记。
+   * 所有换片入口（手势、滚轮、方向键、桌面按钮）都汇聚到这个函数 —— 槽位分配与
+   * 取流闸门因此不会漏掉任何一条换片路径。
    */
   const goToIndex = useCallback(
     (next: number, velocity = 0) => {
@@ -488,7 +485,6 @@ export function useShortsInteraction({
         return;
       }
       if (next === index) return;
-      noteDirection(index, next);
       const target = shortsTrackOffset(next, stageHeight());
       settle(target, shortsSwipeSettleDuration(target - offsetRef.current, velocity));
       setIndex(next);
@@ -497,7 +493,6 @@ export function useShortsInteraction({
       navigationLocked,
       index,
       items.length,
-      noteDirection,
       onBoundary,
       setIndex,
       settle,

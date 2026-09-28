@@ -233,7 +233,6 @@ fn parse_video_item(
         width: video["width"].as_u64().unwrap_or(0),
         height: video["height"].as_u64().unwrap_or(0),
         duration: video["duration"].as_u64().unwrap_or(0) as f64 / 1000.0,
-        share_url: format!("https://www.douyin.com/video/{id}"),
     };
     Ok((item, url))
 }

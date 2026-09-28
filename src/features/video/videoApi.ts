@@ -36,7 +36,7 @@ export function videoGetPopular(page: number, pageSize?: number): Promise<VideoL
  * 短视频流（B 站 story feed）。
  *
  * 上游无游标也不接页码：每次调用拉下一批轮换内容，因此没有参数。后端已做跨
- * 批去重，但跨**页**重复仍可能，调用方必须自行去重（见 `shortsFeedItems`）。
+ * 批去重，但跨**页**重复仍可能，调用方必须自行去重（见 `createShortsFeedMerger`）。
  * 返回的条目是混合画幅，竖屏判定靠 `dimension`。
  */
 /**

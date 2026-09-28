@@ -9,7 +9,6 @@ export type DouyinVideoItem = {
   width: number;
   height: number;
   duration: number;
-  share_url: string;
 };
 
 export type DouyinVideoFeedPage = {
@@ -24,8 +23,8 @@ export type DouyinVideoPlayback = {
 };
 
 export function douyinVideoFeed(): Promise<DouyinVideoFeedPage> {
-  // 仅进入抖音推荐页后请求，不传 Cookie 或伪分页游标；保留后端显式请求契约。
-  return invokeCmd("douyin_video_feed", { consent: true });
+  // 仅进入抖音推荐页后请求，不传 Cookie 或伪分页游标。
+  return invokeCmd("douyin_video_feed");
 }
 
 export function douyinVideoResolve(

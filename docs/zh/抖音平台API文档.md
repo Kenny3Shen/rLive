@@ -31,7 +31,7 @@
 
 与直播 `webcast/feed` 不同，点播推荐使用
 `GET https://www.douyin.com/aweme/v1/web/tab/feed/`，必须沿用本地 `a_bogus` 签名。
-进入推荐舞台时调用 `douyin_video_feed(consent: true)`，后端检查保存的登录 Cookie 字段后才发请求；复用当前账号、临时 `ttwid`
+进入推荐舞台时调用 `douyin_video_feed()`，后端检查保存的登录 Cookie 字段后才发请求；复用当前账号、临时 `ttwid`
 和应用代理。接口无可靠分页游标，每次一批，前端批内/跨批去重并在全重复时停止；每轮最多 20 批。
 没有图集、广告或不支持编码的占位卡，也不为整批作品建立代理。
 

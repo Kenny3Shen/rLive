@@ -64,6 +64,7 @@ import {
   SHORTS_SEED_PARAM,
   SHORTS_SLOT_IDS,
   SHORTS_TOP_BAR_HEIGHT_PX,
+  SHORTS_TOP_CONTROLS_CLASS,
   shortsItemKey,
   shortsMountedIndexes,
   shortsSlotCoveredIndexes,
@@ -76,19 +77,6 @@ import { useShortsStableSlots } from "./useShortsStableSlots";
 import { useShortsFeed } from "./useShortsFeed";
 import { useShortsSessionRetention } from "./useShortsSessionRetention";
 import { useShortsInteraction } from "./useShortsInteraction";
-
-/**
- * 顶部按钮的尺寸基准。
- *
- * 取 40px，触摸设备抬到 44px —— 与底部操作栏那颗按钮（`size-10` 加基础组件的
- * `[@media(pointer:coarse)]:min-h-11`）以及它左边的弹幕输入框完全同高。
- *
- * 播放页与直播页也是这个做法：顶栏 HUD 与底栏控件共用同一套尺寸，一条画面上不会
- * 出现「上面比下面大一圈」。只收窄 `--media-control-size`，不动 `--media-scale-unit`
- * （进度条与它的悬停预览挂在那个变量上）。
- */
-const SHORTS_TOP_CONTROLS_CLASS =
-  "media-skin [--media-control-size:2.5rem] [@media(pointer:coarse)]:[--media-control-size:2.75rem]";
 
 /**
  * `/shorts/bilibili`：B 站短视频（story feed）的竖屏消费页。
@@ -104,11 +92,11 @@ const SHORTS_TOP_CONTROLS_CLASS =
  * （随条带平移的话，换片时它们会跟着滑走），而它们要读 `muted`、播放状态
  * 与弹幕开关 —— 状态因此只能放在两者共同的祖先。舞台是纯展示层。
  *
- * ## 双播放器槽位
+ * ## 三播放器槽位
  *
- * 两个面板按槽位挂载（key 恒定 `slot-a` / `slot-b`），换片只改变它们各自持有哪
- * 一条与谁在播。被提升为活动的那个槽位已经预热好，因此换片不重新取流、不重建
- * 播放器（见 `useShortsSlots`）。
+ * 三个面板按槽位挂载（key 恒定 `slot-a` / `slot-b` / `slot-c`），换片只改变它们
+ * 各自持有哪一条与谁在播。被提升为活动的那个槽位已经预热好，因此换片不重新取流、
+ * 不重建播放器（见 `useShortsSlots`）。
  */
 export function ShortsPage() {
   const navigate = useNavigate();
@@ -176,10 +164,10 @@ export function ShortsPage() {
   /* ---------- 播放、弹幕与抽屉 ---------- */
 
   const danmaku = useShortsDanmaku(current?.cid ?? 0, danmakuVisible);
-  // 保留刚看过的那条的取流会话：方向翻转的第一次必然未命中预热（新目标既不在
-  // 活动槽位也不在预热槽位），那一次实测要付 386~481ms 的取流。
+  // 保留刚看过的那条的取流会话：一次跳变（进/退 UP 主模式、列表重排）会把新目标
+  // 甩出槽位窗口，那一次实测要付 386~481ms 的取流。
   const retention = useShortsSessionRetention();
-  const { slots, slotStates, playback, noteDirection } = useShortsStableSlots({
+  const { slots, slotStates, playback } = useShortsStableSlots({
     items,
     index,
     refs: slotRefs,
@@ -208,7 +196,6 @@ export function ShortsPage() {
     navigationLocked: feed.navigationLocked,
     blocked: panels.anyOpen,
     onMotionActiveChange: setFeedMotionActive,
-    noteDirection,
     onBoundary: (next) => {
       if (feed.uploaderMode) void feed.load(next < 0 ? "prev" : "next");
     },

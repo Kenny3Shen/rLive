@@ -44,6 +44,7 @@ import {
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
   SHORTS_SLOT_IDS,
   SHORTS_TOP_BAR_HEIGHT_PX,
+  SHORTS_TOP_CONTROLS_CLASS,
   shortsMountedIndexes,
   shortsSlotCoveredIndexes,
   shortsSlotTop,
@@ -52,8 +53,6 @@ import type { DouyinVideoItem } from "./douyinVideoApi";
 
 const NO_THUMBNAILS: [] = [];
 const noop = () => {};
-const TOP_CONTROLS =
-  "media-skin [--media-control-size:2.5rem] [@media(pointer:coarse)]:[--media-control-size:2.75rem]";
 
 function stageItem(item: DouyinVideoItem) {
   return {
@@ -83,7 +82,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
   const { items, index, setIndex, query } = feed;
   const current = items[index];
   const retention = useShortsMediaSessionRetention(DOUYIN_SHORTS_SOURCE.stop);
-  const { slots, slotStates, playback, noteDirection } = useShortsMediaSlots({
+  const { slots, slotStates, playback } = useShortsMediaSlots({
     source: DOUYIN_SHORTS_SOURCE,
     items,
     index,
@@ -100,7 +99,6 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
     navigationLocked: !current,
     blocked: menuOpen,
     onMotionActiveChange: setMotionActive,
-    noteDirection,
     onBoundary: (next) => {
       if (next >= items.length && !query.isFetchNextPageError) feed.loadMore();
     },
@@ -242,7 +240,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
             <div
               data-slot="shorts-top-bar"
               className={cn(
-                TOP_CONTROLS,
+                SHORTS_TOP_CONTROLS_CLASS,
                 "pointer-events-auto absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2",
               )}
               style={{ height: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
