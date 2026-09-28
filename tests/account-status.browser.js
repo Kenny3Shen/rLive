@@ -32,11 +32,12 @@ async (page) => {
         bilibili: "unknown",
         douyu: "expired",
         huya: "valid",
+        douyin: "unknown",
       };
       const profileFor = (siteId) => {
         const status = statusBySite[siteId] ?? "none";
         return {
-          username: status === "valid" ? "测试账号" : null,
+          username: status === "valid" && siteId !== "douyin" ? "测试账号" : null,
           has_cookie: status !== "none",
           status,
         };
@@ -93,9 +94,35 @@ async (page) => {
           () => expired.host.textContent.includes("自动退出登录"),
           "清理后未留下重新登录提示",
         );
+        // 抖音接入真实探针后沿用同一条安全边界；不依赖 Cookie 内带有昵称。
+        const douyinUnknown = await renderCard("douyin");
+        harnesses.push(douyinUnknown);
+        await until(
+          () => douyinUnknown.host.textContent.includes("已保存，未验证"),
+          "抖音验证不可用时未保留未验证状态",
+        );
+        await frames();
+        assert(!cleared.includes("douyin"), "抖音 unknown 状态下清除了凭据");
+
+        statusBySite.douyin = "valid";
+        const douyinValid = await renderCard("douyin");
+        harnesses.push(douyinValid);
+        await until(() => douyinValid.host.textContent.includes("已登录"), "抖音有效会话未显示已登录");
+        await frames();
+        assert(!cleared.includes("douyin"), "抖音 valid 状态下清除了凭据");
+
+        statusBySite.douyin = "expired";
+        const douyinExpired = await renderCard("douyin");
+        harnesses.push(douyinExpired);
+        await until(() => cleared.includes("douyin"), "抖音明确失效未触发清理");
+        await until(
+          () => douyinExpired.host.textContent.includes("自动退出登录"),
+          "抖音失效清理后未留下重新登录提示",
+        );
         return {
           passed: true,
           cleared,
+          douyinStatesVerified: ["unknown", "valid", "expired"],
           unknownKeptCookie: !cleared.includes("bilibili"),
           validKeptCookie: !cleared.includes("huya"),
         };

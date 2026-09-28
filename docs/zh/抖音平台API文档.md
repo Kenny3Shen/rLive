@@ -10,7 +10,7 @@
 | 分类、推荐 | 已支持 | 推荐优先调用网页端首页 feed 接口（无需验签，每次返回一批轮换内容，保存的登录 Cookie 会自动附带）；分区列表本地计算 `a_bogus` 验签分页。feed 不可用时回退合成分区接口，首屏再回退 SSR。 |
 | 搜索 | 已支持 | 需要完整登录 Cookie；仅在上游成功返回时展示结果。只返回在播房间，没有未开播主播。 |
 | 房间详情与播放 | 已支持 | 解析网页和回流接口，提供上游实际下发的清晰度与播放地址。 |
-| 账号 | 已支持 | 可扫码登录或手动保存 Cookie；匿名浏览会建立短时网页会话。 |
+| 账号 | 已支持 | 可扫码登录或手动保存 Cookie；账号设置通过第一方当前用户接口验证登录态并显示昵称；匿名浏览会建立短时网页会话。 |
 | 实时弹幕接收 | 已支持 | 本地计算短时 MSSDK 签名，直连官方 WSS，接收聊天、礼物、点赞、进场等事件。 |
 | 短视频推荐 | 已支持 | `/shorts/douyin` 沉浸式滑动流，携带本机登录 Cookie 请求 `tab/feed`，三槽预热并临近末尾自动补货；无账号级个性化保证，不自动降级匿名。 |
 | 公开作品 | 已支持 | 「作品链接」页签支持作品 ID/链接/分享短链，经详情接口选可信 H.264，用原生 MP4 与本机代理播放。 |
@@ -37,7 +37,7 @@
 
 `DouyinVideoFeedPage` 只返回元数据，当前作品和两个邻居经共享三槽调用详情与 `stream_proxy`；
 当前可播后仅下一条预热媒体，原生 MP4 不加载 DASH 内核。
-登录态检查不是有效性认证，不将 Cookie 存在或推荐返回成功描述为个性化已经生效；不采集 Cookie
+推荐请求前的 Cookie 字段检查不是有效性认证，不将 Cookie 存在或推荐返回成功描述为个性化已经生效；不采集 Cookie
 用于 A/B，不绕过验证。产品行为、错误恢复、生命周期与测试入口见[短视频功能](短视频功能.md)。
 
 ## 上游数据与播放
@@ -67,6 +67,20 @@
 
 完整登录 Cookie 或匿名 `ttwid` 会话都能提高连接可用性。
 
+## Cookie 验证
+
+进入账号设置、手动保存 Cookie 或扫码完成后，既有 `account_get_profile` 命令会请求
+`GET https://live.douyin.com/webcast/user/me/?aid=6383&device_platform=web`：
+
+- `status_code=0` 且 `data.id_str` / `data.id` 为非零用户 ID：报告 `valid`，显示安全的 `data.nickname`；缺少昵称不影响登录结论。
+- `status_code=20003`（未登录）：报告 `expired`，设置页沿用已有的自动退出与重新登录提示。
+- 网络失败、HTTP 错误、重定向、风控/验证页、未知业务码或异常结构：报告 `unknown`，显示「已保存，未验证」，不删除 Cookie；可重新进入账号设置重试。
+- 未保存 Cookie 时报告 `none`，不发起网络请求。
+
+探针复用应用 HTTP(S) 代理、抖音 UA 和 Cookie 头校验；不跟随重定向，不引导匿名会话，
+也不把响应 Cookie 写入数据库或共享缓存。只有状态与可选昵称进入账号摘要，不暴露完整响应或凭据。
+验证成功只证明当前会话被接受，不承诺搜索、推荐或播放不受其他风控限制，也不证明账号级个性化。
+
 ## 账号与弹幕边界
 
 `danmaku_connect` 仅负责接收房间消息。rLive 不提供抖音弹幕发送命令，播放器中也不会显示手动发送框、「+1」或会话级自动发送控制；保存的抖音 Cookie 仍可用于搜索、房间解析和实时弹幕接收。
@@ -88,5 +102,6 @@
 - 独立作品链接播放：`src/features/shorts/DouyinVideoPlayer.tsx`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
 - 扫码登录：`src-tauri/src/account/douyin_qr.rs`
+- Cookie 验证：`src-tauri/src/account/douyin_profile.rs`，由 `src-tauri/src/commands/account.rs` 接入账号摘要
 - 弹幕连接与帧解析：`src-tauri/src/danmu_rs/douyin.rs`
 - 本地签名：`src-tauri/src/danmu_rs/douyin_sign.rs`

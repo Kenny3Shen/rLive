@@ -1,5 +1,6 @@
 pub mod bilibili_app;
 pub mod bilibili_qr;
+pub mod douyin_profile;
 pub mod douyin_qr;
 pub mod douyu_qr;
 pub mod huya_qr;
@@ -92,6 +93,26 @@ fn cookie_value(cookie: &str, expected_key: &str) -> Option<String> {
         .filter_map(|part| part.trim().split_once('='))
         .find(|(key, _)| key.trim().eq_ignore_ascii_case(expected_key))
         .and_then(|(_, value)| normalize_display_name(percent_decode_cookie_value(value.trim())))
+}
+
+/// 在把复制来的 Cookie header 交给 reqwest 之前，先限制其长度并剔除控制字节。
+/// 手动填写的 Cookie 可能带有字面的 `Cookie:` 前缀，
+/// 它不能成为第一个 cookie 名称的一部分。
+pub(crate) fn cookie_header_value(value: &str) -> Option<&str> {
+    const MAX_COOKIE_BYTES: usize = 16 * 1024;
+
+    let value = value.trim();
+    let value = value
+        .get(..7)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+        .map(|_| &value[7..])
+        .unwrap_or(value)
+        .trim();
+    (!value.is_empty()
+        && value.len() <= MAX_COOKIE_BYTES
+        && value.is_ascii()
+        && !value.bytes().any(|byte| byte.is_ascii_control()))
+    .then_some(value)
 }
 
 fn normalize_display_name(value: String) -> Option<String> {

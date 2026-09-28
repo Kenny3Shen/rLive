@@ -4,7 +4,9 @@ use serde_json::Value;
 use tauri::State;
 
 use crate::account::qr::QrLoginPoll;
-use crate::account::{bilibili_app, bilibili_qr, douyin_qr, douyu_qr, huya_qr};
+use crate::account::{
+    bilibili_app, bilibili_qr, cookie_header_value, douyin_profile, douyin_qr, douyu_qr, huya_qr,
+};
 use crate::error::AppResult;
 use crate::models::live::SiteId;
 use crate::state::AppState;
@@ -89,8 +91,8 @@ pub fn account_clear_cookie(state: State<'_, AppState>, site_id: SiteId) -> AppR
 }
 
 /// 读取已保存账号的安全展示摘要，同时不把其 Cookie 暴露给 webview。
-/// Bilibili 需要请求其第一方 nav 接口，因为扫码登录回调的 Cookie 没有
-/// 用户名字段；携带可信名称字段的平台则直接使用本地取值。
+/// Bilibili、抖音请求第一方当前账号接口验证会话并获取显示名；
+/// 其他平台的显示名来自 Cookie，登录态由各自的探针确认。
 #[tauri::command(async)]
 pub async fn account_get_profile(
     state: State<'_, AppState>,
@@ -122,6 +124,17 @@ pub async fn account_get_profile(
                 // 网络或验证挑战导致的失败不应遮蔽部分浏览器导出中
                 // 存在的可选字段 DedeUserName，也不应升级成“已登录”的确定事实。
                 BilibiliProfileLookup::Unavailable => (cookie_username, AccountStatus::Unknown),
+            }
+        }
+        SiteId::Douyin if has_cookie => {
+            match douyin_profile::lookup(&cookie, proxy.as_deref()).await {
+                douyin_profile::ProfileLookup::Valid(username) => {
+                    (username.or(cookie_username), AccountStatus::Valid)
+                }
+                douyin_profile::ProfileLookup::Rejected => (None, AccountStatus::Expired),
+                douyin_profile::ProfileLookup::Unavailable => {
+                    (cookie_username, AccountStatus::Unknown)
+                }
             }
         }
         // 斗鱼的显示名来自 Cookie 自身而不是某次查询，因此探针失败时它仍然可用；
@@ -447,26 +460,6 @@ async fn bilibili_profile_lookup(cookie: &str, proxy: Option<&str>) -> BilibiliP
         return BilibiliProfileLookup::Unavailable;
     };
     parse_bilibili_profile(&body)
-}
-
-/// 在把复制来的 Cookie header 交给 reqwest 之前，先限制其长度并剔除控制字节。
-/// 手动填写的 Cookie 可能带有字面的 `Cookie:` 前缀，
-/// 它不能成为第一个 cookie 名称的一部分。
-fn cookie_header_value(value: &str) -> Option<&str> {
-    const MAX_COOKIE_BYTES: usize = 16 * 1024;
-
-    let value = value.trim();
-    let value = value
-        .get(..7)
-        .filter(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
-        .map(|_| &value[7..])
-        .unwrap_or(value)
-        .trim();
-    (!value.is_empty()
-        && value.len() <= MAX_COOKIE_BYTES
-        && value.is_ascii()
-        && !value.bytes().any(|byte| byte.is_ascii_control()))
-    .then_some(value)
 }
 
 fn parse_bilibili_profile(body: &str) -> BilibiliProfileLookup {
