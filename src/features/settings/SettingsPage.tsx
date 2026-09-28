@@ -81,7 +81,6 @@ import { FieldTip } from "@/features/settings/FieldTip";
 import { SwitchField } from "@/features/settings/SwitchField";
 import { ImageCacheField } from "@/features/settings/CacheSettings";
 import { AppLogField } from "@/features/settings/AppLogField";
-import { DiagnosticSummaryField } from "@/features/settings/DiagnosticSummaryField";
 import { notify } from "@/components/ui/toast";
 import { useUpdateStore } from "@/shared/update/updateStore";
 import { LanSyncField } from "@/features/settings/LanSyncField";
@@ -2109,7 +2108,6 @@ function AboutSettings() {
             </div>
           </Field>
           <AppLogField />
-          <DiagnosticSummaryField />
           <Field orientation="horizontal">
             <FieldTitle id="project-homepage">项目主页</FieldTitle>
             <Button onClick={openProjectHomepage} variant="outline">

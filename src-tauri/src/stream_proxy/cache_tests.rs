@@ -284,7 +284,6 @@ async fn prefetched_initialization_is_session_local_without_disk_cache() {
         }
     }
     assert!(fixture.requests.lock().unwrap().is_empty());
-    assert_eq!(proxy.telemetry_totals().upstream_requests, 0);
 
     // 相同上游地址的新会话没有传 init 时必须回源，不能借用另一会话的字节。
     let other_url = proxy
@@ -305,7 +304,6 @@ async fn prefetched_initialization_is_session_local_without_disk_cache() {
     assert_eq!(response.headers()["content-range"], "bytes 0-799/1600");
     assert_eq!(response.bytes().await.unwrap().as_ref(), complete_body());
     assert_eq!(fixture.requests.lock().unwrap().len(), 1);
-    assert_eq!(proxy.telemetry_totals().upstream_requests, 1);
     assert!(!fixture.root.exists(), "关闭磁盘缓存不得创建缓存目录");
 
     proxy.stop_for_session("init-video");
