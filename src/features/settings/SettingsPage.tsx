@@ -162,6 +162,7 @@ type AccountLoginMethod = "manual" | "qr";
 type AccountQrLoginStart = {
   qr_code_url: string;
   qr_key: string;
+  mode?: "qr" | "browser";
 };
 
 type AccountQrLoginPoll = {
@@ -407,6 +408,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+async function cancelBrowserLogin(session: AccountQrLoginStart | null) {
+  if (session?.mode !== "browser") return;
+  await invokeCmd<void>("account_qr_login_cancel", { siteId: "douyin", qrKey: session.qr_key });
+}
+
 function QrLogin({
   siteId,
   siteName,
@@ -418,35 +424,49 @@ function QrLogin({
   loginKind?: "web" | "bilibili_app";
   onSaved: () => Promise<void>;
 }) {
+  const browserLogin = siteId === "douyin";
   const [session, setSession] = useState<AccountQrLoginStart | null>(null);
-  const [status, setStatus] = useState("正在获取二维码…");
+  const [status, setStatus] = useState(browserLogin ? "正在打开官方登录窗口…" : "正在获取二维码…");
   const [loading, setLoading] = useState(false);
   const epochRef = useRef(0);
+  const sessionRef = useRef<AccountQrLoginStart | null>(null);
 
   const refresh = useCallback(async () => {
     const epoch = ++epochRef.current;
     setLoading(true);
     setSession(null);
-    setStatus("正在获取二维码…");
+    setStatus(browserLogin ? "正在打开官方登录窗口…" : "正在获取二维码…");
     try {
+      await cancelBrowserLogin(sessionRef.current);
+      if (epoch !== epochRef.current) return;
+      sessionRef.current = null;
       const next = await invokeCmd<AccountQrLoginStart>("account_qr_login_start", {
         siteId,
         loginKind,
       });
-      if (epoch !== epochRef.current) return;
+      if (epoch !== epochRef.current) {
+        // 取消发生在原生建窗返回之前，也要回收这个迟到的窗口。
+        await cancelBrowserLogin(next);
+        return;
+      }
+      sessionRef.current = next;
       setSession(next);
-      setStatus(`请使用${siteName} App 扫描二维码`);
+      setStatus(
+        browserLogin
+          ? "请在抖音官方窗口点击登录，并使用抖音 App 扫码。"
+          : `请使用${siteName} App 扫描二维码`,
+      );
     } catch (error) {
       if (epoch !== epochRef.current) return;
       const message =
         typeof error === "object" && error && "message" in error
           ? String((error as { message: string }).message)
           : String(error);
-      setStatus(`获取二维码失败：${message}`);
+      setStatus(`${browserLogin ? "打开登录窗口" : "获取二维码"}失败：${message}`);
     } finally {
       if (epoch === epochRef.current) setLoading(false);
     }
-  }, [siteId, siteName, loginKind]);
+  }, [siteId, siteName, loginKind, browserLogin]);
 
   useEffect(() => {
     // 挂载时获取登录二维码（外部 IPC）；refresh 内的同步写入是加载标记。
@@ -454,6 +474,9 @@ function QrLogin({
     void refresh();
     return () => {
       epochRef.current += 1;
+      const current = sessionRef.current;
+      sessionRef.current = null;
+      void cancelBrowserLogin(current).catch(() => {});
     };
   }, [refresh]);
 
@@ -475,11 +498,12 @@ function QrLogin({
         });
         if (cancelled || epoch !== epochRef.current) return;
         setStatus(result.message);
+        if (result.status === "success" || result.status === "expired") {
+          sessionRef.current = null;
+          if (interval !== null) window.clearInterval(interval);
+        }
         if (result.status === "success") {
           await onSaved();
-        }
-        if (result.status === "success" || result.status === "expired") {
-          if (interval !== null) window.clearInterval(interval);
         }
       } catch (error) {
         if (!cancelled && epoch === epochRef.current) {
@@ -501,6 +525,35 @@ function QrLogin({
       if (interval !== null) window.clearInterval(interval);
     };
   }, [onSaved, session, siteId, loginKind]);
+
+  if (browserLogin) {
+    return (
+      <Field>
+        <FieldContent>
+          <FieldDescription role="status" aria-live="polite">
+            {status}
+          </FieldDescription>
+          <FieldDescription>
+            二维码和访问验证由抖音官网提供。确认登录后会自动保存账号并关闭窗口；
+            取消、关闭窗口或超时不会删除原有 Cookie。
+          </FieldDescription>
+          <Button
+            variant="outline"
+            className="w-fit"
+            disabled={loading}
+            onClick={() => void refresh()}
+          >
+            {loading ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <ExternalLink data-icon="inline-start" aria-hidden />
+            )}
+            重新打开登录窗口
+          </Button>
+        </FieldContent>
+      </Field>
+    );
+  }
 
   return (
     <Field>
@@ -652,7 +705,9 @@ export function BilibiliAppAuthField() {
           </div>
           {auth.showUnverifiedHint && (
             <FieldDescription className="text-muted-foreground">
-              {"已保存凭据，但未能向哔哩哔哩确认状态（网络失败或服务故障）。个性化可能仍在生效；可点「刷新状态」重试。"}
+              {
+                "已保存凭据，但未能向哔哩哔哩确认状态（网络失败或服务故障）。个性化可能仍在生效；可点「刷新状态」重试。"
+              }
             </FieldDescription>
           )}
           {profileError && (
@@ -1077,9 +1132,7 @@ export function AccountCard({
         icon={<LogOut aria-hidden />}
         title={`退出${title}登录？`}
         description={
-          <>
-            将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。
-          </>
+          <>将删除本机保存的{title} Cookie，登录内容与弹幕发送将暂时不可用。之后可重新登录。</>
         }
         error={logoutError}
         busy={clearing}
@@ -1098,8 +1151,15 @@ export function AccountCard({
         {loginMethod === "qr" && (
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>{title}扫码登录</DialogTitle>
-              <DialogDescription>请使用 {title} App 扫描二维码并在手机上确认。</DialogDescription>
+              <DialogTitle>
+                {title}
+                {siteId === "douyin" ? "官网扫码登录" : "扫码登录"}
+              </DialogTitle>
+              <DialogDescription>
+                {siteId === "douyin"
+                  ? "将在独立的抖音官方窗口中登录，rLive 不会向网页注入已保存的 Cookie。"
+                  : `请使用 ${title} App 扫描二维码并在手机上确认。`}
+              </DialogDescription>
             </DialogHeader>
             <QrLogin
               siteId={siteId}
@@ -2488,7 +2548,7 @@ export function SettingsPage() {
             siteId="douyin"
             title="抖音"
             placeholder="sessionid=…; ttwid=…; msToken=…"
-            qrLogin
+            qrLogin={!mobileClient}
           />
         </Section>
       </SettingsContent>

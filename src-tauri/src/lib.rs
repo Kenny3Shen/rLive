@@ -33,8 +33,8 @@ use chrono::Local;
 use app_paths::AppDirectories;
 use commands::account::{
     account_bilibili_app_clear, account_bilibili_app_profile, account_clear_cookie,
-    account_get_cookie, account_get_profile, account_qr_login_poll, account_qr_login_start,
-    account_set_cookie,
+    account_get_cookie, account_get_profile, account_qr_login_cancel, account_qr_login_poll,
+    account_qr_login_start, account_set_cookie,
 };
 #[cfg(target_os = "android")]
 use commands::android_navigation::AndroidNavigation;
@@ -284,6 +284,19 @@ fn file_log_filter() -> Targets {
     Targets::new().with_target("rlive_lib", LevelFilter::WARN)
 }
 
+/// 独立的官网窗口不能调用应用命令；插件权限仍仅绑定 main。
+fn main_window_only(
+    handler: impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        if invoke.message.webview_ref().label() != "main" {
+            invoke.resolver.reject("此窗口无权调用应用命令");
+            return true;
+        }
+        handler(invoke)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -327,7 +340,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(main_window_only(tauri::generate_handler![
             settings_get,
             settings_set,
             #[cfg(not(target_os = "android"))]
@@ -374,6 +387,7 @@ pub fn run() {
             account_clear_cookie,
             account_qr_login_start,
             account_qr_login_poll,
+            account_qr_login_cancel,
             site_list,
             site_get_categories,
             site_get_recommend,
@@ -484,7 +498,7 @@ pub fn run() {
             app_confirm_exit,
             app_log_snapshot,
             app_log_clear,
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
@@ -531,6 +545,7 @@ pub fn run() {
                 }
             }
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                let _ = account::douyin_qr::cancel_all();
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     let state = state.inner();
                     state.stream_proxy.stop();

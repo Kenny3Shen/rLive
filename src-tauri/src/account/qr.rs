@@ -1,7 +1,7 @@
 //! 四个平台扫码登录共用的会话存储、网络客户端与响应解析原语。
 //!
 //! 每个平台的协议各不相同（B 站是带数字状态码的轮询、斗鱼是 JSONP 完成回调、
-//! 虎牙是 UDB SDK 分阶段、抖音是 SSO 重定向），因此这里**只**收敛真正逐字节
+//! 虎牙是 UDB SDK 分阶段、抖音使用独立官网窗口），因此这里**只**收敛真正逐字节
 //! 重复的部分：会话表、客户端构建、可信主机判定与文本字段提取。协议本身留在
 //! 各自模块里。
 //!
@@ -170,12 +170,37 @@ impl<P: Clone + Send + 'static> QrSessionStore<P> {
             })
     }
 
+    /// 在会话仍有效时原子提交，只有提交成功才消费句柄。
+    /// 取消/过期与提交共用会话锁，避免已取消的登录写回账号。
+    /// 回调必须是短暂的同步操作，不得等待网络或调用窗口 API。
+    pub fn commit<T>(&self, key: &str, save: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
+        let mut sessions = self
+            .map()
+            .lock()
+            .map_err(|_| self.site.error("session", "二维码登录会话读取失败，请重试"))?;
+        Self::prune(&mut sessions);
+        if !sessions.contains_key(key) {
+            return Err(self.site.error("expired", "登录已取消或过期，请重新登录"));
+        }
+        let result = save()?;
+        let payload = sessions.remove(key);
+        drop(sessions);
+        drop(payload);
+        Ok(result)
+    }
+
+    /// 取走全部载荷，供持有窗口等资源的平台在锁外立即回收。
+    pub fn drain(&self) -> AppResult<Vec<P>> {
+        let mut sessions = self
+            .map()
+            .lock()
+            .map_err(|_| self.site.error("session", "二维码登录会话清理失败，请重试"))?;
+        Ok(sessions.drain().map(|(_, (payload, _))| payload).collect())
+    }
+
     /// 退出账号时使尚未完成的登录全部失效。
     pub fn clear(&self) -> AppResult<()> {
-        self.map()
-            .lock()
-            .map_err(|_| self.site.error("session", "二维码登录会话清理失败，请重试"))?
-            .clear();
+        drop(self.drain()?);
         Ok(())
     }
 
@@ -234,8 +259,8 @@ pub fn can_follow_redirect(url: &Url, prior_redirects: usize, suffixes: &[&str])
 /// 就无法把该客户端变成指向任意目标的已认证请求。
 ///
 /// - `compression`：仅 B 站开启 gzip/brotli，保持与合并前一致。
-/// - `proxy`：仅抖音传入应用显式代理；`None` 时 `with_proxy` 是空操作，
-///   `no_proxy()` 依然生效，因此其余站点行为不变。
+/// - `proxy`：可选的显式 HTTP(S) 代理；`None` 时 `with_proxy` 是空操作，
+///   `no_proxy()` 依然生效。抖音官网窗口使用 WebView 自身的代理配置。
 pub fn build_login_client(
     site: QrSite,
     jar: Arc<Jar>,
@@ -444,6 +469,50 @@ mod tests {
         assert_eq!(optional_text(&data, &["newline"], 4096), None);
         assert_eq!(optional_text(&data, &["url"], 4), None);
         assert_eq!(optional_text(&data, &["absent"], 64), None);
+    }
+
+    #[test]
+    fn commit_is_single_use_and_cancelled_sessions_cannot_save() {
+        let sessions = QrSessionStore::new(DOUYU);
+        sessions.insert("key".into(), Payload("login")).unwrap();
+        let saves = std::cell::Cell::new(0);
+        sessions
+            .commit("key", || {
+                saves.set(saves.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            sessions
+                .commit("key", || {
+                    saves.set(saves.get() + 1);
+                    Ok(())
+                })
+                .is_err()
+        );
+        sessions
+            .insert("cancelled".into(), Payload("login"))
+            .unwrap();
+        sessions.remove("cancelled").unwrap();
+        assert!(
+            sessions
+                .commit("cancelled", || {
+                    saves.set(saves.get() + 1);
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert_eq!(saves.get(), 1);
+    }
+
+    #[test]
+    fn failed_commit_keeps_the_session_for_retry() {
+        let sessions = QrSessionStore::new(DOUYU);
+        sessions.insert("key".into(), Payload("login")).unwrap();
+        let result: AppResult<()> = sessions.commit("key", || Err(DOUYU.error("save", "保存失败")));
+        assert!(result.is_err());
+        assert!(sessions.get("key").is_ok());
+        assert!(sessions.commit("key", || Ok(())).is_ok());
     }
 
     #[test]

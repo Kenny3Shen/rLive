@@ -17,6 +17,7 @@ use crate::state::AppState;
 pub struct AccountQrLoginStart {
     pub qr_code_url: String,
     pub qr_key: String,
+    pub mode: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +80,9 @@ pub fn account_set_cookie(
     let conn = state.db.lock().map_err(|e| {
         crate::error::AppError::new("db_lock_error", format!("account_set_cookie: {e}"))
     })?;
+    if site_id == SiteId::Douyin {
+        douyin_qr::cancel_all()?;
+    }
     crate::account::set_cookie(&conn, &site_id, &cookie)
 }
 
@@ -87,6 +91,9 @@ pub fn account_clear_cookie(state: State<'_, AppState>, site_id: SiteId) -> AppR
     let conn = state.db.lock().map_err(|e| {
         crate::error::AppError::new("db_lock_error", format!("account_clear_cookie: {e}"))
     })?;
+    if site_id == SiteId::Douyin {
+        douyin_qr::cancel_all()?;
+    }
     crate::account::clear_cookie(&conn, &site_id)
 }
 
@@ -276,6 +283,7 @@ pub fn account_bilibili_app_clear(state: State<'_, AppState>) -> AppResult<()> {
 
 #[tauri::command(async)]
 pub async fn account_qr_login_start(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     site_id: SiteId,
     login_kind: Option<AccountLoginKind>,
@@ -288,6 +296,7 @@ pub async fn account_qr_login_start(
         return Ok(AccountQrLoginStart {
             qr_code_url: session.qr_code_url,
             qr_key: session.qr_key,
+            mode: "qr",
         });
     }
     match &site_id {
@@ -296,6 +305,7 @@ pub async fn account_qr_login_start(
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
+                mode: "qr",
             })
         }
         SiteId::Douyin => {
@@ -310,10 +320,11 @@ pub async fn account_qr_login_start(
                 })?;
                 crate::settings::get(&conn)?.proxy
             };
-            let session = douyin_qr::start(proxy.as_deref()).await?;
+            let session = douyin_qr::start(app, proxy.as_deref()).await?;
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
+                mode: "browser",
             })
         }
         SiteId::Douyu => {
@@ -321,6 +332,7 @@ pub async fn account_qr_login_start(
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
+                mode: "qr",
             })
         }
         SiteId::Huya => {
@@ -328,10 +340,20 @@ pub async fn account_qr_login_start(
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
+                mode: "qr",
             })
         }
         _ => Err(qr_login_unsupported(&site_id)),
     }
+}
+
+/// 目前只有抖音官方窗口有需要主动回收的浏览器资源。
+#[tauri::command(async)]
+pub async fn account_qr_login_cancel(site_id: SiteId, qr_key: String) -> AppResult<()> {
+    if site_id == SiteId::Douyin {
+        douyin_qr::cancel(&qr_key)?;
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -383,7 +405,11 @@ pub async fn account_qr_login_poll(
     match result {
         QrLoginPoll::Pending => Ok(AccountQrLoginPoll {
             status: AccountQrLoginStatus::Pending,
-            message: format!("请使用{} App 扫描二维码", qr_login_site_name(&site_id)),
+            message: if site_id == SiteId::Douyin {
+                "请在抖音官方窗口点击登录并扫码；验证成功后会自动保存并关闭窗口".into()
+            } else {
+                format!("请使用{} App 扫描二维码", qr_login_site_name(&site_id))
+            },
         }),
         QrLoginPoll::Scanned => Ok(AccountQrLoginPoll {
             status: AccountQrLoginStatus::Scanned,
@@ -391,13 +417,23 @@ pub async fn account_qr_login_poll(
         }),
         QrLoginPoll::Expired => Ok(AccountQrLoginPoll {
             status: AccountQrLoginStatus::Expired,
-            message: "二维码已失效，请刷新后重新扫描".into(),
+            message: if site_id == SiteId::Douyin {
+                "登录窗口已关闭或会话已过期，原账号未更改；可重新打开窗口".into()
+            } else {
+                "二维码已失效，请刷新后重新扫描".into()
+            },
         }),
         QrLoginPoll::Success { cookie } => {
             let conn = state.db.lock().map_err(|e| {
                 crate::error::AppError::new("db_lock_error", format!("account_qr_login_poll: {e}"))
             })?;
-            crate::account::set_cookie(&conn, &site_id, &cookie)?;
+            if site_id == SiteId::Douyin {
+                douyin_qr::finish(&qr_key, || {
+                    crate::account::set_cookie(&conn, &site_id, &cookie)
+                })?;
+            } else {
+                crate::account::set_cookie(&conn, &site_id, &cookie)?;
+            }
             Ok(AccountQrLoginPoll {
                 status: AccountQrLoginStatus::Success,
                 message: "登录成功，Cookie 已安全保存到本机".into(),
