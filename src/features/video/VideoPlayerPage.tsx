@@ -125,6 +125,7 @@ import {
   VIDEO_HISTORY_QUERY_KEY,
 } from "./videoHistory";
 import { videoSeekGestureIntent, videoSeekGestureTarget } from "./videoSurfaceGesture";
+import { isVideoTailBuffered } from "./videoTailBuffer";
 import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWaitingRecovery";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
@@ -748,6 +749,15 @@ function VideoPlayerPageContent() {
    * 换集后 cid 变，自然就允许对新的一集再预热一次。
    */
   const preloadedNextRef = useRef<string | null>(null);
+  /**
+   * 已把末片缓冲进本机的那一轮媒体会话（其 `playUrl`）。
+   *
+   * 这是预热的闸门：存会话身份而不是布尔量。取流地址本身就是一轮代理会话的
+   * 唯一标识（每次 `video_get_play_info` 都新绑端口），换集、换画质与重试都会
+   * 换一个空缓冲的新地址，旧身份自然失配、闸门随之关闭，不必在渲染期或 effect
+   * 里手动重置，也就没有「新会话还在取流、上一轮的 true 已经放行预热」的窗口。
+   */
+  const [tailBufferedUrl, setTailBufferedUrl] = useState<string | null>(null);
 
   const selectionNextItemRef = useRef<PlaylistItem | null>(null);
   useLayoutEffect(() => {
@@ -1006,40 +1016,6 @@ function VideoPlayerPageContent() {
     retry: false,
   });
 
-  /**
-   * 下一分集预加载。
-   *
-   * 只在「当前集已就绪」后发起：开播前的带宽应该全部给正在看的那一集。
-   * 只做一次（按下一集身份 + 画质去重），失败不重试也不上报 —— 预热是尽力而为
-   * 的加速，切集时自然会走正常取流。
-   */
-  const nextPreloadKey = selectionNextItem
-    ? `${selectionNextItem.bvid}:${selectionNextItem.cid}:${selectionNextItem.epId ?? ""}:${qualityQn ?? ""}`
-    : null;
-  useEffect(() => {
-    // 仅音频模式不启用分片缓存（后端忽略该位），预热也不会被读回，直接不做。
-    if (!videoNextEpisodePreload || audioOnly || loading || playbackError) return;
-    if (!nextPreloadKey || preloadedNextRef.current === nextPreloadKey) return;
-    const next = selectionNextItem;
-    if (!next) return;
-    preloadedNextRef.current = nextPreloadKey;
-    void videoPreloadNext({
-      bvid: next.bvid || null,
-      cid: next.cid,
-      ep_id: next.epId,
-      qn: qualityQn,
-      audio_only: false,
-    }).catch(() => undefined);
-  }, [
-    videoNextEpisodePreload,
-    audioOnly,
-    loading,
-    playbackError,
-    nextPreloadKey,
-    selectionNextItem,
-    qualityQn,
-  ]);
-
   const sessionIdsRef = useRef<VideoSessionIds | null>(null);
   // 用 query 的原始数据而不是上面换集时被抹成 undefined 的 `playInfo`：
   // session 链必须 A→B 连续（见下），中间出现 undefined 会丢掉旧引用、泄漏会话。
@@ -1169,6 +1145,49 @@ function VideoPlayerPageContent() {
   const playKind: VideoJsPlaybackKind = playInfo?.audio_only ? "native" : "dash";
   // Video.js 的 dash.js 适配器原生处理带 SegmentList 的 MPD，不再维护私有分片时间轴补丁。
 
+  /**
+   * 下一分集预加载。
+   *
+   * 闸门是「当前会话的末片已进缓冲」（`tailBufferedUrl` 对上当前 `playUrl`，
+   * 见 `isVideoTailBuffered`）：整段还没取完之前，带宽属于正在看的那一集；
+   * 片尾分片就位说明取流已追到结尾，预热下一集的起播字节才不再与当前播放抢带宽。
+   * 换集/换画质/重试都换取流地址，闸门因此自然重新关闭，新会话的末片再次进
+   * 缓冲前不会放行。
+   *
+   * 只做一次（按下一集身份 + 画质去重），失败不重试也不上报 —— 预热是尽力而为
+   * 的加速，切集时自然会走正常取流。
+   */
+  const nextPreloadKey = selectionNextItem
+    ? `${selectionNextItem.bvid}:${selectionNextItem.cid}:${selectionNextItem.epId ?? ""}:${qualityQn ?? ""}`
+    : null;
+  useEffect(() => {
+    // 仅音频模式不启用分片缓存（后端忽略该位），预热也不会被读回，直接不做。
+    if (!videoNextEpisodePreload || audioOnly || loading || playbackError) return;
+    // 末片闸门：当前会话的最后一个分片还没进缓冲，就不碰下一集的取流。
+    if (!playUrl || tailBufferedUrl !== playUrl) return;
+    if (!nextPreloadKey || preloadedNextRef.current === nextPreloadKey) return;
+    const next = selectionNextItem;
+    if (!next) return;
+    preloadedNextRef.current = nextPreloadKey;
+    void videoPreloadNext({
+      bvid: next.bvid || null,
+      cid: next.cid,
+      ep_id: next.epId,
+      qn: qualityQn,
+      audio_only: false,
+    }).catch(() => undefined);
+  }, [
+    videoNextEpisodePreload,
+    audioOnly,
+    loading,
+    playbackError,
+    tailBufferedUrl,
+    playUrl,
+    nextPreloadKey,
+    selectionNextItem,
+    qualityQn,
+  ]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !playUrl) return;
@@ -1176,6 +1195,8 @@ function VideoPlayerPageContent() {
     // 而这条查询是本地 SQLite，通常早于 playUrl（网络请求）就位。
     if (resumePending) return;
     const media = video;
+    // 本轮的取流地址：effect 已保证它存在，之后的闸门登记不再需要可空判断。
+    const sessionUrl = playUrl;
     let cancelled = false;
     let endedTimer: ReturnType<typeof setTimeout> | null = null;
     let endedSequence = 0;
@@ -1209,6 +1230,22 @@ function VideoPlayerPageContent() {
       return Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
     }
     /**
+     * 末片闸门：本会话的最后一个分片进缓冲后，才登记取流地址放行下一集预热。
+     *
+     * 判据是媒体元素 `buffered` 的末端触到时长（MSE 下为视频与音频两条轨缓冲的
+     * 交集，因此两条轨的末片都就位才算数），见 `isVideoTailBuffered`。
+     *
+     * 身份取本轮 effect 闭包里的 `playUrl`（effect 的依赖之一）：它按会话生成，
+     * 换集/换画质/重试都会换一份并重建播放器，旧会话的登记不会落到新会话身上。
+     */
+    let tailBuffered = false;
+    function syncTailBuffered() {
+      if (cancelled || tailBuffered) return;
+      if (!isVideoTailBuffered(media.buffered, totalDuration())) return;
+      tailBuffered = true;
+      setTailBufferedUrl(sessionUrl);
+    }
+    /**
      * 上报这一集的进度。
      *
      * 只在 ref 里的身份仍指向本播放器实例正在播的这一集时才上报：换集后
@@ -1226,6 +1263,7 @@ function VideoPlayerPageContent() {
       setCurrentTime(actual);
       ensureDanmakuSegments(actual * 1_000);
       reportProgress(actual, false);
+      syncTailBuffered();
     }
     function syncDuration() {
       if (cancelled) return;
@@ -1246,6 +1284,8 @@ function VideoPlayerPageContent() {
     function onPause() {
       if (cancelled) return;
       setPaused(true);
+      // 暂停时后台仍会按缓冲目标续取：末片可能在这之后才落进缓冲。
+      syncTailBuffered();
       // 暂停是「可能马上要走」的最强信号：立刻落盘，不等节流窗口。
       reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
       // 用户暂停不该被自动恢复拉起：waiting 判定计时随之作废。
@@ -1304,6 +1344,8 @@ function VideoPlayerPageContent() {
       setWaiting(false);
       // seek 的短暂 waiting 到此解除：判定计时取消，稳定播放重新起算。
       waitingRecovery.notifyResumed();
+      // 跳到片尾附近时，末片可能这一跳就已进缓冲。
+      syncTailBuffered();
     }
     function syncAudio() {
       if (cancelled) return;
@@ -1402,6 +1444,9 @@ function VideoPlayerPageContent() {
     media.addEventListener("waiting", onWaiting);
     media.addEventListener("seeked", onSeeked);
     media.addEventListener("volumechange", syncAudio);
+    // 下载进度事件：MSE 每次 appendBuffer 之后都会派发，是「末片刚进缓冲」
+    // 最早可见的信号；暂停中的后台缓冲也只有它不依赖播放推进。
+    media.addEventListener("progress", syncTailBuffered);
 
     void loadVideoJsModules(playKind)
       .then((modules) => {
@@ -1477,6 +1522,7 @@ function VideoPlayerPageContent() {
       media.removeEventListener("waiting", onWaiting);
       media.removeEventListener("seeked", onSeeked);
       media.removeEventListener("volumechange", syncAudio);
+      media.removeEventListener("progress", syncTailBuffered);
       const player = playerRef.current;
       playerRef.current = null;
       try {

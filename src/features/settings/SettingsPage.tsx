@@ -2426,7 +2426,7 @@ export function SettingsPage() {
           </Field>
           <SwitchField
             title="预加载下一分集"
-            tip="默认关闭。开启后只加载下一分集的初始化段与首个音视频分片，会产生额外流量；不预载相关视频。"
+            tip="默认关闭。开启后在当前集最后一个分片加载完之后，才加载下一分集的初始化段与首个音视频分片，会产生额外流量；不预载相关视频。"
             checked={videoNextEpisodePreload}
             onCheckedChange={setVideoNextEpisodePreload}
           />

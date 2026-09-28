@@ -254,9 +254,12 @@ message DanmakuElem {
 - 开关住「设置 → 播放 → 视频点播」，默认**关闭**：它会额外下载下一集的 init 段与首个音视频分片，不能在升级或首次启动后未经选择就产生流量。
 - 实现复用现有分片缓存而不是另建预热通道：`video_preload_next` 用与正常播放相同的 `video_play_selection` 解出分集轨道，再以 `first_segment_ranges`（`segment_ranges` 的前两项：init + 首片）写入与转发路径**逐字节相同**的缓存键（`{bvid|ep}:{cid}:{qn}:{v|a}:{start}:{end}`）。它不拉起播放代理、不合成 MPD、不占 session；已命中就跳过，失败返回 `Ok(false)` 且调用方忽略。
 - 为什么只取首片：切集要的是「马上出画」，后续分片由播放器按需拉；顺带预取整段就变成一次未经确认的大额流量。`MEDIA_CACHE_PREFIX_SECS`（10s）仍管普通播放写盘的前缀宽度，预热只截到首片。
-- 触发时机是「当前集已就绪（`!loading && !playbackError`）之后」，开播前带宽全部留给正在看的那一集；按「下一集身份 + 画质」去重只做一次，换集后自然对新的一集再预热。仅音频模式不预热。
+- 触发时机是「**当前集的最后一个分片已进缓冲**」之后，而不是「当前集已就绪」：整段还没取完之前，带宽属于正在看的那一集；末片就位说明取流已追到片尾，预热下一集的起播字节才不再与当前播放抢带宽。按「下一集身份 + 画质」去重只做一次，换集后自然对新的一集再预热。仅音频模式不预热。
+- 末片判据是 `HTMLMediaElement.buffered` 的末端触到时长（`isVideoTailBuffered`，`src/features/video/videoTailBuffer.ts`）：MSE 下 `buffered` 是视频与音频两条轨缓冲区间的**交集**（规范如此），因此末端触底意味着两条轨的末片都已就位，不需要另建下载账本。容差 `VIDEO_TAIL_BUFFER_EPSILON_SECONDS`（0.25s）只吸收时间轴浮点误差 —— 实测 24 条真实分集里两条轨的时长差最大 0.035s，而分片时长远大于容差，所以「倒数第二片已到」不会被误判成末片。判定在 `timeupdate` / `progress` / `pause` / `seeked` 上跑：`progress` 是 MSE 每次 `appendBuffer` 之后的信号，暂停中的后台缓冲也只有它不依赖播放推进。
+- 闸门状态存「已触底的那一轮会话的取流地址」（`playUrl`）而不是布尔量，也不只存分集身份：换集、**换画质与重试**都会换一份代理地址、缓冲从零开始，旧身份自然失配、闸门随之关闭，不必在渲染期或 effect 里手动重置，也就没有「新会话还在取流、上一轮的 true 已经放行预热」的窗口。地址本身就是一轮代理会话的唯一标识（每轮 `video_get_play_info` 都新绑端口）。
 - 开启后播放页自身的 `video_get_play_info` 才带 `media_cache: true`：预热的字节写在同一个缓存键空间里，不打开读路径预热就白做。默认关闭时保持原有行为（播放页不写分片缓存，见 `VideoPlayRequest.media_cache` 的注释）。
-- 实机验证（Windows Debug，真实 CDN）：预热后 `initRange` 与首片 Range 经代理均返回 206 且 `upstream_requests` 不增长，只有第二个分片才触发 1 次上游请求；重复预热因命中已写盘分片而从 1550ms 降到 796ms。
+- 实机验证（Windows Debug，真实 CDN）：预热后 `initRange` 与首片 Range 经代理均返回 206 且 `upstream_requests` 不增长，只有第二个分片才触发 1 次上游请求；重复预热因命中已写盘分片而从 1550ms 降到 796ms。真实 WebView2 上同时核实了信号本身：`progress` 只在末片 append 之后到达，那一刻 `buffered` 末端才等于时长（此前停在倒数第二片）。
+- 回归：`tests/video-tail-buffer.test.ts` 钉住末片判定（触底/差半秒/无缓冲/时长未知/`TimeRanges` 并发失效）；`tests/video-next-preload.browser.js` 在真实播放页上把 DASH 引擎换成可手动推进 `buffered` 的桩（夹具每次取流都发新地址，与真实会话一致），断言「末片前不发、末片后按下一集身份发一次、同一集不重复、换集后闸门重关、同集重建后闸门重关」。
 - 单测：`commands::video::tests` 的 `preload_keeps_only_init_and_the_first_segment` / `preload_without_segments_still_writes_init` 钉住首片截断与空分片表行为；`tests/video-settings.test.ts` 钉住两条偏好的默认值与回填。
 
 ### 换集过渡与 seek 边界
