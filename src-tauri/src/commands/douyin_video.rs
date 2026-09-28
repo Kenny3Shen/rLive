@@ -59,10 +59,7 @@ fn require_feed_consent(consent: bool) -> AppResult<()> {
     if consent {
         Ok(())
     } else {
-        Err(
-            AppError::new("douyin_feed_disabled", "请从抖音推荐页发起推荐请求")
-                .with_site("douyin"),
-        )
+        Err(AppError::new("douyin_feed_disabled", "请从抖音推荐页发起推荐请求").with_site("douyin"))
     }
 }
 

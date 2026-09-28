@@ -791,7 +791,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_account_recommend_fixture_flattens_and_deduplicates_home_modules() {        let raw = include_str!("../../../tests/fixtures/bilibili_account_recommend.json");
+    fn parse_account_recommend_fixture_flattens_and_deduplicates_home_modules() {
+        let raw = include_str!("../../../tests/fixtures/bilibili_account_recommend.json");
         let page = parse_account_recommend_rooms(raw).unwrap();
 
         assert!(!page.has_more);
@@ -841,8 +842,9 @@ mod tests {
 
     #[test]
     fn empty_live_more_recommend_page_stops_paging() {
-        let page = parse_live_more_recommend_rooms(r#"{"code":0,"data":{"recommend_room_list":[]}}"#)
-            .unwrap();
+        let page =
+            parse_live_more_recommend_rooms(r#"{"code":0,"data":{"recommend_room_list":[]}}"#)
+                .unwrap();
         assert!(!page.has_more);
         assert!(page.items.is_empty());
         // 缺 data 对象也不报错：上游偶发只回 code，不应让首页整页失败。

@@ -736,7 +736,9 @@ impl BilibiliSite {
             ("web_location", "333.1007".to_string()),
             ("page", page.max(1).to_string()),
         ];
-        let text = self.live_recommend_text(auth, LIVE_MORE_PATH, &query).await?;
+        let text = self
+            .live_recommend_text(auth, LIVE_MORE_PATH, &query)
+            .await?;
         parse_live_more_recommend_rooms(&text)
     }
 
@@ -776,7 +778,11 @@ where
             Ok(text) if live_recommend_is_personalized(&text) => return Ok(text),
             Ok(_) => {
                 last_error = Some(live_recommend_not_personalized());
-                tracing::debug!(path, attempt, "bilibili live recommend returned a fallback feed");
+                tracing::debug!(
+                    path,
+                    attempt,
+                    "bilibili live recommend returned a fallback feed"
+                );
             }
             Err(error) => {
                 if error.code == "bilibili_app_auth_required" {
@@ -1013,14 +1019,17 @@ mod live_tests {
     async fn live_recommend_retries_a_fallback_feed_once() {
         use std::cell::Cell;
 
-        const PERSONALIZED: &str =
-            r#"{"code":0,"data":{"recommend_room_list":[{"roomid":9,"trackid":"live_feed_0.router-live-1.2.3"}]}}"#;
+        const PERSONALIZED: &str = r#"{"code":0,"data":{"recommend_room_list":[{"roomid":9,"trackid":"live_feed_0.router-live-1.2.3"}]}}"#;
         const FALLBACK: &str = r#"{"code":0,"data":{"recommend_room_list":[]}}"#;
 
         let calls = Cell::new(0);
         let text = live_recommend_with_retry("/webMain/getMoreRecList", || {
             calls.set(calls.get() + 1);
-            let body = if calls.get() == 1 { FALLBACK } else { PERSONALIZED };
+            let body = if calls.get() == 1 {
+                FALLBACK
+            } else {
+                PERSONALIZED
+            };
             std::future::ready(Ok(body.to_string()))
         })
         .await
@@ -1035,7 +1044,9 @@ mod live_tests {
         let calls = std::cell::Cell::new(0);
         let error = live_recommend_with_retry("/webMain/getMoreRecList", || {
             calls.set(calls.get() + 1);
-            std::future::ready(Ok(r#"{"code":0,"data":{"recommend_room_list":[]}}"#.to_string()))
+            std::future::ready(Ok(
+                r#"{"code":0,"data":{"recommend_room_list":[]}}"#.to_string()
+            ))
         })
         .await
         .expect_err("持续回退流不能返回空页");

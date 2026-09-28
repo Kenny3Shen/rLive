@@ -443,11 +443,7 @@ impl AppAuth {
     ///   另一条账号轴；这条路径刻意只带凭据。
     ///
     /// 失败绝不回退匿名请求：调用方据此决定是否回落到 Cookie／匿名路径。
-    pub async fn live_recommend(
-        &self,
-        path: &str,
-        query: &[(&str, String)],
-    ) -> AppResult<String> {
+    pub async fn live_recommend(&self, path: &str, query: &[(&str, String)]) -> AppResult<String> {
         let endpoint = live_recommend_endpoint(path)?;
         if self.expires_at.is_some_and(|at| expiry_reached(at, now())) {
             return Err(auth_required());
@@ -1285,7 +1281,12 @@ mod tests {
             renewed: None,
         };
         assert_eq!(
-            error_of(unknown_expiry.live_recommend("/index/getRoomPlayInfo", &[]).await).code,
+            error_of(
+                unknown_expiry
+                    .live_recommend("/index/getRoomPlayInfo", &[])
+                    .await
+            )
+            .code,
             "bilibili_app_live_path"
         );
     }
@@ -1296,8 +1297,14 @@ mod tests {
     fn live_recommend_body_codes_are_classified_without_claiming_invalidity() {
         for (body, expected) in [
             (r#"{"code":0,"data":{"recommend_room_list":[]}}"#, None),
-            (r#"{"code":-352,"message":"-352"}"#, Some("bilibili_app_auth_unavailable")),
-            (r#"{"code":-663,"message":"-663"}"#, Some("bilibili_app_auth_unavailable")),
+            (
+                r#"{"code":-352,"message":"-352"}"#,
+                Some("bilibili_app_auth_unavailable"),
+            ),
+            (
+                r#"{"code":-663,"message":"-663"}"#,
+                Some("bilibili_app_auth_unavailable"),
+            ),
             // 服务端明确拒绝登录态时仍归为需重新授权，与 feed 同一套分类。
             (r#"{"code":-101}"#, Some("bilibili_app_auth_required")),
             (r#"{"code":61000}"#, Some("bilibili_app_auth_required")),
