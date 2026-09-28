@@ -2108,7 +2108,7 @@ function VideoPlayerPageContent() {
 
   /**
    * 进入短视频流，并以当前这条为种子（上游据此换出一组从本片开始的新窗口）。
-   * bvid 缺失（PGC 分集）时退回裸 `/shorts/bilibili`，由后端用最近观看历史当种子。
+   * bvid 缺失（PGC 分集）时退回裸 `/shorts/bilibili`，首屏就是上游默认窗口。
    * 先把全屏收干净再走：短视频页是沉浸路由，留着元素全屏会盖在它上面。
    */
   const openShorts = useCallback(async () => {
@@ -2795,7 +2795,7 @@ function VideoPlayerPageContent() {
                     </div>
                     {/* 短视频入口：以当前这条为种子进入竖屏流（滑到哪就从哪继续）。
                         与 `⋮` 同级常驻，不藏进溢出菜单 —— 它是这一页的消费方式切换，
-                        不是低频工具。bvid 缺失（PGC）时后端退回最近观看历史。 */}
+                        不是低频工具。bvid 缺失（PGC）时退回首屏默认窗口。 */}
                     <MediaButton
                       type="button"
                       aria-label="以当前视频为种子进入短视频"

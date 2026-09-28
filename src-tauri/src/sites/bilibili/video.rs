@@ -78,15 +78,8 @@ const STORY_FEED_MORE_BATCHES: usize = 6;
 /// 接口。`None` 是首屏（省往返），`clamp` 的下界 1 保证「至少拉一批」—— 传 0 时
 /// 返回空列表会被上层当成取流失败。
 ///
-/// 批数**不**随「新条目够不够」浮动，尽管上游头部很黏（真机实测：登录态连续 6 次
-/// 首屏，60 条只有 43 条唯一，一条 6 轮全中，跨调用重复率 ≈28%）。直觉是「不够新就
-/// 多拉几批」，实测否掉了它：记忆攒满后每多拉一批只换来约 0.4 条新条目，首屏为凑
-/// 6 条新的打满 4 批要 1.65s，而固定两批约 0.8s。同一组实测里另有一次调用 4 批给了
-/// 20 条全新 —— 上游是**不定时整体轮换**，多打接口催不动它，只是把「此刻没有新
-/// 内容」按批数收费，而首屏多等一个往返是直接的流失。
-///
-/// 因此批数守住实测过的时延画像，跨调用记忆只改变**发哪些条目**与**排序**
-/// （见 [`StoryPick`]）。
+/// 因此批数守住实测过的时延画像，不为「凑够新条目」动态加批：上游是**不定时整体
+/// 轮换**，多打接口催不动它。
 fn story_batch_count(requested: Option<usize>) -> usize {
     requested
         .unwrap_or(STORY_FEED_BATCHES)
@@ -112,61 +105,43 @@ fn story_query_params(seed: Option<&str>) -> Vec<(&'static str, String)> {
     params
 }
 
-/// 逐批累积 story 条目，按「见过没见过」分两摊。
+/// 逐批累积 story 条目，按 `bvid` 去重。
 ///
-/// 上游无游标，批与批之间只能靠服务端时间轴推进，重叠不可避，因此跨批去重是硬需求
-/// （`taken`）。`seen` 是更外面一层的记忆：本进程这次运行发过的，加上最近看过的
-/// （见 `commands::video::video_get_story`）—— 那些条目**不是错误**，只是应该排到
-/// 后面去。
+/// 上游无游标，批与批之间只能靠服务端时间轴推进，重叠不可避，因此跨批去重是硬需求。
+/// 去重之外不再做「见过没见过」的分摊：账号个性化由 TV 授权（`access_key`）在上游
+/// 生效，本地不再记「最近发过什么」。
 struct StoryPick {
     /// 本次已收下的 bvid，跨批去重用。
     taken: HashSet<String>,
-    /// 没见过的（优先给）。
-    fresh: Vec<VideoItem>,
-    /// 见过的（只在挑不出新的时兜底）。
-    repeats: Vec<VideoItem>,
+    /// 去重后的条目，保持首次出现顺序。
+    items: Vec<VideoItem>,
 }
 
 impl StoryPick {
     fn new() -> Self {
         Self {
             taken: HashSet::new(),
-            fresh: Vec::new(),
-            repeats: Vec::new(),
+            items: Vec::new(),
         }
     }
 
-    /// 收下一批，按 `seen` 分摊。同一批内或跨批的重复 bvid 直接丢掉。
-    fn absorb(&mut self, page: VideoListPage, seen: &HashSet<String>) {
+    /// 收下一批。同一批内或跨批的重复 bvid 直接丢掉。
+    fn absorb(&mut self, page: VideoListPage) {
         for item in page.items {
-            if !self.taken.insert(item.bvid.clone()) {
-                continue;
-            }
-            if seen.contains(&item.bvid) {
-                self.repeats.push(item);
-            } else {
-                self.fresh.push(item);
+            if self.taken.insert(item.bvid.clone()) {
+                self.items.push(item);
             }
         }
     }
 
     /// 收工成一页。
     ///
-    /// 有新的就只给新的。一条新的都没有时**仍然**把重复条目发出去，但把 `has_more`
-    /// 落下：前端的跨页去重集合是按查询算的（重进这一页就清空），因此这些条目对
-    /// 当次浏览仍是有内容的一页；而「这批没有新的」正是原注释写的那个终止条件
-    /// 「新条目耗尽即停」。
-    ///
-    /// 这里不能回 `has_more: true`：前端拿到全是重复的一页会把它整页去掉，流长度不变
-    /// 而补货判定仍然成立，于是立刻再发一次 —— 每轮一次真实往返地空转。
+    /// `has_more` 保持「新条目耗尽即停」：去重后仍有内容说明轮换还在走，空则结束。
     fn finish(self) -> VideoListPage {
-        let has_more = !self.fresh.is_empty();
-        let items = if self.fresh.is_empty() {
-            self.repeats
-        } else {
-            self.fresh
-        };
-        VideoListPage { has_more, items }
+        VideoListPage {
+            has_more: !self.items.is_empty(),
+            items: self.items,
+        }
     }
 }
 
@@ -1361,21 +1336,15 @@ impl BilibiliSite {
     /// 策略，两个档位与夹取都住在 [`story_batch_count`]。让调用方传具体数字的话，那个
     /// 数字会在两个语言里各存一份，且传大了就绕过了夹取。
     ///
-    /// `seen` 是「最近已经给过或已经看过的 bvid」。它存在是因为上游**头部很黏**：
-    /// 不传的话同一条会在每次进页时反复出现（实测 6 轮首屏里有一条全中）。空集合
-    /// 就是「不过滤」，真网烟测试用的就是那个。
+    /// 账号个性化由 TV 授权（`access_key`）在上游生效，本地不再维护「最近发过什么」
+    /// 名单：这一层只会把条目挑出去，而授权改变的是上游给的内容本身。剩下的是跨批
+    /// 去重（见 [`StoryPick`]），那是无游标流的硬需求，与「见过没见过」无关。
     ///
     /// `seed` 是「以某条视频为起点继续刷」的种子（上游 `bvid` + `display_id`）。实测
     /// （2026-09，真机登录态）带 `bvid` + `display_id=1` 时：该稿件排在结果首位，且与
     /// 不带种子的结果集**零重叠**；只带种子不带 `display_id` 时种子不进首位，
     /// `display_id=2` 又是另一种语义。因此这里固定发 `display_id=1`，只把 `bvid` 当旋钮。
-    /// 种子解决的是「每次都从同一个黏性头部开始」，与 `seen`（去重）是两回事。
-    pub async fn video_story(
-        &self,
-        more: bool,
-        seen: &HashSet<String>,
-        seed: Option<&str>,
-    ) -> AppResult<VideoListPage> {
+    pub async fn video_story(&self, more: bool, seed: Option<&str>) -> AppResult<VideoListPage> {
         let batches = story_batch_count(more.then_some(STORY_FEED_MORE_BATCHES));
         let mut pick = StoryPick::new();
         let mut last_err = None;
@@ -1385,7 +1354,7 @@ impl BilibiliSite {
                 .await
                 .and_then(|text| parse_story(&text))
             {
-                Ok(page) => pick.absorb(page, seen),
+                Ok(page) => pick.absorb(page),
                 // 单批失败不否定整页：拉到一批就能继续消费。全批都败才报错。
                 Err(e) => last_err = Some(e),
             }
@@ -2377,10 +2346,9 @@ mod tests {
         // 串行取批零重复是实测结论，但上游无游标、不作任何保证，去重不能省。
         let batch = story_test_batch;
 
-        let empty_seen = HashSet::new();
         let mut pick = StoryPick::new();
-        pick.absorb(batch(&["a", "b"]), &empty_seen);
-        pick.absorb(batch(&["b", "c"]), &empty_seen);
+        pick.absorb(batch(&["a", "b"]));
+        pick.absorb(batch(&["b", "c"]));
         let combined = pick.finish();
         let bvids: Vec<&str> = combined
             .items
@@ -2391,30 +2359,8 @@ mod tests {
         assert!(combined.has_more);
 
         let mut nothing = StoryPick::new();
-        nothing.absorb(batch(&[]), &empty_seen);
+        nothing.absorb(batch(&[]));
         assert!(!nothing.finish().has_more, "新条目耗尽即停");
-    }
-
-    #[test]
-    fn story_pick_prefers_unseen_and_falls_back_to_repeats() {
-        let batch = story_test_batch;
-        let seen: HashSet<String> = ["a".to_string(), "b".to_string()].into_iter().collect();
-
-        // 见过的排掉，只给没见过的 —— 这正是「总是同一批」的修法。
-        let mut pick = StoryPick::new();
-        pick.absorb(batch(&["a", "b", "c"]), &seen);
-        let picked = pick.finish();
-        let fresh: Vec<&str> = picked.items.iter().map(|item| item.bvid.as_str()).collect();
-        assert_eq!(fresh, ["c"]);
-
-        // 整批都见过时不能给空页：`has_more` 就是「这批非空」，空了会被前端当成到底。
-        let mut all_seen = StoryPick::new();
-        all_seen.absorb(batch(&["a", "b"]), &seen);
-        let fallback = all_seen.finish();
-        assert_eq!(fallback.items.len(), 2, "兜底给重复条目而不是空列表");
-        // 但要落下 `has_more`：全是重复的一页会被前端整页去掉，流长度不变而补货判定
-        // 仍然成立，回 true 就会每轮一次真实往返地空转。
-        assert!(!fallback.has_more, "这批没有新的即为暂时到底");
     }
 
     #[test]
@@ -3200,7 +3146,7 @@ mod tests {
     async fn live_story_feed_smoke() {
         let site = BilibiliSite::new(reqwest::Client::new(), String::new());
         let page = site
-            .video_story(false, &HashSet::new(), None)
+            .video_story(false, None)
             .await
             .expect("匿名 story feed 应放行");
 
@@ -3230,7 +3176,7 @@ mod tests {
     async fn live_story_item_plays_through_existing_playurl() {
         let site = BilibiliSite::new(reqwest::Client::new(), String::new());
         let page = site
-            .video_story(false, &HashSet::new(), None)
+            .video_story(false, None)
             .await
             .expect("匿名 story feed 应放行");
         let item = page.items.first().expect("story feed 未产出条目");

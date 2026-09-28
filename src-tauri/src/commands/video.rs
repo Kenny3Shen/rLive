@@ -181,13 +181,6 @@ pub async fn video_get_popular(
         .await
 }
 
-/// 一次 story feed 请求排除多少条「最近看过的」。
-///
-/// 观看历史按作品去重且长期保留，全表拿来排除会越用越严（老条目其实早该重新可见，
-/// 上游轮换本身也会把它们换走）。只取最近这些条：够覆盖「刚看过又刷出来」，又不会
-/// 把几个月前看过的一直挡在外面。
-const STORY_EXCLUDE_RECENT_WATCHED: usize = 200;
-
 /// 短视频流（story feed）。
 ///
 /// 上游无游标：`page` 不传给上游，只是前端无限列表的页号，每次调用都拉下一批
@@ -197,20 +190,12 @@ const STORY_EXCLUDE_RECENT_WATCHED: usize = 200;
 /// 调用策略，两个档位与夹取都在 `sites/bilibili/video.rs`。让前端传具体数字的话，
 /// 那个数字会在两个语言里各存一份，而且前端改大就绕过了夹取。首屏不传即快路径。
 ///
-/// **排除「最近见过的」是这条命令的职责**，不是站点层的：站点层只会说话（调接口、
-/// 解析），记忆属于应用状态。两个来源合起来传下去：
-///
-/// 1. `state.story_feed_seen` —— 本进程这次运行发过的条目（进程内环形记忆）。
-///    上游头部很黏：实测同一账号连续 6 次首屏共 60 条里只有 43 条唯一，其中一条
-///    六轮全在。没有这层记忆时，每次重新进页都是一次新查询（前端 `staleTime: 0`），
-///    于是用户看到的就是「又是那几条」。
-/// 2. 最近看过的（`video_history`）—— 跨重启仍然有效，因此重开应用不会又从那几条
-///    看过的开始。只取最近 [`STORY_EXCLUDE_RECENT_WATCHED`] 条。
-///
 /// `seed` 是「以某条视频为起点继续刷」的种子（上游 `bvid` + `display_id=1`）。
 /// 实测它能绕开黏性头部：种子稿件排首位，且与不带种子的结果集零重叠。前端传**当前
-/// 正在看的那条**（滑到哪就从哪继续），首屏没得传时回退到最近观看历史里的第一条。
-/// 这与 `seen`（去重）互补：`seen` 只把老条目排到后面，不改内容池；`seed` 换的是窗口。
+/// 正在看的那条**（滑到哪就从哪继续），首屏还没条目可传时传 `null`。
+///
+/// 账号个性化由 TV 授权（`resolve_app_feed` 注入 `access_key`）提供，因此这条命令
+/// 不再自己记「最近发过什么」：推荐由上游按账号给，本地只做跨批去重。
 #[tauri::command]
 pub async fn video_get_story(
     state: State<'_, AppState>,
@@ -218,39 +203,14 @@ pub async fn video_get_story(
     seed_bvid: Option<String>,
 ) -> AppResult<VideoListPage> {
     let site = resolve_app_feed(&state).await?;
-    let pin_entry = !more.unwrap_or(false)
-        && seed_bvid
-            .as_deref()
-            .is_some_and(|seed| !seed.trim().is_empty());
-    let mut seen = state.story_feed_seen.snapshot();
-    // 数据库守卫必须在 await 之前放掉：它不是 Send，跨 await 持有会编译失败，
-    // 而且那把锁是全应用共用的。
-    let recent = {
-        let conn = state.conn()?;
-        crate::db::video_history::recent_bvids(&conn, "ugc", STORY_EXCLUDE_RECENT_WATCHED)?
-    };
-    // 首屏（前端还没条目可传）时用最近看过的第一条当种子，让「重进这一页」也从
-    // 一个跟上次不同的窗口开始，而不是又回到同一个黏性头部。
     let seed = seed_bvid
         .map(|bvid| bvid.trim().to_string())
-        .filter(|bvid| !bvid.is_empty())
-        .or_else(|| recent.first().cloned());
-    seen.extend(recent);
-    // 从 VOD 显式带入的首条不能被刚写入的观看历史过滤掉；补货仍按原规则去重。
-    if pin_entry && let Some(seed) = seed.as_ref() {
-        seen.remove(seed);
-    }
-    let page = site
-        .video_story(more.unwrap_or(false), &seen, seed.as_deref())
-        .await?;
-    // 发出去的就算见过 —— 包括兜底给的重复条目，否则下一次又会挑中它们。
-    state
-        .story_feed_seen
-        .record(page.items.iter().map(|item| item.bvid.clone()));
-    Ok(page)
+        .filter(|bvid| !bvid.is_empty());
+    site.video_story(more.unwrap_or(false), seed.as_deref())
+        .await
 }
 
-/// 作者 story 使用真实双向游标，不经过推荐流的历史排除与进程 seen。
+/// 作者 story 使用真实双向游标，不经过推荐流的本地去重。
 #[tauri::command]
 pub async fn video_get_uploader_story(
     state: State<'_, AppState>,

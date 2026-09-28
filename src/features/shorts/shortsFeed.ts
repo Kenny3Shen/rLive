@@ -22,13 +22,13 @@ export const DOUYIN_SHORTS_PATH = "/shorts/douyin";
  * 进入短视频流时的种子参数：以这条 `bvid` 为起点。
  *
  * 由播放页的「短视频」入口带上（见 `shortsPath`）。带种子时上游把该稿件排在首位
- * 并换出一组与黏性头部不重叠的窗口；不带则由后端回退到最近观看历史。
+ * 并换出一组与黏性头部不重叠的窗口；不带则首屏就是上游按账号给的默认窗口。
  */
 export const SHORTS_SEED_PARAM = "seed";
 
 /**
  * B 站推荐流链接。`seedBvid` 给定时以该稿件为起点，否则进入 `/shorts/bilibili`
- * （后端用最近观看历史当种子）。平台选择页始终使用 `SHORTS_PATH`。
+ * （首屏不带种子）。平台选择页始终使用 `SHORTS_PATH`。
  *
  * 只编码 bvid：`encodeURIComponent` 对 `BV` 串是恒等的，写上是为了不把
  * 「参数值来自别处」这条假设留成隐患。

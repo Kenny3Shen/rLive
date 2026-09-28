@@ -1,4 +1,4 @@
-//! UP 主 story 列表：真实双向 aid 游标与上游位置，不使用推荐流的 seen 记忆。
+//! UP 主 story 列表：真实双向 aid 游标与上游位置，不使用推荐流的本地去重。
 
 use serde_json::Value;
 use std::collections::HashSet;

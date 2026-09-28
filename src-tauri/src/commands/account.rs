@@ -258,7 +258,6 @@ pub fn account_bilibili_app_clear(state: State<'_, AppState>) -> AppResult<()> {
     bilibili_app::cancel_all()?;
     bilibili_app::clear(&tx)?;
     tx.commit().map_err(crate::db::schema::map_db_err)?;
-    state.story_feed_seen.clear();
     Ok(())
 }
 
@@ -350,7 +349,6 @@ pub async fn account_qr_login_poll(
                 let conn = state.conn()?;
                 bilibili_app::finish(&qr_key)?;
                 bilibili_app::save(&conn, &credential)?;
-                state.story_feed_seen.clear();
                 (
                     AccountQrLoginStatus::Success,
                     "App 授权已保存到本机，原有 Web Cookie 未改动",

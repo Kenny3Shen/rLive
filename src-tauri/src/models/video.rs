@@ -97,7 +97,7 @@ pub struct VideoUploaderStoryItem {
     pub index: u64,
 }
 
-/// 有真实双向游标的作者列表，不与推荐流的本地页号/seen 记忆混用。
+/// 有真实双向游标的作者列表，不与推荐流的本地页号/去重混用。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoUploaderStoryPage {
     pub items: Vec<VideoUploaderStoryItem>,
