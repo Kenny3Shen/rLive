@@ -86,7 +86,7 @@ async (page) => {
           skeleton: boxes(skeleton),
           card: boxes(card),
           relatedTop: related ? Math.round(related.getBoundingClientRect().top) : null,
-          // 骨架块的数量与形状：头像 + 名称 + 两条元信息 + 三项统计 + 简介开关。
+          // 骨架块的数量与形状：头像 + 名称 + 两条元信息 + 标题行 + 三项统计。
           blockCount: blocks.length,
           avatar: blocks[0]
             ? { w: Math.round(blocks[0].getBoundingClientRect().width), radius: getComputedStyle(blocks[0]).borderRadius }
@@ -111,11 +111,11 @@ async (page) => {
         measured.relatedTop !== null && measured.relatedTop >= measured.skeleton.y + measured.skeleton.h - 1,
         `${viewport.name}: 相关视频列表没有被 UP 主卡骨架推到下方（related=${measured.relatedTop}）`,
       );
-      // 3. 真卡实测 105px（390px 视口）/ 同样 105px（桌面侧栏）：骨架必须同高，
+      // 3. 真卡实测 123px（390px 视口）/ 同样 123px（桌面侧栏）：骨架必须同高，
       //    否则数据到达时下面的列表会跳。
       assert(
-        Math.abs(measured.skeleton.h - 105) <= 3,
-        `${viewport.name}: UP 主卡骨架高度 ${measured.skeleton.h} 与真卡（105）差得过多`,
+        Math.abs(measured.skeleton.h - 123) <= 3,
+        `${viewport.name}: UP 主卡骨架高度 ${measured.skeleton.h} 与真卡（123）差得过多`,
       );
       // 4. 头像 40px（真卡 `Avatar size="lg"` 与 `size-11` 同时存在时前者生效）且是圆形。
       assert(
@@ -126,7 +126,7 @@ async (page) => {
         measured.avatar.radius === "50%" || parseFloat(measured.avatar.radius) > 100,
         `${viewport.name}: 头像骨架不是圆形（radius=${measured.avatar.radius}）`,
       );
-      // 5. 块数与构图：头像 + 名称 + 2 条元信息 + 3 项统计 + 简介开关 = 8。
+      // 5. 块数与构图：头像 + 名称 + 2 条元信息 + 标题行 + 3 项统计 = 8。
       assert(
         measured.blockCount === 8,
         `${viewport.name}: 骨架块应为 8 块，实测 ${measured.blockCount}`,

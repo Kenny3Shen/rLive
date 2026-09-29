@@ -85,7 +85,8 @@ function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
  * 稿件详情未落定时的 UP 主信息卡骨架。
  *
  * 几何与真卡逐项对齐（`section` 的 `px-2.5 py-2`、卡壳的 `rounded-xl` + 同底同描边、
- * 40px 头像、名称行 `pr-16`、统计行 `mt-1.5`），数据到达时只有内容替换、不重新排布。
+ * 40px 头像、名称行 `pr-16`、标题行的 `mt-1.5` + 24px、统计行的 `mt-0.5` + 16px），
+ * 数据到达时只有内容替换、不重新排布。
  *
  * 必须和真卡一样画在 `RelatedPanel` 里：UP 主卡属于「相关视频」内容区而不是页签之外，
  * 所以首屏加载时它是列表的第一块 —— 从前只在 `archive` 到位后才渲染，移动端冷启动
@@ -113,14 +114,13 @@ function UpCardSkeleton() {
             </div>
           </div>
         </div>
-        {/* 统计行（播放/评论/发布时间）与简介开关同排，与真卡的 `mt-1.5` 同高。 */}
-        <div className="mt-1.5 flex min-w-0 items-center gap-1">
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <Skeleton className="h-4 w-16" />
-            <Skeleton className="h-4 w-14" />
-            <Skeleton className="h-4 w-28" />
-          </div>
-          <Skeleton className="size-6 shrink-0 rounded-md" />
+        {/* 标题行：真卡是 20px 一行标题，行高 24px（行盒 + 上下 2px）。 */}
+        <Skeleton className="mt-1.5 h-6 w-4/5" />
+        {/* 统计行（播放/评论/发布时间）紧跟标题，与真卡的 `mt-0.5` 同高。 */}
+        <div className="mt-0.5 flex items-center gap-x-3">
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-4 w-14" />
+          <Skeleton className="h-4 w-24" />
         </div>
       </div>
     </section>
@@ -702,6 +702,8 @@ export function VideoSidebar({
   };
 
   const archive = archiveQuery.data;
+  // 简介与 Tags 至少有一项时标题才是可展开的开关；两者都没有时标题只是标题。
+  const hasArchiveDetail = Boolean(archive?.desc || archive?.tags.length);
   const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
   // 弹幕页签仅在 UGC 且播放页传入弹幕数据时出现；选集/合集（parts）固定在最右。
   const showDanmakuTab = !isPgc && danmaku !== undefined;
@@ -809,7 +811,7 @@ export function VideoSidebar({
           >
             <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
               {/* 右侧 pr-16 是预留位（关注/更多之类的操作），只留在头像+名称行， */}
-              {/* 不影响下方播放/评论/发布时间与简介开关那一行的可用宽度。 */}
+              {/* 不影响下方标题行与统计行的可用宽度。 */}
               <div className="flex min-w-0 items-start gap-2.5 pr-16">
                 <button
                   type="button"
@@ -860,77 +862,93 @@ export function VideoSidebar({
                   </div>
                 </div>
               </div>
-              {/* 统计行与简介开关同排：侧栏（lg 320 / xl 340）下统计三项与图标开关的
-                  开关单行放下；flex-wrap 兜底字体缩放与超长数值（发布时间换行而非
-                  截断），发布时间组因此不加 border-l，避免换行后出现孤立竖线。 */}
-              <div className="mt-1.5 flex min-w-0 items-center gap-1">
-                <dl className="flex min-w-0 flex-1 flex-wrap items-center gap-y-0.5 text-xs leading-4">
-                  <div
-                    className="flex min-w-0 items-center gap-1"
-                    title={`播放：${formatOnline(archive.view)}`}
-                  >
-                    <dt className="sr-only">播放</dt>
-                    <Play aria-hidden className="size-3.5 shrink-0 text-accent" />
-                    <dd className="truncate font-semibold leading-4 tracking-normal tabular-nums">
-                      {formatOnline(archive.view)}
-                    </dd>
-                  </div>
-                  <div
-                    className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5"
-                    title={`评论：${formatOnline(archive.reply)}`}
-                  >
-                    <dt className="sr-only">评论</dt>
-                    {/*
-                      评论一律用圆气泡 `MessageCircle`，方形 `MessageSquare*` 留给弹幕。
-                      这两件事在本项目里到处并列出现（播放页侧栏、短视频底栏），
-                      靠形状区分比靠位置区分可靠。
-                    */}
-                    <MessageCircle
-                      aria-hidden
-                      className="size-3.5 shrink-0 text-muted-foreground"
-                    />
-                    <dd className="font-semibold leading-4 tracking-normal tabular-nums">
-                      {formatOnline(archive.reply)}
-                    </dd>
-                  </div>
-                  {archive.pubdate > 0 && (
-                    <div
-                      className="ml-2.5 flex min-w-0 items-center gap-1 text-muted-foreground"
-                      title="视频发布时间"
+              {/* 稿件标题一行，整行即简介/Tags 的展开-收起开关。
+
+                  开关从统计行右端搬到标题上。旧实现是独立的图标按钮，走 shadcn
+                  `Button` 的 `aria-expanded:bg-muted`：收起时透明、展开时亮一块灰底，
+                  同一个按钮两种样子，收起态「有背景」正是它；整行开关不画底色，两端
+                  一致。箭头跟在标题文字末尾（与短视频详情入口同一读法），短标题紧贴
+                  文字、长标题截断后仍指得到，点击整行都能切换而不必瞄准小箭头。
+                  没有简介也没有 Tags 时标题退化成不可点的普通一行（无从展开）。 */}
+              {hasArchiveDetail ? (
+                <button
+                  type="button"
+                  aria-expanded={descriptionExpanded}
+                  aria-controls="video-description"
+                  onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+                  className="mt-1.5 flex min-h-6 w-full min-w-0 items-center text-left transition-opacity hover:opacity-80"
+                >
+                  {/* 内层 `w-fit` 让箭头跟着内容宽：短标题的箭头紧贴文字，
+                      而不是隔着一大片空白飘在右边界。 */}
+                  <span className="flex w-fit max-w-full min-w-0 items-center gap-1">
+                    <span
+                      className="min-w-0 truncate text-sm leading-5 font-medium tracking-tight"
+                      title={archive.title}
                     >
-                      <dt className="sr-only">发布时间</dt>
-                      <CalendarDays aria-hidden className="size-3.5 shrink-0" />
-                      <dd className="truncate leading-4 tabular-nums">
-                        {formatDateTime(archive.pubdate)}
-                      </dd>
-                    </div>
-                  )}
-                </dl>
-                {(archive.desc || archive.tags.length > 0) && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="shrink-0 text-muted-foreground"
-                    aria-expanded={descriptionExpanded}
-                    aria-controls="video-description"
-                    aria-label={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
-                    title={descriptionExpanded ? "收起视频简介" : "展开视频简介"}
-                    onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-                  >
+                      {archive.title}
+                    </span>
                     <ChevronDown
                       aria-hidden
                       className={cn(
-                        "size-3.5 transition-transform",
+                        "size-3.5 shrink-0 text-muted-foreground transition-transform",
                         descriptionExpanded && "rotate-180",
                       )}
                     />
-                  </Button>
+                  </span>
+                </button>
+              ) : (
+                <p
+                  className="mt-1.5 flex min-h-6 items-center truncate text-sm leading-5 font-medium tracking-tight"
+                  title={archive.title}
+                >
+                  {archive.title}
+                </p>
+              )}
+              {/* 统计行（播放/评论/发布时间）紧跟标题下方：三项同一档间距、不插竖线，
+                  数值不加粗也不用强调色 —— 事实数字读成安静的一行。
+
+                  字号主动退到 11px（图标同步 12px）就是为了「日期永远留在这一行」：
+                  侧栏 320/340 下典型数值加完整日期时间仍有富余；再去掉右端那个
+                  24px（粗指针 44px）的图标开关，行高也不再被它撑开。因此这里不换行：
+                  极端字号缩放下宁可让三项各自收窄省略，也不让日期另起一行。
+                  收缩权重按重要性分配：播放与评论先让位（`shrink-[3]`，省成「12.3…」
+                  仍读得出量级），日期最后才动（`shrink-[0.5]`），完整时间始终可见。 */}
+              <dl className="mt-0.5 flex min-w-0 items-center gap-x-3 overflow-hidden text-[11px] leading-4 text-muted-foreground">
+                <div
+                  className="flex min-w-0 shrink-[3] items-center gap-1"
+                  title={`播放：${formatOnline(archive.view)}`}
+                >
+                  <dt className="sr-only">播放</dt>
+                  <Play aria-hidden className="size-3 shrink-0" />
+                  <dd className="truncate tabular-nums">{formatOnline(archive.view)}</dd>
+                </div>
+                <div
+                  className="flex min-w-0 shrink-[3] items-center gap-1"
+                  title={`评论：${formatOnline(archive.reply)}`}
+                >
+                  <dt className="sr-only">评论</dt>
+                  {/*
+                    评论一律用圆气泡 `MessageCircle`，方形 `MessageSquare*` 留给弹幕。
+                    这两件事在本项目里到处并列出现（播放页侧栏、短视频底栏），
+                    靠形状区分比靠位置区分可靠。
+                  */}
+                  <MessageCircle aria-hidden className="size-3 shrink-0" />
+                  <dd className="truncate tabular-nums">{formatOnline(archive.reply)}</dd>
+                </div>
+                {archive.pubdate > 0 && (
+                  <div
+                    className="flex min-w-0 shrink-[0.5] items-center gap-1"
+                    title="视频发布时间"
+                  >
+                    <dt className="sr-only">发布时间</dt>
+                    <CalendarDays aria-hidden className="size-3 shrink-0" />
+                    <dd className="truncate tabular-nums">{formatDateTime(archive.pubdate)}</dd>
+                  </div>
                 )}
-              </div>
+              </dl>
               {/* 简介默认不展开：用 hidden 而非条件渲染，让 aria-controls 在收起态也能 */}
               {/* 解析到目标；Tags 跟在正文末尾，点击进入对应的视频搜索结果。 */}
-              {(archive.desc || archive.tags.length > 0) && (
+              {hasArchiveDetail && (
                 <div id="video-description" hidden={!descriptionExpanded} className="mt-2">
                   {archive.desc && (
                     <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">

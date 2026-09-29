@@ -2933,7 +2933,7 @@ function VideoPlayerPageContent() {
             aria-label="视频详情"
             className={cn(
               // 与直播/IPTV 播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度
-              // （320/340，UP 信息卡的「播放/评论/发布时间 + 简介开关」典型值
+              // （320/340，UP 信息卡的「标题 + 播放/评论/发布时间」典型值
               // 单行放下，超长数值退到第二行而非截断），窄屏则列在播放器下方。
               "relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar max-md:pb-[env(safe-area-inset-bottom)]",
               "lg:w-[320px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[340px] lg:pb-0",
