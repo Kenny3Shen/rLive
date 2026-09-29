@@ -141,10 +141,10 @@ bun run tauri -- android build --debug --target x86_64
 adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
 ```
 
-headless 启动必须让进程彻底脱离 WSL，用 PowerShell 起：
+headless 启动必须让进程彻底脱离 WSL，用 pwsh 7 起：
 
 ```bash
-cd /mnt/c && powershell.exe -NoProfile -Command "Start-Process -FilePath 'D:\dev\android-sdk\emulator\emulator.exe' -ArgumentList @('-avd','rlive_win','-no-window','-no-audio','-no-boot-anim','-gpu','swiftshader_indirect') -RedirectStandardOutput 'D:\Temp\emu.log' -RedirectStandardError 'D:\Temp\emu.err' -WindowStyle Hidden"
+cd /mnt/c && pwsh.exe -NoProfile -Command "Start-Process -FilePath 'D:\dev\android-sdk\emulator\emulator.exe' -ArgumentList @('-avd','rlive_win','-no-window','-no-audio','-no-boot-anim','-gpu','swiftshader_indirect') -RedirectStandardOutput 'D:\Temp\emu.log' -RedirectStandardError 'D:\Temp\emu.err' -WindowStyle Hidden"
 ```
 
 `setsid nohup ./emulator.exe ... &` 起的进程会跟着 WSL 侧调用方（终端或 agent 会话）一起被回收 —— 实测两次在会话结束时模拟器无声消失，日志停在半行。`Start-Process` 起的进程挂在 Windows 侧，跨会话存活。

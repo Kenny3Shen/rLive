@@ -9,15 +9,19 @@
 # - 首次构建需要网络（下载已固定版本的共享 FFmpeg SDK）
 # - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x 运行时，以及兼容的 NVIDIA 驱动
 #
-# 用法：
-# cd <rLive 项目目录>
-# .\scripts\build-windows.ps1
+# 用法（需要 PowerShell 7，脚本会拒绝在 Windows PowerShell 5.1 上运行）：
+# pwsh -File .\scripts\build-windows.ps1
+
+#Requires -Version 7.0
 
 param(
     [string]$ProjectRoot = (Get-Location).Path
 )
 
 $ErrorActionPreference = "Stop"
+# 保持「先跑命令再查 $LASTEXITCODE」的写法：置 false 后原生命令写入 stderr
+# 不再抛异常，cargo/bun 的正常进度输出不会中断构建。
+$PSNativeCommandUseErrorActionPreference = $false
 
 function Write-Step([string]$Msg) {
     Write-Host ""
@@ -85,11 +89,8 @@ if ($rustc) {
     # rustup 首次安装时会把进度输出到 stderr。这里只把它当作诊断查询：
     # 版本查询的偶发失败不应在 cargo 有机会运行之前，
     # 就中断真正的 Tauri 构建。
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
     $rustcInfo = & rustc -vV 2>&1
     $rustcCode = $LASTEXITCODE
-    $ErrorActionPreference = $prevEap
     if ($rustcCode -eq 0) {
         $rustcHost = $rustcInfo | Select-String "^host:" | Select-Object -First 1
         if ($rustcHost) {
@@ -167,29 +168,19 @@ $tauriArgs = "build --no-bundle"
 
 if ($bunCmd) {
     Write-Step "bun install"
-    # Bun 会把正常的依赖解析进度写入 stderr。在本脚本默认的 Stop 策略下，
-    # PowerShell 会把这些输出变成终止性的 NativeCommandError，
-    # 让 Bun 无法跑完。
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
     & bun install
     $installCode = $LASTEXITCODE
-    $ErrorActionPreference = $prevEap
     if ($installCode -ne 0) { throw "bun install failed: $installCode" }
 
-    # 6
-    # 快照原生可用性，使延迟到来的桥失败无法改变滑动路由。
+    # 优先走 package.json 的脚本，避免 `bun x tauri` 定位不到 CLI。
     $buildInner = "bun run tauri -- $tauriArgs"
     Write-Host "Using: $buildInner"
 } else {
     Write-Step "npm install (bun not found)"
     $npm = Get-Command npm -ErrorAction SilentlyContinue
     if (-not $npm) { throw "Neither bun nor npm found on PATH." }
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
     & npm install --no-fund --no-audit
     $installCode = $LASTEXITCODE
-    $ErrorActionPreference = $prevEap
     if ($installCode -ne 0) { throw "npm install failed: $installCode" }
     $buildInner = "npx tauri $tauriArgs"
     Write-Host "Using: $buildInner"
@@ -198,17 +189,11 @@ if ($bunCmd) {
 Write-Step "tauri build (via vcvars64)"
 $cmd = "call `"$vcvars`" && cd /d `"$ProjectRoot`" && set CARGO_HOME=$env:CARGO_HOME&& set RUSTUP_HOME=$env:RUSTUP_HOME&& set TEMP=$env:TEMP&& set TMP=$env:TMP&& $buildInner"
 Write-Host $cmd
-# bun/cargo 把进度写入 stderr；在 $ErrorActionPreference=Stop 下这会变成
-# 终止性的 NativeCommandError，在构建完成前中止流程。
-$prevEap = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-# Tauri、Bun 和 Cargo 都用 stderr 输出正常进度。让 cmd.exe 在 PowerShell
-# 看到之前先合并两个流；在 PowerShell 侧写 `2>&1` 在 Windows PowerShell 5
-# 中仍会产生 NativeCommandError 记录。
+# Tauri、Bun 和 Cargo 都用 stderr 输出正常进度。让 cmd.exe 先合并两个流，
+# 保证日志里进度与错误的先后顺序不乱，构建失败时也只需看一条流。
 $cmdWithMergedStderr = "$cmd 2>&1"
 cmd.exe /c $cmdWithMergedStderr
 $buildCode = $LASTEXITCODE
-$ErrorActionPreference = $prevEap
 if ($buildCode -ne 0) { throw "tauri build failed: $buildCode" }
 
 $exe = Join-Path $ProjectRoot "src-tauri\target\release\rlive.exe"

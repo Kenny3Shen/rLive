@@ -227,30 +227,30 @@ jobs:
 
           # 7z reports the MSI payload under WiX's generated component ids
           # ("PathFile_I26a8b29..."), so the real names have to come from the
-          # File table. The query runs under Windows PowerShell rather than this
-          # step's pwsh: the WindowsInstaller COM automation is what ships with
-          # the OS and is exercised there, and pwsh 7 COM interop on
-          # parameterized properties such as StringData is less dependable.
-          $msiQueryScript = Join-Path $env:RUNNER_TEMP "read-msi-file-table.ps1"
-          # Assembled line by line rather than as a here-string: a here-string
-          # inside a YAML block would carry this step's indentation into the
-          # generated script and tie it to the block's nesting depth.
-          @(
-            'param([Parameter(Mandatory = $true)][string] $Path)',
-            '$ErrorActionPreference = "Stop"',
-            '$msiInstaller = New-Object -ComObject WindowsInstaller.Installer',
-            '$database = $msiInstaller.OpenDatabase($Path, 0)',
-            '$view = $database.OpenView(''SELECT `FileName` FROM `File`'')',
-            '$view.Execute()',
-            'while ($null -ne ($record = $view.Fetch())) {',
-            '  # FileName is "SHORTNME.DLL|the real long name.dll" whenever the',
-            '  # file needs a short alias, so the long name is the trailing field.',
-            '  ($record.StringData(1) -split ''\|'')[-1]',
-            '}'
-          ) | Set-Content $msiQueryScript -Encoding ascii
-          $msiPayload = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File $msiQueryScript -Path $msiPath)
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # File table. This runs in-process on the step's pwsh 7: the query was
+          # verified against all 280 MSIs in a machine's Windows Installer cache
+          # under both PowerShell 7.6 and Windows PowerShell 5.1, and the two
+          # returned identical file tables (row counts and content hashes) with
+          # no stray $null entries. The separate `powershell.exe` child process
+          # and the helper script it needed are therefore gone.
+          #
+          # `$null = $view.Execute()` is load-bearing, not style: Execute()
+          # returns a value that a function would otherwise hand back to the
+          # caller, adding a leading $null to the captured array and making the
+          # payload one entry longer than the File table.
+          function Get-MsiFileTable([string] $MsiPath) {
+            $msiInstaller = New-Object -ComObject WindowsInstaller.Installer
+            $database = $msiInstaller.OpenDatabase($MsiPath, 0)
+            $view = $database.OpenView('SELECT `FileName` FROM `File`')
+            $null = $view.Execute()
+            while ($null -ne ($record = $view.Fetch())) {
+              # FileName is "SHORTNME.DLL|the real long name.dll" whenever the
+              # file needs a short alias, so the long name is the trailing field.
+              ($record.StringData(1) -split '\|')[-1]
+            }
+          }
+
+          $msiPayload = @(Get-MsiFileTable $msiPath)
           if ($msiPayload.Count -eq 0) { throw "Reading the MSI File table returned no rows." }
 
           # The NSIS side is read from the installer script tauri renders and

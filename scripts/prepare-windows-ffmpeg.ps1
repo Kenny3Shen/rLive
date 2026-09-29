@@ -17,6 +17,10 @@
 # 视频轨没有画面尺寸，缺少音频解码器时音频轨没有采样率，
 # `avformat_write_header` 会以 `EINVAL` 拒绝，用户看到
 # 「写入容器头失败: Invalid argument」。详细机理见 prepare-linux-ffmpeg.sh 顶部注释。
+#
+# 需要 PowerShell 7；脚本会拒绝在 Windows PowerShell 5.1 上运行。
+
+#Requires -Version 7.0
 
 param(
     [string]$ProjectRoot = (Get-Location).Path,
@@ -24,6 +28,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# 保持「先跑命令再查 $LASTEXITCODE」的写法：置 false 后原生命令写入 stderr
+# 不再抛异常，pacman/make/cygpath 的正常进度输出不会中断构建。
+$PSNativeCommandUseErrorActionPreference = $false
 $ProgressPreference = "SilentlyContinue"
 $FfmpegVersion = "9.0.1"
 $FfmpegArchiveName = "ffmpeg-$FfmpegVersion.tar.xz"
@@ -87,11 +94,8 @@ function Invoke-NativeCommand(
     [string[]]$Arguments,
     [string]$FailureMessage
 ) {
-    $previousPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
     & $FilePath @Arguments
     $exitCode = $LASTEXITCODE
-    $ErrorActionPreference = $previousPreference
     if ($exitCode -ne 0) {
         throw "$FailureMessage (exit $exitCode)"
     }
@@ -269,7 +273,7 @@ function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureM
         $normalized += "`n"
     }
     # 用 WriteAllText 而不是 Set-Content：后者会自行追加一个换行，
-    # 在 Windows PowerShell 上会重新引入 CRLF。
+    # 而 bash 会把那行空内容当成一条命令。
     [IO.File]::WriteAllText($scriptPath, $normalized, [Text.UTF8Encoding]::new($false))
     $scriptPosix = ConvertTo-Msys2Path $Msys2Root $scriptPath
 
@@ -281,13 +285,9 @@ function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureM
     # 这里设置的 PATH 找到，否则会以 "command not found" 失败。
     $previousMsystem = $env:MSYSTEM
     $previousChere = $env:CHERE_INVOKING
-    # `Stop` 会把 MSYS2 输出到 stderr 的普通进度信息变成终止性的
-    # NativeCommandError，让构建无法完成。
-    $previousPreference = $ErrorActionPreference
     try {
         $env:MSYSTEM = "MINGW64"
         $env:CHERE_INVOKING = "1"
-        $ErrorActionPreference = "Continue"
         # 使用 Out-Host 而不是直接调用：PowerShell 函数会返回写入成功流的所有内容，
         # 否则构建的 stdout 会被收集进调用方的返回值。Get-ManagedFfmpegSdk 曾把
         # 整个 pacman 与 make 的输出连同 SDK 路径一起返回，
@@ -295,7 +295,6 @@ function Invoke-Msys2Bash([string]$Msys2Root, [string]$Script, [string]$FailureM
         & $bash --noprofile --norc $scriptPosix | Out-Host
         $exitCode = $LASTEXITCODE
     } finally {
-        $ErrorActionPreference = $previousPreference
         $env:MSYSTEM = $previousMsystem
         $env:CHERE_INVOKING = $previousChere
         Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
@@ -328,14 +327,11 @@ function Install-Msys2BuildTools([string]$Msys2Root) {
         'exit "$missing"'
     $bash = Join-Path $Msys2Root "usr\bin\bash.exe"
     $previousMsystem = $env:MSYSTEM
-    $previousPreference = $ErrorActionPreference
     try {
         $env:MSYSTEM = "MINGW64"
-        $ErrorActionPreference = "Continue"
         & $bash --noprofile --norc -c $probe | Out-Null
         $probeExit = $LASTEXITCODE
     } finally {
-        $ErrorActionPreference = $previousPreference
         $env:MSYSTEM = $previousMsystem
     }
     if ($probeExit -eq 0) {
@@ -457,9 +453,8 @@ make install
         }
 
         # 随 DLL 一起由安装包分发的声明文件。上游 tarball 没有 README.txt，
-        # 所以这里记录该 SDK 的实际构成。其内容是 ASCII 并按 ASCII 写出：
-        # Set-Content -Encoding utf8 在 Windows PowerShell 5.1 上会写 BOM，
-        # 而发布流程使用的 pwsh 7 不会，且该文件会被再分发。
+        # 所以这里记录该 SDK 的实际构成。内容为 ASCII 并按 ASCII 写出，
+        # 避免给再分发的文件带上 BOM。
         Copy-Item (Join-Path $buildDirectory "ffmpeg-$FfmpegVersion\COPYING.LGPLv2.1") `
             (Join-Path $stageRoot "LICENSE") -Force
         @"

@@ -4,6 +4,7 @@
 
 - 沟通、交付和新增文档使用中文；标识符、命令、路径、库名、协议字段保留英文。
 - 仅编辑 `/home/shenss/python/rLive`；`/mnt/d/dev/rLive` 只作 Windows 镜像。
+- Windows 侧脚本统一用 PowerShell 7（`pwsh`，脚本内 `#Requires -Version 7.0`），不再兼容 Windows PowerShell 5.1。
 - 代码修改后运行最聚焦的检查（如`bun run check` 、`bun test`、`cargo test`、`cargo check`等）。
 - 检查通过后、交付前运行 `bash scripts/sync-to-windows.sh`，只读任务不需同步。
 - 交付时说明检查、同步结果及已知限制。
@@ -38,7 +39,7 @@
 - 生产 React 只有 minified 错误码，组件栈必须用 dev 构建（`bun run tauri dev` / `android dev`），`vite build --mode development` 不产出 dev React。
 - 视频画面走硬件层，CDP 截图拍不到，视觉证据用 `adb exec-out screencap -p > /tmp/x.png`。
 - Windows dev 会话的 vite 占 1420 且与 WSL 共享 loopback，与 WSL 的 `bun run dev` / `tauri android dev` 互斥。
-- 模拟器用 Windows emulator（`D:\dev\android-sdk`，AVD `rlive_win`）；带窗口可从 WSL 启动，headless 必须用 PowerShell `Start-Process`，否则随 WSL 会话被回收。多设备/多模拟器时显式传 `-s`。
+- 模拟器用 Windows emulator（`D:\dev\android-sdk`，AVD `rlive_win`）；带窗口可从 WSL 启动，headless 必须用 pwsh 7 `Start-Process`，否则随 WSL 会话被回收。多设备/多模拟器时显式传 `-s`。
 
 完整步骤、探针代码与排错清单：`docs/zh/开发指南.md`「桌面端实机调试」、`docs/zh/Android开发-Windows.md`「调试」。
 
