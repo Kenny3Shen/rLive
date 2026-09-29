@@ -77,6 +77,9 @@ export function UploaderDrawer({
     isFetchNextPageError,
   });
 
+  // 投稿抽屉**不**应用 UP 主屏蔽名单：这个抽屉一次只装一位 UP 主（当前稿件的
+  // 作者），过滤只会得到两种结果 —— 要么原样，要么一个谎称「暂无投稿视频」的空列表。
+  // 屏蔽是「别再推给我」，而点开某人的抽屉是明确要看他的投稿。
   const allItems = dedupeVideoItems(data?.pages.flatMap((page) => page.items) ?? []);
   // 点击时刻的列表快照即播放列表（投稿列表连播）。
   const playlistItems = allItems.map(playlistItemFromVideoItem);

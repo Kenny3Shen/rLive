@@ -28,6 +28,7 @@ async (page) => {
     const { h, host } = harness;
     const base = {
       bvid: "", aid: "1", cid: 1, title: "统计角标", cover: "", author: "作者", author_face: null,
+      author_mid: "42",
       duration: 3723, view: 123456, danmaku: 4567, pubdate: 1735689600, rcmd_reason: null,
     };
     // 封面上承载事实数字的元素：时长、以及含播放/弹幕的那一个统计容器。

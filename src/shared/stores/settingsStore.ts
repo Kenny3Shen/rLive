@@ -387,6 +387,35 @@ export function normalizeDanmakuBlockedUsers(users: readonly string[]): string[]
   return normalized.slice(Math.max(0, normalized.length - DANMAKU_BLOCKED_USERS_MAX));
 }
 
+/** UP 主屏蔽名单的容量上限；到达后淘汰最早的条目。 */
+export const VIDEO_BLOCKED_UPLOADERS_MAX = 500;
+
+/**
+ * 手输 UP 主 UID 的最大长度。B 站 mid 实测 9 位以内，这里给到 20 位：
+ * 长度上限是为了挡住误粘贴的长文本，不是对上游 ID 形状的断言（换成别的标识
+ * 体系时不该因为这个常量而写不进去）。从卡片屏蔽的条目不受它限制。
+ */
+export const VIDEO_BLOCKED_UPLOADER_MAX_LENGTH = 20;
+
+/**
+ * UP 主屏蔽名单按 UID（`owner.mid`）精确匹配：昵称会重名、会被改，而 UID 是上游
+ * 稳定的作者标识，列表条目大多带它。去空白、去空项、去重并按容量上限淘汰最早的
+ * 条目；缺失 UID 的条目在上游侧不参与屏蔽（见 `filterBlockedUploaders`），
+ * 因此这里不做任何按名字回退的猜测。
+ */
+export function normalizeVideoBlockedUploaders(uploaders: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const rawUploader of uploaders) {
+    if (typeof rawUploader !== "string") continue;
+    const uploader = rawUploader.trim();
+    if (!uploader || seen.has(uploader)) continue;
+    seen.add(uploader);
+    normalized.push(uploader);
+  }
+  return normalized.slice(Math.max(0, normalized.length - VIDEO_BLOCKED_UPLOADERS_MAX));
+}
+
 export const DANMAKU_MERGE_WINDOW_SECONDS_MIN = 0;
 export const DANMAKU_MERGE_WINDOW_SECONDS_MAX = 30;
 export const DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT = 10;
@@ -431,6 +460,8 @@ type SettingsState = {
   playbackSoftSwitchEnabled: boolean;
   videoRecommendApi: VideoRecommendApi;
   videoNextEpisodePreload: boolean;
+  /** 按 UID 屏蔽的 UP 主；VOD 浏览列表与竖屏流共用，播放页本身不受影响。 */
+  videoBlockedUploaders: string[];
   /** 仅用于隔离授权变更前后的推荐缓存，不包含凭据。 */
   bilibiliAppAuthRevision: number;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
@@ -481,6 +512,8 @@ type SettingsState = {
   setVideoRecommendApi: (api: VideoRecommendApi) => void;
   bumpBilibiliAppAuthRevision: () => void;
   setVideoNextEpisodePreload: (enabled: boolean) => void;
+  /** 屏蔽一个 UP 主；已在名单中时为无操作。 */
+  blockVideoUploader: (mid: string) => void;
   setRoomCardPreviewEnabled: (enabled: boolean) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
   /** 屏蔽一个用户；已在列表中时为无操作。 */
@@ -533,6 +566,7 @@ const defaultSettings: AppSettings = {
   playback_soft_switch_enabled: true,
   video_recommend_api: VIDEO_RECOMMEND_API_DEFAULT,
   video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
+  video_blocked_uploaders: [],
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   dynamic_background_enabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
   danmaku_send_enabled: false,
@@ -578,6 +612,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     video_recommend_api: state.videoRecommendApi,
     video_next_episode_preload: state.videoNextEpisodePreload,
+    video_blocked_uploaders: state.videoBlockedUploaders,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,
@@ -699,6 +734,7 @@ export const useSettingsStore = create<SettingsState>()(
       videoRecommendApi: VIDEO_RECOMMEND_API_DEFAULT,
       bilibiliAppAuthRevision: 0,
       videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
+      videoBlockedUploaders: [],
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
       dynamicBackgroundEnabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
       danmakuSendEnabled: false,
@@ -750,6 +786,15 @@ export const useSettingsStore = create<SettingsState>()(
         );
         set({ hiddenHomeEntryIds });
         void get().persistToBackend({ hidden_home_entry_ids: hiddenHomeEntryIds });
+      },
+      blockVideoUploader: (mid) => {
+        const uploader = mid.trim();
+        if (!uploader) return;
+        const current = get().videoBlockedUploaders;
+        if (current.includes(uploader)) return;
+        const videoBlockedUploaders = normalizeVideoBlockedUploaders([...current, uploader]);
+        set({ videoBlockedUploaders });
+        void get().persistToBackend({ video_blocked_uploaders: videoBlockedUploaders });
       },
       blockDanmakuUser: (user) => {
         const name = user.trim();
@@ -930,6 +975,9 @@ export const useSettingsStore = create<SettingsState>()(
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
           videoRecommendApi: parseVideoRecommendApi(settings.video_recommend_api),
           videoNextEpisodePreload: settings.video_next_episode_preload === true,
+          videoBlockedUploaders: normalizeVideoBlockedUploaders(
+            settings.video_blocked_uploaders,
+          ),
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
           dynamicBackgroundEnabled: settings.dynamic_background_enabled,
           danmakuSendEnabled: settings.danmaku_send_enabled,

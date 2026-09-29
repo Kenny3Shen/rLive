@@ -310,8 +310,18 @@ export const SHORTS_TOP_CONTROLS_CLASS =
  */
 type ShortsFeedPage = { items: readonly VideoItem[] };
 
-/** 追加时只去重新页；刷新、替换或截断页序列时重建，旧视图数组不会被原位修改。 */
-export function createShortsFeedMerger() {
+/**
+ * 追加时只去重新页；刷新、替换或截断页序列时重建，旧视图数组不会被原位修改。
+ *
+ * `isBlocked` 是 UP 主屏蔽名单的判定，**在合并这一步**过滤而不是在渲染前：
+ * 补货条件是「当前下标离尾部还剩几条」（`shortsShouldFetchMore`），若被屏蔽的
+ * 条目留在视图数组里，它们会一直占着下标、预取窗口永远凑不满，竖屏会卡在
+ * 「滑到末尾却没有下一条」。在合并处丢掉则下标与预取窗口照旧。
+ *
+ * 判定的身份是**回调**而不是 `Set`：名单可能在流已经加载之后才变（用户刚在
+ * 别的表面屏蔽了某人），调用方每次渲染传入的闭包必须是最新的。
+ */
+export function createShortsFeedMerger(isBlocked?: (item: VideoItem) => boolean) {
   let previous: readonly ShortsFeedPage[] = [];
   let seen = new Set<string>();
   let merged: VideoItem[] = [];
@@ -327,6 +337,7 @@ export function createShortsFeedMerger() {
       for (const item of pages[index]!.items) {
         if (!item.bvid || !item.cid || item.cid <= 0 || seen.has(item.bvid)) continue;
         seen.add(item.bvid);
+        if (isBlocked?.(item)) continue;
         added.push(item);
       }
     }

@@ -11,6 +11,7 @@ import {
   MessageSquareText,
   RefreshCw,
   ScrollText,
+  UserRoundX,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -53,6 +54,8 @@ import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useCoarsePointer } from "@/shared/hooks/useCoarsePointer";
 import { ANDROID_BACK_EVENT, DISMISSIBLE_POPUP_SELECTOR, hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
+import { notify } from "@/components/ui/toast";
+import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ShortsSeekBar } from "./ShortsSeekBar";
 import { ShortsSeekBridge, ShortsSeekPlayer } from "./shortsSeekPlayer";
 import { ShortsPoster, ShortsStage } from "./ShortsStage";
@@ -936,6 +939,11 @@ function ShortsDrawerContent({
  * 不会被点开详情，换片时预取等于给每一条都白付一次稿件请求。
  */
 function ShortsDetailBody({ item, open }: { item: VideoItemForDetail; open: boolean }) {
+  const uploaderMid = item.author_mid?.trim() ?? "";
+  function blockUploader() {
+    useSettingsStore.getState().blockVideoUploader(uploaderMid);
+    notify.success(`已屏蔽 ${item.author || "该 UP 主"}`, "其视频不再出现在浏览列表与竖屏流中。");
+  }
   const archiveQuery = useQuery({
     queryKey: ["shorts_archive", item.bvid],
     enabled: open && item.bvid !== "",
@@ -976,6 +984,20 @@ function ShortsDetailBody({ item, open }: { item: VideoItemForDetail; open: bool
             </p>
           )}
         </div>
+        {/* 竖屏没有右键与长按抽屉（那两处都在浏览卡片上），屏蔽入口放在详情抽屉里。
+            与卡片同一口径：按 UID 匹配，条目没有 UID 时不显示这个按钮。 */}
+        {uploaderMid !== "" && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-auto shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => blockUploader()}
+          >
+            <UserRoundX data-icon="inline-start" aria-hidden />
+            屏蔽
+          </Button>
+        )}
       </div>
 
       {archiveQuery.isPending && open && (
@@ -1011,6 +1033,8 @@ type VideoItemForDetail = {
   bvid: string;
   title: string;
   author: string;
+  /** 屏蔽 UP 主按它匹配；缺失时详情抽屉不显示屏蔽入口。 */
+  author_mid?: string | null;
   author_face: string | null;
   view: number;
   danmaku: number;

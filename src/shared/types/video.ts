@@ -28,7 +28,10 @@ export type VideoItem = {
   title: string;
   cover: string;
   author: string;
-  /** UP 主 UID；老缓存或上游缺失时为空。 */
+  /**
+   * UP 主 UID。上游没给时为 `null`（老缓存或未下发），**不是**空串：
+   * 屏蔽 UP 主按这个值精确匹配，缺失时前端不屏蔽，宁可少屏蔽不可错屏蔽。
+   */
   author_mid?: string | null;
   /** UP 主头像（已过上游缩图参数）；上游未给时为 null。 */
   author_face: string | null;

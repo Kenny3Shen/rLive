@@ -51,6 +51,8 @@ import {
 } from "./videoRoute";
 import { useVideoTabScope } from "./videoTabScope";
 import { nextRecommendPage } from "./videoFeed";
+import { filterBlockedUploaders } from "./videoUploaderBlock";
+import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
 
 /** 分区列表未就绪时的稳定空值，避免每次渲染换一个数组引用。 */
 const EMPTY_ZONES: readonly VideoZone[] = [];
@@ -112,6 +114,9 @@ export function VideoPage() {
   const videoRecommendApi = useSettingsStore((state) => state.videoRecommendApi);
   // 本机是否有 TV 授权由后端决定；这里只用授权变更计数隔离新旧账号的推荐缓存。
   const appAuthRevision = useSettingsStore((state) => state.bilibiliAppAuthRevision);
+  // 屏蔽名单在渲染前摘掉条目：列表布局随之变化，但补货由上游 `has_more` 决定，
+  // 不会因为「本地少了 N 条」就空转翻页。
+  const blockedUploaders = useVideoBlockedUploaders();
 
   // UGC 分区表由后端提供以免前端硬编码 rid。只有热门页签的条带用得上它。
   const zonesQuery = useQuery({
@@ -168,9 +173,16 @@ export function VideoPage() {
   const pages = listQuery.data?.pages;
   // 按 payload 自带的 `kind` 分派，理由见 `VideoFeedPage`。
   const feedKind = pages?.[0]?.kind ?? (videoTabUsesPgc(tab) ? "pgc" : "ugc");
+  // 屏蔽 UP 主是**渲染前**的纯过滤：分页游标、上游请求次数与 `has_more` 都不变，
+  // 只是被屏蔽的条目不进网格（连带着不进播放列表快照）。名单为空时
+  // `filterBlockedUploaders` 原样返回，零成本。
   const ugcItems = useMemo(
-    () => dedupeVideoItems(pages?.flatMap((page) => (page.kind === "ugc" ? page.items : [])) ?? []),
-    [pages],
+    () =>
+      filterBlockedUploaders(
+        dedupeVideoItems(pages?.flatMap((page) => (page.kind === "ugc" ? page.items : [])) ?? []),
+        blockedUploaders,
+      ),
+    [blockedUploaders, pages],
   );
   const playlistItems = useMemo(() => ugcItems.map(playlistItemFromVideoItem), [ugcItems]);
   const pgcItems = useMemo(

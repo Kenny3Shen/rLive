@@ -1,6 +1,8 @@
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { videoGetStory, videoGetUploaderStory } from "@/features/video/videoApi";
+import { isBlockedUploader } from "@/features/video/videoUploaderBlock";
+import { useVideoBlockedUploaders } from "@/features/video/useVideoBlockedUploaders";
 import type { VideoItem, VideoUploaderStoryPage } from "@/shared/types/video";
 import {
   createShortsFeedMerger,
@@ -46,7 +48,15 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  const mergeRecommendation = useMemo(() => createShortsFeedMerger(), []);
+  // 屏蔽名单在**合并处**过滤（理由见 `createShortsFeedMerger`）。名单变化时重建
+  // merger：合并结果完全由 `pages` 派生，重建即从头按新名单重算一遍，被屏蔽的条目
+  // 因此既不会留在视图数组里占着下标，也不会在解除屏蔽后回不来。代价是一次
+  // O(已加载条数) 的重算，而名单是低频设置。
+  const blockedUploaders = useVideoBlockedUploaders();
+  const mergeRecommendation = useMemo(
+    () => createShortsFeedMerger((item) => isBlockedUploader(item, blockedUploaders)),
+    [blockedUploaders],
+  );
   const recommendationItems = useMemo(
     () => mergeRecommendation(feedQuery.data?.pages ?? []),
     [feedQuery.data, mergeRecommendation],

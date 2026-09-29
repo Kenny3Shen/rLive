@@ -13,6 +13,7 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "hidden_home_entry_ids",
     "video_recommend_api",
     "video_next_episode_preload",
+    "video_blocked_uploaders",
 ];
 
 /// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
@@ -169,6 +170,17 @@ pub struct AppSettings {
     /// 默认关闭，避免新安装或升级后自动额外消耗流量；旧记录同样回填关闭。
     #[serde(default)]
     pub video_next_episode_preload: bool,
+    /// 按 UP 主屏蔽的 VOD 列表条目，以稿件详情里的作者 UID（`owner.mid`）为准。
+    ///
+    /// 与按昵称匹配的 `danmaku_blocked_users` 是两件事：昵称会重名、会改，
+    /// 而列表条目大多带 `mid`（列表里缺失时前端不屏蔽，宁可少屏蔽不可错屏蔽）。
+    /// 它只过滤浏览列表与竖屏流，不影响播放页本身 —— 屏蔽是「别再推给我」
+    /// 而不是「禁止我打开」。
+    ///
+    /// 旧记录与旧配置包里没有它，serde default 补齐空列表，
+    /// 见 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default)]
+    pub video_blocked_uploaders: Vec<String>,
     /// 在浏览页悬停直播间卡片时播放静音直播预览。
     ///
     /// 该字段在 2.12.0 引入，因此比它更早保存的设置记录和配置包里没有它。
@@ -279,6 +291,7 @@ impl Default for AppSettings {
             playback_soft_switch_enabled: true,
             video_recommend_api: VideoRecommendApi::default(),
             video_next_episode_preload: false,
+            video_blocked_uploaders: Vec::new(),
             room_card_preview_enabled: default_room_card_preview_enabled(),
             dynamic_background_enabled: default_dynamic_background_enabled(),
             danmaku_send_enabled: false,
@@ -324,6 +337,7 @@ mod tests {
         assert_eq!(back.recording_max_concurrent, 4);
         assert_eq!(back.video_recommend_api, VideoRecommendApi::App);
         assert!(!back.video_next_episode_preload);
+        assert!(back.video_blocked_uploaders.is_empty());
         assert!(back.room_card_preview_enabled);
         // 动态背景默认关闭：它是纯装饰，且在弱设备上是逐帧重采样的开销。
         assert!(!back.dynamic_background_enabled);

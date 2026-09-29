@@ -40,6 +40,8 @@ import {
   usePlaylistStore,
   type PlaylistItem,
 } from "./playlistStore";
+import { filterBlockedUploaders } from "./videoUploaderBlock";
+import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
 import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { UploaderDrawer } from "./UploaderDrawer";
 
@@ -135,8 +137,12 @@ function RelatedPanel({ bvid }: { bvid: string }) {
     queryFn: () => videoGetRelated(bvid),
     staleTime: 5 * 60_000,
   });
-  const items = dedupeVideoItems(
-    relatedQuery.data?.items.filter((item) => item.bvid !== bvid) ?? [],
+  // 相关视频按稿件组织而不是按作者，但屏蔽名单仍是「这个人的东西我不想看」，
+  // 因此一并过滤；被屏蔽的条目不影响后续的「连播相关视频」（它同样走这里）。
+  const blockedUploaders = useVideoBlockedUploaders();
+  const items = filterBlockedUploaders(
+    dedupeVideoItems(relatedQuery.data?.items.filter((item) => item.bvid !== bvid) ?? []),
+    blockedUploaders,
   );
   const playlistItems = items.map(playlistItemFromVideoItem);
 

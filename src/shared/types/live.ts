@@ -292,6 +292,8 @@ export type AppSettings = {
   video_recommend_api: VideoRecommendApi;
   /** 只预加载下一分集的起播数据；默认关闭，避免额外流量。 */
   video_next_episode_preload: boolean;
+  /** 按 UID 屏蔽的 UP 主；只过滤浏览列表与竖屏流，随配置包导出导入。 */
+  video_blocked_uploaders: string[];
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   room_card_preview_enabled: boolean;
   /** 画面之外用模糊放大的封面垫底（目前只有短视频竖屏流用得到）。 */

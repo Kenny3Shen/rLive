@@ -75,6 +75,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 - **服务端寿命是权威值**：`oauth2/info` 返回的 `expires_in` 实测是**剩余**寿命（相隔 45 秒的两次请求差 47 秒），校验成功时换算成本机时钟下的绝对到期并写回 `bilibili_app_auth`，可纠正本机时钟偏差。服务端确认有效但未返回寿命时**不**回退本地值：本机时钟可能偏快，拿一个已过的本地期限会让紧随其后的 feed 立刻拒绝一个刚被服务端接受的令牌（此时 `AppAuth` 不设本地期限，只保留路径与设备校验）。
 - APP 主 feed：`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
 - APP 返回的播放/弹幕统计常是「万/亿」格式的显示近似数，映射结果不是精确计数；作者 UID、标题、画幅与取流键在 Rust 统一归一化。
+- **屏蔽 UP 主（2026-10）**：名单按 `author_mid`（UID）匹配，不按昵称 —— 改名不失效、同名不误伤；**缺失 `author_mid` 的条目永不被过滤、也不提供屏蔽入口**（宁可少屏蔽不可错屏蔽）。过滤是渲染前的纯函数（`filterBlockedUploaders`，名单为空时原样返回同一数组引用，零成本），不改分页游标、上游请求次数与 `has_more`；`VideoCard` 桌面右键 / 触摸长按弹出菜单调用 `blockVideoUploader(mid)` 并 `notify.success`。覆盖推荐、热门、分区、搜索、相关视频、UP 投稿抽屉与短视频流；**播放页自身不被屏蔽**（点链接直进仍可看，屏蔽只作用于列表），`UploaderDrawer` 也不过滤（用户已主动进入该作者主页）。名单上限 500、单条 20 字符，存入 `AppSettings.video_blocked_uploaders`（随配置导出/导入与局域网同步，与屏蔽词同一合并策略）。短视频流在**合并器入流时**过滤而不是渲染前，否则被屏蔽条目会占着下标使补货窗口永远凑不满。回归：`tests/video-uploader-block.test.ts`（归一化/上限/缺失 UID 不过滤/合并器过滤与补货阈值）与 `tests/video-card-block-uploader.browser.js`（真实 WebView2 上的桌面右键、触摸长按、无 mid 时无入口）。
 - VOD 发现页四个页签与搜索结果使用 `VideoMasonry` 瀑布流，沿用响应式 2–6 列。以细网格行跨度承载卡片自然高度，追加分页不重新分列，保留 DOM / 键盘顺序、滚动锚点与卡片身份。`ResizeObserver` 在列宽、字体和内容变化时更新跨度；不支持时退回普通网格。分页哨兵仍在完整列表之后。
 - VOD 列表与 UP 投稿抽屉的 `VideoCard` 默认按 `dimension` 设置封面比例；旋转标记非零时交换宽高，未知尺寸与 PGC 保持 16:9。**相关视频**显式使用 `coverAspect="landscape"`，桌面侧栏和移动端相关页签均固定为横屏缩略图，源内容不被过滤。
 - 回归：`tests/video-masonry.browser.js` 验证补位、分页追加不移位、尺寸变化与底部哨兵；`tests/video-card-aspect.browser.js` 验证源画幅、横屏覆盖及真实相关视频区。

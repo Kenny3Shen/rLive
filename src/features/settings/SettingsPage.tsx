@@ -72,6 +72,7 @@ import {
   DanmakuAppearanceSettingsFields,
   DanmakuFilterSettingsFields,
   DanmakuTrackSettingsFields,
+  VideoBlockedUploaderField,
   resetDanmakuAppearanceSettings,
 } from "@/features/settings/PlaybackPreferenceFields";
 import { cn, SITE_LABELS } from "@/lib/utils";
@@ -1275,6 +1276,7 @@ function PlaybackSettingsResetField() {
         playbackSoftSwitchEnabled: true,
         videoRecommendApi: VIDEO_RECOMMEND_API_DEFAULT,
         videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
+        videoBlockedUploaders: [],
         danmakuShieldWords: [],
         danmakuBlockedUsers: [],
         superChatEnabled: true,
@@ -1296,6 +1298,7 @@ function PlaybackSettingsResetField() {
         playback_soft_switch_enabled: true,
         video_recommend_api: VIDEO_RECOMMEND_API_DEFAULT,
         video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
+        video_blocked_uploaders: [],
         danmaku_shield_words: [],
         danmaku_blocked_users: [],
         super_chat_enabled: true,
@@ -2453,6 +2456,7 @@ export function SettingsPage() {
         </Section>
         <Section title="消息过滤">
           <DanmakuFilterSettingsFields idPrefix="settings" layout="page" showSuperChat />
+          <VideoBlockedUploaderField idPrefix="settings" layout="page" />
         </Section>
         <Section title="恢复默认">
           <PlaybackSettingsResetField />

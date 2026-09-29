@@ -175,6 +175,8 @@ import {
   videoEndedTarget,
   type PlaylistItem,
 } from "./playlistStore";
+import { filterBlockedUploaders } from "./videoUploaderBlock";
+import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
 import { notify, setToastPortalContainer } from "@/components/ui/toast";
 
 /** 自动连播相关视频的等待时长：播完后留出反悔时间，也比换集慢一拍。 */
@@ -193,10 +195,12 @@ const SURFACE_TAP_SUPPRESSION_MS = 300;
 function relatedPlaylistItems(
   items: readonly VideoItem[] | undefined,
   currentBvid: string,
+  blockedUploaders: ReadonlySet<string> | null,
 ): PlaylistItem[] {
-  return dedupeVideoItems(items?.filter((item) => item.bvid !== currentBvid) ?? []).map(
-    playlistItemFromVideoItem,
-  );
+  return filterBlockedUploaders(
+    dedupeVideoItems(items?.filter((item) => item.bvid !== currentBvid) ?? []),
+    blockedUploaders,
+  ).map(playlistItemFromVideoItem);
 }
 
 function isPlayerControlTarget(target: EventTarget | null): boolean {
@@ -722,6 +726,9 @@ function VideoPlayerPageContent() {
   const prevItem = playlistStore.getPreviousItem();
   const bvid = params?.bvid ?? null;
   const epId = params?.epId ?? null;
+  // 播放页自身**不**按屏蔽名单拦路（屏蔽是「别再推给我」而不是「禁止我打开」），
+  // 只让侧栏相关视频与播完后的相关连播跳过被屏蔽的 UP 主。
+  const blockedUploaders = useVideoBlockedUploaders();
 
   /**
    * 控制条「播放下一个」的目标：当前视频自身选集里的下一项。它与来源队列无关，
@@ -792,7 +799,7 @@ function VideoPlayerPageContent() {
         })
         .then((page) => {
           if (!canNavigate()) return;
-          const items = relatedPlaylistItems(page.items, bvid ?? "");
+          const items = relatedPlaylistItems(page.items, bvid ?? "", blockedUploaders);
           const target = items[0];
           if (!target) return;
           const state = usePlaylistStore.getState();
@@ -801,7 +808,7 @@ function VideoPlayerPageContent() {
         })
         .catch(() => undefined);
     },
-    [bvid, goToPlaylistItem, queryClient],
+    [bvid, blockedUploaders, goToPlaylistItem, queryClient],
   );
 
   // 只响应路由身份变化：点相关/投稿卡片会先装新队列，再提交导航，

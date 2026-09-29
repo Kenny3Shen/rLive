@@ -17,6 +17,8 @@ import { videoSearch } from "./videoApi";
 import { VideoGrid } from "./VideoCard";
 import { VideoSearchFiltersBar } from "./VideoSearchFiltersBar";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
+import { filterBlockedUploaders } from "./videoUploaderBlock";
+import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
 import {
   VIDEO_SEARCH_QUERY_PARAM,
   parseVideoSearchFilters,
@@ -64,7 +66,13 @@ export function VideoSearchPage() {
     isFetchNextPageError,
   });
 
-  const allItems = dedupeVideoItems(data?.pages.flatMap((page) => page.items) ?? []);
+  // 搜索结果同样过滤被屏蔽的 UP 主：名单是「我不想再看到这个人」，
+  // 而不是「只是别推给我」。上游的页码与 `has_more` 不受影响。
+  const blockedUploaders = useVideoBlockedUploaders();
+  const allItems = filterBlockedUploaders(
+    dedupeVideoItems(data?.pages.flatMap((page) => page.items) ?? []),
+    blockedUploaders,
+  );
   // 点击时刻的列表快照即播放列表（搜索结果连播）。allItems 每次渲染都是新数组，
   // 顺带计算不额外记忆化，量级最多几十条。
   const playlistItems = allItems.map(playlistItemFromVideoItem);

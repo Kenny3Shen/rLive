@@ -320,6 +320,16 @@ pub fn merge_into_db(
     settings.playback_soft_switch_enabled = package.settings.playback_soft_switch_enabled;
     settings.video_recommend_api = package.settings.video_recommend_api;
     settings.video_next_episode_preload = package.settings.video_next_episode_preload;
+    // UP 主屏蔽与弹幕屏蔽用户、屏蔽词同一取向：两边的名单取并集，
+    // 而不是让配置包覆盖本机已有条目。
+    let mut uploaders: HashSet<String> = settings.video_blocked_uploaders.into_iter().collect();
+    for mid in &package.settings.video_blocked_uploaders {
+        let mid = mid.trim();
+        if !mid.is_empty() {
+            uploaders.insert(mid.to_owned());
+        }
+    }
+    settings.video_blocked_uploaders = uploaders.into_iter().collect();
     settings.room_card_preview_enabled = package.settings.room_card_preview_enabled;
     settings.dynamic_background_enabled = package.settings.dynamic_background_enabled;
     settings.recording_ass = package.settings.recording_ass.clone();
@@ -509,6 +519,34 @@ mod tests {
 
         assert!(package.danmaku_blocked_users.is_empty());
         assert!(package.settings.danmaku_blocked_users.is_empty());
+    }
+
+    /// 旧配置包里没有 `video_blocked_uploaders`，导入时按空名单补齐；
+    /// 它随配置包导出（不是本机专属字段），导入与本机名单取并集。
+    #[test]
+    fn profile_merges_video_blocked_uploaders() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("video_blocked_uploaders");
+        let text = serde_json::to_string(&value).unwrap();
+        assert!(decode_package(&text).unwrap().settings.video_blocked_uploaders.is_empty());
+
+        let conn = open_in_memory().unwrap();
+        let mut settings = crate::settings::get(&conn).unwrap();
+        settings.video_blocked_uploaders = vec!["本地用户".into()];
+        crate::settings::set(&conn, &settings).unwrap();
+
+        let mut package = ProfilePackage::sample();
+        package.settings.video_blocked_uploaders =
+            vec!["包内用户".into(), " ".into(), "本地用户".into()];
+        let mut conn = conn;
+        merge_into_db(&mut conn, &package).unwrap();
+
+        let mut merged = crate::settings::get(&conn).unwrap().video_blocked_uploaders;
+        merged.sort();
+        assert_eq!(merged, vec!["包内用户".to_owned(), "本地用户".to_owned()]);
     }
 
     /// 5.3.x 之前的配置包没有 `hidden_home_entry_ids`，导入时按空列表补齐。

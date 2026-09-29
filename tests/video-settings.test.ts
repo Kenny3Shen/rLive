@@ -141,6 +141,7 @@ function settingsFromState() {
     playback_soft_switch_enabled: state.playbackSoftSwitchEnabled,
     video_recommend_api: state.videoRecommendApi,
     video_next_episode_preload: state.videoNextEpisodePreload,
+    video_blocked_uploaders: state.videoBlockedUploaders,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
     danmaku_send_enabled: state.danmakuSendEnabled,

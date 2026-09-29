@@ -37,6 +37,8 @@ const RECORDING_ASS_MERGE_WINDOW_SECONDS_MAX: u32 = 30;
 const RECORDING_ASS_FONT_NAME_MAX_CHARS: usize = 80;
 const RECORDING_ASS_SHIELD_RULE_MAX_CHARS: usize = 200;
 const RECORDING_ASS_SHIELD_RULE_MAX_COUNT: usize = 100;
+/// UP 主屏蔽名单的容量上限，与前端 `VIDEO_BLOCKED_UPLOADERS_MAX` 同值。
+const VIDEO_BLOCKED_UPLOADERS_MAX: usize = 500;
 
 /// 修复手工编辑或来自未来版本的设置记录中的平台可见性偏好。UI 已经阻止了
 /// 这种情况，但设置的导入和写入路径不止一条，
@@ -275,6 +277,27 @@ fn normalize_recording_preferences(settings: &mut AppSettings) {
         .truncate(RECORDING_ASS_SHIELD_RULE_MAX_COUNT);
 }
 
+/// UP 主屏蔽名单的持久化边界归一化。
+///
+/// mid 是上游数字标识，只保留非空、去重并截到容量上限。**不校验是否为数字**：
+/// 名单只做相等比较，不会拿去拼 URL；写死校验只会在上游换成另一种标识时
+/// 让条目静默失效。
+///
+/// 超限时淘汰**最早**的条目（保留末尾），与前端 `normalizeVideoBlockedUploaders`
+/// 一致：用户刚屏蔽的那一条永远在末尾，丢掉它等于让这次屏蔽静默失效。
+fn normalize_video_blocked_uploaders(settings: &mut AppSettings) {
+    let mut seen = HashSet::new();
+    settings.video_blocked_uploaders.retain_mut(|mid| {
+        *mid = mid.trim().to_owned();
+        !mid.is_empty() && seen.insert(mid.clone())
+    });
+    let excess = settings
+        .video_blocked_uploaders
+        .len()
+        .saturating_sub(VIDEO_BLOCKED_UPLOADERS_MAX);
+    settings.video_blocked_uploaders.drain(..excess);
+}
+
 fn normalize_ass_style_width(value: f32) -> f32 {
     if !value.is_finite() {
         return 0.0;
@@ -346,6 +369,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
     normalize_site_preferences(&mut settings);
     normalize_hidden_home_entry_ids(&mut settings);
     normalize_danmaku_preferences(&mut settings);
+    normalize_video_blocked_uploaders(&mut settings);
     normalize_asr_preferences(&mut settings);
     normalize_recording_preferences(&mut settings);
     Ok((settings, true))
@@ -357,6 +381,7 @@ pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     normalize_site_preferences(&mut normalized);
     normalize_hidden_home_entry_ids(&mut normalized);
     normalize_danmaku_preferences(&mut normalized);
+    normalize_video_blocked_uploaders(&mut normalized);
     normalize_asr_preferences(&mut normalized);
     normalize_recording_preferences(&mut normalized);
     let json = serde_json::to_string(&normalized).map_err(|e| {
@@ -796,6 +821,73 @@ mod tests {
         let ass = get(&conn).unwrap().recording_ass;
         assert_eq!(ass.overflow_policy, "delay");
         assert_eq!(ass.max_delay_seconds, 5);
+    }
+
+    /// UP 主屏蔽名单是新增的顶层字段，旧记录里没有它：缺失时按空名单回填，
+    /// 不能让整份设置变成 `settings_schema_unsupported`。
+    #[test]
+    fn backfills_video_blocked_uploaders_for_older_records() {
+        let conn = open_in_memory().unwrap();
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("video_blocked_uploaders");
+        object.insert("danmaku_font_size".into(), serde_json::json!(19));
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
+        )
+        .unwrap();
+
+        let (settings, saved) = get_with_status(&conn).unwrap();
+        assert!(saved);
+        assert!(settings.video_blocked_uploaders.is_empty());
+        assert_eq!(settings.danmaku_font_size, 19);
+    }
+
+    /// 名单在持久化边界去空白、去空项、去重，并按容量上限截断：
+    /// 手工编辑或来自未来版本的记录都不该带进空条目与重复项。
+    #[test]
+    fn set_normalizes_video_blocked_uploaders() {
+        let conn = open_in_memory().unwrap();
+        let settings = AppSettings {
+            video_blocked_uploaders: vec![
+                " 42 ".into(),
+                String::new(),
+                "42".into(),
+                "   ".into(),
+                "7".into(),
+            ],
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        assert_eq!(
+            get(&conn).unwrap().video_blocked_uploaders,
+            vec!["42".to_owned(), "7".to_owned()]
+        );
+    }
+
+    /// 超限时淘汰最早的条目：用户刚屏蔽的那一条在末尾，不能被截掉。
+    /// 这条与前端 `normalizeVideoBlockedUploaders` 的语义必须一致，否则用户在
+    /// 满名单时新屏蔽的人会在下次读设置时静默消失。
+    #[test]
+    fn video_blocked_uploaders_drops_oldest_at_capacity() {
+        let conn = open_in_memory().unwrap();
+        let settings = AppSettings {
+            video_blocked_uploaders: (0..VIDEO_BLOCKED_UPLOADERS_MAX + 2)
+                .map(|index| format!("u{index}"))
+                .collect(),
+            ..AppSettings::default()
+        };
+
+        set(&conn, &settings).unwrap();
+        let saved = get(&conn).unwrap().video_blocked_uploaders;
+        assert_eq!(saved.len(), VIDEO_BLOCKED_UPLOADERS_MAX);
+        assert_eq!(saved.first().map(String::as_str), Some("u2"));
+        assert_eq!(
+            saved.last().map(String::as_str),
+            Some(format!("u{}", VIDEO_BLOCKED_UPLOADERS_MAX + 1).as_str())
+        );
     }
 
     /// 悬停卡片预览是 2.12.0 新增的顶层字段，2.11.x 保存的记录里没有它。

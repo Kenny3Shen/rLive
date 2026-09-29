@@ -18,6 +18,8 @@ import {
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   DANMAKU_SHIELD_ENTRY_MAX_LENGTH,
+  VIDEO_BLOCKED_UPLOADER_MAX_LENGTH,
+  VIDEO_BLOCKED_UPLOADERS_MAX,
   defaultDanmakuFontSize,
   parseDanmakuFontStroke,
   parseDanmakuSpeed,
@@ -659,6 +661,47 @@ export function resetDanmakuAppearanceSettings() {
     danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
     danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
   });
+}
+
+/**
+ * 「设置 → 消息过滤 → 屏蔽的 UP 主」。
+ *
+ * 与「屏蔽用户」（弹幕按昵称）刻意分成两项：那个匹配的是弹幕事件里的昵称，
+ * 这个匹配的是 VOD 列表条目里的作者 UID。两者的数据来源与匹配口径都不同，
+ * 合成一项会让「我屏蔽的到底是名字还是人」变成一个说不清的问题。
+ *
+ * 逐条列表与「屏蔽词」共用同一控件：可以手输 UID 添加、改写或删除。日常入口
+ * 不在这里 —— 长数字 UID 既没有可发现性也容易打错，主入口是视频卡片的右键菜单
+ * 与长按抽屉（那里直接拿到 `author_mid`）；这里主要承担「看看屏蔽了谁」与
+ * 「把某一条撤回来」。
+ */
+export function VideoBlockedUploaderField({
+  idPrefix,
+  layout,
+}: {
+  idPrefix: string;
+  layout: PlaybackSettingsFieldLayout;
+}) {
+  const blockedUploaders = useSettingsStore((state) => state.videoBlockedUploaders);
+
+  return (
+    <SettingsEntryList
+      id={`${idPrefix}-video-blocked-uploaders`}
+      label="屏蔽的 UP 主"
+      noun="UID"
+      hint="按 UP 主 UID 屏蔽，可在视频卡片上右键或长按直接添加；只过滤浏览列表与竖屏流，不影响播放。"
+      entries={blockedUploaders}
+      layout={layout}
+      addPlaceholder="输入 UP 主 UID，回车添加"
+      emptyText="还没有屏蔽的 UP 主。"
+      maxEntries={VIDEO_BLOCKED_UPLOADERS_MAX}
+      entryMaxLength={VIDEO_BLOCKED_UPLOADER_MAX_LENGTH}
+      onCommit={(uploaders) => {
+        useSettingsStore.setState({ videoBlockedUploaders: uploaders });
+        persist({ video_blocked_uploaders: uploaders });
+      }}
+    />
+  );
 }
 
 export function DanmakuFilterSettingsFields({
