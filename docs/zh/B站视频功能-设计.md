@@ -28,7 +28,7 @@
 
 | 表面 | 端点与参数 | 认证 |
 | --- | --- | --- |
-| 推荐（App API，默认） | `GET https://app.bilibili.com/x/v2/feed/index`，`build=8130300&mobi_app=android&platform=android&device=phone&style=2&column=4` | 匿名可用、免 WBI/appkey 签名，必须带 `buvid` 头。保留 `goto=av/vertical_av` 的横竖混合稿件，过滤广告/直播/PGC。`aid` 在 Rust 本地转换为 `bvid`，无逐条详情回查；画幅取 `dimension` 或 URI 的 `player_width/player_height/player_rotate`。有限串行取批、批内去重；前端无新增批次即停，刷新可重试。**实测不按 Cookie 个性化**：有无 Cookie 的 `track_id` 前缀、竖屏占比与卡片结构一致，旋钮是设备 `buvid` |
+| 推荐（App API，默认） | `GET https://app.bilibili.com/x/v2/feed/index`，`build=8130300&mobi_app=android&platform=android&device=phone&style=2&column=4` | 匿名可用、免 WBI/appkey 签名，必须带 `buvid` 头。保留 `goto=av/vertical_av` 的横竖混合稿件，过滤广告/直播/PGC。`aid` 在 Rust 本地转换为 `bvid`，无逐条详情回查；画幅取 `dimension` 或 URI 的 `player_width/player_height/player_rotate`。有限并发取批（4 批同发，跨批去重）、批内去重；前端无新增批次即停，刷新可重试。**实测不按 Cookie 个性化**：有无 Cookie 的 `track_id` 前缀、竖屏占比与卡片结构一致，旋钮是设备 `buvid` |
 | 推荐（Web API，可选） | `GET /x/web-interface/wbi/index/top/feed/rcmd`，`version=1&feed_version=V8&homepage_ver=1&ps=&fresh_idx=<page>&brush=<page>&fresh_type=4` | **需 WBI**；有 Cookie 才是个性化流，匿名返回通用流。取 `data.item[]`，只保留 `goto=av` 且带 `owner` 的 UGC 条目（其余是直播/番剧/广告卡） |
 | 热门 | `GET /x/web-interface/popular?pn=&ps=` | 无 WBI、**匿名可用**。`data.list[]`，`data.no_more` 判尾页 |
 | 番剧 | `GET /pgc/season/index/result`，`st=1&season_type=1&order=3&sort=0&pagesize=20&type=1&page=<n>`，其余筛选位一律 `-1` | 无 WBI、匿名可用。`data.list[]` 仅含 `season_id/title/cover/badge/index_show/order`，**无 ep_id** |
@@ -73,7 +73,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 - **失效检测只能依赖 `oauth2/info`（2026-10 实测）**：`app.bilibili.com/x/v2/feed/index` 对无效令牌、错签名、错 appkey **一律返回 `code=0`**（静默降级匿名流），因此推荐请求本身无法暴露失效。检测链只有一条：启动期后台校验 + 设置页状态查询 + 推荐失败时的错误码提示，三者共用 `oauth2/info`。由此推出两个实现约束：（1）`feed` 保留本地到期守卫作为长会话期间的最后一道防线，否则令牌中途到期会静默换流；（2）无法用 feed 的响应码判断凭据好坏，不要把 `code=0` 当成“仍有效”的证据。
 - **`oauth2/info` 的错误码分类（实测）**：`61000`（篡改字符、refresh_token 冒充）与 `-101` 判为失效；**格式合法但不存在的 access_key（含随机 32 位字符串）返回 `-400`**，与真正的参数错误（缺 `ts`、空 `appkey`）同码，因此凭据格式已合法时把 `-400` 也判为失效——否则用户会看到「稍后重试」而重试永远不会成功。`-412`（风控）、`-500`、未知码仍归为可重试的 `bilibili_app_auth_unavailable`。HTTP 非 2xx 不判失效（网关/风控不能证明令牌坏了）。
 - **服务端寿命是权威值**：`oauth2/info` 返回的 `expires_in` 实测是**剩余**寿命（相隔 45 秒的两次请求差 47 秒），校验成功时换算成本机时钟下的绝对到期并写回 `bilibili_app_auth`，可纠正本机时钟偏差。服务端确认有效但未返回寿命时**不**回退本地值：本机时钟可能偏快，拿一个已过的本地期限会让紧随其后的 feed 立刻拒绝一个刚被服务端接受的令牌（此时 `AppAuth` 不设本地期限，只保留路径与设备校验）。
-- APP 主 feed：`page` 仅兼容既有 IPC，不是上游游标；单次最多三批，跨页完全重复时暂停自动补货。
+- APP 主 feed：`page` 仅兼容既有 IPC，不是上游游标；单次**并发**取 4 批（每批 9~11 条，跨批去重后中位 31 条），跨页完全重复时暂停自动补货。并发而不是串行：该接口的批次彼此独立，并发取回不同窗口（与 story 服务端按时间推进的轮换游标不同）；串行 3 批固定付出约 1.5s 的等待，因为带 `buvid` 的单批请求实测约 500ms。详见[性能优化](性能优化.md)「问题四」。
 - APP 返回的播放/弹幕统计常是「万/亿」格式的显示近似数，映射结果不是精确计数；作者 UID、标题、画幅与取流键在 Rust 统一归一化。
 - **屏蔽 UP 主（2026-10）**：名单按 `author_mid`（UID）匹配，不按昵称 —— 改名不失效、同名不误伤；**缺失 `author_mid` 的条目永不被过滤、也不提供屏蔽入口**（宁可少屏蔽不可错屏蔽）。过滤是渲染前的纯函数（`filterBlockedUploaders`，名单为空时原样返回同一数组引用，零成本），不改分页游标、上游请求次数与 `has_more`；`VideoCard` 桌面右键 / 触摸长按弹出菜单调用 `blockVideoUploader(mid)` 并 `notify.success`。覆盖推荐、热门、分区、搜索、相关视频、UP 投稿抽屉与短视频流；**播放页自身不被屏蔽**（点链接直进仍可看，屏蔽只作用于列表），`UploaderDrawer` 也不过滤（用户已主动进入该作者主页）。名单上限 500、单条 20 字符，存入 `AppSettings.video_blocked_uploaders`（随配置导出/导入与局域网同步，与屏蔽词同一合并策略）。短视频流在**合并器入流时**过滤而不是渲染前，否则被屏蔽条目会占着下标使补货窗口永远凑不满。回归：`tests/video-uploader-block.test.ts`（归一化/上限/缺失 UID 不过滤/合并器过滤与补货阈值）与 `tests/video-card-block-uploader.browser.js`（真实 WebView2 上的桌面右键、触摸长按、无 mid 时无入口）。
 - VOD 发现页四个页签与搜索结果使用 `VideoMasonry` 瀑布流，沿用响应式 2–6 列。以细网格行跨度承载卡片自然高度，追加分页不重新分列，保留 DOM / 键盘顺序、滚动锚点与卡片身份。`ResizeObserver` 在列宽、字体和内容变化时更新跨度；不支持时退回普通网格。分页哨兵仍在完整列表之后。

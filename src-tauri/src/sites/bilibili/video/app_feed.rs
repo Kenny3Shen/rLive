@@ -14,7 +14,23 @@ use crate::models::video::{VideoDimension, VideoItem, VideoListPage};
 
 use super::{BilibiliSite, avatar_thumb, strip_em_tags, video_cover, video_dimension, video_err};
 
-const MAX_BATCHES: usize = 3;
+/// 一次请求并发取几批。
+///
+/// 上游无页码也无游标，每批固定 9~11 条且**每次调用都换一批内容**，因此凑够 20 条
+/// 必须多批。这里与 story feed 的关键差异是：主 feed 的批次彼此独立，并发取回的
+/// 是不同窗口（实测 4 批并发的唯一条数中位 31，最低 26，从未低于目标 20），
+/// 而 story 的轮换游标由服务端按时间推进，并发只会拿到重叠切片。
+///
+/// 并发而不是串行，是因为单批耗时被上游的设备个性化路径主导：带 `buvid` 请求
+/// 实测约 500ms，不带约 140ms，因此串行 3 批固定付出约 1.5s 的等待。
+/// 实测（真机主窗口，`video_get_recommend`）：串行 3 批中位约 1.95s，4 批并发
+/// 中位约 0.82s；默认目标 20 条连测 40 轮全部返回满 20 条。
+///
+/// 4 批而不是 3：并发取回的窗口有少量重叠，3 批的去重后唯一条数最低探到 18
+/// （低于默认目标），余量太薄；4 批在同样时延下把最低唯一条数抬到 28，并且仍然
+/// 只发 4 个请求。
+const FEED_BATCHES: usize = 4;
+
 const MAX_AID: u64 = 1 << 51;
 const BV_XOR: u64 = 23_442_827_791_579;
 const BV_TABLE: &[u8; 58] = b"FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf";
@@ -34,7 +50,7 @@ fn app_feed_params() -> Vec<(&'static str, String)> {
 }
 
 impl BilibiliSite {
-    /// page_size 只是本次目标；上游无可靠页码，最多串行取三批，不无限凑数。
+    /// page_size 只是本次目标；上游无可靠页码，最多并发取 [`FEED_BATCHES`] 批，不无限凑数。
     pub(super) async fn video_app_recommend(&self, page_size: u32) -> AppResult<VideoListPage> {
         let params = app_feed_params();
         collect_app_feed(page_size, || self.get_app_feed("", &params)).await
@@ -48,11 +64,15 @@ where
     Fut: Future<Output = AppResult<String>>,
 {
     let target = page_size.clamp(1, 30) as usize;
+    // 先并发把整波请求发出去，再按顺序解析、去重。串行等待是这里唯一的
+    // 数量级瓶颈（见 [`FEED_BATCHES`]）；并发发起不改变「首批失败即报错、
+    // 后续失败返回部分结果」的语义，因为取舍仍按批序进行。
+    let batches = futures_util::future::join_all((0..FEED_BATCHES).map(|_| fetch())).await;
     let mut items = Vec::with_capacity(target);
     let mut taken = HashSet::new();
     let mut has_more = false;
-    for _ in 0..MAX_BATCHES {
-        let batch = match fetch().await.and_then(|raw| parse_app_feed(&raw)) {
+    for raw in batches {
+        let batch = match raw.and_then(|raw| parse_app_feed(&raw)) {
             Ok(batch) => batch,
             Err(error) => {
                 if items.is_empty() {
@@ -686,6 +706,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetches_the_whole_wave_concurrently() {
+        // 四批必须同时在飞：每个 future 只有在四个都已被轮询过后才就绪。
+        // 若实现退回串行 `await`，第一个 future 永远不会就绪，本测试超时失败。
+        let polled = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+        let fetch = {
+            let polled = std::rc::Rc::clone(&polled);
+            move || {
+                let polled = std::rc::Rc::clone(&polled);
+                let mut started = false;
+                std::future::poll_fn(move |_| {
+                    if !started {
+                        started = true;
+                        *polled.borrow_mut() += 1;
+                    }
+                    if *polled.borrow() == FEED_BATCHES {
+                        std::task::Poll::Ready(Ok(body(vec![card(170001, "av")])))
+                    } else {
+                        std::task::Poll::Pending
+                    }
+                })
+            }
+        };
+        let page = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            collect_app_feed(30, fetch),
+        )
+        .await
+        .expect("并发取批不应等待某个批次的串行完成")
+        .unwrap();
+        assert_eq!(page.items.len(), 1);
+    }
+
+    #[tokio::test]
     async fn deduplicates_within_and_across_batches_preserving_first_occurrence() {
         let mut repeated = card(170001, "vertical_av");
         repeated["title"] = json!("不能覆盖先出现的条目");
@@ -697,22 +750,29 @@ mod tests {
             ]),
             body(vec![repeated, card(882584971, "av")]),
             body(vec![card(117274736399643, "av")]),
+            body(vec![card(117263042742272, "av")]),
         ]
         .into_iter();
         let mut calls = 0;
         let page = collect_app_feed(30, || {
             calls += 1;
-            ready(Ok(batches.next().expect("不允许第四批")))
+            ready(Ok(batches.next().expect("只允许一批的量")))
         })
         .await
         .unwrap();
-        assert_eq!(calls, 3);
+        assert_eq!(calls, FEED_BATCHES);
         assert_eq!(
             page.items
                 .iter()
                 .map(|item| item.aid.as_str())
                 .collect::<Vec<_>>(),
-            ["170001", "455017605", "882584971", "117274736399643"]
+            [
+                "170001",
+                "455017605",
+                "882584971",
+                "117274736399643",
+                "117263042742272"
+            ]
         );
         assert_eq!(page.items[0].title, "混合推荐");
         assert!(page.has_more);
@@ -720,6 +780,7 @@ mod tests {
 
     #[tokio::test]
     async fn clamps_target_and_stops_without_unbounded_refill() {
+        // 目标在首批就满足时不再处理后续批次，但整波请求已经发出（并发换时延）。
         for (requested, expected) in [(0, 1), (2, 2), (30, 30), (u32::MAX, 30)] {
             let mut calls = 0;
             let page = collect_app_feed(requested, || {
@@ -729,7 +790,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(page.items.len(), expected);
-            assert_eq!(calls, 1);
+            assert_eq!(calls, FEED_BATCHES);
         }
         let mut calls = 0;
         let page = collect_app_feed(30, || {
@@ -738,7 +799,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(calls, 3);
+        assert_eq!(calls, FEED_BATCHES);
         assert_eq!(page.items.len(), 1);
         assert!(!page.has_more, "末批仍无新增，不让消费者空转");
     }
@@ -751,14 +812,20 @@ mod tests {
             Err(video_err("离线模拟传输失败")),
             Ok("bad json".to_owned()),
         ] {
-            let mut first = Some(first);
-            let result = collect_app_feed(30, || ready(first.take().expect("首批失败即停"))).await;
+            // 首批坏掉时，后续批次的成功不得把它掩盖成可用结果。
+            let mut batches = [first, Ok(body(vec![card(170001, "av")]))].into_iter();
+            let result = collect_app_feed(30, || {
+                ready(batches.next().unwrap_or_else(|| {
+                    Ok(body(vec![card(170001, "av")]))
+                }))
+            })
+            .await;
             assert!(result.is_err());
         }
     }
 
     #[tokio::test]
-    async fn later_empty_or_failed_batch_returns_partial_without_more_requests() {
+    async fn later_empty_or_failed_batch_returns_partial() {
         for (second, expected_more) in [
             (Ok(body(vec![])), false),
             (Err(video_err("离线模拟传输失败")), true),
@@ -768,11 +835,13 @@ mod tests {
             let mut calls = 0;
             let page = collect_app_feed(30, || {
                 calls += 1;
-                ready(batches.next().expect("空批或失败后不再请求"))
+                ready(batches.next().unwrap_or_else(|| {
+                    Ok(body(vec![card(455017605, "av")]))
+                }))
             })
             .await
             .unwrap();
-            assert_eq!(calls, 2);
+            assert_eq!(calls, FEED_BATCHES);
             assert_eq!(page.items.len(), 1);
             assert_eq!(page.has_more, expected_more);
         }
