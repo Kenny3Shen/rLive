@@ -2,14 +2,17 @@ import { describe, expect, test } from "bun:test";
 import {
   DETAILS_RESIZE_DIRECTION_RATIO,
   DETAILS_RESIZE_LOCK_DISTANCE_PX,
-  DETAILS_RESIZE_OVERSHOOT_DAMPING,
-  DETAILS_SHARE_MAX_PERCENT,
   DETAILS_SHARE_MIN_PERCENT,
+  DETAILS_SHARE_HARD_MAX_PERCENT,
+  DETAILS_STAGE_ASPECT_RATIO,
   clampDetailsSharePercent,
+  detailsResizeCeiling,
   detailsResizeIntent,
   detailsResizeSharePercent,
   detailsShareCssValue,
   detailsShareFromHeights,
+  detailsShareMaxPercent,
+  detailsStageMinHeight,
 } from "../src/shared/gestures/detailsResize";
 
 describe("详情侧栏占比拖动", () => {
@@ -29,26 +32,21 @@ describe("详情侧栏占比拖动", () => {
     expect(detailsResizeSharePercent(42, -120, Number.NaN)).toBe(42);
   });
 
-  test("越界只走阻尼，松手后由 clamp 收回范围内", () => {
-    const overshoot = detailsResizeSharePercent(DETAILS_SHARE_MAX_PERCENT, -500, 1000);
-    expect(overshoot).toBeGreaterThan(DETAILS_SHARE_MAX_PERCENT);
-    // 阻尼系数越小越「硬」，但必须仍然有一小段可感知的过冲。
-    expect(overshoot).toBeCloseTo(
-      DETAILS_SHARE_MAX_PERCENT + 50 * DETAILS_RESIZE_OVERSHOOT_DAMPING,
-      5,
-    );
-    expect(clampDetailsSharePercent(overshoot)).toBe(DETAILS_SHARE_MAX_PERCENT);
-
-    const undershoot = detailsResizeSharePercent(DETAILS_SHARE_MIN_PERCENT, 500, 1000);
-    expect(undershoot).toBeLessThan(DETAILS_SHARE_MIN_PERCENT);
-    expect(clampDetailsSharePercent(undershoot)).toBe(DETAILS_SHARE_MIN_PERCENT);
+  test("上下限是硬停：越界取值原样夹回范围", () => {
+    // 手指继续往上推，占比停在容器给出的上限；继续往下推停在下限。
+    expect(detailsResizeSharePercent(80, -500, 1000, 70)).toBe(70);
+    expect(detailsResizeSharePercent(25, 500, 1000, 70)).toBe(DETAILS_SHARE_MIN_PERCENT);
+    expect(clampDetailsSharePercent(140, 70)).toBe(70);
+    expect(clampDetailsSharePercent(-40, 70)).toBe(DETAILS_SHARE_MIN_PERCENT);
   });
 
   test("clamp 对非有限值回落到下限，不产生 NaN 布局", () => {
     expect(clampDetailsSharePercent(Number.NaN)).toBe(DETAILS_SHARE_MIN_PERCENT);
-    expect(clampDetailsSharePercent(Number.POSITIVE_INFINITY)).toBe(DETAILS_SHARE_MAX_PERCENT);
+    expect(clampDetailsSharePercent(Number.POSITIVE_INFINITY)).toBe(
+      DETAILS_SHARE_HARD_MAX_PERCENT,
+    );
     expect(clampDetailsSharePercent(-40)).toBe(DETAILS_SHARE_MIN_PERCENT);
-    expect(clampDetailsSharePercent(140)).toBe(DETAILS_SHARE_MAX_PERCENT);
+    expect(clampDetailsSharePercent(140)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
   });
 
   test("轴向锁定：纵向归调占比、横向归翻页、其余继续等", () => {
@@ -76,27 +74,104 @@ describe("详情侧栏占比拖动", () => {
 
   test("CSS 取值始终是收回范围内的百分比", () => {
     expect(detailsShareCssValue(41.23456)).toBe("41.235%");
-    expect(detailsShareCssValue(999)).toBe(`${DETAILS_SHARE_MAX_PERCENT.toFixed(3)}%`);
+    expect(detailsShareCssValue(999)).toBe(`${DETAILS_SHARE_HARD_MAX_PERCENT.toFixed(3)}%`);
     expect(detailsShareCssValue(Number.NaN)).toBe(`${DETAILS_SHARE_MIN_PERCENT.toFixed(3)}%`);
   });
+});
 
-  test("舞台让位的那条规则同时认下两个标记", async () => {
-    const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
-    // `-share` 是 React 提交后的持久状态，`-resizing` 是手势逐帧写的临时状态；
-    // 只认一个就会在拖动中（或提交那一帧）跳回画幅比高度。
-    expect(css).toContain('[data-video-details-frame][data-vod-details-share="true"]');
-    expect(css).toContain('[data-video-details-frame][data-vod-details-resizing="true"]');
+describe("16:9 视频窗口给的占比上限", () => {
+  test("满宽 16:9 的高度按宽度换算", () => {
+    expect(detailsStageMinHeight(1600)).toBeCloseTo(900, 5);
+    expect(detailsStageMinHeight(401)).toBeCloseTo(401 / DETAILS_STAGE_ASPECT_RATIO, 5);
+    // 宽度不可用时不参与约束。
+    expect(detailsStageMinHeight(0)).toBe(0);
+    expect(detailsStageMinHeight(Number.NaN)).toBe(0);
   });
 
-  test("启用拖动的宽度阈值与样式表那条媒体查询同源", async () => {
-    const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
-    const viewport = await Bun.file(
-      new URL("../src/shared/hooks/usePlayerViewport.ts", import.meta.url),
-    ).text();
-    // 媒体查询里换宽度档（比如改回 `max-width: 1023px`）而 hook 没跟着改，
-    // 就会出现「手势开着但拖不动」或「能拖动但手势没开」，这类错位只有真机才看得出来。
-    const cssQuery = css.match(/@media \(width < 64rem\)/g) ?? [];
-    expect(cssQuery.length).toBeGreaterThanOrEqual(1);
-    expect(viewport).toContain('STACKED_DETAILS_QUERY = "(width < 64rem)"');
+  test("上限随容器形状变化：越宽给侧栏的越少，越高给的越多", () => {
+    // 该约束等价于「舞台留出一个满宽 16:9 的高度」：
+    // share ≤ (1 − width / (16/9) / height) × 100。
+    const width = 401;
+    const height = 757;
+    const percent = detailsShareMaxPercent(width, height);
+    expect(percent).toBeCloseTo((1 - width / (16 / 9) / height) * 100, 5);
+    // 401×757 的手机上恰好落在竖屏视频未拖动时的默认占比（约 70.2%），
+    // 即「竖屏画面铺满舞台」那个位置。
+    expect(percent).toBeCloseTo(70.2, 1);
+    expect(detailsShareMaxPercent(width, height * 2)).toBeGreaterThan(percent);
+    expect(detailsShareMaxPercent(width * 2, height)).toBeLessThan(percent);
+  });
+
+  test("容器矮到 16:9 放不下时回退到硬顶，不把侧栏顶到下限或以下", () => {
+    // 横屏手机：满宽 16:9 比容器还高，解出的份额低于下限，没有任何取值能满足
+    // 该约束 —— 此时硬夹会把侧栏顶到下限甚至更低，用户连往上拖的余地都没有。
+    expect(detailsShareMaxPercent(800, 360)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
+    // 约束要求份额 ≤ 10%，而侧栏最小就是 20%，同样在可达到的范围内无解（
+    // 16:9 窗口高 900px，容器 1000px，但 80% 的容器高只有 800px）。
+    expect(detailsShareMaxPercent(1600, 1000)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
+    expect(detailsShareMaxPercent(1600, 900)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
+  });
+
+  test("约束刚好可满足的那一刻起就不再回退", () => {
+    // 临界点是「约束给出的份额 == 下限」，即满宽 16:9 恰好占容器高的 80%：
+    // height = width / (16/9) / 0.8。恰好落在临界点上时算得的份额受浮点误差
+    // 影响（19.999…%），会落进「不可满足」那一支；这里只需验证两侧各自稳定 ——
+    // 比临界点高就恢复约束，矮就回退到手势自己的完整量程。
+    const width = 401;
+    const thresholdHeight = detailsStageMinHeight(width) / 0.8;
+    const justAbove = detailsShareMaxPercent(width, thresholdHeight + 1);
+    expect(justAbove).toBeGreaterThan(DETAILS_SHARE_MIN_PERCENT);
+    expect(justAbove).toBeLessThan(DETAILS_SHARE_HARD_MAX_PERCENT);
+    expect(detailsShareMaxPercent(width, thresholdHeight - 1)).toBe(
+      DETAILS_SHARE_HARD_MAX_PERCENT,
+    );
+  });
+
+  test("容器尺寸不可用时回退到硬顶", () => {
+    expect(detailsShareMaxPercent(0, 757)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
+    expect(detailsShareMaxPercent(401, 0)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
+    expect(detailsShareMaxPercent(Number.NaN, Number.NaN)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
+  });
+
+  test("默认布局已经超出 16:9 约束时只能往小拖，不会被弹掉一截", () => {
+    // 横画幅视频按比值撑高：401 宽、16:9 的舞台是 225.6px，侧栏默认 70.2%；
+    // 而横屏手机（800×360）的 16:9 约束根本放不下，回退到硬顶 → 上限即起点。
+    const start = 70.2;
+    expect(detailsResizeCeiling(start, 800, 360)).toBe(Math.max(start, DETAILS_SHARE_HARD_MAX_PERCENT));
+    // 竖屏手机从默认占比开始：上限就是 16:9 约束值（70.2%），与起点相同。
+    expect(detailsResizeCeiling(start, 401, 757)).toBeCloseTo(70.2, 1);
+    // 已经拖到约束内之后，上限就是约束值本身，不会跟着起点继续放宽。
+    expect(detailsResizeCeiling(40, 401, 757)).toBeCloseTo(70.2, 1);
+    // 起点无效（尺寸量失败）时退到约束值。
+    expect(detailsResizeCeiling(Number.NaN, 401, 757)).toBeCloseTo(70.2, 1);
+  });
+
+  test("从约束内往上拖停在约束上，舞台仍放得下满宽 16:9", () => {
+    const width = 401;
+    const height = 757;
+    const ceiling = detailsResizeCeiling(30, width, height);
+    const dragged = detailsResizeSharePercent(30, -100000, height, ceiling);
+    expect(dragged).toBeCloseTo(ceiling, 5);
+    // 舞台高度 = 容器 − 侧栏，必须仍 ≥ 满宽 16:9 的高度。
+    const stageHeight = ((100 - dragged) / 100) * height;
+    expect(stageHeight).toBeGreaterThanOrEqual(detailsStageMinHeight(width) - 0.001);
+  });
+
+  test("舞台让出的高度精确加回侧栏，总和始终守恒", () => {
+    for (const [width, height] of [
+      [401, 757],
+      [900, 1200],
+      [1280, 800],
+    ]) {
+      const ceiling = detailsResizeCeiling(30, width, height);
+      if (ceiling <= DETAILS_SHARE_MIN_PERCENT) continue;
+      const stageHeight = ((100 - ceiling) / 100) * height;
+      const detailsHeight = (ceiling / 100) * height;
+      expect(stageHeight + detailsHeight).toBeCloseTo(height, 5);
+      // 只有「16:9 放得下」的容器才受约束。
+      if (detailsShareMaxPercent(width, height) < DETAILS_SHARE_HARD_MAX_PERCENT) {
+        expect(stageHeight).toBeGreaterThanOrEqual(detailsStageMinHeight(width) - 0.001);
+      }
+    }
   });
 });

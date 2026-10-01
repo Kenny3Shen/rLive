@@ -57,6 +57,7 @@ import {
   useDetailsResize,
   writeDetailsShare,
 } from "@/shared/hooks/useDetailsResize";
+import { roundDetailsShare } from "@/shared/gestures/detailsResize";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
@@ -480,7 +481,19 @@ function VideoPlayerPageContent() {
   );
   const commitDetailsShare = useCallback((percent: number) => {
     clearDetailsResizing(detailsFrameRef.current);
-    setDetailsShare(percent);
+    // 与 `detailsShareCssValue` 同精度：提交后内联值的写法与拖动期间逐帧写的
+    // 完全一致（都是三位小数），提交那一帧因此不会因舍入差异跳一下。
+    setDetailsShare(roundDetailsShare(percent));
+  }, []);
+  /**
+   * 容器尺寸变化后收回超限的占比（旋转、分屏、浏览器栏伸缩）。
+   *
+   * 上限看容器宽度：舞台要保住一个满宽 16:9 视频窗口，容器变矮后原先合法的占比
+   * 可能已经违反这条约束，必须跟着收回来 —— 否则竖屏里调大的侧栏会在旋转后把画面
+   * 压到 16:9 以下。
+   */
+  const clampDetailsShare = useCallback((percent: number) => {
+    setDetailsShare(roundDetailsShare(percent));
   }, []);
   const detailsResize = useDetailsResize({
     enabled: detailsResizeEnabled,
@@ -488,6 +501,7 @@ function VideoPlayerPageContent() {
     detailsRef,
     onPreview: previewDetailsShare,
     onCommit: commitDetailsShare,
+    onClamp: clampDetailsShare,
   });
   useScreenWakeLock(!paused && !loading && !playbackError);
 

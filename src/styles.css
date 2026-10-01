@@ -908,7 +908,11 @@ html[data-platform="android"] .app-shell {
    `data-vod-details-share` 由 React 在提交后写）：未拖动时舞台仍按画幅比撑高、
    最高 70%（与改动前逐像素一致，横屏视频不会因为多出一个默认占比而把评论区的
    空间吃掉）。拖动后舞台改为显式高度，画幅比退居 `object-contain`，因此
-   「把侧栏拖大」真的能让画面变小而不是被比例锁住。 */
+   「把侧栏拖大」真的能让画面变小而不是被比例锁住。
+
+   占比上限（舞台至少保住一个满宽 16:9）不由 CSS 表达：它依赖容器的像素宽高，
+   由 `detailsResize.ts` 的 `detailsShareMaxPercent` 算出后夹在写到这里的取值里。
+   这里只负责「拿到百分比就按它分配」。 */
 [data-video-details-frame] {
   --vod-details-share: 30%;
   --vod-stage-height: calc(100% - var(--vod-details-share));

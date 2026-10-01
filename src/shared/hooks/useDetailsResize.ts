@@ -7,10 +7,12 @@ import {
 } from "react";
 import {
   clampDetailsSharePercent,
+  detailsResizeCeiling,
   detailsResizeIntent,
   detailsResizeSharePercent,
   detailsShareCssValue,
   detailsShareFromHeights,
+  detailsShareMaxPercent,
 } from "@/shared/gestures/detailsResize";
 import { isTouchLikePointer } from "@/shared/gestures/playerEdgeGesture";
 
@@ -20,6 +22,8 @@ type ResizeState = {
   startY: number;
   startPercent: number;
   containerHeight: number;
+  /** 本次手势的上限（%），按下时按容器宽度算定：舞台必须保住一个全宽 16:9。 */
+  maxPercent: number;
   intent: "pending" | "resize" | "swipe";
   /** 手指按下后是否已越过锁定距离并真正开始拖动。 */
   active: boolean;
@@ -38,6 +42,11 @@ export type UseDetailsResizeOptions = {
   onPreview: (percent: number) => void;
   /** 松手提交；宿主据此更新状态（本页内保留，不落盘）。 */
   onCommit: (percent: number) => void;
+  /**
+   * 容器尺寸变化后，已提交的占比超出新上限时回调收后的取值（%） ——
+   * 旋转、分屏、浏览器栏伸缩都算。不传则不做这件事。
+   */
+  onClamp?: (percent: number) => void;
 };
 
 /**
@@ -56,12 +65,15 @@ export function useDetailsResize({
   detailsRef,
   onPreview,
   onCommit,
+  onClamp,
 }: UseDetailsResizeOptions) {
   const stateRef = useRef<ResizeState | null>(null);
   const callbacksRef = useRef({ onPreview, onCommit });
+  const clampRef = useRef(onClamp);
   // 渲染期不写 ref：提交后同步 latest 值，读者全部在事件与效果里，时序等价。
   useLayoutEffect(() => {
     callbacksRef.current = { onPreview, onCommit };
+    clampRef.current = onClamp;
   });
 
   const releasePointer = useCallback((element: HTMLElement, pointerId: number) => {
@@ -69,18 +81,32 @@ export function useDetailsResize({
   }, []);
 
   /**
-   * 按下瞬间的占比基准。
+   * 按下瞬间的占比基准与上限。
    *
-   * 已经调过占比时量 CSS 变量，否则量侧栏与容器的真实高度 —— 舞台按画幅比撑高，
-   * 未调整过时状态里没有值，必须按当前布局起算，否则第一次拖动会跳一下。
+   * 占比量侧栏与容器的真实高度：舞台按画幅比撑高，未调整过时状态里没有值，
+   * 必须按当前布局起算，否则第一次拖动会跳一下。
+   *
+   * 上限看容器宽度：舞台要保住一个满宽 16:9 视频窗口，因此容器越宽、能给侧栏
+   * 的份额越少（401×757 的手机上约 70%）。自定义画幅比它高的默认布局上限就是
+   * 起点，读作「只能往小拖」；两者都在按下那一刻定住，拖动中不重算 —— 拖动会
+   * 改容器高度，重算上限会让边界跟着手指跑。
    */
-  const startPercent = useCallback(() => {
+  const gestureBounds = useCallback(() => {
     const container = containerRef.current;
     const details = detailsRef.current;
     if (!container || !details) return null;
     const containerHeight = container.clientHeight;
+    const containerWidth = container.clientWidth;
     if (!(containerHeight > 0)) return null;
-    return detailsShareFromHeights(details.getBoundingClientRect().height, containerHeight);
+    const startPercent = detailsShareFromHeights(
+      details.getBoundingClientRect().height,
+      containerHeight,
+    );
+    return {
+      containerHeight,
+      startPercent,
+      maxPercent: detailsResizeCeiling(startPercent, containerWidth, containerHeight),
+    };
   }, [containerRef, detailsRef]);
 
   const onPointerDownCapture = useCallback(
@@ -88,21 +114,21 @@ export function useDetailsResize({
       // 部分 Android WebView 对手指输入上报空的 pointerType。
       if (!enabled || !isTouchLikePointer(event.pointerType) || !event.isPrimary) return;
       if (stateRef.current !== null) return;
-      const percent = startPercent();
-      const containerHeight = containerRef.current?.clientHeight ?? 0;
-      if (percent === null || !(containerHeight > 0)) return;
+      const bounds = gestureBounds();
+      if (!bounds) return;
       stateRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
-        startPercent: percent,
-        containerHeight,
+        startPercent: bounds.startPercent,
+        containerHeight: bounds.containerHeight,
+        maxPercent: bounds.maxPercent,
         intent: "pending",
         active: false,
-        lastPercent: percent,
+        lastPercent: bounds.startPercent,
       };
     },
-    [containerRef, enabled, startPercent],
+    [enabled, gestureBounds],
   );
 
   /** 返回 true 表示本次指针已被调占比认领，页签条不应再处理它。 */
@@ -129,7 +155,12 @@ export function useDetailsResize({
         event.currentTarget.setPointerCapture(event.pointerId);
       }
 
-      const preview = detailsResizeSharePercent(state.startPercent, deltaY, state.containerHeight);
+      const preview = detailsResizeSharePercent(
+        state.startPercent,
+        deltaY,
+        state.containerHeight,
+        state.maxPercent,
+      );
       state.lastPercent = preview;
       callbacksRef.current.onPreview(preview);
       event.preventDefault();
@@ -147,13 +178,15 @@ export function useDetailsResize({
       releasePointer(event.currentTarget, event.pointerId);
       if (!state.active) return false;
 
-      // 提交与预览用同一套换算，但提交值必须收回范围内 —— 阻尼越界的部分不落定。
+      // 提交与预览用同一套换算，且同一上限 —— 预览已经夹在范围内，两者一致。
       const committed = clampDetailsSharePercent(
         detailsResizeSharePercent(
           state.startPercent,
           event.clientY - state.startY,
           state.containerHeight,
+          state.maxPercent,
         ),
+        state.maxPercent,
       );
       state.lastPercent = committed;
       callbacksRef.current.onCommit(committed);
@@ -171,7 +204,11 @@ export function useDetailsResize({
       releasePointer(event.currentTarget, event.pointerId);
       // 取消不回到按下前的值：用户已经看到拖动结果，回跳比停在当前值更突兀。
       // 只有「从未真正拖动过」（按下就被取消）才保留原状。
-      if (state.active) callbacksRef.current.onCommit(clampDetailsSharePercent(state.lastPercent));
+      if (state.active) {
+        callbacksRef.current.onCommit(
+          clampDetailsSharePercent(state.lastPercent, state.maxPercent),
+        );
+      }
     },
     [releasePointer],
   );
@@ -183,6 +220,37 @@ export function useDetailsResize({
     },
     [],
   );
+
+  /**
+   * 容器尺寸一变（旋转、分屏、浏览器栏伸缩）就重算上限：已提交的占比若超出新上限，
+   * 收回去。否则竖屏里调大的侧栏会在容器变矮后把画面压到 16:9 窗口以下，不再满足
+   * 这条手势的承诺。
+   *
+   * 当前值从内联自定义属性读，不从 props 走：它就是「是否已拖动过」的唯一事实源，
+   * 未拖动过时为空字符串（此时舞台按画幅比分配，不归手势管）。
+   * 拖动中不插手，那时上限由手势自己的快照决定（且拖动不改容器高度，不会互相触发）。
+   */
+  useLayoutEffect(() => {
+    if (!enabled || !onClamp) return;
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const apply = () => {
+      if (stateRef.current !== null) return;
+      const current = Number.parseFloat(
+        container.style.getPropertyValue("--vod-details-share"),
+      );
+      if (!Number.isFinite(current)) return;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      if (!(width > 0) || !(height > 0)) return;
+      const clamped = clampDetailsSharePercent(current, detailsShareMaxPercent(width, height));
+      if (Math.abs(clamped - current) > 0.01) clampRef.current?.(clamped);
+    };
+    const observer = new ResizeObserver(apply);
+    observer.observe(container);
+    apply();
+    return () => observer.disconnect();
+  }, [containerRef, enabled, onClamp]);
 
   if (!enabled) {
     return {
@@ -221,6 +289,7 @@ export function useDetailsResize({
  */
 export function writeDetailsShare(container: HTMLElement | null, percent: number): void {
   if (!container) return;
+  // 取值已在手势里夹到动态上限（≤ 硬顶），这里只负责格式化。
   container.style.setProperty("--vod-details-share", detailsShareCssValue(percent));
   container.dataset.vodDetailsResizing = "true";
 }
