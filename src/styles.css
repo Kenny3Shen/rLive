@@ -898,6 +898,41 @@ html[data-platform="android"] .app-shell {
   padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
 }
 
+/* 移动端 VOD 播放页：详情侧栏高度可拖（按住页签条上下拖）。
+
+   分界位置只由一个自定义属性 `--vod-details-share` 表达，它是**详情侧栏**占
+   播放页主区域高度的百分比；舞台高度是它的补集，因此两边永远精确地相加为 100%，
+   拖到极限也不会露出缝隙或重叠。
+
+   这套规则只在拖动开始后生效（`data-vod-details-resizing` 由手势写、
+   `data-vod-details-share` 由 React 在提交后写）：未拖动时舞台仍按画幅比撑高、
+   最高 70%（与改动前逐像素一致，横屏视频不会因为多出一个默认占比而把评论区的
+   空间吃掉）。拖动后舞台改为显式高度，画幅比退居 `object-contain`，因此
+   「把侧栏拖大」真的能让画面变小而不是被比例锁住。 */
+[data-video-details-frame] {
+  --vod-details-share: 30%;
+  --vod-stage-height: calc(100% - var(--vod-details-share));
+}
+
+@media (width < 64rem) {
+  [data-video-details-frame][data-vod-details-share="true"] > [data-video-player-frame],
+  [data-video-details-frame][data-vod-details-resizing="true"] > [data-video-player-frame] {
+    aspect-ratio: auto;
+    height: var(--vod-stage-height);
+    max-height: var(--vod-stage-height);
+  }
+}
+
+/* 页签条是抓手：纵向拖动调占比。
+
+   `touch-action: pan-x` 是这一处唯一需要的声明：它把纵向从浏览器手里拿回来
+   （纵向手势因此不会变成页面滚动），同时把横向留给浏览器继续当滚动处理 ——
+   而横向滚动正是 `useHorizontalSwipe` 的输入。两个轴各有归属，不需要
+   `preventDefault` 去和浏览器的滚动争抢。 */
+[data-vod-details-handle] {
+  touch-action: pan-x;
+}
+
 /* 舞台内的 HUD 一律以舞台顶边为基准，不再叠加系统栏预留：
    - 窗口化：状态栏由 `.app-shell` 的 padding 预留，舞台已在其下方。
    - 沉浸式全屏：舞台 `position: fixed` 铺满屏幕，此时系统栏已隐藏。

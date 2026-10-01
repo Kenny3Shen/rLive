@@ -47,7 +47,16 @@ import {
   PlayerMenuRadioGroup,
   type PlayerMenuRadioOption,
 } from "@/shared/components/player/PlayerControls";
-import { useCompactPlayerViewport, usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
+import {
+  useCompactPlayerViewport,
+  usePortraitOrientation,
+  useStackedDetailsViewport,
+} from "@/shared/hooks/usePlayerViewport";
+import {
+  clearDetailsResizing,
+  useDetailsResize,
+  writeDetailsShare,
+} from "@/shared/hooks/useDetailsResize";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
@@ -233,6 +242,8 @@ function VideoPlayerPageContent() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const detailsRef = useRef<HTMLElement | null>(null);
+  /** 舞台 + 详情区的外框：拖动页签条调占比时以它为分母。 */
+  const detailsFrameRef = useRef<HTMLElement | null>(null);
   const params = parseVideoPlayParams(searchParams);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -302,6 +313,11 @@ function VideoPlayerPageContent() {
     ratio: number | null;
   } | null>(null);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab | null>(null);
+  /**
+   * 移动端拖动页签条调出的详情占比（%）；`null` ＝ 按默认布局分配（舞台按画幅比）。
+   * 只在本页有效，换视频、换集与离开页面都重新起算。
+   */
+  const [detailsShare, setDetailsShare] = useState<number | null>(null);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
   const [speedHoldActive, setSpeedHoldActive] = useState(false);
@@ -417,6 +433,8 @@ function VideoPlayerPageContent() {
 
   const compact = useCompactPlayerViewport();
   const portraitOrientation = usePortraitOrientation();
+  /** 侧栏是否列在舞台下方（窄屏）；宽屏两者并排，占比拖动无意义。 */
+  const stackedDetails = useStackedDetailsViewport();
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
   const {
@@ -445,6 +463,32 @@ function VideoPlayerPageContent() {
   });
   const { exit: fullscreenExit, toggle: fullscreenToggle } = fullscreen;
   const fullscreenLockMounted = showPlayerFullscreenLock(fullscreen.fullscreen);
+
+  /**
+   * 移动端详情占比拖动。
+   *
+   * 只有侧栏列在舞台**下方**时才成立：宽屏（`lg`）两者并排，上下拖动与它无关。
+   * 判据取 `STACKED_DETAILS_QUERY`，与样式表里那条宽度媒体查询同源 —— 若改用
+   * `compact`，1024px 以上的平板横屏会「手势开着但拖不动」（舞台列在左边，
+   * 上下拖动不改任何布局）。全屏时舞台接管整屏，抓手也随之停用。
+   */
+  const detailsResizeEnabled =
+    mobileClient && stackedDetails && !webFullscreen && !fullscreen.fullscreen;
+  const previewDetailsShare = useCallback(
+    (percent: number) => writeDetailsShare(detailsFrameRef.current, percent),
+    [],
+  );
+  const commitDetailsShare = useCallback((percent: number) => {
+    clearDetailsResizing(detailsFrameRef.current);
+    setDetailsShare(percent);
+  }, []);
+  const detailsResize = useDetailsResize({
+    enabled: detailsResizeEnabled,
+    containerRef: detailsFrameRef,
+    detailsRef,
+    onPreview: previewDetailsShare,
+    onCommit: commitDetailsShare,
+  });
   useScreenWakeLock(!paused && !loading && !playbackError);
 
   useEffect(() => {
@@ -2507,8 +2551,25 @@ function VideoPlayerPageContent() {
       {/* 与直播页同构：外层普通 div 持画幅比，Container 只负责铺满。
           画幅比不能和 h-full 挂在同一元素上 —— 显式高度优先级高于
           aspect-ratio，画幅比会被静默丢掉（这正是原先的黑边根因）。
-          比值取实测源画幅（`--stage-ar`），元数据到位前回退 16/9。 */}
-      <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
+          比值取实测源画幅（`--stage-ar`），元数据到位前回退 16/9。
+
+          用户拖动过页签条后（`data-vod-details-share`），舞台高度改由
+          `--vod-stage-height` 决定、画幅比退居 `object-contain`，因此「把侧栏
+          拖大」真的能让画面变小而不是被比例锁住；未拖动时一切照旧。 */}
+      <main
+        ref={detailsFrameRef}
+        data-video-details-frame
+        data-vod-details-share={detailsShare === null ? undefined : "true"}
+        // 拖动期间由手势直接写 CSS 变量（不触发 React 渲染）；松手提交后再由 state
+        // 接管，两者的取值完全一致，因此提交那一帧不会跳。未拖动过时不写内联值，
+        // 布局完全按样式表里的默认分配。
+        style={
+          detailsShare === null
+            ? undefined
+            : ({ "--vod-details-share": `${detailsShare}%` } as CSSProperties)
+        }
+        className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row"
+      >
         <div
           data-video-player-frame
           style={
@@ -2953,6 +3014,7 @@ function VideoPlayerPageContent() {
               epId={params.epId}
               aid={params.aid}
               cid={cid}
+              detailsResize={detailsResizeEnabled ? detailsResize : undefined}
               danmaku={{
                 entries: danmakuEntries,
                 positionMs: currentTime * 1000,

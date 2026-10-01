@@ -8,6 +8,7 @@ import {
   COMPACT_LANDSCAPE_PLAYER_QUERY,
   COMPACT_PLAYER_QUERY,
   PORTRAIT_ORIENTATION_QUERY,
+  STACKED_DETAILS_QUERY,
   playerViewportFallbackMatches,
 } from "../src/shared/hooks/usePlayerViewport";
 import {
@@ -205,6 +206,13 @@ describe("mobile player layout", () => {
 
     expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, false, false)).toBe(false);
     expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, false, true)).toBe(false);
+  });
+
+  test("首帧按竖屏播种侧栏在下方的档位", () => {
+    // 占比拖动抓手只在侧栏列在舞台下方时可用：手机竖屏恒为真，平板横屏首帧
+    // 也按竖屏播种（真值只影响抓手是否在首帧可用），挂载后的首次重读会纠正。
+    expect(playerViewportFallbackMatches(STACKED_DETAILS_QUERY, true, false)).toBe(true);
+    expect(playerViewportFallbackMatches(STACKED_DETAILS_QUERY, true, true)).toBe(false);
   });
 
   test("keeps secondary controls out of portrait chrome and restores them in landscape", () => {

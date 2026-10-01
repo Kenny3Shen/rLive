@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -655,6 +662,7 @@ export function VideoSidebar({
   danmaku,
   tab: requestedTab,
   onTabChange,
+  detailsResize,
 }: {
   bvid: string | null;
   epId: string | null;
@@ -670,6 +678,16 @@ export function VideoSidebar({
     loading: boolean;
     /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
     onSeek: (positionMs: number) => void;
+  };
+  /**
+   * 移动端「按住页签条上下拖调占比」的手势处理器（`useDetailsResize` 的返回值）。
+   * 桌面与宽屏不传，页签条行为与从前一致。
+   */
+  detailsResize?: {
+    onPointerDownCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
+    onPointerMoveCapture?: (event: ReactPointerEvent<HTMLElement>) => boolean;
+    onPointerUpCapture?: (event: ReactPointerEvent<HTMLElement>) => boolean;
+    onPointerCancelCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
   };
 }) {
   const navigate = useNavigate();
@@ -749,6 +767,28 @@ export function VideoSidebar({
     enabled: isMobileClient(),
     layout: "track",
   });
+
+  /**
+   * 页签条上的两套手势共用同一串指针事件，靠锁轴判定分流。
+   *
+   * 事件在捕获阶段先经过外层的 `Tabs`（翻页），再到本层（调占比）。两者的锁轴
+   * 阈值互斥（纵向要求 `|dy| > |dx|`，横向要求 `|dx| > 1.25|dy|`），因此同一次
+   * 手势只会有一边锁定：
+   *
+   * - 横向锁定：翻页在 `Tabs` 上 `stopPropagation` 并捕获指针，本层收不到后续事件。
+   * - 纵向锁定：翻页先看到「纵向位移已超阈值且压过横向」并主动放弃这次手势，
+   *   随后本层锁定并接管。
+   */
+  const resizeHandlers = detailsResize;
+  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    resizeHandlers?.onPointerDownCapture?.(event);
+  };
+  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    resizeHandlers?.onPointerMoveCapture?.(event);
+  };
+  const handleResizePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    resizeHandlers?.onPointerUpCapture?.(event);
+  };
 
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
@@ -1003,7 +1043,18 @@ export function VideoSidebar({
       onPointerCancelCapture={sidebarSwipeOnPointerCancelCapture}
       onClickCapture={sidebarSwipeOnClickCapture}
     >
-      <div className="flex h-11 shrink-0 items-center border-b border-border/80">
+      {/* 页签条同时是移动端调占比的抓手（`data-vod-details-handle`）：整条 44px
+          高、可点可拖，不另加一条 grip 占高度。手势处理器只在移动端传入。 */}
+      <div
+        data-vod-details-handle
+        onPointerDownCapture={resizeHandlers ? handleResizePointerDown : undefined}
+        onPointerMoveCapture={resizeHandlers ? handleResizePointerMove : undefined}
+        onPointerUpCapture={resizeHandlers ? handleResizePointerUp : undefined}
+        onPointerCancelCapture={
+          resizeHandlers ? resizeHandlers.onPointerCancelCapture : undefined
+        }
+        className="flex h-11 shrink-0 items-center border-b border-border/80"
+      >
         <TabsList
           variant="line"
           className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"

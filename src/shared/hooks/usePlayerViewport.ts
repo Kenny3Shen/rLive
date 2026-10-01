@@ -5,6 +5,14 @@ export const COMPACT_LANDSCAPE_PLAYER_QUERY =
   "(orientation: landscape) and (max-height: 540px) and (pointer: coarse)";
 export const COMPACT_PLAYER_QUERY = `(max-width: 767px), ${COMPACT_LANDSCAPE_PLAYER_QUERY}`;
 export const PORTRAIT_ORIENTATION_QUERY = "(orientation: portrait)";
+/**
+ * 详情侧栏列在舞台**下方**的宽度档（与播放页的 `lg:flex-row` 断点互斥）。
+ *
+ * 窄屏把侧栏接在舞台下方，占比拖动才有意义；宽屏两侧栏并排，上下拖不改任何布局。
+ * 取值与样式表里那条 `@media (width < 64rem)` 是同一档，两处必须一起改 ——
+ * 否则会出现「手势被启用但拖不动」或「能拖动但手势没开」的错位。
+ */
+export const STACKED_DETAILS_QUERY = "(width < 64rem)";
 
 function matches(query: string): boolean {
   return typeof window !== "undefined" && window.matchMedia(query).matches;
@@ -44,6 +52,9 @@ export function playerViewportFallbackMatches(
   if (query === COMPACT_PLAYER_QUERY) return true;
   if (query === COMPACT_LANDSCAPE_PLAYER_QUERY) return landscape;
   if (query === PORTRAIT_ORIENTATION_QUERY) return !landscape;
+  // 侧栏是否列在舞台下方：手机竖屏恒为真，因此首帧按真播种（真值只影响拖动抓手
+  // 是否在首帧可用）；平板上真值会在挂载后的首次重读里纠正。
+  if (query === STACKED_DETAILS_QUERY) return !landscape;
   return false;
 }
 
@@ -117,4 +128,9 @@ export function useCompactLandscapePlayerViewport(): boolean {
  */
 export function usePortraitOrientation(): boolean {
   return usePlayerMediaQuery(PORTRAIT_ORIENTATION_QUERY);
+}
+
+/** 详情侧栏是否列在舞台下方（窄屏），见 `STACKED_DETAILS_QUERY`。 */
+export function useStackedDetailsViewport(): boolean {
+  return usePlayerMediaQuery(STACKED_DETAILS_QUERY);
 }
