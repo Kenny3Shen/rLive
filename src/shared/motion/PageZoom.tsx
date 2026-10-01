@@ -1,5 +1,6 @@
-import { startTransition, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { startTransition, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { RouterScope, useFrozenRouter, type FrozenRouter } from "./FrozenRouter";
 import { clearMotionStyles } from "./tween";
 import { motionProfile, prefersReducedMotion } from "./tokens";
 
@@ -34,6 +35,8 @@ type ZoomSnapshot = {
   key: string;
   node: ReactNode;
   enabled: boolean;
+  /** 离场页面必须带着自己那一刻的路由上下文，见 `FrozenRouter`。 */
+  router: FrozenRouter;
 };
 
 /** 缩放进入房间，缩放退出期间保持其活跃子树挂载。 */
@@ -52,10 +55,14 @@ export function PageZoom({
   const scopeRef = useRef<HTMLDivElement>(null);
   const incomingRef = useRef<HTMLDivElement>(null);
   const outgoingRef = useRef<HTMLDivElement>(null);
+  const { location, route } = useFrozenRouter();
+  // 上下文对象在路由变化时才换身份，因此可以用作快照副作用的依赖。
+  const router = useMemo<FrozenRouter>(() => ({ location, route }), [location, route]);
   const committedRef = useRef<ZoomSnapshot>({
     key: zoomKey,
     node: children,
     enabled,
+    router,
   });
   const [transition, setTransition] = useState<{
     renderedKey: string;
@@ -77,8 +84,8 @@ export function PageZoom({
   useLayoutEffect(() => {
     // 渲染期间修改的 refs 能在被放弃的并发渲染中幸存。让退出来源绑定到 React
     // 实际提交的那一页。
-    committedRef.current = { key: zoomKey, node: children, enabled };
-  }, [children, enabled, zoomKey]);
+    committedRef.current = { key: zoomKey, node: children, enabled, router };
+  }, [children, enabled, router, zoomKey]);
 
   useLayoutEffect(() => {
     let disposed = false;
@@ -230,7 +237,7 @@ export function PageZoom({
           aria-hidden
           className="pointer-events-none absolute inset-0 z-10 flex min-h-0 min-w-0 bg-background"
         >
-          {outgoing.node}
+          <RouterScope value={outgoing.router}>{outgoing.node}</RouterScope>
         </div>
       )}
       <div
@@ -243,7 +250,9 @@ export function PageZoom({
           outgoing && "pointer-events-none bg-background",
         )}
       >
-        {children}
+        {/* 两侧必须是同一种包裹元素，React 才会把上一帧的层原样搬进离场位；
+            详见 `RouterScope`。 */}
+        <RouterScope value={router}>{children}</RouterScope>
       </div>
     </div>
   );

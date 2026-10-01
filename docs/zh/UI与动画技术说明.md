@@ -38,7 +38,7 @@
 | `src/shared/components/` | 跨功能业务组件（刷新按钮、站点切换器、房间卡片、播放器控制条） |
 | `src/app/layout/` | 标题栏、侧栏、顶部导航、页面滚动容器、路由动效编排 |
 | `src/features/*/` | 功能页与局部状态；`features/recording/` 为桌面录制库与本地回放 |
-| `src/shared/motion/` | 动画令牌、系统减少动效检测、`PagePan`、`PageZoom`、`tween()` 助手 |
+| `src/shared/motion/` | 动画令牌、系统减少动效检测、`PagePan`、`PageZoom`、`FrozenRouter`、`tween()` 助手 |
 | `src/shared/hooks/`、`src/shared/gestures/` | 手势 hook 与纯判定常量 |
 | `src/styles.css` | 主题变量、Tailwind 映射、全局响应式规则、CSS 关键帧与 View Transition |
 | `src/app/theme.ts`、`androidSystemBars.ts` | 主题解析与应用、系统亮暗监听、全局淡化、Android 系统栏图标同步 |
@@ -131,6 +131,8 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 `src/shared/motion/PagePan.tsx` 保留上一个 React subtree 直到离场结束后再卸载。出场页 `absolute inset-0` 离开布局流，两页保持完全不透明并同步移动，表现为一整块连续表面而非交叉淡化。时长与 easing 读 `motionProfile()`。必须遵守：
 
 - 上一页快照只在 `useLayoutEffect` 中更新为 React 已提交的 subtree，不在 render 阶段改写快照 ref（React 19 可能放弃或重放并发 render，ref 写入不会回滚，会漏掉退出层）。`PageZoom` 同一约束。
+- **快照必须连路由上下文一起冻结**（`FrozenRouter.tsx` 的 `RouterScope`）：上下文不是元素的一部分，路由一变，离场页里的 `useLocation` / `useSearchParams` / `useParams` 就会带着**新**页面的取值重渲染。失效现象是「退出动画里旧页面塌成错误态」—— VOD 播放页返回视频页时整个播放器变成「缺少有效参数」的错误卡，房间页退回发现页时离场层里的直播间直接消失。
+- **两侧子节点必须是同一种包裹元素**：`PagePan` / `PageZoom` 靠 key 让 React 把上一帧的层原样搬进离场位，子节点类型一变就退化成卸载重建 —— 媒体元素、播放器实例与页面状态全部从头再来。`RouterScope` 因此同时包在进入层与离场层上，而不是只包离场层。
 - 动画完成后先用 `commitStyles()` 固定旧页离屏最终位置，再同步卸载旧 subtree；不能先 cancel Animation 再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
 - 直接侧栏导航时 `RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移。
 
@@ -138,7 +140,9 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 
 ### 4.4 `PageZoom`：沉浸式播放页进出
 
-`src/shared/motion/PageZoom.tsx` 覆盖 `/room/*` 与 `/iptv/play`，`zoomKey` 取各自 pathname，因此两者之间切换不会被当成同一页而跳过过渡。沉浸式播放页只有 Zoom 一层路由动画：`Shell` 沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支。
+`src/shared/motion/PageZoom.tsx` 覆盖 `/room/*`、`/iptv/play`、`/video/play` 与两条竖屏流，`zoomKey` 取各自 pathname，因此两者之间切换不会被当成同一页而跳过过渡。沉浸式播放页只有 Zoom 一层路由动画：`Shell` 沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支。
+
+VOD 播放页进出因此与直播间共用同一段运动：进入时列表退去、播放页从 `0.96` 长到 `1`，返回时播放页缩回 `0.96` 并淡出、列表在下方展开 —— 方向与进入一致，可反向解读。离场层里的播放页由 `RouterScope` 冻结路由上下文后仍带着自己的 `?bvid=…` 参数与正在播放的画面（见 4.3）。
 
 - 进入：`scale 0.96 -> 1` + `opacity 0 -> 1`，浏览列表已立即卸载。完成后清除 transform、opacity、visibility、transform origin 与 `will-change`，保证全屏播放器没有永久 transformed ancestor。
 - 退出：双层交叉溶解，两条补间从时间 `0` 同时开始。离场 subtree 保持挂载执行 `scale 1 -> 0.96` + `opacity 1 -> 0`，只跑 `duration × 0.72` 以形成重叠，避免视口中间穿过一帧全空画面；目标页 `scale 1.02 -> 1` + `opacity 0 -> 1` 展开，反向缩放刻意比 `0.96` 更贴近 `1`，因为它是背景而非主体。
@@ -274,7 +278,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 
 每个动画检查开始帧、中间帧、最终帧与快速重复操作：
 
-- 页面没有空白、闪回、旧 subtree 短暂复活或边缘残影；退出动画结束后旧直播 subtree 直接卸载、不恢复 opacity。
+- 页面没有空白、闪回、旧 subtree 短暂复活或边缘残影；退出动画结束后旧直播 subtree 直接卸载、不恢复 opacity。**离场页必须仍是它自己那一页**（路由上下文冻结，见 4.3）：VOD 返回视频页时离场层里是正在播放的播放器而不是「缺少有效参数」错误卡，且旧子树没有被重新挂载（媒体元素不丢）。
 - 动画过程中无双滚动条，结束后仍可完整纵向滚动；fixed、FAB、底部导航、Drawer 与播放器控制不互相遮挡。
 - 触摸 swipe 不抢占纵向滚动、Slider、Input 与 ScrollArea scrollbar。
 - 最终 DOM 不残留 transform、opacity、visibility、`will-change`、临时 data attribute 或 finished Animation。
@@ -294,6 +298,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 | `src/app/theme.ts`、`src/app/androidSystemBars.ts` | 主题应用、系统亮暗监听、全局淡化与 Android 系统栏图标同步 |
 | `src/shared/motion/tween.ts`、`tokens.ts`、`preference.ts` | 补间助手、共享 easing / duration 与系统减少动效检测 |
 | `src/shared/motion/PagePan.tsx`、`PageZoom.tsx` | 整页平移与 outgoing subtree 生命周期、沉浸式播放页 Zoom |
+| `src/shared/motion/FrozenRouter.tsx` | 离场子树的 `LocationContext` / `RouteContext` 冻结（两个宿主共用，见 4.3） |
 | `src/shared/gestures/horizontalSwipe.ts`、`longPress.ts` | swipe 与长按的阈值常量和纯判定逻辑 |
 | `src/shared/components/player/PlayerControls.tsx` | 共享播放控制条与安全区避让 |
 | `src/shared/components/player/PlayerStageSkeleton.tsx` | 沉浸播放页的加载骨架（纯黑画面 + HUD 行 + 控制条，另有可复用的骨架块与身份行/控制条占位），直播详情、两条竖屏流与沉浸路由 Suspense 占位共用 |

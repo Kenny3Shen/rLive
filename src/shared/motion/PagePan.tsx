@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
+import { FrozenRouter, RouterScope, useFrozenRouter } from "./FrozenRouter";
 import { EASE_OUT, motionProfile, PAGE_PAN_PERCENT, prefersReducedMotion } from "./tokens";
 
 // Web Animations 可以在 React 忙于主线程时由 Chromium 合成器推进这个 transform。
@@ -9,6 +10,8 @@ const PAGE_PAN_EASING = EASE_OUT;
 type PanSnapshot = {
   key: string;
   node: ReactNode;
+  /** 离场页面必须带着自己那一刻的路由上下文，见 `FrozenRouter`。 */
+  router: FrozenRouter;
 };
 
 /**
@@ -49,7 +52,10 @@ export function PagePan({
   const scopeRef = useRef<HTMLDivElement>(null);
   const incomingRef = useRef<HTMLDivElement>(null);
   const outgoingRef = useRef<HTMLDivElement>(null);
-  const committedRef = useRef<PanSnapshot>({ key: panKey, node: children });
+  const { location, route } = useFrozenRouter();
+  // 上下文对象在路由变化时才换身份，因此可以用作快照副作用的依赖。
+  const router = useMemo<FrozenRouter>(() => ({ location, route }), [location, route]);
+  const committedRef = useRef<PanSnapshot>({ key: panKey, node: children, router });
   const [transition, setTransition] = useState<{
     renderedKey: string;
     outgoing: PanSnapshot | null;
@@ -76,8 +82,8 @@ export function PagePan({
   useLayoutEffect(() => {
     // 被放弃的并发渲染不得推进页面快照。下一次过渡总是从 React 真正提交的内容
     // 出发。
-    committedRef.current = { key: panKey, node: children };
-  }, [children, panKey]);
+    committedRef.current = { key: panKey, node: children, router };
+  }, [children, panKey, router]);
 
   useLayoutEffect(() => {
     if (!enabled || !outgoing) return;
@@ -178,7 +184,7 @@ export function PagePan({
             contentClassName,
           )}
         >
-          {outgoing.node}
+          <RouterScope value={outgoing.router}>{outgoing.node}</RouterScope>
         </div>
       )}
       <div
@@ -186,7 +192,9 @@ export function PagePan({
         key={panKey}
         className={cn("relative h-full min-h-0 min-w-0", contentClassName)}
       >
-        {children}
+        {/* 两侧必须是同一种包裹元素，React 才会把上一帧的层原样搬进离场位；
+            详见 `RouterScope`。 */}
+        <RouterScope value={router}>{children}</RouterScope>
       </div>
     </div>
   );
