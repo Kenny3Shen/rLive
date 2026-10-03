@@ -13,7 +13,7 @@
 | 账号 | 已支持 | 桌面端在独立的抖音官方窗口扫码登录，移动端手动保存 Cookie；账号设置验证登录态并显示昵称；匿名浏览会建立短时网页会话。 |
 | 实时弹幕接收 | 已支持 | 本地计算短时 MSSDK 签名，直连官方 WSS，接收聊天、礼物、点赞、进场等事件。 |
 | 短视频推荐 | 已支持 | `/shorts/douyin` 沉浸式滑动流，携带本机登录 Cookie 请求 `tab/feed`，三槽预热并临近末尾自动补货；无账号级个性化保证，不自动降级匿名。 |
-| 公开作品 | 已支持 | 「作品链接」页签支持作品 ID/链接/分享短链，经详情接口选可信 H.264，用原生 MP4 与本机代理播放。 |
+| 作品链接 | 已移除 | 不再提供单作品输入；`douyin_video_resolve` 只接受推荐条目自带的字符串作品 ID，且与推荐一样要求登录 Cookie。 |
 | 弹幕发送 | 未支持 | 仅接收实时弹幕，不提供手动或会话级自动发送。 |
 
 ## rLive 接入接口
@@ -37,6 +37,8 @@
 
 `DouyinVideoFeedPage` 只返回元数据，当前作品和两个邻居经共享三槽调用详情与 `stream_proxy`；
 当前可播后仅下一条预热媒体，原生 MP4 不加载 DASH 内核。
+详情取流命令 `douyin_video_resolve` 只接受推荐流下发的字符串作品 ID：链接、`v.douyin.com` 短链
+与分享文字解析随「作品链接」功能一起移除，命令也不再有不强制登录的分支。
 推荐请求前的 Cookie 字段检查不是有效性认证，不将 Cookie 存在或推荐返回成功描述为个性化已经生效；不采集 Cookie
 用于 A/B，不绕过验证。产品行为、错误恢复、生命周期与测试入口见[短视频功能](短视频功能.md)。
 
@@ -113,7 +115,6 @@
 - 直播与点播共用的请求、匿名会话、Cookie 作用域及签名 query 编码：`src-tauri/src/sites/douyin/api.rs`
 - 点播推荐/详情：`src-tauri/src/sites/douyin/video.rs`、`src-tauri/src/commands/douyin_video.rs`
 - 推荐入口/共享舞台与媒体适配器：`src/features/shorts/DouyinVideoPage.tsx`、`DouyinShortsFeed.tsx`、`shortsPlaybackSource.ts`
-- 独立作品链接播放：`src/features/shorts/DouyinVideoPlayer.tsx`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
 - 官网登录窗口与临时会话：`src-tauri/src/account/douyin_qr.rs`
 - Cookie 验证：`src-tauri/src/account/douyin_profile.rs`，由 `src-tauri/src/commands/account.rs` 接入账号摘要

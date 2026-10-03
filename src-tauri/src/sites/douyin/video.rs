@@ -1,9 +1,12 @@
-//! 抖音短视频推荐与公开作品；不经过直播 LiveSite trait。
+//! 抖音短视频推荐；不经过直播 LiveSite trait。
+//!
+//! 作品链接输入与分享文字解析已随「作品链接」功能一并移除：这里只按推荐流下发的
+//! 字符串作品 ID 取详情，不再接受 URL、短链或自由文本。
 use super::DouyinSite;
-use super::api::{DEFAULT_USER_AGENT, cookie_pairs, generate_ms_token, normalize_cookie};
+use super::api::{cookie_pairs, generate_ms_token, normalize_cookie};
 use crate::error::{AppError, AppResult};
 use crate::models::douyin_video::{DouyinVideoFeedPage, DouyinVideoItem};
-use reqwest::{Client, Url};
+use reqwest::Url;
 use serde_json::Value;
 
 pub const VIDEO_REFERER: &str = "https://www.douyin.com/";
@@ -33,114 +36,8 @@ fn invalid(message: &str) -> AppError {
     AppError::new("douyin_video_invalid", message).with_site("douyin")
 }
 
-#[derive(Debug, PartialEq)]
-enum VideoInput {
-    Id(String),
-    Short(Url),
-}
-
 fn valid_id(id: &str) -> bool {
     (10..=24).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// 每一次跳转都校验，不能用字符串前缀判断主机，也不发送 Cookie。
-fn parse_video_url(url: Url) -> AppResult<VideoInput> {
-    if url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-    {
-        return Err(invalid(
-            "仅支持无账号信息、使用默认端口的 HTTPS 抖音作品链接",
-        ));
-    }
-    let path = url.path().trim_matches('/');
-    let id = match url.host_str().unwrap_or_default() {
-        "www.douyin.com" | "douyin.com" => {
-            path.strip_prefix("video/").map(str::to_string).or_else(|| {
-                if path.is_empty() {
-                    url.query_pairs()
-                        .find(|(k, _)| k == "modal_id")
-                        .map(|(_, v)| v.into_owned())
-                } else {
-                    None
-                }
-            })
-        }
-        "www.iesdouyin.com" | "iesdouyin.com" => {
-            path.strip_prefix("share/video/").map(str::to_string)
-        }
-        "v.douyin.com"
-            if !path.is_empty()
-                && path.len() <= 64
-                && path.bytes().all(|b| b.is_ascii_alphanumeric()) =>
-        {
-            return Ok(VideoInput::Short(url));
-        }
-        _ => None,
-    };
-    match id.filter(|id| valid_id(id)) {
-        Some(id) => Ok(VideoInput::Id(id)),
-        None => Err(invalid(
-            "链接不是受支持的抖音视频作品；不支持直播、图集或作者主页",
-        )),
-    }
-}
-
-fn parse_input(input: &str) -> AppResult<VideoInput> {
-    let input = input.trim();
-    if input.len() > 4096 {
-        return Err(invalid("分享内容过长，请只粘贴作品链接"));
-    }
-    if valid_id(input) {
-        return Ok(VideoInput::Id(input.into()));
-    }
-    let start = input
-        .find("https://")
-        .ok_or_else(|| invalid("请粘贴 HTTPS 抖音作品链接、分享文字或作品 ID"))?;
-    let raw = input[start..]
-        .split(|c: char| c.is_whitespace() || "\"'<>，。；！）】》".contains(c))
-        .next()
-        .unwrap_or_default();
-    let url = Url::parse(raw).map_err(|_| invalid("作品链接格式无效"))?;
-    parse_video_url(url)
-}
-
-pub async fn resolve_video_id(input: &str, no_redirect: &Client) -> AppResult<String> {
-    let mut target = parse_input(input)?;
-    for _ in 0..5 {
-        let VideoInput::Short(url) = target else {
-            if let VideoInput::Id(id) = target {
-                return Ok(id);
-            }
-            unreachable!();
-        };
-        let response = no_redirect
-            .get(url.clone())
-            .header("user-agent", DEFAULT_USER_AGENT)
-            .send()
-            .await
-            .map_err(|_| invalid("抖音短链请求失败，请稍后重试"))?;
-        if !response.status().is_redirection() {
-            return Err(invalid(
-                "抖音短链未返回作品跳转，可能需要访问验证；可改用完整作品链接",
-            ));
-        }
-        let location = response
-            .headers()
-            .get("location")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| invalid("抖音短链缺少跳转地址"))?;
-        let next = url
-            .join(location)
-            .map_err(|_| invalid("抖音短链跳转地址无效"))?;
-        target = parse_video_url(next)?;
-    }
-    if let VideoInput::Id(id) = target {
-        Ok(id)
-    } else {
-        Err(invalid("抖音短链跳转次数过多"))
-    }
 }
 
 fn media_url(address: &Value) -> Option<String> {
@@ -325,33 +222,22 @@ impl DouyinSite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sites::douyin::DEFAULT_USER_AGENT;
     use serde_json::json;
     const ID: &str = "7520000000000000001";
     #[test]
-    fn validates_inputs_without_losing_large_ids() {
-        for input in [
-            ID.to_string(),
-            format!("https://www.douyin.com/video/{ID}?x=1"),
-            format!("https://www.iesdouyin.com/share/video/{ID}/"),
-            format!("分享：https://www.douyin.com/video/{ID} 复制打开"),
-        ] {
-            assert_eq!(parse_input(&input).unwrap(), VideoInput::Id(ID.into()));
-        }
-        assert!(matches!(
-            parse_input("复制 https://v.douyin.com/AbC123/ 打开"),
-            Ok(VideoInput::Short(_))
-        ));
+    fn rejects_anything_that_is_not_a_feed_item_id() {
+        assert!(valid_id(ID));
         for raw in [
-            "https://127.0.0.1/video/7520000000000000001",
-            "https://www.douyin.com.evil.test/video/7520000000000000001",
-            "https://user@www.douyin.com/video/7520000000000000001",
-            "https://www.douyin.com:8443/video/7520000000000000001",
-            "http://www.douyin.com/video/7520000000000000001",
-            "https://live.douyin.com/7520000000000000001",
-            "https://www.douyin.com/note/7520000000000000001",
-            "https://v.douyin.com/private/other",
+            "",
+            "752000000",
+            "7520000000000000000000001",
+            "https://www.douyin.com/video/7520000000000000001",
+            "复制 https://v.douyin.com/AbC123/ 打开",
+            "7520000000000000001a",
+            "-7520000000000000001",
         ] {
-            assert!(parse_input(raw).is_err(), "{raw}");
+            assert!(!valid_id(raw), "{raw}");
         }
     }
     #[test]
@@ -487,34 +373,30 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "需要网络；RLIVE_DOUYIN_TEST_ID 可指定公开作品，否则只取一批公开 feed 样本"]
+    #[ignore = "需要网络；只取一批公开 feed 样本，再按其中的作品 ID 取详情"]
     async fn public_video_smoke() {
         let site = DouyinSite::default();
-        let id = if let Ok(id) = std::env::var("RLIVE_DOUYIN_TEST_ID") {
-            id
-        } else {
-            site.ensure_web_session().await.unwrap();
-            let params = vec![
-                ("device_platform".into(), "webapp".into()),
-                ("aid".into(), "6383".into()),
-                ("channel".into(), "channel_pc_web".into()),
-                ("count".into(), "3".into()),
-                ("msToken".into(), generate_ms_token()),
-            ];
-            let feed = site
-                .get_signed_json(
-                    "https://www.douyin.com/aweme/v1/web/tab/feed/",
-                    &params,
-                    VIDEO_REFERER,
-                )
-                .await
-                .unwrap();
-            feed["aweme_list"]
-                .as_array()
-                .and_then(|items| items.iter().find_map(|item| item["aweme_id"].as_str()))
-                .expect("公开 feed 没有视频样本")
-                .to_string()
-        };
+        site.ensure_web_session().await.unwrap();
+        let params = vec![
+            ("device_platform".into(), "webapp".into()),
+            ("aid".into(), "6383".into()),
+            ("channel".into(), "channel_pc_web".into()),
+            ("count".into(), "3".into()),
+            ("msToken".into(), generate_ms_token()),
+        ];
+        let feed = site
+            .get_signed_json(
+                "https://www.douyin.com/aweme/v1/web/tab/feed/",
+                &params,
+                VIDEO_REFERER,
+            )
+            .await
+            .unwrap();
+        let id = feed["aweme_list"]
+            .as_array()
+            .and_then(|items| items.iter().find_map(|item| item["aweme_id"].as_str()))
+            .expect("公开 feed 没有视频样本")
+            .to_string();
         let (item, url) = site.video_detail(&id).await.unwrap();
         let response = crate::http_client::default_client()
             .get(url)

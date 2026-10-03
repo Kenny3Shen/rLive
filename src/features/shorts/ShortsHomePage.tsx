@@ -14,7 +14,7 @@ const platforms = [
   {
     siteId: "douyin",
     title: "抖音短视频",
-    description: "推荐视频与作品链接",
+    description: "推荐视频流",
     to: DOUYIN_SHORTS_PATH,
   },
 ] as const;

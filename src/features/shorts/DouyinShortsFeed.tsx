@@ -7,7 +7,6 @@ import {
   FastForward,
   Film,
   Info,
-  Link2,
   RefreshCw,
   Settings,
   Volume2,
@@ -212,9 +211,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
                 <Empty>
                   <EmptyHeader>
                     <EmptyTitle>暂无可播放推荐</EmptyTitle>
-                    <EmptyDescription>
-                      本批没有支持的公开视频，可刷新或改用作品链接。
-                    </EmptyDescription>
+                    <EmptyDescription>本批没有支持的公开视频，可刷新重试。</EmptyDescription>
                   </EmptyHeader>
                   <Button variant="outline" onClick={onRefresh}>
                     刷新推荐
@@ -275,11 +272,6 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
                       onClick={run(playback.retry)}
                     />
                     <PlayerToolTile icon={RefreshCw} label="刷新推荐" onClick={run(onRefresh)} />
-                    <PlayerToolTile
-                      icon={Link2}
-                      label="作品链接"
-                      onClick={run(() => navigate("/shorts/douyin?tab=link"))}
-                    />
                     <PlayerToolTile
                       icon={Film}
                       label="B 站短视频"
@@ -390,12 +382,6 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
                       ? `${index + 1} / ${items.length} 条已加载`
                       : "抖音短视频"}
               </p>
-              <Link
-                to="/shorts/douyin?tab=link"
-                className={buttonVariants({ variant: "secondary", size: "sm" })}
-              >
-                作品链接
-              </Link>
               <MediaButton
                 aria-label={infoVisible ? "隐藏视频信息" : "显示视频信息"}
                 title={infoVisible ? "隐藏视频信息" : "显示视频信息"}

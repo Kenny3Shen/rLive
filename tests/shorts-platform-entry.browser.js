@@ -69,13 +69,14 @@ async (page) => {
     count = await calls();
     assert(count.bilibili.every(seed => seed === "BVfixture") && count.douyin === 0, "旧深链丢失种子或请求了错误平台");
     assert(page.url().includes("from=legacy"), "旧深链丢失其他查询参数");
+    // 作品链接已移除：旧深链只能落到推荐流，不再有单作品输入。
     await page.goto(`${origin}/shorts/douyin?tab=link`);
-    await page.waitForSelector("#douyin-video-input");
-    count = await calls();
-    assert(count.bilibili.length === 0 && count.douyin === 0, "作品链接模式不应请求推荐");
-    await page.getByRole("link", { name: "短视频", exact: true }).click();
+    await page.waitForFunction(() => window.__shortsEntryCalls?.douyin > 0);
+    assert(await page.locator("#douyin-video-input").count() === 0, "作品链接输入仍存在");
+    assert(await page.locator('[data-slot="shorts-viewport"]').count() === 1, "旧链接深链未进入推荐流");
+    await page.getByRole("button", { name: "返回上一页", exact: true }).click();
     await hub();
-    return { passed: true, selectionMakesNoFeedCalls: true, platformsIsolated: true, backToSelection: true, legacySeedPreserved: true, linkModeIsolated: true };
+    return { passed: true, selectionMakesNoFeedCalls: true, platformsIsolated: true, backToSelection: true, legacySeedPreserved: true, linkDeepLinkFallsBackToFeed: true };
   } finally {
     if (oldViewport) await page.setViewportSize(oldViewport);
     await page.goto(`${origin}/settings`);

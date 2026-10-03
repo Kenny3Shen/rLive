@@ -27,11 +27,9 @@ export function douyinVideoFeed(): Promise<DouyinVideoFeedPage> {
   return invokeCmd("douyin_video_feed");
 }
 
-export function douyinVideoResolve(
-  input: string,
-  requireLogin = false,
-): Promise<DouyinVideoPlayback> {
-  return invokeCmd("douyin_video_resolve", { input, requireLogin });
+/** 取推荐条目的播放地址。只接受推荐流下发的字符串作品 ID，登录 Cookie 是硬前提。 */
+export function douyinVideoResolve(input: string): Promise<DouyinVideoPlayback> {
+  return invokeCmd("douyin_video_resolve", { input });
 }
 
 export function douyinVideoStop(info: DouyinVideoPlayback): Promise<void> {

@@ -1,4 +1,4 @@
-//! 抖音短视频推荐与单作品播放，不写入 B 站观看历史。
+//! 抖音短视频推荐，不写入 B 站观看历史。
 use super::video::PlaybackProxyLease;
 use crate::error::{AppError, AppResult};
 use crate::models::{
@@ -7,7 +7,7 @@ use crate::models::{
 };
 use crate::sites::douyin::{
     DEFAULT_USER_AGENT, DouyinSite,
-    video::{VIDEO_REFERER, require_feed_cookie, resolve_video_id},
+    video::{VIDEO_REFERER, require_feed_cookie},
 };
 use crate::state::AppState;
 use crate::stream_proxy::StreamProxyStartOptions;
@@ -52,11 +52,14 @@ fn require_same_account(current: &str, expected: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// 推荐流单条作品的取流入口：只接受推荐条目自带的字符串作品 ID。
+///
+/// 登录 Cookie 是推荐流的硬前提，因此这里没有匿名分支 —— 作品链接输入移除后，
+/// 不再存在“不强制登录”的调用方。
 #[tauri::command]
 pub async fn douyin_video_resolve(
     state: State<'_, AppState>,
     input: String,
-    require_login: Option<bool>,
 ) -> AppResult<DouyinVideoPlayback> {
     let (cookie, proxy) = {
         let conn = state.conn()?;
@@ -65,17 +68,13 @@ pub async fn douyin_video_resolve(
             crate::settings::get(&conn)?.proxy,
         )
     };
-    if require_login.unwrap_or(false) {
-        require_feed_cookie(&cookie)?;
-    }
-    let expected_cookie = require_login.unwrap_or(false).then(|| cookie.clone());
-    let short_client = crate::http_client::build_no_redirect_client(proxy.as_deref())?;
-    let id = resolve_video_id(&input, &short_client).await?;
+    require_feed_cookie(&cookie)?;
+    let expected_cookie = cookie.clone();
     let site = DouyinSite::new(
         crate::http_client::client_for_proxy(proxy.as_deref())?,
         cookie,
     );
-    let (item, url) = site.video_detail(&id).await?;
+    let (item, url) = site.video_detail(&input).await?;
     let session_id = format!("douyin-video-{}", uuid::Uuid::new_v4().simple());
     let lease = PlaybackProxyLease::new(&state.stream_proxy, [session_id.clone()]);
     let play_url = state
@@ -93,10 +92,8 @@ pub async fn douyin_video_resolve(
             },
         )
         .await?;
-    if let Some(expected) = expected_cookie {
-        // 取流途中账号变化时，不把旧登录态创建的代理交给前端；lease 自动回滚。
-        check_feed_account(&state, &expected)?;
-    }
+    // 取流途中账号变化时，不把旧登录态创建的代理交给前端；lease 自动回滚。
+    check_feed_account(&state, &expected_cookie)?;
     lease.commit();
     Ok(DouyinVideoPlayback {
         item,

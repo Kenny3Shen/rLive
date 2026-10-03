@@ -1,4 +1,5 @@
 // 抖音共享滑动流：真实 React/Query/原生解码，只模拟 IPC，媒体拼自本地 DASH 夹具。
+// 「作品链接」已移除，因此「离开页面」走平台选择页返回再进入（不再是页签切换）。
 // playwright-cli -s=rwin --raw run-code --filename=tests/douyin-feed.browser.js
 // oxlint-disable-next-line no-unused-expressions -- run-code 要求顶层函数表达式。
 async (page) => {
@@ -76,7 +77,7 @@ async (page) => {
         }
         if (command === "douyin_video_resolve") {
           check(Object.values(items).some(value => value.id === args.input), "取流身份不是字符串夹具 ID");
-          check(args.requireLogin === (args.input !== items.x.id), "推荐取流必须登录，作品链接不能强制登录");
+          check(Object.keys(args).length === 1, "推荐取流不再接受调用方参数");
           resolves.push({ ...args });
           if (args.input === items.k.id) { waitingMedia = true; return lateMedia.promise; }
           return playback(args.input);
@@ -99,14 +100,17 @@ async (page) => {
         await until(() => [...document.querySelectorAll("button")].some(el => el.textContent.trim() === "刷新推荐"), "菜单未展开");
       };
       const refresh = async () => { await menu(); await click("刷新推荐", document); };
-      const toLink = async () => {
-        root.querySelector('a[href="/shorts/douyin?tab=link"]').click();
-        await until(() => !!root.querySelector("#douyin-video-input"), "未进入作品链接");
-        assert(!viewport(), "离开推荐仍挂载滑动舞台");
+      /** 返回平台选择页：推荐流的卸载路径，等价于用户离开这一页。 */
+      const leave = async () => {
+        root.querySelector('button[aria-label="返回上一页"]').click();
+        await until(() => !viewport(), "离开后仍挂载滑动舞台");
       };
-      const toFeed = async () => {
-        byText('[role="tab"]', "推荐").click();
-        await until(() => !!viewport(), "未进入推荐舞台");
+      /** 从平台选择页重新进入推荐流。 */
+      const reenter = async () => {
+        const link = root.querySelector('a[href="/shorts/douyin"]');
+        assert(link, "平台选择页没有抖音推荐入口");
+        link.click();
+        await until(() => !!viewport(), "未重新进入推荐舞台");
       };
       const counts = async (n) => { await frames(); assert(!errors.length, errors.join("；")); assert(feedCalls.length === n, `预期${n}批，实际${feedCalls.length}`); };
       const playing = async (key) => {
@@ -128,29 +132,26 @@ async (page) => {
         harness.render(harness.h(QueryClientProvider, { client }, harness.h(MemoryRouter, { initialEntries: ["/shorts/douyin"] },
           harness.h(Routes, null,
             harness.h(Route, { path: "/shorts/douyin", element: harness.h(DouyinVideoPage) }),
-            harness.h(Route, { path: "/", element: harness.h(Link, { to: "/shorts/douyin" }, "进入抖音") }),
+            harness.h(Route, { path: "/shorts", element: harness.h(Link, { to: "/shorts/douyin" }, "进入抖音推荐") }),
           ),
         )));
         await until(() => root.textContent.includes("夹具：请先登录抖音"), "登录错误未显示");
         assert(!/实验|灰度/.test(root.textContent), "仍显示实验标识");
         assert(root.querySelector('a[href="/settings?section=account"]'), "没有账号设置入口");
         await counts(1);
-        await toLink();
-        const input = root.querySelector("#douyin-video-input");
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, items.x.id);
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        await frames();
-        root.querySelector("form").requestSubmit();
-        await until(() => !!root.querySelector("video"), "作品链接播放失败");
-        await counts(1);
-        await toFeed();
+        // 作品链接已删除：底栏与「更多操作」都不该再出现它的入口。
+        assert(!root.textContent.includes("作品链接"), "作品链接入口仍存在");
+        assert(!root.querySelector('a[href="/shorts/douyin?tab=link"]'), "底栏仍有作品链接入口");
+        await menu();
+        assert(![...document.querySelectorAll("button")].some(el => el.textContent.trim() === "作品链接"), "更多操作仍提供作品链接入口");
+        await click("刷新推荐", document);
+        await counts(2);
         const first = await playing("a");
         await until(() => root.querySelector('[data-slot="shorts-panel"][inert] video')?.readyState >= 3, "下一条未预热", 15000);
         const warmed = root.querySelector('[data-slot="shorts-panel"][inert] video');
         assert(warmed.paused && warmed.currentTime === 0, "预热条目不应播放");
         assert(resolves.filter(call => call.input === items.b.id).length === 1, "预热重复取流");
         assert(root.querySelector('[data-slot="shorts-seek"]'), "未接入共享进度条");
-        await counts(2);
         // 共享长按倍速与循环链路，不用伪造媒体状态。
         const frame = first.closest('[data-slot="shorts-frame"]');
         frame.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 70, pointerType: "mouse", isPrimary: true, bubbles: true, buttons: 1 }));
@@ -159,7 +160,7 @@ async (page) => {
         await until(() => first.playbackRate === 1, "释放长按未恢复速度");
         first.currentTime = 9.8;
         await until(() => first.currentTime < 1 && !first.paused, "播完没有自动循环", 5000);
-        covered.push("默认登录错误与作品链接隔离；原生解码、长按倍速、自动循环；下一条预热但不播放");
+        covered.push("登录错误可见；作品链接入口已删除；原生解码、长按倍速、自动循环；下一条预热但不播放");
 
         viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
         const second = await playing("b");
@@ -230,10 +231,10 @@ async (page) => {
         lateRefresh.resolve(batch("x", false));
         await frames();
         assert(viewport().dataset.currentId === items.k.id, "迟到刷新污染新轮");
-        await toLink();
+        await leave();
         lateMedia.resolve(playback(items.k.id));
         await allReleased();
-        await toFeed();
+        await reenter();
         await playing("l");
         await counts(9);
         await refresh();
@@ -241,14 +242,14 @@ async (page) => {
         await counts(10);
         await refresh();
         await counts(11);
-        await toLink();
-        await toFeed();
+        await leave();
+        await reenter();
         await playing("n");
         lateExit.resolve(batch("x", false));
         await frames();
         assert(viewport().dataset.currentId === items.n.id, "离页迟到元数据污染新轮");
         await counts(12);
-        await toLink();
+        await leave();
         await allReleased();
         assert(!errors.length, errors.join("；"));
         covered.push("刷新/离页迟到元数据取消、迟到媒体释放、空态可恢复；无B站IPC，全部代理仅释放一次");

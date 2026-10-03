@@ -132,7 +132,7 @@ describe("短视频平台适配器", () => {
     expect(await source.load(douyin)).toBe(native);
     await source.stop(native);
     expect(calls).toEqual([
-      { cmd: "douyin_video_resolve", payload: { input: douyin.id, requireLogin: true } },
+      { cmd: "douyin_video_resolve", payload: { input: douyin.id } },
       { cmd: "douyin_video_stop", payload: { sessionId: native.session_id } },
     ]);
   });

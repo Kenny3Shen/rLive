@@ -78,7 +78,7 @@ export const DOUYIN_SHORTS_SOURCE: ShortsPlaybackSource<DouyinVideoItem, DouyinV
   kind: "native",
   key: (item) => `douyin:${item.id}`,
   canPlay: (item) => item.id.trim() !== "",
-  load: (item) => douyinVideoResolve(item.id, true),
+  load: (item) => douyinVideoResolve(item.id),
   stop: douyinVideoStop,
   sessionId: (info) => info.session_id,
   url: (info) => info.play_url,
