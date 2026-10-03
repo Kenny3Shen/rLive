@@ -23,7 +23,15 @@ const scheduleStarts: string[] = [];
 
 class Dash extends EventTarget {
   static last: Dash;
-  source: { src?: string; engine?: { dashJs?: unknown } } | null = null;
+  sourceWrites = 0;
+  private currentSource: { src?: string; engine?: { dashJs?: unknown } } | null = null;
+  get source() {
+    return this.currentSource;
+  }
+  set source(value: typeof this.currentSource) {
+    this.sourceWrites += 1;
+    this.currentSource = value;
+  }
   destroyed = false;
   handlers = new Map<string, (event: unknown) => void>();
   engine = {
@@ -133,6 +141,22 @@ describe("短视频 DASH 缓冲策略", () => {
     expect(scheduleStarts).toEqual(["video", "audio"]);
     player.setDashBufferMode("active");
     expect(scheduleStarts).toEqual(["video", "audio", "video", "audio"]);
+    player.destroy();
+  });
+
+  test("等价缓冲模式与同 URL 不写 source，不丢失暂停闸门", () => {
+    scheduleStarts.length = 0;
+    const player = create();
+    const dash = Dash.last;
+    player.setDashBufferMode("paused");
+    const writes = dash.sourceWrites;
+    player.setDashBufferMode("paused");
+    player.switchDashSource("http://localhost/one.mpd");
+    expect(dash.sourceWrites).toBe(writes);
+    // 同源调用不能抹掉 paused，否则下一次提升为 active 会漏掉重启调度。
+    player.setDashBufferMode("active");
+    expect(scheduleStarts).toEqual(["video", "audio"]);
+    expect(dash.sourceWrites).toBe(writes + 1);
     player.destroy();
   });
 

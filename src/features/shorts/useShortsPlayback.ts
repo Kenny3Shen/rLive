@@ -419,8 +419,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
    */
   const requestAutoplay = useCallback(
     (player: VideoJsPlayerInstance, media: HTMLVideoElement, token: number) => {
-      // 与直播/播放页同源：先试带声音，被自动播放策略拒绝时降级静音起播再
-      // 立刻尝试恢复声音；用户手动静音过则保持静音。
+      // 与直播/播放页同源：策略拒绝后静音起播，并保持静音直到用户手动恢复。
       requestPlayerAutoplay(
         player,
         media,
@@ -429,9 +428,8 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
           sessionRef.current.mode === "play" &&
           !sessionRef.current.userPaused,
         () => {
-          if (mutedRef.current) return false;
-          setMuted(false);
-          return true;
+          mutedRef.current = true;
+          setMuted(true);
         },
       );
     },

@@ -929,11 +929,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           video.load();
           applyWebPlayerAudio(video, volumeRef.current, mutedRef.current);
 
-          const recoverMutedAutoplay = () => {
-            if (mutedRef.current) return false;
-            mutedRef.current = false;
-            setMuted(false);
-            return true;
+          const onAutoplayMuted = () => {
+            mutedRef.current = true;
+            setMuted(true);
           };
 
           const modules = await videoJsModulesPromise;
@@ -1177,7 +1175,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             player,
             video,
             () => isCurrentPlayer() && !userPausedRef.current,
-            recoverMutedAutoplay,
+            onAutoplayMuted,
           );
 
           // 已有帧则标记运行中；否则等待 play 事件。

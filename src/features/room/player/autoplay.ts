@@ -1,36 +1,41 @@
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
-}
-
 /**
- * 请求播放但不让代理生命周期队列被占住。部分 WebView 会在路由导航后拒绝非静音
- * 请求，因此静音重试一次，播放开始后再恢复声音。
+ * 请求播放但不占用代理生命周期队列；isCurrent 也应在用户暂停后返回 false。
+ * 仅策略阻拦会静音降级，降级后保持静音，等待用户主动恢复声音。
  */
 export function requestPlayerAutoplay(
   player: { play: () => Promise<void> | null },
   video: Pick<HTMLVideoElement, "muted">,
   isCurrent: () => boolean,
-  onMutedAutoplayRecovered: () => boolean | void,
+  onAutoplayMuted?: () => void,
   onAutoplayStarted?: () => void,
 ): void {
   void (async () => {
-    try {
-      await player.play();
-      if (isCurrent()) onAutoplayStarted?.();
-      return;
-    } catch {
-      if (!isCurrent()) return;
-      video.muted = true;
+    let retriedAbort = false;
+    let retriedMuted = false;
+    while (isCurrent()) {
       try {
         await player.play();
-        await sleep(80);
+      } catch (error) {
         if (!isCurrent()) return;
-        const shouldRestoreAudio = onMutedAutoplayRecovered() !== false;
-        if (shouldRestoreAudio) video.muted = false;
-        onAutoplayStarted?.();
-      } catch {
-        // 播放器错误事件上报可操作的播放失败信息。
+        const name =
+          typeof error === "object" && error !== null && "name" in error ? error.name : undefined;
+        if (name === "AbortError" && !retriedAbort) {
+          // 适配器初始化时的 load 可能中断播放，只允许按当前音量重试一次。
+          retriedAbort = true;
+          continue;
+        }
+        if (name === "NotAllowedError" && !video.muted && !retriedMuted) {
+          retriedMuted = true;
+          video.muted = true;
+          if (!isCurrent()) return;
+          onAutoplayMuted?.();
+          continue;
+        }
+        // 网络、解码等媒体故障交给已有的播放器错误事件，不以静音掩盖。
+        return;
       }
+      if (isCurrent()) onAutoplayStarted?.();
+      return;
     }
   })();
 }

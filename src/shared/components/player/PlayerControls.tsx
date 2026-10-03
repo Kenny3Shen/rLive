@@ -1011,7 +1011,7 @@ export function PlayerControls({
           {/* 4. 字幕：常驻控制栏，不可用时为禁用按钮（位置固定在全屏按钮左侧）。 */}
           {captionsSlot}
 
-          {/* 5. 画中画：交给原生 PiPButton —— 它按 `pipAvailability` 自行隐藏，
+          {/* 5. 画中画：交给原生 PiPButton —— 它按 `pictureInPictureAvailability` 自行隐藏，
               移动端 WebView 不支持画中画时不会再留下一个点了没反应的按钮。 */}
           <ButtonTooltip side="top">
             <PiPButton

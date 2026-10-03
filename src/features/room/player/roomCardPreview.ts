@@ -272,13 +272,7 @@ export function startRoomCardPreview(request: RoomCardPreviewRequest): CardPrevi
 
       // Video.js 适配器初始化时可能触发一次原生 load，打断首个 play() 并抛 AbortError。
       // 自动播放 helper 负责吸收它，否则卡片只剩加载动画。
-      requestPlayerAutoplay(
-        instance,
-        mounted.video,
-        () => !stopped && surface === mounted,
-        // 预览始终静音：绝不能因为静音重试成功就把声音放出来。
-        () => false,
-      );
+      requestPlayerAutoplay(instance, mounted.video, () => !stopped && surface === mounted);
       startTimer = window.setTimeout(() => {
         startTimer = null;
         session.stop();

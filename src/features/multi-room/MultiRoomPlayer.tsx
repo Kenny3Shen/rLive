@@ -312,7 +312,7 @@ function MainMultiRoomControls({
   const loadError = playback.loadError ?? player.loadError ?? player.fullscreenError;
   const pictureInPicture = useVideoJsPiP();
   const toggleAudioOnly = useCallback(() => {
-    if (!audioOnly && pictureInPicture?.pip) {
+    if (!audioOnly && pictureInPicture?.isPictureInPicture) {
       void pictureInPicture.exitPictureInPicture();
     }
     onToggleAudioOnly();

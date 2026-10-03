@@ -146,13 +146,8 @@ function startVideoCardPreview(request: VideoCardPreviewRequest): CardPreviewSes
       instance.on("error", () => session.stop());
 
       // Video.js 适配器初始化时可能触发一次原生 load，自动播放 helper 会吸收 AbortError。
-      // 恢复钩子永远返回 false，预览绝不能把声音放出来。
-      requestPlayerAutoplay(
-        instance,
-        mounted.video,
-        () => !stopped && surface === mounted,
-        () => false,
-      );
+      // 预览始终静音，重试也不解除静音。
+      requestPlayerAutoplay(instance, mounted.video, () => !stopped && surface === mounted);
       startTimer = window.setTimeout(() => {
         startTimer = null;
         session.stop();

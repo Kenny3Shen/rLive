@@ -252,19 +252,34 @@ function IptvPlayerContent({
     : undefined;
   const playerControlVolume = nativeMediaVolume ?? player.volume;
   const playerControlMuted =
-    nativeMediaVolume !== undefined ? nativeMediaVolume <= 0 : player.muted;
+    nativeMediaVolume !== undefined ? player.muted || nativeMediaVolume <= 0 : player.muted;
   const changePlayerVolume = player.changeVolume;
+  const setPlayerAudio = player.setAudio;
   const handlePlayerVolumeChange = useCallback(
     (value: number) => {
-      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(value)) return;
+      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(value)) {
+        setPlayerAudio(100, false);
+        return;
+      }
       changePlayerVolume(value);
     },
-    [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive],
+    [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive, setPlayerAudio],
   );
   const handleTogglePlayerMute = useCallback(() => {
+    if (nativePlayerControlsActive && player.muted) {
+      setPlayerAudio(100, false);
+      if (playerControlVolume > 0) return;
+    }
     if (nativePlayerControlsActive && androidPlayerControls.toggleMediaMute()) return;
     toggleMute();
-  }, [androidPlayerControls, nativePlayerControlsActive, toggleMute]);
+  }, [
+    androidPlayerControls,
+    nativePlayerControlsActive,
+    player.muted,
+    playerControlVolume,
+    setPlayerAudio,
+    toggleMute,
+  ]);
 
   // 音量记忆共享给所有播放表面；原生音量生效时真实音量是系统媒体音量，由 OS
   // 自己记住，这里不落盘以免把 100 写进桌面端的记忆。
@@ -368,7 +383,7 @@ function IptvPlayerContent({
   }, [error, onStatusChange, status]);
 
   useEffect(() => {
-    if (!audioOnly || !pictureInPicture?.pip) return;
+    if (!audioOnly || !pictureInPicture?.isPictureInPicture) return;
     void pictureInPicture.exitPictureInPicture();
   }, [audioOnly, pictureInPicture]);
 

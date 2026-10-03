@@ -336,7 +336,7 @@ class VideoJsPlayer {
    * **解除 `paused` 闸门时必须显式重启调度**（见下）。
    */
   setDashBufferMode(mode: VideoJsDashBufferMode): void {
-    if (this.destroyed || !this.dash) return;
+    if (this.destroyed || !this.dash || this.dashBufferMode === mode) return;
     const resumed = this.dashBufferMode === "paused" && mode !== "paused";
     this.dashBufferMode = mode;
     this.dash.source = {
@@ -381,7 +381,7 @@ class VideoJsPlayer {
   }
 
   switchDashSource(url: string): void {
-    if (this.destroyed || !this.dash) return;
+    if (this.destroyed || !this.dash || this.options.url === url) return;
     this.endedAt = null;
     this.dashBufferMode = null;
     this.options.url = url;

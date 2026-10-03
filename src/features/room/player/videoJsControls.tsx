@@ -1,8 +1,9 @@
-import { forwardRef, type ComponentProps, type ReactNode } from "react";
-import { createPlayer, selectPiP, selectPlaybackRate } from "@videojs/react";
+import { forwardRef, useMemo, type ComponentProps, type ReactNode } from "react";
+import { createPlayer, liveFeature, selectPiP, selectPlaybackRate } from "@videojs/react";
 import { I18nProvider } from "@videojs/react/i18n";
 import "@videojs/react/i18n/locales/zh-CN/register";
-import { liveFeature } from "@videojs/core/dom";
+import { notify } from "@/components/ui/toast";
+import { videoJsPlayerErrorMessage } from "./videoJsPlayer";
 import { Video, videoFeatures } from "@videojs/react/video";
 import { PlayerSurface } from "@/components/videojs/skins/shared/skin-surface";
 import { LiveVideoHotkeys } from "@/components/videojs/skins/live-video/hotkeys";
@@ -19,7 +20,25 @@ const videoJsPlayer = createPlayer({
 export const VideoJsPlayerProvider = videoJsPlayer.Player;
 export const useVideoJsPlayer = videoJsPlayer.usePlayer;
 export const useVideoJsMedia = videoJsPlayer.useMedia;
-export const useVideoJsPiP = () => videoJsPlayer.usePlayer(selectPiP);
+/** 订阅官方 PiP 状态；浏览器拒绝切换只提示，不升级为致命播放错误。 */
+export function useVideoJsPiP() {
+  const pip = videoJsPlayer.usePlayer(selectPiP);
+  return useMemo(() => {
+    if (!pip) return undefined;
+    const run = async (action: () => Promise<void>) => {
+      try {
+        await action();
+      } catch (error) {
+        notify.error("切换画中画失败", videoJsPlayerErrorMessage(error, "浏览器暂不允许此操作"));
+      }
+    };
+    return {
+      ...pip,
+      requestPictureInPicture: () => run(pip.requestPictureInPicture),
+      exitPictureInPicture: () => run(pip.exitPictureInPicture),
+    };
+  }, [pip]);
+}
 export const useVideoJsPlaybackRate = () => videoJsPlayer.usePlayer(selectPlaybackRate);
 
 type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"> & {

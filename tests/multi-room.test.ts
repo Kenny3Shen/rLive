@@ -101,15 +101,15 @@ describe("multi-room audio defaults", () => {
       {
         play: () => {
           attempts += 1;
-          return attempts === 1 ? Promise.reject(new Error("autoplay blocked")) : Promise.resolve();
+          return attempts === 1
+            ? Promise.reject(new DOMException("autoplay blocked", "NotAllowedError"))
+            : Promise.resolve();
         },
       },
       video,
       () => true,
-      () => {
-        recovered?.();
-        return false;
-      },
+      undefined,
+      () => recovered?.(),
     );
     await recovery;
 

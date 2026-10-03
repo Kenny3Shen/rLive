@@ -520,19 +520,35 @@ function PlayerPaneContent({
   const playerControlVolume = nativePlayerControlState?.mediaVolume ?? player.volume;
   const playerControlMuted =
     nativePlayerControlState?.mediaVolume !== undefined
-      ? nativePlayerControlState.mediaVolume <= 0
+      ? player.muted || nativePlayerControlState.mediaVolume <= 0
       : player.muted;
 
   const handleToggleMute = useCallback(() => {
+    // 策略降级可能静音了 WebView 本身；用户点取消静音时先解除这一层，
+    // 系统已有音量则不再反向切成系统静音。
+    if (nativePlayerControlsActive && player.muted) {
+      setPlayerAudio(100, false);
+      if (playerControlVolume > 0) return;
+    }
     if (nativePlayerControlsActive && androidPlayerControls.toggleMediaMute()) return;
     togglePlayerMute();
-  }, [androidPlayerControls, nativePlayerControlsActive, togglePlayerMute]);
+  }, [
+    androidPlayerControls,
+    nativePlayerControlsActive,
+    player.muted,
+    playerControlVolume,
+    setPlayerAudio,
+    togglePlayerMute,
+  ]);
   const handlePlayerVolumeChange = useCallback(
     (value: number) => {
-      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(value)) return;
+      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(value)) {
+        setPlayerAudio(100, false);
+        return;
+      }
       changePlayerVolume(value);
     },
-    [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive],
+    [androidPlayerControls, changePlayerVolume, nativePlayerControlsActive, setPlayerAudio],
   );
 
   // 音量记忆共享给所有播放表面；原生音量生效时真实音量是系统媒体音量，由 OS
@@ -563,14 +579,17 @@ function PlayerPaneContent({
   );
   const handleToggleAudioOnly = useCallback(() => {
     const nextAudioOnly = !audioOnly;
-    if (nextAudioOnly && pictureInPicture?.pip) {
+    if (nextAudioOnly && pictureInPicture?.isPictureInPicture) {
       void pictureInPicture.exitPictureInPicture();
     }
     setAudioOnly(nextAudioOnly);
   }, [audioOnly, pictureInPicture]);
   const handleToggleOsd = useCallback(() => setOsdOn((visible) => !visible), []);
   const handleTogglePictureInPicture = useCallback(() => {
-    void pictureInPicture?.togglePictureInPicture();
+    if (!pictureInPicture) return;
+    void (pictureInPicture.isPictureInPicture
+      ? pictureInPicture.exitPictureInPicture()
+      : pictureInPicture.requestPictureInPicture());
   }, [pictureInPicture]);
   const mobileRoomActions = useMemo<readonly PlayerMobileRoomAction[]>(() => {
     const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
@@ -611,12 +630,12 @@ function PlayerPaneContent({
         onSelect: asr.toggle,
       });
     }
-    if (pictureInPicture?.pipAvailability === "available") {
+    if (pictureInPicture?.pictureInPictureAvailability === "available") {
       actions.push({
         id: "picture-in-picture",
-        label: pictureInPicture.pip ? "退出画中画" : "画中画",
+        label: pictureInPicture.isPictureInPicture ? "退出画中画" : "画中画",
         icon: PictureInPicture2,
-        pressed: pictureInPicture.pip,
+        pressed: pictureInPicture.isPictureInPicture,
         disabled: transportDisabled || player.mode === "fullscreen" || audioOnly,
         onSelect: handleTogglePictureInPicture,
       });

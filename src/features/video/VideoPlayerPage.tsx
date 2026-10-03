@@ -638,7 +638,7 @@ function VideoPlayerPageContent() {
   const nativePlayerControlsActive = androidPlayerControls.supported;
   const playerControlVolume = androidPlayerControls.state?.mediaVolume ?? volume;
   const playerControlMuted = androidPlayerControls.state
-    ? androidPlayerControls.state.mediaVolume <= 0
+    ? muted || androidPlayerControls.state.mediaVolume <= 0
     : muted;
   // 旋转与全屏绑定：转到横屏自动全屏，转回竖屏自动退出（仅限自动进来的那次）。
   useAndroidFullscreenOrientation({
@@ -1009,8 +1009,8 @@ function VideoPlayerPageContent() {
       };
     }
     const nextAudioOnly = !audioOnly;
-    if (nextAudioOnly && pictureInPicture?.pip) {
-      void pictureInPicture.exitPictureInPicture().catch(() => undefined);
+    if (nextAudioOnly && pictureInPicture?.isPictureInPicture) {
+      void pictureInPicture.exitPictureInPicture();
     }
     setAudioOnly(nextAudioOnly);
   }, [audioOnly, pictureInPicture]);
@@ -1544,21 +1544,18 @@ function VideoPlayerPageContent() {
           setWaiting(false);
           waitingRecovery.notifyError();
         });
-        // 进页自动起播，与直播同源：先试带声音的 play()，被自动播放策略拒绝时
-        // 降级为静音起播再立刻尝试恢复声音；用户手动静音过则保持静音。
+        // 进页自动起播，与直播同源：策略拒绝时仅降级为静音，等用户手动恢复声音。
         // 快照的播放意图由 onReady 恢复；普通进页继续走统一自动播放策略。
         if (!resume) {
-          const recoverMutedAutoplay = () => {
-            if (mutedRef.current) return false;
-            mutedRef.current = false;
-            setMuted(false);
-            return true;
+          const onAutoplayMuted = () => {
+            mutedRef.current = true;
+            setMuted(true);
           };
           requestPlayerAutoplay(
             player,
             media,
             () => !cancelled && playerRef.current === player && !userPausedRef.current,
-            recoverMutedAutoplay,
+            onAutoplayMuted,
           );
         }
       })
@@ -1651,7 +1648,10 @@ function VideoPlayerPageContent() {
 
   const setPlayerVolume = useCallback(
     (next: number) => {
-      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(next)) return;
+      if (nativePlayerControlsActive && androidPlayerControls.setMediaVolume(next)) {
+        commitPlayerVolume(100, false);
+        return;
+      }
       commitPlayerVolume(next, next === 0);
     },
     [androidPlayerControls, commitPlayerVolume, nativePlayerControlsActive],
@@ -1990,6 +1990,10 @@ function VideoPlayerPageContent() {
   );
 
   const toggleMute = useCallback(() => {
+    if (nativePlayerControlsActive && mutedRef.current) {
+      commitPlayerVolume(100, false);
+      if (playerControlVolume > 0) return;
+    }
     if (nativePlayerControlsActive && androidPlayerControls.toggleMediaMute()) return;
     const media = videoRef.current;
     if (mutedRef.current || volumeRef.current === 0) {
@@ -2008,7 +2012,7 @@ function VideoPlayerPageContent() {
     mutedRef.current = true;
     setMuted(true);
     if (media) media.muted = true;
-  }, [androidPlayerControls, nativePlayerControlsActive]);
+  }, [androidPlayerControls, commitPlayerVolume, nativePlayerControlsActive, playerControlVolume]);
 
   const togglePlayerFullscreen = useCallback(() => {
     if (fullscreen.fullscreen) {
