@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
-use reqwest::Url;
 use reqwest::header::{COOKIE, HeaderMap, REFERER, SET_COOKIE, USER_AGENT};
+use reqwest::{Client, StatusCode, Url};
 use serde_json::Value;
 
 use super::{DouyinSite, a_bogus, json_i64_opt, json_str};
@@ -136,8 +136,73 @@ impl DouyinSite {
         accept_json: bool,
     ) -> AppResult<String> {
         let cookie = self.cookie()?;
-        let mut request = self
-            .client
+        let sends_douyin_cookie = is_douyin_cookie_url(url);
+        let mut response = Self::send_text(
+            &self.client,
+            url,
+            params,
+            referer,
+            accept_json,
+            &cookie,
+            sends_douyin_cookie,
+        )
+        .await?;
+        // 抖音会按出口 IP 对详情类接口做风控：被拒的出口回
+        // `403 Blocked by ArgusSecurityPlugin`，而同一会话改走直连可以正常返回。
+        // 只在这一特征命中时换完全直连（不读环境变量与系统代理）的客户端重试一次，
+        // 重试自身失败时仍报告原始响应。
+        if is_argus_security_block(response.status, &response.text)
+            && let Ok(retried) = Self::send_text(
+                &self.fallback_client,
+                url,
+                params,
+                referer,
+                accept_json,
+                &cookie,
+                sends_douyin_cookie,
+            )
+            .await
+        {
+            response = retried;
+        }
+        let RawResponse {
+            status,
+            headers,
+            text,
+        } = response;
+        if sends_douyin_cookie {
+            self.remember_response_cookies(&headers)?;
+        }
+
+        if !status.is_success() {
+            if is_argus_security_block(status, &text) {
+                return Err(Self::err(
+                    "抖音风控拒绝了当前网络出口的请求（HTTP 403），直连重试也未通过；请在「设置 → 网络」更换代理或改用其他网络后重试",
+                ));
+            }
+            // 响应 body 可能由边缘节点生成，并可能反映请求取值。
+            // 这里用状态码做诊断已经足够安全。
+            return Err(Self::err(format!("HTTP {status}")));
+        }
+        if text.trim() == "blocked" {
+            return Err(Self::err("请求被抖音风控拦截，请稍后重试或更新 Cookie"));
+        }
+        Ok(text)
+    }
+
+    /// 发送一次请求并原样带回状态、响应头与正文；只有传输层失败才返回错误。
+    ///
+    /// 独立成函数是为了让出口被风控时能用另一个客户端重发同一条已签名请求。
+    async fn send_text(
+        client: &Client,
+        url: &str,
+        params: &[(String, String)],
+        referer: &str,
+        accept_json: bool,
+        cookie: &str,
+        sends_douyin_cookie: bool,
+    ) -> AppResult<RawResponse> {
+        let mut request = client
             .get(url)
             .header(USER_AGENT, DEFAULT_USER_AGENT)
             .header(REFERER, referer)
@@ -152,7 +217,6 @@ impl DouyinSite {
             );
         // 手动保存的 `.douyin.com` Cookie 绝不能被重放到其他可注册域，
         // 例如 `webcast.amemv.com`。
-        let sends_douyin_cookie = is_douyin_cookie_url(url);
         if sends_douyin_cookie && !cookie.is_empty() {
             request = request.header(COOKIE, cookie);
         }
@@ -172,19 +236,11 @@ impl DouyinSite {
             .text()
             .await
             .map_err(|_| Self::err("HTTP response body failed"))?;
-        if sends_douyin_cookie {
-            self.remember_response_cookies(&headers)?;
-        }
-
-        if !status.is_success() {
-            // 响应 body 可能由边缘节点生成，并可能反映请求取值。
-            // 这里用状态码做诊断已经足够安全。
-            return Err(Self::err(format!("HTTP {status}")));
-        }
-        if text.trim() == "blocked" {
-            return Err(Self::err("请求被抖音风控拦截，请稍后重试或更新 Cookie"));
-        }
-        Ok(text)
+        Ok(RawResponse {
+            status,
+            headers,
+            text,
+        })
     }
 
     pub(super) async fn get_json(
@@ -294,6 +350,19 @@ impl DouyinSite {
         // 在这里再加参数会使签名失效。
         self.get_json(&signed, &[], referer).await
     }
+}
+
+/// 一次 HTTP 响应原样保留状态、响应头与正文。
+struct RawResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    text: String,
+}
+
+/// 抖音边缘节点拒绝被风控的出口时使用的正文标记；只用于决定是否换直连重试，
+/// 不向用户展示正文。
+fn is_argus_security_block(status: StatusCode, text: &str) -> bool {
+    status == StatusCode::FORBIDDEN && text.contains("ArgusSecurityPlugin")
 }
 
 pub(super) fn normalize_cookie(value: &str) -> String {
@@ -619,5 +688,227 @@ mod tests {
         assert_eq!(url_encode("aZ09-_.~"), "aZ09-_.~");
         assert_eq!(url_encode("a b+c/dé"), "a%20b%2Bc%2Fd%C3%A9");
         assert_eq!(url_encode("中文"), "%E4%B8%AD%E6%96%87");
+    }
+
+    #[test]
+    fn argus_block_is_narrower_than_generic_forbidden() {
+        assert!(is_argus_security_block(
+            StatusCode::FORBIDDEN,
+            "Blocked by ArgusSecurityPlugin Uifid Not Found"
+        ));
+        // 普通 403 不得触发换出口重试。
+        assert!(!is_argus_security_block(StatusCode::FORBIDDEN, "forbidden"));
+        assert!(!is_argus_security_block(
+            StatusCode::OK,
+            "Blocked by ArgusSecurityPlugin"
+        ));
+    }
+
+    /// 两个本地固定代理分别模拟被风控的出口与可用的回退出口：
+    /// 断言同一请求（含 Cookie 与 query）被原样重发，且只有 Argus 特征才触发回退。
+    #[tokio::test]
+    async fn argus_block_retries_the_same_request_through_the_fallback_channel() {
+        let blocked = FixtureProxy::start(Duration::from_secs(10), |_| {
+            (
+                "403 Forbidden",
+                "text/plain",
+                "Blocked by ArgusSecurityPlugin Uifid Not Found".to_string(),
+            )
+        });
+        let allowed = FixtureProxy::start(Duration::from_secs(10), |request| {
+            // 重试必须带同样的签名 query 与 Cookie，不能退化成匿名请求。
+            assert!(
+                request.contains("aweme_id=7691170921935146278"),
+                "{request}"
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("cookie: sessionid=fixture"),
+                "{request}"
+            );
+            (
+                "200 OK",
+                "application/json",
+                r#"{"status_code":0}"#.to_string(),
+            )
+        });
+
+        let site = DouyinSite::with_fallback_client(
+            blocked.client(),
+            allowed.client(),
+            "sessionid=fixture".into(),
+        );
+        let body = site
+            .get_text(
+                "http://www.douyin.com/aweme/v1/web/aweme/detail/",
+                &[("aweme_id".into(), "7691170921935146278".into())],
+                "https://www.douyin.com/",
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(body, r#"{"status_code":0}"#);
+        assert_eq!(blocked.join(), 1, "主通道应被请求一次");
+        assert_eq!(allowed.join(), 1, "回退通道应被请求一次");
+    }
+
+    /// 回退通道也失败时必须报告可操作的信息，且不能回显上游正文。
+    #[tokio::test]
+    async fn argus_block_reports_actionable_error_when_fallback_also_fails() {
+        let blocked = FixtureProxy::start(Duration::from_secs(10), |_| {
+            (
+                "403 Forbidden",
+                "text/plain",
+                "Blocked by ArgusSecurityPlugin Uifid Not Found".to_string(),
+            )
+        });
+        let also_blocked = FixtureProxy::start(Duration::from_secs(10), |_| {
+            (
+                "403 Forbidden",
+                "text/plain",
+                "Blocked by ArgusSecurityPlugin Signature Not Found".to_string(),
+            )
+        });
+
+        let site = DouyinSite::with_fallback_client(
+            blocked.client(),
+            also_blocked.client(),
+            "sessionid=fixture".into(),
+        );
+        let error = site
+            .get_text(
+                "http://www.douyin.com/aweme/v1/web/aweme/detail/",
+                &[],
+                "https://www.douyin.com/",
+                true,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "douyin_api_error");
+        assert!(error.retryable);
+        assert!(error.message.contains("代理"), "{}", error.message);
+        assert!(!error.message.contains("ArgusSecurityPlugin"));
+        assert_eq!(blocked.join(), 1);
+        assert_eq!(also_blocked.join(), 1);
+    }
+
+    /// 普通失败（非 Argus 特征）不得触发第二条通道，避免无意义重发。
+    #[tokio::test]
+    async fn non_argus_failure_does_not_use_the_fallback_channel() {
+        let failing = FixtureProxy::start(Duration::from_secs(10), |_| {
+            (
+                "500 Internal Server Error",
+                "text/plain",
+                "upstream failure".to_string(),
+            )
+        });
+        // 短等待即可：只要回退通道没被访问，它会在超时后自行退出。
+        let fallback = FixtureProxy::start(Duration::from_millis(300), |_| {
+            (
+                "200 OK",
+                "application/json",
+                r#"{"status_code":0}"#.to_string(),
+            )
+        });
+
+        let site = DouyinSite::with_fallback_client(
+            failing.client(),
+            fallback.client(),
+            "sessionid=fixture".into(),
+        );
+        let error = site
+            .get_text(
+                "http://www.douyin.com/aweme/v1/web/aweme/detail/",
+                &[],
+                "https://www.douyin.com/",
+                true,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.message, "HTTP 500 Internal Server Error");
+        assert_eq!(failing.join(), 1);
+        assert_eq!(fallback.join(), 0, "非 Argus 失败不应触发回退通道");
+    }
+
+    /// 本地 HTTP 代理固定件：按绝对形式请求决定响应，并记录被访问次数。
+    /// `wait` 是等待连接的上限，正向用例据此确认连接确实到达。
+    struct FixtureProxy {
+        client: Client,
+        hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        server: std::thread::JoinHandle<()>,
+    }
+
+    impl FixtureProxy {
+        fn start(
+            wait: Duration,
+            handle: impl Fn(&str) -> (&'static str, &'static str, String) + Send + 'static,
+        ) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let hits_in_server = std::sync::Arc::clone(&hits);
+            let server = std::thread::spawn(move || {
+                let deadline = Instant::now() + wait;
+                loop {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            hits_in_server.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            stream.set_nonblocking(false).unwrap();
+                            let mut raw = Vec::new();
+                            let mut buffer = [0_u8; 2048];
+                            loop {
+                                let length = stream.read(&mut buffer).unwrap();
+                                if length == 0 {
+                                    break;
+                                }
+                                raw.extend_from_slice(&buffer[..length]);
+                                if raw.windows(4).any(|window| window == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            let request = String::from_utf8_lossy(&raw).into_owned();
+                            let (status, content_type, body) = handle(&request);
+                            let response = format!(
+                                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                            return;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => return,
+                    }
+                }
+            });
+            let client = Client::builder()
+                .proxy(reqwest::Proxy::all(format!("http://{address}")).unwrap())
+                .build()
+                .unwrap();
+            Self {
+                client,
+                hits,
+                server,
+            }
+        }
+
+        fn client(&self) -> Client {
+            self.client.clone()
+        }
+
+        /// 结束固定件并返回它收到的连接数。
+        fn join(self) -> usize {
+            self.server.join().unwrap();
+            self.hits.load(std::sync::atomic::Ordering::SeqCst)
+        }
     }
 }

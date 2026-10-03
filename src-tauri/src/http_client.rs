@@ -8,6 +8,7 @@ use reqwest::{Client, ClientBuilder, Url};
 use crate::error::{AppError, AppResult};
 
 static DEFAULT_CLIENT: OnceLock<Client> = OnceLock::new();
+static DIRECT_CLIENT: OnceLock<Client> = OnceLock::new();
 
 /// 把用户选择的 HTTP(S) 代理应用到客户端构建器上。
 ///
@@ -27,18 +28,21 @@ pub(crate) fn with_proxy(
     Ok(builder)
 }
 
-/// 共享客户端策略：native-tls、压缩，以及可选的 HTTP 代理。
-fn client_builder(proxy: Option<&str>) -> AppResult<ClientBuilder> {
-    let builder = Client::builder()
+/// 共享客户端策略：native-tls、压缩与连接池参数，不含代理决策。
+fn base_builder() -> ClientBuilder {
+    Client::builder()
         .use_native_tls()
         .gzip(true)
         .brotli(true)
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
         .pool_max_idle_per_host(4)
-        .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT);
+        .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT)
+}
 
-    with_proxy(builder, proxy)
+/// 共享客户端策略：native-tls、压缩，以及可选的 HTTP 代理。
+fn client_builder(proxy: Option<&str>) -> AppResult<ClientBuilder> {
+    with_proxy(base_builder(), proxy)
 }
 
 /// 构建带 native-tls、gzip/brotli 与可选 HTTP 代理的 reqwest 客户端。
@@ -93,7 +97,28 @@ pub fn build_no_redirect_client(proxy: Option<&str>) -> AppResult<Client> {
         .map_err(|_| AppError::new("http_client_build", "网络客户端初始化失败"))
 }
 
-/// 共享默认客户端（无代理）。克隆开销低（内部为 Arc）。
+/// 明确不走任何代理的客户端，包括进程环境变量与系统代理。
+///
+/// `default_client()` 的自动系统代理探测仍会生效（reqwest 默认读取 `HTTP(S)_PROXY`
+/// 等环境变量）；当已配置的代理出口被平台风控拒绝、需要换直连重试时，
+/// 必须用这个客户端，否则回退会再次落到同一条出口。克隆开销低（内部为 Arc）。
+pub fn direct_client() -> Client {
+    DIRECT_CLIENT
+        .get_or_init(|| {
+            base_builder().no_proxy().build().unwrap_or_else(|_| {
+                Client::builder()
+                    .use_native_tls()
+                    .no_proxy()
+                    .timeout(Duration::from_secs(20))
+                    .build()
+                    .expect("fallback reqwest client")
+            })
+        })
+        .clone()
+}
+
+/// 共享默认客户端（无显式代理，但仍会继承环境变量/系统代理）。
+/// 克隆开销低（内部为 Arc）。
 pub fn default_client() -> Client {
     DEFAULT_CLIENT
         .get_or_init(|| {
