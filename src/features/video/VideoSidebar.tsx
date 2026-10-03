@@ -925,18 +925,26 @@ export function VideoSidebar({
                   className="mt-1.5 flex min-h-6 w-full min-w-0 items-center text-left transition-opacity hover:opacity-80"
                 >
                   {/* 内层 `w-fit` 让箭头跟着内容宽：短标题的箭头紧贴文字，
-                      而不是隔着一大片空白飘在右边界。 */}
-                  <span className="flex w-fit max-w-full min-w-0 items-center gap-1">
+                      而不是隔着一大片空白飘在右边界。`items-end` + 箭头的
+                      `mb-[3px]` 让它在标题换行后落在最后一行（单行时与垂直居中
+                      同高），与短视频详情入口同一读法。 */}
+                  <span className="flex w-fit max-w-full min-w-0 items-end gap-1">
                     <span
-                      className="min-w-0 truncate text-sm leading-5 font-medium tracking-tight"
-                      title={archive.title}
+                      className={cn(
+                        "min-w-0 text-sm leading-5 font-medium tracking-tight",
+                        // 收起时单行截断（卡片保持紧凑、骨架几何不变）；展开时让标题
+                        // 换行显示完全体 —— 展开的简介里读得到全文，标题也应当读得到。
+                        // 展开后不再需要 `title` 提示（文字已经全部可见）。
+                        descriptionExpanded ? "break-words" : "truncate",
+                      )}
+                      title={descriptionExpanded ? undefined : archive.title}
                     >
                       {archive.title}
                     </span>
                     <ChevronDown
                       aria-hidden
                       className={cn(
-                        "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                        "mb-[3px] size-3.5 shrink-0 text-muted-foreground transition-transform",
                         descriptionExpanded && "rotate-180",
                       )}
                     />

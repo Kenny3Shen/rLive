@@ -5,7 +5,9 @@
 //   2. 播放/评论/日期紧跟标题下方，三项用同一档间距、不插竖线，
 //      数值不加粗也不用强调色（字号低于正文）；
 //   3. 统计行下的留白与卡壳顶部留白相等；
-//   4. 点标题任意位置切换简介展开，两端按钮都不带底色。
+//   4. 点标题任意位置切换简介展开，两端按钮都不带底色；
+//   5. 收起时标题单行截断（卡高固定、骨架不跳），展开后换行显示完全体、
+//      箭头落到最后一行（与短视频详情入口同一读法）。
 //
 // 只桩 IPC，不访问真实站点。
 // 用法：playwright-cli -s=upcard run-code --filename=tests/video-sidebar-upcard-layout.browser.js
@@ -62,6 +64,8 @@ async (page) => {
               super_chat_enabled: true,
               danmaku_shield_words: [],
               danmaku_blocked_users: [],
+              // 缺这一项会让设置解析抛错，整页停在「无法读取当前设置」。
+              video_blocked_uploaders: [],
               quality_level: "high",
               playback_soft_switch_enabled: true,
               room_card_preview_enabled: true,
@@ -193,6 +197,10 @@ async (page) => {
             .map((item, index) => Math.round((item.box.x - items[index].box.right) * 10) / 10),
           dlRows: new Set(items.map((item) => Math.round(item.box.y))).size,
           descHidden: desc.hidden,
+          // 标题是否被截断：`truncate` 下 scrollWidth 会超出 clientWidth。
+          titleTruncated: title.scrollWidth > title.clientWidth + 1,
+          titleLineHeight: parseFloat(getComputedStyle(title).lineHeight),
+          titleHasTooltip: title.hasAttribute("title"),
         };
       });
 
@@ -211,6 +219,15 @@ async (page) => {
     assert(
       Math.abs(collapsed.toggleBox.w - (collapsed.contentRight - collapsed.toggleBox.x)) <= 1,
       `标题开关应铺满整行（按钮 ${collapsed.toggleBox.w}，可用 ${collapsed.contentRight - collapsed.toggleBox.x}）`,
+    );
+    // 收起态保持紧凑：长标题停在单行（骨架按 24px 画，卡高才不跳）。
+    assert(
+      collapsed.titleTruncated === true,
+      "收起时长标题应停在单行截断（否则卡高会随标题长度变化）",
+    );
+    assert(
+      collapsed.titleHasTooltip === true,
+      "收起时截断的标题应带 title 提示",
     );
 
     /* ---------- 2. 统计行：等距、无竖线、不强调 ---------- */
@@ -303,12 +320,44 @@ async (page) => {
       expanded.toggleBg === "rgba(0, 0, 0, 0)",
       `展开态的标题开关也不应有底色（实测 ${expanded.toggleBg}）`,
     );
+    // 展开后标题必须显示完全体：换行而不截断，因此不再需要 title 提示。
+    assert(
+      expanded.titleTruncated === false,
+      `展开后标题不应再被截断（scrollWidth ${expanded.titleBox.w} / clientWidth）`,
+    );
+    assert(
+      expanded.titleBox.h >= expanded.titleLineHeight * 2 - 1,
+      `展开后的长标题应换行到多行（实测高度 ${expanded.titleBox.h}）`,
+    );
+    assert(expanded.titleHasTooltip === false, "展开后标题全文可见，不应再挂 title 提示");
+    // 箭头跟着标题落到最后一行（而不是飘在首行右侧）。
+    const lastLineTop = expanded.titleBox.bottom - expanded.titleLineHeight;
+    assert(
+      expanded.arrowBox.bottom > lastLineTop && expanded.arrowBox.bottom <= expanded.titleBox.bottom + 1,
+      `展开后箭头应落在标题最后一行（箭头底 ${expanded.arrowBox.bottom}，末行 ${lastLineTop}–${expanded.titleBox.bottom}）`,
+    );
+    const expandedArrowGap = expanded.arrowBox.x - expanded.titleBox.right;
+    assert(
+      expandedArrowGap >= -1 && expandedArrowGap <= 8,
+      `展开后箭头仍应紧跟标题文字（实测间隙 ${expandedArrowGap}）`,
+    );
+    // 展开后统计行仍在标题下方（不能与换行后的标题重叠）。
+    assert(
+      expanded.items[0].box.y >= expanded.titleBox.bottom - 1,
+      `统计行应被换行的标题推到下方（统计 ${expanded.items[0].box.y} / 标题底 ${expanded.titleBox.bottom}）`,
+    );
     await page.click("aside[aria-label=视频详情] button[aria-controls=video-description]", {
       position: { x: 8, y: 12 },
     });
     await page.waitForTimeout(200);
     const restored = await measure();
     assert(restored.descHidden === true, "再点一次应收起简介");
+    // 收起后回到紧凑的单行截断（展开-收起是可逆的）。
+    assert(restored.titleTruncated === true, "收起后长标题应回到单行截断");
+    assert(
+      Math.abs(restored.titleBox.h - collapsed.titleBox.h) <= 1,
+      `收起后标题行高应复原（${restored.titleBox.h} / ${collapsed.titleBox.h}）`,
+    );
 
     /* ---------- 5. 没有简介也没有 Tags：标题退化成不可点的普通行 ---------- */
     await page.addInitScript(() => {
