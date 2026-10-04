@@ -10,10 +10,11 @@ import { cn, normalizeImageUrl } from "@/lib/utils";
 import type { VideoItem } from "@/shared/types/video";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
+  SHORTS_DANMAKU_FONT_SCALE,
   SHORTS_DANMAKU_TOP_OFFSET_PX,
   SHORTS_SAFE_AREA_BOTTOM,
-  shortsFrameAlign,
   shortsFrameFill,
+  shortsFrameTop,
   shortsChromeColumn,
   shortsMediaAspect,
   shortsMediaFrame,
@@ -74,26 +75,16 @@ const SHORTS_MEDIA_AREA_STYLE = {
 } as const;
 
 /**
- * 画面框的定位样式：等比内切出的尺寸。
+ * 画面框的定位样式：等比内切出的尺寸 + 纵向落点。
  *
- * 尺寸还没量到时退回铺满，避免首帧出现 0×0 的空框。
+ * 尺寸还没量到时退回铺满，避免首帧出现 0×0 的空框；纵向落点用 `marginTop` 而不是
+ * flex 对齐类，因为它是留白的几分之几这个连续值。
  */
-function shortsFrameStyle(frame: { width: number; height: number }) {
+function shortsFrameStyle(frame: { width: number; height: number }, offset: number) {
   return frame.width > 0 && frame.height > 0
-    ? { width: `${frame.width}px`, height: `${frame.height}px` }
+    ? { width: `${frame.width}px`, height: `${frame.height}px`, marginTop: `${offset}px` }
     : { width: "100%", height: "100%" };
 }
-
-/**
- * 对齐语义 → flex 类名。
- *
- * `shortsFrameAlign` 刻意返回语义值（`"start"` / `"center"`）而不是类名：那份判定是
- * 可单测的纯几何，不该知道用的是 Tailwind 还是别的什么。映射放在使用它的这一层。
- */
-const SHORTS_ALIGN_CLASS = {
-  start: "items-start",
-  center: "items-center",
-} as const;
 
 /** 画面框是否小于可用区域（桌面上的居中卡片形态）：只有这时才给圆角。 */
 function shortsFrameInset(
@@ -105,17 +96,44 @@ function shortsFrameInset(
 }
 
 /**
- * 画面框的几何：铺满还是等比留边。
+ * 画面框的几何：铺满还是等比留边，以及它在画面区里的纵向落点。
  *
- * 两种形态共用一个出口，因为舞台与相邻条目的封面占位必须得到**完全相同**的矩形 ——
- * 否则换片时画面会从一个构图跳到另一个构图。
+ * 两种形态共用一个出口，因为舞台与相邻条目的空舞台占位必须得到**完全相同**的矩形 ——
+ * 否则换片时画面会从一个构图跳到另一个构图。纵向落点也算在这份几何里，理由相同：
+ * 换片时黑底与视频不能一个在中间、一个偏上。
  */
 function useShortsFrameGeometry(aspect: number | null, area: { width: number; height: number }) {
   const fill = shortsFrameFill(area.width, area.height, aspect);
   // 铺满时画面框就是画面区，裁切交给 CSS 的 `object-cover`：这里不必自己算裁掉多少，
   // 浏览器按同一套居中裁切规则处理，缩放与像素对齐也由合成器负责。
   const frame = fill ? area : shortsMediaFrame(area.width, area.height, aspect);
-  return { fill, frame, inset: shortsFrameInset(frame, area) };
+  // 横屏源偏顶部（不再垂直居中）：偏移是个比例值（留白的 1/4），
+  // `align-items` 表达不了，因此写成 `margin-top`。
+  const offset = shortsFrameTop(frame.height, area.height, aspect);
+  return { fill, frame, offset, inset: shortsFrameInset(frame, area) };
+}
+
+/**
+ * 弹幕列：宽度等于画面框、水平居中，纵向从顶部控制栏下沿到画面区底边。
+ *
+ * 弹幕**不在画面框里**，这是这次修复的核心。画面框会随画幅落在不同高度（竖屏贴顶、
+ * 横屏偏上），而弹幕的起始轨道是固定的一条线：顶部控制栏的下沿。挂在画面框里就只能
+ * 从画面框顶边起算，横屏源上首轨会跟着画面一起掉到屏幕中部（改前的症状）。
+ *
+ * 宽度取画面框宽：桌面宽屏上画面收成居中的竖卡，弹幕跟着收在卡片那一列里，不会飘到
+ * 两侧的黑边上。高度取到画面区底边而不是画面框底边：显示区域设置（`danmakuArea`）
+ * 是按容器高度取比例的，容器若只到画面框底边，16:9 画面上方那段留白会把轨道全吃
+ * 掉，画面里反而一条弹幕都看不到。
+ */
+function shortsDanmakuColumnStyle(frame: { width: number }): React.CSSProperties {
+  return {
+    top: `${SHORTS_DANMAKU_TOP_OFFSET_PX}px`,
+    left: frame.width > 0 ? `calc(50% - ${frame.width / 2}px)` : 0,
+    width: frame.width > 0 ? `${frame.width}px` : "100%",
+    // 起始线已经由本层自己的 `top` 表达；`VideoDanmakuLayer` 读的那个变量在这里
+    // 钉成 0，免得叠加两份偏移。
+    "--video-danmaku-top": "0px",
+  } as React.CSSProperties;
 }
 
 /**
@@ -187,7 +205,7 @@ export function ShortsStage({
   const { size: area, measure } = useShortsStageSize();
   // 起播后以媒体自报画幅为准，起播前用列表下发的 dimension 定框。
   const aspect = shortsMediaAspect(item.dimension, playback.intrinsicSize);
-  const { fill, frame, inset } = useShortsFrameGeometry(aspect, area);
+  const { fill, frame, offset, inset } = useShortsFrameGeometry(aspect, area);
   const warming = mode !== "play";
 
   // 页面层控件的收窄宽度。只由活动舞台报，且只报「比画面区窄」的那些：铺满时给 0，
@@ -206,24 +224,13 @@ export function ShortsStage({
       <div
         ref={measure}
         data-slot="shorts-media-area"
-        className={cn(
-          "absolute inset-x-0 flex justify-center",
-          SHORTS_ALIGN_CLASS[shortsFrameAlign(aspect)],
-        )}
+        className="absolute inset-x-0 flex items-start justify-center"
         style={SHORTS_MEDIA_AREA_STYLE}
       >
         <div
           data-slot="shorts-frame"
           className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}
-          style={
-            {
-              ...shortsFrameStyle(frame),
-              // 弹幕从顶部控制栏下方开始飘，不从画面顶边开始：画面框的顶边就是
-              // 视口顶边（状态栏下沿），而控制栏正好压在那一段上，不让位会让弹幕
-              // 穿过返回按钮。
-              "--video-danmaku-top": `${SHORTS_DANMAKU_TOP_OFFSET_PX}px`,
-            } as React.CSSProperties
-          }
+          style={shortsFrameStyle(frame, offset) as React.CSSProperties}
         >
           {/*
             槽位直接显示视频，不叠加 Poster：预热只缓冲、不播放，store 的 `started`
@@ -249,18 +256,6 @@ export function ShortsStage({
                 fill ? "object-cover" : "object-contain",
               )}
             />
-            {danmakuVisible && danmaku && item.aid && !warming && (
-              <VideoDanmakuLayer
-                videoRef={videoRef}
-                entries={danmaku.entries}
-                active={danmakuVisible}
-                // 竖屏舞台上飘屏弹幕不接受点按：这块画面的点按语义已经归暂停。
-                interactive={false}
-                cid={cid}
-                aid={item.aid}
-                title={item.title}
-              />
-            )}
 
             {/*
               加载指示交给 Video.js 的 `BufferingIndicator`：它读播放器 store 的
@@ -348,6 +343,36 @@ export function ShortsStage({
               />
             )}
         </div>
+
+        {/*
+          弹幕层与画面框**平级**，不在它里面（见 `shortsDanmakuColumnStyle`）。
+
+          挂在画面框里就只能从画面框顶边起算，而画面框会随画幅落在不同高度：横屏源
+          偏上之后，首轨会跟着画面一起掉到屏幕中部、离顶部控制栏一截 —— 正是这次要
+          修的问题。放在这里则起点恒为控制栏下沿，竖屏与横屏两个画幅一致。
+
+          宽度仍跟着画面框收：桌面宽屏上画面是居中的竖卡，弹幕若按画面区通栏，
+          会飘到卡片两侧的黑边上。
+        */}
+        {danmakuVisible && danmaku && item.aid && !warming && (
+          <div
+            data-slot="shorts-danmaku-column"
+            className="pointer-events-none absolute bottom-0"
+            style={shortsDanmakuColumnStyle(frame)}
+          >
+            <VideoDanmakuLayer
+              videoRef={videoRef}
+              entries={danmaku.entries}
+              active={danmakuVisible}
+              // 竖屏舞台上飘屏弹幕不接受点按：这块画面的点按语义已经归暂停。
+              interactive={false}
+              cid={cid}
+              aid={item.aid}
+              title={item.title}
+              fontSizeScale={SHORTS_DANMAKU_FONT_SCALE}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -380,8 +405,9 @@ function ShortsDynamicBackground({ cover }: { cover: string | undefined }) {
  * 相邻条目的封面占位。
  *
  * 滑动时手指下方必须有真实内容 —— 那正是「跟手」的观感来源 —— 但相邻条目不该
- * 起播。画面框用与活动舞台完全相同的几何（同一块画面区、同一套铺满/留边判定），
- * 因此换片时构图不发生跳变：封面停在哪个矩形里，视频就在那个矩形里出画。
+ * 起播。画面框用与活动舞台完全相同的几何（同一块画面区、同一套铺满/留边判定与
+ * 纵向落点），因此换片时构图不发生跳变：封面停在哪个矩形里，视频就在那个矩形里
+ * 出画。
  *
  * 不画信息与操作入口：那些住在页面的固定层里，只描述**当前**条目。占位上再画一份
  * 会在滑动过程中出现两套信息。
@@ -391,21 +417,18 @@ export function ShortsPoster({ item }: { item: Pick<ShortsStageItem, "cover" | "
   const { size: area, measure } = useShortsStageSize();
   // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。
   const aspect = shortsMediaAspect(item.dimension);
-  const { frame, inset } = useShortsFrameGeometry(aspect, area);
+  const { frame, offset, inset } = useShortsFrameGeometry(aspect, area);
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
       <ShortsDynamicBackground cover={cover} />
       <div
         ref={measure}
-        className={cn(
-          "absolute inset-x-0 flex justify-center",
-          SHORTS_ALIGN_CLASS[shortsFrameAlign(aspect)],
-        )}
+        className="absolute inset-x-0 flex items-start justify-center"
         style={SHORTS_MEDIA_AREA_STYLE}
       >
         <div
           className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}
-          style={shortsFrameStyle(frame)}
+          style={shortsFrameStyle(frame, offset) as React.CSSProperties}
         >
           {cover && (
             <img

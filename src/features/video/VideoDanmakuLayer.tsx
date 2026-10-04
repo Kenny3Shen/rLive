@@ -53,6 +53,13 @@ type VideoDanmakuLayerProps = {
   title?: string;
   large?: boolean;
   tapMaxDistance?: number;
+  /**
+   * 额外字号缩放（1 = 完全按设置）。竖屏舞台用它把弹幕整体缩小一档：字号设置是
+   * 全应用一份，而同样的 px 在占满整块视口的短视频舞台上明显偏大。缩放同时作用于
+   * 行高（`danmuLaneHeight`），轨道高度因此跟着缩，不会出现「字小了但轨道还是原来
+   * 那么高」的空隙。
+   */
+  fontSizeScale?: number;
 };
 
 /** 判定为 seek 的时间跳变阈值。正常播放每次 timeupdate 推进约 250ms。 */
@@ -68,6 +75,7 @@ export function VideoDanmakuLayer({
   title,
   large = false,
   tapMaxDistance,
+  fontSizeScale = 1,
 }: VideoDanmakuLayerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -75,7 +83,9 @@ export function VideoDanmakuLayer({
   const recordsRef = useRef(new Map<string, { entry: VideoDanmakuEntry; element: HTMLElement }>());
   const selectedIdRef = useRef<string | null>(null);
   const [target, setTarget] = useState<DanmakuHoverTarget | null>(null);
-  const fontSize = clampDanmuFontSize(useSettingsStore((state) => state.danmakuFontSize));
+  const fontSize = clampDanmuFontSize(
+    useSettingsStore((state) => state.danmakuFontSize) * fontSizeScale,
+  );
   const fontStroke = clampDanmuFontStroke(useSettingsStore((state) => state.danmakuFontStroke));
   const opacity = clampDanmuOpacity(useSettingsStore((state) => state.danmakuOpacity));
   const speed = parseDanmakuSpeed(useSettingsStore((state) => state.danmakuSpeed));

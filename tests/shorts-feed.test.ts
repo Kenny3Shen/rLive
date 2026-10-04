@@ -3,6 +3,7 @@ import { isImmersivePlayerPath } from "../src/app/layout/immersiveRoutes";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
+  SHORTS_DANMAKU_FONT_SCALE,
   SHORTS_DANMAKU_TOP_OFFSET_PX,
   SHORTS_FRAME_FILL_MAX_CROP,
   SHORTS_PATH,
@@ -18,9 +19,10 @@ import {
   SHORTS_SWIPE_SETTLE_EASING,
   SHORTS_SWIPE_SETTLE_MAX_MS,
   SHORTS_SWIPE_SETTLE_MIN_MS,
-  shortsFrameAlign,
+  SHORTS_LANDSCAPE_FRAME_TOP_BIAS,
   shortsFrameCrop,
   shortsFrameFill,
+  shortsFrameTop,
   shortsItemKey,
   shortsMediaAspect,
   shortsMediaFrame,
@@ -142,9 +144,18 @@ describe("画面框等比内切", () => {
 
 describe("操作栏高度契约", () => {
   test("弹幕起始纵坐标等于顶部控制栏高度", () => {
-    // 画面框顶对齐视口顶边（状态栏由外壳让位），控制栏正好压住画面框顶部这一条：
-    // 两者相等，弹幕才会从控制栏正下方开始滚而不穿过返回按钮。
+    // 弹幕层的顶边就是顶部控制栏的下沿（相对画面区顶边），与画面框落在哪里无关 ——
+    // 这正是「16:9 内容的弹幕也从控制栏下方起轨」的那条契约。
     expect(SHORTS_DANMAKU_TOP_OFFSET_PX).toBe(SHORTS_TOP_BAR_HEIGHT_PX);
+  });
+
+  test("短视频弹幕字号缩放小于 1 且不至于小到读不出来", () => {
+    // 「默认字号小一点」的实现：全应用一份字号设置乘以这个系数。
+    // 大于等于 1 等于没缩；太小则与 12px 的下限撞上，滑杆下半段全是同一档。
+    expect(SHORTS_DANMAKU_FONT_SCALE).toBeLessThan(1);
+    expect(SHORTS_DANMAKU_FONT_SCALE).toBeGreaterThan(0.7);
+    // 移动端默认 16px 缩完仍不低于 12px 的下限（否则默认值会被夹回去，等于没缩）。
+    expect(Math.round(16 * SHORTS_DANMAKU_FONT_SCALE)).toBeGreaterThan(12);
   });
 
   test("两条栏都是正数高度", () => {
@@ -410,40 +421,57 @@ describe("挂载窗口与补货", () => {
   });
 });
 
-describe("画面框纵向对齐", () => {
-  test("竖屏源顶对齐：上方不留黑边", () => {
+describe("画面框纵向落点", () => {
+  test("竖屏源贴顶：上方不留黑边", () => {
     // 9:16 放进 9:19.5 的手机视口，居中会在状态栏之下留一条黑边。
-    expect(shortsFrameAlign(9 / 16)).toBe("start");
-    expect(shortsFrameAlign(0.5625)).toBe("start");
+    const area = { width: 390, height: 673 };
+    const frame = shortsMediaFrame(area.width, area.height, 9 / 16);
+    expect(shortsFrameTop(frame.height, area.height, 9 / 16)).toBe(0);
     // 轻微竖也算竖：判据是「是否竖」，不是「竖多少」。
-    expect(shortsFrameAlign(0.99)).toBe("start");
+    expect(shortsFrameTop(600, 673, 0.99)).toBe(0);
   });
 
-  test("横屏源居中：上下对称留边", () => {
-    // 16:9 顶对齐会把画面按在顶部控制栏底下，下方剩一大片背景。
-    expect(shortsFrameAlign(16 / 9)).toBe("center");
-    expect(shortsFrameAlign(1.7778)).toBe("center");
+  test("横屏源偏顶部：上方留白只占全部留白的四分之一", () => {
+    // 手机竖屏里 16:9 的画面高约 219px，留白 454px；顶偏移应是其中的 1/4。
+    const area = { width: 390, height: 673 };
+    const frame = shortsMediaFrame(area.width, area.height, 16 / 9);
+    const slack = area.height - frame.height;
+    expect(shortsFrameTop(frame.height, area.height, 16 / 9)).toBeCloseTo(
+      slack * SHORTS_LANDSCAPE_FRAME_TOP_BIAS,
+      6,
+    );
+    // 关键：不再是留白的一半（那是「垂直居中」，正是这次要改掉的观感）。
+    expect(shortsFrameTop(frame.height, area.height, 16 / 9)).toBeLessThan(slack / 2);
   });
 
-  test("方形归到居中一侧", () => {
-    // 正方形没有「竖屏要顶格」的诉求。
-    expect(shortsFrameAlign(1)).toBe("center");
+  test("方形归到横屏一侧", () => {
+    // 正方形没有「竖屏要顶格」的诉求，跟着横屏一起偏上。
+    expect(shortsFrameTop(300, 673, 1)).toBeCloseTo((673 - 300) * SHORTS_LANDSCAPE_FRAME_TOP_BIAS, 6);
   });
 
-  test("宽高比未知时居中", () => {
-    // 起播前拿不到 dimension 也没有 intrinsic size：不猜竖屏。
-    expect(shortsFrameAlign(null)).toBe("center");
-    expect(shortsFrameAlign(0)).toBe("center");
-    expect(shortsFrameAlign(Number.NaN)).toBe("center");
-    expect(shortsFrameAlign(Number.POSITIVE_INFINITY)).toBe("center");
+  test("铺满与宽高比未知时偏移为 0", () => {
+    // 画面框 = 画面区：没有留白可分配，画面顶到视口顶边（控制栏压在画面上）。
+    expect(shortsFrameTop(673, 673, 9 / 16)).toBe(0);
+    expect(shortsFrameTop(673, 673, 16 / 9)).toBe(0);
+    // 起播前拿不到 dimension 也没有 intrinsic size：不猜画幅，退回铺满。
+    expect(shortsFrameTop(673, 673, null)).toBe(0);
+    expect(shortsFrameTop(673, 673, Number.NaN)).toBe(0);
   });
 
-  test("对齐方式与视口无关", () => {
+  test("偏移恒在 [0, 留白] 内", () => {
+    // 尺寸还没量到时不能报负数；极端画幅下也不能把画面推出画面区。
+    expect(shortsFrameTop(0, 673, 16 / 9)).toBe(0);
+    expect(shortsFrameTop(673, 0, 16 / 9)).toBe(0);
+    expect(shortsFrameTop(700, 673, 16 / 9)).toBe(0);
+    const slack = 673 - 100;
+    expect(shortsFrameTop(100, 673, 16 / 9)).toBeLessThanOrEqual(slack);
+    expect(shortsFrameTop(100, 673, Number.POSITIVE_INFINITY)).toBeLessThanOrEqual(slack);
+  });
+
+  test("落点与视口无关", () => {
     // 同一条视频在手机与桌面上必须得到同样的构图，否则换设备就换画法。
     const portrait = shortsMediaAspect({ width: 1080, height: 1920, rotate: 0 });
-    expect(shortsFrameAlign(portrait)).toBe("start");
-    // 桌面上这条竖屏正好铺满高度，对齐方式此时不产生可见差异，但结论仍一致。
-    expect(shortsMediaFrame(1440, 844, portrait).height).toBe(844);
+    expect(shortsFrameTop(shortsMediaFrame(1440, 844, portrait).height, 844, portrait)).toBe(0);
   });
 });
 
