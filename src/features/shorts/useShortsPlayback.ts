@@ -94,6 +94,8 @@ export type ShortsPlaybackState = {
    * 当前这条还没出画之前，不该让另一条去抢带宽。
    */
   ready: boolean;
+  /** 当前条目的首帧已提交显示；缓冲/暂停不清除，换片与重试时重置。 */
+  hasFrame: boolean;
   /** 点按切换播放/暂停。 */
   togglePlay: () => void;
   toggleMuted: () => void;
@@ -167,6 +169,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
   const [loading, setLoading] = useState(true);
   const [paused, setPaused] = useState(true);
   const [ready, setReady] = useState(false);
+  const [hasFrame, setHasFrame] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ownerId = useId();
   const [duration, setDuration] = useState(0);
@@ -389,6 +392,64 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     expectedItemRef.current = itemKey;
   }, [itemKey]);
   const attachTokenRef = useRef(0);
+  const cancelFirstFrameRef = useRef<(() => void) | null>(null);
+
+  /**
+   * 在换源时监听真正提交显示的首帧，而不是 `play`（它只表示播放请求已开始）。
+   * 预热暂停也会提交解码帧，因此提升槽位无需重新等待；旧条目的迟到回调按 token 作废。
+   */
+  const watchFirstFrame = useCallback((media: HTMLVideoElement, token: number) => {
+    cancelFirstFrameRef.current?.();
+    let cancelled = false;
+    let frameId: number | null = null;
+    const supportsFrameCallback = typeof media.requestVideoFrameCallback === "function";
+    /**
+     * 注册那一刻媒体上的地址。换源会把它换掉，因此「地址已变」就是这一帧来自新源的
+     * 证据：只靠 `readyState` 会把上一条留在元素里的帧（旧地址、已解码）当成新条目出画。
+     * 每次取流都是新地址（代理端口与 MediaSource blob 都不复用），所以换源不会因此卡住。
+     */
+    const previousSource = media.currentSrc;
+    const isFrameDecoded = () =>
+      media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && media.currentSrc !== previousSource;
+    const acceptFrame = () => {
+      if (
+        cancelled ||
+        sessionRef.current.token !== token ||
+        sessionRef.current.itemKey !== expectedItemRef.current
+      )
+        return;
+      setHasFrame(true);
+      cancelFirstFrameRef.current?.();
+    };
+    const onFrameCallback = () => {
+      if (cancelled) return;
+      if (!isFrameDecoded()) {
+        frameId = media.requestVideoFrameCallback(onFrameCallback);
+        return;
+      }
+      acceptFrame();
+    };
+    const onFallback = () => {
+      if (isFrameDecoded()) acceptFrame();
+    };
+    cancelFirstFrameRef.current = () => {
+      cancelled = true;
+      if (frameId !== null) media.cancelVideoFrameCallback(frameId);
+      media.removeEventListener("loadeddata", onFallback);
+      media.removeEventListener("canplay", onFallback);
+      media.removeEventListener("timeupdate", onFallback);
+      cancelFirstFrameRef.current = null;
+    };
+    if (supportsFrameCallback) {
+      frameId = media.requestVideoFrameCallback(onFrameCallback);
+    } else {
+      // 旧 WebView 没有逐帧回调时以「当前源已解码」兜底。多一个 `timeupdate`：
+      // 位置在推进就说明帧已经出来了，避免任何事件错位把黑底永久留下。
+      media.addEventListener("loadeddata", onFallback);
+      media.addEventListener("canplay", onFallback);
+      media.addEventListener("timeupdate", onFallback);
+    }
+  }, []);
 
   /** 记下进度：身份经 ref 读取，并用平台条目键比对挡住错位。 */
   const reportProgress = useCallback(
@@ -577,6 +638,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
         reportProgress(media && Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
       }
       sessionRef.current.token = ++attachTokenRef.current;
+      cancelFirstFrameRef.current?.();
       sessionRef.current.mode = "warm";
       unbindRef.current?.();
       unbindRef.current = null;
@@ -616,6 +678,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     if (sessionRef.current.itemKey === itemKey) return;
     reportProgress(videoRef.current?.currentTime ?? 0, true);
     sessionRef.current.token = ++attachTokenRef.current;
+    cancelFirstFrameRef.current?.();
     sessionRef.current.mode = "warm";
     videoRef.current?.pause();
   }, [itemKey, videoRef, reportProgress]);
@@ -685,6 +748,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     // oxlint-disable-next-line react/set-state-in-effect
     setLoading(true);
     setReady(false);
+    setHasFrame(false);
     setError(null);
     setPaused(true);
     setDuration(playInfo ? source.duration(playInfo) : 0);
@@ -699,6 +763,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     if (!media.paused) media.pause();
 
     if (reused && playerRef.current) {
+      watchFirstFrame(media, token);
       playerRef.current.setShortsBufferMode(mode === "play" ? "active" : "warm");
       if (source.kind === "dash") switchVideoJsDashSource(playerRef.current, playUrl);
       else playerRef.current.switchNativeSource(playUrl);
@@ -711,6 +776,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     void loadVideoJsModules(source.kind)
       .then((modules) => {
         if (cancelled || sessionRef.current.token !== token || playerRef.current) return;
+        watchFirstFrame(media, token);
         const player = createVideoJsPlayer(modules, {
           video: media,
           url: playUrl,
@@ -767,6 +833,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     reportProgress,
     teardown,
     videoRef,
+    watchFirstFrame,
   ]);
 
   /**
@@ -868,6 +935,9 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
   const retry = useCallback(() => {
     adoptedRef.current = null;
     fellBackRef.current = itemKey;
+    cancelFirstFrameRef.current?.();
+    setHasFrame(false);
+    setLoading(true);
     setError(null);
     setRevision((value) => value + 1);
   }, [itemKey]);
@@ -879,6 +949,8 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     setError(null);
     setLoading(true);
     setReady(false);
+    setHasFrame(false);
+    setPaused(true);
     setDuration(0);
     // 画幅也要清：留着上一条的比例会让新条目先按错误的框画一帧。
     setIntrinsicSize(null);
@@ -899,6 +971,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     intrinsicSize,
     rate,
     ready,
+    hasFrame,
     togglePlay,
     toggleMuted,
     setRate: changeRate,

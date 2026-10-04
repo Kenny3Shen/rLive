@@ -167,7 +167,34 @@ class RliveFullscreenWebChromeClient(
     }
   }
 
-  override fun getDefaultVideoPoster(): Bitmap? = delegate.defaultVideoPoster
+  /**
+   * 1×1 全透明位图，用来顶掉 WebView 的内置视频占位图。
+   *
+   * 惰性且只建一次：`getDefaultVideoPoster` 会随每个无首帧的媒体被查询，
+   * 而这张图全进程共用。ARGB_8888 且不画任何像素，因此整张是透明的。
+   */
+  private val transparentVideoPoster: Bitmap by lazy {
+    Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+  }
+
+  /**
+   * 不画 WebView 的内置默认视频海报。
+   *
+   * Android WebView 会给「没有 `poster` 属性、也还没有解码帧」的 `<video>`
+   * 画一张内置占位图（灰底黑圆环播放键）。本应用的加载语义是**黑屏加转圈**：
+   * 那张占位图会被读成「这条视频的封面」，在首屏与连刷快过预热时闪出来，
+   * 与产品语义和 `ShortsStage` 的黑屏指示器直接冲突（Chromium 自己也把
+   * 这张图记为「通常比没有更糟」的缺陷，见 crbug.com/40755557）。
+   *
+   * 关键是**回落到 WebView 自己的资源**：`WebChromeClient` 基类与 Wry 的
+   * `RustWebChromeClient` 都返回 `null`，而 `null` 只是「客户端没有提供」，
+   * WebView 随后仍会画它内置的那张。因此必须返回一张真图 —— 全透明，
+   * 等价于「不画」。
+   *
+   * 只影响没有 `poster` 的媒体：写了 `poster` 的（播放页封面等）走的仍是
+   * 媒体自己的那张图，不受这里影响。
+   */
+  override fun getDefaultVideoPoster(): Bitmap = transparentVideoPoster
 
   override fun getVideoLoadingProgressView(): View? = delegate.videoLoadingProgressView
 

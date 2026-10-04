@@ -15,7 +15,9 @@ const { createRoot } = await import("react-dom/client");
 // 必须显式引应用样式表：Tailwind 的 utilities 由 `@tailwindcss/vite` 从这张表里
 // 生成，夹具不引它就没有任何类名生效，量出来的尺寸全是错的。
 await import("/src/styles.css");
-const { ShortsStage } = await import("/src/features/shorts/ShortsStage.tsx");
+const { ShortsBlankStage, ShortsStage } = await import("/src/features/shorts/ShortsStage.tsx");
+const { useSettingsStore } = await import("/src/shared/stores/settingsStore.ts");
+const originalDynamicBackground = useSettingsStore.getState().dynamicBackgroundEnabled;
 
 const h = React.createElement;
 const NOOP = () => {};
@@ -25,7 +27,7 @@ const ITEM = {
   aid: "1",
   cid: 41_855_094_127,
   title: "竖屏第一条",
-  cover: "",
+  cover: "https://example.com/shorts-test-cover.svg",
   author: "测试 UP 主",
   author_face: null,
   author_fans: 11389,
@@ -38,12 +40,13 @@ const ITEM = {
 };
 
 /** 舞台读的这些字段；本夹具关心的是暂停/播放/起播三态。 */
-function playbackState(paused, loading = false) {
+function playbackState(paused, loading, hasFrame, error) {
   return {
     loading,
     paused,
-    error: null,
-    currentTime: 0,
+    hasFrame,
+    error,
+    getCurrentTime: () => 0,
     duration: 93,
     muted: false,
     intrinsicSize: { width: 1080, height: 1920 },
@@ -78,7 +81,7 @@ function setMedia(video, { paused, readyState = 4 }) {
   video.dispatchEvent(new Event("timeupdate"));
 }
 
-function Stage({ paused, loading }) {
+function Stage({ paused, loading, hasFrame, error, mode }) {
   // 舞台本身不含 `.media-skin`：真实页面把它放在 `shorts-viewport` 上（见
   // `ShortsPage`），`--media-*` 令牌与图标前景色都从那里继承。夹具必须复刻这一层，
   // 否则 `text-media-controls-foreground` 落空、图标变成继承来的黑色。
@@ -96,9 +99,9 @@ function Stage({ paused, loading }) {
     },
     h(ShortsStage, {
       item: ITEM,
-      playback: playbackState(paused, loading),
+      playback: playbackState(paused, loading, hasFrame, error),
       videoRef,
-      mode: "play",
+      mode,
       danmaku: { entries: [], ensure: NOOP },
       danmakuVisible: false,
       gestureActive: false,
@@ -125,6 +128,8 @@ function measure() {
   const bufferingIcon = buffering?.querySelector("svg");
   const loading = frame.querySelector('[data-slot="shorts-loading-indicator"]');
   const loadingIcon = loading?.querySelector("svg");
+  const mask = frame.querySelector('[data-slot="shorts-first-frame-mask"]');
+  const video = frame.querySelector("video");
   const rect = (node) => {
     if (!node) return null;
     const { width, height } = node.getBoundingClientRect();
@@ -155,19 +160,27 @@ function measure() {
     loadingIconCss: cssSize(loadingIcon),
     loadingPointerEvents: loading ? getComputedStyle(loading).pointerEvents : null,
     loadingAriaHidden: loading?.getAttribute("aria-hidden") ?? null,
-    // 画面里不该再有封面：相邻占位（`ShortsBlankStage`）渲染的是空舞台。
-    coverImages: [...frame.querySelectorAll("img")].map((img) => img.getAttribute("src")),
+    // 模糊封面在 frame 外，必须检查整个舞台，不能只扫视频框。
+    coverImages: [...host.querySelectorAll("img")].map((img) => img.getAttribute("src")),
+    nativePoster: video?.getAttribute("poster"),
+    hasMask: !!mask,
+    maskColor: mask ? getComputedStyle(mask).backgroundColor : null,
+    maskOpacity: mask ? getComputedStyle(mask).opacity : null,
+    maskPointerEvents: mask ? getComputedStyle(mask).pointerEvents : null,
+    maskBox: rect(mask),
+    videoBox: rect(video),
   };
 }
 
 window.__shortsStageIndicator = {
-  /** 渲染一次（`paused` 决定舞台是否显示暂停指示，`loading` 决定是否显示起播转圈）。 */
-  async render(paused, loading = false) {
+  /** 分开控制首帧、加载和暂停，覆盖 play 已到但帧未到的状态。 */
+  async render(paused, loading = false, { hasFrame = !loading, error = null, mode = "play" } = {}) {
+    useSettingsStore.setState({ dynamicBackgroundEnabled: true });
     window.__shortsStageIndicatorRoot ??= createRoot(host);
     root = window.__shortsStageIndicatorRoot;
     videoRef ??= React.createRef();
     surfaceTapCount = 0;
-    root.render(h(Stage, { paused, loading }));
+    root.render(h(Stage, { paused, loading, hasFrame, error, mode }));
     await frames();
     const video = host.querySelector("video");
     if (!video) throw new Error("舞台没有渲染 <video>");
@@ -192,8 +205,17 @@ window.__shortsStageIndicator = {
     await frames();
     return surfaceTapCount;
   },
+  async renderBlank() {
+    root.render(h(ShortsBlankStage, { item: ITEM }));
+    await frames();
+    return {
+      images: host.querySelectorAll("img").length,
+      videos: host.querySelectorAll("video").length,
+    };
+  },
   unmount() {
     root?.unmount();
     root = null;
+    useSettingsStore.setState({ dynamicBackgroundEnabled: originalDynamicBackground });
   },
 };

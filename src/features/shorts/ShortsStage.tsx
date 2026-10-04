@@ -218,15 +218,8 @@ export function ShortsStage({
   }, [area.width, frame.width, mode, onChromeColumn]);
 
   const cover = normalizeImageUrl(item.cover);
-  /**
-   * 首帧尚未到达：取流、附着与起播前的缓冲都算。
-   *
-   * 判据里带 `paused` 而不只是 `loading`：播放中的卡顿（`waiting`）已经有
-   * `BufferingIndicator`（延迟 500ms）表达，这里只描述真正的起播阶段 ——
-   * 短暂停顿不该先闪一圈新的转圈。首帧出画后（`ready` / `onPlay`）两个条件
-   * 都归假，转圈与让位的背景一起消失。
-   */
-  const awaitingFirstFrame = playback.paused && playback.loading;
+  // `play` 与 `waiting` 不能证明首帧已出画；只认当前条目的帧回调。
+  const awaitingFirstFrame = !playback.hasFrame;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
@@ -246,7 +239,8 @@ export function ShortsStage({
           {/*
             槽位直接显示视频，不叠加 Poster：预热只缓冲、不播放，store 的 `started`
             仍为 false。若按它显示封面，已经解码的首帧也会被挡住，换片时就会先闪
-            封面再出画。没有首帧时由视频的黑底等待媒体就绪。
+            封面再出画。首帧前由下方黑底遮挡层等待媒体就绪；只给 video 设置
+            黑底不能盖住 WebView 的内置海报或复用槽位留下的旧帧。
 
             `BufferingIndicator` / `PlayButton` 仍通过 store 的 `waiting` / `paused`
             驱动。传输沿用自有的 `VideoJsPlayer`（dash.js），所以保留包住 `<video>`
@@ -271,8 +265,7 @@ export function ShortsStage({
             {/*
               加载指示交给 Video.js 的 `BufferingIndicator`：它读播放器 store 的
               `waiting`（媒体已 starved 且未暂停），并自带 500ms 延迟 —— 短暂卡顿
-              不会闪一下转圈。起播前的取流没有指示器，那段显示视频黑底（见文档
-              「预载未命中时的取流延迟」）。
+              不会闪一下转圈。首帧前由下方独立的起播指示器接管，避免两颗转圈重叠。
 
               它必须在 `ShortsStagePlayer` 里：store 挂在槽位的 `<video>` 上，离开
               这个作用域读不到播放状态。
@@ -282,7 +275,7 @@ export function ShortsStage({
               对齐。后者的兜底是 `--media-spacing * 4.5`，在短视频视口的
               `--media-scale-unit: 1.2rem` 下只有 21.6px，比原来小一圈。
             */}
-            {!warming && !playback.error && (
+            {!warming && !awaitingFirstFrame && !playback.error && (
               <BufferingIndicator
                 data-slot="shorts-buffering-indicator"
                 style={{ "--media-icon-size": "2rem" } as React.CSSProperties}
@@ -308,30 +301,48 @@ export function ShortsStage({
               图标，而短视频播放中不该常驻一颗暂停按钮。`!playback.loading` 保留原
               行为 —— 换片取流期间尚未就绪，那时闪一下播放按钮是多余的。
             */}
-            {!warming && playback.paused && !playback.loading && !playback.error && (
-              <div
-                aria-hidden
-                data-slot="shorts-play-indicator"
-                className="pointer-events-none absolute inset-0 grid place-items-center [&_svg]:size-media-icon"
-                style={
-                  {
-                    "--media-control-size": "4rem",
-                    "--media-icon-size": "2rem",
-                  } as React.CSSProperties
-                }
-              >
-                <PlayButton tabIndex={-1} className="bg-black/40 text-media-controls-foreground" />
-              </div>
-            )}
+            {!warming &&
+              !awaitingFirstFrame &&
+              playback.paused &&
+              !playback.loading &&
+              !playback.error && (
+                <div
+                  aria-hidden
+                  data-slot="shorts-play-indicator"
+                  className="pointer-events-none absolute inset-0 grid place-items-center [&_svg]:size-media-icon"
+                  style={
+                    {
+                      "--media-control-size": "4rem",
+                      "--media-icon-size": "2rem",
+                    } as React.CSSProperties
+                  }
+                >
+                  <PlayButton
+                    tabIndex={-1}
+                    className="bg-black/40 text-media-controls-foreground"
+                  />
+                </div>
+              )}
           </ShortsStagePlayer>
+
+          {/*
+            黑底必须盖在媒体上方：无 poster 不等于无原生海报，换源前也可能保留旧帧。
+            预热与失败时同样遮住；不卸载或隐藏 video，避免影响预热解码和逐帧回调。
+          */}
+          {awaitingFirstFrame && (
+            <div
+              aria-hidden
+              data-slot="shorts-first-frame-mask"
+              className="pointer-events-none absolute inset-0 bg-black"
+            />
+          )}
 
           {/*
             起播转圈：首帧到达前的黑屏上给一个「在加载」的明确信号。
 
-            为什么不直接用 `BufferingIndicator`：那个原语读 store 的 `waiting`
-            （媒体已 starved **且未暂停**），而起播前媒体还处于暂停态，读不到它。
-            图标复用 Video.js 的 `SpinnerIcon`（与 `BufferingIndicator` 同一枚），
-            尺寸走同一个 `--media-icon-size` 令牌，两处转圈看起来是同一种东西。
+            不直接用 `BufferingIndicator`：它读 store 的 `waiting`，起播前暂停时
+            读不到。首帧后才挂载它，避免 play 先到、帧未到时两颗转圈同时出现。
+            图标仍复用同一个 `SpinnerIcon` 与 `--media-icon-size` 令牌。
 
             只当指示器：`aria-hidden` + `pointer-events-none`，点按暂停仍由下面的
             命中层接管。
