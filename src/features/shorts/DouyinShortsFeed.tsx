@@ -27,7 +27,7 @@ import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
 import { cn } from "@/lib/utils";
 import { formatVideoDuration } from "@/features/video/videoHistory";
-import { ShortsStage, ShortsPoster } from "./ShortsStage";
+import { ShortsBlankStage, ShortsStage } from "./ShortsStage";
 import { ShortsSeekBar } from "./ShortsSeekBar";
 import { ShortsSeekBridge, ShortsSeekPlayer } from "./shortsSeekPlayer";
 import { useShortsInteraction } from "./useShortsInteraction";
@@ -170,7 +170,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
                   className="absolute inset-x-0 h-full"
                   style={{ top: shortsSlotTop(position) }}
                 >
-                  <ShortsPoster item={stageItem(item)} />
+                  <ShortsBlankStage item={stageItem(item)} />
                 </div>
               );
             })}

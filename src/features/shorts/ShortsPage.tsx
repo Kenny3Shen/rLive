@@ -58,7 +58,7 @@ import { notify } from "@/components/ui/toast";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ShortsSeekBar } from "./ShortsSeekBar";
 import { ShortsSeekBridge, ShortsSeekPlayer } from "./shortsSeekPlayer";
-import { ShortsPoster, ShortsStage } from "./ShortsStage";
+import { ShortsBlankStage, ShortsStage } from "./ShortsStage";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
@@ -319,7 +319,7 @@ export function ShortsPage() {
   }
 
   const mounted = shortsMountedIndexes(index, items.length);
-  /** 挂载窗口里由槽位面板承担的下标；其余渲染封面占位。 */
+  /** 挂载窗口里由槽位面板承担的下标；其余渲染空舞台占位。 */
   const slotCovered = shortsSlotCoveredIndexes(slots);
   const slotIds: ShortsSlotId[] = [...SHORTS_SLOT_IDS];
 
@@ -397,9 +397,10 @@ export function ShortsPage() {
           })}
 
           {/*
-            挂载窗口里剩下的位置（第三条邻居）渲染封面占位：它们只需要有画面参与
-            平移，不需要能播 —— 一条短视频等于一次签名 playurl + 两条 sidx + 三个
-            本机代理会话，为跟手再多起一份是把上游取流成本翻倍。
+            挂载窗口里剩下的位置（第三条邻居）渲染空舞台占位：它们只需要有一块
+            参与平移的黑底，不需要能播 —— 一条短视频等于一次签名 playurl + 两条
+            sidx + 三个本机代理会话，为跟手再多起一份是把上游取流成本翻倍。
+            占位刻意不画封面：加载期间统一是黑屏加转圈（见 `ShortsStage`）。
           */}
           {mounted.map((itemIndex) => {
             if (slotCovered.has(itemIndex)) return null;
@@ -414,7 +415,7 @@ export function ShortsPage() {
                 className="absolute inset-x-0 h-full"
                 style={{ top: `${itemIndex * 100}%` }}
               >
-                <ShortsPoster item={item} />
+                <ShortsBlankStage item={item} />
               </div>
             );
           })}
@@ -423,8 +424,8 @@ export function ShortsPage() {
         {/*
           把活动槽位的 `<video>` 桥接进进度条的播放器 store。
 
-          必须渲染在槽位面板**之外**：面板里还有一层 `ShortsPosterPlayer`（封面与
-          状态指示用），渲染在它里面会被那个更近的 Player 上下文截走。也不属于条带，
+          必须渲染在槽位面板**之外**：面板里还有一层 `ShortsStagePlayer`（状态指示用的
+          store），渲染在它里面会被那个更近的 Player 上下文截走。也不属于条带，
           否则换片时会跟着平移一起被变换。
         */}
         <ShortsSeekBridge videoRef={slotRefs[slots.active]} active={slots.active} />
@@ -585,7 +586,7 @@ export function ShortsPage() {
           信息与评论：浮在画面上、紧贴进度条上方，属于**页面层**而不是舞台层。
 
           这是与上一版的关键区别：它们以前长在画面框里（会随换片的条带平移一起滑走），
-          而且每个面板各有一份（相邻封面也得自带一份）。挂在页面层之后只有一份，位置固定
+          而且每个面板各有一份（相邻面板也得自带一份）。挂在页面层之后只有一份，位置固定
           在视口上，与两条控制栏、进度条共用同一套坐标。
 
           左下角是信息、右下角是评论 —— 两者贴播放器的左右两边，不再收在一个居中的定宽

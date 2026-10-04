@@ -37,10 +37,10 @@ const ITEM = {
   dimension: { width: 1080, height: 1920, rotate: 0 },
 };
 
-/** 舞台读的这些字段；本夹具关心的是暂停/播放两态。 */
-function playbackState(paused) {
+/** 舞台读的这些字段；本夹具关心的是暂停/播放/起播三态。 */
+function playbackState(paused, loading = false) {
   return {
-    loading: false,
+    loading,
     paused,
     error: null,
     currentTime: 0,
@@ -48,7 +48,7 @@ function playbackState(paused) {
     muted: false,
     intrinsicSize: { width: 1080, height: 1920 },
     rate: 1,
-    ready: true,
+    ready: !loading,
     togglePlay: NOOP,
     toggleMuted: NOOP,
     seek: NOOP,
@@ -78,7 +78,7 @@ function setMedia(video, { paused, readyState = 4 }) {
   video.dispatchEvent(new Event("timeupdate"));
 }
 
-function Stage({ paused }) {
+function Stage({ paused, loading }) {
   // 舞台本身不含 `.media-skin`：真实页面把它放在 `shorts-viewport` 上（见
   // `ShortsPage`），`--media-*` 令牌与图标前景色都从那里继承。夹具必须复刻这一层，
   // 否则 `text-media-controls-foreground` 落空、图标变成继承来的黑色。
@@ -96,7 +96,7 @@ function Stage({ paused }) {
     },
     h(ShortsStage, {
       item: ITEM,
-      playback: playbackState(paused),
+      playback: playbackState(paused, loading),
       videoRef,
       mode: "play",
       danmaku: { entries: [], ensure: NOOP },
@@ -123,6 +123,8 @@ function measure() {
   const playIcon = play?.querySelector("svg");
   const buffering = frame.querySelector('[data-slot="shorts-buffering-indicator"]');
   const bufferingIcon = buffering?.querySelector("svg");
+  const loading = frame.querySelector('[data-slot="shorts-loading-indicator"]');
+  const loadingIcon = loading?.querySelector("svg");
   const rect = (node) => {
     if (!node) return null;
     const { width, height } = node.getBoundingClientRect();
@@ -149,17 +151,23 @@ function measure() {
     bufferingIconCss: cssSize(bufferingIcon),
     hasBuffering: !!buffering,
     bufferingVisible: buffering?.hasAttribute("data-visible") ?? false,
+    hasLoadingIndicator: !!loading,
+    loadingIconCss: cssSize(loadingIcon),
+    loadingPointerEvents: loading ? getComputedStyle(loading).pointerEvents : null,
+    loadingAriaHidden: loading?.getAttribute("aria-hidden") ?? null,
+    // 画面里不该再有封面：相邻占位（`ShortsBlankStage`）渲染的是空舞台。
+    coverImages: [...frame.querySelectorAll("img")].map((img) => img.getAttribute("src")),
   };
 }
 
 window.__shortsStageIndicator = {
-  /** 渲染一次（`paused` 决定舞台是否显示暂停指示）。 */
-  async render(paused) {
+  /** 渲染一次（`paused` 决定舞台是否显示暂停指示，`loading` 决定是否显示起播转圈）。 */
+  async render(paused, loading = false) {
     window.__shortsStageIndicatorRoot ??= createRoot(host);
     root = window.__shortsStageIndicatorRoot;
     videoRef ??= React.createRef();
     surfaceTapCount = 0;
-    root.render(h(Stage, { paused }));
+    root.render(h(Stage, { paused, loading }));
     await frames();
     const video = host.querySelector("video");
     if (!video) throw new Error("舞台没有渲染 <video>");

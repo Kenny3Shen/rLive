@@ -12,7 +12,7 @@ import { bufferFeature, timeFeature } from "@videojs/core/dom";
  * 需要的两个 feature 的 store，再用 `ShortsSeekBridge` 把**活动槽位**的 `<video>`
  * 桥接进去。
  *
- * 为什么不直接复用 `ShortsPosterPlayer`：那份带的是封面需要的 `playbackFeature` /
+ * 为什么不直接复用 `ShortsStagePlayer`：那份带的是状态指示需要的 `playbackFeature` /
  * `metadataFeature`，`TimeSlider` 要的 `timeFeature` / `bufferFeature` 一个都没有。
  * 两者各带各的 feature，而不是拼成一个四 feature 的大 store —— 槽位有三个，每个
  * feature 的 attach 都会往媒体元素上挂一组监听，拼在一起等于三份白付的监听。
@@ -34,7 +34,7 @@ export const ShortsSeekPlayer = createPlayer({
  * 告诉它「现在是这个槽位」。
  *
  * 必须渲染在 `ShortsSeekPlayer` 之内、槽位面板之外：面板里还有一层
- * `ShortsPosterPlayer`，渲染在它里面会被最近的那个 Player 上下文截走。
+ * `ShortsStagePlayer`，渲染在它里面会被最近的那个 Player 上下文截走。
  *
  * 换槽位时新旧两个 effect 的回调在同一个提交里执行：React 先跑所有清理（旧的
  * `setMedia(null)`）再跑所有 setup（新的 `setMedia(el)`），因此 store 不会停在

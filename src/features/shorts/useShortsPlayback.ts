@@ -645,8 +645,8 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
    *
    * **依赖里刻意没有 `mode`**：预热槽位被提升为活动槽位时只有角色变了，内容没
    * 变。若把 `mode` 放进依赖，那一次提升会重跑本 effect —— 于是 `setLoading(true)`
-   * 与 `media.pause()` 会作用在一个**已经缓冲好、正在播**的媒体上，换片反而闪一
-   * 下封面再卡一下。角色变化由下面的 `mode` effect 单独处理。
+   * 与 `media.pause()` 会作用在一个**已经缓冲好、正在播**的媒体上，换片反而卡一
+   * 下。角色变化由下面的 `mode` effect 单独处理。
    */
   useEffect(() => {
     const media = videoRef.current;

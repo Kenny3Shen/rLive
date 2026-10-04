@@ -41,8 +41,8 @@ export type ShortsSlotsState = {
    * 各槽位自己的状态（按槽位索引，不是按角色）。
    *
    * 舞台要用它：预热面板也要按自己的 `intrinsicSize` 定画面框、按自己的 `loading`
-   * 决定封面是否还盖着 —— 拿活动槽位的状态去画预热面板，会得到错误的画幅与错误
-   * 的加载指示。
+   * 决定该显示哪一态指示 —— 拿活动槽位的状态去画预热面板，会得到错误的画幅与
+   * 错误的加载指示。
    */
   slotStates: Record<ShortsSlotId, ShortsPlaybackState>;
   /** 活动槽位的状态。页面上的进度条、暂停图标与错误面板都只描述它。 */

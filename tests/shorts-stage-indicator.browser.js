@@ -2,11 +2,12 @@
 //   playwright-cli -s=shorts-indicator open http://127.0.0.1:1421/ && \
 //   playwright-cli -s=shorts-indicator run-code --filename=tests/shorts-stage-indicator.browser.js
 //
-// 断言四件事：
+// 断言五件事：
 //   1. 暂停时画面里出现 Video.js 的 PlayButton（`[data-paused]`），尺寸按令牌为 64px / 图标 32px；
 //   2. 它只当指示器：外层不接指针、按钮不进 Tab 序、`aria-hidden`；
 //   3. 播放中不出现暂停按钮，点按层仍能收到点击；
-//   4. 缓冲态下 BufferingIndicator 进入 `data-visible`。
+//   4. 缓冲态下 BufferingIndicator 进入 `data-visible`；
+//   5. 起播前（loading 且暂停）画面只有黑底加转圈，没有封面图。
 async (page) => {
   const assert = (condition, message) => {
     if (!condition) throw new Error(message);
@@ -54,6 +55,24 @@ async (page) => {
     !playing.hasPlayButton,
     "播放中不应常驻暂停按钮（舞台只在 paused 时渲染 PlayButton）",
   );
+
+  // 起播前：黑屏 + 转圈，且画面里没有任何封面图。
+  const firstFrame = await page.evaluate(() => window.__shortsStageIndicator.render(true, true));
+  console.log("first-frame:", JSON.stringify(firstFrame));
+  assert(firstFrame.hasLoadingIndicator, "起播前应有加载转圈（shorts-loading-indicator）");
+  assert(
+    firstFrame.loadingIconCss && firstFrame.loadingIconCss.width === "32px",
+    `转圈图标应为 32px（与暂停图标同档），实测 ${JSON.stringify(firstFrame.loadingIconCss)}`,
+  );
+  assert(
+    firstFrame.loadingPointerEvents === "none" && firstFrame.loadingAriaHidden === "true",
+    "转圈只当指示器：应不接指针且 aria-hidden",
+  );
+  assert(
+    firstFrame.coverImages.length === 0,
+    `起播前画面里不应有封面图，实测 ${JSON.stringify(firstFrame.coverImages)}`,
+  );
+  assert(!firstFrame.hasPlayButton, "起播前不应同时出现暂停按钮");
 
   // 缓冲态：指示器容器在 500ms 延迟后进入可见态。
   await page.evaluate(() => window.__shortsStageIndicator.starve());

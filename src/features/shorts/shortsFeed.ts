@@ -573,8 +573,8 @@ export function shortsTrackOffset(index: number, stageHeight: number): number {
  * 当前下标周围需要挂载的条目下标（含自身）。
  *
  * 只挂载三个：上一条、当前、下一条。相邻条目必须真实挂载，否则跟手拖动时
- * 手指下方是空白 —— 那正是「滑动不跟手」的观感来源。再多挂就是白付封面图的
- * 解码与布局开销，滑动过程中看不到第二条之外的内容。
+ * 手指下方是空白 —— 那正是「滑动不跟手」的观感来源。再多挂就是白付一块舞台的
+ * 测量与布局开销，滑动过程中看不到第二条之外的内容。
  */
 export function shortsMountedIndexes(index: number, length: number): number[] {
   if (length <= 0) return [];
@@ -712,7 +712,7 @@ export function shortsNextSlots(
   return unchanged ? current : { held, active };
 }
 
-/** 槽位面板在条带里的位置（百分比字符串），与封面面板同一套坐标系。 */
+/** 槽位面板在条带里的位置（百分比字符串），与相邻占位面板同一套坐标系。 */
 export function shortsSlotTop(held: number | null): string {
   return `${Math.max(0, held ?? 0) * 100}%`;
 }
@@ -720,7 +720,7 @@ export function shortsSlotTop(held: number | null): string {
 /**
  * 挂载窗口里哪些下标由槽位面板承担。
  *
- * 其余下标渲染封面占位：它们只需要有画面参与平移，不需要能播。
+ * 其余下标渲染空舞台占位：它们只需要有一块黑底参与平移，不需要能播。
  */
 export function shortsSlotCoveredIndexes(slots: ShortsSlots): Set<number> {
   const covered = new Set<number>();

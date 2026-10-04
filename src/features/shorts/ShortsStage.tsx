@@ -1,8 +1,9 @@
 import { useCallback, useLayoutEffect, useState, type RefObject } from "react";
 import { Video } from "@videojs/react/video";
+import { SpinnerIcon } from "@videojs/react/icons";
 import { BufferingIndicator } from "@/components/videojs/ui/buffering-indicator";
 import { PlayButton } from "@/components/videojs/ui/play-button";
-import { ShortsPosterPlayer } from "./shortsPosterPlayer";
+import { ShortsStagePlayer } from "./shortsStagePlayer";
 import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
 import { Button } from "@/components/ui/button";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -144,7 +145,7 @@ function shortsDanmakuColumnStyle(frame: { width: number }): React.CSSProperties
  * 的 key 恒定（`slot-a` / `slot-b` / `slot-c`），`<video>` 与 Video.js 实例因此跨换片存活 ——
  * 这就是「播放器复用」的落点。
  *
- * 相邻条目渲染 `ShortsPoster`（封面占位）：它们只需要有画面参与平移，不需要能播。
+ * 相邻条目渲染 `ShortsBlankStage`（空舞台占位）：它们只需要有画面参与平移，不需要能播。
  * 一个槽位就是一个播放器实例加三条本机代理会话，为滑动跟手再多起一份是把上游
  * 取流成本翻倍，而滑动过程中相邻条目只要有画面占位。
  *
@@ -217,10 +218,20 @@ export function ShortsStage({
   }, [area.width, frame.width, mode, onChromeColumn]);
 
   const cover = normalizeImageUrl(item.cover);
+  /**
+   * 首帧尚未到达：取流、附着与起播前的缓冲都算。
+   *
+   * 判据里带 `paused` 而不只是 `loading`：播放中的卡顿（`waiting`）已经有
+   * `BufferingIndicator`（延迟 500ms）表达，这里只描述真正的起播阶段 ——
+   * 短暂停顿不该先闪一圈新的转圈。首帧出画后（`ready` / `onPlay`）两个条件
+   * 都归假，转圈与让位的背景一起消失。
+   */
+  const awaitingFirstFrame = playback.paused && playback.loading;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
-      <ShortsDynamicBackground cover={cover} />
+      {/* 加载期间不留封面：模糊背景也是封面，让位给纯黑与转圈（见下方注释）。 */}
+      <ShortsDynamicBackground cover={cover} visible={!awaitingFirstFrame} />
       <div
         ref={measure}
         data-slot="shorts-media-area"
@@ -241,7 +252,7 @@ export function ShortsStage({
             驱动。传输沿用自有的 `VideoJsPlayer`（dash.js），所以保留包住 `<video>`
             的 Player，为这两种状态指示提供上下文。
           */}
-          <ShortsPosterPlayer>
+          <ShortsStagePlayer>
             <Video
               ref={videoRef}
               playsInline
@@ -263,7 +274,7 @@ export function ShortsStage({
               不会闪一下转圈。起播前的取流没有指示器，那段显示视频黑底（见文档
               「预载未命中时的取流延迟」）。
 
-              它必须在 `ShortsPosterPlayer` 里：store 挂在槽位的 `<video>` 上，离开
+              它必须在 `ShortsStagePlayer` 里：store 挂在槽位的 `<video>` 上，离开
               这个作用域读不到播放状态。
 
               图标尺寸走 `--media-icon-size` 令牌而不是硬写类名：转圈图标用的是
@@ -312,7 +323,29 @@ export function ShortsStage({
                 <PlayButton tabIndex={-1} className="bg-black/40 text-media-controls-foreground" />
               </div>
             )}
-          </ShortsPosterPlayer>
+          </ShortsStagePlayer>
+
+          {/*
+            起播转圈：首帧到达前的黑屏上给一个「在加载」的明确信号。
+
+            为什么不直接用 `BufferingIndicator`：那个原语读 store 的 `waiting`
+            （媒体已 starved **且未暂停**），而起播前媒体还处于暂停态，读不到它。
+            图标复用 Video.js 的 `SpinnerIcon`（与 `BufferingIndicator` 同一枚），
+            尺寸走同一个 `--media-icon-size` 令牌，两处转圈看起来是同一种东西。
+
+            只当指示器：`aria-hidden` + `pointer-events-none`，点按暂停仍由下面的
+            命中层接管。
+          */}
+          {!warming && awaitingFirstFrame && !playback.error && (
+            <div
+              aria-hidden
+              data-slot="shorts-loading-indicator"
+              className="pointer-events-none absolute inset-0 grid place-items-center text-media-controls-foreground"
+              style={{ "--media-icon-size": "2rem" } as React.CSSProperties}
+            >
+              <SpinnerIcon className="size-media-icon drop-shadow-media-icon" />
+            </div>
+          )}
 
           {!warming && playback.error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-8 text-center">
@@ -385,12 +418,22 @@ export function ShortsStage({
  * 才看得见 —— 桌面上的居中竖卡两侧、横屏源的上下留边 —— 而手机上竖屏源现在多数会
  * 裁切铺满，那里根本没有它的位置。关掉时留边处是纯黑，也是播放器的常规画法。
  *
+ * `visible` 为假时（首帧尚未到达）连它一起让位：那时画面区整块是空的，模糊封面
+ * 会铺满全屏、被读成「加载封面」，而产品语义是加载期间只给黑屏与转圈。首帧出画后
+ * 它照常显示在留边处 —— 那是这个设置本身的意图（留边不空着），不是加载占位。
+ *
  * 恒定渲染而不按画幅分支：「画面框是否小于画面区」取决于视口比例，同一条视频在手机
  * 与桌面上的答案不同。
  */
-function ShortsDynamicBackground({ cover }: { cover: string | undefined }) {
+function ShortsDynamicBackground({
+  cover,
+  visible,
+}: {
+  cover: string | undefined;
+  visible: boolean;
+}) {
   const enabled = useSettingsStore((state) => state.dynamicBackgroundEnabled);
-  if (!enabled || !cover) return null;
+  if (!enabled || !cover || !visible) return null;
   return (
     <img
       src={cover}
@@ -402,25 +445,27 @@ function ShortsDynamicBackground({ cover }: { cover: string | undefined }) {
 }
 
 /**
- * 相邻条目的封面占位。
+ * 相邻条目的空舞台占位。
  *
  * 滑动时手指下方必须有真实内容 —— 那正是「跟手」的观感来源 —— 但相邻条目不该
- * 起播。画面框用与活动舞台完全相同的几何（同一块画面区、同一套铺满/留边判定与
- * 纵向落点），因此换片时构图不发生跳变：封面停在哪个矩形里，视频就在那个矩形里
- * 出画。
+ * 起播，也还没有可显示的首帧。这里给出一块与活动舞台完全相同的黑底几何（同一块
+ * 画面区、同一套铺满/留边判定），因此换片时构图不发生跳变：黑底停在哪个矩形里，
+ * 视频就在哪个矩形里出画。
  *
- * 不画信息与操作入口：那些住在页面的固定层里，只描述**当前**条目。占位上再画一份
- * 会在滑动过程中出现两套信息。
+ * **刻意不画封面**：短视频的消费语义是「画面就是内容」，换片时先闪一张静图再出画
+ * 反而像卡了一帧；加载期间黑屏加转圈（活动槽位里）就够。相邻条目也不会渲染模糊
+ * 背景 —— 它同样是这张稿件的封面，同样只属于「已经在播」的舞台。
+ *
+ * 不画信息与操作入口：那些住在页面的固定层里，只描述**当前**条目。占位上再画
+ * 一份会在滑动过程中出现两套信息。
  */
-export function ShortsPoster({ item }: { item: Pick<ShortsStageItem, "cover" | "dimension"> }) {
-  const cover = normalizeImageUrl(item.cover);
+export function ShortsBlankStage({ item }: { item: Pick<ShortsStageItem, "dimension"> }) {
   const { size: area, measure } = useShortsStageSize();
   // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。
   const aspect = shortsMediaAspect(item.dimension);
   const { frame, offset, inset } = useShortsFrameGeometry(aspect, area);
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
-      <ShortsDynamicBackground cover={cover} />
       <div
         ref={measure}
         className="absolute inset-x-0 flex items-start justify-center"
@@ -429,16 +474,7 @@ export function ShortsPoster({ item }: { item: Pick<ShortsStageItem, "cover" | "
         <div
           className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}
           style={shortsFrameStyle(frame, offset) as React.CSSProperties}
-        >
-          {cover && (
-            <img
-              src={cover}
-              alt=""
-              aria-hidden
-              className="absolute inset-0 size-full object-cover"
-            />
-          )}
-        </div>
+        />
       </div>
     </div>
   );
