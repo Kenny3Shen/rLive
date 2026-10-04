@@ -7,7 +7,9 @@
 //   3. 统计行下的留白与卡壳顶部留白相等；
 //   4. 点标题任意位置切换简介展开，两端按钮都不带底色；
 //   5. 收起时标题单行截断（卡高固定、骨架不跳），展开后换行显示完全体、
-//      箭头落到最后一行（与短视频详情入口同一读法）。
+//      箭头落到最后一行（与短视频详情入口同一读法）；
+//   6. 展开/收起是高度过渡（两端各能采到中间帧），收起后简介仍在 DOM 里
+//      （`hidden`），`aria-controls` 始终可解析。
 //
 // 只桩 IPC，不访问真实站点。
 // 用法：playwright-cli -s=upcard run-code --filename=tests/video-sidebar-upcard-layout.browser.js
@@ -64,6 +66,9 @@ async (page) => {
               super_chat_enabled: true,
               danmaku_shield_words: [],
               danmaku_blocked_users: [],
+              hidden_home_entry_ids: [],
+              video_recommend_api: "app",
+              video_next_episode_preload: false,
               // 缺这一项会让设置解析抛错，整页停在「无法读取当前设置」。
               video_blocked_uploaders: [],
               quality_level: "high",
@@ -359,7 +364,87 @@ async (page) => {
       `收起后标题行高应复原（${restored.titleBox.h} / ${collapsed.titleBox.h}）`,
     );
 
-    /* ---------- 5. 没有简介也没有 Tags：标题退化成不可点的普通行 ---------- */
+    /* ---------- 5. 展开/收起是高度过渡 ---------- */
+    // 收起态的 `aria-controls` 必须仍能解析到目标（`keepMounted` + `hidden`）。
+    assert(
+      await page.evaluate(() => {
+        const toggle = document.querySelector("aside[aria-label=视频详情] button[aria-controls=video-description]");
+        const target = document.getElementById(toggle.getAttribute("aria-controls"));
+        return !!target && target.id === "video-description";
+      }),
+      "收起态 aria-controls 应能解析到简介节点",
+    );
+    const collapsedTransition = await page.evaluate(() => {
+      const desc = document.querySelector("#video-description");
+      const style = getComputedStyle(desc);
+      return { property: style.transitionProperty, duration: style.transitionDuration };
+    });
+    assert(
+      collapsedTransition.property.includes("height") &&
+        parseFloat(collapsedTransition.duration) > 0,
+      `简介面板应有高度过渡（实测 ${collapsedTransition.property} / ${collapsedTransition.duration}）`,
+    );
+
+    // 点开并逐帧采样：必须读到 0 与终值之间的中间帧，否则是瞬时切换而不是动画。
+    const expanding = await page.evaluate(async () => {
+      const desc = document.querySelector("#video-description");
+      const toggle = document.querySelector("aside[aria-label=视频详情] button[aria-controls=video-description]");
+      toggle.click();
+      const samples = [];
+      const deadline = performance.now() + 400;
+      while (performance.now() < deadline) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        samples.push(Math.round(desc.getBoundingClientRect().height * 10) / 10);
+      }
+      return { samples, finalHeight: desc.getBoundingClientRect().height, hidden: desc.hidden };
+    });
+    const expandFull = expanding.finalHeight;
+    assert(expanding.hidden === false, "展开后简介不应再 hidden");
+    assert(expandFull > 24, `展开后的简介应有实际高度（实测 ${expandFull}）`);
+    assert(
+      expanding.samples.some((height) => height > 2 && height < expandFull - 2),
+      `展开应采到中间帧（实测 ${JSON.stringify(expanding.samples)}）`,
+    );
+    assert(
+      Math.abs(expanding.samples.at(-1) - expandFull) <= 1,
+      `展开动画应收在终值（末帧 ${expanding.samples.at(-1)} / 终值 ${expandFull}）`,
+    );
+
+    // 收起同样要有中间帧，并且收在 0（随后仍是 DOM 里的 hidden 节点）。
+    const collapsing = await page.evaluate(async () => {
+      const desc = document.querySelector("#video-description");
+      const toggle = document.querySelector("aside[aria-label=视频详情] button[aria-controls=video-description]");
+      const expandedHeight = desc.getBoundingClientRect().height;
+      toggle.click();
+      const samples = [];
+      const deadline = performance.now() + 400;
+      while (performance.now() < deadline) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        samples.push(Math.round(desc.getBoundingClientRect().height * 10) / 10);
+      }
+      return {
+        expandedHeight,
+        samples,
+        finalHeight: desc.getBoundingClientRect().height,
+        hidden: desc.hidden,
+        inDom: !!document.getElementById("video-description"),
+      };
+    });
+    assert(collapsing.hidden === true, "收起后简介应回到 hidden");
+    assert(collapsing.inDom, "收起后简介仍应在 DOM 里（keepMounted 是 aria-controls 的前提）");
+    assert(
+      collapsing.samples.some(
+        (height) => height > 2 && height < collapsing.expandedHeight - 2,
+      ),
+      `收起应采到中间帧（实测 ${JSON.stringify(collapsing.samples)}）`,
+    );
+    assert(
+      Math.abs(collapsing.samples.at(-1) - collapsing.finalHeight) <= 1 &&
+        collapsing.finalHeight <= 1,
+      `收起动画应收到 0（末帧 ${collapsing.samples.at(-1)}）`,
+    );
+
+    /* ---------- 6. 没有简介也没有 Tags：标题退化成不可点的普通行 ---------- */
     await page.addInitScript(() => {
       window.__upcardArchive = {
         bvid: "BV1xx411c7mD",
@@ -428,6 +513,8 @@ async (page) => {
       gaps,
       items: collapsed.items.map((i) => i.text),
       degenerateRowGap: degenerate.rowGap,
+      expandFrames: expanding.samples.length,
+      collapseFrames: collapsing.samples.length,
     };
   } finally {
     if (oldViewport) await page.setViewportSize(oldViewport);

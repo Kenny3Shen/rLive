@@ -53,6 +53,7 @@
 
 - 明确命令用 `Button`；二元设置用 `Switch` / `Toggle` / `Checkbox`；有限选项用 `Select` / `ToggleGroup`；页面视图切换用 `Tabs`（`TabsTrigger` 必须在 `TabsList` 内）。`variant="line"` 的选中指示条画在页签自己的底边上（水平方向 `-bottom-px`，与 `SiteSwitcher` / `VideoTabSwitcher` 同一画法），因此该变体的 `TabsList` 不保留纵向内边距、页签在水平方向撑满页签条：`TabsList` 的 3px 内边距会把页签底边抬高，而窄屏 `max-md:min-h-11` 又把页签撑满，同一份相对页签的偏移在两种页签高度下无法都对齐（曾让 401px 宽的安卓上整条指示条落到页签栏下方）。回归：`tests/tabs-indicator.browser.js`。
 - 选日期用 `Calendar`（配 `Popover` 组成 date picker，`locale={zhCN}` 取自 `react-day-picker/locale`），不用原生 `<input type="date">`：原生控件的弹出层由 WebView 提供，桌面与 Android 上样式、语言与暗色表现都不受项目控制。
+- 可展开的详情面板用 `Collapsible`（`src/components/ui/collapsible.tsx`，Base UI）；高度过渡走 `--collapsible-panel-height`，需要 `aria-controls` 在收起态也能解析时开 `keepMounted`（收起态由基料挂 `hidden`）。播放页 UP 卡简介是第一个调用方，见 `docs/zh/B站视频功能-设计.md`。
 - 表单用 `Field` 系列；加载、空状态与通知分别用 `Skeleton`、`Empty`、`Spinner` 和项目 Base UI toast 封装导出的 `notify`。
 - 破坏性确认用 `AlertDialog`；移动端底部面板用 `Drawer`；短上下文内容用 `Popover`。任务型 Overlay 必须有可访问标题，必要时用 `sr-only` 隐藏视觉标题。
 - Card 只用于独立、重复或需要明确边界的内容；不嵌套 Card，不把整段页面当作悬浮 Card。Base UI 通过 `render` 组合自定义 trigger，不使用 Radix 的 `asChild`。
@@ -212,6 +213,7 @@ CSS 只承担无需 JavaScript 编排的短状态，交互动画优先用可中�
 | hover、focus、pressed、Tabs indicator、播放器控制条显隐 | `transition-*` |
 | 加载图标连续旋转 | `animate-spin-soft` |
 | Popover、Tooltip、Dialog、AlertDialog、Drawer、Toast | Base UI `data-starting-style` / `data-ending-style`，反向操作可从当前帧继续 |
+| 可展开面板（播放页 UP 卡简介）| Base UI `Collapsible` 的 `--collapsible-panel-height` 高度过渡（`150ms`、`--motion-ease-out`、两端 `data-*-style:h-0`），收起态保持 `hidden` + `keepMounted` |
 | Overlay 时长 | Drawer 进 `240ms` / 退 `160ms`；Dialog `200ms` / `140ms`；Popover `160ms` / `110ms` |
 | Tooltip | 首次 Hover 延迟 `350ms`，相邻 Tooltip 用即时状态并跳过动画 |
 

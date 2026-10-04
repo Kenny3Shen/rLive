@@ -20,6 +20,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -850,9 +851,11 @@ export function VideoSidebar({
       <>
         {!isPgc && archiveQuery.isPending && <UpCardSkeleton />}
         {!isPgc && archive && (
-          <section
+          <Collapsible
             key={bvid}
-            className="shrink-0 border-b border-border px-2.5 py-2"
+            open={descriptionExpanded}
+            onOpenChange={setDescriptionExpanded}
+            render={<section className="shrink-0 border-b border-border px-2.5 py-2" />}
             aria-label={`UP 主信息：${archive.author}`}
           >
             <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
@@ -917,11 +920,10 @@ export function VideoSidebar({
                   文字、长标题截断后仍指得到，点击整行都能切换而不必瞄准小箭头。
                   没有简介也没有 Tags 时标题退化成不可点的普通一行（无从展开）。 */}
               {hasArchiveDetail ? (
-                <button
-                  type="button"
-                  aria-expanded={descriptionExpanded}
+                <CollapsibleTrigger
+                  // 显式常驻 `aria-controls`：基料只在展开时挂它，而要求收起态也能
+                  // 解析到目标（回归夹具与无障碍契约都按这一点写）。
                   aria-controls="video-description"
-                  onClick={() => setDescriptionExpanded((expanded) => !expanded)}
                   className="mt-1.5 flex min-h-6 w-full min-w-0 items-center text-left transition-opacity hover:opacity-80"
                 >
                   {/* 内层 `w-fit` 让箭头跟着内容宽：短标题的箭头紧贴文字，
@@ -949,7 +951,7 @@ export function VideoSidebar({
                       )}
                     />
                   </span>
-                </button>
+                </CollapsibleTrigger>
               ) : (
                 <p
                   className="mt-1.5 flex min-h-6 items-center truncate text-sm leading-5 font-medium tracking-tight"
@@ -1000,35 +1002,50 @@ export function VideoSidebar({
                   </div>
                 )}
               </dl>
-              {/* 简介默认不展开：用 hidden 而非条件渲染，让 aria-controls 在收起态也能 */}
-              {/* 解析到目标；Tags 跟在正文末尾，点击进入对应的视频搜索结果。 */}
+              {/* 简介默认不展开：`keepMounted` 让收起态仍留在 DOM 里（`hidden`），
+                  `aria-controls` 因此始终能解析到目标；`--collapsible-panel-height`
+                  是基料量出的当前高度，过渡它就能得到可中断的展开/收起动画。
+                  Tags 跟在正文末尾，点击进入对应的视频搜索结果。 */}
               {hasArchiveDetail && (
-                <div id="video-description" hidden={!descriptionExpanded} className="mt-2">
-                  {archive.desc && (
-                    <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
-                      <LinkText text={archive.desc} />
-                    </p>
+                <CollapsibleContent
+                  id="video-description"
+                  keepMounted
+                  className={cn(
+                    "h-(--collapsible-panel-height) overflow-hidden",
+                    "transition-[height] duration-150 ease-[var(--motion-ease-out)]",
+                    "motion-reduce:transition-none",
+                    // 两端都从/到 0 高：起始帧与结束帧由属性钩子给，避免首次
+                    // 测量前先闪一帧全高。
+                    "data-starting-style:h-0 data-ending-style:h-0",
                   )}
-                  {archive.tags.length > 0 && (
-                    <div
-                      className={cn("flex flex-wrap gap-1.5", archive.desc && "mt-2")}
-                      aria-label="视频 Tags"
-                    >
-                      {archive.tags.map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant="outline"
-                          render={<Link to={videoSearchPath(tag)} />}
-                        >
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                >
+                  <div className="mt-2">
+                    {archive.desc && (
+                      <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                        <LinkText text={archive.desc} />
+                      </p>
+                    )}
+                    {archive.tags.length > 0 && (
+                      <div
+                        className={cn("flex flex-wrap gap-1.5", archive.desc && "mt-2")}
+                        aria-label="视频 Tags"
+                      >
+                        {archive.tags.map((tag) => (
+                          <Badge
+                            key={tag}
+                            variant="outline"
+                            render={<Link to={videoSearchPath(tag)} />}
+                          >
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </CollapsibleContent>
               )}
             </div>
-          </section>
+          </Collapsible>
         )}
         <RelatedPanel bvid={bvid ?? ""} />
       </>
