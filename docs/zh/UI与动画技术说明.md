@@ -147,6 +147,7 @@ VOD 播放页进出因此与直播间共用同一段运动：进入时列表退�
 
 - 进入：`scale 0.96 -> 1` + `opacity 0 -> 1`，浏览列表已立即卸载。完成后清除 transform、opacity、visibility、transform origin 与 `will-change`，保证全屏播放器没有永久 transformed ancestor。
 - 退出：双层交叉溶解，两条补间从时间 `0` 同时开始。离场 subtree 保持挂载执行 `scale 1 -> 0.96` + `opacity 1 -> 0`，只跑 `duration × 0.72` 以形成重叠，避免视口中间穿过一帧全空画面；目标页 `scale 1.02 -> 1` + `opacity 0 -> 1` 展开，反向缩放刻意比 `0.96` 更贴近 `1`，因为它是背景而非主体。
+- VOD 同路径层级（`/video/play?bvid=A → B → C`）：`zoomKey` 保持 pathname，另外用 `motionKey` 跟随浏览器历史 `idx`，动画身份与播放器挂载身份分离。PUSH 或 POP 前进从 `0.96` 展开，POP 返回从 `1.02` 回到 `1`，两者均淡入；只重播现有层的动画，不创建双播放器。REPLACE 补齐参数不改变历史索引，不重播。全屏期间同路径换片也跳过缩放：Tauri 的 fixed 舞台不是 top layer，不能让祖先的 transform 改变其包含块。方向更新不能只放在 pathname 改变分支里。同路径返回复用播放器，不宣称保留前一视频的画面做交叉淡化。回归 `tests/vod-navigation-motion.browser.js` 覆盖三层往返、REPLACE、快速返回、减少动态效果、媒体节点复用与最后离场。
 - 退出期间入场节点带 `bg-background`（否则离场直播间会透过淡入中的目标页继续可见）；两个节点在过渡期都 `pointer-events: none`。
 - 离场 subtree 在两条补间都完成后才卸载，且不先恢复 opacity。删除前两道防闪措施：先 `commitStyles()` 把离场结束帧固化为内联样式再 cancel（否则 cancel 撤销 fill 的瞬间节点会以完全不透明重现）；再撤销离场层的 `will-change` 提升并等一帧合成后才移除子树（部分 WebView 会把该合成层的旧纹理再合成一两帧）。
 

@@ -44,6 +44,7 @@ import { VideoTabScope } from "@/features/video/videoTabScope";
 import { VideoSearchBar } from "@/features/video/VideoSearchBar";
 import {
   VIDEO_HOME_PATH,
+  VIDEO_PLAY_PATH,
   VIDEO_SEARCH_QUERY_PARAM,
   VIDEO_TABS,
   VIDEO_TAB_PARAM,
@@ -223,6 +224,7 @@ export function Shell() {
     prevHistoryIndex: historyIndex,
     directSidebarPath: null as string | null,
     sidebarDirection: 1 as 1 | -1,
+    playerDirection: 1 as 1 | -1,
     tabNavigation: null as { pathname: string; direction: "forward" | "backward" } | null,
   });
 
@@ -250,6 +252,10 @@ export function Shell() {
       prevHistoryIndex: historyIndex,
       directSidebarPath,
       sidebarDirection,
+      // VOD 深入相关推荐/选集只改 search，不改 pathname。方向也必须按历史
+      // 索引推进，不能放进上面的 pathChanged 分支，否则多层返回一直被当成进入。
+      playerDirection:
+        navigationType === "POP" && historyIndex < navMemory.prevHistoryIndex ? -1 : 1,
       tabNavigation,
     });
   }
@@ -791,6 +797,10 @@ export function Shell() {
         // 使房间与 IPTV 播放器绝不会被合并成同一页 ——
         // 需要避免的是那个共享 key，而不是缩放本身。
         zoomKey={isImmersivePlayer ? pathname : "standard-shell"}
+        // 仅动画跟随 VOD 历史层级，DOM key 仍按路径稳定。REPLACE（如补齐 cid）
+        // 不改变 idx，不重播动画；PUSH/POP 每一层都触发，同时避免双播放器/重挂载。
+        motionKey={pathname === VIDEO_PLAY_PATH ? String(historyIndex) : undefined}
+        direction={pathname === VIDEO_PLAY_PATH ? navMemory.playerDirection : 1}
         enabled={isImmersivePlayer}
         className="flex-1 overflow-hidden"
       >

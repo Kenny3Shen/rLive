@@ -43,12 +43,18 @@ type ZoomSnapshot = {
 export function PageZoom({
   zoomKey,
   enabled,
+  motionKey = zoomKey,
+  direction = 1,
   children,
   className,
 }: {
   /** 目的地启用时，改变它会重启过渡。 */
   zoomKey: string;
   enabled: boolean;
+  /** 动画身份独立于挂载身份：同路径换视频可重播动画，但不重建播放器。 */
+  motionKey?: string;
+  /** 同一宿主内的历史返回由反向纵深浮现；跨宿主退出仍保留离场层。 */
+  direction?: 1 | -1;
   children: ReactNode;
   className?: string;
 }) {
@@ -192,13 +198,25 @@ export function PageZoom({
 
     const incoming = incomingRef.current;
     if (!incoming || !enabled || prefersReducedMotion()) return;
+    // 同路径换片会重播动画，但全屏期间不能变换舞台祖先。Tauri 的全屏舞台是
+    // fixed 层而非 top layer，父级 transform/will-change 会改其包含块、短暂缩屏。
+    // 此处读已提交的 DOM（子页 layout effects 已执行），不另建一份全屏状态。
+    if (
+      (document.fullscreenElement && incoming.contains(document.fullscreenElement)) ||
+      incoming.querySelector('[data-player-stage][data-fullscreen="true"]')
+    ) {
+      return;
+    }
 
     const { duration, ease } = motionProfile().roomZoom;
     incoming.style.willChange = "transform,opacity";
     incoming.style.transformOrigin = "50% 50%";
     const animation = incoming.animate(
       [
-        { opacity: 0, transform: `scale(${ROOM_ZOOM_START_SCALE})` },
+        {
+          opacity: 0,
+          transform: `scale(${direction < 0 ? ROOM_ZOOM_BACKDROP_SCALE : ROOM_ZOOM_START_SCALE})`,
+        },
         { opacity: 1, transform: "scale(1)" },
       ],
       { duration: duration * 1000, easing: ease, fill: "both" },
@@ -221,7 +239,7 @@ export function PageZoom({
       clearMotionStyles(incoming);
       if (releaseFrame !== null) window.cancelAnimationFrame(releaseFrame);
     };
-  }, [enabled, outgoing, zoomKey]);
+  }, [direction, enabled, motionKey, outgoing, zoomKey]);
 
   return (
     <div
