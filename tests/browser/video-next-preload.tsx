@@ -43,7 +43,8 @@ const archive: VideoArchive = {
 
 /** `video_preload_next` 的调用记录：断言闸门开合的唯一样本。 */
 const preloadCalls: unknown[] = [];
-Object.assign(window, { nextPreloadCalls: preloadCalls });
+const ipcCalls: string[] = [];
+Object.assign(window, { nextPreloadCalls: preloadCalls, nextPreloadIpcCalls: ipcCalls });
 
 /**
  * 每次 `video_get_play_info` 都返回一份新的取流地址，与真实代理会话一致
@@ -53,6 +54,7 @@ let playInfoCalls = 0;
 
 mockIPC(
   (command, payload) => {
+    ipcCalls.push(command);
     switch (command) {
       case "video_get_archive":
         return archive;

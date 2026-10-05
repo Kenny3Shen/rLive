@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -58,6 +60,7 @@ import {
   writeDetailsShare,
 } from "@/shared/hooks/useDetailsResize";
 import { roundDetailsShare } from "@/shared/gestures/detailsResize";
+import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
@@ -158,7 +161,7 @@ import {
   glassSeparatorClass,
 } from "@/shared/components/player/glassSurface";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
-import { VideoSidebar, type SidebarTab } from "./VideoSidebar";
+import type { SidebarTab } from "./VideoSidebar";
 import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
 import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
 import {
@@ -188,6 +191,10 @@ import {
 import { filterBlockedUploaders } from "./videoUploaderBlock";
 import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
 import { notify, setToastPortalContainer } from "@/components/ui/toast";
+
+const VideoSidebar = lazy(() =>
+  import("./VideoSidebar").then((module) => ({ default: module.VideoSidebar })),
+);
 
 /** 自动连播相关视频的等待时长：播完后留出反悔时间，也比换集慢一拍。 */
 const RELATED_AUTOPLAY_DELAY_MS = 3_000;
@@ -631,6 +638,7 @@ function VideoPlayerPageContent() {
   const aid = params?.aid || archiveQuery.data?.aid || null;
 
   const videoKey = `${params?.bvid ?? params?.epId ?? ""}:${cid}`;
+  const { ready: mediaReady, release: releaseStartup } = usePlayerStartupGate(videoKey);
   // 渲染期不读 ref：内容键同步给记录续播快照的回调。
   useLayoutEffect(() => {
     videoKeyRef.current = videoKey;
@@ -966,6 +974,18 @@ function VideoPlayerPageContent() {
   if (!playInfoQuery.isPlaceholderData && settledCid !== cid) setSettledCid(cid);
   const switchingItem = playInfoQuery.isPlaceholderData && settledCid !== cid;
   const playInfo: VideoPlayInfo | undefined = switchingItem ? undefined : playInfoQuery.data;
+  // 保留取流键与本地续播的必要依赖；侧栏、字幕、缩略图和弹幕让首帧先走。
+  // 失败时也显示侧栏，不能把切集/查看详情等恢复入口一起锁住。
+  const secondaryReady =
+    mediaReady ||
+    playInfoQuery.isError ||
+    !!playbackError ||
+    archiveQuery.isError ||
+    seasonQuery.isError;
+  const secondaryReadyRef = useRef(secondaryReady);
+  useLayoutEffect(() => {
+    secondaryReadyRef.current = secondaryReady;
+  }, [secondaryReady]);
 
   // 换集过渡：清掉旧集的播放错误并停住旧画面/声音（playInfo 已抹成 undefined，
   // 播放器 effect 会随之销毁旧实例），等新集信息就位再重建。
@@ -1020,7 +1040,7 @@ function VideoPlayerPageContent() {
   // CC 字幕列表：多数稿件没有，空列表/失败都按无字幕处理（按钮直接不渲染）。
   const subtitlesQuery = useQuery({
     queryKey: ["video_subtitles", cid, params?.bvid ?? "", params?.epId ?? ""],
-    enabled: cid > 0,
+    enabled: cid > 0 && secondaryReady,
     queryFn: () =>
       videoGetSubtitles({
         bvid: params?.bvid ?? null,
@@ -1035,7 +1055,7 @@ function VideoPlayerPageContent() {
   // 视频缩略图（storyboard）快照：无快照或纯音频不请求。
   const storyboardQuery = useQuery({
     queryKey: ["video_storyboard", cid, bvid ?? "", epId ?? ""],
-    enabled: cid > 0 && !audioOnly,
+    enabled: cid > 0 && !audioOnly && secondaryReady,
     queryFn: async () => {
       // 雪碧图必须经本机图片代理（videoshot CDN 拒绝非 bilibili Referer），
       // 而代理端口是异步取回的。先等它就绪，否则 VTT 可能烧进直连 URL ——
@@ -1146,7 +1166,7 @@ function VideoPlayerPageContent() {
 
   const ensureDanmakuSegments = useCallback(
     (positionMs: number) => {
-      if (!cid || !danmakuVisibleRef.current) return;
+      if (!cid || !danmakuVisibleRef.current || !secondaryReadyRef.current) return;
       // 换视频会把 map/set 换成新实例；在途请求带着旧引用回来时据此丢弃，
       // 否则旧视频的段落会写进新视频的弹幕里。
       const segmentsMap = loadedSegmentsRef.current;
@@ -1185,10 +1205,12 @@ function VideoPlayerPageContent() {
     [cid],
   );
 
-  // 首屏与开启弹幕时先把 0 位置那一段拉起来。
+  // 媒体就绪或重新开启弹幕后从当前进度加载，续播不白取开头分段。
   useEffect(() => {
-    if (danmakuVisible) ensureDanmakuSegments(0);
-  }, [danmakuVisible, ensureDanmakuSegments]);
+    if (danmakuVisible && secondaryReady) {
+      ensureDanmakuSegments((videoRef.current?.currentTime ?? 0) * 1_000);
+    }
+  }, [danmakuVisible, ensureDanmakuSegments, secondaryReady]);
 
   const seekTo = useCallback(
     (target: number) => {
@@ -1388,6 +1410,7 @@ function VideoPlayerPageContent() {
     }
     function onPlaying() {
       if (cancelled) return;
+      releaseStartup();
       setWaiting(false);
       setLoading(false);
       // 缓冲恢复的权威信号：waiting 判定计时必须在这里解除。play 事件只在
@@ -1500,6 +1523,11 @@ function VideoPlayerPageContent() {
 
     media.volume = volumeRef.current / 100;
     media.muted = mutedRef.current;
+    // loadeddata 在自动播放被拦截或用户暂停时也会到达，不必等 playing 才开放侧栏。
+    const onLoadedData = () => {
+      if (!cancelled) releaseStartup();
+    };
+    media.addEventListener("loadeddata", onLoadedData);
     media.addEventListener("timeupdate", syncTime);
     media.addEventListener("durationchange", syncDuration);
     media.addEventListener("loadedmetadata", onReady);
@@ -1575,6 +1603,7 @@ function VideoPlayerPageContent() {
       if (endedTimer !== null) clearTimeout(endedTimer);
       // 播放器会话拆除：waiting 自动恢复的判定计时随之作废（新会话另行登记）。
       waitingRecovery.endSession();
+      media.removeEventListener("loadeddata", onLoadedData);
       media.removeEventListener("timeupdate", syncTime);
       media.removeEventListener("durationchange", syncDuration);
       media.removeEventListener("loadedmetadata", onReady);
@@ -1601,6 +1630,7 @@ function VideoPlayerPageContent() {
     cid,
     epId,
     ensureDanmakuSegments,
+    releaseStartup,
     goToPlaylistItem,
     playUrl,
     playInfo?.duration,
@@ -3027,26 +3057,30 @@ function VideoPlayerPageContent() {
               "lg:w-[320px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[340px] lg:pb-0",
             )}
           >
-            <VideoSidebar
-              tab={sidebarTab}
-              onTabChange={setSidebarTab}
-              bvid={params.bvid}
-              epId={params.epId}
-              aid={params.aid}
-              cid={cid}
-              detailsResize={detailsResizeEnabled ? detailsResize : undefined}
-              danmaku={{
-                entries: danmakuEntries,
-                positionMs: currentTime * 1000,
-                // 空列表只有在「本段已落定且没有在途请求」时才不是加载中，
-                // 否则无弹幕的视频会永远显示加载动画。
-                loading:
-                  danmakuVisible &&
-                  !playbackError &&
-                  (danmakuRequestsInFlight > 0 || !danmakuSegmentSettled),
-                onSeek: (positionMs) => seekTo(positionMs / 1000),
-              }}
-            />
+            {secondaryReady && (
+              <Suspense fallback={null}>
+                <VideoSidebar
+                  tab={sidebarTab}
+                  onTabChange={setSidebarTab}
+                  bvid={params.bvid}
+                  epId={params.epId}
+                  aid={params.aid}
+                  cid={cid}
+                  detailsResize={detailsResizeEnabled ? detailsResize : undefined}
+                  danmaku={{
+                    entries: danmakuEntries,
+                    positionMs: currentTime * 1000,
+                    // 空列表只有在「本段已落定且没有在途请求」时才不是加载中，
+                    // 否则无弹幕的视频会永远显示加载动画。
+                    loading:
+                      danmakuVisible &&
+                      !playbackError &&
+                      (danmakuRequestsInFlight > 0 || !danmakuSegmentSettled),
+                    onSeek: (positionMs) => seekTo(positionMs / 1000),
+                  }}
+                />
+              </Suspense>
+            )}
             <DrawerViewport active={!fullscreen.fullscreen} />
           </aside>
         )}

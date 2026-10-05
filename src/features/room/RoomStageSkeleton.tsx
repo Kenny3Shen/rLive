@@ -16,9 +16,8 @@ import { sidePanelStartsOpen } from "./PlayerPane";
 /**
  * 直播间详情未落定时的加载骨架。
  *
- * 布局与 `RoomPage` + `PlayerPane` 的成品同构：纯黑舞台（画面区留黑，视频本来
- * 就在那里）+ 画面内 HUD 骨架 + 底部控制条骨架 + 右侧主播/弹幕面板骨架 +
- * 桌面底部的操作行。详情到达时只有内容替换，没有整页重新排布。
+ * 纯黑舞台保留 HUD 身份信息与返回按钮，右侧主播/弹幕面板保留信息骨架。
+ * 控制栏不做骨架；桌面底部操作行仅保留高度，避免详情到达后布局跳动。
  *
  * 与真实布局共用同一组断点判据（`useCompactPlayerViewport` /
  * `sidePanelStartsOpen`），因此手机竖屏的「画面在上、聊天在下」与桌面端的
@@ -64,10 +63,12 @@ export function RoomStageSkeleton({ onBack }: { onBack: () => void }) {
           {showSidePanel && <RoomSidePanelSkeleton stacked={stacked} />}
         </div>
       </div>
-      {/* 桌面端常驻的底部操作行（复制链接 / 复制直链）。移动端没有这一行。 */}
-      <div className="hidden shrink-0 items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
-        <Skeleton className="h-7 w-24" />
-        <Skeleton className="h-7 w-24" />
+      {/* 桌面底部操作行只占高，不模拟按钮；移动端不占位。 */}
+      <div
+        aria-hidden
+        className="hidden shrink-0 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:block"
+      >
+        <div className="h-7" />
       </div>
     </div>
   );

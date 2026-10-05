@@ -1,6 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { BILIBILI_SHORTS_PATH, DOUYIN_SHORTS_PATH, SHORTS_SEED_PARAM } from "./shortsFeed";
 
@@ -8,13 +8,11 @@ const platforms = [
   {
     siteId: "bilibili",
     title: "B 站短视频",
-    description: "推荐视频、弹幕与评论",
     to: BILIBILI_SHORTS_PATH,
   },
   {
     siteId: "douyin",
     title: "抖音短视频",
-    description: "推荐视频流",
     to: DOUYIN_SHORTS_PATH,
   },
 ] as const;
@@ -36,10 +34,9 @@ export function ShortsHomePage() {
         <h1 id="shorts-home-title" className="font-heading text-2xl font-semibold tracking-tight">
           短视频
         </h1>
-        <p className="text-sm text-muted-foreground">选择平台，进入上下滑动的推荐流。</p>
       </header>
       <nav aria-label="短视频平台" className="grid gap-4 sm:grid-cols-2">
-        {platforms.map(({ siteId, title, description, to }) => (
+        {platforms.map(({ siteId, title, to }) => (
           <Link
             key={siteId}
             to={to}
@@ -52,7 +49,6 @@ export function ShortsHomePage() {
                 <CardTitle>
                   <h2>{title}</h2>
                 </CardTitle>
-                <CardDescription>{description}</CardDescription>
               </CardHeader>
               <CardFooter className="justify-between gap-3">
                 <span>进入推荐流</span>
@@ -62,9 +58,6 @@ export function ShortsHomePage() {
           </Link>
         ))}
       </nav>
-      <p className="text-xs text-muted-foreground">
-        抖音推荐需先在「设置 → 账号」保存登录 Cookie。
-      </p>
     </section>
   );
 }

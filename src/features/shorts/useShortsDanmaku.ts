@@ -30,6 +30,7 @@ export function useShortsDanmaku(cid: number, visible: boolean): ShortsDanmakuSt
   const loadedRef = useRef(new Map<number, readonly VideoDanmakuEntry[]>());
   const inFlightRef = useRef(new Set<number>());
   const exhaustedFromRef = useRef<number | null>(null);
+  const progressRef = useRef<{ cid: number; positionMs: number } | null>(null);
   // 开关只影响这个 ref 的读数，不进 `ensure` 的依赖：否则开关弹幕会改变
   // 回调身份，把依赖它的播放器 effect 一起重建、从 0 秒重播。
   const visibleRef = useRef(visible);
@@ -46,10 +47,13 @@ export function useShortsDanmaku(cid: number, visible: boolean): ShortsDanmakuSt
     loadedRef.current = new Map();
     inFlightRef.current = new Set();
     exhaustedFromRef.current = null;
+    progressRef.current = null;
   }, [cid]);
 
   const ensure = useCallback(
     (positionMs: number) => {
+      // 由活动媒体的进度回调开闸，不在拿到推荐 cid 时与取流同时拉弹幕。
+      progressRef.current = { cid, positionMs };
       if (!cid || !visibleRef.current) return;
       // 换片会把 map/set 换成新实例；在途请求带着旧引用回来时据此丢弃。
       const segments = loadedRef.current;
@@ -82,10 +86,11 @@ export function useShortsDanmaku(cid: number, visible: boolean): ShortsDanmakuSt
     [cid],
   );
 
-  // 换片与开启弹幕时先把 0 位置那一段拉起来。
+  // 暂停时重新打开弹幕也能补取当前段；未收到媒体进度的新条目继续等待。
   useEffect(() => {
-    if (visible) ensure(0);
-  }, [visible, ensure]);
+    const progress = progressRef.current;
+    if (visible && progress?.cid === cid) ensure(progress.positionMs);
+  }, [cid, visible, ensure]);
 
   return { entries, ensure };
 }

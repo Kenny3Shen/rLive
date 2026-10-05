@@ -166,6 +166,11 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
   onProgress,
 }: UseShortsMediaPlaybackSlotOptions<Item, Info>): ShortsPlaybackState {
   const queryClient = useQueryClient();
+  useEffect(() => {
+    // 活动槽位在推荐/取流 IPC 在途时准备适配器，不再等播放地址返回后串行 import。
+    // 三槽共用模块缓存，预热槽位不另起下载。
+    if (mode === "play") void loadVideoJsModules(source.kind).catch(() => {});
+  }, [mode, source.kind]);
   const [loading, setLoading] = useState(true);
   const [paused, setPaused] = useState(true);
   const [ready, setReady] = useState(false);
@@ -511,7 +516,12 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
       }
       function syncTime() {
         const actual = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : 0;
-        if (sessionRef.current.mode === "play") onProgressRef.current?.(actual * 1_000);
+        if (
+          media.readyState >= 2 &&
+          sessionRef.current.itemKey === expectedItemRef.current &&
+          sessionRef.current.mode === "play"
+        )
+          onProgressRef.current?.(actual * 1_000);
         reportProgress(actual, false);
       }
       function syncDuration() {

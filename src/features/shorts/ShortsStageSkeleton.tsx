@@ -2,21 +2,13 @@ import type { CSSProperties } from "react";
 import { StageSkeletonBlock } from "@/shared/components/player/PlayerStageSkeleton";
 import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
-  SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_SAFE_AREA_BOTTOM,
-  SHORTS_SEEK_BAR_HEIGHT_PX,
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
 } from "./shortsFeed";
 
 /**
- * 竖屏流的加载骨架。
- *
- * 画面区保持纯黑（视频本来就在那里），只把画面周围「本来就有东西」的位置画出来：
- * 左下角的信息浮层（头像 / 作者 / 标题 / 统计）与底部操作栏（进度条 + 输入框 +
- * 几个圆形按钮）。数据到达时这些位置直接换成真内容，几何不跳。
- *
- * 顶部控制栏不在这里：加载态里返回按钮已经是真的（`ShortsBackButton`），
- * 再画一条骨架会与它重叠。
+ * 竖屏流加载时保持纯黑画面，仅占位左下信息浮层，不模拟评论按钮或底部操作栏。
+ * 返回按钮由页面提供真实的 `ShortsBackButton`。
  */
 
 /**
@@ -50,58 +42,12 @@ export function ShortsInfoSkeleton() {
           <StageSkeletonBlock className="h-3.5 w-2/3" />
           <StageSkeletonBlock className="h-3 w-28" />
         </div>
-        {/* 评论按钮与它的计数。 */}
-        <div className="flex shrink-0 flex-col items-center gap-1">
-          <StageSkeletonBlock className="size-11 rounded-full" />
-          <StageSkeletonBlock className="h-3 w-6" />
-        </div>
       </div>
     </div>
   );
 }
 
-/**
- * 底部操作栏的占位：进度条（3px）+ 控制行（56px，输入框 + 三颗圆形按钮）。
- *
- * 高度、安全区与真实底栏走同一组常量，因此加载态与播放态的底栏是同一条。
- */
-export function ShortsBottomBarSkeleton() {
-  return (
-    <div
-      aria-hidden
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col bg-black/85"
-      style={{
-        height: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
-        paddingBottom: SHORTS_SAFE_AREA_BOTTOM,
-      }}
-    >
-      <StageSkeletonBlock
-        className="w-full shrink-0 rounded-none bg-white/20"
-        // 进度条只有 3px 布局高度；命中层是它向上的绝对定位子元素，不占布局。
-        style={{ height: `${SHORTS_SEEK_BAR_HEIGHT_PX}px` }}
-      />
-      <div
-        className="flex flex-1 items-center px-2"
-        style={{ height: `${SHORTS_BOTTOM_CONTROLS_HEIGHT_PX}px` }}
-      >
-        <div className="mx-auto flex w-full max-w-lg items-center gap-1.5">
-          {/* 弹幕输入框。 */}
-          <StageSkeletonBlock className="h-9 min-w-0 flex-1 rounded-full" />
-          {[0, 1, 2].map((index) => (
-            <StageSkeletonBlock key={index} className="size-10 shrink-0 rounded-full" />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * B 站短视频页的首屏骨架：纯黑画面 + 左下信息浮层 + 底栏。
- *
- * 加载文案挂在 `role="status"` 上（骨架本身对辅助技术是装饰）：读屏用户听到的
- * 与从前那条「正在加载短视频…」相同，视觉上不再是一块只有转圈的黑屏。
- */
+/** B 站短视频首屏：纯黑舞台与信息骨架，加载文案通过 `role="status"` 播报。 */
 export function ShortsStageSkeleton({ label = "正在加载短视频…" }: { label?: string }) {
   return (
     <div
@@ -113,7 +59,6 @@ export function ShortsStageSkeleton({ label = "正在加载短视频…" }: { la
         {label}
       </span>
       <ShortsInfoSkeleton />
-      <ShortsBottomBarSkeleton />
     </div>
   );
 }

@@ -33,6 +33,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
+import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { useMultiRoomStore } from "../multi-room/multiRoomStore";
 
 export function RoomPage() {
@@ -118,13 +119,8 @@ function RoomPageContent() {
       });
   }, [detailQuery.data, qc]);
 
-  const danmaku = useDanmakuConnection({
-    siteId,
-    roomId,
-    detailRoomId: detailQuery.data?.room_id,
-    enabled: !!detailQuery.data,
-  });
-
+  const roomSessionKey = siteId && roomId ? `${siteId}:${roomId}` : undefined;
+  const { ready: mediaReady, release: releaseStartup } = usePlayerStartupGate(roomSessionKey ?? "");
   const playback = usePlaybackController({
     siteId,
     roomId,
@@ -133,8 +129,27 @@ function RoomPageContent() {
     enabled: !!detailQuery.data,
   });
 
+  // 详情 → 清晰度 → 线路是必需链路；弹幕连接和关注列表不与首帧争抢请求。
+  const secondaryReady =
+    mediaReady ||
+    !!playback.error ||
+    !!playback.loadError ||
+    detailQuery.isError ||
+    detailQuery.data?.status === false;
+  const notifyPlayerPlaying = playback.onPlayerPlaying;
+  const onPlayerPlaying = useCallback(() => {
+    notifyPlayerPlaying();
+    releaseStartup();
+  }, [notifyPlayerPlaying, releaseStartup]);
+  const danmaku = useDanmakuConnection({
+    siteId,
+    roomId,
+    detailRoomId: detailQuery.data?.room_id,
+    enabled: !!detailQuery.data && secondaryReady,
+  });
   const followQuery = useQuery({
     queryKey: FOLLOW_LIST_QUERY_KEY,
+    enabled: secondaryReady,
     queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
   });
 
@@ -144,7 +159,6 @@ function RoomPageContent() {
   }, [followQuery.data, siteId, roomId]);
 
   const detail = detailQuery.data;
-  const roomSessionKey = siteId && roomId ? `${siteId}:${roomId}` : undefined;
   const activeQuality = playback.qualities[playback.qualityIndex];
   const recordingContext = useMemo<RecordingContext | null>(
     () =>
@@ -386,7 +400,9 @@ function RoomPageContent() {
           loadError={playback.loadError}
           reloadToken={playback.reloadToken}
           onPlayerMediaFailure={playback.onPlayerMediaFailure}
-          onPlayerPlaying={playback.onPlayerPlaying}
+          onPlayerPlaying={onPlayerPlaying}
+          onPlayerReady={releaseStartup}
+          secondaryReady={secondaryReady}
           roomSessionKey={`${siteId}:${roomId}`}
           sideTab={sideTab}
           onSideTabChange={setSideTab}

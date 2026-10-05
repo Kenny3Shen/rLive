@@ -285,6 +285,9 @@ type PlayerPaneProps = {
   reloadToken?: number;
   onPlayerMediaFailure?: (event: PlayerEvent) => void;
   onPlayerPlaying?: () => void;
+  onPlayerReady?: () => void;
+  /** 首帧前暂不挂载辅助面板；用户主动切到关注/设置时仍立即响应。 */
+  secondaryReady?: boolean;
   /** 稳定的房间身份，用于直接切换房间时丢弃消息。 */
   roomSessionKey?: string;
   /** 由 RoomPage 控制，使关注列表切换房间时保持该页签打开。 */
@@ -358,6 +361,8 @@ function PlayerPaneContent({
   reloadToken = 0,
   onPlayerMediaFailure,
   onPlayerPlaying,
+  onPlayerReady,
+  secondaryReady = true,
   roomSessionKey,
   sideTab,
   onSideTabChange,
@@ -467,6 +472,7 @@ function PlayerPaneContent({
     reloadToken,
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
+    onReady: onPlayerReady,
   });
   const { videoRef: playerVideoRef, stageRef: playerStageRef, playerRootRef } = player;
   const androidPlayerControls = useAndroidPlayerControls(androidClient, roomSessionKey);
@@ -1500,18 +1506,20 @@ function PlayerPaneContent({
               compact={compactViewport}
               portalContainer={playerStageRef}
               centerSlot={
-                <DanmakuComposer
-                  siteId={siteId}
-                  roomId={roomId}
-                  roomTitle={roomTitle}
-                  roomUserName={roomUserName}
-                  overlay
-                  // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
-                  // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
-                  // body 级弹窗会被压在其下。
-                  portalContainer={playerStageRef}
-                  onOverlayInteractionChange={handleComposerOverlayInteractionChange}
-                />
+                secondaryReady && (
+                  <DanmakuComposer
+                    siteId={siteId}
+                    roomId={roomId}
+                    roomTitle={roomTitle}
+                    roomUserName={roomUserName}
+                    overlay
+                    // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
+                    // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
+                    // body 级弹窗会被压在其下。
+                    portalContainer={playerStageRef}
+                    onOverlayInteractionChange={handleComposerOverlayInteractionChange}
+                  />
+                )
               }
               onOverlayInteractionChange={handleControlsOverlayInteractionChange}
               refreshDisabled={refreshDisabled}
@@ -1781,21 +1789,23 @@ function PlayerPaneContent({
                   className="flex min-h-0 min-w-0 shrink-0 flex-col"
                   style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
                 >
-                  <DanmakuPanel
-                    key={`chat:${roomSessionKey ?? "room"}`}
-                    active={danmakuActive}
-                    siteId={siteId}
-                    roomId={roomId}
-                    roomTitle={roomTitle}
-                    roomUserName={roomUserName}
-                    visible={shouldShowRoomDanmakuPanel(
-                      sidePanelVisible,
-                      player.mode === "fullscreen",
-                      activeSideTab,
-                    )}
-                    statusText={danmakuStatusText}
-                    className="min-h-0 flex-1"
-                  />
+                  {secondaryReady && (
+                    <DanmakuPanel
+                      key={`chat:${roomSessionKey ?? "room"}`}
+                      active={danmakuActive}
+                      siteId={siteId}
+                      roomId={roomId}
+                      roomTitle={roomTitle}
+                      roomUserName={roomUserName}
+                      visible={shouldShowRoomDanmakuPanel(
+                        sidePanelVisible,
+                        player.mode === "fullscreen",
+                        activeSideTab,
+                      )}
+                      statusText={danmakuStatusText}
+                      className="min-h-0 flex-1"
+                    />
+                  )}
                 </div>
                 <div
                   role="tabpanel"
@@ -1806,7 +1816,9 @@ function PlayerPaneContent({
                   className="min-h-0 min-w-0 shrink-0"
                   style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
                 >
-                  <FollowPanel className="h-full" />
+                  {(secondaryReady || activeSideTab === "follow") && (
+                    <FollowPanel className="h-full" />
+                  )}
                 </div>
                 <div
                   role="tabpanel"
@@ -1817,7 +1829,9 @@ function PlayerPaneContent({
                   className="min-h-0 min-w-0 shrink-0"
                   style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
                 >
-                  <DanmakuSettingsPanel className="h-full" siteId={siteId} />
+                  {(secondaryReady || activeSideTab === "settings") && (
+                    <DanmakuSettingsPanel className="h-full" siteId={siteId} />
+                  )}
                 </div>
               </div>
             </div>
