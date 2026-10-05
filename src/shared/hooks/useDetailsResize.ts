@@ -18,6 +18,7 @@ import { isTouchLikePointer } from "@/shared/gestures/playerEdgeGesture";
 
 type ResizeState = {
   pointerId: number;
+  target: HTMLElement;
   startX: number;
   startY: number;
   startPercent: number;
@@ -27,7 +28,7 @@ type ResizeState = {
   intent: "pending" | "resize" | "swipe";
   /** 手指按下后是否已越过锁定距离并真正开始拖动。 */
   active: boolean;
-  /** 最近一次写出去的占比（%），取消时沿用它。 */
+  /** 最近一次请求的占比（%），下一预览帧或取消时沿用它。 */
   lastPercent: number;
 };
 
@@ -68,6 +69,7 @@ export function useDetailsResize({
   onClamp,
 }: UseDetailsResizeOptions) {
   const stateRef = useRef<ResizeState | null>(null);
+  const previewFrameRef = useRef<number | null>(null);
   const callbacksRef = useRef({ onPreview, onCommit });
   const clampRef = useRef(onClamp);
   // 渲染期不写 ref：提交后同步 latest 值，读者全部在事件与效果里，时序等价。
@@ -75,6 +77,12 @@ export function useDetailsResize({
     callbacksRef.current = { onPreview, onCommit };
     clampRef.current = onClamp;
   });
+
+  const cancelPreview = useCallback(() => {
+    if (previewFrameRef.current === null) return;
+    window.cancelAnimationFrame(previewFrameRef.current);
+    previewFrameRef.current = null;
+  }, []);
 
   const releasePointer = useCallback((element: HTMLElement, pointerId: number) => {
     if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
@@ -118,6 +126,7 @@ export function useDetailsResize({
       if (!bounds) return;
       stateRef.current = {
         pointerId: event.pointerId,
+        target: event.currentTarget,
         startX: event.clientX,
         startY: event.clientY,
         startPercent: bounds.startPercent,
@@ -132,42 +141,46 @@ export function useDetailsResize({
   );
 
   /** 返回 true 表示本次指针已被调占比认领，页签条不应再处理它。 */
-  const onPointerMoveCapture = useCallback(
-    (event: ReactPointerEvent<HTMLElement>): boolean => {
-      const state = stateRef.current;
-      if (!state || state.pointerId !== event.pointerId) return false;
+  const onPointerMoveCapture = useCallback((event: ReactPointerEvent<HTMLElement>): boolean => {
+    const state = stateRef.current;
+    if (!state || state.pointerId !== event.pointerId) return false;
 
-      const deltaX = event.clientX - state.startX;
-      const deltaY = event.clientY - state.startY;
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
 
-      if (!state.active) {
-        if (state.intent === "pending") {
-          state.intent = detailsResizeIntent(deltaX, deltaY);
-        }
-        // 横向锁定：本次手势归页签条的翻页，本 hook 彻底放手。
-        if (state.intent === "swipe") {
-          stateRef.current = null;
-          return false;
-        }
-        if (state.intent === "pending") return true;
-        state.active = true;
-        // 锁定后才捕获：短触摸必须保持原始目标，页签的合成 click 才能照常派发。
-        event.currentTarget.setPointerCapture(event.pointerId);
+    if (!state.active) {
+      if (state.intent === "pending") {
+        state.intent = detailsResizeIntent(deltaX, deltaY);
       }
+      // 横向锁定：本次手势归页签条的翻页，本 hook 彻底放手。
+      if (state.intent === "swipe") {
+        stateRef.current = null;
+        return false;
+      }
+      if (state.intent === "pending") return true;
+      state.active = true;
+      // 锁定后才捕获：短触摸必须保持原始目标，页签的合成 click 才能照常派发。
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
 
-      const preview = detailsResizeSharePercent(
-        state.startPercent,
-        deltaY,
-        state.containerHeight,
-        state.maxPercent,
-      );
-      state.lastPercent = preview;
-      callbacksRef.current.onPreview(preview);
-      event.preventDefault();
-      return true;
-    },
-    [],
-  );
+    const preview = detailsResizeSharePercent(
+      state.startPercent,
+      deltaY,
+      state.containerHeight,
+      state.maxPercent,
+    );
+    state.lastPercent = preview;
+    // 调占比会触发布局（不同于横滑只写 transform），一帧内的高频事件合并，
+    // 只应用最新位置。释放/取消时撤掉待执行帧，不能让旧预览覆盖最终提交。
+    if (previewFrameRef.current === null) {
+      previewFrameRef.current = window.requestAnimationFrame(() => {
+        previewFrameRef.current = null;
+        if (stateRef.current === state) callbacksRef.current.onPreview(state.lastPercent);
+      });
+    }
+    event.preventDefault();
+    return true;
+  }, []);
 
   /** 返回 true 表示松手前是调占比手势（页签条不应据此翻页）。 */
   const onPointerUpCapture = useCallback(
@@ -175,6 +188,7 @@ export function useDetailsResize({
       const state = stateRef.current;
       if (!state || state.pointerId !== event.pointerId) return false;
       stateRef.current = null;
+      cancelPreview();
       releasePointer(event.currentTarget, event.pointerId);
       if (!state.active) return false;
 
@@ -193,7 +207,7 @@ export function useDetailsResize({
       event.preventDefault();
       return true;
     },
-    [releasePointer],
+    [cancelPreview, releasePointer],
   );
 
   const onPointerCancelCapture = useCallback(
@@ -201,6 +215,7 @@ export function useDetailsResize({
       const state = stateRef.current;
       if (!state || state.pointerId !== event.pointerId) return;
       stateRef.current = null;
+      cancelPreview();
       releasePointer(event.currentTarget, event.pointerId);
       // 取消不回到按下前的值：用户已经看到拖动结果，回跳比停在当前值更突兀。
       // 只有「从未真正拖动过」（按下就被取消）才保留原状。
@@ -210,15 +225,29 @@ export function useDetailsResize({
         );
       }
     },
-    [releasePointer],
+    [cancelPreview, releasePointer],
   );
 
-  // 手势期间组件卸载必须放掉状态，避免旧指针继续改新页面。
+  const clearGesture = useCallback(() => {
+    cancelPreview();
+    const state = stateRef.current;
+    stateRef.current = null;
+    if (state) releasePointer(state.target, state.pointerId);
+    return state;
+  }, [cancelPreview, releasePointer]);
+
+  // 全屏/宽屏停用手势时提交最后的位置并释放捕获；卸载只清理，不再更新宿主状态。
+  useLayoutEffect(() => {
+    if (enabled) return;
+    const state = clearGesture();
+    if (state?.active) callbacksRef.current.onCommit(state.lastPercent);
+    clearDetailsResizing(containerRef.current);
+  }, [clearGesture, containerRef, enabled]);
   useLayoutEffect(
     () => () => {
-      stateRef.current = null;
+      clearGesture();
     },
-    [],
+    [clearGesture],
   );
 
   /**
@@ -236,9 +265,7 @@ export function useDetailsResize({
     if (!container || typeof ResizeObserver === "undefined") return;
     const apply = () => {
       if (stateRef.current !== null) return;
-      const current = Number.parseFloat(
-        container.style.getPropertyValue("--vod-details-share"),
-      );
+      const current = Number.parseFloat(container.style.getPropertyValue("--vod-details-share"));
       if (!Number.isFinite(current)) return;
       const width = container.clientWidth;
       const height = container.clientHeight;
@@ -290,11 +317,16 @@ export function useDetailsResize({
 export function writeDetailsShare(container: HTMLElement | null, percent: number): void {
   if (!container) return;
   // 取值已在手势里夹到动态上限（≤ 硬顶），这里只负责格式化。
-  container.style.setProperty("--vod-details-share", detailsShareCssValue(percent));
-  container.dataset.vodDetailsResizing = "true";
+  const value = detailsShareCssValue(percent);
+  if (container.style.getPropertyValue("--vod-details-share") !== value) {
+    container.style.setProperty("--vod-details-share", value);
+  }
+  if (container.dataset.vodDetailsResizing !== "true") {
+    container.dataset.vodDetailsResizing = "true";
+  }
 }
 
-/** 拖动结束：保留最终占比，只撤掉「正在拖动」标记（高度过渡随之恢复）。 */
+/** 拖动结束：保留最终占比，只撤掉「正在拖动」标记。 */
 export function clearDetailsResizing(container: HTMLElement | null): void {
   if (!container) return;
   delete container.dataset.vodDetailsResizing;

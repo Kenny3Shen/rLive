@@ -480,6 +480,8 @@ function VideoPlayerPageContent() {
     [],
   );
   const commitDetailsShare = useCallback((percent: number) => {
+    // 释放可能早于待执行的预览帧；最终 DOM 值必须同步落位，哪怕 state 没有变化。
+    writeDetailsShare(detailsFrameRef.current, percent);
     clearDetailsResizing(detailsFrameRef.current);
     // 与 `detailsShareCssValue` 同精度：提交后内联值的写法与拖动期间逐帧写的
     // 完全一致（都是三位小数），提交那一帧因此不会因舍入差异跳一下。
@@ -2572,7 +2574,7 @@ function VideoPlayerPageContent() {
           比值取实测源画幅（`--stage-ar`），元数据到位前回退 16/9。
 
           用户拖动过页签条后（`data-vod-details-share`），舞台高度改由
-          `--vod-stage-height` 决定、画幅比退居 `object-contain`，因此「把侧栏
+          容器网格的两行决定、画幅比退居 `object-contain`，因此「把侧栏
           拖大」真的能让画面变小而不是被比例锁住；未拖动时一切照旧。 */}
       <main
         ref={detailsFrameRef}

@@ -253,7 +253,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 - 避免用动画修改 `width`、`height`、`top`、`left`、margin、padding 等触发布局的属性。先完成 DOM 读取再批量写入，不在一个 pointermove 中交替读布局和写 style。
 - `will-change` 只在动画运行时设置，结束、取消与卸载都必须清除。同一 target 开始新补间前先由 `tween()` 自动取消（或手动 `killTweensOf()`）。
 - 相同列表效果用一条编排好的序列，不为每项创建独立 delay；动画目标数量必须有界。长列表优先只动画首屏或有界数量，无限滚动追加内容默认直接出现，并继续用 `.room-card` 的 `content-visibility: auto`。
-- 连续手势输入不进 React state（只承担刷新、选中项等离散状态）。下拉刷新位移经 RAF 合并，横向滑动位移直接在 pointermove 中写 transform。
+- 连续手势输入不进 React state（只承担刷新、选中项等离散状态）。下拉刷新位移与 VOD 侧栏占比经 RAF 合并，横向滑动位移直接在 pointermove 中写 transform。占比这类高频布局变量应由不继承的 `@property` 在容器本地消费，避免逐帧使整个播放器与侧栏子树重算样式。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，纵向滚动留给 `app-page`。Android 宿主不请求固定显示模式或刷新率偏好，动画全部按时间基准推进，不设固定帧率 ticker。
 - 不把「组件出现」默认等同于「需要动画」：高频列表刷新、轮询状态、弹幕新增和播放器帧更新通常应直接更新。
 

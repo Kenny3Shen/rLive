@@ -913,17 +913,34 @@ html[data-platform="android"] .app-shell {
    占比上限（舞台至少保住一个满宽 16:9）不由 CSS 表达：它依赖容器的像素宽高，
    由 `detailsResize.ts` 的 `detailsShareMaxPercent` 算出后夹在写到这里的取值里。
    这里只负责「拿到百分比就按它分配」。 */
-[data-video-details-frame] {
-  --vod-details-share: 30%;
-  --vod-stage-height: calc(100% - var(--vod-details-share));
+/* 高频取值只由容器自己消费，不继承进播放器、评论和所有后台页签。
+   普通自定义属性每改一次都会使整棵子树重算样式；这里用非继承属性和容器网格
+   分配两行，让每帧只重新布局必要的尺寸，不传播一份无人消费的变量。 */
+@property --vod-details-share {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 30%;
 }
 
 @media (width < 64rem) {
-  [data-video-details-frame][data-vod-details-share="true"] > [data-video-player-frame],
-  [data-video-details-frame][data-vod-details-resizing="true"] > [data-video-player-frame] {
+  [data-video-details-frame]:is(
+      [data-vod-details-share="true"],
+      [data-vod-details-resizing="true"]
+    ):has(> aside) {
+    display: grid;
+    grid-template-rows: minmax(0, calc(100% - var(--vod-details-share))) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-video-details-frame]:is(
+      [data-vod-details-share="true"],
+      [data-vod-details-resizing="true"]
+    ):has(> aside)
+    > [data-video-player-frame] {
     aspect-ratio: auto;
-    height: var(--vod-stage-height);
-    max-height: var(--vod-stage-height);
+    height: 100%;
+    min-height: 0;
+    max-height: none;
   }
 }
 
