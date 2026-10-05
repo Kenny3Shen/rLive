@@ -154,7 +154,12 @@ impl DouyuSite {
         cdn: &str,
         force_refresh: bool,
     ) -> AppResult<Value> {
-        let body = sign::get_sign(&self.client, room_id, rate, cdn, force_refresh).await?;
+        // `getEncryption` 与 `getH5PlayV1` 必须使用同一份 Cookie：服务端
+        // 以描述符下发时所用的会话判定清晰度放行。缺账号票据时它会把
+        // `rate = 0`（原画）静默降级为 `rate = 4`（蓝光4M），
+        // 因此这里把已保存的账号值合并进播放 Cookie，而不是硬编码匿名值。
+        let cookie = sign::play_cookie(&self.cookie);
+        let body = sign::get_sign(&self.client, room_id, rate, cdn, &cookie, force_refresh).await?;
         let url = format!("https://www.douyu.com/lapi/live/getH5PlayV1/{room_id}");
         let referer = format!("https://www.douyu.com/{room_id}");
         let response = self
@@ -164,14 +169,7 @@ impl DouyuSite {
             .header("referer", &referer)
             .header("origin", "https://www.douyu.com")
             .header("content-type", "application/x-www-form-urlencoded")
-            .header(
-                "cookie",
-                format!(
-                    "dy_did={}; acf_did={}",
-                    sign::SIGN_DEVICE_ID,
-                    sign::SIGN_DEVICE_ID
-                ),
-            )
+            .header("cookie", cookie)
             .body(body)
             .send()
             .await
@@ -1092,5 +1090,57 @@ mod tests {
             "play url should be http(s): {}",
             urls[0].url
         );
+    }
+
+    /// 账号 Cookie 必须解锁原画（`rate = 0`）。
+    ///
+    /// 未登录时服务端会把原画请求静默降级为 `rate = 4`（蓝光4M）；
+    /// 这里用真实账号 Cookie 验证 `getEncryption` 与 `getH5PlayV1`
+    /// 共用同一会话后能拿到不带 `_4000` 后缀的原画流。
+    ///
+    /// 需要环境变量 `DOUYU_SMOKE_COOKIE`（当前有效的斗鱼账号 Cookie）。
+    #[tokio::test]
+    #[ignore = "live network smoke — needs DOUYU_SMOKE_COOKIE"]
+    async fn live_account_cookie_unlocks_original_quality() {
+        let cookie = std::env::var("DOUYU_SMOKE_COOKIE")
+            .expect("set DOUYU_SMOKE_COOKIE to a signed-in douyu cookie");
+        let site = DouyuSite::new_with_cookie(http_client::default_client(), cookie);
+
+        // 挑一个确实提供原画档位的房间：`multirates` 里 rate = 0 的码率高于 4000。
+        let page = site.get_recommend_rooms(1).await.expect("recommend");
+        let mut target = None;
+        for item in page.items.iter().take(20) {
+            let Ok(detail) = site.get_room_detail(&item.room_id).await else {
+                continue;
+            };
+            if !detail.status {
+                continue;
+            }
+            let Ok(qualities) = site.get_play_qualities(&detail).await else {
+                continue;
+            };
+            let original = qualities.iter().find(|q| {
+                q.quality.contains("原画")
+                    || json_i64(q.data.get("rate").unwrap_or(&Value::Null)) == 0
+            });
+            if let Some(original) = original {
+                target = Some((detail, original.clone()));
+                break;
+            }
+        }
+        let (detail, original) = target.expect("need a live room with an original-quality tier");
+
+        let urls = site
+            .get_play_urls(&detail, &original)
+            .await
+            .expect("play urls");
+        assert!(!urls.is_empty(), "no play urls");
+        for url in &urls {
+            let path = url.url.split('?').next().unwrap_or_default();
+            assert!(
+                !path.ends_with("_4000.flv"),
+                "original quality was downgraded to 蓝光4M: {path}"
+            );
+        }
     }
 }

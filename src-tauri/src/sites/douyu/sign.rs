@@ -5,6 +5,8 @@
 //!
 //! * 描述符来自 `wgapi/livenc/liveweb/websec/getEncryption?did={did}`，
 //!   包含 `key` / `rand_str` / `enc_time` / `enc_data` / `expire_at` / `is_special`；
+//!   该请求与随后的播放请求必须携带**同一份** Cookie：账号票据决定了服务端
+//!   是否放行原画（`rate = 0`），缺失时会被静默降级到 `rate = 4`（蓝光4M）；
 //! * `secret` 由 `rand_str` 起始，迭代 `enc_time` 次 `md5(secret + key)` 得到；
 //! * `auth = md5(secret + key + salt)`，普通房间的 `salt` 是 `roomId + tt`
 //!   （`is_special = 1` 时为空）。
@@ -23,7 +25,7 @@ use tokio::sync::Mutex;
 use crate::error::{AppError, AppResult};
 
 const ENCRYPTION_URL: &str = "https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption";
-/// 签名与播放请求共用的浏览器设备 id，与站内搜索请求的兜底 did 一致。
+/// 未保存账号 Cookie 时使用的匿名浏览器设备 id，与站内搜索请求的兜底 did 一致。
 pub(crate) const SIGN_DEVICE_ID: &str = "10000000000000000000000000001501";
 /// `getEncryption` 返回的迭代次数字段是服务端控制的；
 /// 上限只用于防御格式异常的响应，正常取值为 1。
@@ -74,6 +76,9 @@ struct EncryptionResponse {
 
 struct CachedEncryptionKey {
     key: EncryptionKey,
+    /// 取得该描述符时使用的设备 id 与 Cookie。两者变化时描述符不再可复用。
+    did: String,
+    cookie: String,
     fetched_at: Instant,
 }
 
@@ -98,31 +103,46 @@ fn err(msg: impl Into<String>) -> AppError {
 ///
 /// tokio Mutex 在网络请求期间保持持有，天然形成单飞刷新：
 /// 并发调用者会等待第一个请求完成后直接复用其结果。
-async fn encryption_key(client: &Client, force_refresh: bool) -> AppResult<EncryptionKey> {
+async fn encryption_key(
+    client: &Client,
+    did: &str,
+    cookie: &str,
+    force_refresh: bool,
+) -> AppResult<EncryptionKey> {
     let mut cache = ENCRYPTION_KEY_CACHE.lock().await;
     let now = now_secs();
+    // 缓存键必须包含 Cookie：描述符与下发它的会话绑定，复用匿名描述符
+    // 去请求账号会话的播放地址会被服务器以 403 拒绝。
     if !force_refresh
         && let Some(cached) = cache.as_ref()
+        && cached.did == did
+        && cached.cookie == cookie
         && cached.fetched_at.elapsed() < MAX_CACHE_AGE
         && cached.key.is_usable(now, EXPIRY_SAFETY_SECS)
     {
         return Ok(cached.key.clone());
     }
-    let key = fetch_encryption_key(client).await?;
+    let key = fetch_encryption_key(client, did, cookie).await?;
     *cache = Some(CachedEncryptionKey {
         key: key.clone(),
+        did: did.to_string(),
+        cookie: cookie.to_string(),
         fetched_at: Instant::now(),
     });
     Ok(key)
 }
 
-async fn fetch_encryption_key(client: &Client) -> AppResult<EncryptionKey> {
-    let url = format!("{ENCRYPTION_URL}?did={SIGN_DEVICE_ID}");
+async fn fetch_encryption_key(
+    client: &Client,
+    did: &str,
+    cookie: &str,
+) -> AppResult<EncryptionKey> {
+    let url = format!("{ENCRYPTION_URL}?did={did}");
     let text = client
         .get(&url)
         .header("user-agent", super::UA)
         .header("referer", "https://www.douyu.com/")
-        .header("cookie", did_cookie())
+        .header("cookie", cookie)
         .send()
         .await
         .map_err(|e| err(format!("getEncryption 请求失败: {e}")))?
@@ -143,8 +163,27 @@ async fn fetch_encryption_key(client: &Client) -> AppResult<EncryptionKey> {
     Ok(key)
 }
 
-fn did_cookie() -> String {
-    format!("dy_did={SIGN_DEVICE_ID}; acf_did={SIGN_DEVICE_ID}")
+/// 组装一次播放链路的 Cookie：以匿名设备 id 为兜底，再用已保存的账号值覆盖。
+///
+/// 保留账号自己的 `dy_did` / `acf_did` 使 `getEncryption`、`getH5PlayV1` 与
+/// 后续 CDN 请求共享同一个设备身份；缺失账号 Cookie 时退化为纯匿名。
+pub(crate) fn play_cookie(account_cookie: &str) -> String {
+    let anonymous = format!("dy_did={SIGN_DEVICE_ID}; acf_did={SIGN_DEVICE_ID}",);
+    if account_cookie.trim().is_empty() {
+        return anonymous;
+    }
+    super::session::merge_cookie_values(&anonymous, account_cookie)
+}
+
+/// 从 Cookie 中读取 `dy_did`，缺失时回落到匿名设备 id。
+pub(crate) fn device_id_from_cookie(cookie: &str) -> String {
+    cookie
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .find(|(key, _)| key.trim().eq_ignore_ascii_case("dy_did"))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| SIGN_DEVICE_ID.to_string())
 }
 
 fn md5_hex(input: &str) -> String {
@@ -190,15 +229,20 @@ pub(crate) fn build_signed_body(
 ///
 /// 每次调用都基于缓存的描述符重新计算 `auth`（时间戳取当前值），
 /// 因此长驻详情页后请求播放也不会因 `tt` 过旧而被 `-9` 拒绝。
+///
+/// `cookie` 必须与随后 `getH5PlayV1` 请求头里的 Cookie 完全一致：
+/// 描述符与下发它的会话绑定，服务端据此判定是否放行原画。
 pub(crate) async fn get_sign(
     client: &Client,
     room_id: &str,
     rate: i64,
     cdn: &str,
+    cookie: &str,
     force_refresh: bool,
 ) -> AppResult<String> {
-    let key = encryption_key(client, force_refresh).await?;
-    build_signed_body(&key, room_id, now_secs(), rate, cdn, SIGN_DEVICE_ID)
+    let did = device_id_from_cookie(cookie);
+    let key = encryption_key(client, &did, cookie, force_refresh).await?;
+    build_signed_body(&key, room_id, now_secs(), rate, cdn, &did)
 }
 
 #[cfg(test)]
@@ -238,6 +282,32 @@ mod tests {
             }
             assert!(!bad.is_usable(1_700_000_000, 0), "missing {field}");
         }
+    }
+
+    #[test]
+    fn play_cookie_prefers_saved_account_values() {
+        // 账号自己的设备身份必须覆盖匿名兜底值，否则描述符与播放请求
+        // 分属两个会话，服务端会把原画降级。
+        let cookie = play_cookie("acf_auth=fixture; dy_did=account-did; acf_did=account-did");
+        assert!(cookie.contains("acf_auth=fixture"));
+        assert!(cookie.contains("dy_did=account-did"));
+        assert!(cookie.contains("acf_did=account-did"));
+        assert!(!cookie.contains(SIGN_DEVICE_ID));
+        assert_eq!(device_id_from_cookie(&cookie), "account-did");
+    }
+
+    #[test]
+    fn play_cookie_falls_back_to_anonymous_device_identity() {
+        // 未保存账号时保持原有的匿名行为：搜索、描述符与播放共用同一设备 id。
+        let cookie = play_cookie("");
+        assert!(cookie.contains(&format!("dy_did={SIGN_DEVICE_ID}")));
+        assert!(cookie.contains(&format!("acf_did={SIGN_DEVICE_ID}")));
+        assert_eq!(device_id_from_cookie(&cookie), SIGN_DEVICE_ID);
+        // 账号值只补设备字段时同样不能丢掉兜底字段。
+        let partial = play_cookie("acf_auth=fixture");
+        assert!(partial.contains("acf_auth=fixture"));
+        assert!(partial.contains(&format!("dy_did={SIGN_DEVICE_ID}")));
+        assert_eq!(device_id_from_cookie(&partial), SIGN_DEVICE_ID);
     }
 
     /// 参考向量来自独立实现（Python + 已通过线上验证的 pure_live 算法）
