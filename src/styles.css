@@ -88,6 +88,13 @@
   --settings-data: oklch(0.58 0.16 205);
   --settings-history: oklch(0.58 0.15 100);
   --settings-about: oklch(0.6 0.15 305);
+  /* 评论等级：按灰、绿、蓝、黄褐、橙、红区分，浅色使用深前景保证可读性。 */
+  --comment-level-1: #586174;
+  --comment-level-2: #216e42;
+  --comment-level-3: #245b99;
+  --comment-level-4: #805800;
+  --comment-level-5: #9a4314;
+  --comment-level-6: #ae2838;
   /* 物理调光层：它保持中性，
      其下每个表面继续来自活动的明/暗 token 集。 */
   --overlay: oklch(0 0 0 / 0.44);
@@ -138,6 +145,12 @@
   --settings-data: oklch(0.72 0.15 205);
   --settings-history: oklch(0.74 0.14 100);
   --settings-about: oklch(0.74 0.14 305);
+  --comment-level-1: #b5c0d2;
+  --comment-level-2: #72d69b;
+  --comment-level-3: #82b9ff;
+  --comment-level-4: #e3c261;
+  --comment-level-5: #f4a261;
+  --comment-level-6: #ff8894;
 }
 
 @keyframes theme-fade {
@@ -206,6 +219,12 @@
   --color-settings-data: var(--settings-data);
   --color-settings-history: var(--settings-history);
   --color-settings-about: var(--settings-about);
+  --color-comment-level-1: var(--comment-level-1);
+  --color-comment-level-2: var(--comment-level-2);
+  --color-comment-level-3: var(--comment-level-3);
+  --color-comment-level-4: var(--comment-level-4);
+  --color-comment-level-5: var(--comment-level-5);
+  --color-comment-level-6: var(--comment-level-6);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);

@@ -23,6 +23,7 @@ import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
+import { CommentLevelBadge } from "./CommentLevelBadge";
 import { videoGetCommentReplies, videoGetComments } from "./videoApi";
 import { formatRelativeTime } from "./videoHistory";
 
@@ -210,16 +211,7 @@ function CommentRow({
             {comment.uname}
           </span>
           <CommentAuthorBadges isThreadAuthor={isThreadAuthor} isUpper={comment.is_upper} />
-          {comment.level > 0 && (
-            // 覆盖 Badge 默认的 h-5/py-0.5/font-medium：等级药丸要贴合 13px 昵称行。
-            // 前景保持 muted：它比同排的「楼主」更弱，不能与昵称抢注意力。
-            <Badge
-              variant="secondary"
-              className="h-auto shrink-0 rounded-sm border-0 px-1 py-0 text-[10px] leading-4 font-normal text-muted-foreground"
-            >
-              Lv{comment.level}
-            </Badge>
-          )}
+          <CommentLevelBadge level={comment.level} />
         </div>
         <div className="mt-0.5 text-[11px] text-muted-foreground">
           {formatRelativeTime(comment.ctime)}
