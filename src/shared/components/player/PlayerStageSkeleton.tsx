@@ -3,7 +3,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
- * 沉浸播放页共用的加载骨架：画面保持纯黑，仅占位身份信息，不模拟操作控件。
+ * 沉浸播放页共用的加载占位：画面保持纯黑，不模拟顶部或底部控制栏。
  * 返回按钮由调用方通过 `back` 插槽传入，不依赖播放器控制条。
  */
 
@@ -26,38 +26,20 @@ export function StageSkeletonBlock({
   return <Skeleton aria-hidden className={cn("bg-white/10", className)} style={style} />;
 }
 
-/**
- * 画面内 HUD 的身份行占位：标题 + 主播/频道名。
- *
- * 返回箭头不在这里 —— 它由调用方以 `back` 插槽传进来（加载态的返回必须是**真**
- * 按钮，否则用户被困在加载态里）。
- */
-export function PlayerHudSkeleton({ className }: { className?: string }) {
-  return (
-    <div aria-hidden className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
-      <StageSkeletonBlock className="h-4 w-32 shrink-0" />
-      <StageSkeletonBlock className="h-3 w-20 shrink-0" />
-    </div>
-  );
-}
-
 type PlayerStageSkeletonProps = {
   /** 读屏播报的加载文案。骨架对辅助技术是装饰，文案只能挂在这里。 */
   label?: string;
   /** HUD 左端的返回按钮。沉浸页必须传，否则加载态里没有出口。 */
   back?: ReactNode;
-  /** 顶栏其余部分；默认是身份行骨架。 */
-  hud?: ReactNode;
   /** 舞台内的其他层（如竖屏流的信息浮层骨架）。 */
   children?: ReactNode;
   className?: string;
 };
 
-/** 沉浸播放页的加载骨架：纯黑画面 + HUD 身份信息 + 返回槽。 */
+/** 沉浸播放页的加载占位：纯黑画面与真实返回按钮。 */
 export function PlayerStageSkeleton({
   label = "正在加载…",
   back,
-  hud,
   children,
   className,
 }: PlayerStageSkeletonProps) {
@@ -73,10 +55,11 @@ export function PlayerStageSkeleton({
       <span role="status" className="sr-only">
         {label}
       </span>
-      <div className="player-scrim-overlay-top absolute inset-x-0 top-0 z-30 flex min-w-0 items-center gap-2 pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.625rem,var(--player-safe-area-top,0px))] pb-6 text-white">
-        {back}
-        {hud ?? <PlayerHudSkeleton />}
-      </div>
+      {back && (
+        <div className="absolute left-3 top-[max(0.625rem,var(--player-safe-area-top,0px))] z-30 text-white">
+          {back}
+        </div>
+      )}
       {children}
     </div>
   );

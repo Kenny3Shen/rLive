@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getClientPlatform } from "@/shared/clientPlatform";
+import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import {
   PLAYER_HUD_BUTTON_CLASS,
@@ -493,6 +494,13 @@ function IptvPlayerContent({
     [holdControlsVisible],
   );
 
+  const controlsAvailable = Boolean(channel) && (player.ready || status === "error");
+  function handlePlayerBack() {
+    if (fullscreen) void exitFullscreen();
+    else if (webFullscreen) onWebFullscreenChange?.(false);
+    else onBack?.();
+  }
+
   const statusText: Record<IptvPlaybackStatus, string> = {
     idle: "选择一个频道开始观看",
     connecting: "正在连接频道…",
@@ -543,7 +551,7 @@ function IptvPlayerContent({
         }}
         onPointerLeave={handleStagePointerLeave}
         controls={
-          <PlayerControls
+          controlsAvailable && <PlayerControls
             chrome={{
               ref: controlsRef,
               "data-player-controls": true,
@@ -661,7 +669,10 @@ function IptvPlayerContent({
           </div>
         )}
 
-        {channel && (
+        {!controlsAvailable && (onBack || fullscreen || webFullscreen) && (
+          <PlayerLoadingBackButton onClick={handlePlayerBack} label={fullscreen ? "退出全屏" : webFullscreen ? "退出网页全屏" : (backLabel ?? "返回上一页")} />
+        )}
+        {channel && controlsAvailable && (
           <div
             ref={hudRef}
             data-player-hud
@@ -690,11 +701,7 @@ function IptvPlayerContent({
                   className={PLAYER_HUD_BUTTON_CLASS}
                   // 与直播/视频页 HUD 返回箭头同一层级语义：先退全屏层，
                   // 无全屏层时返回页面。
-                  onClick={() => {
-                    if (fullscreen) void exitFullscreen();
-                    else if (webFullscreen) onWebFullscreenChange?.(false);
-                    else onBack();
-                  }}
+                  onClick={handlePlayerBack}
                 >
                   <ChevronLeft
                     className={PLAYER_HUD_ICON_CLASS}

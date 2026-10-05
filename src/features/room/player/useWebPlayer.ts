@@ -13,6 +13,7 @@ import {
   setNativePlayerFullscreen,
   toggleNativePlayerFullscreen,
 } from "@/shared/nativePlayerFullscreen";
+import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { useFullscreenInsetFreeze } from "@/shared/hooks/useFullscreenInsetFreeze";
 import { runningOnAndroidTauri, setAndroidImmersive } from "./androidImmersive";
 import { videoAspectRatio } from "./androidOrientation";
@@ -165,6 +166,8 @@ export type WebPlayerApi = {
   muted: boolean;
   mediaAvailable: boolean;
   running: boolean;
+  /** 当前来源已可播；暂停/缓冲不清除，换源或重建立即复位。 */
+  ready: boolean;
   loadError: string | null;
   /** 非致命的全屏失败，绝不能替换媒体视图。 */
   fullscreenError: string | null;
@@ -750,6 +753,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
   const playbackSourceKey = playUrlKey(playUrl);
   const streamKey = `${sessionKey}::${playbackSourceKey}`;
+  const { ready, release: releaseMediaReady } = usePlayerStartupGate(
+    JSON.stringify([streamKey, reloadToken, mediaKey, softFallbackToken]),
+  );
   // 查询结果可能在播放器运行期间替换等价的 PlayUrl 对象。按 `streamKey` 快照语义
   // 来源，使无害的对象身份抖动不会拆掉 MSE、重建 <video>
   // 并重启进程级代理。
@@ -1402,6 +1408,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
     const onPlaying = () => {
       if (!isCurrentMedia()) return;
+      releaseMediaReady();
       const telemetry = telemetrySessionRef.current;
       if (telemetry) markTelemetryPlaying(telemetry, performance.now());
       setPaused(false);
@@ -1443,6 +1450,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
     const onCanPlay = () => {
       if (!isCurrentMedia()) return;
+      releaseMediaReady();
       setPaused(video.paused);
       onReadyRef.current?.();
     };
@@ -1479,7 +1487,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       video.removeEventListener("resize", syncAspectRatio);
       video.removeEventListener("volumechange", onVolumeChange);
     };
-  }, [effectivePlaybackKind, mediaKey, streamKey]);
+  }, [effectivePlaybackKind, mediaKey, streamKey, releaseMediaReady]);
 
   useEffect(() => {
     if (!profile.telemetry) return;
@@ -1951,6 +1959,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     muted,
     mediaAvailable,
     running,
+    ready,
     loadError,
     fullscreenError,
     setLoadError,

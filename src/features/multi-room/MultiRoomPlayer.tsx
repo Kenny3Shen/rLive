@@ -756,7 +756,9 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
       onPointerDown={main ? revealControls : undefined}
       onPointerLeave={main ? handleStagePointerLeave : undefined}
       controls={
-        main ? (
+        // 底部控制栏与其它播放器同一条契约：首轮取流未出画前不挂载，
+        // 失败态立即恢复。顶部 HUD 不在此列 —— 刷新与移除是卡住时的唯一出口。
+        main && (player.ready || !!error) ? (
           <MainMultiRoomControls
             chrome={{
               ref: controlsRef,
@@ -788,7 +790,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
             onControlsOverlayInteractionChange={handleControlsOverlayInteractionChange}
             onComposerOverlayInteractionChange={handleComposerOverlayInteractionChange}
           />
-        ) : (
+        ) : player.ready || !!error ? (
           // 副画面与主画面共用同一原生控制面：不带主画面业务参数，
           // 音量经上方 volumechange 同步写回共享房间音量。
           <PlayerControls
@@ -799,7 +801,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
                 "absolute inset-x-0 bottom-0 z-30 opacity-0 transition-opacity group-focus-within/player:opacity-100 group-hover/player:opacity-100",
             }}
           />
-        )
+        ) : null
       }
     >
       {cover && (

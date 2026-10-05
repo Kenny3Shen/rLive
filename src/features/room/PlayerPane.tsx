@@ -67,6 +67,7 @@ import {
   VideoJsPlayerProvider,
   VideoJsVideo,
 } from "./player/videoJsControls";
+import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { useAndroidPlayerControls } from "./player/androidPlayerControls";
 import { useAndroidFullscreenOrientation } from "./player/androidOrientation";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -504,6 +505,7 @@ function PlayerPaneContent({
         }
       : null);
   const showHost = !loading && displayError == null && !!playUrl;
+  const controlsAvailable = !loading && (player.ready || displayError != null);
   const transportDisabled = !showHost;
   // 失败的 MSE 会话仍有流地址且必须可刷新；错误状态正是这个控件最有用的地方。
   const refreshDisabled = loading || !playUrl;
@@ -1446,7 +1448,7 @@ function PlayerPaneContent({
           onPointerLeave={handleStagePointerLeave}
           onKeyDown={handleStageKeyDown}
           controls={
-            <PlayerControls
+            controlsAvailable && <PlayerControls
               chrome={{
                 ref: controlsRef,
                 "data-player-controls": true,
@@ -1636,7 +1638,13 @@ function PlayerPaneContent({
             <PlayerEdgeGestureFeedback refs={edgeGestureFeedback} />
           </div>
 
-          {fullscreenHudVisible && (
+          {!controlsAvailable && (
+            <PlayerLoadingBackButton
+              onClick={handleHudBack}
+              label={player.mode === "fullscreen" ? "退出全屏" : webFullscreen ? "退出网页全屏" : "返回上一页"}
+            />
+          )}
+          {controlsAvailable && fullscreenHudVisible && (
             <div
               ref={hudRef}
               data-player-hud

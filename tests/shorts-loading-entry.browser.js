@@ -22,6 +22,7 @@ async (page) => {
       const previous = window.__shortsLoadingInvoke;
       let mode = "pending";
       let finishFeed;
+      const pendingStreams = [];
       let client;
       const items = Array.from({ length: 6 }, (_, i) => ({
         aid: String(i + 1), bvid: `BVfixture${i + 1}`, cid: i + 1, title: "加载入口夹具",
@@ -31,15 +32,19 @@ async (page) => {
         if (cmd === "video_get_story") {
           if (mode === "pending") return new Promise(resolve => { finishFeed = resolve; });
           if (mode === "error") throw new Error("夹具推荐不可用");
-          return { items: mode === "ready" ? items : [], has_more: false };
+          return { items: mode === "ready" || mode === "stream" ? items : [], has_more: false };
         }
-        if (cmd === "video_get_play_info") throw new Error("夹具不访问媒体");
+        if (cmd === "video_get_play_info") {
+          if (mode === "stream") return new Promise((_, reject) => pendingStreams.push(reject));
+          throw new Error("夹具不访问媒体");
+        }
         if (cmd === "video_get_danmaku") return { segment_index: 0, entries: [] };
         if (cmd.startsWith("douyin_video_")) throw new Error("夹具禁止请求真实抖音");
         return original(cmd, args);
       };
       const mount = async (next) => {
         harness.render(null);
+        for (const reject of pendingStreams.splice(0)) reject(new Error("夹具取流已结束"));
         client?.clear();
         finishFeed?.({ items: [], has_more: false });
         finishFeed = undefined;
@@ -93,6 +98,10 @@ async (page) => {
         await mount("error");
         await until(() => harness.host.textContent.includes("夹具推荐不可用"), "错误态未出现");
         assert(platformEntry(), "错误态丢失抖音备用入口");
+        await mount("stream");
+        await until(() => pendingStreams.length > 0, "未进入取流阶段");
+        assert(!harness.host.querySelector('[data-slot="shorts-top-bar"], [data-slot="shorts-bottom-bar"]'), "取流期间仍显示控制栏");
+        assert(harness.host.querySelector('button[aria-label="返回上一页"]'), "取流期间缺少返回按钮");
         await mount("ready");
         await until(() => !!harness.host.querySelector('[data-slot="shorts-top-bar"]'), "正常舞台未出现");
         assert(!platformEntry(), "正常舞台多出悬浮抖音入口");
@@ -101,6 +110,7 @@ async (page) => {
         return { passed: true, loadingHasOnlyBack: true, loadingIsSkeleton: true, fallbackEntriesKept: true, menuEntryKept: true };
       } finally {
         harness.dispose();
+        for (const reject of pendingStreams.splice(0)) reject(new Error("夹具已卸载"));
         finishFeed?.({ items: [], has_more: false });
         client?.clear();
         await frames();

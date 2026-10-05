@@ -16,6 +16,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { ShortsInfoSkeleton } from "./ShortsStageSkeleton";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
 import {
@@ -113,6 +114,9 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
   const covered = shortsSlotCoveredIndexes(slots);
   const loadingMore = query.isFetchingNextPage;
   const exhausted = query.isSuccess && !query.hasNextPage && items.length > 0;
+  const controlsAvailable = current
+    ? playback.hasFrame || playback.ready || !!playback.error
+    : !query.isPending;
 
   return (
     <div data-slot="douyin-recommendation" className="h-full min-h-0">
@@ -181,8 +185,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
           />
 
           {!current && query.isPending && (
-            // 推荐元数据未到：顶部控制栏与底部操作栏已经是真的，只补左下角那块
-            // 信息浮层的位置（作品到达后它就在那里）。画面区留黑。
+            // 推荐元数据未到时仅保留信息占位与真实返回入口，不显示控制栏。
             <>
               <span role="status" className="sr-only">
                 正在加载抖音推荐…
@@ -234,7 +237,8 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
               column > 0 ? { left: `calc(50% - ${column / 2}px)`, width: `${column}px` } : undefined
             }
           >
-            <div
+            {!controlsAvailable && <PlayerLoadingBackButton onClick={goBack} />}
+            {controlsAvailable && <div
               data-slot="shorts-top-bar"
               className={cn(
                 SHORTS_TOP_CONTROLS_CLASS,
@@ -285,7 +289,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
                   </div>
                 </PlayerHudOverflowMenu>
               </span>
-            </div>
+            </div>}
             {playback.rate > 1 && (
               <div
                 data-slot="shorts-speed-hint"
@@ -353,7 +357,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
               </div>
             )}
           </div>
-          <div
+          {controlsAvailable && <div
             data-slot="shorts-bottom-bar"
             className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-black/85"
             style={{
@@ -391,7 +395,7 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
                 <Info aria-hidden />
               </MediaButton>
             </div>
-          </div>
+          </div>}
         </div>
       </ShortsSeekPlayer>
     </div>

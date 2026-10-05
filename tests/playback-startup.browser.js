@@ -86,7 +86,8 @@ async (page) => {
     const before = await page.evaluate(() => window.nextPreloadIpcCalls);
     assert(before.includes("video_get_play_info"), "没有优先取流");
     assert(!secondary.some((cmd) => before.includes(cmd)), `出画前请求了辅助内容：${before}`);
-    assert(await page.getByRole("button", { name: "刷新播放" }).count(), "首帧前真实控制栏不可用");
+    assert(await page.locator('[data-player-controls], [data-player-hud]').count() === 0, "首帧前不应显示控制栏");
+    assert(await page.getByRole("button", { name: "返回视频列表" }).isVisible(), "取流期间缺少返回入口");
     // 暂停/自动播放拦截也应在 loadeddata 后显示侧栏，无须 playing。
     await page.evaluate(() => {
       window.startupEngine.media.pause();
@@ -104,6 +105,14 @@ async (page) => {
       await page.evaluate(() => window.startupAttachCount === 1),
       "辅助内容就位导致播放器重建",
     );
+    assert(await page.locator('[data-player-controls]').count() === 1, "可播后控制栏未出现");
+    await page.evaluate(() => window.startupEngine.media.dispatchEvent(new Event('waiting')));
+    assert(await page.locator('[data-player-controls]').count() === 1, "已起播缓冲不应卸载控制栏");
+    await page.getByRole('button', { name: '刷新播放' }).click();
+    await page.waitForFunction(() => window.startupAttachCount === 2);
+    assert(await page.locator('[data-player-controls], [data-player-hud]').count() === 0, "同一视频重新取流仍显示控制栏");
+    await page.evaluate(() => window.startupEngine.finish());
+    await page.waitForFunction(() => !!document.querySelector('[data-player-controls]'));
 
     const oldEngine = await page.evaluate(() => {
       window.nextPreloadIpcCalls.length = 0;
@@ -113,6 +122,7 @@ async (page) => {
     });
     await page.waitForFunction((count) => window.startupAttachCount > count, oldEngine);
     const switched = await page.evaluate(() => window.nextPreloadIpcCalls);
+    assert(await page.locator('[data-player-controls], [data-player-hud]').count() === 0, "换片未隐藏控制栏");
     assert(!secondary.some((cmd) => switched.includes(cmd)), `换片沿用了旧首帧状态：${switched}`);
     await page.evaluate(() => window.startupEngine.finish());
     await page.waitForFunction(() => window.nextPreloadIpcCalls.includes("video_get_danmaku"));
@@ -189,6 +199,8 @@ async (page) => {
       pausedLoadedData: true,
       noRebuild: true,
       switchResets: true,
+      controlsWaitForMedia: true,
+      reloadHidesControls: true,
       lifecycle,
     };
   } catch (error) {

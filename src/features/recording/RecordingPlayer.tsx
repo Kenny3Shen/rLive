@@ -61,6 +61,8 @@ import {
 } from "./recording";
 import { RecordedDanmakuCanvas } from "./RecordedDanmakuCanvas";
 import { parseRecordedDanmakuSidecar, type RecordedDanmakuEntry } from "./recordedDanmaku";
+import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
+import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { useRecordingPlayerFullscreen } from "./useRecordingPlayerFullscreen";
 
 function recordingPlaybackKind(protocol: RecordingItem["protocol"]): VideoJsPlaybackKind {
@@ -168,6 +170,10 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const [playerRevision, setPlayerRevision] = useState(0);
+  const { ready: mediaReady, release: releaseMediaReady } = usePlayerStartupGate(
+    JSON.stringify([item.id, url, playerRevision]),
+  );
+  const controlsAvailable = mediaReady || !!error;
   const seekTargetRef = useRef<number | null>(null);
   const endedRef = useRef(false);
   const recoverySeekRef = useRef<number | null>(null);
@@ -481,6 +487,10 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
 
     video.volume = volumeRef.current / 100;
     video.muted = mutedRef.current;
+    const onMediaReady = () => { if (!cancelled) releaseMediaReady(); };
+    video.addEventListener("loadeddata", onMediaReady);
+    video.addEventListener("canplay", onMediaReady);
+    video.addEventListener("playing", onMediaReady);
     video.addEventListener("timeupdate", syncTime);
     video.addEventListener("durationchange", syncTime);
     video.addEventListener("loadedmetadata", onReady);
@@ -556,6 +566,9 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       // 离开播放页与协议重建都走这里：最后一段进度必须立刻落盘，
       // 否则节流窗口内看的那几秒全丢。
       reportWatchProgress(clampRecordingPlaybackTime(media.currentTime, recordedDuration), true);
+      video.removeEventListener("loadeddata", onMediaReady);
+      video.removeEventListener("canplay", onMediaReady);
+      video.removeEventListener("playing", onMediaReady);
       video.removeEventListener("timeupdate", syncTime);
       video.removeEventListener("durationchange", syncTime);
       video.removeEventListener("loadedmetadata", onReady);
@@ -587,6 +600,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     item.id,
     playbackKind,
     playerRevision,
+    releaseMediaReady,
     recordedDuration,
     reportWatchProgress,
     resumePending,
@@ -781,7 +795,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       onKeyDown={handleStageKeyDown}
       tabIndex={0}
       controls={
-        <PlayerControls
+        controlsAvailable && <PlayerControls
           chrome={{
             ref: controlsRef,
             "data-player-controls": true,
@@ -855,7 +869,8 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         )}
       </div>
 
-      {showFullscreenHud && (
+      {!controlsAvailable && fullscreen.fullscreen && <PlayerLoadingBackButton label="退出全屏" onClick={() => void fullscreen.exit()} />}
+      {controlsAvailable && showFullscreenHud && (
         <div
           ref={hudRef}
           data-player-hud

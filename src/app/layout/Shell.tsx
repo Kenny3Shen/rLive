@@ -169,7 +169,7 @@ function RouteOutlet({
     return () => window.cancelAnimationFrame(frame);
   }, [defer]);
 
-  // 沉浸播放页的加载占位仅保留纯黑画面与 HUD 身份信息，不模拟控制条。
+  // 沉浸播放页的加载占位保持纯黑，不模拟顶部或底部控制栏。
   // 避免首次进入在顶部闪出一条应用外壳画法的加载条再被播放器顶掉。
   // 共用轻量骨架，不把各页的播放器、弹幕与评论依赖拖进外壳关键路径。
   const fallback = immersive ? <PlayerStageSkeleton /> : <RouteLoadingFallback />;

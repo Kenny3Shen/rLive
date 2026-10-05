@@ -60,6 +60,7 @@ import {
   writeDetailsShare,
 } from "@/shared/hooks/useDetailsResize";
 import { roundDetailsShare } from "@/shared/gestures/detailsResize";
+import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
@@ -1231,6 +1232,9 @@ function VideoPlayerPageContent() {
   const mpdUrl = playInfo?.mpd_url;
   // 仅音频时直接播音轨地址并使用浏览器原生媒体能力；视频轨使用 Video.js 的 DASH 适配器。
   const playUrl = playInfo?.audio_only ? playInfo.audio_url : mpdUrl;
+  const { ready: transportReady, release: releaseTransport } = usePlayerStartupGate(
+    JSON.stringify([videoKey, playUrl]),
+  );
   const playKind: VideoJsPlaybackKind = playInfo?.audio_only ? "native" : "dash";
   // Video.js 的 dash.js 适配器原生处理带 SegmentList 的 MPD，不再维护私有分片时间轴补丁。
 
@@ -1411,6 +1415,7 @@ function VideoPlayerPageContent() {
     function onPlaying() {
       if (cancelled) return;
       releaseStartup();
+      releaseTransport();
       setWaiting(false);
       setLoading(false);
       // 缓冲恢复的权威信号：waiting 判定计时必须在这里解除。play 事件只在
@@ -1525,7 +1530,9 @@ function VideoPlayerPageContent() {
     media.muted = mutedRef.current;
     // loadeddata 在自动播放被拦截或用户暂停时也会到达，不必等 playing 才开放侧栏。
     const onLoadedData = () => {
-      if (!cancelled) releaseStartup();
+      if (cancelled) return;
+      releaseStartup();
+      releaseTransport();
     };
     media.addEventListener("loadeddata", onLoadedData);
     media.addEventListener("timeupdate", syncTime);
@@ -1631,6 +1638,7 @@ function VideoPlayerPageContent() {
     epId,
     ensureDanmakuSegments,
     releaseStartup,
+    releaseTransport,
     goToPlaylistItem,
     playUrl,
     playInfo?.duration,
@@ -2346,12 +2354,12 @@ function VideoPlayerPageContent() {
     );
   }
 
-  // 直入解析态：season 详情落定前不挂播放器与侧栏（此刻侧栏会以缺 epId 的
-  // 形态初始化出错误的页签），只保留顶栏 + 解析指示；失败给可读的错误态。
+  // 直入解析期间只保留返回和加载指示，不先闪出完整顶栏。
   if (seasonEntry !== null) {
+    const entryFailed = entrySeasonQuery.isError || entrySeasonQuery.data?.episodes.length === 0;
     return (
-      <div className="flex h-full min-h-0 flex-col bg-background">
-        {topBar}
+      <div className={cn("relative flex h-full min-h-0 flex-col", entryFailed ? "bg-background" : "media-skin bg-black")}>
+        {entryFailed ? topBar : <PlayerLoadingBackButton label="返回视频列表" onClick={goBack} />}
         <main className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 md:p-6">
           <div className="w-full max-w-xl">
             {entrySeasonQuery.isError ? (
@@ -2366,7 +2374,7 @@ function VideoPlayerPageContent() {
                 title="无法播放"
               />
             ) : (
-              <Spinner className="mx-auto size-6" aria-label="正在打开剧集" />
+              <Spinner className="mx-auto size-6 text-white" aria-label="正在打开剧集" />
             )}
           </div>
         </main>
@@ -2595,6 +2603,13 @@ function VideoPlayerPageContent() {
     : cid <= 0 && archiveQuery.isError
       ? archiveQuery.error
       : null;
+  const controlsAvailable = transportReady || Boolean(playbackError || fatalError);
+  const playerBackLabel = fullscreen.fullscreen ? "退出全屏" : webFullscreen ? "退出窗口全屏" : "返回视频列表";
+  function handlePlayerBack() {
+    if (fullscreen.fullscreen) void fullscreenExit();
+    else if (webFullscreen) setWebFullscreen(false);
+    else goBack();
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -2666,7 +2681,7 @@ function VideoPlayerPageContent() {
             onKeyDown={handleStageKeyDown}
             tabIndex={0}
             controls={
-              <PlayerControls
+              controlsAvailable && <PlayerControls
                 chrome={{
                   ref: controlsRef,
                   "data-player-controls": true,
@@ -2877,9 +2892,9 @@ function VideoPlayerPageContent() {
                   translationTo={asrTranslationTo}
                 />
 
-                {/* 顶部 HUD：所有模式（含桌面普通详情）共用，承载返回/标题与低频工具，
-              与底部控制栏同一套空闲显隐。 */}
-                <div
+                {!controlsAvailable && <PlayerLoadingBackButton onClick={handlePlayerBack} label={playerBackLabel} />}
+                {/* 首帧前只保留返回；媒体就绪后才挂载完整 HUD。 */}
+                {controlsAvailable && <div
                   ref={hudRef}
                   data-player-hud
                   data-visible="true"
@@ -2903,21 +2918,11 @@ function VideoPlayerPageContent() {
                   >
                     <MediaButton
                       type="button"
-                      aria-label={
-                        fullscreen.fullscreen
-                          ? "退出全屏"
-                          : webFullscreen
-                            ? "退出窗口全屏"
-                            : "返回视频列表"
-                      }
+                      aria-label={playerBackLabel}
                       className={PLAYER_HUD_BUTTON_CLASS}
                       // 与直播页 HUD 的返回箭头同一层级语义：两层全屏叠加时一次只收
                       // 一层（原生/元素全屏优先，窗口全屏留给下一次）。
-                      onClick={() => {
-                        if (fullscreen.fullscreen) void fullscreenExit();
-                        else if (webFullscreen) setWebFullscreen(false);
-                        else goBack();
-                      }}
+                      onClick={handlePlayerBack}
                     >
                       <ChevronLeft
                         className={PLAYER_HUD_ICON_CLASS}
@@ -3022,7 +3027,7 @@ function VideoPlayerPageContent() {
                       )}
                     </PlayerHudOverflowMenu>
                   </div>
-                </div>
+                </div>}
               </div>
             </div>
 

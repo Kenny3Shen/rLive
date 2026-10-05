@@ -305,4 +305,4 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 | `src/shared/gestures/horizontalSwipe.ts`、`longPress.ts` | swipe 与长按的阈值常量和纯判定逻辑 |
 | `src/shared/gestures/detailsResize.ts`、`src/shared/hooks/useDetailsResize.ts` | VOD 侧栏占比拖动的阈值/换算与手势接线 |
 | `src/shared/components/player/PlayerControls.tsx` | 共享播放控制条与安全区避让 |
-| `src/shared/components/player/PlayerStageSkeleton.tsx` | 沉浸播放页的轻量加载占位（纯黑画面 + HUD 信息骨架，不绘制控制栏或假按钮），直播详情、两条竖屏流与沉浸路由 Suspense 占位共用 |
+| `src/shared/components/player/PlayerStageSkeleton.tsx` | 沉浸播放页的轻量加载占位（纯黑画面与可选返回入口，不绘制顶部身份行、控制栏或假按钮骨架），直播详情、两条竖屏流与沉浸路由 Suspense 占位共用 |

@@ -178,6 +178,7 @@ export function ShortsPage() {
     retention,
   });
   const panels = useShortsPanels(current);
+  const controlsAvailable = playback.hasFrame || playback.ready || !!playback.error;
 
   const {
     gestureActive,
@@ -462,7 +463,12 @@ export function ShortsPage() {
 
             收进控件列后，返回/更多就落在画面框的左右两条竖线上，与信息浮层的头像、
             评论按钮对齐。 */}
-        <div
+        {!controlsAvailable && (
+          <div className="pointer-events-auto">
+            <ShortsBackButton onClick={goBack} label={feed.uploaderMode ? "返回推荐流" : "返回上一页"} />
+          </div>
+        )}
+        {controlsAvailable && <div
           data-slot="shorts-top-bar"
           className={cn(
             SHORTS_TOP_CONTROLS_CLASS,
@@ -489,7 +495,7 @@ export function ShortsPage() {
               onRefresh={playback.retry}
             />
           </span>
-        </div>
+        </div>}
 
         {feed.uploaderMode && (
           <div
@@ -745,7 +751,7 @@ export function ShortsPage() {
           像素，同时存在只会让进度条看起来带了一圈描边。不被 `max-w-lg` 收窄 ——
           它描述的是时间而不是内容，通栏才读得出比例。
         */}
-        <div
+        {controlsAvailable && <div
           data-slot="shorts-bottom-bar"
           className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-black/85"
           style={{
@@ -865,7 +871,7 @@ export function ShortsPage() {
               </Button>
             </div>
           </div>
-        </div>
+        </div>}
       </div>
 
       {/*
