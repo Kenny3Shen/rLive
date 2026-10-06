@@ -186,6 +186,11 @@ export function videoGetArchive(bvid: string): Promise<VideoArchive> {
   return invokeCmd<VideoArchive>("video_get_archive", { bvid });
 }
 
+/** 当前分 P 的全端在线人数，保留上游数量格式；隐藏或未提供时为 null，供每 30 秒独立刷新。 */
+export function videoGetOnlineTotal(bvid: string, cid: number): Promise<string | null> {
+  return invokeCmd<string | null>("video_get_online_total", { bvid, cid });
+}
+
 /** 评论首页（游标翻页）。mode：2 按时间、3 按热度；next 首次传 0。 */
 export function videoGetComments(
   aid: string,

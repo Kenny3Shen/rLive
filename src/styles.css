@@ -1018,7 +1018,7 @@ html[data-platform="android"] .app-shell {
   padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
 }
 
-/* 移动端 VOD 播放页：详情侧栏高度可拖（按住页签条上下拖）。
+/* 移动端 VOD 播放页：非 16:9 视频随侧栏内容滑动自适应高度。
 
    分界位置只由一个自定义属性 `--vod-details-share` 表达，它是**详情侧栏**占
    播放页主区域高度的百分比；舞台高度是它的补集，因此两边永远精确地相加为 100%，
@@ -1062,16 +1062,6 @@ html[data-platform="android"] .app-shell {
     min-height: 0;
     max-height: none;
   }
-}
-
-/* 页签条是抓手：纵向拖动调占比。
-
-   `touch-action: pan-x` 是这一处唯一需要的声明：它把纵向从浏览器手里拿回来
-   （纵向手势因此不会变成页面滚动），同时把横向留给浏览器继续当滚动处理 ——
-   而横向滚动正是 `useHorizontalSwipe` 的输入。两个轴各有归属，不需要
-   `preventDefault` 去和浏览器的滚动争抢。 */
-[data-vod-details-handle] {
-  touch-action: pan-x;
 }
 
 /* 舞台内的 HUD 一律以舞台顶边为基准，不再叠加系统栏预留：

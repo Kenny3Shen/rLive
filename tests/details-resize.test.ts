@@ -5,6 +5,8 @@ import {
   DETAILS_SHARE_MIN_PERCENT,
   DETAILS_SHARE_HARD_MAX_PERCENT,
   DETAILS_STAGE_ASPECT_RATIO,
+  canResizeVideoDetails,
+  detailsContentScrollStep,
   clampDetailsSharePercent,
   detailsResizeCeiling,
   detailsResizeIntent,
@@ -15,7 +17,52 @@ import {
   detailsStageMinHeight,
 } from "../src/shared/gestures/detailsResize";
 
-describe("详情侧栏占比拖动", () => {
+describe("内容滑动自适应侧栏", () => {
+  test("只启用已知非 16:9 画幅，容忍编码取整", () => {
+    for (const ratio of [null, 0, -1, NaN, Infinity, 16 / 9, 1920 / 1088, 854 / 480]) {
+      expect(canResizeVideoDetails(ratio)).toBe(false);
+    }
+    for (const ratio of [9 / 16, 4 / 3, 1, 21 / 9]) {
+      expect(canResizeVideoDetails(ratio)).toBe(true);
+    }
+  });
+
+  test("上滑先扩大侧栏，只有超过上限的位移用于滚动", () => {
+    expect(detailsContentScrollStep(30, -100, 80, 1000, 70)).toEqual({
+      percent: 40,
+      scrollDelta: 0,
+    });
+    const boundary = detailsContentScrollStep(65, -100, 0, 1000, 70);
+    expect(boundary.percent).toBe(70);
+    expect(boundary.scrollDelta).toBeCloseTo(50);
+    expect(detailsContentScrollStep(70, -100, 0, 1000, 70)).toEqual({
+      percent: 70,
+      scrollDelta: 100,
+    });
+  });
+
+  test("下滑先滚回顶部，再缩小侧栏；下限不会吞掉剩余位移", () => {
+    expect(detailsContentScrollStep(60, 100, 200, 1000, 70)).toEqual({
+      percent: 60,
+      scrollDelta: -100,
+    });
+    const top = detailsContentScrollStep(60, 100, 40, 1000, 70);
+    expect(top.percent).toBe(54);
+    expect(top.scrollDelta).toBeCloseTo(-40);
+    const bottom = detailsContentScrollStep(25, 100, 0, 1000, 70);
+    expect(bottom.percent).toBe(20);
+    expect(bottom.scrollDelta).toBeCloseTo(-50);
+  });
+
+  test("上下边界反向滑动立即响应，不必先滑回越界起点", () => {
+    const max = detailsContentScrollStep(30, -2000, 0, 1000, 70);
+    expect(detailsContentScrollStep(max.percent, 10, 0, 1000, 70).percent).toBe(69);
+    const min = detailsContentScrollStep(30, 2000, 0, 1000, 70);
+    expect(detailsContentScrollStep(min.percent, -10, 0, 1000, 70).percent).toBe(21);
+  });
+});
+
+describe("详情侧栏占比换算", () => {
   test("向上拖把侧栏拖大、向下拖拖小", () => {
     // 手指向上（deltaY < 0）＝分界上移＝侧栏变高。
     expect(detailsResizeSharePercent(30, -100, 1000)).toBeCloseTo(40, 5);
@@ -42,9 +89,7 @@ describe("详情侧栏占比拖动", () => {
 
   test("clamp 对非有限值回落到下限，不产生 NaN 布局", () => {
     expect(clampDetailsSharePercent(Number.NaN)).toBe(DETAILS_SHARE_MIN_PERCENT);
-    expect(clampDetailsSharePercent(Number.POSITIVE_INFINITY)).toBe(
-      DETAILS_SHARE_HARD_MAX_PERCENT,
-    );
+    expect(clampDetailsSharePercent(Number.POSITIVE_INFINITY)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
     expect(clampDetailsSharePercent(-40)).toBe(DETAILS_SHARE_MIN_PERCENT);
     expect(clampDetailsSharePercent(140)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
   });
@@ -122,9 +167,7 @@ describe("16:9 视频窗口给的占比上限", () => {
     const justAbove = detailsShareMaxPercent(width, thresholdHeight + 1);
     expect(justAbove).toBeGreaterThan(DETAILS_SHARE_MIN_PERCENT);
     expect(justAbove).toBeLessThan(DETAILS_SHARE_HARD_MAX_PERCENT);
-    expect(detailsShareMaxPercent(width, thresholdHeight - 1)).toBe(
-      DETAILS_SHARE_HARD_MAX_PERCENT,
-    );
+    expect(detailsShareMaxPercent(width, thresholdHeight - 1)).toBe(DETAILS_SHARE_HARD_MAX_PERCENT);
   });
 
   test("容器尺寸不可用时回退到硬顶", () => {
@@ -137,7 +180,9 @@ describe("16:9 视频窗口给的占比上限", () => {
     // 横画幅视频按比值撑高：401 宽、16:9 的舞台是 225.6px，侧栏默认 70.2%；
     // 而横屏手机（800×360）的 16:9 约束根本放不下，回退到硬顶 → 上限即起点。
     const start = 70.2;
-    expect(detailsResizeCeiling(start, 800, 360)).toBe(Math.max(start, DETAILS_SHARE_HARD_MAX_PERCENT));
+    expect(detailsResizeCeiling(start, 800, 360)).toBe(
+      Math.max(start, DETAILS_SHARE_HARD_MAX_PERCENT),
+    );
     // 竖屏手机从默认占比开始：上限就是 16:9 约束值（70.2%），与起点相同。
     expect(detailsResizeCeiling(start, 401, 757)).toBeCloseTo(70.2, 1);
     // 已经拖到约束内之后，上限就是约束值本身，不会跟着起点继续放宽。

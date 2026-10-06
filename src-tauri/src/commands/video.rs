@@ -802,6 +802,16 @@ pub async fn video_get_archive(
     resolve_bilibili(&state)?.video_archive(&bvid).await
 }
 
+/// 当前分 P 的全端在线人数；隐藏或未提供时返回 None，不并入稿件详情。
+#[tauri::command]
+pub async fn video_get_online_total(
+    state: State<'_, AppState>,
+    bvid: String,
+    cid: i64,
+) -> AppResult<Option<String>> {
+    resolve_bilibili(&state)?.video_online_total(&bvid, cid).await
+}
+
 /// 评论首页（游标翻页）。`mode`：2 按时间、3 按热度；`next` 首次传 0。
 #[tauri::command]
 pub async fn video_get_comments(

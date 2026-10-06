@@ -1,5 +1,5 @@
 /**
- * 移动端 VOD 详情侧栏的占比拖动（按住页签条上下拖）。
+ * 移动端 VOD 详情侧栏的自适应占比（滑动内容区时让出或恢复画面空间）。
  *
  * 抽成纯函数模块（不 import React）是为了让占比换算、边界与上下限都能单测；
  * 组件侧只负责把指针位移喂进来、把结果写成 CSS 变量。
@@ -26,6 +26,35 @@ export const DETAILS_SHARE_HARD_MAX_PERCENT = 85;
 
 /** 舞台至少要保住的窗口比例：满宽 16:9。 */
 export const DETAILS_STAGE_ASPECT_RATIO = 16 / 9;
+
+/** 只对已知的非 16:9 画幅启用；容忍编码取整/补边带来的 1% 偏差。 */
+export function canResizeVideoDetails(aspectRatio: number | null): boolean {
+  return (
+    aspectRatio !== null &&
+    Number.isFinite(aspectRatio) &&
+    aspectRatio > 0 &&
+    Math.abs(aspectRatio / DETAILS_STAGE_ASPECT_RATIO - 1) > 0.01
+  );
+}
+
+/**
+ * 一次纵向滑动的位移分配：上滑先扩侧栏、下滑先回内容顶部。
+ * 返回的 scrollDelta 是交给内容滚动的剩余位移（正数向下滚）。
+ */
+export function detailsContentScrollStep(
+  percent: number,
+  deltaY: number,
+  scrollTop: number,
+  containerHeight: number,
+  maxPercent: number,
+): { percent: number; scrollDelta: number } {
+  if (!(containerHeight > 0)) return { percent, scrollDelta: -deltaY };
+  const scrollFirst = deltaY > 0 ? Math.min(deltaY, Math.max(0, scrollTop)) : 0;
+  const resizeDelta = deltaY - scrollFirst;
+  const next = detailsResizeSharePercent(percent, resizeDelta, containerHeight, maxPercent);
+  const consumed = ((percent - next) / 100) * containerHeight;
+  return { percent: next, scrollDelta: -deltaY + consumed };
+}
 
 /**
  * 满宽 16:9 画面的高度（px）。
@@ -54,10 +83,7 @@ export function detailsStageMinHeight(containerWidth: number): number {
  *   该约束，硬夹会把侧栏顶到下限、连往上拖的余地都没有。
  * - 容器尺寸不可用（未布局 / `NaN`）同样回退到文本硬顶。
  */
-export function detailsShareMaxPercent(
-  containerWidth: number,
-  containerHeight: number,
-): number {
+export function detailsShareMaxPercent(containerWidth: number, containerHeight: number): number {
   if (!(containerWidth > 0) || !(containerHeight > 0)) return DETAILS_SHARE_HARD_MAX_PERCENT;
   const percent = (1 - detailsStageMinHeight(containerWidth) / containerHeight) * 100;
   if (!(percent >= DETAILS_SHARE_MIN_PERCENT)) return DETAILS_SHARE_HARD_MAX_PERCENT;

@@ -918,6 +918,33 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
     })
 }
 
+/// 解析全端实时在线人数。保留上游约数格式，不从仅含 Web 人数的 `count` 回退。
+fn parse_online_total(raw: &str) -> AppResult<Option<String>> {
+    let root: Value =
+        serde_json::from_str(raw).map_err(|e| video_err(format!("在线人数 json: {e}")))?;
+    // 请求层负责完整的上游错误信息；解析层也只接受成功响应，不能把错误当成无数据。
+    let code = root
+        .get("code")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| video_err("在线人数缺少 code"))?;
+    if code != 0 {
+        return Err(video_err(format!("在线人数接口返回 code={code}")));
+    }
+    if root
+        .pointer("/data/show_switch/total")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return Ok(None);
+    }
+    Ok(root
+        .pointer("/data/total")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|total| !total.is_empty())
+        .map(str::to_string))
+}
+
 fn parse_uploader_count(raw: &str, field: &str) -> Option<i64> {
     let root = serde_json::from_str::<Value>(raw).ok()?;
     Some(as_i64(root.get("data")?.get(field)?))
@@ -1527,6 +1554,30 @@ impl BilibiliSite {
             }
         }
         Ok(archive)
+    }
+
+    /// 当前分 P 的全端在线人数。与稿件详情分开，供调用方每 30 秒独立刷新。
+    pub async fn video_online_total(&self, bvid: &str, cid: i64) -> AppResult<Option<String>> {
+        // BV 号为 BV1 + 9 位 Base58 字符；无效参数必须在任何网络请求前拒绝。
+        if bvid.len() != 12
+            || !bvid.starts_with("BV1")
+            || !bvid
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() && !b"0OIl".contains(&byte))
+        {
+            return Err(video_err("在线人数请求的 bvid 无效"));
+        }
+        if cid <= 0 {
+            return Err(video_err("在线人数请求的 cid 无效"));
+        }
+        // 公开接口不需要 Cookie 或 WBI，也不为定时刷新额外引导设备指纹。
+        let text = self
+            .get_public_json(
+                "https://api.bilibili.com/x/player/online/total",
+                &[("bvid", bvid.to_string()), ("cid", cid.to_string())],
+            )
+            .await?;
+        parse_online_total(&text)
     }
 
     /// 评论首页（`x/v2/reply/main`，游标翻页）。匿名可用。
@@ -2739,6 +2790,126 @@ mod tests {
         // 无 pages 字段 → 空表。
         let plain = serde_json::json!({ "code": 0, "data": { "bvid": "BV1Y", "cid": 1 } });
         assert!(parse_archive(&plain.to_string()).unwrap().pages.is_empty());
+    }
+
+    #[test]
+    fn online_total_preserves_numeric_strings_approximations_and_zero() {
+        for total in ["12345", "9.4万+", "0"] {
+            let raw = serde_json::json!({
+                "code": 0,
+                "data": {
+                    "total": total,
+                    "count": "7",
+                    "show_switch": { "total": true, "count": false }
+                }
+            });
+            assert_eq!(
+                parse_online_total(&raw.to_string()).unwrap().as_deref(),
+                Some(total)
+            );
+        }
+        let raw = r#"{"code":0,"data":{"total":"  9.4万+ \n"}}"#;
+        assert_eq!(parse_online_total(raw).unwrap().as_deref(), Some("9.4万+"));
+    }
+
+    #[test]
+    fn online_total_missing_empty_or_non_string_is_not_zero() {
+        for raw in [
+            r#"{"code":0}"#,
+            r#"{"code":0,"data":null}"#,
+            r#"{"code":0,"data":{}}"#,
+            r#"{"code":0,"data":{"total":null}}"#,
+            r#"{"code":0,"data":{"total":""}}"#,
+            r#"{"code":0,"data":{"total":" \t\n "}}"#,
+            r#"{"code":0,"data":{"total":0}}"#,
+            r#"{"code":0,"data":{"total":false}}"#,
+        ] {
+            assert_eq!(parse_online_total(raw).unwrap(), None, "{raw}");
+        }
+    }
+
+    #[test]
+    fn online_total_respects_explicit_hidden_switch() {
+        let hidden = r#"{"code":0,"data":{"total":"12345","count":"7","show_switch":{"total":false,"count":true}}}"#;
+        assert_eq!(parse_online_total(hidden).unwrap(), None);
+        // 只有布尔 false 隐藏；缺失开关不丢弃已提供的全端数据。
+        for switch in [serde_json::json!({}), serde_json::json!({ "total": "false" })] {
+            let raw = serde_json::json!({
+                "code": 0,
+                "data": { "total": "12345", "show_switch": switch }
+            });
+            assert_eq!(
+                parse_online_total(&raw.to_string()).unwrap().as_deref(),
+                Some("12345")
+            );
+        }
+    }
+
+    #[test]
+    fn online_total_never_falls_back_to_web_count() {
+        for raw in [
+            r#"{"code":0,"data":{"count":"12345"}}"#,
+            r#"{"code":0,"data":{"total":null,"count":"12345"}}"#,
+            r#"{"code":0,"data":{"total":" ","count":"12345"}}"#,
+            r#"{"code":0,"data":{"total":"","count":"0"}}"#,
+        ] {
+            assert_eq!(parse_online_total(raw).unwrap(), None, "{raw}");
+        }
+    }
+
+    #[test]
+    fn online_total_rejects_upstream_errors_and_malformed_responses() {
+        for raw in [
+            r#"{"code":-400,"message":"请求错误","data":null}"#,
+            r#"{"code":-404,"message":"啥都木有","data":{"total":"12345"}}"#,
+            r#"{"code":-352,"data":{"total":"0","show_switch":{"total":false}}}"#,
+            r#"{"data":{"total":"12345"}}"#,
+            "not json",
+        ] {
+            assert!(parse_online_total(raw).is_err(), "{raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn online_total_rejects_invalid_ids_before_network() {
+        // 所有出站请求都指向本地代理；既断言参数错误，也检查没有触发连接。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = reqwest::Client::builder()
+            .proxy(
+                reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+            )
+            .timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let site = BilibiliSite::new(client, String::new());
+        for bvid in [
+            "",
+            " ",
+            "0",
+            "av170001",
+            "BV1",
+            "BV17x411w7KCx",
+            "BV27x411w7KC",
+            "BV17x411w7K_",
+            "BV17x411w7K0",
+            "BV17x411w7K中",
+            " BV17x411w7KC ",
+        ] {
+            let error = site.video_online_total(bvid, 1).await.unwrap_err();
+            assert_eq!(error.code, "bilibili_video_error", "{bvid}");
+            assert_eq!(error.message, "在线人数请求的 bvid 无效", "{bvid}");
+        }
+        for cid in [0, -1, i64::MIN] {
+            let error = site.video_online_total("BV17x411w7KC", cid).await.unwrap_err();
+            assert_eq!(error.code, "bilibili_video_error");
+            assert_eq!(error.message, "在线人数请求的 cid 无效");
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), listener.accept())
+                .await
+                .is_err(),
+            "无效参数不应发起网络连接"
+        );
     }
 
     #[test]

@@ -1,16 +1,10 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-  type Ref,
-} from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
   ChevronDown,
+  Eye,
   MessageCircle,
   Play,
   Users,
@@ -36,7 +30,7 @@ import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { CommentsPanel } from "./CommentsPanel";
 import { VideoDanmakuList } from "./VideoDanmakuList";
 import { VideoCard } from "./VideoCard";
-import { videoGetArchive, videoGetRelated, videoGetSeason } from "./videoApi";
+import { videoGetArchive, videoGetOnlineTotal, videoGetRelated, videoGetSeason } from "./videoApi";
 import { formatDateTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath, videoSearchPath } from "./videoRoute";
 import {
@@ -126,11 +120,12 @@ function UpCardSkeleton() {
         </div>
         {/* 标题行：真卡是 20px 一行标题，行高 24px（行盒 + 上下 2px）。 */}
         <Skeleton className="mt-1.5 h-6 w-4/5" />
-        {/* 统计行（播放/评论/发布时间）紧跟标题，与真卡的 `mt-0.5` 同高。 */}
-        <div className="mt-0.5 flex items-center gap-x-3">
-          <Skeleton className="h-4 w-16" />
-          <Skeleton className="h-4 w-14" />
+        {/* 统计行（播放/评论/发布时间/当前在线）。 */}
+        <div className="mt-0.5 flex items-center gap-x-2">
+          <Skeleton className="h-4 w-12" />
+          <Skeleton className="h-4 w-10" />
           <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-14" />
         </div>
       </div>
     </section>
@@ -163,10 +158,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
             // 右侧三行文本。
             <div
               key={index}
-              className={cn(
-                "flex items-start gap-2.5 rounded-xl p-1.5",
-                CARD_SURFACE_CLASS,
-              )}
+              className={cn("flex items-start gap-2.5 rounded-xl p-1.5", CARD_SURFACE_CLASS)}
             >
               <Skeleton className="aspect-video w-2/5 shrink-0 rounded-md ring-1 ring-border-subtle" />
               <div className="flex min-w-0 flex-1 flex-col gap-1.5 py-0.5">
@@ -663,7 +655,7 @@ export function VideoSidebar({
   danmaku,
   tab: requestedTab,
   onTabChange,
-  detailsResize,
+  detailsContentRef,
   onSeek,
 }: {
   bvid: string | null;
@@ -683,16 +675,8 @@ export function VideoSidebar({
     /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
     onSeek: (positionMs: number) => void;
   };
-  /**
-   * 移动端「按住页签条上下拖调占比」的手势处理器（`useDetailsResize` 的返回值）。
-   * 桌面与宽屏不传，页签条行为与从前一致。
-   */
-  detailsResize?: {
-    onPointerDownCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
-    onPointerMoveCapture?: (event: ReactPointerEvent<HTMLElement>) => boolean;
-    onPointerUpCapture?: (event: ReactPointerEvent<HTMLElement>) => boolean;
-    onPointerCancelCapture?: (event: ReactPointerEvent<HTMLElement>) => void;
-  };
+  /** 仅内容视口参与自适应占比，Tab 栏不绑定调整手势。 */
+  detailsContentRef?: Ref<HTMLDivElement>;
 }) {
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
@@ -749,6 +733,16 @@ export function VideoSidebar({
       ? requestedTab
       : (visibleTabs[0] ?? "comments");
 
+  // 在线数按当前分 P 独立刷新，不复用 archive 的五分钟缓存，也不显示上一集数据。
+  const onlineQuery = useQuery({
+    queryKey: ["video_online_total", bvid ?? "", cid],
+    enabled: !isPgc && Boolean(bvid) && cid > 0 && tab === "related",
+    queryFn: () => videoGetOnlineTotal(bvid!, cid),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
   /**
    * 移动端左右滑动切页签，与直播间侧栏同一套算法与手感（`layout: "track"`）。
    *
@@ -771,28 +765,6 @@ export function VideoSidebar({
     enabled: isMobileClient(),
     layout: "track",
   });
-
-  /**
-   * 页签条上的两套手势共用同一串指针事件，靠锁轴判定分流。
-   *
-   * 事件在捕获阶段先经过外层的 `Tabs`（翻页），再到本层（调占比）。两者的锁轴
-   * 阈值互斥（纵向要求 `|dy| > |dx|`，横向要求 `|dx| > 1.25|dy|`），因此同一次
-   * 手势只会有一边锁定：
-   *
-   * - 横向锁定：翻页在 `Tabs` 上 `stopPropagation` 并捕获指针，本层收不到后续事件。
-   * - 纵向锁定：翻页先看到「纵向位移已超阈值且压过横向」并主动放弃这次手势，
-   *   随后本层锁定并接管。
-   */
-  const resizeHandlers = detailsResize;
-  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    resizeHandlers?.onPointerDownCapture?.(event);
-  };
-  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    resizeHandlers?.onPointerMoveCapture?.(event);
-  };
-  const handleResizePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    resizeHandlers?.onPointerUpCapture?.(event);
-  };
 
   const handleUploaderClick = () => {
     if (archive?.author_mid) {
@@ -963,16 +935,8 @@ export function VideoSidebar({
                   {archive.title}
                 </p>
               )}
-              {/* 统计行（播放/评论/发布时间）紧跟标题下方：三项同一档间距、不插竖线，
-                  数值不加粗也不用强调色 —— 事实数字读成安静的一行。
-
-                  字号主动退到 11px（图标同步 12px）就是为了「日期永远留在这一行」：
-                  侧栏 320/340 下典型数值加完整日期时间仍有富余；再去掉右端那个
-                  24px（粗指针 44px）的图标开关，行高也不再被它撑开。因此这里不换行：
-                  极端字号缩放下宁可让三项各自收窄省略，也不让日期另起一行。
-                  收缩权重按重要性分配：播放与评论先让位（`shrink-[3]`，省成「12.3…」
-                  仍读得出量级），日期最后才动（`shrink-[0.5]`），完整时间始终可见。 */}
-              <dl className="mt-0.5 flex min-w-0 items-center gap-x-3 overflow-hidden text-[11px] leading-4 text-muted-foreground">
+              {/* 在线数紧跟发布时间；完整日期与人数由 title 保留，窄侧栏优先收窄累计统计。 */}
+              <dl className="mt-0.5 flex min-w-0 items-center gap-x-2 overflow-hidden text-[11px] leading-4 text-muted-foreground">
                 <div
                   className="flex min-w-0 shrink-[3] items-center gap-1"
                   title={`播放：${formatOnline(archive.view)}`}
@@ -997,11 +961,21 @@ export function VideoSidebar({
                 {archive.pubdate > 0 && (
                   <div
                     className="flex min-w-0 shrink-[0.5] items-center gap-1"
-                    title="视频发布时间"
+                    title={`视频发布时间：${formatDateTime(archive.pubdate)}`}
                   >
                     <dt className="sr-only">发布时间</dt>
                     <CalendarDays aria-hidden className="size-3 shrink-0" />
                     <dd className="truncate tabular-nums">{formatDateTime(archive.pubdate)}</dd>
+                  </div>
+                )}
+                {onlineQuery.data != null && !onlineQuery.isError && (
+                  <div
+                    className="flex min-w-0 shrink-0 items-center gap-1"
+                    title={`当前在线人数：${onlineQuery.data}`}
+                  >
+                    <dt className="sr-only">当前在线人数</dt>
+                    <Eye aria-hidden className="size-3 shrink-0" />
+                    <dd className="tabular-nums">{onlineQuery.data}</dd>
                   </div>
                 )}
               </dl>
@@ -1071,18 +1045,8 @@ export function VideoSidebar({
       onPointerCancelCapture={sidebarSwipeOnPointerCancelCapture}
       onClickCapture={sidebarSwipeOnClickCapture}
     >
-      {/* 页签条同时是移动端调占比的抓手（`data-vod-details-handle`）：整条 44px
-          高、可点可拖，不另加一条 grip 占高度。手势处理器只在移动端传入。 */}
-      <div
-        data-vod-details-handle
-        onPointerDownCapture={resizeHandlers ? handleResizePointerDown : undefined}
-        onPointerMoveCapture={resizeHandlers ? handleResizePointerMove : undefined}
-        onPointerUpCapture={resizeHandlers ? handleResizePointerUp : undefined}
-        onPointerCancelCapture={
-          resizeHandlers ? resizeHandlers.onPointerCancelCapture : undefined
-        }
-        className="flex h-11 shrink-0 items-center border-b border-border/80"
-      >
+      {/* Tab 栏只负责点按/横滑切换，纵向滑动不调整布局。 */}
+      <div className="flex h-11 shrink-0 items-center border-b border-border/80">
         <TabsList
           variant="line"
           className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"
@@ -1106,7 +1070,11 @@ export function VideoSidebar({
           于是停在页签之间，显示的面板与选中的页签脱同步（真机实测 scrollLeft 停在
           304.86px，非整数正是程序化滚动而非手势的特征）。`clip` 不建立滚动容器，
           这条不变量因此由布局本身保证，而不依赖每个面板都记得自我约束。 */}
-      <div data-video-side-tab-viewport className="relative min-h-0 flex-1 overflow-clip">
+      <div
+        ref={detailsContentRef}
+        data-video-side-tab-viewport
+        className="relative min-h-0 flex-1 overflow-clip"
+      >
         <div
           ref={sidebarSwipeBindPage}
           data-slot="horizontal-swipe-track"

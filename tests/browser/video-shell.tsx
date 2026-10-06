@@ -34,7 +34,7 @@ const archive: VideoArchive = {
   view: 0,
   danmaku: 0,
   reply: 0,
-  pubdate: 0,
+  pubdate: 1_700_000_000,
   ugc_season: null,
   pages: [{ page: 1, cid: 1001, part: "第一集", duration: 10 }],
 };
@@ -69,6 +69,8 @@ mockIPC(
         return { items: [], has_more: false };
       case "video_get_archive":
         return archive;
+      case "video_get_online_total":
+        return "1.2万+";
       case "video_get_play_info":
         return {
           mpd_url: "test.mpd",
@@ -119,4 +121,4 @@ createRoot(document.getElementById("fixture")!).render(
     </TooltipProvider>
   </QueryClientProvider>,
 );
-Object.assign(window, { shellFixture: { router } });
+Object.assign(window, { shellFixture: { router, client } });

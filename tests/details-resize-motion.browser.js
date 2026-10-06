@@ -1,4 +1,4 @@
-// 调占比的帧合并、样式隔离和几何回归。在真实主窗口挂独立 root，不依赖视频网络。
+// 真实主窗口中的内容滑动、原生滚动让行、帧合并与清理回归（无需视频网络）。
 // playwright-cli -s=rwin run-code --filename=tests/details-resize-motion.browser.js
 async (page) => {
   const client = await page.context().newCDPSession(page);
@@ -17,13 +17,13 @@ async (page) => {
         style: "position:fixed;inset:0;z-index:1000;background:var(--background)",
       });
       const { React, h, flushSync } = ui;
-      const previews = [];
-      const commits = [];
-      let setEnabled;
-      let rerender;
+      const previews = [],
+        commits = [],
+        passed = [];
+      let setEnabled, rerender;
       function Harness() {
-        const containerRef = React.useRef(null);
-        const detailsRef = React.useRef(null);
+        const containerRef = React.useRef(null),
+          detailsRef = React.useRef(null);
         const [enabled, updateEnabled] = React.useState(true);
         const [share, setShare] = React.useState(null);
         const [, update] = React.useState(0);
@@ -35,7 +35,7 @@ async (page) => {
           clearDetailsResizing(containerRef.current);
           setShare(Number(percent.toFixed(3)));
         };
-        const handlers = useDetailsResize({
+        const bindContent = useDetailsResize({
           enabled,
           containerRef,
           detailsRef,
@@ -57,166 +57,164 @@ async (page) => {
           },
           h(
             "div",
-            {
-              "data-video-player-frame": true,
-              className: "relative flex min-h-0 min-w-0 flex-none flex-col",
-            },
-            h("div", { style: { height: 300 } }, "舞台内容"),
+            { "data-video-player-frame": true, className: "relative flex min-h-0 flex-none flex-col" },
+            h("div", { style: { height: 400 } }, "舞台"),
           ),
           h(
             "aside",
             { ref: detailsRef, className: "flex min-h-0 flex-1 flex-col" },
+            h("div", { "data-test-tabs": true, style: { height: 44, flexShrink: 0 } }, "Tab 栏"),
             h(
               "div",
               {
-                "data-vod-details-handle": true,
-                ...handlers,
-                style: { height: 44, flexShrink: 0 },
+                ref: bindContent,
+                "data-test-content": true,
+                style: { minHeight: 0, flex: 1, overflow: "clip" },
               },
-              "抓手",
-            ),
-            h(
-              "div",
-              { "data-test-descendant": true, style: { overflow: "auto", flex: 1 } },
-              Array.from({ length: 1000 }, (_, index) => h("p", { key: index }, `评论 ${index}`)),
+              h(
+                "div",
+                { "data-test-scroll": true, style: { height: "100%", overflow: "auto" } },
+                h("input", { "data-test-input": true }),
+                Array.from({ length: 1000 }, (_, i) => h("p", { key: i }, `评论 ${i}`)),
+              ),
             ),
           ),
         );
       }
       const frame = () => ui.query("[data-video-details-frame]");
-      const handle = () => ui.query("[data-vod-details-handle]");
-      const send = (type, y, x = 100) =>
-        handle().dispatchEvent(
-          new PointerEvent(type, {
-            pointerId: 71,
-            pointerType: "touch",
-            isPrimary: true,
-            clientX: x,
-            clientY: y,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      const assertGeometry = () => {
+      const scroll = () => ui.query("[data-test-scroll]");
+      const send = (
+        type,
+        y,
+        { x = 100, target = scroll(), cancelable = true, multiple = false } = {},
+      ) => {
+        const touch = new Touch({ identifier: 71, target, clientX: x, clientY: y });
+        const touches = type === "touchend" || type === "touchcancel" ? [] : [touch];
+        if (multiple) touches.push(new Touch({ identifier: 72, target, clientX: 150, clientY: y }));
+        const event = new TouchEvent(type, {
+          touches,
+          targetTouches: touches,
+          changedTouches: [touch],
+          bubbles: true,
+          cancelable,
+        });
+        target.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      const gesture = async (from, to, options) => {
+        send("touchstart", from, options);
+        send("touchmove", to, options);
+        flushSync(() => send("touchend", to, options));
+        await frames();
+      };
+      const geometry = () => {
         const total = frame().getBoundingClientRect().height;
         const stage = ui.query("[data-video-player-frame]").getBoundingClientRect().height;
         const details = ui.query("aside").getBoundingClientRect().height;
         assert(Math.abs(stage + details - total) < 0.5, "舞台与侧栏未铺满容器");
         assert(stage >= 401 / (16 / 9) - 0.5, "舞台被压到满宽 16:9 以下");
       };
-      const passed = [];
       try {
         ui.render(h(Harness));
-        // 合成事件没有浏览器的 active pointer，补上指针捕获行为。
-        let captured = false;
-        handle().setPointerCapture = () => {
-          captured = true;
-        };
-        handle().hasPointerCapture = () => captured;
-        handle().releasePointerCapture = () => {
-          captured = false;
-        };
         await frames();
-        send("pointerdown", 400);
-        for (let i = 1; i <= 30; i++) send("pointermove", 400 + i * 2);
-        assert(previews.length === 0, "同帧 pointermove 立即重复触发布局");
+        send("touchstart", 400);
+        for (let i = 1; i <= 30; i++) send("touchmove", 400 - i * 2);
+        assert(previews.length === 0, "同帧移动立即重复触发布局");
         await frames();
-        assert(previews.length === 1, "同帧事件没有合并成一次最新预览");
-        assert(frame().dataset.vodDetailsResizing === "true", "未标记拖动状态");
-        assertGeometry();
-        const parentShare = getComputedStyle(frame())
-          .getPropertyValue("--vod-details-share")
-          .trim();
-        const childShare = getComputedStyle(ui.query("[data-test-descendant]"))
-          .getPropertyValue("--vod-details-share")
-          .trim();
-        assert(
-          childShare === "30%" && childShare !== parentShare,
-          "高频 CSS 变量仍在向评论/播放器子树继承",
-        );
+        assert(previews.length === 1, "30 次移动没有合并为一次预览");
         const before = frame().style.getPropertyValue("--vod-details-share");
         flushSync(rerender);
         assert(
           frame().style.getPropertyValue("--vod-details-share") === before,
-          "普通 React 提交覆盖拖动预览",
+          "React 提交覆盖预览",
         );
-        passed.push("30 次同帧移动合并一次；变量不继承到 1000 条评论，React 提交不打断预览");
-
-        send("pointermove", 480);
-        flushSync(() => send("pointerup", 500));
-        const final = frame().style.getPropertyValue("--vod-details-share");
-        await frames();
-        assert(previews.length === 1 && commits.length === 1, "松手后旧预览仍在执行");
         assert(
-          frame().style.getPropertyValue("--vod-details-share") === final,
-          "旧预览覆盖最终坐标",
+          getComputedStyle(scroll()).getPropertyValue("--vod-details-share").trim() === "30%",
+          "变量继承到了评论子树",
         );
-        assert(!captured && !frame().hasAttribute("data-vod-details-resizing"), "松手未清理状态");
-        assertGeometry();
-        passed.push("释放同步提交最终位置，并取消未执行的预览");
-
-        send("pointerdown", 400);
-        send("pointermove", 350);
-        flushSync(() => send("pointercancel", 350));
+        geometry();
+        send("touchmove", 320);
+        flushSync(() => send("touchend", 320));
         await frames();
-        assert(previews.length === 1 && commits.length === 2, "取消未提交最新位置/遗留预览");
-        assert(!captured, "取消未释放指针");
-        assertGeometry();
-        passed.push("pointercancel 保留最新拖动结果，不遗留预览");
+        assert(previews.length === 1 && commits.length === 1, "结束后旧预览仍在执行");
+        assert(!frame().hasAttribute("data-vod-details-resizing"), "结束未清理预览标记");
+        passed.push("同帧合并、非继承变量、React 重渲染及释放清理");
 
-        const count = previews.length;
-        send("pointerdown", 400);
-        send("pointermove", 400, 200);
-        send("pointerup", 400, 200);
-        await frames();
-        assert(previews.length === count && commits.length === 2, "横向翻页被占比手势抢走");
-        passed.push("横向手势不触发调占比");
+        const noResize = commits.length;
+        await gesture(400, 350, { target: ui.query("[data-test-tabs]") });
+        await gesture(400, 350, { target: ui.query("[data-test-input]") });
+        await gesture(400, 400, { x: 200 });
+        send("touchstart", 400);
+        send("touchmove", 400, { x: 250 });
+        send("touchend", 400, { x: 250 });
+        assert(commits.length === noResize, "Tab、输入控件或横滑被调占比接管");
+        passed.push("Tab 栏、输入控件与横向手势不调占比");
 
-        send("pointerdown", 400);
-        flushSync(() => {
-          send("pointermove", -2000);
-          send("pointerup", -2000);
-        });
-        await frames();
-        assertGeometry();
+        await gesture(400, -2000);
+        geometry();
+        assert(scroll().scrollTop > 0, "上限剩余位移未滚动内容");
+        const atMax = frame().style.getPropertyValue("--vod-details-share");
+        send("touchstart", 400);
+        assert(!send("touchmove", 350), "上限处仍抢占原生滚动");
+        send("touchend", 350);
         assert(
-          Math.abs(
-            ui.query("[data-video-player-frame]").getBoundingClientRect().height - 401 / (16 / 9),
-          ) < 0.5,
-          "拖动上限没有停在 16:9",
+          frame().style.getPropertyValue("--vod-details-share") === atMax,
+          "上限继续上滑改变占比",
         );
-        ui.host.style.height = "600px";
-        await frames();
-        assertGeometry();
+        send("touchstart", 400);
+        assert(!send("touchmove", 440), "未到顶部就抢占下滑滚动");
+        scroll().scrollTop = 0;
+        assert(!send("touchmove", 480, { cancelable: false }), "不可取消的原生滚动仍被接管");
+        send("touchend", 480);
         assert(
-          parseFloat(frame().style.getPropertyValue("--vod-details-share")) < 63,
-          "容器变矮没有收回超限占比",
+          frame().style.getPropertyValue("--vod-details-share") === atMax,
+          "原生滚动中偷偷改了占比",
         );
-        send("pointerdown", 400);
-        flushSync(() => {
-          send("pointermove", 2000);
-          send("pointerup", 2000);
-        });
-        await frames();
+        await gesture(400, 480);
+        assert(
+          parseFloat(frame().style.getPropertyValue("--vod-details-share")) < parseFloat(atMax),
+          "顶部下滑未缩小侧栏",
+        );
+        passed.push("上滑先扩大、边界位移滚内容；保留原生滚动，下滑到顶才缩小");
+
+        scroll().scrollTop = 0;
+        await gesture(400, 2000);
         assert(
           parseFloat(frame().style.getPropertyValue("--vod-details-share")) === 20,
-          "下限不是 20%",
+          "下限不是20%",
         );
-        assertGeometry();
-        passed.push("上下限与容器变矮后的收回仍正确，总高度不留缝");
+        await gesture(400, -2000);
+        ui.host.style.height = "600px";
+        await frames();
+        geometry();
+        assert(
+          parseFloat(frame().style.getPropertyValue("--vod-details-share")) < 63,
+          "容器变矮未收回超限占比",
+        );
+        passed.push("上下限、尺寸变化收回与总高度守恒");
 
-        send("pointerdown", 400);
-        send("pointermove", 350);
+        scroll().scrollTop = 0;
+        send("touchstart", 400);
+        send("touchmove", 450);
+        flushSync(() => send("touchcancel", 450));
+        await frames();
+        assert(!frame().hasAttribute("data-vod-details-resizing"), "touchcancel 未清理");
+        const count = previews.length;
+        send("touchstart", 400);
+        send("touchmove", 450);
         flushSync(() => setEnabled(false));
         await frames();
-        assert(previews.length === count && !captured, "禁用后旧预览仍执行或指针仍被捕获");
+        assert(
+          previews.length === count && !frame().hasAttribute("data-vod-details-resizing"),
+          "禁用遗留预览",
+        );
         flushSync(() => setEnabled(true));
-        send("pointerdown", 400);
-        send("pointermove", 350);
+        send("touchstart", 400);
+        send("touchmove", 450);
         ui.dispose();
         await frames();
-        assert(previews.length === count && !captured, "卸载后仍执行预览或未释放指针");
-        passed.push("禁用及卸载均取消待执行帧");
+        assert(previews.length === count, "卸载后仍执行预览");
+        passed.push("取消、禁用和卸载清理");
         return { passed };
       } finally {
         ui.dispose();

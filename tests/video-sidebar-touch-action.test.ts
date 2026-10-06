@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 /**
  * 侧栏触摸轴的 CSS 不变量：条带内每个纵向滚动容器都必须自己声明 `touch-pan-y`，
- * 页签条（占比拖动抓手）声明 `touch-action: pan-x`。
+ * 页签条不再设纵向抓手，只有内容视口绑定自适应手势。
  *
  * 真机（vivo V2509A / Android 16 / WebView 151）实测的缺陷：只在 Tabs 外壳上写
  * `touch-pan-y` 不够。Chromium 用命中元素所在的**最近滚动容器**决定手势归属，
@@ -58,21 +58,26 @@ describe("video sidebar touch axes", () => {
     const source = await Bun.file(new URL(SOURCES[0], import.meta.url)).text();
     // 连播换集会在后台改 currentBvid / currentCid；非活动页签跟着滚动
     // 既没有意义，也是条带被滚偏的来源之一。
-    const gates = [...source.matchAll(/if \((?:open && )?!?active\) return;|if \(open && active\)/g)];
+    const gates = [
+      ...source.matchAll(/if \((?:open && )?!?active\) return;|if \(open && active\)/g),
+    ];
     expect(gates.length).toBeGreaterThanOrEqual(2);
-    for (const match of source.matchAll(/useEffect\(\(\) => \{[\s\S]{0,160}?scrollIntoView[\s\S]{0,80}?\}, \[[^\]]*\]\);/g)) {
+    for (const match of source.matchAll(
+      /useEffect\(\(\) => \{[\s\S]{0,160}?scrollIntoView[\s\S]{0,80}?\}, \[[^\]]*\]\);/g,
+    )) {
       expect(match[0], "定位滚动必须带 active 守卫").toMatch(/active/);
     }
   });
 
-  test("调占比抓手把纵向从浏览器手里拿回来，横向仍留给翻页", async () => {
+  test("取消 Tab 抓手，只在内容视口绑定自适应占比", async () => {
     const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
-    const start = css.indexOf("[data-vod-details-handle]");
-    expect(start).toBeGreaterThan(-1);
-    const rule = css.slice(start, css.indexOf("}", start));
-    // 纵向拖动调占比若被合成器当成页面滚动接走，第一次 pointermove 之后就
-    // pointercancel（与上面同一条真机机理）；横向必须继续交给浏览器滚动通道，
-    // 那正是 useHorizontalSwipe 的输入，因此只能是 pan-x，不能是 none。
-    expect(rule).toContain("touch-action: pan-x");
+    const source = await Bun.file(new URL(SOURCES[0], import.meta.url)).text();
+    expect(css).not.toContain("[data-vod-details-handle]");
+    expect(source).not.toContain("data-vod-details-handle");
+    expect(source).toMatch(/ref=\{detailsContentRef\}\s+data-video-side-tab-viewport/);
+    const player = await Bun.file(
+      new URL("../src/features/video/VideoPlayerPage.tsx", import.meta.url),
+    ).text();
+    expect(player).toContain("canResizeVideoDetails(frameAspectRatio)");
   });
 });
