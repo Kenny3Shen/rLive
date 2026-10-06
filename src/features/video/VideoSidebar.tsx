@@ -664,6 +664,7 @@ export function VideoSidebar({
   tab: requestedTab,
   onTabChange,
   detailsResize,
+  onSeek,
 }: {
   bvid: string | null;
   epId: string | null;
@@ -672,6 +673,8 @@ export function VideoSidebar({
   onTabChange: (tab: SidebarTab) => void;
   /** 当前播放的 cid：多 P 稿件的选集页签用它高亮当前 P。 */
   cid: number;
+  /** 评论空降到当前视频的播放位置（秒），与弹幕是否开启无关。 */
+  onSeek?: (seconds: number) => void;
   /** 弹幕查看列表数据：播放页已加载的条目 + 当前进度 + 点击跳转。 */
   danmaku?: {
     entries: readonly VideoDanmakuEntry[];
@@ -800,7 +803,7 @@ export function VideoSidebar({
   /** 页签内容。所有页签常驻条带，因此按 value 取而不是只画当前一个。 */
   const sidebarPanel = (value: SidebarTab): ReactNode => {
     if (value === "comments") {
-      if (resolvedAid) return <CommentsPanel key={resolvedAid} aid={resolvedAid} />;
+      if (resolvedAid) return <CommentsPanel key={resolvedAid} aid={resolvedAid} onSeek={onSeek} />;
       return (
         <div className="px-3 py-6">
           {archiveQuery.isPending || seasonQuery.isPending ? (

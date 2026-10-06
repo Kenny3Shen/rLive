@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ThumbsUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +24,7 @@ import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
 import { CommentLevelBadge } from "./CommentLevelBadge";
+import { commentTimestampSegments } from "./commentTimestamp";
 import { videoGetCommentReplies, videoGetComments } from "./videoApi";
 import { formatRelativeTime } from "./videoHistory";
 
@@ -48,10 +49,36 @@ import { formatRelativeTime } from "./videoHistory";
 /** 桌面端回复分页的页大小：请求与「共几页」的推导共用它。 */
 const DESKTOP_REPLIES_PAGE_SIZE = 10;
 
-/** 把 `[大哭]` 这类占位符换成内联表情图，正文里的 URL 渲染成可点链接。 */
-function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): ReactNode {
+/** 同一评论区的正文、预览与详情共用秒级跳转；短视频未接入时保持纯文本。 */
+const CommentSeekContext = createContext<((seconds: number) => void) | undefined>(undefined);
+
+/** 表情、外链与时间戳共存；只有 URL 之外的正文参与空降识别。 */
+function CommentMessage({ message, emotes }: Pick<VideoComment, "message" | "emotes">): ReactNode {
+  const onSeek = useContext(CommentSeekContext);
+  const renderText = onSeek
+    ? (text: string) =>
+        commentTimestampSegments(text).map((segment, index) =>
+          segment.kind === "text" ? (
+            segment.text
+          ) : (
+            <Button
+              key={index}
+              variant="link"
+              className="h-auto p-0 align-baseline [@media(pointer:coarse)]:min-h-0"
+              aria-label={`跳转到 ${segment.text}`}
+              title={`空降到 ${segment.text}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSeek(segment.seconds);
+              }}
+            >
+              {segment.text}
+            </Button>
+          ),
+        )
+    : undefined;
   if (!message) return message;
-  if (emotes.length === 0) return <LinkText text={message} />;
+  if (emotes.length === 0) return <LinkText text={message} renderText={renderText} />;
   const parts: ReactNode[] = [];
   let rest = message;
   let key = 0;
@@ -65,12 +92,12 @@ function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): 
       }
     }
     if (!hit) {
-      parts.push(<LinkText key={key} text={rest} />);
+      parts.push(<LinkText key={key} text={rest} renderText={renderText} />);
       key += 1;
       break;
     }
     if (hit.index > 0) {
-      parts.push(<LinkText key={key} text={rest.slice(0, hit.index)} />);
+      parts.push(<LinkText key={key} text={rest.slice(0, hit.index)} renderText={renderText} />);
       key += 1;
     }
     parts.push(
@@ -86,6 +113,33 @@ function renderCommentMessage(message: string, emotes: VideoComment["emotes"]): 
     rest = rest.slice(hit.index + hit.text.length);
   }
   return parts;
+}
+
+/** 整行详情入口与正文交互控件互为兄弟，避免 button 内嵌 button / a。 */
+function CommentDetailTrigger({
+  label,
+  onOpenDetail,
+  className,
+  children,
+}: {
+  label: string;
+  onOpenDetail: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("relative", className)}>
+      <button
+        type="button"
+        onClick={onOpenDetail}
+        aria-label={label}
+        className="absolute inset-0 w-full rounded-sm"
+      />
+      <div className="pointer-events-none relative [&_a]:pointer-events-auto [&_button]:pointer-events-auto">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 function CommentBody({
@@ -106,17 +160,16 @@ function CommentBody({
   return (
     <>
       {onOpenDetail ? (
-        <button
-          type="button"
-          onClick={onOpenDetail}
-          aria-label={`查看 ${comment.uname} 的评论详情`}
-          className="block w-full rounded-sm text-left text-[13px] leading-relaxed whitespace-pre-line break-words [overflow-wrap:anywhere]"
+        <CommentDetailTrigger
+          label={`查看 ${comment.uname} 的评论详情`}
+          onOpenDetail={onOpenDetail}
+          className="text-left text-[13px] leading-relaxed whitespace-pre-line break-words [overflow-wrap:anywhere]"
         >
-          {renderCommentMessage(comment.message, comment.emotes) || "图片评论"}
-        </button>
+          <CommentMessage message={comment.message || "图片评论"} emotes={comment.emotes} />
+        </CommentDetailTrigger>
       ) : (
         <p className="whitespace-pre-line break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">
-          {renderCommentMessage(comment.message, comment.emotes)}
+          <CommentMessage message={comment.message} emotes={comment.emotes} />
         </p>
       )}
       {comment.pictures.length > 0 && (
@@ -230,10 +283,10 @@ function CommentRow({
 
 function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDetail: () => void }) {
   return (
-    <button
-      type="button"
-      className="block w-full px-2 py-1.5 text-left text-xs leading-relaxed transition-colors hover:bg-muted/70"
-      onClick={onOpenDetail}
+    <CommentDetailTrigger
+      label={`查看 ${reply.uname} 的回复详情`}
+      className="w-full px-2 py-1.5 text-left text-xs leading-relaxed transition-colors hover:bg-muted/70"
+      onOpenDetail={onOpenDetail}
     >
       <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
         <span className="font-medium text-primary/90">{reply.uname}</span>
@@ -246,11 +299,11 @@ function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDeta
         )}
         <span className="text-muted-foreground">： </span>
         <span className="text-foreground/80">
-          {renderCommentMessage(reply.message, reply.emotes)}
+          <CommentMessage message={reply.message} emotes={reply.emotes} />
         </span>
         {reply.pictures.length > 0 && <span className="text-muted-foreground"> [图片]</span>}
       </span>
-    </button>
+    </CommentDetailTrigger>
   );
 }
 
@@ -502,7 +555,23 @@ function CommentReplies({
  * 短视频的评论抽屉直接复用它（导出而不是另写一份：评论的三个坑 —— 游标语义、
  * 回复预览、pn 翻页 —— 已经在这里跑通）。它不自带滚动容器，由调用方提供。
  */
-export function CommentsPanel({ aid, bottomInset }: { aid: string; bottomInset?: string }) {
+export function CommentsPanel({
+  onSeek,
+  ...props
+}: {
+  aid: string;
+  bottomInset?: string;
+  /** VOD 空降到当前视频的秒级位置；不提供时不将时间戳变为控件。 */
+  onSeek?: (seconds: number) => void;
+}) {
+  return (
+    <CommentSeekContext value={onSeek}>
+      <CommentsPanelContent {...props} />
+    </CommentSeekContext>
+  );
+}
+
+function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?: string }) {
   const [mode, setMode] = useState(3);
   const [selectedComment, setSelectedComment] = useState<VideoComment | null>(null);
   const mobile = isMobileClient();

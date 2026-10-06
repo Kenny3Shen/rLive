@@ -3071,6 +3071,7 @@ function VideoPlayerPageContent() {
                   epId={params.epId}
                   aid={params.aid}
                   cid={cid}
+                  onSeek={seekTo}
                   detailsResize={detailsResizeEnabled ? detailsResize : undefined}
                   danmaku={{
                     entries: danmakuEntries,

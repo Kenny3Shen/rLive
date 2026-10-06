@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { notify } from "@/components/ui/toast";
 import { openExternalUrl } from "@/shared/externalUrl";
 
@@ -48,12 +48,19 @@ export function linkifySegments(text: string): readonly TextLinkSegment[] {
   return segments;
 }
 
-export function LinkText({ text }: { text: string }): ReactNode {
+export function LinkText({
+  text,
+  renderText = (value) => value,
+}: {
+  text: string;
+  /** 只增强 URL 以外的正文，避免把链接里的时间、编号等拆开。 */
+  renderText?: (text: string) => ReactNode;
+}): ReactNode {
   const segments = linkifySegments(text);
-  if (segments.length === 1 && segments[0].kind === "text") return text;
+  if (segments.length === 1 && segments[0].kind === "text") return renderText(text);
   return segments.map((segment, index) =>
     segment.kind === "text" ? (
-      segment.text
+      <Fragment key={index}>{renderText(segment.text)}</Fragment>
     ) : (
       <a
         key={index}
