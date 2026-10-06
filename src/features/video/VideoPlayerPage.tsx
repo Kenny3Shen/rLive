@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -113,7 +114,6 @@ import type {
   VideoHistoryKind,
   VideoItem,
   VideoPlayInfo,
-  VideoSessionIds,
 } from "@/shared/types/video";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import {
@@ -141,6 +141,13 @@ import {
 import { videoSeekGestureIntent, videoSeekGestureTarget } from "./videoSurfaceGesture";
 import { isVideoTailBuffered } from "./videoTailBuffer";
 import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWaitingRecovery";
+import {
+  VideoPlaybackHistory,
+  VideoPlaybackSessions,
+  videoPlaybackForKey,
+  videoPlaybackSnapshot,
+  type VideoResumeSnapshot,
+} from "./videoPlaybackLifecycle";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { storyboardToVtt } from "./storyboardVtt";
@@ -383,7 +390,9 @@ function VideoPlayerPageContent() {
   // 记录方在 videoKey 之前定义，经 ref 读它：进 deps 会撞 TDZ，靠闭包又会
   // 捕获旧值（回调按其他依赖记忆），只有 ref 两边都避得开。
   const videoKeyRef = useRef("");
-  const resumeAtRef = useRef<{ key: string; position: number; playing: boolean } | null>(null);
+  const resumeAtRef = useRef<VideoResumeSnapshot | null>(null);
+  // 读取当前播放器自己的已就绪位置，而不是在取流失败时把共享媒体的 0 秒当作断点。
+  const captureResumeRef = useRef<(() => void) | null>(null);
   // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
   // 否则卡加载时点暂停会被重试重新拉起，按钮状态与实际播放相反。
   const userPausedRef = useRef(false);
@@ -401,14 +410,7 @@ function VideoPlayerPageContent() {
 
   /** 手动重建前记录当前位置；自动恢复已在 waiting 事件发生时记录现场。 */
   const rebuildPlaybackSession = useCallback(() => {
-    const media = videoRef.current;
-    if (media && media.currentTime > 0) {
-      resumeAtRef.current = {
-        key: videoKeyRef.current,
-        position: media.currentTime,
-        playing: !media.paused,
-      };
-    }
+    captureResumeRef.current?.();
     advancePlaybackSession();
   }, [advancePlaybackSession]);
 
@@ -714,20 +716,17 @@ function VideoPlayerPageContent() {
     };
   }, [aid, archiveQuery.data, cid, historyKind, historyOid, params, seasonQuery.data]);
 
-  // 播放器 effect 只依赖播放地址，不该因为历史/元数据变化就重建播放器，
-  // 因此这三样经 ref 读取。
-  const historyEntryRef = useRef<VideoHistoryItem | null>(null);
-  // 离开播放页的路由切换会先以 params=null 再渲染一次(此时 entry 为 null)再卸载,
-  // 若直接赋值,卸载 flush 读到的会是 null,最后一段进度就丢了。因此只在新身份
-  // 存在时覆盖:离开页面时 ref 保留旧作品,flush 仍能对上 reportedCid。
+  // 元数据可晚于播放器到达，但每个 cid 的条目对象独立存活：换集的 layout
+  // 更新不能覆盖旧播放器随后在 passive cleanup 中要 flush 的身份。
+  const historySession = useMemo(() => new VideoPlaybackHistory(cid), [cid]);
   const historyResumeAtRef = useRef(0);
   useLayoutEffect(() => {
-    if (historyEntry) historyEntryRef.current = historyEntry;
+    historySession.update(historyEntry);
     historyResumeAtRef.current = videoResumePosition(resumeQuery.data, {
       cid,
       epId: params?.epId ?? null,
     });
-  }, [cid, historyEntry, params?.epId, resumeQuery.data]);
+  }, [cid, historyEntry, historySession, params?.epId, resumeQuery.data]);
   /**
    * 跨分 P 续播的提示。
    *
@@ -756,10 +755,8 @@ function VideoPlayerPageContent() {
   /**
    * 把进度写进本地观看历史。
    *
-   * 身份经 `historyEntryRef` 读取而不是闭包捕获:稿件详情(标题/封面/UP 主)晚于
-   * 播放器就位,捕获旧值会把这些字段写成空。错位风险由 `reportProgress` 里的
-   * `reportedCid` 比对挡住——换集后 ref 指向新集,旧实例的 flush 因此被丢弃。
-   * `force` 用于暂停/播完/离开这三个「最后一次」的时机,绕过节流窗口。
+   * 身份由播放器所属的 historySession 提供，允许同 cid 补齐标题/封面，但
+   * 换集后旧实例仍能正确 flush。`force` 用于暂停/播完/离开，绕过节流窗口。
    * 失败只吞掉——历史是本地记账,不该让它的故障打断播放。
    */
   const reportVideoProgress = useCallback(
@@ -924,16 +921,15 @@ function VideoPlayerPageContent() {
     }
   }, [archiveQuery.data, bvid, cid, rawCid]);
 
-  /**
-   * 取播放信息。
-   *
-   * 每次进入播放页都重新取而不是复用缓存：后端在这一步拉起三条代理会话并合成 MPD，
-   * 缓存命中会返回一份指向**已经停掉**的会话的 MPD 地址。`staleTime: 0` +
-   * `gcTime: 0` 让这条 query 与代理会话同生命周期。
-   */
+  /** 每次页面挂载独占代理，不复用另一轮页面可能已经停止的 query 结果。 */
+  const playbackOwnerId = useId();
+  const [playbackSessions] = useState(() => new VideoPlaybackSessions(videoStopPlay));
+
+  /** 取流结果是有所有权的资源，只有显式换画质/重试才申请新会话。 */
   const playInfoQuery = useQuery({
     queryKey: [
       "video_play_info",
+      playbackOwnerId,
       cid,
       params?.bvid ?? "",
       params?.epId ?? "",
@@ -942,31 +938,32 @@ function VideoPlayerPageContent() {
       playerRevision,
     ],
     enabled: params !== null && cid > 0,
-    queryFn: () =>
-      videoGetPlayInfo({
-        bvid: params?.bvid ?? null,
-        cid,
-        ep_id: params?.epId ?? null,
-        qn: qualityQn,
-        audio_only: audioOnly,
-        // 开启「预加载下一分集」后，本集也启用分片缓存：预热的字节写在同一个
-        // 缓存键空间里，不打开读路径的话预热就白做了。仅音频模式不写缓存
-        // （后端忽略该位），因为那时没有视频轨要加速。
-        media_cache: videoNextEpisodePreload && !audioOnly,
-      }),
+    queryFn: ({ signal }) =>
+      playbackSessions.acquire(videoKey, signal, () =>
+        videoGetPlayInfo({
+          bvid: params?.bvid ?? null,
+          cid,
+          ep_id: params?.epId ?? null,
+          qn: qualityQn,
+          audio_only: audioOnly,
+          // 与下一分集预热使用同一缓存键空间；仅音频模式不读写分片缓存。
+          media_cache: videoNextEpisodePreload && !audioOnly,
+        }),
+      ),
     // 换画质/重试期间保留旧数据：旧播放器继续播到新信息就位，而不是先黑屏等请求。
     placeholderData: keepPreviousData,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    // 请求池按对象身份移交所有权，不能被 query 的结构共享复制成另一份结果。
+    structuralSharing: false,
     gcTime: 0,
     retry: false,
   });
-  // 换集（cid 变）过渡期不能沿用旧集数据：keepPreviousData 留下的旧 playInfo
-  // 会让旧播放器继续显示旧画面（直到新集就位），seek/时长/画质也是旧集的值。
-  // 换画质/重试（同 cid）仍走 keepPreviousData 的无缝续播路径。VideoPlayInfo
-  // 不回传 cid，用「数据与 cid 对齐时刻」的 cid 比对判定。
-  const [settledCid, setSettledCid] = useState<number | null>(null);
-  if (!playInfoQuery.isPlaceholderData && settledCid !== cid) setSettledCid(cid);
-  const switchingItem = playInfoQuery.isPlaceholderData && settledCid !== cid;
-  const playInfo: VideoPlayInfo | undefined = switchingItem ? undefined : playInfoQuery.data;
+  // 失败也属于「非 placeholder」状态，不能因此认定新 cid 已落定。身份随
+  // 结果返回，A→B 失败→重试时即使 query 再给 A 的 placeholder，也绝不播放 A。
+  const switchingItem = Boolean(playInfoQuery.data && playInfoQuery.data.key !== videoKey);
+  const playInfo: VideoPlayInfo | undefined = videoPlaybackForKey(playInfoQuery.data, videoKey);
   // 保留取流键与本地续播的必要依赖；侧栏、字幕、缩略图和弹幕让首帧先走。
   // 失败时也显示侧栏，不能把切集/查看详情等恢复入口一起锁住。
   const secondaryReady =
@@ -1000,14 +997,7 @@ function VideoPlayerPageContent() {
   const changeQuality = useCallback(
     (qn: number) => {
       if (qn === qualityQn) return;
-      const media = videoRef.current;
-      if (media) {
-        resumeAtRef.current = {
-          key: videoKeyRef.current,
-          position: media.currentTime,
-          playing: !media.paused,
-        };
-      }
+      captureResumeRef.current?.();
       setQualityQn(qn);
     },
     [qualityQn],
@@ -1015,14 +1005,7 @@ function VideoPlayerPageContent() {
 
   /** 仅音频（听视频）：与切画质同一重建链路（记录续播点 → 重取播放信息）。 */
   const toggleAudioOnly = useCallback(() => {
-    const media = videoRef.current;
-    if (media) {
-      resumeAtRef.current = {
-        key: videoKeyRef.current,
-        position: media.currentTime,
-        playing: !media.paused,
-      };
-    }
+    captureResumeRef.current?.();
     const nextAudioOnly = !audioOnly;
     if (nextAudioOnly && pictureInPicture?.isPictureInPicture) {
       void pictureInPicture.exitPictureInPicture();
@@ -1096,30 +1079,26 @@ function VideoPlayerPageContent() {
     retry: false,
   });
 
-  const sessionIdsRef = useRef<VideoSessionIds | null>(null);
-  // 用 query 的原始数据而不是上面换集时被抹成 undefined 的 `playInfo`：
-  // session 链必须 A→B 连续（见下），中间出现 undefined 会丢掉旧引用、泄漏会话。
+  // layout 提交即从请求池接管（也包含已显示的 placeholder）；旧播放器的
+  // passive cleanup 全部完成之后才停旧代理。error/undefined 不清空所有权。
   useLayoutEffect(() => {
-    if (playInfoQuery.data) sessionIdsRef.current = playInfoQuery.data.session_ids;
-  }, [playInfoQuery.data]);
-  useEffect(
-    () => () => {
-      const sessions = sessionIdsRef.current;
-      sessionIdsRef.current = null;
-      if (sessions) void videoStopPlay(sessions);
-    },
-    [],
-  );
-  // 换画质/重试会换一份 session_ids；旧的那份要在新的替换它之前停掉。
-  const previousSessionsRef = useRef<VideoSessionIds | null>(null);
+    if (playInfoQuery.data) playbackSessions.retain(playInfoQuery.data);
+  }, [playInfoQuery.data, playbackSessions]);
   useEffect(() => {
-    const previous = previousSessionsRef.current;
-    const current = playInfoQuery.data;
-    previousSessionsRef.current = current?.session_ids ?? null;
-    if (previous && current && previous.mpd !== current.session_ids.mpd) {
-      void videoStopPlay(previous);
-    }
-  }, [playInfoQuery.data]);
+    playbackSessions.releasePrevious();
+  }, [playInfoQuery.data, playbackSessions]);
+  const playbackMountEpochRef = useRef(0);
+  useEffect(() => {
+    const epoch = ++playbackMountEpochRef.current;
+    return () => {
+      // StrictMode 的 effect 重放仍会使用同一结果，延后一轮微任务确认真正卸载。
+      queueMicrotask(() => {
+        // 这里比较的是生命周期代号，而不是已卸载的 DOM 节点。
+        // oxlint-disable-next-line react-hooks/exhaustive-deps
+        if (playbackMountEpochRef.current === epoch) playbackSessions.clear();
+      });
+    };
+  }, [playbackSessions]);
 
   /**
    * 弹幕分段懒加载。
@@ -1288,9 +1267,28 @@ function VideoPlayerPageContent() {
     // DASH 在建播放器时通过 MPD anchor 定位；原生音频仍需等 metadata 才能 seek。
     // 两条路径都在 onReady 一次性恢复本次快照的播放/暂停意图。
     let pendingInitialResume: { position: number; playing: boolean } | null = null;
-    // 这一轮播放器对应的分集。上报前用它比对 ref 里的身份，
-    // 避免换集过渡期把旧集进度记到新集身上。
-    const reportedCid = cid;
+    // 未恢复到有效媒体位置前，失败实例的 0 秒不能覆盖上一轮留下的断点。
+    let positionReady = false;
+    let initialResumePosition = 0;
+    function establishPosition() {
+      if (
+        media.readyState >= 2 &&
+        Number.isFinite(media.currentTime) &&
+        (initialResumePosition <= 0 || media.currentTime > 0)
+      ) {
+        positionReady = true;
+      }
+    }
+    function captureResume() {
+      if (videoKeyRef.current !== videoKey) return;
+      resumeAtRef.current = videoPlaybackSnapshot(
+        resumeAtRef.current,
+        videoKey,
+        media,
+        positionReady,
+      );
+    }
+    captureResumeRef.current = captureResume;
     // 换集/换画质都会重建播放器：节流窗口按播放器实例重置，
     // 新的一集因此能立刻记下第一笔。
     historyReportedAtRef.current = null;
@@ -1330,15 +1328,10 @@ function VideoPlayerPageContent() {
       tailBuffered = true;
       setTailBufferedUrl(sessionUrl);
     }
-    /**
-     * 上报这一集的进度。
-     *
-     * 只在 ref 里的身份仍指向本播放器实例正在播的这一集时才上报：换集后
-     * 清理函数里的最后一次 flush 会读到新集的身份，写下去就是错位的进度。
-     */
+    /** 本轮的条目可补齐元数据，换集后仍保留给旧实例的最后一次 flush。 */
     function reportProgress(position: number, force: boolean) {
-      const entry = historyEntryRef.current;
-      if (!entry || entry.cid !== reportedCid) return;
+      const entry = historySession.entry;
+      if (!entry || !positionReady) return;
       reportVideoProgress(entry, position, totalDuration(), force);
     }
 
@@ -1381,6 +1374,7 @@ function VideoPlayerPageContent() {
     }
     function onReady() {
       if (cancelled) return;
+      establishPosition();
       setLoading(false);
       setWaiting(false);
       syncTime();
@@ -1406,6 +1400,7 @@ function VideoPlayerPageContent() {
     }
     function onPlaying() {
       if (cancelled) return;
+      establishPosition();
       releaseStartup();
       releaseTransport();
       setWaiting(false);
@@ -1420,14 +1415,13 @@ function VideoPlayerPageContent() {
       if (!media.ended) setWaiting(true);
       // 自动恢复回调本身不读取 ref；在真实媒体事件里保存最后可续播位置。
       if (!media.ended && !media.paused) {
-        if (media.currentTime > 0) {
-          resumeAtRef.current = { key: videoKey, position: media.currentTime, playing: true };
-        }
+        captureResume();
         waitingRecovery.notifyWaiting();
       }
     }
     function onSeeked() {
       if (cancelled) return;
+      establishPosition();
       setWaiting(false);
       // seek 的短暂 waiting 到此解除：判定计时取消，稳定播放重新起算。
       waitingRecovery.notifyResumed();
@@ -1523,6 +1517,7 @@ function VideoPlayerPageContent() {
     // loadeddata 在自动播放被拦截或用户暂停时也会到达，不必等 playing 才开放侧栏。
     const onLoadedData = () => {
       if (cancelled) return;
+      establishPosition();
       releaseStartup();
       releaseTransport();
     };
@@ -1548,7 +1543,7 @@ function VideoPlayerPageContent() {
         // 必须在设置 DASH source 之前交付起播位置，避免先调度 0 秒分片。
         // 同集的画质/恢复快照优先；别的分集快照不能污染本集历史续播。
         const snapshot = resumeAtRef.current;
-        resumeAtRef.current = null;
+        // 快照不在 source 创建前消费；MPD/初始化失败后的下一次重试仍需它。
         const resume = snapshot?.key === videoKey ? snapshot : null;
         const historyResumeAt = historyResumeAtRef.current;
         pendingInitialResume = resume
@@ -1556,6 +1551,7 @@ function VideoPlayerPageContent() {
           : historyResumeAt > 0
             ? { position: historyResumeAt, playing: false }
             : null;
+        initialResumePosition = pendingInitialResume?.position ?? 0;
         if (pendingInitialResume) setCurrentTime(pendingInitialResume.position);
         const player = createVideoJsPlayer(modules, {
           video: media,
@@ -1595,8 +1591,11 @@ function VideoPlayerPageContent() {
       });
 
     return () => {
-      // 销毁前记下最后一次进度:媒体元素此刻还能读 currentTime。
-      // 放在 `cancelled = true` 之前,让它与其它 flush 走同一条 reportProgress。
+      // keepPreviousData 期间仍能播放/seek/暂停。同内容交接以销毁前的最新现场
+      // 为准，不能退回点击切画质/重试时的旧位置与旧播放意图。
+      captureResume();
+      if (captureResumeRef.current === captureResume) captureResumeRef.current = null;
+      // 销毁前记下最后一次进度，使用本轮的历史身份，即使路由已切到下一集。
       reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);
       cancelled = true;
       if (endedTimer !== null) clearTimeout(endedTimer);
@@ -1632,6 +1631,7 @@ function VideoPlayerPageContent() {
     releaseStartup,
     releaseTransport,
     goToPlaylistItem,
+    historySession,
     playUrl,
     playInfo?.duration,
     playKind,

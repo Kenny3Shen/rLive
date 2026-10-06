@@ -43,8 +43,8 @@ function setup(
         engineEvents.get(name)?.delete(callback);
       },
     };
-    set source(value: { src: string }) {
-      sources.push(value.src);
+    set source(value: { src: string } | null) {
+      if (value) sources.push(value.src);
     }
     src = "";
     attach() {}

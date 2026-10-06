@@ -46,6 +46,7 @@ async (page) => {
         window.commentSeekEngine = this;
       }
       set source(value) {
+        if (!value) return;
         queueMicrotask(() => {
           this.media.dispatchEvent(new Event('loadedmetadata'));
           this.media.dispatchEvent(new Event('canplay'));
@@ -129,6 +130,8 @@ async (page) => {
 
     await page.evaluate(() => window.commentSeekFixture.renderWithoutSeek());
     await page.getByRole("button", { name: "评论排序：最热，点击切换" }).waitFor();
+    // 排序按钮在旧播放页也存在，不能据此认定 React 已提交独立的无 seek 面板。
+    await page.waitForFunction(() => !document.querySelector("video"));
     assert(
       (await page.getByRole("button", { name: /^跳转到 / }).count()) === 0,
       "无 seek 接口不能显示空降控件",

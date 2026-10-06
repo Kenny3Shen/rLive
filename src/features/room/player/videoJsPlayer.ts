@@ -501,7 +501,17 @@ class VideoJsPlayer {
           // load()，在 destroy() 后泄漏一个未挂载的 hls.js 实例。
           this.hls.destroy();
         }
-        this.dash?.destroy();
+        if (this.dash) {
+          // DashAdapter 10.0.1 的 destroy 先 attachView(null)，dash.js 随后 reset
+          // 已找不到原媒体，无法移除 PlaybackController 的 DOM 监听。复用 video
+          // 时旧监听会读取已清空的 streamInfo.id。先在媒体仍绑定时同步清源，
+          // 让引擎停止在途分片并解绑，再交给适配器完成销毁（HLS 不走此路径）。
+          try {
+            this.dash.source = null;
+          } finally {
+            this.dash.destroy();
+          }
+        }
       } finally {
         this.hls = null;
         this.dash = null;

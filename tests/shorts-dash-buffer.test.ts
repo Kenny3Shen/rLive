@@ -33,6 +33,7 @@ class Dash extends EventTarget {
     this.currentSource = value;
   }
   destroyed = false;
+  sourceAtDestroy: unknown = undefined;
   handlers = new Map<string, (event: unknown) => void>();
   engine = {
     on: (name: string, handler: (event: unknown) => void) => this.handlers.set(name, handler),
@@ -65,6 +66,7 @@ class Dash extends EventTarget {
   }
   attach() {}
   destroy() {
+    this.sourceAtDestroy = this.source;
     this.destroyed = true;
   }
   set src(value: string) {
@@ -111,7 +113,32 @@ describe("短视频 DASH 缓冲策略", () => {
     player.destroy();
     player.destroy();
     expect(dash.destroyed).toBe(true);
+    expect(dash.sourceAtDestroy).toBeNull();
     expect(dash.handlers.size).toBe(0);
+  });
+
+  test("销毁前仅清源一次，清源失败也释放适配器和媒体", () => {
+    const player = create();
+    const dash = Dash.last;
+    const writes = dash.sourceWrites;
+    player.destroy();
+    player.destroy();
+    expect(dash.sourceWrites).toBe(writes + 1);
+    expect(dash.sourceAtDestroy).toBeNull();
+
+    const failed = create();
+    const broken = Dash.last;
+    Object.defineProperty(broken, "source", {
+      get: () => null,
+      set: () => {
+        throw new Error("清源失败");
+      },
+    });
+    expect(() => failed.destroy()).toThrow("清源失败");
+    expect(broken.destroyed).toBe(true);
+    expect(failed.media.paused).toBe(true);
+    expect(failed.media.src).toBe("");
+    expect(() => failed.destroy()).not.toThrow();
   });
 
   /**

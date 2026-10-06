@@ -47,6 +47,7 @@ async (page) => {
         window.resumeNextEngine = this;
       }
       set source(value) {
+        if (!value) return;
         this.sourceUrl = value.src;
         queueMicrotask(() => {
           // 引擎按 MPD anchor 首次定位，不借用页面 metadata 后的 seek。

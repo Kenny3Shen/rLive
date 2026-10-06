@@ -49,6 +49,7 @@ async (page) => {
         window.nextPreloadEngine = this;
       }
       set source(value) {
+        if (!value) return;
         queueMicrotask(() => {
           this.media.dispatchEvent(new Event('loadedmetadata'));
           this.media.dispatchEvent(new Event('canplay'));

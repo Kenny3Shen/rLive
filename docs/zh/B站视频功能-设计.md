@@ -199,7 +199,7 @@ message DanmakuElem {
 
 - 菜单复用 `PlayerControls` 既有的 `qualities/qualityIndex/onQualityChange` 约定（录制回放同源），不可用档位列出但置灰并提示「登录或大会员后可用」。
 - 切换 = 记录当前位置与播放状态 → 带 `qn` 重取 play-info。新的代理端口 = 新的 MPD 地址，播放器必然重建；DASH 在首次 source 上携带 `#t=秒` 的 MPD anchor，让引擎直接调度目标分片，metadata 回调只恢复播放意图、不再二次 seek。仅音频的原生媒体仍在 metadata 就绪后赋 `currentTime`。
-- 重取期间 `keepPreviousData` 保留旧数据：旧播放器继续播到新信息就位，不黑屏。
+- 重取期间 `keepPreviousData` 保留同内容旧数据：旧播放器继续播到新信息就位，不黑屏。交接时重新读取旧播放器的最新位置与播放/暂停状态，覆盖点击切换时的快照，避免请求期间继续观看、seek 或暂停后被回滚；新播放器尚未建立有效位置就失败时，不用它的 0 秒覆盖断点，后续重试继续沿用原快照。
 
 ### 右侧栏（`VideoSidebar`）
 
@@ -268,7 +268,8 @@ message DanmakuElem {
 
 ### 换集过渡与 seek 边界
 
-- 换集（合集/选集/相关视频跳转，cid 变化）时 `keepPreviousData` 的旧 playInfo 不能沿用：换集过渡（`switchingItem`，用「数据与 cid 对齐时刻」的 cid 比对判定）把 playInfo 抹成 undefined —— 播放器 effect 随之销毁旧实例（旧画面/声音立刻停住，不会先闪旧集首帧）、加载遮罩显示、旧播放错误清空；新集信息就位后重建。换画质/重试（同 cid）仍走旧播放器无缝续播路径。代理会话的停用链走 query 原始数据（不经被抹掉的 playInfo），保持 A→B 连续不泄漏。
+- 换集（合集/选集/相关视频跳转，内容身份变化）时不能沿用旧 playInfo：取流查询结果携带发起时的 `videoKey`，只把身份匹配的数据交给播放器；不匹配时停止旧画面/声音并等待新信息。尤其是 A→B 取流失败→重试，TanStack Query 可能再次给出 A 的 placeholder，不能把失败时的 B 路由身份误当成 A 数据的身份。换画质/重试（同内容）仍走旧播放器无缝续播路径。
+- 取流查询由页面实例独占，关闭窗口聚焦/网络重连引起的隐式刷新；显式切换与重试才新建会话。`VideoPlaybackSessions` 复用在途请求所有权池：查询取消或页面卸载后迟到的 IPC 结果会调用 `video_stop_play`；已提交会话保留到旧引擎清理完成后再释放，失败产生的 `undefined` 不会丢掉旧会话引用。`gcTime: 0` 只负责缓存回收，不能替代代理清理。回归见 `tests/video-playback-lifecycle.test.ts`（真实 QueryObserver 的取消与 placeholder 顺序）和 `tests/video-session-lifecycle.browser.js`（StrictMode 下的真实播放页、可控 IPC/引擎，覆盖交接、失败重试、历史 flush 与卸载迟到结果）。
 - seek 上限离时长留 0.25s 余量：跳到正正好 `duration` 会被媒体元素当成播放结束，留余量让最后一帧真的播出来、再自然触发 ended（自动连播走正常路径）。「跳到最后无限加载不进下一 P」的真正根因是分片表被当成等长展开（见第二章第 3 节第四坑）：末片槽位倒挂 + 逐片偏差累积，插件永远选不中覆盖目标时刻的分片。仅靠这个余量遮不住它 —— 偏差大的稿件在中段 seek 同样会卡死（实测 1069s 稿件跳 500s 即复现）。
 
 ### 跳原址与复制链接（底部 Shell）
@@ -291,7 +292,7 @@ message DanmakuElem {
 - **上报节流**:播放中经 `timeupdate` 上报,间隔 ≥ 5s 且进度 ≥ 3s(点开就退/拖动预览不污染历史);首次越过 3s 立即落一笔「打开过」。暂停、ended(记满时长)、离开播放页(effect 清理)三个时机强制 flush。
 - **续播判定**:`videoResumePosition` 只在「历史停在当前分集(`cid` 比对,取流键 UGC/PGC 都有)且未看完(距片尾 > 5s)」时返回旧位置,否则从 0 起播。DASH 在创建播放器前确定续播位置，并通过 MPD `#t` anchor 交给引擎；避免先下载开头分片再取消、重取 init。仅音频仍等 metadata 后执行原生 seek。两者与换画质续播共用快照和播放意图；续播查询未落定前不建播放器。
 - **跨分 P 续播**:URL 不带 `cid`(首页/搜索/UP 主卡片进入)时,取流键不再一律取详情给的 P1，而是 `videoResumeCid(record, archive)` 给的「上次看的那一 P」——「上次退出的地方」包含「上次看的是哪一 P」。它要求那一 P 确实在 `archive.pages` 里(合集换稿件与脏数据不算)且 `videoResumePosition` 认定有续播位置,否则退回 P1;稿件详情未到时返回 0。`cid <= 0` 期间播放器、播放列表与侧栏 effect 全部按「取流键未就绪」直接返回,否则会先按 P1 建列表再切、把播放列表锚在错误的一集上。落到非首 P 时提示一次「已续播上次观看的 P{n}」(`crossPartNoticeRef` 按 cid 去重,重建播放器不重复提示)。用户明确点过某一集(选集/播放列表/历史卡)时链接一定带 `cid`,这条路径不介入。
-- **身份错位防线**:`historyEntry` 经渲染期 ref 供给播放器 effect(稿件标题/封面晚于播放器就位,闭包捕获会写成空);但只在非空时覆盖——离开播放页的路由切换会先以 `params=null` 再渲染一次,直接赋值会让卸载 flush 读到 null、丢掉最后一段进度。换集后 ref 指向新集,旧实例的 flush 由 `reportedCid` 比对丢弃,不会把旧集进度记到新集身上。
+- **身份错位防线**：每个 `cid` 持有独立的 `VideoPlaybackHistory`，同集标题/封面等晚到元数据可补齐，换集或路由变空不能抹掉旧实例的条目。旧播放器清理时仍用自己的身份 flush 最后进度，既不记到新集，也不因新集 layout 已提交而丢掉旧集最后几秒；尚未恢复有效媒体位置的失败实例不写入假进度。
 - **历史页第三视图**:「观看历史 / 视频历史 / 弹幕历史」三态切换(`view` search 参数)。视频卡片显示封面(缺省回退图标)、时长标签、底边进度条、「已看到 X / Y」与分集副行;点击整卡带着 `cid` 续播进播放页;单条删除乐观更新,清空有确认弹窗。视频只有 B 站一个来源,不参与平台筛选,`historyGrouping` 因此拆成 `filterHistoryBySite`(带 `site_id` 的时间线用)+ `groupHistoryByDate`(通用按日分组)。
 - **时间线窗口化**:三个视图的时间线共用 `HistoryTimeline`(`@tanstack/react-virtual`)。日期分组先由 `flattenHistoryTimeline` 拍平成「标题行 + 记录行」的线性序列,标题因此和记录一起参与同一次窗口计算。滚动容器是 Shell 的 `app-page` 而不是列表自己(整页滚动含筛选行与下拉刷新,列表另开视口会出现双滚动条),所以必须把列表在该容器内容中的起始偏移交给 `scrollMargin`——用 `offsetTop` 逐级累加得出,不用 `getBoundingClientRect` 相减:外层页面平移与横滑 track 都在祖先上留着 transform,rect 会把这些位移算进去而 `scrollTop` 不会,混用两套坐标系会让窗口整体错位。行距不靠 flex `gap`,改由每行自带上内边距:行是绝对定位的,间距必须计入被测高度,否则测量值小于实际占位、越滚越偏。非当前页签的时间线高度收为 0(`active`),否则三个面板同挂载时页面高度被最长的那个撑起,切到较短视图会留下大片空白滚动区。
 - **滚动表面与窗口/元素双模式**:要虚拟化的表面由 `resolveHistoryScrollElement` 决定——优先最近的纵向可滚动祖先(历史页里是 Shell 的 `app-page`),没有则退回文档滚动元素;文档滚动时 `documentElement.scrollTop` 本身就是窗口滚动位置,同一条路径因此同时覆盖元素滚动与窗口滚动,列表自己仍不开滚动容器。两种模式的差别只在观察器:文档滚动元素是 `<html>`,`offsetHeight` 是整篇文档高而非视口高,必须改报 `innerHeight`;其 `scroll` 事件派发在 `window` 上而不是元素上,偏移观察也要改听 `window`(`observeHistoryRect` / `observeHistoryOffset`)。
