@@ -32,10 +32,14 @@ async (page) => {
       return h(
         "section",
         { "data-test-player": location.search },
-        h("div", {
-          "data-player-stage": true,
-          "data-fullscreen": fullscreen ? "true" : undefined,
-        }, h("video")),
+        h(
+          "div",
+          {
+            "data-player-stage": true,
+            "data-fullscreen": fullscreen ? "true" : undefined,
+          },
+          h("video"),
+        ),
         location.search,
       );
     }
@@ -146,18 +150,26 @@ async (page) => {
       await navigate(1, 2);
       const forward = animations()[0];
       assert(forward?.keyframes[0].transform === "scale(0.96)", "历史前进被误判为返回");
-      // 动画未完成立即返回，旧动画须取消，不能在旧 finished 回调里清掉新动画。
+      // 动画未完成立即返回：沿当前合成帧接管，而不是跳回预设反向起点。
+      const beforeInterrupt = getComputedStyle(forward.element).transform;
       await navigate(-1, 1);
       const interrupted = animations()[0];
       assert(interrupted && forward.animation.playState === "idle", "快速返回未接管旧动画");
-      assert(interrupted.keyframes[0].transform === "scale(1.02)", "快速返回方向不对");
+      assert(
+        getComputedStyle(interrupted.element).transform === beforeInterrupt,
+        "快速返回跳离当前合成位置",
+      );
       await settle();
       passed.push("POP 前进方向正确，快速返回取消旧动画");
 
       ui.flushSync(() => setFullscreen(true));
       await navigate(1, 2);
       assert(animations().length === 0 && video() === instance, "全屏换片触发了祖先缩放/重挂载");
-      assert(scope().lastElementChild.style.transform === "" && scope().lastElementChild.style.willChange === "", "全屏舞台仍有变换的包含块");
+      assert(
+        scope().lastElementChild.style.transform === "" &&
+          scope().lastElementChild.style.willChange === "",
+        "全屏舞台仍有变换的包含块",
+      );
       await navigate(-1, 1);
       assert(animations().length === 0, "全屏内返回仍触发缩放");
       ui.flushSync(() => setFullscreen(false));

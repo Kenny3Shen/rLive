@@ -117,7 +117,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 | 桌面 enter / exit | `0.28s` | 页面成对平移，进出必须同拍 |
 | 触控 enter / exit | `0.32s` | 大幅导航快速到达可读位置，尾段平滑减速 |
 | `roomZoom` | 桌面 `0.30s`，触摸 `0.34s` | 直播间进出共用同一时长（比整页平移略长） |
-| `ROOM_ZOOM_START_SCALE` / `BACKDROP_SCALE` / `EXIT_RATIO` | `0.96` / `1.02` / `0.72` | Zoom 起始缩放、退出时目标页起始缩放、离场补间占总时长比例 |
+| `ROOM_ZOOM_START_SCALE` / `ROOM_ZOOM_BACKDROP_SCALE` | `0.96` / `1.02` | 没有来源窗口时的轻缩放起点；方向性历史前进使用较浅的 `1.02` 反向深度 |
 | `PAGE_PAN_PERCENT` | `110%` | 横向页面清除 padding 边缘残影 |
 | `SWIPE_SETTLE_EASING` | `cubic-bezier(0.215, 0.61, 0.355, 1)` | 保留跟手释放初速度，不跟随从静止入场的曲线变化 |
 | 手势收尾时长 | `horizontalSwipeSettleDuration()`，钳制 `170ms ~ 400ms` | 由剩余距离与释放速度推导，不是常量 |
@@ -146,15 +146,14 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 
 `src/shared/motion/PageZoom.tsx` 覆盖 `/room/*`、`/iptv/play`、`/video/play` 与两条竖屏流，`zoomKey` 取各自 pathname，因此两者之间切换不会被当成同一页而跳过过渡。沉浸式播放页只有 Zoom 一层路由动画：`Shell` 沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支。
 
-VOD 播放页进出因此与直播间共用同一段运动：进入时列表退去、播放页从 `0.96` 长到 `1`，返回时播放页缩回 `0.96` 并淡出、列表在下方展开 —— 方向与进入一致，可反向解读。离场层里的播放页由 `RouterScope` 冻结路由上下文后仍带着自己的 `?bvid=…` 参数与正在播放的画面（见 4.3）。
+沉浸式播放页由 `PageZoom` 覆盖。从可定位的播放卡片进入时，播放 subtree 从该卡片在 `PageZoom` 视口中的归一化矩形展开，来源列表保留在下方且滚动位置不重置；返回时列表先按路由滚动记忆恢复，活跃播放器再缩回匹配的卡片。来源卡片暂不可用时用进入时记忆的归一化窗口，深链接或无来源入口沿用中心轻缩放。`data-player-origin` 是稳定的卡片身份；不要将列表索引、播放时间等易变数据作为来源身份。
 
-- 进入：`scale 0.96 -> 1` + `opacity 0 -> 1`，浏览列表已立即卸载。完成后清除 transform、opacity、visibility、transform origin 与 `will-change`，保证全屏播放器没有永久 transformed ancestor。
-- 退出：双层交叉溶解，两条补间从时间 `0` 同时开始。离场 subtree 保持挂载执行 `scale 1 -> 0.96` + `opacity 1 -> 0`，只跑 `duration × 0.72` 以形成重叠，避免视口中间穿过一帧全空画面；目标页 `scale 1.02 -> 1` + `opacity 0 -> 1` 展开，反向缩放刻意比 `0.96` 更贴近 `1`，因为它是背景而非主体。
-- VOD 同路径层级（`/video/play?bvid=A → B → C`）：`zoomKey` 保持 pathname，另外用 `motionKey` 跟随浏览器历史 `idx`，动画身份与播放器挂载身份分离。PUSH 或 POP 前进从 `0.96` 展开，POP 返回从 `1.02` 回到 `1`，两者均淡入；只重播现有层的动画，不创建双播放器。REPLACE 补齐参数不改变历史索引，不重播。全屏期间同路径换片也跳过缩放：Tauri 的 fixed 舞台不是 top layer，不能让祖先的 transform 改变其包含块。方向更新不能只放在 pathname 改变分支里。同路径返回复用播放器，不宣称保留前一视频的画面做交叉淡化。回归 `tests/vod-navigation-motion.browser.js` 覆盖三层往返、REPLACE、快速返回、减少动态效果、媒体节点复用与最后离场。
-- 退出期间入场节点带 `bg-background`（否则离场直播间会透过淡入中的目标页继续可见）；两个节点在过渡期都 `pointer-events: none`。
-- 离场 subtree 在两条补间都完成后才卸载，且不先恢复 opacity。删除前两道防闪措施：先 `commitStyles()` 把离场结束帧固化为内联样式再 cancel（否则 cancel 撤销 fill 的瞬间节点会以完全不透明重现）；再撤销离场层的 `will-change` 提升并等一帧合成后才移除子树（部分 WebView 会把该合成层的旧纹理再合成一两帧）。
+- 入场：`translate + scale` 从来源矩形到全视口，使用 WAAPI transform/opacity，不改变布局尺寸；播放层位于来源列表之上。空间动画遵循 `prefers-reduced-motion`，全屏期间不变换舞台祖先，结束后清除合成样式。
+- 退出：旧播放 subtree 连同冻结路由上下文留在离场层；目标列表恢复后按卡片身份读取当前位置，若卡片未挂载则退回进入时窗口。播放器反向缩放并淡出，目标列表保持静止；退出动画结束后先隐藏离场层、释放合成层，再卸载播放器。
+- VOD 同路径层级（`/video/play?bvid=A → B → C`）：`zoomKey` 保持 pathname，另外用 `motionKey` 跟随浏览器历史 `idx`，动画身份与播放器挂载身份分离。PUSH / POP 前进仍从来源卡片或轻缩放展开，POP 返回沿当前帧反向接管；REPLACE 补齐参数不重播。全屏期间同路径换片也跳过缩放。回归 `tests/vod-navigation-motion.browser.js` 覆盖三层往返、REPLACE、快速返回、减少动态效果与媒体节点复用；`tests/page-zoom-origin.browser.js` 覆盖来源矩形、滚动恢复、缺失卡片、键盘入口及减少动态效果。
+- 快速反向导航从当前合成 transform/opacity 接管，不跳回预设起点；离场层使用 `inert` 与 `aria-hidden`，动画取消、结束与卸载均清理 `will-change` 和 WAAPI。
 
-房间 A 通过右侧关注栏切到房间 B 时使用 replace，B 的返回目标固定为 `/follow`，退出仍由同一个 `PageZoom` 处理。
+来源身份目前覆盖直播、IPTV、视频、番剧、历史与短视频入口。房间 A 通过右侧关注栏切到房间 B 时使用 replace，B 的返回目标固定为 `/follow`；若目标列表没有相同卡片身份，则退回进入时记忆的窗口或轻缩放。
 
 ### 4.5 `useHorizontalSwipe`：横向手势
 

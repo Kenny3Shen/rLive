@@ -328,6 +328,7 @@ function FollowCard({
       <button
         ref={setActivatorNodeRef}
         type="button"
+        data-player-origin={`${user.site_id}:${user.room_id}`}
         className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing"
         aria-label={`打开${user.user_name}的直播间，可拖动卡片或通过菜单移动分组`}
         onPointerEnter={() => preloadRouteModule(roomPath)}

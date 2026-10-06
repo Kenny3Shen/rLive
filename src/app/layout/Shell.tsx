@@ -526,7 +526,8 @@ export function Shell() {
     const previousEntryKey = previousEntryKeyRef.current;
     previousSurfaceKeyRef.current = surfaceKey;
     previousEntryKeyRef.current = location.key;
-    if (previousSurfaceKey === surfaceKey) return;
+    if (previousSurfaceKey === surfaceKey || isImmersivePlayer) return;
+    // PageZoom 入场时短暂保留列表作背景，不能把它当作新播放页的滚动器归零。
 
     const scroller = pageScrollRef.current;
     if (!scroller) return;
@@ -619,7 +620,7 @@ export function Shell() {
       if (frame !== null) window.cancelAnimationFrame(frame);
       endRestore();
     };
-  }, [location.key, navigationType, surfaceKey]);
+  }, [isImmersivePlayer, location.key, navigationType, surfaceKey]);
 
   // 移动端底部导航原子式换页。保留离场的 ReactNode 曾让它最后选中的平台在退出
   // 层移除时多显示一个合成帧。桌面端保留方向性页面平移。

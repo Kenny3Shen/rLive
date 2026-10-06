@@ -131,6 +131,7 @@ type HistoryCardProps = {
  */
 function HistoryCardShell({
   title,
+  playerOrigin,
   preloadPath,
   onOpen,
   onRemove,
@@ -142,6 +143,8 @@ function HistoryCardShell({
 }: {
   /** 卡片标题；删除按钮的 aria-label 复用它。 */
   title: string;
+  /** 稳定卡片标识，不包含观看时间或进度，供播放页动效回退定位。 */
+  playerOrigin: string;
   /** 指针悬停 / 键盘聚焦时预加载的路由。 */
   preloadPath: string;
   onOpen: () => void;
@@ -158,6 +161,7 @@ function HistoryCardShell({
     <div
       role="button"
       data-motion-press
+      data-player-origin={playerOrigin}
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(event) => {
@@ -224,6 +228,7 @@ function HistoryCard({ item, onOpen, onRemove, isRemoving }: HistoryCardProps) {
   return (
     <HistoryCardShell
       title={title}
+      playerOrigin={`history:room:${item.site_id}:${item.room_id}`}
       preloadPath={roomPath}
       onOpen={onOpen}
       onRemove={onRemove}
@@ -292,6 +297,7 @@ function VideoHistoryCard({ item, onOpen, onRemove, isRemoving }: VideoHistoryCa
   return (
     <HistoryCardShell
       title={title}
+      playerOrigin={`history:video:${item.kind}:${item.oid}`}
       preloadPath={playPath}
       onOpen={onOpen}
       onRemove={onRemove}

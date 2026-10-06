@@ -308,6 +308,7 @@ function IptvChannelCard({
       >
         <button
           type="button"
+          data-player-origin={`iptv:channel:${encodeURIComponent(iptvCheckIdentity(channel))}`}
           onClick={() => onOpen(channel)}
           onPointerEnter={() => preloadRouteModule("/iptv/play")}
           onPointerDown={() => preloadRouteModule("/iptv/play")}

@@ -40,6 +40,7 @@ export function ShortsHomePage() {
           <Link
             key={siteId}
             to={to}
+            data-player-origin={`shorts:${siteId}`}
             aria-label={title}
             className="rounded-xl outline-none hover:ring-2 hover:ring-primary/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >

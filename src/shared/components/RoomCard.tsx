@@ -296,6 +296,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
           {...cardButtonProps}
           data-motion-press
           data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
+          data-player-origin={`${room.site_id}:${room.room_id}`}
         >
           {cardBody}
         </button>
@@ -366,6 +367,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             {...cardButtonProps}
             data-motion-press
             data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
+            data-player-origin={`${room.site_id}:${room.room_id}`}
           />
         }
       >

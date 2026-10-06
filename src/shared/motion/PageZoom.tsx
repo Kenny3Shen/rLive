@@ -1,45 +1,39 @@
-import { startTransition, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  startTransition,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { cn } from "@/lib/utils";
 import { RouterScope, useFrozenRouter, type FrozenRouter } from "./FrozenRouter";
 import { clearMotionStyles } from "./tween";
 import { motionProfile, prefersReducedMotion } from "./tokens";
+import {
+  readZoomOrigin,
+  resolveZoomOrigin,
+  zoomRectTransform,
+  type PageZoomOrigin,
+} from "./pageZoomOrigin";
 
-/**
- * 沉浸页进入时的起始缩放，退出时回归的目标。
- *
- * 两个方向共用它，使过渡成为一段可正向也可反向解读的运动：进入时房间从 0.96
- * 长到 1、浏览列表退去；离开时房间缩回 0.96、列表浮现。若退出反而放大，
- * 会被读作第二次无关的推入。
- */
+/** 深链接和同路径换片没有可收回的来源窗口，保留轻量纵深反馈。 */
 const ROOM_ZOOM_START_SCALE = 0.96;
-/**
- * 房间在其上方缩走时目的地由该缩放浮现。
- *
- * 只有退出才有第二层要动：房间的活跃子树在退出期间被保留正是为了让它可以动画，
- * 而进入时浏览列表立即卸载、房间是屏幕上唯一的表面。
- *
- * 刻意比 `ROOM_ZOOM_START_SCALE` 更接近 1。目的地是背景而不是主角，
- * 给它与离开房间相同的行程会让两层看似移动同样距离，
- * 抹平缩放想表达的纵深感。
- */
 const ROOM_ZOOM_BACKDROP_SCALE = 1.02;
-/**
- * 离场页用于淡出的过渡占比。
- *
- * 退出补间比进入短以便两者重叠：旧页清场时新页已在浮现，
- * 而不是视口在两页之间穿过一帧完全空白。
- */
-const ROOM_ZOOM_EXIT_RATIO = 0.72;
+const ORIGIN_MEMORY_LIMIT = 64;
 
 type ZoomSnapshot = {
   key: string;
   node: ReactNode;
   enabled: boolean;
+  origin: PageZoomOrigin | null;
   /** 离场页面必须带着自己那一刻的路由上下文，见 `FrozenRouter`。 */
   router: FrozenRouter;
 };
 
-/** 缩放进入房间，缩放退出期间保持其活跃子树挂载。 */
+/** 从来源窗口展开播放页，返回时让同一个活跃播放器缩回该窗口。 */
 export function PageZoom({
   zoomKey,
   enabled,
@@ -61,13 +55,26 @@ export function PageZoom({
   const scopeRef = useRef<HTMLDivElement>(null);
   const incomingRef = useRef<HTMLDivElement>(null);
   const outgoingRef = useRef<HTMLDivElement>(null);
-  const { location, route } = useFrozenRouter();
+  const pendingOriginRef = useRef<{
+    origin: PageZoomOrigin;
+    entryKey: string;
+    time: number;
+  } | null>(null);
+  const originMemoryRef = useRef(new Map<string, PageZoomOrigin | null>());
+  const interruptedRef = useRef(new WeakMap<HTMLElement, Keyframe>());
+  const lastEntryRef = useRef<string | null>(null);
+  const { location: locationContext, route } = useFrozenRouter();
+  const location = locationContext.location;
   // 上下文对象在路由变化时才换身份，因此可以用作快照副作用的依赖。
-  const router = useMemo<FrozenRouter>(() => ({ location, route }), [location, route]);
+  const router = useMemo<FrozenRouter>(
+    () => ({ location: locationContext, route }),
+    [locationContext, route],
+  );
   const committedRef = useRef<ZoomSnapshot>({
     key: zoomKey,
     node: children,
     enabled,
+    origin: null,
     router,
   });
   const [transition, setTransition] = useState<{
@@ -81,163 +88,190 @@ export function PageZoom({
       // 渲染期状态调整是 React 官方模式；committedRef 只在提交后的 layout effect
       // 里推进（见下），被丢弃的并发渲染不会污染它。规则无法表达这一刻意设计。
       // oxlint-disable-next-line react/refs
-      outgoing: committedRef.current.enabled && !enabled ? committedRef.current : null,
+      outgoing: committedRef.current.enabled !== enabled ? committedRef.current : null,
     });
   }
 
   const outgoing = transition.renderedKey === zoomKey ? transition.outgoing : null;
+  const page = `${location.pathname}${location.search}${location.hash}`;
+
+  const captureOrigin = (event: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>) => {
+    if ("key" in event && event.key !== "Enter" && event.key !== " ") return;
+    pendingOriginRef.current = null;
+    if (
+      enabled ||
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey
+    )
+      return;
+    if ("button" in event && event.button !== 0) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const card = target?.closest<HTMLElement>("[data-player-origin]");
+    const control = target?.closest("button, a, input, select, textarea, [role=button]");
+    const scope = scopeRef.current;
+    // 卡内的收藏/菜单不是播放入口，不能污染随后一次程序导航的来源。
+    if (!card || !scope?.contains(card) || (control && control !== card)) return;
+    const origin = readZoomOrigin(card, scope, page);
+    if (origin)
+      pendingOriginRef.current = { origin, entryKey: location.key, time: performance.now() };
+  };
 
   useLayoutEffect(() => {
-    // 渲染期间修改的 refs 能在被放弃的并发渲染中幸存。让退出来源绑定到 React
-    // 实际提交的那一页。
-    committedRef.current = { key: zoomKey, node: children, enabled, router };
-  }, [children, enabled, router, zoomKey]);
+    // 仅提交时推进快照与来源记忆；REPLACE 补参、同路径换片沿用外层入口。
+    const previous = committedRef.current;
+    const pending = pendingOriginRef.current;
+    let origin: PageZoomOrigin | null = null;
+    if (enabled) {
+      origin = previous.enabled
+        ? previous.origin
+        : (originMemoryRef.current.get(location.key) ?? null);
+      if (
+        !previous.enabled &&
+        pending?.entryKey === previous.router.location.location.key &&
+        performance.now() - pending.time < 1500
+      ) {
+        origin = pending.origin;
+      }
+      originMemoryRef.current.set(location.key, origin);
+      while (originMemoryRef.current.size > ORIGIN_MEMORY_LIMIT) {
+        originMemoryRef.current.delete(originMemoryRef.current.keys().next().value!);
+      }
+    }
+    if (previous.router.location.location.key !== location.key) pendingOriginRef.current = null;
+    committedRef.current = { key: zoomKey, node: children, enabled, origin, router };
+  }, [children, enabled, location.key, router, zoomKey]);
 
   useLayoutEffect(() => {
     let disposed = false;
-    let releaseFrame: number | null = null;
-    const releaseAfterFinalFrame = (callback: () => void) => {
-      const release = () => {
-        releaseFrame = null;
+    let settled = false;
+    let frame: number | null = null;
+    const animations: { element: HTMLElement; animation: Animation }[] = [];
+    const nextFrame = (callback: () => void) => {
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
         callback();
-      };
-      releaseFrame = window.requestAnimationFrame(release);
+      });
     };
-
     const dropOutgoing = () => {
       setTransition((current) =>
         current.outgoing === outgoing ? { ...current, outgoing: null } : current,
       );
     };
-
-    if (outgoing) {
-      const leaving = outgoingRef.current;
-      if (!leaving) return;
-      if (prefersReducedMotion()) {
-        dropOutgoing();
-        return;
-      }
-
-      const { duration, ease } = motionProfile().roomZoom;
-      const incomingPage = incomingRef.current;
-      const animations: Animation[] = [];
-
-      // 离开房间就是倒放的进入：房间收缩回它长出来的缩放，
-      // 目的地从它退到的反向缩放中扩张出来。两层各自一条补间、
-      // 从时间 0 同时开始。该节点即将卸载，结束后不清理它的行内样式——
-      // 恢复 opacity/visibility 会让活跃房间在 React 移除它之前重现一帧。
-      leaving.style.willChange = "transform,opacity";
-      leaving.style.transformOrigin = "50% 50%";
-      animations.push(
-        leaving.animate(
-          [
-            { opacity: 1, transform: "scale(1)" },
-            { opacity: 0, transform: `scale(${ROOM_ZOOM_START_SCALE})` },
-          ],
-          {
-            duration: duration * ROOM_ZOOM_EXIT_RATIO * 1000,
-            easing: ease,
-            fill: "both",
-          },
-        ),
-      );
-
-      if (incomingPage) {
-        incomingPage.style.willChange = "transform,opacity";
-        incomingPage.style.transformOrigin = "50% 50%";
-        animations.push(
-          incomingPage.animate(
-            [
-              { opacity: 0, transform: `scale(${ROOM_ZOOM_BACKDROP_SCALE})` },
-              { opacity: 1, transform: "scale(1)" },
-            ],
-            { duration: duration * 1000, easing: ease, fill: "both" },
-          ),
-        );
-      }
-
-      // 等整段交叉淡化结束再卸载离开的房间，而不是等它自己较短的补间结束：
-      // React 在过渡中途移除活跃播放器会表现为其后仍在动画的表面上的一次卡顿。
-      void Promise.all(animations.map((animation) => animation.finished))
-        .then(() => {
-          if (disposed) return;
-          releaseAfterFinalFrame(() => {
-            // 撤销前先把结束帧固化为内联样式：leaving 的 opacity:0 若被 cancel
-            // 直接撤销，会在 React 移除它之前的一两帧里以自然态（完全不透明）
-            // 重新出现——表现为退出直播间时闪现残留画面（与 PagePan 的
-            // commitStyles 同源问题）。
-            for (const animation of animations) {
-              try {
-                animation.commitStyles();
-              } catch {
-                // 较旧 WebView 缺少 commitStyles()；保持 fill 持有。
-              }
-              animation.cancel();
-            }
-            if (incomingPage) clearMotionStyles(incomingPage);
-            // 撤销离场层的 will-change 提升并等一帧合成：整页离场内容曾是一块
-            // 独立合成层，React 移除子树的瞬间部分 WebView 会把该层的旧纹理
-            // 再合成一两帧（表现为退出后闪现残留画面，即使它的 opacity 已为
-            // 0）。先降级回普通绘制、让合成器在没有这层的状态下出一帧，
-            // 再移除子树，销毁时就没有可闪的层。
-            leaving.style.willChange = "";
-            releaseAfterFinalFrame(() => startTransition(dropOutgoing));
-          });
-        })
-        .catch(() => {
-          // 导航中途再次变化时预期发生取消。
-        });
-
-      return () => {
-        disposed = true;
-        for (const animation of animations) animation.cancel();
-        if (incomingPage) clearMotionStyles(incomingPage);
-        if (releaseFrame !== null) window.cancelAnimationFrame(releaseFrame);
-      };
-    }
-
     const incoming = incomingRef.current;
-    if (!incoming || !enabled || prefersReducedMotion()) return;
-    // 同路径换片会重播动画，但全屏期间不能变换舞台祖先。Tauri 的全屏舞台是
-    // fixed 层而非 top layer，父级 transform/will-change 会改其包含块、短暂缩屏。
-    // 此处读已提交的 DOM（子页 layout effects 已执行），不另建一份全屏状态。
+    const leaving = outgoingRef.current;
+    const scope = scopeRef.current;
+    if (!incoming || !scope) return;
+    const exiting = !!outgoing?.enabled;
+    if (!enabled) lastEntryRef.current = null;
+    const entryKey = `${zoomKey}\u001f${motionKey}`;
+    if (!exiting && (!enabled || lastEntryRef.current === entryKey)) return;
+    if (!exiting) lastEntryRef.current = entryKey;
+
+    // fixed 全屏舞台不能有 transformed ancestor；reduced-motion 直接落位。
     if (
-      (document.fullscreenElement && incoming.contains(document.fullscreenElement)) ||
-      incoming.querySelector('[data-player-stage][data-fullscreen="true"]')
+      prefersReducedMotion() ||
+      (document.fullscreenElement && scope.contains(document.fullscreenElement)) ||
+      scope.querySelector('[data-player-stage][data-fullscreen="true"]')
     ) {
+      if (outgoing) dropOutgoing();
       return;
     }
 
+    const interruptedFrames = interruptedRef.current;
     const { duration, ease } = motionProfile().roomZoom;
-    incoming.style.willChange = "transform,opacity";
-    incoming.style.transformOrigin = "50% 50%";
-    const animation = incoming.animate(
-      [
+    const animate = (element: HTMLElement, keyframes: Keyframe[]) => {
+      const interrupted = interruptedFrames.get(element);
+      interruptedFrames.delete(element);
+      if (interrupted) keyframes[0] = interrupted;
+      clearMotionStyles(element);
+      element.style.willChange = "transform,opacity";
+      element.style.transformOrigin = "50% 50%";
+      const animation = element.animate(keyframes, {
+        duration: duration * 1000,
+        easing: ease,
+        fill: "both",
+      });
+      animations.push({ element, animation });
+    };
+    const finish = () => {
+      void Promise.all(animations.map(({ animation }) => animation.finished))
+        .then(() => {
+          if (disposed) return;
+          nextFrame(() => {
+            settled = true;
+            // 离场先隐藏再 cancel，即使 WebView 没有 commitStyles 也不会闪回原画面。
+            if (leaving) leaving.style.visibility = "hidden";
+            for (const { element, animation } of animations) {
+              animation.cancel();
+              clearMotionStyles(element);
+            }
+            if (leaving) {
+              leaving.style.visibility = "hidden";
+              leaving.style.willChange = "";
+              // 等合成器释放旧纹理，再卸载路由冻结的活跃 subtree。
+              nextFrame(() => startTransition(dropOutgoing));
+            }
+          });
+        })
+        .catch(() => {
+          /* 快速导航取消旧动画。 */
+        });
+    };
+
+    if (exiting && leaving) {
+      // 等 Shell 的 layout effect 恢复滚动后再读目标卡片，背景保持静止，
+      // 避免缩回目标自身也在移动。离场仍保留原播放器及其旧路由参数。
+      nextFrame(() => {
+        const destination = committedRef.current.router.location.location;
+        const rect = resolveZoomOrigin(
+          outgoing.origin,
+          `${destination.pathname}${destination.search}${destination.hash}`,
+          incoming,
+          scope,
+        );
+        const target = rect ? zoomRectTransform(rect) : `scale(${ROOM_ZOOM_START_SCALE})`;
+        animate(leaving, [
+          { opacity: 1, transform: "scale(1)" },
+          { opacity: 0.9, offset: 0.75 },
+          { opacity: 0, transform: target },
+        ]);
+        finish();
+      });
+    } else {
+      // 只有从普通页展开才使用卡片来源；同路径换片仍复用唯一媒体节点。
+      const origin = outgoing && !outgoing.enabled ? committedRef.current.origin : null;
+      animate(incoming, [
         {
-          opacity: 0,
-          transform: `scale(${direction < 0 ? ROOM_ZOOM_BACKDROP_SCALE : ROOM_ZOOM_START_SCALE})`,
+          opacity: origin ? 0.45 : 0,
+          transform: origin
+            ? zoomRectTransform(origin.rect)
+            : `scale(${direction < 0 ? ROOM_ZOOM_BACKDROP_SCALE : ROOM_ZOOM_START_SCALE})`,
         },
         { opacity: 1, transform: "scale(1)" },
-      ],
-      { duration: duration * 1000, easing: ease, fill: "both" },
-    );
-    void animation.finished
-      .then(() => {
-        if (disposed) return;
-        releaseAfterFinalFrame(() => {
-          animation.cancel();
-          clearMotionStyles(incoming);
-        });
-      })
-      .catch(() => {
-        // 过渡中途被替换时预期发生取消。
-      });
+      ]);
+      finish();
+    }
 
     return () => {
       disposed = true;
-      animation.cancel();
-      clearMotionStyles(incoming);
-      if (releaseFrame !== null) window.cancelAnimationFrame(releaseFrame);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      for (const { element, animation } of animations) {
+        // React 按 key 原样移动节点。中断时只采样一次合成位置，反向从当前帧接管。
+        if (!settled && element.isConnected) {
+          const style = getComputedStyle(element);
+          interruptedFrames.set(element, {
+            transform: style.transform,
+            opacity: style.opacity,
+          });
+        }
+        animation.cancel();
+        clearMotionStyles(element);
+      }
+      // StrictMode 的副作用重放需要重新启动；自然清理背景层则不能重播入场。
+      if (!settled && !exiting) lastEntryRef.current = null;
     };
   }, [direction, enabled, motionKey, outgoing, zoomKey]);
 
@@ -246,14 +280,20 @@ export function PageZoom({
       ref={scopeRef}
       className={cn("relative flex h-full min-h-0 min-w-0", className)}
       data-slot="page-zoom"
-      data-transitioning={outgoing ? "exit" : enabled ? "enter" : undefined}
+      data-transitioning={outgoing?.enabled ? "exit" : enabled ? "enter" : undefined}
+      onClickCapture={captureOrigin}
+      onKeyDownCapture={captureOrigin}
     >
       {outgoing && (
         <div
           ref={outgoingRef}
           key={outgoing.key}
           aria-hidden
-          className="pointer-events-none absolute inset-0 z-10 flex min-h-0 min-w-0 bg-background"
+          inert
+          className={cn(
+            "pointer-events-none absolute inset-0 flex min-h-0 min-w-0 bg-background",
+            outgoing.enabled && "z-10",
+          )}
         >
           <RouterScope value={outgoing.router}>{outgoing.node}</RouterScope>
         </div>
@@ -263,9 +303,10 @@ export function PageZoom({
         key={zoomKey}
         className={cn(
           "relative flex h-full min-h-0 min-w-0 flex-1",
-          // 退出期间本页在离开房间下方从透明淡入，因此需要自己的底层：
-          // 没有它，交叉淡化期间房间会透过目的地一直可见。
-          outgoing && "pointer-events-none bg-background",
+          // 播放页盖住静止的来源列表，返回时则在列表上方缩走。
+          outgoing && "bg-background",
+          outgoing?.enabled && "pointer-events-none",
+          outgoing && !outgoing.enabled && "z-10",
         )}
       >
         {/* 两侧必须是同一种包裹元素，React 才会把上一帧的层原样搬进离场位；

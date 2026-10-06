@@ -336,6 +336,7 @@ export const VideoCard = memo(function VideoCard({
         {...cardButtonProps}
         data-motion-press
         data-page-scroll-anchor={`video:${item.bvid}:${item.cid ?? ""}`}
+        data-player-origin={`video:${item.bvid}:${item.cid ?? ""}`}
       >
         {cardBody}
       </button>
@@ -349,6 +350,7 @@ export const VideoCard = memo(function VideoCard({
           {...cardButtonProps}
           data-motion-press
           data-page-scroll-anchor={`video:${item.bvid}:${item.cid ?? ""}`}
+          data-player-origin={`video:${item.bvid}:${item.cid ?? ""}`}
           onPointerDown={cardDrawer.onPointerDown}
           onPointerMove={cardDrawer.onPointerMove}
           onPointerUp={cardDrawer.onPointerUp}
@@ -388,6 +390,7 @@ export const VideoCard = memo(function VideoCard({
             {...cardButtonProps}
             data-motion-press
             data-page-scroll-anchor={`video:${item.bvid}:${item.cid ?? ""}`}
+            data-player-origin={`video:${item.bvid}:${item.cid ?? ""}`}
           />
         }
       >
@@ -423,6 +426,7 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
       type="button"
       data-motion-press
       data-page-scroll-anchor={`pgc:${item.season_id}`}
+      data-player-origin={`pgc:${item.season_id}`}
       aria-label={`${item.title}${item.index_show ? `，${item.index_show}` : ""}`}
       onPointerEnter={() => preloadRouteModule(playPath)}
       onFocus={() => preloadRouteModule(playPath)}

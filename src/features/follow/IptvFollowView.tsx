@@ -226,6 +226,7 @@ function IptvFavoriteCard({
       <button
         ref={setActivatorNodeRef}
         type="button"
+        data-player-origin={`iptv:favorite:${encodeURIComponent(favorite.source_id)}:${encodeURIComponent(favorite.url)}`}
         className="absolute inset-0 cursor-grab rounded-xl outline-none active:cursor-grabbing"
         aria-label={`播放 ${favorite.name}，可拖动卡片或通过菜单移动分组`}
         onPointerEnter={() => preloadRouteModule("/iptv/play")}
