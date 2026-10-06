@@ -341,14 +341,15 @@ pub async fn video_preload_next(
         "video/mp4",
         &selection.video,
     );
-    let audio = preload_track(
-        &client,
-        &store,
-        &headers,
-        &audio_prefix,
-        "audio/mp4",
-        &selection.audio,
-    );
+    // 无声稿件没有音轨，视为音轨预热成功。
+    let audio = async {
+        match selection.audio.as_ref() {
+            Some(audio) => {
+                preload_track(&client, &store, &headers, &audio_prefix, "audio/mp4", audio).await
+            }
+            None => true,
+        }
+    };
     let (video, audio) = tokio::join!(video, audio);
     Ok(video && audio)
 }
@@ -489,13 +490,16 @@ pub async fn video_get_play_info(
             segment_ranges(&selection.video),
         ))
     });
-    let audio_cache = media_cache_store.as_ref().map(|_| {
-        std::sync::Arc::new(crate::media_cache::MediaCacheSpec::new(
-            format!("{cache_prefix}:a"),
-            "audio/mp4",
-            segment_ranges(&selection.audio),
-        ))
-    });
+    let audio_cache = media_cache_store
+        .as_ref()
+        .zip(selection.audio.as_ref())
+        .map(|(_, audio)| {
+            std::sync::Arc::new(crate::media_cache::MediaCacheSpec::new(
+                format!("{cache_prefix}:a"),
+                "audio/mp4",
+                segment_ranges(audio),
+            ))
+        });
 
     // init 段预取落盘。它已随 sidx 一起取回（见 `video_track` 的合并 Range），
     // 在这里写进分片缓存，播放器的 `<Initialization range="0-N">` 请求就命中
@@ -506,10 +510,12 @@ pub async fn video_get_play_info(
     // 要等 playurl 返回才会发起请求 —— 落空只会退回上游，不影响正确性。
     if let Some(store) = media_cache_store.clone() {
         for (spec, track) in [
-            (video_cache.clone(), &selection.video),
-            (audio_cache.clone(), &selection.audio),
+            (video_cache.clone(), Some(&selection.video)),
+            (audio_cache.clone(), selection.audio.as_ref()),
         ] {
-            let Some(spec) = spec else { continue };
+            let (Some(spec), Some(track)) = (spec, track) else {
+                continue;
+            };
             let Some(key) = spec.key_for_range(0, track.init_end) else {
                 continue;
             };
@@ -521,28 +527,37 @@ pub async fn video_get_play_info(
 
     // 会话内保留已预取的 init：普通 VOD 即使关闭磁盘缓存，也无需再向 CDN 取一次。
     // 原生媒体元素的非精确 Range 仍由代理正常回源。
-    let audio_initialization = PrefetchedInitialization {
-        bytes: selection.audio.init_bytes.as_slice().into(),
-        content_type: "audio/mp4",
-    };
+    let audio_initialization = selection
+        .audio
+        .as_ref()
+        .map(|audio| PrefetchedInitialization {
+            bytes: audio.init_bytes.as_slice().into(),
+            content_type: "audio/mp4",
+        });
 
     // 仅音频模式（听视频）不起视频轨代理，也不合成 MPD：音轨 fMP4 是完整
     // 文件，代理转发 Range，前端把 audio_url 直接交给媒体元素播放。
     //
     // video 与 audio 两条代理互不依赖（各绑一个回环端口 + 各建一个 TLS 客户端），
     // 并发启动省掉一次串行的本地开销；mpd 依赖两者返回的本机 URL，必须最后串行。
+    //
+    // 无声稿件没有音轨：仅音频模式直接报错，普通模式不起音轨代理，`audio_url` 为空串。
     let (video_url, audio_url) = if audio_only {
+        let audio = selection.audio.as_ref().ok_or_else(|| {
+            AppError::new("bilibili_video_error", "该视频没有声音，无法仅播声音")
+                .with_site("bilibili")
+        })?;
         let audio_url = state
             .stream_proxy
             .start(
-                selection.audio.base_url.clone(),
+                audio.base_url.clone(),
                 headers.clone(),
                 session_ids.audio.clone(),
                 StreamProxyStartOptions {
                     proxy: proxy.as_deref(),
                     media_cache: audio_cache.clone(),
                     media_cache_store: media_cache_store.clone(),
-                    initialization: Some(audio_initialization),
+                    initialization: audio_initialization,
                     ..Default::default()
                 },
             )
@@ -564,18 +579,26 @@ pub async fn video_get_play_info(
                 ..Default::default()
             },
         );
-        let audio_start = state.stream_proxy.start(
-            selection.audio.base_url.clone(),
-            headers.clone(),
-            session_ids.audio.clone(),
-            StreamProxyStartOptions {
-                proxy: proxy.as_deref(),
-                media_cache: audio_cache.clone(),
-                media_cache_store: media_cache_store.clone(),
-                initialization: Some(audio_initialization),
-                ..Default::default()
-            },
-        );
+        let audio_start = async {
+            let Some(audio) = selection.audio.as_ref() else {
+                return Ok(String::new());
+            };
+            state
+                .stream_proxy
+                .start(
+                    audio.base_url.clone(),
+                    headers.clone(),
+                    session_ids.audio.clone(),
+                    StreamProxyStartOptions {
+                        proxy: proxy.as_deref(),
+                        media_cache: audio_cache.clone(),
+                        media_cache_store: media_cache_store.clone(),
+                        initialization: audio_initialization,
+                        ..Default::default()
+                    },
+                )
+                .await
+        };
         let (video_url, audio_url) = tokio::join!(video_start, audio_start);
         (video_url?, audio_url?)
     };
@@ -599,10 +622,9 @@ pub async fn video_get_play_info(
         video_url,
         audio_url,
         // 仅音频时视频轨代理不存在，时长只能取音轨 sidx（两者本就一致）。
-        duration: if audio_only {
-            selection.audio.sidx.duration_secs()
-        } else {
-            selection.video.sidx.duration_secs()
+        duration: match selection.audio.as_ref().filter(|_| audio_only) {
+            Some(audio) => audio.sidx.duration_secs(),
+            None => selection.video.sidx.duration_secs(),
         },
         quality: selection.quality,
         quality_label: selection.quality_label,

@@ -1735,10 +1735,13 @@ impl BilibiliSite {
         // 两条轨的 sidx 预抓互不依赖（各自独立的 CDN Range 请求），并发执行
         // 省掉一次串行往返；错误优先级保持视频轨在前，与原先的串行顺序一致。
         // 轨内的候选地址回退（mcdn 403 → upos 镜像）是依赖顺序，保持串行。
-        let (video_track, audio_track) = tokio::join!(
-            self.video_track(&video, true),
-            self.video_track(&audio, false)
-        );
+        // 无声稿件没有音轨，只取视频轨。
+        let (video_track, audio_track) = tokio::join!(self.video_track(&video, true), async {
+            match &audio {
+                Some(audio) => self.video_track(audio, false).await.map(Some),
+                None => Ok(None),
+            }
+        });
         let video = video_track?;
         let audio = audio_track?;
         Ok(VideoPlaySelection {
@@ -3300,15 +3303,13 @@ mod tests {
 
         // 音视频两轨都要有可播地址与解析出的分片表，MPD 合成才有输入。
         assert!(selection.video.base_url.starts_with("https://"));
-        assert!(selection.audio.base_url.starts_with("https://"));
+        let audio = selection.audio.as_ref().expect("story 条目应带音轨");
+        assert!(audio.base_url.starts_with("https://"));
         assert!(
             selection.video.sidx.duration_secs() > 0.0,
             "视频轨 sidx 为空"
         );
-        assert!(
-            selection.audio.sidx.duration_secs() > 0.0,
-            "音频轨 sidx 为空"
-        );
+        assert!(audio.sidx.duration_secs() > 0.0, "音频轨 sidx 为空");
         assert!(!selection.accept_quality.is_empty());
 
         // 竖屏舞台按 dimension 决定 cover/contain，缺了它整流都会当成竖屏铺满。

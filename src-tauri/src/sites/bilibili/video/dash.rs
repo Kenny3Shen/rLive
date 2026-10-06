@@ -205,11 +205,12 @@ pub struct VideoTrack {
     pub start_with_sap: i64,
 }
 
-/// 一次播放选中的两条轨与画质信息。
+/// 一次播放选中的轨道与画质信息。
 #[derive(Debug, Clone)]
 pub struct VideoPlaySelection {
     pub video: VideoTrack,
-    pub audio: VideoTrack,
+    /// 无声稿件（playurl 的 `dash.audio` 为 null 或空）没有音轨，为 `None`。
+    pub audio: Option<VideoTrack>,
     pub quality: i64,
     pub quality_label: String,
     pub accept_quality: Vec<VideoQuality>,
@@ -264,17 +265,36 @@ fn segment_list_xml(track: &VideoTrack, proxy_url: &str) -> String {
     xml
 }
 
-/// 用两条轨的本机代理地址合成 MPD。
+/// 用各轨的本机代理地址合成 MPD。
 ///
 /// 清单经文本代理按播放会话挂到 HTTP 上，适配器按 URL 拉取；清单里的分片
-/// 地址是两条轨各自的代理绝对地址，与清单本身同在本机回环。
+/// 地址是各轨的代理绝对地址，与清单本身同在本机回环。无声稿件没有音轨，
+/// 清单只含视频 AdaptationSet（`audio_proxy_url` 被忽略）。
 pub fn build_mpd(
     selection: &VideoPlaySelection,
     video_proxy_url: &str,
     audio_proxy_url: &str,
 ) -> String {
     let video = &selection.video;
-    let audio = &selection.audio;
+    let audio_set = selection
+        .audio
+        .as_ref()
+        .map(|audio| {
+            format!(
+                r#"
+    <AdaptationSet mimeType="audio/mp4">
+      <Representation id="{audio_id}" mimeType="audio/mp4" codecs="{audio_codecs}" startWithSAP="{audio_sap}" bandwidth="{audio_bandwidth}">
+        {audio_segments}
+      </Representation>
+    </AdaptationSet>"#,
+                audio_id = xml_escape(&audio.rep_id),
+                audio_codecs = xml_escape(&audio.codecs),
+                audio_sap = audio.start_with_sap,
+                audio_bandwidth = audio.bandwidth,
+                audio_segments = segment_list_xml(audio, audio_proxy_url),
+            )
+        })
+        .unwrap_or_default();
     // 时长取视频轨 sidx 时间轴，与分片表严格一致；用列表接口的整数秒会与
     // 分片累加值差出小数，尾片可能被播放器判成越界。
     let duration = video.sidx.duration_secs();
@@ -291,12 +311,7 @@ pub fn build_mpd(
       <Representation id="{video_id}" mimeType="video/mp4" codecs="{video_codecs}" width="{width}" height="{height}" frameRate="{frame_rate}" sar="{sar}" startWithSAP="{video_sap}" bandwidth="{video_bandwidth}">
         {video_segments}
       </Representation>
-    </AdaptationSet>
-    <AdaptationSet mimeType="audio/mp4">
-      <Representation id="{audio_id}" mimeType="audio/mp4" codecs="{audio_codecs}" startWithSAP="{audio_sap}" bandwidth="{audio_bandwidth}">
-        {audio_segments}
-      </Representation>
-    </AdaptationSet>
+    </AdaptationSet>{audio_set}
   </Period>
 </MPD>"#,
         video_id = xml_escape(&video.rep_id),
@@ -304,11 +319,6 @@ pub fn build_mpd(
         video_sap = video.start_with_sap,
         video_bandwidth = video.bandwidth,
         video_segments = segment_list_xml(video, video_proxy_url),
-        audio_id = xml_escape(&audio.rep_id),
-        audio_codecs = xml_escape(&audio.codecs),
-        audio_sap = audio.start_with_sap,
-        audio_bandwidth = audio.bandwidth,
-        audio_segments = segment_list_xml(audio, audio_proxy_url),
     )
 }
 
@@ -316,7 +326,13 @@ pub fn build_mpd(
 // 选流
 // ---------------------------------------------------------------------------
 
-/// 从 playurl 的 dash 负载中挑出一条视频轨与一条音频轨。
+/// 选流结果：视频 representation、可选音频 representation、实际 qn、档位名、全部档位。
+type SelectedStreams = (Value, Option<Value>, i64, String, Vec<VideoQuality>);
+
+/// 从 playurl 的 dash 负载中挑出一条视频轨与（可选的）一条音频轨。
+///
+/// 无声稿件的 `dash.audio` 是 null 或空数组（dolby / flac 同样为空），此时
+/// 音频轨为 `None`，由调用方合成纯视频 MPD，而不是整条播放链路报错。
 ///
 /// `accept_quality` 列出的是稿件存在的全部档位，而当前身份能实际取到的只有
 /// `dash.video[]` 里出现的那些（实测匿名最高 480P）。因此可用性以实际返回的
@@ -324,7 +340,7 @@ pub fn build_mpd(
 pub(super) fn select_streams(
     data: &Value,
     request: &VideoPlayRequest,
-) -> AppResult<(Value, Value, i64, String, Vec<VideoQuality>)> {
+) -> AppResult<SelectedStreams> {
     // PGC 付费墙：非免费分集匿名只给试看 MP4（is_preview=1、error_code=-10403），
     // 没有可解析的 DASH。把上游状态透进报错，用户能看出「需要登录或大会员」
     // 而不是以为客户端坏了。
@@ -340,11 +356,11 @@ pub(super) fn select_streams(
         .and_then(Value::as_array)
         .filter(|videos| !videos.is_empty())
         .ok_or_else(|| video_err("playurl 缺少可用视频流"))?;
-    let audios = dash
+    let audios: &[Value] = dash
         .get("audio")
         .and_then(Value::as_array)
-        .filter(|audios| !audios.is_empty())
-        .ok_or_else(|| video_err("playurl 缺少可用音频流"))?;
+        .map(Vec::as_slice)
+        .unwrap_or_default();
 
     let codec = DEFAULT_CODEC;
     // representation 的 `id` 就是该档位的 qn。
@@ -402,7 +418,7 @@ pub(super) fn select_streams(
     let audio = audios
         .iter()
         .max_by_key(|rep| as_i64(rep.get("bandwidth").unwrap_or(&Value::Null)))
-        .ok_or_else(|| video_err("没有可用的音频流"))?;
+        .cloned();
 
     let quality = as_i64(video.get("id").unwrap_or(&Value::Null));
     let quality_label = accept_quality
@@ -410,13 +426,7 @@ pub(super) fn select_streams(
         .find(|candidate| candidate.qn == quality)
         .map(|candidate| candidate.label.clone())
         .unwrap_or_else(|| format!("qn {quality}"));
-    Ok((
-        video.clone(),
-        audio.clone(),
-        quality,
-        quality_label,
-        accept_quality,
-    ))
+    Ok((video.clone(), audio, quality, quality_label, accept_quality))
 }
 
 pub(super) fn segment_base_ranges(rep: &Value) -> AppResult<(u64, u64, u64)> {
@@ -624,7 +634,7 @@ mod tests {
         };
         let selection = VideoPlaySelection {
             video: track_fixture(),
-            audio,
+            audio: Some(audio),
             quality: 32,
             quality_label: "清晰 480P".into(),
             accept_quality: Vec::new(),
@@ -695,7 +705,7 @@ mod tests {
         ];
         let selection = VideoPlaySelection {
             video: video.clone(),
-            audio: video,
+            audio: Some(video),
             quality: 32,
             quality_label: "清晰 480P".into(),
             accept_quality: Vec::new(),
@@ -718,7 +728,7 @@ mod tests {
     fn mpd_escapes_xml_special_characters_in_urls() {
         let selection = VideoPlaySelection {
             video: track_fixture(),
-            audio: track_fixture(),
+            audio: Some(track_fixture()),
             quality: 32,
             quality_label: "清晰 480P".into(),
             accept_quality: Vec::new(),
@@ -731,6 +741,26 @@ mod tests {
         // URL 里的 & 与 < 必须转义，否则 MPD 不是合法 XML。
         assert!(mpd.contains("http://127.0.0.1:5001/live?a=1&amp;b=&lt;2&gt;"));
         assert!(!mpd.contains("live?a=1&b="), "裸 & 会让 MPD 不是合法 XML");
+    }
+
+    #[test]
+    fn mpd_without_audio_track_only_declares_video() {
+        // 无声稿件（如 BV1LAa56JEkC）没有音轨：清单只能有视频 AdaptationSet，
+        // 否则播放器会等一条不存在的音轨。
+        let selection = VideoPlaySelection {
+            video: track_fixture(),
+            audio: None,
+            quality: 32,
+            quality_label: "清晰 480P".into(),
+            accept_quality: Vec::new(),
+        };
+        let mpd = build_mpd(&selection, "http://127.0.0.1:5001/live", "");
+        assert!(mpd.contains(r#"<AdaptationSet mimeType="video/mp4">"#));
+        assert!(
+            !mpd.contains("audio/mp4"),
+            "无音轨时不得声明音频 AdaptationSet"
+        );
+        assert!(mpd.contains("</AdaptationSet>\n  </Period>"));
     }
 
     #[test]
@@ -755,7 +785,7 @@ mod tests {
             select_streams(&data, &VideoPlayRequest::default()).expect("选流应成功");
         // 默认必须落在 avc1 上，而不是同画质里带宽更低的 hvc1/av01。
         assert_eq!(video.get("codecs").unwrap(), "avc1.640033");
-        assert_eq!(audio.get("base_url").unwrap(), "https://a/a2");
+        assert_eq!(audio.unwrap().get("base_url").unwrap(), "https://a/a2");
         assert_eq!(quality, 32);
         assert_eq!(label, "清晰 480P");
         // 只有实际返回了 representation 的档位才算可用；1080P 需大会员，标不可用。
@@ -785,6 +815,26 @@ mod tests {
         assert!(select_streams(&empty, &VideoPlayRequest::default()).is_err());
         let no_dash = serde_json::json!({ "timelength": 1 });
         assert!(select_streams(&no_dash, &VideoPlayRequest::default()).is_err());
+    }
+
+    #[test]
+    fn select_streams_accepts_silent_video_without_audio() {
+        // 实测 BV1LAa56JEkC：`dash.audio` 为 null，dolby/flac 也为空，稿件本身无声。
+        for audio in [serde_json::Value::Null, serde_json::json!([])] {
+            let data = serde_json::json!({
+                "dash": {
+                    "video": [ { "id": 32, "codecs": "avc1.64001F", "bandwidth": 1, "base_url": "https://a/v" } ],
+                    "audio": audio,
+                    "dolby": { "type": 0, "audio": null },
+                    "flac": null
+                }
+            });
+            let (video, audio, quality, _, _) =
+                select_streams(&data, &VideoPlayRequest::default()).expect("无声稿件应可选流");
+            assert_eq!(video.get("codecs").unwrap(), "avc1.64001F");
+            assert!(audio.is_none());
+            assert_eq!(quality, 32);
+        }
     }
 
     #[test]

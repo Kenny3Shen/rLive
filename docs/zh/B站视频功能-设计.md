@@ -110,6 +110,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 - 后端解析 `segment_base.index_range` 的 sidx box，并把每轨初始化范围、`mediaRange` 与逐片标准时间信息写入 `SegmentList`；Video.js DASH 适配器直接交给 dash.js 解析，不依赖前端私有分片表补丁。
 - 每个 `<SegmentURL>` 携带准确的 `mediaRange`，代理向上游转发 Range；不同 CDN 主机仍统一经过 `stream_proxy` 注入 Referer。
 - 视频和音频轨分别使用自己的 timescale、初始化范围和分片范围；播放器接收 HTTP `mpd_url`，不转换成 blob URL。
+- 无声稿件（`dash.audio` 为 `null`/空，`dolby`、`flac` 也为空，如 `BV1LAa56JEkC`）音轨为 `None`：MPD 只声明视频 AdaptationSet，不起音轨代理也不预取音轨；「仅播声音」直接报错而不是等一条不存在的音轨。
 
 ### 已验证的浏览器结论
 
