@@ -2,10 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 import { FrozenRouter, RouterScope, useFrozenRouter } from "./FrozenRouter";
-import { EASE_OUT, motionProfile, PAGE_PAN_PERCENT, prefersReducedMotion } from "./tokens";
-
-// Web Animations 可以在 React 忙于主线程时由 Chromium 合成器推进这个 transform。
-const PAGE_PAN_EASING = EASE_OUT;
+import { motionProfile, PAGE_PAN_PERCENT, prefersReducedMotion } from "./tokens";
 
 type PanSnapshot = {
   key: string;
@@ -52,6 +49,9 @@ export function PagePan({
   const scopeRef = useRef<HTMLDivElement>(null);
   const incomingRef = useRef<HTMLDivElement>(null);
   const outgoingRef = useRef<HTMLDivElement>(null);
+  // React 按 key 复用进出场节点。中断时记录当前合成位置，下一段从那里接手，
+  // 而不是把还没走完的页面瞬移回 0 或屏外；只在中断时读样式，不逐帧采样。
+  const interruptedTransforms = useRef(new WeakMap<HTMLElement, string>());
   const { location, route } = useFrozenRouter();
   // 上下文对象在路由变化时才换身份，因此可以用作快照副作用的依赖。
   const router = useMemo<FrozenRouter>(() => ({ location, route }), [location, route]);
@@ -86,12 +86,16 @@ export function PagePan({
   }, [children, panKey, router]);
 
   useLayoutEffect(() => {
-    if (!enabled || !outgoing) return;
+    if (!enabled || !outgoing) {
+      interruptedTransforms.current = new WeakMap();
+      return;
+    }
     const incoming = incomingRef.current;
     const leaving = outgoingRef.current;
     if (!incoming || !leaving) return;
 
     if (prefersReducedMotion()) {
+      interruptedTransforms.current = new WeakMap();
       // 减少动态效果时不启动动画，同步清掉离场层，避免额外保留一帧。
       // oxlint-disable-next-line react/set-state-in-effect
       setTransition((current) =>
@@ -117,27 +121,38 @@ export function PagePan({
     incoming.style.willChange = "transform";
     leaving.style.willChange = "transform";
 
+    const resumeTransform = (element: HTMLElement, fallback: string) => {
+      const previous = interruptedTransforms.current.get(element);
+      interruptedTransforms.current.delete(element);
+      return previous ?? fallback;
+    };
+    const leavingStart = resumeTransform(leaving, transform(0));
+    // 全新目标页接在离场页旁边，快速连点时也不在两页之间拉出空白。
+    const incomingStart = `${transform(dir * travel)} ${leavingStart === "none" ? "" : leavingStart}`;
     const incomingAnimation = incoming.animate(
-      [{ transform: transform(dir * travel) }, { transform: transform(0) }],
+      [{ transform: resumeTransform(incoming, incomingStart) }, { transform: transform(0) }],
       {
         duration: profile.enter.duration * 1000,
-        easing: PAGE_PAN_EASING,
+        easing: profile.enter.ease,
         fill: "both",
       },
     );
+
     const leavingAnimation = leaving.animate(
-      [{ transform: transform(0) }, { transform: transform(-dir * travel) }],
+      [{ transform: leavingStart }, { transform: transform(-dir * travel) }],
       {
         duration: profile.exit.duration * 1000,
-        easing: PAGE_PAN_EASING,
+        easing: profile.exit.ease,
         fill: "both",
       },
     );
 
     let disposed = false;
+    let completed = false;
     void Promise.all([incomingAnimation.finished, leavingAnimation.finished])
       .then(() => {
         if (disposed) return;
+        completed = true;
         // 在 React 同步丢弃旧子树之前持久化屏外离场位置。否则部分 Android 合成器
         // 会在副作用清理期间把动画被取消的起点画出一帧。
         try {
@@ -158,6 +173,13 @@ export function PagePan({
 
     return () => {
       disposed = true;
+      if (!completed) {
+        for (const element of [incoming, leaving]) {
+          if (element.isConnected) {
+            interruptedTransforms.current.set(element, getComputedStyle(element).transform);
+          }
+        }
+      }
       incomingAnimation.cancel();
       leavingAnimation.cancel();
       incoming.style.willChange = incomingWillChange;
@@ -179,6 +201,7 @@ export function PagePan({
           ref={outgoingRef}
           key={outgoing.key}
           aria-hidden
+          inert
           className={cn(
             "pointer-events-none absolute inset-0 h-full min-h-0 min-w-0",
             contentClassName,

@@ -2,71 +2,43 @@ import { isMobileClient } from "@/shared/clientPlatform";
 export { prefersReducedMotion } from "./preference";
 
 /**
- * 共享动效词汇表。应用动画统一由 Web Animations API 与 CSS 原生承担，
- * 不引入 JS 动画库。
- *
- * 两条规则使它在繁忙的直播播放器帧上也负担得起：
- *
- * 1. 只对 transform 和 opacity 做动画，所有序列都留在合成器上。不用
- * width/height/color/filter 补间。
- * 2. 时长保持很短。触摸客户端获得更快的收尾，让下一个视图在拇指下更早可读。
- *
- * 页面过渡使用短时长的缓动；指针驱动的滑动在手指按下时直接写 transform、
- * 只在释放时补间，因此一个手势绝不会每帧分配一个补间。
+ * 系统感动效词汇表：直接操作快速响应，大面积移动留出减速距离。
+ * 仅使用 WAAPI / CSS 的 transform 与 opacity，不引入逐帧 JS 弹簧或布局补间。
+ * CSS 对应值位于 styles.css 的 --motion-*，由回归测试防止两端漂移。
  */
+export const EASE_OUT = "cubic-bezier(0.2, 0, 0, 1)";
+/** 页面和抽屉共用的强调减速：快速到达可读位置，尾段平稳落位，不越冲。 */
+export const EASE_EMPHASIZED = "cubic-bezier(0.32, 0.72, 0, 1)";
+/** 离场加速清场，不沿用入场的长减速尾巴。 */
+export const EASE_EXIT = "cubic-bezier(0.4, 0, 1, 1)";
+/**
+ * 跟手释放保留非零起始速度，不能用从静止起步的 EASE_OUT。
+ * 时长仍由 horizontalSwipeSettleDuration 根据剩余距离与松手速度推导。
+ */
+export const SWIPE_SETTLE_EASING = "cubic-bezier(0.215, 0.61, 0.355, 1)";
 
-/**
- * 入场减速曲线 —— `power2.out`（quad out）的 cubic-bezier 等价物。
- *
- * Web Animations 与 CSS transition 共用同一条曲线：transform / opacity
- * 动画在 React 忙于提交时仍由 Chromium 合成器推进，这是 rAF ticker 驱动
- * 的 JS 补间库做不到的。页面平移、缩放过渡与指针驱动的页面收尾都读它，
- * 因此共享一条曲线而不是各挑一条 bezier。
- */
-export const EASE_OUT = "cubic-bezier(0.215, 0.61, 0.355, 1)";
-/**
- * 指针驱动页面滑动的释放阶段缓动。
- *
- * 收尾延续手指已经开始的运动，因此曲线要在释放点快速离开、减速进入静止。
- * 它的时长不是常量：`horizontalSwipeSettleDuration` 由剩余距离和松手速度推导，
- * 快甩迅速完成，慢拖在更长坡道上缓缓停下。
- */
-export const SWIPE_SETTLE_EASING = EASE_OUT;
-
-/**
- * 施加到每次整页平移的额外行程，以其活动轴的比例计。
- *
- * 刻意略超 100%。动画元素是滚动容器内带内边距的内容盒，
- * 其自身尺寸可能因 padding 小于被裁剪的视口。正好平移 100% 可能在边缘留下一线
- * 离场页直到卸载。额外的 10% 在任何现实视口下都能清掉这条沟槽。
- */
+/** 水平页内容盒小于裁剪视口时，多走 10% 避免边缘留下离场页。 */
 export const PAGE_PAN_PERCENT = 110;
 
 export type MotionProfile = {
   enter: { duration: number; ease: string };
   exit: { duration: number; ease: string };
-  /**
-   * 沉浸播放器缩放，`PageZoom` 两个方向共用。
-   *
-   * 用一个时长而不是进/出配对：进入房间与离开它是同一段交叉淡化的正反播放，
-   * 给它们不同长度会让往返显得失衡。比页面平移略长，
-   * 因为是两块全视口表面相互溶解，且房间背后还要带起一个播放器。
-   */
+  /** 房间往返沿同一纵深运动；两层以同一总时长完成交接。 */
   roomZoom: { duration: number; ease: string };
 };
 
 const DESKTOP_PROFILE: MotionProfile = {
-  enter: { duration: 0.22, ease: EASE_OUT },
-  exit: { duration: 0.22, ease: EASE_OUT },
-  roomZoom: { duration: 0.26, ease: EASE_OUT },
+  enter: { duration: 0.28, ease: EASE_EMPHASIZED },
+  exit: { duration: 0.28, ease: EASE_EMPHASIZED },
+  roomZoom: { duration: 0.3, ease: EASE_EMPHASIZED },
 };
 
 const TOUCH_PROFILE: MotionProfile = {
-  // 触摸导航读作手指的延伸：整页跟随穿过视口，
-  // 收尾比桌面稍快一点。
-  enter: { duration: 0.2, ease: EASE_OUT },
-  exit: { duration: 0.2, ease: EASE_OUT },
-  roomZoom: { duration: 0.22, ease: EASE_OUT },
+  // 大幅触摸导航不靠缩短时长制造「快」：前段立即响应，尾段有足够帧数减速。
+  // PagePan 的两页是连续表面，必须共享时长与曲线，不能套用弹层的快退出。
+  enter: { duration: 0.32, ease: EASE_EMPHASIZED },
+  exit: { duration: 0.32, ease: EASE_EMPHASIZED },
+  roomZoom: { duration: 0.34, ease: EASE_EMPHASIZED },
 };
 
 export function motionProfile(): MotionProfile {

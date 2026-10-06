@@ -392,7 +392,7 @@ describe("换片纵深", () => {
   });
 
   test("收尾缓动是独立的短促曲线", () => {
-    // 与横向翻页的 `EASE_OUT` 分开：换片需要在释放点更早离开、更快落定。
+    // 与横向翻页的 `SWIPE_SETTLE_EASING` 分开：换片需要在释放点更早离开、更快落定。
     expect(SHORTS_SWIPE_SETTLE_EASING).toBe("cubic-bezier(0.22, 1, 0.36, 1)");
   });
 });

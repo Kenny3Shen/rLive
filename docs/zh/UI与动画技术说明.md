@@ -27,7 +27,7 @@
 
 - 不使用 Framer Motion、GSAP 或任何第二套动画库。运行时动效只用 Web Animations API 与 CSS，封装在 `src/shared/motion/`。新增效果前先确认 `tween()`、CSS、`PagePan`、`PageZoom` 或 View Transition 是否已覆盖需求。
 - 位移、缩放、旋转走 CSS transform；显隐只动画 opacity。
-- 页面控件统一使用完整动态效果：`src/main.tsx` 在 React 首帧前固定根元素 `data-motion="full"`，不提供动效模式选择项。直播飘屏与录制回放弹幕作为持续运动例外，单独遵循 `prefers-reduced-motion`（右侧弹幕列表不受影响）；其他调用方需避免非必要动画时用 `prefersReducedMotion()` 直接读系统偏好。
+- 页面控件默认使用完整动态效果：`src/main.tsx` 在 React 首帧前固定根元素 `data-motion="full"`，不提供动效模式选择项。系统 `prefers-reduced-motion` 是无障碍覆盖：页面导航跳过空间动画，弹层只保留短淡化，按压与悬停不缩放。CSS 直接响应媒体查询，无需重新启动或修改持久化设置；WAAPI 调用方用 `prefersReducedMotion()` 检测。直播飘屏与录制回放弹幕也单独遵循系统偏好，右侧弹幕列表不受影响。
 - 动画用于表达导航层级、操作来源与状态变化，不作为持续装饰。播放、DOM 弹幕、滚动与手势同时工作时，动画仍须可中断、可清理、不阻塞交互。
 
 ## 2. 代码归属
@@ -111,17 +111,19 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 
 | Token / 配置 | 当前值 | 用途 |
 | --- | --- | --- |
-| `EASE_OUT` | `cubic-bezier(0.215, 0.61, 0.355, 1)` | 入场减速曲线（quad out 的 CSS 等价），JS 与 CSS 共用 |
-| 桌面 enter / exit | `0.22s` | 桌面页面平移与 Zoom |
-| 触控 enter / exit | `0.20s` | 移动端更快完成页面读取 |
-| `roomZoom` | 桌面 `0.26s`，触摸 `0.22s` | 直播间进出共用同一时长（比整页平移略长） |
+| `EASE_OUT` | `cubic-bezier(0.2, 0, 0, 1)` | 直接操作归位与显隐，CSS `--motion-ease-out` |
+| `EASE_EMPHASIZED` | `cubic-bezier(0.32, 0.72, 0, 1)` | 页面、抽屉与弹层的强调减速，不越冲 |
+| `EASE_EXIT` | `cubic-bezier(0.4, 0, 1, 1)` | 弹层加速离场，避免拖长收尾 |
+| 桌面 enter / exit | `0.28s` | 页面成对平移，进出必须同拍 |
+| 触控 enter / exit | `0.32s` | 大幅导航快速到达可读位置，尾段平滑减速 |
+| `roomZoom` | 桌面 `0.30s`，触摸 `0.34s` | 直播间进出共用同一时长（比整页平移略长） |
 | `ROOM_ZOOM_START_SCALE` / `BACKDROP_SCALE` / `EXIT_RATIO` | `0.96` / `1.02` / `0.72` | Zoom 起始缩放、退出时目标页起始缩放、离场补间占总时长比例 |
 | `PAGE_PAN_PERCENT` | `110%` | 横向页面清除 padding 边缘残影 |
-| `SWIPE_SETTLE_EASING` | 同 `EASE_OUT` | 手势释放收尾曲线 |
+| `SWIPE_SETTLE_EASING` | `cubic-bezier(0.215, 0.61, 0.355, 1)` | 保留跟手释放初速度，不跟随从静止入场的曲线变化 |
 | 手势收尾时长 | `horizontalSwipeSettleDuration()`，钳制 `170ms ~ 400ms` | 由剩余距离与释放速度推导，不是常量 |
 
 短视频换片不共用上面这条曲线的时长：它的行程只有一条画面且叠了纵深，因此另用
-`SHORTS_SWIPE_SETTLE_EASING`（`cubic-bezier(0.22, 1, 0.36, 1)`，比 `EASE_OUT`
+`SHORTS_SWIPE_SETTLE_EASING`（`cubic-bezier(0.22, 1, 0.36, 1)`，比 `SWIPE_SETTLE_EASING`
 在释放点更早离开、更快落定）与更短的 `150ms ~ 320ms` 钳制，见
 `docs/zh/短视频功能.md`。
 
@@ -134,6 +136,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - 上一页快照只在 `useLayoutEffect` 中更新为 React 已提交的 subtree，不在 render 阶段改写快照 ref（React 19 可能放弃或重放并发 render，ref 写入不会回滚，会漏掉退出层）。`PageZoom` 同一约束。
 - **快照必须连路由上下文一起冻结**（`FrozenRouter.tsx` 的 `RouterScope`）：上下文不是元素的一部分，路由一变，离场页里的 `useLocation` / `useSearchParams` / `useParams` 就会带着**新**页面的取值重渲染。失效现象是「退出动画里旧页面塌成错误态」—— VOD 播放页返回视频页时整个播放器变成「缺少有效参数」的错误卡，房间页退回发现页时离场层里的直播间直接消失。
 - **两侧子节点必须是同一种包裹元素**：`PagePan` / `PageZoom` 靠 key 让 React 把上一帧的层原样搬进离场位，子节点类型一变就退化成卸载重建 —— 媒体元素、播放器实例与页面状态全部从头再来。`RouterScope` 因此同时包在进入层与离场层上，而不是只包离场层。
+- 快速连续或反向导航时，在取消旧动画前记录仍连接的节点的当前 transform，由下一段沿用；全新目标页接在离场页当前坐标旁边，不瞬移回起点或拉出额外空白。只在中断时读取合成位置，不逐帧运行 JS。离场层同时使用 `inert` 与 `aria-hidden`，不能接收键盘聚焦。
 - 动画完成后先用 `commitStyles()` 固定旧页离屏最终位置，再同步卸载旧 subtree；不能先 cancel Animation 再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
 - 直接侧栏导航时 `RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移。
 
@@ -207,7 +210,7 @@ playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser
 
 ### 4.8 CSS 动画的适用范围
 
-CSS 只承担无需 JavaScript 编排的短状态，交互动画优先用可中断 transition，只在主题淡化、加载旋转等确定时间线使用 keyframes。新增效果继续只动画 `transform` / `opacity`，并复用 `--motion-ease-out` 或 `--motion-ease-drawer`。
+CSS 只承担无需 JavaScript 编排的短状态，交互动画优先用可中断 transition，只在主题淡化、加载旋转等确定时间线使用 keyframes。空间动效只动画 `transform` / `opacity`，复用 `--motion-ease-out`、`--motion-ease-emphasized` 与 `--motion-ease-exit`；不模拟整套 Android/iOS 物理引擎，也不为系统感增加夸张弹跳或常驻 GPU 层。
 
 | 场景 | 实现 / 时长 |
 | --- | --- |
@@ -215,7 +218,9 @@ CSS 只承担无需 JavaScript 编排的短状态，交互动画优先用可中�
 | 加载图标连续旋转 | `animate-spin-soft` |
 | Popover、Tooltip、Dialog、AlertDialog、Drawer、Toast | Base UI `data-starting-style` / `data-ending-style`，反向操作可从当前帧继续 |
 | 可展开面板（播放页 UP 卡简介）| Base UI `Collapsible` 的 `--collapsible-panel-height` 高度过渡（`150ms`、`--motion-ease-out`、两端 `data-*-style:h-0`），收起态保持 `hidden` + `keepMounted` |
-| Overlay 时长 | Drawer 进 `240ms` / 退 `160ms`；Dialog `200ms` / `140ms`；Popover `160ms` / `110ms` |
+| 按压反馈 | 按下 `80ms`，松开 `220ms`；触摸控件 `0.97`、卡片 `0.985`，桌面 `0.98`；禁用控件不缩放，触摸卡片不与内层按钮叠加缩放 |
+| Overlay 时长 | Drawer 进 `360ms` / 退 `240ms`；Dialog `280ms` / `180ms`；Popover `220ms` / `140ms`；显隐可先于空间落位完成，遮罩退出与表面同拍 |
+| 减少动态效果 | OS 媒体查询直接覆盖六方向弹层与按压；弹层只淡化 `100ms`，不破坏 Dialog 的居中 translate；即时 Tooltip 与选项对齐 Select 仍跳过动画 |
 | Tooltip | 首次 Hover 延迟 `350ms`，相邻 Tooltip 用即时状态并跳过动画 |
 
 ## 5. Web Animations 实现规范
@@ -277,7 +282,9 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 
 静态检查（命令细节见 [开发指南](开发指南.md)）：纯文档修改不要求运行时测试；UI 或动画实现至少执行 `bun run check` 与对应单元测试，交付前运行 `bun run build`。
 
-浏览器检查至少覆盖桌面 `1280x720` 以上、手机竖屏约 `360x732`、coarse pointer 短横屏约 `844x390`，以及系统开启 `prefers-reduced-motion: reduce` 的情况（页面导航仍沿用完整动效；直播飘屏按既有策略停用，录制回放弹幕停止横向飘移并按媒体时间短暂静态显示，偏好恢复后直播弹幕建立全新会话、不补放旧消息）。
+浏览器检查至少覆盖桌面 `1280x720` 以上、手机竖屏约 `360x732`、coarse pointer 短横屏约 `844x390`，以及系统开启 `prefers-reduced-motion: reduce` 的情况（页面导航跳过空间动画、弹层仅淡化；直播飘屏按既有策略停用，录制回放弹幕停止横向飘移并按媒体时间短暂静态显示，偏好恢复后直播弹幕建立全新会话、不补放旧消息）。
+
+共享动效回归：`bun test tests/system-motion.test.ts` 校验 CSS / WAAPI token 一致性与时长层次；`playwright-cli -s=motion run-code --filename=tests/system-motion.browser.js` 在 Windows Debug 主窗口检查三种视口与真实 OS 媒体查询下的页面接管、弹层反向/卸载和菜单方向样式，结束后清理 CDP 视口与触摸模拟。
 
 每个动画检查开始帧、中间帧、最终帧与快速重复操作：
 

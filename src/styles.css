@@ -45,8 +45,18 @@
      平台色调表面上同样清楚；而强调色恰恰在那些本就是蓝色的控件上
      会被读成选中/激活状态。 */
   --focus-ring-color: color-mix(in oklab, var(--foreground) 72%, transparent);
-  --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  /* 与 shared/motion/tokens.ts 对齐：直接操作、空间移动、离场各有节奏。 */
+  --motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-emphasized: cubic-bezier(0.32, 0.72, 0, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-press-duration: 80ms;
+  --motion-release-duration: 220ms;
+  --motion-popup-duration: 220ms;
+  --motion-popup-exit-duration: 140ms;
+  --motion-dialog-duration: 280ms;
+  --motion-dialog-exit-duration: 180ms;
+  --motion-drawer-duration: 360ms;
+  --motion-drawer-exit-duration: 240ms;
   /* 浅色（很少使用 —— 应用默认深色） */
   --background: oklch(0.985 0.002 260);
   --foreground: oklch(0.18 0.02 260);
@@ -378,25 +388,51 @@ body {
    不存在，而排除本身会造成新的失灵 —— 返回后残留在控件上的焦点状态会让紧接着的
    那一次点击没有任何按下反馈。 */
 [data-motion-press],
+[data-motion-control],
 .motion-card {
   transform-origin: center;
   transition-property: transform, background-color, border-color, color, box-shadow, opacity;
-  transition-duration: 150ms;
+  transition-duration: var(--motion-release-duration);
   transition-timing-function: var(--motion-ease-out);
 }
 
-@media (pointer: coarse) {
-  :root[data-motion="full"] :is([data-motion-press], [data-motion-control]):active {
+/* 按下不等松开的长尾；禁用控件不伪装成可操作。
+   卡片只压父表面，避免内层 Button 与卡片重复缩放。 */
+:root[data-motion="full"]
+  :is([data-motion-press], [data-motion-control]):active:not(
+    :disabled,
+    [data-disabled],
+    [aria-disabled="true"]
+  ),
+:root[data-motion="full"]
+  .motion-card:has(> button:active:not(:disabled, [data-disabled], [aria-disabled="true"])) {
+  transition-duration: var(--motion-press-duration);
+}
+
+@media (pointer: coarse) and (prefers-reduced-motion: no-preference) {
+  :root[data-motion="full"]
+    :is([data-motion-press], [data-motion-control]):active:not(
+      :disabled,
+      [data-disabled],
+      [aria-disabled="true"],
+      .motion-card > button
+    ) {
     transform: scale(0.97);
   }
 
-  :root[data-motion="full"] .motion-card:has(> button:active) {
+  :root[data-motion="full"]
+    .motion-card:has(> button:active:not(:disabled, [data-disabled], [aria-disabled="true"])) {
     transform: scale(0.985);
   }
 }
 
-@media (hover: hover) and (pointer: fine) {
-  :root[data-motion="full"] [data-motion-control]:active {
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  :root[data-motion="full"]
+    :is([data-motion-press], [data-motion-control]):active:not(
+      :disabled,
+      [data-disabled],
+      [aria-disabled="true"]
+    ) {
     transform: scale(0.98);
   }
 
@@ -422,6 +458,7 @@ body {
 }
 
 :root[data-motion="reduced"] [data-motion-press],
+:root[data-motion="reduced"] [data-motion-control],
 :root[data-motion="reduced"] .motion-card {
   transition-property: background-color, border-color, color, box-shadow, opacity;
 }
@@ -588,6 +625,7 @@ body {
    不再重新引入用户可见的设置项。 */
 @media (prefers-reduced-motion: reduce) {
   :root[data-motion="full"] [data-motion-press],
+  :root[data-motion="full"] [data-motion-control],
   :root[data-motion="full"] .motion-card,
   :root[data-motion="full"] .settings-category-button {
     transition-property: background-color, border-color, color, box-shadow, opacity;
@@ -606,11 +644,11 @@ body {
    即使控件被快速切换 —— 关键帧则会重启整段进出场序列。 */
 .motion-popup,
 .motion-tooltip {
-  transform: translate3d(0, 0, 0) scale(1);
+  transform: none;
   opacity: 1;
   transition-property: transform, opacity;
-  transition-duration: 160ms;
-  transition-timing-function: var(--motion-ease-out);
+  transition-duration: var(--motion-popup-duration), 140ms;
+  transition-timing-function: var(--motion-ease-emphasized), var(--motion-ease-out);
 }
 
 .motion-tooltip {
@@ -653,7 +691,8 @@ body {
 }
 
 :is(.motion-popup, .motion-tooltip)[data-ending-style] {
-  transition-duration: 110ms;
+  transition-duration: var(--motion-popup-exit-duration);
+  transition-timing-function: var(--motion-ease-exit);
 }
 
 .motion-tooltip[data-instant] {
@@ -673,7 +712,7 @@ body {
 
 .motion-dialog-overlay {
   opacity: 1;
-  transition: opacity 180ms var(--motion-ease-out);
+  transition: opacity var(--motion-dialog-duration) var(--motion-ease-out);
 }
 
 .motion-dialog-overlay:is([data-starting-style], [data-ending-style]) {
@@ -681,7 +720,17 @@ body {
 }
 
 .motion-dialog-overlay[data-ending-style] {
-  transition-duration: 120ms;
+  transition-duration: var(--motion-dialog-exit-duration);
+  transition-timing-function: var(--motion-ease-exit);
+}
+
+/* 遮罩必须和抽屉同拍退场，不能在大表面还没离开时先露出底层。 */
+[data-slot="drawer-overlay"] {
+  transition-duration: var(--motion-drawer-duration);
+}
+
+[data-slot="drawer-overlay"][data-ending-style] {
+  transition-duration: var(--motion-drawer-exit-duration);
 }
 
 /*
@@ -703,8 +752,8 @@ body {
   opacity: 1;
   transform-origin: center;
   transition:
-    scale 200ms var(--motion-ease-out),
-    opacity 180ms var(--motion-ease-out);
+    scale var(--motion-dialog-duration) var(--motion-ease-emphasized),
+    opacity 160ms var(--motion-ease-out);
 }
 
 .motion-dialog:is([data-starting-style], [data-ending-style]) {
@@ -715,12 +764,13 @@ body {
 }
 
 .motion-dialog[data-ending-style] {
-  transition-duration: 140ms;
+  transition-duration: var(--motion-dialog-exit-duration);
+  transition-timing-function: var(--motion-ease-exit);
 }
 
 .motion-drawer {
-  transform: translate3d(0, 0, 0);
-  transition: transform 240ms var(--motion-ease-drawer);
+  transform: none;
+  transition: transform var(--motion-drawer-duration) var(--motion-ease-emphasized);
 }
 
 /* 与上面弹层类相同的静止期提升隐患。 */
@@ -737,8 +787,8 @@ body {
 }
 
 .motion-drawer[data-ending-style] {
-  transition-duration: 160ms;
-  transition-timing-function: var(--motion-ease-out);
+  transition-duration: var(--motion-drawer-exit-duration);
+  transition-timing-function: var(--motion-ease-exit);
 }
 
 .motion-toast {
@@ -749,6 +799,7 @@ body {
 
 .motion-toast[data-ending-style] {
   transition-duration: 120ms;
+  transition-timing-function: var(--motion-ease-exit);
 }
 
 :root[data-motion="reduced"] :is(.motion-popup, .motion-tooltip) {
@@ -790,6 +841,56 @@ body {
 :root[data-motion="reduced"] .motion-toast {
   translate: none;
   transition-property: opacity;
+}
+
+/* OS 偏好直接覆盖 CSS，不依赖启动时写入的 data-motion="full"。
+   保留短淡化与 Base UI 的退出生命周期，弹窗居中的 translate 不可抹掉。 */
+@media (prefers-reduced-motion: reduce) {
+  :root :is(.motion-popup, .motion-tooltip, .motion-drawer),
+  :root
+    :is(.motion-popup, .motion-tooltip, .motion-drawer):is(
+      [data-starting-style],
+      [data-ending-style]
+    ) {
+    transform: none;
+    will-change: auto;
+  }
+
+  :root .motion-dialog {
+    scale: 1;
+    will-change: auto;
+  }
+
+  :root
+    :is(
+      .motion-popup,
+      .motion-tooltip,
+      .motion-dialog,
+      .motion-drawer,
+      .motion-dialog-overlay,
+      .motion-toast
+    ) {
+    transition-property: opacity;
+    transition-duration: 100ms;
+    transition-timing-function: linear;
+  }
+
+  :root .motion-drawer {
+    opacity: 1;
+  }
+
+  :root .motion-drawer:is([data-starting-style], [data-ending-style]) {
+    opacity: 0;
+  }
+
+  :root .motion-toast {
+    translate: none;
+  }
+
+  :root .motion-tooltip[data-instant],
+  :root .motion-popup[data-align-trigger="true"] {
+    transition-duration: 0ms;
+  }
 }
 
 /* 触摸优先设备上，浏览器的点按闪烁与误选文本会让卡片和控件密集的页面读起来像

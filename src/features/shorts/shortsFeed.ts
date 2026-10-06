@@ -446,7 +446,7 @@ export function shortsSwipeIntent(deltaX: number, deltaY: number): "pending" | "
 /**
  * 换片收尾的缓动曲线。
  *
- * 刻意不复用共享的 `SWIPE_SETTLE_EASING`（`EASE_OUT`）：横向翻页是一整屏的位移，
+ * 刻意不复用共享的 `SWIPE_SETTLE_EASING`：横向翻页是一整屏的位移，
  * 需要温和的减速；短视频换片只有一条画面的行程，且上面叠了纵深缩放，因此收尾要在
  * 释放点更早离开、更快落定，避免「滑完了还在慢悠悠地动」。
  */
