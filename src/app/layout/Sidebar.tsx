@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
-import { activeRecordingCount, useRecordings } from "@/features/recording/recording";
+import { activeRecordingCount, useActiveRecordings } from "@/features/recording/recording";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
 import { killTweensOf, settleTween, tween } from "@/shared/motion/tween";
@@ -214,9 +214,9 @@ function AppearanceToggle() {
 export function Sidebar() {
   const queryClient = useQueryClient();
   const siteId = useSiteId();
-  // 录制列表已经是共享且事件驱动的，在这里订阅即可让徽标保持实时，
-  // 又不必增加第二个轮询源。
-  const recordings = useRecordings();
+  // 侧栏角标只关心「有几个任务在跑」，不读完整录制库：
+  // 那会在启动时触发历史根扫描。
+  const recordings = useActiveRecordings();
   const activeRecordings = activeRecordingCount(recordings.data);
   const preloadHome = useCallback(() => {
     prefetchHomeRecommendations(

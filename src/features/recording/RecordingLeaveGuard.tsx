@@ -17,12 +17,12 @@ import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { CircleDot, LogOut, Square } from "lucide-react";
 import {
+  ACTIVE_RECORDINGS_QUERY_KEY,
   activeRecordingForContext,
-  RECORDINGS_QUERY_KEY,
   recordingErrorMessage,
   setRecordingContinueOnLeave,
   stopRecording,
-  useRecordings,
+  useActiveRecordings,
   type RecordingContext,
   type RecordingItem,
 } from "./recording";
@@ -42,7 +42,8 @@ function locationTarget(location: { pathname: string; search: string; hash: stri
 /** 当前录制尚未显式选择后台延续时，拦截所有应用内导航路径。 */
 export function RecordingLeaveGuard({ context }: { context: RecordingContext | null }) {
   const queryClient = useQueryClient();
-  const recordings = useRecordings();
+  // 离开拦截只需要当前上下文的活动录制，不读历史库。
+  const recordings = useActiveRecordings();
   const active = activeRecordingForContext(recordings.data, context);
   const [stopping, setStopping] = useState(false);
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
@@ -73,7 +74,7 @@ export function RecordingLeaveGuard({ context }: { context: RecordingContext | n
       // 导航之前先把会话加入后台延续，使房间卸载时弹幕 websocket 被移交到录制
       // 而不是被拆除。无论哪种选择媒体都会继续录制。
       const updated = await setRecordingContinueOnLeave(item.id, true);
-      queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) =>
+      queryClient.setQueryData<RecordingItem[]>(ACTIVE_RECORDINGS_QUERY_KEY, (current) =>
         (current ?? []).map((entry) => (entry.id === updated.id ? updated : entry)),
       );
       setStopping(false);
@@ -91,10 +92,10 @@ export function RecordingLeaveGuard({ context }: { context: RecordingContext | n
     setStopping(true);
     try {
       const stopped = await stopRecording(item.id);
-      queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) =>
+      queryClient.setQueryData<RecordingItem[]>(ACTIVE_RECORDINGS_QUERY_KEY, (current) =>
         (current ?? []).map((entry) => (entry.id === stopped.id ? stopped : entry)),
       );
-      void queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: ACTIVE_RECORDINGS_QUERY_KEY });
       notify.success("录制已保存", stopped.title);
       setStopping(false);
       proceed();

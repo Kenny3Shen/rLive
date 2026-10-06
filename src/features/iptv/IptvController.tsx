@@ -20,6 +20,7 @@ import {
 } from "./availability";
 import { useIptvAvailabilityStore } from "./availabilityStore";
 import { cancelIptvAvailabilityProbe, probeIptvAvailability } from "./availabilityProbe";
+import { useIptvEntryProbe } from "./entryProbe";
 import { filterIptvChannels, getIptvGroupOptions, type IptvGroupOption } from "./filterChannels";
 import { iptvHomePath, iptvPlayerPath } from "./iptvRoute";
 import type { PlaylistSource } from "./playlistSource";
@@ -105,6 +106,9 @@ export function IptvControllerProvider({
   const hasFilters =
     selectedGroup !== "all" || keyword.trim().length > 0 || availabilityFilter !== "all";
   const isCheckingAvailability = availabilityProgress !== null;
+
+  // 首次进入 IPTV 时才做静默浅探测：不进入该路由就不会为它产生网络流量。
+  useIptvEntryProbe(source, active, channels);
 
   useEffect(() => {
     if (

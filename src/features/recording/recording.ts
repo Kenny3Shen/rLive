@@ -415,6 +415,8 @@ const subscribeToRecordingChanges = createSharedRecordingChangeSubscription<Quer
       );
       return;
     }
+    // `RECORDINGS_QUERY_KEY` 是 `ACTIVE_RECORDINGS_QUERY_KEY` 的前缀，
+    // 一次失效会同时覆盖完整库与活动集合两条查询。
     void queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
   },
 );
@@ -431,6 +433,51 @@ export function useRecordings(enabled = true) {
     queryKey: RECORDINGS_QUERY_KEY,
     enabled: active,
     queryFn: () => invokeCmd<RecordingItem[]>("recording_list"),
+    staleTime: 500,
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.status === "recording") ? 15_000 : false,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/** 只含正在采集或收尾的任务；不读完整库索引。 */
+export const ACTIVE_RECORDINGS_QUERY_KEY = ["recordings", "active"] as const;
+
+/**
+ * 同一份录制同时存在于完整库与活动集合两个缓存中。
+ *
+ * 变更类命令只知道发生变化的条目，不触发整表失效时用它把两边一起写正确，
+ * 否则侧栏角标或退出保护会拿着过期的活动集合。
+ */
+export function setRecordingItemCaches(
+  queryClient: QueryClient,
+  update: (items: RecordingItem[] | undefined) => RecordingItem[] | undefined,
+): void {
+  queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, update);
+  queryClient.setQueryData<RecordingItem[]>(ACTIVE_RECORDINGS_QUERY_KEY, update);
+}
+
+/**
+ * 只需要「当前是否有录制在跑」的调用方用它。
+ *
+ * 完整 `recording_list` 会建立并刷新库索引（首次调用还要扫描历史根）。
+ * 退出保护、侧栏角标和自动录制去重都只关心活动集合，因此后端提供了一条
+ * 不触碰库索引的 `recording_active_list`；事件订阅与完整查询共用，
+ * 任务开始/结束时两侧都会刷新。
+ */
+export function useActiveRecordings(enabled = true) {
+  const supported = recordingSupported();
+  const active = supported && enabled;
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!active) return;
+    return subscribeToRecordingChanges(queryClient);
+  }, [active, queryClient]);
+  return useQuery({
+    queryKey: ACTIVE_RECORDINGS_QUERY_KEY,
+    enabled: active,
+    queryFn: () => invokeCmd<RecordingItem[]>("recording_active_list"),
     staleTime: 500,
     refetchInterval: (query) =>
       query.state.data?.some((item) => item.status === "recording") ? 15_000 : false,
@@ -473,12 +520,13 @@ export async function startRecording(
 export function useRecordingController(context: RecordingContext | null) {
   const queryClient = useQueryClient();
   const supported = recordingSupported();
-  const query = useRecordings();
+  // 播放器控件只需要知道「当前上下文是否正在录制」，不关心历史库。
+  const query = useActiveRecordings();
   const startMutation = useMutation({
     mutationFn: (options: RecordingStartOptions = {}) =>
       context ? startRecording(context, options) : Promise.reject(new Error("缺少录制上下文")),
     onSuccess: (item) => {
-      queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) => [
+      setRecordingItemCaches(queryClient, (current) => [
         item,
         ...(current ?? []).filter((entry) => entry.id !== item.id),
       ]);

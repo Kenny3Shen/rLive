@@ -134,7 +134,7 @@ async (page) => {
         // 浅探测：同 URL 的两个条目必须得到不同结论。
         const shallow = findButton("检测频道可用性");
         assert(shallow, "未找到浅探测按钮");
-        // 应用启动预热（延迟 700ms、notify=false）也可能发过一次浅探测；
+        // 首次进入 IPTV 的预热（notify=false）会先发过一次浅探测；
         // 这里关心的是「浅探测从不请求 deep」，而不是总次数。
         shallow.click();
         await until(() => probeCalls.length > 0, "浅探测未发出 IPC");

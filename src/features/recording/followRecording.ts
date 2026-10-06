@@ -23,11 +23,12 @@ import {
   FOLLOW_STATUS_REFRESH_INTERVAL_MS,
 } from "@/features/follow/followRefresh";
 import {
-  RECORDINGS_QUERY_KEY,
+  ACTIVE_RECORDINGS_QUERY_KEY,
   recordingErrorMessage,
   recordingSupported,
+  setRecordingItemCaches,
   startRecording,
-  useRecordings,
+  useActiveRecordings,
   type RecordingContext,
   type RecordingItem,
 } from "./recording";
@@ -165,7 +166,7 @@ async function startFollowRecording(
     // 关注录制的启动总是发生在所属播放器页之外。
     continueOnLeave: true,
   });
-  queryClient.setQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY, (current) => [
+  setRecordingItemCaches(queryClient, (current) => [
     item,
     ...(current ?? []).filter((entry) => entry.id !== item.id),
   ]);
@@ -179,7 +180,8 @@ async function startFollowRecording(
 
 export function useFollowRecordingController() {
   const queryClient = useQueryClient();
-  const recordings = useRecordings();
+  // 关注页的录制按钮只需要判断目标房间是否已在录制，不读历史库。
+  const recordings = useActiveRecordings();
   const qualityLevel = useSettingsStore((state) => state.qualityLevel);
   const includeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);
   const supported = recordingSupported();
@@ -235,7 +237,7 @@ export function useFollowAutoRecording() {
     // 失败项与上一轮结论相同。
     select: (result) => result.follows,
   });
-  const recordings = useRecordings(enabled && (autoFollows.data?.length ?? 0) > 0);
+  const recordings = useActiveRecordings(enabled && (autoFollows.data?.length ?? 0) > 0);
   const autoRunRef = useRef(false);
   const attemptedSessionsRef = useRef(new Set<string>());
 
@@ -276,7 +278,7 @@ export function useFollowAutoRecording() {
           const sessionKey = followRecordingSessionKey(target);
           if (attemptedSessionsRef.current.has(sessionKey)) continue;
           attemptedSessionsRef.current.add(sessionKey);
-          const current = queryClient.getQueryData<RecordingItem[]>(RECORDINGS_QUERY_KEY);
+          const current = queryClient.getQueryData<RecordingItem[]>(ACTIVE_RECORDINGS_QUERY_KEY);
           if (activeRecordingForLiveRoom(current, target)) continue;
           try {
             const item = await startFollowRecording(

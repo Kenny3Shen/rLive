@@ -38,6 +38,16 @@ pub fn recording_list(state: State<'_, AppState>) -> AppResult<Vec<RecordingItem
     state.recording.list()
 }
 
+/// 只返回正在采集或收尾的任务。
+///
+/// 完整 `recording_list` 会建立并刷新库索引（首次调用要扫描所有历史根）；
+/// 退出保护、侧栏角标与自动录制去重只需要活动集合，用这条命令可以避免
+/// 为它们触发全量扫描。
+#[tauri::command]
+pub fn recording_active_list(state: State<'_, AppState>) -> AppResult<Vec<RecordingItem>> {
+    Ok(state.recording.active_items())
+}
+
 #[tauri::command(async)]
 pub async fn recording_start(
     state: State<'_, AppState>,

@@ -98,6 +98,16 @@ const ENDPOINT_DISABLED_TRAILING_SILENCE: f32 = 3_600.0;
 const MAX_PCM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BASE64_PCM_BYTES: usize = MAX_PCM_BYTES.div_ceil(3) * 4;
 
+/// 模型空闲多久后释放常驻会话。
+///
+/// 字幕开启时每个采集窗口都会调用转写，因此这个阈值只在字幕关闭、
+/// 媒体暂停或页面离开之后才会到期；到期后模型转为「已下载」状态，
+/// 下一次开启字幕时按需重新加载。
+const ASR_IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(120);
+/// 空闲看门狗的检查间隔。释放仍以 `ASR_IDLE_RELEASE` 为准，
+/// 它只决定最坏情况下的延迟。
+const ASR_IDLE_WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AsrModelState {
@@ -107,6 +117,9 @@ pub enum AsrModelState {
     Extracting,
     Loading,
     Ready,
+    /// 模型已下载且功能仍启用，但会话因长时间空闲已释放。
+    /// 下一次开启字幕时按需重新加载。
+    Idle,
     Error,
 }
 
@@ -147,8 +160,11 @@ impl AsrModelStatus {
             speaker_model_downloaded,
             speaker_model_size_bytes: SPEAKER_MODEL_SIZE_BYTES,
             threads: asr_thread_count(),
-            provider: effective_asr_provider(&options.provider).to_string(),
-            message: asr_provider_fallback_message(&options.provider),
+            // 不在这里解析 provider：`effective_asr_provider` 在 Windows 上会加载
+            // NVIDIA 驱动并逐个试载 CUDA 运行库 DLL。那属于「真正启用」的代价，
+            // 不能出现在应用启动路径上。
+            provider: asr_provider_placeholder(&options.provider),
+            message: None,
         }
     }
 }
@@ -562,10 +578,12 @@ impl NativeAsrSession {
 
         let text = self.current_text();
         let trimmed = text.trim();
+        // 实时假设不加标点：partial 每个采集窗口都会刷新，而标点模型是整个窗口里
+        // 最贵的一步，其输出下一窗口就被替换。标点只处理端点定稿的句子。
         let partial = if trimmed.is_empty() {
             None
         } else {
-            Some(self.add_punctuation(trimmed))
+            Some(trimmed.to_owned())
         };
 
         Ok(AsrTranscribeResult { segments, partial })
@@ -604,6 +622,20 @@ struct AsrInner {
     runtime_options: Mutex<Option<AsrRuntimeOptions>>,
     prepare_lock: tokio::sync::Mutex<()>,
     session: Mutex<Option<NativeAsrSession>>,
+    /// 正在使用模型进行识别的播放器数量。
+    ///
+    /// 大于零时空闲看门狗不会释放会话 —— 字幕开着但媒体暂停是正常的，
+    /// 不能因为暂时没有转写请求就把模型卸掉。
+    streaming_count: std::sync::atomic::AtomicUsize,
+    /// 最近一次转写活动的时间。会话空闲超过 `ASR_IDLE_RELEASE` 后释放。
+    last_activity: Mutex<Option<std::time::Instant>>,
+    /// 空闲看门狗是否已启动，避免重复 spawn。
+    watchdog_started: std::sync::atomic::AtomicBool,
+    /// 已收到「用户真的要看字幕」的加载需求。
+    ///
+    /// 资产尚未就绪时它只登记需求，由正在进行的 `enable` 准备任务在下载完成后
+    /// 接着加载会话，避免两个任务同时下载同一份模型。
+    load_requested: std::sync::atomic::AtomicBool,
 }
 
 impl AsrManager {
@@ -648,6 +680,10 @@ impl AsrManager {
                 runtime_options: Mutex::new(None),
                 prepare_lock: tokio::sync::Mutex::new(()),
                 session: Mutex::new(None),
+                streaming_count: std::sync::atomic::AtomicUsize::new(0),
+                last_activity: Mutex::new(None),
+                watchdog_started: std::sync::atomic::AtomicBool::new(false),
+                load_requested: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -698,10 +734,17 @@ impl AsrManager {
         self.write_hotwords_file(&options.hotwords)?;
         let was_requested = self.inner.requested.swap(true, Ordering::AcqRel);
         let model_exists = self.required_assets_complete(&options);
-        let next_state = if model_exists {
+        // 启用只保证资产就绪：ONNX 会话等用户真的打开字幕时再加载。
+        // 但用户已经在看字幕时（`load_requested`）必须保持旧行为：
+        // 设置变更要重载会话而不是把它卸载成 `Idle`，否则改一次 VAD
+        // 就会把正在看的字幕断掉。
+        let wants_session = self.inner.load_requested.load(Ordering::Acquire);
+        let next_state = if !model_exists {
+            AsrModelState::Downloading
+        } else if wants_session {
             AsrModelState::Loading
         } else {
-            AsrModelState::Downloading
+            AsrModelState::Idle
         };
 
         let generation = {
@@ -747,7 +790,62 @@ impl AsrManager {
 
         let manager = self.clone();
         tauri::async_runtime::spawn(async move {
-            manager.prepare_model(proxy, generation, options).await;
+            manager.prepare_model(proxy, generation, options, false).await;
+        });
+
+        self.status()
+    }
+
+    /// 按实际字幕需求加载会话：用户第一次打开字幕时调用。
+    ///
+    /// 资产尚未就绪时只登记需求，由正在进行的 `enable` 准备任务在下载完成后
+    /// 接着加载，避免两个任务同时下载同一份模型。
+    pub fn load_session(&self, proxy: Option<String>) -> AppResult<AsrModelStatus> {
+        use std::sync::atomic::Ordering;
+
+        let _control = self
+            .inner
+            .control
+            .lock()
+            .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
+        if !self.is_requested() {
+            return Err(AppError::new("asr_disabled", "语音字幕未启用"));
+        }
+        self.inner.load_requested.store(true, Ordering::Release);
+        let options = self
+            .inner
+            .runtime_options
+            .lock()
+            .ok()
+            .and_then(|options| options.clone())
+            .ok_or_else(|| AppError::new("asr_not_ready", "语音字幕正在准备"))?;
+
+        let mut status = self
+            .inner
+            .status
+            .lock()
+            .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))?;
+        if matches!(
+            status.state,
+            AsrModelState::Ready
+                | AsrModelState::Loading
+                | AsrModelState::Downloading
+                | AsrModelState::Extracting
+        ) {
+            // 已经在加载或正在下载：需求已登记，准备任务会接着完成。
+            return Ok(status.clone());
+        }
+        // 资产已就绪：同步切到 Loading，使前端轮询到最终状态；
+        // 真正的会话加载交给后台任务，不阻塞 IPC。
+        status.state = AsrModelState::Loading;
+        self.apply_runtime_options(&mut status, &options);
+        status.threads = asr_thread_count();
+        let generation = self.inner.request_generation.load(Ordering::Acquire);
+        drop(status);
+
+        let manager = self.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.prepare_model(proxy, generation, options, true).await;
         });
 
         self.status()
@@ -763,6 +861,7 @@ impl AsrManager {
                 .lock()
                 .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
             self.inner.requested.store(false, Ordering::Release);
+            self.inner.load_requested.store(false, Ordering::Release);
             if let Ok(mut options) = self.inner.runtime_options.lock() {
                 *options = None;
             }
@@ -811,12 +910,119 @@ impl AsrManager {
         Ok(())
     }
 
+    /// 登记一个正在消费字幕的播放器。
+    ///
+    /// 字幕开着但媒体暂停、或窗口暂时不可见时不会产生转写请求，
+    /// 但那不代表可以卸载模型：下一次采集随时会到来。有活动消费者时
+    /// 空闲看门狗不会释放会话。
+    pub fn streaming_started(&self) {
+        self.inner
+            .streaming_count
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.touch_activity();
+    }
+
+    /// 注销一个播放器。计数饱和到 0，重复的注销不会把后续启动变成负数。
+    pub fn streaming_stopped(&self) {
+        let _ = self.inner.streaming_count.fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |count| Some(count.saturating_sub(1)),
+        );
+        self.touch_activity();
+    }
+
+    fn touch_activity(&self) {
+        if let Ok(mut last) = self.inner.last_activity.lock() {
+            *last = Some(std::time::Instant::now());
+        }
+    }
+
+    /// 空闲释放：没有播放器在消费字幕，且已超过 `ASR_IDLE_RELEASE` 未发生转写时，
+    /// 拆掉常驻会话、回到 `Idle`。模型文件仍留在磁盘上，下次开启字幕时按需重载。
+    fn release_idle_session(&self) {
+        if !self.is_requested() {
+            return;
+        }
+        if self
+            .inner
+            .streaming_count
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+        {
+            return;
+        }
+        let idle_for_too_long = self
+            .inner
+            .last_activity
+            .lock()
+            .map(|last| last.is_some_and(|instant| instant.elapsed() >= ASR_IDLE_RELEASE))
+            .unwrap_or(false);
+        if !idle_for_too_long {
+            return;
+        }
+        let is_ready = self
+            .inner
+            .status
+            .lock()
+            .map(|status| status.state == AsrModelState::Ready)
+            .unwrap_or(false);
+        if !is_ready {
+            return;
+        }
+        let session = match self.inner.session.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(_) => return,
+        };
+        if session.is_none() {
+            return;
+        }
+        // 在锁外销毁：释放 ONNX 会话可能需要几百毫秒，不能阻塞其他转写请求。
+        drop(session);
+        // 需求也一并清掉：空闲释放之后再有设置变更不应该重新拉起会话。
+        self.inner
+            .load_requested
+            .store(false, std::sync::atomic::Ordering::Release);
+        self.update_status(|status| {
+            status.state = AsrModelState::Idle;
+            status.message = None;
+        });
+        tracing::debug!("ASR 会话因空闲已释放，下次开启字幕时按需重载");
+    }
+
+    fn start_idle_watchdog(&self) {
+        if self
+            .inner
+            .watchdog_started
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let manager = self.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(ASR_IDLE_WATCHDOG_INTERVAL).await;
+                let manager = manager.clone();
+                // 销毁会话可能阻塞，放到阻塞线程池，避免占住运行时工作线程。
+                let _ = tokio::task::spawn_blocking(move || manager.release_idle_session()).await;
+            }
+        });
+    }
+
+    /// 准备模型资产，并在需要时加载识别会话。
+    ///
+    /// `load_session` 为真表示用户确实要开字幕；为假（启用开关触发的准备）
+    /// 只在资产就绪后停在 `Idle`。两者共用同一个 `prepare_lock`，
+    /// 因此「启用下载中」与「用户已经点了字幕」不会同时下载同一份模型。
     async fn prepare_model(
         &self,
         proxy: Option<String>,
         generation: u64,
         options: AsrRuntimeOptions,
+        load_session: bool,
     ) {
+        use std::sync::atomic::Ordering;
+
         let _prepare = self.inner.prepare_lock.lock().await;
         if !self.request_is_current(generation) {
             return;
@@ -837,6 +1043,27 @@ impl AsrManager {
             }
         };
         if !model_ready || !self.request_is_current(generation) {
+            return;
+        }
+
+        // 需求可能在下载期间到达（用户先开了开关，下载中又点了字幕）：
+        // 资产就绪后重新读一次，避免这轮以 `Idle` 收尾而用户仍在等字幕。
+        // 排队等锁期间到达的需求也由这一次读取覆盖。
+        let load_session = load_session || self.inner.load_requested.load(Ordering::Acquire);
+
+        if !load_session {
+            // 资产已就绪但没有字幕需求：停在 `Idle`，不占模型内存。
+            // 功能仍启用，所以不能落到 `Downloaded`（那个状态对应功能已关闭）。
+            // 若此时仍持有旧会话（例如同一 generation 的设置变更恰好落在字幕
+            // 关闭之后），一并释放，避免常驻会话既不服务也不再被看门狗回收。
+            drop(
+                self.inner
+                    .session
+                    .lock()
+                    .ok()
+                    .and_then(|mut guard| guard.take()),
+            );
+            self.set_idle_ready_status();
             return;
         }
 
@@ -906,6 +1133,8 @@ impl AsrManager {
             status.downloaded_bytes = status.model_size_bytes;
             status.provider = active_provider.clone();
         });
+        self.touch_activity();
+        self.start_idle_watchdog();
     }
 
     async fn ensure_model_assets(
@@ -1338,6 +1567,9 @@ impl AsrManager {
         if !self.is_requested() {
             return Err(AppError::new("asr_disabled", "语音字幕未启用"));
         }
+        // 转写请求本身就是活动信号：即使状态恰好因竞态被空闲释放，
+        // 这次记录也能让看门狗不再重复判定。
+        self.touch_activity();
         {
             let status = self
                 .inner
@@ -1407,6 +1639,7 @@ impl AsrManager {
         });
     }
 
+    /// 功能关闭时的静止状态：已下载的资产保留，会话已释放。
     fn set_idle_status(&self) {
         self.update_status(|status| {
             let options = AsrRuntimeOptions {
@@ -1427,7 +1660,19 @@ impl AsrManager {
             status.model_size_bytes = total_size;
             status.downloaded_bytes = self.downloaded_bytes(&options);
             status.total_bytes = Some(total_size);
-            status.provider = effective_asr_provider(&options.provider).to_string();
+            // 关闭功能时不要为了写状态文案去探测 CUDA：用户刚刚选择不用它。
+            status.provider = asr_provider_placeholder(&options.provider);
+            status.message = None;
+        });
+    }
+
+    /// 功能仍启用、资产已就绪、但会话未加载（或刚被空闲释放）。
+    /// 与 `set_idle_status` 的区别只在 `state`：这里保持 `Idle`，
+    /// 让前端知道点字幕即可加载，而不是让用户重新下载。
+    fn set_idle_ready_status(&self) {
+        self.update_status(|status| {
+            status.state = AsrModelState::Idle;
+            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
             status.message = None;
         });
     }
@@ -1583,6 +1828,23 @@ fn effective_asr_provider(preference: &str) -> &'static str {
     {
         let _ = preference;
         ASR_PROVIDER_CPU
+    }
+}
+
+/// 不触发 CUDA 探测的 provider 展示值。
+///
+/// `effective_asr_provider` 在 Windows 上会加载 `nvcuda.dll`、查询 GPU 并逐个
+/// 试载 CUDA 运行库 DLL；那是「真正启用」才该付的代价。应用启动时的状态快照
+/// 只需要一个占位值，解析留给 `enable`。
+fn asr_provider_placeholder(preference: &str) -> String {
+    #[cfg(windows)]
+    {
+        normalize_asr_provider(preference).to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = preference;
+        ASR_PROVIDER_CPU.to_string()
     }
 }
 

@@ -11,6 +11,8 @@ export type AsrModelState =
   | "extracting"
   | "loading"
   | "ready"
+  /** 模型已下载且功能仍启用，但会话因长时间空闲已释放；开启字幕时按需重载。 */
+  | "idle"
   | "error"
   | "unsupported";
 
@@ -26,7 +28,8 @@ export type AsrModelStatus = {
   speaker_model_downloaded: boolean;
   speaker_model_size_bytes: number;
   threads: number;
-  provider: "cpu" | "cuda";
+  /** 未解析时的占位值（`auto`），真正使用的后端在会话加载后才确定。 */
+  provider: "cpu" | "cuda" | "auto";
   message: string | null;
 };
 
@@ -93,7 +96,8 @@ export function describeAsrModelStatus(
     };
   }
   if (!options.enabled) {
-    const retained = status.state === "ready" || status.state === "downloaded";
+    const retained =
+      status.state === "ready" || status.state === "downloaded" || status.state === "idle";
     return {
       message: retained ? "功能已关闭，本地模型会保留" : "关闭时不会下载模型",
       busy: false,
@@ -139,6 +143,13 @@ export function describeAsrModelStatus(
       return {
         message: "模型已下载，正在加载…",
         busy: true,
+        error: false,
+        progress: 100,
+      };
+    case "idle":
+      return {
+        message: "模型已下载，开启字幕时加载",
+        busy: false,
         error: false,
         progress: 100,
       };
@@ -198,7 +209,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
       if (!state || state === "downloading" || state === "extracting" || state === "loading") {
         return 500;
       }
-      return state === "ready" ? 5_000 : false;
+      return state === "ready" || state === "idle" ? 5_000 : false;
     },
   });
 
@@ -208,6 +219,20 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
     }
     attemptedStateRef.current = null;
     const status = await invokeCmd<AsrModelStatus>("asr_enable");
+    queryClient.setQueryData(ASR_MODEL_STATUS_QUERY_KEY, status);
+    return status;
+  }, [queryClient, supported]);
+
+  /**
+   * 按实际字幕需求加载识别会话。资产已下载时用它取代 `prepare`：
+   * `prepare` 只保证资产就绪，不会为一次点开就常驻加载模型。
+   */
+  const loadSession = useCallback(async () => {
+    if (!supported) {
+      throw new Error("语音字幕当前仅支持 Tauri 桌面客户端");
+    }
+    const status = await invokeCmd<AsrModelStatus>("asr_load_session");
+    // 写回缓存让状态轮询立刻从 `idle` 切到 `loading`。
     queryClient.setQueryData(ASR_MODEL_STATUS_QUERY_KEY, status);
     return status;
   }, [queryClient, supported]);
@@ -231,6 +256,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
     queryError: query.error ? errorMessage(query.error) : null,
     isPending: query.isPending,
     prepare,
+    loadSession,
     refetch: query.refetch,
   };
 }

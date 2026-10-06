@@ -2393,9 +2393,9 @@ function VideoPlayerPageContent() {
    */
   const localCaptionsAvailable = asr.desktopClient;
   const captionsActive = Boolean(subtitleLan) || asr.captionsOn;
-  /** 本地识别不可用/未就绪时把原因写在选项下方；就绪且可切换时不占行。 */
+  /** 本地识别不可用/未就绪时把原因写在选项下方；可直接操作时不占行。 */
   const localCaptionsHint =
-    asr.controlDisabled || asr.modelStatus?.state !== "ready" || asr.modelQueryError
+    asr.controlDisabled || asr.modelStatus?.state === "error" || asr.modelQueryError
       ? asr.controlLabel
       : null;
   const selectNoCaptions = () => {

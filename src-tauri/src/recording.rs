@@ -425,6 +425,17 @@ impl StoredRecording {
     }
 }
 
+/// 录制库视图的统一排序：最新开始在前，同一时间按 id 稳定排列。
+/// 完整库与活动集合共用它，避免两条查询路径各自演化出不同顺序。
+fn sort_recordings_newest_first(items: &mut [RecordingItem]) {
+    items.sort_by(|left, right| {
+        right
+            .started_at
+            .cmp(&left.started_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
 fn parse_stored_recording(bytes: &[u8]) -> Result<StoredRecording, String> {
     let stored =
         serde_json::from_slice::<StoredRecording>(bytes).map_err(|error| error.to_string())?;
@@ -647,6 +658,8 @@ pub struct RecordingManager {
     _instance_lock: File,
     storage: Arc<Mutex<RecordingStorageState>>,
     library: Arc<Mutex<RecordingLibraryIndex>>,
+    /// 完整库索引是否已建立。首次 `list()` 才扫描历史根，启动路径只做恢复保护。
+    library_hydrated: AtomicBool,
     sessions: Mutex<HashMap<String, Session>>,
     finalizing: Mutex<HashMap<String, FinalizingSession>>,
     pending_background_danmaku: Mutex<HashMap<String, usize>>,
@@ -689,7 +702,8 @@ impl RecordingManager {
     pub fn new(app_directory: &Path) -> AppResult<Self> {
         let instance_lock = acquire_recording_manager_lock(app_directory)?;
         let state = load_storage_state(app_directory)?;
-        let mut library = RecordingLibraryIndex::default();
+        // 恢复保护保留在启动路径：崩溃遗留的 `.part` 与「录制中」元数据必须在
+        // 下一次启动时收尾，否则库视图与实际文件会长期不一致。
         for root in &state.roots {
             if let Err(error) = recover_stale_recordings(root) {
                 if *root == state.default_root {
@@ -697,16 +711,19 @@ impl RecordingManager {
                 }
                 tracing::warn!(path = %root.display(), error = %error, "无法恢复历史录制目录");
             }
-            library.replace_root(root.clone(), scan_recording_root(root));
         }
+        // 完整库索引（逐 bundle 读 metadata）延迟到首次 `list()`：不使用录制库的
+        // 启动不再为历史根做全量扫描。索引未建立期间的增量写入仍照常落到
+        // `library`，首次水合会以磁盘扫描结果为准覆盖对应根。
         let storage = Arc::new(Mutex::new(state));
-        let library = Arc::new(Mutex::new(library));
+        let library = Arc::new(Mutex::new(RecordingLibraryIndex::default()));
         let events = Arc::new(RecordingEventSink::default());
         Ok(Self {
             _instance_lock: instance_lock,
             playback: PlaybackServer::new(storage.clone()),
             storage,
             library,
+            library_hydrated: AtomicBool::new(false),
             sessions: Mutex::new(HashMap::new()),
             finalizing: Mutex::new(HashMap::new()),
             pending_background_danmaku: Mutex::new(HashMap::new()),
@@ -826,27 +843,69 @@ impl RecordingManager {
         library.replace_root(current_root, HashMap::new());
         library.replace_root(roots[0].clone(), scan_recording_root(&roots[0]));
         library.refresh_changed_roots(&roots);
+        drop(library);
+        // 这里已经按新根集合重建了索引，后续 `list()` 无需再水合。
+        self.library_hydrated.store(true, Ordering::Release);
         Ok(self.storage_info())
     }
 
+    /// 首次 `list()` 时建立完整库索引。
+    ///
+    /// 双重检查 + 库锁保证并发首次调用只扫描一次；已建立后由
+    /// `refresh_changed_roots` 负责增量刷新。
+    fn ensure_library_hydrated(&self) {
+        if self.library_hydrated.load(Ordering::Acquire) {
+            return;
+        }
+        let roots = self.storage_roots();
+        let mut library = self
+            .library
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.library_hydrated.load(Ordering::Acquire) {
+            return;
+        }
+        for root in &roots {
+            library.replace_root(root.clone(), scan_recording_root(root));
+        }
+        self.library_hydrated.store(true, Ordering::Release);
+    }
+
+    /// 正在采集或收尾的会话快照。
+    ///
+    /// 退出保护、侧栏角标与自动录制去重只需要这一份集合，因此单独提供一条
+    /// 不触碰库索引、不做磁盘扫描的查询路径。
+    pub fn active_items(&self) -> Vec<RecordingItem> {
+        let mut items: Vec<RecordingItem> = self
+            .tracked_session_states()
+            .iter()
+            .map(|state| state.snapshot())
+            .collect();
+        sort_recordings_newest_first(&mut items);
+        items
+    }
+
+    fn tracked_session_states(&self) -> Vec<Arc<SessionState>> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.reap_finished_locked(&mut sessions);
+        let mut finalizing = self
+            .finalizing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::reap_finalizing_locked(&mut finalizing);
+        sessions
+            .values()
+            .map(|session| session.active.current())
+            .chain(finalizing.values().map(|session| session.state.clone()))
+            .collect()
+    }
+
     pub fn list(&self) -> AppResult<Vec<RecordingItem>> {
-        let tracked_states: Vec<_> = {
-            let mut sessions = self
-                .sessions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            self.reap_finished_locked(&mut sessions);
-            let mut finalizing = self
-                .finalizing
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            Self::reap_finalizing_locked(&mut finalizing);
-            sessions
-                .values()
-                .map(|session| session.active.current())
-                .chain(finalizing.values().map(|session| session.state.clone()))
-                .collect()
-        };
+        self.ensure_library_hydrated();
+        let tracked_states = self.tracked_session_states();
         let roots = self.storage_roots();
         let mut library = self
             .library
@@ -863,12 +922,7 @@ impl RecordingManager {
                 items.push(item);
             }
         }
-        items.sort_by(|left, right| {
-            right
-                .started_at
-                .cmp(&left.started_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        sort_recordings_newest_first(&mut items);
         Ok(items)
     }
 
@@ -4491,6 +4545,75 @@ mod tests {
         assert!(manager.has_background_danmaku_recording("live:douyu:100"));
         // 持久化的元数据携带新标记，重启后仍遵循同一契约。
         assert!(read_stored(&root, &id).unwrap().continue_on_leave);
+
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
+    fn library_scan_is_deferred_until_the_first_list_call() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-lazy-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+
+        // 在启动完成之后写入一个已有录制，模拟“磁盘上有历史库”。
+        let stored = completed_recording(test_recording_id(), "historical");
+        let bundle = root.join(&stored.id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join(&stored.media_file), b"media").unwrap();
+        write_metadata(&bundle, &stored).unwrap();
+
+        // 启动路径不做库扫描：只读活动集合时看不到这个历史条目，
+        // 但它本身不应因为没扫描而丢失。
+        assert!(!manager.library_hydrated.load(Ordering::Acquire));
+        assert!(manager.active_items().is_empty());
+
+        // 首次 `list()` 才建立完整索引。
+        let items = manager.list().unwrap();
+        assert!(manager.library_hydrated.load(Ordering::Acquire));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "historical");
+        assert!(manager.active_items().is_empty());
+
+        drop(manager);
+        std::fs::remove_dir_all(app_directory).unwrap();
+    }
+
+    #[test]
+    fn active_items_only_report_tracked_sessions() {
+        let app_directory =
+            std::env::temp_dir().join(format!("rlive-recording-active-{}", Uuid::new_v4()));
+        let manager = RecordingManager::new(&app_directory).unwrap();
+        let root = PathBuf::from(manager.storage_info().path);
+
+        // 历史库里有一条已完成录制。
+        let stored = completed_recording(test_recording_id(), "completed");
+        let bundle = root.join(&stored.id);
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join(&stored.media_file), b"media").unwrap();
+        write_metadata(&bundle, &stored).unwrap();
+
+        // 一条进行中的会话（仅内存跟踪，不要求磁盘上有可扫描的 bundle）。
+        let active_id = test_recording_id();
+        let active_bundle = root.join(&active_id);
+        std::fs::create_dir_all(&active_bundle).unwrap();
+        let active = active_session_state(root.clone(), active_bundle, active_id.clone());
+        manager.sessions.lock().unwrap().insert(
+            active_id.clone(),
+            Session {
+                active: Arc::new(ActiveSessionState::new(active.clone())),
+                cancel: watch::channel(false).0,
+                task: tauri::async_runtime::spawn(async {}),
+            },
+        );
+
+        let active_items = manager.active_items();
+        assert_eq!(active_items.len(), 1);
+        assert_eq!(active_items[0].id, active_id);
+        assert_eq!(active_items[0].status, RecordingStatus::Recording);
+        // 活动集合不读历史库，因此未水合仍是假。
+        assert!(!manager.library_hydrated.load(Ordering::Acquire));
 
         drop(manager);
         std::fs::remove_dir_all(app_directory).unwrap();

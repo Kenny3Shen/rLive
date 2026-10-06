@@ -52,7 +52,10 @@ use commands::android_system_bars::android_system_bars_set_appearance;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use commands::app_lifecycle::{app_confirm_exit, recording_active_count};
 #[cfg(not(target_os = "android"))]
-use commands::asr::{asr_disable, asr_enable, asr_get_status, asr_reset_stream, asr_transcribe};
+use commands::asr::{
+    asr_disable, asr_enable, asr_get_status, asr_load_session, asr_reset_stream,
+    asr_streaming_started, asr_streaming_stopped, asr_transcribe,
+};
 use commands::cache::{cache_clear, cache_usage};
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
@@ -82,10 +85,10 @@ use commands::lan_sync::{lan_sync_receive, lan_sync_start, lan_sync_status, lan_
 use commands::profile::{profile_export, profile_import};
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use commands::recording::{
-    recording_danmaku_export_ass, recording_danmaku_url, recording_delete, recording_list,
-    recording_playback_url, recording_set_continue_on_leave, recording_set_storage_path,
-    recording_start, recording_stop, recording_storage_info, recording_watch_progress_find,
-    recording_watch_progress_list, recording_watch_progress_report,
+    recording_active_list, recording_danmaku_export_ass, recording_danmaku_url, recording_delete,
+    recording_list, recording_playback_url, recording_set_continue_on_leave,
+    recording_set_storage_path, recording_start, recording_stop, recording_storage_info,
+    recording_watch_progress_find, recording_watch_progress_list, recording_watch_progress_report,
 };
 use commands::settings::{settings_get, settings_set};
 use commands::site::{
@@ -348,13 +351,21 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             asr_enable,
             #[cfg(not(target_os = "android"))]
+            asr_load_session,
+            #[cfg(not(target_os = "android"))]
             asr_disable,
             #[cfg(not(target_os = "android"))]
             asr_reset_stream,
             #[cfg(not(target_os = "android"))]
+            asr_streaming_started,
+            #[cfg(not(target_os = "android"))]
+            asr_streaming_stopped,
+            #[cfg(not(target_os = "android"))]
             asr_transcribe,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_list,
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            recording_active_list,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording_start,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]

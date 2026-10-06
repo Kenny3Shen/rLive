@@ -1404,7 +1404,8 @@ function AsrModelField() {
   async function retryPreparation() {
     setActionError(null);
     try {
-      await model.prepare();
+      // 资产不完整时 `loadSession` 会先补齐下载；资产已就绪时直接加载会话。
+      await model.loadSession();
       await model.refetch();
     } catch (error) {
       setActionError(errorMessage(error));

@@ -97,6 +97,8 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const workerRunningRef = useRef(false);
   const captionTimerRef = useRef<number | null>(null);
   const chunkSetterRef = useRef<((seconds: number) => void) | null>(null);
+  /** 用户已表达「要开字幕」，但会话还在加载；就绪后自动开启。 */
+  const pendingEnableRef = useRef(false);
   const translation = useCaptionTranslation({
     active: captionsOn,
     enabled: options.translationEnabled,
@@ -159,6 +161,38 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     }
   }, [clearCaptionTimer, enqueueTranslation]);
 
+  // 会话加载完成后兑现用户已经表达过的「开字幕」意图。
+  // 只在这里消费一次：用户如果又点了一下关闭，pendingEnableRef 会先被清掉。
+  useEffect(() => {
+    if (!pendingEnableRef.current) return;
+    if (model.status?.state !== "ready" || !options.mediaAvailable) return;
+    pendingEnableRef.current = false;
+    // oxlint-disable-next-line react/set-state-in-effect
+    setCaptionsOn(true);
+  }, [model.status?.state, options.mediaAvailable]);
+
+  // 字幕还开着但会话被空闲看门狗释放：重新加载，否则开关显示为开启、
+  // 实际却没有采集，直到用户重新点一次。只在媒体可用时重载 ——
+  // 媒体不可用时采集本来就不会启动，重载只会陷入「加载 → 空闲释放」的循环。
+  const loadSessionFromIdle = model.loadSession;
+  const modelStatusState = model.status?.state;
+  const modelIsSupported = model.supported;
+  useEffect(() => {
+    if (!captionsOn || !options.featureEnabled || !modelIsSupported) return;
+    if (!options.mediaAvailable || modelStatusState !== "idle") return;
+    pendingEnableRef.current = true;
+    void loadSessionFromIdle().catch(() => {
+      pendingEnableRef.current = false;
+    });
+  }, [
+    captionsOn,
+    loadSessionFromIdle,
+    modelIsSupported,
+    modelStatusState,
+    options.featureEnabled,
+    options.mediaAvailable,
+  ]);
+
   useEffect(() => {
     /* 功能或模型不可用时整条字幕管线复位。外部会话编排：epoch 栅栏与计时器
        清理必须与状态写入原子地同步发生，以围栏在途识别任务。 */
@@ -170,6 +204,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       setNotice(null);
       setCaptureError(null);
       pendingJobRef.current = null;
+      pendingEnableRef.current = false;
       epochRef.current += 1;
       clearCaptionTimer();
     }
@@ -210,6 +245,21 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     const epoch = ++epochRef.current;
     let cancelled = false;
     let subscription: AudioCaptureSubscription | null = null;
+    // 登记活动消费者：空闲看门狗据此不释放会话。
+    // 字幕开着但媒体暂停时不产生转写请求，但模型仍必须常驻。
+    // 登记与注销必须成对：IPC 往返期间就卸载时，登记完成后立即补发注销，
+    // 否则计数会永远留在 1，模型再也不会被空闲释放。
+    let streamingRegistered = false;
+    const stopStreaming = () => {
+      streamingRegistered = false;
+      return invokeCmd("asr_streaming_stopped").catch(() => undefined);
+    };
+    const streamingRequest = invokeCmd("asr_streaming_started")
+      .then(() => {
+        streamingRegistered = true;
+        if (cancelled) void stopStreaming();
+      })
+      .catch(() => undefined);
     void subscribeToVideoPcm(video, (pcm) => {
       // 每完成一个窗口立即发布；当推理慢于播放时，
       // 只保留最新一个尚未开始的窗口。
@@ -237,6 +287,9 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     return () => {
       cancelled = true;
       subscription?.release();
+      void streamingRequest.then(() => {
+        if (streamingRegistered) void stopStreaming();
+      });
       if (subscription && chunkSetterRef.current === subscription.setChunkSeconds) {
         chunkSetterRef.current = null;
       }
@@ -265,14 +318,31 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const modelSupported = model.supported;
   const modelState = model.status?.state;
   const modelQueryError = model.queryError;
-  const prepareModel = model.prepare;
+  const loadSession = model.loadSession;
   const toggle = useCallback(() => {
     if (!localAsrClient || !modelSupported || !options.featureEnabled) return;
     if (modelState === "error" || modelQueryError) {
+      // 失败后重试：`asr_load_session` 会重新校验/补齐资产再加载会话，
+      // 一次点击就能把用户带回可看状态。
       setNotice(null);
       setCaptureError(null);
-      void prepareModel().catch((error) => {
+      pendingEnableRef.current = true;
+      void loadSession().catch((error) => {
+        pendingEnableRef.current = false;
         setNotice(`模型准备失败：${errorMessage(error)}`);
+      });
+      return;
+    }
+    // 资产就绪（`downloaded`/`idle`）时先按需加载会话，加载完成后
+    // 由 status 变为 `ready` 触发采集。这里不阻塞点击：会话加载可能要几秒，
+    // 状态轮询会把进度画在控件上。
+    if (modelState === "downloaded" || modelState === "idle") {
+      setNotice(null);
+      setCaptureError(null);
+      pendingEnableRef.current = true;
+      void loadSession().catch((error) => {
+        pendingEnableRef.current = false;
+        setNotice(`模型加载失败：${errorMessage(error)}`);
       });
       return;
     }
@@ -289,6 +359,8 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
         setNotice(null);
         setCaptureError(null);
         pendingJobRef.current = null;
+        // 用户在会话加载期间又点了关闭：取消先前登记的开启意图。
+        pendingEnableRef.current = false;
         epochRef.current += 1;
         clearCaptionTimer();
         void invokeCmd("asr_reset_stream").catch(() => {});
@@ -297,13 +369,13 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     });
   }, [
     clearCaptionTimer,
+    loadSession,
     localAsrClient,
     modelQueryError,
     modelState,
     modelSupported,
     options.featureEnabled,
     options.mediaAvailable,
-    prepareModel,
   ]);
 
   const statusPresentation = describeAsrModelStatus(model.status, {
@@ -329,6 +401,9 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     controlBusy = true;
   } else if (model.status?.state === "error" || model.queryError || captureError) {
     controlLabel = captureError ? "重试开启语音字幕" : "重试准备语音字幕模型";
+  } else if (model.status?.state === "downloaded" || model.status?.state === "idle") {
+    // 资产已就绪但会话未加载：点击即按需加载，不阻断用户。
+    controlLabel = "开启语音字幕";
   } else if (model.status?.state !== "ready") {
     controlLabel = statusPresentation.message;
     controlDisabled = true;

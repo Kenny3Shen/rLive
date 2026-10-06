@@ -9,7 +9,7 @@ import {
   fetchActiveRecordingCount,
   recordingErrorMessage,
   recordingSupported,
-  useRecordings,
+  useActiveRecordings,
 } from "./recording";
 
 /** 任务运行期间由窗口关闭处理器发出，而不是直接关闭窗口。 */
@@ -25,16 +25,18 @@ const APP_EXIT_REQUESTED_EVENT = "app-exit-requested";
  */
 export function RecordingExitGuard() {
   const supported = recordingSupported();
-  const recordings = useRecordings(supported);
-  // 后端随关闭请求上报的数量。它是权威且最新的；库查询是缓存且背后是 15 秒轮询，
-  // 刚刚开始或结束的任务仍会被数错。
+  // 退出保护只关心活动任务：这里刻意不读完整库，避免仅仅因为应用启动就建立
+  // 全量录制索引（首次调用会扫描所有历史根）。
+  const recordings = useActiveRecordings(supported);
+  // 后端随关闭请求上报的数量。它是权威且最新的；活动集合查询是缓存且背后是
+  // 15 秒轮询，刚刚开始或结束的任务仍会被数错。
   const [reportedCount, setReportedCount] = useState<number | null>(null);
   const cachedCount = activeRecordingCount(recordings.data);
-  // 上报的数量只能说明任务*曾经*在运行。一旦事件驱动的列表显示没有任务在采集，
+  // 上报的数量只能说明任务*曾经*在运行。一旦事件驱动的活动集合显示没有任务在采集，
   // 那才是更新的事实，下方的自动退出可以据此执行。
   const activeCount =
     recordings.isSuccess && cachedCount === 0 ? 0 : (reportedCount ?? cachedCount);
-  // 后端只在有活动任务时才询问，所以列表未解析意味着"未知"而不是"没有"。
+  // 后端只在有活动任务时才询问，所以活动集合未解析意味着"未知"而不是"没有"。
   // 自动退出会等待它，而不是跳过本应由用户回答的问题。
   const countKnown = reportedCount !== null || recordings.isSuccess;
   const [open, setOpen] = useState(false);
