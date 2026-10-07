@@ -109,6 +109,15 @@ fn normalize_hidden_home_entry_ids(settings: &mut AppSettings) {
     });
 }
 
+fn normalize_proxy_preferences(settings: &mut AppSettings) {
+    settings.proxy = settings
+        .proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+}
+
 fn normalize_asr_preferences(settings: &mut AppSettings) {
     if !matches!(settings.asr_provider.as_str(), "auto" | "cpu" | "cuda") {
         settings.asr_provider = "auto".to_owned();
@@ -311,7 +320,7 @@ pub fn get(conn: &Connection) -> AppResult<AppSettings> {
 }
 
 fn decode_saved_settings(json: &str) -> AppResult<AppSettings> {
-    let value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
         AppError::new(
             "settings_schema_unsupported",
             format!("当前设置不是受支持的 rLive 2.0 格式: {error}"),
@@ -341,6 +350,7 @@ fn decode_saved_settings(json: &str) -> AppResult<AppSettings> {
             format!("当前设置缺少必填字段 {field}"),
         ));
     }
+    crate::models::settings::backfill_proxy_mode(&mut value);
     serde_json::from_value(value).map_err(|error| {
         AppError::new(
             "settings_schema_unsupported",
@@ -368,6 +378,7 @@ pub fn get_with_status(conn: &Connection) -> AppResult<(AppSettings, bool)> {
     let mut settings = decode_saved_settings(&json)?;
     normalize_site_preferences(&mut settings);
     normalize_hidden_home_entry_ids(&mut settings);
+    normalize_proxy_preferences(&mut settings);
     normalize_danmaku_preferences(&mut settings);
     normalize_video_blocked_uploaders(&mut settings);
     normalize_asr_preferences(&mut settings);
@@ -380,6 +391,7 @@ pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
     let mut normalized = settings.clone();
     normalize_site_preferences(&mut normalized);
     normalize_hidden_home_entry_ids(&mut normalized);
+    normalize_proxy_preferences(&mut normalized);
     normalize_danmaku_preferences(&mut normalized);
     normalize_video_blocked_uploaders(&mut normalized);
     normalize_asr_preferences(&mut normalized);
@@ -434,6 +446,47 @@ mod tests {
         assert_eq!(s.recording_ass.font_size, 36);
         assert_eq!(s.recording_ass.opacity_percent, 80);
         assert_eq!(s.recording_ass.display_area_percent, 25);
+    }
+
+    #[test]
+    fn proxy_mode_migrates_legacy_addresses_but_preserves_explicit_modes() {
+        use crate::models::settings::ProxyMode;
+        assert_eq!(AppSettings::default().proxy_mode, ProxyMode::Auto);
+        for (address, expected) in [
+            (Some(" http://127.0.0.1:7890 "), ProxyMode::Custom),
+            (None, ProxyMode::Auto),
+            (Some("  "), ProxyMode::Auto),
+        ] {
+            let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+            value.as_object_mut().unwrap().remove("proxy_mode");
+            value["proxy"] = serde_json::to_value(address).unwrap();
+            let conn = open_in_memory().unwrap();
+            conn.execute(
+                "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
+                params![SETTINGS_KEY, value.to_string()],
+            )
+            .unwrap();
+            let settings = get(&conn).unwrap();
+            assert_eq!(settings.proxy_mode, expected);
+            if expected == ProxyMode::Custom {
+                assert_eq!(settings.proxy.as_deref(), Some("http://127.0.0.1:7890"));
+            }
+        }
+        let conn = open_in_memory().unwrap();
+        let mut settings = AppSettings {
+            proxy: Some("http://127.0.0.1:7890".into()),
+            ..AppSettings::default()
+        };
+        for mode in [
+            ProxyMode::Custom,
+            ProxyMode::Off,
+            ProxyMode::Auto,
+            ProxyMode::Custom,
+        ] {
+            settings.proxy_mode = mode;
+            set(&conn, &settings).unwrap();
+            assert_eq!(get(&conn).unwrap(), settings);
+        }
     }
 
     #[test]

@@ -126,6 +126,7 @@ function settingsFromState() {
     default_site: state.siteId,
     disabled_site_ids: state.disabledSiteIds,
     hidden_home_entry_ids: state.hiddenHomeEntryIds,
+    proxy_mode: state.proxyMode,
     proxy: state.proxy,
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_stroke: state.danmakuFontStroke,

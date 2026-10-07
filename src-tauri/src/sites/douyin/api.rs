@@ -147,10 +147,8 @@ impl DouyinSite {
             sends_douyin_cookie,
         )
         .await?;
-        // 抖音会按出口 IP 对详情类接口做风控：被拒的出口回
-        // `403 Blocked by ArgusSecurityPlugin`，而同一会话改走直连可以正常返回。
-        // 只在这一特征命中时换完全直连（不读环境变量与系统代理）的客户端重试一次，
-        // 重试自身失败时仍报告原始响应。
+        // 仅在明确 Argus 风控特征命中时原样重试一次；必须保留应用选择的出口，
+        // 不能把「自定义/自动」悄悄降级为直连。重试自身失败时仍报告原始响应。
         if is_argus_security_block(response.status, &response.text)
             && let Ok(retried) = Self::send_text(
                 &self.fallback_client,
@@ -177,7 +175,7 @@ impl DouyinSite {
         if !status.is_success() {
             if is_argus_security_block(status, &text) {
                 return Err(Self::err(
-                    "抖音风控拒绝了当前网络出口的请求（HTTP 403），直连重试也未通过；请在「设置 → 网络」更换代理或改用其他网络后重试",
+                    "抖音风控拒绝了当前网络出口的请求（HTTP 403），重试也未通过；请在「设置 → 网络」更换代理或改用其他网络后重试",
                 ));
             }
             // 响应 body 可能由边缘节点生成，并可能反映请求取值。
@@ -359,7 +357,7 @@ struct RawResponse {
     text: String,
 }
 
-/// 抖音边缘节点拒绝被风控的出口时使用的正文标记；只用于决定是否换直连重试，
+/// 抖音边缘节点拒绝被风控的出口时使用的正文标记；只用于决定是否原路由重试，
 /// 不向用户展示正文。
 fn is_argus_security_block(status: StatusCode, text: &str) -> bool {
     status == StatusCode::FORBIDDEN && text.contains("ArgusSecurityPlugin")
@@ -702,6 +700,26 @@ mod tests {
             StatusCode::OK,
             "Blocked by ArgusSecurityPlugin"
         ));
+    }
+
+    /// 生产构造入口的重试客户端必须复用应用代理，不得静默换成直连。
+    #[tokio::test]
+    async fn production_fallback_preserves_the_configured_proxy() {
+        let proxy = FixtureProxy::start(Duration::from_secs(3), |_| {
+            ("200 OK", "text/plain", "routed".into())
+        });
+        let site = DouyinSite::new(proxy.client(), String::new());
+        let body = site
+            .fallback_client
+            .get("http://unresolvable.invalid/retry")
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(body, "routed");
+        assert_eq!(proxy.join(), 1);
     }
 
     /// 两个本地固定代理分别模拟被风控的出口与可用的回退出口：

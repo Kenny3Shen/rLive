@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
 use tokio::time;
 use tokio_tungstenite::{
-    connect_async,
+    client_async_tls_with_config,
     tungstenite::{
         Error as WsError, Message,
         client::IntoClientRequest,
@@ -23,6 +23,7 @@ use tokio_tungstenite::{
 };
 
 use crate::danmu_rs::douyin_sign;
+use crate::danmu_rs::proxy::open_websocket_transport;
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::danmu_rs::{ProtoReader, ProtoValue};
@@ -262,10 +263,14 @@ fn validate_numeric_id(value: &str, label: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub async fn run_loop(events: DanmakuEventSender, args: DouyinDanmakuArgs) -> AppResult<()> {
+pub async fn run_loop(
+    events: DanmakuEventSender,
+    args: DouyinDanmakuArgs,
+    route: crate::proxy::ProxyRoute,
+) -> AppResult<()> {
     let mut policy = ReconnectPolicy::with_defaults("douyin");
     loop {
-        let reason = run_connection_once(&events, &args).await;
+        let reason = run_connection_once(&events, &args, &route).await;
         match policy.on_disconnect(reason) {
             Decision::Retry { delay, notice } => {
                 emit_system(&events, notice);
@@ -289,6 +294,7 @@ struct ConnectFailure {
 async fn run_connection_once(
     events: &DanmakuEventSender,
     args: &DouyinDanmakuArgs,
+    route: &crate::proxy::ProxyRoute,
 ) -> DisconnectReason {
     emit_system(events, "正在连接抖音弹幕服务器…");
 
@@ -300,7 +306,7 @@ async fn run_connection_once(
             Ok(url) => url,
             Err(_) => continue,
         };
-        let mut request = match url.into_client_request() {
+        let mut request = match url.clone().into_client_request() {
             Ok(request) => request,
             Err(_) => continue,
         };
@@ -314,13 +320,27 @@ async fn run_connection_once(
             request.headers_mut().insert(name, value);
         }
 
-        let outcome = tokio::time::timeout(
-            Duration::from_secs(CONNECT_TIMEOUT_SECS),
-            connect_async(request),
-        )
+        // 边缘节点会轮换，逐个按实际 authority 判定绕过与上游代理。
+        let proxy = match crate::danmu_rs::proxy::ConnectProxy::from_route(
+            route,
+            &format!("{host}:443"),
+            "douyin",
+            "抖音",
+        ) {
+            Ok(proxy) => proxy,
+            Err(error) => return DisconnectReason::fatal(error.message),
+        };
+        let outcome = tokio::time::timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), async {
+            let stream = open_websocket_transport(proxy.as_ref(), &host, 443, None)
+                .await
+                .map_err(|message| WsError::Io(std::io::Error::other(message)))?;
+            client_async_tls_with_config(request, stream, None, None)
+                .await
+                .map(|(ws, _)| ws)
+        })
         .await;
         match outcome {
-            Ok(Ok((ws, _))) => {
+            Ok(Ok(ws)) => {
                 connected = Some(ws);
                 break;
             }
@@ -740,6 +760,64 @@ mod tests {
     use super::*;
     use flate2::{Compression, write::GzEncoder};
 
+    /// 抖音接收链路必须按应用代理路由拨号，而不是 `connect_async` 的固定直连：
+    /// 后者无法表达自定义或系统代理，自动/自定义模式下会静默绕过设置。
+    /// 边缘节点会轮换，这里断言每个候选主机都按自己的 authority 走隧道。
+    #[tokio::test]
+    async fn receive_gateway_dials_through_the_configured_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // 只接受前两个候选节点的 CONNECT；TLS 不完整时链路会继续轮换。
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    assert!(headers.len() < 4096);
+                    headers.push(stream.read_u8().await.unwrap());
+                }
+                let headers = String::from_utf8(headers).unwrap();
+                requests.push(headers.lines().next().unwrap().to_string());
+                stream
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        let args = DouyinDanmakuArgs {
+            room_id: "522864404974".into(),
+            user_unique_id: "1".into(),
+            signature: "fixture".into(),
+            internal_ext: "fixture".into(),
+            headers: HashMap::new(),
+            heartbeat_interval: Duration::from_secs(10),
+        };
+        let route = crate::proxy::ProxyRoute::Custom(format!("http://{address}"));
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let events = DanmakuEventSender::new(tx, Default::default());
+
+        // 一次连接尝试足够：固定代理不会完成 TLS，函数在遇到首个瞬时失败后
+        // 仍会尝试下一候选节点，因此这里只取受到两次 CONNECT 前的状态。
+        let _ = time::timeout(
+            Duration::from_secs(5),
+            run_connection_once(&events, &args, &route),
+        )
+        .await;
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests,
+            [
+                format!("CONNECT {}:443 HTTP/1.1", DOUYIN_WS_HOSTS[0]),
+                format!("CONNECT {}:443 HTTP/1.1", DOUYIN_WS_HOSTS[1]),
+            ]
+        );
+    }
+
     /// 直播 WSS 握手冒烟：X-Bogus 签名必须被 webcast 边缘接受。
     /// 覆盖纯 Rust 签名链路：匿名 `ttwid` 引导 → feed 开播房间 →
     /// [`build_connection`] 签名 → 握手 → 收到首帧。
@@ -811,7 +889,7 @@ mod tests {
 
         let (ws, _response) = tokio::time::timeout(
             Duration::from_secs(CONNECT_TIMEOUT_SECS),
-            connect_async(request),
+            tokio_tungstenite::connect_async(request),
         )
         .await
         .expect("handshake timeout")

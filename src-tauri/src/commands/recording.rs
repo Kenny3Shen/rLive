@@ -15,11 +15,16 @@ use crate::state::AppState;
 
 fn configured_recording_options(
     state: &AppState,
-) -> AppResult<(Option<String>, FfmpegRecordingOptions, bool, usize)> {
+) -> AppResult<(
+    crate::proxy::ProxyRoute,
+    FfmpegRecordingOptions,
+    bool,
+    usize,
+)> {
     let conn = state.conn()?;
     let settings = crate::settings::get(&conn)?;
     Ok((
-        settings.proxy,
+        settings.proxy_route(),
         FfmpegRecordingOptions {
             rw_timeout_seconds: settings.ffmpeg_rw_timeout_seconds,
             reconnect_delay_max_seconds: settings.ffmpeg_reconnect_delay_max_seconds,
@@ -60,12 +65,12 @@ pub async fn recording_start(
         input.source_key.trim(),
         input.include_danmaku != Some(false) && input.continue_on_leave != Some(false),
     );
-    let (proxy, ffmpeg_options, default_include_danmaku, max_concurrent) =
+    let (route, ffmpeg_options, default_include_danmaku, max_concurrent) =
         configured_recording_options(state.inner())?;
     let input = input.with_recording_defaults(default_include_danmaku);
     state
         .recording
-        .start_with_ffmpeg_options(input, proxy.as_deref(), ffmpeg_options, max_concurrent)
+        .start_with_ffmpeg_options(input, &route, ffmpeg_options, max_concurrent)
         .await
 }
 

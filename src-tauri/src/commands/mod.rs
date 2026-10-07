@@ -15,6 +15,7 @@ pub mod dlna;
 pub mod douyin_video;
 pub mod follow;
 pub mod history;
+pub mod http;
 pub mod image_proxy;
 pub mod iptv;
 pub mod lan_sync;

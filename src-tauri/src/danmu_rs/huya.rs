@@ -13,12 +13,12 @@ use md5::{Digest, Md5};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
 use serde_json::Value;
 use tokio::time;
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
-};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::{Message, http::HeaderValue};
+use tokio_tungstenite::{WebSocketStream, client_async_tls_with_config};
 use uuid::Uuid;
 
+use crate::danmu_rs::proxy::{ConnectProxy, PROXY_CONNECT_TIMEOUT, open_websocket_transport};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
@@ -436,14 +436,73 @@ fn encode_send_message(
     encode_websocket_command_with_metadata(WS_CMD_WUP_REQUEST, &wup, 0, &trace_id, &checksum)
 }
 
-type HuyaWebSocket =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type HuyaWebSocket = WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<
+        tokio::io::BufStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    >,
+>;
 
-async fn connect_send_ws(credentials: &HuyaSendCredentials) -> AppResult<HuyaWebSocket> {
+/// 按应用代理路由建立虎牙 WebSocket，接收与发送网关共用。
+///
+/// 两个端点在同一次会话里必须走同一条出口：只代理接收链路时，在“必须走代理
+/// 才能访问虎牙”的网络里写入会直接连不上，而在“代理出口被风控”的网络里
+/// 没有代理的接收链路又会被限流。
+async fn connect_huya_ws(
+    route: &crate::proxy::ProxyRoute,
+    url: &str,
+    request: tokio_tungstenite::tungstenite::handshake::client::Request,
+) -> AppResult<HuyaWebSocket> {
+    let parsed = reqwest::Url::parse(url).map_err(|error| {
+        AppError::new("huya_danmaku_url", format!("虎牙弹幕地址无效：{error}")).with_site("huya")
+    })?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| {
+            AppError::new("huya_danmaku_url", "虎牙弹幕地址缺少主机名").with_site("huya")
+        })?
+        .to_owned();
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let proxy = ConnectProxy::from_route(route, &format!("{host}:{port}"), "huya", "虎牙")?;
+    let stream = open_websocket_transport(proxy.as_ref(), &host, port, None)
+        .await
+        .map_err(|message| {
+            AppError::new(
+                "huya_danmaku_transport",
+                format!("连接虎牙弹幕服务器失败：{message}"),
+            )
+            .with_site("huya")
+            .retryable()
+        })?;
+    time::timeout(
+        PROXY_CONNECT_TIMEOUT,
+        client_async_tls_with_config(request, stream, None, None),
+    )
+    .await
+    .map_err(|_| {
+        AppError::new("huya_danmaku_transport", "虎牙弹幕 WebSocket 握手超时")
+            .with_site("huya")
+            .retryable()
+    })?
+    .map(|(socket, _)| socket)
+    .map_err(|error| {
+        AppError::new(
+            "huya_danmaku_transport",
+            format!("虎牙弹幕 WebSocket 握手失败：{error}"),
+        )
+        .with_site("huya")
+        .retryable()
+    })
+}
+
+async fn connect_send_ws(
+    credentials: &HuyaSendCredentials,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<HuyaWebSocket> {
     let baseinfo = build_send_baseinfo(credentials);
     let mut last_error = None;
     for endpoint in SEND_SERVER_URLS {
         let url = format!("{endpoint}?baseinfo={baseinfo}");
+        // 写入链路必须携带 Cookie，因此不能复用接收链路的请求构造。
         let mut request = match url.as_str().into_client_request() {
             Ok(request) => request,
             Err(error) => {
@@ -468,14 +527,17 @@ async fn connect_send_ws(credentials: &HuyaSendCredentials) -> AppResult<HuyaWeb
         headers.insert("User-Agent", user_agent);
         headers.insert("Cookie", cookie);
 
-        match connect_async(request).await {
-            Ok((socket, _)) => return Ok(socket),
+        match connect_huya_ws(route, &url, request).await {
+            Ok(socket) => return Ok(socket),
+            // 代理地址本身无效时，换端点重试也不会成功：直接把它作为
+            // 配置错误返回，而不是重试成一串网络错误。
+            Err(error) if error.code.contains("danmaku_proxy") => return Err(error),
             Err(error) => {
                 // 这里不要包含 URL：它的 query 中带有与用户绑定的
                 // 连接描述符。端点名称和错误信息已足够诊断，
                 // 无需暴露会话细节。
                 tracing::warn!(host = %endpoint, error = %error, "huya send websocket connect failed");
-                last_error = Some(error.to_string());
+                last_error = Some(error.message);
             }
         }
     }
@@ -590,13 +652,15 @@ fn verify_cookie_response(payload: &[u8]) -> AppResult<()> {
 /// （缺少会话字段、连接失败、超时或响应无法解码）时返回 `None`。调用方据此提示
 /// 重新登录，因此这里对 `false` 保持保守：只有网关给出的可识别拒绝才算失效。
 ///
-/// 与虎牙其余信令一致，这条探针直连网关，不经过应用代理设置；代理独占的网络下
-/// 连接失败只会留在「未知」，不会把仍然有效的账号判成已失效。
-pub async fn cookie_session_status(cookie: &str) -> Option<bool> {
+/// 与虎牙其余信令一致，这条探针沿用应用代理路由；代理独占的网络下
+/// 连接失败只会留在「未知」，不会把仍然有效的账号判成已失效。调用的
+/// `open_websocket_transport` 自建 TCP 流，因此路由始终按参数决定，
+/// 不会受进程环境变量影响。
+pub async fn cookie_session_status(cookie: &str, route: &crate::proxy::ProxyRoute) -> Option<bool> {
     // 缺少数字账号标识或任一登录凭据时无法构造校验请求。这是本地形状问题，
     // 而不是平台给出的拒绝，因此留在「未知」。
     let credentials = credentials_from_cookie(cookie)?;
-    let socket = connect_send_ws(&credentials).await.ok()?;
+    let socket = connect_send_ws(&credentials, route).await.ok()?;
     let (mut write, mut read) = socket.split();
     write
         .send(Message::Binary(encode_verify_cookie(&credentials).into()))
@@ -668,7 +732,12 @@ fn send_response_status(payload: &[u8]) -> AppResult<(i64, String)> {
 /// 认证一次性的虎牙信令 websocket，并只提交一条文本消息。不做自动重试，
 /// 也不做乐观的本地回显：最后一次写入之后的超时
 /// 仍可能意味着远端服务已经接受了它。
-pub async fn send_chat(cookie: &str, args: HuyaDanmakuArgs, message: &str) -> AppResult<()> {
+pub async fn send_chat(
+    cookie: &str,
+    args: HuyaDanmakuArgs,
+    message: &str,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<()> {
     let message = normalize_outgoing_message(message)?;
     if args.top_sid <= 0 || args.sub_sid <= 0 {
         return Err(AppError::new(
@@ -685,7 +754,7 @@ pub async fn send_chat(cookie: &str, args: HuyaDanmakuArgs, message: &str) -> Ap
         .with_site("huya")
     })?;
 
-    let socket = connect_send_ws(&credentials).await?;
+    let socket = connect_send_ws(&credentials, route).await?;
     let (mut write, mut read) = socket.split();
     write
         .send(Message::Binary(encode_verify_cookie(&credentials).into()))
@@ -807,7 +876,11 @@ fn decode_message(data: &[u8]) -> Vec<DanmakuEvent> {
     events
 }
 
-pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppResult<()> {
+pub async fn run_loop(
+    events: DanmakuEventSender,
+    args: HuyaDanmakuArgs,
+    route: crate::proxy::ProxyRoute,
+) -> AppResult<()> {
     // 频道 id 来自房间元数据；没有它加入包就无法指向任何频道，
     // 因此这里是本地拒绝而不是发起拨号。
     if args.top_sid == 0 && args.sub_sid == 0 {
@@ -818,7 +891,7 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
 
     let mut policy = ReconnectPolicy::with_defaults("huya");
     loop {
-        let reason = run_connection_once(&events, &args).await;
+        let reason = run_connection_once(&events, &args, &route).await;
         match policy.on_disconnect(reason) {
             Decision::Retry { delay, notice } => {
                 emit_system(&events, notice);
@@ -835,13 +908,29 @@ pub async fn run_loop(events: DanmakuEventSender, args: HuyaDanmakuArgs) -> AppR
 async fn run_connection_once(
     events: &DanmakuEventSender,
     args: &HuyaDanmakuArgs,
+    route: &crate::proxy::ProxyRoute,
 ) -> DisconnectReason {
     emit_system(events, "正在连接弹幕服务器…");
 
-    let (ws, _) = match connect_async(SERVER_URL).await {
+    let ws = match connect_huya_ws(
+        route,
+        SERVER_URL,
+        match SERVER_URL.into_client_request() {
+            Ok(request) => request,
+            Err(error) => {
+                return DisconnectReason::transient(format!("连接虎牙弹幕服务器失败：{error}"));
+            }
+        },
+    )
+    .await
+    {
         Ok(ws) => ws,
-        Err(e) => {
-            return DisconnectReason::transient(format!("连接虎牙弹幕服务器失败：{e}"));
+        Err(error) => {
+            // 代理地址无效属于配置问题，重试同一份设置没有意义。
+            if error.code.contains("danmaku_proxy") {
+                return DisconnectReason::fatal(error.message);
+            }
+            return DisconnectReason::transient(error.message);
         }
     };
     let connected_at = Instant::now();
@@ -939,6 +1028,78 @@ mod tests {
         assert_eq!(verify_cookie_verdict(&[0x03, 0x00]), None);
     }
 
+    /// 接收网关与发送网关必须共用应用代理路由：只代理接收链路（或反之）会让
+    /// “必须走代理才能访问虎牙”的网络与“代理出口被风控”的网络各有一条链路可用、
+    /// 另一条不可用。固定代理只完成 CONNECT，因此 TLS 握手必然失败；
+    /// 测试断言的是两条链路都先去代理报到，而不是直连目标。
+    #[tokio::test]
+    async fn receive_and_send_gateways_share_the_configured_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    assert!(headers.len() < 4096);
+                    headers.push(stream.read_u8().await.unwrap());
+                }
+                let headers = String::from_utf8(headers).unwrap();
+                requests.push(headers.lines().next().unwrap().to_string());
+                stream
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        let route = crate::proxy::ProxyRoute::Custom(format!("http://{address}"));
+
+        // 接收网关。TLS 握手预期失败：已证明目标不再是直连，而是经代理转发。
+        assert!(
+            connect_huya_ws(
+                &route,
+                SERVER_URL,
+                SERVER_URL.into_client_request().unwrap(),
+            )
+            .await
+            .is_err(),
+            "固定代理只发 CONNECT 不应完成 TLS 握手"
+        );
+
+        // 发送网关必须与接收网关走同一出口，而不是退回直连。
+        let credentials = credentials_from_cookie("yyuid=42; udb_n=viewer; udb_cred=secret")
+            .expect("fixture credentials");
+        assert!(connect_send_ws(&credentials, &route).await.is_err());
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests,
+            [
+                "CONNECT cdnws.api.huya.com:443 HTTP/1.1",
+                "CONNECT wsapi.huya.com:443 HTTP/1.1",
+            ]
+        );
+    }
+
+    /// “关闭”模式必须直连目标，而不是绕到环境变量里的系统代理：
+    /// `connect_async` 固定直连，无法表达路由，故接收链路改用
+    /// `open_websocket_transport` 自建 TCP 流。
+    #[tokio::test]
+    async fn off_mode_dials_the_receive_gateway_directly() {
+        let error = connect_huya_ws(
+            &crate::proxy::ProxyRoute::Direct,
+            "wss://127.0.0.1:1/",
+            "wss://127.0.0.1:1/".into_client_request().unwrap(),
+        )
+        .await
+        .expect_err("闭端口必须报错");
+        assert!(!error.message.is_empty());
+    }
+
     /// 实网冒烟：确认信令探针能认出一份真实有效的 Cookie，并对被篡改的凭据给出
     /// 明确拒绝。Cookie 走文件传入而不是环境变量，避免凭据进入命令行与 shell 历史：
     /// `HUYA_COOKIE_FILE=<含完整 Cookie 的文件> cargo test --lib huya -- --ignored`
@@ -949,7 +1110,7 @@ mod tests {
         let cookie = std::fs::read_to_string(&path).expect("读取 Cookie 文件失败");
         let cookie = cookie.trim();
         assert_eq!(
-            cookie_session_status(cookie).await,
+            cookie_session_status(cookie, &crate::proxy::ProxyRoute::Direct).await,
             Some(true),
             "有效 Cookie 必须判为已登录"
         );
@@ -958,7 +1119,7 @@ mod tests {
             .replace("udb_cred=", "udb_cred=X")
             .replace("udb_biztoken=", "udb_biztoken=X");
         assert_eq!(
-            cookie_session_status(&tampered).await,
+            cookie_session_status(&tampered, &crate::proxy::ProxyRoute::Direct).await,
             Some(false),
             "凭据被篡改后必须判为已失效"
         );
@@ -1004,7 +1165,9 @@ mod tests {
             sub_sid: 0,
             presenter_id: 0,
         };
-        let error = run_loop(events, args).await.unwrap_err();
+        let error = run_loop(events, args, crate::proxy::ProxyRoute::Direct)
+            .await
+            .unwrap_err();
         assert_eq!(error.code, "danmaku_bad_room");
     }
 

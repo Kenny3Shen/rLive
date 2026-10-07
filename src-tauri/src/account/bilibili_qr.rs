@@ -77,9 +77,9 @@ struct PollData {
     url: String,
 }
 
-pub async fn start() -> AppResult<QrLoginStart> {
+pub async fn start(route: &crate::proxy::ProxyRoute) -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, true, None)?;
+    let client = build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, true, route)?;
     let response = client
         .get(QR_GENERATE_URL)
         .header(ACCEPT, "application/json, text/plain, */*")

@@ -214,7 +214,7 @@ async fn refresh_follows(
         } else {
             follow::list(&conn)?
         };
-        (follows, crate::settings::get(&conn)?.proxy)
+        (follows, crate::settings::get(&conn)?.proxy_route())
     };
 
     // 定向重试时只探测点名的那几条；其余照旧返回列表，但不参与本轮的
@@ -257,7 +257,7 @@ async fn refresh_follows(
         tasks.push(tokio::spawn(async move {
             let _permit = permit;
             let outcome = match SiteId::from_str_loose(&site_id) {
-                Some(sid) => match sites::site_with_proxy(&sid, cookie, proxy.as_deref()) {
+                Some(sid) => match sites::site_with_route(&sid, cookie, &proxy) {
                     Ok(site) => site.get_room_live_status(&room_id).await,
                     Err(error) => Err(error),
                 },

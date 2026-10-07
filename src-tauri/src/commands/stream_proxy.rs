@@ -9,9 +9,9 @@ use crate::models::live::TwitchAdRecovery;
 use crate::state::AppState;
 use crate::stream_proxy::{StreamProxyStartOptions, StreamProxyTelemetry};
 
-fn configured_proxy(state: &State<'_, AppState>) -> AppResult<Option<String>> {
+fn configured_route(state: &State<'_, AppState>) -> AppResult<crate::proxy::ProxyRoute> {
     let conn = state.conn()?;
-    Ok(crate::settings::get(&conn)?.proxy)
+    Ok(crate::settings::get(&conn)?.proxy_route())
 }
 
 #[tauri::command(async)]
@@ -37,7 +37,7 @@ pub async fn stream_proxy_start(
     }
     // 浏览器只会连接这个回环监听器。因此它的上游 reqwest 客户端必须显式收到
     // 已保存的代理设置；WebView 自身的网络配置无法为 HLS 子资源提供路由。
-    let proxy = configured_proxy(&state)?;
+    let route = configured_route(&state)?;
     state
         .stream_proxy
         .start(
@@ -46,7 +46,7 @@ pub async fn stream_proxy_start(
             session_id,
             StreamProxyStartOptions {
                 force_hls: hls.unwrap_or(false),
-                proxy: proxy.as_deref(),
+                route: &route,
                 twitch_ad_recovery,
                 ..Default::default()
             },

@@ -18,7 +18,10 @@ const WINDOW_PREFIX: &str = "douyin-login-";
 pub use desktop::{cancel, cancel_all, finish, poll, start};
 
 #[cfg(mobile)]
-pub async fn start(_app: tauri::AppHandle, _proxy: Option<&str>) -> AppResult<QrLoginStart> {
+pub async fn start(
+    _app: tauri::AppHandle,
+    _route: &crate::proxy::ProxyRoute,
+) -> AppResult<QrLoginStart> {
     Err(SITE.error(
         "unsupported",
         "移动端暂不支持抖音官方登录窗口，请手动输入 Cookie",
@@ -61,7 +64,7 @@ mod desktop {
         app: tauri::AppHandle,
         label: String,
         data_dir: PathBuf,
-        proxy: Option<String>,
+        route: crate::proxy::ProxyRoute,
     }
 
     impl Drop for BrowserSession {
@@ -95,8 +98,12 @@ mod desktop {
         }
     }
 
-    pub async fn start(app: tauri::AppHandle, proxy: Option<&str>) -> AppResult<QrLoginStart> {
-        let proxy_url = browser_proxy(proxy)?;
+    pub async fn start(
+        app: tauri::AppHandle,
+        route: &crate::proxy::ProxyRoute,
+    ) -> AppResult<QrLoginStart> {
+        validate_browser_route(route)?;
+        let proxy_url = browser_proxy(route)?;
         cancel_all()?;
         let qr_key = uuid::Uuid::new_v4().simple().to_string();
         let label = format!("{WINDOW_PREFIX}{qr_key}");
@@ -110,11 +117,13 @@ mod desktop {
             app: app.clone(),
             label: label.clone(),
             data_dir: data_dir.clone(),
-            proxy: proxy.map(str::to_owned),
+            route: route.clone(),
         });
         // 先注册再建窗：慢速建窗期间收到取消或刷新，迟到的窗口也会被回收。
         SESSIONS.insert(qr_key.clone(), Arc::clone(&session))?;
         let key_for_close = qr_key.clone();
+        // 建窗是阻塞调用，因此路由要按值移进闭包。
+        let window_route = route.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
             let mut builder = WebviewWindowBuilder::new(
                 &app,
@@ -131,6 +140,9 @@ mod desktop {
             .on_new_window(|_, _| NewWindowResponse::Deny);
             if let Some(proxy) = proxy_url {
                 builder = builder.proxy_url(proxy);
+            }
+            if let Some(args) = webview_browser_args(&window_route) {
+                builder = builder.additional_browser_args(args);
             }
             let window = builder.build().map_err(|_| {
                 SITE.error(
@@ -199,7 +211,7 @@ mod desktop {
         else {
             return Ok(QrLoginPoll::Pending);
         };
-        match douyin_profile::lookup(&cookie, session.proxy.as_deref()).await {
+        match douyin_profile::lookup(&cookie, &session.route).await {
             douyin_profile::ProfileLookup::Valid(_) => {
                 // 网络验证期间关闭/刷新过窗口，就不能提交这次迟到结果。
                 if SESSIONS.get(qr_key).is_err() {
@@ -244,8 +256,58 @@ mod desktop {
         qr::is_trusted_url(url, &["douyin.com"])
     }
 
-    fn browser_proxy(proxy: Option<&str>) -> AppResult<Option<Url>> {
-        let Some(proxy) = proxy.map(str::trim).filter(|proxy| !proxy.is_empty()) else {
+    /// 不支持的模式必须在开窗前报错，不能让用户误以为已经关闭代理。
+    fn validate_browser_route(route: &crate::proxy::ProxyRoute) -> AppResult<()> {
+        #[cfg(not(windows))]
+        if matches!(route, crate::proxy::ProxyRoute::Direct) {
+            return Err(SITE.error(
+                "proxy",
+                "当前平台无法强制抖音登录窗口直连；请手动输入 Cookie",
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        if matches!(route, crate::proxy::ProxyRoute::Custom(_)) {
+            return Err(SITE.error(
+                "proxy",
+                "当前 macOS 构建无法为抖音登录窗口设置自定义代理；请手动输入 Cookie",
+            ));
+        }
+        #[cfg(windows)]
+        validate_browser_environment(
+            route,
+            std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+                .ok()
+                .as_deref(),
+        )?;
+        let _ = route;
+        Ok(())
+    }
+
+    #[cfg(any(windows, test))]
+    fn validate_browser_environment(
+        route: &crate::proxy::ProxyRoute,
+        args: Option<&str>,
+    ) -> AppResult<()> {
+        // WebView2 运行时可以用此变量覆盖环境选项，wry 无法消除此覆盖。
+        // 不在多线程进程里临时更改全局变量；显式失败比假装关闭代理更安全。
+        if !matches!(route, crate::proxy::ProxyRoute::System(_))
+            && args.is_some_and(|args| !args.trim().is_empty())
+        {
+            return Err(SITE.error("proxy", "WebView2 环境参数可能覆盖代理设置；请清除 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 后重启，或手动输入 Cookie"));
+        }
+        Ok(())
+    }
+
+    /// 登录窗口要显式使用的代理地址。
+    ///
+    /// - 「关闭」返回 `None`，由 [`webview_browser_args`] 补上 `--no-proxy-server`；
+    /// - 「自动」返回 `None`：WebView 自己就会跟随系统代理，再设一遍只会把
+    ///   系统里的 `ProxyOverride` 绕过列表丢掉；
+    /// - 「自定义」把地址交给 WebView，并拒绝它无法表达的形式（带认证、
+    ///   非 HTTP 协议）——静默降级成直连会让用户在无法访问的网络里看到
+    ///   一个永远打不开的窗口。
+    fn browser_proxy(route: &crate::proxy::ProxyRoute) -> AppResult<Option<Url>> {
+        let crate::proxy::ProxyRoute::Custom(proxy) = route else {
             return Ok(None);
         };
         let url = Url::parse(proxy).map_err(|_| SITE.error("proxy", "登录窗口代理地址无效"))?;
@@ -253,6 +315,9 @@ mod desktop {
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
         {
             return Err(SITE.error(
                 "proxy",
@@ -260,6 +325,24 @@ mod desktop {
             ));
         }
         Ok(Some(url))
+    }
+
+    /// 「关闭」模式下必须显式告诉 WebView2 忽略系统代理。
+    ///
+    /// `--no-proxy-server` 是 Chromium 自身的开关，WebView2 原样转发。
+    /// 只有 Windows 支持给主 WebView 追加浏览器参数，其他平台返回 `None`：
+    /// Linux 与 macOS 不支持强制直连，因此已由 validate_browser_route 拒绝开窗。
+    fn webview_browser_args(route: &crate::proxy::ProxyRoute) -> Option<&'static str> {
+        #[cfg(windows)]
+        if matches!(route, crate::proxy::ProxyRoute::Direct) {
+            // 追加而非替换 wry 的默认参数：`additional_browser_args` 一旦设置就会
+            // 覆盖默认值，丢掉 `--disable-features` 会让 WebView 弹出迷你菜单。
+            return Some(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --no-proxy-server",
+            );
+        }
+        let _ = route;
+        None
     }
 
     fn login_cookie<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)>) -> Option<String> {
@@ -329,20 +412,73 @@ mod desktop {
         }
 
         #[test]
-        fn unsupported_proxy_is_not_silently_ignored() {
-            assert!(browser_proxy(None).unwrap().is_none());
+        fn only_a_custom_route_configures_the_window_proxy() {
+            use crate::proxy::ProxyRoute;
+            // 「自动」交给 WebView 自己跟随系统，「关闭」由浏览器参数直连，
+            // 两者都不设显式代理地址。
+            assert!(browser_proxy(&ProxyRoute::Direct).unwrap().is_none());
+            assert!(browser_proxy(&ProxyRoute::System(None)).unwrap().is_none());
             assert!(
-                browser_proxy(Some("http://127.0.0.1:7890"))
+                browser_proxy(&ProxyRoute::Custom("http://127.0.0.1:7890".into()))
                     .unwrap()
                     .is_some()
             );
+        }
+
+        #[test]
+        fn custom_proxy_forms_the_window_cannot_express_are_rejected() {
+            use crate::proxy::ProxyRoute;
             for proxy in [
                 "https://127.0.0.1:7890",
                 "http://user:secret@localhost:7890",
                 "not a proxy",
             ] {
-                assert!(browser_proxy(Some(proxy)).is_err());
+                assert!(
+                    browser_proxy(&ProxyRoute::Custom(proxy.into())).is_err(),
+                    "{proxy}"
+                );
             }
+        }
+
+        #[test]
+        fn browser_environment_cannot_silently_override_explicit_routes() {
+            use crate::proxy::ProxyRoute;
+            for route in [
+                ProxyRoute::Direct,
+                ProxyRoute::Custom("http://127.0.0.1:7890".into()),
+            ] {
+                assert!(
+                    validate_browser_environment(&route, Some("--remote-debugging-port=9223"))
+                        .is_err()
+                );
+                assert!(validate_browser_environment(&route, None).is_ok());
+            }
+            assert!(
+                validate_browser_environment(
+                    &ProxyRoute::System(None),
+                    Some("--remote-debugging-port=9223")
+                )
+                .is_ok()
+            );
+        }
+
+        #[cfg(not(windows))]
+        #[test]
+        fn unsupported_platform_rejects_off_instead_of_inheriting_system_proxy() {
+            assert!(validate_browser_route(&crate::proxy::ProxyRoute::Direct).is_err());
+        }
+
+        #[cfg(windows)]
+        #[test]
+        fn off_mode_disables_the_system_proxy_without_dropping_wry_defaults() {
+            use crate::proxy::ProxyRoute;
+            let args = webview_browser_args(&ProxyRoute::Direct).unwrap();
+            assert!(args.contains("--no-proxy-server"), "{args}");
+            // wry 的默认参数必须保留，否则 WebView2 会显示迷你菜单与 SmartScreen。
+            assert!(
+                args.contains("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection")
+            );
+            assert!(webview_browser_args(&ProxyRoute::System(None)).is_none());
         }
     }
 }

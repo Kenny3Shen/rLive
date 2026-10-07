@@ -17,16 +17,16 @@ use tauri::State;
 /// 抖音推荐流。只看本机保存的登录 Cookie，不接受调用方指定的账号或代理。
 #[tauri::command]
 pub async fn douyin_video_feed(state: State<'_, AppState>) -> AppResult<DouyinVideoFeedPage> {
-    let (cookie, proxy) = {
+    let (cookie, route) = {
         let conn = state.conn()?;
         (
             crate::account::get_cookie(&conn, &SiteId::Douyin)?.unwrap_or_default(),
-            crate::settings::get(&conn)?.proxy,
+            crate::settings::get(&conn)?.proxy_route(),
         )
     };
     require_feed_cookie(&cookie)?;
     let site = DouyinSite::new(
-        crate::http_client::client_for_proxy(proxy.as_deref())?,
+        crate::http_client::client_for_route(&route)?,
         cookie.clone(),
     );
     let page = site.video_feed().await?;
@@ -61,19 +61,16 @@ pub async fn douyin_video_resolve(
     state: State<'_, AppState>,
     input: String,
 ) -> AppResult<DouyinVideoPlayback> {
-    let (cookie, proxy) = {
+    let (cookie, route) = {
         let conn = state.conn()?;
         (
             crate::account::get_cookie(&conn, &SiteId::Douyin)?.unwrap_or_default(),
-            crate::settings::get(&conn)?.proxy,
+            crate::settings::get(&conn)?.proxy_route(),
         )
     };
     require_feed_cookie(&cookie)?;
     let expected_cookie = cookie.clone();
-    let site = DouyinSite::new(
-        crate::http_client::client_for_proxy(proxy.as_deref())?,
-        cookie,
-    );
+    let site = DouyinSite::new(crate::http_client::client_for_route(&route)?, cookie);
     let (item, url) = site.video_detail(&input).await?;
     let session_id = format!("douyin-video-{}", uuid::Uuid::new_v4().simple());
     let lease = PlaybackProxyLease::new(&state.stream_proxy, [session_id.clone()]);
@@ -87,7 +84,7 @@ pub async fn douyin_video_resolve(
             ]),
             session_id.clone(),
             StreamProxyStartOptions {
-                proxy: proxy.as_deref(),
+                route: &route,
                 ..Default::default()
             },
         )

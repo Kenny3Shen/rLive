@@ -44,8 +44,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # elsewhere). Douyu's danmaku proxy ports offer only static-RSA suites that
 # rustls does not support, so HTTP (reqwest) and WebSocket (tokio-tungstenite)
 # both use native-tls.
-# reqwest is pinned to 0.12 so that rlive and tauri-plugin-http share one
-# compilation unit on desktop (tauri core itself needs 0.13 on mobile only).
+# reqwest 保持 0.12；前端 HTTP IPC 复用本客户端与应用级 ProxyRoute。
 # `query`/`form` are built-in in 0.12, not cargo features.
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "native-tls", "gzip", "brotli", "stream"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -66,8 +65,6 @@ flate2 = "1"
 brotli = "9"
 uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.15"
-
-tauri-plugin-http = { version = "2.5.9", default-features = false, features = ["native-tls", "charset"] }
 
 # Keep the Rust wrapper, vendored FFI crate, verified runtime archives and
 # download checksums on the same Sherpa release; upgrade them as one unit.
@@ -100,6 +97,11 @@ fs2 = "0.4"
 sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
 sha2 = "0.11"
 libloading = "0.9"
+# Reading the "Internet Settings" proxy for the "跟随系统代理" mode. reqwest's own
+# system-proxy feature would pull the same crate in, but only through hyper-util,
+# which gives no way to reuse the value for FFmpeg recording and the danmaku
+# WebSocket tunnel.
+windows-registry = "0.6"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Douyu's danmaku ports need native-tls, and Android has no

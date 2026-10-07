@@ -85,6 +85,7 @@ import { AppLogField } from "@/features/settings/AppLogField";
 import { notify } from "@/components/ui/toast";
 import { useUpdateStore } from "@/shared/update/updateStore";
 import { LanSyncField } from "@/features/settings/LanSyncField";
+import { ProxySettingsFields } from "@/features/settings/ProxySettingsFields";
 import {
   FfmpegSettingsFields,
   RecordingAssSettingsFields,
@@ -1751,30 +1752,6 @@ function isHttpM3uUrl(value: string): boolean {
   }
 }
 
-function normalizeHttpProxy(value: string): {
-  value: string | null;
-  error: string | null;
-} {
-  const trimmed = value.trim();
-  if (!trimmed) return { value: null, error: null };
-
-  try {
-    const parsed = new URL(trimmed.includes("://") ? trimmed : `http://${trimmed}`);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { value: null, error: "仅支持 HTTP 或 HTTPS 代理地址" };
-    }
-    if (!parsed.hostname) {
-      return { value: null, error: "请填写代理主机和端口" };
-    }
-    return { value: parsed.href, error: null };
-  } catch {
-    return {
-      value: null,
-      error: "请输入有效的代理地址，例如 http://127.0.0.1:7890",
-    };
-  }
-}
-
 function PlatformEnablementField() {
   const disabledSiteIds = useSettingsStore((s) => s.disabledSiteIds);
   const setSiteEnabled = useSettingsStore((s) => s.setSiteEnabled);
@@ -2225,8 +2202,6 @@ export function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const proxy = useSettingsStore((s) => s.proxy);
-  const setProxy = useSettingsStore((s) => s.setProxy);
   const qualityLevel = useSettingsStore((s) => s.qualityLevel);
   const setQualityLevel = useSettingsStore((s) => s.setQualityLevel);
   const playbackSoftSwitchEnabled = useSettingsStore((s) => s.playbackSoftSwitchEnabled);
@@ -2238,9 +2213,6 @@ export function SettingsPage() {
   const roomCardPreviewEnabled = useSettingsStore((s) => s.roomCardPreviewEnabled);
   const setRoomCardPreviewEnabled = useSettingsStore((s) => s.setRoomCardPreviewEnabled);
   const loadFromBackend = useSettingsStore((s) => s.loadFromBackend);
-  const [proxyDraft, setProxyDraft] = useState(proxy ?? "");
-  const [proxyStatus, setProxyStatus] = useState<string | null>(null);
-  const [proxyError, setProxyError] = useState<string | null>(null);
   const [profileAction, setProfileAction] = useState<"import" | "export" | null>(null);
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -2274,21 +2246,6 @@ export function SettingsPage() {
       location.state[SETTINGS_OVERVIEW_NAVIGATION_STATE] === true;
     if (openedFromOverview) navigate(-1);
     else setCategory(null, true);
-  }
-
-  // 分类主体保持此处的 key，使概览导航只改变页面外壳；
-  // 每个既有设置与持久化路径原样保留。
-  function saveProxy() {
-    setProxyStatus(null);
-    const next = normalizeHttpProxy(proxyDraft);
-    if (next.error) {
-      setProxyError(next.error);
-      return;
-    }
-    setProxyError(null);
-    setProxy(next.value);
-    setProxyDraft(next.value ?? "");
-    setProxyStatus(next.value ? "代理已保存，将用于后续请求" : "代理已关闭，后续请求将直连");
   }
 
   async function exportProfile(path: string) {
@@ -2472,49 +2429,7 @@ export function SettingsPage() {
     network: (
       <SettingsContent title="网络">
         <Section title="代理">
-          <Field data-invalid={proxyError ? true : undefined}>
-            <FieldLabel htmlFor="proxy">代理地址</FieldLabel>
-            <FieldContent>
-              <form
-                className="w-full"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  saveProxy();
-                }}
-              >
-                <InputGroup>
-                  <InputGroupInput
-                    id="proxy"
-                    type="text"
-                    inputMode="url"
-                    autoCapitalize="none"
-                    value={proxyDraft}
-                    onChange={(event) => {
-                      setProxyDraft(event.target.value);
-                      setProxyError(null);
-                      setProxyStatus(null);
-                    }}
-                    placeholder="http://127.0.0.1:7890"
-                    aria-invalid={proxyError ? true : undefined}
-                  />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton type="submit" variant="secondary" size="sm">
-                      保存
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-              </form>
-              {proxyError ? (
-                <FieldError>{proxyError}</FieldError>
-              ) : (
-                proxyStatus && (
-                  <FieldDescription role="status" aria-live="polite">
-                    {proxyStatus}
-                  </FieldDescription>
-                )
-              )}
-            </FieldContent>
-          </Field>
+          <ProxySettingsFields />
         </Section>
         <Section title="IPTV 源">
           <IptvCustomM3uUrlField />
@@ -2634,13 +2549,6 @@ export function SettingsPage() {
   const categoryMetadata = category
     ? settingsCategories.find((item) => item.value === category)
     : undefined;
-
-  // 外部设置变化时同步草稿：渲染期调整模式，当次渲染即对齐。
-  const [prevProxy, setPrevProxy] = useState(proxy);
-  if (proxy !== prevProxy) {
-    setPrevProxy(proxy);
-    setProxyDraft(proxy ?? "");
-  }
 
   return (
     <div className="mx-auto flex h-full min-h-full w-full max-w-6xl flex-col">

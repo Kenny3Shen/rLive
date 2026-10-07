@@ -122,12 +122,12 @@ fn normalize_cookie_header(value: &str) -> String {
 /// Cookie（过期或已登出，常见 `code = -101`）时返回 `Some(false)`；
 /// 无法验证会话（网络失败或无法识别的响应）时返回 `None`。
 /// 调用方用 `false` 回退到匿名弹幕并提示用户。
-pub async fn cookie_session_status(cookie: &str, proxy: Option<&str>) -> Option<bool> {
+pub async fn cookie_session_status(cookie: &str, route: &crate::proxy::ProxyRoute) -> Option<bool> {
     let cookie = normalize_cookie_header(cookie);
     if cookie.is_empty() {
         return Some(false);
     }
-    let client = crate::http_client::client_for_proxy(proxy).ok()?;
+    let client = crate::http_client::client_for_route(route).ok()?;
     let response = client
         .get("https://api.bilibili.com/x/web-interface/nav")
         .header("user-agent", DEFAULT_USER_AGENT)
@@ -1101,7 +1101,10 @@ mod live_tests {
         let address = listener.local_addr().unwrap();
         let request_count = AtomicUsize::new(0);
         let site = BilibiliSite::new(
-            crate::http_client::client_for_proxy(Some(&format!("http://{address}"))).unwrap(),
+            crate::http_client::client_for_route(&crate::proxy::ProxyRoute::Custom(format!(
+                "http://{address}"
+            )))
+            .unwrap(),
             "buvid4=device-4".into(),
         );
         let server = async {
@@ -1145,7 +1148,10 @@ mod live_tests {
         store_device_buvids(&("dev-3".into(), "dev-4".into()));
 
         let site = BilibiliSite::new(
-            crate::http_client::client_for_proxy(Some("http://127.0.0.1:1")).unwrap(),
+            crate::http_client::client_for_route(&crate::proxy::ProxyRoute::Custom(
+                "http://127.0.0.1:1".into(),
+            ))
+            .unwrap(),
             String::new(),
         );
         assert_eq!(

@@ -234,6 +234,9 @@ fn decode_package(text: &str) -> AppResult<ProfilePackage> {
     // serde default。手写字段表曾经重建过同一套规则，但它必须随
     // `AppSettings` 手工同步，漏改就会静默改变接受面。
     fill_local_only_settings(&mut value)?;
+    if let Some(settings) = value.get_mut("settings") {
+        crate::models::settings::backfill_proxy_mode(settings);
+    }
     serde_json::from_value(value)
         .map_err(|e| AppError::new("profile_decode_error", format!("invalid profile json: {e}")))
 }
@@ -307,6 +310,7 @@ pub fn merge_into_db(
     settings.default_site = package.settings.default_site.clone();
     settings.disabled_site_ids = package.settings.disabled_site_ids.clone();
     settings.hidden_home_entry_ids = package.settings.hidden_home_entry_ids.clone();
+    settings.proxy_mode = package.settings.proxy_mode;
     settings.proxy = package.settings.proxy.clone();
     settings.danmaku_opacity = package.settings.danmaku_opacity;
     settings.danmaku_font_stroke = package.settings.danmaku_font_stroke;
@@ -531,7 +535,13 @@ mod tests {
             .unwrap()
             .remove("video_blocked_uploaders");
         let text = serde_json::to_string(&value).unwrap();
-        assert!(decode_package(&text).unwrap().settings.video_blocked_uploaders.is_empty());
+        assert!(
+            decode_package(&text)
+                .unwrap()
+                .settings
+                .video_blocked_uploaders
+                .is_empty()
+        );
 
         let conn = open_in_memory().unwrap();
         let mut settings = crate::settings::get(&conn).unwrap();
@@ -550,6 +560,25 @@ mod tests {
     }
 
     /// 5.3.x 之前的配置包没有 `hidden_home_entry_ids`，导入时按空列表补齐。
+    #[test]
+    fn profile_migrates_legacy_proxy_mode_and_retains_saved_address() {
+        use crate::models::settings::ProxyMode;
+        for (address, expected) in [
+            (Some("http://127.0.0.1:7890"), ProxyMode::Custom),
+            (None, ProxyMode::Auto),
+        ] {
+            let mut value = portable_profile_value(&ProfilePackage::sample()).unwrap();
+            value["settings"]
+                .as_object_mut()
+                .unwrap()
+                .remove("proxy_mode");
+            value["settings"]["proxy"] = serde_json::to_value(address).unwrap();
+            let package = decode_package(&value.to_string()).unwrap();
+            assert_eq!(package.settings.proxy_mode, expected);
+            assert_eq!(package.settings.proxy.as_deref(), address);
+        }
+    }
+
     #[test]
     fn profile_backfills_hidden_home_entry_ids_from_older_packages() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();

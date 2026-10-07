@@ -1,6 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import fetchThroughTauri from "@/shared/api/tauriFetch";
 import { create } from "zustand";
 import packageMetadata from "../../../package.json";
 
@@ -119,7 +119,7 @@ async function requestLatestRelease(): Promise<GitHubReleaseResponse> {
     "X-GitHub-Api-Version": "2022-11-28",
   };
   const response = isTauri()
-    ? await tauriFetch(LATEST_RELEASE_URL, { headers, maxRedirections: 2 })
+    ? await fetchThroughTauri(LATEST_RELEASE_URL, { headers })
     : await globalThis.fetch(LATEST_RELEASE_URL, { headers });
   if (!response.ok) throw new Error(`GitHub 返回 HTTP ${response.status}`);
   return (await response.json()) as GitHubReleaseResponse;

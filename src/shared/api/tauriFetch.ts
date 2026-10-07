@@ -1,39 +1,81 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { invokeCmd } from "./tauri";
 
-type TranslationFetchOptions = RequestInit & {
-  maxRedirections: number;
-  proxy?: { all: string };
+export type HttpFetchRequest = {
+  url: string;
+  method: string;
+  headers: [string, string][];
+  body?: number[];
 };
 
-export function buildTranslationFetchOptions(
-  init: RequestInit | undefined,
-  configuredProxy: string | null | undefined,
-): TranslationFetchOptions {
-  const proxy = configuredProxy?.trim();
+type HttpFetchResponse = {
+  status: number;
+  status_text: string;
+  headers: [string, string][];
+  body: number[];
+  url: string;
+};
+
+/** Request 负责合并 input/init 与编码正文；代理模式只由 Rust 设置决定。 */
+export async function buildHttpFetchRequest(request: Request): Promise<HttpFetchRequest> {
+  request.signal.throwIfAborted();
+  const body = request.body ? Array.from(new Uint8Array(await request.arrayBuffer())) : undefined;
+  request.signal.throwIfAborted();
   return {
-    ...init,
-    maxRedirections: 3,
-    ...(proxy ? { proxy: { all: proxy } } : {}),
+    url: request.url,
+    method: request.method,
+    headers: Array.from(request.headers.entries()),
+    ...(body === undefined ? {} : { body }),
   };
 }
 
+function withAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("请求已取消", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    // invoke 无取消接口：及时结束前端等待，Rust 超时负责回收底层请求。
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
- * 仅供 google-translate-api-x 使用的浏览器兼容传输层。Tauri 受限的 Rust HTTP
- * 客户端无需削弱 WebView CORS 即可到达 Google 翻译，
- * 并显式继承 rLive 配置的 HTTP(S) 代理。
+ * Google 字幕翻译与 GitHub 更新共用的受限 HTTP 传输。
+ * 不在前端推导代理或回退 WebView fetch，以免「关闭」仍继承进程/系统代理。
+ * URL 白名单、重定向检查、请求超时及响应限长统一在 Rust http_fetch 中实现。
  */
 export default async function fetchThroughTauri(
   input: string | URL | Request,
   init?: RequestInit,
 ): Promise<Response> {
   if (!isTauri()) {
-    const error = new Error("字幕翻译仅在 rLive 客户端中可用");
+    const error = new Error("网络请求仅在 rLive 客户端中可用");
     error.name = "TauriUnavailableError";
     throw error;
   }
-
-  const options = buildTranslationFetchOptions(init, useSettingsStore.getState().proxy);
-  return tauriFetch(input, options);
+  const request = new Request(input, init);
+  const payload = await buildHttpFetchRequest(request);
+  const result = await withAbort(
+    invokeCmd<HttpFetchResponse>("http_fetch", { request: payload }),
+    request.signal,
+  );
+  request.signal.throwIfAborted();
+  const response = new Response(
+    [204, 205, 304].includes(result.status) ? null : new Uint8Array(result.body),
+    { status: result.status, statusText: result.status_text, headers: result.headers },
+  );
+  Object.defineProperties(response, {
+    url: { value: result.url },
+    redirected: { value: result.url !== request.url },
+  });
+  return response;
 }

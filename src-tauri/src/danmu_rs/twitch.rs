@@ -238,8 +238,11 @@ fn collect_seven_tv_set(emotes: &mut SevenTvEmotes, set: &Value) {
 /// 两个请求都是尽力而为：7TV 是 Twitch 之外的第三方服务，任一失败只会让对应
 /// 表情退回文本显示，不影响聊天连接。多数频道没有 7TV 账号，频道集返回 404
 /// 属于正常情况。
-async fn fetch_seven_tv_emotes(broadcaster_id: Option<&str>, proxy: Option<&str>) -> SevenTvEmotes {
-    let Ok(client) = crate::http_client::client_for_proxy(proxy) else {
+async fn fetch_seven_tv_emotes(
+    broadcaster_id: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
+) -> SevenTvEmotes {
+    let Ok(client) = crate::http_client::client_for_route(route) else {
         return SevenTvEmotes::new();
     };
     let get = |url: String| {
@@ -522,18 +525,16 @@ struct SessionEnd {
 pub async fn run_loop(
     events: DanmakuEventSender,
     args: TwitchDanmakuArgs,
-    proxy: Option<String>,
+    route: crate::proxy::ProxyRoute,
 ) -> AppResult<()> {
     // 代理设置格式错误属于本地配置问题：每次重试都会以同样方式失败，
     // 因此直接报错而不是进入循环。
-    let proxy_setting = proxy.clone();
-    let proxy = ConnectProxy::from_setting(proxy.as_deref(), "twitch", "Twitch")?;
+    let proxy = ConnectProxy::from_route(&route, IRC_CONNECT_AUTHORITY, "twitch", "Twitch")?;
 
     // 7TV 表情表每个会话取一次，重连时复用：一两小时内主播改表情集的概率很低，
     // 不值得让每次断线重试都多背两个第三方请求。与 Twitch 请求走同一份代理
     // 设置：需要代理才能访问 Twitch 的网络环境里，7TV 同样访问不到。
-    let seven_tv =
-        fetch_seven_tv_emotes(args.broadcaster_id.as_deref(), proxy_setting.as_deref()).await;
+    let seven_tv = fetch_seven_tv_emotes(args.broadcaster_id.as_deref(), &route).await;
 
     let mut policy = ReconnectPolicy::with_defaults("twitch");
     loop {

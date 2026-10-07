@@ -7,7 +7,7 @@ import {
   normalizeCaptionTranslationFrom,
   normalizeCaptionTranslationTo,
 } from "../src/shared/translation/languages";
-import { buildTranslationFetchOptions } from "../src/shared/api/tauriFetch";
+import { buildHttpFetchRequest } from "../src/shared/api/tauriFetch";
 
 describe("caption translation settings", () => {
   test("normalizes unsupported persisted language codes", () => {
@@ -18,18 +18,18 @@ describe("caption translation settings", () => {
     expect(normalizeCaptionTranslationTo("auto")).toBe("auto");
   });
 
-  test("passes the configured application proxy to Tauri HTTP", () => {
-    const controller = new AbortController();
-    const options = buildTranslationFetchOptions(
-      { method: "POST", signal: controller.signal },
-      " http://127.0.0.1:7890 ",
+  test("只传递 HTTP 数据，由 Rust 决定代理模式", async () => {
+    const payload = await buildHttpFetchRequest(
+      new Request("https://translate.google.com/translate_a/single", {
+        method: "POST",
+        body: "字幕",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      }),
     );
-
-    expect(options.method).toBe("POST");
-    expect(options.signal).toBe(controller.signal);
-    expect(options.maxRedirections).toBe(3);
-    expect(options.proxy).toEqual({ all: "http://127.0.0.1:7890" });
-    expect(buildTranslationFetchOptions(undefined, null).proxy).toBeUndefined();
+    expect(payload.method).toBe("POST");
+    expect(payload.headers).toContainEqual(["content-type", "text/plain;charset=UTF-8"]);
+    expect(new TextDecoder().decode(new Uint8Array(payload.body!))).toBe("字幕");
+    expect(payload).not.toHaveProperty("proxy");
   });
 
   test("maps transport failures without exposing the upstream error body", () => {

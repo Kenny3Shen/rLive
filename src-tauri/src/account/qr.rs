@@ -259,21 +259,18 @@ pub fn can_follow_redirect(url: &Url, prior_redirects: usize, suffixes: &[&str])
 /// 就无法把该客户端变成指向任意目标的已认证请求。
 ///
 /// - `compression`：仅 B 站开启 gzip/brotli，保持与合并前一致。
-/// - `proxy`：可选的显式 HTTP(S) 代理；`None` 时 `with_proxy` 是空操作，
-///   `no_proxy()` 依然生效。抖音官网窗口使用 WebView 自身的代理配置。
+/// - `route`：与其余请求共用同一份代理路由。「关闭」会连同环境变量一起绕过，
+///   「自动」跟随系统代理。
 pub fn build_login_client(
     site: QrSite,
     jar: Arc<Jar>,
     trusted_suffixes: &'static [&'static str],
     compression: bool,
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
 ) -> AppResult<Client> {
     let mut builder = Client::builder()
         .use_native_tls()
         .cookie_provider(jar)
-        // 扫码认证携带的是临时登录会话。不要让它走进程级 HTTP(S) 代理
-        // 或应用的浏览代理。
-        .no_proxy()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
@@ -286,7 +283,7 @@ pub fn build_login_client(
     if compression {
         builder = builder.gzip(true).brotli(true);
     }
-    crate::http_client::with_proxy(builder, proxy)?
+    crate::http_client::with_route(builder, route)?
         .build()
         .map_err(|_| site.error("client", "二维码登录网络客户端初始化失败"))
 }

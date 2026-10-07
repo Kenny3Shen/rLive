@@ -65,6 +65,7 @@ async (page) => {
               legacy_player_skin: null,
               default_site: "bilibili",
               disabled_site_ids: [],
+              proxy_mode: "auto",
               proxy: null,
               danmaku_opacity: 0.8,
               danmaku_font_stroke: 0.0,

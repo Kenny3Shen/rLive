@@ -19,7 +19,14 @@ pub async fn dlna_cast(
     headers: HashMap<String, String>,
     title: String,
 ) -> AppResult<DlnaCastStatus> {
-    state.dlna.cast(location, url, headers, title).await
+    let route = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| crate::error::AppError::new("db_lock_error", "读取投屏代理设置失败"))?;
+        crate::settings::get(&conn)?.proxy_route()
+    };
+    state.dlna.cast(location, url, headers, title, &route).await
 }
 
 #[tauri::command(async)]

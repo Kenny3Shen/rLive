@@ -61,12 +61,13 @@ pub struct PrefetchedInitialization {
 ///
 /// 这条路径原本有六个位置参数，其中三个是「这一路流是什么形态」的开关。捆成
 /// 一个结构之后，调用点能自解释，新增开关也不必改所有调用方。
-#[derive(Default)]
+///
+/// 手工实现 `Default` 而不是派生：`route` 是引用，没有可派生的默认值。
 pub struct StreamProxyStartOptions<'a> {
     /// 把上游应答当 HLS 清单改写（直播与部分 IPTV 入口）。
     pub force_hls: bool,
-    /// 上游 reqwest 客户端使用的代理设置。
-    pub proxy: Option<&'a str>,
+    /// 上游 reqwest 客户端与 Twitch 广告恢复客户端使用的代理路由。
+    pub route: &'a crate::proxy::ProxyRoute,
     /// Twitch 服务端广告插播的恢复配置。
     pub twitch_ad_recovery: Option<TwitchAdRecovery>,
     /// VOD 媒体分片的磁盘缓存规格：哪些字节区间可缓存、按什么键缓存。
@@ -76,6 +77,21 @@ pub struct StreamProxyStartOptions<'a> {
     pub media_cache_store: Option<SharedMediaCache>,
     /// 与磁盘缓存开关无关，仅精确覆盖整个初始化段的 Range 可命中。
     pub initialization: Option<PrefetchedInitialization>,
+}
+
+impl Default for StreamProxyStartOptions<'_> {
+    /// 默认直连。需要别的出口的调用点必须显式给出路由，
+    /// 避免默认值默默继承系统代理。
+    fn default() -> Self {
+        Self {
+            force_hls: false,
+            route: &crate::proxy::ProxyRoute::Direct,
+            twitch_ad_recovery: None,
+            media_cache: None,
+            media_cache_store: None,
+            initialization: None,
+        }
+    }
 }
 
 /// 按前端播放会话索引的活动代理端点。
@@ -791,7 +807,7 @@ impl StreamProxy {
     ) -> AppResult<String> {
         let StreamProxyStartOptions {
             force_hls,
-            proxy,
+            route,
             twitch_ad_recovery,
             media_cache,
             media_cache_store,
@@ -801,7 +817,7 @@ impl StreamProxy {
         // 播放器可能为一场播放发出多个本机请求（直播清单轮询、VOD 并发
         // Range 分片）。在每个代理生命周期内构建一个客户端，使这些请求共享其
         // 连接池，而不是每个请求都重建 TLS/连接池状态。
-        let client = match build_stream_client(proxy) {
+        let client = match build_stream_client(route) {
             Ok(client) => client,
             Err(error) => {
                 self.clear_pending(&session_id, generation);
@@ -810,7 +826,7 @@ impl StreamProxy {
         };
         let twitch_ad_recovery = match twitch_ad_recovery {
             Some(config) => {
-                let recovery_client = match crate::http_client::build_client(proxy) {
+                let recovery_client = match crate::http_client::build_client(route) {
                     Ok(client) => client,
                     Err(error) => {
                         self.clear_pending(&session_id, generation);
@@ -2385,7 +2401,8 @@ mod tests {
         use crate::sites::traits::LiveSite;
 
         let probe = crate::sites::twitch::TwitchSite::new(
-            crate::http_client::build_client(None).expect("Twitch probe client"),
+            crate::http_client::build_client(&crate::proxy::ProxyRoute::Direct)
+                .expect("Twitch probe client"),
         );
         let detail = probe
             .get_room_detail("kaicenat")
@@ -2404,7 +2421,8 @@ mod tests {
                 target_height: 1080,
                 target_frame_rate_milli: 60_000,
             },
-            crate::http_client::build_client(None).expect("Twitch recovery client"),
+            crate::http_client::build_client(&crate::proxy::ProxyRoute::Direct)
+                .expect("Twitch recovery client"),
         );
         let mut headers = HashMap::new();
         headers.insert(
@@ -2509,7 +2527,7 @@ mod tests {
                 HashMap::new(),
                 session_id.into(),
                 StreamProxyStartOptions {
-                    proxy: Some(&format!("http://{address}")),
+                    route: &crate::proxy::ProxyRoute::Custom(format!("http://{address}")),
                     ..Default::default()
                 },
             )
@@ -2783,15 +2801,15 @@ mod tests {
 /// 第二分片「卡死失败」。读超时让 stall 的读在 `SEGMENT_READ_TIMEOUT` 后报错，
 /// 死连接随即被丢出池外，dash.js 的下一次重取拿到新连接即可自愈。健康的直播/
 /// VOD 流字节持续到达，永远不会触及这个间隔上限，因此对正常播放无影响。
-fn build_stream_client(proxy: Option<&str>) -> AppResult<Client> {
-    crate::http_client::with_proxy(
+fn build_stream_client(route: &crate::proxy::ProxyRoute) -> AppResult<Client> {
+    crate::http_client::with_route(
         Client::builder()
             .use_native_tls()
             .connect_timeout(std::time::Duration::from_secs(10))
             .read_timeout(SEGMENT_READ_TIMEOUT)
             .pool_max_idle_per_host(2)
             .user_agent(crate::sites::bilibili::DEFAULT_USER_AGENT),
-        proxy,
+        route,
     )?
     .build()
     .map_err(|_| AppError::new("stream_proxy_client", "媒体代理网络客户端初始化失败"))

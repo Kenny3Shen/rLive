@@ -932,7 +932,7 @@ impl RecordingManager {
     pub async fn start_with_ffmpeg_options(
         &self,
         input: RecordingStartInput,
-        proxy: Option<&str>,
+        route: &crate::proxy::ProxyRoute,
         ffmpeg_options: FfmpegRecordingOptions,
         max_active: usize,
     ) -> AppResult<RecordingItem> {
@@ -957,7 +957,7 @@ impl RecordingManager {
         } else {
             input.source.protocol
         };
-        validate_recording_source(source_protocol, &input.source, proxy)?;
+        validate_recording_source(source_protocol, &input.source, route)?;
         // 对启动生命周期串行化，保证去重检查的原子性。会话互斥锁本身在代理构造和
         // 文件系统 I/O 之前就会释放，
         // 因此慢磁盘或代理不会阻塞 stop/list/capture_danmaku。
@@ -1014,7 +1014,7 @@ impl RecordingManager {
 
         // 在创建分卷之前先校验代理。格式错误的代理不得留下看似活动录制、
         // 却没有任务挂载的元数据。
-        let stream_client = http_client::recording_stream_client_for_proxy(proxy)?;
+        let stream_client = http_client::recording_stream_client_for_route(route)?;
 
         let root = self.current_root();
         ensure_sufficient_storage_space(&root)?;
@@ -1098,7 +1098,7 @@ impl RecordingManager {
         let (cancel, cancel_rx) = watch::channel(false);
         let task_state = state.clone();
         let danmaku_finish_source = include_danmaku.then(|| source_key.clone());
-        let proxy = proxy.map(str::to_string);
+        let route = route.clone();
         let mut source = input.source;
         source.protocol = source_protocol;
         let segment_room_dir = room_dir.clone();
@@ -1135,7 +1135,7 @@ impl RecordingManager {
                 let mut outcome = run_recording_task(
                     stream_client.clone(),
                     source.clone(),
-                    proxy.clone(),
+                    route.clone(),
                     ffmpeg_options,
                     task_state.clone(),
                     cancel_rx.clone(),
@@ -1959,14 +1959,14 @@ struct TaskOutcome {
 async fn run_recording_task(
     stream_client: Client,
     source: PlayUrl,
-    proxy: Option<String>,
+    route: crate::proxy::ProxyRoute,
     ffmpeg_options: FfmpegRecordingOptions,
     state: Arc<SessionState>,
     cancel: watch::Receiver<bool>,
 ) -> TaskOutcome {
     match source.protocol {
         PlaybackProtocol::Flv | PlaybackProtocol::Hls | PlaybackProtocol::MpegTs => {
-            run_ffmpeg_recording(source, proxy, ffmpeg_options, state, cancel).await
+            run_ffmpeg_recording(source, route, ffmpeg_options, state, cancel).await
         }
         PlaybackProtocol::Native => {
             run_direct_recording(stream_client, source, state, cancel).await
@@ -1981,14 +1981,17 @@ async fn run_recording_task(
 
 async fn run_ffmpeg_recording(
     mut source: PlayUrl,
-    proxy: Option<String>,
+    route: crate::proxy::ProxyRoute,
     ffmpeg_options: FfmpegRecordingOptions,
     state: Arc<SessionState>,
     mut cancel: watch::Receiver<bool>,
 ) -> TaskOutcome {
     let twitch_recovery = source.twitch_ad_recovery.clone();
-    if source.protocol != PlaybackProtocol::Hls || twitch_recovery.is_none() {
-        return ffmpeg_backend::run(source, proxy, ffmpeg_options, state, cancel).await;
+    let needs_twitch_warmup = source.protocol == PlaybackProtocol::Hls && twitch_recovery.is_some();
+    // 系统/自定义代理统一由 reqwest 转发每个 URL，避免 libavformat 再读进程
+    // no_proxy、忽略 HTTPS 代理，或把清单的代理/绕过规则错误继承给跨域分片。
+    if !needs_twitch_warmup && !route.needs_recording_relay() {
+        return ffmpeg_backend::run(source, route, ffmpeg_options, state, cancel).await;
     }
 
     let recording_id = state
@@ -2005,8 +2008,8 @@ async fn run_ffmpeg_recording(
             source.headers.clone(),
             proxy_session_id.clone(),
             StreamProxyStartOptions {
-                force_hls: true,
-                proxy: proxy.as_deref(),
+                force_hls: source.protocol == PlaybackProtocol::Hls,
+                route: &route,
                 twitch_ad_recovery: twitch_recovery,
                 ..Default::default()
             },
@@ -2017,7 +2020,7 @@ async fn run_ffmpeg_recording(
         Err(error) => {
             return TaskOutcome {
                 status: RecordingStatus::Failed,
-                error: Some(format!("启动 Twitch 录制清单代理失败: {}", error.message)),
+                error: Some(format!("启动录制网络转发失败: {}", error.message)),
                 split: false,
             };
         }
@@ -2033,6 +2036,8 @@ async fn run_ffmpeg_recording(
     // 无事可报，因此先直接读取标志位。
     let warmup = if *cancel.borrow() {
         None
+    } else if !needs_twitch_warmup {
+        Some(Ok(()))
     } else {
         tokio::select! {
             _ = cancel.changed() => None,
@@ -2066,7 +2071,15 @@ async fn run_ffmpeg_recording(
     source.url = local_url;
     source.headers.clear();
     source.twitch_ad_recovery = None;
-    let outcome = ffmpeg_backend::run(source, None, ffmpeg_options, state, cancel).await;
+    // 所有远端请求已由本机 stream_proxy 按路由转发，FFmpeg 只连回环地址。
+    let outcome = ffmpeg_backend::run(
+        source,
+        crate::proxy::ProxyRoute::Direct,
+        ffmpeg_options,
+        state,
+        cancel,
+    )
+    .await;
     recording_proxy.stop_for_session(&proxy_session_id);
     outcome
 }
@@ -2340,7 +2353,7 @@ fn validate_start_input(input: &RecordingStartInput) -> AppResult<()> {
 fn validate_recording_source(
     protocol: PlaybackProtocol,
     source: &PlayUrl,
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
 ) -> AppResult<()> {
     if !matches!(
         protocol,
@@ -2365,15 +2378,18 @@ fn validate_recording_source(
             ));
         }
     }
-    if let Some(proxy) = proxy.map(str::trim).filter(|value| !value.is_empty()) {
-        let proxy_url =
-            Url::parse(proxy).map_err(|_| AppError::new("proxy_invalid", "代理地址无效"))?;
-        if !matches!(proxy_url.scheme(), "http" | "https") || proxy.contains(['\0', '\r', '\n']) {
-            return Err(AppError::new(
-                "recording_proxy_unsupported",
-                "Rust FFmpeg 实验后端仅支持 HTTP(S) 代理",
-            ));
-        }
+    // 自定义地址在这里预校验：格式错误的代理不得留下看似活动录制、
+    // 却没有任务挂载的元数据。系统代理与直连由路由解析保证可用性。
+    if let crate::proxy::ProxyRoute::Custom(proxy) = route
+        && (!matches!(
+            Url::parse(proxy).map(|url| url.scheme().to_owned()),
+            Ok(ref scheme) if matches!(scheme.as_str(), "http" | "https")
+        ) || proxy.contains(['\0', '\r', '\n']))
+    {
+        return Err(AppError::new(
+            "recording_proxy_unsupported",
+            "录制网络转发仅支持 HTTP(S) 代理",
+        ));
     }
     Ok(())
 }
@@ -5045,7 +5061,7 @@ mod tests {
                     include_danmaku: Some(false),
                     continue_on_leave: Some(false),
                 },
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
@@ -5693,7 +5709,7 @@ mod tests {
         let active = manager
             .start_with_ffmpeg_options(
                 input,
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
@@ -5742,7 +5758,7 @@ mod tests {
         let initial = manager
             .start_with_ffmpeg_options(
                 manager_test_input(&url, "live:bilibili:auto-split", "auto-split"),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions {
                     split_duration: Some(std::time::Duration::from_millis(500)),
                     ..FfmpegRecordingOptions::default()
@@ -5900,7 +5916,7 @@ mod tests {
                     "live:bilibili:hls-manager",
                     "hls",
                 ),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
@@ -6057,7 +6073,7 @@ mod tests {
                     "live:bilibili:hls-stop",
                     "hls-stop",
                 ),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
@@ -6106,7 +6122,7 @@ mod tests {
         let active = manager
             .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, "live:bilibili:manager-start-stop", "100"),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
@@ -6159,7 +6175,7 @@ mod tests {
         let first = manager
             .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, source_key, "100"),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
@@ -6168,7 +6184,7 @@ mod tests {
         let duplicate = manager
             .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, source_key, "different-room"),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 DEFAULT_MAX_ACTIVE_RECORDINGS,
             )
@@ -6205,7 +6221,7 @@ mod tests {
         let first = manager
             .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, "live:bilibili:limit-1", "1"),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 1,
             )
@@ -6216,7 +6232,7 @@ mod tests {
         let rejected = manager
             .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, "live:bilibili:limit-2", "2"),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 1,
             )
@@ -6227,7 +6243,7 @@ mod tests {
         let second = manager
             .start_with_ffmpeg_options(
                 manager_lifecycle_test_input(&url, "live:bilibili:limit-2", "2"),
-                None,
+                &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions::default(),
                 2,
             )

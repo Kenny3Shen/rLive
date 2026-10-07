@@ -16,8 +16,8 @@ pub fn asr_get_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
 /// 会话留给用户真的打开字幕时的 `asr_load_session`。
 #[tauri::command]
 pub fn asr_enable(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
-    let (proxy, options) = asr_settings(state.inner())?;
-    state.asr.enable(proxy, options)
+    let (route, options) = asr_settings(state.inner())?;
+    state.asr.enable(route, options)
 }
 
 /// 按实际字幕需求加载识别会话。用户第一次打开字幕时调用。
@@ -26,18 +26,18 @@ pub fn asr_enable(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
 /// 会在下载完成后接着加载，不会重复下载。
 #[tauri::command]
 pub fn asr_load_session(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
-    let (proxy, _) = asr_settings(state.inner())?;
-    state.asr.load_session(proxy)
+    let (route, _) = asr_settings(state.inner())?;
+    state.asr.load_session(route)
 }
 
-fn asr_settings(state: &AppState) -> AppResult<(Option<String>, AsrRuntimeOptions)> {
+fn asr_settings(state: &AppState) -> AppResult<(crate::proxy::ProxyRoute, AsrRuntimeOptions)> {
     let conn = state
         .db
         .lock()
         .map_err(|_| AppError::new("db_lock_error", "读取代理设置失败"))?;
     let settings = crate::settings::get(&conn)?;
     Ok((
-        settings.proxy,
+        settings.proxy_route(),
         AsrRuntimeOptions {
             provider: settings.asr_provider,
             vad_enabled: settings.asr_vad_enabled,

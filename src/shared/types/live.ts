@@ -265,9 +265,14 @@ export type RecordingAssSettings = {
 /** 镜像 Rust `VideoRecommendApi` 的 serde snake_case 取值。 */
 export type VideoRecommendApi = "app" | "web";
 
+/** 镜像 Rust `ProxyMode`：跟随系统、关闭代理、使用自定义地址。 */
+export type ProxyMode = "auto" | "off" | "custom";
+
 export type AppSettings = {
   theme: "system" | "light" | "dark";
   default_site: string;
+  proxy_mode: ProxyMode;
+  /** 独立保存的自定义地址，切换代理模式时不清空。 */
   proxy: string | null;
   danmaku_opacity: number;
   /** 播放器弹幕描边宽度，CSS 像素，0.5..=2.5。 */

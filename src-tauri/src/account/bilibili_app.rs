@@ -147,9 +147,9 @@ struct QrSession {
 static SESSIONS: QrSessionStore<QrSession> = QrSessionStore::new(SITE);
 
 /// 生成 APP 登录二维码，只对外暴露可信二维码地址与本地不透明句柄。
-pub async fn start() -> AppResult<QrLoginStart> {
+pub async fn start(route: &crate::proxy::ProxyRoute) -> AppResult<QrLoginStart> {
     let query = sign_params(&[("local_id", "0".into())], None, now());
-    let response = login_client()?
+    let response = login_client(route)?
         .post(AUTH_CODE_URL)
         .header(USER_AGENT, USER_AGENT_VALUE)
         .header(REFERER, REFERER_VALUE)
@@ -174,7 +174,7 @@ pub async fn start() -> AppResult<QrLoginStart> {
     })
 }
 
-pub async fn poll(qr_key: &str) -> AppResult<AppQrPoll> {
+pub async fn poll(qr_key: &str, route: &crate::proxy::ProxyRoute) -> AppResult<AppQrPoll> {
     if !is_valid_session_key(qr_key) {
         return Err(SITE.error("invalid_key", "APP 登录二维码无效，请刷新二维码"));
     }
@@ -188,7 +188,7 @@ pub async fn poll(qr_key: &str) -> AppResult<AppQrPoll> {
         None,
         now(),
     );
-    let response = login_client()?
+    let response = login_client(route)?
         .post(POLL_URL)
         .header(USER_AGENT, USER_AGENT_VALUE)
         .header(REFERER, REFERER_VALUE)
@@ -268,13 +268,16 @@ fn proactive_refresh_allowed(now: i64) -> bool {
 /// 主动续期带进程内限速：本机时钟大幅偏快时 `needs_refresh` 会恒为真，
 /// 不限速就会变成每个请求续期一次。被限速时直接走远端校验，凭据真失效时
 /// 仍会由被动路径续期，因此限速不影响正确性。
-pub async fn authorize(credential: AppCredential) -> AppResult<AppAuthorization> {
+pub async fn authorize(
+    credential: AppCredential,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<AppAuthorization> {
     if !valid_credential_fields(&credential) {
         return Err(auth_required());
     }
     let now = now();
     if needs_refresh(&credential, now) && proactive_refresh_allowed(now) {
-        let refreshed = refresh(&credential).await?;
+        let refreshed = refresh(&credential, route).await?;
         LAST_PROACTIVE_REFRESH.store(now, Ordering::Relaxed);
         return Ok(AppAuthorization {
             expires_at: Some(refreshed.expires_at),
@@ -282,14 +285,14 @@ pub async fn authorize(credential: AppCredential) -> AppResult<AppAuthorization>
             renewed: true,
         });
     }
-    match validate(&credential).await {
+    match validate(&credential, route).await {
         Ok(validation) => Ok(AppAuthorization {
             credential,
             expires_at: validation.expires_at,
             renewed: false,
         }),
         Err(error) if error.code == "bilibili_app_auth_required" => {
-            let refreshed = refresh(&credential).await?;
+            let refreshed = refresh(&credential, route).await?;
             Ok(AppAuthorization {
                 expires_at: Some(refreshed.expires_at),
                 credential: refreshed,
@@ -305,16 +308,22 @@ pub async fn authorize(credential: AppCredential) -> AppResult<AppAuthorization>
 /// 刻意不用本机时钟做前置判断：时钟被调快时本地判断会把仍然有效的凭据报成
 /// 过期，用户为一个时钟问题白跑一次扫码。凭据**格式**仍在此拒绝，非法格式
 /// 不必联网。是否真的过期以服务端结论为准。
-pub async fn validate(credential: &AppCredential) -> AppResult<AppValidation> {
+pub async fn validate(
+    credential: &AppCredential,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<AppValidation> {
     if !valid_credential_fields(credential) {
         return Err(auth_required());
     }
-    fetch_oauth_info(credential).await
+    fetch_oauth_info(credential, route).await
 }
 
-async fn fetch_oauth_info(credential: &AppCredential) -> AppResult<AppValidation> {
+async fn fetch_oauth_info(
+    credential: &AppCredential,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<AppValidation> {
     let query = sign_params(&[], Some(&credential.access_token), now());
-    let response = login_client()
+    let response = login_client(route)
         .map_err(|_| auth_unavailable())?
         .get(OAUTH_INFO_URL)
         .header(USER_AGENT, USER_AGENT_VALUE)
@@ -343,7 +352,10 @@ async fn fetch_oauth_info(credential: &AppCredential) -> AppResult<AppValidation
 /// 失败分类：`-101`（不存在的 refresh_token）与 `-400`（缺参数／空值）都表明该
 /// 刷新令牌不可用，需要重新扫码；`-3`（签名错误）与本方参数构造有关，属可重试。
 /// 实测旧 `refresh_token` 在轮换后仍然可用，因此「刷新成功但落库失败」可以安全重试。
-pub async fn refresh(credential: &AppCredential) -> AppResult<AppCredential> {
+pub async fn refresh(
+    credential: &AppCredential,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<AppCredential> {
     if !valid_opaque(&credential.refresh_token, MAX_TOKEN_LEN) {
         return Err(auth_required());
     }
@@ -352,7 +364,7 @@ pub async fn refresh(credential: &AppCredential) -> AppResult<AppCredential> {
         None,
         now(),
     );
-    let response = login_client()
+    let response = login_client(route)
         .map_err(|_| auth_unavailable())?
         .post(OAUTH_REFRESH_URL)
         .header(USER_AGENT, USER_AGENT_VALUE)
@@ -397,18 +409,20 @@ pub struct AppAuth {
 }
 
 impl AppAuth {
-    /// 校验并在必要时续期，再为推荐请求应用显式代理；禁止环境代理与重定向。
-    pub async fn new(credential: AppCredential, proxy: Option<&str>) -> AppResult<Self> {
-        let authorization = authorize(credential).await?;
+    /// 校验并在必要时续期，再为推荐请求应用给定的代理路由；禁止重定向。
+    pub async fn new(
+        credential: AppCredential,
+        route: &crate::proxy::ProxyRoute,
+    ) -> AppResult<Self> {
+        let authorization = authorize(credential, route).await?;
         let builder = Client::builder()
             .use_native_tls()
-            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(20))
             .connect_timeout(Duration::from_secs(10))
             .gzip(true)
             .brotli(true);
-        let client = crate::http_client::with_proxy(builder, proxy)
+        let client = crate::http_client::with_route(builder, route)
             .map_err(|_| auth_unavailable())?
             .build()
             .map_err(|_| auth_unavailable())?;
@@ -539,10 +553,16 @@ pub fn sign_params(
     params
 }
 
-fn login_client() -> AppResult<Client> {
+fn login_client(route: &crate::proxy::ProxyRoute) -> AppResult<Client> {
     // 公共构建器要求 Jar，但每个请求都新建且随客户端丢弃，绝不复用 Web 会话，
     // 也不读取、返回或持久化 Set-Cookie / cookie_info。
-    build_login_client(SITE, Arc::new(Jar::default()), TRUSTED_SUFFIXES, true, None)
+    build_login_client(
+        SITE,
+        Arc::new(Jar::default()),
+        TRUSTED_SUFFIXES,
+        true,
+        route,
+    )
 }
 
 fn now() -> i64 {
@@ -1178,11 +1198,11 @@ mod tests {
             ..credential()
         };
         assert_eq!(
-            error_of(validate(&expired).await).code,
+            error_of(validate(&expired, &crate::proxy::ProxyRoute::Direct).await).code,
             "bilibili_app_auth_required"
         );
         assert_eq!(
-            error_of(AppAuth::new(expired, None).await).code,
+            error_of(AppAuth::new(expired, &crate::proxy::ProxyRoute::Direct).await).code,
             "bilibili_app_auth_required"
         );
         let auth = AppAuth {
@@ -1368,7 +1388,7 @@ mod tests {
             ..credential()
         };
         assert_eq!(
-            error_of(refresh(&broken).await).code,
+            error_of(refresh(&broken, &crate::proxy::ProxyRoute::Direct).await).code,
             "bilibili_app_auth_required"
         );
     }

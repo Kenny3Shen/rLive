@@ -92,9 +92,12 @@ struct PendingEntry {
 /// 下载公开或用户提供的 M3U 播放列表，返回可播放的 HTTP(S) 频道条目。
 /// 来源大小刻意设置上限，
 /// 保护桌面进程免受畸形或异常巨大的列表影响。
-pub async fn load_playlist(source_url: &str, proxy: Option<&str>) -> AppResult<Vec<IptvChannel>> {
+pub async fn load_playlist(
+    source_url: &str,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<Vec<IptvChannel>> {
     let source = parse_http_url(source_url, "iptv_invalid_playlist_url")?;
-    let response = crate::http_client::client_for_proxy(proxy)?
+    let response = crate::http_client::client_for_route(route)?
         .get(source.clone())
         .send()
         .await
@@ -151,7 +154,7 @@ pub async fn load_playlist(source_url: &str, proxy: Option<&str>) -> AppResult<V
 /// 每个探测都会等待媒体字节并校验 HLS 清单。
 pub async fn check_channels(
     checks: Vec<IptvChannelCheck>,
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
 ) -> AppResult<Vec<IptvChannelAvailability>> {
     if checks.len() > MAX_CHANNEL_CHECKS {
         return Err(AppError::new(
@@ -160,7 +163,7 @@ pub async fn check_channels(
         ));
     }
 
-    let client = crate::http_client::client_for_proxy(proxy)?;
+    let client = crate::http_client::client_for_route(route)?;
     // 按**完整播放配置**去重，而不是只看 URL：同一 URL 配不同的 Referer/UA
     // 是 IPTV 列表里的常见写法（同一 CDN 路径在不同站点下返回 403 或 200），
     // 按 URL 去重会让第二个条目的结果被第一个冒名顶替。

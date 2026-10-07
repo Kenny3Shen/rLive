@@ -60,9 +60,9 @@ struct QrSession {
 static SESSIONS: QrSessionStore<QrSession> = QrSessionStore::new(SITE);
 
 /// 启动虎牙公开的 Web 扫码流程。
-pub async fn start() -> AppResult<QrLoginStart> {
+pub async fn start(route: &crate::proxy::ProxyRoute) -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = qr::build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, false, None)?;
+    let client = qr::build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, false, route)?;
     let body = udb_request(
         URI_GET_QR_ID,
         json!({

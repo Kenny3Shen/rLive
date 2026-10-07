@@ -206,7 +206,8 @@ pub async fn danmaku_connect(
     };
     // websocket 加入房间前同样需要房间详情请求。这里使用与普通浏览相同的
     // 代理设置，避免 Twitch 房间在匿名 IRC 连接启动前就失败。
-    let site = sites::site_with_proxy(&site_id, cookie.clone(), settings.proxy.as_deref())?;
+    let route = settings.proxy_route();
+    let site = sites::site_with_route(&site_id, cookie.clone(), &route)?;
     // Bilibili 弹幕在没有会话时也能工作。当保存的 Cookie 已过期时，房间详情
     // 仍会被拉取，但聊天连接必须回退到匿名模式，
     // 而不是悄悄使用一个失效的 uid。
@@ -215,8 +216,7 @@ pub async fn danmaku_connect(
     let (detail, cookie_status) = tokio::join!(site.get_room_detail(&room_id), async {
         match (&site_id, &cookie) {
             (SiteId::Bilibili, Some(value)) if !value.trim().is_empty() => {
-                crate::sites::bilibili::cookie_session_status(value, settings.proxy.as_deref())
-                    .await
+                crate::sites::bilibili::cookie_session_status(value, &route).await
             }
             _ => None,
         }
@@ -248,7 +248,7 @@ pub async fn danmaku_connect(
             detail_raw: &detail.raw,
             cookie: &danmaku_cookie,
             identity_cookie: identity_cookie.as_deref().unwrap_or_default(),
-            proxy: settings.proxy.as_deref(),
+            route: &route,
             notice,
         },
     )
@@ -339,7 +339,7 @@ pub async fn bilibili_danmaku_send(
         validate_and_reserve_send(&state.bilibili_send_limiter, &room_id, &message)?;
     // 该请求携带用户的浏览器 Cookie。重定向目标绝不能收到它，
     // 因此写入路径对代理请求和直连请求都刻意关闭了重定向跟随。
-    let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
+    let client = crate::http_client::build_no_redirect_client(&settings.proxy_route())?;
     danmu_rs::bilibili::send_chat(&client, &cookie, &room_id, &message).await?;
     record_successful_danmaku_send(
         state.inner(),
@@ -382,13 +382,13 @@ pub async fn douyu_danmaku_send(
     room_title: Option<String>,
     room_user_name: Option<String>,
 ) -> AppResult<()> {
-    let (send_enabled, cookie, proxy) = {
+    let (send_enabled, cookie, route) = {
         let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
         (
             settings.danmaku_send_enabled,
             account::get_cookie(&conn, &SiteId::Douyu)?.unwrap_or_default(),
-            settings.proxy,
+            settings.proxy_route(),
         )
     };
     if !send_enabled {
@@ -421,7 +421,7 @@ pub async fn douyu_danmaku_send(
                 );
             },
         )?;
-    danmu_rs::douyu::send_chat(&cookie, &room_id, &message, proxy.as_deref()).await?;
+    danmu_rs::douyu::send_chat(&cookie, &room_id, &message, &route).await?;
     record_successful_danmaku_send(
         state.inner(),
         SiteId::Douyu,
@@ -463,13 +463,13 @@ pub async fn huya_danmaku_send(
     room_title: Option<String>,
     room_user_name: Option<String>,
 ) -> AppResult<()> {
-    let (send_enabled, cookie, proxy) = {
+    let (send_enabled, cookie, route) = {
         let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
         (
             settings.danmaku_send_enabled,
             account::get_cookie(&conn, &SiteId::Huya)?.unwrap_or_default(),
-            settings.proxy,
+            settings.proxy_route(),
         )
     };
     if !send_enabled {
@@ -495,12 +495,12 @@ pub async fn huya_danmaku_send(
     // 解析出规范的 top/sub/presenter id，
     // 而不是把短公开房间号直接用于 TARS 请求。
     let room_id = validate_huya_send_room(&room_id)?;
-    let site = sites::site_with_proxy(&SiteId::Huya, Some(cookie.clone()), proxy.as_deref())?;
+    let site = sites::site_with_route(&SiteId::Huya, Some(cookie.clone()), &route)?;
     let detail = site.get_room_detail(&room_id).await?;
     let args = danmu_rs::huya::args_from_raw(&room_id, &detail.raw)?;
     let (_room_id, message) =
         validate_and_reserve_huya_send(&state.huya_send_limiter, &room_id, &message)?;
-    danmu_rs::huya::send_chat(&cookie, args, &message).await?;
+    danmu_rs::huya::send_chat(&cookie, args, &message, &route).await?;
     record_successful_danmaku_send(
         state.inner(),
         SiteId::Huya,

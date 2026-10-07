@@ -16,6 +16,7 @@ mod lan_sync;
 mod media_cache;
 mod models;
 mod profile;
+mod proxy;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod recording;
 mod settings;
@@ -75,6 +76,7 @@ use commands::follow::{
     follow_remove, follow_set_auto_record, follow_set_tags, tag_list, tag_remove, tag_upsert,
 };
 use commands::history::{history_add, history_clear, history_list, history_remove};
+use commands::http::http_fetch;
 use commands::image_proxy::image_proxy_url;
 use commands::iptv::{
     iptv_check_channels, iptv_favorite_add, iptv_favorite_group_list, iptv_favorite_group_remove,
@@ -99,11 +101,10 @@ use commands::stream_proxy::{stream_proxy_start, stream_proxy_stop, stream_proxy
 use commands::video::{
     video_danmaku_send, video_get_archive, video_get_cast_url, video_get_comment_replies,
     video_get_comments, video_get_danmaku, video_get_online_total, video_get_pgc_index,
-    video_get_play_info, video_get_popular, video_get_recommend, video_get_related,
-    video_get_season, video_get_story,
-    video_get_storyboard, video_get_subtitle, video_get_player_meta, video_get_uploader_story,
-    video_get_zone, video_preload_next, video_search, video_search_zone_list, video_stop_play,
-    video_uploader_videos, video_zone_list,
+    video_get_play_info, video_get_player_meta, video_get_popular, video_get_recommend,
+    video_get_related, video_get_season, video_get_story, video_get_storyboard, video_get_subtitle,
+    video_get_uploader_story, video_get_zone, video_preload_next, video_search,
+    video_search_zone_list, video_stop_play, video_uploader_videos, video_zone_list,
 };
 use commands::video_history::{
     video_history_add, video_history_clear, video_history_find, video_history_list,
@@ -306,7 +307,6 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init());
     // 仅限 Android：为播放器边缘手势提供窗口亮度、STREAM_MUSIC 音量
     // 和全屏方向控制；为返回键提供退回系统桌面的应用级桥；并把应用
@@ -345,6 +345,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(main_window_only(tauri::generate_handler![
+            http_fetch,
             settings_get,
             settings_set,
             #[cfg(not(target_os = "android"))]

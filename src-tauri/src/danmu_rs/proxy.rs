@@ -130,6 +130,19 @@ pub(crate) struct ConnectProxy {
 }
 
 impl ConnectProxy {
+    /// 根据当前代理路由与目标站点构造隧道配置。
+    ///
+    /// 「关闭」返回 `None`（直连）；「自动」在目标主机命中绕过列表或系统没有
+    /// 配置代理时也返回 `None`，否则用系统代理建立 CONNECT 隧道。
+    pub(crate) fn from_route(
+        route: &crate::proxy::ProxyRoute,
+        authority: &str,
+        site: &'static str,
+        name: &'static str,
+    ) -> AppResult<Option<Self>> {
+        Self::from_setting(route.upstream_for_authority(authority), site, name)
+    }
+
     pub(crate) fn from_setting(
         proxy: Option<&str>,
         site: &'static str,
@@ -298,6 +311,37 @@ where
             return Ok(stream);
         }
     }
+}
+
+/// 按路由打开一条弹幕 WebSocket 的传输。
+///
+/// `proxy` 为 `None` 表示确定直连（关闭模式、自动模式命中绕过列表、或自动模式
+/// 没有可用代理）。两个分支返回同一形状的 `BufStream<MaybeTlsStream>`，因此
+/// 调用方可以无条件把结果交给 `client_async_tls_with_config`；直连分支同样
+/// 应用 `tune_socket`，避免两条路径的套接字参数出现差异。
+///
+/// 错误返回为字符串：各站点的错误码、文案与重试提示不同，由调用方决定
+/// 应该归类为“临时故障”还是面向用户的命令错误。
+pub(crate) async fn open_websocket_transport(
+    proxy: Option<&ConnectProxy>,
+    host: &str,
+    port: u16,
+    tune_socket: Option<fn(&TcpStream)>,
+) -> Result<BufStream<MaybeTlsStream<TcpStream>>, String> {
+    let Some(proxy) = proxy else {
+        let stream = time::timeout(PROXY_CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+            .await
+            .map_err(|_| "连接弹幕服务器超时".to_owned())?
+            .map_err(|error| format!("连接弹幕服务器失败: {error}"))?;
+        if let Some(tune_socket) = tune_socket {
+            tune_socket(&stream);
+        }
+        return Ok(BufStream::new(MaybeTlsStream::Plain(stream)));
+    };
+    proxy
+        .open_tunnel(&format!("{host}:{port}"), tune_socket)
+        .await
+        .map_err(|error| error.message)
 }
 
 #[cfg(test)]

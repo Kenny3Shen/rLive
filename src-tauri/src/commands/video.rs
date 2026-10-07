@@ -113,14 +113,14 @@ fn first_segment_ranges(track: &VideoTrack) -> Vec<(u64, u64)> {
 /// 但那个函数返回 `Box<dyn LiveSite>`，拿不到 VOD 的 inherent 方法，
 /// 所以这里返回具体类型。
 fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
-    let (cookie, proxy) = {
+    let (cookie, route) = {
         let conn = state.conn()?;
         (
             account::get_cookie(&conn, &SiteId::Bilibili)?,
-            crate::settings::get(&conn)?.proxy,
+            crate::settings::get(&conn)?.proxy_route(),
         )
     };
-    let client = crate::http_client::client_for_proxy(proxy.as_deref())?;
+    let client = crate::http_client::client_for_route(&route)?;
     Ok(BilibiliSite::new(client, cookie.unwrap_or_default()))
 }
 
@@ -130,16 +130,16 @@ fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
 /// 凭据临近到期或已被服务端拒绝时会自动续期；续期轮换了 `refresh_token`，
 /// 因此新凭据必须落库，否则下一次请求仍拿旧值重试。
 async fn resolve_app_feed(state: &AppState) -> AppResult<BilibiliSite> {
-    let (credential, proxy) = {
+    let (credential, route) = {
         let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
-        (account::bilibili_app::load(&conn)?, settings.proxy)
+        (account::bilibili_app::load(&conn)?, settings.proxy_route())
     };
     let site = resolve_bilibili(state)?;
     let Some(credential) = credential else {
         return Ok(site);
     };
-    let mut auth = account::bilibili_app::AppAuth::new(credential, proxy.as_deref()).await?;
+    let mut auth = account::bilibili_app::AppAuth::new(credential, &route).await?;
     if let Some(renewed) = auth.take_renewed() {
         let conn = state.conn()?;
         account::bilibili_app::save(&conn, &renewed)?;
@@ -321,11 +321,11 @@ pub async fn video_preload_next(
     );
     let store = state.media_cache.clone();
     let headers = video_stream_headers();
-    let proxy = {
+    let route = {
         let conn = state.conn()?;
-        crate::settings::get(&conn)?.proxy
+        crate::settings::get(&conn)?.proxy_route()
     };
-    let client = match crate::http_client::client_for_proxy(proxy.as_deref()) {
+    let client = match crate::http_client::client_for_route(&route) {
         Ok(client) => client,
         Err(_) => return Ok(false),
     };
@@ -445,9 +445,9 @@ pub async fn video_get_play_info(
     // 因此两条轨一律经代理注入请求头。
     let headers = video_stream_headers();
 
-    let proxy = {
+    let route = {
         let conn = state.conn()?;
-        crate::settings::get(&conn)?.proxy
+        crate::settings::get(&conn)?.proxy_route()
     };
 
     // 三条流必须各占一个 session_id：`StreamProxy::start` 按 session 覆盖同名代理，
@@ -554,7 +554,7 @@ pub async fn video_get_play_info(
                 headers.clone(),
                 session_ids.audio.clone(),
                 StreamProxyStartOptions {
-                    proxy: proxy.as_deref(),
+                    route: &route,
                     media_cache: audio_cache.clone(),
                     media_cache_store: media_cache_store.clone(),
                     initialization: audio_initialization,
@@ -569,7 +569,7 @@ pub async fn video_get_play_info(
             headers.clone(),
             session_ids.video.clone(),
             StreamProxyStartOptions {
-                proxy: proxy.as_deref(),
+                route: &route,
                 media_cache: video_cache.clone(),
                 media_cache_store: media_cache_store.clone(),
                 initialization: Some(PrefetchedInitialization {
@@ -590,7 +590,7 @@ pub async fn video_get_play_info(
                     headers.clone(),
                     session_ids.audio.clone(),
                     StreamProxyStartOptions {
-                        proxy: proxy.as_deref(),
+                        route: &route,
                         media_cache: audio_cache.clone(),
                         media_cache_store: media_cache_store.clone(),
                         initialization: audio_initialization,
@@ -723,7 +723,7 @@ pub async fn video_danmaku_send(
     state.bilibili_send_limiter.reserve(&aid_key)?;
     // 该请求携带用户的浏览器 Cookie。重定向目标绝不能收到它，
     // 因此写入路径对代理请求和直连请求都刻意关闭了重定向跟随。
-    let client = crate::http_client::build_no_redirect_client(settings.proxy.as_deref())?;
+    let client = crate::http_client::build_no_redirect_client(&settings.proxy_route())?;
     crate::danmu_rs::bilibili::send_video_danmaku(
         &client,
         &cookie,
@@ -831,7 +831,9 @@ pub async fn video_get_online_total(
     bvid: String,
     cid: i64,
 ) -> AppResult<Option<String>> {
-    resolve_bilibili(&state)?.video_online_total(&bvid, cid).await
+    resolve_bilibili(&state)?
+        .video_online_total(&bvid, cid)
+        .await
 }
 
 /// 评论首页（游标翻页）。`mode`：2 按时间、3 按热度；`next` 首次传 0。
@@ -896,7 +898,7 @@ mod tests {
                         std::collections::HashMap::new(),
                         new.audio.clone(),
                         crate::stream_proxy::StreamProxyStartOptions {
-                            proxy: Some("http://["),
+                            route: &crate::proxy::ProxyRoute::Custom("http://[".into()),
                             ..Default::default()
                         },
                     )

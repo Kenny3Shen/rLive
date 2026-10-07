@@ -14,6 +14,7 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "video_recommend_api",
     "video_next_episode_preload",
     "video_blocked_uploaders",
+    "proxy_mode",
 ];
 
 /// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
@@ -98,6 +99,22 @@ impl Default for RecordingAssSettings {
     }
 }
 
+/// 出站请求的代理模式。
+///
+/// 与地址分开保存：切到「自动」或「关闭」后再切回「自定义」时，
+/// 用户填过的地址仍然在。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyMode {
+    /// 跟随系统代理（环境变量与操作系统设置）。
+    #[default]
+    Auto,
+    /// 始终直连，忽略系统代理与环境变量。
+    Off,
+    /// 使用 `AppSettings::proxy` 中的地址。
+    Custom,
+}
+
 /// 视频点播推荐接口的全局偏好。
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -132,7 +149,12 @@ pub struct AppSettings {
     /// serde default 补齐空列表，见 `BACKFILLED_SETTINGS_FIELDS`。
     #[serde(default)]
     pub hidden_home_entry_ids: Vec<String>,
-    /// 例如 `http://127.0.0.1:7890`
+    /// 出站请求的代理模式；旧记录按地址迁移，见 `backfill_proxy_mode`。
+    #[serde(default)]
+    pub proxy_mode: ProxyMode,
+    /// 自定义代理地址，例如 `http://127.0.0.1:7890`。
+    ///
+    /// 只在 `proxy_mode` 为 `custom` 时生效，但无论模式如何都原样保留。
     pub proxy: Option<String>,
     /// 0.0 ..= 1.0
     pub danmaku_opacity: f32,
@@ -255,6 +277,32 @@ pub struct AppSettings {
     pub recording_ass: RecordingAssSettings,
 }
 
+/// 兼容旧数据库与配置包：有非空地址视为自定义，否则使用新的自动默认值。
+/// 显式模式（包括非法取值）绝不覆盖，让后续 serde 校验报错。
+pub(crate) fn backfill_proxy_mode(value: &mut serde_json::Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if object.contains_key("proxy_mode") {
+        return;
+    }
+    let custom = object
+        .get("proxy")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|proxy| !proxy.trim().is_empty());
+    object.insert(
+        "proxy_mode".into(),
+        serde_json::Value::String(if custom { "custom" } else { "auto" }.into()),
+    );
+}
+
+impl AppSettings {
+    /// 把当前模式与地址解析成运行时路由。
+    pub fn proxy_route(&self) -> crate::proxy::ProxyRoute {
+        crate::proxy::ProxyRoute::resolve(self.proxy_mode, self.proxy.as_deref())
+    }
+}
+
 fn default_room_card_preview_enabled() -> bool {
     true
 }
@@ -276,6 +324,7 @@ impl Default for AppSettings {
             default_site: "bilibili".into(),
             disabled_site_ids: Vec::new(),
             hidden_home_entry_ids: Vec::new(),
+            proxy_mode: ProxyMode::default(),
             proxy: None,
             danmaku_opacity: 0.8,
             danmaku_font_stroke: 0.0,

@@ -641,7 +641,8 @@ pub(crate) struct DanmakuConnectRequest<'a> {
     pub(crate) detail_raw: &'a serde_json::Value,
     pub(crate) cookie: &'a str,
     pub(crate) identity_cookie: &'a str,
-    pub(crate) proxy: Option<&'a str>,
+    /// 弹幕连接与其 HTTP 刷新请求共用的代理路由。
+    pub(crate) route: &'a crate::proxy::ProxyRoute,
     pub(crate) notice: Option<String>,
 }
 
@@ -657,7 +658,7 @@ pub async fn connect(
         detail_raw,
         cookie,
         identity_cookie,
-        proxy,
+        route,
         notice,
     } = request;
     if !manager.accepts_connection_generation(generation) {
@@ -685,14 +686,15 @@ pub async fn connect(
                 identity,
                 notice,
                 {
-                    let proxy = proxy.map(str::to_owned);
-                    move |events| bilibili::run_loop(events, args, proxy)
+                    let route = route.clone();
+                    move |events| bilibili::run_loop(events, args, route)
                 },
             );
             Ok(())
         }
         SiteId::Douyu => {
             let args = douyu::args_from_raw(room_id, detail_raw)?;
+            let route = route.clone();
             spawn_loop(
                 app.clone(),
                 manager,
@@ -701,12 +703,13 @@ pub async fn connect(
                 source_key.clone(),
                 identity,
                 notice,
-                move |events| douyu::run_loop(events, args),
+                move |events| douyu::run_loop(events, args, route),
             );
             Ok(())
         }
         SiteId::Huya => {
             let args = huya::args_from_raw(room_id, detail_raw)?;
+            let route = route.clone();
             spawn_loop(
                 app.clone(),
                 manager,
@@ -715,13 +718,13 @@ pub async fn connect(
                 source_key.clone(),
                 identity,
                 notice,
-                move |events| huya::run_loop(events, args),
+                move |events| huya::run_loop(events, args, route),
             );
             Ok(())
         }
         SiteId::Twitch => {
             let args = twitch::args_from_raw(room_id, detail_raw)?;
-            let proxy = proxy.map(str::to_owned);
+            let route = route.clone();
             spawn_loop(
                 app.clone(),
                 manager,
@@ -730,7 +733,7 @@ pub async fn connect(
                 source_key.clone(),
                 identity,
                 notice,
-                move |events| twitch::run_loop(events, args, proxy),
+                move |events| twitch::run_loop(events, args, route),
             );
             Ok(())
         }
@@ -741,6 +744,7 @@ pub async fn connect(
             if !manager.accepts_connection_generation(generation) {
                 return Ok(());
             }
+            let route = route.clone();
             spawn_loop(
                 app.clone(),
                 manager,
@@ -749,7 +753,7 @@ pub async fn connect(
                 source_key,
                 identity,
                 notice,
-                move |events| douyin::run_loop(events, args),
+                move |events| douyin::run_loop(events, args, route),
             );
             Ok(())
         }

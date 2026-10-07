@@ -119,10 +119,11 @@ impl DlnaManager {
         url: String,
         headers: HashMap<String, String>,
         title: String,
+        route: &crate::proxy::ProxyRoute,
     ) -> AppResult<DlnaCastStatus> {
         let _ = self.stop().await;
         let device = self.resolve_device(&location).await?;
-        let relay = start_relay(headers).await.map_err(dlna_error)?;
+        let relay = start_relay(headers, route).await.map_err(dlna_error)?;
 
         let host = lan_ipv4()?;
         let encoded_url =
@@ -389,11 +390,30 @@ pub struct RelayHandle {
 }
 
 struct RelayConfig {
+    client: reqwest::Client,
     headers: HashMap<String, String>,
     token: String,
 }
 
-async fn start_relay(headers: HashMap<String, String>) -> Result<RelayHandle, String> {
+async fn start_relay(
+    headers: HashMap<String, String>,
+    route: &crate::proxy::ProxyRoute,
+) -> Result<RelayHandle, String> {
+    // 设备控制仍直连；远端媒体回源与应用其他出站请求共用代理决策。
+    // 长直播不设总超时，按连接/读空闲超时保护。每场投屏共享连接池。
+    let client = crate::http_client::with_route(
+        reqwest::Client::builder()
+            .use_native_tls()
+            .user_agent(DEFAULT_UA)
+            .gzip(false)
+            .brotli(false)
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(45)),
+        route,
+    )
+    .map_err(|error| error.message)?
+    .build()
+    .map_err(|_| "投屏网络客户端初始化失败".to_owned())?;
     let listener = TcpListener::bind(("0.0.0.0", 0))
         .await
         .map_err(|error| format!("中继端口绑定失败: {error}"))?;
@@ -401,6 +421,7 @@ async fn start_relay(headers: HashMap<String, String>) -> Result<RelayHandle, St
     let token = uuid::Uuid::new_v4().simple().to_string();
 
     let config = Arc::new(RelayConfig {
+        client,
         headers,
         token: token.clone(),
     });
@@ -492,14 +513,7 @@ async fn handle_relay_connection(mut socket: TcpStream, config: Arc<RelayConfig>
         return;
     }
 
-    // 中继回源同样直连：上游可能是回环测试源或局域网源，走代理会被
-    // 劫持到错误出口。
-    let client = reqwest::Client::builder()
-        .user_agent(DEFAULT_UA)
-        .no_proxy()
-        .build()
-        .expect("relay http client");
-    let mut request = client.get(target);
+    let mut request = config.client.get(target);
     for (key, value) in &config.headers {
         request = request.header(key.as_str(), value.as_str());
     }
@@ -663,6 +677,34 @@ mod tests {
         assert_eq!(resolved.control_url, "http://192.168.1.5:49152/avt/control");
     }
 
+    #[tokio::test]
+    async fn remote_media_relay_uses_the_application_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let n = socket.read(&mut request).await.unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..n])
+                    .starts_with("GET http://stream.invalid/live.flv HTTP/1.1")
+            );
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nContent-Length: 6\r\nConnection: close\r\n\r\nmedia!").await.unwrap();
+        });
+        let relay = start_relay(HashMap::new(), &crate::proxy::ProxyRoute::Custom(proxy))
+            .await
+            .unwrap();
+        let path = relay_url("http://stream.invalid/live.flv", &relay.token);
+        let response = crate::http_client::direct_client()
+            .get(format!("http://127.0.0.1:{}{path}", relay.port))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.bytes().await.unwrap().as_ref(), b"media!");
+        server.await.unwrap();
+        stop_relay(&relay).await;
+    }
+
     #[test]
     fn device_without_avtransport_is_rejected() {
         let xml = r#"<root><device><friendlyName>音箱</friendlyName></device></root>"#;
@@ -815,6 +857,7 @@ mod tests {
                     .into_iter()
                     .collect(),
                 "测试直播".into(),
+                &crate::proxy::ProxyRoute::Direct,
             )
             .await
             .expect("cast should succeed against the mock renderer");

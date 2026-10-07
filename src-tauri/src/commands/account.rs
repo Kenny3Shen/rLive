@@ -9,7 +9,15 @@ use crate::account::{
 };
 use crate::error::AppResult;
 use crate::models::live::SiteId;
+use crate::proxy::ProxyRoute;
 use crate::state::AppState;
+
+/// 在等待网络请求之前把设置里的模式与地址快照成路由，
+/// 使一次登录会话的每个请求都遵循同一份设置。
+fn qr_route(state: &AppState) -> AppResult<ProxyRoute> {
+    let conn = state.conn()?;
+    Ok(crate::settings::get(&conn)?.proxy_route())
+}
 
 // 该响应包含一次性的二维码内容及其本地轮询句柄。避免让它进入无意的
 // `Debug` 日志；这两项在用户扫码登录流程之外都不需要。
@@ -107,13 +115,13 @@ pub async fn account_get_profile(
 ) -> AppResult<AccountProfile> {
     // 在等待网络请求之前先快照查询所需的全部值。跨 await 持有 SQLite 互斥锁
     // 会阻塞其他所有设置与账号操作。
-    let (cookie, proxy) = {
+    let (cookie, route) = {
         let conn = state.db.lock().map_err(|e| {
             crate::error::AppError::new("db_lock_error", format!("account_get_profile: {e}"))
         })?;
         (
             crate::account::get_cookie(&conn, &site_id)?.unwrap_or_default(),
-            crate::settings::get(&conn)?.proxy,
+            crate::settings::get(&conn)?.proxy_route(),
         )
     };
 
@@ -121,7 +129,7 @@ pub async fn account_get_profile(
     let cookie_username = crate::account::display_name_from_cookie(&site_id, &cookie);
     let (username, status) = match site_id {
         SiteId::Bilibili if has_cookie => {
-            match bilibili_profile_lookup(&cookie, proxy.as_deref()).await {
+            match bilibili_profile_lookup(&cookie, &route).await {
                 // 平台确认登录：显示名可能缺失，但状态是确定的 Valid。
                 BilibiliProfileLookup::Valid(username) => {
                     (username.or(cookie_username), AccountStatus::Valid)
@@ -133,34 +141,29 @@ pub async fn account_get_profile(
                 BilibiliProfileLookup::Unavailable => (cookie_username, AccountStatus::Unknown),
             }
         }
-        SiteId::Douyin if has_cookie => {
-            match douyin_profile::lookup(&cookie, proxy.as_deref()).await {
-                douyin_profile::ProfileLookup::Valid(username) => {
-                    (username.or(cookie_username), AccountStatus::Valid)
-                }
-                douyin_profile::ProfileLookup::Rejected => (None, AccountStatus::Expired),
-                douyin_profile::ProfileLookup::Unavailable => {
-                    (cookie_username, AccountStatus::Unknown)
-                }
+        SiteId::Douyin if has_cookie => match douyin_profile::lookup(&cookie, &route).await {
+            douyin_profile::ProfileLookup::Valid(username) => {
+                (username.or(cookie_username), AccountStatus::Valid)
             }
-        }
+            douyin_profile::ProfileLookup::Rejected => (None, AccountStatus::Expired),
+            douyin_profile::ProfileLookup::Unavailable => (cookie_username, AccountStatus::Unknown),
+        },
         // 斗鱼的显示名来自 Cookie 自身而不是某次查询，因此探针失败时它仍然可用；
         // 只有平台明确拒绝该会话才报告已失效。
         SiteId::Douyu if has_cookie => {
-            let status =
-                match crate::sites::douyu::cookie_session_status(&cookie, proxy.as_deref()).await {
-                    Some(true) => AccountStatus::Valid,
-                    Some(false) => AccountStatus::Expired,
-                    None => AccountStatus::Unknown,
-                };
+            let status = match crate::sites::douyu::cookie_session_status(&cookie, &route).await {
+                Some(true) => AccountStatus::Valid,
+                Some(false) => AccountStatus::Expired,
+                None => AccountStatus::Unknown,
+            };
             (cookie_username, status)
         }
         // 虎牙的显示名同样来自 Cookie 的 `udb_n`，探针只决定登录态徽标。它走信令
         // 网关的 `verifyCookie`（与发送弹幕前的校验同一条链路），因为虎牙的 Web
         // 业务接口不接受浏览器 Cookie 单独作为凭据，恒回「Token验证不通过」，
-        // 与会话是否有效无关。该链路直连网关，因此不使用应用代理设置。
+        // 与会话是否有效无关。该链路与接收、发送共用应用代理路由。
         SiteId::Huya if has_cookie => {
-            let status = match crate::danmu_rs::huya::cookie_session_status(&cookie).await {
+            let status = match crate::danmu_rs::huya::cookie_session_status(&cookie, &route).await {
                 Some(true) => AccountStatus::Valid,
                 Some(false) => AccountStatus::Expired,
                 None => AccountStatus::Unknown,
@@ -213,7 +216,10 @@ async fn app_profile_from_credential(
     state: &AppState,
     credential: &bilibili_app::AppCredential,
 ) -> BilibiliAppProfile {
-    let (status, expires_at) = match bilibili_app::authorize(credential.clone()).await {
+    // 凭据校验/续期必须与其余请求走同一条出口。这里读不到设置时退回直连：
+    // 校验失败只影响登录态展示，不该让整个账号页报错。
+    let route = qr_route(state).unwrap_or(crate::proxy::ProxyRoute::Direct);
+    let (status, expires_at) = match bilibili_app::authorize(credential.clone(), &route).await {
         Ok(authorization) => {
             let mut expires_at = authorization.credential.expires_at;
             if let Ok(conn) = state.conn() {
@@ -292,7 +298,7 @@ pub async fn account_qr_login_start(
         if site_id != SiteId::Bilibili {
             return Err(qr_login_unsupported(&site_id));
         }
-        let session = bilibili_app::start().await?;
+        let session = bilibili_app::start(&qr_route(state.inner())?).await?;
         return Ok(AccountQrLoginStart {
             qr_code_url: session.qr_code_url,
             qr_key: session.qr_key,
@@ -301,7 +307,7 @@ pub async fn account_qr_login_start(
     }
     match &site_id {
         SiteId::Bilibili => {
-            let session = bilibili_qr::start().await?;
+            let session = bilibili_qr::start(&qr_route(state.inner())?).await?;
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
@@ -309,18 +315,10 @@ pub async fn account_qr_login_start(
             })
         }
         SiteId::Douyin => {
-            // 扫码登录与其他抖音请求使用同一个显式应用代理。在等待网络请求之前
-            // 先读取它，保证数据库互斥锁不会跨 await 点被持有。
-            let proxy = {
-                let conn = state.db.lock().map_err(|e| {
-                    crate::error::AppError::new(
-                        "db_lock_error",
-                        format!("account_qr_login_start: {e}"),
-                    )
-                })?;
-                crate::settings::get(&conn)?.proxy
-            };
-            let session = douyin_qr::start(app, proxy.as_deref()).await?;
+            // 扫码登录与其他抖音请求使用同一份代理路由。在等待网络请求之前
+            // 先解析它，保证数据库互斥锁不会跨 await 点被持有。
+            let route = qr_route(state.inner())?;
+            let session = douyin_qr::start(app, &route).await?;
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
@@ -328,7 +326,7 @@ pub async fn account_qr_login_start(
             })
         }
         SiteId::Douyu => {
-            let session = douyu_qr::start().await?;
+            let session = douyu_qr::start(&qr_route(state.inner())?).await?;
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
@@ -336,7 +334,7 @@ pub async fn account_qr_login_start(
             })
         }
         SiteId::Huya => {
-            let session = huya_qr::start().await?;
+            let session = huya_qr::start(&qr_route(state.inner())?).await?;
             Ok(AccountQrLoginStart {
                 qr_code_url: session.qr_code_url,
                 qr_key: session.qr_key,
@@ -367,7 +365,8 @@ pub async fn account_qr_login_poll(
         if site_id != SiteId::Bilibili {
             return Err(qr_login_unsupported(&site_id));
         }
-        let (status, message) = match bilibili_app::poll(&qr_key).await? {
+        let (status, message) = match bilibili_app::poll(&qr_key, &qr_route(state.inner())?).await?
+        {
             bilibili_app::AppQrPoll::Pending => (
                 AccountQrLoginStatus::Pending,
                 "请使用 B站 App 扫码，并确认 TV 登录",
@@ -472,11 +471,14 @@ enum BilibiliProfileLookup {
     Unavailable,
 }
 
-async fn bilibili_profile_lookup(cookie: &str, proxy: Option<&str>) -> BilibiliProfileLookup {
+async fn bilibili_profile_lookup(
+    cookie: &str,
+    route: &crate::proxy::ProxyRoute,
+) -> BilibiliProfileLookup {
     let Some(cookie) = cookie_header_value(cookie) else {
         return BilibiliProfileLookup::Unavailable;
     };
-    let Ok(client) = crate::http_client::client_for_proxy(proxy) else {
+    let Ok(client) = crate::http_client::client_for_route(route) else {
         return BilibiliProfileLookup::Unavailable;
     };
     let Ok(response) = client

@@ -22,6 +22,7 @@ import type {
   AsrProvider,
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
+  ProxyMode,
   RecordingAssOverflowPolicy,
   RecordingAssSettings,
   SiteId,
@@ -68,6 +69,13 @@ export function parseDanmakuFontStroke(value: unknown): number {
 let settingsWriteQueue: Promise<void> = Promise.resolve();
 let danmakuSendSettingEpoch = 0;
 let asrSettingEpoch = 0;
+
+/** 调用者接收本次错误，队列本身始终恢复，避免一次失败阻断后续写入。 */
+function enqueueSettingsWrite(write: () => Promise<void>): Promise<void> {
+  const result = settingsWriteQueue.then(write);
+  settingsWriteQueue = result.catch(() => {});
+  return result;
+}
 
 type SettingsGetResponse = {
   settings: AppSettings;
@@ -444,6 +452,7 @@ type SettingsState = {
   disabledSiteIds: SiteId[];
   /** 用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口。 */
   hiddenHomeEntryIds: HomeEntryId[];
+  proxyMode: ProxyMode;
   proxy: string | null;
   danmakuOpacity: number;
   danmakuFontStroke: number;
@@ -506,7 +515,8 @@ type SettingsState = {
   setSiteId: (siteId: string) => void;
   setSiteEnabled: (siteId: SiteId, enabled: boolean) => void;
   setHomeEntryVisible: (entryId: HomeEntryId, visible: boolean) => void;
-  setProxy: (proxy: string | null) => void;
+  setProxyMode: (mode: ProxyMode) => Promise<void>;
+  setProxy: (proxy: string | null) => Promise<void>;
   setQualityLevel: (level: QualityLevel) => void;
   setPlaybackSoftSwitchEnabled: (enabled: boolean) => void;
   setVideoRecommendApi: (api: VideoRecommendApi) => void;
@@ -551,6 +561,7 @@ const defaultSettings: AppSettings = {
   default_site: DEFAULT_SITE_ID,
   disabled_site_ids: [],
   hidden_home_entry_ids: [],
+  proxy_mode: "auto",
   proxy: null,
   danmaku_opacity: DANMAKU_OPACITY_DEFAULT,
   danmaku_font_stroke: DANMAKU_FONT_STROKE_DEFAULT,
@@ -597,6 +608,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     default_site: state.siteId,
     disabled_site_ids: state.disabledSiteIds,
     hidden_home_entry_ids: state.hiddenHomeEntryIds,
+    proxy_mode: state.proxyMode,
     proxy: state.proxy,
     danmaku_opacity: state.danmakuOpacity,
     danmaku_font_stroke: state.danmakuFontStroke,
@@ -654,7 +666,6 @@ function forwardedSetters(
     };
   return {
     setTheme: forward("theme", "theme"),
-    setProxy: forward("proxy", "proxy"),
     setQualityLevel: forward("qualityLevel", "quality_level"),
     setPlaybackSoftSwitchEnabled: forward(
       "playbackSoftSwitchEnabled",
@@ -667,6 +678,38 @@ function forwardedSetters(
     setSuperChatEnabled: forward("superChatEnabled", "super_chat_enabled"),
     setAsrTranslationEnabled: forward("asrTranslationEnabled", "asr_translation_enabled"),
     setRecordingIncludeDanmaku: forward("recordingIncludeDanmaku", "recording_include_danmaku"),
+  };
+}
+
+/**
+ * 代理设置需要把真实 IPC 错误交给表单展示。更新、写入和回滚作为同一个队列事务，
+ * 后发的模式/地址修改只能在前一笔完成后取旧值，避免回滚到另一笔失败的乐观值。
+ * 其余 setter 仍使用既有的宽松 persistToBackend，不引入未处理的 rejection。
+ */
+function proxySettingSetters(
+  set: (partial: Partial<SettingsState>) => void,
+  get: () => SettingsState,
+) {
+  const proxySetting =
+    <K extends "proxyMode" | "proxy">(stateKey: K) =>
+    (value: SettingsState[K]): Promise<void> =>
+      enqueueSettingsWrite(async () => {
+        const previous = get()[stateKey];
+        if (value === previous) return;
+        set({ [stateKey]: value } as Partial<SettingsState>);
+        // 和普通设置相同：后端加载前不以本地默认值覆盖完整设置。
+        if (!get().hydratedFromBackend) return;
+        try {
+          await invokeCmd<void>("settings_set", { settings: toAppSettings(get()) });
+        } catch (error) {
+          if (isTauriUnavailableError(error)) return;
+          set({ [stateKey]: previous } as Partial<SettingsState>);
+          throw error;
+        }
+      });
+  return {
+    setProxyMode: proxySetting("proxyMode"),
+    setProxy: proxySetting("proxy"),
   };
 }
 
@@ -718,6 +761,7 @@ export const useSettingsStore = create<SettingsState>()(
       siteId: DEFAULT_SITE_ID,
       disabledSiteIds: [],
       hiddenHomeEntryIds: [],
+      proxyMode: "auto",
       proxy: null,
       danmakuOpacity: DANMAKU_OPACITY_DEFAULT,
       danmakuFontStroke: DANMAKU_FONT_STROKE_DEFAULT,
@@ -763,6 +807,7 @@ export const useSettingsStore = create<SettingsState>()(
       hydratedFromBackend: false,
       settingsLoadError: null,
       ...forwardedSetters(set, get),
+      ...proxySettingSetters(set, get),
       ...asrSettingSetters(set, get),
       setSiteId: (siteId) => {
         const nextSiteId = resolveEnabledSiteId(siteId, get().disabledSiteIds);
@@ -958,6 +1003,7 @@ export const useSettingsStore = create<SettingsState>()(
           siteId: resolveEnabledSiteId(settings.default_site, disabledSiteIds),
           disabledSiteIds,
           hiddenHomeEntryIds: normalizeHiddenHomeEntryIds(settings.hidden_home_entry_ids),
+          proxyMode: settings.proxy_mode,
           proxy: settings.proxy,
           danmakuOpacity: settings.danmaku_opacity,
           danmakuFontStroke: parseDanmakuFontStroke(settings.danmaku_font_stroke),
@@ -1032,16 +1078,17 @@ export const useSettingsStore = create<SettingsState>()(
         }
         const current = toAppSettings(get());
         const next: AppSettings = { ...defaultSettings, ...current, ...patch };
-        settingsWriteQueue = settingsWriteQueue
-          .catch(() => {})
-          .then(async () => {
-            try {
-              await invokeCmd<void>("settings_set", { settings: next });
-            } catch {
-              // 非 Tauri 环境下忽略。
-            }
-          });
-        await settingsWriteQueue;
+        await enqueueSettingsWrite(async () => {
+          try {
+            // 代理事务可能在本次快照入队后才完成或回滚，不能再写回快照中的旧值。
+            const { proxyMode, proxy } = get();
+            await invokeCmd<void>("settings_set", {
+              settings: { ...next, proxy_mode: proxyMode, proxy, ...patch },
+            });
+          } catch {
+            // 保持普通 setter 既有的异常语义；代理表单使用独立的严格写入。
+          }
+        });
       },
     }),
     {

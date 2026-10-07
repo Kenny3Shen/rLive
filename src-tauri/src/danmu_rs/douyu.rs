@@ -17,17 +17,14 @@ use md5::{Digest, Md5};
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::{
-    WebSocketStream, client_async_tls_with_config, connect_async, tungstenite::Message,
-};
+use tokio_tungstenite::{WebSocketStream, client_async_tls_with_config, tungstenite::Message};
 use uuid::Uuid;
 
-use crate::danmu_rs::proxy::{ProxyCredentialErrors, connect_request, proxy_authorization};
+use crate::danmu_rs::proxy::{ConnectProxy, PROXY_CONNECT_TIMEOUT, open_websocket_transport};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
@@ -45,8 +42,6 @@ const LOGIN_APP_VERSION: &str = "218101901";
 const LOGIN_VK_SALT: &str = r#"r5*^5;}2#${XF[h+;'./.Q'1;,-]f'p["#;
 const SEND_LOGIN_TIMEOUT: Duration = Duration::from_secs(8);
 const SEND_RESULT_OBSERVE_TIMEOUT: Duration = Duration::from_secs(3);
-const SEND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_PROXY_RESPONSE_BYTES: usize = 16 * 1024;
 const MAX_SEND_ENCRYPTION_TOKEN_BYTES: usize = 256;
 const MAX_SEND_ENCRYPTION_KEY_VERSION_BYTES: usize = 64;
 // 第一方客户端从网络响应中收到这个数字，并为每个取值做一次 MD5 运算。
@@ -160,14 +155,6 @@ struct SendEncryptionKey {
 struct SendGatewayChallenge {
     nonce: String,
     iterations: u32,
-}
-
-/// 已净化的 HTTP CONNECT 配置。不要保留源 URL，
-/// 它可能包含代理凭据，绝不能进入 tracing 输出。
-struct SendHttpProxy {
-    host: String,
-    port: u16,
-    authorization: Option<String>,
 }
 
 /// 该接口返回的端口既出现过 JSON 数字也出现过十进制字符串。
@@ -769,11 +756,11 @@ fn parse_send_proxy_urls(payload: SendProxyDiscoveryResponse) -> AppResult<Vec<S
 }
 
 async fn discover_send_proxy_urls(
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
     room_id: &str,
     attempt_id: &Uuid,
 ) -> AppResult<Vec<String>> {
-    let client = crate::http_client::build_no_redirect_client(proxy)?;
+    let client = crate::http_client::build_no_redirect_client(route)?;
     let response = client
         .get(SEND_PROXY_DISCOVERY_URL)
         .header("Referer", "https://www.douyu.com/")
@@ -912,14 +899,14 @@ fn encryption_key_from_response(response: SendEncryptionResponse) -> AppResult<S
 /// 官方 Web 协议是从浏览器设备 id 派生它的，
 /// 而账号认证仍留在 STT `loginreq` 数据包内部。
 async fn fetch_send_encryption_key(
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
     did: &str,
     room_id: &str,
     attempt_id: &Uuid,
 ) -> AppResult<SendEncryptionKey> {
     let mut url = Url::parse(SEND_ENCRYPTION_URL).expect("fixed Douyu encryption URL");
     url.query_pairs_mut().append_pair("did", did);
-    let client = crate::http_client::build_no_redirect_client(proxy)?;
+    let client = crate::http_client::build_no_redirect_client(route)?;
     let response = client
         .get(url)
         .header("Referer", "https://www.douyu.com/")
@@ -1037,6 +1024,13 @@ fn endpoint_host_and_port(url: &str) -> AppResult<(String, u16)> {
     Ok((host.to_owned(), port))
 }
 
+/// 发送链路原本就在拨号后关闭 Nagle：一条发送只含一两个小帧，等待合并只会
+/// 增加网关往返延迟。接收链路沿用内核默认值，与替换前的行为保持一致。
+fn tune_send_socket(stream: &tokio::net::TcpStream) {
+    let _ = stream.set_nodelay(true);
+}
+
+/// 供 CONNECT 目标与直连目标共用的 `host:port` 文本，IPv6 字面量加方括号。
 fn socket_address(host: &str, port: u16) -> String {
     if host.contains(':') {
         format!("[{host}]:{port}")
@@ -1045,165 +1039,18 @@ fn socket_address(host: &str, port: u16) -> String {
     }
 }
 
-fn proxy_error(message: impl Into<String>) -> AppError {
-    AppError::new("douyu_send_proxy", message).with_site("douyu")
-}
-
-fn proxy_connection_error(message: impl Into<String>) -> AppError {
-    proxy_error(message).retryable()
-}
-
-/// 解析与普通 HTTP 请求相同的、面向用户的代理设置。websocket 传输是
-/// HTTP CONNECT 隧道，因此 SOCKS 与 HTTPS 代理端点会被明确拒绝，
-/// 而不是静默绕过该设置。缺少 scheme 的旧式 `127.0.0.1:7890` 仍视为 HTTP。
-fn configured_http_proxy(proxy: Option<&str>) -> AppResult<Option<SendHttpProxy>> {
-    let Some(raw) = proxy.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let normalized = if raw.contains("://") {
-        raw.to_owned()
-    } else {
-        format!("http://{raw}")
-    };
-    let proxy = Url::parse(&normalized).map_err(|_| {
-        AppError::new(
-            "douyu_send_proxy_invalid",
-            "斗鱼弹幕代理地址无效，请使用 HTTP 地址",
-        )
-        .with_site("douyu")
-    })?;
-    if proxy.scheme() != "http" {
-        return Err(AppError::new(
-            "douyu_send_proxy_unsupported",
-            "斗鱼弹幕发送目前仅支持 HTTP 代理，请调整代理地址后重试",
-        )
-        .with_site("douyu"));
-    }
-    let host = proxy
-        .host_str()
-        .filter(|host| !host.is_empty())
-        .ok_or_else(|| {
-            AppError::new("douyu_send_proxy_invalid", "斗鱼弹幕代理地址缺少主机名")
-                .with_site("douyu")
-        })?
-        .to_owned();
-    if !matches!(proxy.path(), "" | "/") || proxy.query().is_some() || proxy.fragment().is_some() {
-        return Err(AppError::new(
-            "douyu_send_proxy_invalid",
-            "斗鱼弹幕代理地址不能包含路径、查询参数或片段",
-        )
-        .with_site("douyu"));
-    }
-    let port = proxy.port_or_known_default().ok_or_else(|| {
-        AppError::new("douyu_send_proxy_invalid", "斗鱼弹幕代理地址缺少端口").with_site("douyu")
-    })?;
-    Ok(Some(SendHttpProxy {
-        host,
-        port,
-        authorization: proxy_authorization(
-            &proxy,
-            &ProxyCredentialErrors {
-                invalid_encoding: || proxy_error("斗鱼弹幕代理账号编码无效"),
-                incomplete_credentials: || {
-                    proxy_error("斗鱼弹幕代理账号需同时提供用户名和密码，或移除账号信息")
-                },
-            },
-        )?,
-    }))
-}
-
-async fn open_send_tcp(address: String) -> AppResult<TcpStream> {
-    let stream = time::timeout(SEND_CONNECT_TIMEOUT, TcpStream::connect(address))
-        .await
-        .map_err(|_| {
-            AppError::new("douyu_send_network", "连接斗鱼发送服务器超时，请稍后重试")
-                .with_site("douyu")
-                .retryable()
-        })?
-        .map_err(|_| {
-            AppError::new("douyu_send_network", "无法连接斗鱼发送服务器，请稍后重试")
-                .with_site("douyu")
-                .retryable()
-        })?;
-    let _ = stream.set_nodelay(true);
-    Ok(stream)
-}
-
-fn parse_http_connect_response(response: &[u8]) -> AppResult<()> {
-    let response = std::str::from_utf8(response).map_err(|_| {
-        AppError::new("douyu_send_proxy", "代理返回了无效响应")
-            .with_site("douyu")
-            .retryable()
-    })?;
-    let status = response.lines().next().unwrap_or_default();
-    let code = status
-        .split_whitespace()
-        .nth(1)
-        .and_then(|value| value.parse::<u16>().ok());
-    if !status.starts_with("HTTP/") || code != Some(200) {
-        return Err(AppError::new(
-            "douyu_send_proxy",
-            "代理拒绝连接斗鱼弹幕服务器，请检查代理设置",
-        )
-        .with_site("douyu")
-        .retryable());
-    }
-    Ok(())
-}
-
-async fn connect_via_http_proxy(
-    proxy: &SendHttpProxy,
-    target_host: &str,
-    target_port: u16,
-) -> AppResult<TcpStream> {
-    let mut stream = open_send_tcp(socket_address(&proxy.host, proxy.port)).await?;
-    let target = socket_address(target_host, target_port);
-    stream
-        .write_all(&connect_request(&target, proxy.authorization.as_deref()))
-        .await
-        .map_err(|_| proxy_connection_error("无法向代理建立斗鱼弹幕连接"))?;
-    stream
-        .flush()
-        .await
-        .map_err(|_| proxy_connection_error("无法向代理建立斗鱼弹幕连接"))?;
-
-    let mut response = Vec::with_capacity(1024);
-    let mut buffer = [0_u8; 1024];
-    let header_end = loop {
-        if response.len() >= MAX_PROXY_RESPONSE_BYTES {
-            return Err(proxy_connection_error("代理响应过长，无法建立弹幕连接"));
-        }
-        let read = time::timeout(SEND_CONNECT_TIMEOUT, stream.read(&mut buffer))
-            .await
-            .map_err(|_| proxy_connection_error("等待代理连接响应超时"))?
-            .map_err(|_| proxy_connection_error("读取代理连接响应失败"))?;
-        if read == 0 {
-            return Err(proxy_connection_error("代理在建立连接前关闭"));
-        }
-        response.extend_from_slice(&buffer[..read]);
-        if let Some(index) = response.windows(4).position(|window| window == b"\r\n\r\n") {
-            break index + 4;
-        }
-    };
-    // 在本客户端开始 TLS 握手之前，CONNECT 对端不可能合法地发来隧道内的 TLS
-    // 数据。遇到含义不明的响应时直接拒绝，
-    // 而不是静默丢弃 TLS 之后需要检查的字节。
-    if response.len() != header_end {
-        return Err(proxy_connection_error("代理连接响应格式异常"));
-    }
-    parse_http_connect_response(&response)?;
-    Ok(stream)
-}
-
 async fn connect_douyu_send_ws(
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
     room_id: &str,
     attempt_id: &Uuid,
 ) -> AppResult<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<
+            tokio::io::BufStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        >,
+    >,
 > {
-    let proxy_config = configured_http_proxy(proxy)?;
-    let urls = discover_send_proxy_urls(proxy, room_id, attempt_id).await?;
+    let urls = discover_send_proxy_urls(route, room_id, attempt_id).await?;
     for url in urls {
         let mut request = match url.as_str().into_client_request() {
             Ok(request) => request,
@@ -1232,24 +1079,37 @@ async fn connect_douyu_send_ws(
                 continue;
             }
         };
-        let socket = match proxy_config.as_ref() {
-            Some(proxy) => connect_via_http_proxy(proxy, &host, port).await,
-            None => open_send_tcp(socket_address(&host, port)).await,
-        };
-        let socket = match socket {
-            Ok(socket) => socket,
-            Err(error) => {
+        // 每个下发地址是独立的 authority：代理地址与绕过规则都按实际目标判定，
+        // 而不是预设一个固定的 wsproxy 域名。代理地址本身无效时，换端点重试
+        // 也不会成功：直接作为配置错误返回，而不是模糊成网络失败。
+        let proxy = ConnectProxy::from_route(route, &socket_address(&host, port), "douyu", "斗鱼")
+            .inspect_err(|error| {
                 tracing::warn!(
                     %attempt_id,
                     room_id,
                     endpoint = %url,
-                    stage = "server_transport",
+                    stage = "server_proxy",
                     error_code = %error.code,
-                    "douyu send websocket transport connect failed"
+                    "douyu send websocket proxy was invalid"
                 );
-                continue;
-            }
-        };
+            })?;
+        let socket =
+            match open_websocket_transport(proxy.as_ref(), &host, port, Some(tune_send_socket))
+                .await
+            {
+                Ok(socket) => socket,
+                Err(error) => {
+                    tracing::warn!(
+                        %attempt_id,
+                        room_id,
+                        endpoint = %url,
+                        stage = "server_transport",
+                        error = %error,
+                        "douyu send websocket transport connect failed"
+                    );
+                    continue;
+                }
+            };
         match client_async_tls_with_config(request, socket, None, None).await {
             Ok((ws, _)) => return Ok(ws),
             Err(error) => {
@@ -1271,8 +1131,14 @@ async fn connect_douyu_send_ws(
     )
 }
 
-async fn connect_douyu_ws() -> AppResult<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+async fn connect_douyu_ws(
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<
+    tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<
+            tokio::io::BufStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        >,
+    >,
 > {
     let mut last_err = String::new();
     for &port in SERVER_PORTS {
@@ -1295,11 +1161,45 @@ async fn connect_douyu_ws() -> AppResult<
         // 这里绝不要提供 `Sec-WebSocket-Protocol` 子协议：弹幕代理从不回显它，
         // 而 tungstenite（遵循 RFC 6455）随后会以
         // `SecWebSocketSubProtocolError::NoSubProtocol` 拒绝握手。
-        match connect_async(req).await {
-            Ok((ws, _)) => return Ok(ws),
-            Err(e) => {
+        // 接收链路与发送链路共用同一个应用代理路由；每个端口是一个独立的
+        // authority，便于 NO_PROXY 中的端口规则生效。
+        // 代理地址无效是配置问题：换端口重试不会成功，保持原始错误码交给
+        // 上层判为不可恢复，而不是伪装成临时网络故障。
+        let proxy = ConnectProxy::from_route(
+            route,
+            &format!("danmuproxy.douyu.com:{port}"),
+            "douyu",
+            "斗鱼",
+        )?;
+        let stream = match open_websocket_transport(
+            proxy.as_ref(),
+            "danmuproxy.douyu.com",
+            port,
+            None,
+        )
+        .await
+        {
+            Ok(stream) => stream,
+            Err(error) => {
+                last_err = format!("{url}: {error}");
+                tracing::warn!(port, error = %error, "douyu danmaku transport connect failed");
+                continue;
+            }
+        };
+        match time::timeout(
+            PROXY_CONNECT_TIMEOUT,
+            client_async_tls_with_config(req, stream, None, None),
+        )
+        .await
+        {
+            Ok(Ok((ws, _))) => return Ok(ws),
+            Ok(Err(e)) => {
                 last_err = format!("{url}: {e}");
                 tracing::warn!(port, error = %e, "douyu danmaku ws connect failed");
+            }
+            Err(_) => {
+                last_err = format!("{url}: 握手超时");
+                tracing::warn!(port, "douyu danmaku ws connect timed out");
             }
         }
     }
@@ -1551,7 +1451,7 @@ pub async fn send_chat(
     cookie: &str,
     room_id: &str,
     message: &str,
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
 ) -> AppResult<()> {
     let room_id = room_id.trim();
     if room_id.is_empty()
@@ -1573,7 +1473,7 @@ pub async fn send_chat(
     let attempt_id = Uuid::new_v4();
     let login = login_request_body(room_id, &credentials, current_unix_seconds()?);
 
-    let ws = match connect_douyu_send_ws(proxy, room_id, &attempt_id).await {
+    let ws = match connect_douyu_send_ws(route, room_id, &attempt_id).await {
         Ok(ws) => ws,
         Err(error) => {
             // `connect_douyu_ws` 会记录各端口各自的失败。这里保留最终的安全错误码，
@@ -1673,7 +1573,7 @@ pub async fn send_chat(
     // 当前 Web 房间在 `loginres` 之后要求这个挑战。获取公钥时刻意不带 Cookie
     // 请求头；账号会话已在上面的 STT 登录包中完成认证。
     let encryption =
-        fetch_send_encryption_key(proxy, &credentials.did, room_id, &attempt_id).await?;
+        fetch_send_encryption_key(route, &credentials.did, room_id, &attempt_id).await?;
     write
         .send(Message::Binary(
             serialize_packet(&gateway_challenge_request_body(&encryption.key_version)).into(),
@@ -1838,10 +1738,14 @@ pub async fn send_chat(
     }
 }
 
-pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> AppResult<()> {
+pub async fn run_loop(
+    events: DanmakuEventSender,
+    args: DouyuDanmakuArgs,
+    route: crate::proxy::ProxyRoute,
+) -> AppResult<()> {
     let mut policy = ReconnectPolicy::with_defaults("douyu");
     loop {
-        let reason = run_connection_once(&events, &args).await;
+        let reason = run_connection_once(&events, &args, &route).await;
         match policy.on_disconnect(reason) {
             Decision::Retry { delay, notice } => {
                 emit_system(&events, notice);
@@ -1858,10 +1762,15 @@ pub async fn run_loop(events: DanmakuEventSender, args: DouyuDanmakuArgs) -> App
 async fn run_connection_once(
     events: &DanmakuEventSender,
     args: &DouyuDanmakuArgs,
+    route: &crate::proxy::ProxyRoute,
 ) -> DisconnectReason {
-    match connect_and_read(events, args).await {
+    match connect_and_read(events, args, route).await {
         Ok(reason) => reason,
-        // 这里读取路径上的每个错误都是拨号或传输失败，因此都映射为临时性原因；
+        // 代理地址无效属于配置问题，反复重连同一份设置没有意义。
+        Err(error) if error.code.contains("danmaku_proxy") => {
+            DisconnectReason::fatal(error.message)
+        }
+        // 其余读取路径上的错误都是拨号或传输失败，映射为临时性原因；
         // 由策略决定这串失败何时结束。
         Err(error) => DisconnectReason::transient(error.message),
     }
@@ -1870,10 +1779,11 @@ async fn run_connection_once(
 async fn connect_and_read(
     events: &DanmakuEventSender,
     args: &DouyuDanmakuArgs,
+    route: &crate::proxy::ProxyRoute,
 ) -> Result<DisconnectReason, AppError> {
     emit_system(events, "正在连接弹幕服务器…");
 
-    let ws = connect_douyu_ws().await?;
+    let ws = connect_douyu_ws(route).await?;
     let (mut write, mut read) = ws.split();
 
     // 登录 + 加入弹幕组
@@ -2163,22 +2073,70 @@ mod tests {
         assert_eq!(error.code, "douyu_send_encryption");
     }
 
-    #[test]
-    fn send_proxy_accepts_legacy_http_settings_without_leaking_credentials() {
-        let proxy = configured_http_proxy(Some("user:pa%3Ass@127.0.0.1:7890"))
+    /// 接收链路与发送链路共用同一套 CONNECT 隧道：只代理其中一条，会让
+    /// “必须走代理才能访问斗鱼”的网络与“代理出口被风控”的网络各有一半不可用。
+    /// 固定代理只完成 CONNECT，TLS 必然失败；断言的是两条链路都先去代理报到。
+    #[tokio::test]
+    async fn receive_and_send_gateways_share_the_configured_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            // 接收链路会按端口轮换，每个失败端口都各留一条 CONNECT；收集到
+            // 预期数量或静默 3 秒后结束，避免固定数量假设随端口表变化而失效。
+            while requests.len() < 7 {
+                let Ok(accepted) = time::timeout(Duration::from_secs(3), listener.accept()).await
+                else {
+                    break;
+                };
+                let Ok((mut stream, _)) = accepted else {
+                    break;
+                };
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    assert!(headers.len() < 4096);
+                    headers.push(stream.read_u8().await.unwrap());
+                }
+                let headers = String::from_utf8(headers).unwrap();
+                requests.push(headers.lines().next().unwrap().to_string());
+                stream
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        let route = crate::proxy::ProxyRoute::Custom(format!("http://{address}"));
+
+        // 接收链路：固定代理接受 CONNECT 但不承载 TLS，因此逐个端口失败后返回。
+        assert!(connect_douyu_ws(&route).await.is_err());
+        // 发送链路：发现接口走同一路由，传输层同样必须经过代理而不是直连。
+        let proxy = ConnectProxy::from_setting(Some(&format!("http://{address}")), "douyu", "斗鱼")
             .unwrap()
             .expect("proxy");
-        assert_eq!(proxy.host, "127.0.0.1");
-        assert_eq!(proxy.port, 7890);
-        let request = String::from_utf8(connect_request(
-            "wsproxy.douyu.com:6671",
-            proxy.authorization.as_deref(),
-        ))
-        .unwrap();
-        assert!(request.starts_with("CONNECT wsproxy.douyu.com:6671 HTTP/1.1\r\n"));
-        assert!(request.contains("Proxy-Authorization: Basic dXNlcjpwYTpzcw==\r\n"));
-        assert!(configured_http_proxy(Some("https://127.0.0.1:7890")).is_err());
-        assert!(configured_http_proxy(Some("http://127.0.0.1:7890/path")).is_err());
+        // 隧道建立本身只证明“经过了代理”；TLS 与 WebSocket 握手由
+        // `client_async_tls_with_config` 继续完成。
+        assert!(
+            open_websocket_transport(Some(&proxy), "wsproxy.douyu.com", 6671, None)
+                .await
+                .is_ok(),
+            "发送链路的传输层必须经代理建立 CONNECT"
+        );
+        let requests = server.await.unwrap();
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.contains("danmuproxy.douyu.com:8506")),
+            "{requests:?}"
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.contains("wsproxy.douyu.com:6671")),
+            "{requests:?}"
+        );
     }
 
     #[test]

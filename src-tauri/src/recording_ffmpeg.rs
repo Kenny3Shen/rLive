@@ -41,13 +41,13 @@ const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) async fn run(
     source: PlayUrl,
-    proxy: Option<String>,
+    route: crate::proxy::ProxyRoute,
     options: FfmpegRecordingOptions,
     state: Arc<SessionState>,
     cancel: watch::Receiver<bool>,
 ) -> TaskOutcome {
     let recovery_state = state.clone();
-    let worker = tokio::task::spawn_blocking(move || remux(source, proxy, options, state, cancel));
+    let worker = tokio::task::spawn_blocking(move || remux(source, route, options, state, cancel));
     match worker.await {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -86,7 +86,7 @@ fn initialize() -> Result<(), String> {
 
 fn remux(
     source: PlayUrl,
-    proxy: Option<String>,
+    route: crate::proxy::ProxyRoute,
     recording_options: FfmpegRecordingOptions,
     state: Arc<SessionState>,
     cancel: watch::Receiver<bool>,
@@ -113,6 +113,9 @@ fn remux(
     let final_path = state.bundle.join(media_file);
     let started = Instant::now();
 
+    // 有代理的远端请求已由 stream_proxy 转发。所有模式都显式使用非空直连
+    // 哨兵，让 libavformat 连同 HLS 子分片一起忽略进程 http_proxy。
+    let proxy = Some(route.ffmpeg_proxy().to_owned());
     let mut options = Dictionary::new();
     for (key, value) in build_input_options(&source, proxy.as_deref(), &recording_options) {
         options.set(&key, &value);
@@ -975,7 +978,10 @@ fn unusable_track_error(unusable_tracks: &[String]) -> String {
 /// 上层只会得到一句含糊的 "Protocol not found"。把这种已知成因
 /// 翻译出来，避免用户面对无法行动的错误。
 fn open_failure_message(url: &str, proxy: Option<&str>, error: Error) -> String {
-    let through_https_proxy_tunnel = proxy.is_some()
+    // `direct` 哨兵值不是代理：它只是让 libavformat 忽略环境变量里的
+    // `http_proxy`。把它当成代理会给出「缺少 httpproxy 协议」这种误导性提示。
+    let tunnels_through_a_proxy = proxy.is_some_and(|value| value.starts_with("http://"));
+    let through_https_proxy_tunnel = tunnels_through_a_proxy
         && url
             .trim_start()
             .to_ascii_lowercase()

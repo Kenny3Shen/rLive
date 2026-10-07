@@ -719,7 +719,7 @@ impl AsrManager {
 
     pub fn enable(
         &self,
-        proxy: Option<String>,
+        route: crate::proxy::ProxyRoute,
         mut options: AsrRuntimeOptions,
     ) -> AppResult<AsrModelStatus> {
         use std::sync::atomic::Ordering;
@@ -790,7 +790,9 @@ impl AsrManager {
 
         let manager = self.clone();
         tauri::async_runtime::spawn(async move {
-            manager.prepare_model(proxy, generation, options, false).await;
+            manager
+                .prepare_model(route, generation, options, false)
+                .await;
         });
 
         self.status()
@@ -800,7 +802,7 @@ impl AsrManager {
     ///
     /// 资产尚未就绪时只登记需求，由正在进行的 `enable` 准备任务在下载完成后
     /// 接着加载，避免两个任务同时下载同一份模型。
-    pub fn load_session(&self, proxy: Option<String>) -> AppResult<AsrModelStatus> {
+    pub fn load_session(&self, route: crate::proxy::ProxyRoute) -> AppResult<AsrModelStatus> {
         use std::sync::atomic::Ordering;
 
         let _control = self
@@ -845,7 +847,9 @@ impl AsrManager {
 
         let manager = self.clone();
         tauri::async_runtime::spawn(async move {
-            manager.prepare_model(proxy, generation, options, true).await;
+            manager
+                .prepare_model(route, generation, options, true)
+                .await;
         });
 
         self.status()
@@ -1016,7 +1020,7 @@ impl AsrManager {
     /// 因此「启用下载中」与「用户已经点了字幕」不会同时下载同一份模型。
     async fn prepare_model(
         &self,
-        proxy: Option<String>,
+        route: crate::proxy::ProxyRoute,
         generation: u64,
         options: AsrRuntimeOptions,
         load_session: bool,
@@ -1028,10 +1032,7 @@ impl AsrManager {
             return;
         }
 
-        let model_ready = match self
-            .ensure_model_assets(proxy.as_deref(), generation, &options)
-            .await
-        {
+        let model_ready = match self.ensure_model_assets(&route, generation, &options).await {
             Ok(ready) => ready,
             Err(error) => {
                 tracing::warn!(error = %error, "ASR model preparation failed");
@@ -1139,7 +1140,7 @@ impl AsrManager {
 
     async fn ensure_model_assets(
         &self,
-        proxy: Option<&str>,
+        route: &crate::proxy::ProxyRoute,
         generation: u64,
         options: &AsrRuntimeOptions,
     ) -> AppResult<bool> {
@@ -1157,7 +1158,7 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_model_dir", "无法创建模型目录"))?;
 
         if !self
-            .ensure_windows_runtime(proxy, generation, total_size)
+            .ensure_windows_runtime(route, generation, total_size)
             .await?
         {
             return Ok(false);
@@ -1167,7 +1168,7 @@ impl AsrManager {
         if !self.inner.assets.recognizer_is_complete()
             && !self
                 .download_and_extract_archive(
-                    proxy,
+                    route,
                     generation,
                     MODEL_ARCHIVE_URL,
                     MODEL_ARCHIVE_SIZE_BYTES,
@@ -1196,7 +1197,7 @@ impl AsrManager {
             && !self.inner.assets.punctuation_is_complete()
             && !self
                 .download_and_extract_archive(
-                    proxy,
+                    route,
                     generation,
                     PUNCTUATION_ARCHIVE_URL,
                     PUNCTUATION_ARCHIVE_SIZE_BYTES,
@@ -1227,7 +1228,7 @@ impl AsrManager {
             remove_file_if_present(&self.inner.assets.speaker).await?;
             let downloaded = self
                 .download_model_file(
-                    proxy,
+                    route,
                     SPEAKER_MODEL_URL,
                     &partial_path,
                     SPEAKER_MODEL_SIZE_BYTES,
@@ -1279,7 +1280,7 @@ impl AsrManager {
     #[allow(clippy::too_many_arguments)]
     async fn download_and_extract_archive(
         &self,
-        proxy: Option<&str>,
+        route: &crate::proxy::ProxyRoute,
         generation: u64,
         url: &str,
         expected_size: u64,
@@ -1296,7 +1297,7 @@ impl AsrManager {
 
         let result = self
             .download_model_file(
-                proxy,
+                route,
                 url,
                 &archive_path,
                 expected_size,
@@ -1340,7 +1341,7 @@ impl AsrManager {
     #[allow(clippy::too_many_arguments)]
     async fn download_model_file(
         &self,
-        proxy: Option<&str>,
+        route: &crate::proxy::ProxyRoute,
         url: &str,
         partial_path: &Path,
         expected_size: u64,
@@ -1353,7 +1354,7 @@ impl AsrManager {
             return Ok(false);
         }
 
-        let client = asr_download_client(proxy)?;
+        let client = asr_download_client(route)?;
         let response = client
             .get(url)
             .send()
@@ -1450,7 +1451,7 @@ impl AsrManager {
     #[cfg(windows)]
     async fn ensure_windows_runtime(
         &self,
-        proxy: Option<&str>,
+        route: &crate::proxy::ProxyRoute,
         generation: u64,
         total_size: u64,
     ) -> AppResult<bool> {
@@ -1474,7 +1475,7 @@ impl AsrManager {
 
         let downloaded = self
             .download_model_file(
-                proxy,
+                route,
                 WINDOWS_RUNTIME_ARCHIVE_URL,
                 &archive,
                 WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES,
@@ -1533,7 +1534,7 @@ impl AsrManager {
     #[cfg(not(windows))]
     async fn ensure_windows_runtime(
         &self,
-        _proxy: Option<&str>,
+        _route: &crate::proxy::ProxyRoute,
         _generation: u64,
         _total_size: u64,
     ) -> AppResult<bool> {
@@ -2051,10 +2052,10 @@ fn file_len(path: &Path) -> Option<u64> {
     metadata.is_file().then_some(metadata.len())
 }
 
-fn asr_download_client(proxy: Option<&str>) -> AppResult<reqwest::Client> {
+fn asr_download_client(route: &crate::proxy::ProxyRoute) -> AppResult<reqwest::Client> {
     use std::time::Duration;
 
-    crate::http_client::with_proxy(
+    crate::http_client::with_route(
         reqwest::Client::builder()
             .use_native_tls()
             .connect_timeout(Duration::from_secs(15))
@@ -2062,7 +2063,7 @@ fn asr_download_client(proxy: Option<&str>) -> AppResult<reqwest::Client> {
             // 按读取设置的超时仍能捕捉到卡死的连接。
             .read_timeout(Duration::from_secs(60))
             .user_agent("rLive ASR model downloader"),
-        proxy,
+        route,
     )?
     .build()
     .map_err(|_| AppError::new("asr_http_client", "模型下载客户端初始化失败"))

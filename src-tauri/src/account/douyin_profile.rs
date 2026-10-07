@@ -22,9 +22,9 @@ pub enum ProfileLookup {
     Unavailable,
 }
 
-pub async fn lookup(cookie: &str, proxy: Option<&str>) -> ProfileLookup {
+pub async fn lookup(cookie: &str, route: &crate::proxy::ProxyRoute) -> ProfileLookup {
     // 不跟随跳转，避免把登录/验证页误当账号响应，也不向新目标重放凭据。
-    let Ok(client) = crate::http_client::build_no_redirect_client(proxy) else {
+    let Ok(client) = crate::http_client::build_no_redirect_client(route) else {
         return ProfileLookup::Unavailable;
     };
     lookup_with_client(&client, PROFILE_URL, cookie).await
@@ -222,7 +222,9 @@ mod tests {
                 );
                 stream.write_all(response.as_bytes()).unwrap();
             });
-            let client = crate::http_client::build_no_redirect_client(None).unwrap();
+            let client =
+                crate::http_client::build_no_redirect_client(&crate::proxy::ProxyRoute::Direct)
+                    .unwrap();
             let actual = lookup_with_client(
                 &client,
                 &format!("http://{address}/webcast/user/me/"),
@@ -248,7 +250,11 @@ mod tests {
             );
         }
         assert_eq!(
-            lookup("sessionid=fixture", Some("http://[")).await,
+            lookup(
+                "sessionid=fixture",
+                &crate::proxy::ProxyRoute::Custom("http://[".into()),
+            )
+            .await,
             ProfileLookup::Unavailable
         );
     }

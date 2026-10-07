@@ -12,7 +12,7 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
 };
 
-use crate::danmu_rs::proxy::{ConnectProxy, PROXY_CONNECT_TIMEOUT};
+use crate::danmu_rs::proxy::{ConnectProxy, PROXY_CONNECT_TIMEOUT, open_websocket_transport};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
@@ -1270,32 +1270,13 @@ fn tune_danmaku_socket(stream: &TcpStream) {
     let _ = socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive);
 }
 
-/// 为弹幕套接字打开 TCP 传输，并启用 keepalive 与 `TCP_NODELAY`。
-///
-/// `connect_async` 会用内核默认值拨号，在 Windows 上意味着 keepalive 完全关闭。
-/// 在这里自行构造套接字，是 TLS 握手消费该流之前唯一能设置这些选项的位置。
-async fn open_danmaku_tcp(host: &str) -> std::io::Result<TcpStream> {
-    let stream = time::timeout(PROXY_CONNECT_TIMEOUT, TcpStream::connect((host, 443)))
-        .await
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "连接弹幕服务器超时"))??;
-    tune_danmaku_socket(&stream);
-    Ok(stream)
-}
-
+/// Bilibili 弹幕固定走 443，且必须给套接字设 keepalive 与 `TCP_NODELAY`，
+/// 因此这里只是共享传输层带端口与调优回调的薄封装。
 async fn open_danmaku_transport(
     host: &str,
     proxy: Option<&ConnectProxy>,
 ) -> Result<BufStream<MaybeTlsStream<TcpStream>>, String> {
-    if let Some(proxy) = proxy {
-        return proxy
-            .open_tunnel(&format!("{host}:443"), Some(tune_danmaku_socket))
-            .await
-            .map_err(|error| error.to_string());
-    }
-    open_danmaku_tcp(host)
-        .await
-        .map(|stream| BufStream::new(MaybeTlsStream::Plain(stream)))
-        .map_err(|error| error.to_string())
+    open_websocket_transport(proxy, host, 443, Some(tune_danmaku_socket)).await
 }
 
 async fn run_connection(
@@ -1499,7 +1480,7 @@ async fn run_connection(
 pub async fn run_loop(
     events: DanmakuEventSender,
     mut args: BilibiliDanmakuArgs,
-    proxy: Option<String>,
+    route: crate::proxy::ProxyRoute,
 ) -> AppResult<()> {
     if args.room_id <= 0 {
         return Err(
@@ -1514,10 +1495,10 @@ pub async fn run_loop(
         .with_site("bilibili"));
     }
 
-    let proxy_setting = proxy.clone();
-    let proxy = ConnectProxy::from_setting(proxy.as_deref(), "bilibili", "B站")?;
-    // 房间详情已经使用该代理；重连刷新 token 与主机列表也必须走同一路由。
-    let refresh_client = crate::http_client::client_for_proxy(proxy_setting.as_deref())?;
+    // 房间详情已经使用该路由；重连刷新 token 与主机列表也必须走同一出口。
+    // 目标边缘节点未知（会轮换），因此按站点自身的域名判断绕过。
+    let proxy = ConnectProxy::from_route(&route, "live.bilibili.com:443", "bilibili", "B站")?;
+    let refresh_client = crate::http_client::client_for_route(&route)?;
     // 主机轮换与重连策略保持独立：即使是被 Bilibili 关闭的健康套接字，
     // 也应该尝试下一个边缘节点，
     // 而不是把后续所有尝试都钉在同一个网关上。
@@ -1760,7 +1741,11 @@ mod tests {
 
         let requests = time::timeout(Duration::from_secs(5), async {
             tokio::select! {
-                result = run_loop(events, args, Some(format!("http://{address}"))) => {
+                result = run_loop(
+                    events,
+                    args,
+                    crate::proxy::ProxyRoute::Custom(format!("http://{address}")),
+                ) => {
                     panic!("reconnect loop stopped before the next host: {result:?}")
                 }
                 requests = server => requests,

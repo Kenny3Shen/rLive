@@ -21,7 +21,7 @@ const SESSION_REJECTED_ERROR: i64 = -1;
 /// `Some(false)`；无法判定（网络失败、风控或无法识别的响应）时返回 `None`。
 /// 调用方据此提示重新登录，因此这里对 `false` 保持保守：只有可识别的拒绝
 /// 才算失效。
-pub async fn cookie_session_status(cookie: &str, proxy: Option<&str>) -> Option<bool> {
+pub async fn cookie_session_status(cookie: &str, route: &crate::proxy::ProxyRoute) -> Option<bool> {
     let cookie = normalize_cookie(cookie);
     if cookie.is_empty() {
         return Some(false);
@@ -36,7 +36,7 @@ pub async fn cookie_session_status(cookie: &str, proxy: Option<&str>) -> Option<
         ),
         &cookie,
     );
-    let client = http_client::client_for_proxy(proxy).ok()?;
+    let client = http_client::client_for_route(route).ok()?;
     let response = client
         .get(SESSION_PROBE_URL)
         .header("user-agent", UA)

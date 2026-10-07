@@ -55,7 +55,7 @@ const RECOMMEND_FEED_BATCHES: usize = 2;
 /// `ttwid`、`msToken` 等响应 cookie 留在内存中，绝不写回磁盘。
 pub struct DouyinSite {
     client: Client,
-    /// 出口被风控拒绝时换这条通道重试。生产上始终是完全直连的共享客户端；
+    /// 风控重试保留相同的应用代理路由，不私自切到直连。
     /// 字段化是为了让测试能注入可控回退通道。
     fallback_client: Client,
     cookie: Mutex<String>,
@@ -73,7 +73,7 @@ impl Default for DouyinSite {
 
 impl DouyinSite {
     pub fn new(client: Client, cookie: String) -> Self {
-        Self::with_fallback_client(client, http_client::direct_client(), cookie)
+        Self::with_fallback_client(client.clone(), client, cookie)
     }
 
     /// 生产代码只用 [`DouyinSite::new`]；这个入口供测试注入回退通道。

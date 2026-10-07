@@ -48,9 +48,9 @@ struct QrSession {
 static DOUYU_SESSIONS: QrSessionStore<QrSession> = QrSessionStore::new(SITE);
 
 /// 启动斗鱼公开的 Web 扫码流程。
-pub async fn start() -> AppResult<QrLoginStart> {
+pub async fn start(route: &crate::proxy::ProxyRoute) -> AppResult<QrLoginStart> {
     let jar = Arc::new(Jar::default());
-    let client = build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, false, None)?;
+    let client = build_login_client(SITE, Arc::clone(&jar), TRUSTED_SUFFIXES, false, route)?;
     let response = client
         .post(QR_GENERATE_URL)
         .form(&[("client_id", "1"), ("isMultiAccount", "0")])

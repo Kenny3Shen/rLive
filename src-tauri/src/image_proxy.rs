@@ -54,6 +54,9 @@ pub struct ImageProxy {
     state: Mutex<Option<ImageProxyInner>>,
     port: AtomicU16,
     cache: Arc<ImageCache>,
+    /// 当前监听器使用的代理路由。设置变化时 `start` 会重启监听器，
+    /// 使图片加载与其余出站请求走同一条出口。
+    route: Mutex<Option<crate::proxy::ProxyRoute>>,
 }
 
 struct ImageProxyInner {
@@ -67,6 +70,7 @@ impl ImageProxy {
             state: Mutex::new(None),
             port: AtomicU16::new(0),
             cache: Arc::new(ImageCache::new(cache_root)),
+            route: Mutex::new(None),
         }
     }
 
@@ -91,13 +95,27 @@ impl ImageProxy {
         self.port.store(0, Ordering::Release);
     }
 
-    /// 幂等：已在运行时返回现有的回环 origin。
-    pub async fn start(&self) -> AppResult<String> {
-        self.start_with_allowlist(ALLOWED_IMAGE_HOSTS).await
+    /// 幂等：已在运行且路由未变时返回现有的回环 origin。
+    ///
+    /// 路由变化（用户改了代理模式）必须重启：客户端在启动时就把代理策略烧进了
+    /// 连接池，改设置后继续用旧监听器会一直走旧出口。
+    pub async fn start(&self, route: &crate::proxy::ProxyRoute) -> AppResult<String> {
+        {
+            let current = self.route.lock().unwrap_or_else(|p| p.into_inner());
+            if self.port.load(Ordering::Acquire) != 0 && current.as_ref() == Some(route) {
+                return Ok(Self::base_url(self.port.load(Ordering::Acquire)));
+            }
+        }
+        self.stop();
+        self.start_with_allowlist(ALLOWED_IMAGE_HOSTS, route).await
     }
 
     /// 以显式的上游白名单启动 `start`（测试使用回环主机）。
-    async fn start_with_allowlist(&self, hosts: &'static [&'static str]) -> AppResult<String> {
+    async fn start_with_allowlist(
+        &self,
+        hosts: &'static [&'static str],
+        route: &crate::proxy::ProxyRoute,
+    ) -> AppResult<String> {
         let port = self.port.load(Ordering::Acquire);
         if port != 0 {
             return Ok(Self::base_url(port));
@@ -126,11 +144,13 @@ impl ImageProxy {
             hosts,
             shutdown_rx,
             self.cache.clone(),
+            route.clone(),
         ));
         *state = Some(ImageProxyInner {
             shutdown: shutdown_tx,
             task,
         });
+        *self.route.lock().unwrap_or_else(|p| p.into_inner()) = Some(route.clone());
         self.port.store(port, Ordering::Release);
         let cache = self.cache.clone();
         tauri::async_runtime::spawn(async move {
@@ -177,16 +197,23 @@ async fn run_image_proxy(
     allowed_hosts: &'static [&'static str],
     mut shutdown: watch::Receiver<bool>,
     cache: Arc<ImageCache>,
+    route: crate::proxy::ProxyRoute,
 ) {
-    let client = match reqwest::Client::builder()
-        .use_native_tls()
-        .timeout(IMAGE_TIMEOUT)
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        )
-        .build()
-    {
+    let client = match crate::http_client::with_route(
+        reqwest::Client::builder()
+            .use_native_tls()
+            .timeout(IMAGE_TIMEOUT)
+            .connect_timeout(std::time::Duration::from_secs(8))
+            .user_agent(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            ),
+        &route,
+    )
+    .and_then(|builder| {
+        builder
+            .build()
+            .map_err(|_| AppError::new("image_proxy_client", "图片代理网络客户端初始化失败"))
+    }) {
         Ok(client) => client,
         Err(e) => {
             tracing::warn!(error = %e, "image proxy client build failed");
@@ -561,7 +588,10 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let proxy = ImageProxy::new(cache_root.clone());
-        let base = proxy.start_with_allowlist(&["127.0.0.1"]).await.unwrap();
+        let base = proxy
+            .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
+            .await
+            .unwrap();
         // 显式构造 URL 编码形式以检验百分号解码。
         let encoded_upstream = format!("http://{upstream_addr}/pic.png")
             .as_bytes()
@@ -682,7 +712,10 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let proxy = ImageProxy::new(cache_root.clone());
-        let base = proxy.start_with_allowlist(&["127.0.0.1"]).await.unwrap();
+        let base = proxy
+            .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
+            .await
+            .unwrap();
         let encoded = format!("http://{upstream_addr}/cover.png")
             .bytes()
             .map(|byte| match byte {

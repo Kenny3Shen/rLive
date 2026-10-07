@@ -20,14 +20,14 @@ fn resolve_site(state: &AppState, site_id: &SiteId) -> AppResult<Box<dyn sites::
     // 一个站点实例可能发起多个相互依赖的请求（Twitch bootstrap、GraphQL、
     // 房间数据，然后是它的 HLS master playlist）。把 cookie 和代理一起快照，
     // 使这条链上的每个请求都遵循同一份设置。
-    let (cookie, proxy) = {
+    let (cookie, route) = {
         let conn = state.conn()?;
         (
             account::get_cookie(&conn, site_id)?,
-            crate::settings::get(&conn)?.proxy,
+            crate::settings::get(&conn)?.proxy_route(),
         )
     };
-    sites::site_with_proxy(site_id, cookie, proxy.as_deref())
+    sites::site_with_route(site_id, cookie, &route)
 }
 
 /// 首页推荐专用的站点实例：只有 B 站的推荐会带上本机的 TV 凭据。
@@ -54,20 +54,20 @@ async fn resolve_recommend_site(
     if *site_id != SiteId::Bilibili {
         return resolve_site(state, site_id);
     }
-    let (cookie, proxy, credential) = {
+    let (cookie, route, credential) = {
         let conn = state.conn()?;
         (
             account::get_cookie(&conn, site_id)?,
-            crate::settings::get(&conn)?.proxy,
+            crate::settings::get(&conn)?.proxy_route(),
             account::bilibili_app::load(&conn)?,
         )
     };
-    let client = crate::http_client::client_for_proxy(proxy.as_deref())?;
+    let client = crate::http_client::client_for_route(&route)?;
     let site = BilibiliSite::new(client, cookie.unwrap_or_default());
     let Some(credential) = credential else {
         return Ok(Box::new(site));
     };
-    let mut auth = match account::bilibili_app::AppAuth::new(credential, proxy.as_deref()).await {
+    let mut auth = match account::bilibili_app::AppAuth::new(credential, &route).await {
         Ok(auth) => auth,
         Err(error) => {
             tracing::warn!(error = %error, "bilibili app credential unusable for live recommend; continuing without it");

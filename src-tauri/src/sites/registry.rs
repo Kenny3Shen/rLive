@@ -40,15 +40,15 @@ pub fn all_meta() -> Vec<SiteMeta> {
     ]
 }
 
-/// 使用当前选定的 HTTP(S) 代理构建站点客户端（如已配置）。每种代理策略
+/// 使用当前解析出的代理路由构建站点客户端。每种代理策略
 /// 持有独立的 reqwest 客户端，
 /// 防止缓存的直连连接绕过之后的设置变更。
-pub fn site_with_proxy(
+pub fn site_with_route(
     id: &SiteId,
     cookie: Option<String>,
-    proxy: Option<&str>,
+    route: &crate::proxy::ProxyRoute,
 ) -> AppResult<Box<dyn LiveSite>> {
-    let client = http_client::client_for_proxy(proxy)?;
+    let client = http_client::client_for_route(route)?;
     site_with_client(id, cookie, client)
 }
 
@@ -87,7 +87,8 @@ mod tests {
     #[test]
     fn site_lookup_roundtrip() {
         for m in all_meta() {
-            site_with_proxy(&m.id, None, None).expect("site must resolve");
+            site_with_route(&m.id, None, &crate::proxy::ProxyRoute::Direct)
+                .expect("site must resolve");
         }
     }
 }
