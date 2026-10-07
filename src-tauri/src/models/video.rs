@@ -208,6 +208,21 @@ pub struct VideoSubtitle {
     pub url: String,
 }
 
+/// 视频章节（player v2 的 `view_points`），时间单位为秒。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoChapter {
+    pub start_time: f64,
+    pub end_time: f64,
+    pub title: String,
+}
+
+/// 同一次 player v2 响应中的播放器元数据，字幕与章节互不依赖。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoPlayerMeta {
+    pub subtitles: Vec<VideoSubtitle>,
+    pub chapters: Vec<VideoChapter>,
+}
+
 /// 视频缩略图（快照/storyboard）元数据，对应 B 站 videoshot 接口。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoStoryboard {

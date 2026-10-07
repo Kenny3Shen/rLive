@@ -11,7 +11,7 @@ import type {
   VideoSeason,
   VideoSessionIds,
   VideoStoryboard,
-  VideoSubtitle,
+  VideoPlayerMeta,
   VideoZone,
   VideoUploaderStoryPage,
 } from "@/shared/types/video";
@@ -113,9 +113,9 @@ export function videoGetCastUrl(request: VideoPlayRequest): Promise<VideoCastSou
   return invokeCmd<VideoCastSource>("video_get_cast_url", { request });
 }
 
-/** CC 字幕轨道列表（player v2）。 */
-export function videoGetSubtitles(request: VideoPlayRequest): Promise<VideoSubtitle[]> {
-  return invokeCmd<VideoSubtitle[]>("video_get_subtitles", { request });
+/** CC 字幕和章节共用 player v2，避免重复请求。 */
+export function videoGetPlayerMeta(request: VideoPlayRequest): Promise<VideoPlayerMeta> {
+  return invokeCmd<VideoPlayerMeta>("video_get_player_meta", { request });
 }
 
 /** 视频缩略图（storyboard）快照元数据。无快照时返回 null。 */

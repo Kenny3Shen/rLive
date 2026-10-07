@@ -24,9 +24,9 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::models::settings::VideoRecommendApi;
 use crate::models::video::{
-    PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoComment,
+    PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoChapter, VideoComment,
     VideoCommentPage, VideoDanmakuSegment, VideoDimension, VideoEmote, VideoItem, VideoListPage,
-    VideoPlayRequest, VideoSeason, VideoSeasonEpisode, VideoStoryboard, VideoSubtitle,
+    VideoPlayRequest, VideoPlayerMeta, VideoSeason, VideoSeasonEpisode, VideoStoryboard, VideoSubtitle,
     VideoUgcSeason,
 };
 
@@ -755,6 +755,52 @@ fn parse_subtitles(list: Option<&Value>) -> Vec<VideoSubtitle> {
         });
     }
     subtitles
+}
+
+/// 解析 player v2 的 `data.view_points[]`，只保留有效时间范围与非空字符串标题。
+///
+/// `type` 语义未明确，不据此过滤。稳定排序后保留上游空隙与重叠，
+/// 不补造章节；重叠及视频时长裁剪交给播放器原语处理。
+fn parse_chapters(list: Option<&Value>) -> Vec<VideoChapter> {
+    let mut chapters: Vec<VideoChapter> = list
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let start_time = item.get("from")?.as_f64()?;
+            let end_time = item.get("to")?.as_f64()?;
+            if !start_time.is_finite()
+                || start_time < 0.0
+                || !end_time.is_finite()
+                || end_time <= start_time
+            {
+                return None;
+            }
+            let title = item.get("content")?.as_str()?.trim();
+            if title.is_empty() {
+                return None;
+            }
+            Some(VideoChapter {
+                start_time,
+                end_time,
+                title: title.to_string(),
+            })
+        })
+        .collect();
+    chapters.sort_by(|left, right| {
+        left.start_time
+            .partial_cmp(&right.start_time)
+            .expect("章节起点已校验为有限数值")
+    });
+    chapters
+}
+
+/// 从同一响应独立解析两类元数据，任一缺失或无效都不影响另一类。
+fn parse_player_meta(root: &Value) -> VideoPlayerMeta {
+    VideoPlayerMeta {
+        subtitles: parse_subtitles(root.pointer("/data/subtitle/subtitles")),
+        chapters: parse_chapters(root.pointer("/data/view_points")),
+    }
 }
 
 /**
@@ -1800,15 +1846,15 @@ impl BilibiliSite {
         parse_cast_durl(&data)
     }
 
-    /// 取 CC 字幕列表（player v2 接口）。
+    /// 取播放器元数据：同一次 player v2 响应中的 CC 字幕与章节。
     ///
     /// 手动 CC 公开可用；AI 字幕（`ai-` 前缀）需登录身份才会返回。
-    pub async fn video_subtitles(
+    pub async fn video_player_meta(
         &self,
         request: &VideoPlayRequest,
-    ) -> AppResult<Vec<VideoSubtitle>> {
+    ) -> AppResult<VideoPlayerMeta> {
         if request.cid <= 0 {
-            return Err(video_err("字幕请求缺少 cid"));
+            return Err(video_err("播放器元数据请求缺少 cid"));
         }
         let mut params = BTreeMap::new();
         params.insert("cid".into(), request.cid.to_string());
@@ -1816,12 +1862,20 @@ impl BilibiliSite {
             .fork_json(
                 params,
                 request,
-                "字幕请求缺少 bvid",
-                ("https://api.bilibili.com/x/player/wbi/v2", &[], "player v2"),
-                ("https://api.bilibili.com/x/player/wbi/v2", &[], "player v2"),
+                "播放器元数据请求缺少 bvid",
+                (
+                    "https://api.bilibili.com/x/player/wbi/v2",
+                    &[],
+                    "播放器元数据",
+                ),
+                (
+                    "https://api.bilibili.com/x/player/wbi/v2",
+                    &[],
+                    "播放器元数据",
+                ),
             )
             .await?;
-        Ok(parse_subtitles(root.pointer("/data/subtitle/subtitles")))
+        Ok(parse_player_meta(&root))
     }
 
     /// 缩略图（快照/storyboard）元数据（`x/player/videoshot`）。
@@ -2959,6 +3013,184 @@ mod tests {
         assert_eq!(subtitles[0].lan_doc, "中文（自动生成）");
 
         assert!(parse_subtitles(None).is_empty());
+    }
+
+    #[test]
+    fn player_meta_accepts_missing_empty_or_non_array_view_points() {
+        for root in [
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!({ "data": null }),
+            serde_json::json!({ "data": {} }),
+            serde_json::json!({ "data": { "view_points": null } }),
+            serde_json::json!({ "data": { "view_points": [] } }),
+            serde_json::json!({ "data": { "view_points": {} } }),
+            serde_json::json!({ "data": { "view_points": "章节" } }),
+            serde_json::json!({ "data": { "view_points": 1 } }),
+            serde_json::json!({ "data": { "view_points": true } }),
+        ] {
+            let meta = parse_player_meta(&root);
+            assert!(meta.chapters.is_empty(), "不应补造章节：{root}");
+            assert!(meta.subtitles.is_empty());
+        }
+    }
+
+    #[test]
+    fn player_meta_skips_invalid_chapter_times() {
+        let valid = serde_json::json!({ "from": 0, "to": 10, "content": "有效章节" });
+        let invalid_times = serde_json::json!([
+            null, "0", "1.5", "NaN", "Infinity", true, false, [], {}, -1, -0.25
+        ]);
+        let mut invalid_items = vec![serde_json::json!(null), serde_json::json!([])];
+        for field in ["from", "to"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            invalid_items.push(missing);
+            for time in invalid_times.as_array().unwrap() {
+                let mut item = valid.clone();
+                item[field] = time.clone();
+                invalid_items.push(item);
+            }
+        }
+        for (start, end) in [(0, 0), (1, 1), (2, 1)] {
+            invalid_items.push(serde_json::json!({
+                "from": start, "to": end, "content": "无效范围"
+            }));
+        }
+        invalid_items.push(valid);
+        let root = serde_json::json!({ "data": { "view_points": invalid_items } });
+        let chapters = parse_player_meta(&root).chapters;
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].start_time, 0.0);
+        assert_eq!(chapters[0].end_time, 10.0);
+        assert_eq!(chapters[0].title, "有效章节");
+    }
+
+    #[test]
+    fn player_meta_requires_nonempty_string_chapter_titles() {
+        let invalid_titles = serde_json::json!([null, 123, false, [], {}, "", " \n\t　"]);
+        let mut items = vec![serde_json::json!({ "from": 0, "to": 10 })];
+        for title in invalid_titles.as_array().unwrap() {
+            items.push(serde_json::json!({ "from": 0, "to": 10, "content": title }));
+        }
+        items.push(serde_json::json!({ "from": 0, "to": 10, "content": "  开场\n " }));
+        let root = serde_json::json!({ "data": { "view_points": items } });
+        let chapters = parse_player_meta(&root).chapters;
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "开场");
+    }
+
+    #[test]
+    fn player_meta_sorts_chapters_stably_and_preserves_fractional_ranges() {
+        let root = serde_json::json!({ "data": {
+            "duration": 5,
+            "view_points": [
+                { "from": 40.5, "to": 52.75, "content": " 尾声 ", "type": 999 },
+                { "from": 3.25, "to": 10.5, "content": "先出现", "type": 0 },
+                { "from": 0.0, "to": 1.5, "content": "正零起点", "type": 1 },
+                { "from": -0.0, "to": 2.25, "content": "负零起点", "type": 2 },
+                { "from": 3.25, "to": 8.75, "content": "后出现" }
+            ]
+        } });
+        let chapters = parse_player_meta(&root).chapters;
+        let ranges: Vec<_> = chapters
+            .iter()
+            .map(|chapter| (chapter.start_time, chapter.end_time, chapter.title.as_str()))
+            .collect();
+        // 相同起点保留原顺序；不按 type 过滤、不补齐空隙、不裁剪重叠或超长范围。
+        assert_eq!(
+            ranges,
+            vec![
+                (0.0, 1.5, "正零起点"),
+                (-0.0, 2.25, "负零起点"),
+                (3.25, 10.5, "先出现"),
+                (3.25, 8.75, "后出现"),
+                (40.5, 52.75, "尾声"),
+            ]
+        );
+    }
+
+    #[test]
+    fn player_meta_subtitles_and_chapters_are_independent() {
+        let root = serde_json::json!({ "code": 0, "data": {
+            "subtitle": { "subtitles": [
+                { "lan": "zh-CN", "lan_doc": "中文", "subtitle_url": "//example.com/cc.json" },
+                { "lan": "en", "subtitle_url": "" }
+            ] },
+            "view_points": [{ "from": 1.5, "to": 5.25, "content": "  章节标题  " }]
+        } });
+        let meta = parse_player_meta(&root);
+        let expected_subtitles = serde_json::json!([
+            { "lan": "zh-CN", "lan_doc": "中文", "url": "https://example.com/cc.json" }
+        ]);
+        let expected_chapters = serde_json::json!([
+            { "start_time": 1.5, "end_time": 5.25, "title": "章节标题" }
+        ]);
+        assert_eq!(
+            serde_json::to_value(&meta.subtitles).unwrap(),
+            expected_subtitles
+        );
+        assert_eq!(
+            serde_json::to_value(&meta.chapters).unwrap(),
+            expected_chapters
+        );
+
+        for field in ["subtitle", "view_points"] {
+            for replacement in [
+                None,
+                Some(serde_json::json!(null)),
+                Some(serde_json::json!({})),
+                Some(serde_json::json!([])),
+                Some(serde_json::json!({ "subtitles": [{ "subtitle_url": "" }] })),
+                Some(serde_json::json!([{ "from": 0, "to": 0, "content": "无效" }])),
+            ] {
+                let mut fixture = root.clone();
+                if let Some(value) = replacement {
+                    fixture["data"][field] = value;
+                } else {
+                    fixture["data"].as_object_mut().unwrap().remove(field);
+                }
+                let parsed = parse_player_meta(&fixture);
+                if field == "subtitle" {
+                    assert!(parsed.subtitles.is_empty());
+                    assert_eq!(
+                        serde_json::to_value(parsed.chapters).unwrap(),
+                        expected_chapters
+                    );
+                } else {
+                    assert!(parsed.chapters.is_empty());
+                    assert_eq!(
+                        serde_json::to_value(parsed.subtitles).unwrap(),
+                        expected_subtitles
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn player_meta_rejects_missing_request_ids_before_fetching() {
+        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
+        for cid in [0, -1] {
+            let error = site
+                .video_player_meta(&VideoPlayRequest {
+                    cid,
+                    bvid: Some("BV1x".into()),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "bilibili_video_error");
+            assert_eq!(error.message, "播放器元数据请求缺少 cid");
+        }
+        let error = site
+            .video_player_meta(&VideoPlayRequest {
+                cid: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "播放器元数据请求缺少 bvid");
     }
 
     #[test]

@@ -81,8 +81,8 @@ mockIPC(
         return true;
       case "video_stop_play":
         return null;
-      case "video_get_subtitles":
-        return [];
+      case "video_get_player_meta":
+        return { subtitles: [], chapters: [] };
       case "video_get_danmaku":
       case "video_get_related":
         return { items: [], has_more: false };

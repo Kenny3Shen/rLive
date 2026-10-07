@@ -253,6 +253,19 @@ export type VideoSubtitle = {
   url: string;
 };
 
+/** 平台提供的章节区间（秒），按开始时间排序；不补造缺失章节。 */
+export type VideoChapter = {
+  start_time: number;
+  end_time: number;
+  title: string;
+};
+
+/** player v2 的辅助播放元数据，一次请求获取字幕与章节。 */
+export type VideoPlayerMeta = {
+  subtitles: VideoSubtitle[];
+  chapters: VideoChapter[];
+};
+
 /** 视频缩略图（快照/storyboard）元数据，对应 B 站 videoshot 接口。 */
 export type VideoStoryboard = {
   /** 拼版横向小图数（一般为 10）。 */

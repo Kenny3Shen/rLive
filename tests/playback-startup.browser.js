@@ -72,7 +72,7 @@ async (page) => {
     if (!value) throw new Error(message);
   };
   const secondary = [
-    "video_get_subtitles",
+    "video_get_player_meta",
     "video_get_storyboard",
     "video_get_danmaku",
     "video_get_related",
@@ -95,7 +95,7 @@ async (page) => {
     });
     await page.waitForFunction(() =>
       [
-        "video_get_subtitles",
+        "video_get_player_meta",
         "video_get_storyboard",
         "video_get_danmaku",
         "video_get_related",

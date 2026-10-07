@@ -79,8 +79,8 @@ Object.assign(window, {
         return { items: [comment], has_more: false, all_count: 1, next: 0 };
       case "video_get_comment_replies":
         return { items: [reply], has_more: false, all_count: 1 };
-      case "video_get_subtitles":
-        return [];
+      case "video_get_player_meta":
+        return { subtitles: [], chapters: [] };
       case "video_get_danmaku":
         return { entries: [], segment_index: 1 };
       case "video_get_related":

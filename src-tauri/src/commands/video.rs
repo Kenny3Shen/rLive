@@ -12,8 +12,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::models::video::{
     PgcListPage, VideoArchive, VideoCastSource, VideoCommentPage, VideoDanmakuSegment,
-    VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoSeason, VideoSessionIds,
-    VideoStoryDirection, VideoStoryboard, VideoSubtitle, VideoUploaderStoryPage,
+    VideoListPage, VideoPlayInfo, VideoPlayRequest, VideoPlayerMeta, VideoSeason, VideoSessionIds,
+    VideoStoryDirection, VideoStoryboard, VideoUploaderStoryPage,
 };
 use crate::sites::bilibili::BilibiliSite;
 use crate::sites::bilibili::video::VideoTrack;
@@ -651,13 +651,13 @@ pub async fn video_get_cast_url(
     })
 }
 
-/// 取 CC 字幕轨道列表（player v2）。
+/// 取播放器元数据：同一次 player v2 响应中的 CC 字幕与章节。
 #[tauri::command(async)]
-pub async fn video_get_subtitles(
+pub async fn video_get_player_meta(
     state: State<'_, AppState>,
     request: VideoPlayRequest,
-) -> AppResult<Vec<VideoSubtitle>> {
-    resolve_bilibili(&state)?.video_subtitles(&request).await
+) -> AppResult<VideoPlayerMeta> {
+    resolve_bilibili(&state)?.video_player_meta(&request).await
 }
 
 /// 取视频缩略图（storyboard）快照元数据（videoshot）。

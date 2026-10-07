@@ -7,7 +7,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { VideoPlayerPage } from "../../src/features/video/VideoPlayerPage";
 import { usePlaylistStore } from "../../src/features/video/playlistStore";
 import { useSettingsStore } from "../../src/shared/stores/settingsStore";
-import type { VideoArchive, VideoHistoryItem, VideoPlayInfo } from "../../src/shared/types/video";
+import type { VideoArchive, VideoHistoryItem, VideoPlayInfo, VideoPlayerMeta } from "../../src/shared/types/video";
 
 // 真播放页、query 与路由；只把 IPC 的成功/失败顺序交给回归脚本控制。
 Object.assign(window, { isTauri: true });
@@ -37,6 +37,9 @@ const fixture = {
   requests: [] as { id: string; resolve: () => void; reject: () => void }[],
   stopped: [] as string[],
   reports: [] as VideoHistoryItem[],
+  // 章节回归复用真实播放页/路由，支持延迟元数据与失败响应。
+  metadata: {} as Record<number, VideoPlayerMeta | Promise<VideoPlayerMeta> | Error>,
+  metadataCalls: [] as number[],
 };
 mockIPC(
   (command, payload) => {
@@ -74,7 +77,16 @@ mockIPC(
         if (!fixture.manual) request.resolve();
       });
     }
-    if (command === "video_get_subtitles") return [];
+    if (command === "video_get_player_meta") {
+      const cid = (payload as { request: { cid: number } }).request.cid;
+      fixture.metadataCalls.push(cid);
+      const result = fixture.metadata[cid];
+      if (result instanceof Error) throw result;
+      return result ?? { subtitles: [], chapters: [] };
+    }
+    if (command === "video_get_subtitle") {
+      return JSON.stringify({ body: [{ from: 0, to: 600, content: "测试 CC 字幕" }] });
+    }
     if (command === "video_get_danmaku" || command === "video_get_related")
       return { items: [], has_more: false };
     if (command === "video_get_comments")
@@ -94,7 +106,7 @@ const router = createMemoryRouter(
 );
 const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 // 保留同一个对象，manual 和调用记录由脚本直接控制。
-Object.assign(window, { vodSessionFixture: Object.assign(fixture, { router }) });
+Object.assign(window, { vodSessionFixture: Object.assign(fixture, { router, client }) });
 createRoot(document.getElementById("fixture")!).render(
   <StrictMode>
     <QueryClientProvider client={client}>

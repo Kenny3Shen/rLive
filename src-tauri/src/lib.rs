@@ -101,7 +101,7 @@ use commands::video::{
     video_get_comments, video_get_danmaku, video_get_online_total, video_get_pgc_index,
     video_get_play_info, video_get_popular, video_get_recommend, video_get_related,
     video_get_season, video_get_story,
-    video_get_storyboard, video_get_subtitle, video_get_subtitles, video_get_uploader_story,
+    video_get_storyboard, video_get_subtitle, video_get_player_meta, video_get_uploader_story,
     video_get_zone, video_preload_next, video_search, video_search_zone_list, video_stop_play,
     video_uploader_videos, video_zone_list,
 };
@@ -438,7 +438,7 @@ pub fn run() {
             commands::douyin_video::douyin_video_resolve,
             commands::douyin_video::douyin_video_stop,
             video_get_cast_url,
-            video_get_subtitles,
+            video_get_player_meta,
             video_get_storyboard,
             video_get_subtitle,
             video_get_danmaku,

@@ -125,7 +125,7 @@ import {
   videoGetSeason,
   videoGetStoryboard,
   videoGetSubtitle,
-  videoGetSubtitles,
+  videoGetPlayerMeta,
   videoPreloadNext,
   videoStopPlay,
 } from "./videoApi";
@@ -149,6 +149,7 @@ import {
   type VideoResumeSnapshot,
 } from "./videoPlaybackLifecycle";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
+import { chaptersToVtt } from "./chaptersVtt";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { storyboardToVtt } from "./storyboardVtt";
 import { CastMenu } from "@/features/room/CastMenu";
@@ -1013,12 +1014,12 @@ function VideoPlayerPageContent() {
     setAudioOnly(nextAudioOnly);
   }, [audioOnly, pictureInPicture]);
 
-  // CC 字幕列表：多数稿件没有，空列表/失败都按无字幕处理（按钮直接不渲染）。
-  const subtitlesQuery = useQuery({
-    queryKey: ["video_subtitles", cid, params?.bvid ?? "", params?.epId ?? ""],
+  // CC 字幕和章节来自同一个 player v2 请求；缺失/失败均不阻塞播放。
+  const playerMetaQuery = useQuery({
+    queryKey: ["video_player_meta", cid, params?.bvid ?? "", params?.epId ?? ""],
     enabled: cid > 0 && secondaryReady,
     queryFn: () =>
-      videoGetSubtitles({
+      videoGetPlayerMeta({
         bvid: params?.bvid ?? null,
         cid,
         ep_id: params?.epId ?? null,
@@ -1026,7 +1027,8 @@ function VideoPlayerPageContent() {
     staleTime: 5 * 60_000,
     retry: false,
   });
-  const subtitles = useMemo(() => subtitlesQuery.data ?? [], [subtitlesQuery.data]);
+  const subtitles = useMemo(() => playerMetaQuery.data?.subtitles ?? [], [playerMetaQuery.data]);
+  const chapters = playerMetaQuery.data?.chapters;
 
   // 视频缩略图（storyboard）快照：无快照或纯音频不请求。
   const storyboardQuery = useQuery({
@@ -1734,6 +1736,28 @@ function VideoPlayerPageContent() {
     media.appendChild(track);
     track.track.mode = "showing";
   }, [subtitleLan, subtitleVttUrl, playUrl, subtitles]);
+
+  // 章节轨让现有 TimeSlider 自动分段并展示预览标题，不另做一套 seek/进度计算。
+  // blob 与轨道同属本次 effect：切 P/换集立即清旧轨，换画质/仅音频后重新挂载。
+  useEffect(() => {
+    const media = videoRef.current;
+    if (!media || !playUrl) return;
+    const vtt = chaptersToVtt(chapters);
+    if (!vtt) return;
+    const objectUrl = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+    const track = document.createElement("track");
+    track.kind = "chapters";
+    track.label = "章节";
+    track.default = true;
+    track.src = objectUrl;
+    media.appendChild(track);
+    // disabled 轨不会加载 cues；hidden 只供进度条读取，不覆盖字幕显示。
+    track.track.mode = "hidden";
+    return () => {
+      track.remove();
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [chapters, playUrl]);
 
   // 把缩略图（storyboard）VTT 挂到媒体元素（供 Video.js TimeSlider 缩略图预览使用）。
   useEffect(() => {
