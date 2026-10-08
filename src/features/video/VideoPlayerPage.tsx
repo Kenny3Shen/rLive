@@ -21,9 +21,11 @@ import {
   ChevronLeft,
   ExternalLink,
   FastForward,
+  Headphones,
   Home,
   Link2,
   Smartphone,
+  VideoOff,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -46,6 +48,7 @@ import {
   PLAYER_HUD_TITLE_SIZE_CLASS,
   PlayerControls,
   VOD_PLAYBACK_RATES,
+  audioOnlyControlPresentation,
   formatPlaybackRateLabel,
   PlayerMenuRadioGroup,
   type PlayerMenuRadioOption,
@@ -150,6 +153,8 @@ import {
 } from "./videoPlaybackLifecycle";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { chaptersToVtt } from "./chaptersVtt";
+import { playableChapters } from "./videoChapters";
+import { VideoChapterMenu } from "./VideoChapterMenu";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { storyboardToVtt } from "./storyboardVtt";
 import { CastMenu } from "@/features/room/CastMenu";
@@ -361,6 +366,8 @@ function VideoPlayerPageContent() {
   // 字幕按钮悬停展开与控制栏播放设置菜单同一套时序（useHoverOpen 带
   // 嵌套弹层防护：本地字幕设置里的 Select 展开期间不收起）。
   const subtitleHover = useHoverOpen(subtitleOpen, setSubtitleMenuOpen);
+  /** 控制栏章节菜单的开关态；展开期间与字幕弹层一样保持控制栏可见。 */
+  const [chapterMenuOpen, setChapterMenuOpen] = useState(false);
   /** 窗口全屏（应用内全屏）：隐藏页面 chrome（顶栏/侧栏/底部 Shell）让舞台
    *  撑满应用窗口，但保留系统窗口栏（最小化/最大化/关闭），与直播页的
    *  网页全屏同一语义；与画面全屏（元素级 top layer）相互独立、可叠加。 */
@@ -463,7 +470,8 @@ function VideoPlayerPageContent() {
       waiting ||
       Boolean(playbackError) ||
       overlayInteractionOpen ||
-      subtitleOpen,
+      subtitleOpen ||
+      chapterMenuOpen,
   });
   const fullscreen = useRecordingPlayerFullscreen(stageRef, () => {
     if (!fullscreenLocked) return true;
@@ -1029,6 +1037,14 @@ function VideoPlayerPageContent() {
   });
   const subtitles = useMemo(() => playerMetaQuery.data?.subtitles ?? [], [playerMetaQuery.data]);
   const chapters = playerMetaQuery.data?.chapters;
+  /** 章节菜单的条目：与章节轨同一份数据，只剔除零长和越过实际时长的项。 */
+  const menuChapters = useMemo(() => playableChapters(chapters, duration), [chapters, duration]);
+  const hasMenuChapters = menuChapters.length > 0;
+  useEffect(() => {
+    // 切 P/换集后没有章节，按钮随之消失，残留的展开态会让控制栏一直常驻。
+    // oxlint-disable-next-line react/set-state-in-effect
+    if (!hasMenuChapters) setChapterMenuOpen(false);
+  }, [hasMenuChapters]);
 
   // 视频缩略图（storyboard）快照：无快照或纯音频不请求。
   const storyboardQuery = useQuery({
@@ -2570,6 +2586,21 @@ function VideoPlayerPageContent() {
       </Popover>
     );
 
+  /** 移动端与竖屏把章节入口放到进度条上方左侧；桌面横屏占用主行左组。 */
+  const chaptersPlacement = mobileClient || compact || portraitOrientation ? "progress" : "controls";
+  const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
+  const chaptersSlot = hasMenuChapters ? (
+    <VideoChapterMenu
+      variant={chaptersPlacement === "progress" ? "pill" : "button"}
+      chapters={menuChapters}
+      currentTime={currentTime}
+      open={chapterMenuOpen}
+      onOpenChange={setChapterMenuOpen}
+      onSeek={seekTo}
+      container={stageRef}
+    />
+  ) : null;
+
   const currentPlaybackRate = String(
     VOD_PLAYBACK_RATES.find((rate) => rate === playbackRate?.playbackRate) ?? 1,
   );
@@ -2779,8 +2810,8 @@ function VideoPlayerPageContent() {
                   onRefresh={retryPlayback}
                   onNext={selectionNextItem ? () => goToPlaylistItem(selectionNextItem) : undefined}
                   captionsSlot={captionsSlot}
-                  audioOnly={audioOnly}
-                  onToggleAudioOnly={toggleAudioOnly}
+                  chaptersSlot={chaptersSlot}
+                  chaptersPlacement={chaptersPlacement}
                   onToggleOsd={() => setDanmakuVisible((visible) => !visible)}
                   onToggleFullscreen={fullscreen.nativeLayer ? togglePlayerFullscreen : undefined}
                 />
@@ -2992,6 +3023,21 @@ function VideoPlayerPageContent() {
                           {title}
                         </p>
                       </div>
+                      {/* 仅播声音：点播从底部控制栏移到 HUD，把左组让给章节。 */}
+                      <MediaButton
+                        type="button"
+                        aria-label={audioOnlyControl.label}
+                        aria-pressed={audioOnlyControl.enabled}
+                        title={audioOnlyControl.label}
+                        className={PLAYER_HUD_BUTTON_CLASS}
+                        onClick={toggleAudioOnly}
+                      >
+                        {audioOnlyControl.enabled ? (
+                          <Headphones className={PLAYER_HUD_ICON_CLASS} aria-hidden />
+                        ) : (
+                          <VideoOff className={PLAYER_HUD_ICON_CLASS} aria-hidden />
+                        )}
+                      </MediaButton>
                       {/* 短视频入口：以当前这条为种子进入竖屏流（滑到哪就从哪继续）。
                         与 `⋮` 同级常驻，不藏进溢出菜单 —— 它是这一页的消费方式切换，
                         不是低频工具。bvid 缺失（PGC）时退回首屏默认窗口。 */}

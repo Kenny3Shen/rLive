@@ -22,6 +22,7 @@ function PopoverContent({
   collisionBoundary = "clipping-ancestors",
   collisionPadding = 5,
   sticky = false,
+  collisionAvoidance,
   glass = false,
   ...props
 }: PopoverPrimitive.Popup.Props &
@@ -35,6 +36,7 @@ function PopoverContent({
     | "collisionBoundary"
     | "collisionPadding"
     | "sticky"
+    | "collisionAvoidance"
   > & {
     /**
      * Portal 目标。默认 <body>。当 popover 必须保持在 top layer 之上、而某个
@@ -57,6 +59,7 @@ function PopoverContent({
         collisionBoundary={collisionBoundary}
         collisionPadding={collisionPadding}
         sticky={sticky}
+        collisionAvoidance={collisionAvoidance}
         className="isolate z-50"
       >
         <PopoverPrimitive.Popup

@@ -4,6 +4,7 @@ import { Menu } from "@videojs/react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { VideoJsPlayerProvider } from "../src/features/room/player/videoJsControls";
+import { SkinVariantProvider } from "../src/components/videojs/skins/variant";
 import {
   COMPACT_LANDSCAPE_PLAYER_QUERY,
   COMPACT_PLAYER_QUERY,
@@ -649,6 +650,53 @@ describe("custom player controls layout", () => {
     const subtitlesIdx = html.indexOf("字幕按钮");
     expect(subtitlesIdx).toBeGreaterThan(-1);
     expect(fullscreenIdx).toBeGreaterThan(subtitlesIdx);
+  });
+
+  test("desktop chapters take the left-group slot after volume, before the center slot", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(
+          SkinVariantProvider,
+          { value: "vod" },
+          createElement(PlayerControls, {
+            onToggleFullscreen: () => {},
+            centerSlot: createElement("div", null, "弹幕输入"),
+            chaptersSlot: createElement("div", null, "章节按钮"),
+          }),
+        ),
+      ),
+    );
+    const chaptersIdx = html.indexOf("章节按钮");
+    expect(chaptersIdx).toBeGreaterThan(html.indexOf("player-extension-controls"));
+    expect(html.indexOf("弹幕输入")).toBeGreaterThan(chaptersIdx);
+    expect(html).not.toContain("player-chapters-row");
+  });
+
+  test("mobile/portrait chapters sit in their own row above the progress bar", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(
+          SkinVariantProvider,
+          { value: "vod" },
+          createElement(PlayerControls, {
+            onToggleFullscreen: () => {},
+            chaptersPlacement: "progress",
+            chaptersSlot: createElement("div", null, "章节按钮"),
+          }),
+        ),
+      ),
+    );
+    const rowIdx = html.indexOf("player-chapters-row");
+    const chaptersIdx = html.indexOf("章节按钮");
+    expect(rowIdx).toBeGreaterThan(-1);
+    expect(chaptersIdx).toBeGreaterThan(rowIdx);
+    // 只渲染一次，且在进度条（主行之前）上方。
+    expect(html.lastIndexOf("章节按钮")).toBe(chaptersIdx);
+    expect(html.indexOf("player-extension-controls")).toBeGreaterThan(chaptersIdx);
   });
 
   test("still places toolsSlot at the very right end of right controls", () => {

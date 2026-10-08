@@ -117,6 +117,56 @@ async (page) => {
     await slider.getByText("开场", { exact: true }).waitFor({ state: "visible" });
     assert(await slider.getByText("开场", { exact: true }).getAttribute("aria-live") === "polite", "键盘章节变化应可被读屏通知");
 
+    // 控制栏章节菜单：列出可定位章节（越过时长的不列），点选跳到该章起点。
+    const chapterTrigger = page.getByRole("button", { name: "章节：开场", exact: true });
+    await chapterTrigger.click();
+    const chapterList = page.getByRole("list", { name: "章节列表" });
+    await chapterList.waitFor();
+    const chapterItems = chapterList.getByRole("button");
+    assert(await chapterItems.count() === 3, "章节菜单条目数不对");
+    assert(await chapterItems.first().getAttribute("aria-current") === "true", "当前章节未高亮");
+    await chapterItems.filter({ hasText: "演示" }).click();
+    await page.waitForFunction(() => document.querySelector('video').currentTime === 180);
+    await chapterList.waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "章节：演示", exact: true }).waitFor();
+    await page.getByRole("button", { name: "章节：演示", exact: true }).click();
+    await chapterList.waitFor();
+    assert(await chapterItems.nth(1).getAttribute("aria-current") === "true", "跳转后当前章节未更新");
+    await page.keyboard.press("Escape");
+    await chapterList.waitFor({ state: "hidden" });
+
+    // 位置契约：桌面章节在主行左组（弹幕输入之前），仅播声音在顶部 HUD；竖屏时章节移到进度条上方左侧。
+    const placement = () => page.evaluate(() => {
+      const trigger = [...document.querySelectorAll("button[aria-label^='章节']")];
+      const center = document.querySelector('[data-slot="player-center-slot"]');
+      const slider = document.querySelector(".media-time-slider");
+      const audio = document.querySelector('button[aria-label="仅播声音"]');
+      const one = trigger[0];
+      return {
+        count: trigger.length,
+        inMainRow: !!one?.closest('[data-slot="player-extension-controls"]'),
+        beforeCenter: !!(one && center && one.compareDocumentPosition(center) & Node.DOCUMENT_POSITION_FOLLOWING),
+        inProgressRow: !!one?.closest('[data-slot="player-chapters-row"]'),
+        aboveSlider: !!(one && slider && one.getBoundingClientRect().bottom <= slider.getBoundingClientRect().top + 1),
+        leftAligned: one ? one.getBoundingClientRect().left < innerWidth / 3 : false,
+        audioInHud: !!audio?.closest("[data-player-hud]"),
+        audioInControls: !!audio?.closest('[data-slot="player-extension-controls"]'),
+      };
+    });
+    const desktop = await placement();
+    assert(desktop.count === 1 && desktop.inMainRow && desktop.beforeCenter && !desktop.inProgressRow, `桌面章节位置不对：${JSON.stringify(desktop)}`);
+    assert(desktop.audioInHud && !desktop.audioInControls, `仅播声音应在顶部 HUD：${JSON.stringify(desktop)}`);
+    // playwright-cli 会话可能没有固定视口（`viewportSize()` 为 null），从页面读回原尺寸。
+    const desktopViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    await page.setViewportSize({ width: 420, height: 860 });
+    await page.locator('[data-slot="player-chapters-row"]').waitFor();
+    const portrait = await placement();
+    assert(portrait.count === 1 && portrait.inProgressRow && portrait.aboveSlider && portrait.leftAligned, `竖屏章节位置不对：${JSON.stringify(portrait)}`);
+    assert(portrait.audioInHud, "竖屏仅播声音应在顶部 HUD");
+    await page.locator('[data-slot="player-chapter-pill"]').getByText("演示", { exact: true }).waitFor();
+    await page.setViewportSize(desktopViewport);
+    await page.getByRole("button", { name: "章节：演示", exact: true }).locator("xpath=ancestor::*[@data-slot='player-extension-controls']").waitFor();
+
     // 刷新与仅音频开关触发取流换代；章节继续可用，且不会重复请求相同元数据。
     const metadataCalls = await page.evaluate(() => window.vodSessionFixture.metadataCalls.length);
     await page.getByRole("button", { name: "刷新播放", exact: true }).click();
@@ -147,6 +197,7 @@ async (page) => {
     await page.evaluate(() => window.resolveLateChapterMeta({ subtitles: [], chapters: [{ start_time: 0, end_time: 600, title: "迟到章节" }] }));
     await page.waitForTimeout(150);
     assert(await chapterTrack.count() === 0 && await segments.count() === 1, "迟到响应污染无章节分 P");
+    assert(await page.getByRole("button", { name: /^章节/ }).count() === 0, "无章节分 P 不应显示章节菜单");
     await page.evaluate(() => {
       const f = window.vodSessionFixture;
       f.metadata[4] = new Error("测试元数据失败");
@@ -162,7 +213,7 @@ async (page) => {
     await page.getByText("已离开", { exact: true }).waitFor();
     assert(await page.evaluate((url) => window.chapterRevokedUrls.includes(url), lastUrl), "卸载未释放章节 blob");
     assert(errors.length === 0, `页面异常：${errors.join("; ")}`);
-    return { passed: ["无章节连续轨道", "分段比例/时长裁剪/可见间隙", "悬停标题与点击/键盘 seek", "CC 字幕与章节共存", "刷新和仅音频换源重挂", "切 P 清理与迟到响应隔离", "元数据失败降级", "卸载回收 blob", "StrictMode 无异常"] };
+    return { passed: ["无章节连续轨道", "分段比例/时长裁剪/可见间隙", "悬停标题与点击/键盘 seek", "控制栏章节菜单跳转与高亮", "桌面/竖屏章节与仅播声音位置", "CC 字幕与章节共存", "刷新和仅音频换源重挂", "切 P 清理与迟到响应隔离", "元数据失败降级", "卸载回收 blob", "StrictMode 无异常"] };
   } finally {
     page.off("pageerror", onError);
     await page.goto(originalUrl);

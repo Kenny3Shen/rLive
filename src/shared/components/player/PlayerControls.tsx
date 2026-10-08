@@ -183,6 +183,13 @@ export type PlayerControlsProps = {
   pictureInPictureDisabled?: boolean;
   /** 字幕控件：常驻右侧按钮组、位于全屏按钮左侧，由各播放页提供具体菜单。 */
   captionsSlot?: ReactNode;
+  /** 章节控件：仅在片源有章节时由点播页提供。 */
+  chaptersSlot?: ReactNode;
+  /**
+   * 章节控件的位置：`controls` 为桌面主行左组（音量之后）；`progress` 为移动端/竖屏
+   * 进度条上方左侧，不随紧凑布局的次要控件隐藏。仅点播形态有进度条行。
+   */
+  chaptersPlacement?: "controls" | "progress";
   disabled?: boolean;
   stackedBelowPlayer?: boolean;
   centerSlot?: ReactNode;
@@ -578,6 +585,8 @@ export function PlayerControls({
   fullscreen = false,
   pictureInPictureDisabled,
   captionsSlot,
+  chaptersSlot,
+  chaptersPlacement = "controls",
   stackedBelowPlayer = false,
   disabled = false,
   compact = false,
@@ -685,6 +694,13 @@ export function PlayerControls({
       chrome={chrome}
       avoidSystemGestureBar={playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)}
     >
+      {/* 移动端/竖屏：章节入口单独一行，贴在进度条上方左侧。 */}
+      {variant === "vod" && chaptersSlot && chaptersPlacement === "progress" && (
+        <div data-slot="player-chapters-row" className="flex w-full min-w-0 items-center px-2">
+          {chaptersSlot}
+        </div>
+      )}
+
       {/* 点播/录制回放：上方展示进度条 */}
       {variant === "vod" && (
         <div className="flex w-full min-w-0 items-center gap-2 px-2 pt-1 pb-0.5">
@@ -698,13 +714,13 @@ export function PlayerControls({
         </div>
       )}
 
-      {/* 控制条主行：左侧为暂停|刷新|音量|仅音频，中间为弹幕发送栏，右侧为设置|弹幕|字幕|画中画|窗口全屏|全屏 */}
+      {/* 控制条主行：左侧为暂停|刷新|音量|仅音频（点播为章节），中间为弹幕发送栏，右侧为设置|弹幕|字幕|画中画|窗口全屏|全屏 */}
       <div
         data-slot="player-extension-controls"
         data-compact={compact || undefined}
         className="flex w-full min-w-0 items-center justify-between gap-2 px-2 py-1"
       >
-        {/* 左侧控制栏：暂停 | 刷新 | 音量 | 仅音频 */}
+        {/* 左侧控制栏：暂停 | 刷新 | 音量 | 仅音频（点播：章节，仅音频移到顶部 HUD） */}
         <div className="flex shrink-0 items-center gap-1">
           {/* 1. 暂停 / 播放 */}
           <ButtonTooltip side="top">
@@ -806,6 +822,9 @@ export function PlayerControls({
               {audio.enabled ? <Headphones /> : <VideoOff />}
             </ExtensionButton>
           )}
+
+          {/* 5. 章节（桌面）：占用点播原仅音频的位置。 */}
+          {showSecondary && chaptersPlacement === "controls" && chaptersSlot}
         </div>
 
         {/* 中间：弹幕发送栏 */}
