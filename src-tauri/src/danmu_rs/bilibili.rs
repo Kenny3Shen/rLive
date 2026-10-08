@@ -44,7 +44,7 @@ fn cookie_header_value(cookie: &str) -> &str {
 }
 
 /// 从 cookie header 字符串中提取 `key=value`。
-fn cookie_value(cookie: &str, key: &str) -> Option<String> {
+pub(crate) fn cookie_value(cookie: &str, key: &str) -> Option<String> {
     let cookie = cookie_header_value(cookie);
     for part in cookie.split(';') {
         let part = part.trim();

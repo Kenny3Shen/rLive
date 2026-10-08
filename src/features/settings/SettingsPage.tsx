@@ -313,7 +313,7 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   recording:
     "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 ASS 导出 分辨率 字体 不透明度 描边 阴影 粗体 屏蔽 正则 FFmpeg 超时 重连 HLS 分片 重试",
   account:
-    "账号 发送权限 平台账号 bilibili 哔哩哔哩 B站 Bilibili TV douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码 授权 App 个性化 推荐 story 短视频 UID 到期 移除",
+    "账号 平台账号 bilibili 哔哩哔哩 B站 Bilibili TV douyu 斗鱼 huya 虎牙 douyin 抖音 cookie 登录 扫码 授权 App 个性化 推荐 story 短视频 UID 到期 移除",
   data: "数据 保存 路径 位置 目录 应用 局域网 同步 Wi-Fi 配对 发送 接收 导入 导出 配置 档案 缓存 图片缓存 图片 头像 封面 清除 清理 占用 空间 cache",
   about: "关于 rLive 当前版本 version 项目主页 github 免责声明 运行日志 log 报错 错误 诊断",
 };
@@ -1239,18 +1239,6 @@ export function AccountCard({
         )}
       </Dialog>
     </>
-  );
-}
-
-function DanmakuSendField() {
-  const enabled = useSettingsStore((s) => s.danmakuSendEnabled);
-  const setEnabled = useSettingsStore((s) => s.setDanmakuSendEnabled);
-
-  return (
-    <Field orientation="horizontal">
-      <FieldTitle id="danmaku-send-title">允许发送弹幕</FieldTitle>
-      <Switch aria-labelledby="danmaku-send-title" checked={enabled} onCheckedChange={setEnabled} />
-    </Field>
   );
 }
 
@@ -2254,7 +2242,7 @@ export function SettingsPage() {
     setProfileAction("export");
     try {
       await invokeCmd("profile_export", { path });
-      setProfileStatus("配置已导出。档案不包含 Cookie、发送授权或本机路径。");
+      setProfileStatus("配置已导出。档案不包含 Cookie 或本机路径。");
     } catch (cause) {
       setProfileError(`导出失败：${errorMessage(cause)}`);
     } finally {
@@ -2441,9 +2429,6 @@ export function SettingsPage() {
     ),
     account: (
       <SettingsContent title="账号">
-        <Section title="发送权限">
-          <DanmakuSendField />
-        </Section>
         <Section title="平台账号">
           <BilibiliAppAuthField />
           <AccountCard

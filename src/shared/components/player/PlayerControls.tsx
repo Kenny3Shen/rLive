@@ -191,6 +191,8 @@ export type PlayerControlsProps = {
    * 进度条上方左侧，不随紧凑布局的次要控件隐藏。仅点播形态有进度条行。
    */
   chaptersPlacement?: "controls" | "progress";
+  /** 移动端 VOD 非全屏竖屏：将进度条移入主行中央，替代弹幕输入框。 */
+  progressPlacement?: "above" | "center";
   disabled?: boolean;
   stackedBelowPlayer?: boolean;
   centerSlot?: ReactNode;
@@ -226,13 +228,13 @@ export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
   "text-media-controls-foreground hover:bg-media-muted hover:text-inherit";
 
 /**
- * 画面之上 HUD 图标按钮的唯一样式配方：与底部控制栏同一套 36px MediaButton、
- * 圆角与 hover。返回箭头、溢出菜单、录制与关注共用它 —— 新增 HUD 按钮必须走
+ * 画面之上 HUD 图标按钮的唯一样式配方：与底部控制栏同一套 MediaButton、
+ * 密度（移动端 28px）与 hover。返回箭头、溢出菜单、录制与关注共用它 —— 新增 HUD 按钮必须走
  * 这里，否则就会像之前的录制按钮那样长出一个尺寸与配色都对不上的按钮。
  */
 export const PLAYER_HUD_BUTTON_CLASS = `r-live-media-extension-button shrink-0 ${PLAYER_OVERLAY_CONTROL_BUTTON_CLASS}`;
 
-/** HUD 按钮内的图标尺寸，与控制栏 24px 图标对齐。 */
+/** HUD 图标默认 24px，移动端由共享 --media-icon-size 覆盖为 20px。 */
 export const PLAYER_HUD_ICON_CLASS = "size-6";
 
 /**
@@ -588,6 +590,7 @@ export function PlayerControls({
   captionsSlot,
   chaptersSlot,
   chaptersPlacement = "controls",
+  progressPlacement = "above",
   stackedBelowPlayer = false,
   disabled = false,
   compact = false,
@@ -689,6 +692,35 @@ export function PlayerControls({
   // 容器宽度不足时按优先级让位：与原生控件同一套 media 容器断点，
   // 保证业务按钮行永远不会被 `overflow-hidden` 拦腰截断。
   const secondaryClass = "media-max-sm:hidden";
+  const inlineProgress = variant === "vod" && progressPlacement === "center";
+  // 两种位置共用 Video.js 原生时间轴：章节、缓冲、预览与键盘定位行为不分叉。
+  const progress = variant === "vod" && (
+    <div
+      data-slot="player-progress"
+      data-placement={inlineProgress ? "center" : "above"}
+      className={cn(
+        "flex w-full min-w-0",
+        inlineProgress ? "flex-col" : "items-center gap-2 px-2 pt-1 pb-0.5",
+      )}
+    >
+      {!inlineProgress && (
+        <Time.Value className="shrink-0 text-xs tabular-nums text-white/90" type="current" />
+      )}
+      <TimeSlider className={cn("flex-1", inlineProgress && "[--media-slider-height:1.25rem]")} />
+      {inlineProgress ? (
+        <div className="flex min-w-0 items-center justify-between gap-1 text-xs leading-4 tabular-nums">
+          <Time.Value className="text-white/90" type="current" />
+          <Time.Value className="text-white/70 hover:text-white" type="remaining" toggle />
+        </div>
+      ) : (
+        <Time.Value
+          className="shrink-0 text-xs tabular-nums text-white/70 hover:text-white"
+          type="remaining"
+          toggle
+        />
+      )}
+    </div>
+  );
 
   return (
     <ControlsSurface
@@ -703,24 +735,17 @@ export function PlayerControls({
         </div>
       )}
 
-      {/* 点播/录制回放：上方展示进度条 */}
-      {variant === "vod" && (
-        <div className="flex w-full min-w-0 items-center gap-2 px-2 pt-1 pb-0.5">
-          <Time.Value className="shrink-0 text-xs tabular-nums text-white/90" type="current" />
-          <TimeSlider className="flex-1" />
-          <Time.Value
-            className="shrink-0 text-xs tabular-nums text-white/70 hover:text-white"
-            type="remaining"
-            toggle
-          />
-        </div>
-      )}
+      {/* 桌面、横屏、全屏与录制回放保留独立进度行。 */}
+      {!inlineProgress && progress}
 
       {/* 控制条主行：左侧为暂停|刷新|音量|仅音频（点播为章节），中间为弹幕发送栏，右侧为设置|弹幕|字幕|画中画|窗口全屏|全屏 */}
       <div
         data-slot="player-extension-controls"
         data-compact={compact || undefined}
-        className="flex w-full min-w-0 items-center justify-between gap-2 px-2 py-1"
+        className={cn(
+          "flex w-full min-w-0 items-center justify-between px-2 py-1",
+          inlineProgress ? "gap-1" : "gap-2",
+        )}
       >
         {/* 左侧控制栏：暂停 | 刷新 | 音量 | 仅音频（点播：章节，仅音频移到顶部 HUD） */}
         <div className="flex shrink-0 items-center gap-1">
@@ -829,12 +854,17 @@ export function PlayerControls({
           {showSecondary && chaptersPlacement === "controls" && chaptersSlot}
         </div>
 
-        {/* 中间：弹幕发送栏 */}
+        {/* 中间：弹幕发送栏，或移动端 VOD 竖屏的进度条。 */}
         <div
           data-slot="player-center-slot"
-          className="flex min-w-0 flex-1 items-center justify-center px-2"
+          className={cn(
+            "flex min-w-0 flex-1 items-center justify-center",
+            !inlineProgress && "px-2",
+          )}
         >
-          {centerSlot ? (
+          {inlineProgress ? (
+            progress
+          ) : centerSlot ? (
             <div className="w-full max-w-xl min-w-0">{centerSlot}</div>
           ) : (
             <div className="min-w-0 flex-1" />

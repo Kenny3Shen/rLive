@@ -183,7 +183,7 @@ export function LanSyncField() {
         <FieldTitle>
           <span id="lan-sync-mode-label">同步方式</span>
           <FieldTip>
-            同步关注、分组、历史和通用设置；不包含 Cookie、发送授权、ASR 本机配置或私有 M3U
+            同步关注、分组、历史和通用设置；不包含 Cookie、ASR 本机配置或私有 M3U
             地址。发送方创建一次性会话后，在另一台 rLive 设备输入同步地址和配对码接收。
           </FieldTip>
         </FieldTitle>

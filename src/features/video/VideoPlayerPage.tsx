@@ -642,6 +642,7 @@ function VideoPlayerPageContent() {
   );
   const detailsContentRef = useDetailsResize({
     enabled: detailsResizeEnabled,
+    aspectRatio: frameAspectRatio,
     containerRef: detailsFrameRef,
     detailsRef,
     onPreview: previewDetailsShare,
@@ -2586,8 +2587,11 @@ function VideoPlayerPageContent() {
       </Popover>
     );
 
+  const mobilePortraitControls =
+    mobileClient && portraitOrientation && !fullscreen.fullscreen && !webFullscreen;
   /** 移动端与竖屏把章节入口放到进度条上方左侧；桌面横屏占用主行左组。 */
-  const chaptersPlacement = mobileClient || compact || portraitOrientation ? "progress" : "controls";
+  const chaptersPlacement =
+    mobileClient || compact || portraitOrientation ? "progress" : "controls";
   const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
   const chaptersSlot = hasMenuChapters ? (
     <VideoChapterMenu
@@ -2773,18 +2777,21 @@ function VideoPlayerPageContent() {
                   stackedBelowPlayer={compact}
                   compact={compact}
                   portalContainer={stageRef}
+                  progressPlacement={mobilePortraitControls ? "center" : "above"}
                   centerSlot={
-                    <DanmakuComposer
-                      overlay
-                      portalContainer={stageRef}
-                      roomTitle={title}
-                      video={{
-                        cid,
-                        aid: aid ?? "",
-                        progressMs: Math.floor(currentTime * 1000),
-                      }}
-                      onOverlayInteractionChange={setOverlayInteractionOpen}
-                    />
+                    !mobilePortraitControls && (
+                      <DanmakuComposer
+                        overlay
+                        portalContainer={stageRef}
+                        roomTitle={title}
+                        video={{
+                          cid,
+                          aid: aid ?? "",
+                          progressMs: Math.floor(currentTime * 1000),
+                        }}
+                        onOverlayInteractionChange={setOverlayInteractionOpen}
+                      />
+                    )
                   }
                   playbackSettings={playbackToggles}
                   playbackSettingsTitle="播放设置"
@@ -3150,6 +3157,15 @@ function VideoPlayerPageContent() {
                   cid={cid}
                   onSeek={seekTo}
                   detailsContentRef={detailsContentRef}
+                  danmakuComposer={
+                    mobilePortraitControls ? (
+                      <DanmakuComposer
+                        key={videoKey}
+                        roomTitle={title}
+                        video={{ cid, aid: aid ?? "", progressMs: Math.floor(currentTime * 1000) }}
+                      />
+                    ) : undefined
+                  }
                   danmaku={{
                     entries: danmakuEntries,
                     positionMs: currentTime * 1000,

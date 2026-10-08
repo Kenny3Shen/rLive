@@ -7,6 +7,7 @@ import {
   detailsShareCssValue,
   detailsShareFromHeights,
   detailsShareMaxPercent,
+  detailsShareMinPercent,
 } from "@/shared/gestures/detailsResize";
 
 type ResizeState = {
@@ -14,7 +15,10 @@ type ResizeState = {
   startX: number;
   startY: number;
   lastY: number;
+  containerWidth: number;
   containerHeight: number;
+  aspectRatio: number | null;
+  minPercent: number;
   maxPercent: number;
   intent: "pending" | "resize" | "swipe";
   active: boolean;
@@ -25,6 +29,8 @@ type ResizeState = {
 export type UseDetailsResizeOptions = {
   /** 仅移动端、上下布局、已知非 16:9 视频且不在全屏时启用。 */
   enabled: boolean;
+  /** 原始源画幅，用于恢复默认舞台（满宽按比值撑高，最高占容器 70%）。 */
+  aspectRatio?: number | null;
   containerRef: RefObject<HTMLElement | null>;
   detailsRef: RefObject<HTMLElement | null>;
   /** 逐帧预览不进入 React 状态；结束后由宿主提交。 */
@@ -67,6 +73,7 @@ function scrollContent(scrollers: HTMLElement[], delta: number): void {
  */
 export function useDetailsResize({
   enabled,
+  aspectRatio = null,
   containerRef,
   detailsRef,
   onPreview,
@@ -77,8 +84,10 @@ export function useDetailsResize({
   const previewFrameRef = useRef<number | null>(null);
   const suppressClickUntilRef = useRef(0);
   const callbacksRef = useRef({ onPreview, onCommit, onClamp });
+  const aspectRatioRef = useRef(aspectRatio);
   useLayoutEffect(() => {
     callbacksRef.current = { onPreview, onCommit, onClamp };
+    aspectRatioRef.current = aspectRatio;
   });
 
   const cancelPreview = useCallback(() => {
@@ -121,13 +130,26 @@ export function useDetailsResize({
           details.getBoundingClientRect().height,
           container.clientHeight,
         );
+        const minPercent = detailsShareMinPercent(
+          container.clientWidth,
+          container.clientHeight,
+          aspectRatioRef.current,
+        );
         stateRef.current = {
           touchId: touch.identifier,
           startX: touch.clientX,
           startY: touch.clientY,
           lastY: touch.clientY,
+          containerWidth: container.clientWidth,
           containerHeight: container.clientHeight,
-          maxPercent: detailsResizeCeiling(percent, container.clientWidth, container.clientHeight),
+          aspectRatio: aspectRatioRef.current,
+          minPercent,
+          maxPercent: detailsResizeCeiling(
+            percent,
+            container.clientWidth,
+            container.clientHeight,
+            minPercent,
+          ),
           intent: "pending",
           active: false,
           lastPercent: percent,
@@ -164,6 +186,7 @@ export function useDetailsResize({
           state.scrollers.reduce((sum, node) => sum + Math.max(0, node.scrollTop), 0),
           state.containerHeight,
           state.maxPercent,
+          state.minPercent,
         );
         const changed = Math.abs(next.percent - state.lastPercent) > 0.0001;
         if (!state.active && !changed) return;
@@ -216,26 +239,45 @@ export function useDetailsResize({
     if (!enabled) clearDetailsResizing(containerRef.current);
   }, [containerRef, enabled]);
 
-  // 旋转/分屏后收回超限占比；未调整过的默认布局不参与。
+  // 旋转/分屏/画幅变化后重算双向边界；未调整过的默认布局不参与。
   useLayoutEffect(() => {
     if (!enabled || !onClamp) return;
     const container = containerRef.current;
-    if (!container || typeof ResizeObserver === "undefined") return;
+    if (!container) return;
     const apply = () => {
-      if (stateRef.current !== null) return;
-      const current = Number.parseFloat(container.style.getPropertyValue("--vod-details-share"));
-      if (!Number.isFinite(current)) return;
       const width = container.clientWidth;
       const height = container.clientHeight;
       if (!(width > 0) || !(height > 0)) return;
-      const clamped = clampDetailsSharePercent(current, detailsShareMaxPercent(width, height));
+      const state = stateRef.current;
+      if (state) {
+        if (
+          state.containerWidth === width &&
+          state.containerHeight === height &&
+          Object.is(state.aspectRatio, aspectRatio)
+        ) {
+          return;
+        }
+        // 几何变化让本次位移尺度失效：先提交并结束，再按新边界收口，不能等下次手势。
+        finish();
+      }
+      const current = state?.active
+        ? state.lastPercent
+        : Number.parseFloat(container.style.getPropertyValue("--vod-details-share"));
+      if (!Number.isFinite(current)) return;
+      const minPercent = detailsShareMinPercent(width, height, aspectRatio);
+      const clamped = clampDetailsSharePercent(
+        current,
+        detailsShareMaxPercent(width, height),
+        minPercent,
+      );
       if (Math.abs(clamped - current) > 0.01) callbacksRef.current.onClamp?.(clamped);
     };
+    apply();
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(apply);
     observer.observe(container);
-    apply();
     return () => observer.disconnect();
-  }, [containerRef, enabled, onClamp]);
+  }, [aspectRatio, containerRef, enabled, finish, onClamp]);
 
   return bindContent;
 }

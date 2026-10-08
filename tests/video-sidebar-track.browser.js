@@ -1,7 +1,7 @@
 // VOD 详情侧栏的左右滑动切页签：复用直播侧栏那一套 `useHorizontalSwipe({ layout: "track" })`，
 // 因此这里测的是「接线是否正确」而不是算法本身（算法在 tests/horizontal-swipe.test.ts）。
 //
-// 关键回归点是动态页签集合：PGC 只有分集+评论、单 P 无选集、没有弹幕数据时无弹幕页签。
+// 关键回归点是动态页签集合：分集 / 选集并入相关视频，不论 UGC 或 PGC 都仅按弹幕数据决定页签集合。
 // 条带按下标平移，一旦把全集而不是可见集合喂给 hook，第二页之后就整体错位 ——
 // 那是看不见内容、只见空白的失效方式，必须逐组合验证停靠位置。
 //
@@ -27,12 +27,13 @@ async (page) => {
 
     const WIDTH = 320;
     const HEIGHT = 240;
-    // 与 VideoSidebar 的四种实际组合一一对应。
+    // 与 VideoSidebar 的实际组合一一对应。
     const COMBINATIONS = {
-      pgc: ["episodes", "comments"],
-      ugcPlain: ["related", "comments", "danmaku"],
-      ugcMultiPart: ["related", "comments", "danmaku", "parts"],
-      ugcNoDanmaku: ["related", "comments"],
+      pgc: ["related", "comments", "danmaku", "settings"],
+      pgcNoDanmaku: ["related", "comments", "settings"],
+      ugcPlain: ["related", "comments", "danmaku", "settings"],
+      ugcMultiPart: ["related", "comments", "danmaku", "settings"],
+      ugcNoDanmaku: ["related", "comments", "settings"],
     };
 
     const ui = await setupHarness({
@@ -78,7 +79,7 @@ async (page) => {
           "div",
           {
             "data-sidebar-viewport": true,
-            style: { position: "relative", flex: 1, overflow: "hidden" },
+            style: { position: "relative", minHeight: 0, flex: 1, overflow: "clip" },
           },
           h(
             "div",
@@ -168,6 +169,10 @@ async (page) => {
 
     try {
       ui.render(h(Harness));
+      // 合成 PointerEvent 不建立浏览器原生指针，不能调用真实 pointer capture。
+      // 此夹具验证事件接线与条带几何，不模拟跨窗口拖动的原生捕获。
+      surface().setPointerCapture = () => {};
+      surface().releasePointerCapture = () => {};
       await frames();
       assert(Math.abs(offset() - restFor(0)) < 0.5, "初始条带没有停靠到第一个页签");
       assert(panel("comments") !== null, "非活动页签没有常驻挂载");
@@ -235,6 +240,8 @@ async (page) => {
       results.push("点击切换与拖动同路径");
 
       // 动态页签集合：每种组合都要停靠到自己下标，喂全集会在这里错位。
+      // 各组合都保持选中 settings，专门守住「value 不变但绝对下标改变」：
+      // 弹幕页签消失 / 恢复时，应在第三 / 第四页之间重停靠，而非落在空白区。
       for (const [name, tabs] of Object.entries(COMBINATIONS)) {
         const target = tabs[tabs.length - 1];
         flushSync(() => {
@@ -252,7 +259,7 @@ async (page) => {
           `${name} 组合的活动页签被标成 inert`,
         );
       }
-      results.push("PGC / 单 P / 多 P / 无弹幕四种页签集合各自停靠正确");
+      results.push("PGC / 单 P / 多 P / 无弹幕页签集合各自停靠正确；选中值不变也随下标重定位");
 
       // 页签消失时（弹幕数据迟到又撤销）回退到第一项，条带按新数组重新停靠。
       flushSync(() => {
@@ -269,4 +276,4 @@ async (page) => {
       window.matchMedia = oldMatchMedia;
     }
   });
-};
+}

@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invokeCmd } from "@/shared/api/tauri";
 import { copyText } from "@/shared/clipboard";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { DanmakuEvent, DanmakuFavoriteItem, SiteId } from "@/shared/types/live";
-import { getDanmakuSendConfig, VIDEO_DANMAKU_SEND_CONFIG } from "./sending";
+import { getDanmakuSendConfig, VIDEO_DANMAKU_SEND_CONFIG, type DanmakuSendStatus } from "./sending";
 
 /**
  * 单条评论共享的复制/收藏/+1 行为，附加仅在侧栏列表提供的屏蔽用户。悬浮 DOM
@@ -72,7 +72,7 @@ export type DanmakuActionsParams = {
   message: string;
   /** 收藏与 +1 只对普通聊天提供。 */
   eventKind: DanmakuEvent["kind"];
-  /** 评论作者昵称；屏蔽与 +1 一样是本地行为，不依赖平台登录。 */
+  /** 评论作者昵称；屏蔽是本地行为，不依赖平台登录。 */
   user?: string;
   siteId?: SiteId;
   roomId?: string;
@@ -121,8 +121,7 @@ export function useDanmakuActions({
   const [favoriting, setFavoriting] = useState(false);
   const [sending, setSending] = useState(false);
   const sendInFlightRef = useRef(false);
-  const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
-  const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
+  const danmakuCookieRevision = useSettingsStore((s) => s.danmakuCookieRevision);
   const blockedUsers = useSettingsStore((s) => s.danmakuBlockedUsers);
   const blockDanmakuUser = useSettingsStore((s) => s.blockDanmakuUser);
   const sendConfig = video ? VIDEO_DANMAKU_SEND_CONFIG : getDanmakuSendConfig(siteId);
@@ -136,18 +135,26 @@ export function useDanmakuActions({
   const hasSendTarget = video
     ? Number.isSafeInteger(video.cid) && video.cid > 0 && /^[1-9]\d*$/.test(video.aid)
     : Boolean(roomId);
-  const canRepeat =
-    isChat && Boolean(sendConfig && hasSendTarget && danmakuSendEnabled && !danmakuSendPending);
+  // 同一列表的多条弹幕共享预检缓存；账号更换后不复用旧 Cookie 的就绪结果。
+  // Rust 提交入口仍再次校验凭据与冷却，前端缓存不构成写入授权。
+  const { data: availability, isError: availabilityFailed } = useQuery({
+    queryKey: ["danmaku-send-status", sendConfig?.statusCommand, danmakuCookieRevision],
+    queryFn: () => invokeCmd<DanmakuSendStatus>(sendConfig!.statusCommand),
+    enabled: Boolean(isChat && sendConfig && hasSendTarget),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const canRepeat = Boolean(isChat && sendConfig && hasSendTarget && availability?.available);
   const canFavorite = isChat && Boolean(siteId);
   const repeatLabel = canRepeat
     ? "发送相同的弹幕（+1）"
     : !sendConfig
       ? "当前平台暂不支持发送弹幕"
-      : danmakuSendPending
-        ? "正在同步发送权限…"
-        : !danmakuSendEnabled
-          ? "请先在账号设置启用发送功能"
-          : "发送相同的弹幕（+1）";
+      : !hasSendTarget
+        ? "正在等待发送目标"
+        : availabilityFailed
+          ? "暂时无法确认登录状态"
+          : (availability?.message ?? "正在检查登录状态…");
   const favoriteLabel = canFavorite ? "收藏弹幕" : "当前房间暂不支持收藏";
 
   const resetStatus = useCallback(() => setStatus(null), []);

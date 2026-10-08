@@ -699,6 +699,67 @@ describe("custom player controls layout", () => {
     expect(html.indexOf("player-extension-controls")).toBeGreaterThan(chaptersIdx);
   });
 
+  test("竖屏进度条位于主行中央，且不再渲染发送框或第二条时间轴", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(
+          SkinVariantProvider,
+          { value: "vod" },
+          createElement(PlayerControls, {
+            progressPlacement: "center",
+            centerSlot: createElement("div", null, "弹幕输入"),
+            onToggleFullscreen: () => {},
+          }),
+        ),
+      ),
+    );
+    expect(html).toContain('data-placement="center"');
+    expect(html.indexOf('data-slot="player-progress"')).toBeGreaterThan(
+      html.indexOf('data-slot="player-center-slot"'),
+    );
+    expect(html.split('data-slot="player-progress"').length - 1).toBe(1);
+    expect(html).not.toContain("弹幕输入");
+    expect(html).not.toContain('data-placement="above"');
+  });
+
+  test("默认与全屏仍保留上方进度行和中间弹幕输入", () => {
+    for (const fullscreen of [false, true]) {
+      const html = renderToStaticMarkup(
+        createElement(
+          VideoJsPlayerProvider,
+          null,
+          createElement(
+            SkinVariantProvider,
+            { value: "vod" },
+            createElement(PlayerControls, {
+              fullscreen,
+              centerSlot: createElement("div", null, "弹幕输入"),
+            }),
+          ),
+        ),
+      );
+      expect(html).toContain('data-placement="above"');
+      expect(html.indexOf('data-slot="player-progress"')).toBeLessThan(
+        html.indexOf('data-slot="player-extension-controls"'),
+      );
+      expect(html).toContain("弹幕输入");
+    }
+  });
+
+  test("顶部与底部控制栏共享移动端密度，独立锁定按钮不缩小", () => {
+    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    expect(css).toMatch(
+      /\[data-density="dense"\],\s*\.r-live-player-skin\[data-player-density="dense"\] \[data-player-hud\] \{\s*--media-control-size: 1\.75rem;\s*--media-icon-size: 1\.25rem;/,
+    );
+    const surface = readFileSync(
+      new URL("../src/components/videojs/skins/shared/skin-surface.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(surface).toContain('data-player-density={isMobileClient() ? "dense" : undefined}');
+  });
+
   test("still places toolsSlot at the very right end of right controls", () => {
     const html = renderToStaticMarkup(
       createElement(

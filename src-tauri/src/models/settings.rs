@@ -140,6 +140,9 @@ pub struct AppSettings {
     /// 保留字段只是为了不拒绝升级用户的已存记录（`deny_unknown_fields`）。
     #[serde(default, rename = "bilibili_app_personalization", skip_serializing)]
     pub legacy_bilibili_app_personalization: Option<bool>,
+    /// 发送已改为提供 Cookie 即授权；只消费旧开关，既不作为门控也不再保存。
+    #[serde(default, rename = "danmaku_send_enabled", skip_serializing)]
+    pub legacy_danmaku_send_enabled: Option<bool>,
     pub default_site: String,
     /// 从发现页与房间导航中隐藏的平台 id。
     pub disabled_site_ids: Vec<String>,
@@ -218,10 +221,6 @@ pub struct AppSettings {
     /// 见 `BACKFILLED_SETTINGS_FIELDS`。
     #[serde(default = "default_dynamic_background_enabled")]
     pub dynamic_background_enabled: bool,
-    /// 用户手动发送单条消息功能的本机权限开关。在用户于设置中显式启用之前
-    /// 保持关闭，且不随配置导入。启用这项全局同意后，
-    /// 发送仍需要 Cookie 以及各平台自身的校验。
-    pub danmaku_send_enabled: bool,
     /// 可选端侧 ASR 模型的本机同意开关。默认关闭，
     /// 保证首次启动绝不下载模型数据。
     pub asr_enabled: bool,
@@ -321,6 +320,7 @@ impl Default for AppSettings {
             theme: "system".into(),
             legacy_player_skin: None,
             legacy_bilibili_app_personalization: None,
+            legacy_danmaku_send_enabled: None,
             default_site: "bilibili".into(),
             disabled_site_ids: Vec::new(),
             hidden_home_entry_ids: Vec::new(),
@@ -343,7 +343,6 @@ impl Default for AppSettings {
             video_blocked_uploaders: Vec::new(),
             room_card_preview_enabled: default_room_card_preview_enabled(),
             dynamic_background_enabled: default_dynamic_background_enabled(),
-            danmaku_send_enabled: false,
             asr_enabled: false,
             asr_provider: "auto".into(),
             asr_vad_enabled: true,

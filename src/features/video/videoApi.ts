@@ -200,6 +200,11 @@ export function videoGetComments(
   return invokeCmd<VideoCommentPage>("video_get_comments", { aid, mode, next });
 }
 
+/** 用户主动发送一级文本评论。Cookie/CSRF、参数校验与上游协议均留在 Rust。 */
+export function videoSendComment(aid: string, message: string): Promise<void> {
+  return invokeCmd<void>("video_comment_send", { aid, message });
+}
+
 /** 二级回复（pn 翻页，首传 page = 1）。 */
 export function videoGetCommentReplies(
   aid: string,

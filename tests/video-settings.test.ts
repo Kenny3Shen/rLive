@@ -63,6 +63,27 @@ describe("VOD 偏好回填", () => {
   });
 });
 
+describe("退役的发送权限配置", () => {
+  test("导入的 false/true 不成为发送开关，也不携带 Cookie 或自动发送会话", () => {
+    const initial = useSettingsStore.getState();
+    try {
+      for (const enabled of [false, true]) {
+        useSettingsStore.getState().applyFromBackend(Object.assign(settingsFromState(), {
+          danmaku_send_enabled: enabled,
+          auto_danmaku_send_enabled: true,
+        }));
+        const state = useSettingsStore.getState();
+        expect("danmakuSendEnabled" in state).toBe(false);
+        expect("danmakuSendPending" in state).toBe(false);
+        expect("autoDanmakuSendEnabled" in state).toBe(false);
+        expect(state.danmakuCookieRevision).toBe(initial.danmakuCookieRevision);
+      }
+    } finally {
+      useSettingsStore.setState(initial, true);
+    }
+  });
+});
+
 /**
  * 账号 Cookie 变化后必须刷新的缓存范围。
  *
@@ -145,7 +166,6 @@ function settingsFromState() {
     video_blocked_uploaders: state.videoBlockedUploaders,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
-    danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_provider: state.asrProvider,
     asr_vad_enabled: state.asrVadEnabled,

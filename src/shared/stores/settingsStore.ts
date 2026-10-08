@@ -67,7 +67,6 @@ export function parseDanmakuFontStroke(value: unknown): number {
 // （例如两次滑杆提交）不会乱序 resolve、
 // 用过期快照覆盖最新设置。
 let settingsWriteQueue: Promise<void> = Promise.resolve();
-let danmakuSendSettingEpoch = 0;
 let asrSettingEpoch = 0;
 
 /** 调用者接收本次错误，队列本身始终恢复，避免一次失败阻断后续写入。 */
@@ -477,9 +476,6 @@ type SettingsState = {
   roomCardPreviewEnabled: boolean;
   /** 画面之外用模糊放大的封面垫底。 */
   dynamicBackgroundEnabled: boolean;
-  danmakuSendEnabled: boolean;
-  /** 本地多平台发送权限同步到后端期间为 true。 */
-  danmakuSendPending: boolean;
   asrEnabled: boolean;
   asrProvider: AsrProvider;
   asrVadEnabled: boolean;
@@ -495,7 +491,7 @@ type SettingsState = {
   asrPending: boolean;
   /**
    * 可发送账号 cookie 的仅内存 revision。它刻意不携带任何凭据数据；
-   * 消费方只用它来在账号更新成功后失效缓存的权限检查。
+   * 消费方只用它来在账号更新成功后失效缓存的发送条件检查。
    */
   danmakuCookieRevision: number;
   /** 设备本地自定义 IPTV M3U 地址；绝不纳入配置包。 */
@@ -528,7 +524,6 @@ type SettingsState = {
   setSuperChatEnabled: (enabled: boolean) => void;
   /** 屏蔽一个用户；已在列表中时为无操作。 */
   blockDanmakuUser: (user: string) => void;
-  setDanmakuSendEnabled: (enabled: boolean) => void;
   setDynamicBackgroundEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
   setAsrProvider: (provider: AsrProvider) => Promise<void>;
@@ -580,7 +575,6 @@ const defaultSettings: AppSettings = {
   video_blocked_uploaders: [],
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   dynamic_background_enabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
-  danmaku_send_enabled: false,
   asr_enabled: false,
   asr_provider: "auto",
   asr_vad_enabled: true,
@@ -627,7 +621,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     video_blocked_uploaders: state.videoBlockedUploaders,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
-    danmaku_send_enabled: state.danmakuSendEnabled,
     asr_enabled: state.asrEnabled,
     asr_provider: state.asrProvider,
     asr_vad_enabled: state.asrVadEnabled,
@@ -781,8 +774,6 @@ export const useSettingsStore = create<SettingsState>()(
       videoBlockedUploaders: [],
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
       dynamicBackgroundEnabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
-      danmakuSendEnabled: false,
-      danmakuSendPending: false,
       asrEnabled: false,
       asrProvider: "auto",
       asrVadEnabled: true,
@@ -849,19 +840,6 @@ export const useSettingsStore = create<SettingsState>()(
         const danmakuBlockedUsers = normalizeDanmakuBlockedUsers([...current, name]);
         set({ danmakuBlockedUsers });
         void get().persistToBackend({ danmaku_blocked_users: danmakuBlockedUsers });
-      },
-      setDanmakuSendEnabled: (danmakuSendEnabled) => {
-        const epoch = ++danmakuSendSettingEpoch;
-        set({ danmakuSendEnabled, danmakuSendPending: true });
-        void get()
-          .persistToBackend({ danmaku_send_enabled: danmakuSendEnabled })
-          .finally(() => {
-            // 快速开关会排队两次完整设置写入。只有最新的完成才能清除同步标记，
-            // 否则输入框可能在两次写入之间查到旧的后端取值。
-            if (epoch === danmakuSendSettingEpoch) {
-              set({ danmakuSendPending: false });
-            }
-          });
       },
       setAsrEnabled: async (asrEnabled) => {
         const epoch = ++asrSettingEpoch;
@@ -1026,8 +1004,6 @@ export const useSettingsStore = create<SettingsState>()(
           ),
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
           dynamicBackgroundEnabled: settings.dynamic_background_enabled,
-          danmakuSendEnabled: settings.danmaku_send_enabled,
-          danmakuSendPending: false,
           asrEnabled: settings.asr_enabled,
           asrProvider: parseAsrProvider(settings.asr_provider),
           asrVadEnabled: settings.asr_vad_enabled,

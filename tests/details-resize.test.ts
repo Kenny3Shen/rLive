@@ -14,7 +14,9 @@ import {
   detailsShareCssValue,
   detailsShareFromHeights,
   detailsShareMaxPercent,
+  detailsShareMinPercent,
   detailsStageMinHeight,
+  roundDetailsShare,
 } from "../src/shared/gestures/detailsResize";
 
 describe("内容滑动自适应侧栏", () => {
@@ -117,10 +119,14 @@ describe("详情侧栏占比换算", () => {
     expect(detailsShareFromHeights(100, 0)).toBe(DETAILS_SHARE_MIN_PERCENT);
   });
 
-  test("CSS 取值始终是收回范围内的百分比", () => {
+  test("CSS 取值仅收回物理范围，不能截断合法的超宽原始占比", () => {
     expect(detailsShareCssValue(41.23456)).toBe("41.235%");
-    expect(detailsShareCssValue(999)).toBe(`${DETAILS_SHARE_HARD_MAX_PERCENT.toFixed(3)}%`);
-    expect(detailsShareCssValue(Number.NaN)).toBe(`${DETAILS_SHARE_MIN_PERCENT.toFixed(3)}%`);
+    expect(detailsShareCssValue(999)).toBe("100.000%");
+    expect(detailsShareCssValue(Number.NaN)).toBe("0.000%");
+    expect(detailsShareCssValue(-1)).toBe("0.000%");
+    expect(roundDetailsShare(92.34567)).toBe(92.346);
+    expect(detailsShareCssValue(92.34567)).toBe("92.346%");
+    expect(Number.parseFloat(detailsShareCssValue(92.34567))).toBe(roundDetailsShare(92.34567));
   });
 });
 
@@ -140,8 +146,7 @@ describe("16:9 视频窗口给的占比上限", () => {
     const height = 757;
     const percent = detailsShareMaxPercent(width, height);
     expect(percent).toBeCloseTo((1 - width / (16 / 9) / height) * 100, 5);
-    // 401×757 的手机上恰好落在竖屏视频未拖动时的默认占比（约 70.2%），
-    // 即「竖屏画面铺满舞台」那个位置。
+    // 401×757 的手机上约 70.2%，对应满宽 16:9 舞台，而非竖屏源画幅的默认布局。
     expect(percent).toBeCloseTo(70.2, 1);
     expect(detailsShareMaxPercent(width, height * 2)).toBeGreaterThan(percent);
     expect(detailsShareMaxPercent(width * 2, height)).toBeLessThan(percent);
@@ -218,5 +223,118 @@ describe("16:9 视频窗口给的占比上限", () => {
         expect(stageHeight).toBeGreaterThanOrEqual(detailsStageMinHeight(width) - 0.001);
       }
     }
+  });
+});
+
+describe("原始画幅给出的恢复下限", () => {
+  test("4:3、方形与竖屏按原始高度恢复，最多保留70%舞台", () => {
+    const width = 401;
+    const height = 757;
+    expect(detailsShareMinPercent(width, height, 4 / 3)).toBeCloseTo(
+      (1 - width / (4 / 3) / height) * 100,
+      8,
+    );
+    expect(detailsShareMinPercent(width, height, 1)).toBeCloseTo((1 - width / height) * 100, 8);
+    expect(detailsShareMinPercent(width, height, 9 / 16)).toBe(30);
+    expect(detailsShareMinPercent(800, 360, 4 / 3)).toBe(30);
+    expect(detailsShareMinPercent(width, height, 16 / 9)).toBeCloseTo(
+      detailsShareMaxPercent(width, height),
+      8,
+    );
+  });
+
+  test("未提供有效尺寸或画幅时仍使用兼容下限", () => {
+    for (const ratio of [null, 0, -1, NaN, Infinity]) {
+      expect(detailsShareMinPercent(401, 757, ratio)).toBe(DETAILS_SHARE_MIN_PERCENT);
+    }
+    for (const size of [0, -1, NaN, Infinity]) {
+      expect(detailsShareMinPercent(size, 757, 4 / 3)).toBe(DETAILS_SHARE_MIN_PERCENT);
+      expect(detailsShareMinPercent(401, size, 4 / 3)).toBe(DETAILS_SHARE_MIN_PERCENT);
+    }
+  });
+
+  test("多次手势仍能缩回原始布局，下限不跟随每次手势起点抬高", () => {
+    for (const ratio of [4 / 3, 1, 9 / 16]) {
+      const width = 401;
+      const height = 757;
+      const min = detailsShareMinPercent(width, height, ratio);
+      const max = detailsResizeCeiling(min, width, height, min);
+      const expanded = detailsContentScrollStep(min, -100, 0, height, max, min).percent;
+      expect(expanded).toBeGreaterThan(min);
+      const nextMax = detailsResizeCeiling(expanded, width, height, min);
+      const restored = detailsContentScrollStep(expanded, 2000, 0, height, nextMax, min);
+      expect(restored.percent).toBe(min);
+      expect(restored.scrollDelta).toBeLessThan(0);
+      expect(detailsContentScrollStep(min, 2000, 0, height, nextMax, min)).toEqual({
+        percent: min,
+        scrollDelta: -2000,
+      });
+      expect(detailsContentScrollStep(min, -10, 0, height, nextMax, min).percent).toBeGreaterThan(
+        min,
+      );
+      expect(((100 - restored.percent) / 100) * height).toBeCloseTo(
+        Math.min(width / ratio, height * 0.7),
+        8,
+      );
+    }
+  });
+
+  test("动态下限保留下滑滚动优先与边界剩余位移", () => {
+    const min = detailsShareMinPercent(400, 1000, 1);
+    expect(min).toBe(60);
+    expect(detailsContentScrollStep(70, 100, 200, 1000, 80, min)).toEqual({
+      percent: 70,
+      scrollDelta: -100,
+    });
+    const step = detailsContentScrollStep(70, 300, 40, 1000, 80, min);
+    expect(step.percent).toBe(min);
+    expect(step.scrollDelta).toBeCloseTo(-200, 8);
+    expect(detailsContentScrollStep(min, 100, 200, 1000, 80, min)).toEqual({
+      percent: min,
+      scrollDelta: -100,
+    });
+  });
+
+  test("21:9和极宽画幅以原始布局硬停，超过85%的占比也完整传到CSS与提交", () => {
+    for (const ratio of [21 / 9, 6, 10]) {
+      const width = 401;
+      const height = 757;
+      const min = detailsShareMinPercent(width, height, ratio);
+      const max = detailsResizeCeiling(min, width, height, min);
+      expect(max).toBe(min);
+      for (const delta of [-2000, 2000]) {
+        expect(detailsContentScrollStep(min, delta, 0, height, max, min)).toEqual({
+          percent: min,
+          scrollDelta: -delta,
+        });
+      }
+      const clamped = clampDetailsSharePercent(30, detailsShareMaxPercent(width, height), min);
+      expect(clamped).toBe(min);
+      const committed = roundDetailsShare(clamped);
+      const css = Number.parseFloat(detailsShareCssValue(clamped));
+      expect(css).toBe(committed);
+      expect(css).toBeCloseTo(min, 3);
+      if (ratio >= 6) expect(css).toBeGreaterThan(DETAILS_SHARE_HARD_MAX_PERCENT);
+    }
+  });
+
+  test("尺寸与画幅变化按新原始布局双向收口，上限仍保住满宽16:9", () => {
+    const constrain = (current: number, width: number, height: number, ratio: number) =>
+      clampDetailsSharePercent(
+        current,
+        detailsShareMaxPercent(width, height),
+        detailsShareMinPercent(width, height, ratio),
+      );
+    const original = detailsShareMinPercent(401, 757, 4 / 3);
+    const taller = constrain(original, 401, 1000, 4 / 3);
+    expect(taller).toBeGreaterThan(original);
+    expect(taller).toBe(detailsShareMinPercent(401, 1000, 4 / 3));
+    const shorter = constrain(taller, 401, 500, 4 / 3);
+    expect(shorter).toBeLessThan(taller);
+    expect(shorter).toBe(detailsShareMaxPercent(401, 500));
+    expect(constrain(80, 757, 401, 4 / 3)).toBe(80);
+    const wide = constrain(shorter, 401, 757, 6);
+    expect(wide).toBeGreaterThan(85);
+    expect(constrain(wide, 401, 757, 9 / 16)).toBe(detailsShareMaxPercent(401, 757));
   });
 });

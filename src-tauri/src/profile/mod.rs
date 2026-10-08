@@ -20,7 +20,6 @@ const PROFILE_VERSION: u32 = 2;
 /// 同一个结构体两种线格式，因此导入时由 `fill_local_only_settings` 回填、
 /// 导出时由 `portable_profile_value` 剔除。
 const LOCAL_ONLY_PROFILE_SETTINGS_FIELDS: &[&str] = &[
-    "danmaku_send_enabled",
     "asr_enabled",
     "asr_provider",
     "asr_vad_enabled",
@@ -81,11 +80,9 @@ impl ProfilePackage {
 
 /// 这些控件刻意不随配置离开当前设备。
 ///
-/// 弹幕发送开关是对一次写入操作的明确授权，而自定义 M3U 地址可能标识私有
-/// 播放列表或携带访问 token。
+/// ASR 需要本机选择启用，自定义 M3U 地址可能标识私有播放列表或携带访问 token。
 /// 导入的配置不得替用户决定其中任何一项。
 fn clear_local_only_settings(settings: &mut AppSettings) {
-    settings.danmaku_send_enabled = false;
     settings.asr_enabled = false;
     settings.asr_provider = "auto".into();
     settings.asr_vad_enabled = true;
@@ -337,12 +334,12 @@ pub fn merge_into_db(
     settings.room_card_preview_enabled = package.settings.room_card_preview_enabled;
     settings.dynamic_background_enabled = package.settings.dynamic_background_enabled;
     settings.recording_ass = package.settings.recording_ass.clone();
-    // 不要复制 `danmaku_send_enabled`、`asr_enabled`、`asr_provider`、
+    // 不要复制 `asr_enabled`、`asr_provider`、
     // `asr_vad_enabled`、`asr_punctuation_enabled`、
     // `asr_speaker_diarization_enabled`、`asr_hotwords`、
     // `asr_window_seconds`、`asr_translation_*` 或 `iptv_custom_m3u_url`。
-    // 配置属于便携的不可信输入；导入它不得授出发送授权、
-    // 启用本设备的本地 ASR 模型，也不得替换本设备的私有播放列表地址。
+    // 配置属于便携的不可信输入；导入它不得启用本设备的本地 ASR 模型，
+    // 也不得替换本设备的私有播放列表地址。
     // 现有的本地取值保持不变。
 
     let mut words: HashSet<String> = settings.danmaku_shield_words.into_iter().collect();
@@ -409,7 +406,7 @@ mod tests {
     #[test]
     fn portable_export_omits_cookies_and_local_only_settings() {
         let mut package = ProfilePackage::sample();
-        package.settings.danmaku_send_enabled = true;
+        package.settings.legacy_danmaku_send_enabled = Some(true);
         package.settings.asr_enabled = true;
         package.settings.asr_vad_enabled = true;
         package.settings.asr_punctuation_enabled = false;
@@ -780,7 +777,6 @@ mod tests {
     fn export_package_clears_local_only_settings() {
         let conn = open_in_memory().unwrap();
         let local = AppSettings {
-            danmaku_send_enabled: true,
             asr_enabled: true,
             asr_vad_enabled: true,
             asr_speaker_diarization_enabled: true,
@@ -794,7 +790,6 @@ mod tests {
 
         let package = export_package(&conn).unwrap();
 
-        assert!(!package.settings.danmaku_send_enabled);
         assert!(!package.settings.asr_enabled);
         assert!(package.settings.asr_vad_enabled);
         assert!(package.settings.asr_punctuation_enabled);
@@ -948,7 +943,6 @@ mod tests {
     fn merge_preserves_local_only_settings() {
         let mut conn = open_in_memory().unwrap();
         let local = AppSettings {
-            danmaku_send_enabled: true,
             asr_enabled: true,
             asr_vad_enabled: true,
             asr_punctuation_enabled: false,
@@ -963,7 +957,6 @@ mod tests {
         settings::set(&conn, &local).unwrap();
 
         let mut package = ProfilePackage::sample();
-        package.settings.danmaku_send_enabled = false;
         package.settings.asr_enabled = false;
         package.settings.asr_vad_enabled = false;
         package.settings.asr_speaker_diarization_enabled = false;
@@ -976,7 +969,6 @@ mod tests {
         merge_into_db(&mut conn, &package).unwrap();
 
         let after = settings::get(&conn).unwrap();
-        assert!(after.danmaku_send_enabled);
         assert!(after.asr_enabled);
         assert!(after.asr_vad_enabled);
         assert!(!after.asr_punctuation_enabled);
@@ -992,17 +984,23 @@ mod tests {
     }
 
     #[test]
-    fn merge_cannot_grant_shared_send_permission_from_profile() {
-        let mut conn = open_in_memory().unwrap();
-        let local = AppSettings::default();
-        assert!(!local.danmaku_send_enabled);
-        settings::set(&conn, &local).unwrap();
+    fn legacy_send_permission_import_cannot_supply_cookie() {
+        use crate::account;
+        use crate::models::live::SiteId;
 
-        let mut package = ProfilePackage::sample();
-        package.settings.danmaku_send_enabled = true;
+        for enabled in [false, true] {
+            let mut conn = open_in_memory().unwrap();
+            let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+            value["settings"]["danmaku_send_enabled"] = serde_json::json!(enabled);
+            let package = decode_package(&serde_json::to_string(&value).unwrap()).unwrap();
 
-        merge_into_db(&mut conn, &package).unwrap();
+            merge_into_db(&mut conn, &package).unwrap();
 
-        assert!(!settings::get(&conn).unwrap().danmaku_send_enabled);
+            for site in [SiteId::Bilibili, SiteId::Douyu, SiteId::Huya] {
+                assert!(account::get_cookie(&conn, &site).unwrap().is_none());
+            }
+            let after = serde_json::to_value(settings::get(&conn).unwrap()).unwrap();
+            assert!(after.get("danmaku_send_enabled").is_none());
+        }
     }
 }

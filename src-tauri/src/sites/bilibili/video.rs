@@ -6,10 +6,12 @@
 //! DASH 选流与清单合成由 `dash` 处理，分段弹幕解码由 `danmaku` 处理。
 
 mod app_feed;
+mod comment_send;
 mod danmaku;
 mod dash;
 mod uploader_story;
 
+pub use comment_send::send_comment;
 pub use danmaku::{danmaku_segment_index, decode_danmaku_segment};
 // 保留既有类型路径；命令层测试通过这里构造分片表。
 #[allow(unused_imports)]

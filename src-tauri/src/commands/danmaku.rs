@@ -9,15 +9,13 @@ use crate::models::live::SiteId;
 use crate::sites;
 use crate::state::{AppState, DanmakuSendLimiter};
 
-/// 手动发送单条弹幕前的本地预检结果。用户提交之前，需要同时具备共享的
-/// 本机发送权限和已认证的 Cookie；这只是本地预检，并不是认证结论。
+/// 手动发送单条弹幕前的本地预检结果。提供 Cookie 即授权用户主动发送，
+/// 无需额外开关；这里仅检查本地凭据字段，并不是远端认证结论。
 #[derive(Debug, Serialize)]
 pub struct DanmakuSendStatus {
-    /// 用户已启用这项仅限本机的写入能力。
-    pub send_enabled: bool,
     /// 本地账号同时具备发送所需的凭据字段。
     pub cookie_ready: bool,
-    /// 两项检查都通过；输入框可以接受消息。
+    /// Cookie 字段齐全；输入框可以接受消息。
     pub available: bool,
     /// 面向用户的安全提示文案。其中刻意不包含任何凭据数据。
     pub message: String,
@@ -135,7 +133,7 @@ pub fn record_send_history_public(
     record_successful_danmaku_send(state, site_id, content, room_id, room_title, room_user_name);
 }
 
-/// B 站弹幕发送的公共前置：读取设置与账号 Cookie，发送开关未启用或
+/// B 站弹幕发送的公共前置：读取设置与账号 Cookie，
 /// Cookie 缺 SESSDATA/bili_jct 时直接报错。直播（`bilibili_danmaku_send`）
 /// 与 VOD（`commands::video::video_danmaku_send`）两条写入路径共用，
 /// 后续的代理与发送仍需要这两个返回值。
@@ -145,13 +143,6 @@ pub(super) fn ensure_bilibili_send_ready(
     let conn = state.conn()?;
     let settings = crate::settings::get(&conn)?;
     let cookie = account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default();
-    if !settings.danmaku_send_enabled {
-        return Err(AppError::new(
-            "bilibili_send_disabled",
-            "弹幕发送功能尚未启用，请先在设置中确认开启",
-        )
-        .with_site("bilibili"));
-    }
     if !danmu_rs::bilibili::has_send_credentials(&cookie) {
         return Err(AppError::new(
             "bilibili_send_cookie_missing",
@@ -304,26 +295,45 @@ pub fn danmaku_disconnect(
     Ok(())
 }
 
+/// 状态查询不读取旧设置开关。Cookie 仅在 Rust 内存中检查，返回值不含凭据。
+fn read_send_status(conn: &rusqlite::Connection, site_id: &SiteId) -> AppResult<DanmakuSendStatus> {
+    let cookie = account::get_cookie(conn, site_id)?.unwrap_or_default();
+    let (cookie_ready, missing_message) = match site_id {
+        SiteId::Bilibili => (
+            danmu_rs::bilibili::has_send_credentials(&cookie),
+            "请先保存含 SESSDATA 和 bili_jct 的 B站 Cookie",
+        ),
+        SiteId::Douyu => (
+            danmu_rs::douyu::has_send_credentials(&cookie),
+            "请先在设置中扫码登录，或保存含账号、设备和弹幕令牌字段的完整斗鱼 Cookie",
+        ),
+        SiteId::Huya => (
+            danmu_rs::huya::has_send_credentials(&cookie),
+            "请先在设置中保存含 yyuid 或 udb_uid，且含 udb_n 或 udb_cred 的完整虎牙 Cookie",
+        ),
+        _ => {
+            return Err(AppError::new(
+                "danmaku_send_unsupported",
+                "当前平台暂不支持发送弹幕",
+            ));
+        }
+    };
+    Ok(DanmakuSendStatus {
+        cookie_ready,
+        available: cookie_ready,
+        message: if cookie_ready {
+            "可发送单条普通文本。"
+        } else {
+            missing_message
+        }
+        .into(),
+    })
+}
+
 #[tauri::command]
 pub fn bilibili_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DanmakuSendStatus> {
     let conn = state.conn()?;
-    let settings = crate::settings::get(&conn)?;
-    let cookie = account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default();
-    let cookie_ready = danmu_rs::bilibili::has_send_credentials(&cookie);
-    let send_enabled = settings.danmaku_send_enabled;
-    let message = if !send_enabled {
-        "在设置中启用“弹幕发送功能”后可使用".into()
-    } else if !cookie_ready {
-        "请先保存含 SESSDATA 和 bili_jct 的 B站 Cookie".into()
-    } else {
-        "可发送单条弹幕。".into()
-    };
-    Ok(DanmakuSendStatus {
-        send_enabled,
-        cookie_ready,
-        available: send_enabled && cookie_ready,
-        message,
-    })
+    read_send_status(&conn, &SiteId::Bilibili)
 }
 
 #[tauri::command]
@@ -355,23 +365,7 @@ pub async fn bilibili_danmaku_send(
 #[tauri::command]
 pub fn douyu_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DanmakuSendStatus> {
     let conn = state.conn()?;
-    let settings = crate::settings::get(&conn)?;
-    let cookie = account::get_cookie(&conn, &SiteId::Douyu)?.unwrap_or_default();
-    let cookie_ready = danmu_rs::douyu::has_send_credentials(&cookie);
-    let send_enabled = settings.danmaku_send_enabled;
-    let message = if !send_enabled {
-        "在设置中启用“弹幕发送功能”后可使用".into()
-    } else if cookie_ready {
-        "可发送单条弹幕。".into()
-    } else {
-        "请先在设置中扫码登录，或保存含账号、设备和弹幕令牌字段的完整斗鱼 Cookie".into()
-    };
-    Ok(DanmakuSendStatus {
-        send_enabled,
-        cookie_ready,
-        available: send_enabled && cookie_ready,
-        message,
-    })
+    read_send_status(&conn, &SiteId::Douyu)
 }
 
 #[tauri::command]
@@ -382,22 +376,14 @@ pub async fn douyu_danmaku_send(
     room_title: Option<String>,
     room_user_name: Option<String>,
 ) -> AppResult<()> {
-    let (send_enabled, cookie, route) = {
+    let (cookie, route) = {
         let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
         (
-            settings.danmaku_send_enabled,
             account::get_cookie(&conn, &SiteId::Douyu)?.unwrap_or_default(),
             settings.proxy_route(),
         )
     };
-    if !send_enabled {
-        return Err(AppError::new(
-            "douyu_send_disabled",
-            "弹幕发送功能尚未启用，请先在设置中确认开启",
-        )
-        .with_site("douyu"));
-    }
     if !danmu_rs::douyu::has_send_credentials(&cookie) {
         tracing::warn!(
             room_id = %room_id.trim(),
@@ -436,23 +422,7 @@ pub async fn douyu_danmaku_send(
 #[tauri::command]
 pub fn huya_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DanmakuSendStatus> {
     let conn = state.conn()?;
-    let settings = crate::settings::get(&conn)?;
-    let cookie = account::get_cookie(&conn, &SiteId::Huya)?.unwrap_or_default();
-    let cookie_ready = danmu_rs::huya::has_send_credentials(&cookie);
-    let send_enabled = settings.danmaku_send_enabled;
-    let message = if !send_enabled {
-        "在设置中启用“弹幕发送功能”后可使用".into()
-    } else if cookie_ready {
-        "可发送单条普通文本。".into()
-    } else {
-        "请先在设置中保存含 yyuid 或 udb_uid，且含 udb_n 或 udb_cred 的完整虎牙 Cookie".into()
-    };
-    Ok(DanmakuSendStatus {
-        send_enabled,
-        cookie_ready,
-        available: send_enabled && cookie_ready,
-        message,
-    })
+    read_send_status(&conn, &SiteId::Huya)
 }
 
 #[tauri::command]
@@ -463,22 +433,14 @@ pub async fn huya_danmaku_send(
     room_title: Option<String>,
     room_user_name: Option<String>,
 ) -> AppResult<()> {
-    let (send_enabled, cookie, route) = {
+    let (cookie, route) = {
         let conn = state.conn()?;
         let settings = crate::settings::get(&conn)?;
         (
-            settings.danmaku_send_enabled,
             account::get_cookie(&conn, &SiteId::Huya)?.unwrap_or_default(),
             settings.proxy_route(),
         )
     };
-    if !send_enabled {
-        return Err(AppError::new(
-            "huya_send_disabled",
-            "弹幕发送功能尚未启用，请先在设置中确认开启",
-        )
-        .with_site("huya"));
-    }
     if !danmu_rs::huya::has_send_credentials(&cookie) {
         tracing::warn!(
             room_id = %room_id.trim(),
@@ -523,10 +485,56 @@ pub async fn huya_danmaku_send(
 #[cfg(test)]
 mod tests {
     use super::{
-        strip_bilibili_danmaku_cookie, validate_and_reserve_huya_send, validate_and_reserve_send,
+        read_send_status, strip_bilibili_danmaku_cookie, validate_and_reserve_huya_send,
+        validate_and_reserve_send,
     };
     use crate::danmu_rs;
     use crate::state::DanmakuSendLimiter;
+
+    #[test]
+    fn send_availability_requires_cookie_and_ignores_legacy_switch() {
+        use crate::account;
+        use crate::db::schema::open_in_memory;
+        use crate::models::{AppSettings, live::SiteId};
+
+        let conn = open_in_memory().unwrap();
+        for legacy_enabled in [false, true] {
+            let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+            settings["danmaku_send_enabled"] = serde_json::json!(legacy_enabled);
+            conn.execute(
+                "INSERT OR REPLACE INTO settings_kv (key, value) VALUES ('app_settings', ?1)",
+                [serde_json::to_string(&settings).unwrap()],
+            )
+            .unwrap();
+            // 旧设置 false/true 均可正常加载；读取不会丢失整份设置或恢复旧门控。
+            assert_eq!(
+                crate::settings::get(&conn)
+                    .unwrap()
+                    .legacy_danmaku_send_enabled,
+                Some(legacy_enabled)
+            );
+            for (site, cookie) in [
+                (SiteId::Bilibili, "SESSDATA=abc; bili_jct=csrf"),
+                (
+                    SiteId::Douyu,
+                    "acf_username=viewer; acf_uid=42; acf_stk=session; acf_ltkid=login; acf_devid=device; acf_dmjwt_token=token; acf_biz=1",
+                ),
+                (SiteId::Huya, "udb_uid=12345; udb_cred=opaque-session-proof"),
+            ] {
+                for invalid_cookie in ["", "unrelated=value"] {
+                    account::set_cookie(&conn, &site, invalid_cookie).unwrap();
+                    let status = read_send_status(&conn, &site).unwrap();
+                    assert!(!status.available && !status.cookie_ready);
+                }
+                account::set_cookie(&conn, &site, cookie).unwrap();
+                let status = read_send_status(&conn, &site).unwrap();
+                assert!(status.available && status.cookie_ready);
+                account::clear_cookie(&conn, &site).unwrap();
+                assert!(!read_send_status(&conn, &site).unwrap().available);
+            }
+        }
+        assert!(read_send_status(&conn, &SiteId::Douyin).is_err());
+    }
 
     #[test]
     fn invalid_bilibili_draft_does_not_consume_room_cooldown() {

@@ -22,7 +22,6 @@ function check(condition: unknown, message: string): asserts condition {
 }
 
 const ready: DanmakuSendStatus = {
-  send_enabled: true,
   cookie_ready: true,
   available: true,
   message: "可发送",
@@ -47,8 +46,6 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
   useSettingsStore.setState({
     danmakuBlockedUsers: [],
     danmakuShieldWords: [],
-    danmakuSendEnabled: true,
-    danmakuSendPending: false,
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRoot(host);
@@ -62,10 +59,10 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
       );
     });
   };
-  const resolveStatus = async () => {
-    check(pendingStatus.length > 0, "必须重新发起权限检查");
+  const resolveStatus = async (status = ready) => {
+    check(pendingStatus.length > 0, "必须重新发起登录检查");
     await act(async () => {
-      for (const resolve of pendingStatus.splice(0)) resolve(ready);
+      for (const resolve of pendingStatus.splice(0)) resolve(status);
     });
   };
 
@@ -236,30 +233,40 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
     );
     passed.push("弹幕行点击冻结与跳回恢复");
 
+    const missingCookie: DanmakuSendStatus = {
+      cookie_ready: false,
+      available: false,
+      message: "请先登录 B站",
+    };
+    // 模拟旧版 Zustand 内存残留，已退役的 false/pending 均不能再拦截发送。
+    await act(async () => {
+      useSettingsStore.setState(Object.assign({}, {
+        danmakuSendEnabled: false,
+        danmakuSendPending: true,
+      }));
+    });
     await render(<DanmakuComposer siteId="bilibili" roomId="1" />);
-    await resolveStatus();
+    await resolveStatus(missingCookie);
     const input = () => host.querySelector<HTMLInputElement>("input");
-    check(input() && !input()!.disabled, "授权后允许编辑弹幕");
+    check(input()?.disabled, "缺少 Cookie 时必须禁用输入");
     await act(async () => {
-      useSettingsStore.setState({ danmakuSendPending: true });
+      useSettingsStore.getState().markDanmakuCookieChanged();
     });
-    check(input()?.disabled, "权限持久化期间必须禁用输入");
-    await act(async () => {
-      useSettingsStore.setState({ danmakuSendPending: false });
-    });
-    check(input()?.disabled, "授权状态恢复后不能复用之前的就绪快照");
+    check(input()?.disabled, "Cookie 更新后仍需完成新检查");
     await resolveStatus();
-    check(!input()?.disabled, "新权限检查完成后恢复输入");
+    check(input() && !input()!.disabled, "提供 Cookie 即允许编辑，不受历史 false 影响");
     await act(async () => {
-      useSettingsStore.setState({ danmakuSendEnabled: false });
+      useSettingsStore.getState().markDanmakuCookieChanged();
     });
-    check(input()?.disabled, "撤销发送授权必须立即禁用输入");
+    check(input()?.disabled, "Cookie 移除后立即丢弃旧快照");
+    await resolveStatus(missingCookie);
+    check(input()?.disabled, "已退出账号不能继续发送");
     await act(async () => {
-      useSettingsStore.setState({ danmakuSendEnabled: true });
+      useSettingsStore.getState().markDanmakuCookieChanged();
     });
-    check(input()?.disabled, "快速重新授权仍需新检查");
+    check(input()?.disabled, "重新登录仍需新检查");
     await resolveStatus();
-    passed.push("发送权限等待、撤销及重新授权的快照失效");
+    passed.push("Cookie 登录、退出及重新登录的快照失效，历史发送开关不再生效");
 
     let autoSend: AutoDanmakuSendController | undefined;
     function AutoSend({ roomId }: { roomId: string }) {
@@ -270,11 +277,23 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
       return <output>{controller.statusMessage}</output>;
     }
     await render(<AutoSend roomId="1" />);
-    await resolveStatus();
+    await resolveStatus(missingCookie);
     await act(async () => {
       autoSend!.onTextChange("自动发送测试");
+      autoSend!.onEnabledChange(true);
     });
-    check(autoSend?.canEnable, "具备权限与文本后应可启用自动发送");
+    check(!autoSend?.enabled && !autoSend?.canEnable && sends.length === 0,
+      "缺少 Cookie 时主动尝试也不能开启自动发送");
+    await act(async () => {
+      useSettingsStore.getState().markDanmakuCookieChanged();
+    });
+    await resolveStatus();
+    check(autoSend?.canEnable, "有 Cookie 与文本后可主动启用，不受历史 false 影响");
+    check(!autoSend?.enabled && sends.length === 0, "提供 Cookie 不能自动启动发送");
+    await act(async () => {
+      useSettingsStore.setState(Object.assign({}, { danmakuSendEnabled: true }));
+    });
+    check(!autoSend?.enabled && sends.length === 0, "旧配置的发送 true 不能自动启动会话");
     const setTimeoutBefore = window.setTimeout;
     let staleTimer: (() => void) | undefined;
     window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
@@ -290,16 +309,35 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
         await new Promise((resolve) => setTimeout(resolve, 50));
       });
       check(sends.length === 1 && staleTimer, "首段发送后必须排定下一段计时器");
+      const timerBeforeLogout = staleTimer;
+      await act(async () => {
+        useSettingsStore.getState().markDanmakuCookieChanged();
+      });
+      await resolveStatus(missingCookie);
+      check(!autoSend?.enabled, "退出 Cookie 必须暂停正在运行的序列");
+      await act(async () => {
+        timerBeforeLogout();
+        useSettingsStore.getState().markDanmakuCookieChanged();
+      });
+      await resolveStatus();
+      check(!autoSend?.enabled && sends.length === 1, "重新登录不得自动恢复旧序列或执行旧计时器");
+      await act(async () => {
+        autoSend!.onEnabledChange(true);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      check(sends.length === 2, "重新登录后可由用户主动启动新序列");
       await render(<AutoSend roomId="2" />);
       check(autoSend?.enabled === false && autoSend.text === "", "换房必须清空自动发送会话");
       await act(async () => {
         staleTimer!();
       });
-      check(sends.length === 1, "已经排队的旧房间回调不得再发送");
+      check(sends.length === 2, "已经排队的旧房间回调不得再发送");
     } finally {
       window.setTimeout = setTimeoutBefore;
     }
-    passed.push("自动发送换房复位与过期计时器围栏");
+    passed.push("自动发送需主动启动、Cookie 退出暂停且重登不自启、换房复位与过期计时器围栏");
     return passed;
   } finally {
     await act(async () => {

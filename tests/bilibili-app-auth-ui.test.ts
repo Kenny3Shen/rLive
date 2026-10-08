@@ -294,7 +294,7 @@ describe("Bilibili TV 授权接线边界", () => {
 
     const card = source.slice(
       source.indexOf("export function AccountCard"),
-      source.indexOf("function DanmakuSendField"),
+      source.indexOf("function PlaybackSettingsResetField"),
     );
     expect(card.match(/<ConfirmDialog/g)).toHaveLength(1);
     expect(card).not.toContain("trigger={");

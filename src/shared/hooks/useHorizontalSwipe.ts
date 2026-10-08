@@ -108,6 +108,7 @@ export function useHorizontalSwipe<T>({
   const swipeRef = useRef<SwipeState | null>(null);
   const clickSuppressionUntilRef = useRef(0);
   const renderedValueRef = useRef(value);
+  const renderedIndexRef = useRef(items.findIndex((item) => Object.is(item, value)));
   const itemsRef = useRef(items);
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
@@ -291,7 +292,15 @@ export function useHorizontalSwipe<T>({
 
   useLayoutEffect(() => {
     const previousValue = renderedValueRef.current;
-    if (Object.is(previousValue, value)) return;
+    const previousRenderedIndex = renderedIndexRef.current;
+    const nextIndex = items.findIndex((item) => Object.is(item, value));
+    renderedIndexRef.current = nextIndex;
+    if (Object.is(previousValue, value)) {
+      // 可见页签增减时，选中值可能仍是「设置」，但其绝对下标已经变化。
+      // track 按下标停靠，不能只在 value 改变时定位；普通重渲染不打断手势动画。
+      if (isTrackLayout && previousRenderedIndex !== nextIndex) restAtValue();
+      return;
+    }
     renderedValueRef.current = value;
 
     const pendingCommit = pendingCommitRef.current;
@@ -306,7 +315,6 @@ export function useHorizontalSwipe<T>({
     if (isTrackLayout && committedByGesture) return;
 
     const previousIndex = items.findIndex((item) => Object.is(item, previousValue));
-    const nextIndex = items.findIndex((item) => Object.is(item, value));
     const measuredSurfaceWidth = surfaceWidth();
     const profile = motionProfile();
 

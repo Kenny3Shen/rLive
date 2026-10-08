@@ -362,9 +362,10 @@
   height: var(--media-icon-size);
 }
 
-/* 移动端控制栏缩小一档：按钮 36px 档 → 28px，图标 24px → 20px。只作用于底部控制条，
-   顶部 HUD 与弹层不受影响；`size-media-control` 经 `@theme inline` 读同一变量。 */
-.r-live-player-skin [data-density="dense"] {
+/* 移动端上下控制栏使用同一档密度：按钮 28px、图标 20px。
+   只在 chrome 层设置变量，不缩放画面、标题或独立的全屏锁定按钮。 */
+.r-live-player-skin [data-density="dense"],
+.r-live-player-skin[data-player-density="dense"] [data-player-hud] {
   --media-control-size: 1.75rem;
   --media-icon-size: 1.25rem;
 }

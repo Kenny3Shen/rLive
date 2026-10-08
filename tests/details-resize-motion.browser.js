@@ -20,14 +20,16 @@ async (page) => {
       const previews = [],
         commits = [],
         passed = [];
-      let setEnabled, rerender;
+      let setEnabled, setRatio, rerender;
       function Harness() {
         const containerRef = React.useRef(null),
           detailsRef = React.useRef(null);
         const [enabled, updateEnabled] = React.useState(true);
+        const [ratio, updateRatio] = React.useState(401 / 400);
         const [share, setShare] = React.useState(null);
         const [, update] = React.useState(0);
         setEnabled = updateEnabled;
+        setRatio = updateRatio;
         rerender = () => update((x) => x + 1);
         const commit = (percent) => {
           commits.push(percent);
@@ -37,6 +39,7 @@ async (page) => {
         };
         const bindContent = useDetailsResize({
           enabled,
+          aspectRatio: ratio,
           containerRef,
           detailsRef,
           onPreview: (percent) => {
@@ -57,8 +60,12 @@ async (page) => {
           },
           h(
             "div",
-            { "data-video-player-frame": true, className: "relative flex min-h-0 flex-none flex-col" },
-            h("div", { style: { height: 400 } }, "舞台"),
+            {
+              "data-video-player-frame": true,
+              className: "relative flex min-h-0 flex-none flex-col aspect-[var(--stage-ar,16/9)] max-lg:max-h-[70%]",
+              style: { "--stage-ar": String(ratio) },
+            },
+            h("div", null, "舞台"),
           ),
           h(
             "aside",
@@ -180,9 +187,19 @@ async (page) => {
         scroll().scrollTop = 0;
         await gesture(400, 2000);
         assert(
-          parseFloat(frame().style.getPropertyValue("--vod-details-share")) === 20,
-          "下限不是20%",
+          Math.abs(ui.query("[data-video-player-frame]").getBoundingClientRect().height - 400) < 0.5,
+          "下滑未硬停在原始400px舞台",
         );
+        await gesture(400, 2000);
+        assert(
+          Math.abs(ui.query("[data-video-player-frame]").getBoundingClientRect().height - 400) < 0.5,
+          "再次下滑越过原始布局",
+        );
+        scroll().scrollTop = 80;
+        send("touchstart", 400);
+        assert(!send("touchmove", 440), "原始占比下限仍抢占内容下滑滚动");
+        send("touchend", 440);
+        scroll().scrollTop = 0;
         await gesture(400, -2000);
         ui.host.style.height = "600px";
         await frames();
@@ -191,7 +208,40 @@ async (page) => {
           parseFloat(frame().style.getPropertyValue("--vod-details-share")) < 63,
           "容器变矮未收回超限占比",
         );
-        passed.push("上下限、尺寸变化收回与总高度守恒");
+        passed.push("原始画幅恢复下限、尺寸变化收回与总高度守恒");
+
+        scroll().scrollTop = 0;
+        send("touchstart", 400);
+        send("touchmove", 450);
+        ui.host.style.height = "1200px";
+        await frames();
+        assert(!frame().hasAttribute("data-vod-details-resizing"), "尺寸变化未终止旧手势");
+        assert(
+          Math.abs(ui.query("[data-video-player-frame]").getBoundingClientRect().height - 400) < 0.5,
+          "容器变高未按新下限恢复原始舞台",
+        );
+        const resized = frame().style.getPropertyValue("--vod-details-share");
+        send("touchmove", 550);
+        send("touchend", 550);
+        assert(frame().style.getPropertyValue("--vod-details-share") === resized, "旧手势仍按旧尺寸提交");
+        ui.host.style.height = "600px";
+        await frames();
+        flushSync(() => setRatio(6));
+        await frames();
+        assert(parseFloat(frame().style.getPropertyValue("--vod-details-share")) > 85, "超宽画幅被85%兜底截断");
+        assert(
+          Math.abs(ui.query("[data-video-player-frame]").getBoundingClientRect().height - 401 / 6) < 0.5,
+          "画幅变化未重算原始布局下限",
+        );
+        await gesture(400, 2000);
+        assert(
+          Math.abs(ui.query("[data-video-player-frame]").getBoundingClientRect().height - 401 / 6) < 0.5,
+          "超宽画幅下滑越过原始布局",
+        );
+        flushSync(() => setRatio(401 / 400));
+        await frames();
+        geometry();
+        passed.push("手势中尺寸变化立即收口，画幅变化与超过85%的原始占比正确");
 
         scroll().scrollTop = 0;
         send("touchstart", 400);

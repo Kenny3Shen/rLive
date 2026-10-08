@@ -31,11 +31,12 @@ describe("video sidebar touch axes", () => {
     });
   }
 
-  test("页签面板的三元分支两侧都覆盖到（弹幕支不滚动、其余支让出横向）", async () => {
+  test("评论 / 弹幕独立内滚、外壳固定发送区，其余页签让出横向", async () => {
     const source = await Bun.file(new URL(SOURCES[0], import.meta.url)).text();
-    // 弹幕页签由 VideoDanmakuList 自持滚动视口，外壳必须是 overflow-hidden；
-    // 其余页签由外壳滚动，必须带 touch-pan-y。写死这对组合，防止两支被改成同一种。
-    expect(source).toContain('value === "danmaku"');
+    // 弹幕与评论各自提供列表视口，外壳不滚动，发送区才能固定在底部。
+    expect(source).toContain('value === "danmaku" || value === "comments"');
+    expect(source).toContain('data-slot="video-sidebar-comments-list"');
+    expect(source).toContain("<VideoCommentComposer aid={resolvedAid} />");
     expect(source).toContain('? "overflow-hidden"');
     expect(source).toContain(': "overflow-y-auto overscroll-contain touch-pan-y"');
   });
@@ -54,19 +55,42 @@ describe("video sidebar touch axes", () => {
     expect(viewportTag).not.toContain("overflow-hidden");
   });
 
-  test("合集与选集列表的定位滚动都受 active 把关", async () => {
+  test("三类选集仅定位自身有限高列表，且非活动页签不跟随滚动", async () => {
     const source = await Bun.file(new URL(SOURCES[0], import.meta.url)).text();
-    // 连播换集会在后台改 currentBvid / currentCid；非活动页签跟着滚动
-    // 既没有意义，也是条带被滚偏的来源之一。
-    const gates = [
-      ...source.matchAll(/if \((?:open && )?!?active\) return;|if \(open && active\)/g),
-    ];
-    expect(gates.length).toBeGreaterThanOrEqual(2);
-    for (const match of source.matchAll(
-      /useEffect\(\(\) => \{[\s\S]{0,160}?scrollIntoView[\s\S]{0,80}?\}, \[[^\]]*\]\);/g,
-    )) {
-      expect(match[0], "定位滚动必须带 active 守卫").toMatch(/active/);
+    expect(source).not.toMatch(/\.scrollIntoView\(/);
+    expect(source).toContain("if (!active) return;");
+    expect(source).toContain("list.scrollTop +=");
+    expect(source).toContain("useCurrentRowScroll(open && active, epId)");
+    expect(source).toContain("useCurrentRowScroll(active, currentBvid)");
+    expect(source).toContain("useCurrentRowScroll(open && active, currentCid)");
+    for (const kind of ["episodes", "season", "parts"]) {
+      const start = source.indexOf(`data-video-selection-list="${kind}"`);
+      expect(start).toBeGreaterThan(-1);
+      const listTag = source.slice(start, source.indexOf(">", start));
+      expect(listTag).toContain("max-h-64");
+      expect(listTag).toContain("overflow-y-auto overscroll-contain");
     }
+  });
+
+  test("三类选集共用 Collapsible 标题开关，收起时立即退出焦点序列", async () => {
+    const source = await Bun.file(new URL(SOURCES[0], import.meta.url)).text();
+    expect(source).toContain("function SelectionSection(");
+    expect(source.match(/<SelectionSection\s/g)).toHaveLength(3);
+    expect(source).toContain("<CollapsibleContent inert={!open || undefined}>");
+    expect(source).toContain("defaultOpen={!multiPart}");
+    expect(source).toMatch(/<PartsSeasonPanel\s+[\s\S]*?key=\{archive\.bvid\}/);
+    expect(source).toMatch(/<EpisodesPanel\s+key=\{season\.season_id\}/);
+  });
+
+  test("合集与分集不再独立成 Tab，UGC 与 PGC 的弹幕入口同源", async () => {
+    const source = await Bun.file(new URL(SOURCES[0], import.meta.url)).text();
+    const sidebarTab = source.match(/export type SidebarTab = ([^;]+);/)?.[1] ?? "";
+    expect(sidebarTab).toContain('"related"');
+    expect(sidebarTab).not.toContain('"episodes"');
+    expect(sidebarTab).not.toContain('"parts"');
+    expect(source).toContain("const showDanmakuTab = danmaku !== undefined;");
+    expect(source).toContain("danmakuComposer?: ReactNode;");
+    expect(source).toContain('data-slot="video-sidebar-danmaku-composer"');
   });
 
   test("取消 Tab 抓手，只在内容视口绑定自适应占比", async () => {

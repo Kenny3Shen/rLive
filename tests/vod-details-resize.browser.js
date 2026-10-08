@@ -112,8 +112,11 @@ async (page) => {
     assert(Math.abs(max.stage - 401 / (16 / 9)) < 0.5, "上限未保留满宽16:9舞台");
     await page.evaluate(() => { document.querySelector('[data-video-side-tab-panel]:not([aria-hidden])').scrollTop = 0; });
     await gesture(2000);
-    assert(Math.abs(parseFloat((await read()).share) - 20) < 0.01, "下限不为20%");
-    passed.push("非16:9内容上下滑调整占比，Tab不调整，上下限与总高度正确");
+    const restored = await geometry();
+    assert(Math.abs(restored.stage - portrait.stage) < 0.5, "下滑未恢复原始竖屏舞台");
+    await gesture(2000);
+    assert(Math.abs((await read()).stage - portrait.stage) < 0.5, "继续下滑越过原始竖屏布局");
+    passed.push("非16:9上滑保留16:9舞台，下滑硬停原始布局，Tab不调整且总高度守恒");
 
     const beforeSwipe = await read();
     await page.evaluate(async () => {
@@ -141,6 +144,33 @@ async (page) => {
     await setRatio(1920, 1080);
     const reset = await geometry();
     assert(reset.share === null && Math.abs(reset.stage - 401 / (16 / 9)) < 0.5, "切回16:9未恢复默认布局");
+
+    for (const [width, height] of [[4, 3], [21, 9], [6, 1]]) {
+      await setRatio(1920, 1080);
+      await setRatio(width, height);
+      const original = await read();
+      await gesture(-2000);
+      await page.evaluate(() => { document.querySelector('[data-video-side-tab-panel]:not([aria-hidden])').scrollTop = 0; });
+      await gesture(2000);
+      await gesture(2000);
+      const current = await read();
+      assert(Math.abs(current.stage - original.stage) < 0.5, `${width}:${height}恢复后继续下滑越过原始布局`);
+      assert(Math.abs(current.stage + current.aside - current.frame) < 0.5, `${width}:${height}恢复后高度不守恒`);
+    }
+    passed.push("4:3、21:9及极宽画幅多次手势始终以原始布局硬停");
+
+    // 不切集，只改变源画幅：自定义占比要跟随新下限，而不是保留原先的百分比。
+    await setRatio(4, 3);
+    await gesture(-80);
+    await setRatio(6, 1);
+    const extraWide = await read();
+    assert(parseFloat(extraWide.share) > 85, "动态画幅的原始占比被85%兜底截断");
+    assert(Math.abs(extraWide.stage - 401 / 6) < 0.5, "画幅变化未重算恢复下限");
+    await gesture(2000);
+    assert(Math.abs((await read()).stage - 401 / 6) < 0.5, "极宽画幅下滑越过动态原始布局");
+    passed.push("动态画幅变化重算下限，超过85%的原始占比不会被预览或提交截断");
+
+    await setRatio(1920, 1080);
     await setRatio(1080, 1920);
     await gesture(-80);
     assert((await read()).share !== null, "切集前未建立自定义占比");

@@ -3,14 +3,13 @@ import type { SiteId } from "@/shared/types/live";
 export type DanmakuSendSiteId = "bilibili" | "douyu" | "huya";
 
 export type DanmakuSendStatus = {
-  send_enabled: boolean;
   cookie_ready: boolean;
   available: boolean;
   message: string;
 };
 
 export type DanmakuSendConfig = {
-  /** 报告本地账号/授权状态的 Tauri 命令。 */
+  /** 报告本地账号凭据状态的 Tauri 命令。 */
   statusCommand: string;
   /** 提交一条用户发起的普通文本消息的 Tauri 命令。 */
   sendCommand: string;
@@ -52,7 +51,7 @@ export function isDanmakuSendSite(siteId?: SiteId): siteId is DanmakuSendSiteId 
 
 /** VOD 弹幕发送：oid 是视频 cid，历史与冷却按稿件 aid 记。 */
 export const VIDEO_DANMAKU_SEND_CONFIG: DanmakuSendConfig = {
-  // 状态检查复用直播的开关与 Cookie 检查（同一个设置项、同一份凭据）。
+  // 状态检查复用直播的 Cookie 检查（同一份凭据，不另设权限开关）。
   statusCommand: "bilibili_danmaku_send_status",
   sendCommand: "video_danmaku_send",
   siteLabel: "B站",

@@ -849,6 +849,25 @@ pub async fn video_get_comments(
         .await
 }
 
+/// 由用户显式发送一级文本评论，复用 Web Cookie 授权；不记录到弹幕发送历史。
+#[tauri::command]
+pub async fn video_comment_send(
+    state: State<'_, AppState>,
+    aid: String,
+    message: String,
+) -> AppResult<()> {
+    let (cookie, route) = {
+        let conn = state.conn()?;
+        (
+            account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default(),
+            crate::settings::get(&conn)?.proxy_route(),
+        )
+    };
+    // 含 Cookie 的写入不能跟随重定向，也不能在失败后切换出口重发。
+    let client = crate::http_client::build_no_redirect_client(&route)?;
+    crate::sites::bilibili::video::send_comment(&client, &cookie, &aid, &message).await
+}
+
 /// 二级回复（pn 翻页，首传 page = 1）。
 ///
 /// `page_size` 缺省为 [`COMMENT_REPLIES_PAGE_SIZE`]（移动端无限滚动的页大小）；

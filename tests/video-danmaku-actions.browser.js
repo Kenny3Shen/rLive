@@ -17,6 +17,7 @@ async (page) => {
       if (!resource) throw new Error(`请先打开 Vite 预览页：未找到 ${name}`);
       return resource.name;
     };
+    await import("/src/styles.css");
     const { default: React } = await import(dependencyUrl("react"));
     const { default: ReactDOMClient } = await import(dependencyUrl("react-dom_client"));
     const { default: ReactDOM } = await import(dependencyUrl("react-dom"));
@@ -28,7 +29,11 @@ async (page) => {
     const { setExpectedDanmakuConnectionEpoch, clearExpectedDanmakuConnectionEpoch } =
       await import("/src/features/room/danmaku/eventBus.ts");
     const { loadDanmuJs } = await import("/src/features/room/danmaku/danmuJsLoader.ts");
-    const { useSettingsStore } = await import("/src/shared/stores/settingsStore.ts");
+    // 复用组件已加载的模块 URL（含 Vite HMR 版本），避免另建一份 Zustand store。
+    const settingsUrl = performance.getEntriesByType("resource").find((resource) =>
+      new URL(resource.name).pathname === "/src/shared/stores/settingsStore.ts",
+    )?.name ?? "/src/shared/stores/settingsStore.ts";
+    const { useSettingsStore } = await import(settingsUrl);
     await loadDanmuJs();
     const settings = useSettingsStore.getState();
     const oldTauri = window.isTauri;
@@ -56,6 +61,7 @@ async (page) => {
       clipboard: "",
       calls: [],
       failSend: false,
+      cookieReady: true,
     };
     const callbacks = new Map();
     let nextCallback = 1;
@@ -76,6 +82,11 @@ async (page) => {
           return 1;
         }
         if (command === "plugin:event|unlisten") return;
+        if (command === "bilibili_danmaku_send_status") return {
+          cookie_ready: state.cookieReady,
+          available: state.cookieReady,
+          message: state.cookieReady ? "可发送" : "请先登录 B站",
+        };
         if (command.endsWith("danmaku_send") && state.failSend) throw "测试发送失败";
         if (command === "danmaku_favorite_list") return [];
       },
@@ -89,8 +100,9 @@ async (page) => {
       },
     });
     useSettingsStore.setState({
-      danmakuSendEnabled: true,
-      danmakuSendPending: false,
+      // 历史 false 不应拦截已有 Cookie 的 +1。
+      danmakuSendEnabled: false,
+      danmakuSendPending: true,
       danmakuFontSize: 24,
       danmakuArea: 1,
       danmakuOpacity: 1,
@@ -180,7 +192,10 @@ async (page) => {
         state.time = 8;
         videoRef.current.dispatchEvent(new Event("seeking"));
       },
-      enableSend: (enabled) => useSettingsStore.setState({ danmakuSendEnabled: enabled }),
+      setCookieReady: (ready) => {
+        state.cookieReady = ready;
+        useSettingsStore.getState().markDanmakuCookieChanged();
+      },
       liveReady: () => Boolean(batchHandler),
       emitLive: () => {
         setExpectedDanmakuConnectionEpoch(123);
@@ -198,7 +213,7 @@ async (page) => {
         host.remove();
         client.clear();
         clearExpectedDanmakuConnectionEpoch(123);
-        useSettingsStore.setState(settings);
+        useSettingsStore.setState(settings, true);
         window.isTauri = oldTauri;
         window.__TAURI_INTERNALS__ = oldInternals;
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = oldEventInternals;
@@ -302,14 +317,14 @@ async (page) => {
     await page.waitForFunction(() =>
       document.querySelector("[data-danmaku-menu]")?.textContent.includes("视频限制"),
     );
-    await page.evaluate(() => window.__videoDanmakuActionsTest.enableSend(false));
-    assert(
-      await menu.getByRole("button", { name: "请先在账号设置启用发送功能" }).isDisabled(),
-      "未启用发送时 +1 未禁用",
+    await page.evaluate(() => window.__videoDanmakuActionsTest.setCookieReady(false));
+    await page.waitForFunction(() =>
+      document.querySelector('[data-danmaku-menu] button[aria-label="请先登录 B站"]')?.disabled,
     );
+    assert(await menu.getByRole("button", { name: "请先登录 B站" }).isDisabled(), "无 Cookie 时 +1 未禁用");
     await tap(top);
     await noMenu();
-    passed.push("发送失败可见，权限关闭后禁用，再点同条可取消");
+    passed.push("发送失败可见，退出 Cookie 后禁用，再点同条可取消");
 
     await seed();
     const doublePoint = await center(top);
@@ -401,7 +416,7 @@ async (page) => {
 
     await page.evaluate(() => {
       const test = window.__videoDanmakuActionsTest;
-      test.enableSend(true);
+      test.setCookieReady(true);
       test.render({ live: true, failSend: false });
     });
     await page.waitForFunction(() => window.__videoDanmakuActionsTest.liveReady());

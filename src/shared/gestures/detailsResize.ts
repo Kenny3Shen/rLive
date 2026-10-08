@@ -9,15 +9,13 @@
  */
 
 /**
- * 占比下限（%）。
- *
- * 页签条本身 44px，401×757 的手机上剩约 107px，够露出两三行评论；再小就只剩
- * 一条页签，拖过头没有意义。
+ * 尺寸或画幅不可用时的占比下限（%）。已知画幅使用 `detailsShareMinPercent`
+ * 算出的原始布局作为下限，不能继续下滑到这个兜底值。
  */
 export const DETAILS_SHARE_MIN_PERCENT = 20;
 
 /**
- * 占比的硬顶（%）。
+ * 占比的兜底硬顶（%），不覆盖已知画幅的原始布局。
  *
  * 用于两种情况：16:9 窗口在容器里**放不下**时回退（见
  * `detailsShareMaxPercent`），以及容器尺寸不可用时的兜底。
@@ -26,6 +24,39 @@ export const DETAILS_SHARE_HARD_MAX_PERCENT = 85;
 
 /** 舞台至少要保住的窗口比例：满宽 16:9。 */
 export const DETAILS_STAGE_ASPECT_RATIO = 16 / 9;
+
+/** 与播放页默认舞台的 `max-h-[70%]` 保持一致。 */
+export const DETAILS_STAGE_DEFAULT_MAX_PERCENT = 70;
+
+/**
+ * 恢复原始画幅布局时的侧栏占比下限（%）。
+ *
+ * 原始舞台高度为 `min(width / aspectRatio, height × 70%)`，侧栏拿剩余空间。
+ * 此下限只依赖画幅与容器尺寸，不能取每次手势的起点，否则上滑松手后就缩不回去。
+ * 超宽画幅的原始侧栏占比可能超过 85%，仍须完整保留，不能被兜底硬顶截断。
+ */
+export function detailsShareMinPercent(
+  containerWidth: number,
+  containerHeight: number,
+  aspectRatio: number | null = null,
+): number {
+  if (
+    !Number.isFinite(containerWidth) ||
+    !(containerWidth > 0) ||
+    !Number.isFinite(containerHeight) ||
+    !(containerHeight > 0) ||
+    aspectRatio === null ||
+    !Number.isFinite(aspectRatio) ||
+    !(aspectRatio > 0)
+  ) {
+    return DETAILS_SHARE_MIN_PERCENT;
+  }
+  const stageShare = Math.min(
+    (containerWidth / aspectRatio / containerHeight) * 100,
+    DETAILS_STAGE_DEFAULT_MAX_PERCENT,
+  );
+  return 100 - stageShare;
+}
 
 /** 只对已知的非 16:9 画幅启用；容忍编码取整/补边带来的 1% 偏差。 */
 export function canResizeVideoDetails(aspectRatio: number | null): boolean {
@@ -47,11 +78,18 @@ export function detailsContentScrollStep(
   scrollTop: number,
   containerHeight: number,
   maxPercent: number,
+  minPercent: number = DETAILS_SHARE_MIN_PERCENT,
 ): { percent: number; scrollDelta: number } {
   if (!(containerHeight > 0)) return { percent, scrollDelta: -deltaY };
   const scrollFirst = deltaY > 0 ? Math.min(deltaY, Math.max(0, scrollTop)) : 0;
   const resizeDelta = deltaY - scrollFirst;
-  const next = detailsResizeSharePercent(percent, resizeDelta, containerHeight, maxPercent);
+  const next = detailsResizeSharePercent(
+    percent,
+    resizeDelta,
+    containerHeight,
+    maxPercent,
+    minPercent,
+  );
   const consumed = ((percent - next) / 100) * containerHeight;
   return { percent: next, scrollDelta: -deltaY + consumed };
 }
@@ -73,8 +111,8 @@ export function detailsStageMinHeight(containerWidth: number): number {
  *
  * 舞台高度是容器高度的补集，要求 `(1 - share) × height ≥ minHeight`，解出
  * `share ≤ (1 - minHeight / height) × 100`。同一台手机上容器越矮，能给侧栏的
- * 份额越少：401×757 的手机上限约 `70.2%`（正好是竖屏视频未拖动时的默认占比，
- * 即「竖屏画面铺满舞台」那个位置），900×1200 的平板约 `57.8%`。
+ * 份额越少：401×757 的手机上限约 `70.2%`（舞台高约 `225.6px`），
+ * 900×1200 的平板约 `57.8%`。
  *
  * 两个回退：
  *
@@ -95,19 +133,22 @@ export function detailsShareMaxPercent(containerWidth: number, containerHeight: 
  *
  * 取 16:9 约束与**手势起点的占比**的较大者。默认布局本来就可能已经超过 16:9
  * 约束——宽画幅视频（≥16:9，含 16:9 本身）按比值撑高时给的舞台就比满宽 16:9
- * 窗口矮，横屏手机更是根本放不下。此时若严格夹到约束值，用户往下拖的第一帧
- * 就会把侧栏直接弹掉一截；取较大者则读作「只能往小拖、不能再往大拖」，
- * 既不偷偷改动当前布局，也不再允许越过约束。
+ * 窗口矮，横屏手机更是根本放不下。此时若严格夹到约束值，用户拖动的第一帧
+ * 就会把侧栏直接弹掉一截；保住起点意味着不能再扩大侧栏，下滑则只允许恢复到
+ * 原始布局。
  *
- * 因此不变量是：**拖动不会让占比超过 `max(起点, 16:9 约束)`**，且任何一次
- * 从约束内开始的手势都会停在约束上。
+ * 尺寸或画幅变化后的收口还要保住原始布局下限；当它超过 16:9 约束时，区间
+ * 收为原始占比一个点。默认超宽画幅因此上下滑都保持原位，不会突然扩大舞台。
+ *
+ * 因此不变量是：**拖动不会让占比超过 `max(起点, 原始布局, 16:9 约束)`**。
  */
 export function detailsResizeCeiling(
   startPercent: number,
   containerWidth: number,
   containerHeight: number,
+  minPercent: number = DETAILS_SHARE_MIN_PERCENT,
 ): number {
-  const cap = detailsShareMaxPercent(containerWidth, containerHeight);
+  const cap = Math.max(minPercent, detailsShareMaxPercent(containerWidth, containerHeight));
   if (!Number.isFinite(startPercent)) return cap;
   return Math.max(startPercent, cap);
 }
@@ -162,11 +203,11 @@ export function detailsResizeSharePercent(
   deltaY: number,
   containerHeight: number,
   maxPercent: number = DETAILS_SHARE_HARD_MAX_PERCENT,
+  minPercent: number = DETAILS_SHARE_MIN_PERCENT,
 ): number {
   if (!(containerHeight > 0)) return startPercent;
   const raw = startPercent - (deltaY / containerHeight) * 100;
-  const upper = Math.max(DETAILS_SHARE_MIN_PERCENT, maxPercent);
-  return Math.min(upper, Math.max(DETAILS_SHARE_MIN_PERCENT, raw));
+  return clampDetailsSharePercent(raw, maxPercent, minPercent);
 }
 
 /**
@@ -178,10 +219,11 @@ export function detailsResizeSharePercent(
 export function clampDetailsSharePercent(
   percent: number,
   maxPercent: number = DETAILS_SHARE_HARD_MAX_PERCENT,
+  minPercent: number = DETAILS_SHARE_MIN_PERCENT,
 ): number {
-  if (Number.isNaN(percent)) return DETAILS_SHARE_MIN_PERCENT;
-  const upper = Math.max(DETAILS_SHARE_MIN_PERCENT, maxPercent);
-  return Math.min(upper, Math.max(DETAILS_SHARE_MIN_PERCENT, percent));
+  if (Number.isNaN(percent)) return minPercent;
+  const upper = Math.max(minPercent, maxPercent);
+  return Math.min(upper, Math.max(minPercent, percent));
 }
 
 /**
@@ -195,9 +237,12 @@ export function detailsShareFromHeights(sidebarHeight: number, containerHeight: 
   return (sidebarHeight / containerHeight) * 100;
 }
 
-/** 把占比写成 CSS 变量的取值。单位与精度由这里决定，组件不再拼字符串。 */
+/**
+ * 把占比写成 CSS 变量的取值。动态手势边界已由调用方计算；格式化只做物理范围
+ * 保护，不再套用 85% 兜底上限，以免合法的超宽画幅原始占比在预览/提交时跳变。
+ */
 export function detailsShareCssValue(percent: number): string {
-  return `${clampDetailsSharePercent(percent).toFixed(3)}%`;
+  return `${roundDetailsShare(percent).toFixed(3)}%`;
 }
 
 /**
@@ -208,5 +253,5 @@ export function detailsShareCssValue(percent: number): string {
  * 但会让「总和守恒」这类几何断言出现 0.001px 级的噪声），状态里也白存一串尾数。
  */
 export function roundDetailsShare(percent: number): number {
-  return Math.round(clampDetailsSharePercent(percent) * 1000) / 1000;
+  return Math.round(clampDetailsSharePercent(percent, 100, 0) * 1000) / 1000;
 }

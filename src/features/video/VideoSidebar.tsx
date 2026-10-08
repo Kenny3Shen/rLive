@@ -14,6 +14,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -25,9 +26,16 @@ import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
-import type { VideoArchive, VideoArchivePage, VideoUgcSeason } from "@/shared/types/video";
+import type {
+  SeasonEpisode,
+  VideoArchive,
+  VideoArchivePage,
+  VideoSeason,
+  VideoUgcSeason,
+} from "@/shared/types/video";
 import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { CommentsPanel } from "./CommentsPanel";
+import { VideoCommentComposer } from "./VideoCommentComposer";
 import { VideoDanmakuList } from "./VideoDanmakuList";
 import { VideoCard } from "./VideoCard";
 import { videoGetArchive, videoGetOnlineTotal, videoGetRelated, videoGetSeason } from "./videoApi";
@@ -48,41 +56,26 @@ import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { UploaderDrawer } from "./UploaderDrawer";
 
 /**
- * 播放页右侧栏：相关视频（UGC）/ 分集（PGC）/ 选集（多 P）/ 合集与评论区。
+ * 播放页右侧栏：相关视频（含信息卡、分集 / 选集 / 合集）、评论、弹幕与设置。
  *
- * 一个文件装下多种列表是刻意的 —— 它们共享同一套「页签 + 滚动容器 + 行项」骨架，
+ * 一个文件装下多种列表是刻意的 —— 它们共享同一套「信息卡 + 滚动容器 + 行项」骨架，
  * 拆成多个文件只会让这个骨架复制多遍。相关视频、分集与选集上游都是一次给全；
  * 唯一有翻页的评论区已拆到 `CommentsPanel.tsx`，因为短视频竖屏舞台也要用它，
  * 而那个表面用不上这里的相关视频 / 分集 / 选集 / 弹幕设置。
  */
-export type SidebarTab = "related" | "danmaku" | "episodes" | "parts" | "comments" | "settings";
+export type SidebarTab = "related" | "danmaku" | "comments" | "settings";
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
   danmaku: "弹幕",
-  episodes: "分集",
-  parts: "选集",
   comments: "评论",
   settings: "设置",
 };
 
-const SIDEBAR_TABS: readonly SidebarTab[] = [
-  "related",
-  "danmaku",
-  "episodes",
-  "parts",
-  "comments",
-  "settings",
-];
+const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "danmaku", "comments", "settings"];
 
 function isSidebarTab(value: string): value is SidebarTab {
   return (SIDEBAR_TABS as readonly string[]).includes(value);
-}
-
-/** 页签标签：parts 页签在仅有合集（无分 P）时显示为「合集」。 */
-function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
-  if (value === "parts") return multiPart ? "选集" : "合集";
-  return TAB_LABELS[value];
 }
 
 /**
@@ -92,7 +85,7 @@ function sidebarTabLabel(value: SidebarTab, multiPart: boolean): string {
  * 40px 头像、名称行 `pr-16`、标题行的 `mt-1.5` + 24px、统计行的 `mt-0.5` + 16px），
  * 数据到达时只有内容替换、不重新排布。
  *
- * 必须和真卡一样画在 `RelatedPanel` 里：UP 主卡属于「相关视频」内容区而不是页签之外，
+ * 必须和真卡一样画在「相关视频」面板里：UP 主卡属于内容区而不是页签之外，
  * 所以首屏加载时它是列表的第一块 —— 从前只在 `archive` 到位后才渲染，移动端冷启动
  * （`archive` 与 `related` 同时 pending）会先看到一条没有 UP 主卡的相关列表，
  * 数据到达后整块内容再被往下推一次。
@@ -198,7 +191,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
 }
 
 /**
- * 分集/合集/选集三种页签共用的行画法：左列集号（或序数、P 号），中间标题，
+ * 分集/合集/选集三种列表共用的行画法：左列集号（或序数、P 号），中间标题，
  * 右侧时长；当前播放项高亮，点击整行跳转。三种列表只差数据来源与左列文案。
  */
 function EpisodeRow({
@@ -246,12 +239,118 @@ function EpisodeRow({
   );
 }
 
-/** 分集列表（PGC）。 */
+/**
+ * 只调整选集自身的有限高列表。scrollIntoView 会同时滚动祖先，信息卡移到
+ * 同一页签后会把卡片甚至视频挤出视口；直接设置本层 scrollTop 不会产生这种副作用。
+ */
+function useCurrentRowScroll(active: boolean | undefined, currentKey: string | number) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const currentRowRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const list = listRef.current;
+    const row = currentRowRef.current;
+    if (!list || !row) return;
+    const rowRect = row.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    list.scrollTop += rowRect.top - listRect.top - (list.clientHeight - rowRect.height) / 2;
+  }, [active, currentKey]);
+
+  return { listRef, currentRowRef };
+}
+
+/** 三类选集共用标题开关；收起时移除内容并立即退出焦点序列。 */
+function SelectionSection({
+  label,
+  title,
+  count,
+  open,
+  onOpenChange,
+  children,
+}: {
+  label: string;
+  title?: string;
+  count: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={onOpenChange}
+      render={<section className="shrink-0" />}
+      aria-label={title ? `${label}：${title}` : label}
+    >
+      <h3>
+        <CollapsibleTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-auto w-full min-w-0 justify-start gap-2 rounded-none px-3 py-2"
+            />
+          }
+        >
+          <ChevronDown
+            aria-hidden
+            data-icon="inline-start"
+            className={cn("transition-transform", !open && "-rotate-90")}
+          />
+          <span className="shrink-0">{label}</span>
+          {title && <span className="min-w-0 flex-1 truncate text-left">{title}</span>}
+          <span className="ml-auto shrink-0 font-normal tabular-nums text-muted-foreground">
+            {count}
+          </span>
+        </CollapsibleTrigger>
+      </h3>
+      <CollapsibleContent inert={!open || undefined}>{children}</CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** 当前剧集信息来自 season 接口，不请求或伪造 PGC 相关视频流。 */
+function SeasonInfoCard({
+  season,
+  episode,
+}: {
+  season: VideoSeason;
+  episode: SeasonEpisode | null;
+}) {
+  return (
+    <section className="shrink-0 px-2.5 py-2" aria-label="当前剧集信息">
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>{season.title}</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {episode && (
+            <p className="font-medium">
+              {[episode.title, episode.long_title].filter(Boolean).join(" · ")}
+            </p>
+          )}
+          <p className="text-muted-foreground">
+            共 {season.episodes.length} 集
+            {episode && episode.duration > 0 && ` · ${formatVideoDuration(episode.duration)}`}
+          </p>
+          {season.evaluate && <p className="line-clamp-3">{season.evaluate}</p>}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+/** 分集列表（PGC），置于当前剧集信息卡下方。 */
 function EpisodesPanel({
   epId,
+  episodes,
+  active,
   onNavigate,
 }: {
   epId: string;
+  episodes: SeasonEpisode[];
+  active: boolean;
   onNavigate: (target: {
     bvid: string;
     cid: number;
@@ -260,12 +359,8 @@ function EpisodesPanel({
     aid: string;
   }) => void;
 }) {
-  const seasonQuery = useQuery({
-    queryKey: ["video_season", "", epId],
-    queryFn: () => videoGetSeason({ epId }),
-    staleTime: 5 * 60_000,
-  });
-  const episodes = seasonQuery.data?.episodes ?? [];
+  const [open, setOpen] = useState(true);
+  const { listRef, currentRowRef } = useCurrentRowScroll(open && active, epId);
   const playlistStore = usePlaylistStore();
 
   // 分集列表与播放页共用同一份转换，避免两处映射漂移。
@@ -294,7 +389,12 @@ function EpisodesPanel({
   };
 
   return (
-    <div className="flex min-h-0 flex-col">
+    <SelectionSection
+      label="分集"
+      count={`共 ${episodes.length} 集`}
+      open={open}
+      onOpenChange={setOpen}
+    >
       {/* 播放控制栏 */}
       {episodes.length > 1 && (
         <div className="flex shrink-0 items-center gap-1.5 border-b border-border/50 px-2 py-2">
@@ -334,59 +434,53 @@ function EpisodesPanel({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4 touch-pan-y">
-        {seasonQuery.isPending ? (
-          <div className="flex flex-col gap-2 pt-3">
-            {[0, 1, 2].map((index) => (
-              <Skeleton key={index} className="h-11 w-full rounded-lg" />
-            ))}
-          </div>
-        ) : seasonQuery.isError ? (
-          <ErrorState
-            error={seasonQuery.error}
-            title="分集加载失败"
-            onRetry={() => void seasonQuery.refetch()}
+      <div
+        ref={listRef}
+        data-video-selection-list="episodes"
+        className="max-h-64 overflow-y-auto overscroll-contain px-2 pb-2 touch-pan-y"
+      >
+        {episodes.map((episode, index) => (
+          <EpisodeRow
+            key={episode.ep_id}
+            current={episode.ep_id === epId}
+            rowRef={episode.ep_id === epId ? currentRowRef : undefined}
+            label={episode.title || "·"}
+            title={episode.long_title || episode.title}
+            duration={episode.duration}
+            onNavigate={() => {
+              playlistStore.setPlaylist(playlistItems, playlistItems[index].id, "sequence");
+              onNavigate({
+                bvid: episode.bvid,
+                cid: episode.cid,
+                epId: episode.ep_id,
+                title: episode.long_title || episode.title,
+                aid: episode.aid,
+              });
+            }}
           />
-        ) : (
-          episodes.map((episode) => (
-            <EpisodeRow
-              key={episode.ep_id}
-              current={episode.ep_id === epId}
-              label={episode.title || "·"}
-              title={episode.long_title || episode.title}
-              duration={episode.duration}
-              onNavigate={() =>
-                onNavigate({
-                  bvid: episode.bvid,
-                  cid: episode.cid,
-                  epId: episode.ep_id,
-                  title: episode.long_title || episode.title,
-                  aid: episode.aid,
-                })
-              }
-            />
-          ))
-        )}
+        ))}
       </div>
-    </div>
+    </SelectionSection>
   );
 }
 
 /**
- * UGC 合集列表。合集接管播放列表后，这份列表就是当前连播列表的具象：
- * 点任意分集即跳转，无需「播放全部」（播放页已自动把合集设为播放列表）。
+ * UGC 合集列表。只展示不接管队列，点任意分集时才切换为合集连播列表。
  */
 function UgcSeasonPanel({
   season,
   currentBvid,
   active,
+  defaultOpen,
   onNavigate,
 }: {
   season: VideoUgcSeason;
   /** 链接可能没带 cid，以 bvid 定位当前项。 */
   currentBvid: string;
-  /** 本页签是否选中；非活动时列表不做定位滚动。 */
+  /** 相关视频页签是否选中；非活动时列表不做定位滚动。 */
   active?: boolean;
+  /** 多 P 与合集并存时默认收起；单独合集默认展开。 */
+  defaultOpen: boolean;
   onNavigate: (target: {
     bvid: string;
     cid: number;
@@ -395,25 +489,27 @@ function UgcSeasonPanel({
     epId?: string;
   }) => void;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
+
   return (
-    <div className="flex min-h-0 flex-col">
-      <div className="flex shrink-0 items-baseline gap-2 border-b border-border/50 px-3 py-2">
-        <span className="min-w-0 truncate text-xs font-medium">{season.title}</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          共 {season.episodes.length} 个
-        </span>
-      </div>
+    <SelectionSection
+      label="合集"
+      title={season.title}
+      count={`共 ${season.episodes.length} 个`}
+      open={open}
+      onOpenChange={setOpen}
+    >
       <UgcSeasonList
         season={season}
         currentBvid={currentBvid}
-        active={active}
+        active={open && active}
         onNavigate={onNavigate}
       />
-    </div>
+    </SelectionSection>
   );
 }
 
-/** 合集条目列表：`UgcSeasonPanel` 的列表部分，也供选集页签内的折叠合集复用。 */
+/** 合集条目列表：单独成组件，使每次展开都按当前稿件定位内部列表。 */
 function UgcSeasonList({
   season,
   currentBvid,
@@ -424,7 +520,7 @@ function UgcSeasonList({
   /** 链接可能没带 cid，以 bvid 定位当前项。 */
   currentBvid: string;
   /**
-   * 本面板是否为当前选中页签。非活动时不做定位滚动：用户没在看这一页，
+   * 相关视频是否为当前选中页签。非活动时不做定位滚动：用户没在看这一页，
    * 而连播换集会在后台改 `currentBvid`。与 `VideoDanmakuList` 的 `active` 同义。
    */
   active?: boolean;
@@ -436,17 +532,14 @@ function UgcSeasonList({
     epId?: string;
   }) => void;
 }) {
-  const currentRowRef = useRef<HTMLButtonElement | null>(null);
-
-  // 打开合集页签或连播换集时，把当前播放项滚到可视区中央：长合集（几十上百集）
-  // 默认停在顶部，正在看的那集可能在视口外。仅滚动列表容器，不抖动外层。
-  useEffect(() => {
-    if (!active) return;
-    currentRowRef.current?.scrollIntoView({ block: "center" });
-  }, [active, currentBvid]);
+  const { listRef, currentRowRef } = useCurrentRowScroll(active, currentBvid);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4 touch-pan-y">
+    <div
+      ref={listRef}
+      data-video-selection-list="season"
+      className="max-h-64 overflow-y-auto overscroll-contain px-2 pb-2 touch-pan-y"
+    >
       {season.episodes.map((episode, index) => {
         const current = episode.bvid === currentBvid;
         return (
@@ -492,7 +585,7 @@ function PartsPanel({
   pages: VideoArchivePage[];
   /** 链接缺 cid（搜索进入）时定位不到当前项，不高亮。 */
   currentCid: number;
-  /** 本面板是否为当前选中页签；非活动时不做定位滚动。 */
+  /** 相关视频是否为当前选中页签；非活动时不做定位滚动。 */
   active?: boolean;
   onNavigate: (target: {
     bvid: string;
@@ -502,67 +595,50 @@ function PartsPanel({
     epId?: string;
   }) => void;
 }) {
-  const currentRowRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(true);
-
-  // 打开选集页签或换 P 时把正在播的那 P 滚到可视区中央（与合集面板同一策略）；
-  // 收起后再展开也重新定位，长列表不至于回到顶部找不到当前 P。
-  useEffect(() => {
-    if (open && active) currentRowRef.current?.scrollIntoView({ block: "center" });
-  }, [active, currentCid, open]);
+  const { listRef, currentRowRef } = useCurrentRowScroll(open && active, currentCid);
 
   return (
-    <div className="flex min-h-0 flex-col">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full shrink-0 items-center gap-2 border-b border-border/50 px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-muted/50"
+    <SelectionSection
+      label="选集"
+      count={`共 ${pages.length} P`}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <div
+        ref={listRef}
+        data-video-selection-list="parts"
+        className="max-h-64 overflow-y-auto overscroll-contain px-2 pb-2 touch-pan-y"
       >
-        <ChevronDown
-          aria-hidden
-          className={cn(
-            "size-4 shrink-0 text-muted-foreground transition-transform",
-            !open && "-rotate-90",
-          )}
-        />
-        <span className="shrink-0">选集</span>
-        <span className="ml-auto shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
-          共 {pages.length} P
-        </span>
-      </button>
-      {open && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4 touch-pan-y">
-          {pages.map((page) => {
-            const current = currentCid > 0 && page.cid === currentCid;
-            const label = page.part || `P${page.page}`;
-            return (
-              <EpisodeRow
-                key={page.cid}
-                current={current}
-                label={`P${page.page}`}
-                title={label}
-                duration={page.duration}
-                rowRef={current ? currentRowRef : undefined}
-                onNavigate={() => {
-                  usePlaylistStore.getState().setPlaylist(
-                    pages.map((entry) => playlistItemFromArchivePage(bvid, aid, entry)),
-                    `${bvid}_${page.cid}`,
-                    "sequence",
-                  );
-                  onNavigate({ bvid, cid: page.cid, title: label, aid });
-                }}
-              />
-            );
-          })}
-        </div>
-      )}
-    </div>
+        {pages.map((page) => {
+          const current = currentCid > 0 && page.cid === currentCid;
+          const label = page.part || `P${page.page}`;
+          return (
+            <EpisodeRow
+              key={page.cid}
+              current={current}
+              label={`P${page.page}`}
+              title={label}
+              duration={page.duration}
+              rowRef={current ? currentRowRef : undefined}
+              onNavigate={() => {
+                usePlaylistStore.getState().setPlaylist(
+                  pages.map((entry) => playlistItemFromArchivePage(bvid, aid, entry)),
+                  `${bvid}_${page.cid}`,
+                  "sequence",
+                );
+                onNavigate({ bvid, cid: page.cid, title: label, aid });
+              }}
+            />
+          );
+        })}
+      </div>
+    </SelectionSection>
   );
 }
 
 /**
- * 选集与合集共用一个页签的内容面板：多 P 稿件展开选集、合集默认收起。
+ * 信息卡下方的选集与合集区域：多 P 稿件展开选集、合集默认收起。
  * 只有显式点选才切换相应队列，单纯展示不接管来源列表。
  */
 function PartsSeasonPanel({
@@ -575,7 +651,7 @@ function PartsSeasonPanel({
   archive: VideoArchive;
   currentCid: number;
   currentBvid: string;
-  /** 本页签是否选中；向下传给两份列表，非活动时不做定位滚动。 */
+  /** 相关视频页签是否选中；向下传给两份列表，非活动时不做定位滚动。 */
   active?: boolean;
   onNavigate: (target: {
     bvid: string;
@@ -587,16 +663,11 @@ function PartsSeasonPanel({
 }) {
   const multiPart = archive.pages.length > 0;
   const season = archive.ugc_season;
-  const [seasonOpen, setSeasonOpen] = useState(!multiPart);
 
   return (
-    <div>
+    <section className="shrink-0" aria-label="视频选集与合集">
       {multiPart && (
-        // key 换稿件即重挂：选集收起态不跨稿件沿用 —— 每个多 P 稿件进来都
-        // 是默认展开的列表（与页签自动切到「选集」同一落点），同一稿件内
-        // 换 P（连播/点行跳转）不重挂、收起态保持。
         <PartsPanel
-          key={archive.bvid}
           bvid={archive.bvid}
           aid={archive.aid}
           pages={archive.pages}
@@ -605,45 +676,16 @@ function PartsSeasonPanel({
           onNavigate={onNavigate}
         />
       )}
-      {season && multiPart && (
-        <section className="border-t border-border/60" aria-label={`合集：${season.title}`}>
-          <button
-            type="button"
-            aria-expanded={seasonOpen}
-            onClick={() => setSeasonOpen((value) => !value)}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-muted/50"
-          >
-            <ChevronDown
-              aria-hidden
-              className={cn(
-                "size-4 shrink-0 text-muted-foreground transition-transform",
-                !seasonOpen && "-rotate-90",
-              )}
-            />
-            <span className="min-w-0 flex-1 truncate">{season.title}</span>
-            <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
-              共 {season.episodes.length} 个
-            </span>
-          </button>
-          {seasonOpen && (
-            <UgcSeasonList
-              season={season}
-              currentBvid={currentBvid}
-              active={active}
-              onNavigate={onNavigate}
-            />
-          )}
-        </section>
-      )}
-      {season && !multiPart && (
+      {season && (
         <UgcSeasonPanel
           season={season}
           currentBvid={currentBvid}
           active={active}
+          defaultOpen={!multiPart}
           onNavigate={onNavigate}
         />
       )}
-    </div>
+    </section>
   );
 }
 
@@ -653,6 +695,7 @@ export function VideoSidebar({
   aid,
   cid,
   danmaku,
+  danmakuComposer,
   tab: requestedTab,
   onTabChange,
   detailsContentRef,
@@ -663,7 +706,7 @@ export function VideoSidebar({
   aid: string | null;
   tab: SidebarTab | null;
   onTabChange: (tab: SidebarTab) => void;
-  /** 当前播放的 cid：多 P 稿件的选集页签用它高亮当前 P。 */
+  /** 当前播放的 cid：多 P 稿件的选集列表用它高亮当前 P。 */
   cid: number;
   /** 评论空降到当前视频的播放位置（秒），与弹幕是否开启无关。 */
   onSeek?: (seconds: number) => void;
@@ -675,6 +718,8 @@ export function VideoSidebar({
     /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
     onSeek: (positionMs: number) => void;
   };
+  /** 移动端竖屏的弹幕发送框，固定在弹幕页签底部，由播放页决定是否提供。 */
+  danmakuComposer?: ReactNode;
   /** 仅内容视口参与自适应占比，Tab 栏不绑定调整手势。 */
   detailsContentRef?: Ref<HTMLDivElement>;
 }) {
@@ -717,17 +762,12 @@ export function VideoSidebar({
   // 简介与 Tags 至少有一项时标题才是可展开的开关；两者都没有时标题只是标题。
   const hasArchiveDetail = Boolean(archive?.desc || archive?.tags.length);
   const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
-  // 弹幕页签仅在 UGC 且播放页传入弹幕数据时出现；选集/合集（parts）固定在最右。
-  const showDanmakuTab = !isPgc && danmaku !== undefined;
+  // 合集 / 分集 / 多 P 统一在相关视频的信息卡下，不再占独立页签。
+  const showDanmakuTab = danmaku !== undefined;
   const hasSeason = Boolean(archive?.ugc_season);
-  const tabs: SidebarTab[] = isPgc
-    ? ["episodes", "comments", "settings"]
-    : multiPart || hasSeason
-      ? ["related", "comments", "danmaku", "parts", "settings"]
-      : ["related", "comments", "danmaku", "settings"];
+  const tabs: SidebarTab[] = ["related", "comments", "danmaku", "settings"];
   const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
-  // 请求的页签在当前稿件不存在时回退到第一项（PGC 无「相关推荐」、单 P 无「选集」、
-  // 没有弹幕数据时无「弹幕」）。每种组合都含「评论」，故兜底取它。
+  // 没有弹幕数据时无弹幕页签；请求的页签不存在时回退到相关视频。
   const tab: SidebarTab =
     requestedTab && visibleTabs.includes(requestedTab)
       ? requestedTab
@@ -775,52 +815,87 @@ export function VideoSidebar({
   /** 页签内容。所有页签常驻条带，因此按 value 取而不是只画当前一个。 */
   const sidebarPanel = (value: SidebarTab): ReactNode => {
     if (value === "comments") {
-      if (resolvedAid) return <CommentsPanel key={resolvedAid} aid={resolvedAid} onSeek={onSeek} />;
       return (
-        <div className="px-3 py-6">
-          {archiveQuery.isPending || seasonQuery.isPending ? (
-            <Spinner className="mx-auto size-4" aria-label="正在加载" />
-          ) : (
-            <ErrorState
-              error={new Error("没有取到评论区的稿件信息。")}
-              title="评论不可用"
-              onRetry={() => void archiveQuery.refetch()}
-            />
-          )}
-        </div>
-      );
-    }
-    if (value === "episodes") return <EpisodesPanel epId={epId!} onNavigate={navigateToPlay} />;
-    if (value === "parts") {
-      if (!archive || !(multiPart || hasSeason)) return null;
-      return (
-        <PartsSeasonPanel
-          archive={archive}
-          currentCid={cid}
-          currentBvid={bvid ?? ""}
-          active={value === tab}
-          onNavigate={navigateToPlay}
-        />
+        <>
+          <div
+            data-slot="video-sidebar-comments-list"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y"
+          >
+            {resolvedAid ? (
+              <CommentsPanel key={resolvedAid} aid={resolvedAid} onSeek={onSeek} />
+            ) : (
+              <div className="px-3 py-6">
+                {(isPgc ? seasonQuery.isPending : archiveQuery.isPending) ? (
+                  <Spinner className="mx-auto size-4" aria-label="正在加载" />
+                ) : (
+                  <ErrorState
+                    error={new Error("没有取到评论区的稿件信息。")}
+                    title="评论不可用"
+                    onRetry={() => void (isPgc ? seasonQuery.refetch() : archiveQuery.refetch())}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+          <VideoCommentComposer aid={resolvedAid} />
+        </>
       );
     }
     if (value === "danmaku") {
       if (!danmaku) return null;
       return (
-        <VideoDanmakuList
-          // 按 cid 重挂：换视频后跟随状态（上一条视频用户是否翻过历史）不该留下来。
-          key={cid}
-          entries={danmaku.entries}
-          positionMs={danmaku.positionMs}
-          loading={danmaku.loading}
-          onSeek={danmaku.onSeek}
-          active={value === tab}
-        />
+        <>
+          <div className="min-h-0 flex-1">
+            <VideoDanmakuList
+              // 按 cid 重挂：换视频后跟随状态不应沿用。
+              key={cid}
+              entries={danmaku.entries}
+              positionMs={danmaku.positionMs}
+              loading={danmaku.loading}
+              onSeek={danmaku.onSeek}
+              active={value === tab}
+            />
+          </div>
+          {danmakuComposer && (
+            <div
+              data-slot="video-sidebar-danmaku-composer"
+              className="shrink-0"
+            >
+              {danmakuComposer}
+            </div>
+          )}
+        </>
       );
     }
     if (value === "settings") {
       // 与直播侧栏「设置」页签同源的面板；VOD 不渲染语音字幕卡
       //（本地字幕设置项直接显示在播放器字幕菜单中）。
       return <DanmakuSettingsPanel className="h-full" showAsrCard={false} />;
+    }
+    if (isPgc) {
+      if (seasonQuery.isPending) return <UpCardSkeleton />;
+      if (seasonQuery.isError) {
+        return (
+          <ErrorState
+            error={seasonQuery.error}
+            title="剧集加载失败"
+            onRetry={() => void seasonQuery.refetch()}
+          />
+        );
+      }
+      const season = seasonQuery.data;
+      return (
+        <>
+          <SeasonInfoCard season={season} episode={currentEpisode} />
+          <EpisodesPanel
+            key={season.season_id}
+            epId={epId!}
+            episodes={season.episodes}
+            active={value === tab}
+            onNavigate={navigateToPlay}
+          />
+        </>
+      );
     }
     return (
       <>
@@ -1024,6 +1099,17 @@ export function VideoSidebar({
             </div>
           </Collapsible>
         )}
+        {archive && (multiPart || hasSeason) && (
+          <PartsSeasonPanel
+            // 换稿件复位两份列表的默认展开策略；同稿件换 P 不重挂，保留手动收起态。
+            key={archive.bvid}
+            archive={archive}
+            currentCid={cid}
+            currentBvid={bvid ?? ""}
+            active={value === tab}
+            onNavigate={navigateToPlay}
+          />
+        )}
         <RelatedPanel bvid={bvid ?? ""} />
       </>
     );
@@ -1053,7 +1139,7 @@ export function VideoSidebar({
         >
           {visibleTabs.map((value) => (
             <TabsTrigger key={value} value={value} className="px-3 text-sm">
-              {sidebarTabLabel(value, multiPart)}
+              {TAB_LABELS[value]}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -1085,20 +1171,20 @@ export function VideoSidebar({
             <div
               key={value}
               role="tabpanel"
-              aria-label={sidebarTabLabel(value, multiPart)}
+              aria-label={TAB_LABELS[value]}
               aria-hidden={value === tab ? undefined : true}
               inert={value === tab ? undefined : true}
               data-video-side-tab-panel={value}
               className={cn(
                 "flex min-h-0 min-w-0 shrink-0 flex-col",
-                // 弹幕面板自持滚动视口（要独占滚动位置来跟随播放进度），外壳不能再套
-                // 一层纵向滚动；其余页签是普通文档流内容，由外壳负责滚动。
+                // 弹幕与评论的列表独立滚动，发送区固定在底部，外壳不能再套一层
+                // 纵向滚动；其余页签是普通文档流内容，由外壳负责滚动。
                 //
                 // `touch-pan-y` 必须写在滚动容器自己身上，不能只靠 Tabs 外壳那一层：
                 // Chromium 用命中元素所在的**最近滚动容器**决定手势归属，容器为默认
                 // `touch-action: auto` 时横向拖动会被合成器当作滚动接走，第一次
                 // pointermove 之后就派发 pointercancel，横滑因此永远攒不到锁定阈值。
-                value === "danmaku"
+                value === "danmaku" || value === "comments"
                   ? "overflow-hidden"
                   : "overflow-y-auto overscroll-contain touch-pan-y",
               )}

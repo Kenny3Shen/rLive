@@ -1,6 +1,7 @@
 import "../../styles/theme.css";
 import type { ComponentProps, ReactNode } from "react";
 
+import { isMobileClient } from "@/shared/clientPlatform";
 import { cn } from "@/components/videojs/lib/resolve-class-name";
 import { SkinVariantProvider, type SkinVariant } from "@/components/videojs/skins/variant";
 import { BufferingIndicator } from "@/components/videojs/ui/buffering-indicator";
@@ -41,6 +42,7 @@ export function PlayerSurface({
 }: PlayerSurfacePropsInternal) {
   return (
     <Container
+      data-player-density={isMobileClient() ? "dense" : undefined}
       className={cn(
         "r-live-player-skin pointer-fine:not-data-controls-visible:cursor-none",
         className,

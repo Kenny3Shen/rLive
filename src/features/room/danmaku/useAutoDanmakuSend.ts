@@ -87,8 +87,6 @@ export function useAutoDanmakuSend({
   roomUserName,
   roomSessionKey,
 }: UseAutoDanmakuSendOptions): AutoDanmakuSendController {
-  const danmakuSendEnabled = useSettingsStore((state) => state.danmakuSendEnabled);
-  const danmakuSendPending = useSettingsStore((state) => state.danmakuSendPending);
   const danmakuCookieRevision = useSettingsStore((state) => state.danmakuCookieRevision);
   const sendConfig = getDanmakuSendConfig(siteId);
   const [text, setText] = useState("");
@@ -114,8 +112,6 @@ export function useAutoDanmakuSend({
     siteId ?? "",
     roomId ?? "",
     sendConfig?.statusCommand ?? "",
-    danmakuSendEnabled ? "enabled" : "disabled",
-    danmakuSendPending ? "pending" : "ready",
     String(danmakuCookieRevision),
   ].join("\u0000");
   const [previousAvailabilityKey, setPreviousAvailabilityKey] = useState(availabilityKey);
@@ -129,7 +125,7 @@ export function useAutoDanmakuSend({
     () => splitAutoDanmakuText(text, sendConfig?.maxLength ?? Number.MAX_SAFE_INTEGER),
     [sendConfig?.maxLength, text],
   );
-  // 副作用会在渲染后清理计时器，但到期的计时器可能趁房间/文本/权限更新与那次
+  // 副作用会在渲染后清理计时器，但到期的计时器可能趁房间/文本/凭据更新与那次
   // 清理之间溜进来。再保留一道渲染期同步围栏，
   // 使只有当前会话的输入才能发起请求。
   const runKey = [
@@ -152,7 +148,7 @@ export function useAutoDanmakuSend({
   useEffect(() => {
     let cancelled = false;
 
-    if (!sendConfig || !roomId || danmakuSendPending || !danmakuSendEnabled) {
+    if (!sendConfig || !roomId) {
       // 前提条件缺失时无需清缓存：渲染层按 key 派生会自动回退到“未检查”。
       return () => {
         cancelled = true;
@@ -168,10 +164,9 @@ export function useAutoDanmakuSend({
           setAvailabilityCache({
             key: availabilityKey,
             status: {
-              send_enabled: false,
               cookie_ready: false,
               available: false,
-              message: `暂时无法确认${sendConfig.siteLabel}发送权限。`,
+              message: `暂时无法确认${sendConfig.siteLabel}发送条件。`,
             },
           });
         }
@@ -180,22 +175,16 @@ export function useAutoDanmakuSend({
     return () => {
       cancelled = true;
     };
-  }, [availabilityKey, danmakuSendEnabled, danmakuSendPending, roomId, sendConfig]);
+  }, [availabilityKey, roomId, sendConfig]);
 
   const availabilityMessage = !sendConfig
     ? "当前平台暂不支持自动发送弹幕。"
     : !roomId
       ? "正在等待直播间信息。"
-      : danmakuSendPending
-        ? "正在同步发送权限…"
-        : !danmakuSendEnabled
-          ? "请先在账号设置启用发送功能。"
-          : (currentAvailability?.message ?? "正在检查发送权限…");
+      : (currentAvailability?.message ?? "正在检查登录状态…");
   const canEnable = Boolean(
     sendConfig &&
     roomId &&
-    danmakuSendEnabled &&
-    !danmakuSendPending &&
     currentAvailability?.available &&
     !validation.error,
   );
@@ -217,7 +206,7 @@ export function useAutoDanmakuSend({
     lastSendStartedAtRef.current = null;
   }, [roomKey]);
 
-  // 凭据、共享授权开关与本地文本校验都是实时前提条件。失去任何一项就停止序列，
+  // 凭据与本地文本校验都是实时前提条件。失去任何一项就停止序列，
   // 而不是让过期计时器在下一次渲染之后仍提交请求。渲染期调整：条件不满足的当次
   // 渲染立即暂停，无需额外一次提交。
   if (enabled && !canEnable) {

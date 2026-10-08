@@ -15,6 +15,12 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  MESSAGE_COMPOSER_BUTTON_CLASS as COMPOSER_BUTTON_CLASS,
+  MESSAGE_COMPOSER_GROUP_CLASS,
+  MESSAGE_COMPOSER_SURFACE_CLASS,
+  messageComposerSendButtonClass,
+} from "@/shared/components/messageComposerStyles";
 import { glassTitleClass } from "@/shared/components/player/glassSurface";
 import { cn } from "@/lib/utils";
 import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
@@ -76,13 +82,6 @@ type DanmakuComposerProps = {
 
 type DanmakuPickerTab = "emoji" | "favorites" | "history";
 
-/**
- * 快捷选择器和发送按钮分列输入框两侧。共享同一几何尺寸让整组对称，
- * 且比组合 2rem 高度略小一档，
- * 使任何一个按钮都不会碰到边框。
- */
-const COMPOSER_BUTTON_CLASS =
-  "size-7 rounded-md transition-colors [@media(pointer:coarse)]:min-w-8";
 /** 匹配浮层输入框所在的透明播放器 chrome。 */
 const COMPOSER_OVERLAY_GHOST_CLASS =
   "text-white/90 hover:bg-white/15 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white";
@@ -603,8 +602,6 @@ export function DanmakuComposer({
   onOverlayInteractionChange,
   video,
 }: DanmakuComposerProps) {
-  const danmakuSendEnabled = useSettingsStore((s) => s.danmakuSendEnabled);
-  const danmakuSendPending = useSettingsStore((s) => s.danmakuSendPending);
   const danmakuCookieRevision = useSettingsStore((s) => s.danmakuCookieRevision);
   // 视频页固定 bilibili VOD 目标；直播页沿站点配置。
   const sendConfig = video ? VIDEO_DANMAKU_SEND_CONFIG : getDanmakuSendConfig(siteId);
@@ -623,15 +620,12 @@ export function DanmakuComposer({
   const videoKey = video ? `${video.cid}:${video.aid}` : "";
   const hasVideoTarget = video != null;
 
-  // 权限快照按身份键派生：前提变化或重新拉取期间自动回退到“正在检查”，
-  // 等待授权同步期间展示占位状态，均无需在 effect 里同步写状态。
+  // 登录快照按目标与 Cookie 版本派生；Cookie 本身即发送授权，不再依赖手动开关。
   const availabilityKey = [
     siteId,
     roomId ?? "",
     videoKey,
     sendConfig?.statusCommand ?? "",
-    danmakuSendEnabled ? "enabled" : "disabled",
-    danmakuSendPending ? "pending" : "ready",
     String(danmakuCookieRevision),
   ].join("\u0000");
   const [previousAvailabilityKey, setPreviousAvailabilityKey] = useState(availabilityKey);
@@ -639,19 +633,10 @@ export function DanmakuComposer({
     setPreviousAvailabilityKey(availabilityKey);
     setAvailabilityCache(null);
   }
-  const availability = danmakuSendPending
-    ? {
-        send_enabled: danmakuSendEnabled,
-        cookie_ready: false,
-        available: false,
-        message: "正在同步发送权限…",
-      }
-    : availabilityCache?.key === availabilityKey
-      ? availabilityCache.status
-      : null;
+  const availability = availabilityCache?.key === availabilityKey ? availabilityCache.status : null;
 
   useEffect(() => {
-    if (!sendConfig || danmakuSendPending) return;
+    if (!sendConfig) return;
     // 视频目标不需要房间号；直播目标没有房间号就没有可发送的目的地。
     if (!hasVideoTarget && !roomId) return;
     let cancelled = false;
@@ -664,10 +649,9 @@ export function DanmakuComposer({
           setAvailabilityCache({
             key: availabilityKey,
             status: {
-              send_enabled: false,
               cookie_ready: false,
               available: false,
-              message: `暂时无法确认${sendConfig.siteLabel}发送权限`,
+              message: `暂时无法确认${sendConfig.siteLabel}登录状态`,
             },
           });
         }
@@ -675,7 +659,7 @@ export function DanmakuComposer({
     return () => {
       cancelled = true;
     };
-  }, [availabilityKey, danmakuSendPending, hasVideoTarget, roomId, sendConfig]);
+  }, [availabilityKey, hasVideoTarget, roomId, sendConfig]);
 
   const overlayOpen = quickPickerOpen;
   useEffect(() => {
@@ -703,7 +687,7 @@ export function DanmakuComposer({
   const currentRoomId = roomId;
   const ready = availability?.available === true;
   const canSubmit = ready && draft.trim().length > 0 && !sending;
-  const statusText = result ?? availability?.message ?? "正在检查发送权限…";
+  const statusText = result ?? availability?.message ?? "正在检查登录状态…";
   const inputPlaceholder = ready ? (result ?? "输入弹幕…") : statusText;
 
   function onInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -778,17 +762,10 @@ export function DanmakuComposer({
   }
 
   return (
-    <div
-      className={cn(
-        "min-w-0",
-        overlay
-          ? "w-full max-w-xl"
-          : "shrink-0 border-t border-border-subtle bg-sidebar/80 px-2.5 py-2",
-      )}
-    >
+    <div className={cn("min-w-0", overlay ? "w-full max-w-xl" : MESSAGE_COMPOSER_SURFACE_CLASS)}>
       <InputGroup
         className={cn(
-          "h-8 min-w-0",
+          overlay ? "h-8 min-w-0" : MESSAGE_COMPOSER_GROUP_CLASS,
           overlay && "border-white/25 bg-black/30 text-white has-[>input:disabled]:bg-black/20",
           result?.startsWith("发送失败") && "border-destructive/80",
         )}
@@ -842,11 +819,7 @@ export function DanmakuComposer({
                     "disabled:text-white/45",
                     canSubmit && "bg-white text-black hover:bg-white hover:text-black",
                   )
-                : cn(
-                    "text-muted-foreground hover:text-foreground disabled:text-muted-foreground/60",
-                    canSubmit &&
-                      "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
-                  ),
+                : messageComposerSendButtonClass(canSubmit),
               // 禁用组本身已经变暗；再给按钮叠一层透明度会让图标在视频上几乎不可见。
               // 改为在上面的配色中变暗，保持可辨识度。
               "disabled:opacity-100",
