@@ -52,6 +52,7 @@ import {
 } from "./playlistStore";
 import { filterBlockedUploaders } from "./videoUploaderBlock";
 import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
+import { videoSelectionDefaultOpen } from "./videoSelectionDefaults";
 import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { UploaderDrawer } from "./UploaderDrawer";
 
@@ -143,7 +144,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
   const playlistItems = items.map(playlistItemFromVideoItem);
 
   return (
-    <div className="px-3 pb-4">
+    <div data-slot="video-related-list" className="px-3 pb-4">
       {relatedQuery.isPending ? (
         <div className="flex flex-col gap-1 pt-1.5">
           {[0, 1, 2].map((index) => (
@@ -260,13 +261,20 @@ function useCurrentRowScroll(active: boolean | undefined, currentKey: string | n
   return { listRef, currentRowRef };
 }
 
-/** 三类选集共用标题开关；收起时移除内容并立即退出焦点序列。 */
+/**
+ * 三类选集共用标题开关；收起时移除内容并立即退出焦点序列。
+ *
+ * 每个选集区自成一张卡片（与上方 UP 主信息卡同一套描边/底色/圆角）：
+ * 选集行与相关视频行都是「封面或序号 + 标题」的列表，不包一层时两段列表
+ * 首尾相接，读不出合集在哪里结束、相关推荐从哪里开始。
+ */
 function SelectionSection({
   label,
   title,
   count,
   open,
   onOpenChange,
+  className,
   children,
 }: {
   label: string;
@@ -274,13 +282,23 @@ function SelectionSection({
   count: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** 卡片外侧间距由所在面板决定。 */
+  className?: string;
   children: ReactNode;
 }) {
   return (
     <Collapsible
       open={open}
       onOpenChange={onOpenChange}
-      render={<section className="shrink-0" />}
+      render={
+        <section
+          data-slot="video-selection-card"
+          className={cn(
+            "shrink-0 overflow-hidden rounded-xl border border-border-subtle bg-card/75 shadow-sm",
+            className,
+          )}
+        />
+      }
       aria-label={title ? `${label}：${title}` : label}
     >
       <h3>
@@ -359,7 +377,9 @@ function EpisodesPanel({
     aid: string;
   }) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(() =>
+    videoSelectionDefaultOpen("episodes", { mobile: isMobileClient() }),
+  );
   const { listRef, currentRowRef } = useCurrentRowScroll(open && active, epId);
   const playlistStore = usePlaylistStore();
 
@@ -394,6 +414,7 @@ function EpisodesPanel({
       count={`共 ${episodes.length} 集`}
       open={open}
       onOpenChange={setOpen}
+      className="mx-2.5 mb-2"
     >
       {/* 播放控制栏 */}
       {episodes.length > 1 && (
@@ -479,7 +500,7 @@ function UgcSeasonPanel({
   currentBvid: string;
   /** 相关视频页签是否选中；非活动时列表不做定位滚动。 */
   active?: boolean;
-  /** 多 P 与合集并存时默认收起；单独合集默认展开。 */
+  /** 默认展开状态，见 `videoSelectionDefaultOpen`。 */
   defaultOpen: boolean;
   onNavigate: (target: {
     bvid: string;
@@ -578,6 +599,7 @@ function PartsPanel({
   pages,
   currentCid,
   active,
+  defaultOpen,
   onNavigate,
 }: {
   bvid: string;
@@ -587,6 +609,8 @@ function PartsPanel({
   currentCid: number;
   /** 相关视频是否为当前选中页签；非活动时不做定位滚动。 */
   active?: boolean;
+  /** 默认展开状态，见 `videoSelectionDefaultOpen`。 */
+  defaultOpen: boolean;
   onNavigate: (target: {
     bvid: string;
     cid: number;
@@ -595,7 +619,7 @@ function PartsPanel({
     epId?: string;
   }) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
   const { listRef, currentRowRef } = useCurrentRowScroll(open && active, currentCid);
 
   return (
@@ -638,7 +662,7 @@ function PartsPanel({
 }
 
 /**
- * 信息卡下方的选集与合集区域：多 P 稿件展开选集、合集默认收起。
+ * 信息卡下方的选集与合集区域；默认展开策略见 `videoSelectionDefaultOpen`（移动端一律收起）。
  * 只有显式点选才切换相应队列，单纯展示不接管来源列表。
  */
 function PartsSeasonPanel({
@@ -663,9 +687,11 @@ function PartsSeasonPanel({
 }) {
   const multiPart = archive.pages.length > 0;
   const season = archive.ugc_season;
+  // 仅挂载时取值：面板按稿件 key 重挂，同稿件换 P 不重算，保留手动折叠状态。
+  const mobile = isMobileClient();
 
   return (
-    <section className="shrink-0" aria-label="视频选集与合集">
+    <section className="flex shrink-0 flex-col gap-2 px-2.5 pt-2" aria-label="视频选集与合集">
       {multiPart && (
         <PartsPanel
           bvid={archive.bvid}
@@ -673,6 +699,7 @@ function PartsSeasonPanel({
           pages={archive.pages}
           currentCid={currentCid}
           active={active}
+          defaultOpen={videoSelectionDefaultOpen("parts", { mobile })}
           onNavigate={onNavigate}
         />
       )}
@@ -681,7 +708,7 @@ function PartsSeasonPanel({
           season={season}
           currentBvid={currentBvid}
           active={active}
-          defaultOpen={!multiPart}
+          defaultOpen={videoSelectionDefaultOpen("season", { mobile, multiPart })}
           onNavigate={onNavigate}
         />
       )}
@@ -726,7 +753,7 @@ export function VideoSidebar({
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
-  // 简介默认收起（卡片不先露出简介）；换稿件时由 UP 信息卡 section 上的 key={bvid} 重挂载复位。
+  // 简介默认收起（卡片不先露出简介）；换稿件时由 UP 信息卡 section 上按 bvid 生成的 key 重挂载复位。
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   // 稿件详情：UGC 的评论区 oid 兜底 + 相关视频页签顶部的作者/统计信息。
@@ -857,10 +884,7 @@ export function VideoSidebar({
             />
           </div>
           {danmakuComposer && (
-            <div
-              data-slot="video-sidebar-danmaku-composer"
-              className="shrink-0"
-            >
+            <div data-slot="video-sidebar-danmaku-composer" className="shrink-0">
               {danmakuComposer}
             </div>
           )}
@@ -902,7 +926,10 @@ export function VideoSidebar({
         {!isPgc && archiveQuery.isPending && <UpCardSkeleton />}
         {!isPgc && archive && (
           <Collapsible
-            key={bvid}
+            // 与下方选集区同处一个 Fragment，key 必须带各自前缀：缓存命中时
+            // `archive.bvid === bvid`，两者若都直接用 bvid 会撞成重复 key，
+            // React 删不掉旧节点，切换合集稿件时 UP 卡会越积越多。
+            key={`up-card:${bvid}`}
             open={descriptionExpanded}
             onOpenChange={setDescriptionExpanded}
             render={<section className="shrink-0 border-b border-border px-2.5 py-2" />}
@@ -1102,7 +1129,7 @@ export function VideoSidebar({
         {archive && (multiPart || hasSeason) && (
           <PartsSeasonPanel
             // 换稿件复位两份列表的默认展开策略；同稿件换 P 不重挂，保留手动收起态。
-            key={archive.bvid}
+            key={`selection:${archive.bvid}`}
             archive={archive}
             currentCid={cid}
             currentBvid={bvid ?? ""}

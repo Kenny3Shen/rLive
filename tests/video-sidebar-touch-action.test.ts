@@ -77,8 +77,14 @@ describe("video sidebar touch axes", () => {
     expect(source).toContain("function SelectionSection(");
     expect(source.match(/<SelectionSection\s/g)).toHaveLength(3);
     expect(source).toContain("<CollapsibleContent inert={!open || undefined}>");
-    expect(source).toContain("defaultOpen={!multiPart}");
-    expect(source).toMatch(/<PartsSeasonPanel\s+[\s\S]*?key=\{archive\.bvid\}/);
+    // 默认展开策略只在 `videoSelectionDefaultOpen` 一处决定，三个面板都从它取初值。
+    expect(source.match(/videoSelectionDefaultOpen\("(?:parts|season|episodes)"/g)).toHaveLength(3);
+    expect(source).not.toMatch(/useState\(true\)/);
+    // 选集区与 UP 卡同处一个 Fragment：key 各带前缀，缓存命中时不会撞成重复 key
+    //（重复 key 会让 React 删不掉旧节点，切换合集稿件时 UP 卡越积越多）。
+    expect(source).toMatch(/<PartsSeasonPanel\s+[\s\S]*?key=\{`selection:\$\{archive\.bvid\}`\}/);
+    expect(source).toContain("key={`up-card:${bvid}`}");
+    expect(source).not.toMatch(/\bkey=\{(?:archive\.)?bvid\}/);
     expect(source).toMatch(/<EpisodesPanel\s+key=\{season\.season_id\}/);
   });
 
