@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { videoCoverAspect, videoDimensionAspect } from "../src/shared/videoDimension";
-import { videoMasonryRowSpan } from "../src/features/video/VideoMasonry";
+import {
+  VIDEO_MASONRY_PREFETCH_MARGIN,
+  videoMasonryRowSpan,
+} from "../src/features/video/VideoMasonry";
 import { nextRecommendPage } from "../src/features/video/videoFeed";
 import type { VideoItem, VideoListPage } from "../src/shared/types/video";
 
@@ -43,6 +46,25 @@ describe("VideoCard 画幅", () => {
       expect(videoCoverAspect(dimension)).toBe(16 / 9);
     }
   });
+});
+
+describe("VOD 瀑布流分页预取", () => {
+  // 哨兵落在最高列之后，最短列可能早一整张卡见底；默认 240px 余量会先露出空白。
+  test("预取余量按滚动容器高度提前一整屏", () => {
+    expect(VIDEO_MASONRY_PREFETCH_MARGIN).toBe("0px 0px 100% 0px");
+  });
+
+  for (const path of ["VideoPage.tsx", "VideoSearchPage.tsx"]) {
+    test(`${path} 的瀑布流分页使用瀑布流预取余量`, async () => {
+      const source = await Bun.file(
+        new URL(`../src/features/video/${path}`, import.meta.url),
+      ).text();
+      const call = source.slice(source.indexOf("useInfiniteScroll({"));
+      expect(call.slice(0, call.indexOf("});"))).toContain(
+        "rootMargin: VIDEO_MASONRY_PREFETCH_MARGIN",
+      );
+    });
+  }
 });
 
 describe("VOD 瀑布流跨度", () => {

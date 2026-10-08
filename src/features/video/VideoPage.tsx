@@ -33,7 +33,7 @@ import {
   videoZoneList,
 } from "./videoApi";
 import { PgcCard, VideoGrid } from "./VideoCard";
-import { VideoMasonry } from "./VideoMasonry";
+import { VIDEO_MASONRY_PREFETCH_MARGIN, VideoMasonry } from "./VideoMasonry";
 import { VideoZoneBar } from "./VideoZoneBar";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -198,6 +198,8 @@ export function VideoPage() {
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    // 瀑布流列尾参差，按最短列提前一屏预取，见常量注释。
+    rootMargin: VIDEO_MASONRY_PREFETCH_MARGIN,
   });
 
   // 刷新是一个手动动作，用独立 state 表达它的进行中状态：不能复用 `isRefetching`，

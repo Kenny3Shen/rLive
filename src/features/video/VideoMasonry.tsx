@@ -4,6 +4,16 @@ const ROW_HEIGHT = 4;
 const GRID_CLASS =
   "grid grid-cols-2 items-start gap-x-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 [@media(min-width:80rem)_and_(pointer:coarse)]:grid-cols-5!";
 
+/**
+ * 瀑布流分页哨兵的预取距离（交给 `useInfiniteScroll` 的 `rootMargin`）。
+ *
+ * 哨兵跟在整张网格之后，也就是**最高列**的底边；各列尾部参差不齐，最短列
+ * 可能比它短一整张卡片（竖屏封面在两列布局里近 400px）。通用的 240px 余量
+ * 下，短列下方会先露出一大块空白，哨兵才进入观察范围、下一页才开始请求。
+ * 按滚动容器高度提前一整屏：既盖过列差，也给请求往返留出时间。
+ */
+export const VIDEO_MASONRY_PREFETCH_MARGIN = "0px 0px 100% 0px";
+
 export function videoMasonryRowSpan(height: number): number {
   return Number.isFinite(height) && height > 0 ? Math.max(1, Math.ceil(height / ROW_HEIGHT)) : 1;
 }

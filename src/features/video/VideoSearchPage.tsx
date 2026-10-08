@@ -15,6 +15,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { videoSearch } from "./videoApi";
 import { VideoGrid } from "./VideoCard";
+import { VIDEO_MASONRY_PREFETCH_MARGIN } from "./VideoMasonry";
 import { VideoSearchFiltersBar } from "./VideoSearchFiltersBar";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
 import { filterBlockedUploaders } from "./videoUploaderBlock";
@@ -64,6 +65,8 @@ export function VideoSearchPage() {
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    // 瀑布流列尾参差，按最短列提前一屏预取，见常量注释。
+    rootMargin: VIDEO_MASONRY_PREFETCH_MARGIN,
   });
 
   // 搜索结果同样过滤被屏蔽的 UP 主：名单是「我不想再看到这个人」，
