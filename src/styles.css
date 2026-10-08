@@ -362,6 +362,13 @@
   height: var(--media-icon-size);
 }
 
+/* 移动端控制栏缩小一档：按钮 36px 档 → 28px，图标 24px → 20px。只作用于底部控制条，
+   顶部 HUD 与弹层不受影响；`size-media-control` 经 `@theme inline` 读同一变量。 */
+.r-live-player-skin [data-density="dense"] {
+  --media-control-size: 1.75rem;
+  --media-icon-size: 1.25rem;
+}
+
 @container media-root (height < 16rem) {
   .r-live-player-skin {
     --media-scale-unit: 0.78rem;

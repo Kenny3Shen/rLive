@@ -58,6 +58,7 @@ import {
 } from "@/components/videojs/skins/shared/controls-surface";
 import { useSkinVariant } from "@/components/videojs/skins/variant";
 import { cn } from "@/lib/utils";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { lineName } from "@/lib/playUrl";
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import {
@@ -693,6 +694,7 @@ export function PlayerControls({
     <ControlsSurface
       chrome={chrome}
       avoidSystemGestureBar={playerControlsAvoidSystemGestureBar(fullscreen, stackedBelowPlayer)}
+      dense={isMobileClient()}
     >
       {/* 移动端/竖屏：章节入口单独一行，贴在进度条上方左侧。 */}
       {variant === "vod" && chaptersSlot && chaptersPlacement === "progress" && (

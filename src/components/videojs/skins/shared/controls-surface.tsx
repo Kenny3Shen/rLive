@@ -15,6 +15,8 @@ export type SkinControlsProps = {
   chrome?: ControlsChromeProps;
   /** 控制条贴在窗口底边时避让系统手势栏。 */
   avoidSystemGestureBar?: boolean;
+  /** 移动端密度：控制栏按钮与图标缩小一档（见 `styles.css` 的 `data-density`）。 */
+  dense?: boolean;
   pictureInPictureDisabled?: boolean;
   /**
    * 音量交给原生 VolumePopover。Android 的真实音量是系统媒体音量，原生组件只能写
@@ -33,14 +35,16 @@ export type SkinControlsProps = {
 export function ControlsSurface({
   chrome,
   avoidSystemGestureBar,
+  dense = false,
   children,
-}: Pick<SkinControlsProps, "chrome" | "avoidSystemGestureBar" | "children">) {
+}: Pick<SkinControlsProps, "chrome" | "avoidSystemGestureBar" | "dense" | "children">) {
   const { className, ...chromeProps } = chrome ?? {};
   return (
     <Controls.Root visibility="always">
       <div className={cn(className)} {...chromeProps}>
         <Controls.Backdrop className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-[calc(100%+var(--media-spacing)*8)] bg-(image:--media-controls-gradient)" />
         <Controls.Content
+          data-density={dense ? "dense" : undefined}
           className={cn(
             "relative z-10 flex w-full min-w-0 flex-col gap-0.5 px-1 pt-1",
             "text-media-controls-foreground text-shadow-media",
