@@ -694,31 +694,41 @@ export function PlayerControls({
   const secondaryClass = "media-max-sm:hidden";
   const inlineProgress = variant === "vod" && progressPlacement === "center";
   // 两种位置共用 Video.js 原生时间轴：章节、缓冲、预览与键盘定位行为不分叉。
+  //
+  // 当前时间、滑杆、剩余时间始终在同一行，不上下分栏（中央布局也一样）。这一行
+  // 因此恒为横向 flex：`TimeSlider` 基类的 `flex-1` 正常吃满剩余宽度（若改成列向
+  // `flex-col`，纵向主轴上的 `flex-basis: 0%` 会把滑杆高度压成 0，进度条不可见也
+  // 不可点）。
+  //
+  // 横向主轴下的竞争维度是宽度：`TimeSlider` 自身的 `min-w-18`（64.8px）是硬下限，
+  // 窄竖屏上两个时间标签会把它挤到溢出，剩余时间压到右侧按钮组顶上。中央布局因
+  // 此覆写为 `min-w-0` 让滑杆可让位，并在窄容器上收起剩余时间（容器宽度 = 舞台宽
+  // 度，见 `styles.css` 的 `media-*` 变体）：< 24rem 时只留当前时间，保证滑杆仍有
+  // 可用的拖动长度。上方布局不受影响，两个时间标签与原生最小宽度都保留。
   const progress = variant === "vod" && (
     <div
       data-slot="player-progress"
       data-placement={inlineProgress ? "center" : "above"}
       className={cn(
-        "flex w-full min-w-0",
-        inlineProgress ? "flex-col" : "items-center gap-2 px-2 pt-1 pb-0.5",
+        "flex w-full min-w-0 items-center",
+        inlineProgress ? "gap-1.5" : "gap-2 px-2 pt-1 pb-0.5",
       )}
     >
-      {!inlineProgress && (
-        <Time.Value className="shrink-0 text-xs tabular-nums text-white/90" type="current" />
-      )}
-      <TimeSlider className={cn("flex-1", inlineProgress && "[--media-slider-height:1.25rem]")} />
-      {inlineProgress ? (
-        <div className="flex min-w-0 items-center justify-between gap-1 text-xs leading-4 tabular-nums">
-          <Time.Value className="text-white/90" type="current" />
-          <Time.Value className="text-white/70 hover:text-white" type="remaining" toggle />
-        </div>
-      ) : (
-        <Time.Value
-          className="shrink-0 text-xs tabular-nums text-white/70 hover:text-white"
-          type="remaining"
-          toggle
-        />
-      )}
+      <Time.Value className="shrink-0 text-xs tabular-nums text-white/90" type="current" />
+      <TimeSlider
+        className={cn(
+          "flex-1",
+          inlineProgress && "data-[orientation=horizontal]:min-w-0 [--media-slider-height:1.25rem]",
+        )}
+      />
+      <Time.Value
+        className={cn(
+          "shrink-0 text-xs tabular-nums text-white/70 hover:text-white",
+          inlineProgress && "media-max-sm:hidden",
+        )}
+        type="remaining"
+        toggle
+      />
     </div>
   );
 

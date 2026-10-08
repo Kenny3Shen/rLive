@@ -722,6 +722,50 @@ describe("custom player controls layout", () => {
     expect(html.split('data-slot="player-progress"').length - 1).toBe(1);
     expect(html).not.toContain("弹幕输入");
     expect(html).not.toContain('data-placement="above"');
+
+    // 当前时间、滑杆、剩余时间必须同排一行（不得用 `flex-col` 上下分栏）。
+    // 这一行一旦改成列向，纵向主轴上的 `flex-basis: 0%` 会把滑杆高度压成 0，
+    // 进度条不可见也不可命中；横向主轴下则由 `min-w-0` 与窄容器收起剩余时间
+    // 保证不溢出。纯 DOM 断言只能覆盖类名分叉，真实几何与命中由
+    // `tests/vod-mobile-controls.browser.js` 守。
+    const rowClass =
+      html.match(/data-slot="player-progress"[^>]*class="([^"]*)"/)?.[1] ??
+      html.match(/class="([^"]*)"[^>]*data-slot="player-progress"/)?.[1];
+    expect(rowClass).toBeDefined();
+    expect(rowClass).not.toContain("flex-col");
+    expect(rowClass).toContain("items-center");
+
+    const sliderClass = html.match(/class="[^"]*media-time-slider[^"]*"/)?.[0];
+    expect(sliderClass).toBeDefined();
+    expect(sliderClass).toContain("flex-1");
+    expect(sliderClass).not.toContain("flex-none");
+    expect(sliderClass).toContain("data-[orientation=horizontal]:min-w-0");
+    expect(sliderClass).toContain("[--media-slider-height:1.25rem]");
+  });
+
+  test("上方进度行同样把时间与滑杆排在同一行，且不锁定原生最小宽度", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        VideoJsPlayerProvider,
+        null,
+        createElement(
+          SkinVariantProvider,
+          { value: "vod" },
+          createElement(PlayerControls, { onToggleFullscreen: () => {} }),
+        ),
+      ),
+    );
+    const sliderClass = html.match(/class="[^"]*media-time-slider[^"]*"/)?.[0];
+    expect(sliderClass).toContain("flex-1");
+    expect(sliderClass).not.toContain("flex-none");
+    expect(sliderClass).not.toContain("[--media-slider-height");
+    // 上方布局保留原生的横向最小宽度 `min-w-18`，不覆写成 `min-w-0` 参与让位。
+    // 基类自带的是纵向 `data-[orientation=vertical]:min-w-0`，两者不要混。
+    expect(sliderClass).not.toContain("data-[orientation=horizontal]:min-w-0");
+    expect(sliderClass).toContain("data-[orientation=horizontal]:min-w-18");
+    // 两个时间标签都在，且不挂窄容器收起类。
+    expect(html.split("<time").length - 1).toBe(2);
+    expect(html).not.toContain("media-max-sm:hidden");
   });
 
   test("默认与全屏仍保留上方进度行和中间弹幕输入", () => {

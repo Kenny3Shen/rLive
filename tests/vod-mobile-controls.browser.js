@@ -78,6 +78,52 @@ async (page) => {
           center: Boolean(progress?.closest('[data-slot="player-center-slot"]')),
           count: stage.querySelectorAll('[data-slot="player-progress"]').length,
           sliderWidth: slider?.getBoundingClientRect().width,
+          // 中央布局曾是列向 flex，`TimeSlider` 基类的 `flex-1`（`flex: 1 1 0%`）
+          // 会把高度压成 0：滑杆既不可见也无法命中。现在时间与滑杆同排一行，
+          // 高度、同排关系、越界与命中四项都得量。
+          sliderHeight: slider?.getBoundingClientRect().height,
+          progressFlow: progress ? getComputedStyle(progress).flexDirection : null,
+          // 当前时间、滑杆、剩余时间的纵向中心必须一致；有任何一项被挤到第二行
+          // （或滑杆高度塔陷）都会在这里露出来。
+          rowCentersAligned: (() => {
+            if (!progress) return null;
+            const centers = [...progress.children]
+              .filter((el) => el.getBoundingClientRect().width > 0)
+              .map((el) => {
+                const b = el.getBoundingClientRect();
+                return b.y + b.height / 2;
+              });
+            return centers.every((center) => Math.abs(center - centers[0]) < 1.5);
+          })(),
+          // 行内相邻子元素不得水平重叠，也不得溢出到右侧按钮组。
+          rowOverflow: progress ? progress.scrollWidth - progress.clientWidth : null,
+          rowBleedsIntoRightGroup: (() => {
+            if (!progress) return null;
+            const rightGroup = controls.parentElement?.querySelector(
+              '[data-slot="player-extension-controls"] > div:last-child',
+            );
+            if (!rightGroup) return null;
+            const children = [...progress.children].filter(
+              (el) => el.getBoundingClientRect().width > 0,
+            );
+            const last = children.at(-1);
+            return last
+              ? last.getBoundingClientRect().right > rightGroup.getBoundingClientRect().x + 0.5
+              : null;
+          })(),
+          sliderFlex: slider ? getComputedStyle(slider).flex : null,
+          sliderHitTest: (() => {
+            if (!slider) return null;
+            const box = slider.getBoundingClientRect();
+            // 本夹具没有真实媒体，滑杆处于禁用态（`pointer-events: none`），命中测试
+            // 会被这层语义挡掉。临时摘下再还原：要测的是布局给出的命中区，不是禁用。
+            const disabled = slider.hasAttribute("data-disabled");
+            if (disabled) slider.removeAttribute("data-disabled");
+            const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+            const inside = Boolean(hit && slider.contains(hit));
+            if (disabled) slider.setAttribute("data-disabled", "");
+            return inside;
+          })(),
           noInput: !controls.querySelector("input"),
           allFit: buttons.every((el) => {
             const b = el.getBoundingClientRect();
@@ -99,11 +145,25 @@ async (page) => {
         "竖屏主行未使用唯一进度条替代发送框",
       );
       assert(
-        geometry.sliderWidth >= 72 && geometry.allFit,
+        geometry.sliderWidth >= 40 && geometry.allFit,
         `${width}px 控制栏越界：${JSON.stringify(geometry)}`,
       );
+      assert(
+        geometry.sliderHeight >= 20 && geometry.sliderFlex === "1 1 0%" && geometry.sliderHitTest,
+        `${width}px 中央进度条不可见或不可操作：${JSON.stringify(geometry)}`,
+      );
+      // 时间与滑杆必须同排一行：列向、换行或子元素互相重叠都不合格。
+      assert(
+        geometry.progressFlow === "row" && geometry.rowCentersAligned,
+        `${width}px 进度条与时间未同排一行：${JSON.stringify(geometry)}`,
+      );
+      // 窄屏下剩余时间会收起；无论收不收，整行都不得溢出或压到右侧按钮。
+      assert(
+        geometry.rowOverflow <= 0 && geometry.rowBleedsIntoRightGroup === false,
+        `${width}px 进度行溢出或压住右侧按钮：${JSON.stringify(geometry)}`,
+      );
     }
-    passed.push("401px/320px：上下按钮28px、图标20px，中央进度条与按钮不越界");
+    passed.push("401px/320px：上下按钮28px、图标20px，时间与进度条同排不溢出且可命中");
 
     await page.getByRole("tab", { name: "弹幕", exact: true }).click();
     await frames();
