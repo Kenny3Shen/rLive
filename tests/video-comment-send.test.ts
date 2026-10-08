@@ -6,6 +6,12 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { VideoCommentComposer } from "../src/features/video/VideoCommentComposer";
 import {
+  COMMENT_COMPOSER_TONE_CLASS,
+  DANMAKU_COMPOSER_TONE_CLASS,
+  MESSAGE_COMPOSER_SURFACE_CLASS,
+  commentComposerToneClass,
+} from "../src/shared/components/messageComposerStyles";
+import {
   VIDEO_COMMENT_MAX_LENGTH,
   invalidateVideoComments,
   isVideoCommentLoginError,
@@ -73,6 +79,14 @@ describe("一级文本评论的输入边界", () => {
     const danmaku = read("../src/features/room/BilibiliDanmakuComposer.tsx");
     expect(danmaku).toContain("MESSAGE_COMPOSER_SURFACE_CLASS");
     expect(danmaku).toContain("messageComposerSendButtonClass(canSubmit)");
+    // 几何共用、底色分开：评论与弹幕页签相邻，同一底色下读不出当前发送的是哪种。
+    // 移动端两个发送区都贴在播放器下方同一块侧栏底部，底色统一。
+    expect(composerSource).toContain("commentComposerToneClass(isMobileClient())");
+    expect(danmaku).toContain("DANMAKU_COMPOSER_TONE_CLASS");
+    expect(COMMENT_COMPOSER_TONE_CLASS).not.toBe(DANMAKU_COMPOSER_TONE_CLASS);
+    expect(commentComposerToneClass(false)).toBe(COMMENT_COMPOSER_TONE_CLASS);
+    expect(commentComposerToneClass(true)).toBe(DANMAKU_COMPOSER_TONE_CLASS);
+    expect(MESSAGE_COMPOSER_SURFACE_CLASS).not.toMatch(/\bbg-/);
     expect(composerSource).toContain("event.nativeEvent.isComposing");
     expect(composerSource).toContain("event.shiftKey");
   });

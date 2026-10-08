@@ -14,8 +14,10 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   MESSAGE_COMPOSER_GROUP_CLASS,
   MESSAGE_COMPOSER_SURFACE_CLASS,
+  commentComposerToneClass,
   messageComposerSendButtonClass,
 } from "@/shared/components/messageComposerStyles";
+import { isMobileClient } from "@/shared/clientPlatform";
 import { notify } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { videoSendComment } from "./videoApi";
@@ -77,7 +79,14 @@ function VideoCommentComposerForm({ aid, className }: VideoCommentComposerProps)
   };
 
   return (
-    <section className={cn(MESSAGE_COMPOSER_SURFACE_CLASS, className)} aria-label="发送评论">
+    <section
+      className={cn(
+        MESSAGE_COMPOSER_SURFACE_CLASS,
+        commentComposerToneClass(isMobileClient()),
+        className,
+      )}
+      aria-label="发送评论"
+    >
       <form onSubmit={handleSubmit} aria-busy={mutation.isPending}>
         <FieldGroup className="gap-2">
           <Field data-invalid={Boolean(errorMessage)} data-disabled={mutation.isPending || !aid}>
@@ -92,7 +101,9 @@ function VideoCommentComposerForm({ aid, className }: VideoCommentComposerProps)
                 rows={1}
                 maxLength={VIDEO_COMMENT_MAX_LENGTH}
                 placeholder={aid ? "输入评论…" : "正在获取视频信息"}
-                className="min-h-8 max-h-24 py-1 text-sm leading-6 [field-sizing:content] [@media(pointer:coarse)]:min-h-11"
+                // 单行时文字垂直居中：桌面 4 + 24 + 4 = 32；粗指针输入组抬到 44px 触控高度，
+                // 内边距同步加到 10px（10 + 24 + 10），否则多出的 12px 全堆在文字下方。
+                className="min-h-8 max-h-24 py-1 text-sm leading-6 [field-sizing:content] [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-2.5"
                 disabled={mutation.isPending || !aid}
                 aria-invalid={Boolean(errorMessage)}
                 aria-describedby={errorMessage ? errorId : undefined}

@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MESSAGE_COMPOSER_BUTTON_CLASS as COMPOSER_BUTTON_CLASS,
   MESSAGE_COMPOSER_GROUP_CLASS,
+  DANMAKU_COMPOSER_TONE_CLASS,
   MESSAGE_COMPOSER_SURFACE_CLASS,
   messageComposerSendButtonClass,
 } from "@/shared/components/messageComposerStyles";
@@ -762,7 +763,14 @@ export function DanmakuComposer({
   }
 
   return (
-    <div className={cn("min-w-0", overlay ? "w-full max-w-xl" : MESSAGE_COMPOSER_SURFACE_CLASS)}>
+    <div
+      className={cn(
+        "min-w-0",
+        overlay
+          ? "w-full max-w-xl"
+          : cn(MESSAGE_COMPOSER_SURFACE_CLASS, DANMAKU_COMPOSER_TONE_CLASS),
+      )}
+    >
       <InputGroup
         className={cn(
           overlay ? "h-8 min-w-0" : MESSAGE_COMPOSER_GROUP_CLASS,
