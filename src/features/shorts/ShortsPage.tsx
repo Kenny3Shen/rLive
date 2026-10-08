@@ -25,7 +25,7 @@ import {
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
-import { videoGetArchive } from "@/features/video/videoApi";
+import { videoGetArchive, videoGetPlayerMeta } from "@/features/video/videoApi";
 import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoHistory";
 import { videoPlayPath } from "@/features/video/videoRoute";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -56,6 +56,7 @@ import { ANDROID_BACK_EVENT, DISMISSIBLE_POPUP_SELECTOR, hasBrowserHistoryEntry 
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import { notify } from "@/components/ui/toast";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { ShortsChapterMenu } from "./ShortsChapterMenu";
 import { ShortsSeekBar } from "./ShortsSeekBar";
 import { ShortsSeekBridge, ShortsSeekPlayer } from "./shortsSeekPlayer";
 import { ShortsBlankStage, ShortsStage } from "./ShortsStage";
@@ -180,6 +181,27 @@ export function ShortsPage() {
   const panels = useShortsPanels(current);
   const controlsAvailable = playback.hasFrame || playback.ready || !!playback.error;
 
+  /**
+   * 章节：与播放页同一个 player v2 请求与缓存键（`video_player_meta`），从竖屏点进播放页
+   * 不再重复请求。等当前条出画/可播后才发，不与首帧取流抢带宽；失败或没有章节就不显示入口。
+   */
+  const [chapterMenuOpen, setChapterMenuOpen] = useState(false);
+  const chapterCid = current?.cid ?? 0;
+  const chapterBvid = current?.bvid ?? "";
+  const playerMetaQuery = useQuery({
+    queryKey: ["video_player_meta", chapterCid, chapterBvid, ""],
+    enabled: chapterCid > 0 && chapterBvid !== "" && (playback.hasFrame || playback.ready),
+    queryFn: () => videoGetPlayerMeta({ bvid: chapterBvid, cid: chapterCid, ep_id: null }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const chapters = playerMetaQuery.data?.chapters;
+  useEffect(() => {
+    // 换片后上一条的章节弹层不能留着：它会一直挡住换片手势（见 `blocked`）。
+    // oxlint-disable-next-line react/set-state-in-effect
+    setChapterMenuOpen(false);
+  }, [seekItemKey]);
+
   const {
     gestureActive,
     onSurfaceTap,
@@ -198,7 +220,8 @@ export function ShortsPage() {
     trackRef,
     playback,
     navigationLocked: feed.navigationLocked,
-    blocked: panels.anyOpen,
+    // 章节弹层展开时列表要能上下滚，手指/滚轮不能同时被当成换片。
+    blocked: panels.anyOpen || chapterMenuOpen,
     onMotionActiveChange: setFeedMotionActive,
     onBoundary: (next) => {
       if (feed.uploaderMode) void feed.load(next < 0 ? "prev" : "next");
@@ -705,6 +728,16 @@ export function ShortsPage() {
                     ? ` · ${formatVideoDuration(playback.duration || current.duration)}`
                     : ""}
                 </p>
+              </div>
+              {/* 章节：与播放页竖屏一致，贴在进度条上方左侧；没有章节时不占位。
+                  浮层整体不接指针，这一格要单独接回来。 */}
+              <div data-slot="shorts-chapters" className="pointer-events-auto flex min-w-0 empty:hidden">
+                <ShortsChapterMenu
+                  chapters={chapters}
+                  open={chapterMenuOpen}
+                  onOpenChange={setChapterMenuOpen}
+                  container={viewportRef}
+                />
               </div>
             </div>
 

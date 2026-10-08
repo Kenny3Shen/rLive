@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { RefObject } from "react";
-import { createPlayer, useMediaAttach } from "@videojs/react";
+import { createPlayer, selectTime, useMediaAttach } from "@videojs/react";
 import { bufferFeature, timeFeature } from "@videojs/core/dom";
 
 /**
@@ -20,10 +20,14 @@ import { bufferFeature, timeFeature } from "@videojs/core/dom";
  * 为什么不复用播放页的 `videoFeatures`：那套含画质、音轨、全屏、PiP、字幕、直播
  * 边沿……竖屏舞台一条都用不上，每个 feature 还要在 attach 时挂监听。
  */
-export const ShortsSeekPlayer = createPlayer({
+const shortsSeekPlayer = createPlayer({
   features: [timeFeature, bufferFeature],
   displayName: "rLiveShortsSeek",
-}).Player;
+});
+export const ShortsSeekPlayer = shortsSeekPlayer.Player;
+
+/** 活动槽位的时间状态（`currentTime` / `duration` / `seek`）；章节菜单靠它高亮与跳转。 */
+export const useShortsSeekTime = () => shortsSeekPlayer.usePlayer(selectTime);
 
 /**
  * 把活动槽位的 `<video>` 接进 `ShortsSeekPlayer`。
