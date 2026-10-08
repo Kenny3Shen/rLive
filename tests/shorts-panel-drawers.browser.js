@@ -260,15 +260,9 @@ async (page) => {
   );
 
   /* ---------- 桌面端再点同一条即收起 ---------- */
-  // 收起态的入口是「共 N 条回复」；展开后它让位给完整列表，因此这里改点一级
-  // 评论的正文（同一个开关的另一个落点）。
-  await page.evaluate(() => {
-    const body = [...document.querySelectorAll("button")].find((node) =>
-      /查看 .* 的评论详情/.test(node.getAttribute("aria-label") ?? ""),
-    );
-    if (!body) throw new Error("未找到评论正文按钮");
-    body.click();
-  });
+  // 收起态的入口是「共 N 条回复」；展开后它让位给完整列表，收起入口在展开块表头
+  // （一级评论正文不再是开关：没有楼中楼的评论点正文不应进入二级）。
+  await page.evaluate(() => window.__drawerGeometry.clickPageButton(/^收起 .* 的评论的回复$/));
   await settle();
   assert(
     await page.evaluate(() => window.__drawerGeometry.inlineReplies()) === null,

@@ -1,6 +1,13 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight, ThumbsUp } from "lucide-react";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ThumbsUp,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -142,13 +149,7 @@ function CommentDetailTrigger({
   );
 }
 
-function CommentBody({
-  comment,
-  onOpenDetail,
-}: {
-  comment: VideoComment;
-  onOpenDetail?: () => void;
-}) {
+function CommentBody({ comment }: { comment: VideoComment }) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
 
@@ -159,19 +160,9 @@ function CommentBody({
 
   return (
     <>
-      {onOpenDetail ? (
-        <CommentDetailTrigger
-          label={`查看 ${comment.uname} 的评论详情`}
-          onOpenDetail={onOpenDetail}
-          className="text-left text-[13px] leading-relaxed whitespace-pre-line break-words [overflow-wrap:anywhere]"
-        >
-          <CommentMessage message={comment.message || "图片评论"} emotes={comment.emotes} />
-        </CommentDetailTrigger>
-      ) : (
-        <p className="whitespace-pre-line break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">
-          <CommentMessage message={comment.message} emotes={comment.emotes} />
-        </p>
-      )}
+      <p className="whitespace-pre-line break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">
+        <CommentMessage message={comment.message} emotes={comment.emotes} />
+      </p>
       {comment.pictures.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {comment.pictures.map((src, index) => (
@@ -237,11 +228,9 @@ function CommentAuthorBadges({
 
 function CommentRow({
   comment,
-  onOpenDetail,
   isThreadAuthor = false,
 }: {
   comment: VideoComment;
-  onOpenDetail?: () => void;
   isThreadAuthor?: boolean;
 }) {
   return (
@@ -270,7 +259,7 @@ function CommentRow({
           {formatRelativeTime(comment.ctime)}
         </div>
         <div className="mt-1">
-          <CommentBody comment={comment} onOpenDetail={onOpenDetail} />
+          <CommentBody comment={comment} />
         </div>
         <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
           <ThumbsUp className="size-3" aria-hidden />
@@ -326,7 +315,9 @@ function CommentThread({
 
   return (
     <div className="border-b border-border/60 py-3 last:border-b-0">
-      <CommentRow comment={comment} onOpenDetail={onToggleDetail} />
+      {/* 正文不是详情入口：没有楼中楼的评论点了只会弹出一页「暂无回复」，
+          移动端还会把读到一半的列表盖住。只有下方的回复预览框与「共 N 条回复」打开它。 */}
+      <CommentRow comment={comment} />
       {showPreview && (
         <div className="mt-2 pl-10.5">
           <div className="overflow-hidden rounded-md bg-muted/40 py-1">
@@ -348,7 +339,12 @@ function CommentThread({
       {expanded && (
         <div className="mt-2 pl-10.5">
           {/* key 换楼层即重挂：翻到第 3 页再展开另一条，不该停在那一页。 */}
-          <InlineCommentReplies key={comment.rpid} aid={aid} comment={comment} />
+          <InlineCommentReplies
+            key={comment.rpid}
+            aid={aid}
+            comment={comment}
+            onCollapse={onToggleDetail}
+          />
         </div>
       )}
     </div>
@@ -365,7 +361,16 @@ function CommentThread({
  * 不自带滚动容器 —— 与 `CommentsPanel` 整体的约定一致（滚动由调用方提供）；
  * 也不需要安全区让位：它不是浮层，不存在压住系统手势条的问题。
  */
-function InlineCommentReplies({ aid, comment }: { aid: string; comment: VideoComment }) {
+function InlineCommentReplies({
+  aid,
+  comment,
+  onCollapse,
+}: {
+  aid: string;
+  comment: VideoComment;
+  /** 展开后预览框让位给完整列表，收起入口放在列表表头。 */
+  onCollapse: () => void;
+}) {
   const [page, setPage] = useState(1);
   const repliesQuery = useQuery({
     queryKey: ["video_comment_replies", aid, comment.rpid, page, DESKTOP_REPLIES_PAGE_SIZE],
@@ -384,7 +389,19 @@ function InlineCommentReplies({ aid, comment }: { aid: string; comment: VideoCom
 
   return (
     <div role="group" aria-label={`${comment.uname} 的评论的回复`}>
-      <div className="text-xs text-muted-foreground">全部回复 {formatOnline(allCount)}</div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">全部回复 {formatOnline(allCount)}</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 gap-1 px-2 text-xs text-muted-foreground"
+          aria-label={`收起 ${comment.uname} 的评论的回复`}
+          onClick={onCollapse}
+        >
+          收起
+          <ChevronUp data-icon="inline-end" aria-hidden />
+        </Button>
+      </div>
       {pending ? (
         <div className="flex justify-center py-6">
           <Spinner aria-label="正在加载回复" />
@@ -603,8 +620,9 @@ function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?:
   /**
    * 一次只展开一条：点同一条即收起（桌面端就地展开 / 移动端抽屉共用这个语义）。
    *
-   * 三个入口（正文、回复预览、「共 N 条回复」）都走它 —— 它们是同一件事的
-   * 三个落点，分开各写一遍会各自演化出不同的开关规则。
+   * 所有入口（回复预览、「共 N 条回复」、桌面展开块的「收起」）都走它 —— 它们
+   * 是同一件事的不同落点，分开各写一遍会各自演化出不同的开关规则。一级评论正文
+   * 不是入口：没有楼中楼时也就没有预览框，点正文不会进入二级页。
    */
   const toggleDetail = (comment: VideoComment) => {
     setSelectedComment((current) => (current?.rpid === comment.rpid ? null : comment));

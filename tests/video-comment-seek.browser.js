@@ -101,12 +101,17 @@ async (page) => {
     );
     passed.push("零秒、超长时间、非法格式、外链与无嵌套交互控件边界通过");
 
-    // 点正文的普通文字（不是覆盖按钮的定位器）仍会展开详情。
-    const bodyBox = await page
-      .getByRole("button", { name: "查看 楼主 的评论详情", exact: true })
-      .boundingBox();
+    // 正文不再是详情入口：点普通文字不展开，只有回复预览框打开详情。
+    assert(
+      (await page.getByRole("button", { name: /的评论详情$/ }).count()) === 0,
+      "一级评论正文不应再是详情按钮",
+    );
+    const bodyBox = await page.getByText("开场", { exact: false }).first().boundingBox();
     assert(bodyBox, "主评论正文必须可见");
-    await page.mouse.click(bodyBox.x + 10, bodyBox.y + 5);
+    await page.mouse.click(bodyBox.x + 5, bodyBox.y + bodyBox.height / 2);
+    assert((await replyGroup.count()) === 0, "点正文不应展开回复");
+    const preview = page.getByRole("button", { name: "查看 回复作者 的回复详情", exact: true });
+    await preview.click({ position: { x: 5, y: 5 } });
     await replyGroup.waitFor();
     await page.evaluate(() => window.commentSeekEngine.media.pause());
     await jump("00:05").focus();
@@ -122,11 +127,11 @@ async (page) => {
     });
     await page.keyboard.press("Space");
     assert((await readTime()) === 5, "完整回复支持键盘 Space 空降");
-    await page.getByRole("button", { name: "查看 楼主 的评论详情", exact: true }).click();
-    assert((await replyGroup.count()) === 0, "普通正文入口仍可收起回复");
-    await page.getByRole("button", { name: "查看 回复作者 的回复详情", exact: true }).click({ position: { x: 5, y: 5 } });
+    await page.getByRole("button", { name: "收起 楼主 的评论的回复", exact: true }).click();
+    assert((await replyGroup.count()) === 0, "展开块表头的「收起」应收起回复");
+    await preview.click({ position: { x: 5, y: 5 } });
     await replyGroup.waitFor();
-    passed.push("正文/预览仍可展开收起；完整回复支持 Enter/Space，保留暂停状态");
+    passed.push("正文不展开；预览展开、「收起」收起；完整回复支持 Enter/Space，保留暂停状态");
 
     await page.evaluate(() => window.commentSeekFixture.renderWithoutSeek());
     await page.getByRole("button", { name: "评论排序：最热，点击切换" }).waitFor();
@@ -145,7 +150,7 @@ async (page) => {
       );
       window.commentSeekFixture.renderMobileComments();
     });
-    await page.getByRole("button", { name: "查看 楼主 的评论详情", exact: true }).click();
+    await page.getByRole("button", { name: "查看 回复作者 的回复详情", exact: true }).click({ position: { x: 5, y: 5 } });
     const dialog = page.getByRole("dialog", { name: "评论详情", exact: true });
     await dialog.waitFor();
     await dialog.getByRole("button", { name: "跳转到 00:05", exact: true }).click();
