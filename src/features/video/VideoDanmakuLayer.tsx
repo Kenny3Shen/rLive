@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import type { DanmuJsInstance } from "danmu.js";
 import {
   clampDanmuArea,
@@ -27,6 +35,7 @@ import {
   filterVideoDanmakuEntries,
   firstVideoDanmakuAtOrAfter,
   nextVideoDanmakuBatch,
+  VIDEO_DANMAKU_FIXED_DURATION_MS,
   videoDanmakuComment,
   type VideoDanmakuEntry,
 } from "./videoDanmaku";
@@ -41,11 +50,16 @@ import {
  * 实例以 `live: true` 创建且**不传 `player`**：danmu.js 自带的音视频同步会按
  * `comment.start` 再排一次时间轴，与我们按 currentTime 的投放叠加后，seek 之后两套
  * 时间轴必然打架。把时间基准完全收在这一层，seek 的正确性才只依赖一处逻辑。
+ *
+ * 弹幕只在两种情况下离开画面：滚动弹幕飘完全程，固定弹幕到达媒体时间时长。暂停、
+ * 关闭弹幕、新分段到达都不清屏——关闭只是把这一层调成透明，调度照常进行，重新打开
+ * 时屏上就是「一直开着」会看到的那些弹幕。
  */
 
 type VideoDanmakuLayerProps = {
   videoRef: RefObject<HTMLVideoElement | null>;
   entries: readonly VideoDanmakuEntry[];
+  /** 弹幕开关。关闭时仅隐藏并停止点选，实例与调度保持运行。 */
   active: boolean;
   interactive?: boolean;
   cid?: number;
@@ -91,6 +105,22 @@ export function VideoDanmakuLayer({
   const speed = parseDanmakuSpeed(useSettingsStore((state) => state.danmakuSpeed));
   const area = clampDanmuArea(useSettingsStore((state) => state.danmakuArea));
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
+
+  // 可投放条目走 ref 而不进实例 effect 的依赖：新分段到达、屏蔽词变化都会换一份
+  // 数组，若因此重建实例，屏上正在飘的弹幕会被整屏清掉。
+  const schedule = useMemo(() => {
+    const isShielded = createShieldMatcher(shieldWords);
+    const visible = filterVideoDanmakuEntries(entries, (content) =>
+      // 复用直播的屏蔽词匹配器需要一个 DanmakuEvent 形状；VOD 弹幕只有文本，
+      // 因此合成一条最小事件而不是在这里另写一套匹配。
+      isShielded({ kind: "chat", user: "", content, color: null, ts: 0 }),
+    );
+    return { visible, byId: new Map(visible.map((entry) => [entry.id, entry])) };
+  }, [entries, shieldWords]);
+  const scheduleRef = useRef(schedule);
+  useLayoutEffect(() => {
+    scheduleRef.current = schedule;
+  }, [schedule]);
 
   const releaseSelection = useCallback((dropped = false) => {
     const id = selectedIdRef.current;
@@ -171,10 +201,15 @@ export function VideoDanmakuLayer({
     return () => cancelAnimationFrame(frame);
   }, [selectedId, measureTarget, releaseSelection]);
 
+  // 关闭弹幕时解除点选：被定住的那条应当和其他弹幕一样在不可见状态下继续飘。
+  useEffect(() => {
+    if (!active) releaseSelection();
+  }, [active, releaseSelection]);
+
   useEffect(() => {
     const container = containerRef.current;
     const video = videoRef.current;
-    if (!container || !video || !active) return;
+    if (!container || !video) return;
     // 闭包里再引用 `videoRef.current` 会重新变成可空；绑定一个局部常量，
     // 让下面所有回调共享上面这道判空。
     const media = video;
@@ -184,28 +219,41 @@ export function VideoDanmakuLayer({
     // 已投放到哪个下标。seek 后必须重置，否则跳转后的弹幕会接着旧游标继续投，
     // 表现为「弹幕停在跳转前的位置」或成片错位。
     let cursor = 0;
+    // 游标对应的条目列表。条目列表换了（新分段合并、屏蔽词变化）就按
+    // `nextFromMs` 重新定位游标，而不是清屏：已投放的条目都早于它，不会重投。
+    let cursorList = scheduleRef.current.visible;
+    // 下一条待投放条目的最早时间：早于它的条目已经投过（或因跳转而不再投）。
+    let nextFromMs = 0;
     let lastPositionMs = 0;
-    const isShielded = createShieldMatcher(shieldWords);
-    const visible = filterVideoDanmakuEntries(entries, (content) =>
-      // 复用直播的屏蔽词匹配器需要一个 DanmakuEvent 形状；VOD 弹幕只有文本，
-      // 因此合成一条最小事件而不是在这里另写一套匹配。
-      isShielded({ kind: "chat", user: "", content, color: null, ts: 0 }),
-    );
-
-    const visibleById = new Map(visible.map((entry) => [entry.id, entry]));
     const records = recordsRef.current;
+    // 在屏固定弹幕的到期时间（媒体时间，毫秒）。danmu.js 的固定弹幕计时不受
+    // `pause()` 控制（见 `VIDEO_DANMAKU_FIXED_DURATION_MS`），这里按媒体时间接管。
+    const fixedExpiry = new Map<string, number>();
 
     /** 把游标对齐到某个播放位置，并清空屏幕上按旧时间轴投放的 bullet。 */
     function realign(positionMs: number) {
       releaseSelection(true);
       records.clear();
-      cursor = firstVideoDanmakuAtOrAfter(visible, positionMs);
+      fixedExpiry.clear();
+      cursorList = scheduleRef.current.visible;
+      cursor = firstVideoDanmakuAtOrAfter(cursorList, positionMs);
+      nextFromMs = positionMs;
       lastPositionMs = positionMs;
       danmu?.clear();
     }
 
     function currentPositionMs(): number {
       return Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime * 1_000) : 0;
+    }
+
+    /** 移除已到期的固定弹幕。被点选定住的保留到解除后的下一次检查。 */
+    function expireFixed(positionMs: number) {
+      if (!danmu) return;
+      for (const [id, expiresAtMs] of fixedExpiry) {
+        if (positionMs < expiresAtMs || selectedIdRef.current === id) continue;
+        fixedExpiry.delete(id);
+        danmu.removeComment(id);
+      }
     }
 
     function tick() {
@@ -217,12 +265,24 @@ export function VideoDanmakuLayer({
         return;
       }
       lastPositionMs = positionMs;
-      const next = nextVideoDanmakuBatch(visible, cursor, positionMs);
+      expireFixed(positionMs);
+      const latest = scheduleRef.current.visible;
+      if (latest !== cursorList) {
+        cursorList = latest;
+        cursor = firstVideoDanmakuAtOrAfter(cursorList, nextFromMs);
+      }
+      const next = nextVideoDanmakuBatch(cursorList, cursor, positionMs);
       cursor = next.cursor;
+      // 条目时间是整数毫秒，本次已投到 `<= positionMs` 的全部条目。
+      nextFromMs = Math.floor(positionMs) + 1;
       for (const entry of next.batch) {
         danmu.sendComment(
           videoDanmakuComment(entry, { fontSize, fontStroke, opacity, moveV: speed }),
         );
+        // 车道已满时 danmu.js 会丢弃这条，只给真正上屏的固定弹幕登记到期。
+        if (entry.mode !== "scroll" && records.has(entry.id)) {
+          fixedExpiry.set(entry.id, entry.progressMs + VIDEO_DANMAKU_FIXED_DURATION_MS);
+        }
       }
     }
 
@@ -253,13 +313,14 @@ export function VideoDanmakuLayer({
           hooks: {
             bulletCreateEl: (comment) => createDanmuBulletElement(comment),
             bulletAttached: (comment, element) => {
-              const entry = visibleById.get(comment.id);
+              const entry = scheduleRef.current.byId.get(comment.id);
               if (entry) records.set(comment.id, { entry, element });
             },
             bulletDetached: (comment, element) => {
               if (records.get(comment.id)?.element !== element) return;
               if (selectedIdRef.current === comment.id) releaseSelection(true);
               records.delete(comment.id);
+              fixedExpiry.delete(comment.id);
             },
           },
           // 仅文字接收指针，空白区域仍穿透到播放器。
@@ -286,6 +347,7 @@ export function VideoDanmakuLayer({
       disposed = true;
       releaseSelection(true);
       records.clear();
+      fixedExpiry.clear();
       instanceRef.current = null;
       media.removeEventListener("timeupdate", tick);
       media.removeEventListener("seeking", onSeeking);
@@ -299,27 +361,22 @@ export function VideoDanmakuLayer({
       }
       danmu = null;
     };
-  }, [
-    active,
-    area,
-    cid,
-    entries,
-    fontSize,
-    fontStroke,
-    opacity,
-    shieldWords,
-    speed,
-    videoRef,
-    releaseSelection,
-  ]);
+  }, [area, cid, fontSize, fontStroke, opacity, speed, videoRef, releaseSelection]);
 
   return (
     <div ref={hostRef} className="pointer-events-none absolute inset-0">
+      {/*
+        关闭弹幕只调透明度，不用 `display: none`：danmu.js 按容器尺寸算车道与位移，
+        尺寸归零会把车道重排成 0 条。也不用 `visibility: hidden`：固定弹幕自己写着
+        `visibility` transition，子节点的取值会盖过父级。不可见时把所有后代的命中
+        一并关掉，透明的弹幕文字不能抢走播放器的点按。
+      */}
       <div
         ref={containerRef}
         aria-hidden
         data-video-danmaku-layer
-        className="pointer-events-none absolute inset-0 overflow-hidden"
+        data-visible={active}
+        className="pointer-events-none absolute inset-0 overflow-hidden data-[visible=false]:opacity-0 data-[visible=false]:[&_*]:pointer-events-none!"
         style={{ top: "var(--video-danmaku-top, 0px)" }}
       />
       {target && active && interactive && (

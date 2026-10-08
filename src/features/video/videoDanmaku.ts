@@ -170,6 +170,23 @@ export function nextVideoDanmakuBatch(
 }
 
 /**
+ * 顶部/底部固定弹幕的在屏时长，按**媒体时间**计（毫秒）。
+ *
+ * 到期由 `VideoDanmakuLayer` 按 `currentTime` 判定并主动移除，暂停期间媒体时间不走，
+ * 固定弹幕也就停在屏上。
+ */
+export const VIDEO_DANMAKU_FIXED_DURATION_MS = DANMU_JS_DEFAULT_DURATION_MS;
+
+/**
+ * 交给 danmu.js 的固定弹幕时长：足够长，等于关掉它自己的墙钟计时。
+ *
+ * danmu.js 用 `visibility` 的 CSS transition 给固定弹幕计时，`pause()` 只冻结滚动
+ * 弹幕的位移，不会停这条 transition —— 暂停超过时长，固定弹幕照样到点消失。
+ * 因此把它的计时推到实际不可能触发，真正的到期由上面的媒体时间时长决定。
+ */
+const DANMU_JS_UNTIMED_FIXED_DURATION_MS = 24 * 60 * 60 * 1_000;
+
+/**
  * 把条目映射成 danmu.js 评论。
  *
  * `realTime: true` + 不带 `start`：调度由我们按 `currentTime` 完成，交给 danmu.js
@@ -206,11 +223,12 @@ export function videoDanmakuComment(
     color: true,
     elLazyInit: true,
     disableCopyDOM: true,
-    // 固定模式没有行程，只能按时长消失；滚动模式交给 moveV 以保持恒定速度
-    // （长短弹幕同速，与设置里的「弹幕速度」是同一个 px/s 语义）。
+    // 滚动模式交给 moveV 以保持恒定速度（长短弹幕同速，与设置里的「弹幕速度」是同一个
+    // px/s 语义），暂停时 danmu.js 会冻结位移、只在飘出画面后移除。固定模式没有行程，
+    // 到期由调用方按媒体时间移除（见 `VIDEO_DANMAKU_FIXED_DURATION_MS`）。
     ...(entry.mode === "scroll"
       ? { moveV: options.moveV > 0 ? options.moveV : DANMU_JS_DEFAULT_MOVE_V }
-      : { duration: DANMU_JS_DEFAULT_DURATION_MS }),
+      : { duration: DANMU_JS_UNTIMED_FIXED_DURATION_MS }),
     style,
   };
 }

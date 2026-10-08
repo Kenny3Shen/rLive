@@ -118,6 +118,7 @@ async (page) => {
       color: "#ffffff",
       pool: 0,
     }));
+    state.entries = entries;
     const render = (patch = {}) => {
       Object.assign(state, patch);
       flushSync(() =>
@@ -155,7 +156,7 @@ async (page) => {
                   })
                 : h(VideoDanmakuLayer, {
                     videoRef,
-                    entries,
+                    entries: state.entries,
                     active: state.active,
                     interactive: state.interactive,
                     cid: state.cid,
@@ -191,6 +192,21 @@ async (page) => {
       seek: () => {
         state.time = 8;
         videoRef.current.dispatchEvent(new Event("seeking"));
+      },
+      play: () => {
+        state.paused = false;
+        videoRef.current.dispatchEvent(new Event("play"));
+      },
+      /** 按正常播放步长推进媒体时间，不触发 seek 判定。 */
+      advance: (seconds) => {
+        const target = state.time + seconds;
+        while (state.time < target) {
+          state.time = Math.min(target, state.time + 0.25);
+          videoRef.current.dispatchEvent(new Event("timeupdate"));
+        }
+      },
+      appendEntry: (entry) => {
+        render({ entries: [...state.entries, entry] });
       },
       setCookieReady: (ready) => {
         state.cookieReady = ready;
@@ -407,12 +423,83 @@ async (page) => {
     await noMenu();
     await tap(top);
     await noMenu();
+    passed.push("seek、换视频与全屏锁正确清理交互");
+
+    const bulletCount = (id) =>
+      page.locator(`[data-video-danmaku-layer] [data-rlive-danmaku-id="${id}"]`).count();
+    const layerOpacity = () =>
+      page.locator("[data-video-danmaku-layer]").evaluate((el) => getComputedStyle(el).opacity);
+    const scrollBullet = page.locator('[data-rlive-danmaku-id="action-scroll"]');
+
+    await page.evaluate(() => window.__videoDanmakuActionsTest.render({ interactive: true }));
+    await seed();
+    await tap(top);
+    await waitMenu();
     await page.evaluate(() => window.__videoDanmakuActionsTest.render({ active: false }));
+    await noMenu();
+    assert((await layerOpacity()) === "0", "关闭弹幕后仍可见");
+    for (const id of ["action-top", "action-scroll", "action-bottom"]) {
+      assert((await bulletCount(id)) === 1, `关闭弹幕清掉了在屏弹幕 ${id}`);
+    }
+    const beforeHiddenTap = await state();
+    await tap(top);
     assert(
-      (await page.locator("[data-video-danmaku-layer] [data-rlive-danmaku-id]").count()) === 0,
-      "关闭弹幕仍有残留",
+      (await state()).clicks === beforeHiddenTap.clicks + 1 && (await menu.count()) === 0,
+      "不可见的弹幕仍拦截播放器点按",
     );
-    passed.push("seek、换视频、全屏锁与弹幕关闭正确清理交互");
+    const hiddenX = (await scrollBullet.boundingBox()).x;
+    await page.waitForTimeout(300);
+    assert((await scrollBullet.boundingBox()).x < hiddenX - 2, "关闭弹幕后滚动弹幕没有继续飘");
+    await page.evaluate(() => window.__videoDanmakuActionsTest.render({ active: true }));
+    assert((await layerOpacity()) === "1", "重新打开弹幕后不可见");
+    for (const id of ["action-top", "action-scroll", "action-bottom"]) {
+      assert((await bulletCount(id)) === 1, `重新打开后弹幕 ${id} 未重新出现`);
+    }
+    await tap(top);
+    await waitMenu();
+    await blank();
+    await noMenu();
+    passed.push("关闭弹幕只隐藏且不拦点按，弹幕继续飘，重新打开原样出现");
+
+    await seed();
+    const topDuration = await page
+      .locator('[data-rlive-danmaku-id="action-top"]')
+      .evaluate((el) => parseFloat(getComputedStyle(el).transitionDuration));
+    assert(topDuration > 3_600, `固定弹幕仍由 danmu.js 墙钟计时（${topDuration}s）`);
+    await page.evaluate(() => window.__videoDanmakuActionsTest.appendEntry({
+      id: "action-late",
+      progressMs: 2_000,
+      mode: "scroll",
+      content: "后到分段",
+      color: "#ffffff",
+      pool: 0,
+    }));
+    for (const id of ["action-top", "action-scroll", "action-bottom"]) {
+      assert((await bulletCount(id)) === 1, `新分段到达清掉了在屏弹幕 ${id}`);
+    }
+    await page.evaluate(() => window.__videoDanmakuActionsTest.advance(2));
+    assert((await bulletCount("action-late")) === 1, "新分段的弹幕没有按时投放");
+    assert((await bulletCount("action-top")) === 1, "新分段导致旧弹幕重投或提前消失");
+    await page.evaluate(() => window.__videoDanmakuActionsTest.pause());
+    await page.waitForTimeout(300);
+    assert(
+      (await bulletCount("action-top")) === 1 && (await bulletCount("action-bottom")) === 1,
+      "暂停期间固定弹幕消失",
+    );
+    await page.evaluate(() => {
+      const test = window.__videoDanmakuActionsTest;
+      test.play();
+      // 出现于 0.1s，媒体时间走到 15.1s 前一直在屏，之后按媒体时间到期。
+      test.advance(14.9 - test.state.time);
+    });
+    assert((await bulletCount("action-top")) === 1, "固定弹幕提前到期");
+    await page.evaluate(() => window.__videoDanmakuActionsTest.advance(0.5));
+    await page.waitForFunction(
+      () =>
+        !document.querySelector('[data-rlive-danmaku-id="action-top"]') &&
+        !document.querySelector('[data-rlive-danmaku-id="action-bottom"]'),
+    );
+    passed.push("固定弹幕暂停不消失、按媒体时间到期，新分段不清屏");
 
     await page.evaluate(() => {
       const test = window.__videoDanmakuActionsTest;

@@ -20,7 +20,9 @@ import {
   firstVideoDanmakuAtOrAfter,
   mergeVideoDanmakuEntries,
   nextVideoDanmakuBatch,
+  VIDEO_DANMAKU_FIXED_DURATION_MS,
   videoDanmakuColor,
+  videoDanmakuComment,
   videoDanmakuEntries,
   videoDanmakuMode,
   videoDanmakuSegmentIndex,
@@ -419,6 +421,24 @@ describe("VOD danmaku scheduling", () => {
     // 反向 seek 回到开头后应重新投放最早那几条，而不是接着旧游标继续。
     const backward = nextVideoDanmakuBatch(timeline, firstVideoDanmakuAtOrAfter(timeline, 0), 0);
     expect(backward.batch.map((item) => item.progressMs)).toEqual([0]);
+  });
+
+  test("hands fixed bullets an untimed duration so pausing cannot expire them", () => {
+    // danmu.js 的固定弹幕靠 `visibility` transition 计时，`pause()` 停不住；
+    // 到期必须由调用方按媒体时间负责，交给它的时长不能在一次暂停内耗尽。
+    const options = { fontSize: 24, fontStroke: 0, opacity: 1, moveV: 120 };
+    const [fixed] = videoDanmakuEntries(
+      [{ progress: 0, mode: 5, fontsize: 25, color: 0xffffff, content: "顶", weight: 5, pool: 0 }],
+      1,
+    );
+    const top = videoDanmakuComment(fixed!, options);
+    expect(top.duration).toBeGreaterThan(60 * 60 * 1_000);
+    expect(top.duration).toBeGreaterThan(VIDEO_DANMAKU_FIXED_DURATION_MS);
+    expect(top).not.toHaveProperty("moveV");
+
+    const scroll = videoDanmakuComment(entry(0), options);
+    expect(scroll.moveV).toBe(120);
+    expect(scroll).not.toHaveProperty("duration");
   });
 });
 

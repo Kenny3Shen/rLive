@@ -168,6 +168,13 @@ message DanmakuElem {
 
 实测单条 elem 出现的字段：1,2,3,4,5,6,7,8,9,12,15,20,21,25,26,27（20/21 不在 schema 内，跳过即可）。顶层出现 1,4,5。
 
+### 飘屏调度（`VideoDanmakuLayer`）
+
+- 渲染复用直播的 danmu.js 与字号/透明度/区域/速度/屏蔽词设置，调度按 `video.currentTime` 投放（`videoDanmaku.ts` 的游标与分帧预算）。时间跳变超过 `1.2s` 或 `seeking` 视为跳转，清屏后从新位置重新对齐。
+- 弹幕只在两种情况下离开画面：滚动弹幕飘完整个窗口；顶部/底部固定弹幕在屏满 `15s` **媒体时间**。danmu.js 用 `visibility` 的 CSS transition 给固定弹幕计时，`pause()` 停不住它，因此交给它的时长设为一天（等于关掉墙钟计时），由本层按 `currentTime` 判定到期并 `removeComment`。暂停期间滚动弹幕冻结位移、固定弹幕原地停留。
+- 关闭弹幕不销毁实例，只把弹幕层设为 `opacity: 0` 并关掉所有后代的指针命中；调度、滚动与到期照常进行，重新打开时屏上就是一直开着会看到的那些弹幕。不用 `display: none`（容器尺寸归零会让 danmu.js 把车道重排成 0 条），也不用 `visibility: hidden`（固定弹幕自己写着 `visibility`，会盖过父级）。短视频舞台同样常驻该层，只切换可见性。
+- 新分段合并、屏蔽词变化只替换待投放的条目列表：游标按「下一条待投放时间」重新定位，不清屏、不重投已出现的弹幕（屏蔽词因此只影响之后的新弹幕）。字号、描边、透明度、速度、显示区域变化与换视频仍重建实例。关闭期间不拉取新分段，重新打开后从当前进度补取。
+
 ### 弹幕发送（`video_danmaku_send`）
 
 - 写入接口 `POST https://api.bilibili.com/x/v2/dm/post`：表单 `type=1&oid={cid}&aid={aid}&msg&progress={毫秒}&rnd={微秒时间戳}&color=16777215&fontsize=25&pool=0&mode=1&plat=1&csrf`，携带 SESSDATA Cookie。三个关键字段的对齐依据（参考 PiliPlus 的 `DanmakuHttp.shootDanmaku`）：`aid` 参与表单（上游要求稿件标识，缺失被 -400 拒绝）；`progress` 单位是毫秒（此前按秒发送导致弹幕落在 1/1000 的错误位置）；`rnd` 缺省时上游把连续发送的冷却放大到 90 秒（带上为 5 秒），本地 3 秒冷却的第二条会直接撞上它。与直播 `msg/send` 同一套 Cookie 凭据检查（提供 Cookie 即授权，无额外开关）、同一 3 秒冷却（`DanmakuSendLimiter`，键用稿件 aid——同稿件各分 P 共用一个冷却）与发送历史（`danmaku_send_history`，room_id 存 aid）。

@@ -167,7 +167,7 @@ type ShortsStageProps = {
    */
   mode: ShortsSlotMode;
   danmaku?: ShortsDanmakuState;
-  /** 弹幕开关。未提供弹幕能力或关掉时不挂层。 */
+  /** 弹幕开关。未提供弹幕能力时不挂层；关掉时层仍在，仅不可见。 */
   danmakuVisible?: boolean;
   /** 手势进行中：此时禁掉点按，避免滑动尾声的合成 click 误暂停。 */
   gestureActive: boolean;
@@ -397,8 +397,11 @@ export function ShortsStage({
 
           宽度仍跟着画面框收：桌面宽屏上画面是居中的竖卡，弹幕若按画面区通栏，
           会飘到卡片两侧的黑边上。
+
+          关掉弹幕不卸载这一层，只把它设为不可见：调度照常走，重新打开时屏上就是一直
+          开着会看到的那些弹幕。
         */}
-        {danmakuVisible && danmaku && item.aid && !warming && (
+        {danmaku && item.aid && !warming && (
           <div
             data-slot="shorts-danmaku-column"
             className="pointer-events-none absolute bottom-0"
@@ -407,7 +410,7 @@ export function ShortsStage({
             <VideoDanmakuLayer
               videoRef={videoRef}
               entries={danmaku.entries}
-              active={danmakuVisible}
+              active={danmakuVisible ?? false}
               // 竖屏舞台上飘屏弹幕不接受点按：这块画面的点按语义已经归暂停。
               interactive={false}
               cid={cid}
