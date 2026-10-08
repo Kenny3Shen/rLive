@@ -179,6 +179,10 @@ async (page) => {
         const cardStyle = getComputedStyle(card);
         const borderTop = parseFloat(cardStyle.borderTopWidth);
         const borderBottom = parseFloat(cardStyle.borderBottomWidth);
+        // 信息卡外层 section 不带下分割线（它会在卡与下方内容之间画一道通栏线）。
+        // `card.style` 一处分叉：`dl.closest(".rounded-xl")` 命中的是卡壳元素，
+        // 其父节点就是外层 section（真卡与骨架同构）。
+        const section = card.parentElement;
         // 上留白 = 卡壳内容区顶到第一行（头像行）顶；下留白 = 统计行底到内容区底。
         // 两边都不算边框与 padding，量的是「视觉留白」本身。
         const header = card.firstElementChild;
@@ -191,6 +195,7 @@ async (page) => {
           paddingBottom: parseFloat(cardStyle.paddingBottom),
           borderTop,
           borderBottom,
+          sectionBorderBottom: parseFloat(getComputedStyle(section).borderBottomWidth),
           titleBox: rect(title),
           arrowBox: rect(arrow),
           toggleBox: rect(toggle),
@@ -306,6 +311,12 @@ async (page) => {
     assert(
       bottomGap <= 1,
       `统计行下不应再被高层级按钮撑开（实测 ${bottomGap}）`,
+    );
+    // 信息卡与下方内容之间不画分割线：卡壳自身的底色与描边已经把分块说清楚，
+    // 外层 section 再加一条通栏 border-b 是多余的一道。
+    assert(
+      collapsed.sectionBorderBottom === 0,
+      `信息卡与下方内容之间不应有分割线（实测 ${collapsed.sectionBorderBottom}px）`,
     );
 
     /* ---------- 4. 点标题切换，两端都无底色 ---------- */

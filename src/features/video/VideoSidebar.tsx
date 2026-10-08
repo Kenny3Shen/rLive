@@ -96,7 +96,8 @@ function UpCardSkeleton() {
     <section
       data-slot="video-up-card-skeleton"
       aria-hidden
-      className="shrink-0 border-b border-border px-2.5 py-2"
+      // 与真卡一致：不带下分割线。
+      className="shrink-0 px-2.5 py-2"
     >
       <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
         <div className="flex min-w-0 items-start gap-2.5 pr-16">
@@ -932,7 +933,7 @@ export function VideoSidebar({
             key={`up-card:${bvid}`}
             open={descriptionExpanded}
             onOpenChange={setDescriptionExpanded}
-            render={<section className="shrink-0 border-b border-border px-2.5 py-2" />}
+            render={<section className="shrink-0 px-2.5 py-2" />}
             aria-label={`UP 主信息：${archive.author}`}
           >
             <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">

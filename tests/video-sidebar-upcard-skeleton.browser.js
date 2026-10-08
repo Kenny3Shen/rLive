@@ -86,13 +86,16 @@ async (page) => {
           skeleton: boxes(skeleton),
           card: boxes(card),
           relatedTop: related ? Math.round(related.getBoundingClientRect().top) : null,
-          // 骨架块的数量与形状：头像 + 名称 + 两条元信息 + 标题行 + 三项统计。
+          // 骨架块的数量与形状：头像 + 名称 + 两条元信息 + 标题行 + 四项统计
+          //（播放/评论/发布时间/当前在线）。
           blockCount: blocks.length,
           avatar: blocks[0]
             ? { w: Math.round(blocks[0].getBoundingClientRect().width), radius: getComputedStyle(blocks[0]).borderRadius }
             : null,
           // 真卡与骨架都用主题表面，不该出现黑舞台那套 `bg-white/10`。
           background: getComputedStyle(skeleton).backgroundColor,
+          // 信息卡与下方内容之间不再画分割线（骨架与真卡必须一致）。
+          borderBottom: parseFloat(getComputedStyle(skeleton).borderBottomWidth),
         };
       });
       report[viewport.name] = measured;
@@ -111,11 +114,11 @@ async (page) => {
         measured.relatedTop !== null && measured.relatedTop >= measured.skeleton.y + measured.skeleton.h - 1,
         `${viewport.name}: 相关视频列表没有被 UP 主卡骨架推到下方（related=${measured.relatedTop}）`,
       );
-      // 3. 真卡实测 123px（390px 视口）/ 同样 123px（桌面侧栏）：骨架必须同高，
+      // 3. 真卡实测 122px（390px 视口）/ 同样 122px（桌面侧栏）：骨架必须同高，
       //    否则数据到达时下面的列表会跳。
       assert(
-        Math.abs(measured.skeleton.h - 123) <= 3,
-        `${viewport.name}: UP 主卡骨架高度 ${measured.skeleton.h} 与真卡（123）差得过多`,
+        Math.abs(measured.skeleton.h - 122) <= 3,
+        `${viewport.name}: UP 主卡骨架高度 ${measured.skeleton.h} 与真卡（122）差得过多`,
       );
       // 4. 头像 40px（真卡 `Avatar size="lg"` 与 `size-11` 同时存在时前者生效）且是圆形。
       assert(
@@ -126,15 +129,21 @@ async (page) => {
         measured.avatar.radius === "50%" || parseFloat(measured.avatar.radius) > 100,
         `${viewport.name}: 头像骨架不是圆形（radius=${measured.avatar.radius}）`,
       );
-      // 5. 块数与构图：头像 + 名称 + 2 条元信息 + 标题行 + 3 项统计 = 8。
+      // 5. 块数与构图：头像 + 名称 + 2 条元信息 + 标题行 + 4 项统计 = 9。
       assert(
-        measured.blockCount === 8,
-        `${viewport.name}: 骨架块应为 8 块，实测 ${measured.blockCount}`,
+        measured.blockCount === 9,
+        `${viewport.name}: 骨架块应为 9 块，实测 ${measured.blockCount}`,
       );
       // 6. 侧栏是主题表面：不能带上黑舞台那套白色半透明底。
       assert(
         !measured.background.includes("255, 255, 255") && !measured.background.includes("oklch"),
         `${viewport.name}: UP 主卡骨架用了黑舞台的白色底（${measured.background}）`,
+      );
+      // 7. 信息卡与下方内容之间不画分割线：真卡与骨架都不带下边框，卡片自身的
+      //    底色/描边已经把分块说清楚，再加一条通栏线是多余的一道。
+      assert(
+        measured.borderBottom === 0,
+        `${viewport.name}: UP 主卡骨架不应带下分割线（实测 ${measured.borderBottom}px）`,
       );
     }
     return { passed: true, ...report };
