@@ -85,6 +85,7 @@ async (page) => {
           aside: boxes(aside),
           skeleton: boxes(skeleton),
           card: boxes(card),
+          related: related ? boxes(related) : null,
           relatedTop: related ? Math.round(related.getBoundingClientRect().top) : null,
           // 骨架块的数量与形状：头像 + 名称 + 两条元信息 + 标题行 + 四项统计
           //（播放/评论/发布时间/当前在线）。
@@ -100,12 +101,16 @@ async (page) => {
       });
       report[viewport.name] = measured;
 
-      // 1. 骨架必须画在侧栏内容区里，宽度与侧栏一致（不是浮在别处）。
+      // 1. 骨架必须画在侧栏卡片列里：与下面的相关视频列表同列同宽（不是浮在别处，
+      //    也不是通栏 —— 卡片的左右内缩由外层卡片列 `SidebarCardStack` 统一给）。
       assert(
-        Math.abs(measured.skeleton.w - measured.aside.w) <= 1,
-        `${viewport.name}: UP 主卡骨架宽度 ${measured.skeleton.w} 与侧栏 ${measured.aside.w} 不一致`,
+        measured.skeleton.x > measured.aside.x &&
+          measured.skeleton.x === measured.related.x &&
+          Math.abs(measured.skeleton.w - measured.related.w) <= 1,
+        `${viewport.name}: UP 主卡骨架与相关视频列表不同列（骨架 ${measured.skeleton.x}/${measured.skeleton.w}，相关 ${measured.related?.x}/${measured.related?.w}）`,
       );
-      // 2. 位置在侧栏顶部（页签条之下），相关视频列表被它推到下面。
+      // 2. 位置在侧栏顶部（页签条之下），相关视频列表被它推到下面，两者的缝宽
+      //    与卡片列里其他缝宽同一档（8px）。
       assert(
         measured.skeleton.y >= measured.aside.y,
         `${viewport.name}: UP 主卡骨架跑到了侧栏之外`,
@@ -114,11 +119,16 @@ async (page) => {
         measured.relatedTop !== null && measured.relatedTop >= measured.skeleton.y + measured.skeleton.h - 1,
         `${viewport.name}: 相关视频列表没有被 UP 主卡骨架推到下方（related=${measured.relatedTop}）`,
       );
-      // 3. 真卡实测 122px（390px 视口）/ 同样 122px（桌面侧栏）：骨架必须同高，
-      //    否则数据到达时下面的列表会跳。
       assert(
-        Math.abs(measured.skeleton.h - 122) <= 3,
-        `${viewport.name}: UP 主卡骨架高度 ${measured.skeleton.h} 与真卡（122）差得过多`,
+        measured.relatedTop !== null &&
+          Math.abs(measured.relatedTop - (measured.skeleton.y + measured.skeleton.h) - 8) <= 1,
+        `${viewport.name}: 骨架到相关视频的缝宽应为 8px（实测 ${measured.relatedTop - (measured.skeleton.y + measured.skeleton.h)}）`,
+      );
+      // 3. 真卡壳实测 106px（两侧同高）：骨架卡壳必须同高，否则数据到达时下面的
+      //    列表会跳。
+      assert(
+        Math.abs(measured.card.h - 106) <= 3,
+        `${viewport.name}: UP 主卡骨架卡壳高度 ${measured.card.h} 与真卡（106）差得过多`,
       );
       // 4. 头像 40px（真卡 `Avatar size="lg"` 与 `size-11` 同时存在时前者生效）且是圆形。
       assert(

@@ -57,6 +57,22 @@ import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { UploaderDrawer } from "./UploaderDrawer";
 
 /**
+ * 侧栏「相关视频」页签里所有卡片共用的一列：纵向间距与左右内缩只在这里定义一次。
+ *
+ * 从前每块卡片各自带一套外边距，同一栏里于是出现三种缝宽：UP 信息卡到选集卡
+ * 16px（两段 `py-2` 与 `pt-2` 相加）、选集卡到相关视频 6px（`pt-1.5`）、相关视频
+ * 卡之间 4px（`gap-1`）；左右内缩也分 10px 与 12px 两档。改一处很容易漏掉另一处，
+ * 由容器统一给缝宽后，各卡片只负责自己的表面与内容。
+ *
+ * 内缩 12px（`px-3`）与评论、弹幕、设置页签的列表对齐；段间距 8px（`gap-2`）
+ * 与直播 / IPTV 侧栏的 `gap-2 p-*` 同一档。顶部的 8px 与段间距相等，第一张卡
+ * 与页签栏的距离因此和其他缝宽一致。
+ */
+function SidebarCardStack({ children }: { children: ReactNode }) {
+  return <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-4">{children}</div>;
+}
+
+/**
  * 播放页右侧栏：相关视频（含信息卡、分集 / 选集 / 合集）、评论、弹幕与设置。
  *
  * 一个文件装下多种列表是刻意的 —— 它们共享同一套「信息卡 + 滚动容器 + 行项」骨架，
@@ -96,8 +112,8 @@ function UpCardSkeleton() {
     <section
       data-slot="video-up-card-skeleton"
       aria-hidden
-      // 与真卡一致：不带下分割线。
-      className="shrink-0 px-2.5 py-2"
+      // 与真卡一致：不自行带内外边距（间距由 `SidebarCardStack` 给）、不带下分割线。
+      className="shrink-0"
     >
       <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
         <div className="flex min-w-0 items-start gap-2.5 pr-16">
@@ -145,9 +161,9 @@ function RelatedPanel({ bvid }: { bvid: string }) {
   const playlistItems = items.map(playlistItemFromVideoItem);
 
   return (
-    <div data-slot="video-related-list" className="px-3 pb-4">
+    <div data-slot="video-related-list" className="flex flex-col gap-2">
       {relatedQuery.isPending ? (
-        <div className="flex flex-col gap-1 pt-1.5">
+        <>
           {[0, 1, 2].map((index) => (
             // 与行式 VideoCard 同几何与同表面：卡片底色 + 细描边，封面占 2/5 列宽，
             // 右侧三行文本。
@@ -163,7 +179,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
               </div>
             </div>
           ))}
-        </div>
+        </>
       ) : relatedQuery.isError ? (
         <ErrorState
           error={relatedQuery.error}
@@ -171,11 +187,13 @@ function RelatedPanel({ bvid }: { bvid: string }) {
           onRetry={() => void relatedQuery.refetch()}
         />
       ) : items.length === 0 ? (
-        <p className="pt-4 text-center text-xs text-muted-foreground">暂无相关视频</p>
+        // 空态只是文本，不需要额外内边距：与上方卡片的距离正好是卡片列的同一档缝隙。
+        <p className="text-center text-xs text-muted-foreground">暂无相关视频</p>
       ) : (
-        // 卡片现在自带底色，行与行之间必须留缝：紧贴时相邻两张卡的底色连成一整块，
-        // 反而比透明卡片更读不出边界。间距与上面的骨架一致，数据到达时列表不跳。
-        <div className="flex flex-col gap-1 pt-1.5">
+        // 卡片自带底色，行与行之间必须留缝：紧贴时相邻两张卡的底色连成一整块，
+        // 反而比透明卡片更读不出边界。骨架与真卡共用这里的 `gap-2`，
+        // 数据到达时列表既不跳、缝宽也与上方卡片同一档。
+        <>
           {items.map((item) => (
             <VideoCard
               key={`${item.bvid}-${item.cid ?? ""}`}
@@ -186,7 +204,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
               coverAspect="landscape"
             />
           ))}
-        </div>
+        </>
       )}
     </div>
   );
@@ -338,7 +356,7 @@ function SeasonInfoCard({
   episode: SeasonEpisode | null;
 }) {
   return (
-    <section className="shrink-0 px-2.5 py-2" aria-label="当前剧集信息">
+    <section className="shrink-0" aria-label="当前剧集信息">
       <Card size="sm">
         <CardHeader>
           <CardTitle>{season.title}</CardTitle>
@@ -415,7 +433,6 @@ function EpisodesPanel({
       count={`共 ${episodes.length} 集`}
       open={open}
       onOpenChange={setOpen}
-      className="mx-2.5 mb-2"
     >
       {/* 播放控制栏 */}
       {episodes.length > 1 && (
@@ -692,7 +709,7 @@ function PartsSeasonPanel({
   const mobile = isMobileClient();
 
   return (
-    <section className="flex shrink-0 flex-col gap-2 px-2.5 pt-2" aria-label="视频选集与合集">
+    <section className="flex shrink-0 flex-col gap-2" aria-label="视频选集与合集">
       {multiPart && (
         <PartsPanel
           bvid={archive.bvid}
@@ -898,7 +915,12 @@ export function VideoSidebar({
       return <DanmakuSettingsPanel className="h-full" showAsrCard={false} />;
     }
     if (isPgc) {
-      if (seasonQuery.isPending) return <UpCardSkeleton />;
+      if (seasonQuery.isPending)
+        return (
+          <SidebarCardStack>
+            <UpCardSkeleton />
+          </SidebarCardStack>
+        );
       if (seasonQuery.isError) {
         return (
           <ErrorState
@@ -910,7 +932,7 @@ export function VideoSidebar({
       }
       const season = seasonQuery.data;
       return (
-        <>
+        <SidebarCardStack>
           <SeasonInfoCard season={season} episode={currentEpisode} />
           <EpisodesPanel
             key={season.season_id}
@@ -919,11 +941,11 @@ export function VideoSidebar({
             active={value === tab}
             onNavigate={navigateToPlay}
           />
-        </>
+        </SidebarCardStack>
       );
     }
     return (
-      <>
+      <SidebarCardStack>
         {!isPgc && archiveQuery.isPending && <UpCardSkeleton />}
         {!isPgc && archive && (
           <Collapsible
@@ -933,7 +955,7 @@ export function VideoSidebar({
             key={`up-card:${bvid}`}
             open={descriptionExpanded}
             onOpenChange={setDescriptionExpanded}
-            render={<section className="shrink-0 px-2.5 py-2" />}
+            render={<section className="shrink-0" />}
             aria-label={`UP 主信息：${archive.author}`}
           >
             <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
@@ -1139,7 +1161,7 @@ export function VideoSidebar({
           />
         )}
         <RelatedPanel bvid={bvid ?? ""} />
-      </>
+      </SidebarCardStack>
     );
   };
 
