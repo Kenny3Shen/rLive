@@ -51,6 +51,7 @@ import {
   shouldRetainRoomSidePanel,
   shouldRunFloatingDanmaku,
   shouldShowRoomDanmakuPanel,
+  roomDanmakuComposerInSidePanel,
   sidePanelStartsOpen,
   usesPortraitStackLayout,
   isPortraitStackedPlayer,
@@ -338,6 +339,16 @@ describe("mobile player layout", () => {
     // 全新的横屏房间仍避免挂载从未打开过的面板。
     expect(shouldRetainRoomSidePanel(false, false, true)).toBe(false);
     expect(shouldRetainRoomSidePanel(false, false, false)).toBe(true);
+  });
+
+  test("compact rooms move the danmaku composer to the visible side panel", () => {
+    // 紧凑视口且侧栏可见：发送框住在弹幕页签底部，控制栏只剩按钮。
+    expect(roomDanmakuComposerInSidePanel(true, true, false)).toBe(true);
+    // 侧栏收起或网页全屏（不可见）、原生全屏：回到控制栏，始终保留发送入口。
+    expect(roomDanmakuComposerInSidePanel(true, false, false)).toBe(false);
+    expect(roomDanmakuComposerInSidePanel(true, true, true)).toBe(false);
+    // 桌面宽窗口保持在控制栏。
+    expect(roomDanmakuComposerInSidePanel(false, true, false)).toBe(false);
   });
 
   test("pauses floating danmaku only when an overlay actually obscures the picture", () => {

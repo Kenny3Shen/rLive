@@ -194,6 +194,22 @@ export function shouldShowRoomDanmakuPanel(
 }
 
 /**
+ * 弹幕发送框是否住在侧栏「弹幕」页签底部，而不是播放器控制栏中间。
+ *
+ * 紧凑视口（手机竖屏堆叠、横屏抽屉）里控制栏只有 28px 按钮，输入框会把整行撑高，
+ * 与点播控制栏尺寸不一致；侧栏可见时发送框随聊天列表放在页签底部（与视频页弹幕页签
+ * 同构）。全屏和网页全屏盖住侧栏，侧栏收起时也看不到，这几种情况仍放回控制栏，
+ * 保证始终有一个入口。桌面宽窗口保持原样。
+ */
+export function roomDanmakuComposerInSidePanel(
+  compactViewport: boolean,
+  sidePanelVisible: boolean,
+  fullscreen: boolean,
+): boolean {
+  return compactViewport && sidePanelVisible && !fullscreen;
+}
+
+/**
  * 右侧栏是否可见。
  *
  * 只看网页全屏：原生全屏下舞台已经盘据浏览器 top layer，侧栏自然被盖住，
@@ -686,6 +702,11 @@ function PlayerPaneContent({
     osdOn,
     sidePanelOverlaysPlayer: mobileDrawerOpen,
   });
+  const composerInSidePanel = roomDanmakuComposerInSidePanel(
+    compactViewport,
+    sidePanelVisible,
+    player.mode === "fullscreen",
+  );
   const compactLandscapeSidePanelClassName =
     "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl";
   const portraitStackLayout = usesPortraitStackLayout(inlineCompactSidePanel, sidePanelOpen);
@@ -1508,7 +1529,8 @@ function PlayerPaneContent({
               compact={compactViewport}
               portalContainer={playerStageRef}
               centerSlot={
-                secondaryReady && (
+                secondaryReady &&
+                !composerInSidePanel && (
                   <DanmakuComposer
                     siteId={siteId}
                     roomId={roomId}
@@ -1813,6 +1835,24 @@ function PlayerPaneContent({
                       statusText={danmakuStatusText}
                       className="min-h-0 flex-1"
                     />
+                  )}
+                  {secondaryReady && composerInSidePanel && (
+                    <div
+                      data-slot="room-side-danmaku-composer"
+                      className={cn(
+                        "shrink-0 border-t border-border/80",
+                        // 竖屏堆叠时侧栏贴着窗口底边，发送框要让出手势栏；横屏抽屉自身已留 inset。
+                        // Android WebView 的 env() 常为 0，优先用原生注入的 inset（见 styles.css）。
+                        inlineCompactSidePanel && "pb-[env(safe-area-inset-bottom)]",
+                      )}
+                    >
+                      <DanmakuComposer
+                        siteId={siteId}
+                        roomId={roomId}
+                        roomTitle={roomTitle}
+                        roomUserName={roomUserName}
+                      />
+                    </div>
                   )}
                 </div>
                 <div
