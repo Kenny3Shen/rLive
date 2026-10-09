@@ -1328,26 +1328,27 @@ html.overlay-window #root {
   }
 }
 
-/* 紧凑播放器 chrome 刻意比全局 44px 触摸下限更密。它贴着视频边缘且只包含熟悉的
-   媒体操作；覆盖只作用于控制条主行中间的弹幕输入框（全屏、侧栏收起时），
-   普通移动表单、导航以及内联渲染的菜单选项保持舒适的尺寸。
+/* 控制栏中央的弹幕输入框（全屏、侧栏收起时）：高度一律对齐同排的原生媒体按钮
+   （`--media-control-size`，桌面约 2.03rem、移动端 dense 档 1.75rem），
+   全屏时发送框因此不会高于相邻按钮。
 
-   高度对齐原生媒体按钮（dense 档 `--media-control-size` = 1.75rem），输入框不再把
-   整行撑到 44px，与点播控制栏同高。 */
-[data-slot="player-extension-controls"][data-compact="true"]
+   粗指针下 Input / InputGroup 自带 `min-h-11`（44px，全局触摸下限），必须一起
+   覆盖，否则输入框仍会把整行撑高、比按钮高出近三分之一。 */
+[data-slot="player-extension-controls"]
   [data-slot="player-center-slot"]
   [data-slot="input-group"] {
-  height: 1.75rem !important;
-  min-height: 1.75rem !important;
+  height: var(--media-control-size) !important;
+  min-height: var(--media-control-size) !important;
 }
 
-[data-slot="player-extension-controls"][data-compact="true"]
+[data-slot="player-extension-controls"]
   [data-slot="player-center-slot"]
   [data-slot="input-group-control"] {
   height: 100% !important;
   min-height: 0 !important;
 }
 
+/* 紧凑视口额外收窄输入框两端的小按钮与图标，与 dense 档按钮成比例。 */
 [data-slot="player-extension-controls"][data-compact="true"]
   [data-slot="player-center-slot"]
   [data-slot="input-group"]

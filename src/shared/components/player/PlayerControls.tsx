@@ -711,7 +711,7 @@ export function PlayerControls({
       data-placement={inlineProgress ? "center" : "above"}
       className={cn(
         "flex w-full min-w-0 items-center",
-        inlineProgress ? "gap-1.5" : "gap-2 px-2 pt-1 pb-0.5",
+        inlineProgress ? "gap-1.5" : "gap-2 px-2 pt-0.5 pb-0.5",
       )}
     >
       <Time.Value className="shrink-0 text-xs tabular-nums text-white/90" type="current" />
@@ -753,7 +753,7 @@ export function PlayerControls({
         data-slot="player-extension-controls"
         data-compact={compact || undefined}
         className={cn(
-          "flex w-full min-w-0 items-center justify-between px-2 py-1",
+          "flex w-full min-w-0 items-center justify-between px-2 py-0.5",
           inlineProgress ? "gap-1" : "gap-2",
         )}
       >

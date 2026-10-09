@@ -2980,8 +2980,8 @@ function VideoPlayerPageContent() {
                   >
                     <div
                       className={cn(
-                        "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.375rem,var(--player-safe-area-top,0px))] text-white",
-                        compact ? "pb-3" : "pb-6",
+                        "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.1875rem,var(--player-safe-area-top,0px))] text-white",
+                        compact ? "pb-1.5" : "pb-3",
                       )}
                     >
                       <MediaButton

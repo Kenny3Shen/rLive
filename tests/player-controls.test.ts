@@ -808,6 +808,18 @@ describe("custom player controls layout", () => {
     expect(surface).toContain('data-player-density={isMobileClient() ? "dense" : undefined}');
   });
 
+  test("控制栏中央发送框高度恒等于同排媒体按钮，不再自带 44px 触摸下限", () => {
+    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    // 输入组与输入控件都必须锚定 `--media-control-size`：
+    // 只写其一，另一半的 44px 下限或 `h-8` 仍会把整行撑高、全屏发送框高于两侧按钮。
+    expect(css).toMatch(
+      /\[data-slot="player-extension-controls"\]\s*\[data-slot="player-center-slot"\]\s*\[data-slot="input-group"\] \{\s*height: var\(--media-control-size\) !important;\s*min-height: var\(--media-control-size\) !important;/,
+    );
+    expect(css).toMatch(
+      /\[data-slot="player-extension-controls"\]\s*\[data-slot="player-center-slot"\]\s*\[data-slot="input-group-control"\] \{\s*height: 100% !important;\s*min-height: 0 !important;/,
+    );
+  });
+
   test("still places toolsSlot at the very right end of right controls", () => {
     const html = renderToStaticMarkup(
       createElement(

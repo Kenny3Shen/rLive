@@ -46,9 +46,9 @@ export function ControlsSurface({
         <Controls.Content
           data-density={dense ? "dense" : undefined}
           className={cn(
-            "relative z-10 flex w-full min-w-0 flex-col gap-0.5 px-1 pt-1",
+            "relative z-10 flex w-full min-w-0 flex-col gap-0.5 px-1 pt-0.5",
             "text-media-controls-foreground text-shadow-media",
-            avoidSystemGestureBar ? "pb-[max(0.25rem,env(safe-area-inset-bottom))]" : "pb-1",
+            avoidSystemGestureBar ? "pb-[max(0.125rem,env(safe-area-inset-bottom))]" : "pb-0.5",
           )}
         >
           <Tooltip.Provider>{children}</Tooltip.Provider>

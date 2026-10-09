@@ -867,7 +867,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
         data-visible={main ? "true" : undefined}
         aria-hidden={main ? false : undefined}
         className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 z-30 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent p-2 pb-6 text-white opacity-0 transition-opacity",
+          "pointer-events-none absolute inset-x-0 top-0 z-30 flex min-w-0 items-center gap-2 bg-gradient-to-b from-black/80 to-transparent px-2 pt-1 pb-3 text-white opacity-0 transition-opacity",
           main
             ? "[will-change:opacity] duration-150 ease-out motion-reduced:transition-none data-[visible=true]:opacity-100 data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0"
             : "group-focus-within/player:opacity-100 group-hover/player:opacity-100",
