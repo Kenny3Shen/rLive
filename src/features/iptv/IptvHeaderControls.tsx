@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Activity, ListFilter, Search, ShieldCheck, X } from "lucide-react";
+import { Activity, ListFilter, Search, X } from "lucide-react";
 import {
   InputGroup,
   InputGroupAddon,
@@ -310,9 +310,7 @@ export function IptvContentToolbar({ className }: IptvContentToolbarProps) {
 /**
  * 手动 IPTV 可看性探测放在内容区角落，保持 Shell 侧栏紧凑。
  *
- * 两个入口：默认是轻量探测（只确认清单可达），长按/右键菜单提供深探测
- * （额外验证清单引用的首个媒体资源）。深探测会为每个条目多发一次请求，
- * 因此不设为默认。
+ * 只做轻量探测：确认清单/媒体流网络可达。真正能否播放以打开频道为准。
  */
 export function IptvAvailabilityFab() {
   const {
@@ -321,41 +319,14 @@ export function IptvAvailabilityFab() {
     availabilityProgress,
     isCheckingAvailability,
     checkChannelAvailability,
-    checkChannelAvailabilityDeep,
   } = useIptvController();
   const pending = playlistQuery.isFetching || isCheckingAvailability;
   const label = availabilityProgress
     ? `检测频道可用性（${availabilityProgress.completed}/${availabilityProgress.total}）`
     : "检测频道可用性";
-  const deepLabel = availabilityProgress
-    ? `深探测媒体可用性（${availabilityProgress.completed}/${availabilityProgress.total}）`
-    : "深探测媒体可用性";
 
   return createPortal(
-    <div className="fixed right-4 bottom-[4.5rem] z-30 flex flex-col items-end gap-2 md:right-5 md:bottom-[4.25rem] max-md:bottom-[calc(8.5rem+env(safe-area-inset-bottom))]">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-lg"
-              aria-label={deepLabel}
-              disabled={matchingChannels.length === 0 || pending}
-              onClick={() => void checkChannelAvailabilityDeep()}
-              className="size-11 rounded-full p-0 shadow-lg shadow-black/25"
-            />
-          }
-        >
-          {pending ? (
-            <Spinner className="size-5" aria-hidden />
-          ) : (
-            <ShieldCheck className="size-5" aria-hidden />
-          )}
-        </TooltipTrigger>
-        <TooltipContent>深探测：额外验证首个媒体资源</TooltipContent>
-      </Tooltip>
-
+    <div className="fixed right-4 bottom-[4.5rem] z-30 md:right-5 md:bottom-[4.25rem] max-md:bottom-[calc(8.5rem+env(safe-area-inset-bottom))]">
       <Tooltip>
         <TooltipTrigger
           render={

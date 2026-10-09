@@ -5,13 +5,7 @@ export const IPTV_AVAILABILITY_BATCH_SIZE = 24;
 
 export type IptvAvailabilityFilter = "all" | "available" | "unavailable" | "unchecked" | "stale";
 
-/** 与后端 `IptvProbeLevel` 对应。 */
-export type IptvProbeLevel = "reachable" | "media_verified";
-
-export type IptvChannelCheck = Pick<IptvChannel, "url" | "headers"> & {
-  /** 是否在「网络可达」之外继续验证首个媒体资源。 */
-  deep?: boolean;
-};
+export type IptvChannelCheck = Pick<IptvChannel, "url" | "headers">;
 
 export type IptvChannelAvailability = {
   url: string;
@@ -19,8 +13,6 @@ export type IptvChannelAvailability = {
   latencyMs: number;
   httpStatus: number | null;
   message: string | null;
-  level: IptvProbeLevel | null;
-  mediaMessage: string | null;
 };
 
 /**
@@ -47,17 +39,11 @@ export function iptvCheckIdentity(channel: Pick<IptvChannel, "url" | "headers">)
 export type IptvAvailabilityState =
   | { status: "checking" }
   | {
-      /**
-       * `available` 只代表「网络可达且拿到了可识别清单」；
-       * `media_verified` 才代表清单引用的媒体也取到了首块字节。
-       */
+      /** `available` 只代表「网络可达且拿到了可识别清单或媒体字节」，不代表一定能播。 */
       status: "available" | "unavailable";
-      level: IptvProbeLevel | null;
       latencyMs: number;
       httpStatus: number | null;
       message: string | null;
-      /** 深探测失败的原因；浅探测或深探测成功时为 null。 */
-      mediaMessage: string | null;
       /** 该结果产生的时刻，用于判定陈旧。 */
       checkedAt: number;
     };
@@ -71,11 +57,9 @@ export function availabilityStateFromResult(
 ): IptvAvailabilityState {
   return {
     status: result.available ? "available" : "unavailable",
-    level: result.level,
     latencyMs: result.latencyMs,
     httpStatus: result.httpStatus,
     message: result.message,
-    mediaMessage: result.mediaMessage,
     checkedAt,
   };
 }
@@ -97,7 +81,6 @@ export function isIptvAvailabilityStale(
 export function getIptvChannelChecks(
   channels: readonly IptvChannel[],
   limit = IPTV_AVAILABILITY_CHECK_LIMIT,
-  deep = false,
 ): IptvChannelCheck[] {
   const checks: IptvChannelCheck[] = [];
   const seen = new Set<string>();
@@ -106,7 +89,7 @@ export function getIptvChannelChecks(
     const identity = iptvCheckIdentity(channel);
     if (seen.has(identity)) continue;
     seen.add(identity);
-    checks.push({ url: channel.url, headers: channel.headers, deep });
+    checks.push({ url: channel.url, headers: channel.headers });
   }
   return checks;
 }

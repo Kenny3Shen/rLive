@@ -50,10 +50,8 @@ export type IptvController = {
   clearFilters: () => void;
   openChannel: (channel: IptvChannel) => void;
   updateSource: () => Promise<void>;
-  /** 浅探测：只确认网络可达与清单可识别。 */
+  /** 轻量探测：只确认网络可达与清单/媒体字节可识别。 */
   checkChannelAvailability: () => Promise<IptvChannelAvailability[] | null>;
-  /** 深探测：额外验证清单引用的首个媒体资源。 */
-  checkChannelAvailabilityDeep: () => Promise<IptvChannelAvailability[] | null>;
 };
 
 const IptvControllerContext = createContext<IptvController | null>(null);
@@ -197,16 +195,6 @@ export function IptvControllerProvider({
     [matchingChannels, source.url],
   );
 
-  const checkChannelAvailabilityDeep = useCallback(
-    () =>
-      probeIptvAvailability(matchingChannels, {
-        sourceUrl: source.url,
-        notify: true,
-        deep: true,
-      }),
-    [matchingChannels, source.url],
-  );
-
   const value = useMemo<IptvController>(
     () => ({
       source,
@@ -228,7 +216,6 @@ export function IptvControllerProvider({
       openChannel,
       updateSource,
       checkChannelAvailability,
-      checkChannelAvailabilityDeep,
     }),
     [
       availabilityByIdentity,
@@ -236,7 +223,6 @@ export function IptvControllerProvider({
       availabilityProgress,
       channels,
       checkChannelAvailability,
-      checkChannelAvailabilityDeep,
       clearFilters,
       filteredChannels,
       groupOptions,

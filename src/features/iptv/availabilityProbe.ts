@@ -17,12 +17,6 @@ export type IptvAvailabilityProbeOptions = {
   notify?: boolean;
   /** 即使来源包含数千行也保持启动工作有界。 */
   limit?: number;
-  /**
-   * 深探测：在「网络可达」之外验证清单引用的首个媒体资源。
-   *
-   * 默认关闭：它会为每个条目多发一次请求，只应在用户主动选择时开启。
-   */
-  deep?: boolean;
 };
 
 let probeEpoch = 0;
@@ -50,7 +44,7 @@ export async function probeIptvAvailability(
   options: IptvAvailabilityProbeOptions,
 ): Promise<IptvChannelAvailability[] | null> {
   const limit = options.limit ?? IPTV_AVAILABILITY_CHECK_LIMIT;
-  const checks = getIptvChannelChecks(channels, limit, options.deep ?? false);
+  const checks = getIptvChannelChecks(channels, limit);
   if (checks.length === 0) return null;
 
   // 身份与探测顺序一一对应；后端按同一规则去重并保持顺序。
@@ -102,14 +96,11 @@ export async function probeIptvAvailability(
   store.getState().markChecked(options.sourceUrl);
   if (options.notify) {
     const availableCount = results.filter((result) => result.available).length;
-    const verifiedCount = results.filter((result) => result.level === "media_verified").length;
     const omittedCount =
       new Set(channels.map((channel) => iptvCheckIdentity(channel))).size - checks.length;
     const limitMessage = omittedCount > 0 ? ` · 已检测前 ${limit} 个` : "";
-    // 浅探测只说「网络可达」，不说「可播」；深探测才报告媒体验证数。
-    const detail = options.deep
-      ? `${availableCount} 个可达 · ${verifiedCount} 个媒体已验证 · ${results.length - availableCount} 个不可用`
-      : `${availableCount} 个网络可达 · ${results.length - availableCount} 个不可用（未验证媒体）`;
+    // 只说「网络可达」，不说「可播」：探测不拉取清单引用的分片。
+    const detail = `${availableCount} 个网络可达 · ${results.length - availableCount} 个不可用`;
     toast.success("频道可用性检测完成", `${detail}${limitMessage}`);
   }
   return results;

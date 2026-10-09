@@ -1,4 +1,4 @@
-// F-03：IPTV 的「网络可达」不等于「媒体已验证可播」。
+// F-03：IPTV 可用性探测的身份隔离、结果映射与陈旧判定。
 //
 // 验收要求：同 URL 不同请求头不能串用状态；有效清单但首片失败不显示为已验证；
 // 结果按条目区分检测时间并能标出陈旧。
@@ -32,11 +32,9 @@ function state(
 ): IptvAvailabilityState {
   return {
     status: "available",
-    level: "reachable",
     latencyMs: 10,
     httpStatus: 200,
     message: null,
-    mediaMessage: null,
     checkedAt: 1_000,
     ...overrides,
   };
@@ -90,65 +88,37 @@ describe("探测身份", () => {
   });
 });
 
-describe("分级可用性", () => {
-  test("浅探测成功只标为网络可达，不冒充媒体验证", () => {
-    const state = availabilityStateFromResult({
-      url: "http://a/live.m3u8",
-      available: true,
+describe("可用性结果", () => {
+  test("成功结果标为网络可达并保留延迟", () => {
+    const state = availabilityStateFromResult(
+      {
+        url: "http://a/live.m3u8",
+        available: true,
+        latencyMs: 12,
+        httpStatus: 200,
+        message: null,
+      },
+      5_000,
+    );
+    expect(state).toEqual({
+      status: "available",
       latencyMs: 12,
       httpStatus: 200,
       message: null,
-      level: "reachable",
-      mediaMessage: null,
+      checkedAt: 5_000,
     });
-    expect(state.status).toBe("available");
-    expect(state.status === "available" && state.level).toBe("reachable");
-    // 媒体未验证时不应有验证结论。
-    expect(state.status === "available" && state.mediaMessage).toBe(null);
   });
 
-  test("清单有效但首个分片失败仍是可达，并带上媒体失败原因", () => {
-    const state = availabilityStateFromResult({
-      url: "http://a/live.m3u8",
-      available: true,
-      latencyMs: 20,
-      httpStatus: 200,
-      message: null,
-      level: "reachable",
-      mediaMessage: "首个媒体资源返回 HTTP 403",
-    });
-    expect(state.status).toBe("available");
-    expect(state.status === "available" && state.level).toBe("reachable");
-    // 关键：不能因为清单存在就显示为已验证可播。
-    expect(state.status === "available" && state.level).not.toBe("media_verified");
-    expect(state.status === "available" && state.mediaMessage).toContain("403");
-  });
-
-  test("深探测成功才标为媒体验证", () => {
-    const state = availabilityStateFromResult({
-      url: "http://a/live.m3u8",
-      available: true,
-      latencyMs: 30,
-      httpStatus: 200,
-      message: null,
-      level: "media_verified",
-      mediaMessage: null,
-    });
-    expect(state.status === "available" && state.level).toBe("media_verified");
-  });
-
-  test("不可用结果不带探测级别", () => {
+  test("失败结果带上原因", () => {
     const state = availabilityStateFromResult({
       url: "http://a/live.m3u8",
       available: false,
       latencyMs: 7,
       httpStatus: 403,
       message: "频道返回 HTTP 403",
-      level: null,
-      mediaMessage: null,
     });
     expect(state.status).toBe("unavailable");
-    expect(state.status !== "checking" && state.level).toBe(null);
+    expect(state.status !== "checking" && state.message).toContain("403");
   });
 });
 
@@ -160,7 +130,7 @@ describe("按身份筛选", () => {
       [iptvCheckIdentity(allowed), state({ checkedAt: 1_000 })],
       [
         iptvCheckIdentity(blocked),
-        { status: "unavailable", level: null, latencyMs: 5, httpStatus: 403, message: "403", mediaMessage: null, checkedAt: 1_000 },
+        { status: "unavailable", latencyMs: 5, httpStatus: 403, message: "403", checkedAt: 1_000 },
       ],
     ]);
 

@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { CircleCheck, CircleX, Folder, Inbox, Layers3, Tv, X } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
@@ -249,23 +248,12 @@ function IptvCardAvailability({
     return <Spinner className="size-4 text-muted-foreground" aria-label="检测中" />;
   }
   if (availability.status === "available") {
-    // 两级结论都画绿色对勾，差别只留在无障碍文案与悬浮提示里：
-    // 浅探测的结论是「网络可达」，深探测才代表媒体已验证，不能读成同一件事。
-    const verified = availability.level === "media_verified";
-    const label = verified
-      ? `媒体已验证，响应 ${formatLatency(availability.latencyMs)}`
-      : `网络可达，未验证媒体，响应 ${formatLatency(availability.latencyMs)}`;
+    // 结论是「网络可达」而非「一定能播」，文案不夸大。
     return (
       <span
-        className={cn(
-          "flex items-center gap-1 text-xs tabular-nums",
-          verified ? "text-success" : "text-muted-foreground",
-        )}
-        aria-label={label}
-        title={
-          availability.mediaMessage ??
-          (verified ? "首个媒体资源已确认可读" : "清单可达，未验证其引用的媒体")
-        }
+        className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums"
+        aria-label={`网络可达，响应 ${formatLatency(availability.latencyMs)}`}
+        title="网络可达"
       >
         <CircleCheck className="size-4 text-success" aria-hidden />
         {formatLatency(availability.latencyMs)}
