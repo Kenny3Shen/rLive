@@ -326,7 +326,7 @@ export function IptvAvailabilityFab() {
     : "检测频道可用性";
 
   return createPortal(
-    <div className="fixed right-4 bottom-[4.5rem] z-30 md:right-5 md:bottom-[4.25rem] max-md:bottom-[calc(8.5rem+env(safe-area-inset-bottom))]">
+    <div className="fixed right-4 bottom-[4.5rem] z-30 md:right-5 md:bottom-[4.25rem] max-md:bottom-[calc(8.5rem+var(--app-safe-area-bottom))]">
       <Tooltip>
         <TooltipTrigger
           render={

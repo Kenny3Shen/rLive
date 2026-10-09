@@ -45,6 +45,10 @@
      平台色调表面上同样清楚；而强调色恰恰在那些本就是蓝色的控件上
      会被读成选中/激活状态。 */
   --focus-ring-color: color-mix(in oklab, var(--foreground) 72%, transparent);
+  /* 应用外壳底部安全区。Android WebView 的 `env(safe-area-inset-bottom)` 在 edge-to-edge
+     下常为 0，手势条会压住底部导航标签；MainActivity 注入的原生 inset 优先，
+     旧 APK / 浏览器回退到 env。 */
+  --app-safe-area-bottom: var(--android-safe-area-bottom, env(safe-area-inset-bottom));
   /* 与 shared/motion/tokens.ts 对齐：直接操作、空间移动、离场各有节奏。 */
   --motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
   --motion-ease-emphasized: cubic-bezier(0.32, 0.72, 0, 1);
@@ -1018,7 +1022,7 @@ body {
     bottom: 0;
     left: 0;
     z-index: 20;
-    height: calc(3rem + env(safe-area-inset-bottom));
+    height: calc(3rem + var(--app-safe-area-bottom));
     width: auto;
     flex-direction: row;
     border-top: 1px solid var(--border-subtle);
@@ -1026,7 +1030,7 @@ body {
     padding-right: 0.5rem;
     padding-left: 0.5rem;
     padding-top: 0.125rem;
-    padding-bottom: calc(0.125rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(0.125rem + var(--app-safe-area-bottom));
   }
 
   .app-shell [data-slot="app-sidebar-nav"] {
@@ -1064,7 +1068,7 @@ body {
   }
 
   [data-slot="refresh-fab"] {
-    bottom: calc(3.5rem + env(safe-area-inset-bottom));
+    bottom: calc(3.5rem + var(--app-safe-area-bottom));
   }
 
   .app-shell [data-slot="app-header"] {
@@ -1081,7 +1085,7 @@ body {
      入场 transform 就无法扩大祖先的可滚动区域。 */
   .app-shell [data-slot="app-page"] {
     padding: 0.75rem;
-    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(3.5rem + var(--app-safe-area-bottom));
   }
 
   [data-slot="iptv-player-footer"] {

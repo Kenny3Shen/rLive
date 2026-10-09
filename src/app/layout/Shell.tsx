@@ -638,7 +638,7 @@ export function Shell() {
     "relative h-full min-h-0",
     // 滚动容器留在仅合成的页面包装层内部，
     // 使被位移的内容无法撑大主面板或闪出第二条滚动条。
-    "overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(4.25rem+env(safe-area-inset-bottom))] touch-pan-y md:p-5 md:pb-5",
+    "overflow-x-hidden overflow-y-auto overscroll-y-contain p-4 pb-[calc(4.25rem+var(--app-safe-area-bottom))] touch-pan-y md:p-5 md:pb-5",
   );
   const swipePage = (
     <div

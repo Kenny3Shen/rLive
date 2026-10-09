@@ -62,7 +62,7 @@ export function RefreshFab({
             className={cn(
               "fixed right-4 bottom-4 z-30 size-11 rounded-full p-0 shadow-lg shadow-black/25 md:right-5 md:bottom-5",
               // 清除移动端底部导航栏与设备 inset。
-              "max-md:bottom-[calc(5rem+env(safe-area-inset-bottom))]",
+              "max-md:bottom-[calc(5rem+var(--app-safe-area-bottom))]",
               className,
             )}
           />

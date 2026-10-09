@@ -1843,7 +1843,7 @@ function PlayerPaneContent({
                         "shrink-0 border-t border-border/80",
                         // 竖屏堆叠时侧栏贴着窗口底边，发送框要让出手势栏；横屏抽屉自身已留 inset。
                         // Android WebView 的 env() 常为 0，优先用原生注入的 inset（见 styles.css）。
-                        inlineCompactSidePanel && "pb-[env(safe-area-inset-bottom)]",
+                        inlineCompactSidePanel && "pb-[var(--app-safe-area-bottom)]",
                       )}
                     >
                       <DanmakuComposer
