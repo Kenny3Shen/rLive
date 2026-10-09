@@ -2,6 +2,9 @@
 //!
 //! 官网负责二维码、访问验证及登录协议；rLive 不注入已保存凭据，也不向
 //! 远程页面开放 IPC。只有第一方账号探针确认有效的新 Cookie 才允许落库。
+//!
+//! 整个模块只在桌面端有意义：移动端没有官方登录窗口，`start` / `poll` 等入口直接
+//! 返回「不支持」。下面的 URL 与窗口标签前缀仅供桌面登录窗口使用。
 
 use crate::account::qr::{QrLoginPoll, QrLoginStart, QrSite};
 use crate::error::AppResult;
@@ -10,8 +13,11 @@ const SITE: QrSite = QrSite {
     id: "douyin",
     display: "抖音",
 };
+#[cfg(desktop)]
 const LOGIN_URL: &str = "https://live.douyin.com/";
+#[cfg(desktop)]
 const COOKIE_URL: &str = "https://live.douyin.com/webcast/user/me/";
+#[cfg(desktop)]
 const WINDOW_PREFIX: &str = "douyin-login-";
 /// 只露出官方登录面板的页面脚本：自动打开面板并用不透明底色盖住首页，
 /// 不读写 Cookie、不访问应用 IPC（登录窗口本身也没有 IPC 权限）。

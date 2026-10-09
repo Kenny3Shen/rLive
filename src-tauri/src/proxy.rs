@@ -31,6 +31,10 @@ const SYSTEM_PROXY_TTL: Duration = Duration::from_secs(5);
 /// 它不需要是 FFmpeg 认识的关键字：`http.c` 与 `tls.c` 只判断取值是否以
 /// `http://` 开头。用一个非空、语义自明的取值是为了让 HLS 子分片也拿到它，
 /// 从而连环境变量里的 `http_proxy` 一起被忽略。
+///
+/// 只有桌面录制链路会把它交给 FFmpeg；移动端没有录制，因此随桌面平台一同编译
+/// （测试在任何平台都编译，两个方法也一并保留回归）。
+#[cfg(any(desktop, test))]
 pub const DIRECT_FFMPEG_PROXY: &str = "direct";
 
 /// 从系统解析出的代理配置。
@@ -142,10 +146,15 @@ impl ProxyRoute {
     /// 不支持 HTTPS 代理及 HLS 子分片继承首个 URL 代理选项的问题。
     ///
     /// 即使 System(None) 也必须返回非空哨兵，不能把未支持的环境代理交回 FFmpeg。
+    /// 只有桌面录制链路消费它，移动端没有录制。
+    #[cfg(any(desktop, test))]
     pub fn ffmpeg_proxy(&self) -> &'static str {
         DIRECT_FFMPEG_PROXY
     }
 
+    /// 该出口是否需要录制网络转发。只有桌面录制链路使用；没有代理出口时 FFmpeg
+    /// 直连源站，由已有 stream_proxy 逐请求转发有出口的情况不适用。
+    #[cfg(any(desktop, test))]
     pub fn needs_recording_relay(&self) -> bool {
         matches!(self, Self::Custom(_) | Self::System(Some(_)))
     }

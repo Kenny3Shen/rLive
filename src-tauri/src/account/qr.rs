@@ -173,6 +173,11 @@ impl<P: Clone + Send + 'static> QrSessionStore<P> {
     /// 在会话仍有效时原子提交，只有提交成功才消费句柄。
     /// 取消/过期与提交共用会话锁，避免已取消的登录写回账号。
     /// 回调必须是短暂的同步操作，不得等待网络或调用窗口 API。
+    ///
+    /// 目前只有桌面的抖音官网登录窗口需要「先确认会话仍有效再落库」，移动端没有
+    /// 这个入口，因此随桌面平台一同编译；测试在任何平台都编译，保证提交语义始终
+    /// 有回归。
+    #[cfg(any(desktop, test))]
     pub fn commit<T>(&self, key: &str, save: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
         let mut sessions = self
             .map()
