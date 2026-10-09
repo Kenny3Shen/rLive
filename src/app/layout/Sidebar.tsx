@@ -67,38 +67,42 @@ function SidebarLink({
           // 48px 命中区加图标下方的文字标签 —— 悬停 tooltip 在触摸上不存在，
           // 无标签的纯图标 rail 在平板上无法自解释。
           "touch-wide:h-auto touch-wide:min-h-12 touch-wide:w-auto touch-wide:min-w-12 touch-wide:flex-col touch-wide:gap-0.5 touch-wide:rounded-lg touch-wide:px-1.5 touch-wide:py-1",
-          "max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-1",
+          "max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-0.5",
           className,
+          // 移动端底栏不给整格铺底：选中态由图标背后的胶囊指示器表达（见 styles.css
+          // 的 `app-sidebar-indicator`），整格只换文字颜色。桌面竖栏沿用整格高亮。
           isActive
-            ? "bg-primary/12 text-primary ring-1 ring-primary/15 shadow-sm shadow-primary/10"
-            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+            ? "text-primary md:bg-primary/12 md:shadow-sm md:shadow-primary/10 md:ring-1 md:ring-primary/15"
+            : "text-muted-foreground hover:text-foreground md:hover:bg-muted/70",
         )
       }
     >
       {({ isActive }) => (
         <>
-          <span className="relative inline-flex shrink-0">
-            <Icon
-              className={cn(
-                "motion-nav-icon size-5 transition-transform duration-150 ease-[var(--motion-ease-out)] motion-reduced:transition-none",
-                isActive && "text-primary",
+          <span data-slot="app-sidebar-indicator" className="relative inline-flex shrink-0">
+            <span className="relative inline-flex">
+              <Icon
+                className={cn(
+                  "motion-nav-icon size-5 transition-transform duration-150 ease-[var(--motion-ease-out)] motion-reduced:transition-none",
+                  isActive && "text-primary",
+                )}
+              />
+              {badgeCount > 0 && (
+                <Badge
+                  variant="default"
+                  aria-label={badgeLabel}
+                  // 用实心填充而不是着色的 `destructive` 变体：这么小的计数必须在其覆盖的图标
+                  // 上保持可读，侧栏色的描边让它与图标脱开。
+                  className="pointer-events-none absolute -top-1.5 -right-2 h-4 min-w-4 justify-center rounded-full bg-destructive px-1 text-[10px] leading-none font-semibold tabular-nums text-white ring-2 ring-sidebar"
+                >
+                  {badgeCount > 99 ? "99+" : badgeCount}
+                </Badge>
               )}
-            />
-            {badgeCount > 0 && (
-              <Badge
-                variant="default"
-                aria-label={badgeLabel}
-                // 用实心填充而不是着色的 `destructive` 变体：这么小的计数必须在其覆盖的图标
-                // 上保持可读，侧栏色的描边让它与图标脱开。
-                className="pointer-events-none absolute -top-1.5 -right-2 h-4 min-w-4 justify-center rounded-full bg-destructive px-1 text-[10px] leading-none font-semibold tabular-nums text-white ring-2 ring-sidebar"
-              >
-                {badgeCount > 99 ? "99+" : badgeCount}
-              </Badge>
-            )}
+            </span>
           </span>
           <span
             data-slot="app-sidebar-label"
-            className="sr-only max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[10px] max-md:leading-3 max-md:font-medium touch-wide:not-sr-only touch-wide:block touch-wide:max-w-full touch-wide:truncate touch-wide:text-[10px] touch-wide:leading-3 touch-wide:font-medium"
+            className="sr-only max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[11px] max-md:leading-3.5 max-md:font-medium touch-wide:not-sr-only touch-wide:block touch-wide:max-w-full touch-wide:truncate touch-wide:text-[10px] touch-wide:leading-3 touch-wide:font-medium"
           >
             {label}
           </span>

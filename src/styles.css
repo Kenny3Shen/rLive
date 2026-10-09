@@ -957,6 +957,58 @@ body {
   }
 }
 
+/* 移动端底栏（< md）的选中态：Material 3 式胶囊指示器只铺在图标背后，不给整格铺底。
+   整格高亮在 6 个入口的窄底栏里块面太重，读起来像一排按钮而非导航；胶囊让选中项
+   一眼可辨，标签只换颜色。切换时胶囊从中心横向展开（仅 transform/opacity，合成器
+   完成），减少动效时直接切换。宽度不超过所在格，320px 窄屏也不会挤出格子。 */
+@media (width < 48rem) {
+  .app-shell [data-slot="app-sidebar-indicator"] {
+    width: min(3.5rem, 100%);
+    height: 2rem;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .app-shell [data-slot="app-sidebar-indicator"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: 9999px;
+    background-color: color-mix(in oklab, var(--primary) 16%, transparent);
+    opacity: 0;
+    transform: scaleX(0.4);
+    transition:
+      opacity 160ms var(--motion-ease-out),
+      transform 240ms var(--motion-ease-out);
+  }
+
+  .app-shell [data-slot="app-sidebar-link"] {
+    isolation: isolate;
+  }
+
+  .app-shell [data-slot="app-sidebar-link"][aria-current="page"] [data-slot="app-sidebar-indicator"]::before {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  /* 按下未选中项时给出同形的浅色反馈，触摸上没有悬停态可依赖。 */
+  .app-shell [data-slot="app-sidebar-link"]:not([aria-current="page"]):active
+    [data-slot="app-sidebar-indicator"]::before {
+    background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  .app-shell [data-slot="app-sidebar-link"][aria-current="page"] [data-slot="app-sidebar-label"] {
+    font-weight: 600;
+  }
+
+  [data-motion="reduced"] .app-shell [data-slot="app-sidebar-indicator"]::before {
+    transition: none;
+  }
+}
+
 /* 较矮的横屏手机首先是观看表面。保持底部导航可达但紧凑：图标保留 44px 目标，
    标签与多余的外壳内边距不再吃掉五分之一的视口。 */
 @media (max-height: 540px) and (orientation: landscape) and (pointer: coarse) {
