@@ -188,7 +188,7 @@ playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-motion.browser.js
 playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser.js
 ```
 
-前者在独立临时 React root 上验证真实 hook 的生命周期，结束后自动清理；后者切换真实的视频、直播平台、历史、关注和 IPTV 页签，检查逐帧面板覆盖、即时启动和最终落位，并把截图写入 `.playwright-cli/windows-*-tabs.png`。保活窗口的纯函数回归位于 `tests/horizontal-swipe.test.ts`。
+前者在独立临时 React root 上验证真实 hook 的生命周期，结束后自动清理；后者切换真实的视频、直播平台、历史、关注和 IPTV 页签，检查逐帧面板覆盖、即时启动和最终落位，并把截图写入 `.playwright-cli/windows-*-tabs.png`。
 
 ### 4.5.1 `useImageZoom`：图片查看器的缩放与平移
 

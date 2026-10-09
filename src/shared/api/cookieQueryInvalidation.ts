@@ -17,7 +17,8 @@ const COOKIE_DEPENDENT_QUERY_SCOPES = new Set([
 
 /**
  * VOD 列表里只有推荐接口受账号影响：Web API 推荐需要 Cookie 才是个性化流，
- * App API 则只认设备轴（`buvid`，见 `docs/zh/短视频调研-B站与抖音.md`）。
+ * App API 不按 Web Cookie 个性化；设备 buvid 与独立 TV 授权的边界见
+ * `docs/zh/B站视频功能-设计.md`「推荐源与画幅适配」。
  * 站点 id 不在 key 的第二槽位（那里是页签），因此单独判断。
  */
 const COOKIE_DEPENDENT_VIDEO_LIST_TABS = new Set(["recommend"]);

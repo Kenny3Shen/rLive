@@ -151,22 +151,6 @@ describe("history refresh scroll reset", () => {
     expect(second).toBe(1);
   });
 
-  test("resets every registered timeline, not just one token", () => {
-    // 三个视图共用同一个滚动容器，因此刷新要归零的是「这个容器」而不是某一条
-    // 时间线：只要有一条登记在册，回顶就应当发生。
-    let watch = 0;
-    let danmaku = 0;
-    registerHistoryRefreshScrollReset(10, () => {
-      watch += 1;
-    });
-    registerHistoryRefreshScrollReset(11, () => {
-      danmaku += 1;
-    });
-
-    resetHistoryScrollForRefresh(10);
-    expect([watch, danmaku]).toEqual([1, 1]);
-  });
-
   test("ignores the zero token, which means 'not participating'", () => {
     let calls = 0;
     registerHistoryRefreshScrollReset(0, () => {

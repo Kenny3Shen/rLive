@@ -261,6 +261,7 @@ message DanmakuElem {
 - 一集播完后的动作由纯函数 `videoEndedAction(loopPlayback, autoPlayNext, hasNext, autoPlayRelated)` 决定，优先级固定：循环 > 连播下一集 > 连播相关视频 > 停住。`hasNext` 的目标经 `videoEndedTarget(selectionNext, queueNext)` 选出：当前视频自身选集的下一项优先，没有才退回来源队列邻项（搜索/UP 投稿）；推荐/热门/相关流的邻项不计入（`getNextAutoPlayItem` 对 `feed` 返回 null），这类队列走完即落到相关连播。搜索/投稿队列的条目没有 cid（列表项以 0 占位），取流键由历史续播/稿件详情补出，若沿队列邻项走就会切到另一个视频，因此选集优先。循环是「就看这一集」的显式意图，不该被连播带走；`autoPlayRelated` 是 UGC 专属偏好（PGC 没有相关视频列表，也没有可定位的 bvid），关闭或相关视频为空时停住。`ended` 读 `usePlaylistStore.getState()` 快照而不是播放器挂载时的闭包值，播放期间改偏好立刻生效；选集经 `selectionNextItemRef` 读取，因为分集表/稿件详情晚于播放器就位，延迟窗口里还会再取一次。
 - 两条连播的等待窗口不同：换集 1 秒，相关连播 3 秒。跳转前的校验按已定下的 `action` 只查它对应的开关现值（`stillWanted`），因此等待期间关掉开关、按暂停、换片或重播都会取消这次跳转；`cancelled`/`loopPlayback` 又是两条路径共用的守卫。
 - 相关连播沿用来源队列耗尽时的同一条路径（`playRelatedItem`：取相关视频接口、按 `relatedPlaylistItems` 去重并滤掉当前视频、以 `feed` 类型装入队列、跳转第一个）。
+- 结束判定统一经过播放器传输层：原生 `ended` 与 dash.js 最后一个 Period 的 `playbackEnded` 合并去重，中间 Period 的结束不切集。DASH 在终点可能只暂停而不发出原生 `ended`，此时仍按同一规则连播。重播、拖离终点或卸载会取消待执行动作；循环重播延后到本轮结束事件处理完成，避免被引擎的收尾暂停打断。回归见 `tests/video-playback-ended.test.ts` 与 `tests/video-ended-next.test.ts`。
 - 循环重播走原生 `media.currentTime = 0` + `play()`（与 seek 同一条 DASH 路径）；进度已在 `ended` 里按总时长记满，观看历史仍认定「已看完」，下次进入从头播放。
 - 音量与静音由 `src/shared/playerVolume.ts` 记在 localStorage `rlive-player-volume`，视频页、直播页、IPTV 播放页与录制回放共享同一份：初值取 `readPlayerVolume()`，音量/静音状态变化写 `rememberPlayerVolume()`（同值不重渲染，一次拖动最多写它经过的档位数，不需要节流）。不参与的两处：多画面按槽位各存一份音量（副画面默认静音是角色语义）；Android 真实音量是系统媒体音量（由 OS 记住），网页层固定 100 且不落盘，否则会把 100 写进桌面端的记忆。
 

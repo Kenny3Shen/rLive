@@ -48,7 +48,7 @@ export type ShortsIntrinsicSize = { width: number; height: number };
  * `dimension` 只是起播前的先验（也可能与实际取到的流不一致）。
  *
  * `rotate` 非 0 时宽高互换 —— B 站这个字段是 0/1 标志而不是角度（见
- * `docs/zh/短视频调研-B站与抖音.md`），因此判定「非 0 即互换」而不是只认 90/270。
+ * `docs/zh/短视频功能.md`「四、竖屏舞台」），因此判定「非 0 即互换」而不是只认 90/270。
  *
  * 两个来源都没有时返回 null 而不是猜 9:16：猜错的代价是画面被按错误比例定框，
  * 而 null 会让舞台退回「画面框 = 舞台」，由 `object-contain` 自己居中留边。

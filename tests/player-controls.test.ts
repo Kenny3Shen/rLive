@@ -133,13 +133,6 @@ describe("panel drawer geometry", () => {
     expect(panelDrawerSizeClass("right", false)).toBe("h-full w-[min(22rem,78vw)]");
   });
 
-  // 二级回复叠在一级评论抽屉之上：两层的侧别与尺寸都由这两个函数算，因此只要
-  // 输入相同就不可能错位。曾经二级走基础组件的 20rem 而一级是 22rem，桌面上
-  // 右侧露出一条 32px 的缝。
-  test("derives width from the same token the live sidebar uses", () => {
-    expect(panelDrawerSizeClass("right", false)).toContain("w-[min(22rem,78vw)]");
-  });
-
   // 侧栏挂载点（播放页）已经把抽屉改成 absolute w-full，此时再写死高宽会把
   // 70dvh 泄进侧栏 —— 抽屉只占侧栏上面七成，下面露出评论列表。
   test("leaves sizing to the sidebar when scoped, and keeps sliding in from the right", () => {
@@ -832,28 +825,6 @@ describe("custom player controls layout", () => {
     expect(toolsIdx).toBeGreaterThan(fullscreenIdx);
   });
 
-  test("fullscreen top HUD buttons use matching player control button styling", () => {
-    const html = renderToStaticMarkup(
-      createElement(PlayerFullscreenHud, {
-        fullscreen: true,
-        hasRoomIdentity: true,
-        hasActions: true,
-        roomTitle: "测试房间",
-        onBack: () => {},
-        roomActions: [
-          {
-            id: "share",
-            label: "分享",
-            icon: () => null,
-            onSelect: () => {},
-          },
-        ],
-      }),
-    );
-    expect(html).toContain("r-live-media-extension-button");
-    expect(html).toContain("退出全屏");
-  });
-
   test("every fullscreen HUD button lands on the one shared overlay recipe", () => {
     const html = renderToStaticMarkup(
       createElement(PlayerFullscreenHud, {
@@ -865,7 +836,8 @@ describe("custom player controls layout", () => {
         roomActions: [{ id: "share", label: "分享", icon: () => null, onSelect: () => {} }],
       }),
     );
-    // 返回箭头与溢出菜单都必须是 36px 的 MediaButton，一个都不能退回 shadcn 图标按钮。
+    expect(html).toContain("退出全屏");
+    // 返回箭头与溢出菜单都必须使用 MediaButton，一个都不能退回 shadcn 图标按钮。
     expect(html.split("r-live-media-extension-button").length - 1).toBe(2);
     // 白色前景跟着同一份配方走，否则按钮在深色遮罩上会变成深色。
     expect(html.split("text-media-controls-foreground").length - 1).toBe(2);

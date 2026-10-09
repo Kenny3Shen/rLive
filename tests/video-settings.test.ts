@@ -87,8 +87,8 @@ describe("退役的发送权限配置", () => {
 /**
  * 账号 Cookie 变化后必须刷新的缓存范围。
  *
- * App API 推荐不按 Cookie 个性化（设备轴才是旋钮，见
- * `docs/zh/短视频调研-B站与抖音.md` 的实测），但 Web API 推荐是
+ * App API 推荐不按 Web Cookie 个性化，设备 buvid 与独立 TV 授权的边界见
+ * `docs/zh/B站视频功能-设计.md`「推荐源与画幅适配」；Web API 推荐是
  * 「有 Cookie 才是个性化流」。因此切换推荐接口与账号变更都必须让推荐页重取。
  */
 describe("推荐缓存与账号的耦合", () => {
