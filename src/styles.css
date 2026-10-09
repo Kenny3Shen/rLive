@@ -954,9 +954,11 @@ body {
      先派发 pointercancel、再派发 contextmenu；应用层 preventDefault 取消菜单后，
      WebView 的触摸路由会悬死——后续所有 touch 事件不再派发到页面，表现为只能
      滚动、点按与 Tab 全部失效。让卡片封面/缩略图不参与命中测试，长按落在
-     容器元素上即可同时规避接管与菜单（div 上没有原生长按菜单）。 */
+     容器元素上即可同时规避接管与菜单（div 上没有原生长按菜单）。
+     图片查看器同样适用：命中测试由 `useImageZoom` 按几何判断，不依赖事件目标。 */
   .room-card img,
-  [data-motion-press] img {
+  [data-motion-press] img,
+  [data-image-viewer] img {
     pointer-events: none;
   }
 }

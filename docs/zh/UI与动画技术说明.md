@@ -190,6 +190,67 @@ playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser
 
 前者在独立临时 React root 上验证真实 hook 的生命周期，结束后自动清理；后者切换真实的视频、直播平台、历史、关注和 IPTV 页签，检查逐帧面板覆盖、即时启动和最终落位，并把截图写入 `.playwright-cli/windows-*-tabs.png`。保活窗口的纯函数回归位于 `tests/horizontal-swipe.test.ts`。
 
+### 4.5.1 `useImageZoom`：图片查看器的缩放与平移
+
+`src/shared/hooks/useImageZoom.ts` 给 VOD 评论图片查看器（`src/shared/components/ImageViewer.tsx`）
+补上缩放与平移；阈值与换算在 `src/shared/gestures/imageZoom.ts`
+（纯函数，单测见 `tests/image-zoom.test.ts`）。两端共用同一套几何，各自用本端读得懂的输入：
+
+| 输入 | 触屏 | 桌面 |
+| --- | --- | --- |
+| 放大 / 缩小 | 双指捏合 | 滚轮、触控板捏合（`ctrl + wheel`）、`+` / `-` |
+| 切换适配尺寸与 `2.5` 倍 | 双击（点按配对） | 双击（原生 `dblclick`） |
+| 复位 | 双击 | 双击、`0` |
+| 放大后平移 | 单指拖动 | 左键拖动 |
+| 切换图片 | 横向滑动 | 左右方向键、两侧按钮 |
+
+| 参数 | 值 | 含义 |
+| --- | --- | --- |
+| 倍率区间 | `1 ~ 4` | 下限即「适配尺寸」，图片始终完整可见 |
+| 双击倍率 | `2.5` | 留出继续捏合的余量 |
+| 双击窗口 | `320ms`、落点容差 `12px` | 触屏用点按配对；鼠标走原生 `dblclick`，两条判定不叠加 |
+| 点按/拖动分界 | `10px` | 与 `HORIZONTAL_SWIPE_LOCK_DISTANCE_PX` 同档，不会与翻页误判 |
+| 滚轮灵敏度 | `0.0025` / 像素，捏合 `0.01` | 乘性换算（`scale × e^(−delta × 灵敏度)`）；一格滚轮约 `1.28` 倍 |
+| 键盘步进 | `1.25` 倍 | `+` / `-` 各一步 |
+| 滚轮收口 | 停手 `160ms` 后 | 成串的滚轮事件期间不起补间，否则互相打断成抖动 |
+| 释放收口 | `220ms` | 残留倍率低于 `1.02` 直接归位，其余只做范围修正 |
+
+实现约束：
+
+- 与 `useHorizontalSwipe` **共用同一串指针事件**，每个处理器返回「本轮是否认领」：缩放层先判，
+  未认领的才转交翻页层。因此点按收尾、横滑锁定仍由翻页层负责，两层不能按「是否放大」整段隔开。
+- 认领规则：第一根手指必须落在当前图片上（**按几何判断**，不读 `event.target`：触屏下
+  `[data-image-viewer] img` 与卡片封面一样 `pointer-events: none`，且 pointer capture 会改写 target）；
+  两根及以上手指即双指缩放，第二根按下时就认领，早于横滑的 `10px` 锁定，因此双指永远优先；
+  放大态的单指改为平移；未放大时不认领，翻页照旧。
+- 放大或多指期间 `enabled: false` 停用横滑，hook 同时把条带停回当前图 —— 否则捏合中途的条带会
+  被横滑带走。缩回适配尺寸要等收尾动画跑完再解锁，否则横滑会在图片还在缩小途中接管。
+- 变换直接写 `<img>` 的 `transform`（`translate3d` + `scale`，`origin-center`）：跟手逐帧写内联样式，
+  释放交给 WAAPI；新手势从当前实时像素接管（`DOMMatrixReadOnly`），不回跳。只有「是否放大」与
+  「是否多指」两个布尔进 React 状态。
+- 平移边界按「放大后图片边缘不超过视口边缘」计算，小于视口的方向恒为 0。锚点（双指中点、
+  双击落点）不额外夹取：边界收口已经在结果上兜住了任意锚点，纯倍率换算因此可以逐帧推进，
+  不必为「锚点跑到图外」再分一路。
+- 弹层用 `touch-none`（不是 `touch-pan-y`）：手势全部自持，交给浏览器只会换来原生页面缩放与
+  `pointercancel`。窗口级 `pointerup` / `pointercancel` 兜底与 `useDetailsResize` 同理，
+  保证手指在弹层外结束也能收尾。
+- 点图外的空白只在**未放大**时关闭查看器；放大态下图片不一定铺满视口，那里的一点点击不该
+  连带丢掉缩放，退出交给双击复位或关闭按钮。
+- 桌面输入走同一套几何：滚轮把 `deltaMode` 归一化成像素后按指数换算（倍率是乘性量，
+  加法会让 1→2 与 3→4 需要同样的滚动量），锚点取指针位置；触控板捏合在浏览器里就是
+  `ctrl + wheel`，用大一档的灵敏度补偿「每个事件 delta 只有个位数」；键盘锚点取视口中心。
+- 滚轮必须用**原生非 passive** 监听器（`bindViewport`）：React 的 `onWheel` 在根节点上
+  passive 代理，`preventDefault` 无效，满屏弹层底下的页面会跟着滚。指针不在图上或已顶到
+  倍率边界时只吃掉事件、不做变换。
+- 放大后光标换成 `cursor-grab` / `cursor-grabbing` 给出可操作性暗示；鼠标拖拽补一次显式
+  `setPointerCapture`（触摸本来就有隐式捕获），拖出弹层甚至拖出窗口也不会丢事件。
+
+回归：`tests/image-viewer-zoom.browser.js` 挂真实 `ImageViewer`（真实 base-ui Dialog 与两个手势 hook，
+只把图片请求换成内联 SVG）。触屏部分覆盖双击锚点、一比一平移、边缘收口、缩回归位、翻页恢复与按图复位；
+桌面部分由外层真实输入驱动（`page.mouse.dblclick` / `page.mouse.wheel` / `Keyboard`），
+覆盖滚轮缩放不穿透到页面、触控板捏合、键盘 `+` / `-` / `0` 与鼠标拖拽平移 —— 这些路径的
+命中测试与 passive 监听器语义是合成事件替代不了的。
+
 ### 4.6 `useLongPress`：触摸长按
 
 `src/shared/hooks/useLongPress.ts` 把「按住约半秒」翻译为一次回调，`useLongPressDrawer` 在其上封装抽屉开关、Android Back 收起与点按抑制，由 `RoomCard` 与关注页卡片共用。判定常量在 `src/shared/gestures/longPress.ts`：触发 `500ms`、漂移容忍半径 `10px`、`LONG_PRESS_CONTEXTMENU_GRACE_MS` `300ms`，以及播放页与短视频共用的临时长按倍速 `LONG_PRESS_SPEED_RATE`（3x）。
@@ -197,7 +258,7 @@ playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser
 - 只有触摸 / 触控笔主指针参与；鼠标交给右键菜单，桌面端 `enabled: false`。触发后松手可能合成一次 click，调用方需用「触发时置位、下次 pointerdown 清零」的标记抑制。
 - 取消判定除卡片自身的 pointermove/up/cancel 外，还必须镜像到 **window 捕获阶段**：祖先横向翻页锁定手势后会 `setPointerCapture` 并 `stopPropagation`，卡片自身取消路径会失明。`HORIZONTAL_SWIPE_LOCK_DISTANCE_PX`（10px）不小于长按容忍半径，保证能锁定为翻页的手势在计时器到期前必已取消。
 - Android WebView 在系统长按点派发原生 `contextmenu`：调用方在卡片上 `preventDefault` 并经 `triggerNow()` 立即触发；自持计时器承担 iOS WebView 与兜底。`contextmenu` 必须归属本卡片的按压，距上次触发不足一个触发周期的伪信号在宽限外一律忽略。
-- 卡片封面在 `@media (pointer: coarse)` 下 `pointer-events: none`（`.room-card img`、`[data-motion-press] img`）：Android WebView 149+ 在 `<img>` 上识别长按会启动原生图片菜单接管，应用层 `preventDefault` 后触摸路由会悬死。iOS 长按封面的系统菜单由同组规则中的 `-webkit-touch-callout: none` 压制。
+- 卡片封面与图片查看器的图片在 `@media (pointer: coarse)` 下 `pointer-events: none`（`.room-card img`、`[data-motion-press] img`、`[data-image-viewer] img`）：Android WebView 149+ 在 `<img>` 上识别长按会启动原生图片菜单接管，应用层 `preventDefault` 后触摸路由会悬死。iOS 长按封面的系统菜单由同组规则中的 `-webkit-touch-callout: none` 压制。
 - 抽屉退出动画期间（`data-closed` 存在时）遮罩与弹层 `pointer-events: none`（`styles.css` 的 `.motion-dialog-overlay` 等规则），避免抬手事件派发到已卸载节点导致后续点按不再合成 click。
 - 关注卡片上长按计时与 dnd-kit 拖拽激活器共用同一次 pointerdown；触摸不激活 MouseSensor。
 
@@ -311,5 +372,6 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 | `src/shared/motion/FrozenRouter.tsx` | 离场子树的 `LocationContext` / `RouteContext` 冻结（两个宿主共用，见 4.3） |
 | `src/shared/gestures/horizontalSwipe.ts`、`longPress.ts` | swipe 与长按的阈值常量和纯判定逻辑 |
 | `src/shared/gestures/detailsResize.ts`、`src/shared/hooks/useDetailsResize.ts` | VOD 侧栏内容滑动自适应占比的阈值/换算与手势接线 |
+| `src/shared/gestures/imageZoom.ts`、`src/shared/hooks/useImageZoom.ts` | 图片查看器双指缩放 / 双击 / 平移的阈值换算与手势接线 |
 | `src/shared/components/player/PlayerControls.tsx` | 共享播放控制条与安全区避让 |
 | `src/shared/components/player/PlayerStageSkeleton.tsx` | 沉浸播放页的轻量加载占位（纯黑画面与可选返回入口，不绘制顶部身份行、控制栏或假按钮骨架），直播详情、两条竖屏流与沉浸路由 Suspense 占位共用 |
