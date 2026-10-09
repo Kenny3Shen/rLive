@@ -698,9 +698,12 @@ body {
   transform: translate3d(4px, 0, 0) scale(0.97);
 }
 
+/* 退场的位移仍用 ease-exit 加速离开，透明度改用 ease-out：ease-exit 起步极慢，
+   前一半时长里几乎还是不透明，读起来像弹层「卡了一下才消失」。透明度先走，
+   关闭立即有反馈，位移在后面收尾。时长保持单值，与对话框/遮罩同拍的约束一致。 */
 :is(.motion-popup, .motion-tooltip)[data-ending-style] {
   transition-duration: var(--motion-popup-exit-duration);
-  transition-timing-function: var(--motion-ease-exit);
+  transition-timing-function: var(--motion-ease-exit), var(--motion-ease-out);
 }
 
 .motion-tooltip[data-instant] {
@@ -755,25 +758,41 @@ body {
   pointer-events: none;
 }
 
+/* 居中靠 `translate`（Tailwind -translate-1/2），入场上浮只用独立的 `transform`
+   叠加，两者互不覆盖。入场从略低处浮起并放大，与弹层「从锚点长出」同一套语言；
+   退场只做更轻的收缩，不再往下坠 —— 离开要快、要安静，位移会把注意力拉回已关闭的面板。 */
 .motion-dialog {
   scale: 1;
   opacity: 1;
   transform-origin: center;
   transition:
     scale var(--motion-dialog-duration) var(--motion-ease-emphasized),
+    transform var(--motion-dialog-duration) var(--motion-ease-emphasized),
     opacity 160ms var(--motion-ease-out);
 }
 
-.motion-dialog:is([data-starting-style], [data-ending-style]) {
+.motion-dialog[data-starting-style] {
   scale: 0.96;
   opacity: 0;
   /* 与上面弹层类相同的静止期提升隐患。 */
-  will-change: scale, opacity;
+  will-change: scale, transform, opacity;
+}
+
+/* `scale` 与 `transform` 不能写在同一条规则里：构建时的 CSS 压缩会把二者合并，
+   直接丢掉 `scale` 声明（实测 dist 产物中入场缩放与减少动效的 scale: 1 都会消失）。
+   上浮单独成规则，`:where()` 让它与上面同为 (0,1,0)，仍可被减少动效规则覆盖。 */
+.motion-dialog:where([data-starting-style]) {
+  transform: translate3d(0, 8px, 0);
 }
 
 .motion-dialog[data-ending-style] {
+  scale: 0.98;
+  opacity: 0;
+  will-change: scale, opacity;
+  /* 单值时长：遮罩按同一时长退场（tests/system-motion.browser.js 断言二者同拍）。
+     透明度用 ease-out 先走，缩放与位移用 ease-exit 收尾。 */
   transition-duration: var(--motion-dialog-exit-duration);
-  transition-timing-function: var(--motion-ease-exit);
+  transition-timing-function: var(--motion-ease-exit), var(--motion-ease-exit), var(--motion-ease-out);
 }
 
 .motion-drawer {
@@ -839,7 +858,7 @@ body {
 }
 
 :root[data-motion="reduced"]
-  :is(.motion-popup, .motion-tooltip, .motion-drawer):is(
+  :is(.motion-popup, .motion-tooltip, .motion-dialog, .motion-drawer):is(
     [data-starting-style],
     [data-ending-style]
   ) {
@@ -854,9 +873,9 @@ body {
 /* OS 偏好直接覆盖 CSS，不依赖启动时写入的 data-motion="full"。
    保留短淡化与 Base UI 的退出生命周期，弹窗居中的 translate 不可抹掉。 */
 @media (prefers-reduced-motion: reduce) {
-  :root :is(.motion-popup, .motion-tooltip, .motion-drawer),
+  :root :is(.motion-popup, .motion-tooltip, .motion-dialog, .motion-drawer),
   :root
-    :is(.motion-popup, .motion-tooltip, .motion-drawer):is(
+    :is(.motion-popup, .motion-tooltip, .motion-dialog, .motion-drawer):is(
       [data-starting-style],
       [data-ending-style]
     ) {

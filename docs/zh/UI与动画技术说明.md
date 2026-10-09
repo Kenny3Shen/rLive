@@ -219,6 +219,7 @@ CSS 只承担无需 JavaScript 编排的短状态，交互动画优先用可中�
 | 可展开面板（播放页 UP 卡简介）| Base UI `Collapsible` 的 `--collapsible-panel-height` 高度过渡（`150ms`、`--motion-ease-out`、两端 `data-*-style:h-0`），收起态保持 `hidden` + `keepMounted` |
 | 按压反馈 | 按下 `80ms`，松开 `220ms`；触摸控件 `0.97`、卡片 `0.985`，桌面 `0.98`；禁用控件不缩放，触摸卡片不与内层按钮叠加缩放 |
 | Overlay 时长 | Drawer 进 `360ms` / 退 `240ms`；Dialog `280ms` / `180ms`；Popover `220ms` / `140ms`；显隐可先于空间落位完成，遮罩退出与表面同拍 |
+| Popover / Dialog 曲线 | 入场 `--motion-ease-emphasized`：Popover 从锚点方向偏移 `4px` + `0.97` 缩放长出，Dialog 从下方 `8px` 浮起 + `0.96` 缩放（上浮用独立的 `transform`，不碰居中 `translate`）。退场位移/缩放用 `--motion-ease-exit`，透明度改用 `--motion-ease-out` 先走，关闭立即有反馈；Dialog 退场只收缩到 `0.98`、不下坠。退场时长保持单值，与遮罩同拍 |
 | 减少动态效果 | OS 媒体查询直接覆盖六方向弹层与按压；弹层只淡化 `100ms`，不破坏 Dialog 的居中 translate；即时 Tooltip 与选项对齐 Select 仍跳过动画 |
 | Tooltip | 首次 Hover 延迟 `350ms`，相邻 Tooltip 用即时状态并跳过动画 |
 
