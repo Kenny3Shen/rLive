@@ -13,6 +13,10 @@ const SITE: QrSite = QrSite {
 const LOGIN_URL: &str = "https://live.douyin.com/";
 const COOKIE_URL: &str = "https://live.douyin.com/webcast/user/me/";
 const WINDOW_PREFIX: &str = "douyin-login-";
+/// 只露出官方登录面板的页面脚本：自动打开面板并用不透明底色盖住首页，
+/// 不读写 Cookie、不访问应用 IPC（登录窗口本身也没有 IPC 权限）。
+#[cfg(desktop)]
+const LOGIN_ONLY_SCRIPT: &str = include_str!("douyin_login_only.js");
 
 #[cfg(desktop)]
 pub use desktop::{cancel, cancel_all, finish, poll, start};
@@ -130,9 +134,11 @@ mod desktop {
                 &label,
                 WebviewUrl::External(Url::parse(LOGIN_URL).expect("fixed login URL")),
             )
-            .title("抖音官网登录 — 请点击登录并扫码")
-            .inner_size(1100.0, 800.0)
-            .min_inner_size(700.0, 600.0)
+            .title("抖音扫码登录")
+            // 官方登录面板约 726×483，窗口只需容纳面板本身。
+            .inner_size(820.0, 600.0)
+            .min_inner_size(780.0, 560.0)
+            .initialization_script(LOGIN_ONLY_SCRIPT)
             .center()
             .incognito(true)
             .data_directory(data_dir)

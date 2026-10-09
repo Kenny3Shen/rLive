@@ -455,7 +455,7 @@ function QrLogin({
       setSession(next);
       setStatus(
         browserLogin
-          ? "请在抖音官方窗口点击登录，并使用抖音 App 扫码。"
+          ? "请在弹出的抖音登录窗口中用抖音 App 扫码。"
           : `请使用${siteName} App 扫描二维码`,
       );
     } catch (error) {
