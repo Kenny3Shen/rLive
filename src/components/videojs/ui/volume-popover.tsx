@@ -39,8 +39,7 @@ export function VolumePopover({
       </ButtonTooltip>
       {/*
         与控制栏的播放设置、字幕菜单同构：弹层元素只负责重置 UA `[popover]` 外观并
-        铺指针桥接区，材质画在子元素上。`mediaPopupMotionClass` 的桥接区占用
-        `::before`，而玻璃填充也在 `::before`，两者不能共用一个元素。
+        铺指针桥接区，材质画在子元素上。
       */}
       <VolumePopoverPrimitive.Popup
         className={cn(

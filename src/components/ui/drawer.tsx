@@ -98,7 +98,7 @@ function DrawerContent({
   side?: DrawerSide;
   container?: DialogPrimitive.Portal.Props["container"];
   /* 选择毛玻璃材质。启用后放弃默认的 `bg-popover`，
-     让玻璃质感的 `::before` 填充透过模糊背景显现。 */
+     让玻璃材质的半透明填充透过模糊背景显现。 */
   glass?: boolean;
 }) {
   const scopedContainer = React.useContext(DrawerScopeContext)?.container;

@@ -937,9 +937,8 @@ export function PlayerControls({
                 </Menu.Trigger>
                 <Menu.Popup
                   keepMounted={false}
-                  /* 材质挂在 Content 上：玻璃工具的填充占用了 `::before`，而弹层要用
-                     它铺指针桥接区，两者不能共用一个元素。这里只清掉 UA 的
-                     `[popover]` 外观，让底下的视频能透到毛玻璃里。 */
+                  /* 材质挂在 Content 上，弹层元素只负责用 `::before` 铺指针桥接区。
+                     这里只清掉 UA 的 `[popover]` 外观，让底下的视频能透到毛玻璃里。 */
                   className={cn(
                     mediaPopupResetClass,
                     mediaPopupMotionClass,

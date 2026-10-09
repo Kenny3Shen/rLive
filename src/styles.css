@@ -1292,12 +1292,14 @@ html.overlay-window #root {
 /*
  * 毛玻璃控制表面。
  *
- * 面板本身不带背景：填充位于一层基本透明的 `::before` 上，
- * 真正看到的是其后被模糊的页面或视频。这正是这种材质的意义 ——
- * 一块画着渐变的不透明填充读出来的是渐变而不是玻璃。
+ * 填充是一层基本透明的纯色，真正看到的是其后被模糊的页面或视频。这正是这种
+ * 材质的意义 —— 一块画着渐变的不透明填充读出来的是渐变而不是玻璃。
  *
- * 背景放在伪元素而不是面板上，调用方就能继续用 `bg-transparent` 去掉组件默认的
- * `bg-popover` 而不抹掉这层材质。
+ * 填充画在面板自身的 `background-image` 上（单色渐变），颜色由 `--glass-fill`
+ * 决定。不用 `background-color`，调用方就能继续用 `bg-transparent` 去掉组件默认的
+ * `bg-popover` 而不抹掉这层材质；也不用 `inset: 0` 的 `::before`：面板常是滚动
+ * 容器（播放设置抽屉），伪元素只铺满首屏滚动视口，滚下去的开关行会落在没有填充
+ * 的区域，与上方行底色不一致。背景图随滚动内容一起绘制，没有这个问题。
  *
  * 真正干活的是 `backdrop-filter`，没有它的浏览器会在原始背景上显示无法阅读的文字。
  * 下方的 @supports 兜底在这种情况换入近乎实心的填充。
@@ -1310,25 +1312,16 @@ html.overlay-window #root {
     0 8px 32px oklch(0 0 0 / 0.24),
     inset 0 1px 0 color-mix(in oklab, var(--popover-foreground) 8%, transparent);
 
+  /* 低透明度：背景必须能透过面板看见。 */
+  --glass-fill: color-mix(in oklab, var(--popover) 32%, transparent);
+  background-image: linear-gradient(var(--glass-fill), var(--glass-fill));
+
   @supports (backdrop-filter: blur(1px)) {
     backdrop-filter: blur(24px) saturate(180%);
   }
 
-  &::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    border-radius: inherit;
-    /* 低透明度：背景必须能透过面板看见。 */
-    background-color: color-mix(in oklab, var(--popover) 32%, transparent);
-  }
-
   @supports not (backdrop-filter: blur(1px)) {
-    &::before {
-      background-color: color-mix(in oklab, var(--popover) 94%, transparent);
-    }
+    --glass-fill: color-mix(in oklab, var(--popover) 94%, transparent);
   }
 }
 
@@ -1342,24 +1335,15 @@ html.overlay-window #root {
     0 8px 32px oklch(0 0 0 / 0.4),
     inset 0 1px 0 oklch(1 0 0 / 0.1);
 
+  --glass-fill: oklch(0.16 0.012 265 / 0.44);
+  background-image: linear-gradient(var(--glass-fill), var(--glass-fill));
+
   @supports (backdrop-filter: blur(1px)) {
     backdrop-filter: blur(14px) saturate(140%);
   }
 
-  &::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    border-radius: inherit;
-    background-color: oklch(0.16 0.012 265 / 0.44);
-  }
-
   @supports not (backdrop-filter: blur(1px)) {
-    &::before {
-      background-color: oklch(0.16 0.012 265 / 0.94);
-    }
+    --glass-fill: oklch(0.16 0.012 265 / 0.94);
   }
 }
 
@@ -1430,8 +1414,8 @@ html.overlay-window #root {
     backdrop-filter: none;
   }
 
-  .glass-surface::before {
-    background-color: color-mix(in oklab, var(--popover) 90%, transparent);
+  .glass-surface {
+    --glass-fill: color-mix(in oklab, var(--popover) 90%, transparent);
   }
 
   .glass-surface-overlay {
@@ -1440,8 +1424,8 @@ html.overlay-window #root {
       inset 0 1px 0 oklch(1 0 0 / 0.08);
   }
 
-  .glass-surface-overlay::before {
-    background-color: oklch(0.16 0.012 265 / 0.82);
+  .glass-surface-overlay {
+    --glass-fill: oklch(0.16 0.012 265 / 0.82);
   }
 }
 

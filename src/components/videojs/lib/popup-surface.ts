@@ -25,8 +25,6 @@ export const mediaPopupTriggerOpenClass = "!bg-media-muted !transition-none";
  *
  * 桥接区长度取自 `--media-popup-side-offset`，调用方须把它指向自己命名空间的偏移
  * 变量（弹层是 `--media-popover-side-offset`，tooltip 是 `--media-tooltip-side-offset`）。
- *
- * 这段样式占用了 `::before`，因此玻璃材质的 `::before` 填充不能和它挂同一个元素。
  */
 export const mediaPopupMotionClass = [
   "media-transitioning:opacity-0 media-transitioning:blur-media-hidden-popup media-transitioning:scale-media-hidden-popup",
@@ -51,7 +49,7 @@ export const mediaPopupMotionClass = [
  * Video.js 自带材质：tooltip、进度缩略图与错误对话框。
  *
  * 环形描边走 `::after`，因此可以和上面的指针桥接区共存于同一个元素。控制栏的玻璃
- * 面板不用它 —— 玻璃的填充在 `::before`，与桥接区冲突，只能画在子元素上。
+ * 面板不用它，材质画在弹层的子元素上。
  */
 export const mediaPopupSurfaceClass =
   "bg-media-popover text-media-popover-foreground surface-media after:surface-media-inset";
