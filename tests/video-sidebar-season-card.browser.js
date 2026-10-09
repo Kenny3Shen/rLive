@@ -4,7 +4,11 @@
 //      UP 卡与选集区曾共用 `key={bvid}`：缓存命中时 `archive.bvid === bvid`，
 //      同一 Fragment 里出现重复 key，React 删不掉旧节点，卡片越切越多；
 //   2. 合集/选集区自成一张卡片（底色 + 描边 + 圆角），与下方相关视频分开；
-//   3. 移动端（Android UA）选集卡片默认收起，评论与弹幕发送区底色一致。
+//   3. 标题行开关的底色铺满按钮自身边框，不沿左右两侧漏出卡片底色。
+//      `Button` 基料带 `border border-transparent` 与 `bg-clip-padding`，底色被裁到
+//      padding box，那 1px 透明边框不画底色；展开（`aria-expanded` 的 `bg-muted`）
+//      或悬停时卡片底色因此沿四边漏出一圈 1px 缝；
+//   4. 移动端（Android UA）选集卡片默认收起，评论与弹幕发送区底色一致。
 //
 // 只桩 IPC，不访问真实站点。
 // 用法：playwright-cli -s=season run-code --filename=tests/video-sidebar-season-card.browser.js
@@ -191,6 +195,62 @@ async (page) => {
         rows.find((row) => row.textContent.includes(title)).click();
       }, title);
 
+    /**
+     * 量标题行垂直中点那 1px 行的像素。两端各 1px 卡片描边、再内 1px 是按钮
+     * 自己的透明边框（曾经的漏缝所在），中间是填充色与文字。返回整行像素，
+     * 由调用方取众数当填充色作比较——`bg-clip-padding` 漏缝时，两端内侧会退回
+     * 卡片底色（比 `bg-muted` 暗一档）。
+     */
+    const titleRowPixels = async () => {
+      const clip = await page.evaluate(() => {
+        const card = document.querySelector("aside[aria-label=视频详情] [data-slot=video-selection-card]");
+        const button = card.querySelector("h3 button");
+        const cardRect = card.getBoundingClientRect();
+        const buttonRect = button.getBoundingClientRect();
+        return {
+          x: Math.round(cardRect.left),
+          y: Math.round(buttonRect.top + buttonRect.height / 2),
+          width: Math.round(cardRect.width),
+          height: 1,
+        };
+      });
+      const buffer = await page.screenshot({ clip });
+      return await page.evaluate(
+        async ({ base64 }) => {
+          const bitmap = await createImageBitmap(
+            await (await fetch(`data:image/png;base64,${base64}`)).blob(),
+          );
+          const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+          const context = canvas.getContext("2d");
+          context.drawImage(bitmap, 0, 0);
+          const { data, width } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+          return {
+            width,
+            pixels: Array.from({ length: width }, (_, x) => [data[x * 4], data[x * 4 + 1], data[x * 4 + 2]]),
+          };
+        },
+        { base64: buffer.toString("base64") },
+      );
+    };
+    /** 标题行的填充色取众数，再断言左右两端内侧与它同色。 */
+    const assertTitleRowFilled = async (state) => {
+      const { width, pixels } = await titleRowPixels();
+      const counts = new Map();
+      for (const pixel of pixels) {
+        const key = pixel.join(",");
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      const fill = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0].split(",").map(Number);
+      for (const x of [1, width - 2]) {
+        const pixel = pixels[x];
+        assert(
+          pixel.every((value, index) => Math.abs(value - fill[index]) <= 4),
+          `${state}标题行第 ${x} 列应与自身底色同色，实测 ${pixel.join(",")} vs ${fill.join(",")}（左右两侧漏出卡片底色）`,
+        );
+      }
+      return fill;
+    };
+
     await waitCurrent("合集第 1 期");
     const counts = [await upCards()];
     // 1 → 2 → 3（未缓存）→ 1 → 2（缓存命中，`archive.bvid` 立即等于新 `bvid`）。
@@ -226,6 +286,23 @@ async (page) => {
           ?.getAttribute("aria-expanded"),
     );
     assert(desktopToggle === "true", `桌面端单独合集应默认展开，实测 ${desktopToggle}`);
+
+    // 展开态的标题行常驻 `bg-muted`（`aria-expanded:bg-muted`），底色最容易读；
+    // 收起态则只在悬停时上色——用户看到的漏缝正是这两种时刻。收起态悬停用
+    // 中心点移动指针触发，不依赖 :hover 媒体查询。
+    const expandedFill = await assertTitleRowFilled("展开态");
+    await page.evaluate(() => {
+      document.querySelector("aside[aria-label=视频详情] [data-slot=video-selection-card] h3 button").click();
+    });
+    await page.waitForTimeout(250);
+    const collapsedCenter = await page.evaluate(() => {
+      const button = document.querySelector("aside[aria-label=视频详情] [data-slot=video-selection-card] h3 button");
+      const rect = button.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+    await page.mouse.move(collapsedCenter.x, collapsedCenter.y);
+    await page.waitForTimeout(250);
+    const hoverFill = await assertTitleRowFilled("收起悬停态");
 
     // 移动端：选集卡片默认收起；两个发送区底色一致。
     await page.evaluate(() =>
@@ -276,7 +353,7 @@ async (page) => {
       `移动端评论/弹幕发送区底色应一致：${mobile.commentBackground} vs ${mobile.danmakuBackground}`,
     );
 
-    return { passed: true, counts, surface, desktopToggle, mobile };
+    return { passed: true, counts, surface, desktopToggle, expandedFill, hoverFill, mobile };
   } finally {
     await page.evaluate(() => sessionStorage.removeItem("__seasonCardMobileUA")).catch(() => {});
     if (oldViewport) await page.setViewportSize(oldViewport);

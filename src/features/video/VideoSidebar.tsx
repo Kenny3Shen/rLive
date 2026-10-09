@@ -286,6 +286,11 @@ function useCurrentRowScroll(active: boolean | undefined, currentKey: string | n
  * 每个选集区自成一张卡片（与上方 UP 主信息卡同一套描边/底色/圆角）：
  * 选集行与相关视频行都是「封面或序号 + 标题」的列表，不包一层时两段列表
  * 首尾相接，读不出合集在哪里结束、相关推荐从哪里开始。
+ *
+ * 标题行开关是铺满卡片宽度的 `Button`：基料自带 `border border-transparent` 与
+ * `bg-clip-padding`，底色因此被裁到 padding box，那 1px 透明边框不画底色 ——
+ * 悬停或展开（`aria-expanded:bg-muted`）时卡片底色会沿四边漏出一圈 1px 缝，
+ * 左右两侧最显眼。`bg-clip-border` 让底色铺到边框下，与卡片描边相接。
  */
 function SelectionSection({
   label,
@@ -326,7 +331,7 @@ function SelectionSection({
             <Button
               variant="ghost"
               size="sm"
-              className="h-auto w-full min-w-0 justify-start gap-2 rounded-none px-3 py-2"
+              className="h-auto w-full min-w-0 justify-start gap-2 rounded-none bg-clip-border px-3 py-2"
             />
           }
         >
