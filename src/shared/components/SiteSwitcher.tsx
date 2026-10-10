@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { isSiteEnabled } from "@/shared/siteId";
@@ -58,6 +58,7 @@ export function SiteSwitcher({
   const disabledSiteIds = useSettingsStore((s) => s.disabledSiteIds);
   const setSiteId = useSettingsStore((s) => s.setSiteId);
   const [sites, setSites] = useState<SiteInfo[]>(FALLBACK_SITES);
+  const touchPointerRef = useRef(false);
   const selectedValue = value ?? siteId;
   const visibleSites = useMemo(
     () => sites.filter((site) => isSiteEnabled(site.id, disabledSiteIds)),
@@ -105,7 +106,23 @@ export function SiteSwitcher({
             aria-selected={active}
             title={label}
             onPointerEnter={() => onValueIntent?.(site.id)}
-            onPointerDown={() => onValueIntent?.(site.id)}
+            onPointerDown={(event) => {
+              // Android WebView 在 touch -> focus 后切换 retained panel 时会同步重算整棵
+              // 页面的样式与布局，平台页签的点击因此可能阻塞 50ms 以上。保留 touch
+              // 的 pointerdown，让横滑手势继续工作；在随后合成的 mousedown 上取消默认
+              // 聚焦即可保留 click/导航，同时不影响鼠标和键盘焦点。
+              touchPointerRef.current = event.pointerType === "touch";
+              onValueIntent?.(site.id);
+            }}
+            onPointerCancel={() => {
+              touchPointerRef.current = false;
+            }}
+            onMouseDown={(event) => {
+              if (touchPointerRef.current) event.preventDefault();
+            }}
+            onMouseUp={() => {
+              touchPointerRef.current = false;
+            }}
             onFocus={() => onValueIntent?.(site.id)}
             onClick={() => {
               if (value === undefined && site.id !== "all") setSiteId(site.id);
