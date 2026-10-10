@@ -18,6 +18,7 @@ import {
   danmuLaneHeight,
 } from "@/features/room/danmaku/danmuJsAdapter";
 import { loadDanmuJs } from "@/features/room/danmaku/danmuJsLoader";
+import { removeDanmuJsComment } from "@/features/room/danmaku/danmuJsCompat";
 import {
   DanmakuActionMenu,
   type DanmakuHoverTarget,
@@ -252,7 +253,7 @@ export function VideoDanmakuLayer({
       for (const [id, expiresAtMs] of fixedExpiry) {
         if (positionMs < expiresAtMs || selectedIdRef.current === id) continue;
         fixedExpiry.delete(id);
-        danmu.removeComment(id);
+        removeDanmuJsComment(danmu, id);
       }
     }
 

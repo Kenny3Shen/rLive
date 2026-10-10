@@ -4,6 +4,7 @@ type InternalBullet = DanmuJsBullet & {
   mode?: "scroll" | "top" | "bottom";
   prior?: boolean;
   options?: { realTime?: boolean };
+  remove?: () => void;
 };
 
 type InternalChannel = {
@@ -11,8 +12,24 @@ type InternalChannel = {
 };
 
 type InternalInstance = DanmuJsInstance & {
-  main?: { channel?: InternalChannel };
+  main?: { channel?: InternalChannel; queue?: InternalBullet[] };
 };
+
+/**
+ * danmu.js 1.2.1 的 `removeComment` 在 `queue.filter` 中调用 `Bullet.remove()`，
+ * 后者同步触发 `bullet_remove`，其监听器又对同一队列 `splice`。遍历因此跳过下一颗
+ * bullet，把它从主队列丢掉却不移除 DOM/车道；VOD 固定弹幕便再也无法按时清理。
+ *
+ * 先单独移除目标 bullet，让原生事件正常清理主队列、车道与 detach 钩子，再用公开
+ * 方法清理待发数据和冻结槽位。此时 filter 中已无目标，不会边遍历边 splice。
+ */
+export function removeDanmuJsComment(instance: DanmuJsInstance, id: string): void {
+  const main = (instance as InternalInstance).main;
+  if (!main || typeof instance.removeComment !== "function") return;
+  const bullet = main.queue?.find((item) => item.id === id);
+  if (typeof bullet?.remove === "function") bullet.remove();
+  instance.removeComment(id);
+}
 
 /**
  * danmu.js 1.2.1 会在未预约的 `prior` 固定弹幕选择上/下车道之前就拒绝它。

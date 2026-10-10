@@ -1,4 +1,5 @@
 import type { DanmuJsBullet, DanmuJsInstance } from "danmu.js";
+import { removeDanmuJsComment } from "./danmuJsCompat";
 
 type InternalBullet = DanmuJsBullet & {
   status?: string;
@@ -117,5 +118,5 @@ export function removeDanmuJsPin(instance: DanmuJsInstance, id: string): void {
   // `removeComment` 无条件解引用 `main`。
   if (!isUsable(instance) || !internalMain(instance)) return;
   releaseDanmuJsPin(instance, id);
-  instance.removeComment(id);
+  removeDanmuJsComment(instance, id);
 }
