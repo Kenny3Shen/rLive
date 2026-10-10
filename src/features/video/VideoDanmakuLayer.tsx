@@ -18,7 +18,7 @@ import {
   danmuLaneHeight,
 } from "@/features/room/danmaku/danmuJsAdapter";
 import { loadDanmuJs } from "@/features/room/danmaku/danmuJsLoader";
-import { removeDanmuJsComment } from "@/features/room/danmaku/danmuJsCompat";
+import { createDanmuJsPlayback, removeDanmuJsComment } from "@/features/room/danmaku/danmuJsCompat";
 import {
   DanmakuActionMenu,
   type DanmakuHoverTarget,
@@ -217,6 +217,7 @@ export function VideoDanmakuLayer({
 
     let disposed = false;
     let danmu: DanmuJsInstance | null = null;
+    let playback: ReturnType<typeof createDanmuJsPlayback> | null = null;
     // 已投放到哪个下标。seek 后必须重置，否则跳转后的弹幕会接着旧游标继续投，
     // 表现为「弹幕停在跳转前的位置」或成片错位。
     let cursor = 0;
@@ -240,6 +241,7 @@ export function VideoDanmakuLayer({
       cursor = firstVideoDanmakuAtOrAfter(cursorList, positionMs);
       nextFromMs = positionMs;
       lastPositionMs = positionMs;
+      playback?.clear();
       danmu?.clear();
     }
 
@@ -291,10 +293,10 @@ export function VideoDanmakuLayer({
       realign(currentPositionMs());
     }
     function onPlay() {
-      danmu?.play();
+      playback?.play();
     }
     function onPause() {
-      danmu?.pause();
+      playback?.pause();
     }
 
     void loadDanmuJs()
@@ -328,11 +330,12 @@ export function VideoDanmakuLayer({
           containerStyle: { pointerEvents: "none" },
         });
         instanceRef.current = danmu;
+        playback = createDanmuJsPlayback(danmu);
         // 减少动态效果下不做入场滚动：把滚动弹幕也按固定时长呈现，
         // 与录制回放叠加层的处理一致。
         if (prefersReducedMotion()) danmu.setPlayRate("scroll", 0.01);
         realign(currentPositionMs());
-        if (media.paused) danmu.pause();
+        if (media.paused) onPause();
       })
       .catch(() => {
         // 弹幕是加分项，渲染器加载失败不该把播放页拖下水。
@@ -360,6 +363,8 @@ export function VideoDanmakuLayer({
       } catch {
         // 实例可能已经随容器卸载释放。
       }
+      playback?.clear();
+      playback = null;
       danmu = null;
     };
   }, [area, cid, fontSize, fontStroke, opacity, speed, videoRef, releaseSelection]);

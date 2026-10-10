@@ -3,17 +3,93 @@ import type { DanmuJsBullet, DanmuJsInstance } from "danmu.js";
 type InternalBullet = DanmuJsBullet & {
   mode?: "scroll" | "top" | "bottom";
   prior?: boolean;
+  /** `Bullet.startMove` 记录的墙钟起点，`fullySlideIntoScreen` 据此判断车道是否空出。 */
+  _lastMoveTime?: number;
   options?: { realTime?: boolean };
   remove?: () => void;
 };
 
 type InternalChannel = {
   addBullet: (bullet: InternalBullet) => unknown;
+  updatePos?: () => void;
 };
 
 type InternalInstance = DanmuJsInstance & {
   main?: { channel?: InternalChannel; queue?: InternalBullet[] };
 };
+
+/**
+ * 用 WAAPI 暂停/恢复滚动弹幕，保留原来那条 CSS transition 时间轴。
+ *
+ * danmu.js 1.2.1 的 `Bullet.pauseMove` 用 `getBoundingClientRect()` 采样当前位置写回
+ * `left`，再把 transform 清零、transition 设为 0s。transform transition 跑在合成线程，
+ * 主线程采样到的位置落后于屏幕上已经画出的帧，提交后弹幕就向右跳回一截（实测
+ * 约 5–7px）；暂停越频繁，倒退越明显。`Animation.pause()` 由合成器在当前时间轴上
+ * 定格，不重定位。
+ *
+ * danmu.js 仍负责调度、车道和固定弹幕：只接管正在运行 transform transition 的滚动
+ * bullet，并把它标为 `paused` 让原生 `pauseMove`/`startMove` 跳过它；其余 bullet
+ * 照常走原生逻辑。
+ */
+export function createDanmuJsPlayback(instance: DanmuJsInstance) {
+  const paused = new Map<InternalBullet, Animation[]>();
+  let pausedAt = 0;
+  const updatePosition = () => (instance as InternalInstance).main?.channel?.updatePos?.();
+  return {
+    pause() {
+      updatePosition();
+      if (!paused.size) pausedAt = Date.now();
+      for (const bullet of instance.state.bullets) {
+        if (bullet.mode !== "scroll" || bullet.status !== "start" || !bullet.el) continue;
+        const animations = bullet.el
+          .getAnimations()
+          .filter(
+            (animation) =>
+              "transitionProperty" in animation &&
+              animation.transitionProperty === "transform" &&
+              animation.playState === "running",
+          );
+        if (!animations.length) continue;
+        for (const animation of animations) animation.pause();
+        paused.set(bullet, animations);
+        // pauseMove 遇到 paused 直接返回，不再改写 left/transform。
+        bullet.status = "paused";
+      }
+      instance.pause();
+    },
+    play() {
+      updatePosition();
+      const bullets = new Set<InternalBullet>(instance.state.bullets);
+      // 暂停期间墙钟照走而动画定格；顺延起点，车道判定才不会把没飘完的弹幕当成已入屏。
+      const pausedFor = pausedAt ? Date.now() - pausedAt : 0;
+      pausedAt = 0;
+      for (const [bullet, animations] of paused) {
+        // seek/到期会移除 bullet；点选会取消原 transition 并进入 forcedPause。
+        // 这些情况仍交还给 danmu.js，不能把已取消的动画或单条冻结重新拉起。
+        if (
+          !bullets.has(bullet) ||
+          bullet.status !== "paused" ||
+          !bullet.el?.isConnected ||
+          animations.some(
+            (animation) =>
+              animation.playState === "idle" || !bullet.el?.getAnimations().includes(animation),
+          )
+        )
+          continue;
+        bullet.status = "start";
+        if (typeof bullet._lastMoveTime === "number") bullet._lastMoveTime += pausedFor;
+        for (const animation of animations) animation.play();
+      }
+      paused.clear();
+      instance.play();
+    },
+    /** seek 清屏或实例销毁时丢弃暂停记录，避免恢复时碰到已移除的 bullet。 */
+    clear() {
+      paused.clear();
+      pausedAt = 0;
+    },
+  };
+}
 
 /**
  * danmu.js 1.2.1 的 `removeComment` 在 `queue.filter` 中调用 `Bullet.remove()`，
