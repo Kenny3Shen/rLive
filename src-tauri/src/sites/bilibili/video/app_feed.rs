@@ -2,9 +2,11 @@
 //!
 //! `goto` 决定是否为 UGC，`card_goto` 只参与明确广告的排除，不推断画幅。
 //! APP 不给 bvid，在本地按完整整数 aid 转换，避免每条卡片补一次 view 请求。
+//! 发布时间缺失时，在去重、截取后通过资源信息接口一次批量补齐。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::time::Duration;
 
 use reqwest::Url;
 use serde_json::Value;
@@ -31,6 +33,9 @@ use super::{BilibiliSite, avatar_thumb, strip_em_tags, video_cover, video_dimens
 /// 只发 4 个请求。
 const FEED_BATCHES: usize = 4;
 
+/// 日期是补充信息，不能让慢请求拖住整页推荐。
+const PUBDATE_TIMEOUT: Duration = Duration::from_secs(2);
+
 const MAX_AID: u64 = 1 << 51;
 const BV_XOR: u64 = 23_442_827_791_579;
 const BV_TABLE: &[u8; 58] = b"FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf";
@@ -53,8 +58,79 @@ impl BilibiliSite {
     /// page_size 只是本次目标；上游无可靠页码，最多并发取 [`FEED_BATCHES`] 批，不无限凑数。
     pub(super) async fn video_app_recommend(&self, page_size: u32) -> AppResult<VideoListPage> {
         let params = app_feed_params();
-        collect_app_feed(page_size, || self.get_app_feed("", &params)).await
+        let mut page = collect_app_feed(page_size, || self.get_app_feed("", &params)).await?;
+        fill_app_feed_pubdates(&mut page.items, |resources| async move {
+            // 实测一次支持整页（最多 30 条），pubtime 与 view.pubdate 一致。
+            // 公开元数据不带 Web Cookie、TV 凭据，也不额外请求 Tags / UP 主信息。
+            self.get_public_json(
+                "https://api.bilibili.com/x/v3/fav/resource/infos",
+                &[("resources", resources), ("platform", "web".to_owned())],
+            )
+            .await
+        })
+        .await;
+        Ok(page)
     }
+}
+
+/// 只查询最终返回且缺日期的稿件；补齐失败保持原卡片与分页语义，不回退推荐源。
+async fn fill_app_feed_pubdates<F, Fut>(items: &mut [VideoItem], fetch: F)
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = AppResult<String>>,
+{
+    let resources = items
+        .iter()
+        .filter(|item| item.pubdate <= 0)
+        .map(|item| format!("{}:2", item.aid))
+        .collect::<Vec<_>>()
+        .join(",");
+    if resources.is_empty() {
+        return;
+    }
+    match tokio::time::timeout(PUBDATE_TIMEOUT, fetch(resources)).await {
+        Ok(Ok(raw)) => {
+            if let Err(error) = apply_app_feed_pubdates(items, &raw) {
+                tracing::warn!(%error, "APP 推荐发布日期解析失败，保留推荐列表");
+            }
+        }
+        Ok(Err(error)) => tracing::warn!(%error, "APP 推荐发布日期补齐失败，保留推荐列表"),
+        Err(_) => tracing::warn!("APP 推荐发布日期补齐超时，保留推荐列表"),
+    }
+}
+
+fn apply_app_feed_pubdates(items: &mut [VideoItem], raw: &str) -> AppResult<()> {
+    let root: Value = serde_json::from_str(raw)
+        .map_err(|error| video_err(format!("APP 推荐发布日期 JSON: {error}")))?;
+    if root.get("code").and_then(Value::as_i64) != Some(0) {
+        return Err(video_err("APP 推荐发布日期接口返回错误"));
+    }
+    let data = root
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| video_err("APP 推荐发布日期接口缺少 data"))?;
+    let dates: HashMap<u64, i64> = data
+        .iter()
+        .filter_map(|entry| {
+            // type=2 才是视频；ctime 是创建时间、fav_time 是收藏时间，都不是发布日期。
+            if entry.get("type").and_then(json_u64) != Some(2) {
+                return None;
+            }
+            let aid = entry.get("id").and_then(json_u64)?;
+            let pubdate = entry
+                .get("pubtime")
+                .and_then(json_u64)
+                .and_then(positive_i64)?;
+            Some((aid, pubdate))
+        })
+        .collect();
+    for item in items.iter_mut().filter(|item| item.pubdate <= 0) {
+        // 按 aid 关联，不依赖上游顺序；缺项、畸形日期不影响其他条目。
+        if let Some(pubdate) = decimal_u64(&item.aid).and_then(|aid| dates.get(&aid)) {
+            item.pubdate = *pubdate;
+        }
+    }
+    Ok(())
 }
 
 /// 仅注入传输边界，便于离线验证次数、顺序和部分成功；生产仍复用同一请求层。
@@ -409,6 +485,124 @@ mod tests {
     fn dimension_tuple(item: &VideoItem) -> Option<(i64, i64, i64)> {
         item.dimension
             .map(|dimension| (dimension.width, dimension.height, dimension.rotate))
+    }
+
+    #[tokio::test]
+    async fn fills_missing_pubdates_in_one_batch_after_deduplication_and_truncation() {
+        let mut dated = card(455017605, "av");
+        dated["pubdate"] = json!(1584949634);
+        let raw = body(vec![
+            card(170001, "av"),
+            card(170001, "av"),
+            dated,
+            card(117274736399643, "vertical_av"),
+            card(882584971, "av"),
+        ]);
+        let mut page = collect_app_feed(3, || ready(Ok(raw.clone())))
+            .await
+            .unwrap();
+        let mut expected = serde_json::to_value(&page).unwrap();
+        expected["items"][0]["pubdate"] = json!(1320850533);
+        expected["items"][2]["pubdate"] = json!(1759000000);
+        let mut calls = 0;
+        fill_app_feed_pubdates(&mut page.items, |resources| {
+            calls += 1;
+            assert_eq!(resources, "170001:2,117274736399643:2");
+            ready(Ok(json!({ "code": 0, "data": [
+                { "id": "117274736399643", "type": "2", "pubtime": "1759000000" },
+                { "id": 882584971, "type": 2, "pubtime": 1 },
+                { "id": 455017605, "type": 2, "pubtime": 1 },
+                { "id": 170001, "type": 2, "pubtime": 1320850533, "ctime": 1497380562 }
+            ] })
+            .to_string()))
+        })
+        .await;
+        assert_eq!(calls, 1);
+        // 除缺失日期外，顺序、已有日期、画幅、取流键、统计与 has_more 都不能改动。
+        assert_eq!(serde_json::to_value(&page).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn skips_pubdate_request_when_no_dates_are_missing() {
+        let mut entry = card(170001, "av");
+        entry["pubdate"] = json!("1320850533");
+        let mut items = parse_app_feed(&body(vec![entry])).unwrap();
+        for items in [&mut items[..], &mut [][..]] {
+            let mut calls = 0;
+            fill_app_feed_pubdates(items, |_| {
+                calls += 1;
+                ready(Ok(String::new()))
+            })
+            .await;
+            assert_eq!(calls, 0, "已有发布日期或空列表不应请求补齐");
+        }
+    }
+
+    #[test]
+    fn pubdates_ignore_missing_invalid_and_non_video_entries() {
+        for invalid in [
+            json!({ "id": 170001, "type": 12, "pubtime": 1320850533 }),
+            json!({ "id": "170001.0", "type": 2, "pubtime": 1320850533 }),
+            json!({ "id": 170001.0, "type": 2, "pubtime": 1320850533 }),
+            json!({ "id": 170001, "type": 2, "ctime": 1497380562, "fav_time": 1759000000 }),
+            json!({ "id": 170001, "type": 2, "pubtime": null }),
+            json!({ "id": 170001, "type": 2, "pubtime": 0 }),
+            json!({ "id": 170001, "type": 2, "pubtime": -1 }),
+            json!({ "id": 170001, "type": 2, "pubtime": 1.5 }),
+            json!({ "id": 170001, "type": 2, "pubtime": "未知" }),
+            json!({ "id": 170001, "type": 2, "pubtime": u64::MAX }),
+            Value::Null,
+        ] {
+            let mut items = parse_app_feed(&body(vec![
+                card(170001, "av"),
+                card(455017605, "vertical_av"),
+                card(882584971, "av"),
+            ]))
+            .unwrap();
+            apply_app_feed_pubdates(
+                &mut items,
+                &json!({ "code": 0, "data": [invalid,
+                    { "id": 455017605, "type": 2, "pubtime": 1584949634 }
+                ] })
+                .to_string(),
+            )
+            .unwrap();
+            assert_eq!(items[0].pubdate, 0);
+            assert_eq!(items[1].pubdate, 1584949634);
+            assert_eq!(items[2].pubdate, 0, "缺项不借用其他稿件的日期");
+        }
+    }
+
+    #[tokio::test]
+    async fn pubdate_failures_preserve_the_feed() {
+        let mut items = parse_app_feed(&body(vec![card(170001, "av")])).unwrap();
+        let expected = serde_json::to_value(&items).unwrap();
+        for result in [
+            Err(video_err("网络不可用")),
+            Ok("oops".to_owned()),
+            Ok("null".to_owned()),
+            Ok(r#"{"code":-101,"data":[]}"#.to_owned()),
+            Ok(r#"{"data":[]}"#.to_owned()),
+            Ok(r#"{"code":0,"data":null}"#.to_owned()),
+            Ok(r#"{"code":0,"data":{}}"#.to_owned()),
+            Ok(r#"{"code":0,"data":[]}"#.to_owned()),
+        ] {
+            fill_app_feed_pubdates(&mut items, |_| ready(result)).await;
+            assert_eq!(serde_json::to_value(&items).unwrap(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn pubdate_timeout_does_not_block_the_feed() {
+        let mut items = parse_app_feed(&body(vec![card(170001, "av")])).unwrap();
+        tokio::time::timeout(
+            PUBDATE_TIMEOUT + Duration::from_secs(1),
+            fill_app_feed_pubdates(&mut items, |_| std::future::pending()),
+        )
+        .await
+        .expect("日期请求未完成也必须返回推荐列表");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].pubdate, 0);
     }
 
     #[test]
@@ -815,9 +1009,11 @@ mod tests {
             // 首批坏掉时，后续批次的成功不得把它掩盖成可用结果。
             let mut batches = [first, Ok(body(vec![card(170001, "av")]))].into_iter();
             let result = collect_app_feed(30, || {
-                ready(batches.next().unwrap_or_else(|| {
-                    Ok(body(vec![card(170001, "av")]))
-                }))
+                ready(
+                    batches
+                        .next()
+                        .unwrap_or_else(|| Ok(body(vec![card(170001, "av")]))),
+                )
             })
             .await;
             assert!(result.is_err());
@@ -835,9 +1031,11 @@ mod tests {
             let mut calls = 0;
             let page = collect_app_feed(30, || {
                 calls += 1;
-                ready(batches.next().unwrap_or_else(|| {
-                    Ok(body(vec![card(455017605, "av")]))
-                }))
+                ready(
+                    batches
+                        .next()
+                        .unwrap_or_else(|| Ok(body(vec![card(455017605, "av")]))),
+                )
             })
             .await
             .unwrap();
