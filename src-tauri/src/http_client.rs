@@ -1,6 +1,7 @@
 //! 直播站点后端共享的 HTTP 客户端构建器。
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use reqwest::{Client, ClientBuilder, Url};
@@ -10,6 +11,53 @@ use crate::proxy::ProxyRoute;
 
 static DEFAULT_CLIENT: OnceLock<Client> = OnceLock::new();
 static DIRECT_CLIENT: OnceLock<Client> = OnceLock::new();
+
+/// 按代理路由缓存已构建的客户端。
+///
+/// `reqwest::Client` 内部持有连接池与 native-tls 配置，重建一次就要丢弃已建立的
+/// 连接并重新初始化 TLS，开销很大。自定义 / 自动（System(Some)）出口原本每次请求
+/// 都走 `build_client` 重建，连接池无法复用；按路由缓存后，同一出口的请求复用同一
+/// 个连接池。`Client` 内部为 Arc，返回时克隆开销极低。
+///
+/// 路由数量超过 8 条时整体清空：用户反复修改代理设置会不断产生新路由，清空可避免
+/// 历史出口的客户端长期驻留内存。
+static ROUTE_CLIENTS: LazyLock<Mutex<HashMap<String, Client>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 禁止重定向客户端的独立缓存，缓存语义与 [`ROUTE_CLIENTS`] 相同。
+///
+/// 与普通客户端分开存放，避免两类客户端互相覆盖；缓存全部路由（含直连），因为
+/// 禁止重定向客户端有独立的 builder 选项，不能复用进程级直连客户端。
+static NO_REDIRECT_CLIENTS: LazyLock<Mutex<HashMap<String, Client>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 代理路由缓存容量上限，超过即整体清空。
+const ROUTE_CLIENT_CACHE_LIMIT: usize = 8;
+
+/// 从给定缓存里取出客户端，未命中时用 `build` 构建并写回。
+///
+/// 这些函数均为同步，锁不会跨越 await，持锁期间只做一次同步构建，安全。
+/// 用路由的 `Debug` 文本做键：`ProxyRoute` 未派生 `Hash`，而 `Debug` 覆盖全部字段，
+/// 可唯一区分不同出口，且不必改动 `proxy.rs` 的派生。
+fn cached_client(
+    cache: &Mutex<HashMap<String, Client>>,
+    route: &ProxyRoute,
+    build: impl FnOnce(&ProxyRoute) -> AppResult<Client>,
+) -> AppResult<Client> {
+    let key = format!("{route:?}");
+    let mut map = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(client) = map.get(&key) {
+        return Ok(client.clone());
+    }
+    if map.len() > ROUTE_CLIENT_CACHE_LIMIT {
+        map.clear();
+    }
+    let client = build(route)?;
+    map.insert(key, client.clone());
+    Ok(client)
+}
 
 /// 把一条代理路由应用到客户端构建器上。
 ///
@@ -78,7 +126,8 @@ pub fn client_for_route(route: &ProxyRoute) -> AppResult<Client> {
     match route {
         ProxyRoute::Direct => Ok(direct_client()),
         ProxyRoute::System(None) => Ok(direct_client()),
-        _ => build_client(route),
+        // 自定义 / 自动出口按路由缓存，复用连接池，避免每次请求重建 native-tls。
+        _ => cached_client(&ROUTE_CLIENTS, route, build_client),
     }
 }
 
@@ -109,10 +158,12 @@ pub fn recording_stream_client_for_route(route: &ProxyRoute) -> AppResult<Client
 /// 用于携带机密且绝不跟随服务端选定目标的请求
 /// （例如带 Cookie 的签名请求）的客户端。
 pub fn build_no_redirect_client(route: &ProxyRoute) -> AppResult<Client> {
-    client_builder(route)?
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| AppError::new("http_client_build", "网络客户端初始化失败"))
+    cached_client(&NO_REDIRECT_CLIENTS, route, |route| {
+        client_builder(route)?
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| AppError::new("http_client_build", "网络客户端初始化失败"))
+    })
 }
 
 /// 明确不走任何代理的客户端，包括进程环境变量与系统代理。
@@ -188,6 +239,23 @@ mod tests {
         recording_stream_client_for_route,
     };
     use crate::proxy::ProxyRoute;
+
+    /// 自定义出口的客户端必须被缓存复用，而不是每次重建。
+    ///
+    /// `reqwest::Client` 没有相等比较，但其 `Debug` 输出里带着连接池指纹；
+    /// 若每次重建，两次取回的指纹会不同。
+    #[test]
+    fn custom_and_no_redirect_routes_reuse_cached_clients() {
+        let fingerprint = |client: &reqwest::Client| format!("{client:?}");
+        let route = ProxyRoute::Custom("http://127.0.0.1:7890".into());
+        let first = client_for_route(&route).unwrap();
+        let second = client_for_route(&route).unwrap();
+        assert_eq!(fingerprint(&first), fingerprint(&second));
+
+        let first = build_no_redirect_client(&route).unwrap();
+        let second = build_no_redirect_client(&route).unwrap();
+        assert_eq!(fingerprint(&first), fingerprint(&second));
+    }
 
     #[test]
     fn request_error_endpoint_drops_credentials_and_query() {
