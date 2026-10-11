@@ -165,7 +165,11 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
   const [paused, setPaused] = useState(true);
   const [muted, setMuted] = useState(initialAudio.muted);
   const [volume, setVolume] = useState(initialAudio.volume);
-  const [currentTime, setCurrentTime] = useState(0);
+  /**
+   * 播放进度只给键盘快进快退与重试取点读取，不进 state：`timeupdate` 约 4Hz，
+   * 写 state 会让整个播放器（控制栏、弹幕画布）随之重渲染，与逐帧绘制的弹幕抢主线程。
+   */
+  const currentTimeRef = useRef(0);
   const [duration, setDuration] = useState(0);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
@@ -307,7 +311,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       endedRef.current = false;
       seekTargetRef.current = target;
       clearSeekTimer();
-      setCurrentTime(target);
+      currentTimeRef.current = target;
       setError(null);
       setWaiting(true);
 
@@ -370,7 +374,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     setWaiting(false);
     setError(null);
     setPaused(true);
-    setCurrentTime(0);
+    currentTimeRef.current = 0;
     setDuration(recordedDuration);
     endedRef.current = false;
     const kind = playbackKind;
@@ -381,7 +385,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       // 录制元数据具有权威性。FLV MediaSource 在重建缓冲期间可能短暂暴露 0 或 1 秒
       // 的时长。
       const nextDuration = recordedDuration > 0 ? recordedDuration : finiteDuration(media);
-      setCurrentTime(clampRecordingPlaybackTime(actualTime, nextDuration));
+      currentTimeRef.current = clampRecordingPlaybackTime(actualTime, nextDuration);
       setDuration((previousDuration) =>
         endedRef.current && nextDuration <= 0 ? previousDuration : nextDuration,
       );
@@ -462,7 +466,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       // 记实际停止点会让下次进来又跳到尾部立刻结束，等于播不了。
       reportWatchProgress(endDuration, true);
       setDuration(endDuration);
-      setCurrentTime(endedTime);
+      currentTimeRef.current = endedTime;
       setPaused(true);
       if (seekTargetRef.current === null) setWaiting(false);
       else completeSeek();
@@ -648,13 +652,13 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
   }, [muted, volume]);
 
   const retryPlayback = useCallback(() => {
-    const target = clampRecordingPlaybackTime(currentTime, duration || recordedDuration);
+    const target = clampRecordingPlaybackTime(currentTimeRef.current, duration || recordedDuration);
     recoverySeekRef.current = target;
     setError(null);
     setWaiting(false);
     setLoading(true);
     setPlayerRevision((revision) => revision + 1);
-  }, [currentTime, duration, recordedDuration]);
+  }, [duration, recordedDuration]);
 
   const clearControlsHideTimer = useCallback(() => {
     if (controlsHideTimerRef.current === null) return;
@@ -756,16 +760,16 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         void fullscreen.toggle();
       } else if (key === "arrowleft") {
         event.preventDefault();
-        seekTo(currentTime - 5);
+        seekTo(currentTimeRef.current - 5);
       } else if (key === "arrowright") {
         event.preventDefault();
-        seekTo(currentTime + 5);
+        seekTo(currentTimeRef.current + 5);
       } else {
         return;
       }
       revealControls();
     },
-    [currentTime, fullscreen, revealControls, seekTo, toggleMute, togglePlayback],
+    [fullscreen, revealControls, seekTo, toggleMute, togglePlayback],
   );
 
   const showFullscreenHud = showPlayerFullscreenHud({

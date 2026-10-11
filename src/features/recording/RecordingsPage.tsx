@@ -1,7 +1,7 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Captions,
@@ -174,7 +174,11 @@ function RecordingStatusBadge({ status }: { status: RecordingStatus }) {
   );
 }
 
-function RecordingCard({
+/**
+ * 录制进行中时进度事件每路约 500ms 更新一次列表（未变条目保持引用），memo 让只有
+ * 正在录的那张卡重渲染。回调统一接收条目本身，调用方可传稳定引用。
+ */
+const RecordingCard = memo(function RecordingCard({
   item,
   watched,
   revealing,
@@ -191,13 +195,13 @@ function RecordingCard({
   revealing: boolean;
   stopping: boolean;
   exportingAss: boolean;
-  onOpen?: () => void;
-  onStop: () => void;
-  onExportAss: () => void;
-  onReveal: () => void;
-  onDelete: () => void;
+  onOpen: (item: RecordingItem) => void;
+  onStop: (id: string) => void;
+  onExportAss: (id: string) => void;
+  onReveal: (filePath: string) => void;
+  onDelete: (item: RecordingItem) => void;
 }) {
-  const playable = item.status !== "recording" && Boolean(onOpen);
+  const playable = item.status !== "recording";
   const playbackPath = recordingPlaybackPath(item.id);
   // 伴生文件只有任务完成写入后才存在。
   const exportable = item.status !== "recording" && item.include_danmaku && item.danmaku_count > 0;
@@ -227,7 +231,7 @@ function RecordingCard({
             onPointerEnter={() => preloadRouteModule(playbackPath)}
             onPointerDown={() => preloadRouteModule(playbackPath)}
             onFocus={() => preloadRouteModule(playbackPath)}
-            onClick={onOpen}
+            onClick={() => onOpen(item)}
           />
         )}
 
@@ -256,7 +260,7 @@ function RecordingCard({
                       disabled={stopping}
                       className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                       aria-label="停止并保存"
-                      onClick={onStop}
+                      onClick={() => onStop(item.id)}
                     />
                   }
                 >
@@ -276,7 +280,7 @@ function RecordingCard({
                       disabled={exportingAss}
                       className="text-muted-foreground"
                       aria-label="导出 ASS 弹幕字幕"
-                      onClick={onExportAss}
+                      onClick={() => onExportAss(item.id)}
                     />
                   }
                 >
@@ -297,7 +301,7 @@ function RecordingCard({
                     disabled={revealing}
                     className="text-muted-foreground"
                     aria-label="在文件管理器中显示"
-                    onClick={onReveal}
+                    onClick={() => onReveal(item.file_path)}
                   />
                 }
               >
@@ -314,7 +318,7 @@ function RecordingCard({
                     size="icon-sm"
                     className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     aria-label="删除录制"
-                    onClick={onDelete}
+                    onClick={() => onDelete(item)}
                   />
                 }
               >
@@ -361,7 +365,7 @@ function RecordingCard({
       </Card>
     </li>
   );
-}
+});
 
 type RecordingUserGroup = {
   key: string;
@@ -734,11 +738,14 @@ export function RecordingsPage() {
     );
   }
 
-  function openRecording(item: RecordingItem) {
-    const params = new URLSearchParams({ user: recordingUserGroupKey(item) });
-    if (platformFilter !== "all") params.set("platform", platformFilter);
-    navigate(`${recordingPlaybackPath(item.id)}?${params.toString()}`);
-  }
+  const openRecording = useCallback(
+    (item: RecordingItem) => {
+      const params = new URLSearchParams({ user: recordingUserGroupKey(item) });
+      if (platformFilter !== "all") params.set("platform", platformFilter);
+      navigate(`${recordingPlaybackPath(item.id)}?${params.toString()}`);
+    },
+    [navigate, platformFilter],
+  );
 
   if (!supported) {
     return (
@@ -803,17 +810,17 @@ export function RecordingsPage() {
                         item={item}
                         watched={watchProgressById.get(item.id) ?? null}
                         stopping={stopMutation.isPending && stopMutation.variables === item.id}
-                        onOpen={item.status === "recording" ? undefined : () => openRecording(item)}
-                        onStop={() => stopMutation.mutate(item.id)}
+                        onOpen={openRecording}
+                        onStop={stopMutation.mutate}
                         exportingAss={
                           exportAssMutation.isPending && exportAssMutation.variables === item.id
                         }
-                        onExportAss={() => exportAssMutation.mutate(item.id)}
+                        onExportAss={exportAssMutation.mutate}
                         revealing={
                           revealMutation.isPending && revealMutation.variables === item.file_path
                         }
-                        onReveal={() => revealMutation.mutate(item.file_path)}
-                        onDelete={() => setDeleteTarget(item)}
+                        onReveal={revealMutation.mutate}
+                        onDelete={setDeleteTarget}
                       />
                     ))}
                   </ul>
