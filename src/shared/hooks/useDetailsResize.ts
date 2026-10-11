@@ -12,18 +12,44 @@ import {
 
 type ResizeState = {
   touchId: number;
-  startX: number;
-  startY: number;
   lastY: number;
   containerWidth: number;
   containerHeight: number;
   aspectRatio: number | null;
   minPercent: number;
   maxPercent: number;
-  intent: "pending" | "resize" | "swipe";
   active: boolean;
   lastPercent: number;
   scrollers: HTMLElement[];
+};
+
+/**
+ * 已按下、但还没开始调整占比的一次按压。
+ *
+ * 与 `ResizeState` 分开存是有原因的：手势**启用**的时刻不由手指决定。首次进入
+ * 播放页时画幅要等媒体报出 `videoWidth/videoHeight` 才可知（`enabled` 依赖它），
+ * 而手指可能在那之前就按下了。若把「按下」和「可调整」合成同一份状态，
+ * 启用那一刻的重算（`ResizeObserver` 的收口）就会把这份状态当作旧手势清掉，
+ * 整次拖动随之丢失 —— 这正是「首次进入有时拖不动」的根因。
+ *
+ * 按压因此只记录与布局无关的东西（触摸身份、起点、滚动链），
+ * 布局量（容器尺寸、起算占比、上下限）等到真正接管的那一刻再现场量。
+ */
+type ResizePress = {
+  touchId: number;
+  startX: number;
+  startY: number;
+  /**
+   * 最近一次**已派发** touchmove 的纵向位置。
+   *
+   * 接管那一帧的位移要算「本帧增量」（当前减上一次已派发位置），不能算「自按下
+   * 以来的总位移」：总位移跨过了布局变化（画幅刚到位、舞台刚变高），算进来会让
+   * 第一帧跳一下；也不能从当前位置起算（那是 0，本帧就不会认领手势，
+   * 浏览器随即开始原生滚动，整次拖动依然丢）。
+   */
+  lastY: number;
+  scrollers: HTMLElement[];
+  intent: "pending" | "resize" | "swipe";
 };
 
 export type UseDetailsResizeOptions = {
@@ -70,6 +96,10 @@ function scrollContent(scrollers: HTMLElement[], delta: number): void {
  * React 的 passive touchmove 又无法阻止同一位移被浏览器和布局各消费一次。
  * 仅需改变占比时认领手势；到达边界的剩余位移交给命中的滚动链。完全不需调整
  * 时保留原生滚动及惯性，已由浏览器认领的不可取消事件不再抢回。
+ *
+ * 监听器**不按 `enabled` 绑定**：首次进入播放页时画幅要等媒体报出尺寸才可知，
+ * 手指可能先于它按下；按 `enabled` 绑定会让这一次拖动整个失效。绑定恒常、
+ * 是否接管逐帧看 `enabled`，因此启用后手势能接着进行（见 `ResizePress`）。
  */
 export function useDetailsResize({
   enabled,
@@ -81,13 +111,16 @@ export function useDetailsResize({
   onClamp,
 }: UseDetailsResizeOptions) {
   const stateRef = useRef<ResizeState | null>(null);
+  const pressRef = useRef<ResizePress | null>(null);
   const previewFrameRef = useRef<number | null>(null);
   const suppressClickUntilRef = useRef(0);
   const callbacksRef = useRef({ onPreview, onCommit, onClamp });
   const aspectRatioRef = useRef(aspectRatio);
+  const enabledRef = useRef(enabled);
   useLayoutEffect(() => {
     callbacksRef.current = { onPreview, onCommit, onClamp };
     aspectRatioRef.current = aspectRatio;
+    enabledRef.current = enabled;
   });
 
   const cancelPreview = useCallback(() => {
@@ -99,6 +132,7 @@ export function useDetailsResize({
   const finish = useCallback(() => {
     const state = stateRef.current;
     stateRef.current = null;
+    pressRef.current = null;
     cancelPreview();
     if (state?.active) {
       callbacksRef.current.onCommit(state.lastPercent);
@@ -106,9 +140,52 @@ export function useDetailsResize({
     }
   }, [cancelPreview]);
 
+  /**
+   * 真正接管一次按压：现场量布局，建立本轮调整的基准。
+   *
+   * `lastY` 继承按压里记的上一次已派发位置，于是接管那一帧的位移正好是它自己的
+   * 增量，而按下到接管之间的位移不会被追溯应用。
+   */
+  const beginResize = useCallback(
+    (press: ResizePress): ResizeState | null => {
+      const container = containerRef.current;
+      const details = detailsRef.current;
+      if (!container || !details || container.clientHeight <= 0) return null;
+      const percent = detailsShareFromHeights(
+        details.getBoundingClientRect().height,
+        container.clientHeight,
+      );
+      const minPercent = detailsShareMinPercent(
+        container.clientWidth,
+        container.clientHeight,
+        aspectRatioRef.current,
+      );
+      const state: ResizeState = {
+        touchId: press.touchId,
+        lastY: press.lastY,
+        containerWidth: container.clientWidth,
+        containerHeight: container.clientHeight,
+        aspectRatio: aspectRatioRef.current,
+        minPercent,
+        maxPercent: detailsResizeCeiling(
+          percent,
+          container.clientWidth,
+          container.clientHeight,
+          minPercent,
+        ),
+        active: false,
+        lastPercent: percent,
+        scrollers: press.scrollers,
+      };
+      stateRef.current = state;
+      return state;
+    },
+    [containerRef, detailsRef],
+  );
+
   const bindContent = useCallback(
     (viewport: HTMLDivElement | null) => {
-      if (!viewport || !enabled) return;
+      if (!viewport) return;
       const start = (event: TouchEvent) => {
         if (event.touches.length !== 1) {
           finish();
@@ -122,64 +199,46 @@ export function useDetailsResize({
           )
         )
           return;
-        const container = containerRef.current;
-        const details = detailsRef.current;
-        if (!container || !details || container.clientHeight <= 0) return;
         const touch = event.touches[0];
-        const percent = detailsShareFromHeights(
-          details.getBoundingClientRect().height,
-          container.clientHeight,
-        );
-        const minPercent = detailsShareMinPercent(
-          container.clientWidth,
-          container.clientHeight,
-          aspectRatioRef.current,
-        );
-        stateRef.current = {
+        pressRef.current = {
           touchId: touch.identifier,
           startX: touch.clientX,
           startY: touch.clientY,
           lastY: touch.clientY,
-          containerWidth: container.clientWidth,
-          containerHeight: container.clientHeight,
-          aspectRatio: aspectRatioRef.current,
-          minPercent,
-          maxPercent: detailsResizeCeiling(
-            percent,
-            container.clientWidth,
-            container.clientHeight,
-            minPercent,
-          ),
-          intent: "pending",
-          active: false,
-          lastPercent: percent,
           scrollers: contentScrollers(target, viewport),
+          intent: "pending",
         };
       };
       const move = (event: TouchEvent) => {
-        const state = stateRef.current;
-        if (!state) return;
+        const press = pressRef.current;
+        if (!press) return;
         if (event.touches.length !== 1) {
           finish();
           return;
         }
-        const touch = Array.from(event.touches).find((item) => item.identifier === state.touchId);
+        const touch = Array.from(event.touches).find((item) => item.identifier === press.touchId);
         if (!touch) return;
-        if (state.intent === "pending") {
-          state.intent = detailsResizeIntent(
-            touch.clientX - state.startX,
-            touch.clientY - state.startY,
+        const previousY = press.lastY;
+        press.lastY = touch.clientY;
+        if (press.intent === "pending") {
+          press.intent = detailsResizeIntent(
+            touch.clientX - press.startX,
+            touch.clientY - press.startY,
           );
         }
-        if (state.intent === "swipe") {
-          stateRef.current = null;
+        if (press.intent === "swipe") {
+          pressRef.current = null;
           return;
         }
-        if (state.intent === "pending") return;
-        const delta = touch.clientY - state.lastY;
-        state.lastY = touch.clientY;
+        if (press.intent === "pending") return;
         // 原生滚动已开始后不能再改布局，否则同一手指位移会被消费两次。
         if (!event.cancelable) return;
+        // 纵向意图已定但画幅还没到（首次进入的常见时序）：留住这次按压，
+        // 等 `enabled` 转真后的下一个 touchmove 再接管。
+        if (!enabledRef.current) return;
+        const state = stateRef.current ?? beginResize(press);
+        if (!state) return;
+        const delta = touch.clientY - previousY;
         const next = detailsContentScrollStep(
           state.lastPercent,
           delta,
@@ -202,13 +261,10 @@ export function useDetailsResize({
         scrollContent(state.scrollers, next.scrollDelta);
       };
       const end = (event: TouchEvent) => {
-        const state = stateRef.current;
-        if (
-          state &&
-          Array.from(event.changedTouches).some((item) => item.identifier === state.touchId)
-        ) {
-          finish();
-        }
+        const touchId = stateRef.current?.touchId ?? pressRef.current?.touchId;
+        if (touchId === undefined) return;
+        if (!Array.from(event.changedTouches).some((item) => item.identifier === touchId)) return;
+        finish();
       };
       const click = (event: MouseEvent) => {
         if (Date.now() >= suppressClickUntilRef.current) return;
@@ -229,15 +285,26 @@ export function useDetailsResize({
         viewport.removeEventListener("click", click, true);
         cancelPreview();
         stateRef.current = null;
+        pressRef.current = null;
         clearDetailsResizing(containerRef.current);
       };
     },
-    [cancelPreview, containerRef, detailsRef, enabled, finish],
+    [beginResize, cancelPreview, containerRef, finish],
   );
 
+  /**
+   * 禁用时收掉正在进行的调整（旋转、全屏、切 16:9 都会走到这里）。
+   *
+   * 只丢调整状态，**保留尚未接管的按压**：`enabled` 是逐帧判定的，一次按住期间
+   * 它可能先假后真（画幅刚到位、刚从全屏退出）。按压在重新启用后还要能接着用，
+   * 否则同一次拖动会被切成两段。
+   */
   useLayoutEffect(() => {
-    if (!enabled) clearDetailsResizing(containerRef.current);
-  }, [containerRef, enabled]);
+    if (enabled) return;
+    stateRef.current = null;
+    cancelPreview();
+    clearDetailsResizing(containerRef.current);
+  }, [cancelPreview, containerRef, enabled]);
 
   // 旋转/分屏/画幅变化后重算双向边界；未调整过的默认布局不参与。
   useLayoutEffect(() => {

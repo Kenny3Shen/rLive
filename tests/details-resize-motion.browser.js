@@ -259,11 +259,66 @@ async (page) => {
           "禁用遗留预览",
         );
         flushSync(() => setEnabled(true));
+        await frames();
+
+        /*
+          首次进入播放页的真实时序：手指先落下，画幅要等媒体报出
+          `videoWidth/videoHeight` 才可知（`enabled` 依赖它）。
+
+          从前监听器按 `enabled` 绑定，这一整次拖动会在启用那一刻被丢掉 ——
+          正是「首次进入视频页，侧栏自适应高度有时不触发」的根因。
+          这里逐帧模拟：按下 → 小幅移动 → 启用（画幅到位）→ 继续移动 → 抬起。
+        */
+        // 先摆回默认布局，否则上一段留在 `--vod-details-share` 上的值会遮住结果。
+        // 只能靠下滑恢复：占比是持久状态，没有别的「重置」入口。
+        scroll().scrollTop = 0;
+        await gesture(400, 2000);
+        await gesture(400, 2000);
+        const restoredShare = frame().style.getPropertyValue("--vod-details-share");
+        const restoredStage = ui.query("[data-video-player-frame]").getBoundingClientRect().height;
+        // 原始舞台高 = min(容器宽 / 画幅, 容器高 × 70%) = min(401 / (401/400), 757 × 0.7) = 400。
+        assert(
+          Math.abs(restoredStage - 400) < 1,
+          `未回到原始布局，无法量接管帧：${restoredShare} / ${restoredStage}`,
+        );
+        const baselineShare = Number.parseFloat(restoredShare || "30");
+        flushSync(() => setEnabled(false));
+        await frames();
+        const disabledPreviews = previews.length;
+        // 按下时还没启用：按以前的实现这次按压根本不会被记下。
+        send("touchstart", 400);
+        // 越过 10px 锁定距离，确认纵向意图（此时仍未启用）。
+        send("touchmove", 386);
+        assert(
+          previews.length === disabledPreviews,
+          "未启用时就开始调整占比",
+        );
+        flushSync(() => setEnabled(true));
+        await frames();
+        // 启用后的第一个 touchmove 必须当场接管，而不是等下一位移累积。
+        assert(send("touchmove", 340), "启用后的首个移动未认领手势");
+        await frames();
+        const afterResume = Number.parseFloat(frame().style.getPropertyValue("--vod-details-share"));
+        assert(
+          afterResume > baselineShare && afterResume < baselineShare + 20,
+          `接管帧追溯应用了按下以来的总位移（应在 ${baselineShare}–${baselineShare + 20} 之间）：${afterResume}`,
+        );
+        assert(previews.length > disabledPreviews, "接管后未产出预览");
+        const commitsBeforeResume = commits.length;
+        send("touchmove", 300);
+        flushSync(() => send("touchend", 300));
+        await frames();
+        assert(commits.length > commitsBeforeResume, "跨越启用的手势未提交");
+        assert(!frame().hasAttribute("data-vod-details-resizing"), "跨越启用的手势未清理标记");
+        passed.push("画幅/启用晚于按下时手势能接着进行，且接管帧不追溯总位移");
+
         send("touchstart", 400);
         send("touchmove", 450);
+        // 基准取**当前**条数：上面的新用例也会产出预览，不能用更早的 `count`。
+        const beforeUnmount = previews.length;
         ui.dispose();
         await frames();
-        assert(previews.length === count, "卸载后仍执行预览");
+        assert(previews.length === beforeUnmount, "卸载后仍执行预览");
         passed.push("取消、禁用和卸载清理");
         return { passed };
       } finally {
