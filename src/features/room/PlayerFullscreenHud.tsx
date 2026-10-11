@@ -74,6 +74,8 @@ export type PlayerFullscreenHudProps = {
   toolsSlot?: ReactNode;
   /** 紧凑视口（竖屏手机或较矮的横屏）。 */
   compact?: boolean;
+  /** 移动端竖屏非全屏时，房间信息区只保留标题。 */
+  titleOnly?: boolean;
   /** Portal 目标 —— `:fullscreen` 祖先拥有 top layer。 */
   portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
   /** 告诉舞台有菜单打开，空闲计时器不能把它淡出。 */
@@ -105,6 +107,15 @@ export function showPlayerFullscreenHud({
   return fullscreen && (hasRoomIdentity || hasActions);
 }
 
+/** 仅移动端竖屏非全屏简化身份行；桌面、横屏及任一全屏层保持完整信息。 */
+export function playerHudTitleOnly(
+  mobileClient: boolean,
+  portrait: boolean,
+  fullscreen: boolean,
+): boolean {
+  return mobileClient && portrait && !fullscreen;
+}
+
 /**
  * 全屏顶部 chrome，普通直播视频网站的画法：最左侧返回箭头（可选）退出全屏，
  * 其后是房间标题与主播身份，右侧溢出菜单，覆盖一段向下渐隐入画面的遮罩。
@@ -125,6 +136,7 @@ export function PlayerFullscreenHud({
   cast,
   toolsSlot,
   compact = false,
+  titleOnly = false,
   portalContainer,
   onOverlayInteractionChange,
   onExitFullscreen,
@@ -279,6 +291,7 @@ export function PlayerFullscreenHud({
         userAvatar={roomUserAvatar}
         online={roomOnline}
         compact={compact}
+        titleOnly={titleOnly}
         className="flex-1"
       />
 

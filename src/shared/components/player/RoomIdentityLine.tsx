@@ -60,6 +60,8 @@ type RoomIdentityLineProps = {
   online?: number;
   density?: "fullscreen" | "tile";
   compact?: boolean;
+  /** 仅显示标题，隐藏主播、平台房间号与热度。 */
+  titleOnly?: boolean;
   className?: string;
 };
 
@@ -73,6 +75,7 @@ export function RoomIdentityLine({
   online,
   density = "fullscreen",
   compact = false,
+  titleOnly = false,
   className,
 }: RoomIdentityLineProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -142,6 +145,7 @@ export function RoomIdentityLine({
     displayUserName,
     onlineLabel,
     siteId,
+    titleOnly,
     trimmedRoomId,
   ]);
 
@@ -171,56 +175,62 @@ export function RoomIdentityLine({
           {displayTitle}
         </strong>
 
-        <Avatar
-          size="sm"
-          className={cn("shrink-0 ring-1 ring-white/25", tile || compact ? "size-5" : "size-6")}
-          aria-label={avatarLabel}
-        >
-          <AvatarImage src={avatarUrl} alt={avatarLabel} referrerPolicy="no-referrer" />
-          <AvatarFallback
-            aria-label={`${avatarLabel}（加载失败）`}
-            className="bg-white/18 text-[0.625rem] font-medium text-white"
-          >
-            {Array.from(displayUserName)[0] ?? "?"}
-          </AvatarFallback>
-        </Avatar>
+        {!titleOnly && (
+          <>
+            <Avatar
+              size="sm"
+              className={cn("shrink-0 ring-1 ring-white/25", tile || compact ? "size-5" : "size-6")}
+              aria-label={avatarLabel}
+            >
+              <AvatarImage src={avatarUrl} alt={avatarLabel} referrerPolicy="no-referrer" />
+              <AvatarFallback
+                aria-label={`${avatarLabel}（加载失败）`}
+                className="bg-white/18 text-[0.625rem] font-medium text-white"
+              >
+                {Array.from(displayUserName)[0] ?? "?"}
+              </AvatarFallback>
+            </Avatar>
 
-        <span
-          className={cn(
-            "shrink-0 font-medium [text-shadow:0_1px_2px_rgb(0_0_0_/_0.7)]",
-            tile ? "text-[0.6875rem]" : compact ? "text-xs" : "text-sm",
-          )}
-          title={displayUserName}
-        >
-          {displayUserName}
-        </span>
+            <span
+              className={cn(
+                "shrink-0 font-medium [text-shadow:0_1px_2px_rgb(0_0_0_/_0.7)]",
+                tile ? "text-[0.6875rem]" : compact ? "text-xs" : "text-sm",
+              )}
+              title={displayUserName}
+            >
+              {displayUserName}
+            </span>
 
-        {siteId && trimmedRoomId && (
-          <MetaItem
-            tile={tile}
-            compact={compact}
-            title={`${platformName}房间号：${trimmedRoomId}`}
-            icon={<SiteLogo siteId={siteId} className={tile || compact ? "size-3" : "size-3.5"} />}
-          >
-            {trimmedRoomId}
-          </MetaItem>
-        )}
+            {siteId && trimmedRoomId && (
+              <MetaItem
+                tile={tile}
+                compact={compact}
+                title={`${platformName}房间号：${trimmedRoomId}`}
+                icon={
+                  <SiteLogo siteId={siteId} className={tile || compact ? "size-3" : "size-3.5"} />
+                }
+              >
+                {trimmedRoomId}
+              </MetaItem>
+            )}
 
-        {onlineLabel && (
-          <MetaItem
-            tile={tile}
-            compact={compact}
-            title={`当前热度：${onlineLabel}`}
-            icon={
-              <Flame
-                aria-hidden
-                className={cn("text-accent", tile || compact ? "size-3" : "size-3.5")}
-              />
-            }
-          >
-            <span className="sr-only">当前热度 </span>
-            {onlineLabel}
-          </MetaItem>
+            {onlineLabel && (
+              <MetaItem
+                tile={tile}
+                compact={compact}
+                title={`当前热度：${onlineLabel}`}
+                icon={
+                  <Flame
+                    aria-hidden
+                    className={cn("text-accent", tile || compact ? "size-3" : "size-3.5")}
+                  />
+                }
+              >
+                <span className="sr-only">当前热度 </span>
+                {onlineLabel}
+              </MetaItem>
+            )}
+          </>
         )}
       </div>
     </div>

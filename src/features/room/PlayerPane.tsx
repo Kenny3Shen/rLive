@@ -35,6 +35,7 @@ import { FollowPanel } from "./FollowPanel";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import {
   PlayerFullscreenHud,
+  playerHudTitleOnly,
   showPlayerFullscreenHud,
   type PlayerHudRoomAction,
 } from "./PlayerFullscreenHud";
@@ -1716,6 +1717,11 @@ function PlayerPaneContent({
                 }}
                 toolsSlot={player.mode === "fullscreen" ? undefined : hudToolsSlot}
                 compact={compactViewport}
+                titleOnly={playerHudTitleOnly(
+                  mobileClient,
+                  roomPortraitOrientation,
+                  player.mode === "fullscreen" || webFullscreen,
+                )}
                 // 只有原生全屏需要把菜单塞进 stage：它位于 top layer，portal 到 `<body>`
                 // 会被整个压住。网页全屏没有这层，走默认 portal 反而不会被 stage 的
                 // `overflow-hidden` 裁掉。

@@ -58,6 +58,7 @@ import {
 } from "../src/features/room/PlayerPane";
 import {
   PlayerFullscreenHud,
+  playerHudTitleOnly,
   roomIdentityOverflowDistance,
   showPlayerFullscreenHud,
 } from "../src/features/room/PlayerFullscreenHud";
@@ -505,6 +506,60 @@ describe("Android native player controls", () => {
 });
 
 describe("fullscreen top HUD", () => {
+  test("仅移动端竖屏非全屏隐藏直播卡片信息，任一全屏层都保持完整", () => {
+    for (const mobileClient of [false, true]) {
+      for (const portrait of [false, true]) {
+        for (const fullscreen of [false, true]) {
+          for (const webFullscreen of [false, true]) {
+            const titleOnly = playerHudTitleOnly(
+              mobileClient,
+              portrait,
+              fullscreen || webFullscreen,
+            );
+            expect(titleOnly).toBe(mobileClient && portrait && !fullscreen && !webFullscreen);
+            const html = renderToStaticMarkup(
+              createElement(PlayerFullscreenHud, {
+                roomTitle: "竖屏直播标题",
+                roomUserName: "测试主播",
+                siteId: "bilibili",
+                roomId: "123456",
+                roomOnline: 12345,
+                titleOnly,
+                compact: true,
+                onBack: () => {},
+                roomActions: [{ id: "share", label: "分享", icon: () => null, onSelect: () => {} }],
+              }),
+            );
+            expect(html).toContain("竖屏直播标题");
+            expect(html).toContain(PLAYER_HUD_TITLE_SIZE_CLASS);
+            expect(html).toContain("退出全屏");
+            expect(html).toContain("更多房间操作");
+            for (const metadata of [
+              "测试主播",
+              'data-slot="avatar"',
+              "房间号：123456",
+              "当前热度",
+            ]) {
+              expect(html.includes(metadata)).toBe(!titleOnly);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  test("仅标题模式保留空标题兜底，默认身份行仍显示主播信息", () => {
+    const html = renderToStaticMarkup(
+      createElement(RoomIdentityLine, { title: "  ", titleOnly: true }),
+    );
+    expect(html).toContain("直播间");
+    expect(html).not.toContain("未知主播");
+    expect(html).not.toContain('data-slot="avatar"');
+    const defaultHtml = renderToStaticMarkup(createElement(RoomIdentityLine));
+    expect(defaultHtml).toContain("未知主播");
+    expect(defaultHtml).toContain('data-slot="avatar"');
+  });
+
   test("pans only by the room identity width that exceeds the fixed controls", () => {
     expect(roomIdentityOverflowDistance(640, 420)).toBe(220);
     expect(roomIdentityOverflowDistance(420, 420)).toBe(0);
