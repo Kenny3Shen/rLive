@@ -140,6 +140,8 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - 动画完成后先用 `commitStyles()` 固定旧页离屏最终位置，再同步卸载旧 subtree；不能先 cancel Animation 再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
 - 直接侧栏导航时 `RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移。
 
+**底栏点击不能只依赖 `click`**：底栏固定在滚动容器之外，用户点它时内容的惯性滚动常常还在跑，而 Chromium 的 scroll gesture 会吃掉「用来停住滚动」的第一次点按 —— `pointerdown` / `pointerup` 照常派发，`click` 被吞掉，于是表现为「点一下没反应，得再点一次」。`SidebarLink` 因此在 `pointerup` 上自行判定并导航（触摸、位移在 `LONG_PRESS_CANCEL_SLOP_PX` 内、时长低于 `SIDEBAR_TAP_MAX_DURATION_MS`、且指针未被祖先捕获），随后用 `SIDEBAR_TAP_CLICK_SUPPRESSION_MS` 的窗口把兼容 `click` 压掉，保证同一次点按只导航一次。自行导航必须带上 `SIDEBAR_NAVIGATION_STATE`，否则 Shell 认不出这是底栏直达、会退回普通换页。鼠标与键盘仍走 `NavLink` 自己的路径。
+
 `Shell` 当前映射：桌面侧栏点击按项目顺序纵向平移，桌面浏览器前进后退按 history index 横向平移；移动端主导航与前进后退直接换页。直播平台与视频四页签在两端共用保活 track，关注与历史页签也由各自的 track 驱动。IPTV 来源只由 `useHorizontalSwipe` 的单页位移处理，父级 `PagePan` 保持固定 key，避免双重平移和离场子树读取新来源。录制库保留原有的直接筛选，不添加整页动画。关注页 IPTV 分组与设置页一级/二级切换继续使用 `PagePan`，其他普通内容更新直接替换。
 
 ### 4.4 `PageZoom`：沉浸式播放页进出
@@ -344,6 +346,8 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 静态检查（命令细节见 [开发指南](开发指南.md)）：纯文档修改不要求运行时测试；UI 或动画实现至少执行 `bun run check` 与对应单元测试，交付前运行 `bun run build`。
 
 浏览器检查至少覆盖桌面 `1280x720` 以上、手机竖屏约 `360x732`、coarse pointer 短横屏约 `844x390`，以及系统开启 `prefers-reduced-motion: reduce` 的情况（页面导航跳过空间动画、弹层仅淡化；直播飘屏按既有策略停用，录制回放弹幕停止横向飘移并按媒体时间短暂静态显示，偏好恢复后直播弹幕建立全新会话、不补放旧消息）。
+
+底栏点击回归：`tests/sidebar-tap.test.ts` 用源码断言守住「触摸在 `pointerup` 上自行导航、兼容 click 被压掉、只认触摸、滑动/长按/已捕获指针不算点按、导航带上侧栏状态」；`tests/sidebar-fling-tap.browser.js` 用 CDP 真实合成器触摸（夹具合成的 PointerEvent 不经合成器，测不出这条路径）在真实 Shell 里制造惯性滚动后点底栏，断言当场切页且只导航一次。
 
 共享动效回归：`bun test tests/system-motion.test.ts` 校验 CSS / WAAPI token 一致性与时长层次；`playwright-cli -s=motion run-code --filename=tests/system-motion.browser.js` 在 Windows Debug 主窗口检查三种视口与真实 OS 媒体查询下的页面接管、弹层反向/卸载和菜单方向样式，结束后清理 CDP 视口与触摸模拟。
 

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { NavLink, useNavigate } from "react-router-dom";
 import { ArrowUpCircle, Moon, Sun } from "lucide-react";
@@ -12,6 +12,7 @@ import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
 import { activeRecordingCount, useActiveRecordings } from "@/features/recording/recording";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
+import { hasLongPressMovedBeyondSlop } from "@/shared/gestures/longPress";
 import { killTweensOf, settleTween, tween } from "@/shared/motion/tween";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -22,6 +23,24 @@ import {
   sidebarNavItemsFor,
   type SidebarNavItem,
 } from "./sidebarNavigation";
+
+/**
+ * 触摸在底栏上自行导航后，抑制随后到达的兼容 click 的时长（ms）。
+ *
+ * 与 `HORIZONTAL_SWIPE_CLICK_SUPPRESSION_MS` 同量级：延迟的 click 一般紧跟着
+ * `pointerup` 到达，这个窗口足够盖住它；超出窗口的 click 一定是用户新的一次操作，
+ * 不该被吞。
+ */
+const SIDEBAR_TAP_CLICK_SUPPRESSION_MS = 420;
+
+/**
+ * 触摸点按的最大时长（ms）。超过它视为长按而不是点按。
+ *
+ * 移动端底栏上的长按没有额外语义（不是卡片长按抽屉那一类），但按住半秒再松手
+ * 仍不该算一次点按 —— 那通常是用户在犹豫或误触。与 `LONG_PRESS_TRIGGER_MS`
+ * 同档。
+ */
+const SIDEBAR_TAP_MAX_DURATION_MS = 500;
 
 function SidebarLink({
   to,
@@ -39,11 +58,89 @@ function SidebarLink({
   onIntent?: () => void;
 }) {
   const navigate = useNavigate();
+  /**
+   * 触摸指针在底栏上的落点与时刻，用来在 fling 期间自行合成一次导航。
+   *
+   * 惯性滚动还在跑时，浏览器的第一次点按只用来停住滚动：`pointerdown` /
+   * `pointerup` 照常派发，`click` 却被吞掉（Chromium 的 scroll gesture 会吃掉
+   * 这一次 tap）。底栏是固定在滚动容器之外的一层，用户想点它的时候滚动可能还
+   * 在滑，于是「点一下没反应，得再点一下」—— 底栏因此读作失灵。
+   *
+   * 这里在 `pointerup` 上自己判定并导航，不等 `click`；随后的兼容 `click`
+   * 用时间窗去重（见 `handleClick`）。只处理触摸：鼠标与键盘走原来的
+   * `NavLink` 路径，不产生第二次导航。
+   */
+  const tapRef = useRef<{ pointerId: number; x: number; y: number; time: number } | null>(null);
+  /** 自行导航后，抑制随后到达的兼容 click。 */
+  const suppressClickUntilRef = useRef(0);
 
   function preloadDestination() {
     preloadRouteModule(to);
     onIntent?.();
   }
+
+  /**
+   * 导航到本条目。
+   *
+   * `state` 必须是 `SIDEBAR_NAVIGATION_STATE`：Shell 靠它把这一次跳转识别为
+   * 「底部导航直达」并据此选页面转场（移动端原子式换页、桌面端方向平移）。
+   * 用 `NavLink` 自己的点击处理器做不到这一点 —— 那是它的内部逻辑，
+   * 只能靠真正点击那一下走进去。
+   */
+  const goToDestination = useCallback(() => {
+    navigate(to, { state: SIDEBAR_NAVIGATION_STATE });
+  }, [navigate, to]);
+
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLAnchorElement>) => {
+      // 预加载不走回调引用：`preloadDestination` 每次渲染都是新函数（它读 `to`
+      // 与 `onIntent`），把它列进依赖会让本处理器也每次重建，而它自己并不需要
+      // 新的闭包 —— 这里直接调用即可。
+      preloadDestination();
+      // 部分 Android WebView 对手指输入上报空的 pointerType。
+      const pointerType = event.pointerType as string;
+      if (pointerType !== "touch" && pointerType !== "") {
+        tapRef.current = null;
+        return;
+      }
+      if (!event.isPrimary || event.button !== 0) {
+        tapRef.current = null;
+        return;
+      }
+      tapRef.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        time: event.timeStamp,
+      };
+    },
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- 见上方注释。
+    [],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLAnchorElement>) => {
+      const tap = tapRef.current;
+      tapRef.current = null;
+      if (!tap || tap.pointerId !== event.pointerId) return;
+      if (
+        hasLongPressMovedBeyondSlop(tap.x, tap.y, event.clientX, event.clientY) ||
+        event.timeStamp - tap.time > SIDEBAR_TAP_MAX_DURATION_MS
+      ) {
+        return;
+      }
+      // 指针已被祖先（横向翻页）捕获时不在这里导航：那一层会用自己的收尾与
+      // 点按抑制决定结果，两边都动手会翻两次。
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) return;
+      suppressClickUntilRef.current = Date.now() + SIDEBAR_TAP_CLICK_SUPPRESSION_MS;
+      goToDestination();
+    },
+    [goToDestination],
+  );
+
+  const handlePointerCancel = useCallback(() => {
+    tapRef.current = null;
+  }, []);
 
   const link = (
     <NavLink
@@ -51,12 +148,22 @@ function SidebarLink({
       end={end}
       state={SIDEBAR_NAVIGATION_STATE}
       onPointerEnter={preloadDestination}
-      onPointerDown={preloadDestination}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       onFocus={preloadDestination}
       onClick={(event) => {
+        // 触摸已经在 `pointerup` 上导航过：这里的兼容 click 只负责把默认行为
+        // （整页跳转）压下去，不能再走一次路由，否则同一次点按会导航两遍。
+        if (Date.now() < suppressClickUntilRef.current) {
+          event.preventDefault();
+          return;
+        }
+        // `detail === 0` 是键盘触发的 click（Enter / 空格），鼠标 click 的
+        // detail 是点击次数；两者都交给 `NavLink` 自己处理。
         if (event.detail !== 0) return;
         event.preventDefault();
-        navigate(to);
+        goToDestination();
       }}
       data-slot="app-sidebar-link"
       data-motion-press
