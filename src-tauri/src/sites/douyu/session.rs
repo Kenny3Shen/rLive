@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use super::{UA, sign};
 use crate::http_client;
+pub(super) use crate::sites::cookie::{merge_cookie_values, normalize_cookie};
 
 /// 只需要登录态、返回体最小的斗鱼 Web 接口。斗鱼没有第一方的「账号资料」
 /// 读接口，因此用关注列表的第一页作为会话探针。
@@ -73,13 +74,6 @@ fn json_strict_i64(value: &Value) -> Option<i64> {
         .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
 }
 
-pub(super) fn normalize_cookie(value: &str) -> String {
-    merge_cookie_values(
-        "",
-        value.trim().strip_prefix("Cookie:").unwrap_or(value).trim(),
-    )
-}
-
 /// 账号 Cookie 的作用域限定在斗鱼的 HTTPS Web 主机。保持显式声明，
 /// 可避免未来的调用点仅因为复用了 JSON 辅助函数，
 /// 就把保存的 Cookie 重放到任意 URL。
@@ -91,36 +85,6 @@ pub(super) fn is_douyu_cookie_url(value: &str) -> bool {
         && url
             .host_str()
             .is_some_and(|host| host == "douyu.com" || host.ends_with(".douyu.com"))
-}
-
-fn cookie_pairs(value: &str) -> Vec<(String, String)> {
-    value
-        .split(';')
-        .filter_map(|part| {
-            let (key, value) = part.trim().split_once('=')?;
-            let key = key.trim();
-            (!key.is_empty()).then(|| (key.to_string(), value.trim().to_string()))
-        })
-        .collect()
-}
-
-pub(super) fn merge_cookie_values(base: &str, updates: &str) -> String {
-    let mut merged = cookie_pairs(base);
-    for (key, value) in cookie_pairs(updates) {
-        if let Some((_, previous)) = merged
-            .iter_mut()
-            .find(|(previous_key, _)| previous_key.eq_ignore_ascii_case(&key))
-        {
-            *previous = value;
-        } else {
-            merged.push((key, value));
-        }
-    }
-    merged
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 #[cfg(test)]

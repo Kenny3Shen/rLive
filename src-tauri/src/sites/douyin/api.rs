@@ -14,6 +14,8 @@ use serde_json::Value;
 
 use super::{DouyinSite, a_bogus, json_i64_opt, json_str};
 use crate::error::{AppError, AppResult};
+use crate::sites::cookie::merge_cookie_values;
+pub(super) use crate::sites::cookie::{cookie_pairs, normalize_cookie};
 
 /// 抖音 Web 直播接口使用的浏览器 UA。保持稳定很重要：
 /// 部分边缘节点把 `ttwid` 绑定到浏览器家族上。
@@ -363,13 +365,6 @@ fn is_argus_security_block(status: StatusCode, text: &str) -> bool {
     status == StatusCode::FORBIDDEN && text.contains("ArgusSecurityPlugin")
 }
 
-pub(super) fn normalize_cookie(value: &str) -> String {
-    merge_cookie_values(
-        "",
-        value.trim().strip_prefix("Cookie:").unwrap_or(value).trim(),
-    )
-}
-
 /// 保存的账号 cookie 的作用域限定为抖音自有 Web 主机。保持这条边界显式可见，
 /// 因为房间回源 API 托管在 amemv.com 上。
 fn is_douyin_cookie_url(value: &str) -> bool {
@@ -377,21 +372,6 @@ fn is_douyin_cookie_url(value: &str) -> bool {
         .ok()
         .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
         .is_some_and(|host| host == "douyin.com" || host.ends_with(".douyin.com"))
-}
-
-pub(super) fn cookie_pairs(value: &str) -> Vec<(String, String)> {
-    value
-        .split(';')
-        .filter_map(|part| {
-            let (key, value) = part.trim().split_once('=')?;
-            let key = key.trim();
-            if key.is_empty() {
-                None
-            } else {
-                Some((key.to_string(), value.trim().to_string()))
-            }
-        })
-        .collect()
 }
 
 /// 本次首页引导相对于访问前的 cookie 新增或刷新了哪些键值对。只有这些匿名
@@ -407,25 +387,6 @@ fn changed_cookie_pairs(before: &str, after: &str) -> Vec<(String, String)> {
                 .any(|(old_key, old_value)| old_key.eq_ignore_ascii_case(key) && old_value == value)
         })
         .collect()
-}
-
-fn merge_cookie_values(base: &str, updates: &str) -> String {
-    let mut merged = cookie_pairs(base);
-    for (key, value) in cookie_pairs(updates) {
-        if let Some((_, previous)) = merged
-            .iter_mut()
-            .find(|(previous_key, _)| previous_key.eq_ignore_ascii_case(&key))
-        {
-            *previous = value;
-        } else {
-            merged.push((key, value));
-        }
-    }
-    merged
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 fn is_safe_session_value(value: &str) -> bool {
@@ -569,6 +530,7 @@ mod tests {
     fn sends_cookies_only_to_douyin_owned_web_hosts() {
         assert!(is_douyin_cookie_url("https://live.douyin.com/123"));
         assert!(is_douyin_cookie_url("https://www.douyin.com/"));
+        assert!(is_douyin_cookie_url("http://www.douyin.com/"));
         assert!(!is_douyin_cookie_url(
             "https://webcast.amemv.com/webcast/room/reflow/info/"
         ));
