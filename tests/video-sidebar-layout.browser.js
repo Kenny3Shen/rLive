@@ -16,6 +16,8 @@ async (page) => {
     );
     const { MemoryRouter, useLocation } = await import(dependencyUrl("react-router-dom"));
     const { VideoSidebar } = await import("/src/features/video/VideoSidebar.tsx");
+    const { createPlaybackClock } = await import("/src/features/video/videoPlaybackClock.ts");
+    const clock = createPlaybackClock(40);
     const { TooltipProvider } = await import("/src/components/ui/tooltip.tsx");
     const { usePlaylistStore } = await import("/src/features/video/playlistStore.ts");
     const ui = await setupHarness({
@@ -109,7 +111,7 @@ async (page) => {
           ...props,
           tab,
           onTabChange: setTab,
-          danmaku: { entries, positionMs: 40000, loading: false, onSeek: () => {} },
+          danmaku: { entries, clock, loading: false, onSeek: () => {} },
           danmakuComposer: h("input", {
             "aria-label": "测试弹幕发送",
             style: { height: 36, width: "100%" },

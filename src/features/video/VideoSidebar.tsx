@@ -37,6 +37,7 @@ import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { CommentsPanel } from "./CommentsPanel";
 import { VideoCommentComposer } from "./VideoCommentComposer";
 import { VideoDanmakuList } from "./VideoDanmakuList";
+import type { PlaybackClock } from "./videoPlaybackClock";
 import { videoSelectionCount } from "./videoSelectionCount";
 import { VideoCard } from "./VideoCard";
 import { videoGetArchive, videoGetOnlineTotal, videoGetRelated, videoGetSeason } from "./videoApi";
@@ -769,10 +770,11 @@ export function VideoSidebar({
   cid: number;
   /** 评论空降到当前视频的播放位置（秒），与弹幕是否开启无关。 */
   onSeek?: (seconds: number) => void;
-  /** 弹幕查看列表数据：播放页已加载的条目 + 当前进度 + 点击跳转。 */
+  /** 弹幕查看列表数据：播放页已加载的条目 + 播放进度 store + 点击跳转。 */
   danmaku?: {
     entries: readonly VideoDanmakuEntry[];
-    positionMs: number;
+    /** 仅弹幕列表自己订阅，侧栏本身不随进度重渲染。 */
+    clock: PlaybackClock;
     loading: boolean;
     /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
     onSeek: (positionMs: number) => void;
@@ -909,7 +911,7 @@ export function VideoSidebar({
               // 按 cid 重挂：换视频后跟随状态不应沿用。
               key={cid}
               entries={danmaku.entries}
-              positionMs={danmaku.positionMs}
+              clock={danmaku.clock}
               loading={danmaku.loading}
               onSeek={danmaku.onSeek}
               active={value === tab}

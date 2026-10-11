@@ -1,6 +1,6 @@
 import { useMemo, type RefObject } from "react";
 import { VideoChapterMenu } from "@/features/video/VideoChapterMenu";
-import { playableChapters } from "@/features/video/videoChapters";
+import { activeChapterIndex, playableChapters } from "@/features/video/videoChapters";
 import type { VideoChapter } from "@/shared/types/video";
 import { useShortsSeekTime } from "./shortsSeekPlayer";
 
@@ -34,7 +34,7 @@ export function ShortsChapterMenu({
     <VideoChapterMenu
       variant="pill"
       chapters={items}
-      currentTime={time.currentTime}
+      activeIndex={activeChapterIndex(items, time.currentTime)}
       open={open}
       onOpenChange={onOpenChange}
       onSeek={seek}

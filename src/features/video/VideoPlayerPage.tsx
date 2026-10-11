@@ -158,7 +158,8 @@ import {
 } from "./videoPlaybackLifecycle";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { chaptersToVtt } from "./chaptersVtt";
-import { playableChapters } from "./videoChapters";
+import { activeChapterIndex, playableChapters } from "./videoChapters";
+import { createPlaybackClock, usePlaybackClock } from "./videoPlaybackClock";
 import { VideoChapterMenu } from "./VideoChapterMenu";
 import { subtitleJsonToVtt } from "./subtitleVtt";
 import { storyboardToVtt } from "./storyboardVtt";
@@ -341,7 +342,8 @@ function VideoPlayerPageContent() {
   const [paused, setPaused] = useState(true);
   const [muted, setMuted] = useState(initialAudio.muted);
   const [volume, setVolume] = useState(initialAudio.volume);
-  const [currentTime, setCurrentTime] = useState(0);
+  // 进度不进页面 state：timeupdate 约 4Hz，整页重渲染会挤占主线程让飘动弹幕丢帧。
+  const [playbackClock] = useState(() => createPlaybackClock());
   const [duration, setDuration] = useState(0);
   const [frameSize, setFrameSize] = useState<{
     key: string;
@@ -1054,6 +1056,10 @@ function VideoPlayerPageContent() {
   /** 章节菜单的条目：与章节轨同一份数据，只剔除零长和越过实际时长的项。 */
   const menuChapters = useMemo(() => playableChapters(chapters, duration), [chapters, duration]);
   const hasMenuChapters = menuChapters.length > 0;
+  // 只在当前章节变化时重渲染，进度本身不触发播放页渲染。
+  const activeChapter = usePlaybackClock(playbackClock, (seconds) =>
+    activeChapterIndex(menuChapters, seconds),
+  );
   useEffect(() => {
     // 切 P/换集后没有章节，按钮随之消失，残留的展开态会让控制栏一直常驻。
     // oxlint-disable-next-line react/set-state-in-effect
@@ -1223,13 +1229,13 @@ function VideoPlayerPageContent() {
       // 上限离时长留 0.25s 余量：跳到正正好 duration 会被媒体元素当成播放结束，
       // 留余量让最后一帧真的播出来、再自然触发 ended（自动连播走它的正常路径）。
       const clamped = Math.max(0, duration > 0 ? Math.min(target, duration - 0.25) : target);
-      setCurrentTime(clamped);
+      playbackClock.set(clamped);
       setWaiting(true);
       // DASH 的 seek 走原生 `currentTime`，Video.js DASH 适配器会按当前位置处理分片。
       // 不维护播放器私有分片时间轴补丁。
       media.currentTime = clamped;
     },
-    [duration],
+    [duration, playbackClock],
   );
 
   const mpdUrl = playInfo?.mpd_url;
@@ -1332,7 +1338,7 @@ function VideoPlayerPageContent() {
     setPlaybackError(null);
     setPaused(true);
     userPausedRef.current = false;
-    setCurrentTime(0);
+    playbackClock.set(0);
     setDuration(playInfo?.duration ?? 0);
     // 本轮播放器会话向 waiting 自动恢复登记：同 key 续用预算，换 key 重置；
     // 上一会话挂起的计时在模块内随之作废。
@@ -1370,7 +1376,7 @@ function VideoPlayerPageContent() {
     function syncTime() {
       if (cancelled) return;
       const actual = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : 0;
-      setCurrentTime(actual);
+      playbackClock.set(actual);
       ensureDanmakuSegments(actual * 1_000);
       reportProgress(actual, false);
       syncTailBuffered();
@@ -1421,7 +1427,7 @@ function VideoPlayerPageContent() {
         pendingInitialResume = null;
         // DASH 已从目标分片开始调度，不能再 seek，否则会取消在途分片并重取 init。
         if (playKind !== "dash") media.currentTime = initialResume.position;
-        setCurrentTime(initialResume.position);
+        playbackClock.set(initialResume.position);
         // 用户在加载期间按过暂停就保持暂停，不被自动续播重新拉起。
         if (initialResume.playing && !userPausedRef.current) {
           void media.play().catch(() => {
@@ -1584,7 +1590,7 @@ function VideoPlayerPageContent() {
             ? { position: historyResumeAt, playing: false }
             : null;
         initialResumePosition = pendingInitialResume?.position ?? 0;
-        if (pendingInitialResume) setCurrentTime(pendingInitialResume.position);
+        if (pendingInitialResume) playbackClock.set(pendingInitialResume.position);
         const player = createVideoJsPlayer(modules, {
           video: media,
           url: playUrl,
@@ -1664,6 +1670,7 @@ function VideoPlayerPageContent() {
     releaseTransport,
     goToPlaylistItem,
     historySession,
+    playbackClock,
     playUrl,
     playInfo?.duration,
     playKind,
@@ -2229,10 +2236,10 @@ function VideoPlayerPageContent() {
         togglePlayerFullscreen();
       } else if (key === "arrowleft") {
         event.preventDefault();
-        seekTo(currentTime - (event.shiftKey ? 30 : 5));
+        seekTo(playbackClock.get() - (event.shiftKey ? 30 : 5));
       } else if (key === "arrowright") {
         event.preventDefault();
-        seekTo(currentTime + (event.shiftKey ? 30 : 5));
+        seekTo(playbackClock.get() + (event.shiftKey ? 30 : 5));
       } else if (key === "arrowup") {
         event.preventDefault();
         setPlayerVolume((playerControlMuted ? 0 : playerControlVolume) + 5);
@@ -2251,7 +2258,7 @@ function VideoPlayerPageContent() {
       revealControls();
     },
     [
-      currentTime,
+      playbackClock,
       fullscreen,
       fullscreenLocked,
       playerControlMuted,
@@ -2615,7 +2622,7 @@ function VideoPlayerPageContent() {
     <VideoChapterMenu
       variant={chaptersPlacement === "progress" ? "pill" : "button"}
       chapters={menuChapters}
-      currentTime={currentTime}
+      activeIndex={activeChapter}
       open={chapterMenuOpen}
       onOpenChange={setChapterMenuOpen}
       onSeek={seekTo}
@@ -2805,7 +2812,7 @@ function VideoPlayerPageContent() {
                         video={{
                           cid,
                           aid: aid ?? "",
-                          progressMs: Math.floor(currentTime * 1000),
+                          getProgressMs: () => playbackClock.get() * 1000,
                         }}
                         onOverlayInteractionChange={setOverlayInteractionOpen}
                       />
@@ -3190,13 +3197,17 @@ function VideoPlayerPageContent() {
                       <DanmakuComposer
                         key={videoKey}
                         roomTitle={title}
-                        video={{ cid, aid: aid ?? "", progressMs: Math.floor(currentTime * 1000) }}
+                        video={{
+                          cid,
+                          aid: aid ?? "",
+                          getProgressMs: () => playbackClock.get() * 1000,
+                        }}
                       />
                     ) : undefined
                   }
                   danmaku={{
                     entries: danmakuEntries,
-                    positionMs: currentTime * 1000,
+                    clock: playbackClock,
                     // 空列表只有在「本段已落定且没有在途请求」时才不是加载中，
                     // 否则无弹幕的视频会永远显示加载动画。
                     loading:

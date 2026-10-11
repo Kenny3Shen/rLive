@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { LocateFixed } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn, formatOnline } from "@/lib/utils";
 import { formatRecordingDuration } from "@/features/recording/recording";
-import type { VideoDanmakuEntry } from "./videoDanmaku";
+import { firstVideoDanmakuAtOrAfter, type VideoDanmakuEntry } from "./videoDanmaku";
+import { usePlaybackClock, type PlaybackClock } from "./videoPlaybackClock";
 import {
   isVideoDanmakuSeek,
   isVideoDanmakuUserScroll,
@@ -32,15 +41,18 @@ import {
 
 export function VideoDanmakuList({
   entries,
-  positionMs,
+  clock,
   loading,
   onSeek,
   active = true,
 }: {
   /** 已加载并合并排序的全部弹幕条目（播放页的 danmakuEntries）。 */
   entries: readonly VideoDanmakuEntry[];
-  /** 当前播放位置（毫秒），按它跟踪滚动。 */
-  positionMs: number;
+  /**
+   * 播放进度 store（秒）。只订阅派生下标（跟随行、已出现边界），下标不变时不重渲染；
+   * 非活动页签不订阅，横滑条带里看不见的列表不随播放刷新。
+   */
+  clock: PlaybackClock;
   /** 段还在取（首批没回来）。 */
   loading: boolean;
   /** 点击条目跳到该弹幕出现的播放位置（毫秒）。 */
@@ -64,7 +76,28 @@ export function VideoDanmakuList({
   // 全量渲染：行级 content-visibility 让浏览器跳过屏外行的布局与绘制，
   // 滚动可以到达任意位置（进度窗口截断会让"滚动查看更多"失效）。
   const total = entries.length;
-  const followIndex = videoDanmakuFollowIndex(entries, positionMs);
+  const followIndex = usePlaybackClock(
+    clock,
+    (seconds) => videoDanmakuFollowIndex(entries, seconds * 1_000),
+    active,
+  );
+  // 第一条尚未出现（progressMs > 当前进度）的下标；其后整段淡化。
+  const futureFrom = usePlaybackClock(
+    clock,
+    (seconds) => firstVideoDanmakuAtOrAfter(entries, Math.floor(seconds * 1_000) + 1),
+    active,
+  );
+  // 行组件 memo 依赖稳定的点击回调；onSeek 由播放页内联创建。
+  const onSeekRef = useRef(onSeek);
+  useLayoutEffect(() => {
+    onSeekRef.current = onSeek;
+  }, [onSeek]);
+  const selectEntry = useCallback((progressMs: number) => {
+    // 点条目是对播放头的显式表态：先武装跟随，seek 之后的新位置
+    // 就由跟随逻辑接手（否则点完一条就停在原地不再跟）。
+    setFollowing(true);
+    onSeekRef.current(progressMs);
+  }, []);
 
   /** 把跟随行滚到视口中央，并把落点记为新锚点。 */
   const scrollToFollowRow = useCallback(() => {
@@ -133,7 +166,7 @@ export function VideoDanmakuList({
     };
   }, [active]);
 
-  // 依赖 followIndex 而不是 positionMs：后者约 4Hz 跳动，每跳都重滚会与
+  // 依赖 followIndex 而不是播放进度：后者约 4Hz 跳动，每跳都重滚会与
   // content-visibility 的滚动锚定互相推挤；跟随行没换就没有要滚的理由。
   useLayoutEffect(() => {
     if (!active || !following || followIndex < 0) return;
@@ -142,16 +175,18 @@ export function VideoDanmakuList({
 
   // 拖动进度条是对播放头最明确的表态，重新武装跟随。正常播放的步长远小于阈值。
   //
-  // 记在 effect 里而不是渲染期：渲染期改 ref 会被 react(refs) 拦下，而换成
-  // 「渲染期 setState」那套写法会让 4Hz 的 positionMs 每跳都多跑一遍渲染 ——
-  // 这个列表是全量渲染的，上万行时那是实打实的开销。
-  const previousPositionRef = useRef(positionMs);
+  // 直接订阅 store 而不经渲染：这个列表是全量渲染的，按 4Hz 进度逐跳渲染
+  // 在上万行时是实打实的开销。非活动页签也照常判定，切回时跟随已重新武装。
   useEffect(() => {
-    const previous = previousPositionRef.current;
-    previousPositionRef.current = positionMs;
-    // 已经在跟随时 setState 同值，React 自己会跳过重渲染。
-    if (isVideoDanmakuSeek(previous, positionMs)) setFollowing(true);
-  }, [positionMs]);
+    let previous = clock.get() * 1_000;
+    return clock.subscribe(() => {
+      const next = clock.get() * 1_000;
+      const seeked = isVideoDanmakuSeek(previous, next);
+      previous = next;
+      // 已经在跟随时 setState 同值，React 自己会跳过重渲染。
+      if (seeked) setFollowing(true);
+    });
+  }, [clock]);
 
   return (
     <div className="relative h-full">
@@ -173,40 +208,13 @@ export function VideoDanmakuList({
         )}
         <ol className="flex flex-col gap-0.5 px-3 py-2 text-sm">
           {entries.map((entry, index) => (
-            <li
+            <VideoDanmakuRow
               key={`${entry.progressMs}-${index}`}
-              ref={index === followIndex ? followRef : undefined}
-              className={cn(
-                // 屏外行跳过布局与绘制：全量渲染上万条也保持滚动流畅；
-                // contain-intrinsic-size 提供 scrollHeight 估算避免滚动条抖动。
-                "[content-visibility:auto] [contain-intrinsic-size:auto_1.75rem]",
-                entry.progressMs > positionMs && "opacity-55",
-              )}
-            >
-              {/* 整行是跳转入口（含未来条目）：点了就走 seek，列表随后跟随
-                  新位置滚动。按钮语义让键盘/读屏也能跳。 */}
-              <button
-                type="button"
-                onClick={() => {
-                  // 点条目是对播放头的显式表态：先武装跟随，seek 之后的新位置
-                  // 就由跟随逻辑接手（否则点完一条就停在原地不再跟）。
-                  setFollowing(true);
-                  onSeek(entry.progressMs);
-                }}
-                title="跳转到此弹幕的位置"
-                className="flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
-              >
-                <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                  {formatRecordingDuration(entry.progressMs)}
-                </span>
-                <span
-                  className="min-w-0 flex-1 truncate leading-relaxed"
-                  style={entry.color ? { color: entry.color } : undefined}
-                >
-                  {entry.content}
-                </span>
-              </button>
-            </li>
+              entry={entry}
+              future={index >= futureFrom}
+              followRef={index === followIndex ? followRef : undefined}
+              onSelect={selectEntry}
+            />
           ))}
         </ol>
         {total > 0 && (
@@ -233,3 +241,50 @@ export function VideoDanmakuList({
     </div>
   );
 }
+
+/**
+ * 单行 memo：播放推进时只有跨过「已出现」边界与跟随行变化的那几行重渲染，
+ * 其余上万行不参与协调。
+ */
+const VideoDanmakuRow = memo(function VideoDanmakuRow({
+  entry,
+  future,
+  followRef,
+  onSelect,
+}: {
+  entry: VideoDanmakuEntry;
+  future: boolean;
+  followRef: RefObject<HTMLLIElement | null> | undefined;
+  onSelect: (progressMs: number) => void;
+}) {
+  return (
+    <li
+      ref={followRef}
+      className={cn(
+        // 屏外行跳过布局与绘制：全量渲染上万条也保持滚动流畅；
+        // contain-intrinsic-size 提供 scrollHeight 估算避免滚动条抖动。
+        "[content-visibility:auto] [contain-intrinsic-size:auto_1.75rem]",
+        future && "opacity-55",
+      )}
+    >
+      {/* 整行是跳转入口（含未来条目）：点了就走 seek，列表随后跟随
+          新位置滚动。按钮语义让键盘/读屏也能跳。 */}
+      <button
+        type="button"
+        onClick={() => onSelect(entry.progressMs)}
+        title="跳转到此弹幕的位置"
+        className="flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
+      >
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+          {formatRecordingDuration(entry.progressMs)}
+        </span>
+        <span
+          className="min-w-0 flex-1 truncate leading-relaxed"
+          style={entry.color ? { color: entry.color } : undefined}
+        >
+          {entry.content}
+        </span>
+      </button>
+    </li>
+  );
+});

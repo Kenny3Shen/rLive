@@ -14,12 +14,12 @@ import {
 import type { VideoChapter } from "@/shared/types/video";
 import { cn } from "@/lib/utils";
 import { formatVideoDuration } from "./videoHistory";
-import { activeChapterIndex } from "./videoChapters";
 
 export type VideoChapterMenuProps = {
   /** 已按 `playableChapters` 过滤的章节；为空时调用方不渲染本组件。 */
   chapters: readonly VideoChapter[];
-  currentTime: number;
+  /** 当前章节下标（`activeChapterIndex`），-1 表示不在任何章节内；由调用方按进度订阅。 */
+  activeIndex: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** 跳到章节起点；沿用页面的 `seekTo`（时长余量、等待态都在那里）。 */
@@ -39,7 +39,7 @@ export type VideoChapterMenuProps = {
  */
 export function VideoChapterMenu({
   chapters,
-  currentTime,
+  activeIndex,
   open,
   onOpenChange,
   onSeek,
@@ -47,7 +47,6 @@ export function VideoChapterMenu({
   variant = "button",
 }: VideoChapterMenuProps) {
   const hover = useHoverOpen(open, onOpenChange);
-  const activeIndex = activeChapterIndex(chapters, currentTime);
   const activeTitle = activeIndex >= 0 ? chapters[activeIndex].title : null;
   const listRef = useRef<HTMLDivElement | null>(null);
 

@@ -108,7 +108,7 @@ function Fixture() {
         </button>
       </header>
       <section aria-label="弹幕输入对照">
-        <DanmakuComposer video={{ cid: 1, aid, progressMs: 0 }} />
+        <DanmakuComposer video={{ cid: 1, aid, getProgressMs: () => 0 }} />
       </section>
       <div data-testid="comment-list" className="min-h-0 flex-1 overflow-y-auto">
         <CommentsPanel aid={aid} />

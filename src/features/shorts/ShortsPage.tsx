@@ -839,7 +839,7 @@ export function ShortsPage() {
                     video={{
                       cid: current.cid ?? 0,
                       aid: current.aid,
-                      progressMs: Math.floor(playback.getCurrentTime() * 1000),
+                      getProgressMs: () => playback.getCurrentTime() * 1000,
                     }}
                   />
                 )}

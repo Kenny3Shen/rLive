@@ -76,8 +76,8 @@ type DanmakuComposerProps = {
   video?: {
     cid: number;
     aid: string;
-    /** 当前播放位置（毫秒），让弹幕落在正确的进度条位置。 */
-    progressMs: number;
+    /** 发送时读取当前播放位置（毫秒），让弹幕落在正确的进度条位置；不随进度重渲染。 */
+    getProgressMs: () => number;
   };
 };
 
@@ -741,7 +741,7 @@ export function DanmakuComposer({
           ? {
               cid: video.cid,
               aid: video.aid,
-              progressMs: video.progressMs,
+              progressMs: Math.max(0, Math.floor(video.getProgressMs()) || 0),
               message: outgoingMessage,
               videoTitle: roomTitle,
             }
