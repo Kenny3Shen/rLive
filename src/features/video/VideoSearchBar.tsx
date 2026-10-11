@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Search } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import { InputGroupButton } from "@/components/ui/input-group";
 import { SearchHistoryField } from "@/shared/components/SearchHistoryField";
 import { cn } from "@/lib/utils";
 import { VIDEO_SEARCH_QUERY_PARAM, videoSearchPath } from "./videoRoute";
@@ -13,6 +13,11 @@ import { VIDEO_SEARCH_QUERY_PARAM, videoSearchPath } from "./videoRoute";
  * 两者不共享状态也能对齐——提交即导航，返回/前进时草稿跟着 URL 回放。
  *
  * 历史记忆与浮层交给 `SearchHistoryField`（直播搜索页共用同一份实现）。
+ *
+ * 提交按钮与直播搜索页同款：一枚内嵌在输入组右端的图标按钮，不写「搜索」二字。
+ * 头部这条 bar 在移动端要同时容下返回键、输入框与提交键，带文字的大按钮会把
+ * 输入框挤到只剩一半宽；图标在两端读法一致（放大镜就是提交），也免了「按钮比
+ * 输入框还显眼」的失衡。
  */
 
 /** 视频搜索历史独立成键，与直播搜索历史互不污染。 */
@@ -42,17 +47,19 @@ export function VideoSearchBar({ className }: { className?: string }) {
       autoFocusWhenEmpty
       className={cn("h-full min-w-0 flex-1", className)}
       inputGroupClassName="h-9"
+      endAdornment={
+        // 与直播搜索页同款：内嵌图标提交键，不写「搜索」二字，也不做空态禁用
+        // （空提交在 `SearchHistoryField` 里已被 `trim` 拦下，两页读法因此一致）。
+        <InputGroupButton type="submit" size="icon-xs" aria-label="搜索" title="搜索">
+          <Search aria-hidden />
+        </InputGroupButton>
+      }
       onSubmit={(next) => {
         // 空态页被结果页替换而不是压栈：头部的返回键会把结果页替换回空搜索页
         // （见 Shell 的 goBackToVideo），若空态压栈会在它下面再垫一层空白；
         // 浏览器/硬件返回也因此从结果直达来源页。已有结果时换词仍正常压栈。
         if (next !== keyword) navigate(videoSearchPath(next), { replace: !keyword });
       }}
-    >
-      <Button type="submit" className="h-9 shrink-0" disabled={!draft.trim()}>
-        <Search className="size-4" aria-hidden />
-        搜索
-      </Button>
-    </SearchHistoryField>
+    />
   );
 }

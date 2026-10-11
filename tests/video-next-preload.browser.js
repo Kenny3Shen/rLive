@@ -75,9 +75,11 @@ async (page) => {
       () => window.nextPreloadEngine && !window.nextPreloadEngine.media.paused,
     );
     // 选集（稿件详情）晚于播放器就位：等它落定，闸门打开时才存在可预热的目标。
-    await page.waitForFunction(() =>
-      document.body.innerText.includes("选集共 2 P"),
-    );
+    // 标题行右侧报的是当前 P 的位置（`1/2`）而不是总数，见 `videoSelectionCount`。
+    await page.waitForFunction(() => {
+      const card = document.querySelector('[data-slot="video-selection-card"]');
+      return card?.querySelector("h3 button")?.textContent.includes("1/2") ?? false;
+    });
   };
   try {
     await open();

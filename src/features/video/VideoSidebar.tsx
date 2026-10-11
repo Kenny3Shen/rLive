@@ -37,6 +37,7 @@ import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { CommentsPanel } from "./CommentsPanel";
 import { VideoCommentComposer } from "./VideoCommentComposer";
 import { VideoDanmakuList } from "./VideoDanmakuList";
+import { videoSelectionCount } from "./videoSelectionCount";
 import { VideoCard } from "./VideoCard";
 import { videoGetArchive, videoGetOnlineTotal, videoGetRelated, videoGetSeason } from "./videoApi";
 import { formatDateTime, formatVideoDuration } from "./videoHistory";
@@ -409,6 +410,8 @@ function EpisodesPanel({
 
   // 分集列表与播放页共用同一份转换，避免两处映射漂移。
   const playlistItems: PlaylistItem[] = episodes.map(playlistItemFromPgcEpisode);
+  // 当前集的位置标记：分集表还没到、或 epId 不在表里（改版、脏数据）时退回总数。
+  const currentIndex = episodes.findIndex((episode) => episode.ep_id === epId);
 
   // 播放全部：从第一集开始
   const handlePlayAll = () => {
@@ -435,7 +438,7 @@ function EpisodesPanel({
   return (
     <SelectionSection
       label="分集"
-      count={`共 ${episodes.length} 集`}
+      count={videoSelectionCount(currentIndex, episodes.length, "集")}
       open={open}
       onOpenChange={setOpen}
     >
@@ -539,7 +542,11 @@ function UgcSeasonPanel({
     <SelectionSection
       label="合集"
       title={season.title}
-      count={`共 ${season.episodes.length} 个`}
+      count={videoSelectionCount(
+        season.episodes.findIndex((episode) => episode.bvid === currentBvid),
+        season.episodes.length,
+        "个",
+      )}
       open={open}
       onOpenChange={setOpen}
     >
@@ -644,11 +651,13 @@ function PartsPanel({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { listRef, currentRowRef } = useCurrentRowScroll(open && active, currentCid);
+  // 链接缺 cid（搜索入口）时 `currentCid` 为 0，定位不到就退回总数。
+  const currentIndex = pages.findIndex((page) => page.cid === currentCid);
 
   return (
     <SelectionSection
       label="选集"
-      count={`共 ${pages.length} P`}
+      count={videoSelectionCount(currentIndex, pages.length, "P")}
       open={open}
       onOpenChange={setOpen}
     >
@@ -1251,13 +1260,14 @@ export function VideoSidebar({
         </div>
       </div>
 
-      {/* UP 主投稿抽屉 */}
+      {/* UP 主投稿抽屉。带上当前播放的 bvid：打开后定位并高亮那一条。 */}
       {archive && archive.author_mid && (
         <UploaderDrawer
           open={uploaderDrawerOpen}
           onOpenChange={setUploaderDrawerOpen}
           mid={archive.author_mid}
           uploaderName={archive.author}
+          currentBvid={bvid ?? ""}
         />
       )}
     </Tabs>
