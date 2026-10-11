@@ -903,7 +903,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             ? createPlaybackTelemetrySession({
                 sessionId: proxySessionId,
                 siteId: siteId ?? null,
-                sourceId: playbackSourceId(selectedSource, 0),
+                sourceId: playbackSourceId(selectedSource),
                 protocol: playbackProtocol(selectedSource),
                 quality: qualityRef.current,
                 switchMode: "hard",
@@ -1304,7 +1304,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             ? createPlaybackTelemetrySession({
                 sessionId: `${proxySessionId}:soft:${sequence}`,
                 siteId: siteId ?? null,
-                sourceId: playbackSourceId(targetSource, 0),
+                sourceId: playbackSourceId(targetSource),
                 protocol: playbackProtocol(targetSource),
                 quality: qualityRef.current,
                 switchMode: "soft",

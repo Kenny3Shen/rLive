@@ -4,7 +4,7 @@ import type { PlayUrl } from "@/shared/types/live";
 /** 稳定排序：按适配器给出的线路优先级，同优先级保持原始顺序。 */
 export function rankPlaybackSourceIndices(sources: readonly PlayUrl[]): number[] {
   return sources
-    .map((source, index) => ({ index, priority: playbackSourcePriority(source, index) }))
+    .map((source, index) => ({ index, priority: playbackSourcePriority(source) }))
     .sort((left, right) => left.priority - right.priority || left.index - right.index)
     .map(({ index }) => index);
 }

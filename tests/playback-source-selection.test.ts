@@ -4,7 +4,13 @@ import {
   nextRankedLineIndex,
   rankPlaybackSourceIndices,
 } from "../src/features/room/playback/sourceSelection";
-import { lineLabel, lineName, playbackProtocol, playbackSourceId } from "../src/lib/playUrl";
+import {
+  lineLabel,
+  lineName,
+  playbackProtocol,
+  playbackSourceId,
+  playbackSourcePriority,
+} from "../src/lib/playUrl";
 
 const sources: PlayUrl[] = [
   {
@@ -42,7 +48,9 @@ describe("structured playback sources", () => {
     expect(lineName({ ...sources[0], label: "主线路（FLV）" }, 0)).toBe("主线路");
     expect(lineLabel(sources[1], 1)).toBe("备用线路（HLS）");
     expect(lineLabel("https://example.test/live.flv", 0)).toBe("线路1（FLV）");
-    expect(playbackSourceId(sources[2], 2)).toBe("third");
+    expect(playbackSourceId(sources[2])).toBe("third");
+    expect(playbackSourceId({ ...sources[2], source_id: " third " })).toBe("third");
+    expect(playbackSourcePriority({ ...sources[0], priority: -1 })).toBe(0);
   });
 });
 

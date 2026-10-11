@@ -30,11 +30,11 @@ export function playbackProtocol(
   return inferPlaybackProtocol(url);
 }
 
-export function playbackSourceId(source: PlaybackSourceLike, _index: number): string {
+export function playbackSourceId(source: PlaybackSourceLike): string {
   return source.source_id.trim();
 }
 
-export function playbackSourcePriority(source: PlaybackSourceLike, _index: number): number {
+export function playbackSourcePriority(source: PlaybackSourceLike): number {
   return Math.max(0, source.priority);
 }
 
