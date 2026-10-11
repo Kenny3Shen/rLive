@@ -84,6 +84,7 @@
 | 桌面侧栏 | 宽 `68px` |
 | 移动端导航 | 底部导航含安全区；全部可见入口在同一 flex 容器内等宽分配。选中态为图标背后的胶囊指示器（`app-sidebar-indicator::before`，主色 16%，切换时横向展开），整格不铺底，标签 `11px`、选中加粗；按下未选中项给同形浅色反馈。桌面竖栏保留整格高亮 |
 | 触摸目标 | 应用导航与表单至少 `44px`；仅播放器边缘媒体操作可用 `32px` 例外 |
+| 设置行高 | 行高由标题文字决定，控件只保留自己的视觉高度并在行内居中，不许把整行撑高。两档高度与留白写在容器上（`styles.css` 的 `--settings-row-height` / `--settings-row-padding-block`）：设置页 `.settings-section` 56px + 上下 12px，侧栏设置页签 `.settings-panel` 44px + 上下 8px（恰好是最高 28px 按钮加两侧留白，与表单触摸目标下限同高）；设置导航页 `.settings-category-row` 64px。粗指针下控件不再被 `min-h-11` 推到 68px，触摸热区改由透明 `::after` 向上下撑开。分割线用伪元素而不是 `divide-y`：真边框会占 1px 布局高度，让除末行外的每个条目高 1px |
 | 平板宽视口 | `touch-wide` variant（`min-width: 48rem` 且主指针为粗指针，定义在 `styles.css`）下：侧栏 rail 链接按移动端待遇渲染（48px 命中区 + 图标下方文字标签，tooltip 隐藏）；首页/搜索/视频网格在 `xl` 宽度上限 5 列（细指针桌面仍 6 列）；底部 Drawer 限宽 `36rem` 居中，不再通栏拉伸 |
 | 播放器 compact 判定 | `usePlayerViewport` 只按媒体查询（`max-width: 767px` 或矮横屏粗指针）解析，移动端兜底仅播种首个渲染帧；平板（≥md 触摸）与桌面共用宽布局：直播间右侧内联聊天面板、桌面密度控件。客户端平台（`clientPlatform`）只决定原生能力（多画面/录制/标题栏），不再决定布局密度 |
 | 安全区 | `env(safe-area-inset-*)` 用于 edge-to-edge、底部导航、Drawer、悬浮按钮，不用固定 padding 覆盖。Android WebView 的 `env(safe-area-inset-bottom)` 常为 0，底部导航、页面底部留白、刷新 FAB 与直播间竖屏发送框统一用 `--app-safe-area-bottom`（优先 MainActivity 注入的 `--android-safe-area-bottom`，回退 env） |

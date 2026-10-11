@@ -31,7 +31,10 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
 
   return (
     <ScrollArea className={cn("min-h-0 flex-1", className)}>
-      <div className="flex flex-col gap-3 px-3 py-3">
+      {/* `settings-panel` 与设置页的 `settings-section` 共用同一套行高契约（见
+          styles.css）：行高由标题文字决定，开关、滑杆与「管理」按钮只保留各自的视觉
+          高度并在行内居中，不会把整行撑高。 */}
+      <div className="settings-panel flex flex-col gap-3 px-3 py-3">
         {!mobileClient && showAsrCard && (
           <Card size="sm">
             <CardHeader className="border-b">

@@ -1937,34 +1937,38 @@ function SettingsOverviewButton({
   const Icon = entry.icon;
 
   return (
-    <button
-      type="button"
-      data-motion-press
-      onPointerEnter={() => {
-        if (entry.to) preloadRouteModule(entry.to);
-      }}
-      onPointerDown={() => {
-        if (entry.to) preloadRouteModule(entry.to);
-      }}
-      onFocus={() => {
-        if (entry.to) preloadRouteModule(entry.to);
-      }}
-      onClick={() => onOpen(entry)}
-      className="settings-category-button group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-[transform,background-color,color] duration-150 ease-[var(--motion-ease-out)] hover:bg-muted/40"
-    >
-      <span
-        className={cn("flex size-10 shrink-0 items-center justify-center rounded-lg", entry.tone)}
+    // 分割线画在这层静态包裹上（见 styles.css 的 `settings-category-row`）：按钮悬停时会
+    // 横向平移，画在按钮自己的伪元素上会跟着滑动。
+    <div className="settings-category-row">
+      <button
+        type="button"
+        data-motion-press
+        onPointerEnter={() => {
+          if (entry.to) preloadRouteModule(entry.to);
+        }}
+        onPointerDown={() => {
+          if (entry.to) preloadRouteModule(entry.to);
+        }}
+        onFocus={() => {
+          if (entry.to) preloadRouteModule(entry.to);
+        }}
+        onClick={() => onOpen(entry)}
+        className="settings-category-button group flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left transition-[transform,background-color,color] duration-150 ease-[var(--motion-ease-out)] hover:bg-muted/40"
       >
-        <Icon className="size-5" aria-hidden />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-        {entry.label}
-      </span>
-      <ChevronRight
-        className="motion-disclosure-icon size-4 shrink-0 text-muted-foreground transition-[transform,color] duration-150 ease-[var(--motion-ease-out)] group-hover:text-foreground motion-reduced:transition-colors"
-        aria-hidden
-      />
-    </button>
+        <span
+          className={cn("flex size-10 shrink-0 items-center justify-center rounded-lg", entry.tone)}
+        >
+          <Icon className="size-5" aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+          {entry.label}
+        </span>
+        <ChevronRight
+          className="motion-disclosure-icon size-4 shrink-0 text-muted-foreground transition-[transform,color] duration-150 ease-[var(--motion-ease-out)] group-hover:text-foreground motion-reduced:transition-colors"
+          aria-hidden
+        />
+      </button>
+    </div>
   );
 }
 
@@ -2032,7 +2036,9 @@ function SettingsCategoryOverview({
                 {group.label}
               </p>
               <Card className="settings-category-list overflow-hidden rounded-xl bg-card/85 p-0 ring-border-subtle shadow-sm shadow-black/10">
-                <CardContent className="divide-y divide-border-subtle p-0">
+                {/* 分割线由 `settings-category-row` 的伪元素画，不用 `divide-y`：真边框会占
+                    1px 布局高度，让除末行以外的每个条目都比末行高 1px。 */}
+                <CardContent className="p-0">
                   {group.entries.map((entry) => (
                     <SettingsOverviewButton key={entry.key} entry={entry} onOpen={onOpen} />
                   ))}
