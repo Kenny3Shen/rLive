@@ -48,25 +48,16 @@ import {
 } from "../src/features/shorts/shortsFeed";
 import * as shortsFeed from "../src/features/shorts/shortsFeed";
 import type { VideoItem } from "../src/shared/types/video";
+import { videoItem } from "./helpers/video";
 
 function item(overrides: Partial<VideoItem> = {}): VideoItem {
-  return {
-    bvid: "BV1x",
+  return videoItem({
     aid: "117263042742272",
     cid: 41_855_094_127,
-    title: "标题",
-    cover: "https://i1.hdslb.com/a.jpg",
-    author: "up主",
-    author_face: null,
-    duration: 93,
-    view: 100,
-    danmaku: 2,
     reply: 11,
-    pubdate: 1_789_292_152,
-    rcmd_reason: null,
     dimension: { width: 1080, height: 1920, rotate: 0 },
     ...overrides,
-  };
+  });
 }
 
 describe("显示宽高比", () => {

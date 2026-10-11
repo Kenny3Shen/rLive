@@ -2,27 +2,17 @@ import { describe, expect, test } from "bun:test";
 import {
   createVideoJsPlayer,
   loadVideoJsModules,
-  videoJsDashBufferSettings,
-  type VideoJsPlayerModules,
 } from "../src/features/room/player/videoJsPlayer";
+import { MediaStub } from "./helpers/media";
 
 /** 只桩可观察的媒体副作用；load 会丢缓冲，用来抓角色提升误重载。 */
-class Media extends EventTarget {
-  currentTime = 0;
-  paused = true;
+class Media extends MediaStub {
   preload = "metadata";
-  src = "";
   loads = 0;
   bufferedSeconds = 0;
   load() {
     this.loads += 1;
     this.bufferedSeconds = 0;
-  }
-  pause() {
-    this.paused = true;
-  }
-  removeAttribute() {
-    this.src = "";
   }
 }
 
@@ -102,60 +92,6 @@ describe("短视频原生播放器复用", () => {
     );
     expect(media.loads).toBe(1);
     expect(media.src).toBe("http://127.0.0.1/one.mp4");
-    player.destroy();
-  });
-});
-
-class Dash extends EventTarget {
-  static last: Dash;
-  source: { src?: string; engine?: { dashJs?: unknown } } | null = null;
-  scheduleStarts = 0;
-  engine = {
-    on() {},
-    off() {},
-    getActiveStream: () => ({
-      getStreamProcessors: () => [
-        {
-          getScheduleController: () => ({
-            startScheduleTimer: () => {
-              this.scheduleStarts += 1;
-            },
-          }),
-        },
-      ],
-    }),
-  };
-  constructor() {
-    super();
-    Dash.last = this;
-  }
-  attach() {}
-  destroy() {}
-  set src(value: string) {
-    this.source = { ...this.source, src: value };
-  }
-}
-
-describe("共用短视频门控保留 DASH 语义", () => {
-  test("仍用 2 秒预热预算，并仅在解除暂停门控时恢复调度", () => {
-    const player = createVideoJsPlayer({ DashAdapter: Dash } as unknown as VideoJsPlayerModules, {
-      video: new Media() as unknown as HTMLVideoElement,
-      kind: "dash",
-      url: "http://127.0.0.1/one.mpd",
-      dash: videoJsDashBufferSettings("warm"),
-    });
-    const dash = Dash.last;
-    player.setShortsBufferMode("warm");
-    expect(dash.source?.engine?.dashJs).toEqual(videoJsDashBufferSettings("warm"));
-    expect(videoJsDashBufferSettings("warm").streaming?.buffer?.bufferTimeDefault).toBe(2);
-    player.setShortsBufferMode("paused");
-    expect(dash.scheduleStarts).toBe(0);
-    player.setShortsBufferMode("active");
-    player.setShortsBufferMode("active");
-    expect(dash.scheduleStarts).toBe(1);
-    expect(dash.source?.src).toBe("http://127.0.0.1/one.mpd");
-    player.switchNativeSource("http://127.0.0.1/native.mp4");
-    expect(dash.source?.src).toBe("http://127.0.0.1/one.mpd");
     player.destroy();
   });
 });

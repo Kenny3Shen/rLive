@@ -6,21 +6,9 @@ import {
 } from "../src/features/video/VideoMasonry";
 import { nextRecommendPage } from "../src/features/video/videoFeed";
 import type { VideoItem, VideoListPage } from "../src/shared/types/video";
+import { videoItem } from "./helpers/video";
 
-const item = (bvid: string, cid = 1): VideoItem => ({
-  bvid,
-  aid: "1",
-  cid,
-  title: "测试视频",
-  cover: "",
-  author: "作者",
-  author_face: null,
-  duration: 30,
-  view: 0,
-  danmaku: 0,
-  pubdate: 0,
-  rcmd_reason: null,
-});
+const item = (bvid: string, cid = 1): VideoItem => videoItem({ bvid, cid });
 const page = (...items: VideoItem[]): VideoListPage => ({ items, has_more: true });
 
 describe("VideoCard 画幅", () => {

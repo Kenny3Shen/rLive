@@ -1,13 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PendingPlaybackRequests } from "../src/features/shorts/pendingPlaybackRequests";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "./helpers/async";
 
 describe("短视频取流所有权", () => {
   test("取消不能中止 invoke，但迟到的成功结果立即释放", async () => {

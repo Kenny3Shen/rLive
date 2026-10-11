@@ -11,25 +11,10 @@ import {
   normalizeVideoBlockedUploaders,
   useSettingsStore,
 } from "../src/shared/stores/settingsStore";
+import { videoItem } from "./helpers/video";
 
 function item(overrides: Partial<VideoItem> = {}): VideoItem {
-  return {
-    bvid: "BV1x",
-    aid: "1",
-    cid: 2,
-    title: "标题",
-    cover: "",
-    author: "UP 主",
-    author_mid: "42",
-    author_face: null,
-    duration: 60,
-    view: 1,
-    danmaku: 1,
-    reply: null,
-    pubdate: 0,
-    rcmd_reason: null,
-    ...overrides,
-  };
+  return videoItem({ author_mid: "42", ...overrides });
 }
 
 describe("UP 主屏蔽名单的规整", () => {

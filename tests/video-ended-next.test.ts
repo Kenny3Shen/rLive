@@ -7,6 +7,7 @@ import {
   videoEndedTarget,
 } from "../src/features/video/playlistStore";
 import type { SeasonEpisode, VideoArchive, VideoItem } from "../src/shared/types/video";
+import { videoItem } from "./helpers/video";
 
 /**
  * 「播完进下一集」的回归：目标必须来自当前视频自身的选集，而不是来源队列。
@@ -19,20 +20,7 @@ import type { SeasonEpisode, VideoArchive, VideoItem } from "../src/shared/types
 
 /** 搜索/UP 投稿条目：没有 cid，播放页用稿件详情补齐取流键。 */
 function searchItem(bvid: string, cid: number | null): VideoItem {
-  return {
-    bvid,
-    aid: `aid${bvid}`,
-    cid,
-    title: `${bvid} 标题`,
-    cover: "",
-    author: "up",
-    author_face: null,
-    duration: 60,
-    view: 1,
-    danmaku: 0,
-    rcmd_reason: null,
-    pubdate: 0,
-  };
+  return videoItem({ bvid, aid: `aid${bvid}`, cid, title: `${bvid} 标题` });
 }
 
 function archive(pages: VideoArchive["pages"]): VideoArchive {

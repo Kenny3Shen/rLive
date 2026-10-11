@@ -4,26 +4,10 @@ import {
   readPlayerVolume,
   rememberPlayerVolume,
 } from "../src/shared/playerVolume";
+import { memoryStorage as createMemoryStorage, throwingStorage } from "./helpers/storage";
 
-function memoryStorage(initial?: string) {
-  const values = new Map<string, string>();
-  if (initial !== undefined) values.set("rlive-player-volume", initial);
-  return {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-  };
-}
-
-function throwingStorage() {
-  return {
-    getItem: () => {
-      throw new Error("storage disabled");
-    },
-    setItem: () => {
-      throw new Error("storage disabled");
-    },
-  };
-}
+const memoryStorage = (initial?: string) =>
+  createMemoryStorage(initial === undefined ? {} : { "rlive-player-volume": initial });
 
 describe("player volume memory", () => {
   test("restores the remembered volume and mute state", () => {

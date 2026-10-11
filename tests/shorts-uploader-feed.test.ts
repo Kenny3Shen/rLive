@@ -16,26 +16,21 @@ import {
   shortsUploaderItems,
   shortsValidateUploaderPage,
 } from "../src/features/shorts/shortsUploaderFeed";
+import { videoItem } from "./helpers/video";
 
 function item(
   index: number,
   overrides: Partial<VideoUploaderStoryItem> = {},
 ): VideoUploaderStoryItem {
   return {
-    aid: String(index),
-    bvid: `BV${index}`,
-    cid: index,
-    title: `稿件 ${index}`,
-    cover: "",
-    author: "测试 UP",
-    author_mid: "100",
-    author_face: null,
-    duration: 10,
-    view: 0,
-    danmaku: 0,
-    reply: null,
-    pubdate: 0,
-    rcmd_reason: null,
+    ...videoItem({
+      aid: String(index),
+      bvid: `BV${index}`,
+      cid: index,
+      title: `稿件 ${index}`,
+      author_mid: "100",
+      duration: 10,
+    }),
     index,
     ...overrides,
   };

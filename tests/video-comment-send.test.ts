@@ -20,16 +20,10 @@ import {
   withVideoCommentSubmitLock,
 } from "../src/features/video/videoCommentSubmission";
 
+import { deferred } from "./helpers/async";
+
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 const composerSource = read("../src/features/video/VideoCommentComposer.tsx");
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function renderComposer(aid: string) {
   return renderToStaticMarkup(

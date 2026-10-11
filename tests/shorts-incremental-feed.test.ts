@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createShortsFeedMerger } from "../src/features/shorts/shortsFeed";
-import type { VideoItem } from "../src/shared/types/video";
+import { videoItem } from "./helpers/video";
 
-const item = (id: number) => ({ bvid: `BV${id}`, cid: id, aid: String(id) }) as VideoItem;
+const item = (id: number) => videoItem({ bvid: `BV${id}`, cid: id, aid: String(id) });
 
 describe("推荐 Feed 增量合并", () => {
   test("追加只读取新页，跨页去重且不修改手势持有的旧数组", () => {

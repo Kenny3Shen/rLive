@@ -8,22 +8,7 @@ import {
   type DesktopFullscreenWindow,
   watchDesktopFullscreen,
 } from "../src/features/room/player/desktopFullscreenWatcher";
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-
-/** 让所有已排队的微任务落地。 */
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+import { deferred, settle, type Deferred } from "./helpers/async";
 
 type Harness = {
   window: DesktopFullscreenWindow & { maximizeCalls: number };

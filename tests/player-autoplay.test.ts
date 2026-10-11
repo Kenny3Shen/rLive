@@ -1,15 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { requestPlayerAutoplay } from "../src/features/room/player/autoplay";
-
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<void>((done, fail) => {
-    resolve = done;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from "./helpers/async";
 
 async function flushMicrotasks() {
   // 两种降级各最多一次，只需清空微任务，不等待真实定时器。

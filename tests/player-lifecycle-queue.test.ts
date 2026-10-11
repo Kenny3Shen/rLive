@@ -1,13 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createSerialTaskQueue } from "../src/features/room/player/serialTaskQueue";
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "./helpers/async";
 
 describe("播放器生命周期串行队列", () => {
   test("同实例的启动、切源、停止按入队顺序执行，并保留返回值", async () => {

@@ -4,19 +4,7 @@ import {
   videoJsDashBufferSettings,
   type VideoJsPlayerModules,
 } from "../src/features/room/player/videoJsPlayer";
-
-class Media extends EventTarget {
-  currentTime = 0;
-  paused = true;
-  src = "";
-  load() {}
-  pause() {
-    this.paused = true;
-  }
-  removeAttribute() {
-    this.src = "";
-  }
-}
+import { MediaStub } from "./helpers/media";
 
 /** `getScheduleController().startScheduleTimer()` 的调用记录（短视频第二分片回归）。 */
 const scheduleStarts: string[] = [];
@@ -74,9 +62,9 @@ class Dash extends EventTarget {
   }
 }
 
-function create(dash: unknown = Dash) {
-  return createVideoJsPlayer({ DashAdapter: dash } as unknown as VideoJsPlayerModules, {
-    video: new Media() as unknown as HTMLVideoElement,
+function create() {
+  return createVideoJsPlayer({ DashAdapter: Dash } as unknown as VideoJsPlayerModules, {
+    video: new MediaStub() as unknown as HTMLVideoElement,
     kind: "dash",
     url: "http://localhost/one.mpd",
     dash: videoJsDashBufferSettings("warm"),
@@ -198,6 +186,34 @@ describe("短视频 DASH 缓冲策略", () => {
     player.setDashBufferMode("paused");
     player.setDashBufferMode("active");
     expect(scheduleStarts).toEqual(["video", "audio"]);
+    player.destroy();
+  });
+});
+
+describe("共用短视频门控保留 DASH 语义", () => {
+  test("仍用 2 秒预热预算，并仅在解除暂停门控时恢复调度", () => {
+    scheduleStarts.length = 0;
+    const player = create();
+    const dash = Dash.last;
+    player.setShortsBufferMode("warm");
+    expect(dash.source?.engine?.dashJs).toEqual(videoJsDashBufferSettings("warm"));
+    expect(videoJsDashBufferSettings("warm").streaming?.buffer?.bufferTimeDefault).toBe(2);
+    player.setShortsBufferMode("paused");
+    const writes = dash.sourceWrites;
+    // 同 URL 与不支持的原生换源均不能写 source 或抹掉暂停闸门。
+    player.switchDashSource("http://localhost/one.mpd");
+    player.switchNativeSource("http://localhost/native.mp4");
+    expect(dash.sourceWrites).toBe(writes);
+    expect(dash.source?.engine?.dashJs).toEqual(videoJsDashBufferSettings("paused"));
+    expect(scheduleStarts).toEqual([]);
+    player.setShortsBufferMode("active");
+    player.setShortsBufferMode("active");
+    expect(scheduleStarts).toEqual(["video", "audio"]);
+    expect(dash.sourceWrites).toBe(writes + 1);
+    expect(dash.source?.src).toBe("http://localhost/one.mpd");
+    player.switchNativeSource("http://localhost/native.mp4");
+    expect(dash.source?.src).toBe("http://localhost/one.mpd");
+    expect(dash.sourceWrites).toBe(writes + 1);
     player.destroy();
   });
 });

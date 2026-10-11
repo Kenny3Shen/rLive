@@ -8,16 +8,7 @@ import {
   videoPlaybackSnapshot,
   type VideoPlaybackResult,
 } from "../src/features/video/videoPlaybackLifecycle";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred, settle as tick } from "./helpers/async";
 
 function info(id: string): VideoPlayInfo {
   return {
@@ -38,8 +29,6 @@ function sessions() {
   const stopped: string[] = [];
   return { owner: new VideoPlaybackSessions((ids) => stopped.push(ids.mpd)), stopped };
 }
-
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function entry(cid: number, title = "标题"): VideoHistoryItem {
   return {

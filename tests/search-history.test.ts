@@ -6,25 +6,7 @@ import {
   removeSearchHistoryEntry,
   writeSearchHistory,
 } from "../src/shared/searchHistory";
-
-function memoryStorage(initial?: Record<string, string>) {
-  const values = new Map<string, string>(Object.entries(initial ?? {}));
-  return {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-  };
-}
-
-function throwingStorage() {
-  return {
-    getItem: () => {
-      throw new Error("storage disabled");
-    },
-    setItem: () => {
-      throw new Error("storage disabled");
-    },
-  };
-}
+import { memoryStorage, throwingStorage } from "./helpers/storage";
 
 describe("search history memory", () => {
   test("puts the newest keyword first and dedupes", () => {

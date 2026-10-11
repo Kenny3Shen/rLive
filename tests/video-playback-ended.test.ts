@@ -3,21 +3,17 @@ import {
   createVideoJsPlayer,
   type VideoJsPlayerModules,
 } from "../src/features/room/player/videoJsPlayer";
+import { MediaStub } from "./helpers/media";
 
-class MediaStub extends EventTarget {
+class EndedMedia extends MediaStub {
   currentTime = 10;
   ended = false;
-  paused = true;
-  src = "";
   play() {
     this.paused = false;
     this.dispatchEvent(new Event("play"));
     return Promise.resolve();
   }
-  pause() {
-    this.paused = true;
-  }
-  load() {}
+  // 此套用例只观察结束信号，保留原桩不清 src 的行为。
   removeAttribute() {}
   seek(time: number) {
     this.currentTime = time;
@@ -29,7 +25,7 @@ function setup(
   kind: "dash" | "native" = "dash",
   options: { startTime?: number; url?: string } = {},
 ) {
-  const media = new MediaStub();
+  const media = new EndedMedia();
   const sources: string[] = [];
   const engineEvents = new Map<string, Set<(event: { isLast: boolean }) => void>>();
   class DashStub extends EventTarget {
