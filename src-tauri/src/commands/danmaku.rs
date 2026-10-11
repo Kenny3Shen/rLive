@@ -459,7 +459,7 @@ pub async fn huya_danmaku_send(
     let room_id = validate_huya_send_room(&room_id)?;
     let site = sites::site_with_route(&SiteId::Huya, Some(cookie.clone()), &route)?;
     let detail = site.get_room_detail(&room_id).await?;
-    let args = danmu_rs::huya::args_from_raw(&room_id, &detail.raw)?;
+    let args = danmu_rs::huya::args_from_raw(&detail.raw)?;
     let (_room_id, message) =
         validate_and_reserve_huya_send(&state.huya_send_limiter, &room_id, &message)?;
     danmu_rs::huya::send_chat(&cookie, args, &message, &route).await?;

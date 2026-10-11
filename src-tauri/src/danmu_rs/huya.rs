@@ -65,7 +65,7 @@ fn json_i64(v: &Value) -> Option<i64> {
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
-pub fn args_from_raw(_room_id: &str, raw: &Value) -> AppResult<HuyaDanmakuArgs> {
+pub fn args_from_raw(raw: &Value) -> AppResult<HuyaDanmakuArgs> {
     let ayyuid = raw
         .get("ayyuid")
         .and_then(json_i64)
@@ -499,16 +499,12 @@ async fn connect_send_ws(
     route: &crate::proxy::ProxyRoute,
 ) -> AppResult<HuyaWebSocket> {
     let baseinfo = build_send_baseinfo(credentials);
-    let mut last_error = None;
     for endpoint in SEND_SERVER_URLS {
         let url = format!("{endpoint}?baseinfo={baseinfo}");
         // 写入链路必须携带 Cookie，因此不能复用接收链路的请求构造。
         let mut request = match url.as_str().into_client_request() {
             Ok(request) => request,
-            Err(error) => {
-                last_error = Some(error.to_string());
-                continue;
-            }
+            Err(_) => continue,
         };
         let headers = request.headers_mut();
         let origin = HeaderValue::from_static("https://www.huya.com");
@@ -537,11 +533,9 @@ async fn connect_send_ws(
                 // 连接描述符。端点名称和错误信息已足够诊断，
                 // 无需暴露会话细节。
                 tracing::warn!(host = %endpoint, error = %error, "huya send websocket connect failed");
-                last_error = Some(error.message);
             }
         }
     }
-    let _ = last_error;
     Err(
         AppError::new("huya_send_network", "无法连接虎牙弹幕服务器，请稍后重试")
             .with_site("huya")
@@ -1179,7 +1173,7 @@ mod tests {
             "subSid": 1346609715,
             "presenterUid": 9988,
         });
-        let a = args_from_raw("lpl", &raw).unwrap();
+        let a = args_from_raw(&raw).unwrap();
         assert_eq!(a.ayyuid, 1486578378);
         assert_eq!(a.top_sid, 1346609715);
         assert_eq!(a.presenter_id, 9988);
@@ -1195,7 +1189,7 @@ mod tests {
                 "presenterUid": 999,
             }],
         });
-        let args = args_from_raw("room", &raw).unwrap();
+        let args = args_from_raw(&raw).unwrap();
         assert_eq!(args.top_sid, 456);
         assert_eq!(args.sub_sid, 457);
         assert_eq!(args.presenter_id, 999);
@@ -1238,9 +1232,9 @@ mod tests {
     }
 
     #[test]
-    fn numeric_profile_room_is_not_used_as_a_signal_channel() {
+    fn missing_signal_channels_are_rejected() {
         let raw = serde_json::json!({"ayyuid": 99});
-        assert!(args_from_raw("31339681", &raw).is_err());
+        assert!(args_from_raw(&raw).is_err());
     }
 
     #[test]

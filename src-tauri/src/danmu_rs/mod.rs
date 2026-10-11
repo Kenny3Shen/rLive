@@ -708,7 +708,7 @@ pub async fn connect(
             Ok(())
         }
         SiteId::Huya => {
-            let args = huya::args_from_raw(room_id, detail_raw)?;
+            let args = huya::args_from_raw(detail_raw)?;
             let route = route.clone();
             spawn_loop(
                 app.clone(),
