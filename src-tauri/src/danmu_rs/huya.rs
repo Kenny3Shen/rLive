@@ -351,8 +351,6 @@ fn encode_verify_cookie(credentials: &HuyaSendCredentials) -> Vec<u8> {
 fn write_user_id(writer: &mut TarsWriter, credentials: &HuyaSendCredentials) {
     // 9
     // 5
-    // 镜像钉住真正触碰到的 danmu.js 1.2.1 部分：唯一的全局冻结槽位、渲染队列，
-    // 以及 `restartComment` 在主循环关闭后拒绝行动的行为。
     writer.write_i64(credentials.uid, 0);
     writer.write_string(&credentials.guid, 1);
     writer.write_string("", 2);

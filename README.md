@@ -123,7 +123,7 @@ bun run build    # 前端生产构建
 
 - **播放**：平台媒体 CDN → `stream_proxy` → 本机地址 → 播放器；代理处理 HLS 清单改写与 B 站 DASH 音视频轨回环，IPTV 复用同一路径。
 - **录制**：平台 CDN → 进程内 FFmpeg → 本地录制目录，只重新封装，不依赖前端播放。
-- **弹幕**：Rust 协议适配器解析并批处理，通过 Tauri Events 推送至界面；录制任务复用消息写入弹幕轨。
+- **弹幕**：Rust 协议适配器解析并批处理，通过 Tauri Events 推送至界面；直播与在线点播画面统一使用 `weizhenye/Danmaku` DOM 引擎，点播绑定媒体时间轴；录制任务复用消息写入弹幕轨。
 - **字幕**：播放器音频 → Web Audio 16 kHz PCM → 本机 sherpa-onnx；B 站 CC 字幕则经 Rust 获取并转为 WebVTT。
 - **存储**：设置、账号、关注与历史等保存在 `rlive.db`；录制媒体、`metadata.json` 与 `danmaku.jsonl` 存放在独立录制目录。
 

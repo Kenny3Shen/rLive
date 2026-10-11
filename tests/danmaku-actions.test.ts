@@ -4,7 +4,7 @@ import {
   formatDanmakuClipboardText,
   isDanmakuActionFailure,
 } from "../src/features/room/danmaku/useDanmakuActions";
-import { danmakuVisibleContentRect } from "../src/features/room/danmaku/DanmuJsDanmaku";
+import { danmakuVisibleContentRect } from "../src/features/room/danmaku/LiveDanmaku";
 import { isDanmakuPinTap } from "../src/features/room/danmaku/useDanmakuPinInteraction";
 
 describe("danmaku clipboard actions", () => {

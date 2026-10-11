@@ -104,7 +104,7 @@ describe("danmaku appearance defaults", () => {
     expect(useSettingsStore.getState().danmakuFontStroke).toBe(DANMAKU_FONT_STROKE_DEFAULT);
   });
 
-  test("uses a 100 px/s scrolling speed and clamps it to the supported range", () => {
+  test("标准速度默认 100，并限制在受支持的范围", () => {
     expect(DANMAKU_SPEED_DEFAULT).toBe(100);
     expect(parseDanmakuSpeed(DANMAKU_SPEED_MIN - 1)).toBe(DANMAKU_SPEED_MIN);
     expect(parseDanmakuSpeed(DANMAKU_SPEED_MAX + 1)).toBe(DANMAKU_SPEED_MAX);

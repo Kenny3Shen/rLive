@@ -20,7 +20,7 @@
 | 运行时动画 | Web Animations API（`src/shared/motion/tween.ts`） | 页面入场、Zoom、手势回弹与可中断反馈 |
 | 文档快照 | View Transition API + CSS keyframes | 亮暗主题全局淡化 |
 | 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay、Drawer、主题淡化、加载旋转、短状态过渡 |
-| 直播画面弹幕 | `danmu.js@1.2.1` + CSS transition | DOM 轨道与飘屏，不属于页面 UI 动画层 |
+| 直播画面弹幕 | `weizhenye/Danmaku` `DanmakuRenderer` + `requestAnimationFrame` | 媒体时钟驱动的 DOM 轨道与飘屏，不属于页面 UI 动画层 |
 | 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 按本地媒体时间绘制录制 sidecar |
 
 硬性规则：
@@ -327,18 +327,17 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，纵向滚动留给 `app-page`。Android 宿主不请求固定显示模式或刷新率偏好，动画全部按时间基准推进，不设固定帧率 ticker。
 - 不把「组件出现」默认等同于「需要动画」：高频列表刷新、轮询状态、弹幕新增和播放器帧更新通常应直接更新。
 
-播放页（与播放器、danmu.js 共享主线程与合成预算）：
+播放页（与播放器、DanmakuRenderer 共享主线程预算）：
 
 - 避免模糊、滤镜、大面积阴影变化和无限背景动画。控制栏用 `player-scrim-overlay`（由底边向上淡出的黑色渐变，画在 `::before` 上且高于控制栏自身高度，不设上边框、不用 `backdrop-filter`），自动显隐仅合成 opacity，不触发播放器 React 重渲染。
 - 音量、播放设置与字幕弹层，以及播放设置 Drawer 用 `glass-surface-overlay`：桌面 `14px` blur；coarse pointer 或 slow-update 设备关闭 `backdrop-filter`，改用更实的静态半透明底色。移动端对话框遮罩、视频浮层与房间卡片角标同样不采样动态背景。
 - 浏览器回退亮度使用覆盖视频与弹幕 DOM 容器的黑色 opacity 叠层，不对整幅动态画面用 `filter: brightness()`；手势提示通过局部 DOM 写入更新，不每步重渲染 `PlayerPane`。
 - 移动端推荐、分类、分区、关注、历史、IPTV 及房间内关注列表统一使用下拉刷新，桌面端保留刷新按钮入口。fullscreen 播放器稳定后不能保留 transformed ancestor；Zoom 与页面动画完成时必须恢复普通绘制。
 
-画面弹幕（`DanmuJsDanmaku`，会话与实例契约见 [播放器技术文档](播放器技术文档.md)）：
+画面弹幕（`DanmakuRenderer`，会话与实例契约见 [播放器技术文档](播放器技术文档.md)）：
 
-- 位置与时序由 danmu.js 的单条 linear transform transition 管理，不维护应用级逐帧渲染循环、目标 FPS、跳帧或位图缓存。普通消息用 `moveV: 100` 与 `setPlayRate` 实现 `50–200 px/s` 匀速移动，SC 只用平台提供的持续时长；不要为调整快慢叠加 JS 补间。聚合只更新同一活动 bullet 的文本与计数槽。
-- 数据池、本地 metadata、聚合目标与 SC 计时器都必须有界，并在 `bullet_remove` / `destroy` 时同步释放；实例必须等容器非零尺寸后才启动，隐藏或卸载时销毁以免继续分配 DOM。
-- 两个容器都保持 `opacity: 1`，普通消息与 SC 各自从统一的 `danmaku_opacity` 写到元素上，避免容器与子项透明度相乘。字号与描边变化要同时更新两层的现有 DOM 与后续 comment，描边为 0 时移除 `-webkit-text-stroke` 与 `paint-order`；resize 与全屏后由各自 ResizeObserver 重排。
+- 位置与时序由 `DanmakuRenderer` 按媒体时钟在 `requestAnimationFrame` 中写入 `transform`。VOD 绑定真实媒体，暂停、缓冲等待、seek 和倍速变化跟随原生媒体事件；没有应用自建 `timeupdate` 投放循环，也没有 native CSS transition。滚动弹幕的实际移动时长由舞台宽度、弹幕宽度与标准 `speed` 共同决定，界面以 `speed / 100` 显示 `0.5×–2.0×` 倍率；SC 使用平台提供的持续时长。聚合只更新同一活动 bullet 的文本与计数槽。
+- 数据池、本地 metadata、聚合目标与固定时长分组都必须有界，并在 renderer 的 `remove` / `clear` / `destroy` 以及适配层的 attach/detach 时同步释放；实例必须等容器非零尺寸后才启动。单条 pin、固定弹幕按媒体时间到期、边界丢弃由共享适配层补齐，不把这些业务行为误记为库原生能力。
 
 ## 7. 流程与验证清单
 

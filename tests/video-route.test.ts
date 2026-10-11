@@ -19,7 +19,6 @@ import {
   filterVideoDanmakuEntries,
   firstVideoDanmakuAtOrAfter,
   mergeVideoDanmakuEntries,
-  nextVideoDanmakuBatch,
   VIDEO_DANMAKU_FIXED_DURATION_MS,
   videoDanmakuColor,
   videoDanmakuComment,
@@ -200,7 +199,6 @@ describe("video paths", () => {
       bvid: "BV4ww",
     });
   });
-
 });
 
 describe("video search filters", () => {
@@ -211,7 +209,9 @@ describe("video search filters", () => {
       zone: 4,
       pubTime: "week",
     });
-    expect(path).toBe("/video/search?q=%E7%8C%AB%E7%8C%AB&order=click&duration=2&zone=4&pubtime=week");
+    expect(path).toBe(
+      "/video/search?q=%E7%8C%AB%E7%8C%AB&order=click&duration=2&zone=4&pubtime=week",
+    );
     expect(parseVideoSearchFilters(new URLSearchParams(path.split("?")[1]))).toEqual({
       order: "click",
       duration: 2,
@@ -236,7 +236,6 @@ describe("video search filters", () => {
       DEFAULT_VIDEO_SEARCH_FILTERS,
     );
   });
-
 });
 
 describe("video original url", () => {
@@ -280,7 +279,7 @@ describe("VOD danmaku segmentation", () => {
 });
 
 describe("VOD danmaku mapping", () => {
-  test("maps upstream modes onto the three danmu.js forms", () => {
+  test("将上游模式映射为共享弹幕的三种形态", () => {
     expect(videoDanmakuMode(1)).toBe("scroll");
     expect(videoDanmakuMode(2)).toBe("scroll");
     expect(videoDanmakuMode(3)).toBe("scroll");
@@ -306,9 +305,33 @@ describe("VOD danmaku mapping", () => {
 
   test("drops blank content and sorts by progress", () => {
     const items: VideoDanmakuItem[] = [
-      { progress: 900, mode: 1, fontsize: 25, color: 16_777_215, content: "后", weight: 5, pool: 0 },
-      { progress: 100, mode: 1, fontsize: 25, color: 16_777_215, content: "先", weight: 5, pool: 0 },
-      { progress: 300, mode: 1, fontsize: 25, color: 16_777_215, content: "   ", weight: 5, pool: 0 },
+      {
+        progress: 900,
+        mode: 1,
+        fontsize: 25,
+        color: 16_777_215,
+        content: "后",
+        weight: 5,
+        pool: 0,
+      },
+      {
+        progress: 100,
+        mode: 1,
+        fontsize: 25,
+        color: 16_777_215,
+        content: "先",
+        weight: 5,
+        pool: 0,
+      },
+      {
+        progress: 300,
+        mode: 1,
+        fontsize: 25,
+        color: 16_777_215,
+        content: "   ",
+        weight: 5,
+        pool: 0,
+      },
     ];
     const entries = videoDanmakuEntries(items, 1);
     expect(entries.map((entry) => entry.content)).toEqual(["先", "后"]);
@@ -324,7 +347,7 @@ describe("VOD danmaku mapping", () => {
       weight: 5,
       pool: 0,
     };
-    // 不同段里 progress 可能巧合相同；id 不带段号会让 danmu.js 因冲突丢掉后来那条。
+    // 不同分段必须拥有独立 id，防止增量合并时把后来的弹幕误当成旧条目。
     const first = videoDanmakuEntries([item], 1);
     const second = videoDanmakuEntries([item], 2);
     expect(first[0]!.id).not.toBe(second[0]!.id);
@@ -332,7 +355,17 @@ describe("VOD danmaku mapping", () => {
 
   test("merges segments back into one ordered timeline", () => {
     const early = videoDanmakuEntries(
-      [{ progress: 10, mode: 1, fontsize: 25, color: 16_777_215, content: "a", weight: 5, pool: 0 }],
+      [
+        {
+          progress: 10,
+          mode: 1,
+          fontsize: 25,
+          color: 16_777_215,
+          content: "a",
+          weight: 5,
+          pool: 0,
+        },
+      ],
       1,
     );
     const late = videoDanmakuEntries(
@@ -372,73 +405,49 @@ describe("VOD danmaku filtering", () => {
 
   test("hides the subtitle and special pools", () => {
     const entries = [entry(100, { pool: 0 }), entry(200, { pool: 1 }), entry(300, { pool: 2 })];
-    expect(
-      filterVideoDanmakuEntries(entries, () => false).map((item) => item.content),
-    ).toEqual(["d100"]);
+    expect(filterVideoDanmakuEntries(entries, () => false).map((item) => item.content)).toEqual([
+      "d100",
+    ]);
   });
 });
 
-describe("VOD danmaku scheduling", () => {
-  const timeline = [entry(0), entry(1_000), entry(2_000), entry(3_000)];
-
-  test("emits only the bullets whose time has arrived", () => {
-    const first = nextVideoDanmakuBatch(timeline, 0, 1_000);
-    expect(first.batch.map((item) => item.progressMs)).toEqual([0, 1_000]);
-    const second = nextVideoDanmakuBatch(timeline, first.cursor, 2_000);
-    expect(second.batch.map((item) => item.progressMs)).toEqual([2_000]);
-  });
-
-  test("never replays a bullet the cursor already passed", () => {
-    const first = nextVideoDanmakuBatch(timeline, 0, 3_000);
-    expect(first.batch).toHaveLength(4);
-    const again = nextVideoDanmakuBatch(timeline, first.cursor, 3_000);
-    expect(again.batch).toHaveLength(0);
-    expect(again.cursor).toBe(first.cursor);
-  });
-
-  test("drops rather than defers bullets over the per-tick budget", () => {
-    // 补投会让密集段落成片迟到、与画面错位，所以超预算的直接跳过 ——
-    // 游标仍然要推到该位置之后。
-    const dense = Array.from({ length: 10 }, (_, index) => entry(index));
-    const result = nextVideoDanmakuBatch(dense, 0, 1_000, 3);
-    expect(result.batch).toHaveLength(3);
-    expect(result.cursor).toBe(10);
-  });
-
-  test("realigns the cursor after a seek in either direction", () => {
-    // 这正是 seek 的正确性所依赖的那一步：游标按新时间重新二分定位。
+describe("VOD 媒体时间轴映射", () => {
+  test("侧栏跟随的二分定位覆盖双向跳转和边界", () => {
+    const timeline = [entry(0), entry(1_000), entry(2_000), entry(3_000)];
     expect(firstVideoDanmakuAtOrAfter(timeline, 0)).toBe(0);
     expect(firstVideoDanmakuAtOrAfter(timeline, 1_500)).toBe(2);
     expect(firstVideoDanmakuAtOrAfter(timeline, 9_999)).toBe(4);
-
-    const forward = nextVideoDanmakuBatch(
-      timeline,
-      firstVideoDanmakuAtOrAfter(timeline, 2_000),
-      2_000,
-    );
-    expect(forward.batch.map((item) => item.progressMs)).toEqual([2_000]);
-
-    // 反向 seek 回到开头后应重新投放最早那几条，而不是接着旧游标继续。
-    const backward = nextVideoDanmakuBatch(timeline, firstVideoDanmakuAtOrAfter(timeline, 0), 0);
-    expect(backward.batch.map((item) => item.progressMs)).toEqual([0]);
+    expect(firstVideoDanmakuAtOrAfter([], 0)).toBe(0);
   });
 
-  test("hands fixed bullets an untimed duration so pausing cannot expire them", () => {
-    // danmu.js 的固定弹幕靠 `visibility` transition 计时，`pause()` 停不住；
-    // 到期必须由调用方按媒体时间负责，交给它的时长不能在一次暂停内耗尽。
-    const options = { fontSize: 24, fontStroke: 0, opacity: 1, moveV: 120 };
-    const [fixed] = videoDanmakuEntries(
-      [{ progress: 0, mode: 5, fontsize: 25, color: 0xffffff, content: "顶", weight: 5, pool: 0 }],
-      1,
-    );
-    const top = videoDanmakuComment(fixed!, options);
-    expect(top.duration).toBeGreaterThan(60 * 60 * 1_000);
-    expect(top.duration).toBeGreaterThan(VIDEO_DANMAKU_FIXED_DURATION_MS);
+  test("时间换算为秒，固定弹幕使用真实媒体时长而非一天墙钟占位", () => {
+    const options = { fontSize: 24, fontStroke: 0, opacity: 1 };
+    const top = videoDanmakuComment({ ...entry(1_250), mode: "top" }, options);
+    expect(top.time).toBe(1.25);
+    expect(top.duration).toBe(VIDEO_DANMAKU_FIXED_DURATION_MS);
+    expect(top.duration).toBe(15_000);
     expect(top).not.toHaveProperty("moveV");
+    expect(top).not.toHaveProperty("realTime");
+    expect(typeof top.render).toBe("function");
 
-    const scroll = videoDanmakuComment(entry(0), options);
-    expect(scroll.moveV).toBe(120);
+    const scroll = videoDanmakuComment(entry(2_500), options);
+    expect(scroll.time).toBe(2.5);
+    expect(scroll.text).toBe("d2500");
+    expect(scroll.mode).toBe("scroll");
     expect(scroll).not.toHaveProperty("duration");
+    expect(scroll.style?.height).toBe("34px");
+  });
+
+  test("减少动态效果用固定弹幕呈现，仍由媒体时间到期", () => {
+    const comment = videoDanmakuComment(entry(0), {
+      fontSize: 24,
+      fontStroke: 1,
+      opacity: 0.8,
+      reducedMotion: true,
+    });
+    expect(comment.mode).toBe("top");
+    expect(comment.duration).toBe(15_000);
+    expect(comment.style?.WebkitTextStroke).toBe("1px rgba(0,0,0,.92)");
   });
 });
 

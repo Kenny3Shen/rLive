@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { DanmuJsBullet, DanmuJsComment, DanmuJsInstance } from "danmu.js";
+import type { DanmakuComment } from "./danmakuTypes";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import {
@@ -17,30 +17,25 @@ import {
 } from "./filter";
 import {
   clampDanmuArea,
-  createDanmuBulletElement,
-  danmuCommentFromEvent,
-  danmuGhostRecordIds,
-  danmuLayerAreaConfig,
-  danmuLaneCount,
+  danmakuCommentFromEvent,
+  danmakuLayerAreaConfig,
+  danmakuLaneCount,
   danmuLaneHeight,
-  danmuMaxActiveComments,
-  danmuMoveVPlayRate,
-  danmuRenderLayer,
-  enqueueDanmuJsPending,
-  flushDanmuJsPending,
+  danmakuMaxActiveComments,
+  danmakuRenderLayer,
+  enqueueDanmakuPending,
+  flushDanmakuPending,
   isPinnedDanmakuEvent,
-  updateDanmuAggregation,
-  updateDanmuAppearance,
-  type DanmuJsBulletMeta,
-  type DanmuJsPendingEvent,
-  type DanmuJsRenderLayer,
-  DANMU_JS_MAX_ACTIVE_COMMENTS,
-  DANMU_JS_MAX_SUPER_CHATS,
-  DANMU_JS_DEFAULT_MOVE_V,
-} from "./danmuJsAdapter";
-import { installDanmuJsFixedPriorCompat } from "./danmuJsCompat";
-import { loadDanmuJs } from "./danmuJsLoader";
-import { releaseDanmuJsPin, removeDanmuJsPin, resumeDanmuJsPin } from "./danmuJsPin";
+  updateDanmakuAggregation,
+  updateDanmakuAppearance,
+  type DanmakuBulletMeta,
+  type DanmakuCommentWithMeta,
+  type DanmakuPendingEvent,
+  type DanmakuRenderLayer,
+  DANMAKU_DEFAULT_SPEED,
+  DANMAKU_MAX_SUPER_CHATS,
+} from "./danmakuAdapter";
+import { loadDanmakuRenderer } from "./danmakuLoader";
 import {
   MAX_SUPER_CHAT_DEDUPE_KEYS,
   siteSupportsSuperChat,
@@ -66,12 +61,12 @@ export function danmakuVisibleContentRect(
     (rect): rect is DanmakuHitRect =>
       Boolean(
         rect &&
-        Number.isFinite(rect.x) &&
-        Number.isFinite(rect.y) &&
-        Number.isFinite(rect.width) &&
-        Number.isFinite(rect.height) &&
-        rect.width > 0 &&
-        rect.height > 0,
+          Number.isFinite(rect.x) &&
+          Number.isFinite(rect.y) &&
+          Number.isFinite(rect.width) &&
+          Number.isFinite(rect.height) &&
+          rect.width > 0 &&
+          rect.height > 0,
       ),
   );
   if (rects.length === 0) return fallbackRect;
@@ -82,7 +77,7 @@ export function danmakuVisibleContentRect(
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-type DanmuJsDanmakuProps = {
+type LiveDanmakuProps = {
   className?: string;
   active?: boolean;
   sessionKey?: number | string | null;
@@ -91,12 +86,6 @@ type DanmuJsDanmakuProps = {
   roomTitle?: string;
   roomUserName?: string;
   large?: boolean;
-  /**
-   * 把到达的评论延后这么多毫秒。
-   *
-   * 多视图时钟对齐可能让一条流落后其直播边缘数秒；评论由服务器实时下发，
-   * 不加同样的延迟，它们描述的就是画面尚未到达的时刻。
-   */
   delayMs?: number;
 };
 
@@ -113,22 +102,18 @@ type RuntimeConfig = {
   siteId?: SiteId;
 };
 
+type RendererConstructor = Awaited<ReturnType<typeof loadDanmakuRenderer>>;
+type Renderer = InstanceType<RendererConstructor>;
+
 type RuntimeBullet = {
-  comment: DanmuJsComment & { __rliveMeta: DanmuJsBulletMeta };
-  meta: DanmuJsBulletMeta;
-  layer: DanmuJsRenderLayer;
-  instance: DanmuJsInstance;
-  /** 交给 danmu.js 的时间，供下方幽灵清扫使用。 */
-  sentAt: number;
-  /** 由挂载钩子设置：只有已挂载的评论屏幕上才有 bullet。 */
+  comment: DanmakuCommentWithMeta;
+  meta: DanmakuBulletMeta;
+  layer: DanmakuRenderLayer;
   attached: boolean;
 };
 
-type DanmuJsInstances = Record<DanmuJsRenderLayer, DanmuJsInstance>;
-
 function useReducedMotionPreference(): boolean {
   const [reduced, setReduced] = useState(prefersReducedMotion);
-
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -137,12 +122,10 @@ function useReducedMotionPreference(): boolean {
     else if (typeof query.addListener === "function") query.addListener(sync);
     sync();
     return () => {
-      if (typeof query.removeEventListener === "function")
-        query.removeEventListener("change", sync);
+      if (typeof query.removeEventListener === "function") query.removeEventListener("change", sync);
       else if (typeof query.removeListener === "function") query.removeListener(sync);
     };
   }, []);
-
   return reduced;
 }
 
@@ -150,30 +133,22 @@ function usePageVisibility(): boolean {
   const [visible, setVisible] = useState(() =>
     typeof document === "undefined" ? true : !document.hidden,
   );
-
   useEffect(() => {
     const sync = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", sync);
     sync();
     return () => document.removeEventListener("visibilitychange", sync);
   }, []);
-
   return visible;
 }
 
-function bulletId(value: unknown): string | null {
-  if (typeof value === "string" && value) return value;
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  return null;
-}
-
-function commentMeta(comment: DanmuJsComment): DanmuJsBulletMeta | null {
-  const candidate = comment.__rliveMeta as Partial<DanmuJsBulletMeta> | undefined;
+function commentMeta(comment: DanmakuComment): DanmakuBulletMeta | null {
+  const candidate = (comment as DanmakuComment & { __rliveMeta?: DanmakuBulletMeta }).__rliveMeta;
   if (!candidate || typeof candidate.id !== "string" || !candidate.event) return null;
   if (typeof candidate.baseText !== "string" || typeof candidate.aggregationCount !== "number") {
     return null;
   }
-  return candidate as DanmuJsBulletMeta;
+  return candidate;
 }
 
 function relativeRect(container: HTMLElement, element: HTMLElement): DanmakuHitRect {
@@ -187,7 +162,7 @@ function relativeRect(container: HTMLElement, element: HTMLElement): DanmakuHitR
   };
 }
 
-function visualRect(meta: DanmuJsBulletMeta): DanmakuHitRect | null {
+function visualRect(meta: DanmakuBulletMeta): DanmakuHitRect | null {
   const toHitRect = (element: HTMLElement | undefined): DanmakuHitRect | null => {
     if (!element?.isConnected) return null;
     const rect = element.getBoundingClientRect();
@@ -202,10 +177,7 @@ function visualRect(meta: DanmuJsBulletMeta): DanmakuHitRect | null {
   );
 }
 
-function relativeVisualRect(
-  container: HTMLElement,
-  meta: DanmuJsBulletMeta,
-): DanmakuHitRect | null {
+function relativeVisualRect(container: HTMLElement, meta: DanmakuBulletMeta): DanmakuHitRect | null {
   const rect = visualRect(meta);
   if (!rect) return null;
   const containerRect = container.getBoundingClientRect();
@@ -217,7 +189,7 @@ function relativeVisualRect(
   };
 }
 
-export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
+export const LiveDanmaku = memo(function LiveDanmaku({
   className,
   active = true,
   sessionKey = null,
@@ -227,15 +199,14 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   roomUserName,
   large = false,
   delayMs = 0,
-}: DanmuJsDanmakuProps) {
+}: LiveDanmakuProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const topContainerRef = useRef<HTMLDivElement>(null);
-  const instancesRef = useRef<DanmuJsInstances | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<Renderer | null>(null);
   const recordsRef = useRef(new Map<string, RuntimeBullet>());
   const recordOrderRef = useRef<string[]>([]);
   const aggregationTargetsRef = useRef(new Map<string, string>());
-  const pendingEventsRef = useRef<DanmuJsPendingEvent[]>([]);
+  const pendingEventsRef = useRef<DanmakuPendingEvent[]>([]);
   const superChatIdsRef = useRef<string[]>([]);
   const superChatTimersRef = useRef(new Map<string, number>());
   const superChatDedupeKeysRef = useRef(new Set<string>());
@@ -267,12 +238,11 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const stageHeightRef = useRef(stageSize.height);
   const areaRef = useRef(normalizedArea);
   const laneHeightRef = useRef(laneHeight);
-
   const configRef = useRef<RuntimeConfig>({
     fontSize,
     fontStroke: DANMAKU_FONT_STROKE_DEFAULT,
     opacity: 0.8,
-    danmakuSpeed: DANMU_JS_DEFAULT_MOVE_V,
+    danmakuSpeed: DANMAKU_DEFAULT_SPEED,
     mergeWindowSeconds: 10,
     filterGifts: true,
     shieldMatcher: () => false,
@@ -300,8 +270,9 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       siteId,
     };
   }, [
-    filterGifts,
+    blockedUserMatcher,
     danmakuSpeed,
+    filterGifts,
     fontSize,
     fontStroke,
     laneHeight,
@@ -309,11 +280,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     normalizedArea,
     opacity,
     shieldMatcher,
-    blockedUserMatcher,
     siteId,
+    sizeReady,
     stageSize.height,
     superChatEnabled,
-    sizeReady,
   ]);
 
   useLayoutEffect(() => {
@@ -321,10 +291,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     if (!host) return;
     const measure = () => {
       const rect = host.getBoundingClientRect();
-      const next = {
-        width: Math.max(0, Math.floor(rect.width)),
-        height: Math.max(0, Math.floor(rect.height)),
-      };
+      const next = { width: Math.max(0, Math.floor(rect.width)), height: Math.max(0, Math.floor(rect.height)) };
       setStageSize((current) =>
         current.width === next.width && current.height === next.height ? current : next,
       );
@@ -339,62 +306,25 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     return () => observer.disconnect();
   }, [active, pageVisible]);
 
-  const removeRecordRef = useRef<(id: string, removeFromInstance: boolean) => void>(() => {});
-
-  /**
-   * 在 danmu.js 一侧撤销一次钉住，传入持有它的记录。
-   *
-   * `dropped` 表示 bullet 无论如何都要消失 —— 它自己的记录正在销毁或整个层正在
-   * 销毁 —— 因此只需交还冻结状态。否则 bullet 必须重新移动，而当 danmu.js 无法
-   * 重启它时改为移除评论：困在 `forcedPause` 的 bullet 没有运行中的 transition，
-   * 其自身删除所等待的 `transitionend` 永远不会到来，
-   * 会永远占着车道。
-   */
-  const unpinRecord = useCallback((record: RuntimeBullet, id: string, dropped: boolean) => {
-    const element = record.meta.element;
-    if (element) {
-      delete element.dataset.rliveDanmakuSelected;
-      element.style.removeProperty("z-index");
-    }
-    if (dropped) {
-      releaseDanmuJsPin(record.instance, id);
-      return;
-    }
-    if (!resumeDanmuJsPin(record.instance, id)) {
-      removeRecordRef.current(id, true);
-      return;
-    }
-    // 恢复的 bullet 要等主循环 tick 之后才会重新移动。
-    if (record.instance.status === "paused") record.instance.play();
+  const removeRecordRef = useRef<(id: string, removeFromRenderer: boolean) => void>(() => {});
+  const releaseSelection = useCallback((dropped = false) => {
+    const selectedId = selectedIdRef.current;
+    selectedIdRef.current = null;
+    setHoverTarget(null);
+    if (!selectedId) return;
+    if (!dropped) rendererRef.current?.unpin(selectedId);
   }, []);
-  const unpinRecordRef = useRef(unpinRecord);
-  useLayoutEffect(() => {
-    unpinRecordRef.current = unpinRecord;
-  }, [unpinRecord]);
-
-  /** 结束当前的钉住（若有）。`dropped` 见 {@link unpinRecord}。 */
-  const releaseSelection = useCallback(
-    (dropped = false) => {
-      const selectedId = selectedIdRef.current;
-      selectedIdRef.current = null;
-      setHoverTarget(null);
-      if (!selectedId) return;
-      const record = recordsRef.current.get(selectedId);
-      if (record) unpinRecord(record, selectedId, dropped);
-    },
-    [unpinRecord],
-  );
   const releaseSelectionRef = useRef(releaseSelection);
   useLayoutEffect(() => {
     releaseSelectionRef.current = releaseSelection;
   }, [releaseSelection]);
 
-  const removeRecord = useCallback((id: string, removeFromInstance: boolean) => {
+  const removeRecord = useCallback((id: string, removeFromRenderer: boolean) => {
     const record = recordsRef.current.get(id);
     if (!record) return;
-    const superChatTimer = superChatTimersRef.current.get(id);
-    if (superChatTimer !== undefined) {
-      window.clearTimeout(superChatTimer);
+    const timer = superChatTimersRef.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
       superChatTimersRef.current.delete(id);
     }
     recordsRef.current.delete(id);
@@ -407,56 +337,40 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       aggregationTargetsRef.current.delete(key);
       aggregatorRef.current.forget(key);
     }
-    // map 条目已经不在了，`releaseSelection` 无法找到记录：趁下方丢弃清理所需的
-    // 元素引用之前，用手头仍在的这条执行 unpin。
     if (selectedIdRef.current === id) {
       selectedIdRef.current = null;
       setHoverTarget(null);
-      unpinRecordRef.current(record, id, true);
+      rendererRef.current?.unpin(id);
     }
     record.meta.element = undefined;
     record.meta.contentElement = undefined;
     record.meta.countElement = undefined;
     record.meta.countSlotElement = undefined;
-    if (removeFromInstance) removeDanmuJsPin(record.instance, id);
-    const layerHasRecords = Array.from(recordsRef.current.values()).some(
-      (candidate) => candidate.instance === record.instance,
-    );
-    if (!layerHasRecords && record.instance.status === "playing") record.instance.pause();
+    if (removeFromRenderer) rendererRef.current?.remove(id);
   }, []);
   useLayoutEffect(() => {
     removeRecordRef.current = removeRecord;
   }, [removeRecord]);
 
-  /**
-   * 屏蔽列表变化后撤下该用户的全部在屏 bullet 并清空其待处理事件。
-   * 与屏蔽词"只影响新消息"不同，屏蔽用户的语义是立即消失：
-   * 用户刚点过屏蔽按钮的那条评论不该继续飘完全程。菜单随被移除的
-   * 钉住评论一起收起（`removeRecord` 会清掉 hover 目标）。
-   */
   useLayoutEffect(() => {
     const matcher = blockedUserMatcher;
-    // removeRecord 会在迭代中 splice recordOrderRef，先做快照避免迭代器失效；
-    // unicorn/no-useless-spread 误把必要的防御性拷贝当冗余，用 slice 表达同一意图。
     for (const id of recordOrderRef.current.slice()) {
       const record = recordsRef.current.get(id);
       if (record && matcher(record.meta.event)) removeRecordRef.current(id, true);
     }
-    pendingEventsRef.current = pendingEventsRef.current.filter(
-      (pending) => !matcher(pending.event),
-    );
+    pendingEventsRef.current = pendingEventsRef.current.filter((pending) => !matcher(pending.event));
   }, [blockedUserMatcher]);
 
   const selectBullet = useCallback(
     (id: string, element: HTMLElement) => {
       const record = recordsRef.current.get(id);
       const host = hostRef.current;
-      if (!record || !host) return;
+      const renderer = rendererRef.current;
+      if (!record || !host || !renderer) return;
       if (selectedIdRef.current && selectedIdRef.current !== id) releaseSelection();
-
+      if (!renderer.pin(id)) return;
       selectedIdRef.current = id;
       element.dataset.rliveDanmakuSelected = "true";
-      record.instance.freezeComment(id);
       const rect = relativeVisualRect(host, record.meta) ?? relativeRect(host, element);
       setHoverTarget({
         hoverKey: id,
@@ -473,52 +387,35 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   );
 
   const queueEvents = useCallback((events: readonly DanmakuEvent[]) => {
-    enqueueDanmuJsPending(pendingEventsRef.current, events);
-  }, []);
-
-  /**
-   * 丢弃 danmu.js 接受却从未渲染的评论记录。
-   *
-   * `Main.readData` 在所有车道都忙时会直接丢弃实时评论而不构建 Bullet，
-   * 且该路径既不触发 `bullet_remove` 也不触发 detach 钩子。这些记录曾不断累积
-   * 直到活动预算耗尽，然后最旧的记录 —— 一颗还在舞台上滚动的 bullet —— 被
-   * 淘汰，这正是繁忙房间的前几条评论中途消失的原因。在这里回收它们，
-   * 让预算如实反映屏幕上实际存在的内容。
-   */
-  const sweepGhostRecords = useCallback(() => {
-    const ghosts = danmuGhostRecordIds(recordOrderRef.current, recordsRef.current);
-    for (const id of ghosts) removeRecordRef.current(id, true);
+    enqueueDanmakuPending(pendingEventsRef.current, events);
   }, []);
 
   const renderEvents = useCallback(
     (events: readonly DanmakuEvent[]) => {
-      const instances = instancesRef.current;
-      if (!sizeReadyRef.current || !instances) {
+      const renderer = rendererRef.current;
+      if (!sizeReadyRef.current || !renderer) {
         queueEvents(events);
         return;
       }
-
-      sweepGhostRecords();
-      const maxActiveComments = danmuMaxActiveComments(
+      const maxActiveComments = danmakuMaxActiveComments(
         stageHeightRef.current,
         laneHeightRef.current,
         areaRef.current,
       );
-      // 图片弹幕占两条轨道，因此需要所在图层真正开出的车道数：滚动层受显示区域
-      // 约束，固定层始终整屏（见 `danmuLayerAreaConfig`）。
-      const scrollLaneCount = danmuLaneCount(
+      const scrollLaneCount = danmakuLaneCount(
         stageHeightRef.current,
         laneHeightRef.current,
         areaRef.current,
       );
-      const topLaneCount = danmuLaneCount(stageHeightRef.current, laneHeightRef.current, 1);
+      const topLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeightRef.current, 1);
       const config = configRef.current;
       const supportsSuperChat = config.superChatEnabled && siteSupportsSuperChat(config.siteId);
+      // 每批只统计一次，循环内随新增滚动记录递增；逐条遍历全部记录在高峰批次会退化为 O(n²)。
+      let activeScrollCount = 0;
+      for (const record of recordsRef.current.values()) if (record.layer === "scroll") activeScrollCount += 1;
       for (const event of events) {
         if (!shouldShowValidatedOnFloatingDanmaku(event, config.filterGifts)) continue;
-        if (config.shieldMatcher(event)) continue;
-        if (config.blockedUserMatcher(event)) continue;
-
+        if (config.shieldMatcher(event) || config.blockedUserMatcher(event)) continue;
         if (event.kind === "super_chat") {
           if (!supportsSuperChat || !event.content.trim()) continue;
           const dedupeKey = superChatDedupeKey(event);
@@ -535,23 +432,17 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         if (aggregation.key && aggregation.count > 1) {
           const targetId = aggregationTargetsRef.current.get(aggregation.key);
           const target = targetId ? recordsRef.current.get(targetId) : undefined;
-          // 合并进一条从未上屏的评论会把重复计数也藏掉。实时评论在 `sendComment`
-          // 内同步挂载，未挂载的目标只能是静默丢弃的结果。
-          if (target?.attached) {
-            updateDanmuAggregation(target.comment, aggregation.count);
+          if (target) {
+            updateDanmakuAggregation(target.comment, aggregation.count);
             continue;
           }
           aggregatorRef.current.forget(aggregation.key);
           aggregation = aggregatorRef.current.aggregate(event);
         }
+        if (!isPinnedDanmakuEvent(event) && activeScrollCount >= maxActiveComments) continue;
 
-        // 饱和时丢弃最新的评论，绝不在途中的那条：已进入舞台的 bullet
-        // 必须被允许走完全程。固定弹幕绕过预算，
-        // 因为它们不占用滚动车道且有自己的上限。
-        if (!isPinnedDanmakuEvent(event) && recordsRef.current.size >= maxActiveComments) continue;
-
-        const id = `rlive-danmu-${runtimeEpochRef.current}-${++sequenceRef.current}`;
-        const comment = danmuCommentFromEvent(event, {
+        const id = `rlive-danmaku-${runtimeEpochRef.current}-${++sequenceRef.current}`;
+        const comment = danmakuCommentFromEvent(event, {
           id,
           fontSize: config.fontSize,
           fontStroke: config.fontStroke,
@@ -561,17 +452,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
           aggregationCount: aggregation.count,
         });
         if (!comment) continue;
-        const layer = danmuRenderLayer(comment);
-        const instance = instances[layer];
+        const layer = danmakuRenderLayer(comment);
         const meta = comment.__rliveMeta;
-        recordsRef.current.set(id, {
-          comment,
-          meta,
-          layer,
-          instance,
-          sentAt: Date.now(),
-          attached: false,
-        });
+        recordsRef.current.set(id, { comment, meta, layer, attached: false });
+        if (layer === "scroll") activeScrollCount += 1;
         recordOrderRef.current.push(id);
         if (meta.aggregationKey) aggregationTargetsRef.current.set(meta.aggregationKey, id);
 
@@ -582,19 +466,16 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
             id,
             window.setTimeout(() => removeRecordRef.current(id, true), duration),
           );
-          while (superChatIdsRef.current.length > DANMU_JS_MAX_SUPER_CHATS) {
+          while (superChatIdsRef.current.length > DANMAKU_MAX_SUPER_CHATS) {
             const oldest = superChatIdsRef.current[0];
             if (!oldest) break;
             removeRecordRef.current(oldest, true);
           }
         }
-
-        if (instance.status === "idle") instance.start();
-        else if (instance.status === "paused") instance.play();
-        instance.sendComment(comment);
+        renderer.emit(comment);
       }
     },
-    [queueEvents, sweepGhostRecords],
+    [queueEvents],
   );
   const renderEventsRef = useRef(renderEvents);
   useLayoutEffect(() => {
@@ -602,8 +483,8 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, [renderEvents]);
 
   const flushPending = useCallback(() => {
-    if (!sizeReadyRef.current || !instancesRef.current || document.hidden) return;
-    const events = flushDanmuJsPending(pendingEventsRef.current);
+    if (!sizeReadyRef.current || !rendererRef.current || document.hidden) return;
+    const events = flushDanmakuPending(pendingEventsRef.current);
     if (events.length > 0) renderEventsRef.current(events);
   }, []);
   const flushPendingRef = useRef(flushPending);
@@ -614,7 +495,7 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   const processBatch = useCallback(
     (events: readonly DanmakuEvent[]) => {
       if (!active || reducedMotion || !pageVisible) return;
-      if (!sizeReadyRef.current || !instancesRef.current || document.hidden) queueEvents(events);
+      if (!sizeReadyRef.current || !rendererRef.current || document.hidden) queueEvents(events);
       else renderEventsRef.current(events);
     },
     [active, pageVisible, queueEvents, reducedMotion],
@@ -634,7 +515,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
 
   const delayMsRef = useRef(delayMs);
   useLayoutEffect(() => {
-    // 保存在 ref 里，使滞留值变化不会让批量流重新订阅。
     delayMsRef.current = Number.isFinite(delayMs) ? Math.max(0, Math.min(60_000, delayMs)) : 0;
   }, [delayMs]);
 
@@ -660,9 +540,6 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
     };
   }, [active, pageVisible, reducedMotion, sessionKey]);
 
-  // 待处理消息属于房间会话，不属于某个渲染器实例。零尺寸宿主变为可测量时下方
-  // 实例会被重建，因此这道边界要独立于 `sizeReady`，
-  // 只在房间/可见性会话真正结束时清空队列。
   useEffect(() => {
     const pendingEvents = pendingEventsRef.current;
     return () => {
@@ -671,46 +548,21 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   }, [active, pageVisible, reducedMotion, sessionKey]);
 
   useEffect(() => {
-    const scrollContainer = scrollContainerRef.current;
-    const topContainer = topContainerRef.current;
-    const records = recordsRef.current;
-    const recordOrder = recordOrderRef.current;
-    const aggregationTargets = aggregationTargetsRef.current;
-    const pendingEvents = pendingEventsRef.current;
-    const superChatIds = superChatIdsRef.current;
-    const superChatTimers = superChatTimersRef.current;
-    const superChatDedupeKeys = superChatDedupeKeysRef.current;
-    const superChatDedupeOrder = superChatDedupeOrderRef.current;
+    const container = containerRef.current;
+    if (!container) return;
     let disposed = false;
-    let instances: DanmuJsInstances | null = null;
-    let listenersAttached = false;
-    let restoreFixedPriorCompat = () => {};
-
-    const onBulletRemove = (payload: { bullet: DanmuJsBullet }) => {
-      const id = bulletId(payload?.bullet?.id);
-      if (id) removeRecordRef.current(id, false);
-    };
-
-    const destroyInstances = () => {
-      const current = instances;
-      if (!current) return;
-      if (listenersAttached) {
-        current.scroll.off("bullet_remove", onBulletRemove);
-        current.top.off("bullet_remove", onBulletRemove);
-        listenersAttached = false;
-      }
-      restoreFixedPriorCompat();
-      restoreFixedPriorCompat = () => {};
-      current.scroll.destroy();
-      current.top.destroy();
-      if (instancesRef.current === current) instancesRef.current = null;
-      instances = null;
-    };
+    let renderer: Renderer | null = null;
+    const records = recordsRef.current;
+    const pendingEvents = pendingEventsRef.current;
 
     const clearRenderedState = (preservePending: boolean) => {
       releaseSelectionRef.current(true);
-      for (const timer of superChatTimers.values()) window.clearTimeout(timer);
-      superChatTimers.clear();
+      for (const timer of superChatTimersRef.current.values()) window.clearTimeout(timer);
+      superChatTimersRef.current.clear();
+      renderer?.clear();
+      renderer?.destroy();
+      renderer = null;
+      if (rendererRef.current) rendererRef.current = null;
       for (const record of records.values()) {
         record.meta.element = undefined;
         record.meta.contentElement = undefined;
@@ -718,148 +570,97 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
         record.meta.countSlotElement = undefined;
       }
       records.clear();
-      recordOrder.length = 0;
-      aggregationTargets.clear();
+      recordOrderRef.current.length = 0;
+      aggregationTargetsRef.current.clear();
       aggregatorRef.current.clear();
       if (!preservePending) pendingEvents.length = 0;
-      superChatIds.length = 0;
-      superChatDedupeKeys.clear();
-      superChatDedupeOrder.length = 0;
+      superChatIdsRef.current.length = 0;
+      superChatDedupeKeysRef.current.clear();
+      superChatDedupeOrderRef.current.length = 0;
       sequenceRef.current = 0;
-      destroyInstances();
-      scrollContainer?.replaceChildren();
-      topContainer?.replaceChildren();
+      container.replaceChildren();
     };
 
-    if (!active || reducedMotion || !pageVisible || !scrollContainer || !topContainer) {
+    if (!active || reducedMotion || !pageVisible) {
       clearRenderedState(false);
       return;
     }
-
-    // 房间页签或网格单元进入时宿主尺寸为零很常见。拆除旧 bullet，
-    // 但保留有界待处理队列，让第一次有效测量能冲刷期间收到的消息。
     if (!sizeReady) {
       clearRenderedState(true);
       return;
     }
-
     runtimeEpochRef.current += 1;
-
-    void loadDanmuJs()
-      .then((Constructor) => {
+    void loadDanmakuRenderer()
+      .then((RendererConstructor) => {
         if (disposed) return;
-        const hooks = {
-          bulletCreateEl: (comment: DanmuJsComment) => createDanmuBulletElement(comment),
-          bulletAttached: (comment: DanmuJsComment, element: HTMLElement) => {
+        const instance = new RendererConstructor({
+          container,
+          speed: configRef.current.danmakuSpeed,
+          area: danmakuLayerAreaConfig("scroll", areaRef.current),
+          onAttach: (comment: DanmakuComment, element: HTMLElement) => {
             const meta = commentMeta(comment);
             if (!meta) return;
             meta.element = element;
             element.dataset.rliveDanmakuId = meta.id;
             const record = recordsRef.current.get(meta.id);
             if (record) record.attached = true;
-            if (selectedIdRef.current === meta.id) {
-              element.dataset.rliveDanmakuSelected = "true";
-            }
+            if (selectedIdRef.current === meta.id) element.dataset.rliveDanmakuSelected = "true";
           },
-          bulletDetached: (comment: DanmuJsComment, element: HTMLElement) => {
-            const meta = commentMeta(comment);
-            if (meta?.element === element) {
-              meta.element = undefined;
-              meta.contentElement = undefined;
-              meta.countElement = undefined;
-              meta.countSlotElement = undefined;
-            }
-            // 所有通道都被占用时实时评论可能被拒绝。danmu.js 对该路径不发 bullet_remove，
-            // 因此也要从 detach 钩子释放本地记录。
-            if (meta) removeRecordRef.current(meta.id, false);
-          },
-        };
-        const createInstance = (container: HTMLElement, layer: DanmuJsRenderLayer) =>
-          new Constructor({
-            container,
-            comments: [],
-            live: true,
-            defaultOff: true,
-            area: danmuLayerAreaConfig(layer, areaRef.current),
-            channelSize: laneHeightRef.current,
-            // 钉住由下层自己的按压委托驱动，danmu.js 的 hover 路径保持关闭。它还拥有唯一
-            // 的全局冻结槽位，其 `mouseControl` 标志一旦设置会抑制实例上的所有后续 hover
-            // —— 本组件任何地方都不应能设置它。
-            mouseControl: false,
-            mouseControlPause: false,
-            needResizeObserver: true,
-            maxCommentsLength: DANMU_JS_MAX_ACTIVE_COMMENTS,
-            interval: 250,
-            chaseEffect: true,
-            disableCopyDOM: true,
-            hooks,
-          });
-
-        let scrollInstance: DanmuJsInstance | null = null;
-        try {
-          scrollInstance = createInstance(scrollContainer, "scroll");
-          const topInstance = createInstance(topContainer, "top");
-          instances = { scroll: scrollInstance, top: topInstance };
-        } catch (error) {
-          scrollInstance?.destroy();
-          throw error;
-        }
+          onDetach: (id: string) => removeRecordRef.current(id, false),
+        });
+        renderer = instance;
+        rendererRef.current = instance;
         if (disposed) {
-          destroyInstances();
+          instance.destroy();
+          renderer = null;
+          rendererRef.current = null;
           return;
         }
-        restoreFixedPriorCompat = installDanmuJsFixedPriorCompat(instances.top);
-        instances.scroll.setPlayRate("scroll", danmuMoveVPlayRate(configRef.current.danmakuSpeed));
-        instancesRef.current = instances;
-        instances.scroll.on("bullet_remove", onBulletRemove);
-        instances.top.on("bullet_remove", onBulletRemove);
-        listenersAttached = true;
-        instances.scroll.resize();
-        instances.top.resize();
+        instance.resize();
         flushPendingRef.current();
       })
       .catch((error: unknown) => {
         if (!disposed) {
           clearRenderedState(true);
-          console.error("Unable to initialize danmu.js", error);
+          console.error("Unable to initialize danmaku renderer", error);
         }
       });
 
     return () => {
       disposed = true;
-      // 尺寸变化与会话边界清理都会经过这里。上方独立的会话副作用负责待处理队列失效。
       clearRenderedState(true);
     };
   }, [active, pageVisible, reducedMotion, sessionKey, sizeReady]);
 
   useEffect(() => {
-    instancesRef.current?.scroll.setPlayRate("scroll", danmuMoveVPlayRate(danmakuSpeed));
+    rendererRef.current?.resize();
+  }, [stageSize.height, stageSize.width]);
+
+  useEffect(() => {
+    rendererRef.current?.setSpeed(danmakuSpeed);
   }, [danmakuSpeed]);
 
   useEffect(() => {
-    const instances = instancesRef.current;
-    if (!instances) return;
-    instances.scroll.setFontSize(fontSize, laneHeight);
-    instances.top.setFontSize(fontSize, laneHeight);
-    instances.scroll.setArea({ ...danmuLayerAreaConfig("scroll", normalizedArea), reflow: true });
-    // 舞台高度从 ref 读：它随窗口尺寸每帧变化，进依赖数组会把整段
-    // setFontSize/setArea 重排接到拖拽窗口的每一步上。
-    const scrollLaneCount = danmuLaneCount(stageHeightRef.current, laneHeight, normalizedArea);
-    const topLaneCount = danmuLaneCount(stageHeightRef.current, laneHeight, 1);
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    renderer.setArea(danmakuLayerAreaConfig("scroll", normalizedArea));
+    renderer.refreshLayout();
+    const scrollLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeight, normalizedArea);
+    const topLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeight, 1);
     for (const { comment, layer } of recordsRef.current.values()) {
-      updateDanmuAppearance(comment, {
+      updateDanmakuAppearance(comment, {
         fontSize,
         fontStroke,
         opacity,
         laneCount: layer === "top" ? topLaneCount : scrollLaneCount,
       });
     }
+    renderer.refreshLayout();
   }, [fontSize, fontStroke, laneHeight, normalizedArea, opacity]);
 
   useEffect(() => {
     if (superChatEnabled && siteSupportsSuperChat(siteId)) return;
-    const ids = superChatIdsRef.current.slice();
-    for (const id of ids) removeRecordRef.current(id, true);
+    for (const id of superChatIdsRef.current.slice()) removeRecordRef.current(id, true);
     superChatDedupeKeysRef.current.clear();
     superChatDedupeOrderRef.current.length = 0;
   }, [siteId, superChatEnabled]);
@@ -877,28 +678,17 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
       const meta = recordsRef.current.get(selectedId)?.meta;
       const rect = meta && relativeVisualRect(host, meta);
       if (!meta || !rect) {
-        // 释放无法在评论层自身捕获。评论持续在指针下移动，而层本身不接受指针事件，
-        // 按压数帧后的鼠标 pointerup 命中测试往往落在画面上。触摸又是另一回事 ——
-        // 它会捕获到收到 pointerdown 的元素 —— 因此唯一能可靠看到两者的是 document。
-        // 在舞台上方的捕获阶段监听，也让 `preventDefault` 能及时抵达舞台自己的
-        // 冒泡阶段点按处理器。
         if (selectedIdRef.current === selectedId) releaseSelectionRef.current();
         return;
       }
       setHoverTarget((current) =>
         current && current.hoverKey === selectedId
           ? current.left === rect.x &&
-            current.top === rect.y &&
-            current.width === rect.width &&
-            current.height === rect.height
+              current.top === rect.y &&
+              current.width === rect.width &&
+              current.height === rect.height
             ? current
-            : {
-                ...current,
-                left: rect.x,
-                top: rect.y,
-                width: rect.width,
-                height: rect.height,
-              }
+            : { ...current, left: rect.x, top: rect.y, width: rect.width, height: rect.height }
           : current,
       );
       frame = window.requestAnimationFrame(update);
@@ -919,19 +709,10 @@ export const DanmuJsDanmaku = memo(function DanmuJsDanmaku({
   return (
     <div ref={hostRef} className={cn("pointer-events-none absolute inset-0", className)}>
       <div
-        ref={scrollContainerRef}
+        ref={containerRef}
         aria-hidden="true"
-        data-rlive-danmaku-layer="scroll"
-        // 层本身从不接受指针；只有其中的 bullet 文本接受（见 `createDanmuBulletElement`），
-        // 这正是空白画面的按压能落到舞台的原因。
+        data-rlive-danmaku-layer="live"
         className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
-        style={{ opacity: 1 }}
-      />
-      <div
-        ref={topContainerRef}
-        aria-hidden="true"
-        data-rlive-danmaku-layer="top"
-        className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
         style={{ opacity: 1 }}
       />
       {hoverTarget && (

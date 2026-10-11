@@ -1,10 +1,10 @@
-// Windows 主窗口：真实 VideoDanmakuLayer + danmu.js，媒体事件由夹具控制。
+// Windows 主窗口：真实 VideoDanmakuLayer + DanmakuRenderer，媒体事件由夹具控制。
 // playwright-cli -s=rwin run-code --filename=tests/video-danmaku-pause.browser.js
 async (page) => {
   return page.evaluate(async () => {
     const { setupHarness, assert, frames, until } = await import("/tests/browser/harness.js");
     const { VideoDanmakuLayer } = await import("/src/features/video/VideoDanmakuLayer.tsx");
-    const { loadDanmuJs } = await import("/src/features/room/danmaku/danmuJsLoader.ts");
+    const { loadDanmakuRenderer } = await import("/src/features/room/danmaku/danmakuLoader.ts");
     const settingsUrl =
       performance
         .getEntriesByType("resource")
@@ -19,14 +19,23 @@ async (page) => {
     });
     const { h, createRef, render, query } = harness;
     const videoRef = createRef();
-    let time = 0;
-    let paused = false;
-    let instance;
-    const DanmuJs = await loadDanmuJs();
-    const originalSend = DanmuJs.prototype.sendComment;
-    DanmuJs.prototype.sendComment = function (comment) {
-      if (harness.host.contains(this.container)) instance = this;
-      return originalSend.call(this, comment);
+    let baseTime = 0;
+    let anchor = performance.now();
+    let rate = 1;
+    let paused = true;
+    let waiting = false;
+    let renderer;
+    const mediaTime = () =>
+      baseTime + (!paused && !waiting ? ((performance.now() - anchor) / 1_000) * rate : 0);
+    const commitTime = () => {
+      baseTime = mediaTime();
+      anchor = performance.now();
+    };
+    const Renderer = await loadDanmakuRenderer();
+    const originalSetComments = Renderer.prototype.setComments;
+    Renderer.prototype.setComments = function (comments) {
+      if (comments.some((comment) => String(comment.id).startsWith("pause-"))) renderer = this;
+      return originalSetComments.call(this, comments);
     };
     const entries = ["scroll", "scroll", "top", "bottom"].map((mode, index) => ({
       id: `pause-${index}`,
@@ -37,9 +46,45 @@ async (page) => {
       content: `暂停位置回归 ${index}`,
     }));
     const dispatch = (type) => videoRef.current.dispatchEvent(new Event(type));
+    const seekTo = (position) => {
+      commitTime();
+      baseTime = position;
+      anchor = performance.now();
+      dispatch("seeking");
+    };
+    const pause = () => {
+      commitTime();
+      paused = true;
+      dispatch("pause");
+    };
+    const wait = () => {
+      commitTime();
+      waiting = true;
+      dispatch("waiting");
+    };
+    const play = () => {
+      commitTime();
+      paused = false;
+      waiting = false;
+      anchor = performance.now();
+      dispatch("playing");
+    };
+    const setRate = (nextRate) => {
+      commitTime();
+      rate = nextRate;
+      anchor = performance.now();
+      dispatch("ratechange");
+    };
+    const bullet = (id) => {
+      const element = query(`[data-rlive-danmaku-id="${id}"]`);
+      if (element) return element;
+      return [...query("[data-video-danmaku-layer]").querySelectorAll("*")].find(
+        (candidate) => candidate.textContent?.trim() === entries.find((entry) => entry.id === id)?.content,
+      );
+    };
     const positions = () =>
       entries.map(({ id }) => {
-        const element = query(`[data-rlive-danmaku-id="${id}"]`);
+        const element = bullet(id);
         assert(element, `弹幕意外消失：${id}`);
         return element.getBoundingClientRect().left;
       });
@@ -70,106 +115,73 @@ async (page) => {
         ),
       );
       Object.defineProperties(videoRef.current, {
-        currentTime: { configurable: true, get: () => time },
+        currentTime: { configurable: true, get: mediaTime },
         paused: { configurable: true, get: () => paused },
+        playbackRate: { configurable: true, get: () => rate },
       });
-      await until(() => query("[data-video-danmaku-layer].danmu"), "弹幕实例未就绪");
-      await frames();
+      await until(() => renderer, "弹幕渲染器未就绪");
+      seekTo(0);
+      play();
+      await until(() => mediaTime() >= 0.2 && bullet("pause-0"), "滚动弹幕未开始移动");
 
       for (const shift of [0, 12, -17]) {
         harness.host.style.transform = "none";
-        time = 0;
-        dispatch("seeking");
-        paused = false;
-        dispatch("play");
-        time = 0.1;
-        dispatch("timeupdate");
-        await until(() => positions()[0] < 850, "滚动弹幕未开始移动");
-        // 只移动、不改变尺寸：复现页面转场/布局位移不触发 ResizeObserver 的情况。
+        seekTo(0);
+        play();
+        await until(() => mediaTime() >= 0.2 && bullet("pause-0"), "滚动弹幕未开始移动");
         harness.host.style.transform = `translateX(${shift}px)`;
         await frames();
-        if (shift !== 0) {
-          assert(
-            Math.abs(instance.containerPos.left - instance.container.getBoundingClientRect().left) >
-              1,
-            "夹具没有制造容器原点缓存过期",
-          );
-        }
-        for (let cycle = 0; cycle < 3; cycle++) {
-          const before = positions();
-          paused = true;
-          dispatch("pause");
-          unchanged(before, `位移 ${shift}px，第 ${cycle + 1} 次暂停`);
-          const stopped = positions();
-          await frames();
-          unchanged(stopped, "暂停后仍在移动");
-          dispatch("pause");
-          unchanged(stopped, "重复暂停改变位置");
-          paused = false;
-          dispatch("play");
-          unchanged(stopped, "恢复瞬间改变位置");
-          await until(() => positions()[0] < stopped[0] - 3, "恢复后没有继续向左滚动");
-        }
-        passed.push(`容器位移 ${shift}px：连续暂停无跳变、保持静止、恢复向左滚动，固定弹幕保留`);
-      }
-
-      // 不在暂停前测量布局：保留已有 transition，在帧间切换，覆盖合成线程动画。
-      const scrolling = query('[data-rlive-danmaku-id="pause-0"]');
-      const transition = scrolling.getAnimations().find((item) => item.transitionProperty === "transform");
-      assert(transition, "缺少滚动动画");
-      const originalLeft = scrolling.style.left;
-      for (let cycle = 0; cycle < 20; cycle++) {
-        await new Promise((resolve) => setTimeout(resolve, 33));
-        paused = true;
-        dispatch("pause");
-        assert(scrolling.getAnimations().includes(transition), "暂停取消并重建了滚动时间轴");
-        assert(scrolling.style.left === originalLeft, "暂停把动画采样位置重新写回 left");
-        await transition.ready;
-        const stopped = positions();
+        const before = positions();
+        pause();
+        unchanged(before, `位移 ${shift}px，暂停原位`);
         await frames();
-        unchanged(stopped, "合成动画暂停后仍在移动");
-        paused = false;
-        dispatch("play");
-        assert(scrolling.getAnimations().includes(transition), "恢复重建了滚动时间轴");
-        await until(() => positions()[0] < stopped[0] - 1, "恢复后未继续向左移动");
+        unchanged(before, "pause 后仍在移动");
+        pause();
+        unchanged(before, "重复 pause 改变位置");
+        play();
+        unchanged(before, "playing 瞬间改变位置");
+        await until(() => positions()[0] < before[0] - 3, "playing 后没有继续向左滚动");
       }
-      passed.push("帧间快速暂停/恢复 20 次保持同一动画，不重定位，暂停稳定且恢复向左移动");
+      passed.push("容器位移与连续暂停均保持原位，playing 后继续移动");
 
-      // 暂停期间点选再解除，会由 danmu.js 取消 transition；恢复不能复活旧动画。
-      paused = true;
-      dispatch("pause");
-      instance.freezeComment("pause-0");
-      instance.restartComment("pause-0");
-      const released = positions()[0];
-      paused = false;
-      dispatch("play");
-      await until(() => positions()[0] < released - 3, "暂停时点选再解除后无法恢复");
-      assert(!scrolling.getAnimations().includes(transition), "复活了已取消的旧动画");
-      passed.push("暂停时点选再解除正确交还原生动画，不复活旧 transition");
-
-      // 已点选冻结的弹幕在媒体暂停/恢复后仍须保持冻结。
-      instance.freezeComment("pause-1");
-      const pinned = positions()[1];
-      paused = true;
-      dispatch("pause");
-      paused = false;
-      dispatch("play");
+      const beforeWaiting = positions();
+      wait();
       await frames();
-      assert(Math.abs(positions()[1] - pinned) < 0.1, "媒体恢复解除了单条弹幕的冻结");
-      const finishing = scrolling.getAnimations().find((item) => item.transitionProperty === "transform");
-      assert(finishing, "恢复后滚动动画丢失");
-      finishing.finish();
-      await until(() => !scrolling.isConnected, "滚动结束没有移除弹幕");
-      assert(!instance.state.bullets.some((bullet) => bullet.id === "pause-0"), "滚动结束没有释放主队列");
-      assert(!instance.main.channel.channels.some((channel) => channel.queue.scroll.some((bullet) => bullet.id === "pause-0")), "滚动结束没有释放车道");
-      passed.push("暂停/恢复后动画结束仍正常移除 DOM、主队列与车道");
-      time = 30;
-      dispatch("seeking");
+      unchanged(beforeWaiting, "waiting 后弹幕跳变");
+      await frames();
+      unchanged(beforeWaiting, "waiting 期间弹幕仍在移动");
+      play();
+      await until(() => positions()[0] < beforeWaiting[0] - 3, "waiting 后没有恢复移动");
+      passed.push("waiting 冻结弹幕，playing 恢复同一位置继续移动");
+
+      const beforeRate = positions();
+      setRate(2);
+      unchanged(beforeRate, "ratechange 改变弹幕位置");
+      await frames();
+      assert(positions()[0] < beforeRate[0], "ratechange 后弹幕没有继续按媒体时钟移动");
+      passed.push("ratechange 不重定位、不清屏");
+
+      renderer.pin("pause-1");
+      const pinned = bullet("pause-1").getBoundingClientRect().left;
+      pause();
+      play();
+      await frames();
+      assert(Math.abs(bullet("pause-1").getBoundingClientRect().left - pinned) < 0.1, "单条 pin 未保持暂停");
+      renderer.unpin("pause-1");
+      await until(
+        () => bullet("pause-1").getBoundingClientRect().left < pinned - 3,
+        "unpin 后滚动弹幕无法恢复",
+      );
+      passed.push("单条 pin 跨媒体暂停保持冻结，unpin 后恢复");
+
+      seekTo(30);
+      await frames();
       assert(!query("[data-rlive-danmaku-id]"), "seek 后旧弹幕残留");
-      passed.push("点选冻结不被恢复播放解除，seek 清理旧弹幕");
+      assert(renderer.size === 0, "seek 后 renderer 仍保留旧弹幕");
+      passed.push("seek 清理旧弹幕和 renderer 记录");
       return { passed };
     } finally {
-      DanmuJs.prototype.sendComment = originalSend;
+      Renderer.prototype.setComments = originalSetComments;
       harness.dispose();
       useSettingsStore.setState(settings, true);
     }

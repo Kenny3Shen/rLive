@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { DanmakuEvent } from "../src/shared/types/live";
 import {
-  DANMU_JS_DEFAULT_MOVE_V,
-  DANMU_JS_FONT_WEIGHT,
-  danmuCommentFromEvent,
-  safeDanmuColor,
-  clampDanmuFontStroke,
-  danmuLaneHeight,
+  DANMAKU_DEFAULT_DURATION_MS,
+  DANMAKU_FONT_WEIGHT,
+  DANMAKU_DEFAULT_SPEED,
   clampDanmuFontSize,
+  clampDanmuFontStroke,
+  danmakuCommentFromEvent,
+  danmuLaneHeight,
   isPinnedDanmakuEvent,
-} from "../src/features/room/danmaku/danmuJsAdapter";
-import { resolveDanmuJsConstructor } from "../src/features/room/danmaku/danmuJsLoader";
+  safeDanmuColor,
+} from "../src/features/room/danmaku/danmakuAdapter";
 
 function chat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
   return {
@@ -33,25 +33,14 @@ function mappingOptions(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("danmu.js loader interop", () => {
-  test("resolves UMD/CJS shapes", () => {
-    class NamedConstructor {}
-    class DefaultConstructor {}
-
-    expect(resolveDanmuJsConstructor(NamedConstructor)).toBe(NamedConstructor);
-    expect(resolveDanmuJsConstructor({ DanmuJs: NamedConstructor })).toBe(NamedConstructor);
-    expect(resolveDanmuJsConstructor({ default: DefaultConstructor })).toBe(DefaultConstructor);
-    expect(resolveDanmuJsConstructor(null)).toBeNull();
-    expect(resolveDanmuJsConstructor({})).toBeNull();
-  });
-});
-
-describe("danmu.js event mapping", () => {
-  test("maps live chat to scrolling comment", () => {
-    const comment = danmuCommentFromEvent(chat(), mappingOptions());
+describe("danmaku adapter mapping", () => {
+  test("maps live chat to a scrolling comment", () => {
+    const comment = danmakuCommentFromEvent(chat(), mappingOptions());
     expect(comment).not.toBeNull();
     expect(comment?.mode).toBe("scroll");
-    expect(comment?.moveV).toBe(DANMU_JS_DEFAULT_MOVE_V);
+    expect(comment?.text).toBe("你好");
+    expect(comment?.duration).toBeUndefined();
+    expect(DANMAKU_DEFAULT_SPEED).toBe(100);
   });
 
   test("pins self-sent and SC at top", () => {
@@ -59,31 +48,28 @@ describe("danmu.js event mapping", () => {
     expect(isPinnedDanmakuEvent(chat({ kind: "super_chat", amount: 30 }))).toBe(true);
     expect(isPinnedDanmakuEvent(chat())).toBe(false);
 
-    const selfComment = danmuCommentFromEvent(
-      chat({ is_self: true }),
-      mappingOptions()
-    );
+    const selfComment = danmakuCommentFromEvent(chat({ is_self: true }), mappingOptions());
     expect(selfComment?.mode).toBe("top");
-    expect(selfComment?.prior).toBe(true);
+    expect(selfComment?.duration).toBe(DANMAKU_DEFAULT_DURATION_MS);
   });
 
   test("maps SC duration from amount tiers", () => {
-    const sc = danmuCommentFromEvent(
+    const sc = danmakuCommentFromEvent(
       chat({ kind: "super_chat", amount: 30, super_chat: { price: 30 } }),
-      mappingOptions()
+      mappingOptions(),
     );
     expect(sc?.mode).toBe("top");
     expect(sc?.duration).toBeGreaterThan(0);
   });
 
   test("returns null for blank content", () => {
-    expect(danmuCommentFromEvent(chat({ content: "" }), mappingOptions())).toBeNull();
+    expect(danmakuCommentFromEvent(chat({ content: "" }), mappingOptions())).toBeNull();
   });
 });
 
-describe("danmu.js appearance", () => {
+describe("danmaku appearance", () => {
   test("uses bold font weight", () => {
-    expect(DANMU_JS_FONT_WEIGHT).toBe(700);
+    expect(DANMAKU_FONT_WEIGHT).toBe(700);
   });
 
   test("clamps font stroke to [0, 1.5] at half-pixel steps", () => {

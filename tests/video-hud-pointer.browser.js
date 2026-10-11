@@ -20,8 +20,8 @@ async (page) => {
     const { default: ReactDOM } = await import(dependencyUrl("react-dom"));
     const { QueryClient, QueryClientProvider } = await import(dependencyUrl("@tanstack_react-query"));
     const { VideoDanmakuLayer } = await import("/src/features/video/VideoDanmakuLayer.tsx");
-    const { loadDanmuJs } = await import("/src/features/room/danmaku/danmuJsLoader.ts");
-    await loadDanmuJs();
+    const { loadDanmakuRenderer } = await import("/src/features/room/danmaku/danmakuLoader.ts");
+    await loadDanmakuRenderer();
     const stage = document.querySelector("[data-player-stage]");
     const surface = stage.querySelector("[data-player-video-surface]");
     const hud = stage.querySelector("[data-player-hud]");
@@ -40,7 +40,7 @@ async (page) => {
         active: true,
         cid: 123,
         aid: "456",
-        entries: [{ id: "hud-hit", progressMs: 100, mode: "top", content: "顶部弹幕", color: "#ffffff", pool: 0 }],
+        entries: [{ id: "hud-hit", progressMs: 100, mode: "top", content: "顶部弹幕".repeat(16), color: "#ffffff", pool: 0 }],
       }),
     )));
     let time = 0;
@@ -51,10 +51,11 @@ async (page) => {
     window.__videoHudPointerTest = {
       hud,
       surface,
-      seed: () => {
-        time = 0.1;
-        videoRef.current.dispatchEvent(new Event("play"));
-        videoRef.current.dispatchEvent(new Event("timeupdate"));
+      seed: async () => {
+        // 越过 progressMs=100：原生只投放 time < currentTime 的弹幕。
+        time = 0.2;
+        videoRef.current.dispatchEvent(new Event("playing"));
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       },
       dispose: () => {
         ReactDOM.flushSync(() => root.unmount());
@@ -66,7 +67,7 @@ async (page) => {
   });
   const passed = [];
   try {
-    await page.waitForSelector("[data-video-danmaku-layer].danmu");
+    await page.waitForSelector("[data-video-danmaku-layer]");
     await page.evaluate(() => window.__videoHudPointerTest.seed());
     await page.waitForSelector('[data-rlive-danmaku-id="hud-hit"]');
     const hit = await page.evaluate(() => {
@@ -75,7 +76,8 @@ async (page) => {
       const rect = bullet.getBoundingClientRect();
       const title = hud.querySelector("p[title]");
       const titleRect = title.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
+      // 顶部弹幕原生水平居中；取标题中心落在弹幕内的点，验证标题区域穿透。
+      const x = Math.max(rect.left + 2, Math.min(rect.right - 2, titleRect.left + titleRect.width / 2));
       const y = Math.min(rect.bottom - 2, titleRect.bottom - 2);
       const target = document.elementFromPoint(x, y);
       return {
@@ -87,7 +89,8 @@ async (page) => {
     });
     assert(hit.overlapsTitle, "测试弹幕未与真实 HUD 标题重叠");
     assert(hit.hitsBullet, `顶部 HUD 拦截了弹幕，命中：${hit.actual}`);
-    if (await page.evaluate(() => navigator.maxTouchPoints > 0)) await page.touchscreen.tap(hit.x, hit.y);
+    if (await page.evaluate(() => navigator.maxTouchPoints > 0))
+      await page.touchscreen.tap(hit.x, hit.y).catch(() => page.mouse.click(hit.x, hit.y));
     else await page.mouse.click(hit.x, hit.y);
     await page.locator("[data-danmaku-menu]").waitFor({ state: "visible" });
     passed.push("真实 HUD 标题区域穿透到弹幕，点按打开操作菜单");

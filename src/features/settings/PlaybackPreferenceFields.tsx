@@ -631,12 +631,12 @@ export function DanmakuAppearanceSettingsFields({
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-speed`}
         title="滚动速度"
-        description={layout === "page" ? "调整普通滚动弹幕的移动速度。" : undefined}
+        description={layout === "page" ? "调整普通滚动弹幕的速度，1.0× 为默认值。" : undefined}
         value={speed}
         min={DANMAKU_SPEED_MIN}
         max={DANMAKU_SPEED_MAX}
         step={10}
-        displayValue={`${speed} px/s`}
+        displayValue={`${(speed / DANMAKU_SPEED_DEFAULT).toFixed(1)}×`}
         layout={layout}
         onPreview={(value) => useSettingsStore.setState({ danmakuSpeed: parseDanmakuSpeed(value) })}
         onCommit={(value) => {

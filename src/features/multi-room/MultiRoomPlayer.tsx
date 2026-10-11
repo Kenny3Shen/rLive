@@ -38,7 +38,7 @@ import type {
 import { useAsrCaptions, type AsrCaptions } from "@/features/asr/useAsrCaptions";
 import { AsrCaptionOverlay } from "@/features/asr/AsrCaptionOverlay";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
-import { DanmuJsDanmaku } from "@/features/room/danmaku/DanmuJsDanmaku";
+import { LiveDanmaku } from "@/features/room/danmaku/LiveDanmaku";
 import { useDanmakuConnection } from "@/features/room/danmaku/useDanmakuConnection";
 import { usePlaybackController } from "@/features/room/playback/usePlaybackController";
 import type { PlaybackController } from "@/features/room/playback/usePlaybackController";
@@ -182,7 +182,7 @@ function MainMultiRoomDanmaku({
 
   const sessionKey = `multi-room:${room.key}`;
   return (
-    <DanmuJsDanmaku
+    <LiveDanmaku
       active={danmaku.active && osdOn}
       sessionKey={sessionKey}
       siteId={room.siteId}

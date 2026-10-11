@@ -1,22 +1,16 @@
-import type { DanmuJsComment, DanmuJsMode } from "danmu.js";
+import type { DanmakuComment } from "@/features/room/danmaku/danmakuTypes";
 import {
-  DANMU_JS_DEFAULT_DURATION_MS,
-  DANMU_JS_DEFAULT_MOVE_V,
-  DANMU_JS_FONT_WEIGHT,
+  DANMAKU_DEFAULT_DURATION_MS,
+  DANMAKU_FONT_WEIGHT,
   clampDanmuFontSize,
+  clampDanmuFontStroke,
   clampDanmuOpacity,
-} from "@/features/room/danmaku/danmuJsAdapter";
+  createDanmuBulletElement,
+  danmuLaneHeight,
+} from "@/features/room/danmaku/danmakuAdapter";
 import type { VideoDanmakuItem } from "@/shared/types/video";
 
-/**
- * VOD 弹幕的分段与调度。
- *
- * 与直播的唯一区别是**调度源**：直播是 WebSocket 到达即投放，VOD 必须按
- * `player.currentTime` 投放。渲染层（danmu.js、字号/透明度/区域/速度设置、屏蔽词）
- * 继续复用 `features/room/danmaku/` 那一套，这里只产出「什么时候该发哪一条」。
- */
-
-/** 上游按 6 分钟切段，段号从 1 起。 */
+/** VOD 分段、筛选与数据映射；播放调度由共享 Danmaku 渲染器的媒体绑定负责。 */
 export const VIDEO_DANMAKU_SEGMENT_MS = 360_000;
 
 export function videoDanmakuSegmentIndex(positionMs: number): number {
@@ -24,37 +18,20 @@ export function videoDanmakuSegmentIndex(positionMs: number): number {
   return Math.floor(position / VIDEO_DANMAKU_SEGMENT_MS) + 1;
 }
 
-/**
- * 该播放位置需要保证已加载的段号集合。
- *
- * 除当前段外多取一段：滚动弹幕在自己出现时间之前就要开始入场，正好跨段的那几条
- * 若等到播放头进入下一段才请求，会迟到整条弹幕的行程时间。只预取一段而不是更多，
- * 是因为一次请求就够盖住 6 分钟。
- */
+/** 提前取下一段，避免播放头跨越六分钟边界时等待弹幕请求。 */
 export function videoDanmakuSegmentsFor(positionMs: number): number[] {
   const index = videoDanmakuSegmentIndex(positionMs);
   return [index, index + 1];
 }
 
-/**
- * 弹幕模式映射。
- *
- * 上游 1/2/3 都是滚动，4 底部居中，5 顶部居中。6（逆向）、7（高级）、8（代码）、
- * 9（BAS）没有对应的 danmu.js 形态，按滚动降级 —— 它们在存量弹幕里占比极低，
- * 丢弃反而会让画面莫名变空。
- */
-export function videoDanmakuMode(mode: number): DanmuJsMode {
+/** 维持现有三种展示形态，高级/代码等未支持模式仍按普通滚动降级。 */
+export function videoDanmakuMode(mode: number): DanmakuComment["mode"] {
   if (mode === 4) return "bottom";
   if (mode === 5) return "top";
   return "scroll";
 }
 
-/**
- * RGB 十进制转 `#rrggbb`。
- *
- * 上游给的是十进制整数（如 16777215 = 白）。越界值回落白色而不是让非法颜色进内联
- * 样式 —— `safeDanmuColor` 那道校验只认得字符串形态，这里必须先转对。
- */
+/** RGB 十进制转 #rrggbb，非法颜色回落白色。 */
 export function videoDanmakuColor(color: number): string {
   if (!Number.isFinite(color)) return "#ffffff";
   const value = Math.trunc(color);
@@ -63,22 +40,16 @@ export function videoDanmakuColor(color: number): string {
 }
 
 export type VideoDanmakuEntry = {
-  /** 段内去重后的稳定 id，投放给 danmu.js 时必须唯一。 */
+  /** 段内稳定 id，跨段不能冲突。 */
   id: string;
-  /** 出现时间，毫秒。 */
+  /** 出现时间，毫秒；映射给渲染器时统一换算为秒。 */
   progressMs: number;
-  mode: DanmuJsMode;
+  mode: DanmakuComment["mode"];
   color: string;
   content: string;
   pool: number;
 };
 
-/**
- * 把一段原始弹幕规整成可调度的条目。
- *
- * id 带上段号：同一 cid 的不同段里 `progress` 可能巧合相同，只用内容+时间做 key
- * 会让 danmu.js 因 id 冲突丢掉后来那条。
- */
 export function videoDanmakuEntries(
   items: readonly VideoDanmakuItem[],
   segmentIndex: number,
@@ -89,7 +60,7 @@ export function videoDanmakuEntries(
     if (!content) continue;
     entries.push({
       id: `${segmentIndex}:${index}`,
-      progressMs: Math.max(0, Math.trunc(item.progress)),
+      progressMs: Number.isFinite(item.progress) ? Math.max(0, Math.trunc(item.progress)) : 0,
       mode: videoDanmakuMode(item.mode),
       color: videoDanmakuColor(item.color),
       content,
@@ -99,17 +70,14 @@ export function videoDanmakuEntries(
   return entries.sort((left, right) => left.progressMs - right.progressMs);
 }
 
-/** 合并多段并按时间排序；重复段号由调用方去重，这里只负责有序合并。 */
+/** 重复段号由调用方去重，此处只负责合并时间轴。 */
 export function mergeVideoDanmakuEntries(
   segments: readonly (readonly VideoDanmakuEntry[])[],
 ): VideoDanmakuEntry[] {
   return segments.flat().sort((left, right) => left.progressMs - right.progressMs);
 }
 
-/**
- * 可见条目：普通池（pool 0）且未被屏蔽词命中。字幕池与特殊池是平台自绘
- * 字幕的载体，不混进弹幕轨道。
- */
+/** 只显示普通池（pool 0），字幕池、特殊池与屏蔽词命中的弹幕不进入渲染器。 */
 export function filterVideoDanmakuEntries(
   entries: readonly VideoDanmakuEntry[],
   isShielded: (content: string) => boolean,
@@ -117,7 +85,7 @@ export function filterVideoDanmakuEntries(
   return entries.filter((entry) => entry.pool === 0 && !isShielded(entry.content));
 }
 
-/** 二分找出第一条 `progressMs >= positionMs` 的条目下标。 */
+/** 弹幕侧栏跟随定位用的二分查找，不承担播放器弹幕投放。 */
 export function firstVideoDanmakuAtOrAfter(
   entries: readonly VideoDanmakuEntry[],
   positionMs: number,
@@ -132,103 +100,40 @@ export function firstVideoDanmakuAtOrAfter(
   return low;
 }
 
-/**
- * 单帧最多投放的弹幕数。
- *
- * 高能片段一秒内可能挤进上百条，一次全投会让 danmu.js 在同一帧构建上百个 DOM 节点、
- * 掉一整帧；而车道本来也装不下那么多，多出来的会被它直接丢弃。分帧投放让密集段落
- * 平滑铺开，视觉上与上游播放器一致。
- */
-export const VIDEO_DANMAKU_MAX_PER_TICK = 24;
+/** 固定弹幕显示 15 秒媒体时间，暂停/缓冲期间不消耗时长。 */
+export const VIDEO_DANMAKU_FIXED_DURATION_MS = DANMAKU_DEFAULT_DURATION_MS;
 
-/**
- * 一次调度要投放的条目。
- *
- * `cursor` 是「已投放到哪个下标」的游标，seek 后由调用方用
- * `firstVideoDanmakuAtOrAfter` 重置。刻意不在这里保存状态：seek 的正确性依赖游标
- * 能被外部无条件重置，藏在闭包里反而更容易漏掉那一步。
- */
-export function nextVideoDanmakuBatch(
-  entries: readonly VideoDanmakuEntry[],
-  cursor: number,
-  positionMs: number,
-  maxPerTick = VIDEO_DANMAKU_MAX_PER_TICK,
-): { batch: VideoDanmakuEntry[]; cursor: number } {
-  const batch: VideoDanmakuEntry[] = [];
-  let index = Math.max(0, cursor);
-  while (index < entries.length && entries[index]!.progressMs <= positionMs) {
-    if (batch.length >= maxPerTick) {
-      // 超预算的条目直接跳过而不是留到下一帧：它们的出现时间已经过去，
-      // 补投会让弹幕成片迟到、与画面错位。
-      index += 1;
-      continue;
-    }
-    batch.push(entries[index]!);
-    index += 1;
-  }
-  return { batch, cursor: index };
-}
-
-/**
- * 顶部/底部固定弹幕的在屏时长，按**媒体时间**计（毫秒）。
- *
- * 到期由 `VideoDanmakuLayer` 按 `currentTime` 判定并主动移除，暂停期间媒体时间不走，
- * 固定弹幕也就停在屏上。
- */
-export const VIDEO_DANMAKU_FIXED_DURATION_MS = DANMU_JS_DEFAULT_DURATION_MS;
-
-/**
- * 交给 danmu.js 的固定弹幕时长：足够长，等于关掉它自己的墙钟计时。
- *
- * danmu.js 用 `visibility` 的 CSS transition 给固定弹幕计时，`pause()` 只冻结滚动
- * 弹幕的位移，不会停这条 transition —— 暂停超过时长，固定弹幕照样到点消失。
- * 因此把它的计时推到实际不可能触发，真正的到期由上面的媒体时间时长决定。
- */
-const DANMU_JS_UNTIMED_FIXED_DURATION_MS = 24 * 60 * 60 * 1_000;
-
-/**
- * 把条目映射成 danmu.js 评论。
- *
- * `realTime: true` + 不带 `start`：调度由我们按 `currentTime` 完成，交给 danmu.js
- * 自己的时间轴会让它同时按 `start` 再排一次，seek 后两套时间轴必然打架。
- */
 export function videoDanmakuComment(
   entry: VideoDanmakuEntry,
-  options: { fontSize: number; fontStroke: number; opacity: number; moveV: number },
-): DanmuJsComment {
+  options: { fontSize: number; fontStroke: number; opacity: number; reducedMotion?: boolean },
+): DanmakuComment {
   const fontSize = clampDanmuFontSize(options.fontSize);
-  const opacity = clampDanmuOpacity(options.opacity);
-  const style: Record<string, string | number> = {
+  const fontStroke = clampDanmuFontStroke(options.fontStroke);
+  const mode = options.reducedMotion && entry.mode === "scroll" ? "top" : entry.mode;
+  const style: NonNullable<DanmakuComment["style"]> = {
     color: entry.color,
-    opacity: String(opacity),
+    opacity: String(clampDanmuOpacity(options.opacity)),
     fontSize: `${fontSize}px`,
-    fontWeight: DANMU_JS_FONT_WEIGHT,
+    fontWeight: DANMAKU_FONT_WEIGHT,
+    height: `${danmuLaneHeight(fontSize)}px`,
     lineHeight: "1.35",
     whiteSpace: "nowrap",
     textShadow: "0 1px 2px rgba(0,0,0,.92), 0 0 3px rgba(0,0,0,.72)",
     pointerEvents: "none",
   };
-  if (options.fontStroke > 0) {
-    // 大写 W 是必须的：danmu.js 自己把 camelCase 键转成 CSS 文本，小写会生成
-    // 非法的无前缀 `webkit-text-stroke`。
-    style.WebkitTextStroke = `${options.fontStroke}px rgba(0,0,0,.92)`;
+  if (fontStroke > 0) {
+    style.WebkitTextStroke = `${fontStroke}px rgba(0,0,0,.92)`;
     style.paintOrder = "stroke fill";
   }
-
-  return {
+  const comment: DanmakuComment = {
     id: entry.id,
-    txt: entry.content,
-    mode: entry.mode,
-    realTime: true,
-    color: true,
-    elLazyInit: true,
-    disableCopyDOM: true,
-    // 滚动模式交给 moveV 以保持恒定速度（长短弹幕同速，与设置里的「弹幕速度」是同一个
-    // px/s 语义），暂停时 danmu.js 会冻结位移、只在飘出画面后移除。固定模式没有行程，
-    // 到期由调用方按媒体时间移除（见 `VIDEO_DANMAKU_FIXED_DURATION_MS`）。
-    ...(entry.mode === "scroll"
-      ? { moveV: options.moveV > 0 ? options.moveV : DANMU_JS_DEFAULT_MOVE_V }
-      : { duration: DANMU_JS_UNTIMED_FIXED_DURATION_MS }),
+    text: entry.content,
+    time: entry.progressMs / 1_000,
+    mode,
+    ...(mode === "scroll" ? {} : { duration: VIDEO_DANMAKU_FIXED_DURATION_MS }),
     style,
   };
+  // 自定义 DOM 只在原生调度实际投放时创建，沿用直播的安全文本和点选标记。
+  comment.render = () => createDanmuBulletElement(comment);
+  return comment;
 }

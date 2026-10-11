@@ -171,10 +171,12 @@ message DanmakuElem {
 
 ### 飘屏调度（`VideoDanmakuLayer`）
 
-- 渲染复用直播的 danmu.js 与字号/透明度/区域/速度/屏蔽词设置，调度按 `video.currentTime` 投放（`videoDanmaku.ts` 的游标与分帧预算）。时间跳变超过 `1.2s` 或 `seeking` 视为跳转，清屏后从新位置重新对齐。
-- 弹幕只在两种情况下离开画面：滚动弹幕飘完整个窗口；顶部/底部固定弹幕在屏满 `15s` **媒体时间**。danmu.js 用 `visibility` 的 CSS transition 给固定弹幕计时，`pause()` 停不住它，因此交给它的时长设为一天（等于关掉墙钟计时），由本层按 `currentTime` 判定到期并通过 `removeDanmuJsComment` 清理（与颜色无关）。danmu.js 1.2.1 的 `removeComment` 会在 `queue.filter` 中触发同步 `bullet_remove`，监听器又 `splice` 同一队列，导致相邻弹幕失去跟踪却残留在 DOM/车道；兼容层先让目标 bullet 正常移除并完成事件清理，再调用公开方法清理待发数据与冻结槽位，避免遍历时修改队列。暂停期间滚动弹幕冻结位移、固定弹幕原地停留。滚动弹幕的暂停/恢复不走 danmu.js 原生 `pauseMove`：它用 `getBoundingClientRect()` 采样位置写回 `left` 再清零 transform，而 transform transition 跑在合成线程，主线程采样落后于屏上已画出的帧，暂停瞬间弹幕会向右跳回约 5–7px。`createDanmuJsPlayback`（`danmuJsCompat.ts`）改为对运行中的 transform transition 调用 `Animation.pause()`/`play()`，保留同一条时间轴，并把 bullet 标为 `paused` 让原生逻辑跳过它；恢复时顺延 `_lastMoveTime`，使车道「已完全入屏」判定不受暂停时长影响。固定弹幕、点选冻结与 seek 清屏仍交给 danmu.js。回归见 `tests/video-danmaku-expiry.browser.js`（彩色/白色相邻顶部与底部弹幕、错时到期、隐藏及 seek）与 `tests/video-danmaku-pause.browser.js`（连续/帧间暂停无跳变、点选冻结、动画结束清理）。
-- 关闭弹幕不销毁实例，只把弹幕层设为 `opacity: 0` 并关掉所有后代的指针命中；调度、滚动与到期照常进行，重新打开时屏上就是一直开着会看到的那些弹幕。不用 `display: none`（容器尺寸归零会让 danmu.js 把车道重排成 0 条），也不用 `visibility: hidden`（固定弹幕自己写着 `visibility`，会盖过父级）。短视频舞台同样常驻该层，只切换可见性。
-- 新分段合并、屏蔽词变化只替换待投放的条目列表：游标按「下一条待投放时间」重新定位，不清屏、不重投已出现的弹幕（屏蔽词因此只影响之后的新弹幕）。字号、描边、透明度、速度、显示区域变化与换视频仍重建实例。关闭期间不拉取新分段，重新打开后从当前进度补取。
+- 渲染统一使用 `weizhenye/Danmaku` 的 `DanmakuRenderer`（由 `danmakuLoader.ts` 惰性加载），直播与 VOD 共用同一套 DOM 弹幕适配层。VOD 把真实 `HTMLVideoElement` 传给 renderer，由媒体事件和 `requestAnimationFrame` 按 `currentTime` 驱动；不再自建 `timeupdate` 投放循环、暂停补偿或 WAAPI 播放控制。`seeking` 会清屏并按新位置重新对齐，`pause`、`waiting`、`playing` 和 `ratechange` 由原生媒体时钟接管。
+- 弹幕离屏规则仍保持业务语义：滚动弹幕自然飘出后移除，顶部/底部固定弹幕在 **15s 媒体时间** 后到期。固定时长由渲染器按时长分组的原生实例以媒体时间计时，暂停、缓冲等待、隐藏和倍速变化都不会改写到期点，钉住期间寿命暂停、释放后顺延（见[播放器技术文档](播放器技术文档.md)「画面弹幕与手势的播放侧契约」）；到期、seek 和卸载都会同步清理 DOM 与 renderer 记录。增量分段只更新待投放集合，不清屏、不重投已经出现的弹幕。
+- `DanmakuRenderer` 原生按帧写入 `transform`，没有依赖 native CSS transition。速度含义也随库标准改变：实际移动时长由舞台宽度、弹幕宽度与 `duration` 共同决定，设置值以 renderer 的标准 `speed` 数值传入；界面用 `speed / 100` 显示为 0.5×–2.0×，不再保证每条不同长度弹幕都是相同的固定 px/s。共享适配层只保留必要的私有记账，用于单条 `pin`、attach/detach、固定时长分组和边界丢弃；这些不是库原生的完整业务能力。
+- 关闭弹幕不销毁实例，只把弹幕层设为 `opacity: 0` 并关闭所有后代的指针命中；调度、滚动与到期照常进行。字号、描边、透明度、速度、显示区域变化与换视频仍按组件生命周期更新 renderer 配置。
+
+参考：[weizhenye/Danmaku 官方仓库](https://github.com/weizhenye/Danmaku)。
 
 ### 弹幕发送（`video_danmaku_send`）
 

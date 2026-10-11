@@ -6,7 +6,7 @@ import {
   clampDanmuOpacity,
   danmuLaneHeight,
   safeDanmuColor,
-} from "@/features/room/danmaku/danmuJsAdapter";
+} from "@/features/room/danmaku/danmakuAdapter";
 import {
   DANMAKU_IMAGE_FALLBACK_TEXT,
   DANMAKU_IMAGE_HORIZONTAL_GAP,

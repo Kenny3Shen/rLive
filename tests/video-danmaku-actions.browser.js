@@ -1,4 +1,7 @@
-// 在 Vite 预览页运行真实组件与 danmu.js，IPC 和媒体时钟使用本地桩，不发送真实弹幕：
+// 在普通浏览器打开的 Vite 预览页运行真实组件与 DanmakuRenderer，IPC 和媒体时钟使用本地桩，不发送真实弹幕。
+// 不能在 Tauri 主窗口运行：其 __TAURI_INTERNALS__ 不可写，桩无法注入，脚本会直接中止。
+// WSL：bunx vite --port 1430 --strictPort --host 127.0.0.1（避开 Windows dev 占用的 1420）
+// playwright-cli -s=video-danmaku-actions open http://127.0.0.1:1430/
 // playwright-cli -s=video-danmaku-actions run-code --filename=tests/video-danmaku-actions.browser.js
 async (page) => {
   const assert = (condition, message) => {
@@ -25,16 +28,16 @@ async (page) => {
       dependencyUrl("@tanstack_react-query")
     );
     const { VideoDanmakuLayer } = await import("/src/features/video/VideoDanmakuLayer.tsx");
-    const { DanmuJsDanmaku } = await import("/src/features/room/danmaku/DanmuJsDanmaku.tsx");
+    const { LiveDanmaku } = await import("/src/features/room/danmaku/LiveDanmaku.tsx");
     const { setExpectedDanmakuConnectionEpoch, clearExpectedDanmakuConnectionEpoch } =
       await import("/src/features/room/danmaku/eventBus.ts");
-    const { loadDanmuJs } = await import("/src/features/room/danmaku/danmuJsLoader.ts");
+    const { loadDanmakuRenderer } = await import("/src/features/room/danmaku/danmakuLoader.ts");
     // 复用组件已加载的模块 URL（含 Vite HMR 版本），避免另建一份 Zustand store。
     const settingsUrl = performance.getEntriesByType("resource").find((resource) =>
       new URL(resource.name).pathname === "/src/shared/stores/settingsStore.ts",
     )?.name ?? "/src/shared/stores/settingsStore.ts";
     const { useSettingsStore } = await import(settingsUrl);
-    await loadDanmuJs();
+    await loadDanmakuRenderer();
     const settings = useSettingsStore.getState();
     const oldTauri = window.isTauri;
     const oldInternals = window.__TAURI_INTERNALS__;
@@ -50,8 +53,8 @@ async (page) => {
     const state = {
       time: 0,
       paused: false,
+      waiting: false,
       active: true,
-      interactive: true,
       cid: 123,
       aid: "456",
       live: false,
@@ -63,12 +66,55 @@ async (page) => {
       failSend: false,
       cookieReady: true,
     };
+    // 连续媒体时钟：播放中按墙钟前进，暂停/缓冲时冻结；赋值 time 只重设基准。
+    // 渲染器每帧按 currentTime 计算滚动位置，冻结的时钟会让滚动弹幕停在原地。
+    const clock = { base: 0, anchor: performance.now(), paused: false, waiting: false };
+    const mediaTime = () =>
+      clock.base + (clock.paused || clock.waiting ? 0 : (performance.now() - clock.anchor) / 1_000);
+    const commitClock = () => {
+      clock.base = mediaTime();
+      clock.anchor = performance.now();
+    };
+    Object.defineProperties(state, {
+      time: {
+        enumerable: true,
+        get: mediaTime,
+        set: (value) => {
+          clock.base = value;
+          clock.anchor = performance.now();
+        },
+      },
+      paused: {
+        enumerable: true,
+        get: () => clock.paused,
+        set: (value) => {
+          commitClock();
+          clock.paused = value;
+        },
+      },
+      waiting: {
+        enumerable: true,
+        get: () => clock.waiting,
+        set: (value) => {
+          commitClock();
+          clock.waiting = value;
+        },
+      },
+    });
     const callbacks = new Map();
     let nextCallback = 1;
     let batchHandler = null;
+    // Tauri 主窗口的 __TAURI_INTERNALS__ 不可写，赋值会静默失败，收藏和 +1 将调用真实后端。
+    // 在改动任何全局之前探测，必须在普通浏览器打开的 Vite 预览页运行。
+    const internals = Object.getOwnPropertyDescriptor(window, "__TAURI_INTERNALS__");
+    if (internals && !internals.writable && !internals.set && !internals.configurable) {
+      root.unmount();
+      host.remove();
+      throw new Error("IPC 桩无法注入（当前是 Tauri 主窗口），为避免真实收藏/发送已中止；请在普通浏览器的 Vite 预览页运行");
+    }
     window.isTauri = true;
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-    window.__TAURI_INTERNALS__ = {
+    const ipcStub = {
       transformCallback: (callback) => {
         const id = nextCallback++;
         callbacks.set(id, callback);
@@ -91,6 +137,7 @@ async (page) => {
         if (command === "danmaku_favorite_list") return [];
       },
     };
+    window.__TAURI_INTERNALS__ = ipcStub;
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
@@ -149,7 +196,7 @@ async (page) => {
                 style: { position: "absolute", inset: 0, width: "100%", height: "100%" },
               }),
               state.live
-                ? h(DanmuJsDanmaku, {
+                ? h(LiveDanmaku, {
                     siteId: "bilibili",
                     roomId: "789",
                     sessionKey: "actions-test",
@@ -173,13 +220,14 @@ async (page) => {
         paused: { configurable: true, get: () => state.paused },
       });
     };
-    const seed = () => {
+    const seed = async () => {
       state.time = 0;
       state.paused = false;
       videoRef.current.dispatchEvent(new Event("seeking"));
-      videoRef.current.dispatchEvent(new Event("play"));
-      state.time = 0.1;
-      videoRef.current.dispatchEvent(new Event("timeupdate"));
+      videoRef.current.dispatchEvent(new Event("playing"));
+      // 越过 progressMs=100：原生只投放 time < currentTime 的弹幕。
+      state.time = 0.2;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     };
     window.__videoDanmakuActionsTest = {
       state,
@@ -189,21 +237,24 @@ async (page) => {
         state.paused = true;
         videoRef.current.dispatchEvent(new Event("pause"));
       },
+      wait: () => {
+        state.waiting = true;
+        videoRef.current.dispatchEvent(new Event("waiting"));
+      },
       seek: () => {
         state.time = 8;
         videoRef.current.dispatchEvent(new Event("seeking"));
       },
       play: () => {
         state.paused = false;
-        videoRef.current.dispatchEvent(new Event("play"));
+        state.waiting = false;
+        videoRef.current.dispatchEvent(new Event("playing"));
       },
-      /** 按正常播放步长推进媒体时间，不触发 seek 判定。 */
-      advance: (seconds) => {
+      /** 按正常播放步长推进媒体时间；调度由 renderer 的媒体时钟逐帧读取。 */
+      advance: async (seconds) => {
         const target = state.time + seconds;
-        while (state.time < target) {
-          state.time = Math.min(target, state.time + 0.25);
-          videoRef.current.dispatchEvent(new Event("timeupdate"));
-        }
+        while (state.time < target) state.time = Math.min(target, state.time + 0.25);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       },
       appendEntry: (entry) => {
         render({ entries: [...state.entries, entry] });
@@ -254,8 +305,9 @@ async (page) => {
   const tap = async (locator) => {
     const point = await center(locator);
     // 移动中的 bullet 不满足 locator.click 的 stable 条件，直接按实时位置点按。
+    // 触屏 Windows 的 maxTouchPoints > 0，但桌面 CDP 会话没有 hasTouch，此时回退鼠标。
     if (await page.evaluate(() => navigator.maxTouchPoints > 0))
-      await page.touchscreen.tap(point.x, point.y);
+      await page.touchscreen.tap(point.x, point.y).catch(() => page.mouse.click(point.x, point.y));
     else await page.mouse.click(point.x, point.y);
   };
   const blank = async () => {
@@ -265,7 +317,7 @@ async (page) => {
     await page.mouse.click(size.width - 30, size.height / 2);
   };
   const seed = async () => {
-    await page.waitForSelector("[data-video-danmaku-layer].danmu");
+    await page.waitForSelector("[data-video-danmaku-layer]");
     await page.evaluate(() => window.__videoDanmakuActionsTest.seed());
     await top.waitFor({ state: "visible" });
   };
@@ -297,6 +349,8 @@ async (page) => {
       document.querySelector("[data-danmaku-menu]")?.textContent.includes("已收藏"),
     );
     await page.evaluate(() => {
+      // 冻结时钟，使 +1 读取的播放进度可精确断言。
+      window.__videoDanmakuActionsTest.state.paused = true;
       window.__videoDanmakuActionsTest.state.time = 42.3459;
     });
     await menu.getByRole("button", { name: "发送相同的弹幕（+1）", exact: true }).click();
@@ -465,7 +519,7 @@ async (page) => {
     const topDuration = await page
       .locator('[data-rlive-danmaku-id="action-top"]')
       .evaluate((el) => parseFloat(getComputedStyle(el).transitionDuration));
-    assert(topDuration > 3_600, `固定弹幕仍由 danmu.js 墙钟计时（${topDuration}s）`);
+    assert(topDuration === 0, `固定弹幕仍依赖 CSS 墙钟计时（${topDuration}s）`);
     await page.evaluate(() => window.__videoDanmakuActionsTest.appendEntry({
       id: "action-late",
       progressMs: 2_000,
@@ -507,14 +561,14 @@ async (page) => {
       test.render({ live: true, failSend: false });
     });
     await page.waitForFunction(() => window.__videoDanmakuActionsTest.liveReady());
-    await page.waitForSelector('[data-rlive-danmaku-layer="scroll"].danmu');
+    await page.waitForSelector('[data-rlive-danmaku-layer="live"]');
     await page.evaluate(() => window.__videoDanmakuActionsTest.emitLive());
     const liveBullet = page.locator(
-      '[data-rlive-danmaku-layer="scroll"] [data-rlive-danmaku-content]',
+      '[data-rlive-danmaku-layer="live"] [data-rlive-danmaku-content]',
     );
     await page.waitForFunction(() => {
       const rect = document
-        .querySelector('[data-rlive-danmaku-layer="scroll"] [data-rlive-danmaku-content]')
+        .querySelector('[data-rlive-danmaku-layer="live"] [data-rlive-danmaku-content]')
         ?.getBoundingClientRect();
       return rect && rect.left < innerWidth - 150;
     });

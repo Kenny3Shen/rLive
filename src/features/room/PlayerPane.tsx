@@ -56,7 +56,7 @@ import {
 } from "@/shared/components/player/PlayerFullscreenLock";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
-import { DanmuJsDanmaku } from "./danmaku/DanmuJsDanmaku";
+import { LiveDanmaku } from "./danmaku/LiveDanmaku";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import type { SleepTimerController } from "./useSleepTimer";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
@@ -1624,7 +1624,7 @@ function PlayerPaneContent({
               {/* 悬浮弹幕跟随画面亮度，
                   而控件与房间信息保持正常对比度。 */}
               {showHost && osdOn && !audioOnly && (
-                <DanmuJsDanmaku
+                <LiveDanmaku
                   active={floatingDanmakuActive}
                   sessionKey={danmakuSessionKey}
                   siteId={siteId}

@@ -48,7 +48,7 @@ export function defaultDanmakuFontSize(mobile = isMobileClient()): number {
   return mobile ? DANMAKU_FONT_SIZE_MOBILE_DEFAULT : DANMAKU_FONT_SIZE_DESKTOP_DEFAULT;
 }
 
-/** 受支持滚动速度范围内的整数 CSS 像素每秒。 */
+/** 弹幕标准速度（50–200，100 为默认基准）；实际行程速度由渲染器和文本宽度决定。 */
 export function parseDanmakuSpeed(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isFinite(numeric)) return DANMAKU_SPEED_DEFAULT;
