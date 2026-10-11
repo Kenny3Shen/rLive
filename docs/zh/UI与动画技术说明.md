@@ -348,9 +348,9 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 
 浏览器检查至少覆盖桌面 `1280x720` 以上、手机竖屏约 `360x732`、coarse pointer 短横屏约 `844x390`，以及系统开启 `prefers-reduced-motion: reduce` 的情况（页面导航跳过空间动画、弹层仅淡化；直播飘屏按既有策略停用，录制回放弹幕停止横向飘移并按媒体时间短暂静态显示，偏好恢复后直播弹幕建立全新会话、不补放旧消息）。
 
-底栏点击回归：`tests/sidebar-tap.test.ts` 用源码断言守住「触摸在 `pointerup` 上自行导航、兼容 click 被压掉、只认触摸、滑动/长按/已捕获指针不算点按、导航带上侧栏状态」；`tests/sidebar-fling-tap.browser.js` 用 CDP 真实合成器触摸（夹具合成的 PointerEvent 不经合成器，测不出这条路径）在真实 Shell 里制造惯性滚动后点底栏，断言当场切页且只导航一次。
+底栏点击回归：`tests/sidebar-fling-tap.browser.js` 用 CDP 真实合成器触摸（夹具合成的 PointerEvent 不经合成器，测不出这条路径）在真实 Shell 里制造惯性滚动后点底栏，断言当场切页且只导航一次。
 
-共享动效回归：`bun test tests/system-motion.test.ts` 校验 CSS / WAAPI token 一致性与时长层次；`playwright-cli -s=motion run-code --filename=tests/system-motion.browser.js` 在 Windows Debug 主窗口检查三种视口与真实 OS 媒体查询下的页面接管、弹层反向/卸载和菜单方向样式，结束后清理 CDP 视口与触摸模拟。
+共享动效回归：`playwright-cli -s=motion run-code --filename=tests/system-motion.browser.js` 在 Windows Debug 主窗口检查三种视口与真实 OS 媒体查询下的页面接管、弹层反向/卸载和菜单方向样式，结束后清理 CDP 视口与触摸模拟。
 
 每个动画检查开始帧、中间帧、最终帧与快速重复操作：
 

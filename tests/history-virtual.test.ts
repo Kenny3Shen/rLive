@@ -8,6 +8,7 @@ import {
   clearHistoryScrollSnapshots,
   historyAnchorTo,
   historySnapshotKey,
+  historyStableRowKeys,
   readHistoryScrollSnapshot,
   registerHistoryRefreshScrollReset,
   resetHistoryScrollForRefresh,
@@ -176,12 +177,33 @@ describe("history refresh scroll reset", () => {
   });
 });
 
+describe("historyStableRowKeys", () => {
+  test("keeps an equivalent sequence by reference so measurements survive", () => {
+    const keys = ["heading", "a", "b", "c"];
+    expect(historyStableRowKeys(keys, [...keys])).toBe(keys);
+  });
+
+  test("replaces the sequence on any change, including a same-length swap", () => {
+    // 同数量替换必须换新数组：虚拟器按数组身份判缓存，沿用旧引用会让新行的行键
+    // 继续命中旧缓存（行内容换成别的记录、测量高度却还是上一条的）。
+    const previous = ["heading", "a", "b", "c"];
+    for (const replacement of [
+      ["heading", "new", "a", "b"],
+      ["other-heading", "x", "y", "z"],
+    ]) {
+      const next = historyStableRowKeys(previous, replacement);
+      expect(next).toBe(replacement);
+      expect(next).not.toBe(previous);
+    }
+  });
+});
+
 describe("danmaku card sizing", () => {
   test("estimate is not below the clamped card height", () => {
     // 窗口化列表的总高度 = 已测行实测高 + 未测行估高。实测发生在行进入视口时，
     // 因此实测一旦系统性超过估高，往下滚就会持续把总高度往上抬：滚动条比滚动
-    // 更快变长，表现为「怎么也滚不到底」。浏览器夹具实测（400 行、长内容）：
-    // 不限高 + 估高 132 → 214 步里 211 步增长（总高 +61%）；限高 + 170 → 0 步。
+    // 更快变长，表现为「怎么也滚不到底」。400 行长内容实测：不限高 + 估高 132
+    // → 214 步里 211 步增长（总高 +61%）；限高 + 170 → 0 步。
     expect(DANMAKU_CARD_ESTIMATE_PX).toBeGreaterThanOrEqual(DANMAKU_CONTENT_MAX_HEIGHT_PX);
   });
 });

@@ -122,8 +122,8 @@ async (page) => {
       // 一次**没有触发过倍速**的短按抬手之后，右键菜单必须恢复：宽限期只属于真正
       // 触发过的那次按压，否则任何一次点按之后的右键都会被平白吞掉。
       // （夹具没有可播放媒体，倍速计时器不会真的触发，因此这里只能守住「不误伤」
-      // 这一侧；「抬手后宽限期内仍归属」由 `playback-selection.test.ts` 的
-      // `isContextMenuOwnedByPress` 断言与共享实现守住。）
+      // 这一侧；「抬手后宽限期内仍归属」由 `src/shared/gestures/longPress.ts` 的
+      // `isContextMenuOwnedByPress` 与 `LONG_PRESS_CONTEXTMENU_GRACE_MS` 定义。）
       out.afterShortPressContextMenuPrevented = await (() => {
         const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
         frame.dispatchEvent(event);
