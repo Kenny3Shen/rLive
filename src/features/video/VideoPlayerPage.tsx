@@ -70,7 +70,12 @@ import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import { isTouchLikePointer } from "@/shared/gestures/playerEdgeGesture";
-import { LONG_PRESS_SPEED_RATE, LONG_PRESS_TRIGGER_MS } from "@/shared/gestures/longPress";
+import {
+  isContextMenuOwnedByPress,
+  LONG_PRESS_SPEED_RATE,
+  LONG_PRESS_TRIGGER_MS,
+} from "@/shared/gestures/longPress";
+import { clearStaleSelection } from "@/shared/selection";
 import {
   PlayerBrightnessShade,
   PlayerEdgeGestureFeedback,
@@ -281,6 +286,14 @@ function VideoPlayerPageContent() {
   const speedHoldTimerRef = useRef<number | null>(null);
   const speedHoldRef = useRef(false);
   const speedHoldRestoreRateRef = useRef(1);
+  /**
+   * 最近一次长按倍速**触发**的时刻（0 表示从未），供 `onContextMenu` 判定归属。
+   *
+   * 只靠 `speedHoldRef` 不够：Android WebView 在系统长按点先派发 `pointercancel`
+   * 再派发 contextmenu，取消路径已经把 `speedHoldRef` 清掉，菜单却还没弹。宽限期
+   * 与卡片长按共用 `LONG_PRESS_CONTEXTMENU_GRACE_MS`。
+   */
+  const speedHoldTriggeredAtRef = useRef(0);
   /**
    * 被手势认领过的按压对点按识别器的封锁截止时刻（`Date.now()` 毫秒）。
    *
@@ -1843,6 +1856,7 @@ function VideoPlayerPageContent() {
     // DASH 的 media.duration 可能为 Infinity，使用已有的真实分片时长。
     if (!media || !playbackRate || duration <= 0 || loading || playbackError) return;
     speedHoldRef.current = true;
+    speedHoldTriggeredAtRef.current = Date.now();
     suppressSurfaceTaps();
     speedHoldRestoreRateRef.current = playbackRate.playbackRate;
     playbackRate.setPlaybackRate(LONG_PRESS_SPEED_RATE);
@@ -1934,6 +1948,10 @@ function VideoPlayerPageContent() {
         revealControls();
         return;
       }
+      // 评论抽屉里选中文字后回到画面：选区还挂在已经脱离文档的节点上，系统会把
+      // 下一次长按读成「拖拽已有选区」，长按倍速因此永不触发。与两个短视频页
+      // 共用同一个清理函数（见 `@/shared/selection`）。
+      clearStaleSelection();
       // 这里刻意不清除封锁：它按时刻过期，否则一次滑动之后紧跟的轻点会与滑动
       // 那一下凑成双击。
       edgeGestureStart(event);
@@ -2856,7 +2874,17 @@ function VideoPlayerPageContent() {
                   }}
                   onContextMenu={(event) => {
                     // 长按倍速会触发系统的长按菜单，按住期间一律压掉。
-                    if (speedHoldRef.current || speedHoldTimerRef.current !== null) {
+                    //
+                    // 归属判定与短视频页共用 `isContextMenuOwnedByPress`：
+                    // `pointercancel` 先到、contextmenu 后到的那一帧里，只看
+                    // `speedHoldRef` 已经为假，菜单照样会弹出来盖住倍速提示。
+                    if (
+                      isContextMenuOwnedByPress(
+                        speedHoldRef.current || speedHoldTimerRef.current !== null,
+                        speedHoldTriggeredAtRef.current,
+                        Date.now(),
+                      )
+                    ) {
                       event.preventDefault();
                     }
                   }}

@@ -205,6 +205,7 @@ export function ShortsPage() {
   const {
     gestureActive,
     onSurfaceTap,
+    onContextMenu,
     goToIndex,
     onPointerDownCapture,
     onPointerMoveCapture,
@@ -362,7 +363,12 @@ export function ShortsPage() {
         // `media-skin` 提供 `--media-*` 令牌（白字 + 白色半透明悬停底）。复用播放器
         // HUD 的溢出菜单需要它：那些控件的配色走令牌，不在这个作用域里会落到应用
         // 前景色 —— 在黑舞台上变成看不见的深色图标。
-        className="media-skin relative h-full min-h-0 overflow-hidden bg-black"
+        //
+        // `select-none` 是长按倍速的前提：画面上没有任何可选文本，而 Android WebView
+        // 的长按一旦命中文字节点就会改走「选择文字」分支，我们的计时器再触发也只会
+        // 被系统菜单盖住。与播放页画面同一处理（那里还多一层 `touch-none`）。
+        // 评论抽屉走 portal、底部发送框是输入框，都不受影响，正文仍可选择。
+        className="media-skin relative h-full min-h-0 select-none overflow-hidden bg-black"
         style={
           {
             // 纵向手势由本页接管，横向留给系统返回手势。
@@ -376,6 +382,7 @@ export function ShortsPage() {
         onPointerUpCapture={onPointerUpCapture}
         onPointerCancelCapture={onPointerCancelCapture}
         onWheel={onWheel}
+        onContextMenu={onContextMenu}
       >
         <div ref={trackRef} data-slot="shorts-track" className="relative h-full">
           {/*

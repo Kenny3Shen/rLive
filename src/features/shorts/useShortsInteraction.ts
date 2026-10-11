@@ -4,15 +4,18 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
 import {
   hasLongPressMovedBeyondSlop,
+  isContextMenuOwnedByPress,
   LONG_PRESS_SPEED_RATE,
   LONG_PRESS_TRIGGER_MS,
 } from "@/shared/gestures/longPress";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
+import { clearStaleSelection } from "@/shared/selection";
 import {
   SHORTS_SWIPE_SETTLE_EASING,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
@@ -82,6 +85,15 @@ export function useShortsInteraction({
   /** 倍速释放后短暂封锁点按：抬手后可能补发一次 click，那一下不该切暂停。 */
   const suppressTapUntilRef = useRef(0);
   /**
+   * 最近一次倍速**触发**的时刻（0 表示从未）。
+   *
+   * 只给 `onContextMenu` 用：Android WebView 在系统长按点先派发 `pointercancel`
+   * 再派发 contextmenu，而取消路径会把按压状态清干净 —— 只看「现在是否按住」
+   * 就会在菜单已经弹出之后才发现自己不该拦它（`styles.css` 里图片长按的注释
+   * 记录了同一条时序）。宽限期与卡片长按共用 `LONG_PRESS_CONTEXTMENU_GRACE_MS`。
+   */
+  const speedHoldTriggeredAtRef = useRef(0);
+  /**
    * 计时器到期时才读的资格。
    *
    * 不在按下时闭包捕获：按下与触发相隔 500ms，这段时间里取流可能刚好完成，也可能
@@ -122,6 +134,7 @@ export function useShortsInteraction({
         speedHoldTimerRef.current = null;
         if (!speedPressRef.current || !speedEligibleRef.current) return;
         speedHoldActiveRef.current = true;
+        speedHoldTriggeredAtRef.current = Date.now();
         // 立即封锁点按：倍速期间手指仍在画面上，中途任何补发的 click 都不该切暂停。
         suppressTapUntilRef.current = Date.now() + SHORTS_TAP_SUPPRESSION_MS;
         setRate(LONG_PRESS_SPEED_RATE);
@@ -512,6 +525,11 @@ export function useShortsInteraction({
       ) {
         return;
       }
+      // 上一次在评论抽屉里选中的文字必须先清掉：选区还在时系统长按会转成
+      // 「拖拽选区」，我们的计时器与系统菜单都不会按长按倍速处理
+      // （见 `@/shared/selection`）。放在 `blocked` 判断之后 —— 浮层打开时这里
+      // 已经返回，抽屉内的选区归用户自己。
+      clearStaleSelection();
       // 长按倍速先于换片武装：它对鼠标也成立（桌面按住画面同样倍速），而下面那段换片
       // 只收手指。两者共用同一次按压：位移超过容忍半径时倍速自己取消（见
       // `trackSpeedHoldMove`），不需要在这里分他们的胜负。
@@ -746,6 +764,32 @@ export function useShortsInteraction({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [blocked, playback]);
 
+  /**
+   * 长按倍速期间压掉系统长按菜单。
+   *
+   * Android WebView 在系统长按点派发 contextmenu；按住画面被识别成长按倍速后，
+   * 那次 contextmenu 会带出「复制/搜索」一类的菜单，把倍速提示盖住。播放页用
+   * 同一套判据（`speedHoldRef.current || speedHoldTimerRef.current !== null`），
+   * 两处必须一致，否则同一手势在两个播放表面上结果不同。
+   *
+   * 归属判定走共享的 `isContextMenuOwnedByPress`：除了「现在按住」，还要接住
+   * 刚刚释放的那一次（系统菜单可能晚于 `pointercancel` 到达）。
+   *
+   * 只在归属本次按压时阻止默认行为：不武装时（画面外的背景区、控制栏、评论抽屉
+   * 里的文本）右键菜单与文本选择照常保留。
+   */
+  const onContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (
+      isContextMenuOwnedByPress(
+        speedPressRef.current !== null,
+        speedHoldTriggeredAtRef.current,
+        Date.now(),
+      )
+    ) {
+      event.preventDefault();
+    }
+  }, []);
+
   /** 切换页内模式前释放倍速与手势，不改动页面持有的槽位和下标。 */
   const resetInteraction = useCallback(() => {
     releaseSpeedHold();
@@ -758,6 +802,7 @@ export function useShortsInteraction({
   return {
     gestureActive,
     onSurfaceTap,
+    onContextMenu,
     goToIndex,
     onPointerDownCapture,
     onPointerMoveCapture,

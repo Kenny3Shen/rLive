@@ -126,13 +126,16 @@ export function DouyinShortsFeed({ onRefresh }: { onRefresh: () => void }) {
           data-slot="shorts-viewport"
           data-platform="douyin"
           data-current-id={current?.id}
-          className="media-skin relative h-full min-h-0 overflow-hidden bg-black text-media-controls-foreground"
+          // `select-none` 与 B 站短视频页、播放页画面同一处理：长按必须走倍速
+          // 而不是系统的文字选择（评论抽屉与底部输入框都在此作用域之外）。
+          className="media-skin relative h-full min-h-0 select-none overflow-hidden bg-black text-media-controls-foreground"
           style={{ touchAction: "pan-x", "--media-scale-unit": "1.2rem" } as React.CSSProperties}
           onPointerDownCapture={menuOpen ? undefined : interaction.onPointerDownCapture}
           onPointerMoveCapture={menuOpen ? undefined : interaction.onPointerMoveCapture}
           onPointerUpCapture={interaction.onPointerUpCapture}
           onPointerCancelCapture={interaction.onPointerCancelCapture}
           onWheel={menuOpen ? undefined : interaction.onWheel}
+          onContextMenu={interaction.onContextMenu}
         >
           <div ref={trackRef} data-slot="shorts-track" className="relative h-full">
             {SHORTS_SLOT_IDS.map((slotId) => {
