@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type {
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
 } from "@/shared/types/live";
 import { appendAsrCaptionLine, formatAsrCaptionSegment } from "./audio";
+import type { AsrCaptionTextStore } from "./asrCaptionText";
 import { captionTranslationClient, describeCaptionTranslationFailure } from "./translation";
 
 type CaptionSegment = {
@@ -31,10 +32,10 @@ export function useCaptionTranslation(options: {
   to: CaptionTranslationLanguage;
   mediaKey: number;
   sessionKey: string;
+  /** 译文与翻译提示写入叠加层的文本 store，宿主不随翻译批次重渲染。 */
+  text: AsrCaptionTextStore;
 }) {
-  const [translatedCaption, setTranslatedCaption] = useState<string | null>(null);
-  const [translationNotice, setTranslationNotice] = useState<string | null>(null);
-  const [translationPending, setTranslationPending] = useState(false);
+  const text = options.text;
   const epochRef = useRef(0);
   const workerRunningRef = useRef(false);
   const pendingJobsRef = useRef<TranslationJob[]>([]);
@@ -53,18 +54,15 @@ export function useCaptionTranslation(options: {
       epochRef.current += 1;
       pendingJobsRef.current = [];
       if (clearRateLimit) rateLimitedRef.current = false;
-      setTranslatedCaption(null);
-      setTranslationNotice(null);
-      setTranslationPending(false);
+      text.update({ translatedCaption: null, translationNotice: null });
       clearCaptionTimer();
     },
-    [clearCaptionTimer],
+    [clearCaptionTimer, text],
   );
 
   const processPendingJobs = useCallback(async () => {
     if (workerRunningRef.current) return;
     workerRunningRef.current = true;
-    setTranslationPending(true);
     try {
       while (pendingJobsRef.current.length > 0) {
         const job = pendingJobsRef.current.shift();
@@ -81,22 +79,25 @@ export function useCaptionTranslation(options: {
           const remainingMs = job.expiresAt - Date.now();
           if (remainingMs <= 0) continue;
           for (const [index, segment] of job.segments.entries()) {
-            const text = translatedSegments[index];
-            if (!text) continue;
-            setTranslatedCaption((current) =>
-              appendAsrCaptionLine(current, formatAsrCaptionSegment({ ...segment, text })),
-            );
+            const translated = translatedSegments[index];
+            if (!translated) continue;
+            text.update((current) => ({
+              translatedCaption: appendAsrCaptionLine(
+                current.translatedCaption,
+                formatAsrCaptionSegment({ ...segment, text: translated }),
+              ),
+            }));
           }
-          setTranslationNotice(null);
+          text.update({ translationNotice: null });
           clearCaptionTimer();
           captionTimerRef.current = window.setTimeout(() => {
-            setTranslatedCaption(null);
+            text.update({ translatedCaption: null });
             captionTimerRef.current = null;
           }, remainingMs);
         } catch (error) {
           if (job.epoch !== epochRef.current) continue;
           const failure = describeCaptionTranslationFailure(error);
-          setTranslationNotice(failure.message);
+          text.update({ translationNotice: failure.message });
           if (failure.kind === "rate_limited") {
             rateLimitedRef.current = true;
             pendingJobsRef.current = [];
@@ -105,10 +106,9 @@ export function useCaptionTranslation(options: {
       }
     } finally {
       workerRunningRef.current = false;
-      setTranslationPending(false);
       if (pendingJobsRef.current.length > 0) void processPendingJobs();
     }
-  }, [clearCaptionTimer]);
+  }, [clearCaptionTimer, text]);
 
   const enqueue = useCallback(
     (segments: CaptionSegment[]) => {
@@ -122,7 +122,7 @@ export function useCaptionTranslation(options: {
         return;
       }
 
-      setTranslationNotice(null);
+      text.update({ translationNotice: null });
       pendingJobsRef.current.push({
         segments,
         from: options.from,
@@ -138,27 +138,20 @@ export function useCaptionTranslation(options: {
       }
       void processPendingJobs();
     },
-    [options.active, options.enabled, options.from, options.to, processPendingJobs],
+    [options.active, options.enabled, options.from, options.to, processPendingJobs, text],
   );
 
-  // 外部会话编排：reset 含 epoch 栅栏、待办队列与计时器清理，状态写入与这些
+  // 外部会话编排：reset 含 epoch 栅栏、待办队列与计时器清理，文本清空与这些
   // 外部副作用必须同步发生。
   useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
     reset(true);
   }, [options.active, options.enabled, options.from, options.to, reset]);
 
   useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
     reset(false);
   }, [options.mediaKey, options.sessionKey, reset]);
 
   useEffect(() => () => clearCaptionTimer(), [clearCaptionTimer]);
 
-  return {
-    translatedCaption,
-    translationNotice,
-    translationPending,
-    enqueue,
-  };
+  return { enqueue };
 }

@@ -13,6 +13,7 @@ import {
   subscribeToVideoPcm,
   type AudioCaptureSubscription,
 } from "./audio";
+import { createAsrCaptionTextStore, type AsrCaptionTextStore } from "./asrCaptionText";
 import { describeAsrModelStatus, useAsrModelStatus, type AsrModelStatus } from "./model";
 import { useCaptionTranslation } from "./useCaptionTranslation";
 
@@ -64,16 +65,13 @@ export type AsrCaptions = {
   /** 本机是否具备本地 ASR 客户端形态（桌面）。 */
   desktopClient: boolean;
   captionsOn: boolean;
-  /** 已定稿的可见行。 */
-  caption: string | null;
-  translatedCaption: string | null;
-  /** 在途假设文本，每个窗口替换。 */
-  partial: string | null;
+  /**
+   * 字幕文本（定稿行、在途假设、译文）。随识别窗高频变化，因此不进返回值本身，
+   * 只由 `AsrCaptionOverlay` 订阅；实例在 hook 生命周期内稳定。
+   */
+  text: AsrCaptionTextStore;
   notice: string | null;
-  translationNotice: string | null;
-  translationPending: boolean;
   noticeIsError: boolean;
-  processing: boolean;
   modelStatus: AsrModelStatus | null;
   modelQueryError: string | null;
   controlLabel: string;
@@ -87,11 +85,9 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const localAsrClient = clientPlatform === "desktop";
   const model = useAsrModelStatus({ enabled: options.featureEnabled });
   const [captionsOn, setCaptionsOn] = useState(false);
-  const [caption, setCaption] = useState<string | null>(null);
-  const [partial, setPartial] = useState<string | null>(null);
+  const [text] = useState(createAsrCaptionTextStore);
   const [notice, setNotice] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
   const epochRef = useRef(0);
   const pendingJobRef = useRef<TranscriptionJob | null>(null);
   const workerRunningRef = useRef(false);
@@ -106,6 +102,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     to: options.translationTo,
     mediaKey: options.mediaKey,
     sessionKey: options.sessionKey,
+    text,
   });
   const enqueueTranslation = translation.enqueue;
 
@@ -119,7 +116,6 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const processPendingJobs = useCallback(async () => {
     if (workerRunningRef.current) return;
     workerRunningRef.current = true;
-    setProcessing(true);
     try {
       while (pendingJobRef.current) {
         const job = pendingJobRef.current;
@@ -129,24 +125,25 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
             pcmBase64: encodePcmBase64(job.pcm),
           });
           if (job.epoch !== epochRef.current) continue;
+          // 同值写入由 React 跳过，成功窗口不会因此重渲染宿主。
           setNotice(null);
 
           // 实时假设随每个窗口变化，包括语句被提交后回到空值。
-          setPartial(response.partial?.trim() || null);
+          text.update({ partial: response.partial?.trim() || null });
 
           if (response.segments.length === 0) continue;
           enqueueTranslation(response.segments);
-          setCaption((current) =>
-            response.segments.reduce(
+          text.update((current) => ({
+            caption: response.segments.reduce(
               (committed, segment) =>
                 appendAsrCaptionLine(committed || null, formatAsrCaptionSegment(segment)),
-              current ?? "",
+              current.caption ?? "",
             ),
-          );
+          }));
           // 只有已提交行会过期；部分文本由下一个窗口取代，而不是超时清除。
           clearCaptionTimer();
           captionTimerRef.current = window.setTimeout(() => {
-            setCaption(null);
+            text.update({ caption: null });
             captionTimerRef.current = null;
           }, CAPTION_RETENTION_MS);
         } catch (error) {
@@ -156,10 +153,9 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       }
     } finally {
       workerRunningRef.current = false;
-      setProcessing(false);
       if (pendingJobRef.current) void processPendingJobs();
     }
-  }, [clearCaptionTimer, enqueueTranslation]);
+  }, [clearCaptionTimer, enqueueTranslation, text]);
 
   // 会话加载完成后兑现用户已经表达过的「开字幕」意图。
   // 只在这里消费一次：用户如果又点了一下关闭，pendingEnableRef 会先被清掉。
@@ -199,8 +195,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     /* oxlint-disable react/set-state-in-effect */
     if (!options.featureEnabled || !model.supported) {
       setCaptionsOn(false);
-      setCaption(null);
-      setPartial(null);
+      text.update({ caption: null, partial: null });
       setNotice(null);
       setCaptureError(null);
       pendingJobRef.current = null;
@@ -209,14 +204,13 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       clearCaptionTimer();
     }
     /* oxlint-enable react/set-state-in-effect */
-  }, [clearCaptionTimer, model.supported, options.featureEnabled]);
+  }, [clearCaptionTimer, model.supported, options.featureEnabled, text]);
 
   // 切房间或换媒体元素时清空流式解码状态。外部会话编排：包含 asr_reset_stream
   // IPC 与 epoch 栅栏，状态写入与其同步发生。
   useEffect(() => {
     /* oxlint-disable react/set-state-in-effect */
-    setCaption(null);
-    setPartial(null);
+    text.update({ caption: null, partial: null });
     setNotice(null);
     setCaptureError(null);
     pendingJobRef.current = null;
@@ -227,7 +221,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     // 流式解码跨窗口保持状态，因此切换房间或媒体元素时必须清空它，
     // 否则下一条字幕会从上一条语句中间继续。
     if (model.supported) void invokeCmd("asr_reset_stream").catch(() => {});
-  }, [clearCaptionTimer, model.supported, options.mediaKey, options.sessionKey]);
+  }, [clearCaptionTimer, model.supported, options.mediaKey, options.sessionKey, text]);
 
   useEffect(() => {
     if (
@@ -348,26 +342,22 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     }
     if (modelState !== "ready" || !options.mediaAvailable) return;
 
-    setCaptionsOn((current) => {
-      const next = !current;
-      if (next) {
-        setNotice(null);
-        setCaptureError(null);
-      } else {
-        setCaption(null);
-        setPartial(null);
-        setNotice(null);
-        setCaptureError(null);
-        pendingJobRef.current = null;
-        // 用户在会话加载期间又点了关闭：取消先前登记的开启意图。
-        pendingEnableRef.current = false;
-        epochRef.current += 1;
-        clearCaptionTimer();
-        void invokeCmd("asr_reset_stream").catch(() => {});
-      }
-      return next;
-    });
+    // 副作用（epoch 栅栏、清空文本 store、IPC）不放进 state updater：updater 可能被
+    // 重放，且在其中通知外部 store 会在渲染期更新叠加层。
+    setNotice(null);
+    setCaptureError(null);
+    if (captionsOn) {
+      text.update({ caption: null, partial: null });
+      pendingJobRef.current = null;
+      // 用户在会话加载期间又点了关闭：取消先前登记的开启意图。
+      pendingEnableRef.current = false;
+      epochRef.current += 1;
+      clearCaptionTimer();
+      void invokeCmd("asr_reset_stream").catch(() => {});
+    }
+    setCaptionsOn(!captionsOn);
   }, [
+    captionsOn,
     clearCaptionTimer,
     loadSession,
     localAsrClient,
@@ -376,6 +366,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     modelSupported,
     options.featureEnabled,
     options.mediaAvailable,
+    text,
   ]);
 
   const statusPresentation = describeAsrModelStatus(model.status, {
@@ -416,14 +407,9 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   return {
     desktopClient: localAsrClient,
     captionsOn,
-    caption,
-    translatedCaption: translation.translatedCaption,
-    partial,
+    text,
     notice,
-    translationNotice: translation.translationNotice,
-    translationPending: translation.translationPending,
     noticeIsError: notice !== null,
-    processing,
     modelStatus: model.status,
     modelQueryError: model.queryError,
     controlLabel,
