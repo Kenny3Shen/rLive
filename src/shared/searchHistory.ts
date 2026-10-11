@@ -7,19 +7,10 @@
  * 便于单测；具体存储键由调用方给出，直播与视频两个搜索表面因此互不污染。
  */
 
+import { browserStorage, type StorageLike } from "./browserStorage";
+
 /** 每份历史保留的最近搜索词条数。 */
 export const MAX_SEARCH_HISTORY_ITEMS = 10;
-
-type StorageLike = Pick<Storage, "getItem" | "setItem">;
-
-function browserStorage(): StorageLike | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
 
 /** 读历史；键不存在、数据损坏或存储不可用时一律按空历史处理。 */
 export function readSearchHistory(

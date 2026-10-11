@@ -11,27 +11,18 @@
  * 网页层固定 100，落盘只会污染桌面端的记忆。
  */
 
+import { browserStorage, type StorageLike } from "./browserStorage";
+
 const STORAGE_KEY = "rlive-player-volume";
 
 /** 没有记忆时的音量，与各播放器原先硬编码的默认值一致。 */
 export const DEFAULT_PLAYER_VOLUME = 80;
-
-type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
 export type PlayerVolumeMemory = {
   /** 0-100 的整数音量。 */
   volume: number;
   muted: boolean;
 };
-
-function browserStorage(): StorageLike | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
 
 /** 越界或非数值一律回落默认值：坏记录不该把播放器锁在静音或爆音上。 */
 function clampVolume(value: unknown): number {

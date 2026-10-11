@@ -1,9 +1,8 @@
+import { browserStorage, type StorageLike } from "@/shared/browserStorage";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 
 const STORAGE_KEY = "rlive-playback-line-preferences";
 export const MAX_PLAYBACK_LINE_PREFERENCES = 100;
-
-type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
 export type PlaybackLinePreference = {
   roomKey: string;
@@ -11,15 +10,6 @@ export type PlaybackLinePreference = {
   index: number;
   updatedAt: number;
 };
-
-function browserStorage(): StorageLike | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
 
 function parsePreferences(raw: string | null): PlaybackLinePreference[] {
   if (!raw) return [];
