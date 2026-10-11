@@ -892,7 +892,11 @@ export function HistoryPage() {
                             roomId: item.room_id,
                           })
                         }
-                        isRemoving={removeWatchHistoryMutation.isPending}
+                        isRemoving={
+                          removeWatchHistoryMutation.isPending &&
+                          removeWatchHistoryMutation.variables.siteId === item.site_id &&
+                          removeWatchHistoryMutation.variables.roomId === item.room_id
+                        }
                       />
                     )}
                   />
@@ -955,7 +959,11 @@ export function HistoryPage() {
                         onRemove={() =>
                           removeVideoHistoryMutation.mutate({ kind: item.kind, oid: item.oid })
                         }
-                        isRemoving={removeVideoHistoryMutation.isPending}
+                        isRemoving={
+                          removeVideoHistoryMutation.isPending &&
+                          removeVideoHistoryMutation.variables.kind === item.kind &&
+                          removeVideoHistoryMutation.variables.oid === item.oid
+                        }
                       />
                     )}
                   />
