@@ -407,7 +407,8 @@ function EpisodesPanel({
     videoSelectionDefaultOpen("episodes", { mobile: isMobileClient() }),
   );
   const { listRef, currentRowRef } = useCurrentRowScroll(open && active, epId);
-  const playlistStore = usePlaylistStore();
+  // 只取动作：分集区不随队列内容变化重渲染。
+  const setPlaylist = usePlaylistStore((state) => state.setPlaylist);
 
   // 分集列表与播放页共用同一份转换，避免两处映射漂移。
   const playlistItems: PlaylistItem[] = episodes.map(playlistItemFromPgcEpisode);
@@ -418,7 +419,7 @@ function EpisodesPanel({
   const handlePlayAll = () => {
     const firstItem = playlistItems[0];
     if (!firstItem) return;
-    playlistStore.setPlaylist(playlistItems, firstItem.id, "sequence");
+    setPlaylist(playlistItems, firstItem.id, "sequence");
     onNavigate({
       bvid: firstItem.bvid,
       cid: firstItem.cid,
@@ -433,7 +434,7 @@ function EpisodesPanel({
     if (playlistItems.length === 0) return;
     const currentItem = playlistItems.find((item) => item.epId === epId);
     if (!currentItem) return;
-    playlistStore.setPlaylist(playlistItems, currentItem.id, "sequence");
+    setPlaylist(playlistItems, currentItem.id, "sequence");
   };
 
   return (
@@ -496,7 +497,7 @@ function EpisodesPanel({
             title={episode.long_title || episode.title}
             duration={episode.duration}
             onNavigate={() => {
-              playlistStore.setPlaylist(playlistItems, playlistItems[index].id, "sequence");
+              setPlaylist(playlistItems, playlistItems[index].id, "sequence");
               onNavigate({
                 bvid: episode.bvid,
                 cid: episode.cid,

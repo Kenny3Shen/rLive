@@ -804,9 +804,16 @@ function VideoPlayerPageContent() {
     },
     [queryClient],
   );
-  const playlistStore = usePlaylistStore();
-  const nextItem = playlistStore.getNextItem();
-  const prevItem = playlistStore.getPreviousItem();
+  // 按字段订阅：邻项选择器返回 store 内既有对象，队列不变时引用稳定。
+  const nextItem = usePlaylistStore((state) => state.getNextItem());
+  const prevItem = usePlaylistStore((state) => state.getPreviousItem());
+  const playlistLength = usePlaylistStore((state) => state.items.length);
+  const loopPlayback = usePlaylistStore((state) => state.loopPlayback);
+  const autoPlayNext = usePlaylistStore((state) => state.autoPlayNext);
+  const autoPlayRelated = usePlaylistStore((state) => state.autoPlayRelated);
+  const toggleLoopPlayback = usePlaylistStore((state) => state.toggleLoopPlayback);
+  const toggleAutoPlayNext = usePlaylistStore((state) => state.toggleAutoPlayNext);
+  const toggleAutoPlayRelated = usePlaylistStore((state) => state.toggleAutoPlayRelated);
   const bvid = params?.bvid ?? null;
   const epId = params?.epId ?? null;
   // 播放页自身**不**按屏蔽名单拦路（屏蔽是「别再推给我」而不是「禁止我打开」），
@@ -2657,23 +2664,23 @@ function VideoPlayerPageContent() {
       <PlaybackSettingRow
         id="video-playback-loop"
         label="循环播放"
-        checked={playlistStore.loopPlayback}
-        onToggle={playlistStore.toggleLoopPlayback}
+        checked={loopPlayback}
+        onToggle={toggleLoopPlayback}
       />
-      {(playlistStore.items.length > 1 || selectionNextItem !== null) && (
+      {(playlistLength > 1 || selectionNextItem !== null) && (
         <PlaybackSettingRow
           id="video-playback-next"
           label="自动切集"
-          checked={playlistStore.autoPlayNext}
-          onToggle={playlistStore.toggleAutoPlayNext}
+          checked={autoPlayNext}
+          onToggle={toggleAutoPlayNext}
         />
       )}
       {!epId && (
         <PlaybackSettingRow
           id="video-playback-related"
           label="自动连播"
-          checked={playlistStore.autoPlayRelated}
-          onToggle={playlistStore.toggleAutoPlayRelated}
+          checked={autoPlayRelated}
+          onToggle={toggleAutoPlayRelated}
         />
       )}
     </div>
