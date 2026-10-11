@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -25,6 +25,16 @@ const SSDP_MULTICAST_ADDR: &str = "239.255.255.250:1900";
 const SSDP_SEARCH_WINDOW: Duration = Duration::from_secs(3);
 const AVTRANSPORT_TYPE: &str = "urn:schemas-upnp-org:service:AVTransport:1";
 const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+// 设备描述 XML 与 SOAP 正文解析用的静态正则：模式固定，用 LazyLock 全进程只编译一次，
+// 避免每次解析都重建正则。
+static FRIENDLY_NAME_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<friendlyName[^>]*>([^<]+)</friendlyName>").unwrap());
+static SERVICE_BLOCK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<service>(.*?)</service>").unwrap());
+static CONTROL_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<controlURL>\s*([^<\s]+)\s*</controlURL>").unwrap());
+static URI_ATTR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"URI="([^"]+)""#).unwrap());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DlnaDevice {
@@ -282,21 +292,18 @@ fn header_value(message: &str, header: &str) -> Option<String> {
 /// 输入是设备自报的受控 XML，这里用正则做有界提取即可，避免为单一
 /// 用途引入完整的 XML 解析依赖。
 fn parse_device_description(xml: &str, location: &str) -> AppResult<ResolvedDevice> {
-    let name = Regex::new(r"<friendlyName[^>]*>([^<]+)</friendlyName>")
-        .expect("valid friendlyName regex")
+    let name = FRIENDLY_NAME_RE
         .captures(xml)
         .and_then(|captures| captures.get(1))
         .map(|matched| matched.as_str().trim().to_string())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "未知设备".into());
 
-    let service_block = Regex::new(r"(?s)<service>(.*?)</service>").expect("valid service regex");
-    let control_url = service_block
+    let control_url = SERVICE_BLOCK_RE
         .captures_iter(xml)
         .find(|captures| captures[1].contains(AVTRANSPORT_TYPE))
         .and_then(|captures| {
-            Regex::new(r"<controlURL>\s*([^<\s]+)\s*</controlURL>")
-                .expect("valid controlURL regex")
+            CONTROL_URL_RE
                 .captures(&captures[1])
                 .map(|inner| inner[1].to_string())
         })
@@ -619,8 +626,7 @@ fn rewrite_hls_manifest(manifest: &str, manifest_url: &str, token: &str) -> Stri
 }
 
 fn rewrite_uri_attributes(line: &str, base: &str, token: &str) -> String {
-    let pattern = Regex::new(r#"URI="([^"]+)""#).expect("valid uri regex");
-    pattern
+    URI_ATTR_RE
         .replace_all(line, |captures: &regex::Captures| {
             let absolute = resolve_relative(base, &captures[1]);
             format!("URI=\"{}\"", relay_url(&absolute, token))
@@ -882,13 +888,17 @@ mod tests {
             .iter()
             .find(|request| request.contains("#SetAVTransportURI"))
             .expect("set uri request");
-        let current_uri = Regex::new(r"<CurrentURI>([^<]+)</CurrentURI>")
-            .unwrap()
-            .captures(set_uri_request)
-            .map(|captures| captures[1].to_string())
-            .expect("current uri in soap body")
-            // SOAP 正文中的 XML 转义由接收方（电视）还原。
-            .replace("&amp;", "&");
+        let current_uri = {
+            // 模式固定，用函数内 LazyLock 静态只编译一次。
+            static CURRENT_URI_RE: LazyLock<Regex> =
+                LazyLock::new(|| Regex::new(r"<CurrentURI>([^<]+)</CurrentURI>").unwrap());
+            CURRENT_URI_RE
+                .captures(set_uri_request)
+                .map(|captures| captures[1].to_string())
+                .expect("current uri in soap body")
+                // SOAP 正文中的 XML 转义由接收方（电视）还原。
+                .replace("&amp;", "&")
+        };
         assert!(current_uri.starts_with("http://"), "{current_uri}");
         assert!(current_uri.contains("/stream?url="), "{current_uri}");
 
