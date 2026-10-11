@@ -173,7 +173,7 @@ message DanmakuElem {
 
 - 渲染统一使用 `weizhenye/Danmaku` 的 `DanmakuRenderer`（由 `danmakuLoader.ts` 惰性加载），直播与 VOD 共用同一套 DOM 弹幕适配层。VOD 把真实 `HTMLVideoElement` 传给 renderer，由媒体事件和 `requestAnimationFrame` 按 `currentTime` 驱动；不再自建 `timeupdate` 投放循环、暂停补偿或 WAAPI 播放控制。`seeking` 会清屏并按新位置重新对齐，`pause`、`waiting`、`playing` 和 `ratechange` 由原生媒体时钟接管。
 - 弹幕离屏规则仍保持业务语义：滚动弹幕自然飘出后移除，顶部/底部固定弹幕在 **15s 媒体时间** 后到期。固定时长由渲染器按时长分组的原生实例以媒体时间计时，暂停、缓冲等待、隐藏和倍速变化都不会改写到期点，钉住期间寿命暂停、释放后顺延（见[播放器技术文档](播放器技术文档.md)「画面弹幕与手势的播放侧契约」）；到期、seek 和卸载都会同步清理 DOM 与 renderer 记录。增量分段只更新待投放集合，不清屏、不重投已经出现的弹幕。
-- `DanmakuRenderer` 原生按帧写入 `transform`，没有依赖 native CSS transition。速度含义也随库标准改变：实际移动时长由舞台宽度、弹幕宽度与 `duration` 共同决定，设置值以 renderer 的标准 `speed` 数值传入；界面用 `speed / 100` 显示为 0.5×–2.0×，不再保证每条不同长度弹幕都是相同的固定 px/s。共享适配层只保留必要的私有记账，用于单条 `pin`、attach/detach、固定时长分组和边界丢弃；这些不是库原生的完整业务能力。
+- `DanmakuRenderer` 的滚动弹幕位移由每条一份的 WAAPI 动画在合成器上推进（原生引擎仍按媒体时间调度、分配与到期），没有依赖 native CSS transition。速度含义也随库标准改变：实际移动时长由舞台宽度、弹幕宽度与 `duration` 共同决定，设置值以 renderer 的标准 `speed` 数值传入；界面用 `speed / 100` 显示为 0.5×–2.0×，不再保证每条不同长度弹幕都是相同的固定 px/s。共享适配层只保留必要的私有记账，用于单条 `pin`、attach/detach、固定时长分组和边界丢弃；这些不是库原生的完整业务能力。
 - 关闭弹幕不销毁实例，只把弹幕层设为 `opacity: 0` 并关闭所有后代的指针命中；调度、滚动与到期照常进行。字号、描边、透明度、速度、显示区域变化与换视频仍按组件生命周期更新 renderer 配置。
 - 飘屏流畅度依赖主线程空闲：播放进度不进播放页 React state。`timeupdate`（约 4Hz）只写 `videoPlaybackClock.ts` 的外部 store，播放页本身不订阅；章节菜单、侧栏弹幕列表经 `usePlaybackClock` 订阅派生值（当前章节下标、跟随行与「已出现」边界），派生值不变时不重渲染；发送弹幕与键盘快进快退在触发时读取 `get()`。此前每次 `timeupdate` 都重渲染整页和侧栏（相关推荐、评论、弹幕列表），dev 构建下每 265ms 产生 35–100ms 长任务，滚动弹幕随之丢帧、跳动。
 

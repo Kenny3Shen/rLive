@@ -5,6 +5,11 @@ import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
  * 私有字段集中在此处，锁定 danmaku 2.0.10。原生引擎负责唯一的 rAF、媒体事件、
  * 时间轴、轨道分配和 DOM 移动；应用仅补充公开 API 缺失的生命周期、单条冻结和移除。
  * 固定弹幕按时长分组，仍由原生媒体时间到期，绝不使用 CSS transition 或墙钟占位。
+ *
+ * 滚动弹幕的位移交给合成器：上屏时为每个节点建一条线性 WAAPI 动画（translate 起点到终点），
+ * 之后每帧不再写 style，主线程卡顿或 60/120Hz 切换都不影响飘动。原生引擎仍每帧计算 `x`
+ * 供轨道准入、钉住和重基使用，并作为到期、分配的唯一时间基准；动画只在媒体时钟偏离超过
+ * DRIFT_MS 时被校正，暂停/缓冲/倍速/seek 通过媒体事件同步。
  */
 type NativeComment = {
   mode: "rtl" | "top" | "bottom";
@@ -57,6 +62,13 @@ type RecordItem = {
   element: HTMLElement;
   attached: boolean;
   pinned: boolean;
+  /** 滚动弹幕的合成器动画；不支持 WAAPI 时为空，回退为每帧写 transform。 */
+  motion?: Animation;
+  /** 动画建立时的舞台宽度与时长（毫秒），用于从动画进度反推可见位置。 */
+  span?: { width: number; duration: number };
+  /** 固定弹幕最近一次写入的位置，未变化时跳过 style 写入。 */
+  px?: number;
+  py?: number;
   /** 铉住时的媒体时间与墙钟，释放时顺延固定弹幕寿命。 */
   pinnedAt?: { media: number; wall: number };
 };
@@ -67,6 +79,8 @@ const MAX_ACTIVE = 800;
 /** 常规固定弹幕 1 组 + 同屏至多 3 条 SC 各自的时长。 */
 const MAX_FIXED_GROUPS = 4;
 const DEFAULT_DURATION_MS = 15_000;
+/** 动画与媒体时钟的允许偏差；MSE 的 currentTime 有数毫秒抖动，超过此值才重新对齐。 */
+const DRIFT_MS = 100;
 /** 容器尚无尺寸时的占位时长；原生 duration=0 会把所有待投弹幕判为过期。 */
 const FALLBACK_DURATION_S = 8;
 const clock = () => performance.now() / 1_000;
@@ -109,6 +123,8 @@ export class DanmakuRenderer {
   private speed: number;
   private area: number;
   private destroyed = false;
+  /** 媒体暂停或缓冲等待：滚动弹幕动画冻结。 */
+  private halted = false;
 
   constructor(options: DanmakuRendererOptions) {
     this.options = options;
@@ -117,6 +133,13 @@ export class DanmakuRenderer {
     this.speed = positive(options.speed, 100);
     this.area = this.normalizedArea(options.area ?? 1);
     this.container.dataset.danmakuRenderer = "weizhenye";
+    if (this.media) {
+      this.halted = this.media.paused;
+      this.media.addEventListener("pause", this.onHalt);
+      this.media.addEventListener("waiting", this.onHalt);
+      this.media.addEventListener("playing", this.onResume);
+      this.media.addEventListener("ratechange", this.onRate);
+    }
     if (typeof ResizeObserver !== "undefined") {
       this.observer = new ResizeObserver(() => this.resize());
       this.observer.observe(this.container);
@@ -214,6 +237,8 @@ export class DanmakuRenderer {
     record.group.native._.runningList = record.group.native._.runningList.filter((c) => c !== record.comment);
     record.pinned = true;
     record.pinnedAt = { media: this.now(), wall: clock() };
+    this.freeze(record.motion);
+    this.snapshot(record);
     return true;
   }
 
@@ -231,6 +256,7 @@ export class DanmakuRenderer {
     record.pinned = false;
     record.pinnedAt = undefined;
     record.group.native._.runningList.push(comment);
+    if (comment.mode === "rtl") this.startMotion(record);
     // 不启动媒体、不手动 play 原生循环；暂停/缓冲期间继续保持静止。
   }
 
@@ -241,9 +267,15 @@ export class DanmakuRenderer {
 
   resize(): void {
     if (this.destroyed) return;
+    // 尺寸/速度变化前先以动画的可见位置为准，重基才不会跳变。
+    for (const record of this.records.values()) this.snapshot(record);
     for (const group of this.groups.values()) this.resizeGroup(group);
     // 新宽度/时长生效后，按在途弹幕当前像素位置反推起始时间，从同一位置以新速度继续。
-    for (const record of this.records.values()) if (record.attached && !record.pinned) this.rebase(record);
+    for (const record of this.records.values()) {
+      if (!record.attached) continue;
+      if (!record.pinned) this.rebase(record);
+      if (record.group.width > 0) this.startMotion(record);
+    }
     this.refreshLayout();
   }
 
@@ -273,9 +305,11 @@ export class DanmakuRenderer {
       const width = node.offsetWidth;
       const height = node.offsetHeight;
       if (width === record.comment.width && height === record.comment.height) continue;
+      this.snapshot(record);
       if (!record.pinned) this.rebase(record);
       record.comment.width = width;
       record.comment.height = height;
+      if (record.attached) this.startMotion(record);
     }
   }
 
@@ -283,12 +317,110 @@ export class DanmakuRenderer {
     if (this.destroyed) return;
     this.observer?.disconnect();
     window.removeEventListener("resize", this.onResize);
+    if (this.media) {
+      this.media.removeEventListener("pause", this.onHalt);
+      this.media.removeEventListener("waiting", this.onHalt);
+      this.media.removeEventListener("playing", this.onResume);
+      this.media.removeEventListener("ratechange", this.onRate);
+    }
     this.clear();
     this.destroyed = true;
     delete this.container.dataset.danmakuRenderer;
   }
 
   private readonly onResize = () => this.resize();
+  private readonly onHalt = () => {
+    this.halted = true;
+    for (const record of this.records.values()) this.freeze(record.motion);
+  };
+  private readonly onResume = () => {
+    this.halted = false;
+    const rate = this.rate();
+    for (const record of this.records.values()) {
+      const motion = record.motion;
+      if (!motion || record.pinned) continue;
+      // 从冻结的位置继续；只有缓冲期间真的偏离媒体时钟时才对齐，否则恢复瞬间会跳一帧。
+      const current = motion.currentTime;
+      const want = this.expected(record);
+      if (typeof current !== "number" || Math.abs(current - want) > DRIFT_MS) motion.currentTime = want;
+      motion.playbackRate = rate;
+      motion.play();
+    }
+  };
+  private readonly onRate = () => {
+    const rate = this.rate();
+    for (const record of this.records.values())
+      if (record.motion) record.motion.playbackRate = rate;
+  };
+  private rate() {
+    const rate = this.media?.playbackRate;
+    return rate !== undefined && rate > 0 ? rate : 1;
+  }
+  /** 原生时间基准下的已飘行时间（动画本地毫秒；倍速由 playbackRate 表达）。 */
+  private expected(record: RecordItem) {
+    const comment = record.comment;
+    return Math.max(0, (this.media ? this.now() - comment.time : clock() - comment._utc) * 1_000);
+  }
+  /** 把动画精确停在当前帧位置：先 pause 再同步写 currentTime，避免等到下一帧才生效。 */
+  private freeze(motion: Animation | undefined) {
+    if (!motion) return;
+    const at = motion.currentTime;
+    if (at === null) return;
+    motion.pause();
+    motion.currentTime = at;
+  }
+  /** 把 comment.x 校准为动画的实际可见位置（动画走合成器，原生每帧算出的 x 可能差一帧）。 */
+  private snapshot(record: RecordItem): void {
+    const { motion, span, comment } = record;
+    const at = motion?.currentTime;
+    if (!span || typeof at !== "number") return;
+    comment.x =
+      span.width - Math.min(1, Math.max(0, at / span.duration)) * (span.width + comment.width);
+  }
+  /** 以 comment.x 的当前像素位置为起点重建滚动弹幕的合成器动画。 */
+  private startMotion(record: RecordItem): void {
+    const comment = record.comment;
+    const node = comment.node;
+    const state = record.group.native._;
+    record.motion?.cancel();
+    record.motion = undefined;
+    record.span = undefined;
+    if (comment.mode !== "rtl" || !node || typeof node.animate !== "function") return;
+    const total = state.width + comment.width;
+    const duration = state.duration * 1_000;
+    if (
+      !(total > 0) ||
+      !(duration > 0) ||
+      !Number.isFinite(comment.x) ||
+      !Number.isFinite(comment.y)
+    )
+      return;
+    const elapsed = Math.min(1, Math.max(0, (state.width - comment.x) / total)) * duration;
+    const motion = node.animate(
+      [
+        { transform: `translate(${state.width}px,${comment.y}px)` },
+        { transform: `translate(${-comment.width}px,${comment.y}px)` },
+      ],
+      { duration, easing: "linear", fill: "both" },
+    );
+    motion.currentTime = elapsed;
+    motion.playbackRate = this.rate();
+    if (record.pinned || this.halted) {
+      motion.pause();
+      motion.currentTime = elapsed;
+    }
+    record.motion = motion;
+    record.span = { width: state.width, duration };
+  }
+  /** 每帧只比较一次动画与媒体时钟，偏差过大才重新对齐（seek 之外的缓冲/抖动兜底）。 */
+  private syncMotion(record: RecordItem): void {
+    const motion = record.motion;
+    if (!motion || !this.media || record.pinned || this.halted) return;
+    const current = motion.currentTime;
+    const want = this.expected(record);
+    if (typeof current !== "number" || Math.abs(current - want) > DRIFT_MS)
+      motion.currentTime = want;
+  }
   private normalizedArea(area: number) {
     return Number.isFinite(area) ? Math.max(0.1, Math.min(1, area)) : 1;
   }
@@ -431,6 +563,11 @@ export class DanmakuRenderer {
           comment.x = native._.width - (native._.width + comment.width) *
             (this.media.currentTime - comment.time) / native._.duration;
         }
+        // 已有合成器动画：x 仅用于准入/钉住/重基，位移不再逐帧写 style。
+        if (record.motion) {
+          this.syncMotion(record);
+          return;
+        }
         if (!record.attached && !this.canAttach(record)) {
           comment.node?.remove();
           this.detach(record);
@@ -439,10 +576,21 @@ export class DanmakuRenderer {
           comment._utc = -Number.MAX_SAFE_INTEGER;
           return;
         }
+        // 固定弹幕位置只在尺寸变化时改变，未变化时不再重复写 style。
+        if (
+          record.attached &&
+          comment.mode !== "rtl" &&
+          record.px === comment.x &&
+          record.py === comment.y
+        )
+          return;
         original.render.call(native, stage, comment);
+        record.px = comment.x;
+        record.py = comment.y;
         if (!record.attached) {
           record.attached = true;
           this.options.onAttach?.(record.definition, record.element);
+          this.startMotion(record);
         }
       },
       remove: (_stage, comment) => {
@@ -497,6 +645,8 @@ export class DanmakuRenderer {
     const id = record.definition.id;
     if (this.records.get(id) !== record) return;
     this.records.delete(id);
+    record.motion?.cancel();
+    record.motion = undefined;
     record.group.count -= 1;
     this.options.onDetach?.(id);
     if (!this.media && record.group.count === 0) {

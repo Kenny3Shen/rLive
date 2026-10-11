@@ -1,4 +1,4 @@
-// Windows 主窗口：DanmakuRenderer 生命周期边界回归（固定弹幕钉住寿命、零尺寸、固定组上限、改速不跳变）。
+// Windows 主窗口：DanmakuRenderer 生命周期边界回归（固定弹幕钉住寿命、零尺寸、固定组上限、改速不跳变、滚动走合成器动画）。
 // playwright-cli -s=rwin run-code --filename=tests/danmaku-renderer.browser.js
 async (page) => {
   return page.evaluate(async () => {
@@ -56,10 +56,18 @@ async (page) => {
       await step(2);
       await until(() => node("scroll-speed"), "滚动弹幕未上屏");
       await frames();
+      // 滚动位移必须走合成器动画：主线程逐帧写 transform 会让 currentTime 抖动直接变成画面抖动。
+      const motions = node("scroll-speed").parentElement.getAnimations();
+      assert(motions.length === 1 && motions[0].playState === "running", "滚动弹幕未使用合成器动画");
+      // 滚动弹幕由合成器按真实时间推进；本夹具的媒体时钟是手动步进的，量位置前必须像真实
+      // 媒体停住时那样发 pause，否则动画与冻结的媒体时间之间的差会被误判为改速跳变。
+      media.dispatchEvent(new Event("pause"));
+      await frames();
       const beforeSpeed = left("scroll-speed");
       renderer.setSpeed(200);
       await frames();
       assert(Math.abs(left("scroll-speed") - beforeSpeed) < 1, `改速跳变 ${(left("scroll-speed") - beforeSpeed).toFixed(2)}px`);
+      media.dispatchEvent(new Event("playing"));
       await step(2.5);
       assert(left("scroll-speed") < beforeSpeed - 40, "改速后没有按新速度继续");
       passed.push("改速度保持在途位置并按新速度继续");

@@ -12,6 +12,7 @@ import {
   DANMAKU_IMAGE_HORIZONTAL_GAP,
 } from "@/features/room/danmaku/content";
 import { prefersReducedMotion } from "@/shared/motion/preference";
+import { createSmoothMediaClock } from "@/shared/smoothMediaClock";
 import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
 import { filterRecordedDanmakuEntries, type RecordedDanmakuEntry } from "./recordedDanmaku";
 import {
@@ -80,6 +81,8 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     const stage = stageElement;
 
     let animationFrame = 0;
+    // rAF 帧内用平滑时钟定位，避免 currentTime 抖动造成逐帧来回跳；暂停/seek 时直接读真实时间。
+    const clock = createSmoothMediaClock();
     let cssWidth = 0;
     let cssHeight = 0;
     let layout: RecordedDanmakuLayout | null = null;
@@ -208,13 +211,14 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       });
     }
 
-    function draw() {
+    function draw(frameMs?: number) {
       const context = canvas.getContext("2d");
       if (!context) return;
       context.clearRect(0, 0, cssWidth, cssHeight);
       if (!active || !layout || opacity <= 0) return;
 
-      const currentMs = Math.max(0, video.currentTime * 1_000);
+      const currentMs =
+        frameMs === undefined ? Math.max(0, video.currentTime * 1_000) : clock.read(frameMs, video);
       applyTextStyle(context);
 
       for (const bullet of visibleRecordedDanmaku(layout, currentMs)) {
@@ -265,12 +269,13 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
 
     function scheduleFrame() {
       window.cancelAnimationFrame(animationFrame);
+      clock.reset();
       if (video.paused || video.ended) {
         draw();
         return;
       }
-      const tick = () => {
-        draw();
+      const tick = (frameMs: number) => {
+        draw(frameMs);
         if (!video.paused && !video.ended) animationFrame = window.requestAnimationFrame(tick);
       };
       animationFrame = window.requestAnimationFrame(tick);
@@ -280,10 +285,17 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
     resizeObserver?.observe(stage);
     if (!resizeObserver) window.addEventListener("resize", resize);
+    // 播放中由 rAF 逐帧绘制；timeupdate 只补暂停态（如外部改 currentTime）的静帧，不在帧外重复绘制。
+    const redrawStill = () => {
+      clock.reset();
+      if (video.paused || video.ended) draw();
+    };
     video.addEventListener("play", scheduleFrame);
     video.addEventListener("pause", scheduleFrame);
-    video.addEventListener("seeked", draw);
-    video.addEventListener("timeupdate", draw);
+    video.addEventListener("seeked", redrawStill);
+    video.addEventListener("timeupdate", redrawStill);
+    video.addEventListener("ratechange", redrawStill);
+    video.addEventListener("waiting", redrawStill);
     resize();
     scheduleFrame();
 
@@ -293,8 +305,10 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       window.cancelAnimationFrame(animationFrame);
       video.removeEventListener("play", scheduleFrame);
       video.removeEventListener("pause", scheduleFrame);
-      video.removeEventListener("seeked", draw);
-      video.removeEventListener("timeupdate", draw);
+      video.removeEventListener("seeked", redrawStill);
+      video.removeEventListener("timeupdate", redrawStill);
+      video.removeEventListener("ratechange", redrawStill);
+      video.removeEventListener("waiting", redrawStill);
       images.dispose();
       segmentCache.clear();
     };
