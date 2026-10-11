@@ -123,6 +123,12 @@ function DanmakuQuickPicker({
   const [favoriteFailed, setFavoriteFailed] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearFailed, setClearFailed] = useState(false);
+  /**
+   * 清空是不可撤销的破坏性操作，按「再点一次确认」两步执行。这里不用 ConfirmDialog：
+   * 选择器本身就是弹层，常挂在全屏播放器里，再叠一层模态对话框会与弹层的外部点击
+   * 关闭、全屏 portal 容器相互干扰。
+   */
+  const [clearArmed, setClearArmed] = useState(false);
   const queryClient = useQueryClient();
   const favoriteQueryKey = ["danmaku-favorites", siteId] as const;
   const historyQueryKey = ["danmaku-send-history", siteId] as const;
@@ -202,8 +208,20 @@ function DanmakuQuickPicker({
     }
   }
 
+  // 已武装的「确认清空」在 3 秒内无后续操作即撤回，避免下次打开时一点就清。
+  useEffect(() => {
+    if (!clearArmed) return;
+    const timer = window.setTimeout(() => setClearArmed(false), 3_000);
+    return () => window.clearTimeout(timer);
+  }, [clearArmed]);
+
   async function clearHistory() {
     if (clearing || historyItems.length === 0) return;
+    if (!clearArmed) {
+      setClearArmed(true);
+      return;
+    }
+    setClearArmed(false);
     setClearing(true);
     setClearFailed(false);
     try {
@@ -477,13 +495,15 @@ function DanmakuQuickPicker({
               {historyItems.length > 0 && (
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant={clearArmed ? "destructive" : "ghost"}
                   size="xs"
                   disabled={clearing}
+                  aria-live="polite"
                   onClick={() => void clearHistory()}
+                  onBlur={() => setClearArmed(false)}
                   className={cn(
-                    "text-muted-foreground",
-                    overlay && "text-white/70 hover:bg-white/15 hover:text-white",
+                    !clearArmed && "text-muted-foreground",
+                    !clearArmed && overlay && "text-white/70 hover:bg-white/15 hover:text-white",
                   )}
                 >
                   {clearing ? (
@@ -491,7 +511,7 @@ function DanmakuQuickPicker({
                   ) : (
                     <Trash2 data-icon="inline-start" />
                   )}
-                  清空
+                  {clearArmed ? "确认清空" : "清空"}
                 </Button>
               )}
             </div>
