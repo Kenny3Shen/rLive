@@ -218,7 +218,7 @@ export function VideoDanmakuList({
           ))}
         </ol>
         {total > 0 && (
-          <p className="px-3 pt-1 text-center text-[11px] text-muted-foreground">
+          <p className="px-3 pt-1 text-center text-xs text-muted-foreground">
             共 {formatOnline(total)} 条弹幕
           </p>
         )}

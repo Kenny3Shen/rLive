@@ -668,7 +668,11 @@ function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?:
           />
         </div>
       ) : comments.length === 0 ? (
-        <p className="px-3 pb-6 pt-4 text-center text-xs text-muted-foreground">暂无评论</p>
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>暂无评论</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
       ) : (
         <div className="px-3 pb-4">
           {comments.map((comment) => (
