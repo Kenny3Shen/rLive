@@ -139,6 +139,7 @@ bun run build    # 前端生产构建
 | 从源码运行、检查与构建 | [开发指南](docs/zh/开发指南.md) |
 | 理解模块分层与核心数据流 | [架构说明](docs/zh/架构说明.md) |
 | 查找播放器、平台接入与专题说明 | [文档中心](docs/README.md) |
+| 查看性能实测与瓶颈分析 | [弹幕性能实测](docs/zh/弹幕性能实测.md) |
 | 准备版本发布与核验安装包 | [发布流程](docs/zh/发布流程.md) |
 
 反馈问题请提交 [GitHub Issue](https://github.com/Kenny3Shen/rLive/issues)，附上应用版本、系统、涉及的平台与复现步骤；日志和截图请先移除 Cookie、令牌及私有媒体地址。
