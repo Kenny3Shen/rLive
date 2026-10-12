@@ -104,7 +104,7 @@ export function VideoSearchPage() {
         </Empty>
       ) : allItems.length > 0 ? (
         <>
-          <VideoGrid items={allItems} playlist={playlistItems} />
+          <VideoGrid items={allItems} playlist={playlistItems} playlistKind="list" />
           {hasNextPage && (
             <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
               {isFetchingNextPage && (

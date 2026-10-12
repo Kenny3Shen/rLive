@@ -205,7 +205,7 @@ import {
   playlistItemFromVideoItem,
   usePlaylistStore,
   videoEndedAction,
-  videoEndedTarget,
+  videoEndedTargets,
   type PlaylistItem,
 } from "./playlistStore";
 import { filterBlockedUploaders } from "./videoUploaderBlock";
@@ -808,6 +808,7 @@ function VideoPlayerPageContent() {
   const nextItem = usePlaylistStore((state) => state.getNextItem());
   const prevItem = usePlaylistStore((state) => state.getPreviousItem());
   const playlistLength = usePlaylistStore((state) => state.items.length);
+  const playlistKind = usePlaylistStore((state) => state.kind);
   const loopPlayback = usePlaylistStore((state) => state.loopPlayback);
   const autoPlayNext = usePlaylistStore((state) => state.autoPlayNext);
   const autoPlayRelated = usePlaylistStore((state) => state.autoPlayRelated);
@@ -1496,15 +1497,21 @@ function VideoPlayerPageContent() {
       reportProgress(total > 0 ? total : media.currentTime, true);
       // 偏好可能在播放期间被改，读 store 快照而不是播放器挂载时的闭包值。
       const state = usePlaylistStore.getState();
-      // 选集（分 P/合集/分集）的下一集优先于来源队列的邻项，见 videoEndedTarget。
-      const nextItem = videoEndedTarget(selectionNextItemRef.current, state.getNextAutoPlayItem());
-      const action = videoEndedAction(
-        state.loopPlayback,
-        state.autoPlayNext,
-        nextItem !== null,
-        // PGC 剧集没有相关视频列表，也没有可定位的 bvid，开关对它不生效。
-        state.autoPlayRelated && !epId && Boolean(bvid),
+      // 选集（分 P/合集/分集）的下一集优先于来源列表的邻项，见 videoEndedTargets。
+      const targets = videoEndedTargets(
+        selectionNextItemRef.current,
+        state.getNextAutoPlayItem(),
+        state.kind,
       );
+      const action = videoEndedAction({
+        loopPlayback: state.loopPlayback,
+        autoPlayNext: state.autoPlayNext,
+        autoPlayRelated: state.autoPlayRelated,
+        hasEpisode: targets.episode !== null,
+        hasListItem: targets.list !== null,
+        // PGC 剧集没有相关视频列表，也没有可定位的 bvid。
+        relatedAvailable: !epId && Boolean(bvid),
+      });
       if (action === "loop") {
         // 等 dash.js 本轮结束处理里的 pause 完成，再从头播放。
         endedTimer = setTimeout(() => {
@@ -1539,21 +1546,29 @@ function VideoPlayerPageContent() {
           current.loopPlayback
         )
           return false;
-        return action === "related" ? current.autoPlayRelated : current.autoPlayNext;
+        return action === "next" ? current.autoPlayNext : current.autoPlayRelated;
       };
       // 自动连播相关视频是「看完了随便接着看」，比换集多留两秒。
       const delay = action === "related" ? RELATED_AUTOPLAY_DELAY_MS : 1_000;
       endedTimer = setTimeout(() => {
-        if (action === "next") {
-          // 等待窗口里选集可能才就位（详情/分集表晚于播放器），重取一次目标。
-          const target = videoEndedTarget(
-            selectionNextItemRef.current,
-            usePlaylistStore.getState().getNextAutoPlayItem(),
-          );
-          if (stillWanted() && target) goToPlaylistItem(target);
+        if (action === "related") {
+          playRelatedItem(stillWanted);
           return;
         }
-        playRelatedItem(stillWanted);
+        if (!stillWanted()) return;
+        // 等待窗口里选集可能才就位（详情/分集表晚于播放器），重取一次目标；
+        // 列表下一条也让位给此时才出现、且自动切集开着的下一集。
+        const current = usePlaylistStore.getState();
+        const latest = videoEndedTargets(
+          selectionNextItemRef.current,
+          current.getNextAutoPlayItem(),
+          current.kind,
+        );
+        const target =
+          action === "next"
+            ? latest.episode
+            : ((current.autoPlayNext ? latest.episode : null) ?? latest.list);
+        if (target) goToPlaylistItem(target);
       }, delay);
     }
 
@@ -2667,7 +2682,8 @@ function VideoPlayerPageContent() {
         checked={loopPlayback}
         onToggle={toggleLoopPlayback}
       />
-      {(playlistLength > 1 || selectionNextItem !== null) && (
+      {/* 自动切集只管同一作品的下一集；搜索/UP 投稿列表的下一条归自动连播。 */}
+      {((playlistKind === "sequence" && playlistLength > 1) || selectionNextItem !== null) && (
         <PlaybackSettingRow
           id="video-playback-next"
           label="自动切集"

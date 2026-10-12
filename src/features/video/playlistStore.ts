@@ -175,38 +175,52 @@ export function playlistItemFromArchivePage(
   };
 }
 
+/** 播完后的去向：循环、下一集（自动切集）、列表下一条或相关视频（自动连播）、停住。 */
+export type VideoEndedAction = "loop" | "next" | "list" | "related" | "stop";
+
 /**
  * 一集播完后做什么。
  *
  * 循环播放优先于两种连播：开着它是「就看这一集」的显式意图，不该被连播带走。
- * 队列没有下一集时退到相关连播（自动连播开关），再没有就停住（进度已在
- * `ended` 里记满）。
+ * 「自动切集」只管同一作品的下一集（选集或选集队列）；换到另一个视频——
+ * 搜索/UP 投稿列表的下一条或相关视频——都属于「自动连播」。关掉自动连播后
+ * 搜索结果不再一条接一条往下播，选集与列表都没有下一项时退到相关连播，
+ * 再没有就停住（进度已在 `ended` 里记满）。
  */
-export function videoEndedAction(
-  loopPlayback: boolean,
-  autoPlayNext: boolean,
-  hasNext: boolean,
-  autoPlayRelated: boolean,
-): "loop" | "next" | "related" | "stop" {
-  if (loopPlayback) return "loop";
-  if (autoPlayNext && hasNext) return "next";
-  return autoPlayRelated ? "related" : "stop";
+export function videoEndedAction(input: {
+  loopPlayback: boolean;
+  autoPlayNext: boolean;
+  autoPlayRelated: boolean;
+  hasEpisode: boolean;
+  hasListItem: boolean;
+  /** 当前视频能否连播相关视频（PGC 没有相关视频列表，也没有可定位的 bvid）。 */
+  relatedAvailable: boolean;
+}): VideoEndedAction {
+  if (input.loopPlayback) return "loop";
+  if (input.autoPlayNext && input.hasEpisode) return "next";
+  if (!input.autoPlayRelated) return "stop";
+  if (input.hasListItem) return "list";
+  return input.relatedAvailable ? "related" : "stop";
 }
 
 /**
- * 播完后「下一集」该往哪去：当前视频自身选集的下一项优先于来源队列的邻项。
+ * 播完后的两类候选目标：同一作品的下一集与来源列表的下一条。
  *
- * 来源队列的邻项是「用户点开时那个列表里的下一条」，它不是这部作品的下文：
- * 搜索/投稿队列的条目没有 cid（列表项以 0 占位），推荐/热门/相关流队列本就
- * 不自动连播。沿它们走会把播完的选集切到另一个视频上（搜索队列的下一条，
- * 或相关视频的第一个）。选集（分 P / UGC 合集 / PGC 分集）才是「下一集」的
- * 正确回答；没有下一集时才退回来源队列，仍没有才轮到相关连播。
+ * 当前视频自身选集（分 P / UGC 合集 / PGC 分集）的下一项优先于选集队列的邻项，
+ * 选集还没就位（详情/分集表晚于播放器）时才用 `sequence` 队列邻项兜底。
+ * 搜索/UP 投稿列表（`list`）的邻项是另一个视频，不是这部作品的下文：条目没有
+ * cid（列表项以 0 占位），只作为「自动连播」的目标，且排在选集之后。推荐/热门/
+ * 相关流（`feed`）只供手动换片，两类目标都不取。
  */
-export function videoEndedTarget(
+export function videoEndedTargets(
   selectionNext: PlaylistItem | null,
   queueNext: PlaylistItem | null,
-): PlaylistItem | null {
-  return selectionNext ?? queueNext;
+  kind: PlaylistKind,
+): { episode: PlaylistItem | null; list: PlaylistItem | null } {
+  return {
+    episode: selectionNext ?? (kind === "sequence" ? queueNext : null),
+    list: kind === "list" ? queueNext : null,
+  };
 }
 
 /** 取当前项沿播放方向的相邻项：step=1 是「下一个」，-1 是「上一个」。 */
@@ -232,8 +246,13 @@ function adjacentItem(
  */
 export type PlaylistUploader = { mid: string; name: string };
 
-/** 推荐/热门/相关流只供手动换片；选集、合集、搜索与 UP 投稿队列可自动连播。 */
-export type PlaylistKind = "feed" | "sequence";
+/**
+ * 队列语义：
+ * - `sequence`：选集（分 P / 合集 / PGC 分集），下一项受「自动切集」控制；
+ * - `list`：搜索 / UP 投稿列表，下一项是另一个视频，受「自动连播」控制；
+ * - `feed`：推荐 / 热门 / 相关流，只供手动换片，不自动连播。
+ */
+export type PlaylistKind = "feed" | "list" | "sequence";
 
 type PlaylistState = {
   /** 当前播放列表。空数组表示无列表（单视频播放）。 */
@@ -242,14 +261,14 @@ type PlaylistState = {
   currentId: string | null;
   /** 临时队列类型，不持久化。 */
   kind: PlaylistKind;
-  /** 是否自动切集（持久化到本地）。 */
+  /** 是否自动切集（持久化到本地）。只管同一作品的下一集。 */
   autoPlayNext: boolean;
   /** 是否循环播放当前视频（持久化到本地）。优先于两种连播。 */
   loopPlayback: boolean;
   /**
-   * 队列走完后是否自动连播当前视频的相关视频（持久化到本地）。连播目标是相关
-   * 视频接口的第一个；本轮列表随之换成相关流队列。PGC 剧集不适用（无相关视频
-   * 列表，也没有可定位的 bvid）。
+   * 播完后是否自动换到另一个视频（持久化到本地）：先沿搜索/UP 投稿列表的下一条，
+   * 列表走完再连播相关视频接口的第一个，本轮列表随之换成相关流队列。相关连播
+   * 对 PGC 剧集不适用（无相关视频列表，也没有可定位的 bvid）。
    *
    * 默认开启：来源流播完接着看相关视频在引入开关前就是既有行为，这个开关是给
    * 它一个显式出口与固定节拍，而不是把它变成要用户自己去找的选配。
@@ -275,11 +294,11 @@ type PlaylistActions = {
   toggleAutoPlayNext: () => void;
   /** 切换循环播放。 */
   toggleLoopPlayback: () => void;
-  /** 切换队列走完后自动连播相关视频。 */
+  /** 切换自动连播（列表下一条与相关视频）。 */
   toggleAutoPlayRelated: () => void;
   /** 获取下一个播放项（如果有）。 */
   getNextItem: () => PlaylistItem | null;
-  /** 获取可自动连播的下一项；推荐流的邻项不作为下一集。 */
+  /** 获取可自动连播的下一项；推荐流的邻项不作为下一集，用途见 `videoEndedTargets`。 */
   getNextAutoPlayItem: () => PlaylistItem | null;
   /** 获取上一个播放项（如果有）。 */
   getPreviousItem: () => PlaylistItem | null;

@@ -110,7 +110,7 @@ const searchQueue = [
   index: String(index + 1),
   duration: 10,
 }));
-usePlaylistStore.getState().setPlaylist(searchQueue, "BV1parts_0", "sequence");
+usePlaylistStore.getState().setPlaylist(searchQueue, "BV1parts_0", "list");
 
 const router = createMemoryRouter(
   [

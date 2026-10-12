@@ -286,6 +286,7 @@ export function UploaderDrawer({
                         <VideoCard
                           item={item}
                           playlist={playlistItems}
+                          playlistKind="list"
                           playlistUploader={playlistUploader}
                           onNavigate={() => onOpenChange(false)}
                           orientation="row"
