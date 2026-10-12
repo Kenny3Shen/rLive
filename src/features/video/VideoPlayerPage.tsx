@@ -338,6 +338,8 @@ function VideoPlayerPageContent() {
 
   const [loading, setLoading] = useState(true);
   const [waiting, setWaiting] = useState(false);
+  // 桌面方向键跳转的短暂缓冲只显示缓冲提示，不唤醒上下控制栏。
+  const [keyboardSeeking, setKeyboardSeeking] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [paused, setPaused] = useState(true);
   const [muted, setMuted] = useState(initialAudio.muted);
@@ -482,7 +484,7 @@ function VideoPlayerPageContent() {
     keepVisible:
       paused ||
       loading ||
-      waiting ||
+      (waiting && !keyboardSeeking) ||
       Boolean(playbackError) ||
       overlayInteractionOpen ||
       subtitleOpen ||
@@ -1343,6 +1345,7 @@ function VideoPlayerPageContent() {
     // oxlint-disable-next-line react/set-state-in-effect
     setLoading(true);
     setWaiting(false);
+    setKeyboardSeeking(false);
     setPlaybackError(null);
     setPaused(true);
     userPausedRef.current = false;
@@ -1445,11 +1448,13 @@ function VideoPlayerPageContent() {
       }
     }
     function onPlaying() {
-      if (cancelled) return;
+      // 连续跳转时，上一跳排队的完成事件可能在新一跳开始后才送达。
+      if (cancelled || media.seeking) return;
       establishPosition();
       releaseStartup();
       releaseTransport();
       setWaiting(false);
+      setKeyboardSeeking(false);
       setLoading(false);
       // 缓冲恢复的权威信号：waiting 判定计时必须在这里解除。play 事件只在
       // 暂停→播放转换时触发，覆盖不了卡顿恢复；漏掉 playing 会让正常播放
@@ -1458,6 +1463,8 @@ function VideoPlayerPageContent() {
     }
     function onWaiting() {
       if (cancelled) return;
+      // 非 seek 的卡顿照常唤醒控制栏，不沿用上次按键的意图。
+      if (!media.seeking) setKeyboardSeeking(false);
       if (!media.ended) setWaiting(true);
       // 自动恢复回调本身不读取 ref；在真实媒体事件里保存最后可续播位置。
       if (!media.ended && !media.paused) {
@@ -1466,9 +1473,10 @@ function VideoPlayerPageContent() {
       }
     }
     function onSeeked() {
-      if (cancelled) return;
+      if (cancelled || media.seeking) return;
       establishPosition();
       setWaiting(false);
+      setKeyboardSeeking(false);
       // seek 的短暂 waiting 到此解除：判定计时取消，稳定播放重新起算。
       waitingRecovery.notifyResumed();
       // 跳到片尾附近时，末片可能这一跳就已进缓冲。
@@ -2144,6 +2152,7 @@ function VideoPlayerPageContent() {
 
   const handleStagePointerActivity = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
+      setKeyboardSeeking(false);
       if (isPlayerControlTarget(event.target)) {
         holdControlsVisible();
         return;
@@ -2230,6 +2239,24 @@ function VideoPlayerPageContent() {
       (!fullscreenLocked && Date.now() < suppressTapUntilRef.current),
   });
 
+  // 原生 Hotkey 在舞台上先于 React 冒泡处理按键，必须在捕获阶段记录意图。
+  // 不拦截事件：跳转仍归 Video.js；控件内方向键和组合修饰键不属于画面跳转。
+  const handleStageKeyDownCapture = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>) => {
+      setKeyboardSeeking(
+        !mobileClient &&
+          !fullscreenLocked &&
+          !event.defaultPrevented &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !isPlayerControlTarget(event.target) &&
+          (event.key === "ArrowLeft" || event.key === "ArrowRight"),
+      );
+    },
+    [fullscreenLocked, mobileClient],
+  );
+
   const handleStageKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
       if (event.defaultPrevented) return;
@@ -2259,9 +2286,11 @@ function VideoPlayerPageContent() {
       } else if (key === "arrowleft") {
         event.preventDefault();
         seekTo(playbackClock.get() - (event.shiftKey ? 30 : 5));
+        if (!mobileClient) return;
       } else if (key === "arrowright") {
         event.preventDefault();
         seekTo(playbackClock.get() + (event.shiftKey ? 30 : 5));
+        if (!mobileClient) return;
       } else if (key === "arrowup") {
         event.preventDefault();
         setPlayerVolume((playerControlMuted ? 0 : playerControlVolume) + 5);
@@ -2287,6 +2316,7 @@ function VideoPlayerPageContent() {
       playerControlVolume,
       goToPlaylistItem,
       webFullscreen,
+      mobileClient,
       nextItem,
       prevItem,
       revealControls,
@@ -2786,6 +2816,7 @@ function VideoPlayerPageContent() {
             onPointerEnter={handleStagePointerActivity}
             onPointerMove={handleStagePointerActivity}
             onPointerLeave={handleStagePointerLeave}
+            onKeyDownCapture={handleStageKeyDownCapture}
             onKeyDown={handleStageKeyDown}
             tabIndex={0}
             controls={

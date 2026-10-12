@@ -747,6 +747,8 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
 
   const handleStageKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
+      // 原生 Hotkey 已处理时让位，避免重复跳转并意外唤醒控制栏。
+      if (event.defaultPrevented) return;
       if (isPlayerControlTarget(event.target)) return;
       const key = event.key.toLowerCase();
       if (key === " " || key === "k") {
@@ -761,9 +763,11 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       } else if (key === "arrowleft") {
         event.preventDefault();
         seekTo(currentTimeRef.current - 5);
+        return;
       } else if (key === "arrowright") {
         event.preventDefault();
         seekTo(currentTimeRef.current + 5);
+        return;
       } else {
         return;
       }
