@@ -50,9 +50,9 @@ export function videoDanmakuFollowScrollTop(metrics: {
 /**
  * 程序化滚动与用户滚动的判定容差（px）。
  *
- * 行级 `content-visibility: auto` 让屏外行只有估算高度，屏内行实现出真实高度后滚动
- * 锚定会把 `scrollTop` 微调几 px —— 那不是用户操作。容差要盖住这点漂移，又要小于一
- * 次有意的滚动手势（滚轮一格约 100px，触摸拖动通常几十 px 以上）。
+ * 虚拟列表里屏外行只有估算高度，屏内行实测后虚拟器会补偿 `scrollTop` 几 px ——
+ * 那不是用户操作。容差要盖住这点漂移，又要小于一次有意的滚动手势（滚轮一格约
+ * 100px，触摸拖动通常几十 px 以上）。
  */
 export const VIDEO_DANMAKU_FOLLOW_DRIFT_PX = 32;
 

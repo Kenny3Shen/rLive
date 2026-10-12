@@ -1,12 +1,5 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { LocateFixed } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -30,14 +23,20 @@ import {
  * 定位）。
  *
  * 面板自持滚动视口（跟随播放需要独占滚动位置，不与外层页签容器共享）；
- * 全量渲染已加载条目，屏外行用 `content-visibility: auto` 跳过渲染，
- * 上万条也不拖垮滚动。点击任意条目（含未来条目）跳到该弹幕出现的播放位置。
+ * 已加载条目全部可滚动到达，但只挂载可视区及前后缓冲行。不能用行级
+ * `content-visibility: auto` 代替虚拟化：Chromium 每帧都为每个这样的元素做相交计算，
+ * Android 实测 5 876 行在播放时仅此一项就占主线程约 470 ms/s，且全屏、页签不可见时照算。
+ * 点击任意条目（含未来条目）跳到该弹幕出现的播放位置。
  *
  * 跟随行是播放头所在的那一行，通常在列表中部，所以「贴底」在这里既不是跟随
  * 目标也不是恢复信号（那是直播增量列表的语义）。一旦用户自己滚动就停下，
  * 只有显式意图才恢复：点「回到当前进度」、点条目跳转、拖动进度条。判定与
  * 几何在 `videoDanmakuFollow.ts`，此处只负责接线。
  */
+
+/** 单行实测约 26.75px（11px 时间戳 + leading-relaxed 正文 + py-0.5），取整避免估高修正。 */
+const VIDEO_DANMAKU_ROW_ESTIMATE_PX = 27;
+const VIDEO_DANMAKU_LIST_OVERSCAN = 8;
 
 export function VideoDanmakuList({
   entries,
@@ -66,15 +65,20 @@ export function VideoDanmakuList({
    */
   active?: boolean;
 }) {
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const followRef = useRef<HTMLLIElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  // 虚拟器需要在视口挂载后重新取滚动元素，ref 同时存一份 state。
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const setViewportRef = useCallback((element: HTMLDivElement | null) => {
+    viewportRef.current = element;
+    setViewport(element);
+  }, []);
+  const listRef = useRef<HTMLOListElement | null>(null);
   // 最近一次跟随滚动写下的 scrollTop：scroll 事件拿它作锚点区分「我滚的」和
   // 「用户滚的」。滚动事件是异步派发的，无法靠标志位在同一帧内消费掉。
   const followAnchorRef = useRef(0);
   const [following, setFollowing] = useState(true);
 
-  // 全量渲染：行级 content-visibility 让浏览器跳过屏外行的布局与绘制，
-  // 滚动可以到达任意位置（进度窗口截断会让"滚动查看更多"失效）。
+  // 不截断进度窗口：滚动可以到达任意已加载位置，只是 DOM 只挂可视行。
   const total = entries.length;
   const followIndex = usePlaybackClock(
     clock,
@@ -99,17 +103,40 @@ export function VideoDanmakuList({
     onSeekRef.current(progressMs);
   }, []);
 
+  const getItemKey = useCallback((index: number) => entries[index]?.id ?? index, [entries]);
+  // oxlint-disable-next-line react/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: total,
+    // 非活动期间仍保留滚动元素，让前插分段可按稳定 key 保持阅读位置；
+    // 只断开元素会让 anchorTo 跳过保位，重新激活后落在旧像素而非旧阅读行。
+    // 行 DOM 由下方 active 显式门控，非活动时仍然零行。
+    getScrollElement: () => viewport,
+    estimateSize: () => VIDEO_DANMAKU_ROW_ESTIMATE_PX,
+    getItemKey,
+    paddingStart: 8,
+    paddingEnd: 8,
+    gap: 2,
+    overscan: VIDEO_DANMAKU_LIST_OVERSCAN,
+    // 不跟随时分段插到前面，保持阅读行原位；不追加跟随，跟随行由下方居中逻辑决定。
+    anchorTo: "end",
+    useFlushSync: false,
+  });
+  const totalSize = virtualizer.getTotalSize();
+  // 非活动页签保留虚拟器的阅读锚点，但不挂载可视范围内的行。
+  const virtualRows = active ? virtualizer.getVirtualItems() : [];
+
   /** 把跟随行滚到视口中央，并把落点记为新锚点。 */
   const scrollToFollowRow = useCallback(() => {
     const viewport = viewportRef.current;
-    const row = followRef.current;
-    if (!viewport || !row) return;
+    const list = listRef.current;
+    // 跟随行通常尚未挂载：位置取虚拟器的测量缓存（已测行为实测值，其余为估高）。
+    const item = virtualizer.measurementsCache[followIndex];
+    if (!viewport || !list || !item) return;
     const target = videoDanmakuFollowScrollTop({
-      // offsetTop 的参照是最近的定位祖先，未必是滚动内容；用两个矩形之差加上
-      // 当前 scrollTop 换算，对任何嵌套层级都成立。
-      rowTop: row.getBoundingClientRect().top - viewport.getBoundingClientRect().top +
-        viewport.scrollTop,
-      rowHeight: row.offsetHeight,
+      // 列表在滚动内容里的偏移用两个矩形之差加 scrollTop 换算，与嵌套层级无关。
+      rowTop: list.getBoundingClientRect().top - viewport.getBoundingClientRect().top +
+        viewport.scrollTop + item.start,
+      rowHeight: item.size,
       viewportHeight: viewport.clientHeight,
       scrollHeight: viewport.scrollHeight,
     });
@@ -117,7 +144,7 @@ export function VideoDanmakuList({
     // 回读而不是记 target：越界目标会被浏览器夹住，小数位也可能被取整，
     // 记我们「想滚到哪」而不是「实际停在哪」会让下一个 scroll 事件自误判。
     followAnchorRef.current = viewport.scrollTop;
-  }, []);
+  }, [followIndex, virtualizer]);
 
   // 只在本页签活动时听：非活动期间跟随 effect 提前返回、锚点因此停在旧值，而分段
   // 懒加载仍在改 scrollHeight，滚动锚定会派发位移很大的 scroll 事件 —— 用户还没
@@ -166,17 +193,17 @@ export function VideoDanmakuList({
     };
   }, [active]);
 
-  // 依赖 followIndex 而不是播放进度：后者约 4Hz 跳动，每跳都重滚会与
-  // content-visibility 的滚动锚定互相推挤；跟随行没换就没有要滚的理由。
+  // 依赖 followIndex 而不是播放进度：后者约 4Hz 跳动，跟随行没换就没有要滚的理由。
+  // 视口刚挂载或总高度变化（分段到达、实测修正估高）时也要重新居中。
   useLayoutEffect(() => {
     if (!active || !following || followIndex < 0) return;
     scrollToFollowRow();
-  }, [active, following, followIndex, scrollToFollowRow]);
+  }, [active, following, followIndex, scrollToFollowRow, totalSize, viewport]);
 
   // 拖动进度条是对播放头最明确的表态，重新武装跟随。正常播放的步长远小于阈值。
   //
-  // 直接订阅 store 而不经渲染：这个列表是全量渲染的，按 4Hz 进度逐跳渲染
-  // 在上万行时是实打实的开销。非活动页签也照常判定，切回时跟随已重新武装。
+  // 直接订阅 store 而不经渲染：只为判定 seek 没必要按 4Hz 进度逐跳重渲染列表。
+  // 非活动页签也照常判定，切回时跟随已重新武装。
   useEffect(() => {
     let previous = clock.get() * 1_000;
     return clock.subscribe(() => {
@@ -191,7 +218,7 @@ export function VideoDanmakuList({
   return (
     <div className="relative h-full">
       <div
-        ref={viewportRef}
+        ref={setViewportRef}
         data-slot="video-danmaku-list"
         aria-label="视频弹幕"
         // touch-pan-y：本视口位于侧栏横滑条带内，滚动容器必须让出横向，
@@ -206,16 +233,28 @@ export function VideoDanmakuList({
         {total === 0 && !loading && (
           <p className="py-4 text-center text-xs text-muted-foreground">当前位置附近暂无弹幕</p>
         )}
-        <ol className="flex flex-col gap-0.5 px-3 py-2 text-sm">
-          {entries.map((entry, index) => (
-            <VideoDanmakuRow
-              key={`${entry.progressMs}-${index}`}
-              entry={entry}
-              future={index >= futureFrom}
-              followRef={index === followIndex ? followRef : undefined}
-              onSelect={selectEntry}
-            />
-          ))}
+        <ol
+          ref={listRef}
+          data-count={total}
+          className="relative text-sm"
+          // 行绝对定位，原生滚动锚定无从依附；位置保持交给虚拟器的 anchorTo。
+          style={{ height: total > 0 ? totalSize : 0, overflowAnchor: "none" }}
+        >
+          {virtualRows.map((virtualRow: VirtualItem) => {
+            const entry = entries[virtualRow.index];
+            if (!entry) return null;
+            return (
+              <VideoDanmakuRow
+                key={virtualRow.key}
+                index={virtualRow.index}
+                start={virtualRow.start}
+                measureRef={virtualizer.measureElement}
+                entry={entry}
+                future={virtualRow.index >= futureFrom}
+                onSelect={selectEntry}
+              />
+            );
+          })}
         </ol>
         {total > 0 && (
           <p className="px-3 pt-1 text-center text-xs text-muted-foreground">
@@ -243,29 +282,31 @@ export function VideoDanmakuList({
 }
 
 /**
- * 单行 memo：播放推进时只有跨过「已出现」边界与跟随行变化的那几行重渲染，
- * 其余上万行不参与协调。
+ * 单行 memo：播放推进时只有跨过「已出现」边界的那几行重渲染。
+ * 行高由 `measureElement` 实测；正文单行截断，估高只用于尚未挂载的行。
  */
 const VideoDanmakuRow = memo(function VideoDanmakuRow({
+  index,
+  start,
+  measureRef,
   entry,
   future,
-  followRef,
   onSelect,
 }: {
+  index: number;
+  start: number;
+  measureRef: (element: HTMLLIElement | null) => void;
   entry: VideoDanmakuEntry;
   future: boolean;
-  followRef: RefObject<HTMLLIElement | null> | undefined;
   onSelect: (progressMs: number) => void;
 }) {
   return (
     <li
-      ref={followRef}
-      className={cn(
-        // 屏外行跳过布局与绘制：全量渲染上万条也保持滚动流畅；
-        // contain-intrinsic-size 提供 scrollHeight 估算避免滚动条抖动。
-        "[content-visibility:auto] [contain-intrinsic-size:auto_1.75rem]",
-        future && "opacity-55",
-      )}
+      ref={measureRef}
+      data-index={index}
+      data-entry-id={entry.id}
+      className={cn("absolute inset-x-3 top-0", future && "opacity-55")}
+      style={{ transform: `translateY(${start}px)` }}
     >
       {/* 整行是跳转入口（含未来条目）：点了就走 seek，列表随后跟随
           新位置滚动。按钮语义让键盘/读屏也能跳。 */}
