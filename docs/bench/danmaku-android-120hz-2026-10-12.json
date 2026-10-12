@@ -1,0 +1,5860 @@
+{
+  "title": "Android 120Hz 弹幕性能实测",
+  "date": "2026-10-12",
+  "question": "移动端 120Hz 下的弹幕性能表现：刷新率是否真正生效、主线程余量、帧节奏档位、位移正确性",
+  "environment": {
+    "device": "Android 16 x86_64 emulator rlive_win（4 核、deviceMemory 2、Chrome WebView 133.0.6943.137、dpr 2.625）",
+    "hostDisplay": "Windows 宿主 1920×1080 @200Hz，NVIDIA GTX 1070 Ti；模拟器以 -gpu host 带窗口运行",
+    "refreshRate": {
+      "how": "模拟器以 -vsync-rate 120 -no-snapshot-load 冷启动；AVD config.ini 的 hw.lcd.vsync 保持 60；系统侧 peak_refresh_rate / min_refresh_rate 设为 120.0",
+      "verified": "dumpsys display mActiveSfDisplayMode.vsyncRate=120.00001、presentationDeadlineNanos=8333333；SurfaceFlinger activeMode vsyncRate=120.00 Hz",
+      "restored": "采样结束后已 delete peak_refresh_rate / min_refresh_rate 两项系统覆盖；-vsync-rate 是启动参数，重启模拟器即恢复 60Hz"
+    },
+    "stage": "横屏全屏 915×412 CSS px，视频 1280×720；同一 production 前端与原生 IPC/媒体源"
+  },
+  "criticalFinding": {
+    "summary": "Android 的显示节奏跟随内容：同一页面只有 rAF 循环时中位帧间隔 16.7ms（60Hz 档），加入一个「真的被绘制」的合成动画后变为 8.4ms（120Hz 档）。因此跨对照直接比较 FPS 会得出错误结论。",
+    "evidence": {
+      "capturedAt": "2026-10-12T12:08:19.696Z",
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html",
+      "note": "同一页面内交替对照；plain 无动画，waapi 多一个不可见的合成器动画",
+      "rows": [
+        {
+          "variant": "plain",
+          "frames": 258,
+          "fps": 64.37,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.7,
+            "max": 16.8
+          },
+          "at120HzCadence": 14
+        },
+        {
+          "variant": "waapi",
+          "frames": 384,
+          "fps": 95.8,
+          "frameMs": {
+            "median": 8.4,
+            "p95": 16.7,
+            "max": 17
+          },
+          "at120HzCadence": 75
+        },
+        {
+          "variant": "plain",
+          "frames": 258,
+          "fps": 64.37,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 16.8
+          },
+          "at120HzCadence": 14
+        },
+        {
+          "variant": "waapi",
+          "frames": 382,
+          "fps": 95.3,
+          "frameMs": {
+            "median": 8.4,
+            "p95": 16.7,
+            "max": 25
+          },
+          "at120HzCadence": 74
+        }
+      ]
+    },
+    "paceValidity": {
+      "capturedAt": "2026-10-12T12:33:33.227Z",
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html",
+      "note": "同页交替；at120 为中位节奏落在 120Hz 档的帧占比",
+      "rows": [
+        {
+          "variant": "none",
+          "animsAtStart": 0,
+          "animsDuring": 0,
+          "connected": null,
+          "frames": 193,
+          "fps": 64.16,
+          "median": 16.7,
+          "p95": 16.7,
+          "at120": 13
+        },
+        {
+          "variant": "transparent",
+          "animsAtStart": 1,
+          "animsDuring": 1,
+          "connected": true,
+          "frames": 195,
+          "fps": 65,
+          "median": 16.7,
+          "p95": 16.7,
+          "at120": 15
+        },
+        {
+          "variant": "painted",
+          "animsAtStart": 1,
+          "animsDuring": 1,
+          "connected": true,
+          "frames": 278,
+          "fps": 92.66,
+          "median": 8.4,
+          "p95": 16.7,
+          "at120": 71
+        },
+        {
+          "variant": "none",
+          "animsAtStart": 0,
+          "animsDuring": 0,
+          "connected": null,
+          "frames": 192,
+          "fps": 64,
+          "median": 16.7,
+          "p95": 16.8,
+          "at120": 13
+        },
+        {
+          "variant": "painted",
+          "animsAtStart": 1,
+          "animsDuring": 1,
+          "connected": true,
+          "frames": 289,
+          "fps": 96.07,
+          "median": 8.4,
+          "p95": 16.7,
+          "at120": 75
+        }
+      ]
+    },
+    "paceValidityNote": "无背景（仅 opacity）的动画元素不产生绘制，不能把节奏抬到 120Hz（65 FPS）；带背景色的 2×2 元素可以（96 FPS）。pace 元素因此改为有背景色。",
+    "consequence": "所有 120Hz 对照都在两种口径下采集：pace 关闭（暴露系统自适应行为）与 pace 开启（用微小的已绘制合成动画把节奏固定在 120Hz，保证可比）。"
+  },
+  "vod": {
+    "build": "单份 Vite production 包内选择基线 407fd71d 或当前 VideoDanmakuList；共享播放器、IPC、数据源与依赖",
+    "method": "seek 38s，41s 起采 8s；首轮预热不计；每构建 on/off/masked 各两轮；Trace 单独采 5s",
+    "variants": {
+      "on": "弹幕层正常，侧栏页签非活动",
+      "off": "产品开关隐藏弹幕层，引擎仍运行",
+      "masked": "临时 display:none 弹幕层与列表（零尺寸会改变轨道准入，非等负载对照）"
+    },
+    "paced": {
+      "current": {
+        "capturedAt": "2026-10-12T12:51:12.383Z",
+        "build": {
+          "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+          "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+          "builtAt": "2026-10-12T12:49:20.225Z",
+          "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+          "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+          "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+          "variant": "current"
+        },
+        "url": "http://tauri.localhost/video/play?bvid=BV1Js411o76u&cid=1176840",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off",
+            "masked"
+          ],
+          "repeat": 2,
+          "targetHz": 120,
+          "pace": true
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8012.6,
+            "fps": 95.2,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 41.7
+            },
+            "jankOver25ms": 7,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 177,
+              "overThresholdPercent": 23.2
+            },
+            "cadence": "full",
+            "animationsAtStart": 16,
+            "animationsAtEnd": 42,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.03,
+              "msPerSecond": {
+                "Script": 41.3,
+                "Style": 46.2,
+                "Layout": 23.9,
+                "Task": 287.3
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8011.3,
+            "fps": 91.7,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 33.3
+            },
+            "jankOver25ms": 1,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 216,
+              "overThresholdPercent": 29.4
+            },
+            "cadence": "full",
+            "animationsAtStart": 20,
+            "animationsAtEnd": 42,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 50.1
+            },
+            "cdp": {
+              "elapsedSeconds": 8.05,
+              "msPerSecond": {
+                "Script": 39.7,
+                "Style": 43.2,
+                "Layout": 24.9,
+                "Task": 257.9
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8007.8,
+            "fps": 94.3,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 25.1
+            },
+            "jankOver25ms": 1,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 201,
+              "overThresholdPercent": 26.6
+            },
+            "cadence": "full",
+            "animationsAtStart": 1,
+            "animationsAtEnd": 3,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 20.4,
+                "Style": 17.5,
+                "Layout": 9.9,
+                "Task": 148.8
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8010.4,
+            "fps": 95.4,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 33.3
+            },
+            "jankOver25ms": 1,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 189,
+              "overThresholdPercent": 24.7
+            },
+            "cadence": "full",
+            "animationsAtStart": 18,
+            "animationsAtEnd": 41,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 40.8,
+                "Style": 44.4,
+                "Layout": 23.6,
+                "Task": 249.8
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8021.4,
+            "fps": 93.1,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 25
+            },
+            "jankOver25ms": 0,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 212,
+              "overThresholdPercent": 28.4
+            },
+            "cadence": "full",
+            "animationsAtStart": 18,
+            "animationsAtEnd": 43,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.06,
+              "msPerSecond": {
+                "Script": 35.5,
+                "Style": 41.6,
+                "Layout": 23.6,
+                "Task": 229.4
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8006.1,
+            "fps": 93.8,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 25.1
+            },
+            "jankOver25ms": 2,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 198,
+              "overThresholdPercent": 26.4
+            },
+            "cadence": "full",
+            "animationsAtStart": 1,
+            "animationsAtEnd": 1,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 23.5,
+                "Style": 17.4,
+                "Layout": 10.4,
+                "Task": 156.1
+              }
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "capturedAt": "2026-10-12T12:52:51.369Z",
+        "build": {
+          "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+          "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+          "builtAt": "2026-10-12T12:49:20.225Z",
+          "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+          "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+          "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+          "variant": "baseline"
+        },
+        "url": "http://tauri.localhost/video/play?bvid=BV1Js411o76u&cid=1176840",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off",
+            "masked"
+          ],
+          "repeat": 2,
+          "targetHz": 120,
+          "pace": true
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8022,
+            "fps": 68.9,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 25.1,
+              "max": 50.1
+            },
+            "jankOver25ms": 30,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 331,
+              "overThresholdPercent": 59.9
+            },
+            "cadence": "half",
+            "animationsAtStart": 18,
+            "animationsAtEnd": 42,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.07,
+              "msPerSecond": {
+                "Script": 29.4,
+                "Style": 33.9,
+                "Layout": 20.7,
+                "Task": 878.7
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8050.1,
+            "fps": 71.3,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 25,
+              "max": 41.7
+            },
+            "jankOver25ms": 20,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 328,
+              "overThresholdPercent": 57.1
+            },
+            "cadence": "half",
+            "animationsAtStart": 18,
+            "animationsAtEnd": 43,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8.1,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.08,
+              "msPerSecond": {
+                "Script": 30.4,
+                "Style": 30.1,
+                "Layout": 20.7,
+                "Task": 856.3
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8006.4,
+            "fps": 95,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 25.1
+            },
+            "jankOver25ms": 4,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 189,
+              "overThresholdPercent": 24.8
+            },
+            "cadence": "full",
+            "animationsAtStart": 1,
+            "animationsAtEnd": 3,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 23,
+                "Style": 17.8,
+                "Layout": 12.1,
+                "Task": 162.8
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8011.5,
+            "fps": 68,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 25,
+              "max": 41.7
+            },
+            "jankOver25ms": 23,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 332,
+              "overThresholdPercent": 60.9
+            },
+            "cadence": "half",
+            "animationsAtStart": 18,
+            "animationsAtEnd": 41,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 50.3
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 32.5,
+                "Style": 34.5,
+                "Layout": 20,
+                "Task": 882.1
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8010.1,
+            "fps": 72.4,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 25,
+              "max": 33.4
+            },
+            "jankOver25ms": 12,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 331,
+              "overThresholdPercent": 57.1
+            },
+            "cadence": "half",
+            "animationsAtStart": 20,
+            "animationsAtEnd": 43,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.3,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 50.5
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 28.6,
+                "Style": 33,
+                "Layout": 21,
+                "Task": 872.1
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8007.3,
+            "fps": 92.3,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 83.3
+            },
+            "jankOver25ms": 3,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 204,
+              "overThresholdPercent": 27.6
+            },
+            "cadence": "full",
+            "animationsAtStart": 3,
+            "animationsAtEnd": 1,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.03,
+              "msPerSecond": {
+                "Script": 22.4,
+                "Style": 17.8,
+                "Layout": 10.5,
+                "Task": 167.5
+              }
+            }
+          }
+        ]
+      }
+    },
+    "unpaced": {
+      "current": {
+        "capturedAt": "2026-10-12T12:56:33.476Z",
+        "build": {
+          "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+          "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+          "builtAt": "2026-10-12T12:49:20.225Z",
+          "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+          "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+          "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+          "variant": "current"
+        },
+        "url": "http://tauri.localhost/video/play?bvid=BV1Js411o76u&cid=1176840",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off",
+            "masked"
+          ],
+          "repeat": 2,
+          "targetHz": 120,
+          "pace": false
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8004.8,
+            "fps": 93.9,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 25.1
+            },
+            "jankOver25ms": 2,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 202,
+              "overThresholdPercent": 26.9
+            },
+            "cadence": "full",
+            "animationsAtStart": 15,
+            "animationsAtEnd": 40,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 34.4,
+                "Style": 41.2,
+                "Layout": 22.4,
+                "Task": 240.6
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8009.7,
+            "fps": 82.8,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 33.3
+            },
+            "jankOver25ms": 1,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 295,
+              "overThresholdPercent": 44.5
+            },
+            "cadence": "full",
+            "animationsAtStart": 17,
+            "animationsAtEnd": 42,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 51
+            },
+            "cdp": {
+              "elapsedSeconds": 8.03,
+              "msPerSecond": {
+                "Script": 27.2,
+                "Style": 29.4,
+                "Layout": 16.4,
+                "Task": 175.1
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8006.8,
+            "fps": 78.1,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 16.7,
+              "max": 50
+            },
+            "jankOver25ms": 1,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 331,
+              "overThresholdPercent": 53
+            },
+            "cadence": "half",
+            "animationsAtStart": 2,
+            "animationsAtEnd": 2,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 16.7,
+                "Style": 9.9,
+                "Layout": 3.4,
+                "Task": 96.9
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8010.8,
+            "fps": 95.6,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 33.3
+            },
+            "jankOver25ms": 4,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 178,
+              "overThresholdPercent": 23.2
+            },
+            "cadence": "full",
+            "animationsAtStart": 17,
+            "animationsAtEnd": 41,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 36.3,
+                "Style": 43.9,
+                "Layout": 22,
+                "Task": 278.1
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8020.1,
+            "fps": 83.8,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 25.1
+            },
+            "jankOver25ms": 2,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 286,
+              "overThresholdPercent": 42.6
+            },
+            "cadence": "full",
+            "animationsAtStart": 17,
+            "animationsAtEnd": 40,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.03,
+              "msPerSecond": {
+                "Script": 28.5,
+                "Style": 31.6,
+                "Layout": 18.3,
+                "Task": 207.3
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 0,
+              "rowContentVisibility": null,
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8009.3,
+            "fps": 80.7,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 25.1
+            },
+            "jankOver25ms": 1,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 311,
+              "overThresholdPercent": 48.1
+            },
+            "cadence": "full",
+            "animationsAtStart": 0,
+            "animationsAtEnd": 2,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.03,
+              "msPerSecond": {
+                "Script": 17.7,
+                "Style": 9.2,
+                "Layout": 3.3,
+                "Task": 87
+              }
+            }
+          }
+        ]
+      },
+      "baseline": {
+        "capturedAt": "2026-10-12T12:58:05.792Z",
+        "build": {
+          "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+          "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+          "builtAt": "2026-10-12T12:49:20.225Z",
+          "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+          "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+          "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+          "variant": "baseline"
+        },
+        "url": "http://tauri.localhost/video/play?bvid=BV1Js411o76u&cid=1176840",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off",
+            "masked"
+          ],
+          "repeat": 2,
+          "targetHz": 120,
+          "pace": false
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8013.9,
+            "fps": 68.5,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 25,
+              "max": 58.3
+            },
+            "jankOver25ms": 19,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 348,
+              "overThresholdPercent": 63.4
+            },
+            "cadence": "half",
+            "animationsAtStart": 17,
+            "animationsAtEnd": 41,
+            "longtasks": {
+              "count": 1,
+              "totalMs": 53,
+              "maxMs": 53
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.06,
+              "msPerSecond": {
+                "Script": 28.4,
+                "Style": 29.4,
+                "Layout": 20.7,
+                "Task": 854.1
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8009,
+            "fps": 75.9,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 16.7,
+              "max": 33.4
+            },
+            "jankOver25ms": 2,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 347,
+              "overThresholdPercent": 57.1
+            },
+            "cadence": "half",
+            "animationsAtStart": 19,
+            "animationsAtEnd": 41,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 50.1
+            },
+            "cdp": {
+              "elapsedSeconds": 8.03,
+              "msPerSecond": {
+                "Script": 23.9,
+                "Style": 26.3,
+                "Layout": 16.2,
+                "Task": 772.4
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8009.3,
+            "fps": 79.3,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 16.7,
+              "max": 25
+            },
+            "jankOver25ms": 0,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 324,
+              "overThresholdPercent": 51
+            },
+            "cadence": "half",
+            "animationsAtStart": 2,
+            "animationsAtEnd": 2,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 16,
+                "Style": 10.1,
+                "Layout": 3.7,
+                "Task": 103.2
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8013.4,
+            "fps": 72,
+            "frameMs": {
+              "median": 16.6,
+              "p95": 25,
+              "max": 133.3
+            },
+            "jankOver25ms": 13,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 314,
+              "overThresholdPercent": 54.4
+            },
+            "cadence": "half",
+            "animationsAtStart": 17,
+            "animationsAtEnd": 40,
+            "longtasks": {
+              "count": 1,
+              "totalMs": 111,
+              "maxMs": 111
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.05,
+              "msPerSecond": {
+                "Script": 31,
+                "Style": 42,
+                "Layout": 20.2,
+                "Task": 868
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8026,
+            "fps": 50,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 41.6,
+              "max": 116.6
+            },
+            "jankOver25ms": 67,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 309,
+              "overThresholdPercent": 77.1
+            },
+            "cadence": "half",
+            "animationsAtStart": 17,
+            "animationsAtEnd": 41,
+            "longtasks": {
+              "count": 8,
+              "totalMs": 610,
+              "maxMs": 102
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 3,
+              "totalFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 57,
+              "mean": 49.3
+            },
+            "cdp": {
+              "elapsedSeconds": 8.08,
+              "msPerSecond": {
+                "Script": 42.5,
+                "Style": 33.4,
+                "Layout": 28,
+                "Task": 929.2
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "masked",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 0,
+              "height": 0
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "list": {
+              "total": 5876,
+              "mounted": 5876,
+              "rowContentVisibility": "auto",
+              "active": false
+            },
+            "cid": "1176840",
+            "durationMs": 8006.9,
+            "fps": 80.6,
+            "frameMs": {
+              "median": 8.4,
+              "p95": 16.7,
+              "max": 33.4
+            },
+            "jankOver25ms": 3,
+            "frameBudget": {
+              "targetHz": 120,
+              "budgetMs": 8.333333333333334,
+              "overThresholdMs": 12.5,
+              "overThresholdCount": 310,
+              "overThresholdPercent": 48.1
+            },
+            "cadence": "full",
+            "animationsAtStart": 0,
+            "animationsAtEnd": 0,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "totalFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 0,
+              "mean": 0
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 19.8,
+                "Style": 11.3,
+                "Layout": 4.7,
+                "Task": 103.5
+              }
+            }
+          }
+        ]
+      }
+    },
+    "trace": {
+      "note": "Trace 与 Performance 采样分开执行，避免追踪开销混入耗时对照。pace 固定节奏下两份可比；unpaced 会各自落到不同节奏档。",
+      "paced": {
+        "current": {
+          "capturedAt": "2026-10-12T12:53:51.968Z",
+          "build": {
+            "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+            "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+            "builtAt": "2026-10-12T12:49:20.225Z",
+            "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+            "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+            "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+            "variant": "current"
+          },
+          "cid": "1176840",
+          "pace": true,
+          "elapsedSeconds": 5.070800999999847,
+          "events": 158424,
+          "note": "同名事件累计 inclusive ms/s；嵌套事件不能相加，非 self time 或线程占用率。Trace 有额外开销。",
+          "rendererEventsMsPerSecond": {
+            "RunTask": 342.1,
+            "ThreadControllerImpl::RunTask": 330.9,
+            "ProxyMain::BeginMainFrame": 291.7,
+            "v8.callFunction": 96.8,
+            "FunctionCall": 79.4,
+            "FireAnimationFrame": 72.3,
+            "UpdateLayoutTree": 47.1,
+            "Layerize": 40.1,
+            "Layout": 35.5,
+            "Commit": 26.7,
+            "IntersectionObserverController::computeIntersections": 18.5,
+            "PrePaint": 17.5,
+            "EventDispatch": 16.2,
+            "Paint": 15.2,
+            "LocalFrameView::ScheduleAnimation": 11.9,
+            "AnimationHost::TickAnimations": 6.4,
+            "MainFrameAborted": 6.3,
+            "LayerTreeHost::WaitForCommitCompletion": 5.4,
+            "TimerFire": 5,
+            "V8.GCIncrementalMarking": 4.1,
+            "V8.GC_MC_INCREMENTAL": 4,
+            "BlinkScheduler_PerformMicrotaskCheckpoint": 3.1,
+            "MajorGC": 1.7,
+            "V8.GCFinalizeMC": 1.7,
+            "V8.GC_MARK_COMPACTOR": 1.7,
+            "ScrollTree::SetScrollOffset": 1.6,
+            "SimpleWatcher::OnHandleReady": 1.1,
+            "V8.GC_MC_CLEAR": 0.7,
+            "LayerTreeHost::DoUpdateLayers": 0.5,
+            "XHRLoad": 0.5,
+            "V8.GC_MC_INCREMENTAL_EMBEDDER_TRACING": 0.5,
+            "V8.GC_MC_EVACUATE": 0.4,
+            "MinorGC": 0.4,
+            "V8.GCScavenger": 0.4,
+            "V8.GC_SCAVENGER": 0.4,
+            "V8.GC_SCAVENGER_SCAVENGE": 0.4,
+            "AnimationHost::UpdateAnimationState": 0.4,
+            "V8.GC_MC_CLEAR_EXTERNAL_STRING_TABLE": 0.3,
+            "V8.GC_MC_MARK": 0.3,
+            "V8.GC_MC_EVACUATE_UPDATE_POINTERS": 0.3
+          }
+        },
+        "baseline": {
+          "capturedAt": "2026-10-12T12:53:18.670Z",
+          "build": {
+            "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+            "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+            "builtAt": "2026-10-12T12:49:20.225Z",
+            "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+            "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+            "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+            "variant": "baseline"
+          },
+          "cid": "1176840",
+          "pace": true,
+          "elapsedSeconds": 5.036970999999539,
+          "events": 133933,
+          "note": "同名事件累计 inclusive ms/s；嵌套事件不能相加，非 self time 或线程占用率。Trace 有额外开销。",
+          "rendererEventsMsPerSecond": {
+            "RunTask": 920.3,
+            "ThreadControllerImpl::RunTask": 915.9,
+            "ProxyMain::BeginMainFrame": 890.4,
+            "IntersectionObserverController::computeIntersections": 666.5,
+            "v8.callFunction": 91,
+            "FunctionCall": 78.3,
+            "FireAnimationFrame": 67.1,
+            "Layout": 47.3,
+            "UpdateLayoutTree": 38.4,
+            "Commit": 29.6,
+            "Layerize": 22.1,
+            "EventDispatch": 14.2,
+            "LocalFrameView::ScheduleAnimation": 10.9,
+            "PrePaint": 9.8,
+            "Paint": 8.8,
+            "MainFrameAborted": 4.8,
+            "TimerFire": 4.1,
+            "AnimationHost::TickAnimations": 3.7,
+            "LayerTreeHost::WaitForCommitCompletion": 3.2,
+            "ProxyMain::BeginMainFrame::commit": 1.8,
+            "SimpleWatcher::OnHandleReady": 1.6,
+            "MinorGC": 1.2,
+            "V8.GCScavenger": 1.2,
+            "V8.GC_SCAVENGER": 1.2,
+            "V8.GC_SCAVENGER_SCAVENGE": 1.2,
+            "LayerTreeHost::DoUpdateLayers": 0.9,
+            "WidgetBase::WillBeginMainFrame": 0.7,
+            "BlinkScheduler_PerformMicrotaskCheckpoint": 0.7,
+            "XHRLoad": 0.6,
+            "V8.GC_SCAVENGER_SCAVENGE_ROOTS": 0.6,
+            "ScrollTree::SetScrollOffset": 0.6,
+            "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE": 0.4,
+            "UpdateLayer": 0.3,
+            "AnimationHost::UpdateAnimationState": 0.2,
+            "HitTest": 0.2,
+            "LayerTreeHost::ApplyCompositorChanges": 0.1,
+            "Receive mojo message": 0.1,
+            "PaintImage": 0.1,
+            "XHRReadyStateChange": 0.1,
+            "V8.GC_SCAVENGER_SCAVENGE_WEAK_GLOBAL_HANDLES_PROCESS": 0
+          }
+        }
+      },
+      "unpaced": {
+        "current": {
+          "capturedAt": "2026-10-12T12:54:06.504Z",
+          "build": {
+            "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+            "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+            "builtAt": "2026-10-12T12:49:20.225Z",
+            "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+            "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+            "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+            "variant": "current"
+          },
+          "cid": "1176840",
+          "pace": false,
+          "elapsedSeconds": 5.033323999999993,
+          "events": 153311,
+          "note": "同名事件累计 inclusive ms/s；嵌套事件不能相加，非 self time 或线程占用率。Trace 有额外开销。",
+          "rendererEventsMsPerSecond": {
+            "RunTask": 301.6,
+            "ThreadControllerImpl::RunTask": 294.3,
+            "ProxyMain::BeginMainFrame": 262.7,
+            "v8.callFunction": 75.4,
+            "FunctionCall": 65.3,
+            "FireAnimationFrame": 57.9,
+            "UpdateLayoutTree": 42,
+            "Layerize": 36.3,
+            "Commit": 31.3,
+            "Layout": 30.8,
+            "IntersectionObserverController::computeIntersections": 22.1,
+            "PrePaint": 16.7,
+            "LocalFrameView::ScheduleAnimation": 11.8,
+            "EventDispatch": 11.3,
+            "Paint": 8.9,
+            "MainFrameAborted": 7.3,
+            "AnimationHost::TickAnimations": 6.9,
+            "V8.GCIncrementalMarking": 5.6,
+            "V8.GC_MC_INCREMENTAL": 5.5,
+            "TimerFire": 5.2,
+            "MajorGC": 4.6,
+            "V8.GCFinalizeMC": 4.6,
+            "V8.GC_MARK_COMPACTOR": 4.6,
+            "LayerTreeHost::WaitForCommitCompletion": 2.8,
+            "V8.GC_MC_INCREMENTAL_EMBEDDER_TRACING": 1.7,
+            "ScrollTree::SetScrollOffset": 1.7,
+            "V8.GC_MC_EVACUATE": 1.7,
+            "BlinkScheduler_PerformMicrotaskCheckpoint": 1.6,
+            "V8.GC_MC_EVACUATE_UPDATE_POINTERS": 1.6,
+            "V8.GC_MC_FINISH": 1,
+            "V8.GC_MC_EVACUATE_UPDATE_POINTERS_SLOTS_MAIN": 1,
+            "V8.GC_MC_SWEEP_START_JOBS": 1,
+            "V8.GC_MC_CLEAR": 1,
+            "V8.GCIncrementalMarkingStart": 0.8,
+            "V8.GC_MC_INCREMENTAL_START": 0.8,
+            "LayerTreeHost::DoUpdateLayers": 0.7,
+            "V8.GC_MC_MARK": 0.6,
+            "V8.GC_MC_MARK_FULL_CLOSURE_PARALLEL": 0.6,
+            "V8.GC_MC_MARK_FULL_CLOSURE_PARALLEL_JOIN": 0.5,
+            "AnimationHost::UpdateAnimationState": 0.4
+          }
+        },
+        "baseline": {
+          "capturedAt": "2026-10-12T12:53:32.419Z",
+          "build": {
+            "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+            "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+            "builtAt": "2026-10-12T12:49:20.225Z",
+            "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+            "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+            "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+            "variant": "baseline"
+          },
+          "cid": "1176840",
+          "pace": false,
+          "elapsedSeconds": 5.05471100000068,
+          "events": 139524,
+          "note": "同名事件累计 inclusive ms/s；嵌套事件不能相加，非 self time 或线程占用率。Trace 有额外开销。",
+          "rendererEventsMsPerSecond": {
+            "RunTask": 904.7,
+            "ThreadControllerImpl::RunTask": 901.4,
+            "ProxyMain::BeginMainFrame": 886.9,
+            "IntersectionObserverController::computeIntersections": 690,
+            "v8.callFunction": 71,
+            "FunctionCall": 62.2,
+            "FireAnimationFrame": 54.7,
+            "Layout": 41.8,
+            "UpdateLayoutTree": 29.1,
+            "Commit": 28.5,
+            "Layerize": 22.8,
+            "LocalFrameView::ScheduleAnimation": 11.2,
+            "EventDispatch": 10.6,
+            "Paint": 8.9,
+            "PrePaint": 8.9,
+            "MainFrameAborted": 4.7,
+            "AnimationHost::TickAnimations": 4.1,
+            "TimerFire": 2.9,
+            "BlinkScheduler_PerformMicrotaskCheckpoint": 0.7,
+            "LayerTreeHost::WaitForCommitCompletion": 0.4,
+            "ScrollTree::SetScrollOffset": 0.4,
+            "LayerTreeHost::DoUpdateLayers": 0.4,
+            "SimpleWatcher::OnHandleReady": 0.4,
+            "AnimationHost::UpdateAnimationState": 0.4,
+            "ProxyMain::BeginMainFrame::commit": 0.2,
+            "UpdateLayer": 0.2,
+            "LayerTreeHost::ApplyCompositorChanges": 0.2,
+            "HitTest": 0.1,
+            "WidgetBase::WillBeginMainFrame": 0.1,
+            "PaintImage": 0.1,
+            "Receive mojo message": 0,
+            "EvaluateScript": 0,
+            "RecordingSource::FinishDisplayItemListUpdate": 0,
+            "v8.run": 0,
+            "RecordingSource::DetermineIfSolidColor": 0,
+            "v8.compile": 0,
+            "WidgetBase::DidCommitAndDrawCompositorFrame": 0,
+            "Receive mojo reply": 0,
+            "v8.produceCache": 0
+          }
+        }
+      }
+    }
+  },
+  "liveFixture": {
+    "note": "直播弹幕生产 A/B 夹具（层 / 层+面板 / 仅事件输送）在 120Hz 固定节奏下的分层采样；夹具不播放视频。基线=提交 30e723d5，当前=当前源码。同一 URL 连跑两轮用于评估运行间波动。",
+    "build": {
+      "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+      "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+      "builtAt": "2026-10-12T12:58:58.161Z",
+      "currentSourceSHA256": {
+        "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+        "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+        "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+        "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+      }
+    },
+    "paced": {
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html?scene=layer,both,bus&variants=baseline,current&motion=running,paused&cpu=1&sample=9000&warmup=6000&pace=120",
+      "capturedAt": "2026-10-12T13:02:49.339Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+        "builtAt": "2026-10-12T12:58:58.161Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 2,
+        "devicePixelRatio": 2.625,
+        "viewport": {
+          "width": 412,
+          "height": 915
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9003.800000000745,
+          "frames": 844,
+          "fps": 93.73819942690088,
+          "frameMs": {
+            "median": 9.200000000186265,
+            "p95": 22.899999999441206,
+            "max": 39.60000000055879
+          },
+          "jankOver25ms": 27,
+          "jankRatio": 0.031990521327014215,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.989448899351537
+          },
+          "layerOnScreen": {
+            "min": 45,
+            "mean": 50.27272727272727,
+            "max": 55,
+            "samples": [
+              55,
+              55,
+              55,
+              50,
+              46,
+              45,
+              47,
+              47,
+              49,
+              52,
+              52
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 55,
+            "rendererCount": 1,
+            "layerDOM": 55,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6046.0999999996275,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 52,
+            "rendererCount": 1,
+            "layerDOM": 52,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15050.399999999441,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.047686999999314,
+            "msPerSecond": {
+              "Script": 78.79947659551596,
+              "RecalcStyle": 64.08400290594093,
+              "Layout": 12.264792095483454,
+              "Task": 256.507436652061
+            }
+          }
+        },
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9006.100000000559,
+          "frames": 820,
+          "fps": 91.0493998512063,
+          "frameMs": {
+            "median": 9.200000000186265,
+            "p95": 24,
+            "max": 40.60000000055879
+          },
+          "jankOver25ms": 29,
+          "jankRatio": 0.03536585365853658,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.983067032343193
+          },
+          "layerOnScreen": {
+            "min": 50,
+            "mean": 53.09090909090909,
+            "max": 56,
+            "samples": [
+              56,
+              54,
+              54,
+              52,
+              52,
+              52,
+              55,
+              53,
+              50,
+              53,
+              53
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 56,
+            "rendererCount": 1,
+            "layerDOM": 56,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6033.5999999996275,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 53,
+            "rendererCount": 1,
+            "layerDOM": 53,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15039.900000000373,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.033750999999938,
+            "msPerSecond": {
+              "Script": 79.87800416460506,
+              "RecalcStyle": 18.665336248475423,
+              "Layout": 14.489219372993668,
+              "Task": 179.3625925709056
+            }
+          }
+        },
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9007.200000000186,
+          "frames": 770,
+          "fps": 85.48716582289546,
+          "frameMs": {
+            "median": 9.899999999441206,
+            "p95": 24.899999999441206,
+            "max": 38.10000000055879
+          },
+          "jankOver25ms": 38,
+          "jankRatio": 0.04935064935064935,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 226,
+            "received": 225,
+            "batches": 181,
+            "actualRate": 24.980015987209715
+          },
+          "layerOnScreen": {
+            "min": 45,
+            "mean": 50.72727272727273,
+            "max": 57,
+            "samples": [
+              52,
+              52,
+              55,
+              56,
+              57,
+              54,
+              49,
+              47,
+              45,
+              46,
+              45
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 52,
+            "rendererCount": 1,
+            "layerDOM": 52,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6046.5,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 377,
+            "received": 376,
+            "batches": 302,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 45,
+            "rendererCount": 1,
+            "layerDOM": 45,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15054.399999999441,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.054573999999775,
+            "msPerSecond": {
+              "Script": 78.57785468427532,
+              "RecalcStyle": 53.03739303472607,
+              "Layout": 12.213164307895958,
+              "Task": 245.62403488005685
+            }
+          }
+        },
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9006.5,
+          "frames": 887,
+          "fps": 98.48442791317382,
+          "frameMs": {
+            "median": 8.799999999813735,
+            "p95": 22.199999999254942,
+            "max": 33.39999999944121
+          },
+          "jankOver25ms": 20,
+          "jankRatio": 0.02254791431792559,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.981957475156833
+          },
+          "layerOnScreen": {
+            "min": 51,
+            "mean": 53.36363636363637,
+            "max": 56,
+            "samples": [
+              56,
+              54,
+              52,
+              54,
+              51,
+              53,
+              54,
+              53,
+              55,
+              53,
+              52
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 56,
+            "rendererCount": 1,
+            "layerDOM": 56,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6026.4000000003725,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 52,
+            "rendererCount": 1,
+            "layerDOM": 52,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15033.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.031750000000102,
+            "msPerSecond": {
+              "Script": 64.58416143050829,
+              "RecalcStyle": 17.271625100340277,
+              "Layout": 10.889141085614513,
+              "Task": 151.22861018074957
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "baseline",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9024.400000000373,
+          "frames": 776,
+          "fps": 85.98909622800053,
+          "frameMs": {
+            "median": 10.200000000186265,
+            "p95": 23.799999999813735,
+            "max": 36.90000000037253
+          },
+          "jankOver25ms": 28,
+          "jankRatio": 0.03608247422680412,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 226,
+            "received": 226,
+            "batches": 181,
+            "actualRate": 25.043216169495
+          },
+          "layerOnScreen": {
+            "min": 50,
+            "mean": 52,
+            "max": 56,
+            "samples": [
+              53,
+              50,
+              51,
+              52,
+              50,
+              53,
+              54,
+              56,
+              51,
+              51,
+              51
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 450,
+            "received": 450,
+            "batches": 131,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 53,
+            "rendererCount": 1,
+            "layerDOM": 53,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6059,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 676,
+            "received": 676,
+            "batches": 312,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 51,
+            "rendererCount": 1,
+            "layerDOM": 51,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15084.299999999814,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.086943000000247,
+            "msPerSecond": {
+              "Script": 114.77633347100037,
+              "RecalcStyle": 59.73031854607046,
+              "Layout": 32.865398187266265,
+              "Task": 362.47580732045003
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "baseline",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9029.5,
+          "frames": 734,
+          "fps": 81.2891079240268,
+          "frameMs": {
+            "median": 10.799999999813735,
+            "p95": 23.90000000037253,
+            "max": 40.299999999813735
+          },
+          "jankOver25ms": 27,
+          "jankRatio": 0.03678474114441417,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 226,
+            "received": 225,
+            "batches": 181,
+            "actualRate": 24.918323273713938
+          },
+          "layerOnScreen": {
+            "min": 47,
+            "mean": 51.54545454545455,
+            "max": 56,
+            "samples": [
+              56,
+              51,
+              52,
+              54,
+              52,
+              55,
+              53,
+              50,
+              49,
+              47,
+              48
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 450,
+            "received": 450,
+            "batches": 131,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 56,
+            "rendererCount": 1,
+            "layerDOM": 56,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6036.699999999255,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 676,
+            "received": 675,
+            "batches": 312,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 48,
+            "rendererCount": 1,
+            "layerDOM": 48,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15067.399999999441,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.072748000000502,
+            "msPerSecond": {
+              "Script": 120.59091688647585,
+              "RecalcStyle": 25.626965501520285,
+              "Layout": 38.84787718120028,
+              "Task": 320.7407502114948
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "current",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9010,
+          "frames": 806,
+          "fps": 89.45615982241954,
+          "frameMs": {
+            "median": 9.700000000186265,
+            "p95": 22.59999999962747,
+            "max": 38
+          },
+          "jankOver25ms": 25,
+          "jankRatio": 0.031017369727047148,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 226,
+            "batches": 180,
+            "actualRate": 25.083240843507213
+          },
+          "layerOnScreen": {
+            "min": 49,
+            "mean": 52.27272727272727,
+            "max": 56,
+            "samples": [
+              53,
+              52,
+              49,
+              49,
+              49,
+              50,
+              54,
+              54,
+              54,
+              55,
+              56
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1351,
+            "received": 1350,
+            "batches": 160,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 53,
+            "rendererCount": 1,
+            "layerDOM": 53,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40493.71484375,
+            "panelDistanceToBottom": 0.28515625,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6061.9000000003725,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1576,
+            "received": 1576,
+            "batches": 340,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 56,
+            "rendererCount": 1,
+            "layerDOM": 56,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40458.66796875,
+            "panelDistanceToBottom": 0.33203125,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15072.100000000559,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.048698999999942,
+            "msPerSecond": {
+              "Script": 138.60390316884315,
+              "RecalcStyle": 72.6406083349666,
+              "Layout": 21.903811807642306,
+              "Task": 365.9968134645678
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "current",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9002.300000000745,
+          "frames": 754,
+          "fps": 83.75637337124263,
+          "frameMs": {
+            "median": 10.700000000186265,
+            "p95": 23.699999999254942,
+            "max": 31.600000000558794
+          },
+          "jankOver25ms": 25,
+          "jankRatio": 0.033156498673740056,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 226,
+            "batches": 180,
+            "actualRate": 25.104695466711984
+          },
+          "layerOnScreen": {
+            "min": 50,
+            "mean": 52.81818181818182,
+            "max": 54,
+            "samples": [
+              50,
+              52,
+              51,
+              54,
+              53,
+              54,
+              54,
+              53,
+              54,
+              53,
+              53
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1351,
+            "received": 1350,
+            "batches": 160,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 50,
+            "rendererCount": 1,
+            "layerDOM": 50,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40493.71484375,
+            "panelDistanceToBottom": 0.28515625,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6062,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1576,
+            "received": 1576,
+            "batches": 340,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 53,
+            "rendererCount": 1,
+            "layerDOM": 53,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40458.66796875,
+            "panelDistanceToBottom": 0.33203125,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15064.600000000559,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.038285999999971,
+            "msPerSecond": {
+              "Script": 133.79417292172474,
+              "RecalcStyle": 41.41570647355054,
+              "Layout": 21.968877727480724,
+              "Task": 303.3452360325848
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "baseline",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9003.400000000373,
+          "frames": 835,
+          "fps": 92.74274163093558,
+          "frameMs": {
+            "median": 8.900000000372529,
+            "p95": 23,
+            "max": 47
+          },
+          "jankOver25ms": 21,
+          "jankRatio": 0.025149700598802394,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.99055912210839
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6036.5,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15039.900000000373,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.043687999999747,
+            "msPerSecond": {
+              "Script": 45.680479025814556,
+              "RecalcStyle": 10.10992418137408,
+              "Layout": 0,
+              "Task": 104.79563204745952
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "baseline",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9013.299999999814,
+          "frames": 793,
+          "fps": 87.98109460464163,
+          "frameMs": {
+            "median": 9.100000000558794,
+            "p95": 24,
+            "max": 38.700000000186265
+          },
+          "jankOver25ms": 31,
+          "jankRatio": 0.03909205548549811,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 226,
+            "received": 225,
+            "batches": 181,
+            "actualRate": 24.963110070673853
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6042,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 377,
+            "received": 376,
+            "batches": 302,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15055.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.066044999999576,
+            "msPerSecond": {
+              "Script": 52.81575372723417,
+              "RecalcStyle": 9.604187934209913,
+              "Layout": 0,
+              "Task": 104.64188077602103
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "current",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9004.900000000373,
+          "frames": 831,
+          "fps": 92.28309031749,
+          "frameMs": {
+            "median": 8.899999999441206,
+            "p95": 23.699999999254942,
+            "max": 40
+          },
+          "jankOver25ms": 33,
+          "jankRatio": 0.039711191335740074,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 226,
+            "batches": 180,
+            "actualRate": 25.09744694555083
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 152,
+            "received": 151,
+            "batches": 122,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6063,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 377,
+            "received": 377,
+            "batches": 302,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15068,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.051821000000018,
+            "msPerSecond": {
+              "Script": 47.82871866334941,
+              "RecalcStyle": 9.771735433124356,
+              "Layout": 0,
+              "Task": 98.78874096162532
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "current",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9002.099999999627,
+          "frames": 682,
+          "fps": 75.760100421016,
+          "frameMs": {
+            "median": 9.600000000558794,
+            "p95": 29.5,
+            "max": 80.80000000074506
+          },
+          "jankOver25ms": 69,
+          "jankRatio": 0.10117302052785923,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.994168027461292
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6031.299999999814,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15033.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.036385999999766,
+            "msPerSecond": {
+              "Script": 55.66107955105197,
+              "RecalcStyle": 7.559880686814592,
+              "Layout": 0,
+              "Task": 102.52129557104205
+            }
+          }
+        }
+      ]
+    },
+    "pacedRound2": {
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html?scene=layer,both,bus&variants=baseline,current&motion=running,paused&cpu=1&sample=9000&warmup=6000&pace=120",
+      "capturedAt": "2026-10-12T13:06:20.100Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "150c533c0d27076827544a72383fe31b7fed0556",
+        "builtAt": "2026-10-12T12:58:58.161Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 2,
+        "devicePixelRatio": 2.625,
+        "viewport": {
+          "width": 412,
+          "height": 915
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9006.700000000186,
+          "frames": 888,
+          "fps": 98.59326945495927,
+          "frameMs": {
+            "median": 8.599999999627471,
+            "p95": 21.700000000186265,
+            "max": 36.299999999813735
+          },
+          "jankOver25ms": 15,
+          "jankRatio": 0.016891891891891893,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.981402733520085
+          },
+          "layerOnScreen": {
+            "min": 50,
+            "mean": 52.63636363636363,
+            "max": 55,
+            "samples": [
+              54,
+              52,
+              52,
+              54,
+              54,
+              55,
+              53,
+              50,
+              52,
+              52,
+              51
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 54,
+            "rendererCount": 1,
+            "layerDOM": 54,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6030.299999999814,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 51,
+            "rendererCount": 1,
+            "layerDOM": 51,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15037.799999999814,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.032922999999755,
+            "msPerSecond": {
+              "Script": 49.389217643061066,
+              "RecalcStyle": 46.26929732490925,
+              "Layout": 8.742906365968373,
+              "Task": 193.55716859316163
+            }
+          }
+        },
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9004.599999999627,
+          "frames": 938,
+          "fps": 104.16898029896262,
+          "frameMs": {
+            "median": 8.5,
+            "p95": 19.59999999962747,
+            "max": 35.299999999813735
+          },
+          "jankOver25ms": 11,
+          "jankRatio": 0.011727078891257996,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.98722874975116
+          },
+          "layerOnScreen": {
+            "min": 50,
+            "mean": 52.45454545454545,
+            "max": 55,
+            "samples": [
+              51,
+              55,
+              54,
+              52,
+              50,
+              50,
+              50,
+              54,
+              53,
+              54,
+              54
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 51,
+            "rendererCount": 1,
+            "layerDOM": 51,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6036.200000000186,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 54,
+            "rendererCount": 1,
+            "layerDOM": 54,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15040.899999999441,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.046720000000278,
+            "msPerSecond": {
+              "Script": 51.771028615894565,
+              "RecalcStyle": 16.469173357857372,
+              "Layout": 9.135355134236212,
+              "Task": 133.48163754376864
+            }
+          }
+        },
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9003.600000000559,
+          "frames": 869,
+          "fps": 96.51694877603914,
+          "frameMs": {
+            "median": 8.800000000745058,
+            "p95": 22.100000000558794,
+            "max": 33
+          },
+          "jankOver25ms": 21,
+          "jankRatio": 0.024165707710011506,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.99000399839909
+          },
+          "layerOnScreen": {
+            "min": 50,
+            "mean": 54.90909090909091,
+            "max": 61,
+            "samples": [
+              58,
+              58,
+              61,
+              60,
+              57,
+              55,
+              51,
+              50,
+              50,
+              52,
+              52
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 58,
+            "rendererCount": 1,
+            "layerDOM": 58,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6041.399999999441,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 52,
+            "rendererCount": 1,
+            "layerDOM": 52,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15045.299999999814,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.063226000000213,
+            "msPerSecond": {
+              "Script": 59.96970615098722,
+              "RecalcStyle": 47.274998990424585,
+              "Layout": 9.956278261184027,
+              "Task": 208.52729480650214
+            }
+          }
+        },
+        {
+          "scene": "layer",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9007.400000000373,
+          "frames": 876,
+          "fps": 97.25336945178006,
+          "frameMs": {
+            "median": 8.899999999441206,
+            "p95": 21.899999999441206,
+            "max": 38.90000000037253
+          },
+          "jankOver25ms": 17,
+          "jankRatio": 0.019406392694063926,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.979461331792827
+          },
+          "layerOnScreen": {
+            "min": 47,
+            "mean": 52.27272727272727,
+            "max": 57,
+            "samples": [
+              54,
+              53,
+              55,
+              57,
+              56,
+              55,
+              52,
+              50,
+              47,
+              48,
+              48
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 54,
+            "rendererCount": 1,
+            "layerDOM": 54,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 6032.299999999814,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 48,
+            "rendererCount": 1,
+            "layerDOM": 48,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": null,
+            "elapsedMs": 15039.899999999441,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.04061400000046,
+            "msPerSecond": {
+              "Script": 65.39345668335909,
+              "RecalcStyle": 17.339751481480338,
+              "Layout": 10.170437538865766,
+              "Task": 152.06699456474198
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "baseline",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9028.799999999814,
+          "frames": 790,
+          "fps": 87.49778486620772,
+          "frameMs": {
+            "median": 9.700000000186265,
+            "p95": 24.09999999962747,
+            "max": 42.200000000186265
+          },
+          "jankOver25ms": 31,
+          "jankRatio": 0.039240506329113925,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.92025518341359
+          },
+          "layerOnScreen": {
+            "min": 46,
+            "mean": 49.63636363636363,
+            "max": 54,
+            "samples": [
+              51,
+              53,
+              54,
+              53,
+              52,
+              49,
+              48,
+              46,
+              46,
+              47,
+              47
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 451,
+            "received": 450,
+            "batches": 132,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 51,
+            "rendererCount": 1,
+            "layerDOM": 51,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6062.600000000559,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 676,
+            "received": 675,
+            "batches": 312,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 47,
+            "rendererCount": 1,
+            "layerDOM": 47,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15092,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.063740000000507,
+            "msPerSecond": {
+              "Script": 98.16852645816742,
+              "RecalcStyle": 56.414791245112035,
+              "Layout": 30.80361969782721,
+              "Task": 329.8082248608005
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "baseline",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9012.700000000186,
+          "frames": 889,
+          "fps": 98.63858777058834,
+          "frameMs": {
+            "median": 8.900000000372529,
+            "p95": 21.5,
+            "max": 30.59999999962747
+          },
+          "jankOver25ms": 20,
+          "jankRatio": 0.02249718785151856,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.964771932938557
+          },
+          "layerOnScreen": {
+            "min": 49,
+            "mean": 51.54545454545455,
+            "max": 55,
+            "samples": [
+              49,
+              49,
+              55,
+              53,
+              54,
+              53,
+              51,
+              51,
+              51,
+              50,
+              51
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 450,
+            "received": 450,
+            "batches": 131,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 49,
+            "rendererCount": 1,
+            "layerDOM": 49,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6039.0999999996275,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 675,
+            "received": 675,
+            "batches": 311,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 51,
+            "rendererCount": 1,
+            "layerDOM": 51,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15052.399999999441,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.05601200000001,
+            "msPerSecond": {
+              "Script": 85.60766041387744,
+              "RecalcStyle": 21.782214952895355,
+              "Layout": 30.16427098373981,
+              "Task": 247.6038017617465
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "half",
+          "options": {
+            "variant": "current",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9003.399999999441,
+          "frames": 869,
+          "fps": 96.51909278717528,
+          "frameMs": {
+            "median": 9.299999999813735,
+            "p95": 20.90000000037253,
+            "max": 39.700000000186265
+          },
+          "jankOver25ms": 17,
+          "jankRatio": 0.019562715765247412,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.990559122110977
+          },
+          "layerOnScreen": {
+            "min": 47,
+            "mean": 51.27272727272727,
+            "max": 54,
+            "samples": [
+              47,
+              49,
+              51,
+              54,
+              54,
+              52,
+              52,
+              49,
+              50,
+              53,
+              53
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1351,
+            "received": 1350,
+            "batches": 160,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 47,
+            "rendererCount": 1,
+            "layerDOM": 47,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40493.71484375,
+            "panelDistanceToBottom": 0.28515625,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6052.600000000559,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1576,
+            "received": 1575,
+            "batches": 340,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 53,
+            "rendererCount": 1,
+            "layerDOM": 53,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40458.66796875,
+            "panelDistanceToBottom": 0.33203125,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15056.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.034461999999621,
+            "msPerSecond": {
+              "Script": 114.71131319164805,
+              "RecalcStyle": 71.01385782573738,
+              "Layout": 18.158247829257228,
+              "Task": 332.78683334991354
+            }
+          }
+        },
+        {
+          "scene": "both",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "current",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9006.5,
+          "frames": 875,
+          "fps": 97.15205684783213,
+          "frameMs": {
+            "median": 9.099999999627471,
+            "p95": 20.5,
+            "max": 41.60000000055879
+          },
+          "jankOver25ms": 8,
+          "jankRatio": 0.009142857142857144,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.981957475156833
+          },
+          "layerOnScreen": {
+            "min": 48,
+            "mean": 51,
+            "max": 56,
+            "samples": [
+              56,
+              54,
+              50,
+              49,
+              49,
+              48,
+              53,
+              51,
+              49,
+              51,
+              51
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1350,
+            "received": 1350,
+            "batches": 159,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 56,
+            "rendererCount": 1,
+            "layerDOM": 56,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40493.71484375,
+            "panelDistanceToBottom": 0.28515625,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6031.4000000003725,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "both",
+              "rate": 25,
+              "width": 412,
+              "height": 240,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1575,
+            "received": 1575,
+            "batches": 339,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 51,
+            "rendererCount": 1,
+            "layerDOM": 51,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40458.66796875,
+            "panelDistanceToBottom": 0.33203125,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15038,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.029142999999749,
+            "msPerSecond": {
+              "Script": 112.96575987333783,
+              "RecalcStyle": 34.51645410865787,
+              "Layout": 18.257546701830343,
+              "Task": 260.07307670285724
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "baseline",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9016.299999999814,
+          "frames": 829,
+          "fps": 91.94458924392679,
+          "frameMs": {
+            "median": 8.800000000745058,
+            "p95": 22.59999999962747,
+            "max": 39.700000000186265
+          },
+          "jankOver25ms": 22,
+          "jankRatio": 0.026537997587454766,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.95480407706095
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6018.5999999996275,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15034.899999999441,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.030436999999438,
+            "msPerSecond": {
+              "Script": 53.17627485801976,
+              "RecalcStyle": 10.15731575338004,
+              "Layout": 0,
+              "Task": 107.35637710556678
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "baseline",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9000.900000000373,
+          "frames": 834,
+          "fps": 92.65740092657018,
+          "frameMs": {
+            "median": 8.900000000372529,
+            "p95": 21.800000000745058,
+            "max": 35.5
+          },
+          "jankOver25ms": 16,
+          "jankRatio": 0.019184652278177457,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.997500249973967
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6045.799999999814,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "baseline",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15046.799999999814,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.065253000000666,
+            "msPerSecond": {
+              "Script": 44.214099705763395,
+              "RecalcStyle": 8.593472239549651,
+              "Layout": 0,
+              "Task": 92.2397863578595
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "current",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9002.5,
+          "frames": 852,
+          "fps": 94.64037767286865,
+          "frameMs": {
+            "median": 8.599999999627471,
+            "p95": 22.800000000745058,
+            "max": 34.60000000055879
+          },
+          "jankOver25ms": 23,
+          "jankRatio": 0.02699530516431925,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "received": 225,
+            "batches": 180,
+            "actualRate": 24.993057484032214
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6046.200000000186,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 376,
+            "received": 376,
+            "batches": 301,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15048.900000000373,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.050680000000284,
+            "msPerSecond": {
+              "Script": 43.75836953687327,
+              "RecalcStyle": 10.322981256656599,
+              "Layout": 0,
+              "Task": 95.63281432996976
+            }
+          }
+        },
+        {
+          "scene": "bus",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "paceHz": 120,
+          "cadence": "full",
+          "options": {
+            "variant": "current",
+            "mode": "idle",
+            "rate": 25,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "paused"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9007.599999999627,
+          "frames": 837,
+          "fps": 92.92153292775374,
+          "frameMs": {
+            "median": 8.799999999813735,
+            "p95": 23.100000000558794,
+            "max": 32.59999999962747
+          },
+          "jankOver25ms": 22,
+          "jankRatio": 0.026284348864994027,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 226,
+            "received": 225,
+            "batches": 181,
+            "actualRate": 24.97890670100907
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 151,
+            "received": 151,
+            "batches": 121,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 6047.0999999996275,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "idle",
+              "rate": 25,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "paused"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 377,
+            "received": 376,
+            "batches": 302,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 15054.699999999255,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.03708800000004,
+            "msPerSecond": {
+              "Script": 41.571466383861605,
+              "RecalcStyle": 9.024145831046354,
+              "Layout": 0,
+              "Task": 89.92299289328523
+            }
+          }
+        }
+      ]
+    }
+  },
+  "motionIntegrity": {
+    "note": "滚动弹幕位移正确性：实测速度 vs 动画声明时长；渲染位移 vs 动画自身位移。",
+    "clockConsistency": [
+      {
+        "capturedAt": "2026-10-12T12:18:17.306Z",
+        "build": "current",
+        "id": "1:5738",
+        "frames": 458,
+        "spanMs": 4997.4,
+        "declared": {
+          "durationMs": 9150,
+          "travelPx": 1395.01,
+          "playbackRate": 1,
+          "expectedPxPerSecond": 152.46
+        },
+        "measured": {
+          "pxPerSecond": -152.28,
+          "animationMsPerSecond": 998.84,
+          "mediaMsPerSecond": 1000.34,
+          "performanceMsPerSecond": 1000
+        },
+        "animationTravelPx": 761.02,
+        "renderedTravelPx": 761.01
+      },
+      {
+        "capturedAt": "2026-10-12T12:18:26.619Z",
+        "build": "current",
+        "id": "1:5738",
+        "frames": 467,
+        "spanMs": 5003.9,
+        "declared": {
+          "durationMs": 9150,
+          "travelPx": 1395.01,
+          "playbackRate": 1,
+          "expectedPxPerSecond": 152.46
+        },
+        "measured": {
+          "pxPerSecond": -152.34,
+          "animationMsPerSecond": 999.22,
+          "mediaMsPerSecond": 999.54,
+          "performanceMsPerSecond": 1000
+        },
+        "animationTravelPx": 762.3,
+        "renderedTravelPx": 762.3
+      }
+    ],
+    "current": {
+      "capturedAt": "2026-10-12T12:54:27.079Z",
+      "url": "http://tauri.localhost/video/play?bvid=BV1Js411o76u&cid=1176840",
+      "build": "current",
+      "id": "1:5737",
+      "frames": 477,
+      "steps": 476,
+      "durationMs": 5015.5,
+      "mediaClock": {
+        "advancedSeconds": 5.02,
+        "wallSeconds": 5.02,
+        "rate": 1
+      },
+      "declared": {
+        "animatedTag": "DIV",
+        "durationMs": 9150,
+        "playbackRate": 1,
+        "travelPx": 1395.01
+      },
+      "measuredPxPerSecond": -152.51,
+      "expectedPxPerSecond": 152.46,
+      "speedErrorPercent": 0.04,
+      "medianStepPx": 1.28,
+      "backtrackFrames": 0,
+      "jumpFrames": 0,
+      "maxJumpPx": 5.09
+    },
+    "baseline": {
+      "capturedAt": "2026-10-12T12:54:51.144Z",
+      "url": "http://tauri.localhost/video/play?bvid=BV1Js411o76u&cid=1176840",
+      "build": "baseline",
+      "id": "1:5738",
+      "frames": 314,
+      "steps": 313,
+      "durationMs": 5002.8,
+      "mediaClock": {
+        "advancedSeconds": 5,
+        "wallSeconds": 5,
+        "rate": 1
+      },
+      "declared": {
+        "animatedTag": "DIV",
+        "durationMs": 9150,
+        "playbackRate": 1,
+        "travelPx": 1395.01
+      },
+      "measuredPxPerSecond": -152.64,
+      "expectedPxPerSecond": 152.46,
+      "speedErrorPercent": 0.12,
+      "medianStepPx": 2.55,
+      "backtrackFrames": 0,
+      "jumpFrames": 0,
+      "maxJumpPx": 6.36
+    }
+  },
+  "cadenceSource": {
+    "note": "判定「有效帧节奏减半」是系统把刷新率降到 60Hz，还是刷新率仍为 120Hz 而主线程跟不上。",
+    "baseline": {
+      "build": "baseline",
+      "frames": 425,
+      "fps": 70.8,
+      "median": 16.6,
+      "p95": 25,
+      "near120": 44,
+      "near60": 47,
+      "wallMs": 6002
+    },
+    "surfaceFlingerDuringSample": "vsyncRate=120.00001（8 次轮询全部为 120Hz）",
+    "interpretation": "基线在 120Hz 下主线程跟不上：rAF 中位间隔 16.6ms，而 SurfaceFlinger 仍报 120Hz。所以是跳帧，不是系统降档。"
+  },
+  "scripts": {
+    "tests/vod-danmaku-performance.browser.js": "adad944ed81a7f5a",
+    "tests/danmaku-p0-performance.browser.js": "c5ca28d4c6599915",
+    "tests/browser/frame-cadence.browser.js": "5c7eaf38bd9906b7"
+  },
+  "limitations": [
+    "非 aarch64 真机；模拟器宿主刷新率 200Hz 与真实高刷手机不同，绝对 FPS 不能外推",
+    "本模拟器 WebView 的 rAF 上限约 92～95 次/秒，送不满 120；因此只能判断「节奏档位」与主线程余量，不能宣称达到 120 FPS",
+    "masked 变体尺寸为 0，会改变轨道准入与在屏数，不能当作等负载动画对照",
+    "120Hz 节奏由注入的已绘制合成动画固定（pace）；它本身占一个合成层，与真实内容驱动的高刷不完全等价",
+    "VOD 关闭弹幕只隐藏图层，renderer 与调度器仍运行",
+    "Trace 事件为 inclusive duration，不跨事件相加",
+    "直播夹具不含视频解码；bus 场景无被测组件，反映事件输送与页面自身开销（约 92～94 FPS、Task 约 70～82 ms/s）",
+    "直播夹具的运行间波动实测 1～26%（同一 URL 连跑两轮、夹具源码在两提交间完全相同）；both 场景两版差异完全落在噪声内，不据此下 A/B 结论"
+  ]
+}

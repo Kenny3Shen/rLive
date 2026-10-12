@@ -1,0 +1,3745 @@
+{
+  "说明": "2026-10-12 P0 生产构建单轮 A/B 复测。没有视频解码；面板最终估高33px。高密度层在估高校准前采样，但该场景不挂载面板，预算/渲染层源码指纹不变。Android空闲基线不稳、实到事件率不等于目标，未证明60FPS。字段名沿用CDP和浏览器夹具。",
+  "runs": [
+    {
+      "url": "http://127.0.0.1:1433/tests/browser/danmaku-bench.html?scene=panel-pinned,panel-up&cpu=1,4&sample=9000",
+      "capturedAt": "2026-10-12T07:29:11.382Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T07:26:05.973Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+        "hardwareConcurrency": 12,
+        "deviceMemory": 16,
+        "devicePixelRatio": 1,
+        "viewport": {
+          "width": 780,
+          "height": 493
+        },
+        "nativeIPC": false,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "panel-pinned",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "baseline",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9010.40000000596,
+          "frames": 541,
+          "fps": 60.041729556916685,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 16.80000001192093,
+            "max": 17.099999994039536
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.8268667316775
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 750,
+            "received": 750,
+            "batches": 71,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9959,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3005,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 2100,
+            "received": 2100,
+            "batches": 251,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9959,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12015.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.014649999997346,
+            "msPerSecond": {
+              "Script": 27.778005801675462,
+              "RecalcStyle": 3.488321787313901,
+              "Layout": 7.624810724766934,
+              "Task": 69.44884160784771
+            }
+          }
+        },
+        {
+          "scene": "panel-pinned",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9009.700000017881,
+          "frames": 541,
+          "fps": 60.04639444142716,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 16.900000005960464,
+            "max": 17.299999982118607
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.83850738618608
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 1650,
+            "received": 1650,
+            "batches": 99,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 27,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 41534,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3005.800000011921,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 3000,
+            "received": 3000,
+            "batches": 279,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 41534,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12015.700000017881,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.013143999996828,
+            "msPerSecond": {
+              "Script": 22.10760196442774,
+              "RecalcStyle": 6.341960141768525,
+              "Layout": 5.592942928684791,
+              "Task": 52.114889099759786
+            }
+          }
+        },
+        {
+          "scene": "panel-pinned",
+          "cpu": 4,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "baseline",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9006.899999976158,
+          "frames": 541,
+          "fps": 60.06506123099314,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 17.299999982118607,
+            "max": 31.100000023841858
+          },
+          "jankOver25ms": 1,
+          "jankRatio": 0.0018484288354898336,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.88508809952077
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 750,
+            "received": 750,
+            "batches": 71,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9959,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3007.7000000178814,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 2100,
+            "received": 2100,
+            "batches": 251,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9959,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12014.700000017881,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.012920999986818,
+            "msPerSecond": {
+              "Script": 99.41183330035959,
+              "RecalcStyle": 14.570858881398394,
+              "Layout": 31.78192730197224,
+              "Task": 261.8976689137132
+            }
+          }
+        },
+        {
+          "scene": "panel-pinned",
+          "cpu": 4,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9007,
+          "frames": 541,
+          "fps": 60.06439435994227,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 17.599999994039536,
+            "max": 22.100000023841858
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.8834240035528
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 1650,
+            "received": 1650,
+            "batches": 99,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 27,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 41534,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3006.899999976158,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 3000,
+            "received": 3000,
+            "batches": 279,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 41534,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12014.09999999404,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.014716000005137,
+            "msPerSecond": {
+              "Script": 80.1991987323381,
+              "RecalcStyle": 24.415078633633563,
+              "Layout": 22.371198382720554,
+              "Task": 192.6347984782894
+            }
+          }
+        },
+        {
+          "scene": "panel-up",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "baseline",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": true
+          },
+          "requestedMs": 9000,
+          "durationMs": 9008.40000000596,
+          "frames": 541,
+          "fps": 60.05505972199747,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 16.899999976158142,
+            "max": 17.099999994039536
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.86013054472568
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 1650,
+            "received": 1650,
+            "batches": 100,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 1200,
+            "panelDataCount": null,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 4979,
+            "panelDistanceToBottom": 36255,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3007.2999999821186,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 3000,
+            "received": 3000,
+            "batches": 280,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 1200,
+            "panelDataCount": null,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41234,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12016.09999999404,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.014273000007961,
+            "msPerSecond": {
+              "Script": 51.8305802364303,
+              "RecalcStyle": 5.691085681557972,
+              "Layout": 34.937814730008924,
+              "Task": 159.04743510638454
+            }
+          }
+        },
+        {
+          "scene": "panel-up",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": true
+          },
+          "requestedMs": 9000,
+          "durationMs": 9010.200000017881,
+          "frames": 541,
+          "fps": 60.04306230704383,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 16.899999976158142,
+            "max": 17.099999994039536
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.83019244826096
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 1650,
+            "received": 1650,
+            "batches": 99,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 26,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 5297,
+            "panelDistanceToBottom": 36237,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3005.7999999821186,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 3000,
+            "received": 3000,
+            "batches": 279,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41534,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12016.09999999404,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.013268000009703,
+            "msPerSecond": {
+              "Script": 15.579033043270027,
+              "RecalcStyle": 4.953142411825762,
+              "Layout": 3.563524350986283,
+              "Task": 37.422608536619315
+            }
+          }
+        },
+        {
+          "scene": "panel-up",
+          "cpu": 4,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "baseline",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": true
+          },
+          "requestedMs": 9000,
+          "durationMs": 9006.300000011921,
+          "frames": 540,
+          "fps": 59.95802937935503,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 18.19999998807907,
+            "max": 30
+          },
+          "jankOver25ms": 1,
+          "jankRatio": 0.001851851851851852,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.8950734483876
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 1650,
+            "received": 1650,
+            "batches": 100,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 1200,
+            "panelDataCount": null,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 5257,
+            "panelDistanceToBottom": 35977,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3008,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 3000,
+            "received": 3000,
+            "batches": 280,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 1200,
+            "panelDataCount": null,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41234,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12015.90000000596,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.013819999992847,
+            "msPerSecond": {
+              "Script": 215.3848201984886,
+              "RecalcStyle": 21.9134617731613,
+              "Layout": 136.7837387479424,
+              "Task": 637.37594050076
+            }
+          }
+        },
+        {
+          "scene": "panel-up",
+          "cpu": 4,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": true
+          },
+          "requestedMs": 9000,
+          "durationMs": 9007.40000000596,
+          "frames": 539,
+          "fps": 59.83968736812436,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 17.30000001192093,
+            "max": 70.59999999403954
+          },
+          "jankOver25ms": 2,
+          "jankRatio": 0.0037105751391465678,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.87676799066398
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 1650,
+            "received": 1650,
+            "batches": 99,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 26,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 5297,
+            "panelDistanceToBottom": 36237,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3007.300000011921,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 3000,
+            "received": 3000,
+            "batches": 279,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41534,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12015.09999999404,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.012831000000006,
+            "msPerSecond": {
+              "Script": 60.65441590993985,
+              "RecalcStyle": 20.606621826149837,
+              "Layout": 15.862829337419043,
+              "Task": 155.62191280408967
+            }
+          }
+        }
+      ],
+      "记录": "chromium-panel-final"
+    },
+    {
+      "url": "http://127.0.0.1:1433/tests/browser/danmaku-bench.html?scene=panel-pinned,panel-up,high-density&cpu=1,4&sample=9000",
+      "capturedAt": "2026-10-12T07:14:50.526Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T06:57:14.402Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "3115a9d232055985e3dfc3771e42a3db24a3d3832c59f34d6c815938dd254675",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+        "hardwareConcurrency": 12,
+        "deviceMemory": 16,
+        "devicePixelRatio": 1,
+        "viewport": {
+          "width": 780,
+          "height": 493
+        },
+        "nativeIPC": false,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9012,
+          "frames": 541,
+          "fps": 60.031069684864626,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 20.19999998807907,
+            "max": 21.200000017881393
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1800,
+            "batches": 180,
+            "actualRate": 199.73368841544607
+          },
+          "layerOnScreen": {
+            "min": 751,
+            "mean": 753.6363636363636,
+            "max": 756,
+            "samples": [
+              755,
+              756,
+              755,
+              753,
+              751,
+              753,
+              754,
+              754,
+              751,
+              754,
+              754
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 4401,
+            "received": 4401,
+            "batches": 441,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 755,
+            "rendererCount": 1,
+            "layerDOM": 755,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22028,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 6201,
+            "received": 6201,
+            "batches": 621,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 754,
+            "rendererCount": 1,
+            "layerDOM": 754,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31042.399999976158,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.020802000013646,
+            "msPerSecond": {
+              "Script": 19.1699141605967,
+              "RecalcStyle": 130.17623045026636,
+              "Layout": 14.134774269494791,
+              "Task": 382.3932727926829
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9001.700000017881,
+          "frames": 541,
+          "fps": 60.09975893430411,
+          "frameMs": {
+            "median": 16.69999998807907,
+            "p95": 18.099999994039536,
+            "max": 18.599999994039536
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1800,
+            "batches": 180,
+            "actualRate": 199.96222935627986
+          },
+          "layerOnScreen": {
+            "min": 299,
+            "mean": 299.8181818181818,
+            "max": 300,
+            "samples": [
+              300,
+              299,
+              299,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 4401,
+            "received": 4401,
+            "batches": 441,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 300,
+            "rendererCount": 1,
+            "layerDOM": 300,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22004.69999998808,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 6201,
+            "received": 6201,
+            "batches": 621,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 300,
+            "rendererCount": 1,
+            "layerDOM": 300,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31007.40000000596,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.00610400000005,
+            "msPerSecond": {
+              "Script": 8.225865479679058,
+              "RecalcStyle": 44.501928913989694,
+              "Layout": 1.6765296070309772,
+              "Task": 119.12398524378499
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 4,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9035.399999976158,
+          "frames": 228,
+          "fps": 25.23407928819993,
+          "frameMs": {
+            "median": 36.599999994039536,
+            "p95": 62.5,
+            "max": 79.80000001192093
+          },
+          "jankOver25ms": 214,
+          "jankRatio": 0.9385964912280702,
+          "longtasks": {
+            "supported": true,
+            "count": 26,
+            "maxMs": 74,
+            "totalMs": 1437
+          },
+          "events": {
+            "sent": 1110,
+            "received": 1110,
+            "batches": 111,
+            "actualRate": 122.85012285044702
+          },
+          "layerOnScreen": {
+            "min": 729,
+            "mean": 741.2,
+            "max": 752,
+            "samples": [
+              743,
+              734,
+              729,
+              735,
+              741,
+              746,
+              752,
+              748,
+              742,
+              742
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 4071,
+            "received": 4071,
+            "batches": 408,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 743,
+            "rendererCount": 1,
+            "layerDOM": 743,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22070.59999999404,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 5181,
+            "received": 5181,
+            "batches": 519,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 742,
+            "rendererCount": 1,
+            "layerDOM": 742,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31112.90000000596,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.117457999993348,
+            "msPerSecond": {
+              "Script": 83.85648719199551,
+              "RecalcStyle": 260.4894916984244,
+              "Layout": 112.54354009645549,
+              "Task": 995.7310469657906
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 4,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9002.699999988079,
+          "frames": 541,
+          "fps": 60.093083186234836,
+          "frameMs": {
+            "median": 16.599999994039536,
+            "p95": 22.400000005960464,
+            "max": 25.400000005960464
+          },
+          "jankOver25ms": 2,
+          "jankRatio": 0.0036968576709796672,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1800,
+            "batches": 180,
+            "actualRate": 199.94001799486637
+          },
+          "layerOnScreen": {
+            "min": 299,
+            "mean": 299.90909090909093,
+            "max": 300,
+            "samples": [
+              299,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 4401,
+            "received": 4401,
+            "batches": 441,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 299,
+            "rendererCount": 1,
+            "layerDOM": 299,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22018,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "mockIPC-events",
+            "running": true,
+            "sent": 6201,
+            "received": 6201,
+            "batches": 621,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 300,
+            "rendererCount": 1,
+            "layerDOM": 300,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31024.79999998212,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.01634900001227,
+            "msPerSecond": {
+              "Script": 32.320177490867145,
+              "RecalcStyle": 185.18959281608622,
+              "Layout": 8.195778579544765,
+              "Task": 470.4827863245116
+            }
+          }
+        }
+      ],
+      "记录": "chromium"
+    },
+    {
+      "url": "http://localhost:1420/tests/browser/danmaku-bench.html?scene=panel-pinned,panel-up&cpu=1&sample=9000",
+      "capturedAt": "2026-10-12T07:35:52.596Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T07:26:05.973Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "hardwareConcurrency": 20,
+        "deviceMemory": 32,
+        "devicePixelRatio": 1,
+        "viewport": {
+          "width": 1920,
+          "height": 1032
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "panel-pinned",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "baseline",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9001.5,
+          "frames": 1556,
+          "fps": 172.86007887574294,
+          "frameMs": {
+            "median": 5.9000000059604645,
+            "p95": 6.4000000059604645,
+            "max": 8.5
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.97500416597234
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 750,
+            "received": 750,
+            "batches": 71,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9959,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3015.4000000059605,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 2100,
+            "received": 2100,
+            "batches": 251,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9959,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12017,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.006131999980425,
+            "msPerSecond": {
+              "Script": 32.317758611647335,
+              "RecalcStyle": 3.145856623027686,
+              "Layout": 6.898855135604833,
+              "Task": 89.84622921380218
+            }
+          }
+        },
+        {
+          "scene": "panel-pinned",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9002,
+          "frames": 1558,
+          "fps": 173.0726505221062,
+          "frameMs": {
+            "median": 5.9000000059604645,
+            "p95": 6.299999982118607,
+            "max": 9
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1358,
+            "received": 1350,
+            "batches": 181,
+            "actualRate": 149.96667407242836
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1642,
+            "received": 1642,
+            "batches": 98,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 41534,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 2999.199999988079,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 3000,
+            "received": 2992,
+            "batches": 279,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 41534,
+            "panelDistanceToBottom": 0,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12001.299999982119,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.006118999997852,
+            "msPerSecond": {
+              "Script": 28.96130952745152,
+              "RecalcStyle": 5.802721460821523,
+              "Layout": 5.0900948566203645,
+              "Task": 72.79961546146086
+            }
+          }
+        },
+        {
+          "scene": "panel-up",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "baseline",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": true
+          },
+          "requestedMs": 9000,
+          "durationMs": 9001.40000000596,
+          "frames": 1561,
+          "fps": 173.41746839369057,
+          "frameMs": {
+            "median": 5.9000000059604645,
+            "p95": 6.199999988079071,
+            "max": 12.699999988079071
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.97667029563246
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1650,
+            "received": 1650,
+            "batches": 100,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 1200,
+            "panelDataCount": null,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 4979,
+            "panelDistanceToBottom": 36255,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3015.800000011921,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 3000,
+            "received": 3000,
+            "batches": 280,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 1200,
+            "panelDataCount": null,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41234,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12018.200000017881,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.010796999995364,
+            "msPerSecond": {
+              "Script": 54.347467821131914,
+              "RecalcStyle": 4.851846068668787,
+              "Layout": 29.3336982289287,
+              "Task": 188.44936801937433
+            }
+          }
+        },
+        {
+          "scene": "panel-up",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 150,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": true
+          },
+          "requestedMs": 9000,
+          "durationMs": 9002.699999988079,
+          "frames": 1557,
+          "fps": 172.94811556555942,
+          "frameMs": {
+            "median": 5.9000000059604645,
+            "p95": 6.300000011920929,
+            "max": 19.400000005960464
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "received": 1350,
+            "batches": 180,
+            "actualRate": 149.95501349614977
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1642,
+            "received": 1642,
+            "batches": 98,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 26,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 5297,
+            "panelDistanceToBottom": 36237,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 2979.600000023842,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 2992,
+            "received": 2992,
+            "batches": 278,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41534,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 11982.40000000596,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.00655600000755,
+            "msPerSecond": {
+              "Script": 21.998308787491457,
+              "RecalcStyle": 4.173404351226873,
+              "Layout": 3.235420953356146,
+              "Task": 62.86320764557792
+            }
+          }
+        }
+      ],
+      "记录": "windows-panel-final"
+    },
+    {
+      "url": "http://localhost:1420/tests/browser/danmaku-bench.html?scene=high-density&cpu=1,4&sample=9000",
+      "capturedAt": "2026-10-12T07:02:43.595Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T06:57:14.402Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "3115a9d232055985e3dfc3771e42a3db24a3d3832c59f34d6c815938dd254675",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "hardwareConcurrency": 20,
+        "deviceMemory": 32,
+        "devicePixelRatio": 1,
+        "viewport": {
+          "width": 1920,
+          "height": 1032
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9001.59999999404,
+          "frames": 1131,
+          "fps": 125.64432989699041,
+          "frameMs": {
+            "median": 6.4000000059604645,
+            "p95": 15.799999982118607,
+            "max": 22.5
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1800,
+            "batches": 180,
+            "actualRate": 199.96445076444098
+          },
+          "layerOnScreen": {
+            "min": 741,
+            "mean": 749.1,
+            "max": 756,
+            "samples": [
+              755,
+              756,
+              755,
+              753,
+              747,
+              742,
+              748,
+              749,
+              745,
+              741
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4411,
+            "received": 4411,
+            "batches": 442,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 755,
+            "rendererCount": 1,
+            "layerDOM": 755,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22064.90000000596,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 6211,
+            "received": 6211,
+            "batches": 622,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 741,
+            "rendererCount": 1,
+            "layerDOM": 741,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31067.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.013938000018243,
+            "msPerSecond": {
+              "Script": 40.73025574385546,
+              "RecalcStyle": 295.07169896161,
+              "Layout": 31.40658389257027,
+              "Task": 798.8738107567889
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9000.199999988079,
+          "frames": 1553,
+          "fps": 172.5517210730936,
+          "frameMs": {
+            "median": 5.9000000059604645,
+            "p95": 6.5999999940395355,
+            "max": 9.799999982118607
+          },
+          "jankOver25ms": 0,
+          "jankRatio": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1800,
+            "batches": 180,
+            "actualRate": 199.99555565458368
+          },
+          "layerOnScreen": {
+            "min": 299,
+            "mean": 299.8,
+            "max": 300,
+            "samples": [
+              300,
+              299,
+              299,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4411,
+            "received": 4411,
+            "batches": 442,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 300,
+            "rendererCount": 1,
+            "layerDOM": 300,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22060,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 6211,
+            "received": 6211,
+            "batches": 622,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 300,
+            "rendererCount": 1,
+            "layerDOM": 300,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31061,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.008998000004794,
+            "msPerSecond": {
+              "Script": 20.853040482404367,
+              "RecalcStyle": 112.28984621813227,
+              "Layout": 2.0975695632288835,
+              "Task": 290.3769098404294
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 4,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9082.40000000596,
+          "frames": 134,
+          "fps": 14.753809565743863,
+          "frameMs": {
+            "median": 73.09999999403954,
+            "p95": 87.7999999821186,
+            "max": 141.40000000596046
+          },
+          "jankOver25ms": 133,
+          "jankRatio": 0.9925373134328358,
+          "longtasks": {
+            "supported": true,
+            "count": 104,
+            "maxMs": 90,
+            "totalMs": 6924
+          },
+          "events": {
+            "sent": 1000,
+            "received": 990,
+            "batches": 100,
+            "actualRate": 109.00202589616734
+          },
+          "layerOnScreen": {
+            "min": 722,
+            "mean": 729.3636363636364,
+            "max": 743,
+            "samples": [
+              743,
+              738,
+              725,
+              722,
+              723,
+              732,
+              731,
+              723,
+              728,
+              726,
+              732
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 3581,
+            "received": 3581,
+            "batches": 359,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 743,
+            "rendererCount": 1,
+            "layerDOM": 743,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22128.69999998808,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4581,
+            "received": 4571,
+            "batches": 459,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 732,
+            "rendererCount": 1,
+            "layerDOM": 732,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31219.30000001192,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.189699000009568,
+            "msPerSecond": {
+              "Script": 118.86994340063399,
+              "RecalcStyle": 224.19787633935096,
+              "Layout": 122.41042932949473,
+              "Task": 985.9551439052103
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 4,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9008.200000017881,
+          "frames": 707,
+          "fps": 78.48404786734271,
+          "frameMs": {
+            "median": 11.799999982118607,
+            "p95": 20.5,
+            "max": 48.29999998211861
+          },
+          "jankOver25ms": 21,
+          "jankRatio": 0.0297029702970297,
+          "longtasks": {
+            "supported": true,
+            "count": 1,
+            "maxMs": 51,
+            "totalMs": 51
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1800,
+            "batches": 180,
+            "actualRate": 199.81794365094325
+          },
+          "layerOnScreen": {
+            "min": 297,
+            "mean": 299.7,
+            "max": 300,
+            "samples": [
+              300,
+              300,
+              297,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300,
+              300
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4411,
+            "received": 4411,
+            "batches": 442,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 300,
+            "rendererCount": 1,
+            "layerDOM": 300,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22082.59999999404,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 6211,
+            "received": 6211,
+            "batches": 622,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 300,
+            "rendererCount": 1,
+            "layerDOM": 300,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31095.09999999404,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.032929999986663,
+            "msPerSecond": {
+              "Script": 89.00633570737152,
+              "RecalcStyle": 339.3108326981971,
+              "Layout": 16.831526426112525,
+              "Task": 973.0490549592413
+            }
+          }
+        }
+      ],
+      "记录": "windows-density"
+    },
+    {
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html?scene=mobile25,mobile200&cpu=1&sample=9000",
+      "capturedAt": "2026-10-12T07:38:43.139Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T07:26:05.973Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 2,
+        "devicePixelRatio": 2.625,
+        "viewport": {
+          "width": 412,
+          "height": 915
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "mobile25",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "options": {
+            "variant": "baseline",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9094.400000002235,
+          "frames": 64,
+          "fps": 7.037297677690037,
+          "frameMs": {
+            "median": 123.30000000074506,
+            "p95": 258.19999999925494,
+            "max": 446.29999999701977
+          },
+          "jankOver25ms": 64,
+          "jankRatio": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 12,
+            "maxMs": 90,
+            "totalMs": 764
+          },
+          "events": {
+            "sent": 208,
+            "received": 211,
+            "batches": 167,
+            "actualRate": 23.20109078113434
+          },
+          "layerOnScreen": {
+            "min": 43,
+            "mean": 47.90909090909091,
+            "max": 52,
+            "samples": [
+              46,
+              47,
+              46,
+              46,
+              51,
+              52,
+              52,
+              49,
+              48,
+              47,
+              43
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 455,
+            "received": 445,
+            "batches": 135,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 46,
+            "rendererCount": 1,
+            "layerDOM": 46,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6680.900000002235,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 663,
+            "received": 656,
+            "batches": 302,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 43,
+            "rendererCount": 1,
+            "layerDOM": 43,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15775.800000000745,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.607163000000583,
+            "msPerSecond": {
+              "Script": 453.33466289681303,
+              "RecalcStyle": 17.86240121042909,
+              "Layout": 11.92381143111583,
+              "Task": 601.9141134588483
+            }
+          }
+        },
+        {
+          "scene": "mobile25",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "options": {
+            "variant": "current",
+            "mode": "both",
+            "rate": 25,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9055.599999997765,
+          "frames": 73,
+          "fps": 8.061310128541237,
+          "frameMs": {
+            "median": 117.60000000149012,
+            "p95": 248.89999999850988,
+            "max": 279
+          },
+          "jankOver25ms": 72,
+          "jankRatio": 0.9863013698630136,
+          "longtasks": {
+            "supported": true,
+            "count": 16,
+            "maxMs": 80,
+            "totalMs": 958
+          },
+          "events": {
+            "sent": 214,
+            "received": 209,
+            "batches": 171,
+            "actualRate": 23.07964132691943
+          },
+          "layerOnScreen": {
+            "min": 46,
+            "mean": 50.45454545454545,
+            "max": 53,
+            "samples": [
+              46,
+              53,
+              52,
+              52,
+              50,
+              50,
+              51,
+              49,
+              50,
+              51,
+              51
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1362,
+            "received": 1357,
+            "batches": 169,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 46,
+            "rendererCount": 1,
+            "layerDOM": 46,
+            "panelDOMRows": 24,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40497.90625,
+            "panelDistanceToBottom": 0.09375,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6725.699999999255,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1576,
+            "received": 1566,
+            "batches": 340,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 51,
+            "rendererCount": 1,
+            "layerDOM": 51,
+            "panelDOMRows": 21,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40460.953125,
+            "panelDistanceToBottom": 0.046875,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15781.60000000149,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.574476999998296,
+            "msPerSecond": {
+              "Script": 474.37128941881696,
+              "RecalcStyle": 19.981665839296916,
+              "Layout": 16.318593694467896,
+              "Task": 601.774801903125
+            }
+          }
+        },
+        {
+          "scene": "mobile200",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "options": {
+            "variant": "baseline",
+            "mode": "both",
+            "rate": 200,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9070.699999999255,
+          "frames": 57,
+          "fps": 6.2839692636736615,
+          "frameMs": {
+            "median": 136.5,
+            "p95": 352.0999999977648,
+            "max": 360.29999999701977
+          },
+          "jankOver25ms": 57,
+          "jankRatio": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 28,
+            "maxMs": 158,
+            "totalMs": 2054
+          },
+          "events": {
+            "sent": 1390,
+            "received": 1390,
+            "batches": 139,
+            "actualRate": 153.2406539737963
+          },
+          "layerOnScreen": {
+            "min": 42,
+            "mean": 46.90909090909091,
+            "max": 56,
+            "samples": [
+              56,
+              45,
+              45,
+              42,
+              49,
+              42,
+              43,
+              48,
+              50,
+              48,
+              48
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1330,
+            "received": 1270,
+            "batches": 114,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 56,
+            "rendererCount": 1,
+            "layerDOM": 56,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6628.10000000149,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 2720,
+            "received": 2660,
+            "batches": 253,
+            "prefilled": 300,
+            "injectionError": null,
+            "layerOnScreen": 48,
+            "rendererCount": 1,
+            "layerDOM": 48,
+            "panelDOMRows": 300,
+            "panelDataCount": null,
+            "panelCount": 300,
+            "panelUnpinned": false,
+            "panelScrollTop": 9816,
+            "panelDistanceToBottom": 0,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15699.300000000745,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.802933999999368,
+            "msPerSecond": {
+              "Script": 539.3043552063438,
+              "RecalcStyle": 33.34664907465675,
+              "Layout": 20.02788144855536,
+              "Task": 778.8120372941906
+            }
+          }
+        },
+        {
+          "scene": "mobile200",
+          "cpu": 1,
+          "warmupMs": 6000,
+          "options": {
+            "variant": "current",
+            "mode": "both",
+            "rate": 200,
+            "width": 412,
+            "height": 240,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9065.10000000149,
+          "frames": 77,
+          "fps": 8.494114791892791,
+          "frameMs": {
+            "median": 111.30000000074506,
+            "p95": 263.1000000014901,
+            "max": 369.6000000014901
+          },
+          "jankOver25ms": 76,
+          "jankRatio": 0.987012987012987,
+          "longtasks": {
+            "supported": true,
+            "count": 9,
+            "maxMs": 93,
+            "totalMs": 607
+          },
+          "events": {
+            "sent": 1610,
+            "received": 1620,
+            "batches": 161,
+            "actualRate": 178.7073501670951
+          },
+          "layerOnScreen": {
+            "min": 43,
+            "mean": 46.90909090909091,
+            "max": 50,
+            "samples": [
+              49,
+              50,
+              50,
+              48,
+              50,
+              44,
+              43,
+              44,
+              45,
+              47,
+              46
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 2310,
+            "received": 2260,
+            "batches": 150,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 49,
+            "rendererCount": 1,
+            "layerDOM": 49,
+            "panelDOMRows": 27,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40597.71484375,
+            "panelDistanceToBottom": 0.28515625,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 6323.79999999702,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 3920,
+            "received": 3880,
+            "batches": 311,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 46,
+            "rendererCount": 1,
+            "layerDOM": 46,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40541.71484375,
+            "panelDistanceToBottom": 0.28515625,
+            "layerRect": {
+              "width": 412,
+              "height": 240
+            },
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 15389.199999999255,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.36114599999928,
+            "msPerSecond": {
+              "Script": 513.4384187577427,
+              "RecalcStyle": 51.82228757035057,
+              "Layout": 28.269295233726773,
+              "Task": 719.9865272906244
+            }
+          }
+        }
+      ],
+      "记录": "android-both-final"
+    },
+    {
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html?scene=high-density&width=960&height=540&cpu=1&sample=9000",
+      "capturedAt": "2026-10-12T07:40:00.336Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T07:26:05.973Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 2,
+        "devicePixelRatio": 2.625,
+        "viewport": {
+          "width": 412,
+          "height": 915
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "baseline",
+            "mode": "layer",
+            "rate": 200,
+            "width": 960,
+            "height": 540,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9052.699999999255,
+          "frames": 96,
+          "fps": 10.604571011964154,
+          "frameMs": {
+            "median": 85.59999999776483,
+            "p95": 198.30000000074506,
+            "max": 355.80000000074506
+          },
+          "jankOver25ms": 95,
+          "jankRatio": 0.9895833333333334,
+          "longtasks": {
+            "supported": true,
+            "count": 25,
+            "maxMs": 134,
+            "totalMs": 1612
+          },
+          "events": {
+            "sent": 1510,
+            "received": 1560,
+            "batches": 151,
+            "actualRate": 172.3242789444175
+          },
+          "layerOnScreen": {
+            "min": 206,
+            "mean": 213.27272727272728,
+            "max": 221,
+            "samples": [
+              210,
+              212,
+              207,
+              206,
+              210,
+              207,
+              213,
+              219,
+              221,
+              221,
+              220
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4061,
+            "received": 4001,
+            "batches": 407,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 210,
+            "rendererCount": 1,
+            "layerDOM": 210,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 960,
+              "height": 540
+            },
+            "panelRect": null,
+            "elapsedMs": 22168.60000000149,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 5571,
+            "received": 5561,
+            "batches": 558,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 220,
+            "rendererCount": 1,
+            "layerDOM": 220,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 960,
+              "height": 540
+            },
+            "panelRect": null,
+            "elapsedMs": 31222.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.274567000000388,
+            "msPerSecond": {
+              "Script": 484.24071980932496,
+              "RecalcStyle": 44.6363695469538,
+              "Layout": 39.61672819873796,
+              "Task": 765.4416642846726
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 960,
+            "height": 540,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9040.39999999851,
+          "frames": 94,
+          "fps": 10.397770010178254,
+          "frameMs": {
+            "median": 67.69999999925494,
+            "p95": 305.6000000014901,
+            "max": 622.0999999977648
+          },
+          "jankOver25ms": 86,
+          "jankRatio": 0.9148936170212766,
+          "longtasks": {
+            "supported": true,
+            "count": 15,
+            "maxMs": 88,
+            "totalMs": 939
+          },
+          "events": {
+            "sent": 1710,
+            "received": 1700,
+            "batches": 171,
+            "actualRate": 188.0447767798195
+          },
+          "layerOnScreen": {
+            "min": 140,
+            "mean": 147.54545454545453,
+            "max": 150,
+            "samples": [
+              150,
+              148,
+              146,
+              140,
+              141,
+              150,
+              150,
+              150,
+              149,
+              149,
+              150
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4271,
+            "received": 4241,
+            "batches": 428,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 150,
+            "rendererCount": 1,
+            "layerDOM": 150,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 960,
+              "height": 540
+            },
+            "panelRect": null,
+            "elapsedMs": 22243.699999999255,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 5981,
+            "received": 5941,
+            "batches": 599,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 150,
+            "rendererCount": 1,
+            "layerDOM": 150,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 960,
+              "height": 540
+            },
+            "panelRect": null,
+            "elapsedMs": 31284.39999999851,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.352436999997735,
+            "msPerSecond": {
+              "Script": 443.1490957919311,
+              "RecalcStyle": 24.649938834130165,
+              "Layout": 10.136502389700446,
+              "Task": 580.7118508257591
+            }
+          }
+        }
+      ],
+      "记录": "android-density"
+    },
+    {
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html?scene=idle&variants=current&cpu=1&sample=9000",
+      "capturedAt": "2026-10-12T07:22:30.159Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T06:57:14.402Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "3115a9d232055985e3dfc3771e42a3db24a3d3832c59f34d6c815938dd254675",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 2,
+        "devicePixelRatio": 2.625,
+        "viewport": {
+          "width": 412,
+          "height": 915
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "idle",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "idle",
+            "rate": 0,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9000.099999997765,
+          "frames": 428,
+          "fps": 47.555027166376625,
+          "frameMs": {
+            "median": 19.399999998509884,
+            "p95": 39.399999998509884,
+            "max": 66.69999999925494
+          },
+          "jankOver25ms": 113,
+          "jankRatio": 0.26401869158878505,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "received": 0,
+            "batches": 0,
+            "actualRate": 0
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1,
+            "received": 1,
+            "batches": 1,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 3046.5,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1,
+            "received": 1,
+            "batches": 1,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": null,
+            "panelRect": null,
+            "elapsedMs": 12046.599999997765,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.032725000000937,
+            "msPerSecond": {
+              "Script": 26.930964908150614,
+              "RecalcStyle": 0,
+              "Layout": 0,
+              "Task": 50.08687854439862
+            }
+          }
+        }
+      ],
+      "记录": "android-idle-clean"
+    },
+    {
+      "url": "http://tauri.localhost/tests/browser/danmaku-bench.html?scene=panel-pinned,panel-up&variants=current&rate=200&cpu=1&sample=9000",
+      "capturedAt": "2026-10-12T07:27:01.559Z",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "builtAt": "2026-10-12T07:26:05.973Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "3e628d3d0a93aa4b8c0bfc305ade383e620827c3c439579ce2ef8bd0a5a102f2",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      },
+      "environment": {
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 2,
+        "devicePixelRatio": 2.625,
+        "viewport": {
+          "width": 412,
+          "height": 915
+        },
+        "nativeIPC": true,
+        "reactVersion": "19.3.0",
+        "production": true
+      },
+      "rows": [
+        {
+          "scene": "panel-pinned",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false
+          },
+          "requestedMs": 9000,
+          "durationMs": 9061.60000000149,
+          "frames": 117,
+          "fps": 12.911627085722252,
+          "frameMs": {
+            "median": 67.19999999925494,
+            "p95": 166,
+            "max": 259.0999999977648
+          },
+          "jankOver25ms": 106,
+          "jankRatio": 0.905982905982906,
+          "longtasks": {
+            "supported": true,
+            "count": 14,
+            "maxMs": 82,
+            "totalMs": 867
+          },
+          "events": {
+            "sent": 1710,
+            "received": 1720,
+            "batches": 171,
+            "actualRate": 189.81195373882287
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1800,
+            "received": 1760,
+            "batches": 99,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 27,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40516.953125,
+            "panelDistanceToBottom": 0.046875,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3397.099999997765,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 3510,
+            "received": 3480,
+            "batches": 270,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 27,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": false,
+            "panelScrollTop": 40470.85546875,
+            "panelDistanceToBottom": 0.14453125,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12458.89999999851,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.393190999999206,
+            "msPerSecond": {
+              "Script": 577.1390148460154,
+              "RecalcStyle": 31.120947077518668,
+              "Layout": 30.036118716208783,
+              "Task": 744.8574185280157
+            }
+          }
+        },
+        {
+          "scene": "panel-up",
+          "cpu": 1,
+          "warmupMs": 3000,
+          "options": {
+            "variant": "current",
+            "mode": "panel",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": true
+          },
+          "requestedMs": 9000,
+          "durationMs": 9022.599999997765,
+          "frames": 160,
+          "fps": 17.733247622640885,
+          "frameMs": {
+            "median": 48.5,
+            "p95": 133.19999999925494,
+            "max": 178
+          },
+          "jankOver25ms": 132,
+          "jankRatio": 0.825,
+          "longtasks": {
+            "supported": true,
+            "count": 10,
+            "maxMs": 83,
+            "totalMs": 590
+          },
+          "events": {
+            "sent": 1740,
+            "received": 1780,
+            "batches": 174,
+            "actualRate": 197.28237980187984
+          },
+          "layerOnScreen": {
+            "min": 0,
+            "mean": 0,
+            "max": 0,
+            "samples": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "valid": true,
+          "before": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 1860,
+            "received": 1820,
+            "batches": 105,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 28,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41031,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 3429.300000000745,
+            "visibility": "visible"
+          },
+          "after": {
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 3600,
+            "received": 3600,
+            "batches": 279,
+            "prefilled": 1200,
+            "injectionError": null,
+            "layerOnScreen": 0,
+            "rendererCount": 0,
+            "layerDOM": 0,
+            "panelDOMRows": 20,
+            "panelDataCount": 1200,
+            "panelCount": 1200,
+            "panelUnpinned": true,
+            "panelScrollTop": 0,
+            "panelDistanceToBottom": 41514,
+            "layerRect": null,
+            "panelRect": {
+              "width": 340,
+              "height": 480
+            },
+            "elapsedMs": 12452.199999999255,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.28651600000012,
+            "msPerSecond": {
+              "Script": 448.911518593189,
+              "RecalcStyle": 18.55572100451857,
+              "Layout": 24.76364656023821,
+              "Task": 591.2700737283961
+            }
+          }
+        }
+      ],
+      "记录": "android-panel-33"
+    }
+  ]
+}

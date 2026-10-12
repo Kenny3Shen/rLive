@@ -1,0 +1,2124 @@
+{
+  "title": "Android 真实 VOD 弹幕列表虚拟化复测",
+  "date": "2026-10-12",
+  "video": {
+    "url": "https://www.bilibili.com/video/BV1Js411o76u",
+    "bvid": "BV1Js411o76u",
+    "cid": 1176840,
+    "part": 1,
+    "size": [
+      1280,
+      720
+    ],
+    "loadedDanmaku": 5876,
+    "density40To50Seconds": 919
+  },
+  "environment": {
+    "device": "Android 16 x86_64 emulator rlive_win",
+    "gpu": "host，有窗口",
+    "displayHz": 60,
+    "physicalSize": [
+      2400,
+      1080
+    ],
+    "stageCSS": [
+      915,
+      412
+    ],
+    "production": true,
+    "tauri": "debug APK + production 前端；原生 IPC 与媒体源不替换",
+    "caveat": "非 aarch64 真机，主机负载和调度造成波动；不外推真机帧率或稳定 60 FPS"
+  },
+  "method": {
+    "build": "单份 Vite production 包内选择基线或当前 VideoDanmakuList；共享其余页面、播放器、IPC、数据源和依赖，含双方 Tailwind 类",
+    "variants": {
+      "on": "弹幕层正常显示，侧栏页签为相关视频（弹幕页签 inactive/inert）",
+      "off": "产品开关隐藏弹幕层，但 renderer/调度仍运行，DOM 在屏约 58 条",
+      "masked": "临时 display:none 弹幕层与列表；不播放假视频，不改播放器。零尺寸会影响轨道准入/在屏数，非等负载或完全停引擎对照"
+    },
+    "sampling": "seek 38s，41s 起采 8s；首轮只预热；每构建 on/off/masked 两轮，最后切回基线一轮；Trace 单独采 5s",
+    "totalFrames": "来自 getVideoPlaybackQuality().totalVideoFrames，包含 droppedFrames；采样早期误命名 decodedFrames，归档时仅更正字段名",
+    "taskMetric": "CDP Performance.TaskDuration 增量 / Timestamp 增量。Trace 事件为 inclusive duration，不跨事件相加，不代表 self time。"
+  },
+  "samples": [
+    {
+      "capturedAt": "2026-10-12T11:30:10.363Z",
+      "build": {
+        "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+        "currentHead": "b01be739af4d7693f5d3589ac063f6bfc2aa0f75",
+        "builtAt": "2026-10-12T11:28:00.940Z",
+        "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+        "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+        "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+        "variant": "baseline"
+      },
+      "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+      "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+      "hardware": {
+        "cores": 4,
+        "memory": 2
+      },
+      "config": {
+        "seekTo": 38,
+        "sampleFrom": 41,
+        "sampleMs": 8000,
+        "variants": [
+          "on",
+          "off",
+          "masked"
+        ],
+        "repeat": 2
+      },
+      "rows": [
+        {
+          "round": 0,
+          "variant": "on",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8027,
+          "fps": 51.1,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.4,
+            "max": 66.7
+          },
+          "jankOver25ms": 65,
+          "longtasks": {
+            "count": 1,
+            "totalMs": 62,
+            "maxMs": 62
+          },
+          "media": {
+            "from": 41.3,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 57,
+            "mean": 49.8
+          },
+          "cdp": {
+            "elapsedSeconds": 8.11,
+            "msPerSecond": {
+              "Script": 44.8,
+              "Style": 33,
+              "Layout": 30.6,
+              "Task": 829.1
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "off",
+          "layerVisible": false,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8018.1,
+          "fps": 55.7,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.3,
+            "max": 66.7
+          },
+          "jankOver25ms": 32,
+          "longtasks": {
+            "count": 1,
+            "totalMs": 55,
+            "maxMs": 55
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 59,
+            "mean": 50.6
+          },
+          "cdp": {
+            "elapsedSeconds": 8.06,
+            "msPerSecond": {
+              "Script": 38.4,
+              "Style": 30,
+              "Layout": 20.7,
+              "Task": 777.2
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "masked",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 0,
+            "height": 0
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8019,
+          "fps": 58.5,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 83.3
+          },
+          "jankOver25ms": 9,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 24.7,
+              "Style": 12,
+              "Layout": 3.4,
+              "Task": 172.9
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "on",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8033.6,
+          "fps": 53.9,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.3,
+            "max": 66.6
+          },
+          "jankOver25ms": 47,
+          "longtasks": {
+            "count": 1,
+            "totalMs": 53,
+            "maxMs": 53
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 58,
+            "mean": 49.9
+          },
+          "cdp": {
+            "elapsedSeconds": 8.07,
+            "msPerSecond": {
+              "Script": 40.3,
+              "Style": 36.6,
+              "Layout": 23.7,
+              "Task": 734.5
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "off",
+          "layerVisible": false,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8010.8,
+          "fps": 57.5,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 20,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 3,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 58,
+            "mean": 49.9
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 31.2,
+              "Style": 25.5,
+              "Layout": 18,
+              "Task": 601.9
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "masked",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 0,
+            "height": 0
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8022.2,
+          "fps": 58,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 49.9
+          },
+          "jankOver25ms": 15,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 2,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "cdp": {
+            "elapsedSeconds": 8.05,
+            "msPerSecond": {
+              "Script": 21.2,
+              "Style": 10.2,
+              "Layout": 2.8,
+              "Task": 147.4
+            }
+          }
+        }
+      ]
+    },
+    {
+      "capturedAt": "2026-10-12T11:31:51.537Z",
+      "build": {
+        "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+        "currentHead": "b01be739af4d7693f5d3589ac063f6bfc2aa0f75",
+        "builtAt": "2026-10-12T11:28:00.940Z",
+        "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+        "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+        "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+        "variant": "current"
+      },
+      "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+      "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+      "hardware": {
+        "cores": 4,
+        "memory": 2
+      },
+      "config": {
+        "seekTo": 38,
+        "sampleFrom": 41,
+        "sampleMs": 8000,
+        "variants": [
+          "on",
+          "off",
+          "masked"
+        ],
+        "repeat": 2
+      },
+      "rows": [
+        {
+          "round": 0,
+          "variant": "on",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8030.1,
+          "fps": 56.3,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.3,
+            "max": 33.4
+          },
+          "jankOver25ms": 30,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 58,
+            "mean": 49.9
+          },
+          "cdp": {
+            "elapsedSeconds": 8.05,
+            "msPerSecond": {
+              "Script": 45.3,
+              "Style": 40.1,
+              "Layout": 20.9,
+              "Task": 296.5
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "off",
+          "layerVisible": false,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8021.4,
+          "fps": 58.2,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 50
+          },
+          "jankOver25ms": 13,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 59,
+            "mean": 50.6
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 40.5,
+              "Style": 31.3,
+              "Layout": 22.4,
+              "Task": 258.8
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "masked",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 0,
+            "height": 0
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8032.4,
+          "fps": 58.3,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 14,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "cdp": {
+            "elapsedSeconds": 8.04,
+            "msPerSecond": {
+              "Script": 24.8,
+              "Style": 12,
+              "Layout": 4.1,
+              "Task": 162.5
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "on",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8005.4,
+          "fps": 56.6,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.3,
+            "max": 33.4
+          },
+          "jankOver25ms": 28,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 59,
+            "mean": 50.6
+          },
+          "cdp": {
+            "elapsedSeconds": 8.02,
+            "msPerSecond": {
+              "Script": 44.2,
+              "Style": 37.7,
+              "Layout": 21.2,
+              "Task": 296.2
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "off",
+          "layerVisible": false,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8014.1,
+          "fps": 56.5,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.3,
+            "max": 50
+          },
+          "jankOver25ms": 27,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 59,
+            "mean": 50.6
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 45.3,
+              "Style": 35.4,
+              "Layout": 25.9,
+              "Task": 293
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "masked",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 0,
+            "height": 0
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8002.5,
+          "fps": 58.2,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 15,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 2,
+            "totalFrames": 194
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 20.7,
+              "Style": 9.6,
+              "Layout": 2.7,
+              "Task": 138.3
+            }
+          }
+        }
+      ]
+    },
+    {
+      "capturedAt": "2026-10-12T11:34:21.942Z",
+      "build": {
+        "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+        "currentHead": "b01be739af4d7693f5d3589ac063f6bfc2aa0f75",
+        "builtAt": "2026-10-12T11:28:00.940Z",
+        "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+        "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+        "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+        "variant": "baseline"
+      },
+      "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+      "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+      "hardware": {
+        "cores": 4,
+        "memory": 2
+      },
+      "config": {
+        "seekTo": 38,
+        "sampleFrom": 41,
+        "sampleMs": 8000,
+        "variants": [
+          "on",
+          "off",
+          "masked"
+        ],
+        "repeat": 1
+      },
+      "rows": [
+        {
+          "round": 0,
+          "variant": "on",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8014.4,
+          "fps": 50.9,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.4,
+            "max": 50.1
+          },
+          "jankOver25ms": 70,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 58,
+            "mean": 50.1
+          },
+          "cdp": {
+            "elapsedSeconds": 8.06,
+            "msPerSecond": {
+              "Script": 41.9,
+              "Style": 34.7,
+              "Layout": 24.6,
+              "Task": 833.5
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "off",
+          "layerVisible": false,
+          "layerSize": {
+            "width": 915,
+            "height": 412
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8029.8,
+          "fps": 53.8,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.3,
+            "max": 49.9
+          },
+          "jankOver25ms": 49,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 58,
+            "mean": 49.9
+          },
+          "cdp": {
+            "elapsedSeconds": 8.06,
+            "msPerSecond": {
+              "Script": 42.9,
+              "Style": 31,
+              "Layout": 24.5,
+              "Task": 794.4
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "masked",
+          "layerVisible": true,
+          "layerSize": {
+            "width": 0,
+            "height": 0
+          },
+          "viewport": {
+            "width": 915,
+            "height": 412,
+            "dpr": 2.625
+          },
+          "videoSize": {
+            "width": 1280,
+            "height": 720
+          },
+          "muted": false,
+          "list": {
+            "total": 5876,
+            "mounted": 5876,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cid": "1176840",
+          "durationMs": 8023.3,
+          "fps": 57.8,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 50
+          },
+          "jankOver25ms": 16,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 2,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "cdp": {
+            "elapsedSeconds": 8.05,
+            "msPerSecond": {
+              "Script": 25.1,
+              "Style": 11.5,
+              "Layout": 3.3,
+              "Task": 160
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "traces": [
+    {
+      "capturedAt": "2026-10-12T11:33:19.429Z",
+      "build": {
+        "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+        "currentHead": "b01be739af4d7693f5d3589ac063f6bfc2aa0f75",
+        "builtAt": "2026-10-12T11:28:00.940Z",
+        "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+        "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+        "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+        "variant": "baseline"
+      },
+      "cid": "1176840",
+      "elapsedSeconds": 5.019737999999961,
+      "events": 94635,
+      "note": "同名事件累计 inclusive ms/s；嵌套事件不能相加，非 self time 或线程占用率。Trace 有额外开销。",
+      "rendererEventsMsPerSecond": {
+        "RunTask": 885.6,
+        "ThreadControllerImpl::RunTask": 860,
+        "ProxyMain::BeginMainFrame": 799.4,
+        "IntersectionObserverController::computeIntersections": 484.1,
+        "v8.callFunction": 148.1,
+        "FunctionCall": 109.8,
+        "FireAnimationFrame": 91.6,
+        "EventDispatch": 45.8,
+        "Layout": 42.8,
+        "Commit": 39.7,
+        "UpdateLayoutTree": 38.9,
+        "Layerize": 24.5,
+        "PrePaint": 14.5,
+        "LocalFrameView::ScheduleAnimation": 12.6,
+        "Paint": 9.9,
+        "TimerFire": 9.1,
+        "AnimationHost::TickAnimations": 5.1,
+        "HitTest": 5.1,
+        "XHRLoad": 4.7,
+        "LayerTreeHost::DoUpdateLayers": 4.6,
+        "MainFrameAborted": 4.5,
+        "V8.GCIncrementalMarking": 4.2,
+        "V8.GC_MC_INCREMENTAL": 4,
+        "ScrollTree::SetScrollOffset": 4,
+        "MajorGC": 3.9,
+        "V8.GCFinalizeMC": 3.8,
+        "V8.GC_MARK_COMPACTOR": 3.8,
+        "BlinkScheduler_PerformMicrotaskCheckpoint": 2.9,
+        "LayerTreeHost::WaitForCommitCompletion": 2.6,
+        "UpdateLayer": 2.1,
+        "SimpleWatcher::OnHandleReady": 1.8,
+        "V8.GC_MC_EVACUATE": 1.7,
+        "MinorGC": 1.3,
+        "V8.GCScavenger": 1.3,
+        "V8.GC_SCAVENGER": 1.2,
+        "V8.GC_SCAVENGER_SCAVENGE": 1.2,
+        "V8.GC_SCAVENGER_SCAVENGE_PARALLEL_PHASE": 1,
+        "V8.GC_SCAVENGER_SCAVENGE_PARALLEL": 1,
+        "V8.GC_MC_EVACUATE_COPY": 0.9,
+        "V8.GC_MC_EVACUATE_COPY_PARALLEL": 0.8
+      }
+    },
+    {
+      "capturedAt": "2026-10-12T11:32:59.108Z",
+      "build": {
+        "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+        "currentHead": "b01be739af4d7693f5d3589ac063f6bfc2aa0f75",
+        "builtAt": "2026-10-12T11:28:00.940Z",
+        "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+        "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+        "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d",
+        "variant": "current"
+      },
+      "cid": "1176840",
+      "elapsedSeconds": 5.096456999999646,
+      "events": 100584,
+      "note": "同名事件累计 inclusive ms/s；嵌套事件不能相加，非 self time 或线程占用率。Trace 有额外开销。",
+      "rendererEventsMsPerSecond": {
+        "RunTask": 430.7,
+        "ThreadControllerImpl::RunTask": 397.7,
+        "ProxyMain::BeginMainFrame": 331.5,
+        "v8.callFunction": 139.3,
+        "FunctionCall": 101.7,
+        "FireAnimationFrame": 85,
+        "EventDispatch": 40,
+        "UpdateLayoutTree": 38.6,
+        "Commit": 33.8,
+        "Layout": 29.9,
+        "Layerize": 25.9,
+        "PrePaint": 17.1,
+        "TimerFire": 17.1,
+        "IntersectionObserverController::computeIntersections": 15.7,
+        "LocalFrameView::ScheduleAnimation": 12.5,
+        "Paint": 10.3,
+        "V8.GCIncrementalMarking": 8,
+        "V8.GC_MC_INCREMENTAL": 7.3,
+        "HitTest": 7.1,
+        "MainFrameAborted": 6.1,
+        "AnimationHost::TickAnimations": 6,
+        "BlinkScheduler_PerformMicrotaskCheckpoint": 5.3,
+        "LayerTreeHost::DoUpdateLayers": 5.2,
+        "MajorGC": 5.1,
+        "V8.GC_MC_INCREMENTAL_EMBEDDER_TRACING": 5,
+        "V8.GCFinalizeMC": 5,
+        "V8.GC_MARK_COMPACTOR": 4.9,
+        "ScrollTree::SetScrollOffset": 4.2,
+        "UpdateLayer": 2.9,
+        "LayerTreeHost::WaitForCommitCompletion": 2.2,
+        "V8.GC_MC_EVACUATE": 1.7,
+        "MinorGC": 1.6,
+        "V8.GC_MC_CLEAR": 1.6,
+        "V8.GCScavenger": 1.5,
+        "V8.GC_SCAVENGER": 1.2,
+        "V8.GC_SCAVENGER_SCAVENGE": 1,
+        "V8.GC_MC_EVACUATE_COPY": 0.9,
+        "SimpleWatcher::OnHandleReady": 0.8,
+        "LayerTreeHost::ApplyCompositorChanges": 0.8,
+        "AnimationHost::UpdateAnimationState": 0.7
+      }
+    }
+  ],
+  "regression": {
+    "chromium": {
+      "passed": [
+        "6000 条仅挂 33 行，跟随行居中",
+        "已出现 / 未来条目边界正确",
+        "正常播放推进重新居中且保持稳定",
+        "用户滚动停跟随，正常播放推进不拉回",
+        "回到当前进度恢复跟随",
+        "seek 重新武装跟随",
+        "停止跟随后点击条目回调毫秒位置并恢复跟随",
+        "非活动页签零行，重新激活后居中",
+        "活动 / 非活动期间前插分段均保留阅读行，且不恢复跟随",
+        "尾部追加不拉动停止跟随的阅读位置"
+      ]
+    },
+    "android": {
+      "passed": [
+        "真实 5876 条仅挂可视行",
+        "无行级 content-visibility:auto",
+        "原生视口滚动停止跟随，按钮恢复",
+        "非活动页签零行"
+      ],
+      "start": {
+        "count": 19,
+        "total": "5876",
+        "size": [
+          915.047607421875,
+          71.69642639160156
+        ],
+        "noAuto": true,
+        "time": 49.337177
+      }
+    }
+  },
+  "preliminary": {
+    "note": "以下为不同 production 产物的早期探索，仅保留波动范围，不能替代上方单构建 A/B。",
+    "samples": [
+      {
+        "capturedAt": "2026-10-12T10:13:59.810Z",
+        "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off"
+          ],
+          "repeat": 2
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8007.9,
+            "fps": 55.8,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.3,
+              "max": 50
+            },
+            "jankOver25ms": 31,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 1,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 31.6,
+                "Style": 26,
+                "Layout": 18,
+                "Task": 746.2
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8007.2,
+            "fps": 57.7,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 16.8,
+              "max": 33.4
+            },
+            "jankOver25ms": 20,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.06,
+              "msPerSecond": {
+                "Script": 29,
+                "Style": 23.5,
+                "Layout": 15.9,
+                "Task": 689.2
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8028,
+            "fps": 54.8,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.3,
+              "max": 50
+            },
+            "jankOver25ms": 40,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 5,
+              "decodedFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.08,
+              "msPerSecond": {
+                "Script": 32.8,
+                "Style": 24.3,
+                "Layout": 19.1,
+                "Task": 720.9
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8022.3,
+            "fps": 57.7,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 16.8,
+              "max": 33.4
+            },
+            "jankOver25ms": 18,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 2,
+              "decodedFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 28.4,
+                "Style": 23,
+                "Layout": 16.2,
+                "Task": 702
+              }
+            }
+          }
+        ]
+      },
+      {
+        "capturedAt": "2026-10-12T11:01:28.121Z",
+        "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off"
+          ],
+          "repeat": 2
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8016.9,
+            "fps": 56.1,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.3,
+              "max": 50
+            },
+            "jankOver25ms": 31,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 44,
+                "Style": 33.4,
+                "Layout": 24.3,
+                "Task": 291.1
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8016.9,
+            "fps": 58.4,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 16.8,
+              "max": 33.4
+            },
+            "jankOver25ms": 14,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 51
+            },
+            "cdp": {
+              "elapsedSeconds": 8.03,
+              "msPerSecond": {
+                "Script": 39.7,
+                "Style": 30.9,
+                "Layout": 20,
+                "Task": 256.6
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8042.9,
+            "fps": 55.6,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.3,
+              "max": 49.9
+            },
+            "jankOver25ms": 36,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.1,
+              "msPerSecond": {
+                "Script": 44.7,
+                "Style": 40.3,
+                "Layout": 24.9,
+                "Task": 305.7
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8007.3,
+            "fps": 57.6,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 16.8,
+              "max": 33.5
+            },
+            "jankOver25ms": 20,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 2,
+              "decodedFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 51
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 38.1,
+                "Style": 28.4,
+                "Layout": 19.7,
+                "Task": 253.2
+              }
+            }
+          }
+        ]
+      },
+      {
+        "capturedAt": "2026-10-12T11:06:56.337Z",
+        "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off"
+          ],
+          "repeat": 2
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8025.3,
+            "fps": 45.5,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.4,
+              "max": 50.1
+            },
+            "jankOver25ms": 109,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 50.3
+            },
+            "cdp": {
+              "elapsedSeconds": 8.07,
+              "msPerSecond": {
+                "Script": 42.1,
+                "Style": 33.4,
+                "Layout": 21.7,
+                "Task": 903.5
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8020.5,
+            "fps": 55.5,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.3,
+              "max": 50
+            },
+            "jankOver25ms": 36,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 2,
+              "decodedFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.06,
+              "msPerSecond": {
+                "Script": 33.9,
+                "Style": 26.8,
+                "Layout": 23.4,
+                "Task": 853.1
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8028.6,
+            "fps": 49.1,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.4,
+              "max": 83.4
+            },
+            "jankOver25ms": 77,
+            "longtasks": {
+              "count": 1,
+              "totalMs": 52,
+              "maxMs": 52
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 4,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.1,
+              "msPerSecond": {
+                "Script": 39.1,
+                "Style": 27.7,
+                "Layout": 27.6,
+                "Task": 897.2
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8026.6,
+            "fps": 53.9,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.3,
+              "max": 83.4
+            },
+            "jankOver25ms": 42,
+            "longtasks": {
+              "count": 2,
+              "totalMs": 141,
+              "maxMs": 73
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 50.3
+            },
+            "cdp": {
+              "elapsedSeconds": 8.05,
+              "msPerSecond": {
+                "Script": 35.6,
+                "Style": 30.8,
+                "Layout": 26.6,
+                "Task": 887.7
+              }
+            }
+          }
+        ]
+      },
+      {
+        "capturedAt": "2026-10-12T11:09:00.114Z",
+        "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+        "userAgent": "Mozilla/5.0 (Linux; Android 16; sdk_gphone64_x86_64 Build/BE2A.250530.021.A1; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36",
+        "hardware": {
+          "cores": 4,
+          "memory": 2
+        },
+        "config": {
+          "seekTo": 38,
+          "sampleFrom": 41,
+          "sampleMs": 8000,
+          "variants": [
+            "on",
+            "off"
+          ],
+          "repeat": 2
+        },
+        "rows": [
+          {
+            "round": 0,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8023.1,
+            "fps": 56.2,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.3,
+              "max": 33.5
+            },
+            "jankOver25ms": 30,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 193
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.05,
+              "msPerSecond": {
+                "Script": 54.9,
+                "Style": 41.1,
+                "Layout": 28.2,
+                "Task": 340.5
+              }
+            }
+          },
+          {
+            "round": 0,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8009.4,
+            "fps": 57.2,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.2,
+              "max": 33.4
+            },
+            "jankOver25ms": 23,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 2,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.04,
+              "msPerSecond": {
+                "Script": 47.2,
+                "Style": 35.7,
+                "Layout": 25,
+                "Task": 309.9
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "on",
+            "layerVisible": true,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8031.7,
+            "fps": 49.1,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 33.4,
+              "max": 116.7
+            },
+            "jankOver25ms": 63,
+            "longtasks": {
+              "count": 6,
+              "totalMs": 486,
+              "maxMs": 118
+            },
+            "media": {
+              "from": 41.2,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 6,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 59,
+              "mean": 50.6
+            },
+            "cdp": {
+              "elapsedSeconds": 8.05,
+              "msPerSecond": {
+                "Script": 61.9,
+                "Style": 48.9,
+                "Layout": 46.2,
+                "Task": 430.8
+              }
+            }
+          },
+          {
+            "round": 1,
+            "variant": "off",
+            "layerVisible": false,
+            "layerSize": {
+              "width": 915,
+              "height": 412
+            },
+            "viewport": {
+              "width": 915,
+              "height": 412,
+              "dpr": 2.625
+            },
+            "videoSize": {
+              "width": 1280,
+              "height": 720
+            },
+            "muted": false,
+            "cid": "1176840",
+            "durationMs": 8004.4,
+            "fps": 58.6,
+            "frameMs": {
+              "median": 16.7,
+              "p95": 16.8,
+              "max": 33.4
+            },
+            "jankOver25ms": 12,
+            "longtasks": {
+              "count": 0,
+              "totalMs": 0,
+              "maxMs": 0
+            },
+            "media": {
+              "from": 41.1,
+              "advancedSeconds": 8,
+              "waiting": 0,
+              "droppedFrames": 0,
+              "decodedFrames": 192
+            },
+            "danmakuDOM": {
+              "max": 58,
+              "mean": 49.9
+            },
+            "cdp": {
+              "elapsedSeconds": 8.02,
+              "msPerSecond": {
+                "Script": 36.6,
+                "Style": 31.7,
+                "Layout": 19.1,
+                "Task": 259.8
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "excluded": [
+    "land1 / land-sparse / fs-dense / fs-sparse：实际自动连播到 P2 cid 16950806（360p），不作为 P1 数据",
+    "vod-ab-invalid-missing-baseline-css：生成目录被 Tailwind 自动扫描忽略，缺少基线 content-visibility 样式；构建已加 @source，采样已加 computedStyle 校验后重跑",
+    "CLI 中断/超时的空文件或错误输出：无有效返回的样本不计数",
+    "早期临时 Trace 的 threadBusyMsPerSec 重复累加嵌套 RunTask，出现 >1000ms/s；全部弃用，当前归档 Trace 不再提供这一错误汇总"
+  ],
+  "remaining": [
+    "Windows 真实 VOD production A/B 尚未完成，不能套用无视频夹具结果",
+    "未连接 Android 真机",
+    "layer/both/bus × running/paused 分层夹具尚无本轮有效结果",
+    "P1 remove(id) 与 setComments 未改动"
+  ]
+}
