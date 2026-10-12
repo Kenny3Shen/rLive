@@ -330,19 +330,29 @@ export class DanmakuRenderer {
 
   private readonly onResize = () => this.resize();
   private readonly onHalt = () => {
+    if (this.halted) return;
     this.halted = true;
-    for (const record of this.records.values()) this.freeze(record.motion);
+    // 媒体事件可能排在长任务之后。动画 currentTime 仍是文档时间轴的旧采样，
+    // 合成器却已继续移动；补上采样以来的墙钟差，再冻结到真正的当前进度。
+    const sampledAt = document.timeline.currentTime;
+    const catchUpMs = typeof sampledAt === "number" ? Math.max(0, performance.now() - sampledAt) : 0;
+    for (const record of this.records.values()) this.freeze(record.motion, catchUpMs);
   };
   private readonly onResume = () => {
+    if (this.media?.paused) return;
+    const wasHalted = this.halted;
     this.halted = false;
     const rate = this.rate();
     for (const record of this.records.values()) {
       const motion = record.motion;
       if (!motion || record.pinned) continue;
-      // 从冻结的位置继续；只有缓冲期间真的偏离媒体时钟时才对齐，否则恢复瞬间会跳一帧。
-      const current = motion.currentTime;
-      const want = this.expected(record);
-      if (typeof current !== "number" || Math.abs(current - want) > DRIFT_MS) motion.currentTime = want;
+      // 暂停落定时可能已领先停止的媒体时钟。从可见位置重基运行副本，既不在
+      // playing 瞬间回拉，也不让下一帧 syncMotion 再把它拉回；不污染 seek 时间轴。
+      // 快速 pause→play 同样同步处理，无需异步回调复活动画。
+      if (wasHalted) {
+        this.snapshot(record);
+        this.rebase(record);
+      }
       motion.playbackRate = rate;
       motion.play();
     }
@@ -361,13 +371,14 @@ export class DanmakuRenderer {
     const comment = record.comment;
     return Math.max(0, (this.media ? this.now() - comment.time : clock() - comment._utc) * 1_000);
   }
-  /** 把动画精确停在当前帧位置：先 pause 再同步写 currentTime，避免等到下一帧才生效。 */
-  private freeze(motion: Animation | undefined) {
+  /** 同步冻结；媒体暂停额外补偿文档时间轴的采样延迟，已暂停/待启动的动画不外推。 */
+  private freeze(motion: Animation | undefined, catchUpMs = 0) {
     if (!motion) return;
     const at = motion.currentTime;
-    if (at === null) return;
+    if (typeof at !== "number") return;
+    const current = at + (motion.playState === "running" && !motion.pending ? catchUpMs * motion.playbackRate : 0);
     motion.pause();
-    motion.currentTime = at;
+    motion.currentTime = current;
   }
   /** 把 comment.x 校准为动画的实际可见位置（动画走合成器，原生每帧算出的 x 可能差一帧）。 */
   private snapshot(record: RecordItem): void {
@@ -416,6 +427,13 @@ export class DanmakuRenderer {
   private syncMotion(record: RecordItem): void {
     const motion = record.motion;
     if (!motion || !this.media || record.pinned || this.halted) return;
+    // paused 先同步变化，事件稍后才派发；窗口内不允许按停住的媒体时钟回拉。
+    if (this.media.paused || this.media.ended) {
+      this.onHalt();
+      return;
+    }
+    // 已缓冲的 seek 不保证再次派发 playing，只跳过校时，不能留下全局 halted。
+    if (this.media.seeking || motion.pending) return;
     const current = motion.currentTime;
     const want = this.expected(record);
     if (typeof current !== "number" || Math.abs(current - want) > DRIFT_MS)

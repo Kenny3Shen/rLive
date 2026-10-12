@@ -3,8 +3,10 @@
 async (page) => {
   return page.evaluate(async () => {
     const { setupHarness, assert, frames, until } = await import("/tests/browser/harness.js");
-    const { VideoDanmakuLayer } = await import("/src/features/video/VideoDanmakuLayer.tsx");
-    const { loadDanmakuRenderer } = await import("/src/features/room/danmaku/danmakuLoader.ts");
+    // HMR 后也复用同一版依赖，避免拿旧 loader 的类去探测新组件实例。
+    const version = Date.now();
+    const { VideoDanmakuLayer } = await import(`/src/features/video/VideoDanmakuLayer.tsx?t=${version}`);
+    const { loadDanmakuRenderer } = await import(`/src/features/room/danmaku/danmakuLoader.ts?t=${version}`);
     const settingsUrl =
       performance
         .getEntriesByType("resource")
@@ -97,6 +99,16 @@ async (page) => {
         );
       });
     };
+    const settlePause = async (before, label) => {
+      await frames();
+      const frozen = positions();
+      frozen.forEach((x, index) => {
+        assert(x <= before[index] + 0.1, `${label}：${entries[index].id} 暂停时回退`);
+      });
+      await frames();
+      unchanged(frozen, `${label}：暂停落定后仍在移动`);
+      return frozen;
+    };
     const passed = [];
     try {
       useSettingsStore.setState({
@@ -133,25 +145,21 @@ async (page) => {
         await frames();
         const before = positions();
         pause();
-        unchanged(before, `位移 ${shift}px，暂停原位`);
-        await frames();
-        unchanged(before, "pause 后仍在移动");
+        const frozen = await settlePause(before, `位移 ${shift}px，暂停`);
         pause();
-        unchanged(before, "重复 pause 改变位置");
+        unchanged(frozen, "重复 pause 改变位置");
         play();
-        unchanged(before, "playing 瞬间改变位置");
-        await until(() => positions()[0] < before[0] - 3, "playing 后没有继续向左滚动");
+        unchanged(frozen, "playing 瞬间改变位置");
+        await until(() => positions()[0] < frozen[0] - 3, "playing 后没有继续向左滚动");
       }
       passed.push("容器位移与连续暂停均保持原位，playing 后继续移动");
 
       const beforeWaiting = positions();
       wait();
-      await frames();
-      unchanged(beforeWaiting, "waiting 后弹幕跳变");
-      await frames();
-      unchanged(beforeWaiting, "waiting 期间弹幕仍在移动");
+      const frozenWaiting = await settlePause(beforeWaiting, "waiting");
       play();
-      await until(() => positions()[0] < beforeWaiting[0] - 3, "waiting 后没有恢复移动");
+      unchanged(frozenWaiting, "waiting 后恢复瞬间改变位置");
+      await until(() => positions()[0] < frozenWaiting[0] - 3, "waiting 后没有恢复移动");
       passed.push("waiting 冻结弹幕，playing 恢复同一位置继续移动");
 
       const beforeRate = positions();
