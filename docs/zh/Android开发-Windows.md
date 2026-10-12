@@ -215,4 +215,9 @@ unzip -Z1 "$APK" | awk '/^lib\// { print }'
 
 刷新率完全跟随系统：应用不请求固定显示模式或刷新率偏好，省电模式、温控与厂商动态刷新策略直接生效。已知取舍是部分厂商 ROM 只给「主动表达高刷意图」的应用高刷，这类设备上 rLive 可能稳定在 60 Hz。Web 动画和 Canvas 全部按时间基准推进（WAAPI/CSS 时长、DanmakuRenderer 的媒体时钟与标准 `speed`、按平滑媒体时钟绘制的回放弹幕），因此不同刷新率下观感时长一致。滚动弹幕的位移走合成器 WAAPI 动画，回放 Canvas 用 `src/shared/smoothMediaClock.ts` 把抖动的 `currentTime` 外推成匀速时间，120 Hz 下单帧位移小于 `currentTime` 抖动时也不会来回跳。
 
-模拟器验证 120 Hz：把 AVD `config.ini` 的 `hw.lcd.vsync` 改成 `120` 后冷启动（`-no-snapshot-load`），再执行 `adb shell settings put system peak_refresh_rate 120.0` 和 `min_refresh_rate 120.0`，`dumpsys display` 的 `renderFrameRate` 才会变成 120。`rlive_win` 实测 WebView 的 rAF 大约 95 fps，送不满 120，但已经能区分逐帧写 `transform` 和合成器动画。验证完删除这两项设置并改回 `hw.lcd.vsync=60`。
+模拟器验证 120 Hz：把 AVD `config.ini` 的 `hw.lcd.vsync` 改成 `120` 后冷启动（`-no-snapshot-load`），再执行 `adb shell settings put system peak_refresh_rate 120.0` 和 `min_refresh_rate 120.0`，`dumpsys display` 的 `renderFrameRate` 才会变成 120。也可不改 `config.ini`，直接给模拟器传 `-vsync-rate 120`（实测 `dumpsys display` 的 `mActiveSfDisplayMode.vsyncRate=120.00001`、`presentationDeadlineNanos=8333333`，SurfaceFlinger `activeMode` 为 `vsyncRate=120.00 Hz`）。验证完删除这两项设置并改回 `hw.lcd.vsync=60`。
+
+`rlive_win` 实测 WebView 的 rAF 大约 92～95 fps，送不满 120，但已经能区分逐帧写 `transform` 和合成器动画。两个容易踩的坑：
+
+- **显示节奏跟随内容**：同一页面只有 rAF 循环时帧间隔中位数为 16.7ms（60Hz 档），加入一个**真的被绘制**的合成动画后才升到 8.4ms（120Hz 档）。所以「关掉动画后 FPS 变高」不代表省了开销，可能只是系统自己降档；测 A/B 要么用已绘制的节奏元素把刷新率钉住，要么按帧间隔中位数判档位，不要直接比 FPS。
+- **只带 `opacity` 的动画元素不产生绘制**，拉不起刷新率（实测 65 fps vs 带背景色 96 fps）。要固定节奏的元素必须有背景色。
