@@ -1,10 +1,21 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { ArrowDownToLine, Ban, Copy, MessageSquarePlus, Star } from "lucide-react";
 import type { DanmakuEvent, SiteId } from "@/shared/types/live";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -12,17 +23,9 @@ import {
   createShieldMatcher,
   shouldShowValidatedInDanmakuPanel,
 } from "./danmaku/filter";
-import { DanmakuRichText } from "./danmaku/emoji";
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
-import {
-  appendWithinDanmakuListWindow,
-  danmakuListAppendCapacity,
-  DANMAKU_LIST_MAX_PINNED,
-  DANMAKU_LIST_MAX_SCROLLED_UP,
-  scrollTopAfterDanmakuListTrim,
-  trimToDanmakuListWindow,
-} from "./danmaku/listWindow";
+import { appendWithinDanmakuListWindow } from "./danmaku/listWindow";
 import {
   danmakuListSurfaceFromTheme,
   resolveDanmakuListUserColor,
@@ -31,26 +34,33 @@ import {
 import { formatDanmakuClipboardText, useDanmakuActions } from "./danmaku/useDanmakuActions";
 import { cn } from "@/lib/utils";
 
-// 即使房间每分钟产生上千条评论，也把渲染的 DOM 保持得很小。有界队列保留近期
-// 流量，而不要求 React 维护无限增长的聊天树。渲染窗口本身取决于钉住状态；
-// 参见 `listWindow.ts`。
+// 有界队列只负责隐藏页签或突发流量期间的待提交事件；已提交的历史由虚拟器窗口化渲染。
 const MAX_BUFFERED = 200;
 const MAX_PER_FLUSH = 32;
 const MIN_FLUSH_INTERVAL_MS = 32;
 const BACKPRESSURE_FLUSH_INTERVAL_MS = 80;
 const BACKPRESSURE_PENDING_THRESHOLD = MAX_PER_FLUSH * 2;
 const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
+// text-sm 的 14px × leading-relaxed 1.625 + py-1 8px + border 2px，
+// 虚拟器测高会取整到 33px。贴近常见单行，避免每批新增行都触发估高修正与额外布局。
+const DANMAKU_ROW_ESTIMATE_PX = 33;
+const DANMAKU_LIST_OVERSCAN = 6;
 
-function scrollDanmakuViewportToBottom(root: HTMLElement | null): void {
-  const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
+type DanmakuLine = { id: number; event: DanmakuEvent };
+
+type DanmakuPanelMenuTarget = {
+  line: DanmakuLine;
+  anchor: { getBoundingClientRect: () => DOMRect };
+  trigger: HTMLElement;
+};
+
+function scrollDanmakuViewportToBottom(viewport: HTMLElement | null): void {
   if (!viewport) return;
   const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
   // 即使在已钉住时赋值 `scrollTop` 也可能在原语内派发额外的滚动工作。
   // 避免在每次批量 React 提交上都做这次同步写入。
   if (Math.abs(viewport.scrollTop - target) > 1) viewport.scrollTop = target;
 }
-
-type DanmakuLine = { id: number; event: DanmakuEvent };
 
 function DanmakuSender({
   event,
@@ -66,81 +76,77 @@ function DanmakuSender({
   const userColor = resolveDanmakuListUserColor(event.color, surface);
 
   return (
-    <>
-      <span className="mr-1.5 text-primary" style={userColor ? { color: userColor } : undefined}>
-        {user}：
-      </span>
-    </>
+    <span className="mr-1.5 text-primary" style={userColor ? { color: userColor } : undefined}>
+      {user}：
+    </span>
   );
 }
 
 /**
- * 追加批次会保持既有 `DanmakuLine` 引用不变。因此记忆化一行可以避免繁忙房间
- * 里每次动画帧冲刷都重新协调最多 300 条已渲染消息。
+ * 虚拟窗口内的轻量行。行不再拥有 Popover、状态或查询；交互由面板根节点委托，
+ * 因而可视窗口外的消息完全没有 React 行组件。
  */
 const DanmakuRow = memo(function DanmakuRow({
   line,
-  siteId,
-  roomId,
-  roomTitle,
-  roomUserName,
   surface,
-  onMenuOpen,
+  selected,
+  menuId,
 }: {
   line: DanmakuLine;
-  siteId?: SiteId;
-  roomId?: string;
-  roomTitle?: string;
-  roomUserName?: string;
   surface: DanmakuListSurface;
-  onMenuOpen: () => void;
+  selected: boolean;
+  menuId: string;
 }) {
   const { event } = line;
-  if (event.kind === "system") {
-    return (
-      <div className="px-1.5 py-0.5 text-xs text-muted-foreground">
-        <DanmakuRichText content={event.content} spans={event.spans} />
-      </div>
-    );
-  }
+  const user = event.user.trim() || "匿名";
+  const message = formatDanmakuClipboardText(event.content);
+  const selectable = event.kind !== "system" && message.length > 0;
+
+  const Row = selectable ? "button" : "div";
 
   return (
-    <SelectableDanmakuRow
-      event={event}
-      siteId={siteId}
-      roomId={roomId}
-      roomTitle={roomTitle}
-      roomUserName={roomUserName}
-      surface={surface}
-      onMenuOpen={onMenuOpen}
-    />
+    <Row
+      type={selectable ? "button" : undefined}
+      data-danmaku-id={selectable ? line.id : undefined}
+      aria-label={selectable ? `选择 ${user} 的弹幕` : undefined}
+      aria-haspopup={selectable ? "dialog" : undefined}
+      aria-expanded={selectable ? selected : undefined}
+      aria-controls={selected ? menuId : undefined}
+      className={cn(
+        "block w-full rounded-md border border-transparent px-1.5 py-1 text-left break-words leading-relaxed font-semibold",
+        event.kind === "system" && "text-xs font-normal text-muted-foreground",
+        selectable &&
+          "cursor-pointer outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring aria-expanded:bg-muted",
+        event.is_self === true && "border-primary/60",
+      )}
+    >
+      {event.kind !== "system" && <DanmakuSender event={event} user={user} surface={surface} />}
+      {event.content}
+    </Row>
   );
 });
 
-/**
- * 这个状态刻意放在记忆化列表行之下。打开一个操作菜单
- * 绝不会使高频父列表或其余 299 条已渲染消息失效。
- */
-const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
-  event,
+const DanmakuPanelActionMenu = memo(function DanmakuPanelActionMenu({
+  target,
+  menuId,
+  viewport,
   siteId,
   roomId,
   roomTitle,
   roomUserName,
-  surface,
-  onMenuOpen,
+  onClose,
 }: {
-  event: DanmakuEvent;
+  target: DanmakuPanelMenuTarget;
+  menuId: string;
+  viewport: HTMLElement | null;
   siteId?: SiteId;
   roomId?: string;
   roomTitle?: string;
   roomUserName?: string;
-  surface: DanmakuListSurface;
-  onMenuOpen: () => void;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const event = target.line.event;
   const message = formatDanmakuClipboardText(event.content);
-  const user = event.user.trim() || "匿名";
   const actions = useDanmakuActions({
     message,
     eventKind: event.kind,
@@ -151,42 +157,23 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
     roomUserName,
   });
 
-  if (!message) {
-    return (
-      <div
-        className={cn(
-          "rounded-md border border-transparent px-1.5 py-1 leading-relaxed font-semibold",
-          event.is_self === true && "border-primary/60",
-        )}
-      >
-        <DanmakuSender event={event} user={user} surface={surface} />
-        <DanmakuRichText content={event.content} spans={event.spans} />
-      </div>
-    );
-  }
-
   return (
     <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        // 打开操作菜单即冻结列表（由面板注入）：被点击的行与菜单停在原地。
-        if (nextOpen) onMenuOpen();
-        if (!nextOpen) actions.resetStatus();
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
       }}
     >
-      <PopoverTrigger
-        type="button"
-        aria-label={`选择 ${user} 的弹幕`}
-        className={cn(
-          "block w-full cursor-pointer appearance-none rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left leading-relaxed font-semibold text-foreground outline-none transition-colors hover:bg-muted/50 aria-expanded:bg-muted",
-          event.is_self === true && "border-primary/60",
-        )}
+      <PopoverContent
+        id={menuId}
+        aria-label={`${event.user.trim() || "匿名"} 的弹幕操作`}
+        anchor={target.anchor}
+        side="left"
+        align="start"
+        className="w-40 p-1"
+        initialFocus
+        finalFocus={() => (target.trigger.isConnected ? target.trigger : (viewport ?? false))}
       >
-        <DanmakuSender event={event} user={user} surface={surface} />
-        <DanmakuRichText content={event.content} spans={event.spans} />
-      </PopoverTrigger>
-      <PopoverContent side="left" align="start" className="w-40 p-1">
         <div className="flex flex-col gap-1">
           <Button
             type="button"
@@ -238,7 +225,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
             title={actions.blockLabel}
             onClick={() => {
               actions.block();
-              setOpen(false);
+              onClose();
             }}
           >
             <Ban data-icon="inline-start" aria-hidden />
@@ -264,7 +251,7 @@ const SelectableDanmakuRow = memo(function SelectableDanmakuRow({
 
 type DanmakuPanelProps = {
   active: boolean;
-  /** Current room identity used only by the explicit “+1” send action. */
+  /** 当前房间身份，同时用于显式的「+1」发送操作。 */
   siteId?: SiteId;
   roomId?: string;
   roomTitle?: string;
@@ -286,14 +273,20 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   statusText,
 }: DanmakuPanelProps) {
   const [items, setItems] = useState<readonly DanmakuLine[]>([]);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const scrollRootRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
   const autoScroll = useRef(true);
+  const readingKeyRef = useRef<number | null>(null);
   const unreadCountRef = useRef(0);
   const [atBottom, setAtBottom] = useState(true);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [menuTarget, setMenuTarget] = useState<DanmakuPanelMenuTarget | null>(null);
+  const menuTargetRef = useRef(menuTarget);
+  menuTargetRef.current = menuTarget;
+  const [viewport, setViewport] = useState<HTMLElement | null>(null);
   const pendingRef = useRef(new BoundedQueue<DanmakuLine>(MAX_BUFFERED));
-  // 一次向上滚动裁剪被提交时设置，其布局落定后消费一次。
-  const pendingTrimRef = useRef<{ viewport: HTMLElement; heightBeforeTrim: number } | null>(null);
   const flushFrameRef = useRef<number | null>(null);
   const flushTimerRef = useRef<number | null>(null);
   const lastFlushAtRef = useRef(0);
@@ -327,16 +320,12 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     return () => query.removeEventListener("change", onChange);
   }, []);
 
-  // 过滤设置变化期间保持事件订阅稳定，
-  // 使隐藏页签的有界队列不会在监听空档丢失消息。
+  // 过滤设置变化期间保持事件订阅稳定，使隐藏页签的有界队列不会在监听空档丢失消息。
   useLayoutEffect(() => {
     matchersRef.current = { shieldMatcher, blockedUserMatcher, filterGifts };
   }, [shieldMatcher, blockedUserMatcher, filterGifts]);
 
-  // 与屏蔽词不同，屏蔽用户是即时承诺：点击后该用户的既有行立刻从列表消失，
-  // 而不是等自然裁剪淘汰。解除屏蔽不回填历史 —— 被删的行已不可恢复，
-  // 新消息会照常流入。React 渲染期调整模式：匹配器变化的当次渲染即过滤。
-  // 保持相同引用，未命中时避免无效重渲染。
+  // 屏蔽用户是即时承诺：点击后既有行立即消失；解除屏蔽不回填历史。
   const [prevBlockedMatcher, setPrevBlockedMatcher] = useState(() => blockedUserMatcher);
   if (blockedUserMatcher !== prevBlockedMatcher) {
     setPrevBlockedMatcher(() => blockedUserMatcher);
@@ -358,16 +347,30 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     if (visible) scheduleFlushRef.current();
   }, [visible]);
 
-  // 房间停用时重置面板状态：渲染期调整模式，当次渲染即回到空列表。
-  // 队列/引用类描述符的重置留在下方的订阅 effect 里。
-  const [prevPanelActive, setPrevPanelActive] = useState(active);
-  if (active !== prevPanelActive) {
-    setPrevPanelActive(active);
-    if (!active) {
-      setAtBottom(true);
-      setUnreadCount(0);
-      setItems([]);
-    }
+  // 停用或换房立即清空，避免旧房间的菜单拿着新 roomId 发送。
+  const [previousContext, setPreviousContext] = useState({ active, siteId, roomId });
+  if (
+    active !== previousContext.active ||
+    siteId !== previousContext.siteId ||
+    roomId !== previousContext.roomId
+  ) {
+    setPreviousContext({ active, siteId, roomId });
+    setAtBottom(true);
+    setUnreadCount(0);
+    setMenuTarget(null);
+    setItems([]);
+  }
+
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (!visible) setMenuTarget(null);
+  }
+  if (
+    menuTarget &&
+    (blockedUserMatcher(menuTarget.line.event) || !items.includes(menuTarget.line))
+  ) {
+    setMenuTarget(null);
   }
 
   useEffect(() => {
@@ -383,44 +386,37 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       }
     };
 
-    if (!active) {
-      cancelFlush();
-      pending.clear();
-      nextIdRef.current = 0;
-      lastFlushAtRef.current = 0;
-      autoScroll.current = true;
-      unreadCountRef.current = 0;
-      pendingTrimRef.current = null;
-      return;
-    }
+    cancelFlush();
+    pending.clear();
+    nextIdRef.current = 0;
+    lastFlushAtRef.current = 0;
+    autoScroll.current = true;
+    unreadCountRef.current = 0;
+    readingKeyRef.current = null;
+    if (!active) return;
 
     const flush = () => {
       flushFrameRef.current = null;
-      // `keepMounted` 让页签切换保留当前消息列表。本面板隐藏期间把新事件扣在有界
-      // 队列里，使聊天流量无法协调数百个不可见的 React 节点。
+      // `keepMounted` 让页签切换保留当前消息列表。隐藏期间把新事件扣在有界队列里，
+      // 使聊天流量无法协调不可见的 React 节点。
       if (!activeRef.current || !visibleRef.current) return;
-      // 队列里的行可能携带刚被屏蔽的用户（订阅回调之后才生效），出队时再过一遍。
-      // 匹配器是 Set 查找，重复调用的开销可以忽略。
       const batch = pending
         .take(MAX_PER_FLUSH)
         .filter((line) => !matchersRef.current.blockedUserMatcher(line.event));
-      if (batch.length === 0) return;
+      if (batch.length === 0) {
+        if (pending.length > 0) scheduleFlush();
+        return;
+      }
       lastFlushAtRef.current = performance.now();
 
       if (!autoScroll.current) {
-        // 信息流在历史浏览中被刻意钉住：记录此后到达的数量，
-        // 显示在跳回控件上。
         unreadCountRef.current += batch.length;
         setUnreadCount(unreadCountRef.current);
       }
 
-      // 淘汰最旧的行会把剩余行上移，只有当信息流钉在最新消息上时读者才察觉不到。
-      // 读者翻看历史时保持更宽的窗口；钉住窗口由 `scrollToBottom` 恢复。
-      const capacity = danmakuListAppendCapacity(autoScroll.current);
-      setItems((previous) => appendWithinDanmakuListWindow(previous, batch, capacity));
+      // 数据仍有界；裁剪后由虚拟器的稳定键锚定代替整段高度差补偿。
+      setItems((previous) => appendWithinDanmakuListWindow(previous, batch));
 
-      // 突发流量不应让每个动画帧都协调数百个节点。原生源已经合并了消息；
-      // 为隐藏页签积压或超大原生批次保留本地节奏上限。
       if (pending.length > 0) scheduleFlush();
     };
 
@@ -435,8 +431,6 @@ export const DanmakuPanel = memo(function DanmakuPanel({
         return;
       }
 
-      // 正常流量下快速列表有用，但持续突发不需要每秒 31 次 React 提交。
-      // 以更从容的节奏排空更大的有界积压，追平后回到低延迟路径。
       const minInterval =
         pending.length >= BACKPRESSURE_PENDING_THRESHOLD
           ? BACKPRESSURE_FLUSH_INTERVAL_MS
@@ -478,134 +472,169 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       if (scheduleFlushRef.current === scheduleFlush) scheduleFlushRef.current = () => {};
       pending.clear();
     };
-  }, [active]);
+  }, [active, siteId, roomId]);
 
   useLayoutEffect(() => {
-    if (!visible) return;
+    const root = scrollRootRef.current;
+    const next = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR) ?? null;
+    setViewport((current) => (current === next ? current : next));
+  }, []);
 
-    if (autoScroll.current) {
-      // 已钉住：先归还读者翻历史期间保留的行，再钉住。钉住状态下裁剪不可见，
-      // 因为内容底部不动，偏移由浏览器代为钳制。
-      if (items.length > DANMAKU_LIST_MAX_PINNED) {
-        // 视口滚动同步（外部系统）：本 effect 的职责是每批提交后把视口钉回底部，
-        // 裁剪状态写入与其同步发生。
-        // oxlint-disable-next-line react/set-state-in-effect
-        setItems((previous) => trimToDanmakuListWindow(previous, DANMAKU_LIST_MAX_PINNED));
-      }
-      // Base UI 拥有嵌套视口，用 `scrollIntoView` 滚动哨兵元素可能选中外层祖先而非
-      // 聊天视口。只设置真正的视口，每批提交一次。
-      scrollDanmakuViewportToBottom(scrollRootRef.current);
-      return;
+  const getItemKey = useCallback((index: number) => items[index].id, [items]);
+  // 用真实 viewport 给虚拟器，而不是 ScrollArea 外层。
+  // oxlint-disable-next-line react/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => (visible ? viewport : null),
+    estimateSize: () => DANMAKU_ROW_ESTIMATE_PX,
+    getItemKey,
+    paddingStart: 8,
+    paddingEnd: 8,
+    gap: 2,
+    overscan: DANMAKU_LIST_OVERSCAN,
+    anchorTo: "end",
+    // 跟随由下方同步 scrollTop 完成，不启用 scrollToEnd 的跨帧重试；
+    // 否则快速上滚时尚未结束的重试会把阅读位置拉回底部。
+    useFlushSync: false,
+  });
+
+  // 长文本和面板变窄会换行：仅测量挂载的可视行，不把近似估高当成固定行高。
+  // 缓存按稳定 id 保存，淘汰数据后也释放对应测高，避免长时间直播积累无用键。
+  useLayoutEffect(() => {
+    const keys = new Set(items.map((line) => line.id));
+    for (const key of virtualizer.itemSizeCache.keys()) {
+      if (typeof key === "number" && !keys.has(key)) virtualizer.itemSizeCache.delete(key);
     }
+  }, [items, virtualizer]);
 
-    // 读者停在历史里，`flush` 在未裁剪的情况下追加了行。在这里执行更大的窗口限制，
-    // 因为此时被移除的行可以被测量：移除它们会让下方所有内容上移其高度，
-    // 在同一帧内从 `scrollTop` 扣掉即可保持阅读位置不动。浏览器随后钳制掉的
-    // 本来就在内容之外。
-    if (items.length <= DANMAKU_LIST_MAX_SCROLLED_UP) return;
-    const viewport = scrollRootRef.current?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
-    const heightBeforeTrim = viewport?.scrollHeight ?? 0;
-    setItems((previous) => trimToDanmakuListWindow(previous, DANMAKU_LIST_MAX_SCROLLED_UP));
-    pendingTrimRef.current = viewport ? { viewport, heightBeforeTrim } : null;
-    // `atBottom` 是依赖项，因此重新钉住会重跑本副作用，即使没有新批次到达 ——
-    // 这正是归还保留历史行的机制。
-  }, [items, visible, atBottom]);
-
-  // 在上面的裁剪提交之后运行，因此 `scrollHeight` 已反映被移除的行。
-  // 补偿放在这里而不是裁剪自身的提交里，
-  // 可以把测量排除出常见钉住场景的冲刷路径。
+  // 锚点仍在窗口内时由虚拟器保持位置；连锚点也被淘汰时，退到最早保留行。
   useLayoutEffect(() => {
-    const pendingTrim = pendingTrimRef.current;
-    if (!pendingTrim) return;
-    pendingTrimRef.current = null;
-    const { viewport, heightBeforeTrim } = pendingTrim;
-    viewport.scrollTop = scrollTopAfterDanmakuListTrim(
-      viewport.scrollTop,
-      heightBeforeTrim,
-      viewport.scrollHeight,
-    );
-  }, [items]);
+    const first = items[0];
+    if (
+      !autoScroll.current &&
+      viewport &&
+      first &&
+      readingKeyRef.current !== null &&
+      readingKeyRef.current < first.id
+    ) {
+      readingKeyRef.current = first.id;
+      viewport.scrollTop = 0;
+    }
+  }, [items, viewport]);
+
+  // 虚拟器处理追加时的锚定；这里同步测高、重新显示与主动回底带来的总高度变化。
+  const totalSize = virtualizer.getTotalSize();
+  useLayoutEffect(() => {
+    if (visible && autoScroll.current) scrollDanmakuViewportToBottom(viewport);
+  }, [items, totalSize, visible, atBottom, viewport]);
 
   useEffect(() => {
-    if (!visible || typeof ResizeObserver === "undefined") return;
-    const root = scrollRootRef.current;
-    const viewport = root?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
-    if (!viewport) return;
+    if (!visible || !viewport || typeof ResizeObserver === "undefined") return;
 
-    // 页签切换或侧栏/窗口缩放可能改变视口，发生在 React 的消息批次布局副作用
-    // 之后。这种情况下直播信息流也要保持钉住；手动向上滚动会关闭这条路径。
     let frame: number | null = null;
+    let previousWidth = viewport.clientWidth;
+    let previousHeight = viewport.clientHeight;
     const scrollIfPinned = () => {
+      if (previousWidth !== viewport.clientWidth || previousHeight !== viewport.clientHeight) {
+        previousWidth = viewport.clientWidth;
+        previousHeight = viewport.clientHeight;
+        setMenuTarget(null);
+      }
       if (!autoScroll.current || frame !== null) return;
       frame = window.requestAnimationFrame(() => {
         frame = null;
-        if (autoScroll.current) scrollDanmakuViewportToBottom(root);
+        if (autoScroll.current) scrollDanmakuViewportToBottom(viewport);
       });
     };
     const observer = new ResizeObserver(scrollIfPinned);
     observer.observe(viewport);
     scrollIfPinned();
 
+    const closeOnResize = () => setMenuTarget(null);
+    window.addEventListener("resize", closeOnResize);
     return () => {
+      window.removeEventListener("resize", closeOnResize);
       observer.disconnect();
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [visible]);
+  }, [visible, viewport]);
 
   useEffect(() => {
-    const viewport = scrollRootRef.current?.querySelector<HTMLElement>(SCROLL_VIEWPORT_SELECTOR);
-    if (!viewport) return;
+    if (!visible || !viewport) return;
 
-    // React 的委托 scroll 处理器对每次程序化钉住和用户滚动都会运行。本监听器在
-    // 热路径上只修改 refs，仅在钉住状态翻转时上报，因此直接以 passive 方式
-    // 挂到真正的嵌套视口上。
+    // 热路径上只修改 refs，仅在钉住状态翻转时上报，避免每次 scroll 触发 React 树协调。
     const updateAutoScroll = () => {
+      const key = virtualizer.getVirtualItemForOffset(viewport.scrollTop)?.key;
+      readingKeyRef.current = typeof key === "number" ? key : null;
+      if (menuTargetRef.current) return;
       const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
       const next = distanceToBottom < 48;
       const repinned = next && !autoScroll.current;
       autoScroll.current = next;
       setAtBottom((previous) => (previous === next ? previous : next));
-      // 手动向下滚回会像跳回控件一样重新钉住信息流。清除未读计数触发重渲染，
-      // 让上方布局副作用归还为阅读历史而保留的行。
       if (repinned) {
         unreadCountRef.current = 0;
         setUnreadCount(0);
       }
     };
+    // 菜单锚在点击坐标；用户主动滚动/改变视口后收起，不让菜单悬在另一条消息上。
+    const closeOnMove = () => setMenuTarget(null);
+    viewport.addEventListener("wheel", closeOnMove, { passive: true });
+    viewport.addEventListener("touchmove", closeOnMove, { passive: true });
     viewport.addEventListener("scroll", updateAutoScroll, { passive: true });
-    return () => viewport.removeEventListener("scroll", updateAutoScroll);
-  }, []);
+    return () => {
+      viewport.removeEventListener("wheel", closeOnMove);
+      viewport.removeEventListener("touchmove", closeOnMove);
+      viewport.removeEventListener("scroll", updateAutoScroll);
+    };
+  }, [visible, viewport, virtualizer]);
 
   const scrollToBottom = useCallback(() => {
     autoScroll.current = true;
     unreadCountRef.current = 0;
     setUnreadCount(0);
-    // 现在就钉住；`atBottom` 翻转后上方布局副作用归还保留的历史行，
-    // 使淘汰造成的位移落在钉住状态下。
     setAtBottom(true);
-    scrollDanmakuViewportToBottom(scrollRootRef.current);
+    setMenuTarget(null);
+    scrollDanmakuViewportToBottom(viewport);
+  }, [viewport]);
+
+  const closeMenu = useCallback(() => {
+    setMenuTarget(null);
   }, []);
 
-  // 点击弹幕行打开操作菜单即表示读者要停在那一行上：解除底部跟随，让被点击的行
-  // 与菜单固定在当前位置，新消息只累积为未读。与手动上滚一致，滚回底部
-  // （跳回控件或向下滚动）才恢复跟随。
-  const unpinFromBottom = useCallback(() => {
+  const handleListClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!(event.target instanceof Element)) return;
+    const trigger = event.target.closest<HTMLElement>("[data-danmaku-id]");
+    if (!trigger || !event.currentTarget.contains(trigger)) return;
+    const id = Number(trigger.dataset.danmakuId);
+    const line = itemsRef.current.find((item) => item.id === id);
+    if (!line) return;
+    const rect = trigger.getBoundingClientRect();
+    // 原生 button 为 Enter/Space/辅助技术提供 click；这种 click 没有有效指针坐标。
+    const anchorRect = new DOMRect(
+      event.detail === 0 ? rect.left + rect.width / 2 : event.clientX,
+      event.detail === 0 ? rect.top + rect.height / 2 : event.clientY,
+      0,
+      0,
+    );
     autoScroll.current = false;
     setAtBottom(false);
+    setMenuTarget({ line, trigger, anchor: { getBoundingClientRect: () => anchorRect } });
   }, []);
+
+  const virtualRows = virtualizer.getVirtualItems();
 
   return (
     <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
+      {statusText && <p className="px-4 py-1 text-xs text-muted-foreground">{statusText}</p>}
       <div ref={scrollRootRef} className="relative min-h-0 flex-1">
         <ScrollArea className="h-full min-h-0">
           <div
-            className="flex flex-col gap-0.5 px-2.5 py-2 text-sm"
+            className="px-2.5 text-sm"
             // 让侧列表独立于继承来的悬浮弹幕描边样式。
             style={{ WebkitTextStroke: "0px", paintOrder: "normal" }}
+            onClick={handleListClick}
           >
-            {statusText && (
-              <p className="px-1.5 py-1 text-xs text-muted-foreground">{statusText}</p>
-            )}
             {!active && !statusText && (
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">
                 进入直播间后显示弹幕
@@ -614,20 +643,49 @@ export const DanmakuPanel = memo(function DanmakuPanel({
             {active && items.length === 0 && !statusText && (
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
             )}
-            {items.map((line) => (
-              <DanmakuRow
-                key={line.id}
-                line={line}
-                siteId={siteId}
-                roomId={roomId}
-                roomTitle={roomTitle}
-                roomUserName={roomUserName}
-                surface={listSurface}
-                onMenuOpen={unpinFromBottom}
-              />
-            ))}
+            <div
+              data-slot="danmaku-list"
+              data-count={items.length}
+              className="relative"
+              style={{ height: items.length > 0 ? totalSize : 0, overflowAnchor: "none" }}
+            >
+              {virtualRows.map((virtualRow: VirtualItem) => {
+                const line = items[virtualRow.index];
+                if (!line) return null;
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
+                    className="absolute inset-x-0 top-0"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    <DanmakuRow
+                      line={line}
+                      surface={listSurface}
+                      selected={menuTarget?.line.id === line.id}
+                      menuId={menuId}
+                    />
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </ScrollArea>
+
+        {visible && menuTarget && (
+          <DanmakuPanelActionMenu
+            key={menuTarget.line.id}
+            target={menuTarget}
+            menuId={menuId}
+            viewport={viewport}
+            siteId={siteId}
+            roomId={roomId}
+            roomTitle={roomTitle}
+            roomUserName={roomUserName}
+            onClose={closeMenu}
+          />
+        )}
 
         {visible && active && !atBottom && (
           <Button
