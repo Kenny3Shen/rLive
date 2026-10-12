@@ -90,7 +90,6 @@ async (page) => {
       passed.push("零尺寸不写坏位置，恢复后正常投放");
 
       // 固定弹幕时长各异时原生实例有上限；超出的并入不短于自身时长的组，不会提前到期。
-      time = 0;
       const durations = [4_000, 6_000, 8_000, 10_000, 12_000, 5_000];
       renderer.setComments(
         durations.map((ms, i) => comment(`fixed-${ms}`, i % 2 ? "bottom" : "top", 0.05, ms)),
@@ -107,6 +106,97 @@ async (page) => {
       renderer.destroy();
       assert(!stage.querySelector("[data-danmaku-group]"), "destroy 后残留原生舞台");
       passed.push("destroy 清理全部原生舞台");
+
+      // `appendComments` 增量追加：分段加载不能重建整条时间轴，也不能补投过去的分段。
+      time = 0;
+      const appendStage = document.createElement("div");
+      appendStage.style.cssText = "position:fixed;left:0;top:0;width:800px;height:400px;pointer-events:none";
+      document.body.append(appendStage);
+      const appended = new Renderer({ container: appendStage, media, speed: 100 });
+      try {
+        const seg = (name, from) =>
+          Array.from({ length: 12 }, (_, i) => comment(`${name}-${i}`, "scroll", from + i * 0.2));
+        time = 100;
+        appended.appendComments(seg("past", 10));
+        appended.appendComments(seg("future", 105));
+        media.dispatchEvent(new Event("seeking"));
+        media.dispatchEvent(new Event("playing"));
+        await frames();
+        await frames();
+        // 增量追加必须把游标留在“当前时间”：过去的 40 条不能一次性补投，未来的仍要按时间入场。
+        const onScreen = [...appendStage.querySelectorAll("[data-rlive-danmaku-id]")].map((el) =>
+          el.dataset.rliveDanmakuId,
+        );
+        assert(
+          onScreen.every((id) => !id.startsWith("past-")),
+          `增量追加补投了过去的分段：${onScreen.filter((id) => id.startsWith("past-")).join(",")}`,
+        );
+        await step(106.5);
+        await until(
+          () => [...appendStage.querySelectorAll("[data-rlive-danmaku-id]")].some((el) => el.dataset.rliveDanmakuId.startsWith("future-")),
+          "增量追加后未来弹幕没有入场",
+        );
+        passed.push("appendComments 不补投过去分段，未来弹幕仍按时间入场");
+
+        // 重复追加同一 id 不得重复登记；时间轴里一个 id 只应存在一条。
+        appended.appendComments(seg("future", 105));
+        const duplicated = [...appendStage.querySelectorAll("[data-rlive-danmaku-id='future-0']")].length;
+        assert(duplicated <= 1, `重复 append 产生了重复节点：${duplicated}`);
+        passed.push("appendComments 对已登记 id 幂等");
+
+        // `remove` 必须同时清掉尚未上屏的时间轴条目，否则它稍后仍会被投放。
+        appended.remove("future-11");
+        await step(108.5);
+        assert(
+          !appendStage.querySelector("[data-rlive-danmaku-id='future-11']"),
+          "remove 没有清掉未上屏的时间轴条目",
+        );
+        passed.push("remove 清理未上屏的时间轴条目");
+
+        // `setComments` 换成新对象后，`remove` 仍要能按 id 摘掉它（记录与时间轴可能不同实例）。
+        time = 200;
+        appended.setComments(seg("reset", 201));
+        appended.remove("reset-3");
+        await step(202.5);
+        assert(
+          !appendStage.querySelector("[data-rlive-danmaku-id='reset-3']"),
+          "setComments 换对象后 remove 失效",
+        );
+        passed.push("setComments 换对象后 remove 仍按 id 生效");
+
+        // 墓碑压实：移除超过阈值会重建时间轴并修正原生游标。
+        // 游标修正错了会把已过去的历史整段重播，所以必须同时验证“移除的不再出现”
+        // 与“未移除的仍按时间入场”。
+        time = 300;
+        const bulk = Array.from({ length: 600 }, (_, i) => comment(`bulk-${i}`, "scroll", 300.2 + i * 0.05));
+        appended.setComments(bulk);
+        media.dispatchEvent(new Event("seeking"));
+        media.dispatchEvent(new Event("playing"));
+        await step(300.5);
+        // 隔一条移除一条：移除数超过 COMPACT_THRESHOLD(512)，必然触发至少一次压实。
+        const removedBulk = [];
+        for (let i = 0; i < bulk.length; i += 2) {
+          removedBulk.push(`bulk-${i}`);
+          appended.remove(`bulk-${i}`);
+        }
+        await step(305);
+        const afterCompact = [...appendStage.querySelectorAll("[data-rlive-danmaku-id]")].map(
+          (el) => el.dataset.rliveDanmakuId,
+        );
+        const leaked = afterCompact.filter((id) => removedBulk.includes(id));
+        assert(leaked.length === 0, `压实前已移除的弹幕仍被投放：${leaked.slice(0, 5).join(",")}`);
+        // 偶数号被移除，奇数号必须全部正常入场（600 条 × 0.05s ≈ 30s 窗口内）。
+        const survivors = afterCompact.filter((id) => id.startsWith("bulk-"));
+        assert(
+          survivors.length > 0 && survivors.every((id) => Number(id.slice(5)) % 2 === 1),
+          `压实后存活集合异常：${survivors.slice(0, 5).join(",")}`,
+        );
+        passed.push("墓碑压实后已移除的不重播，未移除的仍按时间入场");
+      } finally {
+        appended.destroy();
+        appendStage.remove();
+      }
+
       return { passed };
     } finally {
       renderer?.destroy();

@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import type { DanmakuRenderer } from "@/features/room/danmaku/danmakuRenderer";
+import type { DanmakuComment } from "@/features/room/danmaku/danmakuTypes";
 import {
   clampDanmuArea,
   clampDanmuFontSize,
@@ -84,23 +85,37 @@ export function VideoDanmakuLayer({
     );
     return { visible, byId: new Map(visible.map((entry) => [entry.id, entry])) };
   }, [entries, shieldWords]);
-  const comments = useMemo(
-    () =>
-      schedule.visible.map((entry) =>
-        videoDanmakuComment(entry, {
-          fontSize,
-          fontStroke,
-          opacity,
-          // 减少动态效果时用正常媒体时长的顶部弹幕代替近乎静止、长期占道的滚动弹幕。
-          reducedMotion: prefersReducedMotion(),
-        }),
-      ),
-    [schedule, fontSize, fontStroke, opacity],
-  );
-  const latestRef = useRef({ schedule, comments, speed, area });
+  /**
+   * 按 id 缓存转换结果。分段加载会让 `entries` 每次换新引用，但合并保留了条目本身，
+   * 重算全部条目的样式对象是纯浪费。外观参数变化时 key 失配自然重建；
+   * 同时淘汰已不在列表里的 id，长视频下不会随段落累积无界增长。
+   */
+  const [commentCache] = useState(() => new Map<string, { key: string; comment: DanmakuComment }>());
+  const scheduleComments = useMemo(() => {
+    // 减少动态效果时用正常媒体时长的顶部弹幕代替近乎静止、长期占道的滚动弹幕。
+    const reducedMotion = prefersReducedMotion();
+    const key = `${fontSize}|${fontStroke}|${opacity}|${reducedMotion}`;
+    const list: DanmakuComment[] = [];
+    const byId = new Map<string, DanmakuComment>();
+    for (const entry of schedule.visible) {
+      const cached = commentCache.get(entry.id);
+      let comment: DanmakuComment;
+      if (cached && cached.key === key) {
+        comment = cached.comment;
+      } else {
+        comment = videoDanmakuComment(entry, { fontSize, fontStroke, opacity, reducedMotion });
+        commentCache.set(entry.id, { key, comment });
+      }
+      list.push(comment);
+      byId.set(entry.id, comment);
+    }
+    for (const id of Array.from(commentCache.keys())) if (!byId.has(id)) commentCache.delete(id);
+    return { list, byId };
+  }, [schedule, fontSize, fontStroke, opacity, commentCache]);
+  const latestRef = useRef({ schedule, scheduleComments, speed, area });
   useLayoutEffect(() => {
-    latestRef.current = { schedule, comments, speed, area };
-  }, [schedule, comments, speed, area]);
+    latestRef.current = { schedule, scheduleComments, speed, area };
+  }, [schedule, scheduleComments, speed, area]);
 
   const releaseSelection = useCallback((dropped = false) => {
     const id = selectedIdRef.current;
@@ -181,6 +196,30 @@ export function VideoDanmakuLayer({
     if (!active) releaseSelection();
   }, [active, releaseSelection]);
 
+  /**
+   * 已推送到渲染器时间轴的 id → 当时的弹幕对象。分段加载只增不减时走增量 `appendComments`，
+   * 避免每次取回新段都重建整条时间轴；条目减少（屏蔽词命中）或外观参数变化（字号、描边、
+   * 透明度、减少动态效果）会产出新对象，此时必须整体替换，否则已上屏节点拿不到新样式。
+   */
+  const pushedRef = useRef(new Map<string, DanmakuComment>());
+  const syncComments = useCallback((renderer: DanmakuRenderer) => {
+    const { list, byId } = latestRef.current.scheduleComments;
+    const pushed = pushedRef.current;
+    let appendOnly = pushed.size <= byId.size;
+    if (appendOnly) {
+      for (const [id, comment] of pushed) {
+        if (byId.get(id) !== comment) {
+          appendOnly = false;
+          break;
+        }
+      }
+    }
+    if (appendOnly) renderer.appendComments(list);
+    else renderer.setComments(list);
+    pushed.clear();
+    for (const comment of list) pushed.set(comment.id, comment);
+  }, []);
+
   useEffect(() => {
     const container = containerRef.current;
     const media = videoRef.current;
@@ -188,6 +227,8 @@ export function VideoDanmakuLayer({
     let disposed = false;
     let renderer: DanmakuRenderer | null = null;
     const records = recordsRef.current;
+    // 新建实例的时间轴是空的，上一轮（或上一条视频）的推送记录不能复用。
+    pushedRef.current = new Map();
     void loadDanmakuRenderer()
       .then((Renderer) => {
         if (disposed) return;
@@ -207,7 +248,7 @@ export function VideoDanmakuLayer({
           },
         });
         instanceRef.current = renderer;
-        renderer.setComments(latest.comments);
+        syncComments(renderer);
       })
       .catch((error: unknown) => {
         renderer?.destroy();
@@ -223,12 +264,13 @@ export function VideoDanmakuLayer({
       renderer?.destroy();
       records.clear();
     };
-  }, [cid, videoRef, releaseSelection]);
+  }, [cid, videoRef, releaseSelection, syncComments]);
 
   // 仅更新原生时间轴；到来的新分段、屏蔽词和设置变化均不重建实例或清除在途弹幕。
   useEffect(() => {
-    instanceRef.current?.setComments(comments);
-  }, [comments]);
+    const renderer = instanceRef.current;
+    if (renderer) syncComments(renderer);
+  }, [scheduleComments, syncComments]);
   useEffect(() => {
     instanceRef.current?.setSpeed(speed);
   }, [speed]);

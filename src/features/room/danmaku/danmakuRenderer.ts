@@ -118,6 +118,20 @@ export class DanmakuRenderer {
   private readonly options: DanmakuRendererOptions;
   private readonly groups = new Map<string, Group>();
   private readonly records = new Map<string, RecordItem>();
+  /**
+   * 已登记进时间轴的 id。`appendComments` 靠它跳过已转换的条目，避免每次分段加载都重建
+   * 整条时间轴。整体替换时直接换掉这个 Set（O(1)），不逐条清理。
+   * 直播走 `emit`，不入此表：无媒体时原生会回收已消费前缀，登记会随会话无限增长。
+   */
+  private timelineIds = new Set<string>();
+  /**
+   * 已移除但仍在分组时间轴里的 id（墓碑）。从数组中 `splice` 一条需要先知道下标，
+   * 而 `indexOf` 是 O(时间轴)；时间轴可能到十万条，而 `remove` 在直播 SC 集中到期时
+   * 会连续触发。这里只记墓碑，让原生跳过它，再在安全时机一次性压实。
+   */
+  private readonly removedIds = new Set<string>();
+  /** 墓碑数量的压实阈值：限制墓碑内存，同时把 O(时间轴) 的压实摊薄到亚毫秒每次移除。 */
+  private static readonly COMPACT_THRESHOLD = 512;
   private readonly definitions = new WeakMap<NativeComment["render"], DanmakuComment>();
   private readonly observer?: ResizeObserver;
   private speed: number;
@@ -172,7 +186,10 @@ export class DanmakuRenderer {
     group.native.show();
   }
 
-  /** 替换未来时间轴，不清除/重投在途弹幕。每次 seek 仍由原生重新定位。 */
+  /**
+   * 替换未来时间轴，不清除/重投在途弹幕。每次 seek 仍由原生重新定位。
+   * 分段追加走 `appendComments`；只有外观变化、条目减少（屏蔽词命中）或换视频才需要整体替换。
+   */
   setComments(comments: readonly DanmakuComment[]): void {
     if (this.destroyed) return;
     const grouped = new Map<Group, NativeComment[]>();
@@ -183,19 +200,14 @@ export class DanmakuRenderer {
       const group = this.groupFor(definition);
       let list = grouped.get(group);
       if (!list) grouped.set(group, list = []);
-      list.push(this.toNative(definition));
-      const record = this.records.get(definition.id);
-      if (record) {
-        // 仅更新样式：保留节点身份、菜单命中和原来的运动位置。
-        for (const key of Object.keys(record.definition.style ?? {})) {
-          if (!(key in (definition.style ?? {}))) {
-            record.element.style.removeProperty(key.replace(/[A-Z]/g, (l) => `-${l.toLowerCase()}`));
-          }
-        }
-        record.definition = definition;
-        applyStyle(record.element, definition.style);
-      }
+      const native = this.toNative(definition);
+      list.push(native);
+      this.applyDefinition(definition);
     }
+    // 整体替换：整个 Set 一次换掉，不逐条删除也不额外分配临时数组。数组是重建的，
+    // 旧墓碑也随之消失，不需要保留。
+    this.timelineIds = seen;
+    this.removedIds.clear();
     const now = this.now();
     for (const group of this.groups.values()) {
       const list = grouped.get(group) ?? [];
@@ -206,26 +218,106 @@ export class DanmakuRenderer {
     this.refreshLayout();
   }
 
+  /**
+   * 增量追加时间轴：只对尚未登记的 id 做分组、转换与有序插入，不重建已有分组。
+   * VOD 分段加载的语义是追加而不是替换，而整条时间轴全量重建的代价随视频时长线性增长。
+   *
+   * 只处理未登记的 id；外观变化（字号、描边、透明度、减少动态效果）会改变已上屏节点的样式，
+   * 必须走 `setComments` 整体替换，不能靠本方法。
+   */
+  appendComments(comments: readonly DanmakuComment[]): void {
+    if (this.destroyed) return;
+    // 分段追加是天然的压实时机：只在真有墓碑时才付 O(时间轴) 的代价，
+    // 否则重复 append 会在数组里留下同一 id 的墓碑与新条目各一份。
+    if (this.removedIds.size > 0) this.compact();
+    const additions = new Map<Group, NativeComment[]>();
+    for (const definition of comments) {
+      if (this.timelineIds.has(definition.id)) continue;
+      this.timelineIds.add(definition.id);
+      const group = this.groupFor(definition);
+      const native = this.toNative(definition);
+      let list = additions.get(group);
+      if (!list) additions.set(group, list = []);
+      list.push(native);
+    }
+    if (additions.size === 0) return;
+    const now = this.now();
+    for (const [group, list] of additions) {
+      const existing = group.native.comments;
+      list.sort((a, b) => a.time - b.time);
+      const last = existing[existing.length - 1];
+      // 常见路径：新分段接在现有时间轴末尾且全在未来。整批 push，不动游标，也不重建数组。
+      if ((!last || list[0]!.time >= last.time) && list[0]!.time >= now) {
+        existing.push(...list);
+        continue;
+      }
+      // 乱序分段（向后 seek 后补回旧段）或含已过去的时间：整批归并并重新定位游标，
+      // 与 `setComments` 的语义一致——过去的不补投，从当前位置往后继续。
+      const merged: NativeComment[] = [];
+      let left = 0;
+      let right = 0;
+      while (left < existing.length && right < list.length) {
+        merged.push(existing[left]!.time <= list[right]!.time ? existing[left++]! : list[right++]!);
+      }
+      while (left < existing.length) merged.push(existing[left++]!);
+      while (right < list.length) merged.push(list[right++]!);
+      group.native.comments = merged;
+      group.native._.position = lowerBound(merged, now);
+    }
+  }
+
+  /**
+   * 移除一条弹幕。O(1)：只记墓碑并从在屏列表摘出，不扫描时间轴。
+   * 时间轴里的条目由原生推进游标时经 `setup` 钩子跳过，累积到阈值再一次性压实。
+   */
   remove(id: string): void {
     if (this.destroyed) return;
-    for (const group of this.groups.values()) {
-      const state = group.native._;
-      let removedBefore = 0;
-      group.native.comments = group.native.comments.filter((comment, index) => {
-        if (this.definitions.get(comment.render)?.id !== id) return true;
-        if (index < state.position) removedBefore++;
-        return false;
-      });
-      state.position -= removedBefore;
-      state.runningList = state.runningList.filter((comment) => this.definitions.get(comment.render)?.id !== id);
-    }
+    this.timelineIds.delete(id);
+    this.removedIds.add(id);
     const record = this.records.get(id);
     if (record) {
+      // 在屏弹幕：从运行列表摘出（规模由在屏数限制），移除节点并回收记录。
+      const running = record.group.native._.runningList;
+      const at = running.indexOf(record.comment);
+      if (at >= 0) running.splice(at, 1);
       record.comment.node?.remove();
       this.detach(record);
     } else {
       this.options.onDetach?.(id);
     }
+    // 只阻止新消息进入，不主动清屏；墓碑到位即生效，不等待压实。
+    if (this.removedIds.size >= DanmakuRenderer.COMPACT_THRESHOLD) this.compact();
+  }
+
+  /**
+   * 把墓碑从各分组时间轴里真正摘掉，并修正原生游标。
+   * 这是唯一需要 O(时间轴) 的操作，只在墓碑累积到阈值或分段追加时发生。
+   */
+  private compact(): void {
+    if (this.removedIds.size === 0) return;
+    const removed = this.removedIds;
+    for (const group of this.groups.values()) {
+      const list = group.native.comments;
+      // 游标之前被摘掉的条目会让 position 偏移，不同步会把整段历史重播一遍。
+      const before = Math.min(group.native._.position, list.length);
+      let droppedBefore = 0;
+      let dropped = 0;
+      const kept: NativeComment[] = [];
+      for (let index = 0; index < list.length; index += 1) {
+        const comment = list[index]!;
+        const definition = this.definitions.get(comment.render);
+        if (definition && removed.has(definition.id)) {
+          dropped += 1;
+          if (index < before) droppedBefore += 1;
+        } else {
+          kept.push(comment);
+        }
+      }
+      if (dropped === 0) continue;
+      group.native.comments = kept;
+      group.native._.position = before - droppedBefore;
+    }
+    removed.clear();
   }
 
   pin(id: string): boolean {
@@ -263,6 +355,9 @@ export class DanmakuRenderer {
   clear(): void {
     if (this.destroyed) return;
     for (const group of Array.from(this.groups.values())) this.destroyGroup(group);
+    // 分组已全部销毁，注册表一并失效；不清会让后续 `appendComments` 跳过本该重投的条目。
+    this.timelineIds = new Set();
+    this.removedIds.clear();
   }
 
   resize(): void {
@@ -446,6 +541,19 @@ export class DanmakuRenderer {
     return this.media ? this.media.currentTime : clock();
   }
 
+  /** 时间轴已有同一 id 时只更新样式：保留节点身份、菜单命中和原来的运动位置。 */
+  private applyDefinition(definition: DanmakuComment): void {
+    const record = this.records.get(definition.id);
+    if (!record) return;
+    for (const key of Object.keys(record.definition.style ?? {})) {
+      if (!(key in (definition.style ?? {}))) {
+        record.element.style.removeProperty(key.replace(/[A-Z]/g, (l) => `-${l.toLowerCase()}`));
+      }
+    }
+    record.definition = definition;
+    applyStyle(record.element, definition.style);
+  }
+
   private toNative(definition: DanmakuComment): NativeComment {
     const render = () => {
       const element = definition.render?.() ?? document.createElement("span");
@@ -539,6 +647,8 @@ export class DanmakuRenderer {
         for (const scheduled of pending) {
           const definition = this.definitions.get(scheduled.render);
           if (!definition || this.records.has(definition.id) || seen.has(definition.id)) continue;
+          // 墓碑：已移除但尚未压实的条目。在此跳过，不建节点也不进运行列表。
+          if (this.removedIds.has(definition.id)) continue;
           seen.add(definition.id);
           if (selected.length >= MAX_PENDING_PER_FRAME || this.records.size + selected.length >= MAX_ACTIVE ||
               group.width <= 0 || group.height <= 0) {
