@@ -13,7 +13,7 @@ playwright-cli -s=p0 --raw run-code --filename=tests/danmaku-p0-performance.brow
 
 输出仅在 `.playwright-cli/`：`danmaku-bench-baseline/`、`danmaku-bench-dist/`、构建元数据及手动保存的结果。每次源代码变化后重新 build；preview 不会自动 build。也可 `bunx vite preview --outDir .playwright-cli/danmaku-bench-dist --port 1433 --strictPort`。
 
-构建从 `git show 30e723d5:…` 生成基线 `DanmakuPanel`、`LiveDanmaku`、`danmakuAdapter`、`listWindow`，仅这四个文件彼此指向基线。其余依赖（React/store/eventBus/loader/renderer/filter/UI 等）均共享当前代码，不 checkout、不改 `src`。基线 ignored 目录通过 CSS `@source` 显式纳入 Tailwind。构建 JSON 记录完整基线 commit、当前 HEAD、四个当前文件 SHA256 与构建时间。
+构建从 `git show 30e723d5:…`（或 `--baseline=<commit>` 指定的提交）生成基线 `DanmakuPanel`、`LiveDanmaku`、`danmakuAdapter`、`listWindow`，仅这四个文件彼此指向基线。其余依赖（React/store/eventBus/loader/renderer/filter/UI 等）均共享当前代码，不 checkout、不改 `src`。基线 ignored 目录通过 CSS `@source` 显式纳入 Tailwind。构建 JSON 记录完整基线 commit、当前 HEAD、四个当前文件 SHA256 与构建时间。
 
 ### Windows WebView2 原生主窗口
 
@@ -78,7 +78,7 @@ adb -s emulator-5554 reverse tcp:1420 tcp:1421
 注意 **headless 会话没有 GPU**，`getAnimations()` 返回 0、层数不代表真实合成，层结论必须来自
 WebView2 或 Android 真实目标。
 
-基线钉底预填 300 条，当前钉底预填 1200 条。上滚场景先解除钉底，再以最多 32 条/批等待 React 实际提交，直到两版均达到 1200；最后两版都重新滚到满窗口中点。不会一次把 1200 条塞进 pending 队列。预填后启动连续事件，再预热，测量期间不停流；手机预热 6s 使预填洪峰离开 412px 舞台。
+钉底预填量按实际列表能力决定：未虚拟化版本（无 `data-count`，如默认基线 `30e723d5`）预填 300 条，虚拟化版本预填 1200 条；`--baseline=<commit>` 选到已虚拟化提交时两版同为 1200。上滚场景先解除钉底，再以最多 32 条/批等待 React 实际提交，直到两版均达到 1200；最后两版都重新滚到满窗口中点。不会一次把 1200 条塞进 pending 队列。预填后启动连续事件，再预热，测量期间不停流；手机预热 6s 使预填洪峰离开 412px 舞台。
 
 ## 手动 API
 
@@ -107,6 +107,7 @@ try {
 - FPS = 帧数 / **真实采样 duration**；帧间隔 median/p95/max、`>25ms` jank 数及比例。
 - `PerformanceObserver` longtask 的 supported/count/maxMs/totalMs。
 - 实际 sent、共享 bus received、batch 数、实际 received/s；定时器被阻塞时不补追 tick，避免制造假流量。
+- `panelScrollEvents`：采样期间面板 viewport 收到的 scroll 事件数（只计数、不读几何）；钉底稳态应接近 0。
 - 渲染器第一次 `emit` 暂包装捕获实例，立即恢复 prototype。每秒读 `size`；rAF 只记时间，**不会每帧查 DOM**。DOM 行数/data-count/在屏节点数/几何只在 sample 头尾读取。
 - 基线没有 `data-count`，`panelDataCount:null`，`panelCount` 从实际行数推断；当前版同时报告窗口容量与实际 DOM 行数。
 - CDP `Script/RecalcStyle/Layout/Task` 为累计秒数差转换的 ms/s，分母是 CDP **Timestamp 真差**。Task 包含子项，不能相加。

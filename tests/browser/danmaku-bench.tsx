@@ -271,7 +271,10 @@ async function prepare(input: Partial<Options> = {}) {
           await frames();
         }
       };
-      await fillTo(next.variant === "baseline" ? 300 : 1200);
+      // --baseline 可选已虚拟化的提交；按实际列表能力而非变体名字确定预填容量，
+      // 否则同容量 A/B 会变成「基线仍增长、当前已裁剪」的不同负载。
+      const virtualized = panel()?.querySelector('[data-slot="danmaku-list"]')?.hasAttribute("data-count");
+      await fillTo(virtualized ? 1200 : 300);
       if (next.scrolledUp) {
         const view = viewport()!;
         view.scrollTop = Math.max(0, (view.scrollHeight - view.clientHeight) / 2);
@@ -325,6 +328,11 @@ async function sample(ms = 9000) {
   const supportsLongtasks = PerformanceObserver.supportedEntryTypes.includes("longtask");
   const observer = supportsLongtasks ? new PerformanceObserver((list) => tasks.push(...list.getEntries())) : null;
   const densityTimer = window.setInterval(() => density.push(layerSize()), 1000);
+  // 只计数，不在 scroll 热路径读取几何，避免探针本身制造同步布局。
+  const panelViewport = viewport();
+  let panelScrollEvents = 0;
+  const onPanelScroll = () => { panelScrollEvents++; };
+  panelViewport?.addEventListener("scroll", onPanelScroll, { passive: true });
   let hidden = false;
   const onVisibility = () => { if (document.hidden) hidden = true; };
   document.addEventListener("visibilitychange", onVisibility);
@@ -360,6 +368,7 @@ async function sample(ms = 9000) {
       jankOver25ms: intervals.filter((value) => value > 25).length,
       jankRatio: intervals.filter((value) => value > 25).length / intervals.length,
       longtasks: { supported: supportsLongtasks, count: longtasks.length, maxMs: Math.max(0, ...longtasks.map((task) => task.duration)), totalMs: longtasks.reduce((sum, task) => sum + task.duration, 0) },
+      panelScrollEvents,
       events: { sent: after.sent - before.sent, received: after.received - before.received, batches: after.batches - before.batches, actualRate: (after.received - before.received) * 1000 / durationMs },
       layerOnScreen: { min: Math.min(...density), mean: density.reduce((a, b) => a + b, 0) / density.length, max: Math.max(...density), samples: density },
       valid: !hidden && !injectionError && (options!.rate === 0 || after.received > before.received),
@@ -369,6 +378,7 @@ async function sample(ms = 9000) {
   } finally {
     observer?.disconnect();
     clearInterval(densityTimer);
+    panelViewport?.removeEventListener("scroll", onPanelScroll);
     document.removeEventListener("visibilitychange", onVisibility);
     sampling = false;
   }

@@ -15,6 +15,8 @@ const generated = path.join(root, ".playwright-cli/danmaku-bench-baseline");
 const outDir = path.join(root, ".playwright-cli/danmaku-bench-dist");
 const files = ["DanmakuPanel.tsx", "danmaku/LiveDanmaku.tsx", "danmaku/danmakuAdapter.ts", "danmaku/listWindow.ts"];
 const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+const arg = (name: string, fallback: string) =>
+  process.argv.find((value) => value.startsWith(`--${name}=`))?.split("=").slice(1).join("=") ?? fallback;
 const config = {
   configFile: false as const,
   root,
@@ -23,8 +25,6 @@ const config = {
 };
 
 if (process.argv.includes("--preview")) {
-  const arg = (name: string, fallback: string) =>
-    process.argv.find((value) => value.startsWith(`--${name}=`))?.split("=").slice(1).join("=") ?? fallback;
   const server = await preview({
     ...config,
     preview: { host: arg("host", "127.0.0.1"), port: Number(arg("port", "1431")), strictPort: true },
@@ -32,7 +32,9 @@ if (process.argv.includes("--preview")) {
   server.printUrls();
   console.log("页面路径：/tests/browser/danmaku-bench.html");
 } else {
-  const baseline = git("rev-parse", "30e723d5");
+  // `--baseline=<commit>` 可把对照换成任意提交，用于「同一改动前后」的单会话 A/B；
+  // 默认仍是长期历史基线，便于跨轮比较。
+  const baseline = git("rev-parse", arg("baseline", "30e723d5"));
   const hashes: Record<string, string> = {};
   for (const file of files) {
     const sourcePath = `src/features/room/${file}`;
