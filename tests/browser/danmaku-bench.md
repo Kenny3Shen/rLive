@@ -56,6 +56,27 @@ adb -s emulator-5554 reverse tcp:1420 tcp:1421
 - `cpu=1`、`cpu=4` 或 `cpu=1,4`。Android 默认 1x 使用真实设备能力。
 - `sample=9000`（默认，runner 最低 8000ms）；`warmup` 可增加但不能低于表中下限。
 - `rate`、`width`、`height`、`panelWidth`、`panelHeight` 可覆写，实际参数完整进入结果。
+- `willChange=node`（默认）/`none`/`group`：合成层策略对照，只对 `layer`/`both` 场景有意义。
+
+### `willChange` 策略对照
+
+节点内联带 `will-change:transform`，普通声明无法覆盖，夹具改用 `!important` 样式表，不改生产代码。
+必须用 `:has()`（`div:has(> [data-rlive-danmaku-id])`）而不是逐个改元素：采样期间持续新建节点，
+一次性改 DOM 只能覆盖当时已存在的那些。
+
+| 取值 | 效果 |
+| --- | --- |
+| `node` | 现状：动画包装节点提升为合成层 |
+| `none` | 包装节点与组都不提升 |
+| `group` | 把提升移到 `[data-danmaku-group]` 组容器 |
+
+`prepare` 阶段会核对 `getComputedStyle` 的实际值（`metrics().effectiveWillChange`），覆盖没命中就报错，
+避免所有策略退化成同一个 `node` 却得到「看起来合理但完全无效」的结论。该字段同时记录原生引擎
+自己写的 `translateZ(0)`（`nativeStageTransform`），避免把「去掉 will-change」误读成「完全没有合成层」。
+
+合成层证据用 CDP `LayerTree.enable` + `LayerTree.layerTreeDidChange` + `compositingReasons` 读取；
+注意 **headless 会话没有 GPU**，`getAnimations()` 返回 0、层数不代表真实合成，层结论必须来自
+WebView2 或 Android 真实目标。
 
 基线钉底预填 300 条，当前钉底预填 1200 条。上滚场景先解除钉底，再以最多 32 条/批等待 React 实际提交，直到两版均达到 1200；最后两版都重新滚到满窗口中点。不会一次把 1200 条塞进 pending 队列。预填后启动连续事件，再预热，测量期间不停流；手机预热 6s 使预填洪峰离开 412px 舞台。
 
@@ -90,4 +111,5 @@ try {
 - 基线没有 `data-count`，`panelDataCount:null`，`panelCount` 从实际行数推断；当前版同时报告窗口容量与实际 DOM 行数。
 - CDP `Script/RecalcStyle/Layout/Task` 为累计秒数差转换的 ms/s，分母是 CDP **Timestamp 真差**。Task 包含子项，不能相加。
 - `valid:false` 表示页面离开前台、注入失败或本应有流量却没收到事件；系统减少动态效果会在 layer prepare 阶段直接报错。
+- `effectiveWillChange` 只在 layer/both 场景且已有节点上屏时非空；它是核对覆盖是否生效的依据。
 - runner 的 `finally` 解除 CPU 节流、dispose 并 detach CDP。仍应保存设备温度/电源/浏览器版本及重复轮次，不能把一次结果等同于稳定硬件结论。

@@ -27,6 +27,10 @@ async (page) => {
   for (const variant of variants) if (!["baseline", "current"].includes(variant)) throw new Error(`未知 variant：${variant}`);
   const motions = (params.get("motion") || "running").split(",");
   if (motions.some((motion) => !["running", "paused"].includes(motion))) throw new Error("未知 motion");
+  // P2：合成层策略。节点内联的 `will-change:transform` 由夹具用 `!important` 覆盖，
+  // 不改生产代码。只对挂载了弹幕层的场景有意义，其余场景会报错而不是静默退化。
+  const willChanges = (params.get("willChange") || "node").split(",");
+  if (willChanges.some((value) => !["node", "none", "group"].includes(value))) throw new Error("未知 willChange 策略");
   const sampleMs = Number(params.get("sample") || 9000);
   if (!Number.isFinite(sampleMs) || sampleMs < 8000 || sampleMs > 60000) throw new Error("正式采样 sample 须为 8000..60000ms");
   // pace：采样期间挂一个微小的合成器动画，把 Android 显示节奏固定在指定 Hz。
@@ -49,9 +53,9 @@ async (page) => {
       const minimumWarmup = scene === "high-density" ? 22000 : scene.startsWith("mobile") || ["layer", "both"].includes(scene) ? 6000 : 3000;
       const warmupMs = Math.max(minimumWarmup, Number(params.get("warmup") || minimumWarmup));
       if (!Number.isFinite(warmupMs)) throw new Error("warmup 必须是毫秒数");
-      for (const cpu of cpus) for (const variant of variants) for (const motion of motions) {
+      for (const cpu of cpus) for (const variant of variants) for (const motion of motions) for (const willChange of willChanges) {
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
-        const options = { ...scenes[scene], variant, motion };
+        const options = { ...scenes[scene], variant, motion, willChange };
         // 可覆写 layer 几何/rate 但结果仍完整记录，便于有限档位的设备专项复跑。
         for (const name of ["width", "height", "panelWidth", "panelHeight", "rate"]) {
           if (params.has(name)) options[name] = Number(params.get(name));
@@ -85,7 +89,7 @@ async (page) => {
         const cadence = budget === null ? null
           : measurement.frameMs.median <= budget * 1.1 ? "full"
             : measurement.frameMs.median <= budget * 2.05 ? "half" : "lower";
-        rows.push({ scene, cpu, warmupMs, paceHz, cadence, ...measurement, cdp: { elapsedSeconds, msPerSecond } });
+        rows.push({ scene, cpu, warmupMs, paceHz, cadence, willChange, ...measurement, cdp: { elapsedSeconds, msPerSecond } });
         await page.evaluate(() => window.__danmakuP0Bench.dispose());
       }
     }

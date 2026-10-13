@@ -26,6 +26,16 @@ type Options = {
   scrolledUp: boolean;
   /** 仅测试：冻结现有及后续弹幕的 WAAPI，原生轨道、到期与事件摄入保持运行。 */
   motion: "running" | "paused";
+  /**
+   * P2 合成层策略。动画包装节点（`[data-rlive-danmaku-id]` 的父节点）内联带
+   * `will-change:transform`，这里用 `!important` 样式表覆盖它，从而在不改生产代码的
+   * 前提下对照不同策略。用 `:has()` 而不是逐个改元素：采样期间会持续新建节点，
+   * 一次性改 DOM 只能覆盖当时已存在的那些。
+   * - `node`：保持现状，每条弹幕一个合成层。
+   * - `none`：包装节点与组都不提升。
+   * - `group`：把提升移到组容器，包装节点不提升。
+   */
+  willChange: "node" | "none" | "group";
 };
 type Renderer = InstanceType<Awaited<ReturnType<typeof loadDanmakuRenderer>>>;
 const globals = window as typeof window & { __TAURI_INTERNALS__?: { invoke?: unknown }; isTauri?: boolean; __danmakuP0Bench?: unknown };
@@ -40,7 +50,7 @@ const until = async (test: () => boolean, message: string, timeout = 10000) => {
   const deadline = performance.now() + timeout;
   while (!test()) { if (performance.now() > deadline) throw new Error(message); await sleep(25); }
 };
-const defaults: Options = { variant: "current", mode: "panel", rate: 150, width: 1920, height: 1080, panelWidth: 340, panelHeight: 480, scrolledUp: false, motion: "running" };
+const defaults: Options = { variant: "current", mode: "panel", rate: 150, width: 1920, height: 1080, panelWidth: 340, panelHeight: 480, scrolledUp: false, motion: "running", willChange: "node" };
 const epoch = 710023;
 let options: Options | null = null;
 let root: Root | null = null;
@@ -50,6 +60,7 @@ let unsubscribe: (() => void) | null = null;
 let restoreSettings: (() => void) | null = null;
 let restoreEmit: (() => void) | null = null;
 let restoreAnimate: (() => void) | null = null;
+let restoreWillChange: (() => void) | null = null;
 let serial = 0;
 let sent = 0;
 let received = 0;
@@ -75,12 +86,25 @@ const layerSize = () => [...renderers].reduce((total, renderer) => total + rende
 function metrics() {
   const list = panel()?.querySelector<HTMLElement>('[data-slot="danmaku-list"]');
   const view = viewport();
+  // 采样时必须确认覆盖真的生效：内联样式不可被普通声明覆盖，一旦样式表没命中，
+  // 所有策略都会退化成同一个 `node`，对照会得到“看起来合理但完全无效”的结论。
+  // 动画包装节点是 `[data-rlive-danmaku-id]` 的父节点，它才是带 will-change 的那个。
+  const probe = host.querySelector<HTMLElement>("[data-rlive-danmaku-id]");
+  const wrapper = probe?.parentElement ?? null;
+  const group = host.querySelector<HTMLElement>("[data-danmaku-group]");
   return {
     options, production: import.meta.env.PROD, reactVersion: React.version,
     transport: nativeIPC ? "native-event-plugin" : "mockIPC-events",
     running: timer !== null, sent, received, batches, prefilled, injectionError,
     layerOnScreen: layerSize(), rendererCount: renderers.size,
     layerDOM: host.querySelectorAll("[data-rlive-danmaku-id]").length,
+    effectiveWillChange: probe ? {
+      wrapper: wrapper ? getComputedStyle(wrapper).willChange : null,
+      group: group ? getComputedStyle(group).willChange : null,
+      // 原生引擎自己给中间层写了 `translateZ(0)`，它也会提升图层。
+      // 记下来，避免把“去掉 will-change”误读成“完全没有合成层”。
+      nativeStageTransform: wrapper?.parentElement ? getComputedStyle(wrapper.parentElement).transform : null,
+    } : null,
     panelDOMRows: panel()?.querySelectorAll(rowSelector).length ?? 0,
     panelDataCount: list ? Number(list.dataset.count) : null,
     panelCount: panelCount(), panelUnpinned: Boolean(panel()?.querySelector('[aria-label="滚动到底部"]')),
@@ -132,6 +156,8 @@ async function dispose() {
     restoreEmit = null;
     restoreAnimate?.();
     restoreAnimate = null;
+    restoreWillChange?.();
+    restoreWillChange = null;
     renderers.clear();
     // 原生 unlisten 是异步的；下一轮切换前留出清理微任务的机会。
     await sleep(100);
@@ -151,6 +177,7 @@ async function prepare(input: Partial<Options> = {}) {
   assert(import.meta.env.PROD, "必须使用独立 production build，禁止用 Vite dev 采性能");
   assert(["baseline", "current"].includes(next.variant), "未知 variant");
   assert(["running", "paused"].includes(next.motion), "未知 motion");
+  assert(["node", "none", "group"].includes(next.willChange), "未知 willChange 策略");
   assert(["panel", "layer", "both", "idle"].includes(next.mode), "未知 mode");
   assert(Number.isFinite(next.rate) && next.rate >= 0 && next.rate <= 10000, "rate 必须为 0..10000");
   for (const key of ["width", "height", "panelWidth", "panelHeight"] as const) assert(Number.isFinite(next[key]) && next[key] > 0, `${key} 必须为正数`);
@@ -181,6 +208,17 @@ async function prepare(input: Partial<Options> = {}) {
       };
       Element.prototype.animate = wrapped;
       restoreAnimate = () => { if (Element.prototype.animate === wrapped) Element.prototype.animate = original; };
+    }
+    // P2：节点内联样式固定带 `will-change:transform`，普通声明无法覆盖它，
+    // 必须用 `!important` 样式表。组容器不带内联 will-change，所以可以直接声明。
+    if (next.willChange !== "node") {
+      const style = document.createElement("style");
+      style.id = "danmaku-bench-will-change";
+      style.textContent = next.willChange === "none"
+        ? "div:has(> [data-rlive-danmaku-id]){will-change:auto !important}"
+        : "div:has(> [data-rlive-danmaku-id]){will-change:auto !important}[data-danmaku-group]{will-change:transform !important}";
+      document.head.append(style);
+      restoreWillChange = () => style.remove();
     }
     const RendererConstructor = await loadDanmakuRenderer();
     const originalEmit = RendererConstructor.prototype.emit;
@@ -214,6 +252,14 @@ async function prepare(input: Partial<Options> = {}) {
     await inject(1);
     await until(() => received === 1, "eventBus 未收到探针：请检查同源 Tauri 事件权限/原生插件");
     if (next.mode === "layer" || next.mode === "both") await until(() => renderers.size === 1 && layerSize() > 0, "真实悬浮渲染器未就绪");
+    // 确认 P2 覆盖已生效，且真的改变了包装节点的计算值（否则本轮对照无效）。
+    if (next.mode === "layer" || next.mode === "both") {
+      await until(() => Boolean(host.querySelector("[data-rlive-danmaku-id]")), "节点未上屏，无法核对 will-change 覆盖");
+      const effective = metrics().effectiveWillChange!;
+      const wantWrapper = next.willChange === "node" ? "transform" : "auto";
+      assert(effective.wrapper === wantWrapper, `will-change 覆盖未生效：包装节点计算值为 ${effective.wrapper}，期望 ${wantWrapper}`);
+      if (next.willChange === "group") assert(effective.group === "transform", `组容器未提升：${effective.group}`);
+    }
     if (next.mode === "panel" || next.mode === "both") {
       await until(() => panelCount() === 1, "真实面板未收到首条消息");
       const fillTo = async (target: number) => {
@@ -343,4 +389,4 @@ const api = {
 globals.__danmakuP0Bench = api;
 status.dataset.production = String(import.meta.env.PROD);
 status.textContent = `React ${React.version} · ${import.meta.env.PROD ? "production" : "非生产：禁止采样"} · 等待 start()`;
-window.addEventListener("pagehide", () => { stop(); restoreEmit?.(); restoreAnimate?.(); restoreSettings?.(); restoreSettings = null; });
+window.addEventListener("pagehide", () => { stop(); restoreEmit?.(); restoreAnimate?.(); restoreWillChange?.(); restoreWillChange = null; restoreSettings?.(); restoreSettings = null; });
