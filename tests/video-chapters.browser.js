@@ -51,6 +51,8 @@ async (page) => {
     }
   `;
   const assert = (value, message) => { if (!value) throw new Error(message); };
+  // 新增断言先收集在这里，返回时并进既有的用例清单。
+  const passed = [];
   const errors = [];
   const onError = (error) => errors.push(error.message);
   page.on("pageerror", onError);
@@ -58,7 +60,10 @@ async (page) => {
   const slider = page.locator(".media-time-slider");
   const segments = slider.locator('[class~="group/chapter"]');
   const chapterTrack = page.locator('video track[kind="chapters"]');
+  // 脚本自带视口：离开时复原，避免上一次运行留下的 420×860 把宽屏段落压成 0 高。
+  const initialViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   try {
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${origin}/tests/browser/video-session-lifecycle.html`);
     await page.waitForFunction(() => window.vodSessionFixture?.metadataCalls.length > 0);
     await segments.first().waitFor();
@@ -157,15 +162,79 @@ async (page) => {
     assert(desktop.count === 1 && desktop.inMainRow && desktop.beforeCenter && !desktop.inProgressRow, `桌面章节位置不对：${JSON.stringify(desktop)}`);
     assert(desktop.audioInHud && !desktop.audioInControls, `仅播声音应在顶部 HUD：${JSON.stringify(desktop)}`);
     // playwright-cli 会话可能没有固定视口（`viewportSize()` 为 null），从页面读回原尺寸。
-    const desktopViewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
     await page.setViewportSize({ width: 420, height: 860 });
     await page.locator('[data-slot="player-chapters-row"]').waitFor();
     const portrait = await placement();
     assert(portrait.count === 1 && portrait.inProgressRow && portrait.aboveSlider && portrait.leftAligned, `竖屏章节位置不对：${JSON.stringify(portrait)}`);
     assert(portrait.audioInHud, "竖屏仅播声音应在顶部 HUD");
     await page.locator('[data-slot="player-chapter-pill"]').getByText("演示", { exact: true }).waitFor();
-    await page.setViewportSize(desktopViewport);
-    await page.getByRole("button", { name: "章节：演示", exact: true }).locator("xpath=ancestor::*[@data-slot='player-extension-controls']").waitFor();
+    // 胶囊在自动收起的主控制栏里：先把指针停上去唤出控制栏，否则命中测试落在画面上。
+    // 抽屉进出场期间覆盖层会吃掉指针，因此以「胶囊真的在指针下」为准。
+    const revealControls = async () => {
+      await page.mouse.move(1, 1);
+      await page.waitForTimeout(50);
+      const box = await page.locator('[data-slot="player-chapter-pill"]').boundingBox();
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      await page.mouse.move(cx, cy);
+      await page.waitForFunction(
+        ({ cx, cy }) => {
+          const hit = document.elementFromPoint(cx, cy);
+          return !!hit?.closest('[data-slot="player-chapter-pill"]');
+        },
+        { cx, cy },
+      );
+    };
+    await revealControls();
+
+    /*
+      移动客户端或紧凑视口下章节改走抽屉：竖屏从底部推入。
+
+      断言三件事：抽屉确实存在且带底部侧别；列表仍能定位到当前章节；点选后
+      跳转、收起、且不改变播放/暂停状态。抽屉是 Portal 到 `DrawerScope` 的
+      侧栏视口（非全屏时），因此它不在控制栏 DOM 里。
+    */
+    await page.locator('[data-slot="player-chapter-pill"]').click();
+    const drawer = page.locator('[data-slot="drawer-content"][data-side="bottom"]');
+    await drawer.waitFor();
+    await drawer.getByRole("heading", { name: "章节" }).waitFor();
+    const drawerItems = drawer.getByRole("list", { name: "章节列表" }).getByRole("button");
+    assert(await drawerItems.count() === 3, "抽屉章节条目数不对");
+    assert(
+      await drawerItems.nth(1).getAttribute("aria-current") === "true",
+      "抽屉未高亮当前章节",
+    );
+    // 点选章节：跳转、收起、不改播放/暂停。
+    const pausedBeforeChapter = await page.evaluate(() => document.querySelector("video").paused);
+    await drawerItems.filter({ hasText: "开场" }).click();
+    await page.waitForFunction(() => document.querySelector("video").currentTime === 0);
+    await drawer.waitFor({ state: "hidden" });
+    assert(
+      await page.evaluate(() => document.querySelector("video").paused) === pausedBeforeChapter,
+      "点选章节改变了播放/暂停状态",
+    );
+    await page.locator('[data-slot="player-chapter-pill"]').getByText("开场", { exact: true }).waitFor();
+    // 非全屏时抽屉挂进侧栏的 `DrawerViewport`，与设置抽屉同一处；不能落在舞台里。
+    await revealControls();
+    await page.locator('[data-slot="player-chapter-pill"]').click();
+    await drawer.waitFor();
+    const drawerScope = await drawer.evaluate((el) => {
+      const stage = document.querySelector('[data-slot="player-chapters-row"]')?.closest("div[class*='relative']");
+      return {
+        inSidebarViewport: !!el.closest('[data-slot="drawer-viewport"]'),
+        inStage: !!(stage && stage.contains(el)),
+      };
+    });
+    assert(
+      drawerScope.inSidebarViewport && !drawerScope.inStage,
+      `非全屏抽屉未挂在侧栏视口：${JSON.stringify(drawerScope)}`,
+    );
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "hidden" });
+    passed.push("竖屏章节为底部抽屉：高亮、点选跳转与收起，且挂在侧栏视口");
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("button", { name: "章节：开场", exact: true }).locator("xpath=ancestor::*[@data-slot='player-extension-controls']").waitFor();
 
     // 刷新与仅音频开关触发取流换代；章节继续可用，且不会重复请求相同元数据。
     const metadataCalls = await page.evaluate(() => window.vodSessionFixture.metadataCalls.length);
@@ -213,9 +282,10 @@ async (page) => {
     await page.getByText("已离开", { exact: true }).waitFor();
     assert(await page.evaluate((url) => window.chapterRevokedUrls.includes(url), lastUrl), "卸载未释放章节 blob");
     assert(errors.length === 0, `页面异常：${errors.join("; ")}`);
-    return { passed: ["无章节连续轨道", "分段比例/时长裁剪/可见间隙", "悬停标题与点击/键盘 seek", "控制栏章节菜单跳转与高亮", "桌面/竖屏章节与仅播声音位置", "CC 字幕与章节共存", "刷新和仅音频换源重挂", "切 P 清理与迟到响应隔离", "元数据失败降级", "卸载回收 blob", "StrictMode 无异常"] };
+    return { passed: [...passed, "无章节连续轨道", "分段比例/时长裁剪/可见间隙", "悬停标题与点击/键盘 seek", "控制栏章节菜单跳转与高亮", "桌面/竖屏章节与仅播声音位置", "CC 字幕与章节共存", "刷新和仅音频换源重挂", "切 P 清理与迟到响应隔离", "元数据失败降级", "卸载回收 blob", "StrictMode 无异常"] };
   } finally {
     page.off("pageerror", onError);
+    await page.setViewportSize(initialViewport);
     await page.goto(originalUrl);
     await page.unroute(enginePattern);
   }

@@ -744,6 +744,7 @@ export function ShortsPage() {
                   open={chapterMenuOpen}
                   onOpenChange={setChapterMenuOpen}
                   container={viewportRef}
+                  compact={compact}
                 />
               </div>
             </div>

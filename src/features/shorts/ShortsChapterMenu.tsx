@@ -1,6 +1,7 @@
 import { useMemo, type RefObject } from "react";
 import { VideoChapterMenu } from "@/features/video/VideoChapterMenu";
 import { activeChapterIndex, playableChapters } from "@/features/video/videoChapters";
+import { isMobileClient } from "@/shared/clientPlatform";
 import type { VideoChapter } from "@/shared/types/video";
 import { useShortsSeekTime } from "./shortsSeekPlayer";
 
@@ -9,17 +10,22 @@ import { useShortsSeekTime } from "./shortsSeekPlayer";
  *
  * 时间读写走 `ShortsSeekPlayer` 的 store（活动槽位的 `<video>` 已由 `ShortsSeekBridge`
  * 桥接），因此必须渲染在 `ShortsSeekPlayer` 之内；跳转不改变播放/暂停。
+ *
+ * 移动客户端或紧凑视口下与播放页一致改走抽屉：竖屏从底部、横屏从右侧。
  */
 export function ShortsChapterMenu({
   chapters,
   open,
   onOpenChange,
   container,
+  compact = false,
 }: {
   chapters: readonly VideoChapter[] | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   container: RefObject<HTMLElement | null>;
+  /** 紧凑视口（窄屏或矮横屏）；由页面传入，与 `compact` 控制栏同一判据。 */
+  compact?: boolean;
 }) {
   const time = useShortsSeekTime();
   const duration = time?.duration ?? 0;
@@ -33,6 +39,7 @@ export function ShortsChapterMenu({
   return (
     <VideoChapterMenu
       variant="pill"
+      presentation={isMobileClient() || compact ? "drawer" : "popover"}
       chapters={items}
       activeIndex={activeChapterIndex(items, time.currentTime)}
       open={open}

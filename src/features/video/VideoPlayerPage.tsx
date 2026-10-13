@@ -2669,10 +2669,18 @@ function VideoPlayerPageContent() {
   /** 移动端与竖屏把章节入口放到进度条上方左侧；桌面横屏占用主行左组。 */
   const chaptersPlacement =
     mobileClient || compact || portraitOrientation ? "progress" : "controls";
+  /**
+   * 移动客户端或紧凑视口下章节改走抽屉。
+   *
+   * 与设置抽屉同一判据、同一侧别：竖屏从底部、横屏从右侧；播放页非全屏时
+   * 按 `DrawerScope` 挂进侧栏的 `DrawerViewport`，全屏时落在舞台内。
+   */
+  const chaptersDrawer = mobileClient || compact;
   const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
   const chaptersSlot = hasMenuChapters ? (
     <VideoChapterMenu
       variant={chaptersPlacement === "progress" ? "pill" : "button"}
+      presentation={chaptersDrawer ? "drawer" : "popover"}
       chapters={menuChapters}
       activeIndex={activeChapter}
       open={chapterMenuOpen}

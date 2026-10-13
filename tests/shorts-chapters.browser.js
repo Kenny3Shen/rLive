@@ -5,6 +5,7 @@
 // 断言（桌面 1280×720 与手机 390×844 各一遍）：
 //   1. 有章节时，胶囊出现在信息块里、进度条上方左侧，显示当前章节名；
 //   2. 弹层列出全部章节并高亮当前项，点选跳到该章起点、收起弹层，胶囊随之更新；
+//      形态按视口分档：桌面为 Popover，手机为从底部推入的 Drawer；
 //   3. 弹层展开时滚轮不换片（列表要能滚）；
 //   4. 换到没有章节的下一条后入口消失。
 // oxlint-disable-next-line no-unused-expressions -- run-code 要求顶层函数表达式。
@@ -243,6 +244,22 @@ async (page) => {
     assert((await items.count()) === 3, `${label}：章节条目数不对`);
     assert((await items.first().getAttribute("aria-current")) === "true", `${label}：当前章节未高亮`);
 
+    /*
+      形态契约：桌面是锚在胶囊上的 Popover，手机改走从底部推入的 Drawer。
+      竖屏流舞台本身就是满屏的，抽屉只能从底部来；断言侧别与列表内容一致。
+    */
+    const shape = await page.evaluate(() => ({
+      drawers: [...document.querySelectorAll('[data-slot="drawer-content"]')].map((el) => el.getAttribute("data-side")),
+      popovers: document.querySelectorAll('[data-slot="popover-content"]').length,
+    }));
+    const expected = viewport.width < 768 ? "drawer" : "popover";
+    assert(
+      expected === "drawer"
+        ? shape.drawers.length === 1 && shape.drawers[0] === "bottom" && shape.popovers === 0
+        : shape.drawers.length === 0 && shape.popovers === 1,
+      `${label}：章节形态不对 ${JSON.stringify(shape)}`,
+    );
+
     // 弹层展开时滚轮不换片。
     const aidBefore = await page.locator('[data-slot="shorts-viewport"]').getAttribute("data-current-aid");
     const box = await list.boundingBox();
@@ -275,7 +292,7 @@ async (page) => {
     );
     await settle(300);
     assert((await pill.count()) === 0, `${label}：无章节条目不应显示入口`);
-    return { label, geometry };
+    return { label, geometry, shape };
   };
 
   const report = [];
