@@ -1,0 +1,1158 @@
+{
+  "title": "弹幕 P2 合成层策略回测数据（2026-10-13）",
+  "capturedAt": "2026-10-13T03:12:08.387955+00:00",
+  "head": "6cd5b06a77881cecf436a0ab21a08850479a6532",
+  "question": "把 will-change:transform 从每条弹幕的动画包装节点移到组容器（或整体去掉）能否减少合成层、改善性能？",
+  "conclusion": "负结果。合成层由 WAAPI 的 ActiveTransformAnimation 提升，will-change 不改变层数；三种策略性能无差异。但 will-change 在 WAAPI 不可用的回退路径上仍是必需的（Style 约 3 倍劣化），因此保留。",
+  "fixture": {
+    "path": "tests/browser/danmaku-bench.tsx",
+    "option": "willChange=node|none|group",
+    "mechanism": "用 !important 样式表覆盖节点内联 will-change，不改生产代码；:has() 覆盖采样期间新建的节点",
+    "sha256": "343a3b3d35bcd2311f1146ef3741333ccfbcff5d92791cf57f1246a6a5c5805d",
+    "runner": "tests/danmaku-p0-performance.browser.js",
+    "runnerSHA256": "589a7f334d3a04116cfa39edecca5afb921bfdafccc57071e11c59ee9bf45603",
+    "assertion": "prepare 阶段核对 getComputedStyle(wrapper).willChange 实际值，覆盖失效会报错而不是静默退化"
+  },
+  "runs": {
+    "webview2-same-page-toggle": {
+      "note": "同一页面内切换策略：密度恒定，只有 will-change 变化，是最干净的对照。",
+      "url": "http://localhost:1420/tests/browser/danmaku-bench.html?scene=layer&cpu=1&sample=6000",
+      "environment": {
+        "userAgent": "Edg/154.0.4258.62",
+        "hardwareConcurrency": 20,
+        "deviceMemory": 32,
+        "stage": {
+          "width": 1280,
+          "height": 720
+        },
+        "rate": 120
+      },
+      "rows": [
+        {
+          "label": "A node",
+          "onScreen": 377,
+          "domNodes": 377,
+          "totalLayers": 374,
+          "anims": {
+            "total": 367,
+            "running": 367
+          },
+          "fps": 106.9500899578072,
+          "p95": 16.400000005960464,
+          "Style": 239.63901955422835,
+          "Layout": 42.114495742117015,
+          "Task": 795.1687208132932,
+          "Script": 48.481387639266565,
+          "wrapper": "transform",
+          "nativeStage": "matrix(1, 0, 0, 1, 0, 0)"
+        },
+        {
+          "label": "B none",
+          "onScreen": 376,
+          "domNodes": 370,
+          "totalLayers": 382,
+          "anims": {
+            "total": 375,
+            "running": 375
+          },
+          "fps": 108.4241031280258,
+          "p95": 16.100000023841858,
+          "Style": 250.7826203006897,
+          "Layout": 37.727461215821805,
+          "Task": 798.3651710121384,
+          "Script": 45.88766190656918,
+          "wrapper": "auto",
+          "nativeStage": "matrix(1, 0, 0, 1, 0, 0)"
+        },
+        {
+          "label": "A' node",
+          "onScreen": 386,
+          "domNodes": 373,
+          "totalLayers": 386,
+          "anims": {
+            "total": 379,
+            "running": 379
+          },
+          "fps": 109.21865374668232,
+          "p95": 16.19999998807907,
+          "Style": 249.31037046138118,
+          "Layout": 37.58480983077225,
+          "Task": 786.334814807533,
+          "Script": 46.49340969030839,
+          "wrapper": "transform",
+          "nativeStage": "matrix(1, 0, 0, 1, 0, 0)"
+        }
+      ]
+    },
+    "webview2-layer-reasons": {
+      "note": "CDP LayerTree 把图层映射回弹幕包装节点读 compositingReasons：node 采样到的弹幕层全部同时带 ActiveTransformAnimation 与 WillChangeTransform。",
+      "rows": {
+        "node": {
+          "totalLayers": 397,
+          "domWrappers": 384,
+          "danmakuLayers": 258,
+          "sampledReasons": {
+            "ActiveTransformAnimation": 149,
+            "WillChangeTransform": 149
+          },
+          "animations": {
+            "count": 390,
+            "running": 390
+          },
+          "onScreen": 390,
+          "effective": {
+            "wrapper": "transform",
+            "group": "auto",
+            "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+          },
+          "gpu": "n/a"
+        },
+        "none": {
+          "totalLayers": 231,
+          "domWrappers": 300,
+          "danmakuLayers": 0,
+          "sampledReasons": null,
+          "animations": {
+            "count": 224,
+            "running": 224
+          },
+          "onScreen": 224,
+          "effective": {
+            "wrapper": "auto",
+            "group": "auto",
+            "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+          },
+          "gpu": "n/a"
+        }
+      }
+    },
+    "chromium-3-strategy-alternating": {
+      "note": "3 轮交替顺序抵消漂移；rate 200，1920×1080。node 与 none 差异在噪声内。",
+      "rows": {
+        "summary": {
+          "node": {
+            "runs": 3,
+            "fps": 49.287514661549196,
+            "style": 238.22237886278202,
+            "layout": 68.38300702764565,
+            "task": 805.1268286282327,
+            "script": 40.59222854993153,
+            "onScreen": 756
+          },
+          "none": {
+            "runs": 3,
+            "fps": 41.78724678169617,
+            "style": 240.25424134444762,
+            "layout": 92.98378146250107,
+            "task": 844.4708357049807,
+            "script": 49.455132794510156,
+            "onScreen": 756
+          }
+        },
+        "rows": [
+          {
+            "willChange": "node",
+            "fps": 49.287514661549196,
+            "p95": 34.60000002384186,
+            "onScreen": 756,
+            "Script": 40.59222854993153,
+            "Style": 248.05372805256158,
+            "Layout": 68.38300702764565,
+            "Task": 805.1268286282327,
+            "valid": true
+          },
+          {
+            "willChange": "none",
+            "fps": 41.78724678169617,
+            "p95": 41.30000001192093,
+            "onScreen": 756,
+            "Script": 49.455132794510156,
+            "Style": 248.55877100903686,
+            "Layout": 92.98378146250107,
+            "Task": 844.4708357049807,
+            "valid": true
+          },
+          {
+            "willChange": "node",
+            "fps": 42.45966331987775,
+            "p95": 39.20000001788139,
+            "onScreen": 756,
+            "Script": 51.083973040210815,
+            "Style": 238.22237886278202,
+            "Layout": 104.46615822231693,
+            "Task": 852.7570077172518,
+            "valid": true
+          },
+          {
+            "willChange": "none",
+            "fps": 36.7417331099955,
+            "p95": 45.80000001192093,
+            "onScreen": 756,
+            "Script": 58.51750902557449,
+            "Style": 240.25424134444762,
+            "Layout": 105.23729660485711,
+            "Task": 857.0927508928462,
+            "valid": true
+          },
+          {
+            "willChange": "node",
+            "fps": 60.16126213848021,
+            "p95": 20.700000017881393,
+            "onScreen": 756,
+            "Script": 19.350605452986848,
+            "Style": 146.7863192966426,
+            "Layout": 14.863197192352901,
+            "Task": 405.34743792809036,
+            "valid": true
+          },
+          {
+            "willChange": "none",
+            "fps": 60.11399209271109,
+            "p95": 20.900000005960464,
+            "onScreen": 756,
+            "Script": 19.782040978400108,
+            "Style": 152.54088672206407,
+            "Layout": 22.098074480400996,
+            "Task": 426.1374962312522,
+            "valid": true
+          }
+        ]
+      }
+    },
+    "chromium-node-vs-group": {
+      "note": "node 与 group 各 3 轮交替；rate 200，1920×1080。两者完全一致（60.1 FPS）。",
+      "rows": {
+        "summary": {
+          "node": {
+            "fps": 60.101710587192244,
+            "style": 135.01907842994333,
+            "layout": 13.377186110413488,
+            "task": 371.54092264853944,
+            "onScreen": 756
+          },
+          "group": {
+            "fps": 60.08069049071833,
+            "style": 138.37279675535532,
+            "layout": 19.194634222399525,
+            "task": 383.60093589082373,
+            "onScreen": 756
+          }
+        },
+        "rows": [
+          {
+            "willChange": "node",
+            "fps": 60.09345093834691,
+            "p95": 20.19999998807907,
+            "onScreen": 756,
+            "Script": 17.759425998084247,
+            "Style": 134.82765808536664,
+            "Layout": 12.778024701565402,
+            "Task": 361.7877259163701,
+            "valid": true
+          },
+          {
+            "willChange": "group",
+            "fps": 60.04319115223402,
+            "p95": 20.400000005960464,
+            "onScreen": 756,
+            "Script": 18.79384435343846,
+            "Style": 137.10384121187454,
+            "Layout": 18.817663233180376,
+            "Task": 379.3520740937337,
+            "valid": true
+          },
+          {
+            "willChange": "node",
+            "fps": 60.11973952265739,
+            "p95": 20.400000005960464,
+            "onScreen": 756,
+            "Script": 19.14178264890267,
+            "Style": 135.30619884688286,
+            "Layout": 13.607200500864433,
+            "Task": 381.33688054048196,
+            "valid": true
+          },
+          {
+            "willChange": "group",
+            "fps": 60.08069049071833,
+            "p95": 20.400000005960464,
+            "onScreen": 756,
+            "Script": 18.697363905757058,
+            "Style": 138.37279675535532,
+            "Layout": 19.194634222399525,
+            "Task": 383.60093589082373,
+            "valid": true
+          },
+          {
+            "willChange": "node",
+            "fps": 60.101710587192244,
+            "p95": 20.30000001192093,
+            "onScreen": 756,
+            "Script": 18.556696140023924,
+            "Style": 135.01907842994333,
+            "Layout": 13.377186110413488,
+            "Task": 371.54092264853944,
+            "valid": true
+          },
+          {
+            "willChange": "group",
+            "fps": 60.11699115715438,
+            "p95": 20.5,
+            "onScreen": 756,
+            "Script": 18.703126104793654,
+            "Style": 140.4792776429235,
+            "Layout": 19.692015292441226,
+            "Task": 387.7813678540652,
+            "valid": true
+          }
+        ]
+      }
+    },
+    "android-3-strategy-alternating": {
+      "note": "Android 16 x86_64（4 核/2GB）3 轮交替；rate 200，412×240。差异在噪声内。",
+      "rows": {
+        "summary": {
+          "node": {
+            "runs": 3,
+            "fps": 30.356187561433362,
+            "style": 255.90370378030667,
+            "layout": 119.9612142822714,
+            "task": 951.7442749990922,
+            "script": 143.41589811029692,
+            "onScreen": 756
+          },
+          "none": {
+            "runs": 3,
+            "fps": 28.920747222739404,
+            "style": 263.8569632166086,
+            "layout": 106.31716071300617,
+            "task": 952.5915110705396,
+            "script": 148.07905474359097,
+            "onScreen": 756
+          }
+        },
+        "rows": [
+          {
+            "willChange": "node",
+            "fps": 29.138907913579477,
+            "p95": 53,
+            "onScreen": 756,
+            "Script": 143.41589811029692,
+            "Style": 255.90370378030667,
+            "Layout": 119.9612142822714,
+            "Task": 951.7442749990922,
+            "valid": true
+          },
+          {
+            "willChange": "none",
+            "fps": 28.920747222739404,
+            "p95": 57.099999997764826,
+            "onScreen": 756,
+            "Script": 148.07905474359097,
+            "Style": 263.8569632166086,
+            "Layout": 106.31716071300617,
+            "Task": 953.2711981272394,
+            "valid": true
+          },
+          {
+            "willChange": "node",
+            "fps": 30.356187561433362,
+            "p95": 52,
+            "onScreen": 756,
+            "Script": 148.9064215173466,
+            "Style": 248.75501944106782,
+            "Layout": 120.45691224251388,
+            "Task": 954.477381215538,
+            "valid": true
+          },
+          {
+            "willChange": "none",
+            "fps": 28.49358894248529,
+            "p95": 59.80000000074506,
+            "onScreen": 756,
+            "Script": 153.2807876825198,
+            "Style": 257.1635418743222,
+            "Layout": 113.32931762533092,
+            "Task": 952.5915110705396,
+            "valid": true
+          },
+          {
+            "willChange": "node",
+            "fps": 35.43321770914595,
+            "p95": 46.19999999925494,
+            "onScreen": 756,
+            "Script": 137.88072693818185,
+            "Style": 267.74735271483047,
+            "Layout": 103.64270176918858,
+            "Task": 940.382636286226,
+            "valid": true
+          },
+          {
+            "willChange": "none",
+            "fps": 31.19073759856563,
+            "p95": 53.599999997764826,
+            "onScreen": 756,
+            "Script": 138.09410167180397,
+            "Style": 272.2088714495687,
+            "Layout": 104.29524878992596,
+            "Task": 938.2633142350254,
+            "valid": true
+          }
+        ]
+      }
+    },
+    "android-layer-count": {
+      "note": "Android CDP LayerTree 总层数：node 58 / none 54，无数量级差异。",
+      "rows": {
+        "node": {
+          "totalLayers": 58,
+          "onScreen": 51,
+          "sampleReasons": {
+            "Viewport": 1,
+            "OverflowScrolling": 3,
+            "RootScroller": 1
+          }
+        },
+        "none": {
+          "totalLayers": 54,
+          "onScreen": 44,
+          "sampleReasons": {
+            "Viewport": 1,
+            "OverflowScrolling": 3,
+            "RootScroller": 1
+          }
+        }
+      }
+    },
+    "webview2-high-density": {
+      "note": "high-density 场景（1920×1080，rate 200），cpu=1 与 cpu=4 各一轮。",
+      "rows": [
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "paceHz": 0,
+          "cadence": null,
+          "willChange": "node",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running",
+            "willChange": "node"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9004.90000000596,
+          "frames": 1242,
+          "fps": 137.9249075502424,
+          "frameMs": {
+            "median": 6,
+            "p95": 12.200000017881393,
+            "max": 36.30000001192093
+          },
+          "jankOver25ms": 12,
+          "jankRatio": 0.00966183574879227,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1810,
+            "batches": 180,
+            "actualRate": 201.001676864685
+          },
+          "layerOnScreen": {
+            "min": 737,
+            "mean": 749.8181818181819,
+            "max": 756,
+            "samples": [
+              756,
+              754,
+              744,
+              737,
+              743,
+              745,
+              756,
+              755,
+              756,
+              751,
+              751
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "node"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4401,
+            "received": 4391,
+            "batches": 441,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 756,
+            "rendererCount": 1,
+            "layerDOM": 756,
+            "effectiveWillChange": {
+              "wrapper": "transform",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22029.5,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "node"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 6201,
+            "received": 6201,
+            "batches": 621,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 751,
+            "rendererCount": 1,
+            "layerDOM": 751,
+            "effectiveWillChange": {
+              "wrapper": "transform",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31036.69999998808,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.036158999981126,
+            "msPerSecond": {
+              "Script": 40.23767178075988,
+              "RecalcStyle": 277.99566165283795,
+              "Layout": 31.26118077388746,
+              "Task": 775.985128196023
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 1,
+          "warmupMs": 22000,
+          "paceHz": 0,
+          "cadence": null,
+          "willChange": "none",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running",
+            "willChange": "none"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9008.699999988079,
+          "frames": 1142,
+          "fps": 126.76634808590708,
+          "frameMs": {
+            "median": 6.300000011920929,
+            "p95": 15.799999982118607,
+            "max": 28
+          },
+          "jankOver25ms": 2,
+          "jankRatio": 0.0017513134851138354,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "maxMs": 0,
+            "totalMs": 0
+          },
+          "events": {
+            "sent": 1800,
+            "received": 1810,
+            "batches": 180,
+            "actualRate": 200.91689144964258
+          },
+          "layerOnScreen": {
+            "min": 749,
+            "mean": 754.1818181818181,
+            "max": 756,
+            "samples": [
+              756,
+              756,
+              755,
+              755,
+              749,
+              753,
+              754,
+              754,
+              754,
+              755,
+              755
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "none"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4401,
+            "received": 4391,
+            "batches": 441,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 756,
+            "rendererCount": 1,
+            "layerDOM": 756,
+            "effectiveWillChange": {
+              "wrapper": "auto",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22009.79999998212,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "none"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 6201,
+            "received": 6201,
+            "batches": 621,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 755,
+            "rendererCount": 1,
+            "layerDOM": 755,
+            "effectiveWillChange": {
+              "wrapper": "auto",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31019.5,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.023282000009203,
+            "msPerSecond": {
+              "Script": 37.47815927726241,
+              "RecalcStyle": 295.1743057567395,
+              "Layout": 32.62360635517097,
+              "Task": 809.8440234930646
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 4,
+          "warmupMs": 22000,
+          "paceHz": 0,
+          "cadence": null,
+          "willChange": "node",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running",
+            "willChange": "node"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9001.200000017881,
+          "frames": 188,
+          "fps": 20.886104074970728,
+          "frameMs": {
+            "median": 51.19999998807907,
+            "p95": 63.599999994039536,
+            "max": 86.69999998807907
+          },
+          "jankOver25ms": 185,
+          "jankRatio": 0.9840425531914894,
+          "longtasks": {
+            "supported": true,
+            "count": 32,
+            "maxMs": 68,
+            "totalMs": 1748
+          },
+          "events": {
+            "sent": 1260,
+            "received": 1270,
+            "batches": 126,
+            "actualRate": 141.09229880432355
+          },
+          "layerOnScreen": {
+            "min": 702,
+            "mean": 720.7,
+            "max": 750,
+            "samples": [
+              750,
+              746,
+              731,
+              722,
+              717,
+              718,
+              702,
+              705,
+              702,
+              714
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "node"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 4041,
+            "received": 4031,
+            "batches": 405,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 750,
+            "rendererCount": 1,
+            "layerDOM": 750,
+            "effectiveWillChange": {
+              "wrapper": "transform",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22028.40000000596,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "node"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 5301,
+            "received": 5301,
+            "batches": 531,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 714,
+            "rendererCount": 1,
+            "layerDOM": 714,
+            "effectiveWillChange": {
+              "wrapper": "transform",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31043.40000000596,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.049705000012182,
+            "msPerSecond": {
+              "Script": 106.03240658106627,
+              "RecalcStyle": 225.54039054281336,
+              "Layout": 123.46512952615537,
+              "Task": 989.8533709096524
+            }
+          }
+        },
+        {
+          "scene": "high-density",
+          "cpu": 4,
+          "warmupMs": 22000,
+          "paceHz": 0,
+          "cadence": null,
+          "willChange": "none",
+          "options": {
+            "variant": "current",
+            "mode": "layer",
+            "rate": 200,
+            "width": 1920,
+            "height": 1080,
+            "panelWidth": 340,
+            "panelHeight": 480,
+            "scrolledUp": false,
+            "motion": "running",
+            "willChange": "none"
+          },
+          "requestedMs": 9000,
+          "durationMs": 9036.5,
+          "frames": 178,
+          "fps": 19.697891882919272,
+          "frameMs": {
+            "median": 52.69999998807907,
+            "p95": 68.80000001192093,
+            "max": 74.39999997615814
+          },
+          "jankOver25ms": 177,
+          "jankRatio": 0.9943820224719101,
+          "longtasks": {
+            "supported": true,
+            "count": 72,
+            "maxMs": 65,
+            "totalMs": 3929
+          },
+          "events": {
+            "sent": 1190,
+            "received": 1180,
+            "batches": 119,
+            "actualRate": 130.5815304598019
+          },
+          "layerOnScreen": {
+            "min": 741,
+            "mean": 749.9090909090909,
+            "max": 756,
+            "samples": [
+              755,
+              753,
+              741,
+              744,
+              749,
+              750,
+              751,
+              750,
+              756,
+              750,
+              750
+            ]
+          },
+          "valid": true,
+          "before": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "none"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 3861,
+            "received": 3861,
+            "batches": 387,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 755,
+            "rendererCount": 1,
+            "layerDOM": 755,
+            "effectiveWillChange": {
+              "wrapper": "auto",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 22054.899999976158,
+            "visibility": "visible"
+          },
+          "after": {
+            "options": {
+              "variant": "current",
+              "mode": "layer",
+              "rate": 200,
+              "width": 1920,
+              "height": 1080,
+              "panelWidth": 340,
+              "panelHeight": 480,
+              "scrolledUp": false,
+              "motion": "running",
+              "willChange": "none"
+            },
+            "production": true,
+            "reactVersion": "19.3.0",
+            "transport": "native-event-plugin",
+            "running": true,
+            "sent": 5051,
+            "received": 5041,
+            "batches": 506,
+            "prefilled": 0,
+            "injectionError": null,
+            "layerOnScreen": 750,
+            "rendererCount": 1,
+            "layerDOM": 750,
+            "effectiveWillChange": {
+              "wrapper": "auto",
+              "group": "auto",
+              "nativeStageTransform": "matrix(1, 0, 0, 1, 0, 0)"
+            },
+            "panelDOMRows": 0,
+            "panelDataCount": null,
+            "panelCount": 0,
+            "panelUnpinned": false,
+            "panelScrollTop": null,
+            "panelDistanceToBottom": null,
+            "layerRect": {
+              "width": 1920,
+              "height": 1080
+            },
+            "panelRect": null,
+            "elapsedMs": 31103.29999998212,
+            "visibility": "visible"
+          },
+          "cdp": {
+            "elapsedSeconds": 9.097508999984711,
+            "msPerSecond": {
+              "Script": 85.93286360049915,
+              "RecalcStyle": 241.20415819359866,
+              "Layout": 107.93635928270594,
+              "Task": 989.7039947984802
+            }
+          }
+        }
+      ]
+    },
+    "fallback-no-waapi": {
+      "note": "关键对照：删除 Element.prototype.animate 强制走「每帧写 style.transform」的回退路径——即生产注释描述的场景。去掉 will-change 造成明确劣化，证明它不是死代码。",
+      "headlessChromium": {
+        "first": {
+          "node": {
+            "hasAnimate": "undefined",
+            "fps": 60.118239194909926,
+            "onScreen": 406,
+            "p95": 18.299999982118607,
+            "jankRatio": 0,
+            "Style": 53.7524395836626,
+            "Layout": 19.161728974940203,
+            "Task": 212.9325958690566,
+            "Script": 41.37186495322388
+          },
+          "none": {
+            "hasAnimate": "undefined",
+            "fps": 60.117038486816526,
+            "onScreen": 406,
+            "p95": 18.099999994039536,
+            "jankRatio": 0,
+            "Style": 158.72105941953575,
+            "Layout": 16.351774482375085,
+            "Task": 318.91814478680897,
+            "Script": 38.81569262914494
+          }
+        },
+        "alternating": {
+          "summary": {
+            "node": {
+              "fps": 60.19518438517743,
+              "style": 96.87029433523642,
+              "task": 354.4258770079146,
+              "onScreen": 410
+            },
+            "none": {
+              "fps": 60.14226342696672,
+              "style": 235.75615198990891,
+              "task": 465.6879126387766,
+              "onScreen": 425
+            }
+          },
+          "rows": [
+            {
+              "willChange": "node",
+              "fps": 60.19518438517743,
+              "onScreen": 410,
+              "Style": 83.52399550244806,
+              "Layout": 30.502023399823184,
+              "Task": 313.89889305598257,
+              "Script": 58.74463026977139
+            },
+            {
+              "willChange": "none",
+              "fps": 60.14226342696672,
+              "onScreen": 425,
+              "Style": 235.75615198990891,
+              "Layout": 26.26708575861046,
+              "Task": 465.6879126387766,
+              "Script": 61.077050809505295
+            },
+            {
+              "willChange": "none",
+              "fps": 60.125444448668624,
+              "onScreen": 406,
+              "Style": 217.10669014280327,
+              "Layout": 24.512688752335855,
+              "Task": 423.40736700357854,
+              "Script": 55.82090135428596
+            },
+            {
+              "willChange": "node",
+              "fps": 60.12544444902656,
+              "onScreen": 407,
+              "Style": 96.87029433523642,
+              "Layout": 34.86538608778593,
+              "Task": 354.4258770079146,
+              "Script": 68.08059926233642
+            }
+          ]
+        }
+      },
+      "caveat": "headless Linux Chromium（无 GPU）；层数不代表真实合成，但 Style/Task 相对差异有效。"
+    }
+  },
+  "limitations": [
+    "headless 会话无 GPU，getAnimations() 返回 0，层数不可用于结论；层证据取自 WebView2 与 Android 真实 GPU。",
+    "headless 层数曾出现 393 vs 7 的假象，根因是同一会话内 addInitScript 删除 WAAPI 的残留，已改用真实目标复测。",
+    "Android 的 compositingReasons 全量采样因导航抖动未成功，只取到总层数。",
+    "CPU 节流下的 FPS 在 WebView2 上噪声较大，不能单独作为策略结论。"
+  ]
+}

@@ -658,8 +658,9 @@ export class DanmakuRenderer {
           // 运行副本与原始时间轴分离，pin/unpin/resize 重基不污染下次 seek。
           // 节点在这里建好并先设 flex（避免 inline-flex 内容多出 baseline 行盒），
           // 原生 setup 再一次性插入 fragment 并统一测量：整批只触发一次布局。
-          // 原生每帧写 transform 而非 CSS 动画，浏览器不会自动提升图层；不加 will-change 时
-          // 整个舞台每帧重绘光栅（实测 Raster 约 200ms/s），加上后只走合成。
+          // will-change 只在 WAAPI 不可用的回退路径上生效：那时原生引擎每帧写 transform，
+          // 没有它整个舞台会逐帧重绘光栅（实测 Style 约 3 倍劣化）。走 WAAPI 时图层由
+          // ActiveTransformAnimation 提升，它不是必需的，但也不改变层数（见 P2 回测）。
           const node = document.createElement("div");
           node.style.cssText = "position:absolute;display:flex;will-change:transform;";
           node.appendChild(scheduled.render());
