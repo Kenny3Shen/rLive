@@ -8,8 +8,12 @@ import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
  *
  * 滚动弹幕的位移交给合成器：上屏时为每个节点建一条线性 WAAPI 动画（translate 起点到终点），
  * 之后每帧不再写 style，主线程卡顿或 60/120Hz 切换都不影响飘动。原生引擎仍每帧计算 `x`
- * 供轨道准入、钉住和重基使用，并作为到期、分配的唯一时间基准；动画只在媒体时钟偏离超过
- * DRIFT_MS 时被校正，暂停/缓冲/倍速/seek 通过媒体事件同步。
+ * 供轨道准入、钉住和重基使用，并作为到期、分配的唯一时间基准。
+ *
+ * 动画与媒体时钟的偏差分级处理：`DRIFT_RESTORE_MS` 以上用速率微调收敛（不写 `currentTime`，
+ * 因此看不到跳变），`HARD_DRIFT_MS` 以上才硬对齐（seek 之外的缓冲/抖动兜底）。倍速切换
+ * 走 `updatePlaybackRate`，它在改速率前先同步播放位置，不会像直接写 `playbackRate` 那样
+ * 以主线程的旧采样为基准重设起点；暂停/缓冲/seek 仍通过媒体事件同步。
  */
 type NativeComment = {
   mode: "rtl" | "top" | "bottom";
@@ -79,8 +83,34 @@ const MAX_ACTIVE = 800;
 /** 常规固定弹幕 1 组 + 同屏至多 3 条 SC 各自的时长。 */
 const MAX_FIXED_GROUPS = 4;
 const DEFAULT_DURATION_MS = 15_000;
-/** 动画与媒体时钟的允许偏差；MSE 的 currentTime 有数毫秒抖动，超过此值才重新对齐。 */
-const DRIFT_MS = 100;
+/**
+ * 恢复媒体倍速的偏差区（毫秒）：偏差回到这个量级以内就直接跟媒体同步，不再微调。
+ * 它同时是「不值得校正」的下界：偏差只有几毫秒时微调与媒体倍速量化到同一档，
+ * 再往下调只是白写 DOM。
+ */
+const DRIFT_RESTORE_MS = 10;
+/**
+ * 硬对齐阈值（毫秒）。缓冲恢复、轨道重基等大偏差直接写 `currentTime`；
+ * 微调速率只能把每秒最多约 0.35 倍速的差距慢慢吃掉，追不上这种量级。
+ */
+const HARD_DRIFT_MS = 1_000;
+/**
+ * 微调校正的时间常数（毫秒）：偏差按 `e^-1` 衰减所需的时间。
+ *
+ * 它同时决定微调的幅度（`trim = 1 + diff / 该值`）。取值要大到看不出快慢变化，
+ * 又要小到在下一次倍速切换前已经对齐：实测 400ms 在 3 倍速下约 0.4s 收敛，
+ * 回到 1 倍速约 1.1s，两者都在长按动作的间隔内。
+ */
+const RATE_TRIM_CATCH_UP_MS = 400;
+/**
+ * 微调速率的相对上限：偏差再大也只偏这么多。
+ *
+ * 微调只负责几十到几百毫秒的偏差；上秒级的偏差属于缓冲恢复，交给硬对齐。
+ * 超过这个幅度肉眼能看出弹幕快慢在变，已经不算「悄悄追上」。
+ */
+const RATE_TRIM_LIMIT = 0.35;
+/** 微调速率的量化步长：避免偏差每帧抖动一点就把同一个速率写两遍。 */
+const RATE_STEP = 0.05;
 /** 容器尚无尺寸时的占位时长；原生 duration=0 会把所有待投弹幕判为过期。 */
 const FALLBACK_DURATION_S = 8;
 const clock = () => performance.now() / 1_000;
@@ -448,6 +478,7 @@ export class DanmakuRenderer {
         this.snapshot(record);
         this.rebase(record);
       }
+      // 冻结期间动画是暂停的，没有合成器旧采样问题；微调留下的速率也要在这里复位。
       motion.playbackRate = rate;
       motion.play();
     }
@@ -455,8 +486,29 @@ export class DanmakuRenderer {
   private readonly onRate = () => {
     const rate = this.rate();
     for (const record of this.records.values())
-      if (record.motion) record.motion.playbackRate = rate;
+      if (record.motion) this.applyRate(record.motion, rate);
   };
+  /**
+   * 切换一条动画的速率。
+   *
+   * 对合成器上正在跑的动画必须走 `updatePlaybackRate`：直接写 `playbackRate` 会用主线程
+   * 已采样的 `document.timeline.currentTime` 反推新的起始时间，主线程刚跑过长任务时
+   * 这个采样是旧的，动画会当场倒退或前跳 —— 长按 3 倍速开始与结束各跳一次。
+   * `updatePlaybackRate` 把新速率挂为 pending，下一帧再按新采样同步，不产生跳变。
+   * 已暂停/待启动的动画没有这个采样问题，直写即可。
+   */
+  private applyRate(motion: Animation, rate: number): void {
+    if (Math.abs(motion.playbackRate - rate) < 1e-6) return;
+    if (typeof motion.updatePlaybackRate === "function" && motion.playState === "running" && !motion.pending) {
+      try {
+        motion.updatePlaybackRate(rate);
+        return;
+      } catch {
+        // 未关联时间轴（节点已脱离文档）等情况下回退为直接赋值。
+      }
+    }
+    motion.playbackRate = rate;
+  }
   private rate() {
     const rate = this.media?.playbackRate;
     return rate !== undefined && rate > 0 ? rate : 1;
@@ -518,7 +570,12 @@ export class DanmakuRenderer {
     record.motion = motion;
     record.span = { width: state.width, duration };
   }
-  /** 每帧只比较一次动画与媒体时钟，偏差过大才重新对齐（seek 之外的缓冲/抖动兜底）。 */
+  /**
+   * 每帧只比较一次动画与媒体时钟，按偏差量分级校正。
+   *
+   * 硬写 `currentTime` 在画面上就是一次回拉或前跳，因此只留给大偏差（缓冲恢复、
+   * 轨道重基）；几十毫秒级的偏差改成微调速率，让动画在一两秒内悄悄追上或等回来。
+   */
   private syncMotion(record: RecordItem): void {
     const motion = record.motion;
     if (!motion || !this.media || record.pinned || this.halted) return;
@@ -528,11 +585,31 @@ export class DanmakuRenderer {
       return;
     }
     // 已缓冲的 seek 不保证再次派发 playing，只跳过校时，不能留下全局 halted。
+    // `updatePlaybackRate` 生效前同样不能读时间：pending 窗口里 currentTime 还是旧值。
     if (this.media.seeking || motion.pending) return;
     const current = motion.currentTime;
+    if (typeof current !== "number") return;
+    const mediaRate = this.rate();
     const want = this.expected(record);
-    if (typeof current !== "number" || Math.abs(current - want) > DRIFT_MS)
+    const diff = want - current;
+    const magnitude = Math.abs(diff);
+    if (magnitude > HARD_DRIFT_MS) {
       motion.currentTime = want;
+      this.applyRate(motion, mediaRate);
+      return;
+    }
+    if (magnitude <= DRIFT_RESTORE_MS) {
+      this.applyRate(motion, mediaRate);
+      return;
+    }
+    // 比例控制：偏差越大修正越多，收敛速度与当前倍速无关（时间常数为
+    // `RATE_TRIM_CATCH_UP_MS / 倍速`）。量化到 `RATE_STEP` 后，15ms 以下的偏差
+    // 会直接归到媒体倍速，不会每帧来回改速率。
+    const trim = Math.max(
+      1 - RATE_TRIM_LIMIT,
+      Math.min(1 + RATE_TRIM_LIMIT, 1 + diff / RATE_TRIM_CATCH_UP_MS),
+    );
+    this.applyRate(motion, Math.round((mediaRate * trim) / RATE_STEP) * RATE_STEP);
   }
   private normalizedArea(area: number) {
     return Number.isFinite(area) ? Math.max(0.1, Math.min(1, area)) : 1;
