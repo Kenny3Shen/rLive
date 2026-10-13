@@ -186,6 +186,97 @@ export function detailsResizeStepIsVisible(
 }
 
 /**
+ * 松手后继续推进的惯性（内容滑动自适应侧栏的「甩出去」）。
+ *
+ * 只在手指确实拖动过侧栏、且松手速度足够快时启用：占比是一个持久状态，
+ * 没有原生滚动的回弹，慢速松手后再溜一段会读作「没对准」。速度按指数衰减，
+ * 与原生惯性同形，因此停下是渐变的而不是硬停。
+ */
+
+/** 只取最近这段时间内的位移估算速度（ms）。 */
+export const DETAILS_MOMENTUM_WINDOW_MS = 100;
+
+/**
+ * 速度采样的最小时间跨度（ms）：比这更短时，1px 的坐标取整会放大成极大速度。
+ * 与 60Hz 的一帧同量级，因此逐帧采样的正常手势不会被误判。
+ */
+export const DETAILS_MOMENTUM_MIN_SPAN_MS = 16;
+
+/** 启动惯性的最小速度（px/ms，约 300px/s）。低于此速度的松手就是「停下来」。 */
+export const DETAILS_MOMENTUM_MIN_VELOCITY = 0.3;
+
+/** 惯性衰减到这个速度就停下（px/ms）。比启动阈值低一个数量级，形成滞回。 */
+export const DETAILS_MOMENTUM_STOP_VELOCITY = 0.02;
+
+/** 指数衰减的时间常数（ms）：速度乘 `e^-1` 所需的时间。 */
+export const DETAILS_MOMENTUM_DECAY_MS = 325;
+
+/**
+ * 单帧参与衰减的最大时长（ms）。
+ *
+ * 后台页签恢复、长任务后的 `dt` 可上百毫秒；不夹住就会把整段惯性在一帧里走完，
+ * 侧栏「唰」地弹到位。夹住只影响这一次的节奏，总位移仍由 `v₀·τ` 决定。
+ */
+export const DETAILS_MOMENTUM_MAX_STEP_MS = 64;
+
+/** 速度采样保留的条数（环形，只留最近几条）。 */
+export const DETAILS_MOMENTUM_SAMPLE_LIMIT = 5;
+
+/**
+ * 惯性结束后抑制点击的时间（ms）。
+ *
+ * 与拖动结束用的是同一套抑制：惯性期间手指已抬起，紧接的那一次点按落在内容
+ * 控件上时应被吞掉，否则「甩一下侧栏」会顺手点进评论。
+ */
+export const DETAILS_RESIZE_TAP_SUPPRESSION_MS = 420;
+
+/** 一次速度采样：手指位置与事件时间戳。 */
+export type DetailsMomentumSample = { time: number; y: number };
+
+/**
+ * 按最近一段采样估算手指速度（px/ms，向上为负）。
+ *
+ * 只取 `DETAILS_MOMENTUM_WINDOW_MS` 内的位移：更早的采样属于上一段动作，
+ * 混进来会把「先慢后快」读成中等速度。采样不足、跨度太短或取值无效时返回 0
+ * （不接惯性）—— 宁可少接一次，也不要用噪声把侧栏弹出去。
+ */
+export function detailsResizeVelocity(samples: readonly DetailsMomentumSample[]): number {
+  if (samples.length < 2) return 0;
+  const last = samples[samples.length - 1];
+  if (!Number.isFinite(last.time) || !Number.isFinite(last.y)) return 0;
+  let first = last;
+  for (let index = samples.length - 2; index >= 0; index -= 1) {
+    const sample = samples[index];
+    if (!Number.isFinite(sample.time) || !Number.isFinite(sample.y)) continue;
+    if (last.time - sample.time > DETAILS_MOMENTUM_WINDOW_MS) break;
+    first = sample;
+  }
+  const span = last.time - first.time;
+  if (span < DETAILS_MOMENTUM_MIN_SPAN_MS) return 0;
+  return (last.y - first.y) / span;
+}
+
+/**
+ * 惯性的一步：速度按 `v(t) = v₀·e^(-t/τ)` 衰减，返回这段时间的位移与步末速度。
+ *
+ * 位移是速度在这段时间上的积分 `Δ = v₀·τ·(1 - e^(-dt/τ))`，直接喂给
+ * `detailsContentScrollStep`；步末速度作为下一帧的初速度，因此总位移收敛于 `v₀·τ`。
+ */
+export function detailsMomentumStep(
+  velocity: number,
+  dtMs: number,
+): { delta: number; velocity: number } {
+  if (!Number.isFinite(velocity)) return { delta: 0, velocity: 0 };
+  if (!(dtMs > 0)) return { delta: 0, velocity };
+  const step = Math.min(dtMs, DETAILS_MOMENTUM_MAX_STEP_MS);
+  const decay = Math.exp(-step / DETAILS_MOMENTUM_DECAY_MS);
+  return {
+    delta: velocity * DETAILS_MOMENTUM_DECAY_MS * (1 - decay),
+    velocity: velocity * decay,
+  };
+}
+
+/**
  * 手势意图判定。
  *
  * `resize`：纵向拖动（手指上移＝分界上移＝侧栏变高）；

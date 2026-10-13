@@ -375,7 +375,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 | `src/shared/motion/PagePan.tsx`、`PageZoom.tsx` | 整页平移与 outgoing subtree 生命周期、沉浸式播放页 Zoom |
 | `src/shared/motion/FrozenRouter.tsx` | 离场子树的 `LocationContext` / `RouteContext` 冻结（两个宿主共用，见 4.3） |
 | `src/shared/gestures/horizontalSwipe.ts`、`longPress.ts` | swipe 与长按的阈值常量和纯判定逻辑 |
-| `src/shared/gestures/detailsResize.ts`、`src/shared/hooks/useDetailsResize.ts` | VOD 侧栏内容滑动自适应占比的阈值/换算与手势接线 |
+| `src/shared/gestures/detailsResize.ts`、`src/shared/hooks/useDetailsResize.ts` | VOD 侧栏内容滑动自适应占比的阈值/换算、松手惯性（`detailsResizeVelocity` / `detailsMomentumStep`）与手势接线 |
 | `src/shared/gestures/imageZoom.ts`、`src/shared/hooks/useImageZoom.ts` | 图片查看器双指缩放 / 双击 / 平移的阈值换算与手势接线 |
 | `src/shared/components/player/PlayerControls.tsx` | 共享播放控制条与安全区避让 |
 | `src/shared/components/player/PlayerStageSkeleton.tsx` | 沉浸播放页的轻量加载占位（纯黑画面与可选返回入口，不绘制顶部身份行、控制栏或假按钮骨架），直播详情、两条竖屏流与沉浸路由 Suspense 占位共用 |

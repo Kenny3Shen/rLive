@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DETAILS_MOMENTUM_DECAY_MS,
+  DETAILS_MOMENTUM_MIN_SPAN_MS,
+  DETAILS_MOMENTUM_MIN_VELOCITY,
+  DETAILS_MOMENTUM_SAMPLE_LIMIT,
+  DETAILS_MOMENTUM_STOP_VELOCITY,
+  DETAILS_MOMENTUM_WINDOW_MS,
   DETAILS_RESIZE_DIRECTION_RATIO,
   DETAILS_RESIZE_LOCK_DISTANCE_PX,
   DETAILS_SHARE_MIN_PERCENT,
@@ -8,10 +14,12 @@ import {
   canResizeVideoDetails,
   detailsContentScrollStep,
   clampDetailsSharePercent,
+  detailsMomentumStep,
   detailsResizeCeiling,
   detailsResizeIntent,
   detailsResizeSharePercent,
   detailsResizeStepIsVisible,
+  detailsResizeVelocity,
   detailsShareCssValue,
   detailsShareFromHeights,
   detailsShareMaxPercent,
@@ -352,5 +360,131 @@ describe("原始画幅给出的恢复下限", () => {
     const wide = constrain(shorter, 401, 757, 6);
     expect(wide).toBeGreaterThan(85);
     expect(constrain(wide, 401, 757, 9 / 16)).toBe(detailsShareMaxPercent(401, 757));
+  });
+});
+
+describe("松手后的侧栏惯性", () => {
+  test("速度取最近 100ms 的位移，向上为负", () => {
+    // 200px/s 上滑：100ms 走 20px。
+    expect(detailsResizeVelocity([
+      { time: 0, y: 400 },
+      { time: 50, y: 390 },
+      { time: 100, y: 380 },
+    ])).toBeCloseTo(-0.2, 8);
+    expect(detailsResizeVelocity([
+      { time: 0, y: 380 },
+      { time: 100, y: 400 },
+    ])).toBeCloseTo(0.2, 8);
+  });
+
+  test("窗口外的旧采样不参与：末段速度不被早先的慢动作稀释", () => {
+    // 前 200ms 只挪 2px，最近 50ms 挪了 30px：应读成 0.6px/ms 而不是平均后的 0.13。
+    const samples = [
+      { time: 0, y: 400 },
+      { time: 100, y: 399 },
+      { time: 200, y: 398 },
+      { time: 250, y: 368 },
+    ];
+    expect(detailsResizeVelocity(samples)).toBeCloseTo(-0.6, 8);
+    // 把窗口外的采样换成方向相反的一条：只要它落在窗口外就不该影响结果 ——
+    // 若把 0ms 那条也算进来，读到的会是 (368 - 300) / 250 = +0.272，方向都反了。
+    const withStale = [{ time: 0, y: 300 }, ...samples.slice(-2)];
+    expect(detailsResizeVelocity(withStale)).toBeCloseTo(-0.6, 8);
+    // 只剩窗口外的一条：跨度算不出来，不接惯性。
+    expect(detailsResizeVelocity([{ time: 0, y: 300 }, { time: 250, y: 368 }])).toBe(0);
+  });
+
+  test("采样不足、跨度太短或取值无效时不接惯性", () => {
+    expect(detailsResizeVelocity([])).toBe(0);
+    expect(detailsResizeVelocity([{ time: 0, y: 400 }])).toBe(0);
+    // 跨度 < 16ms：1px 的坐标取整就能放大成极大速度。
+    expect(
+      detailsResizeVelocity([
+        { time: 0, y: 400 },
+        { time: DETAILS_MOMENTUM_MIN_SPAN_MS - 1, y: 200 },
+      ]),
+    ).toBe(0);
+    expect(
+      detailsResizeVelocity([
+        { time: 0, y: 400 },
+        { time: Number.NaN, y: 300 },
+        { time: 60, y: 200 },
+      ]),
+    ).toBeCloseTo(-200 / 60, 8);
+    expect(detailsResizeVelocity([{ time: Number.NaN, y: Number.NaN }])).toBe(0);
+    // 采样窗口本身就是 100ms：更长的跨度自然被截断在窗口边界上。
+    expect(DETAILS_MOMENTUM_WINDOW_MS).toBe(100);
+    expect(DETAILS_MOMENTUM_SAMPLE_LIMIT).toBeGreaterThanOrEqual(3);
+  });
+
+  test("位移是速度的积分：总位移收敛到 v₀·τ，速度按 e^(-t/τ) 衰减", () => {
+    const velocity = 0.8;
+    const dt = 16;
+    const one = detailsMomentumStep(velocity, dt);
+    // 单步位移等于该段时间上速度的积分。
+    expect(one.delta).toBeCloseTo(
+      velocity * DETAILS_MOMENTUM_DECAY_MS * (1 - Math.exp(-dt / DETAILS_MOMENTUM_DECAY_MS)),
+      8,
+    );
+    expect(one.velocity).toBeCloseTo(velocity * Math.exp(-dt / DETAILS_MOMENTUM_DECAY_MS), 8);
+    // 逐帧累加：总位移逼近 v₀·τ，速度单调衰减。
+    let total = 0;
+    let current = velocity;
+    let previous = velocity;
+    for (let i = 0; i < 400; i += 1) {
+      const step = detailsMomentumStep(current, dt);
+      total += step.delta;
+      current = step.velocity;
+      expect(Math.abs(current)).toBeLessThanOrEqual(Math.abs(previous) + 1e-12);
+      previous = current;
+    }
+    expect(total).toBeCloseTo(velocity * DETAILS_MOMENTUM_DECAY_MS, 2);
+    expect(Math.abs(current)).toBeLessThan(DETAILS_MOMENTUM_STOP_VELOCITY);
+  });
+
+  test("单帧时长被夹住：后台恢复的百毫秒不会把惯性一帧走完", () => {
+    const velocity = 1;
+    const capped = detailsMomentumStep(velocity, 1000);
+    const atCap = detailsMomentumStep(velocity, 64);
+    expect(capped).toEqual(atCap);
+    // 正常一帧不受影响。
+    expect(detailsMomentumStep(velocity, 16)).not.toEqual(capped);
+  });
+
+  test("启动阈值与停止阈值形成滞回，非法取值立即停下", () => {
+    // 启动门槛高于停止门槛：接上惯性后能在低于启动速度的区间里继续跑一段。
+    expect(DETAILS_MOMENTUM_MIN_VELOCITY).toBeGreaterThan(DETAILS_MOMENTUM_STOP_VELOCITY);
+    expect(DETAILS_MOMENTUM_MIN_VELOCITY).toBeGreaterThan(0);
+    expect(detailsMomentumStep(Number.NaN, 16)).toEqual({ delta: 0, velocity: 0 });
+    expect(detailsMomentumStep(Number.POSITIVE_INFINITY, 16)).toEqual({ delta: 0, velocity: 0 });
+    // 非正时长不推进，速度原样保留。
+    expect(detailsMomentumStep(0.5, 0)).toEqual({ delta: 0, velocity: 0.5 });
+    expect(detailsMomentumStep(0.5, Number.NaN)).toEqual({ delta: 0, velocity: 0.5 });
+  });
+
+  test("惯性位移交给同一套分配逻辑：仍先滚内容、到顶再缩侧栏", () => {
+    // 下滑（delta > 0）时先滚回内容顶部，剩余位移才缩小侧栏。
+    const scrollOnly = detailsContentScrollStep(60, 100, 200, 1000, 70);
+    expect(scrollOnly).toEqual({ percent: 60, scrollDelta: -100 });
+    const withResize = detailsContentScrollStep(60, 100, 40, 1000, 70);
+    expect(withResize.percent).toBe(54);
+    expect(withResize.scrollDelta).toBeCloseTo(-40, 8);
+    // 上滑超过上限后剩余位移用于滚动，不会丢。
+    const atCeiling = detailsContentScrollStep(70, -100, 0, 1000, 70);
+    expect(atCeiling).toEqual({ percent: 70, scrollDelta: 100 });
+  });
+
+  test("一次快速上滑的惯性位移量级合理：不超过一个手指滑动的高度", () => {
+    // 0.8px/ms（800px/s）的松手速度，指数衰减下总位移约 260px ——
+    // 相当于再滑 1/3 个屏幕，不会把侧栏一路顶到上限。
+    let total = 0;
+    let velocity = 0.8;
+    for (let i = 0; i < 200; i += 1) {
+      const step = detailsMomentumStep(velocity, 16);
+      total += step.delta;
+      velocity = step.velocity;
+    }
+    expect(total).toBeGreaterThan(150);
+    expect(total).toBeLessThan(400);
   });
 });

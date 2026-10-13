@@ -10,7 +10,7 @@ async (page) => {
       mobile: false,
     });
     return await page.evaluate(async () => {
-      const { setupHarness, assert, frames } = await import("/tests/browser/harness.js");
+      const { setupHarness, assert, frame: nextFrame, frames } = await import("/tests/browser/harness.js");
       const { useDetailsResize, writeDetailsShare, clearDetailsResizing } =
         await import("/src/shared/hooks/useDetailsResize.ts");
       const ui = await setupHarness({
@@ -93,7 +93,7 @@ async (page) => {
       const send = (
         type,
         y,
-        { x = 100, target = scroll(), cancelable = true, multiple = false } = {},
+        { x = 100, target = scroll(), cancelable = true, multiple = false, time = performance.now() } = {},
       ) => {
         const touch = new Touch({ identifier: 71, target, clientX: x, clientY: y });
         const touches = type === "touchend" || type === "touchcancel" ? [] : [touch];
@@ -105,6 +105,9 @@ async (page) => {
           bubbles: true,
           cancelable,
         });
+        // `timeStamp` 是只读的合成值，速度采样读的是它：用 `defineProperty` 摆到
+        // 指定时刻，才能在不真的等墙钟的前提下造出确定的手指速度。
+        Object.defineProperty(event, "timeStamp", { value: time });
         target.dispatchEvent(event);
         return event.defaultPrevented;
       };
@@ -113,6 +116,31 @@ async (page) => {
         send("touchmove", to, options);
         flushSync(() => send("touchend", to, options));
         await frames();
+      };
+      /**
+       * 带速度的甩动：以 `velocity`（px/ms，向上为负）匀速走完 `distance`，采样间隔 16ms。
+       * `end()` 里的速度估算读的就是这些事件的时间戳，因此步数由距离与速度反推
+       * （至少 5 步，让位移能跨过 10px 的锁定距离）。
+       */
+      const fling = async (from, distance, velocity) => {
+        const steps = Math.max(5, Math.ceil(Math.abs(distance / velocity) / 16));
+        const start = performance.now();
+        send("touchstart", from, { time: start });
+        for (let i = 1; i <= steps; i += 1) {
+          const elapsed = i * 16;
+          send("touchmove", from + (distance * i) / steps, { time: start + elapsed });
+        }
+        flushSync(() => send("touchend", from + distance, { time: start + steps * 16 }));
+        await frames();
+      };
+      /** 等到惯性自己停下（速度低于阈值后 `stopMomentum` 会提交）。 */
+      const settleMomentum = async (limit = 200) => {
+        for (let i = 0; i < limit; i += 1) {
+          const before = commits.length;
+          await nextFrame();
+          if (commits.length > before) return true;
+        }
+        return false;
       };
       const geometry = () => {
         const total = frame().getBoundingClientRect().height;
@@ -140,8 +168,10 @@ async (page) => {
           "变量继承到了评论子树",
         );
         geometry();
-        send("touchmove", 320);
-        flushSync(() => send("touchend", 320));
+        // 末段保持慢速（2px / 一帧 ≈ 0.1px/ms，低于 0.3 的惯性启动阈值），
+        // 这一段要验证的是同帧合并与释放清理，不接惯性；甩动另有用例。
+        send("touchmove", 338);
+        flushSync(() => send("touchend", 338));
         await frames();
         assert(previews.length === 1 && commits.length === 1, "结束后旧预览仍在执行");
         assert(!frame().hasAttribute("data-vod-details-resizing"), "结束未清理预览标记");
@@ -361,9 +391,103 @@ async (page) => {
         send("touchmove", 300);
         flushSync(() => send("touchend", 300));
         await frames();
+        // 这一段位移跨了 `setEnabled(true)` 与两帧等待，末段速度已过惯性阈值：
+        // 提交会发生在惯性停下时，这里等到它落定（没接惯性则当场就已提交）。
+        await settleMomentum();
         assert(commits.length > commitsBeforeResume, "跨越启用的手势未提交");
         assert(!frame().hasAttribute("data-vod-details-resizing"), "跨越启用的手势未清理标记");
         passed.push("画幅/启用晚于按下时手势能接着进行，且接管帧不追溯总位移");
+
+        /*
+          松手后的惯性。侧栏占比是持久状态、没有原生滚动的回弹，快速上滑后
+          直接硬停会读作「甩出去半截又被人拽住」；这里验证三件事：
+
+          1. 快速上滑（≥ 0.3px/ms）松手后占比继续变大，且是渐停而不是一帧到位；
+          2. 慢速松手不接惯性（否则每次微调都会自己溜一段）；
+          3. 惯性未停时再按下：当场停住并提交当时的位置，新手势从该位置接着走，
+             不会弹回甩出前的起点。
+        */
+        scroll().scrollTop = 0;
+        await gesture(400, 2000);
+        await gesture(400, 2000);
+        const flingStart = Number.parseFloat(
+          frame().style.getPropertyValue("--vod-details-share") || "30",
+        );
+        const flingCommits = commits.length;
+        // 上滑：速度 -1px/ms（1000px/s），5 步共 80px。
+        await fling(400, -80, -1);
+        assert(commits.length === flingCommits, "甩动在抬手前就提交了");
+        const afterRelease = Number.parseFloat(frame().style.getPropertyValue("--vod-details-share"));
+        assert(afterRelease > flingStart, `甩动后占比未变大：${flingStart} → ${afterRelease}`);
+        // 渐停：头几帧还在动，不是一帧到位。
+        const momentumFrames = [];
+        for (let i = 0; i < 4; i += 1) {
+          await nextFrame();
+          momentumFrames.push(
+            Number.parseFloat(frame().style.getPropertyValue("--vod-details-share")),
+          );
+        }
+        assert(
+          momentumFrames.some((value, i) => i > 0 && value > momentumFrames[i - 1] + 1e-6),
+          `惯性没有逐帧推进：${JSON.stringify(momentumFrames)}`,
+        );
+        assert(await settleMomentum(), "惯性未自行停下并提交");
+        const settledShare = Number.parseFloat(frame().style.getPropertyValue("--vod-details-share"));
+        // 总位移约 v₀·τ = 1 × 325 = 325px，即 325 / 757 × 100 ≈ 43 个百分点；
+        // 上限 70.2% 会先截住它，因此只断言「确实跑出了远大于一次甩动的位移」。
+        assert(
+          settledShare > afterRelease + 3,
+          `惯性总位移过小：${afterRelease} → ${settledShare}`,
+        );
+        assert(!frame().hasAttribute("data-vod-details-resizing"), "惯性结束后未清理预览标记");
+        passed.push("快速上滑松手后惯性继续推进并渐停提交");
+
+        // 慢速松手：不接惯性。
+        scroll().scrollTop = 0;
+        await gesture(400, 2000);
+        await gesture(400, 2000);
+        const slowCommits = commits.length;
+        // 0.1px/ms 低于 0.3 的启动阀值；40px 走 400ms，跨过锁定距离但不快。
+        await fling(400, -40, -0.1);
+        await frames();
+        assert(commits.length > slowCommits, "慢速拖动未提交");
+        const slowSettled = Number.parseFloat(frame().style.getPropertyValue("--vod-details-share"));
+        for (let i = 0; i < 30; i += 1) await nextFrame();
+        assert(
+          Number.parseFloat(frame().style.getPropertyValue("--vod-details-share")) === slowSettled,
+          "慢速松手后仍在自行推进",
+        );
+        passed.push("慢速松手不接惯性");
+
+        // 惯性未停时再按下：立即停住并提交，新手势从当时的位置接着走。
+        scroll().scrollTop = 0;
+        await gesture(400, 2000);
+        await gesture(400, 2000);
+        await fling(400, -80, -1);
+        await nextFrame();
+        const midMomentum = Number.parseFloat(frame().style.getPropertyValue("--vod-details-share"));
+        const midCommits = commits.length;
+        send("touchstart", 400);
+        assert(commits.length > midCommits, "再次按下时未提交惯性位置");
+        const stoppedAt = Number.parseFloat(frame().style.getPropertyValue("--vod-details-share"));
+        assert(
+          stoppedAt >= midMomentum,
+          `按下后位置倒退了：${midMomentum} → ${stoppedAt}`,
+        );
+        // 惯性已经停下：不再有新预览。
+        const previewsAtPress = previews.length;
+        for (let i = 0; i < 10; i += 1) await nextFrame();
+        assert(previews.length === previewsAtPress, "按下后惯性仍在跑");
+        // 新手势从停下位置继续（向上拖 40px ≈ +5.3 个百分点）。
+        send("touchmove", 360);
+        flushSync(() => send("touchend", 360));
+        await frames();
+        const afterSecondDrag = Number.parseFloat(frame().style.getPropertyValue("--vod-details-share"));
+        assert(
+          afterSecondDrag > stoppedAt,
+          `新手势未从惯性停下位置继续：${stoppedAt} → ${afterSecondDrag}`,
+        );
+        passed.push("惯性期间再按下立即停住并提交，新手势从该位置继续");
 
         send("touchstart", 400);
         send("touchmove", 450);
