@@ -165,6 +165,27 @@ export const DETAILS_RESIZE_LOCK_DISTANCE_PX = 10;
 export const DETAILS_RESIZE_DIRECTION_RATIO = 1.25;
 
 /**
+ * 「这一步值得认领手势」的最小布局变化（px）。
+ *
+ * 按压初期要靠 `preventDefault` 从合成器手里赢下手势归属（见 `useDetailsResize`
+ * 的 `claimPendingMove`），但只能在本步**真能**改变布局时才抢，否则会吞掉原生
+ * 滚动与惯性。比较用像素而不是百分比：占比由侧栏真实高度反算，而容器高度只有
+ * `clientHeight` 的整数精度，边界处会留下约 `0.05%` 的测量偏差 —— 在上限处直接
+ * 比较百分比会把这个偏差读成「还能再拖」，于是每次到达上限都恰好抢走原生滚动。
+ */
+export const DETAILS_RESIZE_CLAIM_MIN_PX = 1;
+
+/** 一步手势带来的布局变化是否值得认领（见 `DETAILS_RESIZE_CLAIM_MIN_PX`）。 */
+export function detailsResizeStepIsVisible(
+  percent: number,
+  nextPercent: number,
+  containerHeight: number,
+): boolean {
+  if (!(containerHeight > 0)) return false;
+  return (Math.abs(nextPercent - percent) / 100) * containerHeight >= DETAILS_RESIZE_CLAIM_MIN_PX;
+}
+
+/**
  * 手势意图判定。
  *
  * `resize`：纵向拖动（手指上移＝分界上移＝侧栏变高）；

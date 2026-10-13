@@ -4,6 +4,7 @@ import {
   detailsContentScrollStep,
   detailsResizeCeiling,
   detailsResizeIntent,
+  detailsResizeStepIsVisible,
   detailsShareCssValue,
   detailsShareFromHeights,
   detailsShareMaxPercent,
@@ -21,6 +22,16 @@ type ResizeState = {
   active: boolean;
   lastPercent: number;
   scrollers: HTMLElement[];
+};
+
+/** 现场量出的本轮调整基准：容器尺寸、起算占比与双向边界。 */
+type ResizeMetrics = {
+  containerWidth: number;
+  containerHeight: number;
+  aspectRatio: number | null;
+  percent: number;
+  minPercent: number;
+  maxPercent: number;
 };
 
 /**
@@ -140,47 +151,58 @@ export function useDetailsResize({
     }
   }, [cancelPreview]);
 
+  /** 量取本轮调整的基准；只在需要时读 DOM，不写任何状态。 */
+  const measureResize = useCallback((): ResizeMetrics | null => {
+    const container = containerRef.current;
+    const details = detailsRef.current;
+    if (!container || !details || container.clientHeight <= 0) return null;
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+    const percent = detailsShareFromHeights(
+      details.getBoundingClientRect().height,
+      containerHeight,
+    );
+    const minPercent = detailsShareMinPercent(
+      containerWidth,
+      containerHeight,
+      aspectRatioRef.current,
+    );
+    return {
+      containerWidth,
+      containerHeight,
+      aspectRatio: aspectRatioRef.current,
+      percent,
+      minPercent,
+      maxPercent: detailsResizeCeiling(percent, containerWidth, containerHeight, minPercent),
+    };
+  }, [containerRef, detailsRef]);
+
   /**
-   * 真正接管一次按压：现场量布局，建立本轮调整的基准。
+   * 真正接管一次按压：用现场量到的基准建立本轮调整。
    *
    * `lastY` 继承按压里记的上一次已派发位置，于是接管那一帧的位移正好是它自己的
    * 增量，而按下到接管之间的位移不会被追溯应用。
    */
   const beginResize = useCallback(
     (press: ResizePress): ResizeState | null => {
-      const container = containerRef.current;
-      const details = detailsRef.current;
-      if (!container || !details || container.clientHeight <= 0) return null;
-      const percent = detailsShareFromHeights(
-        details.getBoundingClientRect().height,
-        container.clientHeight,
-      );
-      const minPercent = detailsShareMinPercent(
-        container.clientWidth,
-        container.clientHeight,
-        aspectRatioRef.current,
-      );
+      const metrics = measureResize();
+      if (!metrics) return null;
       const state: ResizeState = {
         touchId: press.touchId,
         lastY: press.lastY,
-        containerWidth: container.clientWidth,
-        containerHeight: container.clientHeight,
-        aspectRatio: aspectRatioRef.current,
-        minPercent,
-        maxPercent: detailsResizeCeiling(
-          percent,
-          container.clientWidth,
-          container.clientHeight,
-          minPercent,
-        ),
+        containerWidth: metrics.containerWidth,
+        containerHeight: metrics.containerHeight,
+        aspectRatio: metrics.aspectRatio,
+        minPercent: metrics.minPercent,
+        maxPercent: metrics.maxPercent,
         active: false,
-        lastPercent: percent,
+        lastPercent: metrics.percent,
         scrollers: press.scrollers,
       };
       stateRef.current = state;
       return state;
     },
-    [containerRef, detailsRef],
+    [measureResize],
   );
 
   const bindContent = useCallback(
@@ -209,6 +231,50 @@ export function useDetailsResize({
           intent: "pending",
         };
       };
+      /**
+       * 未越过锁定距离时的表态：只阻止默认行为，既不接管也不预览。
+       *
+       * 合成器按**第一个 touchmove 是否被阻止**决定手势归属：不阻止它就当场开始
+       * 原生滚动，并把后续 touchmove 全标成 `cancelable === false`。锁定距离是
+       * `10px`，而手指逐帧位移常常只有 3~4px，合成器的触摸 slop 又恰好也是这个
+       * 量级（实测 9px 的首帧已经会被判给原生滚动）—— 等攒够 10px 时事件早已不可
+       * 取消，`!event.cancelable` 把整次拖动丢掉。这正是「切换侧栏页签或点开信息卡
+       * 标题后，第一次滑动不改变侧栏高度」的根因：只有首帧位移就 ≥10px 的大跨度
+       * 滑动才抢得赢这场归属竞争。
+       *
+       * 只在纵向占优且这一步**真能**改变占比时按住不放：到达边界、以及下滑要先
+       * 滚回内容顶部的位移照旧让给原生滚动与惯性。画幅未知、或当前根本没启用调整
+       * （16:9、全屏、并排）时无从判断能否调整，也不能乐观接管 —— 一旦接管，
+       * 合成器到手指抬起前都不会再开始原生滚动，用户会白划一下。`preventDefault`
+       * 只作用于 touchmove，不吞 click，也不拦页签横滑用的 PointerEvent。
+       */
+      const claimPendingMove = (
+        event: TouchEvent,
+        press: ResizePress,
+        offsetX: number,
+        offsetY: number,
+        deltaY: number,
+      ) => {
+        if (!event.cancelable || !enabledRef.current) return;
+        if (Math.abs(offsetY) <= Math.abs(offsetX)) return;
+        const metrics = measureResize();
+        if (!metrics) return;
+        const scrollTop = press.scrollers.reduce(
+          (sum, node) => sum + Math.max(0, node.scrollTop),
+          0,
+        );
+        const next = detailsContentScrollStep(
+          metrics.percent,
+          deltaY,
+          scrollTop,
+          metrics.containerHeight,
+          metrics.maxPercent,
+          metrics.minPercent,
+        );
+        if (!detailsResizeStepIsVisible(metrics.percent, next.percent, metrics.containerHeight))
+          return;
+        event.preventDefault();
+      };
       const move = (event: TouchEvent) => {
         const press = pressRef.current;
         if (!press) return;
@@ -225,12 +291,21 @@ export function useDetailsResize({
             touch.clientX - press.startX,
             touch.clientY - press.startY,
           );
+          if (press.intent === "pending") {
+            claimPendingMove(
+              event,
+              press,
+              touch.clientX - press.startX,
+              touch.clientY - press.startY,
+              touch.clientY - previousY,
+            );
+            return;
+          }
         }
         if (press.intent === "swipe") {
           pressRef.current = null;
           return;
         }
-        if (press.intent === "pending") return;
         // 原生滚动已开始后不能再改布局，否则同一手指位移会被消费两次。
         if (!event.cancelable) return;
         // 纵向意图已定但画幅还没到（首次进入的常见时序）：留住这次按压，
@@ -248,7 +323,15 @@ export function useDetailsResize({
           state.minPercent,
         );
         const changed = Math.abs(next.percent - state.lastPercent) > 0.0001;
-        if (!state.active && !changed) return;
+        // 尚未接管时，只有这一步**真能**改变布局才抢下归属：占比由侧栏真实高度反算，
+        // 而容器高度只有整数精度，边界处会留下亚像素偏差 —— 直接比百分比会把它读成
+        // 「还能再拖」，每次到达上限都恰好抢走原生滚动与惯性（见 `detailsResizeStepIsVisible`）。
+        // 已接管的手势不受此限：它本来就由我们逐帧分配位移。
+        if (
+          !state.active &&
+          !detailsResizeStepIsVisible(state.lastPercent, next.percent, state.containerHeight)
+        )
+          return;
         event.preventDefault();
         state.active = true;
         state.lastPercent = next.percent;
@@ -289,7 +372,7 @@ export function useDetailsResize({
         clearDetailsResizing(containerRef.current);
       };
     },
-    [beginResize, cancelPreview, containerRef, finish],
+    [beginResize, cancelPreview, containerRef, finish, measureResize],
   );
 
   /**

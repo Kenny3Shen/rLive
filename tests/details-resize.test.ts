@@ -11,6 +11,7 @@ import {
   detailsResizeCeiling,
   detailsResizeIntent,
   detailsResizeSharePercent,
+  detailsResizeStepIsVisible,
   detailsShareCssValue,
   detailsShareFromHeights,
   detailsShareMaxPercent,
@@ -111,6 +112,21 @@ describe("详情侧栏占比换算", () => {
     // 恰在临界比例上：既不满足纵向的 `> |dx|`，也不满足横向的 `> 1.25|dy|`。
     expect(detailsResizeIntent(40, -32)).toBe("pending");
     expect(Math.abs(-40) > 32 * DETAILS_RESIZE_DIRECTION_RATIO).toBe(false);
+  });
+
+  test("认领门槛用像素而非百分比，边界处的测量偏差不算变化", () => {
+    // 上限处按侧栏真实高度反算的占比会与上限差约 0.04%（容器高度只有整数精度），
+    // 直接比百分比会把这个偏差读成「还能再拖」，每次到顶都抢走原生滚动。
+    const height = 717;
+    const percent = 67.63797690845101;
+    const cap = 67.67782426778243;
+    expect(Math.abs(cap - percent) > 0.0001).toBe(true);
+    expect(detailsResizeStepIsVisible(percent, cap, height)).toBe(false);
+    // 真能看见的一步：1px 及以上的布局变化才算数。
+    expect(detailsResizeStepIsVisible(percent, percent + (1 / height) * 100, height)).toBe(true);
+    expect(detailsResizeStepIsVisible(percent, percent + (0.5 / height) * 100, height)).toBe(false);
+    // 容器高度不可用时不能凭占比判定。
+    expect(detailsResizeStepIsVisible(percent, percent + 50, 0)).toBe(false);
   });
 
   test("起算占比按侧栏真实高度量取，未拖动过时也不跳变", () => {

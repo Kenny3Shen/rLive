@@ -262,6 +262,59 @@ async (page) => {
         await frames();
 
         /*
+          锁定距离内的表态。合成器按**第一个 touchmove 是否被 preventDefault**
+          决定手势归属，而锁定距离（10px）与合成器的触摸 slop 同量级：逐帧 3~4px
+          的慢速滑动等攒够 10px 时，后续 touchmove 早已被标成 `cancelable === false`，
+          整次拖动因此被判成原生滚动丢掉 —— 真机表现为「切换页签或点开信息卡标题
+          后，第一次滑动不改侧栏高度」，只有首帧就跨过 10px 的大幅滑动才正常。
+
+          夹具合成的 TouchEvent 不经合成器，测不出取消状态，但可以直接验证修复所
+          依赖的契约：pending 阶段的移动在**真能改变占比**时必须 `preventDefault`
+          以抢下归属，而在到达边界或本就不该调整时不能抢（否则吞掉原生滚动）。
+        */
+        // 先摆回默认布局，否则上一段留在 `--vod-details-share` 上的值会遮住结果。
+        // 只能靠下滑恢复：占比是持久状态，没有别的「重置」入口。
+        scroll().scrollTop = 0;
+        await gesture(400, 2000);
+        await gesture(400, 2000);
+        const pendingShare = Number.parseFloat(
+          frame().style.getPropertyValue("--vod-details-share"),
+        );
+        const pendingStage = ui.query("[data-video-player-frame]").getBoundingClientRect().height;
+        const pendingPreviews = previews.length;
+        const pendingCommits = commits.length;
+        // 首帧 4px：纵向占优且能改变占比 → 必须当场拦下默认行为，但不得预览或提交。
+        send("touchstart", 400);
+        assert(
+          send("touchmove", 396),
+          "未越锁定距离时未认领手势，合成器会把整次拖动判给原生滚动",
+        );
+        assert(previews.length === pendingPreviews, "锁定距离内就开始预览");
+        assert(
+          Number.parseFloat(frame().style.getPropertyValue("--vod-details-share")) === pendingShare,
+          "锁定距离内就改了占比",
+        );
+        // 斜向移动（横向占优）不拦：这次手势归页签横滑。
+        send("touchend", 396);
+        send("touchstart", 400);
+        assert(!send("touchmove", 396, { x: 130 }), "横向占优的按压被调占比拦下");
+        send("touchend", 396, { x: 130 });
+        // 下滑要先滚回内容顶部：此时位移归原生滚动，pending 阶段同样不能拦。
+        scroll().scrollTop = 200;
+        send("touchstart", 400);
+        assert(!send("touchmove", 404), "内容下滑滚回顶部时被调占比拦下");
+        send("touchend", 404);
+        assert(previews.length === pendingPreviews, "pending 阶段产出了预览");
+        assert(commits.length === pendingCommits, "pending 阶段发生了提交");
+        assert(
+          Math.abs(
+            ui.query("[data-video-player-frame]").getBoundingClientRect().height - pendingStage,
+          ) < 0.5,
+          "pending 阶段改了舞台高度",
+        );
+        passed.push("锁定距离内只在真能改占比时认领，不预览不提交");
+
+        /*
           首次进入播放页的真实时序：手指先落下，画幅要等媒体报出
           `videoWidth/videoHeight` 才可知（`enabled` 依赖它）。
 
