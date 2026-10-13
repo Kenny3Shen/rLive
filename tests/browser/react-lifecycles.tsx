@@ -174,6 +174,13 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
         setTimeout(resolve, 100);
         await promise;
       });
+      // act 会把 rAF 里的批次提交攒到回调结束；面板在提交后的下一帧才回底，
+      // 等两帧再断言。冻结断言只会因此更严格。
+      for (let frame = 0; frame < 2; frame++) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        requestAnimationFrame(() => resolve());
+        await promise;
+      }
     };
     await emitScrollRegressionBatch(
       Array.from({ length: 30 }, (_, index) => `观众${index}`),
@@ -187,7 +194,11 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
     const rowTriggers = host.querySelectorAll<HTMLButtonElement>(
       'button[aria-label^="选择"]',
     );
-    check(rowTriggers.length >= 30, "弹幕行必须呈现为可点击按钮");
+    // 列表已虚拟化，只挂载视口附近的行；断言行可点击，而不是全部 30 行都在 DOM 中。
+    check(
+      rowTriggers.length > 0 && rowTriggers.length < 30,
+      "弹幕行必须呈现为可点击按钮且保持窗口化",
+    );
     await act(async () => {
       rowTriggers[rowTriggers.length - 1]!.click();
       const { promise, resolve } = Promise.withResolvers<void>();
@@ -227,9 +238,10 @@ export async function runReactLifecycleRegressions(host: HTMLElement): Promise<s
     );
     await emitScrollRegressionBatch(["恢复观众"]);
     viewport = danmakuViewport();
+    const resumedGap = viewport!.scrollHeight - viewport!.clientHeight - viewport!.scrollTop;
     check(
-      Math.abs(viewport!.scrollTop - (viewport!.scrollHeight - viewport!.clientHeight)) < 1,
-      "恢复后新批次必须继续跟随底部",
+      Math.abs(resumedGap) < 1,
+      `恢复后新批次必须继续跟随底部（距底 ${resumedGap}px）`,
     );
     passed.push("弹幕行点击冻结与跳回恢复");
 

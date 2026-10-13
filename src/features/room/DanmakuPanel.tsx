@@ -41,10 +41,14 @@ const MIN_FLUSH_INTERVAL_MS = 32;
 const BACKPRESSURE_FLUSH_INTERVAL_MS = 80;
 const BACKPRESSURE_PENDING_THRESHOLD = MAX_PER_FLUSH * 2;
 const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
-// text-sm 的 14px × leading-relaxed 1.625 + py-1 8px + border 2px，
-// 虚拟器测高会取整到 33px。贴近常见单行，避免每批新增行都触发估高修正与额外布局。
+// text-sm 的 14px × leading-relaxed 1.625 = 22.75px，加 py-1 的 8px 与 1px 透明边框后
+// 单行约 32.75px，`measureElement` 再取整到整数。透明边框按设备像素取整，行高因此
+// 随 devicePixelRatio 变化（2.625 下是 32px、1 下是 33px），这里是上界；实际值由
+// 已挂载行校准，估值与实测不一致会让列表总高逐批漂移。
 const DANMAKU_ROW_ESTIMATE_PX = 33;
 const DANMAKU_LIST_OVERSCAN = 6;
+// 贴底 48px 内视为「跟随最新消息」。
+const DANMAKU_PINNED_THRESHOLD_PX = 48;
 
 type DanmakuLine = { id: number; event: DanmakuEvent };
 
@@ -53,6 +57,8 @@ type DanmakuPanelMenuTarget = {
   anchor: { getBoundingClientRect: () => DOMRect };
   trigger: HTMLElement;
 };
+
+const ignorePinnedRowResize = () => false;
 
 function scrollDanmakuViewportToBottom(viewport: HTMLElement | null): void {
   if (!viewport) return;
@@ -481,22 +487,52 @@ export const DanmakuPanel = memo(function DanmakuPanel({
   }, []);
 
   const getItemKey = useCallback((index: number) => items[index].id, [items]);
+  const rowEstimateRef = useRef(DANMAKU_ROW_ESTIMATE_PX);
+  const estimateRowSize = useCallback(() => rowEstimateRef.current, []);
+  const pinFrameRef = useRef<number | null>(null);
+  const cancelPin = useCallback(() => {
+    if (pinFrameRef.current !== null) cancelAnimationFrame(pinFrameRef.current);
+    pinFrameRef.current = null;
+  }, []);
+  const schedulePin = useCallback(() => {
+    if (!visible || !viewport || !autoScroll.current || pinFrameRef.current !== null) return;
+    // 合并追加、动态测高和视口 resize，只在布局完成后的下一帧读写一次。
+    pinFrameRef.current = requestAnimationFrame(() => {
+      pinFrameRef.current = null;
+      if (autoScroll.current) scrollDanmakuViewportToBottom(viewport);
+    });
+  }, [visible, viewport]);
+  useLayoutEffect(() => cancelPin, [cancelPin, schedulePin]);
   // 用真实 viewport 给虚拟器，而不是 ScrollArea 外层。
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => (visible ? viewport : null),
-    estimateSize: () => DANMAKU_ROW_ESTIMATE_PX,
+    estimateSize: estimateRowSize,
     getItemKey,
     paddingStart: 8,
     paddingEnd: 8,
     gap: 2,
     overscan: DANMAKU_LIST_OVERSCAN,
-    anchorTo: "end",
-    // 跟随由下方同步 scrollTop 完成，不启用 scrollToEnd 的跨帧重试；
-    // 否则快速上滚时尚未结束的重试会把阅读位置拉回底部。
+    // 阅读态才需要稳定键锚定。订底时保留旧行锚点会在每批淘汰时先向上补偿，
+    // 再被订底拉回；这两次滚动正是移动端不必要的布局/事件来源。
+    anchorTo: atBottom ? "start" : "end",
+    // 当前版本的 followOnAppend 会启动无法公开取消的跨帧 index 追踪，
+    // 用户上滚或打开菜单后仍可能追拉；这里使用上方可取消的一次性订底。
+    followOnAppend: false,
+    // 禁用 end 锚定附带的「测高后隐式回底」，阅读/菜单暂停时只补偿视口上方行。
+    scrollEndThreshold: -1,
+    onChange: schedulePin,
     useFlushSync: false,
+    // 测高或滚动但可视范围未变时，直接更新容器高度/行位置，不再协调 React 子树。
+    directDomUpdates: true,
+    directDomUpdatesMode: "position",
   });
+  // 订底时测高不逐行补偿 scrollTop，统一交给 schedulePin；阅读态恢复虚拟器默认
+  // 的视口上方行补偿。否则一批长文本会先产生中间滚动事件，再被误认为用户上滚。
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = atBottom
+    ? ignorePinnedRowResize
+    : undefined;
 
   // 长文本和面板变窄会换行：仅测量挂载的可视行，不把近似估高当成固定行高。
   // 缓存按稳定 id 保存，淘汰数据后也释放对应测高，避免长时间直播积累无用键。
@@ -505,6 +541,22 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     for (const key of virtualizer.itemSizeCache.keys()) {
       if (typeof key === "number" && !keys.has(key)) virtualizer.itemSizeCache.delete(key);
     }
+  }, [items, virtualizer]);
+
+  // 钉底时每批都会淘汰已测行、补进未测行，总高因此逐批漂移估值与实测之差；每个批次
+  // 都得多写一次 `scrollTop` 并派发滚动事件，虚拟器又因该事件重渲染。单行实测值随
+  // devicePixelRatio 变化，只能从已挂载行读出：多行消息只会更高，最小值就是单行高度。
+  // 只统计普通弹幕（系统消息刻意更小），且估值已是上界，因此只向下校准、不会振荡。
+  useLayoutEffect(() => {
+    let smallest = Number.POSITIVE_INFINITY;
+    for (const row of virtualizer.getVirtualItems()) {
+      if (items[row.index]?.event.kind === "system") continue;
+      const measured = virtualizer.itemSizeCache.get(row.key);
+      if (typeof measured === "number" && measured > 0 && measured < smallest) smallest = measured;
+    }
+    // 不调 `measure()`：估值只作用于未测行，下一批重算测量时自然生效；
+    // 清空测高缓存反而会让已测行退回估值，造成高度跳变。
+    if (smallest < rowEstimateRef.current) rowEstimateRef.current = smallest;
   }, [items, virtualizer]);
 
   // 锚点仍在窗口内时由虚拟器保持位置；连锚点也被淘汰时，退到最早保留行。
@@ -522,16 +574,14 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     }
   }, [items, viewport]);
 
-  // 虚拟器处理追加时的锚定；这里同步测高、重新显示与主动回底带来的总高度变化。
-  const totalSize = virtualizer.getTotalSize();
+  // 追加与显示会改变 DOM，测高变化由 onChange 通知；共用一个可取消 rAF。
   useLayoutEffect(() => {
-    if (visible && autoScroll.current) scrollDanmakuViewportToBottom(viewport);
-  }, [items, totalSize, visible, atBottom, viewport]);
+    schedulePin();
+  }, [items, schedulePin]);
 
   useEffect(() => {
     if (!visible || !viewport || typeof ResizeObserver === "undefined") return;
 
-    let frame: number | null = null;
     let previousWidth = viewport.clientWidth;
     let previousHeight = viewport.clientHeight;
     const scrollIfPinned = () => {
@@ -540,11 +590,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
         previousHeight = viewport.clientHeight;
         setMenuTarget(null);
       }
-      if (!autoScroll.current || frame !== null) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = null;
-        if (autoScroll.current) scrollDanmakuViewportToBottom(viewport);
-      });
+      schedulePin();
     };
     const observer = new ResizeObserver(scrollIfPinned);
     observer.observe(viewport);
@@ -555,22 +601,29 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     return () => {
       window.removeEventListener("resize", closeOnResize);
       observer.disconnect();
-      if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [visible, viewport]);
+  }, [visible, viewport, schedulePin]);
 
   useEffect(() => {
     if (!visible || !viewport) return;
 
+    let lastOffset = viewport.scrollTop;
     // 热路径上只修改 refs，仅在钉住状态翻转时上报，避免每次 scroll 触发 React 树协调。
     const updateAutoScroll = () => {
-      const key = virtualizer.getVirtualItemForOffset(viewport.scrollTop)?.key;
+      const offset = viewport.scrollTop;
+      const movedUp = offset < lastOffset - 1;
+      lastOffset = offset;
+      // 订底时只有向上移动才可能是用户离开底部。程序写入、测高夹取后的回放等
+      // 向下/原地滚动事件可能晚于下一批追加到达，此时距底已变大，不能据此解除跟随。
+      if (autoScroll.current && !movedUp) return;
+      const key = virtualizer.getVirtualItemForOffset(offset)?.key;
       readingKeyRef.current = typeof key === "number" ? key : null;
       if (menuTargetRef.current) return;
-      const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-      const next = distanceToBottom < 48;
+      const distanceToBottom = viewport.scrollHeight - offset - viewport.clientHeight;
+      const next = distanceToBottom < DANMAKU_PINNED_THRESHOLD_PX;
       const repinned = next && !autoScroll.current;
       autoScroll.current = next;
+      if (!next) cancelPin();
       setAtBottom((previous) => (previous === next ? previous : next));
       if (repinned) {
         unreadCountRef.current = 0;
@@ -587,7 +640,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       viewport.removeEventListener("touchmove", closeOnMove);
       viewport.removeEventListener("scroll", updateAutoScroll);
     };
-  }, [visible, viewport, virtualizer]);
+  }, [visible, viewport, virtualizer, cancelPin]);
 
   const scrollToBottom = useCallback(() => {
     autoScroll.current = true;
@@ -596,31 +649,36 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     setAtBottom(true);
     setMenuTarget(null);
     scrollDanmakuViewportToBottom(viewport);
-  }, [viewport]);
+    schedulePin();
+  }, [viewport, schedulePin]);
 
   const closeMenu = useCallback(() => {
     setMenuTarget(null);
   }, []);
 
-  const handleListClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (!(event.target instanceof Element)) return;
-    const trigger = event.target.closest<HTMLElement>("[data-danmaku-id]");
-    if (!trigger || !event.currentTarget.contains(trigger)) return;
-    const id = Number(trigger.dataset.danmakuId);
-    const line = itemsRef.current.find((item) => item.id === id);
-    if (!line) return;
-    const rect = trigger.getBoundingClientRect();
-    // 原生 button 为 Enter/Space/辅助技术提供 click；这种 click 没有有效指针坐标。
-    const anchorRect = new DOMRect(
-      event.detail === 0 ? rect.left + rect.width / 2 : event.clientX,
-      event.detail === 0 ? rect.top + rect.height / 2 : event.clientY,
-      0,
-      0,
-    );
-    autoScroll.current = false;
-    setAtBottom(false);
-    setMenuTarget({ line, trigger, anchor: { getBoundingClientRect: () => anchorRect } });
-  }, []);
+  const handleListClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (!(event.target instanceof Element)) return;
+      const trigger = event.target.closest<HTMLElement>("[data-danmaku-id]");
+      if (!trigger || !event.currentTarget.contains(trigger)) return;
+      const id = Number(trigger.dataset.danmakuId);
+      const line = itemsRef.current.find((item) => item.id === id);
+      if (!line) return;
+      const rect = trigger.getBoundingClientRect();
+      // 原生 button 为 Enter/Space/辅助技术提供 click；这种 click 没有有效指针坐标。
+      const anchorRect = new DOMRect(
+        event.detail === 0 ? rect.left + rect.width / 2 : event.clientX,
+        event.detail === 0 ? rect.top + rect.height / 2 : event.clientY,
+        0,
+        0,
+      );
+      autoScroll.current = false;
+      cancelPin();
+      setAtBottom(false);
+      setMenuTarget({ line, trigger, anchor: { getBoundingClientRect: () => anchorRect } });
+    },
+    [cancelPin],
+  );
 
   const virtualRows = virtualizer.getVirtualItems();
 
@@ -644,10 +702,11 @@ export const DanmakuPanel = memo(function DanmakuPanel({
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">等待弹幕…</p>
             )}
             <div
+              ref={virtualizer.containerRef}
               data-slot="danmaku-list"
               data-count={items.length}
               className="relative"
-              style={{ height: items.length > 0 ? totalSize : 0, overflowAnchor: "none" }}
+              style={{ overflowAnchor: "none" }}
             >
               {virtualRows.map((virtualRow: VirtualItem) => {
                 const line = items[virtualRow.index];
@@ -657,8 +716,7 @@ export const DanmakuPanel = memo(function DanmakuPanel({
                     key={virtualRow.key}
                     data-index={virtualRow.index}
                     ref={virtualizer.measureElement}
-                    className="absolute inset-x-0 top-0"
-                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                    className="absolute inset-x-0"
                   >
                     <DanmakuRow
                       line={line}

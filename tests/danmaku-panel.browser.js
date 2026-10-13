@@ -336,7 +336,51 @@ async (page) => {
       );
       assertNoOverlap(rows());
       checkWindow();
-      passed.push("长文本动态测量后相邻行不重叠");
+      harness.host.style.width = "240px";
+      await until(() => atBottom(), "长文本缩窄后未保持订底");
+      await frames(4);
+      assertNoOverlap(rows());
+      emit([event("缩窄后的末条")]);
+      await until(() => count() === 4 && rowFor("缩窄后的末条") && atBottom(), "换行重测后追加失去订底");
+      assertNoOverlap(rows());
+      harness.host.style.width = "360px";
+      await frames(4);
+      passed.push("长文本动态测量、视口缩窄与追加后无重叠且保持订底");
+
+      // 在可滚动列表底部打开菜单，而不是只用两条不溢出的菜单样本：
+      // 几何仍贴底并不代表用户允许 followOnAppend，选中行必须冻结。
+      await reset();
+      await appendPinned(240);
+      const selected = rowFor("消息-00240");
+      const selectedId = selected.dataset.danmakuId;
+      selected.click();
+      await until(() => document.querySelector(MENU), "底部弹幕菜单没有打开");
+      const selectedTop = selected.getBoundingClientRect().top;
+      for (let index = 0; index < 3; index++) {
+        emit(Array.from({ length: 8 }, () => event(`消息-${String(++serial).padStart(5, "0")}`)));
+        await until(() => count() === serial, "菜单冻结期间没有继续收集");
+        await frames(4);
+        const current = harness.query(`[data-danmaku-id="${selectedId}"]`);
+        assert(current && Math.abs(current.getBoundingClientRect().top - selectedTop) <= 2,
+          "几何贴底时 followOnAppend 推动了菜单选中行");
+      }
+      assert(harness.query('button[aria-label="滚动到底部"]').textContent.includes("24"),
+        "菜单冻结期间未累积未读");
+      await backToBottom("消息-00264");
+      await appendPinned(24);
+      passed.push("底部打开菜单停止追加跟随，保留选中行与未读，回底后恢复");
+
+      // 回底/追加的跨帧校正尚未结束时立即上滚，不等跟随自然稳定。
+      emit(Array.from({ length: 24 }, () => event(`消息-${String(++serial).padStart(5, "0")}`)));
+      await until(() => count() === serial, "即时上滚样本未提交");
+      const rapidAnchor = await readAnchor();
+      for (let index = 0; index < 4; index++) {
+        emit(Array.from({ length: 8 }, () => event(`消息-${String(++serial).padStart(5, "0")}`)));
+        await until(() => count() === serial, "快速上滚后的追加未提交");
+        await frames(4);
+        assertAnchor(rapidAnchor, "跟随中快速上滚");
+      }
+      passed.push("跟随校正期间快速上滚不会被后续批次拉回底部");
 
       await reset();
       await appendPinned(24);

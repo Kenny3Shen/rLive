@@ -1,0 +1,4005 @@
+{
+  "title": "模拟器移动端弹幕性能重测数据（2026-10-13）",
+  "capturedAt": "2026-10-13T07:17:51.266Z",
+  "head": "925fb28d",
+  "environments": {
+    "android": {
+      "fixture": "Android 16 x86_64 模拟器 rlive_win（4 核、deviceMemory=2、Chrome WebView 133.0.6943.137、60Hz）",
+      "transport": "原生 Tauri 事件插件（保留真实 IPC）",
+      "viewportPortrait": "412×915（dpr 2.625）",
+      "viewportLandscape": "915×412",
+      "note": "真机 aarch64 未测；绝对 FPS 不可外推"
+    },
+    "desktopChromium": {
+      "build": "Chromium 151.0.7922.10（Playwright，headless）",
+      "viewport": "780×493 与 412×915"
+    }
+  },
+  "fixtures": {
+    "live": {
+      "path": "tests/browser/danmaku-bench.tsx",
+      "runner": "tests/danmaku-p0-performance.browser.js",
+      "baseline": "30e723d5",
+      "currentHead": "925fb28d",
+      "build": {
+        "baseline": "30e723d53ec8312c998eeaa4bf4da961b066e5c9",
+        "currentHead": "925fb28d3b2314737b3f83cb1c4cccafcd8aabd1",
+        "builtAt": "2026-10-13T05:50:44.910Z",
+        "currentSourceSHA256": {
+          "src/features/room/DanmakuPanel.tsx": "7f06331a8f8e39638cfe48bd383452aa2fba7405fe34570ed525222b89741453",
+          "src/features/room/danmaku/LiveDanmaku.tsx": "56c8121b2735e718c320264a0368dce0d47ba8b04d3bcced7b8f1c40ba0e3cbf",
+          "src/features/room/danmaku/danmakuAdapter.ts": "a4c69c9e6a8fa7cdf46111ec272d9305f78260842eafdecf07eb1cb1c9c6498e",
+          "src/features/room/danmaku/listWindow.ts": "4ccc9ce2e363e46f828d6d69126de186a7a7ba6a3b0a9dee8039a675b634bbea"
+        }
+      }
+    },
+    "vod": {
+      "path": "src/features/video/VideoDanmakuList.tsx",
+      "runner": "tests/vod-danmaku-performance.browser.js",
+      "baseline": "407fd71d",
+      "currentHead": "925fb28d",
+      "build": {
+        "baseline": "407fd71d9f79e1072af48543c663e467dc33e3c1",
+        "currentHead": "925fb28d3b2314737b3f83cb1c4cccafcd8aabd1",
+        "builtAt": "2026-10-13T06:18:36.232Z",
+        "sourcePath": "src/features/video/VideoDanmakuList.tsx",
+        "baselineSourceSHA256": "b27a80e86b5c2428eb858211ea1e619f3338fbd4cbe31ae850358ce5d32e7eff",
+        "currentSourceSHA256": "86a29a92bad290beb78d969b92c9e071782173016df3a487d65a37574373200d"
+      },
+      "note": "单 production 包内按 sessionStorage.__vodDanmakuListVariant 切换实现，其他页面/播放器/IPC 共用"
+    }
+  },
+  "liveAndroidPortrait": {
+    "note": "两轮：baseline,current 与 current,baseline（反转顺序），采样 9s，CPU 1×",
+    "rows": [
+      {
+        "scene": "panel-pinned",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.87645941412125,
+        "frameMs": {
+          "median": 15.799999998882413,
+          "p95": 31.299999998882413,
+          "max": 38
+        },
+        "jankOver25ms": 87,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1342,
+          "batches": 180,
+          "actualRate": 149.07963874292588
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.014616999998907,
+          "msPerSecond": {
+            "Script": 71.80316146543758,
+            "RecalcStyle": 6.264381503951509,
+            "Layout": 14.454080522779371,
+            "Task": 192.79421410806586
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "panel-pinned",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.43470532688996,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 31.90000000037253,
+          "max": 51.90000000037253
+        },
+        "jankOver25ms": 93,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.97500416597234
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.014202000000296,
+          "msPerSecond": {
+            "Script": 136.35316803417095,
+            "RecalcStyle": 24.730308905879046,
+            "Layout": 15.205561180012992,
+            "Task": 289.1950945851795
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "panel-up",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.199148596512124,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 31.300000000745058,
+          "max": 48.40000000037253
+        },
+        "jankOver25ms": 82,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.6607689237666
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.033135000001494,
+          "msPerSecond": {
+            "Script": 104.16804354189814,
+            "RecalcStyle": 10.387312931776684,
+            "Layout": 58.47515840291468,
+            "Task": 324.6336958320134
+          }
+        },
+        "panelDOMRows": 1200,
+        "panelCount": 1200
+      },
+      {
+        "scene": "panel-up",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.33267408138927,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.5,
+          "max": 38.09999999962747
+        },
+        "jankOver25ms": 80,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.9983333518268
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.012376000000586,
+          "msPerSecond": {
+            "Script": 67.37246648386176,
+            "RecalcStyle": 8.45504004715238,
+            "Layout": 10.60874513002939,
+            "Task": 162.68784169678514
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "mobile25",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 56.90200210748156,
+        "frameMs": {
+          "median": 16,
+          "p95": 32.30000000074506,
+          "max": 41.40000000037253
+        },
+        "jankOver25ms": 107,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 223,
+          "batches": 180,
+          "actualRate": 24.735178304031944
+        },
+        "layerOnScreen": {
+          "min": 49,
+          "mean": 51.09090909090909,
+          "max": 52,
+          "samples": [
+            52,
+            52,
+            52,
+            52,
+            51,
+            49,
+            49,
+            50,
+            51,
+            52,
+            52
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.033568000000741,
+          "msPerSecond": {
+            "Script": 84.18345885036095,
+            "RecalcStyle": 34.64732871883781,
+            "Layout": 24.287856138347767,
+            "Task": 288.3867149723991
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "mobile25",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.2891272549952,
+        "frameMs": {
+          "median": 16.299999998882413,
+          "p95": 32.69999999925494,
+          "max": 40.20000000111759
+        },
+        "jankOver25ms": 85,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 226,
+          "received": 225,
+          "batches": 181,
+          "actualRate": 24.932405478479534
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 50.45454545454545,
+          "max": 53,
+          "samples": [
+            52,
+            53,
+            50,
+            50,
+            50,
+            51,
+            51,
+            51,
+            51,
+            48,
+            48
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.052325999999084,
+          "msPerSecond": {
+            "Script": 130.6211243386639,
+            "RecalcStyle": 48.76459376297814,
+            "Layout": 18.573900232936484,
+            "Task": 337.2424943600475
+          }
+        },
+        "panelDOMRows": 22,
+        "panelCount": 1200
+      },
+      {
+        "scene": "mobile200",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.325689908005145,
+        "frameMs": {
+          "median": 15.700000001117587,
+          "p95": 32.19999999925494,
+          "max": 39.59999999962747
+        },
+        "jankOver25ms": 108,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1800,
+          "received": 1800,
+          "batches": 180,
+          "actualRate": 199.97333688839004
+        },
+        "layerOnScreen": {
+          "min": 47,
+          "mean": 52.2,
+          "max": 57,
+          "samples": [
+            49,
+            47,
+            50,
+            53,
+            53,
+            57,
+            56,
+            55,
+            51,
+            51
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.01498299999912,
+          "msPerSecond": {
+            "Script": 132.75599077670103,
+            "RecalcStyle": 46.37047013843964,
+            "Layout": 40.591535225306096,
+            "Task": 386.84975889586707
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "mobile200",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.65094569725098,
+        "frameMs": {
+          "median": 16.09999999962747,
+          "p95": 32,
+          "max": 50.5
+        },
+        "jankOver25ms": 77,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1800,
+          "received": 1800,
+          "batches": 180,
+          "actualRate": 199.56096587509955
+        },
+        "layerOnScreen": {
+          "min": 45,
+          "mean": 48.90909090909091,
+          "max": 53,
+          "samples": [
+            52,
+            47,
+            45,
+            45,
+            48,
+            52,
+            53,
+            52,
+            52,
+            46,
+            46
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.038715999999113,
+          "msPerSecond": {
+            "Script": 189.56342914194536,
+            "RecalcStyle": 64.71593974189,
+            "Layout": 36.30936075434082,
+            "Task": 451.44210748522283
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "layer",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.70916798916127,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 31.5,
+          "max": 40.70000000111759
+        },
+        "jankOver25ms": 85,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.970313072233242
+        },
+        "layerOnScreen": {
+          "min": 44,
+          "mean": 50,
+          "max": 56,
+          "samples": [
+            51,
+            54,
+            54,
+            56,
+            55,
+            50,
+            49,
+            45,
+            44,
+            46,
+            46
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.035823999998684,
+          "msPerSecond": {
+            "Script": 52.79142223222475,
+            "RecalcStyle": 26.693747022964946,
+            "Layout": 9.078972764411077,
+            "Task": 188.90396714237082
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "layer",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.38005127579287,
+        "frameMs": {
+          "median": 15.800000000745058,
+          "p95": 32.40000000037253,
+          "max": 39.30000000074506
+        },
+        "jankOver25ms": 107,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.971975893720302
+        },
+        "layerOnScreen": {
+          "min": 47,
+          "mean": 50.63636363636363,
+          "max": 56,
+          "samples": [
+            56,
+            53,
+            50,
+            49,
+            48,
+            47,
+            52,
+            52,
+            50,
+            50,
+            50
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.022381000000678,
+          "msPerSecond": {
+            "Script": 53.36850660595725,
+            "RecalcStyle": 29.143748196843006,
+            "Layout": 10.208170104985898,
+            "Task": 191.2737890363834
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "both",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.15490644352444,
+        "frameMs": {
+          "median": 15.800000000745058,
+          "p95": 32.69999999925494,
+          "max": 39
+        },
+        "jankOver25ms": 104,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.97059019377281
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 50.54545454545455,
+          "max": 53,
+          "samples": [
+            49,
+            48,
+            48,
+            52,
+            53,
+            53,
+            51,
+            51,
+            51,
+            50,
+            50
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.024155999999493,
+          "msPerSecond": {
+            "Script": 92.35899734003353,
+            "RecalcStyle": 34.6078902004816,
+            "Layout": 26.44690539481066,
+            "Task": 312.5346015738377
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "both",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.097875737285605,
+        "frameMs": {
+          "median": 16.09999999962747,
+          "p95": 32.80000000074506,
+          "max": 41.5
+        },
+        "jankOver25ms": 97,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.94567386580439
+        },
+        "layerOnScreen": {
+          "min": 45,
+          "mean": 50.27272727272727,
+          "max": 54,
+          "samples": [
+            53,
+            50,
+            48,
+            45,
+            45,
+            48,
+            52,
+            54,
+            54,
+            52,
+            52
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.053506999998717,
+          "msPerSecond": {
+            "Script": 135.13625162052375,
+            "RecalcStyle": 51.352475896916644,
+            "Layout": 18.462790165183897,
+            "Task": 357.2201357993606
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "bus",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.51918272167009,
+        "frameMs": {
+          "median": 15.599999999627471,
+          "p95": 30.90000000037253,
+          "max": 42.20000000111759
+        },
+        "jankOver25ms": 43,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.98473155293987
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.01274899999953,
+          "msPerSecond": {
+            "Script": 30.604757771464957,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 78.67066973683988
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "bus",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.525131599394896,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.399999998509884,
+          "max": 33.90000000037253
+        },
+        "jankOver25ms": 43,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 223,
+          "batches": 180,
+          "actualRate": 24.76512004974825
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.012625999999727,
+          "msPerSecond": {
+            "Script": 33.99919180048157,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 76.86960492979735
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "idle",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.348826890010535,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.699999999254942,
+          "max": 32.80000000074506
+        },
+        "jankOver25ms": 45,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 0,
+          "received": 0,
+          "batches": 0,
+          "actualRate": 0
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.024653000000399,
+          "msPerSecond": {
+            "Script": 5.34258768730464,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 42.575376582344305
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "idle",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.308292054460985,
+        "frameMs": {
+          "median": 15.600000001490116,
+          "p95": 30.200000001117587,
+          "max": 35.09999999962747
+        },
+        "jankOver25ms": 44,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 0,
+          "received": 0,
+          "batches": 0,
+          "actualRate": 0
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.013025999998717,
+          "msPerSecond": {
+            "Script": 4.607109754260657,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 41.676679951888964
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "panel-pinned",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 56.710355466283666,
+        "frameMs": {
+          "median": 16.199999999254942,
+          "p95": 32.80000000074506,
+          "max": 44.399999998509884
+        },
+        "jankOver25ms": 95,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1342,
+          "batches": 180,
+          "actualRate": 148.93404507975086
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.025236999999834,
+          "msPerSecond": {
+            "Script": 135.30946611152953,
+            "RecalcStyle": 25.50592300235487,
+            "Layout": 15.50585319809359,
+            "Task": 282.7668680611986
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "panel-pinned",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.563205004489646,
+        "frameMs": {
+          "median": 15.799999998882413,
+          "p95": 31.300000000745058,
+          "max": 43.40000000037253
+        },
+        "jankOver25ms": 84,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.73546734102464
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.032976000000417,
+          "msPerSecond": {
+            "Script": 76.1466652850587,
+            "RecalcStyle": 6.8341817801793265,
+            "Layout": 15.2017452498483,
+            "Task": 193.62566666842903
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "panel-up",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.14205188522715,
+        "frameMs": {
+          "median": 15.800000000745058,
+          "p95": 30.5,
+          "max": 36.09999999962747
+        },
+        "jankOver25ms": 77,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.7969419231832
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.02183100000002,
+          "msPerSecond": {
+            "Script": 72.19931297759828,
+            "RecalcStyle": 9.513368184351902,
+            "Layout": 11.347474808605899,
+            "Task": 172.41278405680583
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "panel-up",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.75753906987836,
+        "frameMs": {
+          "median": 15.599999999627471,
+          "p95": 32.40000000037253,
+          "max": 38.5
+        },
+        "jankOver25ms": 95,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.9483511235081
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.011596000000281,
+          "msPerSecond": {
+            "Script": 102.06771364361781,
+            "RecalcStyle": 10.187318650325329,
+            "Layout": 56.25507401796354,
+            "Task": 311.67664418155374
+          }
+        },
+        "panelDOMRows": 1200,
+        "panelCount": 1200
+      },
+      {
+        "scene": "mobile25",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.42083809989702,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 32.59999999962747,
+          "max": 43.59999999962747
+        },
+        "jankOver25ms": 91,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.989726445796574
+        },
+        "layerOnScreen": {
+          "min": 50,
+          "mean": 52.18181818181818,
+          "max": 55,
+          "samples": [
+            53,
+            53,
+            53,
+            55,
+            54,
+            52,
+            53,
+            50,
+            50,
+            50,
+            51
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.021850000000995,
+          "msPerSecond": {
+            "Script": 135.94395827905188,
+            "RecalcStyle": 47.18500085902039,
+            "Layout": 19.849698232621943,
+            "Task": 347.28730803545335
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "mobile25",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.56241473775987,
+        "frameMs": {
+          "median": 16,
+          "p95": 32.5,
+          "max": 47.20000000111759
+        },
+        "jankOver25ms": 101,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 223,
+          "batches": 180,
+          "actualRate": 24.73298359637852
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 52,
+          "max": 56,
+          "samples": [
+            56,
+            54,
+            55,
+            53,
+            53,
+            53,
+            51,
+            50,
+            51,
+            48,
+            48
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.033503000000564,
+          "msPerSecond": {
+            "Script": 86.08875205996512,
+            "RecalcStyle": 33.53438859764381,
+            "Layout": 23.623947432129768,
+            "Task": 292.0265814933405
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "mobile200",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.246827016942696,
+        "frameMs": {
+          "median": 16.199999999254942,
+          "p95": 32.20000000111759,
+          "max": 44.69999999925494
+        },
+        "jankOver25ms": 78,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1810,
+          "received": 1800,
+          "batches": 181,
+          "actualRate": 199.69823378003267
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 51.72727272727273,
+          "max": 55,
+          "samples": [
+            52,
+            51,
+            49,
+            50,
+            48,
+            51,
+            54,
+            52,
+            52,
+            55,
+            55
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.032920999999988,
+          "msPerSecond": {
+            "Script": 206.88435114178483,
+            "RecalcStyle": 75.42034298761175,
+            "Layout": 40.591188608867554,
+            "Task": 509.5576502883182
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "mobile200",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.72262060697794,
+        "frameMs": {
+          "median": 15.700000001117587,
+          "p95": 32.5,
+          "max": 44.09999999962747
+        },
+        "jankOver25ms": 104,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1800,
+          "received": 1800,
+          "batches": 180,
+          "actualRate": 199.80907133184672
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 50.63636363636363,
+          "max": 55,
+          "samples": [
+            51,
+            48,
+            48,
+            50,
+            51,
+            53,
+            52,
+            55,
+            52,
+            49,
+            48
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.027648999999656,
+          "msPerSecond": {
+            "Script": 118.73113365396034,
+            "RecalcStyle": 40.790021853974864,
+            "Layout": 37.51630130945644,
+            "Task": 347.53500053005115
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "layer",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.203154504054204,
+        "frameMs": {
+          "median": 16,
+          "p95": 32.5,
+          "max": 47.69999999925494
+        },
+        "jankOver25ms": 105,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.991669443518827
+        },
+        "layerOnScreen": {
+          "min": 49,
+          "mean": 51,
+          "max": 53,
+          "samples": [
+            51,
+            52,
+            50,
+            53,
+            51,
+            50,
+            49,
+            51,
+            52,
+            51
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.01867300000049,
+          "msPerSecond": {
+            "Script": 48.127812151519,
+            "RecalcStyle": 27.79322412509978,
+            "Layout": 10.735725754775087,
+            "Task": 182.61178778739566
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "layer",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.47062674049064,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 32.100000001490116,
+          "max": 50.59999999962747
+        },
+        "jankOver25ms": 104,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.963110070676432
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 51.18181818181818,
+          "max": 55,
+          "samples": [
+            55,
+            52,
+            51,
+            50,
+            50,
+            48,
+            50,
+            51,
+            50,
+            53,
+            53
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.024364000000787,
+          "msPerSecond": {
+            "Script": 52.63706118236794,
+            "RecalcStyle": 27.731040104319625,
+            "Layout": 9.7909392839199,
+            "Task": 187.58640498098816
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "both",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.65222404541459,
+        "frameMs": {
+          "median": 16,
+          "p95": 31.5,
+          "max": 41
+        },
+        "jankOver25ms": 92,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 223,
+          "batches": 180,
+          "actualRate": 24.723934542552797
+        },
+        "layerOnScreen": {
+          "min": 47,
+          "mean": 52.09090909090909,
+          "max": 56,
+          "samples": [
+            56,
+            56,
+            51,
+            49,
+            50,
+            47,
+            50,
+            53,
+            55,
+            53,
+            53
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.056837000000087,
+          "msPerSecond": {
+            "Script": 135.47963820039914,
+            "RecalcStyle": 44.81167100611355,
+            "Layout": 17.18348248952682,
+            "Task": 346.90874971029865
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "both",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 56.97151424287856,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 32.29999999888241,
+          "max": 42.90000000037253
+        },
+        "jankOver25ms": 99,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.987506246876563
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 50.45454545454545,
+          "max": 54,
+          "samples": [
+            49,
+            49,
+            48,
+            50,
+            51,
+            52,
+            54,
+            53,
+            50,
+            49,
+            50
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.020841999999902,
+          "msPerSecond": {
+            "Script": 86.58038795048262,
+            "RecalcStyle": 31.389752752570434,
+            "Layout": 24.198073749656903,
+            "Task": 288.51996299237146
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "bus",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.77581858382012,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 31,
+          "max": 51.79999999888241
+        },
+        "jankOver25ms": 46,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 223,
+          "batches": 180,
+          "actualRate": 24.776951879379748
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.012832999998864,
+          "msPerSecond": {
+            "Script": 31.475896646485765,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 79.75561069422852
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "bus",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.1006043370092,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.700000001117587,
+          "max": 35.40000000037253
+        },
+        "jankOver25ms": 47,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.995556345539605
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.009917000001224,
+          "msPerSecond": {
+            "Script": 31.638471253393647,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 74.59325097000396
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "idle",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.53835558616646,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.90000000037253,
+          "max": 33.40000000037253
+        },
+        "jankOver25ms": 40,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 0,
+          "received": 0,
+          "batches": 0,
+          "actualRate": 0
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.012338000000454,
+          "msPerSecond": {
+            "Script": 4.6549519114791655,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 40.05420125165986
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "idle",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.33267408138927,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.699999999254942,
+          "max": 37
+        },
+        "jankOver25ms": 43,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 0,
+          "received": 0,
+          "batches": 0,
+          "actualRate": 0
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.014918000000762,
+          "msPerSecond": {
+            "Script": 3.9195032056859396,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 38.393804580360055
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      }
+    ]
+  },
+  "liveAndroidLandscape": {
+    "note": "横屏 915×412，仅作对照，不作为文档口径",
+    "rows": [
+      {
+        "scene": "panel-pinned",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.8398556758257,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 31.40000000037253,
+          "max": 40.59999999962747
+        },
+        "jankOver25ms": 90,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.87510407993338
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.018937000000733,
+          "msPerSecond": {
+            "Script": 71.78373681953286,
+            "RecalcStyle": 6.250071377590887,
+            "Layout": 13.96428426099326,
+            "Task": 181.4485454327785
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "panel-pinned",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.48472405641814,
+        "frameMs": {
+          "median": 16,
+          "p95": 31,
+          "max": 36.59999999962747
+        },
+        "jankOver25ms": 104,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.81855308570113
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.023599000000104,
+          "msPerSecond": {
+            "Script": 143.11096935934154,
+            "RecalcStyle": 27.116453202319516,
+            "Layout": 15.462012440933865,
+            "Task": 306.3737650575971
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "panel-up",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.123026921500816,
+        "frameMs": {
+          "median": 15.800000000745058,
+          "p95": 31.800000000745058,
+          "max": 39.09999999962747
+        },
+        "jankOver25ms": 75,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.74875486684073
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.027769000000262,
+          "msPerSecond": {
+            "Script": 103.08272176658184,
+            "RecalcStyle": 9.801757222631355,
+            "Layout": 57.76632078202099,
+            "Task": 311.87184785077227
+          }
+        },
+        "panelDOMRows": 1200,
+        "panelCount": 1200
+      },
+      {
+        "scene": "panel-up",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.2951209220798,
+        "frameMs": {
+          "median": 15.599999999627471,
+          "p95": 30.5,
+          "max": 34.5
+        },
+        "jankOver25ms": 88,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1350,
+          "received": 1350,
+          "batches": 180,
+          "actualRate": 149.90339558952758
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.018071000000418,
+          "msPerSecond": {
+            "Script": 67.20517059579275,
+            "RecalcStyle": 8.421313161095801,
+            "Layout": 9.99770350000525,
+            "Task": 157.26412000969327
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "mobile25",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.42338920174427,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 32.30000000074506,
+          "max": 39.80000000074506
+        },
+        "jankOver25ms": 94,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.99083669321559
+        },
+        "layerOnScreen": {
+          "min": 48,
+          "mean": 50.72727272727273,
+          "max": 53,
+          "samples": [
+            53,
+            52,
+            51,
+            51,
+            49,
+            49,
+            48,
+            49,
+            52,
+            52,
+            52
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.02557700000034,
+          "msPerSecond": {
+            "Script": 82.66385628309108,
+            "RecalcStyle": 35.25802283887092,
+            "Layout": 24.810380544090588,
+            "Task": 283.2542451302453
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "mobile25",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.44577030564286,
+        "frameMs": {
+          "median": 16,
+          "p95": 33,
+          "max": 42
+        },
+        "jankOver25ms": 94,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.952313356698152
+        },
+        "layerOnScreen": {
+          "min": 47,
+          "mean": 49.09090909090909,
+          "max": 53,
+          "samples": [
+            51,
+            49,
+            47,
+            48,
+            47,
+            47,
+            48,
+            48,
+            50,
+            52,
+            53
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.036314999999377,
+          "msPerSecond": {
+            "Script": 135.90285420551243,
+            "RecalcStyle": 48.630664159010664,
+            "Layout": 18.143347149807354,
+            "Task": 350.94648648262245
+          }
+        },
+        "panelDOMRows": 22,
+        "panelCount": 1200
+      },
+      {
+        "scene": "mobile200",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.477641419414,
+        "frameMs": {
+          "median": 16,
+          "p95": 32.40000000037253,
+          "max": 43.30000000074506
+        },
+        "jankOver25ms": 90,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1800,
+          "received": 1800,
+          "batches": 180,
+          "actualRate": 199.7292558975776
+        },
+        "layerOnScreen": {
+          "min": 49,
+          "mean": 52.6,
+          "max": 56,
+          "samples": [
+            50,
+            50,
+            49,
+            50,
+            55,
+            55,
+            56,
+            56,
+            55,
+            50
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.023629000001165,
+          "msPerSecond": {
+            "Script": 132.41357773018436,
+            "RecalcStyle": 38.84656605451696,
+            "Layout": 36.216249582064826,
+            "Task": 354.8864874652521
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "mobile200",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.06659338951008,
+        "frameMs": {
+          "median": 16,
+          "p95": 32.5,
+          "max": 40.09999999962747
+        },
+        "jankOver25ms": 84,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 1800,
+          "received": 1800,
+          "batches": 180,
+          "actualRate": 199.84678413215707
+        },
+        "layerOnScreen": {
+          "min": 50,
+          "mean": 51.18181818181818,
+          "max": 54,
+          "samples": [
+            51,
+            52,
+            50,
+            50,
+            50,
+            51,
+            54,
+            54,
+            51,
+            50,
+            50
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.01702800000021,
+          "msPerSecond": {
+            "Script": 185.30307325206942,
+            "RecalcStyle": 61.31155409520599,
+            "Layout": 34.80049080472998,
+            "Task": 442.97744223483704
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "layer",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 56.99873336148558,
+        "frameMs": {
+          "median": 15.799999998882413,
+          "p95": 31.799999998882413,
+          "max": 43.69999999925494
+        },
+        "jankOver25ms": 106,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.99944445679192
+        },
+        "layerOnScreen": {
+          "min": 47,
+          "mean": 49.3,
+          "max": 53,
+          "samples": [
+            53,
+            50,
+            50,
+            49,
+            49,
+            50,
+            49,
+            48,
+            47,
+            48
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.016708000001017,
+          "msPerSecond": {
+            "Script": 51.17056025324849,
+            "RecalcStyle": 26.829858524859922,
+            "Layout": 9.94575847415598,
+            "Task": 188.32527348116483
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "layer",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.15554075800455,
+        "frameMs": {
+          "median": 15.900000000372529,
+          "p95": 32.29999999888241,
+          "max": 41.90000000037253
+        },
+        "jankOver25ms": 100,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.9708673214583
+        },
+        "layerOnScreen": {
+          "min": 42,
+          "mean": 49.09090909090909,
+          "max": 55,
+          "samples": [
+            55,
+            55,
+            54,
+            52,
+            51,
+            49,
+            46,
+            44,
+            42,
+            45,
+            47
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.021316000000297,
+          "msPerSecond": {
+            "Script": 51.58925815257828,
+            "RecalcStyle": 25.09367812855607,
+            "Layout": 9.406831553178874,
+            "Task": 185.56538757759367
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "both",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.881814444903576,
+        "frameMs": {
+          "median": 15.800000000745058,
+          "p95": 31.699999999254942,
+          "max": 43.90000000037253
+        },
+        "jankOver25ms": 89,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.99694481785663
+        },
+        "layerOnScreen": {
+          "min": 49,
+          "mean": 52.36363636363637,
+          "max": 58,
+          "samples": [
+            51,
+            51,
+            49,
+            52,
+            56,
+            58,
+            56,
+            53,
+            50,
+            50,
+            50
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.021591999999146,
+          "msPerSecond": {
+            "Script": 80.41174994392007,
+            "RecalcStyle": 31.408536320421838,
+            "Layout": 23.31096329783257,
+            "Task": 276.5864384024721
+          }
+        },
+        "panelDOMRows": 300,
+        "panelCount": 300
+      },
+      {
+        "scene": "both",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 57.81886382048169,
+        "frameMs": {
+          "median": 16,
+          "p95": 31.800000000745058,
+          "max": 39.59999999962747
+        },
+        "jankOver25ms": 89,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.969758847616852
+        },
+        "layerOnScreen": {
+          "min": 47,
+          "mean": 49.45454545454545,
+          "max": 54,
+          "samples": [
+            54,
+            52,
+            50,
+            50,
+            49,
+            47,
+            51,
+            48,
+            48,
+            47,
+            48
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.031161999999313,
+          "msPerSecond": {
+            "Script": 126.50077586916126,
+            "RecalcStyle": 43.76513232738267,
+            "Layout": 17.141094357515914,
+            "Task": 325.14132732866705
+          }
+        },
+        "panelDOMRows": 20,
+        "panelCount": 1200
+      },
+      {
+        "scene": "bus",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.28393005828476,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.59999999962747,
+          "max": 59.69999999925494
+        },
+        "jankOver25ms": 44,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.979184013322232
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.015589000000546,
+          "msPerSecond": {
+            "Script": 30.43273157194538,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 80.9780703179739
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "bus",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 59.53637161358871,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.40000000037253,
+          "max": 33.399999998509884
+        },
+        "jankOver25ms": 42,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 225,
+          "received": 225,
+          "batches": 180,
+          "actualRate": 24.991947039286305
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.011747000000469,
+          "msPerSecond": {
+            "Script": 28.633071922679218,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 68.61821575771785
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "idle",
+        "variant": "baseline",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.564504142778,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 30.90000000037253,
+          "max": 38.90000000037253
+        },
+        "jankOver25ms": 47,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 0,
+          "received": 0,
+          "batches": 0,
+          "actualRate": 0
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.024237999999968,
+          "msPerSecond": {
+            "Script": 5.5315473727530575,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 38.043212069539955
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      },
+      {
+        "scene": "idle",
+        "variant": "current",
+        "cpu": 1,
+        "valid": true,
+        "fps": 58.948256530376455,
+        "frameMs": {
+          "median": 15.699999999254942,
+          "p95": 31.09999999962747,
+          "max": 34
+        },
+        "jankOver25ms": 48,
+        "longtasks": {
+          "supported": true,
+          "count": 0,
+          "maxMs": 0,
+          "totalMs": 0
+        },
+        "events": {
+          "sent": 0,
+          "received": 0,
+          "batches": 0,
+          "actualRate": 0
+        },
+        "layerOnScreen": {
+          "min": 0,
+          "mean": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "cdp": {
+          "elapsedSeconds": 9.016589999999269,
+          "msPerSecond": {
+            "Script": 4.787397452918057,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 36.04821778521887
+          }
+        },
+        "panelDOMRows": 0,
+        "panelCount": 0
+      }
+    ]
+  },
+  "vodAndroid": {
+    "note": "真实播放 BV1Js411o76u P1（cid=1176840），seek 38s、采样 41–49s、每轮 8s；baseline 与 current 各 2 轮",
+    "baseline": {
+      "variant": "baseline",
+      "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+      "hardware": {
+        "cores": 4,
+        "memory": 2
+      },
+      "config": {
+        "seekTo": 38,
+        "sampleFrom": 41,
+        "sampleMs": 8000,
+        "variants": [
+          "on",
+          "off",
+          "masked"
+        ],
+        "repeat": 2,
+        "targetHz": 60,
+        "pace": false
+      },
+      "rows": [
+        {
+          "round": 0,
+          "variant": "on",
+          "fps": 55.7,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.3,
+            "max": 50
+          },
+          "jankOver25ms": 33,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 43,
+            "mean": 36.9
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 5874,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.05,
+            "msPerSecond": {
+              "Script": 32.5,
+              "Style": 23.7,
+              "Layout": 21.1,
+              "Task": 583.9
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "off",
+          "fps": 57.2,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 50
+          },
+          "jankOver25ms": 21,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 42,
+            "mean": 36.1
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 5874,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.04,
+            "msPerSecond": {
+              "Script": 32.2,
+              "Style": 23.9,
+              "Layout": 19.3,
+              "Task": 601.6
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "masked",
+          "fps": 58.5,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 50
+          },
+          "jankOver25ms": 11,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 5874,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.04,
+            "msPerSecond": {
+              "Script": 18.2,
+              "Style": 8.3,
+              "Layout": 3,
+              "Task": 123.7
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "on",
+          "fps": 57.4,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 22,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 3,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 42,
+            "mean": 36.1
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 5874,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.06,
+            "msPerSecond": {
+              "Script": 33.4,
+              "Style": 23.7,
+              "Layout": 18.2,
+              "Task": 599.4
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "off",
+          "fps": 57.9,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 49.9
+          },
+          "jankOver25ms": 17,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 42,
+            "mean": 36.1
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 5874,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 32.3,
+              "Style": 25.3,
+              "Layout": 19.4,
+              "Task": 562.2
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "masked",
+          "fps": 58.8,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 9,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.1,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 5874,
+            "rowContentVisibility": "auto",
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.04,
+            "msPerSecond": {
+              "Script": 14.5,
+              "Style": 8.2,
+              "Layout": 2.5,
+              "Task": 111.7
+            }
+          }
+        }
+      ]
+    },
+    "current": {
+      "variant": "current",
+      "url": "http://tauri.localhost/video/play?cid=1176840&bvid=BV1Js411o76u",
+      "hardware": {
+        "cores": 4,
+        "memory": 2
+      },
+      "config": {
+        "seekTo": 38,
+        "sampleFrom": 41,
+        "sampleMs": 8000,
+        "variants": [
+          "on",
+          "off",
+          "masked"
+        ],
+        "repeat": 2,
+        "targetHz": 60,
+        "pace": false
+      },
+      "rows": [
+        {
+          "round": 0,
+          "variant": "on",
+          "fps": 57.2,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 50
+          },
+          "jankOver25ms": 21,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 42,
+            "mean": 36.5
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 35.4,
+              "Style": 23.9,
+              "Layout": 18.4,
+              "Task": 215.9
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "off",
+          "fps": 58,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 16,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 43,
+            "mean": 36.9
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.04,
+            "msPerSecond": {
+              "Script": 30.5,
+              "Style": 22.4,
+              "Layout": 17.6,
+              "Task": 192.8
+            }
+          }
+        },
+        {
+          "round": 0,
+          "variant": "masked",
+          "fps": 58.2,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 15,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 193
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.02,
+            "msPerSecond": {
+              "Script": 16.5,
+              "Style": 7.8,
+              "Layout": 2.8,
+              "Task": 121.3
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "on",
+          "fps": 57,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 33.2,
+            "max": 33.4
+          },
+          "jankOver25ms": 23,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 43,
+            "mean": 37.1
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 36.2,
+              "Style": 25.2,
+              "Layout": 21.4,
+              "Task": 235.1
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "off",
+          "fps": 58.8,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 10,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 0,
+            "totalFrames": 192
+          },
+          "danmakuDOM": {
+            "max": 43,
+            "mean": 36.9
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.02,
+            "msPerSecond": {
+              "Script": 28.9,
+              "Style": 21.4,
+              "Layout": 16.1,
+              "Task": 187.2
+            }
+          }
+        },
+        {
+          "round": 1,
+          "variant": "masked",
+          "fps": 59.1,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 16.8,
+            "max": 33.4
+          },
+          "jankOver25ms": 8,
+          "longtasks": {
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "media": {
+            "from": 41.2,
+            "advancedSeconds": 8,
+            "waiting": 0,
+            "droppedFrames": 1,
+            "totalFrames": 194
+          },
+          "danmakuDOM": {
+            "max": 0,
+            "mean": 0
+          },
+          "list": {
+            "total": 5874,
+            "mounted": 0,
+            "rowContentVisibility": null,
+            "active": false
+          },
+          "cdp": {
+            "elapsedSeconds": 8.03,
+            "msPerSecond": {
+              "Script": 16.9,
+              "Style": 8.1,
+              "Layout": 2.7,
+              "Task": 114.4
+            }
+          }
+        }
+      ]
+    }
+  },
+  "desktopChromiumControl": {
+    "note": "同一夹具、同一 production 包在桌面 Chromium 上不出现回归，用于隔离模拟器因素",
+    "panelAB": [
+      {
+        "scene": "panel-pinned",
+        "cpu": 1,
+        "variant": "baseline",
+        "fps": 60.1,
+        "p95": 17.2,
+        "jank": 0,
+        "script": 25.9,
+        "style": 3.3,
+        "layout": 7.5,
+        "task": 68.5,
+        "rows": 300,
+        "count": 300
+      },
+      {
+        "scene": "panel-pinned",
+        "cpu": 1,
+        "variant": "current",
+        "fps": 60,
+        "p95": 17,
+        "jank": 0,
+        "script": 19.3,
+        "style": 5.7,
+        "layout": 5,
+        "task": 46.5,
+        "rows": 20,
+        "count": 1200
+      },
+      {
+        "scene": "panel-pinned",
+        "cpu": 4,
+        "variant": "baseline",
+        "fps": 60.1,
+        "p95": 18.8,
+        "jank": 1,
+        "script": 104,
+        "style": 13.6,
+        "layout": 30.4,
+        "task": 256.5,
+        "rows": 300,
+        "count": 300
+      },
+      {
+        "scene": "panel-pinned",
+        "cpu": 4,
+        "variant": "current",
+        "fps": 60.1,
+        "p95": 18.1,
+        "jank": 0,
+        "script": 82.8,
+        "style": 22.4,
+        "layout": 22,
+        "task": 185,
+        "rows": 20,
+        "count": 1200
+      },
+      {
+        "scene": "panel-up",
+        "cpu": 1,
+        "variant": "baseline",
+        "fps": 60.1,
+        "p95": 19.2,
+        "jank": 0,
+        "script": 48.8,
+        "style": 5.5,
+        "layout": 40.5,
+        "task": 159,
+        "rows": 1200,
+        "count": 1200
+      },
+      {
+        "scene": "panel-up",
+        "cpu": 1,
+        "variant": "current",
+        "fps": 60,
+        "p95": 16.9,
+        "jank": 1,
+        "script": 15.6,
+        "style": 4.7,
+        "layout": 3.4,
+        "task": 40.8,
+        "rows": 20,
+        "count": 1200
+      },
+      {
+        "scene": "panel-up",
+        "cpu": 4,
+        "variant": "baseline",
+        "fps": 60.1,
+        "p95": 26.1,
+        "jank": 94,
+        "script": 204.3,
+        "style": 19.6,
+        "layout": 123.4,
+        "task": 595.8,
+        "rows": 1200,
+        "count": 1200
+      },
+      {
+        "scene": "panel-up",
+        "cpu": 4,
+        "variant": "current",
+        "fps": 60,
+        "p95": 17.8,
+        "jank": 1,
+        "script": 55.3,
+        "style": 18.3,
+        "layout": 15,
+        "task": 134.3,
+        "rows": 20,
+        "count": 1200
+      }
+    ],
+    "pinned412": [
+      {
+        "dsf": 2.625,
+        "variant": "baseline",
+        "fps": 60.1,
+        "script": 26.3,
+        "style": 3.2,
+        "layout": 7.9,
+        "task": 68,
+        "wps": 20.1,
+        "rps": 20.6,
+        "scrollH": 10439
+      },
+      {
+        "dsf": 2.625,
+        "variant": "current",
+        "fps": 60,
+        "script": 19.6,
+        "style": 5.6,
+        "layout": 5.1,
+        "task": 47.3,
+        "wps": 20,
+        "rps": 100.4,
+        "scrollH": 42014
+      },
+      {
+        "dsf": 1,
+        "variant": "baseline",
+        "fps": 60.1,
+        "script": 25.5,
+        "style": 3.1,
+        "layout": 7.3,
+        "task": 65.9,
+        "wps": 20.1,
+        "rps": 20.6,
+        "scrollH": 10439
+      },
+      {
+        "dsf": 1,
+        "variant": "current",
+        "fps": 60.1,
+        "script": 19.8,
+        "style": 5.9,
+        "layout": 5.2,
+        "task": 48.1,
+        "wps": 20,
+        "rps": 100.4,
+        "scrollH": 42014
+      }
+    ]
+  },
+  "diagnostics": {
+    "note": "定位钉底回归：滚动事件与强制布局频率，以及只抬高滚动高度不改实现的隔离对照",
+    "events": [
+      {
+        "variant": "baseline",
+        "scrollPerSec": 0,
+        "roPerSec": 0.1,
+        "framesPerSec": 59.3,
+        "scrollH": 10296,
+        "rows": 300
+      },
+      {
+        "variant": "current",
+        "scrollPerSec": 47.2,
+        "roPerSec": 0.1,
+        "framesPerSec": 57.7,
+        "scrollH": 40822,
+        "rows": 27
+      }
+    ],
+    "tallSpacer": [
+      {
+        "label": "baseline 正常",
+        "fps": 59,
+        "script": 68.3,
+        "style": 6.6,
+        "layout": 15.2,
+        "task": 193.9,
+        "scrollH": 10296,
+        "rows": 300
+      },
+      {
+        "label": "baseline +30k 空白尾",
+        "fps": 59.3,
+        "script": 62.1,
+        "style": 5.9,
+        "layout": 12.7,
+        "task": 164,
+        "scrollH": 40296,
+        "rows": 300
+      },
+      {
+        "label": "current 正常",
+        "fps": 58.3,
+        "script": 144.7,
+        "style": 26.2,
+        "layout": 15.7,
+        "task": 313.4,
+        "scrollH": 40822,
+        "rows": 20
+      },
+      {
+        "label": "current +30k 空白尾",
+        "fps": 58.4,
+        "script": 122.5,
+        "style": 19.1,
+        "layout": 13.4,
+        "task": 257.3,
+        "scrollH": 70894,
+        "rows": 7
+      }
+    ],
+    "trace": [
+      {
+        "variant": "current",
+        "top": [
+          [
+            "Document::UpdateStyleAndLayout",
+            145.8
+          ],
+          [
+            "Blink.ForcedStyleAndLayout.UpdateTime",
+            108
+          ],
+          [
+            "LocalFrameView::UpdateStyleAndLayout",
+            72.4
+          ],
+          [
+            "Blink.Style.UpdateTime",
+            35.5
+          ],
+          [
+            "UpdateLayoutTree",
+            32.3
+          ],
+          [
+            "Document::updateStyle",
+            26.2
+          ],
+          [
+            "PrePaint",
+            25.1
+          ],
+          [
+            "LocalFrameView::RunPaintLifecyclePhase",
+            23.6
+          ],
+          [
+            "Document::recalcStyle",
+            20.7
+          ],
+          [
+            "Blink.Layout.UpdateTime",
+            18.1
+          ],
+          [
+            "LocalFrameView::layout",
+            16
+          ],
+          [
+            "ScrollableArea::SetScrollOffset",
+            15.4
+          ]
+        ],
+        "scrollH": 40814
+      },
+      {
+        "variant": "baseline",
+        "top": [
+          [
+            "Document::UpdateStyleAndLayout",
+            33.9
+          ],
+          [
+            "Blink.ForcedStyleAndLayout.UpdateTime",
+            30.6
+          ],
+          [
+            "LocalFrameView::UpdateStyleAndLayout",
+            27.8
+          ],
+          [
+            "PrePaint",
+            19.1
+          ],
+          [
+            "Blink.Layout.UpdateTime",
+            16.4
+          ],
+          [
+            "LocalFrameView::layout",
+            15.5
+          ],
+          [
+            "Layout",
+            15.2
+          ],
+          [
+            "LocalFrameView::RunPaintLifecyclePhase",
+            14.9
+          ],
+          [
+            "LocalFrameView::performLayout",
+            14
+          ],
+          [
+            "Paint",
+            13.9
+          ],
+          [
+            "LocalFrameView::RunPrePaintLifecyclePhase",
+            12.2
+          ],
+          [
+            "Blink.PrePaint.UpdateTime",
+            11
+          ]
+        ],
+        "scrollH": 10296
+      }
+    ],
+    "scrollTopNoop": [
+      {
+        "label": "current 正常",
+        "fps": 58.3,
+        "p95": 31.7,
+        "script": 132.3,
+        "style": 24.8,
+        "layout": 14.7,
+        "task": 283.8,
+        "rows": 20,
+        "count": 1200,
+        "scrollH": 40822
+      },
+      {
+        "label": "current scrollTop 写入屏蔽",
+        "fps": 58.9,
+        "p95": 31.3,
+        "script": 70.6,
+        "style": 7.9,
+        "layout": 3.6,
+        "task": 151.7,
+        "rows": 22,
+        "count": 1200,
+        "scrollH": 41992
+      },
+      {
+        "label": "baseline 正常",
+        "fps": 58.3,
+        "p95": 31.5,
+        "script": 74.3,
+        "style": 6.2,
+        "layout": 14.8,
+        "task": 188.5,
+        "rows": 300,
+        "count": 300,
+        "scrollH": 10296
+      },
+      {
+        "label": "baseline scrollTop 写入屏蔽",
+        "fps": 58.5,
+        "p95": 31.3,
+        "script": 89.8,
+        "style": 9.6,
+        "layout": 34.9,
+        "task": 240.4,
+        "rows": 1200,
+        "count": 1200,
+        "scrollH": 41143
+      }
+    ],
+    "pinnedRateSweep": [
+      {
+        "rate": 25,
+        "variant": "baseline",
+        "fps": 59,
+        "script": 60.2,
+        "style": 4.2,
+        "layout": 11.4,
+        "task": 159.5,
+        "rows": 300,
+        "count": 300,
+        "scrollH": 10296
+      },
+      {
+        "rate": 25,
+        "variant": "current",
+        "fps": 58,
+        "script": 113.4,
+        "style": 19.9,
+        "layout": 9.1,
+        "task": 246.5,
+        "rows": 20,
+        "count": 1200,
+        "scrollH": 40952
+      },
+      {
+        "rate": 50,
+        "variant": "baseline",
+        "fps": 58.3,
+        "script": 62.6,
+        "style": 5.3,
+        "layout": 11.7,
+        "task": 170.8,
+        "rows": 300,
+        "count": 300,
+        "scrollH": 10296
+      },
+      {
+        "rate": 50,
+        "variant": "current",
+        "fps": 57.9,
+        "script": 106.2,
+        "style": 18.4,
+        "layout": 9.2,
+        "task": 233,
+        "rows": 20,
+        "count": 1200,
+        "scrollH": 40907
+      },
+      {
+        "rate": 150,
+        "variant": "baseline",
+        "fps": 59.1,
+        "script": 76.8,
+        "style": 6.6,
+        "layout": 15.7,
+        "task": 192.2,
+        "rows": 300,
+        "count": 300,
+        "scrollH": 10296
+      },
+      {
+        "rate": 150,
+        "variant": "current",
+        "fps": 58.7,
+        "script": 134.8,
+        "style": 27.3,
+        "layout": 15.7,
+        "task": 291.2,
+        "rows": 20,
+        "count": 1200,
+        "scrollH": 40822
+      }
+    ],
+    "profile": [
+      {
+        "variant": "current",
+        "total": 1425,
+        "panelDOMRows": 27,
+        "panelCount": 1200,
+        "top": [
+          {
+            "key": "(idle) @ :-1",
+            "pct": 60.8,
+            "samples": 866
+          },
+          {
+            "key": "(program) @ :-1",
+            "pct": 15.2,
+            "samples": 216
+          },
+          {
+            "key": "(anonymous) @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 5.7,
+            "samples": 81
+          },
+          {
+            "key": "(anonymous) @ :-1",
+            "pct": 4.8,
+            "samples": 68
+          },
+          {
+            "key": "scrollTo @ :-1",
+            "pct": 3.8,
+            "samples": 54
+          },
+          {
+            "key": "now @ :-1",
+            "pct": 1.3,
+            "samples": 18
+          },
+          {
+            "key": "setTimeout @ :-1",
+            "pct": 0.8,
+            "samples": 12
+          },
+          {
+            "key": "fg @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.8,
+            "samples": 12
+          },
+          {
+            "key": "Jp @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.6,
+            "samples": 9
+          },
+          {
+            "key": "Am @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.6,
+            "samples": 8
+          },
+          {
+            "key": "on @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.5,
+            "samples": 7
+          },
+          {
+            "key": "Ot.getMaxScrollOffset @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.5,
+            "samples": 7
+          },
+          {
+            "key": "(garbage collector) @ :-1",
+            "pct": 0.5,
+            "samples": 7
+          },
+          {
+            "key": "e @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.4,
+            "samples": 6
+          },
+          {
+            "key": "Ot.getMeasurements.dt.key @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.4,
+            "samples": 6
+          },
+          {
+            "key": "appendChild @ :-1",
+            "pct": 0.4,
+            "samples": 5
+          },
+          {
+            "key": "Dy @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.4,
+            "samples": 5
+          },
+          {
+            "key": "postMessage @ :-1",
+            "pct": 0.3,
+            "samples": 4
+          },
+          {
+            "key": "(anonymous) @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.1,
+            "samples": 2
+          },
+          {
+            "key": "Ot.indexFromElement @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 2
+          },
+          {
+            "key": "At @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 2
+          },
+          {
+            "key": "os @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "Sh @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "i @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "gi @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 1
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "total": 1023,
+        "panelDOMRows": 300,
+        "panelCount": 300,
+        "top": [
+          {
+            "key": "(idle) @ :-1",
+            "pct": 70.7,
+            "samples": 723
+          },
+          {
+            "key": "(program) @ :-1",
+            "pct": 12.6,
+            "samples": 129
+          },
+          {
+            "key": "(anonymous) @ :-1",
+            "pct": 4.9,
+            "samples": 50
+          },
+          {
+            "key": "X_ @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 2.7,
+            "samples": 28
+          },
+          {
+            "key": "(anonymous) @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 2.1,
+            "samples": 21
+          },
+          {
+            "key": "(garbage collector) @ :-1",
+            "pct": 1.1,
+            "samples": 11
+          },
+          {
+            "key": "getRandomValues @ :-1",
+            "pct": 0.5,
+            "samples": 5
+          },
+          {
+            "key": "useLayoutEffect @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.3,
+            "samples": 3
+          },
+          {
+            "key": "processIpcMessage @ :19",
+            "pct": 0.3,
+            "samples": 3
+          },
+          {
+            "key": "removeChild @ :-1",
+            "pct": 0.3,
+            "samples": 3
+          },
+          {
+            "key": "Ir @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "t @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "now @ :-1",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "registerCallback @ :265",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "Wp @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "requestAnimationFrame @ :-1",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "createTextNode @ :-1",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "setAttribute @ :-1",
+            "pct": 0.2,
+            "samples": 2
+          },
+          {
+            "key": "ip @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "hu @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "r @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "hi @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "useRef @ danmaku-bench-nUsbR4QU.js:7",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "sendIpcMessage @ :67",
+            "pct": 0.1,
+            "samples": 1
+          },
+          {
+            "key": "useState @ danmaku-bench-nUsbR4QU.js:8",
+            "pct": 0.1,
+            "samples": 1
+          }
+        ]
+      }
+    ],
+    "pinnedWriteDiagnosis": [
+      {
+        "variant": "baseline",
+        "writes": 180,
+        "effective": 180,
+        "scrollEvents": 0,
+        "shMin": 10296,
+        "shMax": 10296,
+        "shSamples": 180,
+        "writesPerSec": 20,
+        "effectivePerSec": 20,
+        "scrollEventsPerSec": 0,
+        "shSpread": 0
+      },
+      {
+        "variant": "current",
+        "writes": 181,
+        "effective": 181,
+        "scrollEvents": 439,
+        "shMin": 40814,
+        "shMax": 40929,
+        "shSamples": 180,
+        "writesPerSec": 20.1,
+        "effectivePerSec": 20.1,
+        "scrollEventsPerSec": 48.8,
+        "shSpread": 115
+      }
+    ],
+    "pinnedUnpinnedControl": [
+      {
+        "label": "baseline 钉底",
+        "fps": 59,
+        "script": 73.2,
+        "style": 6.5,
+        "layout": 14.1,
+        "task": 195.3,
+        "scrollH": 10296,
+        "rows": 300,
+        "count": 300
+      },
+      {
+        "label": "baseline 非钉底（不写 scrollTop）",
+        "fps": 59.6,
+        "script": 93.3,
+        "style": 9.3,
+        "layout": 42.2,
+        "task": 270.1,
+        "scrollH": 41143,
+        "rows": 1200,
+        "count": 1200
+      },
+      {
+        "label": "current 钉底",
+        "fps": 58.1,
+        "script": 139.4,
+        "style": 24.8,
+        "layout": 15.6,
+        "task": 303.8,
+        "scrollH": 40815,
+        "rows": 20,
+        "count": 1200
+      },
+      {
+        "label": "current 非钉底（不写 scrollTop）",
+        "fps": 59.2,
+        "script": 72.4,
+        "style": 8.3,
+        "layout": 9.4,
+        "task": 176.9,
+        "scrollH": 41994,
+        "rows": 20,
+        "count": 1200
+      }
+    ]
+  }
+}
