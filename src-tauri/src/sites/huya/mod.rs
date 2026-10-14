@@ -950,46 +950,6 @@ impl LiveSite for HuyaSite {
 mod tests {
     use super::*;
 
-    /// 真实演练搜索分页：`startPage` 曾经空转，所有页都返回第一页。
-    /// 只有真实请求能证明 `start = rows * (page - 1)` 的偏移生效，
-    /// 并且未开播主播确实出现在结果里。
-    #[tokio::test]
-    #[ignore = "live network smoke — run with --ignored"]
-    async fn live_search_pagination_and_offline_anchors_smoke() {
-        let site = HuyaSite::default();
-        let first = site.search_rooms("英雄联盟", 1).await.expect("page 1");
-        assert!(!first.items.is_empty(), "search page 1 returned no rooms");
-        assert!(first.has_more, "search page 1 should offer another page");
-        let offline = first
-            .items
-            .iter()
-            .find(|item| item.live_status == Some(false))
-            .expect("search page 1 returned no offline anchors");
-        // 未开播条目的 `live_intro` 是旧标题，必须已经被丢掉。
-        assert!(
-            offline.title.is_empty(),
-            "offline anchors must not carry a stale stream title"
-        );
-        assert!(
-            first
-                .items
-                .iter()
-                .any(|item| item.live_status == Some(true)),
-            "search page 1 returned no live rooms"
-        );
-
-        let second = site.search_rooms("英雄联盟", 2).await.expect("page 2");
-        assert!(!second.items.is_empty(), "search page 2 returned no rooms");
-        let first_ids: Vec<_> = first.items.iter().map(|item| &item.room_id).collect();
-        assert!(
-            second
-                .items
-                .iter()
-                .any(|item| !first_ids.contains(&&item.room_id)),
-            "search page 2 repeated page 1 — the start offset is not taking effect"
-        );
-    }
-
     #[test]
     fn search_start_snaps_to_row_buckets() {
         // 上游按 `floor(start / rows)` 归桶，偏移必须是 SEARCH_ROWS 的整数倍。

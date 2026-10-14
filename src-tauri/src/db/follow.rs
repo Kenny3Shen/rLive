@@ -394,264 +394,45 @@ mod tests {
     }
 
     #[test]
-    fn auto_record_listing_is_filtered_by_sql_and_matches_the_in_memory_filter() {
-        let conn = open_in_memory().unwrap();
-        upsert(&conn, follow("1", true)).unwrap();
+    fn upsert_and_preferences_roundtrip_without_duplicates() {
+        let mut conn = open_in_memory().unwrap();
+        upsert(&conn, follow("1", false)).unwrap();
         upsert(&conn, follow("2", false)).unwrap();
-        upsert(&conn, follow("3", true)).unwrap();
-
-        let filtered = list_auto_record(&conn).unwrap();
-        let expected: Vec<FollowRecord> = list(&conn)
-            .unwrap()
-            .into_iter()
-            .filter(|record| record.auto_record)
-            .collect();
-
-        assert_eq!(filtered, expected);
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|record| record.auto_record));
-    }
-
-    #[test]
-    fn upsert_and_list_follow() {
-        let conn = open_in_memory().unwrap();
-        upsert(
-            &conn,
-            FollowRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                user_name: "u".into(),
-                face: "".into(),
-                tag_ids: vec![],
-                auto_record: false,
-                live_status: None,
-                live_started_at: None,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-        let rows = list(&conn).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].room_id, "1");
-    }
-
-    /// 一轮刷新落库的规模测量，写真实文件库（WAL/NORMAL/busy timeout 同生产）。
-    ///
-    /// 默认 ignore：绝对耗时依赖机器与磁盘，不适合当断言。手动跑：
-    /// `cargo test -p rlive follow_round_trip_scaling --lib -- --ignored --nocapture`
-    #[test]
-    #[ignore = "规模测量，手动跑"]
-    fn follow_round_trip_scaling() {
-        use std::time::Instant;
-
-        for count in [100_usize, 1_000, 5_000] {
-            let dir =
-                std::env::temp_dir().join(format!("rlive-follow-scaling-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let mut conn = crate::db::schema::Db::open(dir.join("follow.db")).unwrap();
-            {
-                let transaction = conn.transaction().unwrap();
-                for index in 0..count {
-                    upsert(&transaction, follow(&index.to_string(), false)).unwrap();
-                }
-                transaction.commit().unwrap();
-            }
-            let wal = dir.join("follow.db-wal");
-            let wal_before = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
-
-            let updates: Vec<FollowLiveStatusUpdate> =
-                (0..count).map(|i| status_update(&i.to_string())).collect();
-
-            let read_at = Instant::now();
-            let rows = list(&conn).unwrap();
-            let read_ms = read_at.elapsed().as_secs_f64() * 1000.0;
-            assert_eq!(rows.len(), count);
-
-            let batch_at = Instant::now();
-            let applied = apply_live_status_batch(&mut conn, &updates).unwrap();
-            let batch_ms = batch_at.elapsed().as_secs_f64() * 1000.0;
-            assert_eq!(applied, count);
-            let wal_after = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
-
-            // 对照组：改造前的形态是每条一次整行 upsert、每条一次隐式提交。
-            let legacy_at = Instant::now();
-            for record in &rows {
-                upsert(&conn, record.clone()).unwrap();
-            }
-            let legacy_ms = legacy_at.elapsed().as_secs_f64() * 1000.0;
-
-            println!(
-                "count={count} read={read_ms:.1}ms batch={batch_ms:.1}ms legacy={legacy_ms:.1}ms \
-                 wal_delta={}KiB",
-                (wal_after.saturating_sub(wal_before)) / 1024
-            );
-            drop(conn);
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-    }
-
-    #[test]
-    fn upsert_updates_existing_follow() {
-        let conn = open_in_memory().unwrap();
-        upsert(
-            &conn,
-            FollowRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                user_name: "old".into(),
-                face: "".into(),
-                tag_ids: vec![],
-                auto_record: false,
-                live_status: None,
-                live_started_at: None,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-        upsert(
-            &conn,
-            FollowRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                user_name: "new".into(),
-                face: "f".into(),
-                tag_ids: vec!["t1".into()],
-                auto_record: true,
-                live_status: Some(1),
-                live_started_at: Some(1_704_067_200_000),
-                updated_at: 2,
-            },
-        )
-        .unwrap();
-        let rows = list(&conn).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].user_name, "new");
-        assert_eq!(rows[0].face, "f");
-        assert_eq!(rows[0].tag_ids, vec!["t1".to_string()]);
-        assert!(rows[0].auto_record);
-        assert_eq!(rows[0].live_status, Some(1));
-        assert_eq!(rows[0].live_started_at, Some(1_704_067_200_000));
-        assert_eq!(rows[0].updated_at, 2);
-    }
-
-    #[test]
-    fn remove_follow() {
-        let conn = open_in_memory().unwrap();
-        upsert(
-            &conn,
-            FollowRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                user_name: "u".into(),
-                face: "".into(),
-                tag_ids: vec![],
-                auto_record: false,
-                live_status: None,
-                live_started_at: None,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-        remove(&conn, "bilibili", "1").unwrap();
-        assert!(list(&conn).unwrap().is_empty());
-    }
-
-    #[test]
-    fn set_tags_and_list_tags() {
-        let conn = open_in_memory().unwrap();
-        upsert(
-            &conn,
-            FollowRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                user_name: "u".into(),
-                face: "".into(),
-                tag_ids: vec![],
-                auto_record: false,
-                live_status: None,
-                live_started_at: None,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
+        let mut edited = follow("1", true);
+        edited.user_name = "新名字".into();
+        edited.face = "new-face".into();
+        upsert(&conn, edited.clone()).unwrap();
+        assert_eq!(list(&conn).unwrap().len(), 2);
+        assert_eq!(fetch(&conn, "1"), Some(edited.clone()));
+        assert_eq!(list_auto_record(&conn).unwrap(), [edited]);
+        set_auto_record(&conn, "bilibili", "1", false).unwrap();
+        assert!(list_auto_record(&conn).unwrap().is_empty());
         upsert_tag(
             &conn,
             TagRecord {
                 id: "t1".into(),
-                name: "Favorites".into(),
+                name: "收藏".into(),
             },
         )
         .unwrap();
         set_tags(&conn, "bilibili", "1", &["t1".into()]).unwrap();
-        let follow = list(&conn)
-            .unwrap()
-            .into_iter()
-            .find(|follow| follow.site_id == "bilibili" && follow.room_id == "1")
-            .expect("follow must be listed");
-        assert_eq!(follow.tag_ids, vec!["t1".to_string()]);
-        let tags = list_tags(&conn).unwrap();
-        assert_eq!(tags.len(), 1);
-        assert_eq!(tags[0].name, "Favorites");
-    }
-
-    #[test]
-    fn set_and_list_auto_record_follows() {
-        let conn = open_in_memory().unwrap();
-        upsert(
-            &conn,
-            FollowRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                user_name: "u".into(),
-                face: "".into(),
-                tag_ids: vec![],
-                auto_record: false,
-                live_status: None,
-                live_started_at: None,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-
-        set_auto_record(&conn, "bilibili", "1", true).unwrap();
-
-        let rows = list_auto_record(&conn).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].auto_record);
-        set_auto_record(&conn, "bilibili", "1", false).unwrap();
-        assert!(list_auto_record(&conn).unwrap().is_empty());
-    }
-
-    #[test]
-    fn remove_tag_clears_follow_references() {
-        let mut conn = open_in_memory().unwrap();
-        upsert_tag(
-            &conn,
-            TagRecord {
-                id: "t1".into(),
-                name: "Favorites".into(),
-            },
-        )
-        .unwrap();
-        upsert(
-            &conn,
-            FollowRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                user_name: "u".into(),
-                face: "".into(),
-                tag_ids: vec!["t1".into()],
-                auto_record: false,
-                live_status: None,
-                live_started_at: None,
-                updated_at: 1,
-            },
-        )
-        .unwrap();
-
+        assert_eq!(fetch(&conn, "1").unwrap().tag_ids, ["t1"]);
+        assert_eq!(list_tags(&conn).unwrap()[0].name, "收藏");
         remove_tag(&mut conn, "t1").unwrap();
-
         assert!(list_tags(&conn).unwrap().is_empty());
-        assert!(list(&conn).unwrap()[0].tag_ids.is_empty());
+        assert!(fetch(&conn, "1").unwrap().tag_ids.is_empty());
+        assert_eq!(fetch(&conn, "2").unwrap().tag_ids, ["keep"]);
+        remove(&conn, "bilibili", "1").unwrap();
+        assert!(fetch(&conn, "1").is_none());
+        assert_eq!(
+            set_tags(&conn, "bilibili", "1", &[]).unwrap_err().code,
+            "not_found"
+        );
+        assert_eq!(
+            set_auto_record(&conn, "bilibili", "1", true)
+                .unwrap_err()
+                .code,
+            "not_found"
+        );
     }
 }

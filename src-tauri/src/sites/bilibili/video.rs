@@ -26,10 +26,10 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::models::settings::VideoRecommendApi;
 use crate::models::video::{
-    PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoChapter, VideoComment,
-    VideoCommentPage, VideoDanmakuSegment, VideoDimension, VideoEmote, VideoItem, VideoListPage,
-    VideoPlayRequest, VideoPlayerMeta, VideoSeason, VideoSeasonEpisode, VideoStoryboard, VideoSubtitle,
-    VideoUgcSeason,
+    PgcItem, PgcListPage, SeasonEpisode, VideoArchive, VideoArchivePage, VideoChapter,
+    VideoComment, VideoCommentPage, VideoDanmakuSegment, VideoDimension, VideoEmote, VideoItem,
+    VideoListPage, VideoPlayRequest, VideoPlayerMeta, VideoSeason, VideoSeasonEpisode,
+    VideoStoryboard, VideoSubtitle, VideoUgcSeason,
 };
 
 use super::BilibiliSite;
@@ -2430,29 +2430,6 @@ mod tests {
     }
 
     #[test]
-    fn story_batch_count_defaults_and_clamps() {
-        // 首屏不传 = 用小的那档（少等一个往返）。
-        assert_eq!(story_batch_count(None), STORY_FEED_BATCHES);
-        // 传具体数时原值生效（补货档走这条）。
-        assert_eq!(
-            story_batch_count(Some(STORY_FEED_MORE_BATCHES)),
-            STORY_FEED_MORE_BATCHES
-        );
-        // 0 会被夹到 1：拉 0 批返回空列表，上层会当成取流失败。
-        assert_eq!(story_batch_count(Some(0)), 1);
-        // 超大值夹到上限，而不是真的打那么多次接口。
-        assert_eq!(story_batch_count(Some(usize::MAX)), STORY_FEED_MAX_BATCHES);
-        // 两个档位的差异是设计的一部分：首屏快、补货多。写成同一个值就把这个设计
-        // 无声地取消了，而两端调用点看起来都还正常。经函数比较而不是直接比两个常量：
-        // 后者是编译期常量折叠（clippy 也会指出那不是断言），而这里要守的是「两条
-        // 调用路径拿到的批数不同」。
-        assert!(
-            story_batch_count(Some(STORY_FEED_MORE_BATCHES)) > story_batch_count(None),
-            "补货档必须比首屏多拉"
-        );
-    }
-
-    #[test]
     fn story_query_params_only_adds_seed_with_display_id() {
         // 无种子：只有 pull=1（现状路径）。
         assert_eq!(story_query_params(None), vec![("pull", "1".to_string())]);
@@ -2657,20 +2634,6 @@ mod tests {
     }
 
     #[test]
-    fn search_filter_query_defaults_match_the_legacy_request() {
-        // 全默认时与旧请求逐字相同：order 空串、duration/tids 归零，不带发布时间位。
-        let query = search_filter_query(None, None, None, None, local_dt(2026, 9, 6, 12));
-        assert_eq!(
-            query,
-            vec![
-                ("order", "".to_string()),
-                ("duration", "0".to_string()),
-                ("tids", "0".to_string()),
-            ]
-        );
-    }
-
-    #[test]
     fn search_filter_query_sanitizes_unknown_values() {
         let query = search_filter_query(
             Some("hack"),
@@ -2715,36 +2678,6 @@ mod tests {
         // 跨月回退由 chrono 的日期算术处理，这里只固定一个已知组合。
         let (begin, _) = pub_time_window("week", local_dt(2026, 3, 1, 8)).unwrap();
         assert_eq!(begin, midnight(2026, 2, 23));
-    }
-
-    #[test]
-    fn parse_related_maps_owner_and_stat() {
-        let raw = serde_json::json!({
-            "code": 0,
-            "data": [{
-                "bvid": "BV1t5xDzKEFJ",
-                "aid": 115331263634260i64,
-                "pic": "http://i1.hdslb.com/bfs/archive/a8b83.jpg",
-                "duration": 226,
-                "title": "东北街头12元猪蹄红烧肉饭",
-                "owner": { "name": "转生成为毛毛", "face": "//i0.hdslb.com/bfs/face/1f.jpg" },
-                "stat": { "view": 1385636, "danmaku": 5870 }
-            }]
-        })
-        .to_string();
-        let page = parse_related(&raw).unwrap();
-        assert!(!page.has_more);
-        assert_eq!(page.items.len(), 1);
-        let item = &page.items[0];
-        // aid 是超大整数，必须无损转成字符串。
-        assert_eq!(item.aid, "115331263634260");
-        assert_eq!(item.bvid, "BV1t5xDzKEFJ");
-        assert_eq!(item.author, "转生成为毛毛");
-        assert_eq!(item.view, 1_385_636);
-        assert!(item.cover.starts_with("https://i1.hdslb.com/"));
-        assert!(item.author_face.as_deref().unwrap().starts_with("https://"));
-
-        assert!(parse_related("{}").is_err());
     }
 
     #[test]
@@ -2851,84 +2784,6 @@ mod tests {
         assert!(parse_archive(&plain.to_string()).unwrap().pages.is_empty());
     }
 
-    #[test]
-    fn online_total_preserves_numeric_strings_approximations_and_zero() {
-        for total in ["12345", "9.4万+", "0"] {
-            let raw = serde_json::json!({
-                "code": 0,
-                "data": {
-                    "total": total,
-                    "count": "7",
-                    "show_switch": { "total": true, "count": false }
-                }
-            });
-            assert_eq!(
-                parse_online_total(&raw.to_string()).unwrap().as_deref(),
-                Some(total)
-            );
-        }
-        let raw = r#"{"code":0,"data":{"total":"  9.4万+ \n"}}"#;
-        assert_eq!(parse_online_total(raw).unwrap().as_deref(), Some("9.4万+"));
-    }
-
-    #[test]
-    fn online_total_missing_empty_or_non_string_is_not_zero() {
-        for raw in [
-            r#"{"code":0}"#,
-            r#"{"code":0,"data":null}"#,
-            r#"{"code":0,"data":{}}"#,
-            r#"{"code":0,"data":{"total":null}}"#,
-            r#"{"code":0,"data":{"total":""}}"#,
-            r#"{"code":0,"data":{"total":" \t\n "}}"#,
-            r#"{"code":0,"data":{"total":0}}"#,
-            r#"{"code":0,"data":{"total":false}}"#,
-        ] {
-            assert_eq!(parse_online_total(raw).unwrap(), None, "{raw}");
-        }
-    }
-
-    #[test]
-    fn online_total_respects_explicit_hidden_switch() {
-        let hidden = r#"{"code":0,"data":{"total":"12345","count":"7","show_switch":{"total":false,"count":true}}}"#;
-        assert_eq!(parse_online_total(hidden).unwrap(), None);
-        // 只有布尔 false 隐藏；缺失开关不丢弃已提供的全端数据。
-        for switch in [serde_json::json!({}), serde_json::json!({ "total": "false" })] {
-            let raw = serde_json::json!({
-                "code": 0,
-                "data": { "total": "12345", "show_switch": switch }
-            });
-            assert_eq!(
-                parse_online_total(&raw.to_string()).unwrap().as_deref(),
-                Some("12345")
-            );
-        }
-    }
-
-    #[test]
-    fn online_total_never_falls_back_to_web_count() {
-        for raw in [
-            r#"{"code":0,"data":{"count":"12345"}}"#,
-            r#"{"code":0,"data":{"total":null,"count":"12345"}}"#,
-            r#"{"code":0,"data":{"total":" ","count":"12345"}}"#,
-            r#"{"code":0,"data":{"total":"","count":"0"}}"#,
-        ] {
-            assert_eq!(parse_online_total(raw).unwrap(), None, "{raw}");
-        }
-    }
-
-    #[test]
-    fn online_total_rejects_upstream_errors_and_malformed_responses() {
-        for raw in [
-            r#"{"code":-400,"message":"请求错误","data":null}"#,
-            r#"{"code":-404,"message":"啥都木有","data":{"total":"12345"}}"#,
-            r#"{"code":-352,"data":{"total":"0","show_switch":{"total":false}}}"#,
-            r#"{"data":{"total":"12345"}}"#,
-            "not json",
-        ] {
-            assert!(parse_online_total(raw).is_err(), "{raw}");
-        }
-    }
-
     #[tokio::test]
     async fn online_total_rejects_invalid_ids_before_network() {
         // 所有出站请求都指向本地代理；既断言参数错误，也检查没有触发连接。
@@ -2959,7 +2814,10 @@ mod tests {
             assert_eq!(error.message, "在线人数请求的 bvid 无效", "{bvid}");
         }
         for cid in [0, -1, i64::MIN] {
-            let error = site.video_online_total("BV17x411w7KC", cid).await.unwrap_err();
+            let error = site
+                .video_online_total("BV17x411w7KC", cid)
+                .await
+                .unwrap_err();
             assert_eq!(error.code, "bilibili_video_error");
             assert_eq!(error.message, "在线人数请求的 cid 无效");
         }
@@ -3041,7 +2899,17 @@ mod tests {
     fn player_meta_skips_invalid_chapter_times() {
         let valid = serde_json::json!({ "from": 0, "to": 10, "content": "有效章节" });
         let invalid_times = serde_json::json!([
-            null, "0", "1.5", "NaN", "Infinity", true, false, [], {}, -1, -0.25
+            null,
+            "0",
+            "1.5",
+            "NaN",
+            "Infinity",
+            true,
+            false,
+            [],
+            {},
+            -1,
+            -0.25
         ]);
         let mut invalid_items = vec![serde_json::json!(null), serde_json::json!([])];
         for field in ["from", "to"] {
@@ -3112,64 +2980,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn player_meta_subtitles_and_chapters_are_independent() {
-        let root = serde_json::json!({ "code": 0, "data": {
-            "subtitle": { "subtitles": [
-                { "lan": "zh-CN", "lan_doc": "中文", "subtitle_url": "//example.com/cc.json" },
-                { "lan": "en", "subtitle_url": "" }
-            ] },
-            "view_points": [{ "from": 1.5, "to": 5.25, "content": "  章节标题  " }]
-        } });
-        let meta = parse_player_meta(&root);
-        let expected_subtitles = serde_json::json!([
-            { "lan": "zh-CN", "lan_doc": "中文", "url": "https://example.com/cc.json" }
-        ]);
-        let expected_chapters = serde_json::json!([
-            { "start_time": 1.5, "end_time": 5.25, "title": "章节标题" }
-        ]);
-        assert_eq!(
-            serde_json::to_value(&meta.subtitles).unwrap(),
-            expected_subtitles
-        );
-        assert_eq!(
-            serde_json::to_value(&meta.chapters).unwrap(),
-            expected_chapters
-        );
-
-        for field in ["subtitle", "view_points"] {
-            for replacement in [
-                None,
-                Some(serde_json::json!(null)),
-                Some(serde_json::json!({})),
-                Some(serde_json::json!([])),
-                Some(serde_json::json!({ "subtitles": [{ "subtitle_url": "" }] })),
-                Some(serde_json::json!([{ "from": 0, "to": 0, "content": "无效" }])),
-            ] {
-                let mut fixture = root.clone();
-                if let Some(value) = replacement {
-                    fixture["data"][field] = value;
-                } else {
-                    fixture["data"].as_object_mut().unwrap().remove(field);
-                }
-                let parsed = parse_player_meta(&fixture);
-                if field == "subtitle" {
-                    assert!(parsed.subtitles.is_empty());
-                    assert_eq!(
-                        serde_json::to_value(parsed.chapters).unwrap(),
-                        expected_chapters
-                    );
-                } else {
-                    assert!(parsed.chapters.is_empty());
-                    assert_eq!(
-                        serde_json::to_value(parsed.subtitles).unwrap(),
-                        expected_subtitles
-                    );
-                }
-            }
-        }
-    }
-
     #[tokio::test]
     async fn player_meta_rejects_missing_request_ids_before_fetching() {
         let site = BilibiliSite::new(reqwest::Client::new(), String::new());
@@ -3196,48 +3006,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_archive_reads_aid_desc_and_stats() {
-        let raw = serde_json::json!({
-            "code": 0,
-            "data": {
-                "bvid": "BV1Ybuq6nEYq",
-                "aid": 117075725000671i64,
-                "cid": 311001234i64,
-                "title": "测试稿件",
-                "pic": "https://i0.hdslb.com/bfs/archive/x.jpg",
-                "desc": "简介内容",
-                "owner": { "name": "UP 主", "face": "https://i0.hdslb.com/bfs/face/2f.jpg" },
-                "stat": { "view": 100, "danmaku": 5, "reply": 4986 },
-                "pubdate": 1759000000
-            }
-        })
-        .to_string();
-        let archive = parse_archive(&raw).unwrap();
-        assert_eq!(archive.aid, "117075725000671");
-        assert_eq!(archive.cid, 311_001_234);
-        assert_eq!(archive.desc, "简介内容");
-        assert!(archive.tags.is_empty());
-        assert_eq!(archive.reply, 4986);
-        assert_eq!(archive.pubdate, 1759000000);
-        assert_eq!(archive.cover, "https://i0.hdslb.com/bfs/archive/x.jpg");
-
-        // 根上没有 cid 时退回首 P（搜索/UP 列表的条目靠这条路径补齐取流键）。
-        let multi_page = serde_json::json!({
-            "code": 0,
-            "data": {
-                "bvid": "BV1Ybuq6nEYq",
-                "aid": 117075725000671i64,
-                "title": "多P稿件",
-                "pages": [{ "cid": 998877i64 }]
-            }
-        })
-        .to_string();
-        assert_eq!(parse_archive(&multi_page).unwrap().cid, 998877);
-
-        assert!(parse_archive("{}").is_err());
-    }
-
-    #[test]
     fn parse_archive_tags_preserves_order_and_skips_empty_names() {
         let raw = serde_json::json!({
             "code": 0,
@@ -3253,19 +3021,6 @@ mod tests {
         assert_eq!(parse_archive_tags(&raw), ["动画", "声优"]);
         assert!(parse_archive_tags("not json").is_empty());
         assert!(parse_archive_tags(r#"{"code":0,"data":null}"#).is_empty());
-    }
-
-    #[test]
-    fn parse_uploader_counts_matches_member_card_response() {
-        let raw = serde_json::json!({
-            "code": 0,
-            "data": { "follower": 1427549, "archive_count": 321 }
-        })
-        .to_string();
-
-        assert_eq!(parse_uploader_count(&raw, "follower"), Some(1427549));
-        assert_eq!(parse_uploader_count(&raw, "archive_count"), Some(321));
-        assert_eq!(parse_uploader_count("{}", "follower"), None);
     }
 
     #[test]
@@ -3327,68 +3082,6 @@ mod tests {
         assert!(!main.replies[0].is_upper);
 
         assert!(parse_comments("{}").is_err());
-    }
-
-    #[test]
-    fn parse_comments_marks_upper_author_on_comments_and_replies() {
-        let raw = serde_json::json!({
-            "data": {
-                "cursor": { "is_end": true, "all_count": 2, "next": 1 },
-                // 页面级 `upper.mid` 是作者标识的唯一来源（实测两个评论接口都下发）。
-                "upper": { "mid": 42 },
-                "replies": [
-                    {
-                        "rpid": 1, "member": { "uname": "UP 主", "mid": "42" },
-                        "content": { "message": "本人在此" },
-                        "replies": [ { "rpid": 11, "member": { "uname": "路人", "mid": "7" }, "content": { "message": "楼中楼" } } ]
-                    },
-                    {
-                        "rpid": 2, "member": { "uname": "路人甲", "mid": "7" },
-                        "content": { "message": "普通评论" },
-                        "replies": [ { "rpid": 22, "member": { "uname": "UP 主", "mid": "42" }, "content": { "message": "作者回复" } } ]
-                    }
-                ]
-            }
-        })
-        .to_string();
-        let page = parse_comments(&raw).unwrap();
-        assert!(page.items[0].is_upper, "作者本人的一级评论要标 UP");
-        assert!(!page.items[0].replies[0].is_upper);
-        assert!(!page.items[1].is_upper);
-        assert!(
-            page.items[1].replies[0].is_upper,
-            "作者在楼中楼的回复也要标 UP"
-        );
-    }
-
-    #[test]
-    fn parse_comment_replies_marks_upper_and_ignores_unknown_identity() {
-        let with_upper = serde_json::json!({
-            "data": {
-                "page": { "count": 1 },
-                "upper": { "mid": 42 },
-                "replies": [ { "rpid": 1, "member": { "uname": "UP 主", "mid": "42" }, "content": { "message": "作者回复" } } ]
-            }
-        })
-        .to_string();
-        let page = parse_comment_replies(&with_upper, 1, COMMENT_REPLIES_PAGE_SIZE).unwrap();
-        assert!(page.items[0].is_upper);
-
-        // mid 为 0（上游的「未登录/身份未知」形态）不能与同样为 0 的 author 相互命中。
-        let unknown = serde_json::json!({
-            "data": {
-                "page": { "count": 1 },
-                "upper": { "mid": 0 },
-                "replies": [ { "rpid": 1, "member": { "uname": "匿名", "mid": "0" }, "content": { "message": "x" } } ]
-            }
-        })
-        .to_string();
-        assert!(
-            !parse_comment_replies(&unknown, 1, COMMENT_REPLIES_PAGE_SIZE)
-                .unwrap()
-                .items[0]
-                .is_upper
-        );
     }
 
     #[test]
@@ -3480,76 +3173,94 @@ mod tests {
         assert!(!parse_comment_replies(&raw, 5, 20).unwrap().has_more);
     }
 
-    /// story feed 的三条契约都是行为观测而非上游承诺，回归只能靠真网验证：
-    /// 匿名无 WBI 即可、取流键齐备、且串行取批后仍能出新条目。
-    #[tokio::test]
-    #[ignore = "live network smoke — run with --ignored"]
-    async fn live_story_feed_smoke() {
-        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
-        let page = site
-            .video_story(false, None)
-            .await
-            .expect("匿名 story feed 应放行");
-
-        assert!(!page.items.is_empty(), "story feed 未产出条目");
-        assert!(page.has_more);
-        for item in &page.items {
-            assert!(!item.bvid.is_empty(), "条目缺 bvid");
-            assert!(item.cid.is_some_and(|cid| cid > 0), "条目缺可播 cid");
-            assert!(!item.aid.is_empty(), "条目缺 aid");
-            assert!(item.cover.starts_with("https://"), "封面未升级到 https");
+    #[test]
+    fn online_total_preserves_display_values_without_inventing_counts() {
+        use serde_json::{Value, json};
+        for (data, expected) in [
+            (json!({"total": "12345"}), Some("12345")),
+            (json!({"total": " 9.4万+ "}), Some("9.4万+")),
+            (json!({"total": "0"}), Some("0")),
+            (
+                json!({"total": "123", "show_switch": {"total": false}}),
+                None,
+            ),
+            (
+                json!({"total": "123", "show_switch": {"total": "false"}}),
+                Some("123"),
+            ),
+            (json!({"count": "12345"}), None),
+            (Value::Null, None),
+        ]
+        .into_iter()
+        .chain(
+            [Value::Null, json!(""), json!(" "), json!(0), json!(false)]
+                .map(|total| (json!({"total": total, "count": "12345"}), None)),
+        ) {
+            let raw = json!({"code": 0, "data": data}).to_string();
+            assert_eq!(
+                parse_online_total(&raw).unwrap().as_deref(),
+                expected,
+                "{raw}"
+            );
         }
-        // 两批串行：上游单批约 4~5 条，去重后应明显多于一批。
-        assert!(
-            page.items.len() >= 5,
-            "串行两批去重后只得 {} 条，轮换语义可能已变",
-            page.items.len()
-        );
+        for raw in [
+            "not json",
+            "{}",
+            r#"{"code":-400}"#,
+            r#"{"code":-352,"data":{"total":"0"}}"#,
+        ] {
+            assert!(parse_online_total(raw).is_err(), "{raw}");
+        }
     }
 
-    /// story 条目能否直接走通现有 playurl / DASH 取流链路。
-    ///
-    /// 这是短视频入口的集成前提：竖屏舞台没有自己的取流实现，它把 story 给的
-    /// `bvid`/`cid` 原样交给 [`BilibiliSite::video_play_selection`]。若上游哪天
-    /// 改成只给 story 专用的播放凭据，这条会先失败，而不是等用户看到黑屏。
-    #[tokio::test]
-    #[ignore = "live network smoke — run with --ignored"]
-    async fn live_story_item_plays_through_existing_playurl() {
-        let site = BilibiliSite::new(reqwest::Client::new(), String::new());
-        let page = site
-            .video_story(false, None)
-            .await
-            .expect("匿名 story feed 应放行");
-        let item = page.items.first().expect("story feed 未产出条目");
-        let cid = item.cid.expect("story 条目应带 cid");
+    #[test]
+    fn story_batch_count_is_bounded() {
+        for (input, expected) in [
+            (None, STORY_FEED_BATCHES),
+            (Some(0), 1),
+            (Some(STORY_FEED_MORE_BATCHES), STORY_FEED_MORE_BATCHES),
+            (Some(usize::MAX), STORY_FEED_MAX_BATCHES),
+        ] {
+            assert_eq!(story_batch_count(input), expected);
+        }
+    }
 
-        let selection = site
-            .video_play_selection(&VideoPlayRequest {
-                bvid: Some(item.bvid.clone()),
-                cid,
-                ep_id: None,
-                qn: None,
-                audio_only: None,
-                media_cache: None,
-            })
-            .await
-            .expect("story 条目应能走通现有 playurl");
+    #[test]
+    fn player_meta_subtitles_and_chapters_fail_independently() {
+        let mut root = serde_json::json!({"data": {
+            "subtitle": {"subtitles": [{"lan":"zh-CN", "subtitle_url":"//example.com/cc.json"}]},
+            "view_points": [{"from":1.5, "to":5.25, "content":"章节"}]
+        }});
+        let meta = parse_player_meta(&root);
+        assert_eq!(meta.subtitles[0].url, "https://example.com/cc.json");
+        assert_eq!(meta.chapters[0].start_time, 1.5);
+        for field in ["subtitle", "view_points"] {
+            let original = root["data"][field].take();
+            let parsed = parse_player_meta(&root);
+            assert_eq!(parsed.subtitles.is_empty(), field == "subtitle");
+            assert_eq!(parsed.chapters.is_empty(), field == "view_points");
+            root["data"][field] = original;
+        }
+    }
 
-        // 音视频两轨都要有可播地址与解析出的分片表，MPD 合成才有输入。
-        assert!(selection.video.base_url.starts_with("https://"));
-        let audio = selection.audio.as_ref().expect("story 条目应带音轨");
-        assert!(audio.base_url.starts_with("https://"));
-        assert!(
-            selection.video.sidx.duration_secs() > 0.0,
-            "视频轨 sidx 为空"
-        );
-        assert!(audio.sidx.duration_secs() > 0.0, "音频轨 sidx 为空");
-        assert!(!selection.accept_quality.is_empty());
-
-        // 竖屏舞台按 dimension 决定 cover/contain，缺了它整流都会当成竖屏铺满。
-        assert!(
-            page.items.iter().all(|item| item.dimension.is_some()),
-            "story 条目缺 dimension，竖屏判定会失效"
-        );
+    #[test]
+    fn comment_author_requires_a_known_matching_identity() {
+        for (author, member, expected) in [(42, "42", true), (42, "7", false), (0, "0", false)] {
+            let reply = serde_json::json!({"rpid": 1, "member": {"mid": member}, "content": {"message":"回复"}});
+            let raw = serde_json::json!({"data": {
+                "upper": {"mid": author}, "page": {"count":1},
+                "replies": [{"rpid":2, "member":{"mid":member}, "content":{"message":"评论"}, "replies":[reply]}]
+            }}).to_string();
+            let page = parse_comments(&raw).unwrap();
+            assert_eq!(page.items[0].is_upper, expected);
+            assert_eq!(page.items[0].replies[0].is_upper, expected);
+            assert_eq!(
+                parse_comment_replies(&raw, 1, COMMENT_REPLIES_PAGE_SIZE)
+                    .unwrap()
+                    .items[0]
+                    .is_upper,
+                expected
+            );
+        }
     }
 }

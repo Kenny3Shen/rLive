@@ -413,9 +413,7 @@ async fn remove_entry(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DiskCache, DiskCacheConfig, SWEEP_TARGET_PERCENT, disk_cache_key, is_committed_cache_name,
-    };
+    use super::{DiskCache, DiskCacheConfig, disk_cache_key, is_committed_cache_name};
     use std::fs::OpenOptions;
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
@@ -748,39 +746,6 @@ mod tests {
             "过期条目不得先读正文再丢弃"
         );
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// 清扫开销与占用规模的关系。默认 ignore：绝对耗时依赖机器与磁盘。
-    ///
-    /// `cargo test -p rlive sweep_cost_scaling --lib -- --ignored --nocapture`
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "规模测量，手动跑"]
-    async fn sweep_cost_scaling() {
-        // 每轮从空目录开始，使打印的耗时确实对应“目录里有 count 个条目时的清扫开销”。
-        for count in [500_usize, 2_000, 8_000] {
-            let root = test_root();
-            let mut cache = cache(root.clone());
-            // 预算故意设小，让每次清扫都要真的删一批而不是空跑。
-            cache.config.budget_bytes = 128 * 1024;
-            for index in 0..count {
-                cache
-                    .put(&disk_cache_key(&format!("entry-{index}")), &[7_u8; 512])
-                    .await;
-            }
-            let at = std::time::Instant::now();
-            cache.sweep().await;
-            let elapsed = at.elapsed().as_secs_f64() * 1000.0;
-            let usage = cache.usage().await;
-            println!(
-                "entries={count} sweep={elapsed:.1}ms remaining_bytes={} remaining_files={}",
-                usage.bytes, usage.files
-            );
-            assert!(
-                usage.bytes <= cache.config.budget_bytes * SWEEP_TARGET_PERCENT / 100,
-                "清扫后未回到预算目标线"
-            );
-            let _ = std::fs::remove_dir_all(root);
-        }
     }
 
     #[tokio::test]

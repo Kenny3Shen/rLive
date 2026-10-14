@@ -159,7 +159,6 @@ impl BilibiliSite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::settings::VideoRecommendApi;
     use serde_json::json;
 
     fn item(aid: &str, index: u64) -> Value {
@@ -278,66 +277,6 @@ mod tests {
         )
         .unwrap();
         assert!(stalled.prev_cursor.is_none());
-    }
-
-    #[tokio::test]
-    #[ignore = "真实网络：APP 混合推荐与作者双向游标，不读取登录凭据"]
-    async fn live_app_feed_and_uploader_cursor() {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(std::time::Duration::from_secs(25))
-            .build()
-            .unwrap();
-        let site = BilibiliSite::new(client, String::new());
-        let recommended = site
-            .video_recommend(VideoRecommendApi::App, 1, 20)
-            .await
-            .unwrap();
-        assert!(!recommended.items.is_empty());
-        // 本地转换得到的 bvid 必须指向同一稿件，而不仅是形状像 BV 字符串。
-        let first = &recommended.items[0];
-        let archive = site.video_archive(&first.bvid).await.unwrap();
-        assert_eq!(archive.aid, first.aid);
-        let page = site
-            .video_uploader_story("304036454", None, VideoStoryDirection::Initial)
-            .await
-            .unwrap();
-        let seed = &page.items[3];
-        let entered = site
-            .video_uploader_story(
-                "304036454",
-                Some(&seed.video.aid),
-                VideoStoryDirection::Initial,
-            )
-            .await
-            .unwrap();
-        assert_eq!(entered.items[0].video.aid, seed.video.aid);
-        assert_eq!(entered.items[0].index, seed.index);
-        assert_eq!(entered.total, page.total);
-        let next = site
-            .video_uploader_story(
-                "304036454",
-                entered.next_cursor.as_deref(),
-                VideoStoryDirection::Next,
-            )
-            .await
-            .unwrap();
-        assert!(next.items[0].index > entered.items.last().unwrap().index);
-        let prev = site
-            .video_uploader_story(
-                "304036454",
-                entered.prev_cursor.as_deref(),
-                VideoStoryDirection::Prev,
-            )
-            .await
-            .unwrap();
-        assert_eq!(prev.items.last().unwrap().index + 1, seed.index);
-        eprintln!(
-            "APP推荐 {} 条；UP入口 {}/{}，双向游标通过",
-            recommended.items.len(),
-            seed.index,
-            page.total
-        );
     }
 
     #[test]

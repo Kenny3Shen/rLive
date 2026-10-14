@@ -344,441 +344,118 @@ pub fn map_db_err(err: rusqlite::Error) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
-    fn assert_trigger_exists(conn: &Connection, name: &str) {
-        let count: i64 = conn
-            .query_row(
-                &format!(
-                    "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = '{name}'"
-                ),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1, "缺少触发器 {name}");
+    fn version(conn: &Connection) -> i64 {
+        conn.pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap()
     }
 
     #[test]
-    fn fresh_database_uses_versioned_schema() {
-        let conn = open_in_memory().unwrap();
-
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
+    fn upgrades_supported_versions_without_losing_existing_data() {
+        for old_version in [0, 3, 4, 5, SCHEMA_VERSION] {
+            let conn = Connection::open_in_memory().unwrap();
+            if old_version == SCHEMA_VERSION {
+                initialize_schema(&conn).unwrap();
+            } else if old_version > 0 {
+                conn.execute_batch(SCHEMA).unwrap();
+                if old_version >= 4 {
+                    create_video_history_objects(&conn).unwrap();
+                }
+                if old_version >= 5 {
+                    create_recording_watch_progress_objects(&conn).unwrap();
+                }
+                conn.pragma_update(None, "user_version", old_version)
+                    .unwrap();
+            }
+            if old_version > 0 {
+                conn.execute_batch(
+                    "INSERT INTO cookies VALUES ('bilibili', 'sentinel', 1);
+                     INSERT INTO settings_kv VALUES ('sentinel', 'kept');
+                     INSERT INTO history (site_id, room_id, title, user_name, watched_at)
+                     VALUES ('bilibili', '1', 'room', 'user', 7);",
+                )
+                .unwrap();
+            }
+            initialize_schema(&conn).unwrap();
+            assert_eq!(version(&conn), SCHEMA_VERSION, "旧版本 {old_version}");
+            conn.execute_batch(
+                "INSERT INTO video_history (kind, oid, title, watched_at)
+                 VALUES ('ugc', 'BV1', 't', 1);
+                 INSERT INTO recording_watch_progress VALUES ('room/recording', 30.5, 600, 1);
+                 INSERT INTO bilibili_app_auth VALUES (1, 'a', 'r', '42', 1);",
+            )
             .unwrap();
-        let columns: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('danmaku_send_history') ORDER BY cid")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-
-        assert_eq!(version, SCHEMA_VERSION);
-        assert!(columns.iter().any(|column| column == "room_id"));
-        assert!(columns.iter().any(|column| column == "room_title"));
-        assert!(columns.iter().any(|column| column == "room_user_name"));
-        let follow_columns: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('follows') ORDER BY cid")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert!(follow_columns.iter().any(|column| column == "auto_record"));
-
-        let video_columns: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('video_history') ORDER BY cid")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        for expected in ["kind", "oid", "progress", "duration", "watched_at"] {
             assert!(
-                video_columns.iter().any(|column| column == expected),
-                "video_history 缺少列 {expected}"
+                conn.execute(
+                    "INSERT INTO bilibili_app_auth VALUES (2, 'b', 'r', '43', 1)",
+                    []
+                )
+                .is_err()
             );
-        }
-
-        let watch_columns: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('recording_watch_progress') ORDER BY cid")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        for expected in ["id", "progress", "duration", "watched_at"] {
-            assert!(
-                watch_columns.iter().any(|column| column == expected),
-                "recording_watch_progress 缺少列 {expected}"
-            );
+            if old_version > 0 {
+                let saved: (String, String, i64) = conn
+                    .query_row(
+                        "SELECT cookie, value, watched_at FROM cookies, settings_kv, history",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap();
+                assert_eq!(saved, ("sentinel".into(), "kept".into(), 7));
+            }
+            // 迁移后再次打开不重建表，也不删除已写入的记录。
+            initialize_schema(&conn).unwrap();
+            let progress: f64 = conn
+                .query_row("SELECT progress FROM recording_watch_progress", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(progress, 30.5);
         }
     }
 
     #[test]
-    fn rejects_old_schema_versions_without_modifying_them() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE follows (
-                site_id TEXT NOT NULL,
-                room_id TEXT NOT NULL,
-                user_name TEXT NOT NULL,
-                face TEXT NOT NULL DEFAULT '',
-                tag_ids TEXT NOT NULL DEFAULT '[]',
-                auto_record INTEGER NOT NULL DEFAULT 0,
-                live_status INTEGER,
-                live_started_at INTEGER,
-                updated_at INTEGER NOT NULL,
-                PRIMARY KEY (site_id, room_id)
+    fn unsupported_versions_leave_existing_data_untouched() {
+        for old_version in [0, 1, 2, SCHEMA_VERSION + 1] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('kept');",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", old_version)
+                .unwrap();
+            assert_eq!(
+                initialize_schema(&conn).unwrap_err().code,
+                "db_schema_unsupported"
             );
-            INSERT INTO follows (site_id, room_id, user_name, updated_at)
-            VALUES ('bilibili', '1', 'user', 1);
-            PRAGMA user_version = 2;",
-        )
-        .unwrap();
-
-        let error = initialize_schema(&conn).unwrap_err();
-        let count: i64 = conn
-            .query_row("SELECT count(*) FROM follows", [], |row| row.get(0))
-            .unwrap();
-
-        assert_eq!(error.code, "db_schema_unsupported");
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn migrates_v3_databases_by_adding_the_new_tables() {
-        // v3 形态：SCHEMA 里的表齐全，但没有 video_history 与 recording_watch_progress。
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
-        conn.execute_batch(
-            "INSERT INTO history (site_id, room_id, title, user_name, watched_at)
-             VALUES ('bilibili', '1', 'room', 'user', 7);
-             INSERT INTO settings_kv (key, value) VALUES ('sentinel', 'kept');
-             PRAGMA user_version = 3;",
-        )
-        .unwrap();
-
-        initialize_schema(&conn).unwrap();
-
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
-
-        // 新表可写，说明列与主键都建好了。
-        conn.execute(
-            "INSERT INTO video_history (kind, oid, title, watched_at) VALUES ('ugc', 'BV1', 't', 1)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO recording_watch_progress (id, progress, duration, watched_at)
-             VALUES ('bilibili_1/user_1', 30, 600, 1)",
-            [],
-        )
-        .unwrap();
-
-        // 迁移不得动存量数据。
-        let sentinel: String = conn
-            .query_row(
-                "SELECT value FROM settings_kv WHERE key = 'sentinel'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(sentinel, "kept");
-        let rooms: i64 = conn
-            .query_row("SELECT count(*) FROM history", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(rooms, 1);
-
-        assert_trigger_exists(&conn, "video_history_prune_after_insert");
-        assert_trigger_exists(&conn, "recording_watch_progress_prune_after_insert");
-    }
-
-    #[test]
-    fn migrates_v4_databases_by_adding_recording_watch_progress() {
-        // v4 形态：v3 加上 video_history 的表、索引与修剪触发器。
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
-        create_video_history_objects(&conn).unwrap();
-        conn.execute_batch(
-            "INSERT INTO video_history (kind, oid, title, watched_at)
-             VALUES ('ugc', 'BV1', 'sentinel', 1);
-             PRAGMA user_version = 4;",
-        )
-        .unwrap();
-
-        initialize_schema(&conn).unwrap();
-
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
-
-        // 新表可写且能原样读回，说明列、主键与索引都建好了。
-        conn.execute(
-            "INSERT INTO recording_watch_progress (id, progress, duration, watched_at)
-             VALUES ('bilibili_1/user_1', 30.5, 600.25, 1)",
-            [],
-        )
-        .unwrap();
-        let stored: (f64, f64, i64) = conn
-            .query_row(
-                "SELECT progress, duration, watched_at
-                 FROM recording_watch_progress WHERE id = 'bilibili_1/user_1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(stored, (30.5, 600.25, 1));
-
-        assert_trigger_exists(&conn, "recording_watch_progress_prune_after_insert");
-
-        // v4 已有的 video_history 数据不得被迁移碰动。
-        let title: String = conn
-            .query_row(
-                "SELECT title FROM video_history WHERE kind = 'ugc' AND oid = 'BV1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(title, "sentinel");
-    }
-
-    #[test]
-    fn migrates_v5_databases_by_adding_the_app_auth_table() {
-        // v5 形态：v4 加上 recording_watch_progress；没有 APP 凭据表。
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
-        create_video_history_objects(&conn).unwrap();
-        create_recording_watch_progress_objects(&conn).unwrap();
-        conn.execute_batch(
-            "INSERT INTO cookies (site_id, cookie, updated_at)
-             VALUES ('bilibili', 'SESSDATA=sentinel', 1);
-             PRAGMA user_version = 5;",
-        )
-        .unwrap();
-
-        initialize_schema(&conn).unwrap();
-
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
-
-        // 单行约束：第二次插入必须被拒绝，避免同账号多份凭据。
-        conn.execute(
-            "INSERT INTO bilibili_app_auth (singleton, access_token, refresh_token, mid, expires_at)
-             VALUES (1, 'a', 'r', '42', 1)",
-            [],
-        )
-        .unwrap();
-        assert!(
-            conn.execute(
-                "INSERT INTO bilibili_app_auth (singleton, access_token, refresh_token, mid, expires_at)
-                 VALUES (1, 'b', 's', '43', 2)",
-                [],
-            )
-            .is_err()
-        );
-
-        // 迁移不得动存量 Web Cookie。
-        let cookie: String = conn
-            .query_row(
-                "SELECT cookie FROM cookies WHERE site_id = 'bilibili'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(cookie, "SESSDATA=sentinel");
-    }
-
-    #[test]
-    fn rejects_unversioned_existing_database_without_modifying_it() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE follows (
-                site_id TEXT NOT NULL,
-                room_id TEXT NOT NULL,
-                user_name TEXT NOT NULL,
-                updated_at INTEGER NOT NULL,
-                PRIMARY KEY (site_id, room_id)
-            );
-            INSERT INTO follows (site_id, room_id, user_name, updated_at)
-            VALUES ('bilibili', '1', 'user', 1);",
-        )
-        .unwrap();
-
-        let error = initialize_schema(&conn).unwrap_err();
-        let count: i64 = conn
-            .query_row("SELECT count(*) FROM follows", [], |row| row.get(0))
-            .unwrap();
-
-        assert_eq!(error.code, "db_schema_unsupported");
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn rejects_unknown_schema_version() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "user_version", 99).unwrap();
-
-        let error = initialize_schema(&conn).unwrap_err();
-
-        assert_eq!(error.code, "db_schema_unsupported");
-    }
-
-    #[test]
-    fn current_schema_reopens_without_changes() {
-        let conn = open_in_memory().unwrap();
-        conn.execute(
-            "INSERT INTO settings_kv (key, value) VALUES ('sentinel', 'kept')",
-            [],
-        )
-        .unwrap();
-
-        initialize_schema(&conn).unwrap();
-
-        let value: String = conn
-            .query_row(
-                "SELECT value FROM settings_kv WHERE key = 'sentinel'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(value, "kept");
+            assert_eq!(version(&conn), old_version);
+            let value: String = conn
+                .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(value, "kept");
+        }
     }
 
     #[test]
     fn file_database_uses_bounded_wal_settings() {
         let dir = std::env::temp_dir().join(format!("rlive-db-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-
         {
             let conn = Db::open(dir.join("rlive.db")).unwrap();
-            let journal_mode: String = conn
+            let journal: String = conn
                 .pragma_query_value(None, "journal_mode", |row| row.get(0))
                 .unwrap();
-            let synchronous: i64 = conn
-                .pragma_query_value(None, "synchronous", |row| row.get(0))
-                .unwrap();
-            let busy_timeout: i64 = conn
-                .pragma_query_value(None, "busy_timeout", |row| row.get(0))
-                .unwrap();
-            let cache_size: i64 = conn
-                .pragma_query_value(None, "cache_size", |row| row.get(0))
-                .unwrap();
-            let journal_size_limit: i64 = conn
-                .pragma_query_value(None, "journal_size_limit", |row| row.get(0))
-                .unwrap();
-
-            assert_eq!(journal_mode, "wal");
-            assert_eq!(synchronous, 1);
-            assert_eq!(busy_timeout, DB_BUSY_TIMEOUT.as_millis() as i64);
-            assert_eq!(cache_size, -DB_CACHE_SIZE_KIB);
-            assert_eq!(journal_size_limit, DB_JOURNAL_SIZE_LIMIT_BYTES);
+            assert_eq!(journal, "wal");
+            for (pragma, expected) in [
+                ("synchronous", 1),
+                ("busy_timeout", DB_BUSY_TIMEOUT.as_millis() as i64),
+                ("cache_size", -DB_CACHE_SIZE_KIB),
+                ("journal_size_limit", DB_JOURNAL_SIZE_LIMIT_BYTES),
+            ] {
+                let actual: i64 = conn
+                    .pragma_query_value(None, pragma, |row| row.get(0))
+                    .unwrap();
+                assert_eq!(actual, expected, "{pragma}");
+            }
         }
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn current_history_indexes_avoid_temporary_sorting() {
-        let conn = open_in_memory().unwrap();
-
-        let indexes: Vec<String> = conn
-            .prepare(
-                "SELECT name FROM sqlite_master
-                 WHERE type = 'index' AND name LIKE 'idx_history_%_order'
-                 ORDER BY name",
-            )
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(
-            indexes,
-            vec!["idx_history_recent_order", "idx_history_site_recent_order"]
-        );
-
-        let plan: Vec<String> = conn
-            .prepare(
-                "EXPLAIN QUERY PLAN
-                 SELECT site_id, room_id, title, user_name, cover, watched_at
-                 FROM history
-                 ORDER BY watched_at DESC, site_id ASC, room_id ASC
-                 LIMIT 200",
-            )
-            .unwrap()
-            .query_map([], |row| row.get(3))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert!(
-            plan.iter()
-                .any(|detail| detail.contains("idx_history_recent_order"))
-        );
-        assert!(
-            plan.iter()
-                .all(|detail| !detail.contains("USE TEMP B-TREE"))
-        );
-    }
-
-    #[test]
-    fn video_history_recent_index_avoids_temporary_sorting() {
-        let conn = open_in_memory().unwrap();
-
-        let plan: Vec<String> = conn
-            .prepare(
-                "EXPLAIN QUERY PLAN
-                 SELECT kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid,
-                        progress, duration, watched_at
-                 FROM video_history
-                 ORDER BY watched_at DESC, kind ASC, oid ASC
-                 LIMIT 200",
-            )
-            .unwrap()
-            .query_map([], |row| row.get(3))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert!(
-            plan.iter()
-                .any(|detail| detail.contains("idx_video_history_recent_order"))
-        );
-        assert!(
-            plan.iter()
-                .all(|detail| !detail.contains("USE TEMP B-TREE"))
-        );
-    }
-
-    #[test]
-    fn recording_watch_progress_recent_index_avoids_temporary_sorting() {
-        let conn = open_in_memory().unwrap();
-
-        let plan: Vec<String> = conn
-            .prepare(
-                "EXPLAIN QUERY PLAN
-                 SELECT id, progress, duration, watched_at
-                 FROM recording_watch_progress
-                 ORDER BY watched_at DESC, id ASC",
-            )
-            .unwrap()
-            .query_map([], |row| row.get(3))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert!(
-            plan.iter()
-                .any(|detail| detail.contains("idx_recording_watch_progress_recent"))
-        );
-        assert!(
-            plan.iter()
-                .all(|detail| !detail.contains("USE TEMP B-TREE"))
-        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

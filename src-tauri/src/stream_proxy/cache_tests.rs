@@ -590,3 +590,82 @@ async fn media_cache_discards_prefix_when_client_disconnects_between_chunks() {
     .await
     .expect("客户端离开后代理未及时结束");
 }
+
+#[tokio::test]
+async fn public_proxy_caches_exact_segments_but_budget_exhaustion_never_blocks_delivery() {
+    for budget in [64, 4096] {
+        let mut fixture = Fixture::new(complete_response()).await;
+        fixture.store = MediaCache::with_write_budget(
+            fixture.root.clone(),
+            crate::media_cache::CacheWriteBudget::new(budget, 2),
+        );
+        let proxy = StreamProxy::new();
+        let url = proxy
+            .start(
+                fixture.context.url.to_string(),
+                HashMap::new(),
+                "cache-budget".into(),
+                StreamProxyStartOptions {
+                    media_cache: fixture.context.media_cache.clone(),
+                    media_cache_store: Some(fixture.store.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        for attempt in 0..2 {
+            let reply = fixture
+                .context
+                .client
+                .get(&url)
+                .header("Range", "bytes=0-799")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(reply.status(), 206);
+            let expected_range = if budget >= 800 && attempt > 0 {
+                "bytes 0-799/*"
+            } else {
+                "bytes 0-799/1600"
+            };
+            assert_eq!(reply.headers()["content-range"], expected_range);
+            assert_eq!(reply.bytes().await.unwrap().as_ref(), complete_body());
+            if budget >= 800 {
+                fixture.wait_for_complete_cache().await;
+            } else {
+                fixture.assert_not_cached().await;
+            }
+            let expected_requests = if budget >= 800 { 1 } else { attempt + 1 };
+            assert_eq!(fixture.requests.lock().unwrap().len(), expected_requests);
+        }
+        timeout(WAIT, async {
+            while fixture.store.in_flight() != (0, 0) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("写盘后额度应归还");
+        // 即使已有完整缓存，非精确分片请求仍须回源。
+        *fixture.reply.lock().unwrap() = response(
+            206,
+            "bytes 0-499/1600",
+            "Content-Length: 500",
+            &complete_body()[..500],
+        );
+        let before = fixture.requests.lock().unwrap().len();
+        let reply = fixture
+            .context
+            .client
+            .get(&url)
+            .header("Range", "bytes=0-499")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            reply.bytes().await.unwrap().as_ref(),
+            &complete_body()[..500]
+        );
+        assert_eq!(fixture.requests.lock().unwrap().len(), before + 1);
+        proxy.stop();
+    }
+}

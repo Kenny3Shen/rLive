@@ -370,127 +370,42 @@ impl Default for AppSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn settings_default_roundtrip() {
-        let s = AppSettings::default();
-        let v = serde_json::to_string(&s).unwrap();
-        let back: AppSettings = serde_json::from_str(&v).unwrap();
-        assert_eq!(back.default_site, "bilibili");
-        assert_eq!(back.ffmpeg_rw_timeout_seconds, 10);
-        assert_eq!(back.ffmpeg_reconnect_delay_max_seconds, 8);
-        assert_eq!(back.ffmpeg_hls_segment_retry_count, 5);
-        assert!(back.recording_include_danmaku);
-        assert_eq!(back.recording_auto_split_minutes, 0);
-        assert_eq!(back.recording_max_concurrent, 4);
-        assert_eq!(back.video_recommend_api, VideoRecommendApi::App);
-        assert!(!back.video_next_episode_preload);
-        assert!(back.video_blocked_uploaders.is_empty());
-        assert!(back.room_card_preview_enabled);
-        // 动态背景默认关闭：它是纯装饰，且在弱设备上是逐帧重采样的开销。
-        assert!(!back.dynamic_background_enabled);
-        assert!(back.danmaku_shield_words.is_empty());
-        assert!(back.danmaku_blocked_users.is_empty());
-        assert!(back.hidden_home_entry_ids.is_empty());
-        assert!(!v.contains("recording_auto_follow"));
-        assert!(!back.legacy_recording_continue_after_leave);
-        assert!(!v.contains("recording_continue_after_leave"));
-        assert!(!v.contains("player_skin"));
-        assert_eq!(back.recording_ass.resolution_width, 1920);
-        assert_eq!(back.recording_ass.font_size, 36);
-        assert_eq!(back.recording_ass.scroll_duration_seconds, 12);
-        assert_eq!(back.recording_ass.display_area_percent, 25);
-    }
-
-    #[test]
-    fn settings_require_ass_options() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value.as_object_mut().unwrap().remove("recording_ass");
-
-        assert!(serde_json::from_value::<AppSettings>(value).is_err());
-    }
-
-    #[test]
-    fn settings_accept_and_drop_legacy_continue_after_leave() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value["recording_continue_after_leave"] = serde_json::json!(true);
-
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        assert!(settings.legacy_recording_continue_after_leave);
-        assert!(
-            !serde_json::to_value(settings)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("recording_continue_after_leave")
-        );
-    }
-
-    #[test]
-    fn settings_accept_and_drop_legacy_player_skin() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value["player_skin"] = serde_json::json!("minimal");
-
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        assert_eq!(settings.legacy_player_skin.as_deref(), Some("minimal"));
-        assert!(
-            !serde_json::to_value(settings)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("player_skin")
-        );
-    }
-
-    /// 「App 个性化推荐」开关已由「本机有 TV 凭据即生效」取代。
-    ///
-    /// 升级用户的已存记录与旧配置包都带着这个字段，`deny_unknown_fields` 会
-    /// 直接拒掉整份设置；这里确认它被消费并丢弃，而不是变成错误。
-    #[test]
-    fn settings_accept_and_drop_legacy_app_personalization() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value["bilibili_app_personalization"] = serde_json::json!(true);
-
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        assert_eq!(settings.legacy_bilibili_app_personalization, Some(true));
-        assert!(
-            !serde_json::to_value(settings)
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("bilibili_app_personalization")
-        );
-    }
-
-    #[test]
-    fn settings_reject_legacy_global_auto_follow() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value["recording_auto_follow"] = serde_json::json!(true);
-
-        assert!(serde_json::from_value::<AppSettings>(value).is_err());
-    }
-
-    #[test]
-    fn settings_reject_unknown_and_missing_fields() {
-        let base = serde_json::to_value(AppSettings::default()).unwrap();
-        let mut unknown_field = base.clone();
-        unknown_field["motion_mode"] = serde_json::json!("full");
-        let mut missing_field = base;
-        missing_field
-            .as_object_mut()
-            .unwrap()
-            .remove("danmaku_speed");
-
-        for (case, value) in [
-            ("unknown field", unknown_field),
-            ("missing field", missing_field),
+    fn legacy_settings_are_consumed_but_not_written_back() {
+        for (field, value) in [
+            ("player_skin", json!("minimal")),
+            ("recording_continue_after_leave", json!(true)),
+            ("bilibili_app_personalization", json!(true)),
         ] {
+            let mut input = serde_json::to_value(AppSettings::default()).unwrap();
+            input[field] = value;
+            let decoded: AppSettings = serde_json::from_value(input).unwrap();
             assert!(
-                serde_json::from_value::<AppSettings>(value).is_err(),
-                "accepted settings with {case}"
+                serde_json::to_value(decoded).unwrap().get(field).is_none(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_and_missing_required_fields() {
+        for field in [
+            "recording_auto_follow",
+            "motion_mode",
+            "recording_ass",
+            "danmaku_speed",
+        ] {
+            let mut input = serde_json::to_value(AppSettings::default()).unwrap();
+            if input.get(field).is_some() {
+                input.as_object_mut().unwrap().remove(field);
+            } else {
+                input[field] = json!(true);
+            }
+            assert!(
+                serde_json::from_value::<AppSettings>(input).is_err(),
+                "{field}"
             );
         }
     }

@@ -155,236 +155,70 @@ mod tests {
     use crate::db::schema::open_in_memory;
 
     #[test]
-    fn records_deduplicate_per_platform_and_keep_the_latest_timestamp() {
+    fn sends_are_deduplicated_scoped_and_ordered_without_stale_relabeling() {
         let conn = open_in_memory().unwrap();
-        record(
-            &conn,
-            "bilibili",
-            "你好",
-            "room-1",
-            "房间标题",
-            "主播甲",
-            10,
-        )
-        .unwrap();
-        record(
-            &conn,
-            "bilibili",
-            "第二条",
-            "room-1",
-            "房间标题",
-            "主播甲",
-            20,
-        )
-        .unwrap();
-        record(&conn, "douyu", "你好", "room-1", "房间标题", "主播乙", 30).unwrap();
-        record(
-            &conn,
-            "bilibili",
-            "你好",
-            "room-1",
-            "房间标题",
-            "主播甲",
-            40,
-        )
-        .unwrap();
-
+        for (site, content, room, time) in [
+            ("bilibili", "你好", "first", 10),
+            ("bilibili", "第二条", "first", 20),
+            ("douyu", "你好", "other", 20),
+            ("huya", "你好", "other", 20),
+            ("bilibili", "你好", "new", 40),
+            ("bilibili", "你好", "stale", 5),
+        ] {
+            record(&conn, site, content, room, room, room, time).unwrap();
+        }
+        let rows = list(&conn, "bilibili").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].content, "你好");
+        assert_eq!(rows[0].sent_at, 40);
         assert_eq!(
-            list(&conn, "bilibili").unwrap(),
-            vec![
-                DanmakuSendHistoryRecord {
-                    site_id: "bilibili".into(),
-                    content: "你好".into(),
-                    room_id: "room-1".into(),
-                    room_title: "房间标题".into(),
-                    room_user_name: "主播甲".into(),
-                    sent_at: 40,
-                },
-                DanmakuSendHistoryRecord {
-                    site_id: "bilibili".into(),
-                    content: "第二条".into(),
-                    room_id: "room-1".into(),
-                    room_title: "房间标题".into(),
-                    room_user_name: "主播甲".into(),
-                    sent_at: 20,
-                },
+            (
+                &*rows[0].room_id,
+                &*rows[0].room_title,
+                &*rows[0].room_user_name
+            ),
+            ("new", "new", "new")
+        );
+        let timeline = list_all(&conn).unwrap();
+        assert_eq!(
+            timeline
+                .iter()
+                .map(|r| (&*r.site_id, r.sent_at))
+                .collect::<Vec<_>>(),
+            [
+                ("bilibili", 40),
+                ("bilibili", 20),
+                ("douyu", 20),
+                ("huya", 20)
             ]
         );
-        assert_eq!(
-            list(&conn, "douyu").unwrap(),
-            vec![DanmakuSendHistoryRecord {
-                site_id: "douyu".into(),
-                content: "你好".into(),
-                room_id: "room-1".into(),
-                room_title: "房间标题".into(),
-                room_user_name: "主播乙".into(),
-                sent_at: 30,
-            }]
-        );
+        clear(&conn, "bilibili").unwrap();
+        assert!(list(&conn, "bilibili").unwrap().is_empty());
+        assert_eq!(list_all(&conn).unwrap().len(), 2);
+        clear_all(&conn).unwrap();
+        assert!(list_all(&conn).unwrap().is_empty());
     }
 
     #[test]
-    fn resending_relabels_the_room_only_when_the_newer_send_wins() {
+    fn retention_prunes_oldest_sends_only_within_their_platform() {
         let conn = open_in_memory().unwrap();
-        record(
-            &conn,
-            "bilibili",
-            "你好",
-            "room-1",
-            "第一个直播间",
-            "第一个主播",
-            10,
-        )
-        .unwrap();
-
-        // 较晚出现的重复条目才是留存时间戳所属的那条。
-        record(
-            &conn,
-            "bilibili",
-            "你好",
-            "room-2",
-            "第二个直播间",
-            "第二个主播",
-            20,
-        )
-        .unwrap();
-        let records = list(&conn, "bilibili").unwrap();
-        assert_eq!(records[0].room_id, "room-2");
-        assert_eq!(records[0].room_title, "第二个直播间");
-        assert_eq!(records[0].room_user_name, "第二个主播");
-        assert_eq!(records[0].sent_at, 20);
-
-        // 乱序到达的更早发送不得改写更新的条目。
-        record(
-            &conn,
-            "bilibili",
-            "你好",
-            "room-3",
-            "第三个直播间",
-            "第三个主播",
-            5,
-        )
-        .unwrap();
-        let records = list(&conn, "bilibili").unwrap();
-        assert_eq!(records[0].room_id, "room-2");
-        assert_eq!(records[0].room_title, "第二个直播间");
-        assert_eq!(records[0].room_user_name, "第二个主播");
-        assert_eq!(records[0].sent_at, 20);
-    }
-
-    #[test]
-    fn keeps_a_bounded_history_for_each_platform() {
-        let conn = open_in_memory().unwrap();
+        record(&conn, "huya", "保留", "room", "标题", "主播", 0).unwrap();
         for index in 0..=MAX_RECORDS_PER_SITE {
             record(
                 &conn,
                 "bilibili",
-                &format!("弹幕 {index}"),
-                "room-1",
-                "房间标题",
-                "主播甲",
+                &index.to_string(),
+                "room",
+                "标题",
+                "主播",
                 index,
             )
             .unwrap();
         }
-
-        let records = list(&conn, "bilibili").unwrap();
-        assert_eq!(records.len(), MAX_RECORDS_PER_SITE as usize);
-        assert_eq!(
-            records.first().map(|record| record.content.as_str()),
-            Some("弹幕 50")
-        );
-        assert_eq!(
-            records.last().map(|record| record.content.as_str()),
-            Some("弹幕 1")
-        );
-    }
-
-    #[test]
-    fn clearing_one_platform_leaves_other_platforms_intact() {
-        let conn = open_in_memory().unwrap();
-        record(
-            &conn,
-            "bilibili",
-            "你好",
-            "room-1",
-            "房间标题",
-            "主播甲",
-            10,
-        )
-        .unwrap();
-        record(&conn, "huya", "晚上好", "room-1", "房间标题", "主播乙", 20).unwrap();
-
-        clear(&conn, "bilibili").unwrap();
-
-        assert!(list(&conn, "bilibili").unwrap().is_empty());
+        let rows = list(&conn, "bilibili").unwrap();
+        assert_eq!(rows.len(), MAX_RECORDS_PER_SITE as usize);
+        assert_eq!(rows.first().unwrap().sent_at, MAX_RECORDS_PER_SITE);
+        assert_eq!(rows.last().unwrap().sent_at, 1);
         assert_eq!(list(&conn, "huya").unwrap().len(), 1);
-    }
-
-    #[test]
-    fn lists_all_platforms_in_reverse_chronological_order() {
-        let conn = open_in_memory().unwrap();
-        record(
-            &conn,
-            "bilibili",
-            "第一条",
-            "room-1",
-            "房间标题",
-            "主播甲",
-            10,
-        )
-        .unwrap();
-        record(&conn, "huya", "第二条", "room-1", "房间标题", "主播乙", 20).unwrap();
-        record(&conn, "douyu", "第三条", "room-1", "房间标题", "主播丙", 20).unwrap();
-
-        assert_eq!(
-            list_all(&conn).unwrap(),
-            vec![
-                DanmakuSendHistoryRecord {
-                    site_id: "douyu".into(),
-                    content: "第三条".into(),
-                    room_id: "room-1".into(),
-                    room_title: "房间标题".into(),
-                    room_user_name: "主播丙".into(),
-                    sent_at: 20,
-                },
-                DanmakuSendHistoryRecord {
-                    site_id: "huya".into(),
-                    content: "第二条".into(),
-                    room_id: "room-1".into(),
-                    room_title: "房间标题".into(),
-                    room_user_name: "主播乙".into(),
-                    sent_at: 20,
-                },
-                DanmakuSendHistoryRecord {
-                    site_id: "bilibili".into(),
-                    content: "第一条".into(),
-                    room_id: "room-1".into(),
-                    room_title: "房间标题".into(),
-                    room_user_name: "主播甲".into(),
-                    sent_at: 10,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn clearing_all_platforms_removes_every_record() {
-        let conn = open_in_memory().unwrap();
-        record(
-            &conn,
-            "bilibili",
-            "你好",
-            "room-1",
-            "房间标题",
-            "主播甲",
-            10,
-        )
-        .unwrap();
-        record(&conn, "huya", "晚上好", "room-1", "房间标题", "主播乙", 20).unwrap();
-
-        clear_all(&conn).unwrap();
-
-        assert!(list_all(&conn).unwrap().is_empty());
     }
 }

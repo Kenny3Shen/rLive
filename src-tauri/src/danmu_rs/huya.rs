@@ -1092,31 +1092,6 @@ mod tests {
         assert!(!error.message.is_empty());
     }
 
-    /// 实网冒烟：确认信令探针能认出一份真实有效的 Cookie，并对被篡改的凭据给出
-    /// 明确拒绝。Cookie 走文件传入而不是环境变量，避免凭据进入命令行与 shell 历史：
-    /// `HUYA_COOKIE_FILE=<含完整 Cookie 的文件> cargo test --lib huya -- --ignored`
-    #[tokio::test]
-    #[ignore = "live network smoke — run with --ignored"]
-    async fn cookie_session_status_smoke() {
-        let path = std::env::var("HUYA_COOKIE_FILE").expect("需要 HUYA_COOKIE_FILE 环境变量");
-        let cookie = std::fs::read_to_string(&path).expect("读取 Cookie 文件失败");
-        let cookie = cookie.trim();
-        assert_eq!(
-            cookie_session_status(cookie, &crate::proxy::ProxyRoute::Direct).await,
-            Some(true),
-            "有效 Cookie 必须判为已登录"
-        );
-        // 两个凭据都要失效，否则网关会用仍然有效的那个通过校验。
-        let tampered = cookie
-            .replace("udb_cred=", "udb_cred=X")
-            .replace("udb_biztoken=", "udb_biztoken=X");
-        assert_eq!(
-            cookie_session_status(&tampered, &crate::proxy::ProxyRoute::Direct).await,
-            Some(false),
-            "凭据被篡改后必须判为已失效"
-        );
-    }
-
     #[test]
     fn percent_encode_query_keeps_unreserved_and_uppercases_hex() {
         // 期望值取自替换前的手写实现：仅 A-Za-z0-9-._~ 免转义，

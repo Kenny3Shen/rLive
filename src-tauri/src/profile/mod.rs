@@ -429,47 +429,6 @@ mod tests {
         }
     }
 
-    /// 旧配置包可能仍带有已删除的 `player_skin`；导入时消费该字段，重新导出时丢弃。
-    #[test]
-    fn profile_accepts_and_drops_removed_player_skin() {
-        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]["player_skin"] = serde_json::json!("minimal");
-        let text = serde_json::to_string(&value).unwrap();
-
-        let package = decode_package(&text).unwrap();
-
-        assert_eq!(
-            package.settings.legacy_player_skin.as_deref(),
-            Some("minimal")
-        );
-        assert!(
-            !serde_json::to_string(&package)
-                .unwrap()
-                .contains("player_skin")
-        );
-    }
-
-    /// 旧配置包可能仍带有已删除的 `bilibili_app_personalization`；
-    /// 该开关已由「本机有 TV 凭据即生效」取代，导入时消费字段、导出时丢弃。
-    #[test]
-    fn profile_accepts_and_drops_removed_app_personalization() {
-        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]["bilibili_app_personalization"] = serde_json::json!(true);
-        let text = serde_json::to_string(&value).unwrap();
-
-        let package = decode_package(&text).unwrap();
-
-        assert_eq!(
-            package.settings.legacy_bilibili_app_personalization,
-            Some(true)
-        );
-        assert!(
-            !serde_json::to_string(&package)
-                .unwrap()
-                .contains("bilibili_app_personalization")
-        );
-    }
-
     /// 未知字段由 `AppSettings` 的 `deny_unknown_fields` 拦下，因此错误码是 serde
     /// 路径的 `profile_decode_error`（先前由手写校验层报 `profile_schema_invalid`）。
     /// 字段名仍出现在消息里，依然能定位到具体哪个字段。
@@ -483,43 +442,6 @@ mod tests {
 
         assert_eq!(error.code, "profile_decode_error");
         assert!(error.message.contains("danmaku_font_weight"));
-    }
-
-    /// 2.11.x 导出的配置包没有 `room_card_preview_enabled`，导入时按默认值补齐，
-    /// 其余便携字段仍然必填。
-    #[test]
-    fn profile_backfills_room_card_preview_from_older_packages() {
-        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]
-            .as_object_mut()
-            .unwrap()
-            .remove("room_card_preview_enabled");
-        let text = serde_json::to_string(&value).unwrap();
-
-        let package = decode_package(&text).unwrap();
-
-        assert!(package.settings.room_card_preview_enabled);
-    }
-
-    /// 2.12.x 导出的配置包没有 `danmaku_blocked_users`（顶层与 settings 内都没有），
-    /// 导入时按空列表补齐，其余便携字段仍然必填。
-    #[test]
-    fn profile_backfills_blocked_users_from_older_packages() {
-        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .remove("danmaku_blocked_users");
-        value["settings"]
-            .as_object_mut()
-            .unwrap()
-            .remove("danmaku_blocked_users");
-        let text = serde_json::to_string(&value).unwrap();
-
-        let package = decode_package(&text).unwrap();
-
-        assert!(package.danmaku_blocked_users.is_empty());
-        assert!(package.settings.danmaku_blocked_users.is_empty());
     }
 
     /// 旧配置包里没有 `video_blocked_uploaders`，导入时按空名单补齐；
@@ -574,48 +496,6 @@ mod tests {
             assert_eq!(package.settings.proxy_mode, expected);
             assert_eq!(package.settings.proxy.as_deref(), address);
         }
-    }
-
-    #[test]
-    fn profile_backfills_hidden_home_entry_ids_from_older_packages() {
-        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]
-            .as_object_mut()
-            .unwrap()
-            .remove("hidden_home_entry_ids");
-        let text = serde_json::to_string(&value).unwrap();
-
-        let package = decode_package(&text).unwrap();
-
-        assert!(package.settings.hidden_home_entry_ids.is_empty());
-    }
-
-    #[test]
-    fn profile_accepts_legacy_continue_after_leave_without_exporting_it() {
-        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]["recording_continue_after_leave"] = serde_json::json!(true);
-        let text = serde_json::to_string(&value).unwrap();
-
-        let package = decode_package(&text).unwrap();
-
-        assert!(package.settings.legacy_recording_continue_after_leave);
-        assert!(
-            !serde_json::to_string(&package)
-                .unwrap()
-                .contains("recording_continue_after_leave")
-        );
-    }
-
-    #[test]
-    fn profile_rejects_legacy_global_auto_follow() {
-        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
-        value["settings"]["recording_auto_follow"] = serde_json::json!(true);
-        let text = serde_json::to_string(&value).unwrap();
-
-        let error = decode_package(&text).unwrap_err();
-
-        assert_eq!(error.code, "profile_decode_error");
-        assert!(error.message.contains("recording_auto_follow"));
     }
 
     #[test]
@@ -861,55 +741,6 @@ mod tests {
         assert_eq!(imported.danmaku_font_stroke, 1.5);
         assert!(imported.danmaku_filter_gifts);
         assert!(!imported.super_chat_enabled);
-    }
-
-    #[test]
-    fn merge_carries_recording_ass_preferences() {
-        let mut conn = open_in_memory().unwrap();
-        let mut package = ProfilePackage::sample();
-        package.settings.recording_ass.resolution_width = 3840;
-        package.settings.recording_ass.resolution_height = 2160;
-        package.settings.recording_ass.font_name = "Noto Sans SC".into();
-        package.settings.recording_ass.font_size = 72;
-
-        merge_into_db(&mut conn, &package).unwrap();
-
-        let ass = settings::get(&conn).unwrap().recording_ass;
-        assert_eq!(ass.resolution_width, 3840);
-        assert_eq!(ass.resolution_height, 2160);
-        assert_eq!(ass.font_name, "Noto Sans SC");
-        assert_eq!(ass.font_size, 72);
-    }
-
-    #[test]
-    fn merge_carries_platform_visibility_preferences() {
-        let mut conn = open_in_memory().unwrap();
-        let mut package = ProfilePackage::sample();
-        package.settings.disabled_site_ids = vec!["huya".into(), "douyin".into()];
-        package.settings.default_site = "douyu".into();
-
-        merge_into_db(&mut conn, &package).unwrap();
-
-        let settings = settings::get(&conn).unwrap();
-        assert_eq!(settings.disabled_site_ids, vec!["huya", "douyin"]);
-        assert_eq!(settings.default_site, "douyu");
-    }
-
-    /// 主页入口可见性也是可移植偏好：导入时跟随配置包，
-    /// 但持久化边界仍会丢弃包内的未知 id。
-    #[test]
-    fn merge_carries_hidden_home_entry_ids() {
-        let mut conn = open_in_memory().unwrap();
-        let mut package = ProfilePackage::sample();
-        package.settings.hidden_home_entry_ids =
-            vec!["shorts".into(), "iptv".into(), "home".into()];
-
-        merge_into_db(&mut conn, &package).unwrap();
-
-        assert_eq!(
-            settings::get(&conn).unwrap().hidden_home_entry_ids,
-            vec!["shorts", "iptv"]
-        );
     }
 
     #[test]

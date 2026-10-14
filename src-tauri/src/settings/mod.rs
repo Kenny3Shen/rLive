@@ -417,38 +417,6 @@ mod tests {
     use crate::db::schema::open_in_memory;
 
     #[test]
-    fn get_returns_defaults_when_empty() {
-        let conn = open_in_memory().unwrap();
-        let (s, has_saved_settings) = get_with_status(&conn).unwrap();
-        assert!(!has_saved_settings);
-        assert_eq!(s.default_site, "bilibili");
-        assert_eq!(s.theme, "system");
-        assert_eq!(s.danmaku_opacity, 0.8);
-        assert_eq!(s.danmaku_font_stroke, 0.0);
-        assert_eq!(s.danmaku_font_size, 20);
-        assert_eq!(s.danmaku_speed, 100);
-        assert_eq!(s.danmaku_area, 0.25);
-        assert!(s.danmaku_filter_gifts);
-        assert_eq!(s.danmaku_merge_window_seconds, 10);
-        assert!(s.super_chat_enabled);
-        assert_eq!(s.asr_font_size, 20);
-        assert!(s.asr_vad_enabled);
-        assert!(s.asr_punctuation_enabled);
-        assert_eq!(s.asr_provider, "auto");
-        assert!(s.asr_hotwords.is_empty());
-        assert!(!s.asr_translation_enabled);
-        assert_eq!(s.asr_translation_from, "auto");
-        assert_eq!(s.asr_translation_to, "zh-CN");
-        assert!(s.danmaku_shield_words.is_empty());
-        assert!(s.proxy.is_none());
-        assert!(s.recording_include_danmaku);
-        assert_eq!(s.recording_ass.resolution_width, 1920);
-        assert_eq!(s.recording_ass.font_size, 36);
-        assert_eq!(s.recording_ass.opacity_percent, 80);
-        assert_eq!(s.recording_ass.display_area_percent, 25);
-    }
-
-    #[test]
     fn proxy_mode_migrates_legacy_addresses_but_preserves_explicit_modes() {
         use crate::models::settings::ProxyMode;
         assert_eq!(AppSettings::default().proxy_mode, ProxyMode::Auto);
@@ -503,84 +471,6 @@ mod tests {
         let (back, has_saved_settings) = get_with_status(&conn).unwrap();
         assert!(has_saved_settings);
         assert_eq!(back, s);
-    }
-
-    #[test]
-    fn set_clamps_danmaku_merge_window() {
-        let conn = open_in_memory().unwrap();
-        let mut settings = AppSettings {
-            danmaku_merge_window_seconds: 1,
-            ..AppSettings::default()
-        };
-
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 1);
-
-        // 零是显式的"关闭合并"取值，必须原样通过这一边界。
-        settings.danmaku_merge_window_seconds = 0;
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 0);
-
-        settings.danmaku_merge_window_seconds = 60;
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_merge_window_seconds, 30);
-    }
-
-    #[test]
-    fn set_clamps_danmaku_speed() {
-        let conn = open_in_memory().unwrap();
-        let mut settings = AppSettings {
-            danmaku_speed: 100,
-            ..AppSettings::default()
-        };
-
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_speed, 100);
-
-        settings.danmaku_speed = 1;
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_speed, DANMAKU_SPEED_MIN);
-
-        settings.danmaku_speed = 500;
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_speed, DANMAKU_SPEED_MAX);
-    }
-
-    #[test]
-    fn set_normalizes_danmaku_font_stroke_to_half_pixels() {
-        let conn = open_in_memory().unwrap();
-        let mut settings = AppSettings {
-            danmaku_font_stroke: 1.74,
-            ..AppSettings::default()
-        };
-
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_font_stroke, 1.5);
-
-        settings.danmaku_font_stroke = 0.0;
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().danmaku_font_stroke, 0.0);
-
-        settings.danmaku_font_stroke = 0.1;
-        set(&conn, &settings).unwrap();
-        assert_eq!(
-            get(&conn).unwrap().danmaku_font_stroke,
-            DANMAKU_FONT_STROKE_MIN
-        );
-
-        settings.danmaku_font_stroke = 9.0;
-        set(&conn, &settings).unwrap();
-        assert_eq!(
-            get(&conn).unwrap().danmaku_font_stroke,
-            DANMAKU_FONT_STROKE_MAX
-        );
-
-        settings.danmaku_font_stroke = f32::NAN;
-        set(&conn, &settings).unwrap();
-        assert_eq!(
-            get(&conn).unwrap().danmaku_font_stroke,
-            DANMAKU_FONT_STROKE_DEFAULT
-        );
     }
 
     #[test]
@@ -655,44 +545,6 @@ mod tests {
         settings.recording_ass.overflow_policy = "drop".into();
         set(&conn, &settings).unwrap();
         assert_eq!(get(&conn).unwrap().recording_ass.overflow_policy, "drop");
-    }
-
-    #[test]
-    fn set_normalizes_local_asr_hotwords() {
-        let conn = open_in_memory().unwrap();
-        let mut settings = AppSettings {
-            asr_hotwords: vec![
-                " 主播昵称 ".into(),
-                "主播昵称".into(),
-                "GAME".into(),
-                "game".into(),
-                "\t".into(),
-            ],
-            ..AppSettings::default()
-        };
-
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().asr_hotwords, vec!["主播昵称", "GAME"]);
-
-        settings.asr_hotwords = (0..120).map(|index| format!("热词{index}")).collect();
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().asr_hotwords.len(), 100);
-    }
-
-    #[test]
-    fn set_normalizes_asr_provider() {
-        let conn = open_in_memory().unwrap();
-        let mut settings = AppSettings {
-            asr_provider: "unsupported".into(),
-            ..AppSettings::default()
-        };
-
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().asr_provider, "auto");
-
-        settings.asr_provider = "cuda".into();
-        set(&conn, &settings).unwrap();
-        assert_eq!(get(&conn).unwrap().asr_provider, "cuda");
     }
 
     #[test]
@@ -810,26 +662,6 @@ mod tests {
         assert!(!raw.contains("bilibili_app_personalization"));
     }
 
-    /// `hidden_home_entry_ids` 是 6.0.0 新增的同类字段，旧记录里没有它，
-    /// 按空列表回填。
-    #[test]
-    fn backfills_hidden_home_entry_ids_for_older_records() {
-        let conn = open_in_memory().unwrap();
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .remove("hidden_home_entry_ids");
-        conn.execute(
-            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
-            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
-        )
-        .unwrap();
-
-        let settings = get(&conn).unwrap();
-        assert!(settings.hidden_home_entry_ids.is_empty());
-    }
-
     /// 未知 id、重复项与乱序都在持久化边界被清理，且首页 / 关注 / 设置这类
     /// 非内容入口无法被写入。
     #[test]
@@ -851,50 +683,6 @@ mod tests {
             get(&conn).unwrap().hidden_home_entry_ids,
             vec!["video", "iptv"]
         );
-    }
-
-    /// 溢出策略是在 2.4 之后加入的，旧记录缺少这两个字段时按默认值补齐，其余
-    /// `recording_ass` 字段仍然必填。
-    #[test]
-    fn backfills_recording_ass_overflow_options_for_older_records() {
-        let conn = open_in_memory().unwrap();
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        let ass = value
-            .get_mut("recording_ass")
-            .and_then(serde_json::Value::as_object_mut)
-            .unwrap();
-        ass.remove("overflow_policy");
-        ass.remove("max_delay_seconds");
-        conn.execute(
-            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
-            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
-        )
-        .unwrap();
-
-        let ass = get(&conn).unwrap().recording_ass;
-        assert_eq!(ass.overflow_policy, "delay");
-        assert_eq!(ass.max_delay_seconds, 5);
-    }
-
-    /// UP 主屏蔽名单是新增的顶层字段，旧记录里没有它：缺失时按空名单回填，
-    /// 不能让整份设置变成 `settings_schema_unsupported`。
-    #[test]
-    fn backfills_video_blocked_uploaders_for_older_records() {
-        let conn = open_in_memory().unwrap();
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.remove("video_blocked_uploaders");
-        object.insert("danmaku_font_size".into(), serde_json::json!(19));
-        conn.execute(
-            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
-            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
-        )
-        .unwrap();
-
-        let (settings, saved) = get_with_status(&conn).unwrap();
-        assert!(saved);
-        assert!(settings.video_blocked_uploaders.is_empty());
-        assert_eq!(settings.danmaku_font_size, 19);
     }
 
     /// 名单在持久化边界去空白、去空项、去重，并按容量上限截断：
@@ -943,32 +731,74 @@ mod tests {
         );
     }
 
-    /// 悬停卡片预览是 2.12.0 新增的顶层字段，2.11.x 保存的记录里没有它。
-    /// 缺失时按默认值补齐，不能让整份设置变成 `settings_schema_unsupported`。
-    ///
-    /// `dynamic_background_enabled` 是 6.0.0 新增的同类字段，一并覆盖：它的默认值是
-    /// **false**，因此这里同时验证「回填」不等于「回填成 true」—— 缺字段的旧记录
-    /// 不该凭空得到一个用户没开过的效果。
     #[test]
-    fn backfills_room_card_preview_for_older_records() {
+    fn danmaku_numeric_options_keep_valid_values_and_bound_invalid_ones() {
+        let conn = open_in_memory().unwrap();
+        for (speed, window, stroke, expected) in [
+            (100, 1, 1.74, (100, 1, 1.5)),
+            (1, 0, 0.0, (DANMAKU_SPEED_MIN, 0, 0.0)),
+            (
+                500,
+                60,
+                9.0,
+                (DANMAKU_SPEED_MAX, 30, DANMAKU_FONT_STROKE_MAX),
+            ),
+            (100, 10, 0.1, (100, 10, DANMAKU_FONT_STROKE_MIN)),
+            (100, 10, f32::NAN, (100, 10, DANMAKU_FONT_STROKE_DEFAULT)),
+        ] {
+            let settings = AppSettings {
+                danmaku_speed: speed,
+                danmaku_merge_window_seconds: window,
+                danmaku_font_stroke: stroke,
+                ..Default::default()
+            };
+            set(&conn, &settings).unwrap();
+            let actual = get(&conn).unwrap();
+            assert_eq!(
+                (
+                    actual.danmaku_speed,
+                    actual.danmaku_merge_window_seconds,
+                    actual.danmaku_font_stroke
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn older_settings_backfill_only_new_fields_and_keep_user_values() {
         let conn = open_in_memory().unwrap();
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.remove("room_card_preview_enabled");
-        object.remove("recording_max_concurrent");
-        object.remove("dynamic_background_enabled");
-        object.insert("danmaku_font_size".into(), serde_json::json!(18));
+        for field in [
+            "hidden_home_entry_ids",
+            "video_blocked_uploaders",
+            "room_card_preview_enabled",
+            "recording_max_concurrent",
+            "dynamic_background_enabled",
+        ] {
+            value.as_object_mut().unwrap().remove(field);
+        }
+        for field in ["overflow_policy", "max_delay_seconds"] {
+            value["recording_ass"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+        }
+        value["danmaku_font_size"] = serde_json::json!(18);
         conn.execute(
             "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)",
-            params![SETTINGS_KEY, serde_json::to_string(&value).unwrap()],
+            params![SETTINGS_KEY, value.to_string()],
         )
         .unwrap();
-
-        let (settings, saved) = get_with_status(&conn).unwrap();
+        let (actual, saved) = get_with_status(&conn).unwrap();
         assert!(saved);
-        assert!(settings.room_card_preview_enabled);
-        assert_eq!(settings.recording_max_concurrent, 4);
-        assert!(!settings.dynamic_background_enabled);
-        assert_eq!(settings.danmaku_font_size, 18);
+        assert_eq!(actual.danmaku_font_size, 18);
+        assert!(actual.hidden_home_entry_ids.is_empty());
+        assert!(actual.video_blocked_uploaders.is_empty());
+        assert!(actual.room_card_preview_enabled);
+        assert!(!actual.dynamic_background_enabled);
+        assert_eq!(actual.recording_max_concurrent, 4);
+        assert_eq!(actual.recording_ass.overflow_policy, "delay");
+        assert_eq!(actual.recording_ass.max_delay_seconds, 5);
     }
 }

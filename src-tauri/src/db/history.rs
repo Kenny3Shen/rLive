@@ -137,205 +137,66 @@ mod tests {
     use super::*;
     use crate::db::schema::open_in_memory;
 
+    fn record(site: &str, room: &str, watched_at: i64) -> HistoryRecord {
+        HistoryRecord {
+            site_id: site.into(),
+            room_id: room.into(),
+            title: room.into(),
+            user_name: site.into(),
+            cover: "cover".into(),
+            watched_at,
+        }
+    }
+
     #[test]
-    fn upsert_list_and_clear_history() {
+    fn revisits_preserve_time_and_artwork_while_history_is_scoped_and_ordered() {
         let conn = open_in_memory().unwrap();
-        upsert(
-            &conn,
-            HistoryRecord {
-                site_id: "bilibili".into(),
-                room_id: "1".into(),
-                title: "t1".into(),
-                user_name: "u1".into(),
-                cover: String::new(),
-                watched_at: 10,
-            },
-        )
-        .unwrap();
-        upsert(
-            &conn,
-            HistoryRecord {
-                site_id: "bilibili".into(),
-                room_id: "2".into(),
-                title: "t2".into(),
-                user_name: "u2".into(),
-                cover: String::new(),
-                watched_at: 20,
-            },
-        )
-        .unwrap();
-
+        for (site, room, time) in [
+            ("bilibili", "middle", 20),
+            ("huya", "newest", 30),
+            ("douyu", "oldest", 10),
+        ] {
+            upsert(&conn, record(site, room, time)).unwrap();
+        }
+        let mut revisit = record("bilibili", "middle", 5);
+        revisit.cover.clear();
+        revisit.title = "更新".into();
+        upsert(&conn, revisit).unwrap();
         let rows = list(&conn).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].room_id, "2");
-        assert_eq!(rows[1].room_id, "1");
         assert_eq!(
-            metadata_for_room(&conn, "bilibili", "2").unwrap(),
-            Some(("t2".into(), "u2".into()))
+            rows.iter().map(|r| &*r.room_id).collect::<Vec<_>>(),
+            ["newest", "middle", "oldest"]
         );
-
-        // 较早的 watched_at 不得覆盖较新的值
-        upsert(
-            &conn,
-            HistoryRecord {
-                site_id: "bilibili".into(),
-                room_id: "2".into(),
-                title: "t2-old".into(),
-                user_name: "u2".into(),
-                cover: String::new(),
-                watched_at: 5,
-            },
-        )
-        .unwrap();
-        let rows = list(&conn).unwrap();
-        assert_eq!(rows[0].watched_at, 20);
-        assert_eq!(rows[0].title, "t2-old");
-
-        remove(&conn, "bilibili", "1").unwrap();
-        let rows = list(&conn).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].room_id, "2");
-
+        assert_eq!((&*rows[1].cover, rows[1].watched_at), ("cover", 20));
+        assert_eq!(
+            metadata_for_room(&conn, "bilibili", "middle").unwrap(),
+            Some(("更新".into(), "bilibili".into()))
+        );
+        assert!(
+            metadata_for_room(&conn, "huya", "middle")
+                .unwrap()
+                .is_none()
+        );
+        remove(&conn, "bilibili", "middle").unwrap();
+        assert_eq!(list(&conn).unwrap().len(), 2);
         clear(&conn).unwrap();
         assert!(list(&conn).unwrap().is_empty());
     }
 
     #[test]
-    fn global_list_keeps_platforms_that_a_smaller_query_cap_would_hide() {
+    fn global_list_exposes_the_full_retention_window_and_prunes_oldest() {
         let conn = open_in_memory().unwrap();
-        upsert(
-            &conn,
-            HistoryRecord {
-                site_id: "huya".into(),
-                room_id: "huya-room".into(),
-                title: "huya".into(),
-                user_name: "huya-user".into(),
-                cover: String::new(),
-                watched_at: 1,
-            },
-        )
-        .unwrap();
-
-        // 比历史上的 200 条查询上限多出一截，但仍在修剪触发器之内：这些行全都
-        // 还在库里，全局时间线就必须全都给出来。上限更小的时候，最旧的虎牙那条
-        // 会被 B 站的活跃使用挤出全局视图。
-        let bilibili_rows = 250;
-        for index in 0..bilibili_rows {
-            upsert(
-                &conn,
-                HistoryRecord {
-                    site_id: "bilibili".into(),
-                    room_id: format!("bilibili-{index}"),
-                    title: format!("title-{index}"),
-                    user_name: "bilibili-user".into(),
-                    cover: String::new(),
-                    watched_at: index + 10,
-                },
-            )
-            .unwrap();
+        upsert(&conn, record("huya", "old", 0)).unwrap();
+        for index in 1..HISTORY_RETENTION_LIMIT {
+            upsert(&conn, record("bilibili", &index.to_string(), index)).unwrap();
         }
-
         let rows = list(&conn).unwrap();
-        assert_eq!(rows.len() as i64, bilibili_rows + 1);
-        assert_eq!(rows.last().unwrap().room_id, "huya-room");
-
-        let huya_rows = list_for_site(&conn, "huya").unwrap();
-        assert_eq!(huya_rows.len(), 1);
-        assert_eq!(huya_rows[0].room_id, "huya-room");
-    }
-
-    #[test]
-    fn revisit_without_a_cover_keeps_the_recorded_artwork() {
-        let conn = open_in_memory().unwrap();
-        let mut record = HistoryRecord {
-            site_id: "bilibili".into(),
-            room_id: "1".into(),
-            title: "t1".into(),
-            user_name: "u1".into(),
-            cover: "https://example.com/a.jpg".into(),
-            watched_at: 10,
-        };
-        upsert(&conn, record.clone()).unwrap();
-
-        record.cover = String::new();
-        record.watched_at = 20;
-        upsert(&conn, record.clone()).unwrap();
-        assert_eq!(list(&conn).unwrap()[0].cover, "https://example.com/a.jpg");
-
-        record.cover = "https://example.com/b.jpg".into();
-        record.watched_at = 30;
-        upsert(&conn, record).unwrap();
-        assert_eq!(list(&conn).unwrap()[0].cover, "https://example.com/b.jpg");
-    }
-
-    #[test]
-    fn global_list_mixes_platforms_by_recency() {
-        let conn = open_in_memory().unwrap();
-        for (site_id, room_id, watched_at) in [
-            ("bilibili", "middle", 20),
-            ("huya", "newest", 30),
-            ("douyu", "oldest", 10),
-        ] {
-            upsert(
-                &conn,
-                HistoryRecord {
-                    site_id: site_id.into(),
-                    room_id: room_id.into(),
-                    title: room_id.into(),
-                    user_name: site_id.into(),
-                    cover: String::new(),
-                    watched_at,
-                },
-            )
-            .unwrap();
-        }
-
-        let rows = list(&conn).unwrap();
-        assert_eq!(
-            rows.iter()
-                .map(|record| record.room_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["newest", "middle", "oldest"]
-        );
-    }
-
-    #[test]
-    fn new_rooms_keep_history_within_the_storage_limit() {
-        let conn = open_in_memory().unwrap();
-        for index in 0..=HISTORY_RETENTION_LIMIT {
-            upsert(
-                &conn,
-                HistoryRecord {
-                    site_id: "bilibili".into(),
-                    room_id: format!("room-{index:05}"),
-                    title: format!("title-{index}"),
-                    user_name: "user".into(),
-                    cover: String::new(),
-                    watched_at: index,
-                },
-            )
-            .unwrap();
-        }
-
-        let count: i64 = conn
-            .query_row("SELECT count(*) FROM history", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, HISTORY_RETENTION_LIMIT);
-        // 全局时间线交付整段保留窗口：历史页窗口化后不再需要更小的查询上限。
+        assert_eq!(rows.len() as i64, HISTORY_RETENTION_LIMIT);
+        assert_eq!(rows.last().unwrap().room_id, "old");
+        assert_eq!(list_for_site(&conn, "huya").unwrap().len(), 1);
+        upsert(&conn, record("bilibili", "latest", HISTORY_RETENTION_LIMIT)).unwrap();
         assert_eq!(list(&conn).unwrap().len() as i64, HISTORY_RETENTION_LIMIT);
-        assert!(
-            metadata_for_room(&conn, "bilibili", "room-00000")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            metadata_for_room(
-                &conn,
-                "bilibili",
-                &format!("room-{HISTORY_RETENTION_LIMIT:05}")
-            )
-            .unwrap()
-            .is_some()
-        );
+        assert!(metadata_for_room(&conn, "huya", "old").unwrap().is_none());
+        assert_eq!(list(&conn).unwrap()[0].room_id, "latest");
     }
 }

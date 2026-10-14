@@ -222,7 +222,6 @@ impl DouyinSite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sites::douyin::DEFAULT_USER_AGENT;
     use serde_json::json;
     const ID: &str = "7520000000000000001";
     #[test]
@@ -347,75 +346,5 @@ mod tests {
             parse_video_feed(&json!({"status_code":0,"has_more":true,"aweme_list":items})).unwrap();
         assert_eq!(page.items.len(), FEED_COUNT);
         assert!(page.has_more);
-    }
-
-    #[tokio::test]
-    #[ignore = "需要用户显式提供 RLIVE_DOUYIN_TEST_COOKIE；不输出 Cookie 或媒体 URL"]
-    async fn cookie_video_feed_smoke() {
-        let cookie = std::env::var("RLIVE_DOUYIN_TEST_COOKIE").expect("请显式提供测试账号 Cookie");
-        let site = DouyinSite::new(crate::http_client::default_client(), cookie);
-        let page = site.video_feed().await.unwrap();
-        assert!(
-            !page.items.is_empty(),
-            "本批无受支持的作品，不能证明推荐可用"
-        );
-        let (item, url) = site.video_detail(&page.items[0].id).await.unwrap();
-        assert_eq!(item.id, page.items[0].id);
-        let response = crate::http_client::default_client()
-            .get(url)
-            .header("referer", VIDEO_REFERER)
-            .header("user-agent", DEFAULT_USER_AGENT)
-            .header("range", "bytes=0-1023")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT);
-    }
-
-    #[tokio::test]
-    #[ignore = "需要网络；只取一批公开 feed 样本，再按其中的作品 ID 取详情"]
-    async fn public_video_smoke() {
-        let site = DouyinSite::default();
-        site.ensure_web_session().await.unwrap();
-        let params = vec![
-            ("device_platform".into(), "webapp".into()),
-            ("aid".into(), "6383".into()),
-            ("channel".into(), "channel_pc_web".into()),
-            ("count".into(), "3".into()),
-            ("msToken".into(), generate_ms_token()),
-        ];
-        let feed = site
-            .get_signed_json(
-                "https://www.douyin.com/aweme/v1/web/tab/feed/",
-                &params,
-                VIDEO_REFERER,
-            )
-            .await
-            .unwrap();
-        let id = feed["aweme_list"]
-            .as_array()
-            .and_then(|items| items.iter().find_map(|item| item["aweme_id"].as_str()))
-            .expect("公开 feed 没有视频样本")
-            .to_string();
-        let (item, url) = site.video_detail(&id).await.unwrap();
-        let response = crate::http_client::default_client()
-            .get(url)
-            .header("referer", VIDEO_REFERER)
-            .header("user-agent", DEFAULT_USER_AGENT)
-            .header("range", "bytes=0-1023")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT);
-        assert!(
-            response
-                .headers()
-                .get("content-type")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains("video")
-        );
-        println!("公开作品 {}：H264 元数据与 CDN Range 验证通过", item.id);
     }
 }

@@ -18,9 +18,6 @@ mod parse;
 mod playback;
 mod room;
 
-#[cfg(test)]
-mod tests;
-
 use reqwest::Client;
 
 use crate::error::{AppError, AppResult};

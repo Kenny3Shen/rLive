@@ -673,20 +673,6 @@ fn parse_search_items(data: &Value, site_id: &SiteId) -> Vec<LiveRoomItem> {
         .collect()
 }
 
-// 线上 smoke 沿用同一份校验；这些入口仅在测试编译时存在。
-#[cfg(test)]
-pub(super) mod test_support {
-    use crate::error::AppResult;
-
-    pub(in super::super) fn normalize_tag_id(value: &str) -> Option<String> {
-        super::normalize_tag_id(value)
-    }
-
-    pub(in super::super) fn normalize_category_slug(value: &str) -> AppResult<String> {
-        super::normalize_category_slug(value)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3942,316 +3942,363 @@ async fn write_simple_response(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ActiveSessionState, AssExportOptions, CONTINUE_ON_LEAVE_DEFAULT, FfmpegRecordingOptions,
-        FinalizingSession, MINIMUM_FREE_SPACE_BYTES, RECORDING_METADATA_VERSION,
-        RECORDING_STORAGE_CONFIG_VERSION, RecordingEventSink, RecordingLibraryIndex,
-        RecordingManager, RecordingStartInput, RecordingStatus, RecordingStorageConfig, Session,
-        SessionState, StoredDanmakuBatch, StoredRecording, TaskOutcome, create_recording_bundle,
-        decode_playback_relative_path, find_bundle_in_root, finish_session, is_safe_recording_id,
-        load_storage_state, local_playback_url, media_file_name, parse_range, prepare_storage_root,
-        read_stored, recording_bundle_room_dir, recording_bundle_session_dir, recording_file_stem,
-        recording_timestamp, recover_bundle_sidecars, recover_stale_recordings, safe_relative_path,
-        salvage_temporary_media_after_worker_failure, scan_recording_root,
-        stop_sessions_until_deadline, storage_space_is_low, stored_keeps_background_danmaku,
-        wait_for_finalizing_sessions, write_metadata,
-    };
-    use crate::models::live::{DanmakuEvent, DanmakuKind, PlaybackProtocol};
-    use percent_encoding::percent_decode_str;
-    use reqwest::Url;
-    use std::collections::HashMap;
-    use std::fs::OpenOptions;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::{Arc, Barrier, Mutex};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::sync::{oneshot, watch};
-    use uuid::Uuid;
+    use super::*;
+    use crate::models::live::DanmakuKind;
+    use std::ops::Deref;
+    use std::sync::Barrier;
+    use tokio::sync::oneshot;
 
-    /// 不校验并发上限的用例统一用这个值，与设置默认值一致。
-    const DEFAULT_MAX_ACTIVE_RECORDINGS: usize = 4;
+    const ID: &str = "bilibili_100/主播_20260820-192158";
+    const SECOND_ID: &str = "bilibili_100/主播_20260820-193000";
+    const SOURCE: &str = "live:bilibili:shutdown";
 
-    /// 磁盘形态的录制 id：`<platform>_<room>/<user>_<time>`。
-    /// 手工创建分卷的测试必须自行 `create_dir_all`，
-    /// 因为 id 现在跨越房间目录与会话目录。
-    fn test_recording_id() -> String {
-        format!("bilibili_{}/主播_20260820-192158", Uuid::new_v4())
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("rlive-recording-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Deref for TestDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    // 字段按声明顺序释放，确保目录清理前先释放 manager 的文件锁。
+    struct Library {
+        manager: RecordingManager,
+        root: PathBuf,
+        directory: TestDir,
+    }
+
+    impl Library {
+        fn new() -> Self {
+            let directory = TestDir::new();
+            let manager = RecordingManager::new(&directory).unwrap();
+            let root = PathBuf::from(manager.storage_info().path);
+            Self {
+                manager,
+                root,
+                directory,
+            }
+        }
+
+        fn active(&self) -> Arc<SessionState> {
+            let bundle = self.root.join(ID);
+            std::fs::create_dir_all(&bundle).unwrap();
+            active_session_state(self.root.clone(), bundle, ID.into())
+        }
+
+        fn put(&self, stored: &StoredRecording) -> PathBuf {
+            let bundle = self.root.join(&stored.id);
+            std::fs::create_dir_all(&bundle).unwrap();
+            write_metadata(&bundle, stored).unwrap();
+            bundle
+        }
+
+        async fn start(
+            &self,
+            input: RecordingStartInput,
+            limit: usize,
+        ) -> AppResult<RecordingItem> {
+            self.start_with_ffmpeg_options(
+                input,
+                &crate::proxy::ProxyRoute::Direct,
+                FfmpegRecordingOptions::default(),
+                limit,
+            )
+            .await
+        }
+    }
+
+    impl Deref for Library {
+        type Target = RecordingManager;
+        fn deref(&self) -> &RecordingManager {
+            &self.manager
+        }
+    }
+
+    fn session(
+        state: &Arc<SessionState>,
+        cancel: watch::Sender<bool>,
+        task: JoinHandle<()>,
+    ) -> Session {
+        Session {
+            active: Arc::new(ActiveSessionState::new(state.clone())),
+            cancel,
+            task,
+        }
+    }
+
+    fn chat(content: &str) -> DanmakuEvent {
+        DanmakuEvent {
+            kind: DanmakuKind::Chat,
+            user: "viewer".into(),
+            is_self: false,
+            user_id: None,
+            content: content.into(),
+            color: None,
+            spans: None,
+            super_chat: None,
+            ts: 1,
+        }
+    }
+
+    fn enable_danmaku(state: &SessionState) {
+        let mut stored = state.stored.lock().unwrap();
+        stored.include_danmaku = true;
+        stored.continue_on_leave = true;
+        stored.danmaku_file = Some("danmaku.jsonl".into());
+    }
+
+    fn outcome(status: RecordingStatus) -> TaskOutcome {
+        TaskOutcome {
+            status,
+            error: None,
+            split: false,
+        }
     }
 
     #[test]
-    fn names_recording_media_from_user_title_and_start_time() {
+    fn names_media_and_bundles_without_collisions_across_roots() {
         let stem = recording_file_stem("主播:甲", "标题/测试", 1_700_000_000_000);
-
         assert!(stem.starts_with("主播_甲_标题_测试_"));
-        assert!(!stem.contains(':'));
-        assert!(!stem.contains('/'));
-        assert_eq!(
-            media_file_name(
+        assert!(!stem.contains([':', '/']));
+        for (protocol, url, extension) in [
+            (
                 PlaybackProtocol::Flv,
                 "https://example.test/live.flv",
-                &stem
+                "flv",
             ),
-            format!("{stem}.flv")
-        );
-        assert_eq!(
-            media_file_name(
+            (
                 PlaybackProtocol::MpegTs,
                 "https://example.test/live.m3u8",
-                &stem
+                "ts",
             ),
-            format!("{stem}.ts")
+        ] {
+            assert_eq!(
+                media_file_name(protocol, url, &stem),
+                format!("{stem}.{extension}")
+            );
+        }
+        let root = TestDir::new();
+        let history = TestDir::new();
+        let mut input = manager_test_input("https://example.test/live.flv", SOURCE, "100");
+        let room = recording_bundle_room_dir(&input);
+        let name = recording_bundle_session_dir(&input, 1_700_000_000_000);
+        assert_eq!(room, "bilibili_100");
+        assert!(name.ends_with(&recording_timestamp(1_700_000_000_000)));
+        let roots = [root.0.clone(), history.0.clone()];
+        for (target, suffix) in [(&root, ""), (&root, "_1"), (&root, "_2"), (&history, "_3")] {
+            let (bundle, id) = create_recording_bundle(target, &roots, &room, &name).unwrap();
+            assert_eq!(id, format!("{room}/{name}{suffix}"));
+            assert_eq!(bundle, target.join(&id));
+        }
+        input.site_id = None;
+        input.room_id = None;
+        input.source_kind = "iptv".into();
+        input.source_key = "iptv:source:cctv1".into();
+        assert_eq!(recording_bundle_room_dir(&input), "iptv_cctv1");
+    }
+
+    #[test]
+    fn recording_and_playback_paths_reject_traversal() {
+        for id in [ID, "iptv_cctv1/未知用户_20260820-192158"] {
+            assert!(is_safe_recording_id(id), "{id}");
+        }
+        for id in [
+            "bilibili_100",
+            "bilibili_100/user_1/extra",
+            "../bilibili_100/user_1",
+            "bilibili_100/../../etc",
+            "bilibili_100/..",
+            "bilibili_100/.",
+            "/bilibili_100/user_1",
+            "bilibili_100//user_1",
+            "bilibili_100/user_1/",
+            "bilibili_100\\user_1",
+            "bilibili:100/user_1",
+            "bilibili/user_1",
+            "_100/user_1",
+            "bilibili_100/user_1.",
+            "bilibili_100./user_1",
+            " bilibili_100/user_1",
+            "bilibili_100/user_1 ",
+        ] {
+            assert!(!is_safe_recording_id(id), "{id}");
+        }
+        for (path, safe) in [
+            ("segments/0001.ts", true),
+            ("", false),
+            ("../metadata.json", false),
+            ("metadata.json", false),
+        ] {
+            assert_eq!(safe_relative_path(Path::new(path)), safe, "{path}");
+        }
+        for path in [
+            vec!["%2E%2E", "metadata.json"],
+            vec!["segments%2Fsecret.ts"],
+            vec!["segments%5Csecret.ts"],
+        ] {
+            assert!(decode_playback_relative_path(path).is_none());
+        }
+    }
+
+    #[test]
+    fn local_playback_urls_round_trip_unicode_and_spaces() {
+        let id = "斗鱼_房间 100/斗鱼主播_20260816-120000";
+        let file = "斗鱼主播_标题 测试_20260816-120000.flv";
+        let url = local_playback_url("http://127.0.0.1:1234", "token", id, file).unwrap();
+        assert!(url.contains("%E6%96%97%E9%B1%BC_%E6%88%BF%E9%97%B4%20100"));
+        let parsed = Url::parse(&url).unwrap();
+        let segments: Vec<_> = parsed.path_segments().unwrap().collect();
+        let room = percent_decode_str(segments[1]).decode_utf8().unwrap();
+        let session = percent_decode_str(segments[2]).decode_utf8().unwrap();
+        assert_eq!(format!("{room}/{session}"), id);
+        assert!(is_safe_recording_id(id));
+        assert!(!segments[1].contains("%2F"));
+        assert_eq!(
+            decode_playback_relative_path([segments[3]]),
+            Some(PathBuf::from(file))
         );
     }
 
     #[test]
-    fn names_recording_bundles_from_platform_and_room_without_overwriting() {
-        let root = std::env::temp_dir().join(format!("rlive-recording-name-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let input = manager_test_input("https://example.test/live.flv", "live:bilibili:100", "100");
-        let started_at = 1_700_000_000_000;
-
-        let room_dir = recording_bundle_room_dir(&input);
-        assert_eq!(room_dir, "bilibili_100");
-        let session_dir = recording_bundle_session_dir(&input, started_at);
-        // 会话层级把用户名与媒体文件携带的同一时间戳配对，
-        // 因此分卷与其中的文件相互对应。
-        assert!(session_dir.ends_with(&recording_timestamp(started_at)));
-
-        let roots = [root.clone()];
-        let (first, first_id) =
-            create_recording_bundle(&root, &roots, &room_dir, &session_dir).unwrap();
-        let (_second, second_id) =
-            create_recording_bundle(&root, &roots, &room_dir, &session_dir).unwrap();
-        let (_third, third_id) =
-            create_recording_bundle(&root, &roots, &room_dir, &session_dir).unwrap();
-
-        // 同一房间的所有会话共享房间目录；只有会话层级
-        // 在两者冲突时追加后缀。
-        assert_eq!(first, root.join(&room_dir).join(&session_dir));
-        assert_eq!(first_id, format!("{room_dir}/{session_dir}"));
-        assert_eq!(second_id, format!("{room_dir}/{session_dir}_1"));
-        assert_eq!(third_id, format!("{room_dir}/{session_dir}_2"));
-        assert!(first.starts_with(root.join(&room_dir)));
-
-        let historical_root =
-            root.with_file_name(format!("rlive-recording-name-history-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&historical_root).unwrap();
-        let all_roots = [historical_root.clone(), root.clone()];
-        let (_historical, historical_id) =
-            create_recording_bundle(&historical_root, &all_roots, &room_dir, &session_dir).unwrap();
-        // id 在所有存储根中寻址同一场录制，
-        // 因此在另一个根中已被占用的名字会被跳过而不是复用。
-        assert_eq!(historical_id, format!("{room_dir}/{session_dir}_3"));
-
-        let mut iptv = input;
-        iptv.site_id = None;
-        iptv.room_id = None;
-        iptv.source_kind = "iptv".into();
-        iptv.source_key = "iptv:source:cctv1".into();
-        assert_eq!(recording_bundle_room_dir(&iptv), "iptv_cctv1");
-
-        std::fs::remove_dir_all(root).unwrap();
-        std::fs::remove_dir_all(historical_root).unwrap();
+    fn range_and_free_space_boundaries() {
+        for (header, size, expected) in [
+            (Some("bytes=10-20"), 100, Some((206, 10, 20))),
+            (Some("bytes=90-"), 100, Some((206, 90, 99))),
+            (Some("bytes=-10"), 100, Some((206, 90, 99))),
+            (None, 0, Some((200, 0, 0))),
+            (Some("bytes=0-0"), 0, None),
+            (Some("bytes=0-1,4-5"), 100, None),
+        ] {
+            assert_eq!(parse_range(header, size).ok(), expected, "{header:?}");
+        }
+        for (available, low) in [
+            (MINIMUM_FREE_SPACE_BYTES - 1, true),
+            (MINIMUM_FREE_SPACE_BYTES, false),
+            (MINIMUM_FREE_SPACE_BYTES + 1, false),
+        ] {
+            assert_eq!(storage_space_is_low(available), low);
+        }
     }
 
     #[test]
-    fn scan_finds_nested_bundles_and_ignores_single_level_ones() {
-        let root = std::env::temp_dir().join(format!("rlive-recording-scan-{}", Uuid::new_v4()));
-
-        // 同一房间的两个会话共用一个房间目录。
-        let first_id = "bilibili_100/主播_20260820-192158".to_string();
-        let second_id = "bilibili_100/主播_20260820-193000".to_string();
-        for id in [&first_id, &second_id] {
-            let bundle = root.join(id);
-            std::fs::create_dir_all(&bundle).unwrap();
-            write_metadata(&bundle, &completed_recording(id.clone(), "100")).unwrap();
+    fn scan_and_delete_keep_nested_library_index_consistent() {
+        let lib = Library::new();
+        for id in [ID, SECOND_ID, "bilibili_legacy"] {
+            lib.put(&completed_recording(id.into(), "100"));
         }
-
-        // 嵌套布局之前的单级分卷：它的元数据在上一级，
-        // 两级扫描不会触及它。文件原样留在磁盘上。
-        let legacy = root.join("bilibili_legacy");
-        std::fs::create_dir_all(&legacy).unwrap();
-        write_metadata(
-            &legacy,
-            &completed_recording("bilibili_legacy".into(), "legacy"),
-        )
-        .unwrap();
-
-        let found = scan_recording_root(&root);
+        let found = scan_recording_root(&lib.root);
         assert_eq!(found.len(), 2);
-        assert!(found.contains_key(&first_id));
-        assert!(found.contains_key(&second_id));
-        assert!(!found.contains_key("bilibili_legacy"));
-        assert!(legacy.join("metadata.json").is_file());
-
-        // 两个会话都能通过 id 解析回各自的分卷。
-        let roots = [root.clone()];
-        assert_eq!(
-            find_bundle_in_root(&roots, &first_id).unwrap().1,
-            root.join(&first_id)
-        );
-        assert!(find_bundle_in_root(&roots, "bilibili_legacy").is_none());
-
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    /// 删除时也要把该录制从缓存的库索引中去掉。
-    ///
-    /// 索引按存储根索引。在嵌套布局下从 `bundle.parent()` 推导出的
-    /// 是房间目录，匹配不到任何索引条目，
-    /// 于是被删除的卡片在每次刷新时都会重新出现。
-    #[test]
-    fn deleting_a_recording_also_drops_it_from_the_library_index() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-delete-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-
-        // 同一房间的两个会话，因此房间目录必须在第一次删除后存活，
-        // 只在第二次删除时消失。
-        let kept_id = "bilibili_100/主播_20260820-192158".to_string();
-        let removed_id = "bilibili_100/主播_20260820-193000".to_string();
-        for id in [&kept_id, &removed_id] {
-            let bundle = root.join(id);
-            std::fs::create_dir_all(&bundle).unwrap();
-            write_metadata(&bundle, &completed_recording(id.clone(), "100")).unwrap();
+        for id in [ID, SECOND_ID] {
+            assert!(found.contains_key(id));
+            assert_eq!(
+                find_bundle_in_root(&[lib.root.clone()], id).unwrap().1,
+                lib.root.join(id)
+            );
         }
-
-        // 先执行列表操作，正是它填充缓存的索引。
-        let listed = manager.list().unwrap();
-        assert_eq!(listed.len(), 2);
-
-        manager.delete(&removed_id).unwrap();
-        let after = manager.list().unwrap();
+        assert!(find_bundle_in_root(&[lib.root.clone()], "bilibili_legacy").is_none());
+        assert_eq!(lib.list().unwrap().len(), 2);
+        lib.delete(SECOND_ID).unwrap();
         assert_eq!(
-            after
+            lib.list()
+                .unwrap()
                 .iter()
                 .map(|item| item.id.as_str())
                 .collect::<Vec<_>>(),
-            [kept_id.as_str()],
-            "删除后的录制不应继续出现在列表中"
+            [ID]
         );
-        assert!(!root.join(&removed_id).exists());
-        // 留存下来的会话保留共享的房间目录。
-        assert!(root.join("bilibili_100").is_dir());
-
-        manager.delete(&kept_id).unwrap();
-        assert!(manager.list().unwrap().is_empty());
-        // 房间的最后一个会话删除时带走被清空的房间目录。
-        assert!(!root.join("bilibili_100").exists());
-
-        // 删除已经不存在的内容仍然视为成功。
-        manager.delete(&removed_id).unwrap();
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).ok();
+        assert!(!lib.root.join(SECOND_ID).exists());
+        assert!(lib.root.join("bilibili_100").is_dir());
+        lib.delete(ID).unwrap();
+        assert!(lib.list().unwrap().is_empty());
+        assert!(!lib.root.join("bilibili_100").exists());
+        lib.delete(SECOND_ID).unwrap();
+        assert!(lib.root.join("bilibili_legacy/metadata.json").is_file());
     }
 
     #[test]
-    fn recording_id_accepts_two_levels_and_rejects_traversal() {
-        assert!(is_safe_recording_id("bilibili_100/user_20260820-192158"));
-        assert!(is_safe_recording_id("iptv_cctv1/未知用户_20260820-192158"));
+    fn library_index_prioritizes_roots_and_refreshes_external_additions() {
+        let primary = TestDir::new();
+        let fallback = TestDir::new();
+        let roots = [primary.0.clone(), fallback.0.clone()];
+        let mut index = RecordingLibraryIndex::default();
+        for (root, title) in [(&fallback, "fallback"), (&primary, "primary")] {
+            index.replace_root(
+                root.0.clone(),
+                HashMap::from([(ID.into(), completed_recording(ID.into(), title))]),
+            );
+        }
+        assert_eq!(index.items(&roots).len(), 1);
+        assert_eq!(index.items(&roots)[0].title, "primary");
+        index.upsert(&primary, completed_recording(ID.into(), "updated"));
+        assert_eq!(index.items(&roots)[0].title, "updated");
+        index.remove(&primary, ID);
+        assert_eq!(index.items(&roots)[0].title, "fallback");
 
-        // 单级属于嵌套之前的布局，已不再构成有效 id。
-        assert!(!is_safe_recording_id("bilibili_100"));
-        // 三级会让某个分卷藏到其房间目录之下。
-        assert!(!is_safe_recording_id("bilibili_100/user_1/extra"));
-        assert!(!is_safe_recording_id(&Uuid::new_v4().to_string()));
-
-        // 路径穿越、绝对路径和仅含点的层级仍然被拒绝：
-        // 这是把播放与删除限制在存储根之内的唯一守卫。
-        assert!(!is_safe_recording_id("../bilibili_100/user_1"));
-        assert!(!is_safe_recording_id("bilibili_100/../../etc"));
-        assert!(!is_safe_recording_id("bilibili_100/.."));
-        assert!(!is_safe_recording_id("bilibili_100/."));
-        assert!(!is_safe_recording_id("/bilibili_100/user_1"));
-        assert!(!is_safe_recording_id("bilibili_100//user_1"));
-        assert!(!is_safe_recording_id("bilibili_100/user_1/"));
-        assert!(!is_safe_recording_id("bilibili_100\\user_1"));
-        assert!(!is_safe_recording_id("bilibili:100/user_1"));
-        // 房间层级仍必须符合 `<platform>_<room>` 形态。
-        assert!(!is_safe_recording_id("bilibili/user_1"));
-        assert!(!is_safe_recording_id("_100/user_1"));
-        // 末尾的点号和首尾空白会破坏 Windows 路径。
-        assert!(!is_safe_recording_id("bilibili_100/user_1."));
-        assert!(!is_safe_recording_id("bilibili_100./user_1"));
-        assert!(!is_safe_recording_id(" bilibili_100/user_1"));
-        assert!(!is_safe_recording_id("bilibili_100/user_1 "));
-    }
-
-    #[test]
-    fn recording_space_guard_keeps_its_reserve_boundary() {
-        assert!(storage_space_is_low(MINIMUM_FREE_SPACE_BYTES - 1));
-        assert!(!storage_space_is_low(MINIMUM_FREE_SPACE_BYTES));
-        assert!(!storage_space_is_low(MINIMUM_FREE_SPACE_BYTES + 1));
-    }
-
-    #[test]
-    fn recovery_counts_valid_danmaku_before_an_incomplete_tail() {
-        let root = std::env::temp_dir().join(format!("rlive-danmaku-count-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
+        let bundle = primary.join(ID);
         std::fs::create_dir_all(&bundle).unwrap();
-        let mut stored = completed_recording(id, "danmaku-count");
-        stored.include_danmaku = true;
-        stored.danmaku_file = Some("danmaku.jsonl".into());
-        let events = vec![
-            DanmakuEvent {
-                kind: DanmakuKind::Chat,
-                user: "viewer-1".into(),
-                is_self: false,
-                user_id: None,
-                content: "first".into(),
-                color: None,
-                spans: None,
-                super_chat: None,
-                ts: 1,
-            },
-            DanmakuEvent {
-                kind: DanmakuKind::Chat,
-                user: "viewer-2".into(),
-                is_self: false,
-                user_id: None,
-                content: "second".into(),
-                color: None,
-                spans: None,
-                super_chat: None,
-                ts: 2,
-            },
-        ];
-        let batch = serde_json::to_string(&StoredDanmakuBatch {
-            offset_ms: 10,
-            events: &events,
-        })
-        .unwrap();
-        std::fs::write(
-            bundle.join("danmaku.jsonl"),
-            format!("{batch}\n{{\"offset_ms\":"),
-        )
-        .unwrap();
-
-        assert_eq!(super::count_recorded_danmaku(&bundle, &stored), Some(2));
-
-        std::fs::remove_dir_all(root).unwrap();
+        write_metadata(&bundle, &completed_recording(ID.into(), "external")).unwrap();
+        // 不依赖文件系统时间戳精度，但仍走实际过期根刷新分支。
+        index.roots.get_mut(&primary.0).unwrap().modified_at = None;
+        index.refresh_changed_roots(std::slice::from_ref(&primary.0));
+        assert_eq!(index.items(&roots)[0].title, "external");
     }
 
     #[test]
-    fn concurrent_metadata_replacements_leave_a_valid_bundle() {
-        let root = std::env::temp_dir().join(format!("rlive-metadata-write-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let stored = completed_recording(id, "metadata");
-        write_metadata(&bundle, &stored).unwrap();
+    fn library_scan_is_lazy_and_active_items_only_include_tracked_sessions() {
+        let lib = Library::new();
+        lib.put(&completed_recording(SECOND_ID.into(), "historical"));
+        assert!(!lib.library_hydrated.load(Ordering::Acquire));
+        assert!(lib.active_items().is_empty());
+        let state = lib.active();
+        lib.sessions.lock().unwrap().insert(
+            ID.into(),
+            session(
+                &state,
+                watch::channel(false).0,
+                tauri::async_runtime::spawn(async {}),
+            ),
+        );
+        let active = lib.active_items();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, ID);
+        assert_eq!(active[0].status, RecordingStatus::Recording);
+        assert!(!lib.library_hydrated.load(Ordering::Acquire));
+        let listed = lib.list().unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|item| item.title == "historical"));
+        assert!(lib.library_hydrated.load(Ordering::Acquire));
+        assert_eq!(lib.active_items().len(), 1);
+    }
 
+    #[test]
+    fn concurrent_metadata_writes_and_sidecar_recovery_are_atomic() {
+        let lib = Library::new();
+        let mut old = completed_recording(ID.into(), "old");
+        old.status = RecordingStatus::Recording;
+        let bundle = lib.put(&old);
         let barrier = Arc::new(Barrier::new(8));
         let handles: Vec<_> = (0..8)
             .map(|index| {
                 let barrier = barrier.clone();
                 let bundle = bundle.clone();
-                let mut stored = stored.clone();
-                stored.title = format!("metadata-{index}");
+                let mut stored = old.clone();
                 std::thread::spawn(move || {
+                    stored.title = format!("metadata-{index}");
                     barrier.wait();
                     write_metadata(&bundle, &stored).unwrap();
                 })
@@ -4260,107 +4307,509 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
-
-        let persisted: StoredRecording =
-            serde_json::from_slice(&std::fs::read(bundle.join("metadata.json")).unwrap()).unwrap();
-        assert!(persisted.title.starts_with("metadata-"));
-        assert!(!bundle.join("metadata.json.tmp").exists());
-        assert!(!bundle.join("metadata.json.bak").exists());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn startup_recovery_prefers_valid_metadata_tmp_over_old_backup() {
-        let root = std::env::temp_dir().join(format!("rlive-metadata-recovery-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        // id 跨越分卷的两级，因此不可能来自 `file_name()`。
-        let mut old = completed_recording(id, "old");
-        old.status = RecordingStatus::Recording;
-        let mut next = old.clone();
-        next.status = RecordingStatus::Completed;
-        next.title = "new".into();
-        std::fs::write(
-            bundle.join("metadata.json.bak"),
-            serde_json::to_vec_pretty(&old).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            bundle.join("metadata.json.tmp"),
-            serde_json::to_vec_pretty(&next).unwrap(),
-        )
-        .unwrap();
-
+        assert!(
+            read_stored(&lib.root, ID)
+                .unwrap()
+                .title
+                .starts_with("metadata-")
+        );
+        for sidecar in ["metadata.json.tmp", "metadata.json.bak"] {
+            assert!(!bundle.join(sidecar).exists());
+        }
+        std::fs::remove_file(bundle.join("metadata.json")).unwrap();
+        let next = completed_recording(ID.into(), "new");
+        for (file, stored) in [("metadata.json.bak", old), ("metadata.json.tmp", next)] {
+            std::fs::write(bundle.join(file), serde_json::to_vec(&stored).unwrap()).unwrap();
+        }
         recover_bundle_sidecars(&bundle).unwrap();
-
-        let recovered: StoredRecording =
-            serde_json::from_slice(&std::fs::read(bundle.join("metadata.json")).unwrap()).unwrap();
-        assert_eq!(recovered.title, "new");
-        assert!(!bundle.join("metadata.json.bak").exists());
-        assert!(!bundle.join("metadata.json.tmp").exists());
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(read_stored(&lib.root, ID).unwrap().title, "new");
+        for sidecar in ["metadata.json.tmp", "metadata.json.bak"] {
+            assert!(!bundle.join(sidecar).exists());
+        }
     }
 
     #[test]
-    fn parses_ranges_and_suffix_ranges() {
-        assert_eq!(
-            parse_range(Some("bytes=10-20"), 100).unwrap(),
-            (206, 10, 20)
+    fn sidecars_hide_account_ids_and_count_valid_batches_before_truncated_tail() {
+        let lib = Library::new();
+        let mut stored = completed_recording(ID.into(), "danmaku");
+        stored.include_danmaku = true;
+        stored.danmaku_file = Some("danmaku.jsonl".into());
+        let bundle = lib.put(&stored);
+        let mut own = chat("测试");
+        own.is_self = true;
+        own.user_id = Some("private-account-id".into());
+        let batch = serde_json::to_string(&StoredDanmakuBatch {
+            offset_ms: 250,
+            events: &[own, chat("second")],
+        })
+        .unwrap();
+        assert!(batch.contains("\"offset_ms\":250"));
+        assert!(batch.contains("\"is_self\":true"));
+        assert!(!batch.contains("private-account-id"));
+        assert!(!batch.contains("user_id"));
+        std::fs::write(
+            bundle.join("danmaku.jsonl"),
+            format!("{batch}\n{{\"offset_ms\":"),
+        )
+        .unwrap();
+        assert_eq!(count_recorded_danmaku(&bundle, &stored), Some(2));
+    }
+
+    #[test]
+    fn only_background_sidecar_recordings_retain_matching_connections() {
+        for (background, danmaku, source, expected) in [
+            (true, true, SOURCE, true),
+            (false, true, SOURCE, false),
+            (true, false, SOURCE, false),
+            (true, true, "live:bilibili:other", false),
+        ] {
+            let mut stored = completed_recording(ID.into(), "shutdown");
+            stored.status = RecordingStatus::Recording;
+            stored.continue_on_leave = background;
+            stored.include_danmaku = danmaku;
+            assert_eq!(stored_keeps_background_danmaku(&stored, source), expected);
+        }
+        let lib = Library::new();
+        let danmaku = crate::danmu_rs::DanmakuManager::new();
+        assert!(danmaku.begin_connect(100, SOURCE.into(), false));
+        {
+            let _reservation = lib.reserve_background_danmaku_start(SOURCE, true);
+            assert!(lib.has_background_danmaku_recording(SOURCE));
+            assert!(danmaku.detach_for_generation(101));
+        }
+        assert!(!lib.has_background_danmaku_recording(SOURCE));
+        assert!(danmaku.disconnect_background_for_source(SOURCE));
+    }
+
+    #[tokio::test]
+    async fn leave_guard_persists_background_ownership_and_finalizing_accepts_last_batch() {
+        let lib = Library::new();
+        let state = lib.active();
+        enable_danmaku(&state);
+        state.stored.lock().unwrap().continue_on_leave = false;
+        *state.danmaku_writer.lock().unwrap() = Some(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(state.bundle.join("danmaku.jsonl"))
+                .unwrap(),
         );
-        assert_eq!(parse_range(Some("bytes=90-"), 100).unwrap(), (206, 90, 99));
-        assert_eq!(parse_range(Some("bytes=-10"), 100).unwrap(), (206, 90, 99));
-        assert_eq!(parse_range(None, 0).unwrap(), (200, 0, 0));
-        assert!(parse_range(Some("bytes=0-0"), 0).is_err());
-        assert!(parse_range(Some("bytes=0-1,4-5"), 100).is_err());
+        lib.sessions.lock().unwrap().insert(
+            ID.into(),
+            session(
+                &state,
+                watch::channel(false).0,
+                tauri::async_runtime::spawn(async {}),
+            ),
+        );
+        assert!(!lib.has_background_danmaku_recording(SOURCE));
+        assert!(
+            lib.set_continue_on_leave(ID, true)
+                .unwrap()
+                .continue_on_leave
+        );
+        assert!(lib.has_background_danmaku_recording(SOURCE));
+        assert!(read_stored(&lib.root, ID).unwrap().continue_on_leave);
+
+        lib.sessions.lock().unwrap().remove(ID);
+        lib.finalizing.lock().unwrap().insert(
+            ID.into(),
+            FinalizingSession {
+                state: state.clone(),
+            },
+        );
+        lib.capture_danmaku(SOURCE, &[chat("final")]);
+        assert_eq!(state.danmaku_count.load(Ordering::Acquire), 1);
+        assert!(
+            !std::fs::read(state.bundle.join("danmaku.jsonl"))
+                .unwrap()
+                .is_empty()
+        );
+        finish_session(&state, outcome(RecordingStatus::Completed));
+        lib.capture_danmaku(SOURCE, &[chat("too late")]);
+        assert_eq!(state.danmaku_count.load(Ordering::Acquire), 1);
+        assert_eq!(read_stored(&lib.root, ID).unwrap().danmaku_count, 1);
+        *state.danmaku_writer.lock().unwrap() = None;
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_waits_for_finalization_and_is_idempotent() {
+        let lib = Library::new();
+        let state = lib.active();
+        let (cancel, mut rx) = watch::channel(false);
+        let task_state = state.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            if !*rx.borrow() {
+                rx.changed().await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            finish_session(&task_state, outcome(RecordingStatus::Completed));
+        });
+        lib.sessions
+            .lock()
+            .unwrap()
+            .insert(ID.into(), session(&state, cancel, task));
+        lib.stop_all_graceful().await;
+        lib.stop_all_graceful().await;
+        assert!(lib.sessions.lock().unwrap().is_empty());
+        assert!(state.finished.load(Ordering::Acquire));
+        let stored = read_stored(&lib.root, ID).unwrap();
+        assert_eq!(stored.status, RecordingStatus::Completed);
+        assert!(stored.ended_at.is_some());
+    }
+
+    struct TaskDropFlag(Arc<AtomicBool>);
+    impl Drop for TaskDropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_only_aborts_owned_tasks_and_defers_recovery_to_restart() {
+        for owned in [true, false] {
+            let lib = Library::new();
+            let state = lib.active();
+            std::fs::write(state.bundle.join("stream.flv.part"), b"partial-media").unwrap();
+            state.bytes.store(13, Ordering::Relaxed);
+            let (cancel, rx) = watch::channel(false);
+            let dropped = Arc::new(AtomicBool::new(false));
+            let flag = dropped.clone();
+            let (ready, ready_rx) = oneshot::channel();
+            let task = tauri::async_runtime::spawn(async move {
+                let _flag = TaskDropFlag(flag);
+                let _rx = rx;
+                ready.send(()).unwrap();
+                std::future::pending::<()>().await;
+            });
+            ready_rx.await.unwrap();
+            let mut other_owner = None;
+            if owned {
+                stop_sessions_until_deadline(
+                    vec![(ID.into(), session(&state, cancel, task))],
+                    tokio::time::Instant::now(),
+                )
+                .await;
+            } else {
+                // 另一 stop 请求拥有 task；退出等待不能越权取消它。
+                other_owner = Some(task);
+                wait_for_finalizing_sessions(
+                    vec![(ID.into(), state.clone())],
+                    tokio::time::Instant::now(),
+                )
+                .await;
+            }
+            assert_eq!(dropped.load(Ordering::Acquire), owned);
+            assert!(!state.finished.load(Ordering::Acquire));
+            assert!(state.bundle.join("stream.flv.part").exists());
+            assert!(!state.bundle.join("stream.flv").exists());
+            assert_eq!(
+                read_stored(&lib.root, ID).unwrap().status,
+                RecordingStatus::Recording
+            );
+            if let Some(task) = other_owner {
+                task.abort();
+                let _ = task.await;
+                assert!(dropped.load(Ordering::Acquire));
+            }
+            recover_stale_recordings(&lib.root).unwrap();
+            assert!(!state.bundle.join("stream.flv.part").exists());
+            assert_eq!(
+                std::fs::read(state.bundle.join("stream.flv")).unwrap(),
+                b"partial-media"
+            );
+            let stored = read_stored(&lib.root, ID).unwrap();
+            assert_eq!(stored.status, RecordingStatus::Interrupted);
+            assert!(stored.ended_at.is_some());
+        }
     }
 
     #[test]
-    fn local_playback_paths_stay_inside_the_recording_bundle() {
-        assert!(safe_relative_path(
-            PathBuf::from("segments/0001.ts").as_path()
-        ));
-        assert!(!safe_relative_path(PathBuf::new().as_path()));
-        assert!(!safe_relative_path(
-            PathBuf::from("../metadata.json").as_path()
-        ));
-        assert!(!safe_relative_path(
-            PathBuf::from("metadata.json").as_path()
-        ));
+    fn recovery_handles_failed_parts_missing_media_and_unsafe_paths() {
+        for (status, media, part, error) in [
+            (
+                RecordingStatus::Failed,
+                "stream.flv",
+                true,
+                "发布录制文件失败",
+            ),
+            (
+                RecordingStatus::Recording,
+                "stream.flv",
+                false,
+                "媒体文件缺失",
+            ),
+            (
+                RecordingStatus::Recording,
+                "../outside.flv",
+                false,
+                "媒体路径无效",
+            ),
+        ] {
+            let lib = Library::new();
+            let stored = StoredRecording {
+                status,
+                media_file: media.into(),
+                error: part.then(|| error.into()),
+                ..completed_recording(ID.into(), "recovery")
+            };
+            let bundle = lib.put(&stored);
+            if part {
+                std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
+            }
+            recover_stale_recordings(&lib.root).unwrap();
+            let recovered = read_stored(&lib.root, ID).unwrap();
+            assert_eq!(recovered.status, RecordingStatus::Interrupted);
+            assert!(recovered.ended_at.is_some());
+            assert!(
+                recovered
+                    .error
+                    .as_deref()
+                    .is_some_and(|message| message.contains(error))
+            );
+            assert!(!lib.root.join("outside.flv").exists());
+            assert!(!lib.root.join("bilibili_100/outside.flv").exists());
+            if part {
+                assert!(!bundle.join("stream.flv.part").exists());
+                assert_eq!(
+                    std::fs::read(bundle.join("stream.flv")).unwrap(),
+                    b"partial-media"
+                );
+            }
+        }
     }
 
     #[test]
-    fn local_playback_urls_round_trip_unicode_and_spaces() {
-        let id = "斗鱼_房间 100/斗鱼主播_20260816-120000";
-        let file = "斗鱼主播_标题 测试_20260816-120000.flv";
-        let url = local_playback_url("http://127.0.0.1:1234", "token", id, file).unwrap();
+    fn worker_failure_salvages_parts_without_overwriting_final_media() {
+        let lib = Library::new();
+        let state = lib.active();
+        for part in [b"partial-media".as_slice(), b"new-partial"] {
+            std::fs::write(state.bundle.join("stream.flv.part"), part).unwrap();
+            salvage_temporary_media_after_worker_failure(&state);
+            assert_eq!(
+                std::fs::read(state.bundle.join("stream.flv")).unwrap(),
+                b"partial-media"
+            );
+            if part == b"partial-media" {
+                assert!(!state.bundle.join("stream.flv.part").exists());
+            } else {
+                assert_eq!(
+                    std::fs::read(state.bundle.join("stream.flv.part")).unwrap(),
+                    part
+                );
+            }
+        }
+    }
 
-        assert!(url.contains("%E6%96%97%E9%B1%BC_%E6%88%BF%E9%97%B4%20100"));
-        assert!(url.contains("%E6%96%97%E9%B1%BC%E4%B8%BB%E6%92%AD"));
-        assert!(url.contains("%20"));
-        let parsed = Url::parse(&url).unwrap();
-        let segments = parsed.path_segments().unwrap().collect::<Vec<_>>();
-        // id 在 token 之后占据两段，回放服务器恰好重新拼接这两段。
-        // 编码端与解析端必须在此一致，
-        // 否则每场录制都会以 404 播放。
-        let room = percent_decode_str(segments[1]).decode_utf8().unwrap();
-        let session = percent_decode_str(segments[2]).decode_utf8().unwrap();
-        assert_eq!(format!("{room}/{session}"), id);
-        assert!(is_safe_recording_id(&format!("{room}/{session}")));
-        // id 内部的分隔符不能原样保留，否则两级会坍缩成一个不可用的段。
-        assert!(!segments[1].contains("%2F"));
-        let encoded = segments.last().unwrap().to_string();
+    #[tokio::test]
+    async fn finalizing_sessions_stay_visible_and_fence_mutations() {
+        let lib = Library::new();
+        let state = lib.active();
+        lib.finalizing
+            .lock()
+            .unwrap()
+            .insert(ID.into(), FinalizingSession { state });
+        assert_eq!(lib.list().unwrap()[0].status, RecordingStatus::Recording);
+        assert_eq!(lib.delete(ID).unwrap_err().code, "recording_still_active");
+        assert_eq!(lib.stop(ID).await.unwrap_err().code, "recording_stopping");
+        let duplicate = lib
+            .start(
+                manager_test_input("https://example.test/live.flv", SOURCE, "shutdown"),
+                4,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(duplicate.code, "recording_already_active");
+        let error = lib
+            .set_storage_path(Some(
+                lib.directory.join("busy-target").display().to_string(),
+            ))
+            .unwrap_err();
+        assert_eq!(error.code, "recording_storage_busy");
+        assert!(lib.root.join(ID).join("metadata.json").is_file());
         assert_eq!(
-            decode_playback_relative_path([encoded.as_str()]),
-            Some(PathBuf::from(file))
+            lib.storage_info().path,
+            crate::app_paths::path_to_string(&lib.root)
         );
     }
 
     #[test]
-    fn encoded_playback_paths_cannot_add_separators_or_parent_segments() {
-        assert!(decode_playback_relative_path(["%2E%2E", "metadata.json"]).is_none());
-        assert!(decode_playback_relative_path(["segments%2Fsecret.ts"]).is_none());
-        assert!(decode_playback_relative_path(["segments%5Csecret.ts"]).is_none());
+    fn input_defaults_preserve_explicit_opt_out_and_metadata_requires_background_flag() {
+        const { assert!(CONTINUE_ON_LEAVE_DEFAULT) };
+        let input = manager_test_input("https://example.test/live.flv", SOURCE, "shutdown");
+        let mut value = serde_json::to_value(&input).unwrap();
+        for key in ["includeDanmaku", "continueOnLeave"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let parsed: RecordingStartInput = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            (parsed.include_danmaku, parsed.continue_on_leave),
+            (None, None)
+        );
+        for default in [false, true] {
+            let resolved = parsed.clone().with_recording_defaults(default);
+            assert_eq!(resolved.include_danmaku, Some(default));
+            assert_eq!(resolved.continue_on_leave, Some(true));
+            let explicit = input.clone().with_recording_defaults(default);
+            assert_eq!(
+                (explicit.include_danmaku, explicit.continue_on_leave),
+                (Some(false), Some(false))
+            );
+        }
+        let mut metadata = serde_json::to_value(completed_recording(ID.into(), "legacy")).unwrap();
+        metadata
+            .as_object_mut()
+            .unwrap()
+            .remove("continue_on_leave");
+        assert!(serde_json::from_value::<StoredRecording>(metadata).is_err());
+    }
+
+    #[test]
+    fn storage_migration_moves_current_bundles_but_never_changes_legacy_metadata() {
+        let lib = Library::new();
+        let first = lib.put(&completed_recording(ID.into(), "current"));
+        std::fs::write(first.join("stream.flv"), b"media").unwrap();
+        std::fs::write(first.join("danmaku.jsonl"), b"{}\n").unwrap();
+        let old = lib.put(&completed_recording(SECOND_ID.into(), "legacy"));
+        std::fs::write(old.join("stream.flv"), b"old-media").unwrap();
+        let mut metadata =
+            serde_json::to_value(completed_recording(SECOND_ID.into(), "legacy")).unwrap();
+        metadata["schema_version"] = serde_json::json!(1);
+        let metadata = serde_json::to_vec(&metadata).unwrap();
+        std::fs::write(old.join("metadata.json"), &metadata).unwrap();
+        assert_eq!(scan_recording_root(&lib.root).len(), 1);
+        let info = lib
+            .set_storage_path(Some(
+                lib.directory
+                    .join("custom-recordings ")
+                    .display()
+                    .to_string(),
+            ))
+            .unwrap();
+        let target = PathBuf::from(info.path);
+        assert!(!first.exists());
+        for file in ["stream.flv", "danmaku.jsonl", "metadata.json"] {
+            assert!(target.join(ID).join(file).is_file());
+        }
+        assert!(!target.join(SECOND_ID).exists());
+        assert!(old.join("stream.flv").is_file());
+        assert_eq!(std::fs::read(old.join("metadata.json")).unwrap(), metadata);
+        assert_eq!(lib.list().unwrap().len(), 1);
+        let Library {
+            manager, directory, ..
+        } = lib;
+        drop(manager);
+        let restarted = RecordingManager::new(&directory).unwrap();
+        assert_eq!(restarted.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn storage_conflict_rolls_back_without_losing_media() {
+        let lib = Library::new();
+        let bundle = lib.put(&completed_recording(ID.into(), "conflict"));
+        std::fs::write(bundle.join("stream.flv"), b"media").unwrap();
+        let target = lib.directory.join("conflict-target");
+        std::fs::create_dir_all(target.join(ID)).unwrap();
+        let error = lib
+            .set_storage_path(Some(target.display().to_string()))
+            .unwrap_err();
+        assert_eq!(error.code, "recording_storage_conflict");
+        assert_eq!(std::fs::read(bundle.join("stream.flv")).unwrap(), b"media");
+        assert_eq!(
+            lib.storage_info().path,
+            crate::app_paths::path_to_string(&lib.root)
+        );
+    }
+
+    #[test]
+    fn storage_config_recovers_committed_backup_but_reports_corruption() {
+        let directory = TestDir::new();
+        let path = directory.join(RECORDING_STORAGE_CONFIG_FILE);
+        std::fs::write(&path, b"not-json").unwrap();
+        let error = load_storage_state(&directory).unwrap_err();
+        assert_eq!(error.code, "recording_storage_error");
+        assert!(error.message.contains("恢复录制目录设置失败"));
+        std::fs::remove_file(&path).unwrap();
+        for (suffix, name) in [("bak", "committed"), ("tmp", "uncommitted")] {
+            let root = directory.join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            let config = RecordingStorageConfig {
+                schema_version: RECORDING_STORAGE_CONFIG_VERSION,
+                current_path: Some(crate::app_paths::path_to_string(&root)),
+                known_paths: Vec::new(),
+            };
+            std::fs::write(
+                path.with_extension(format!("json.{suffix}")),
+                serde_json::to_vec(&config).unwrap(),
+            )
+            .unwrap();
+        }
+        let storage = load_storage_state(&directory).unwrap();
+        assert_eq!(
+            storage.current_root,
+            std::fs::canonicalize(directory.join("committed")).unwrap()
+        );
+        assert!(path.exists());
+        for suffix in ["bak", "tmp"] {
+            assert!(!path.with_extension(format!("json.{suffix}")).exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_rejects_symlinks_to_filesystem_root() {
+        let directory = TestDir::new();
+        let selected = directory.join("selected");
+        std::os::unix::fs::symlink("/", &selected).unwrap();
+        assert_eq!(
+            prepare_storage_root(&selected).unwrap_err().code,
+            "recording_storage_path_invalid"
+        );
+    }
+
+    #[test]
+    fn manager_enforces_exclusive_app_data_ownership() {
+        let lib = Library::new();
+        assert_eq!(
+            RecordingManager::new(&lib.directory).err().unwrap().code,
+            "recording_already_running"
+        );
+    }
+
+    #[tokio::test]
+    async fn ass_export_uses_media_stem_and_rejects_missing_danmaku() {
+        let lib = Library::new();
+        let mut stored = completed_recording(ID.into(), "字幕导出");
+        stored.include_danmaku = true;
+        stored.danmaku_file = Some("danmaku.jsonl".into());
+        let bundle = lib.put(&stored);
+        std::fs::write(bundle.join("stream.flv"), b"a").unwrap();
+        let batch = serde_json::to_string(&StoredDanmakuBatch {
+            offset_ms: 1200,
+            events: &[chat("你好")],
+        })
+        .unwrap();
+        std::fs::write(bundle.join("danmaku.jsonl"), format!("{batch}\n")).unwrap();
+        let options =
+            AssExportOptions::try_from_settings(&crate::models::settings::AppSettings::default())
+                .unwrap();
+        let path = lib.export_danmaku_ass(ID, options.clone()).await.unwrap();
+        assert_eq!(
+            path,
+            crate::app_paths::path_to_string(&bundle.join("stream.ass"))
+        );
+        let script = std::fs::read_to_string(path).unwrap();
+        for text in ["[Events]", "Dialogue: 0,0:00:01.20,", "你好"] {
+            assert!(script.contains(text), "{text}");
+        }
+        lib.put(&completed_recording(SECOND_ID.into(), "无弹幕"));
+        assert_eq!(
+            lib.export_danmaku_ass(SECOND_ID, options)
+                .await
+                .unwrap_err()
+                .code,
+            "recording_danmaku_missing"
+        );
     }
 
     fn completed_recording(id: String, title: &str) -> StoredRecording {
@@ -4390,251 +4839,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn recording_library_index_respects_root_priority_and_incremental_updates() {
-        let primary_root = PathBuf::from("primary");
-        let fallback_root = PathBuf::from("fallback");
-        let id = test_recording_id();
-        let fallback = completed_recording(id.clone(), "fallback");
-        let primary = completed_recording(id.clone(), "primary");
-        let mut index = RecordingLibraryIndex::default();
-        index.replace_root(
-            fallback_root.clone(),
-            HashMap::from([(id.clone(), fallback)]),
-        );
-        index.replace_root(primary_root.clone(), HashMap::from([(id.clone(), primary)]));
-
-        let items = index.items(&[primary_root.clone(), fallback_root.clone()]);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].title, "primary");
-
-        let updated = completed_recording(id.clone(), "updated");
-        index.upsert(&primary_root, updated);
-        assert_eq!(
-            index.items(&[primary_root.clone(), fallback_root.clone()])[0].title,
-            "updated"
-        );
-
-        index.remove(&primary_root, &id);
-        assert_eq!(
-            index.items(&[primary_root, fallback_root])[0].title,
-            "fallback"
-        );
-    }
-
-    #[test]
-    fn recording_library_index_rebuilds_after_external_bundle_addition() {
-        let root = std::env::temp_dir().join(format!("rlive-recording-index-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut index = RecordingLibraryIndex::default();
-        index.replace_root(root.clone(), scan_recording_root(&root));
-        assert!(index.items(std::slice::from_ref(&root)).is_empty());
-
-        let stored = completed_recording(test_recording_id(), "external");
-        let bundle = root.join(&stored.id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join("stream.flv"), b"media").unwrap();
-        write_metadata(&bundle, &stored).unwrap();
-        // 单元测试中避免依赖文件系统的时间戳精度，
-        // 同时仍然走生产代码使用的同一个过期根分支。
-        index.roots.get_mut(&root).unwrap().modified_at = None;
-
-        index.refresh_changed_roots(std::slice::from_ref(&root));
-
-        let items = index.items(std::slice::from_ref(&root));
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].title, "external");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn recording_scan_skips_an_old_metadata_version_without_modifying_it() {
-        let root =
-            std::env::temp_dir().join(format!("rlive-recording-old-metadata-{}", Uuid::new_v4()));
-        let stored = completed_recording(test_recording_id(), "old-metadata");
-        let bundle = root.join(&stored.id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join(&stored.media_file), b"old-media").unwrap();
-        let mut value = serde_json::to_value(stored).unwrap();
-        value["schema_version"] = serde_json::json!(1);
-        let metadata = serde_json::to_vec_pretty(&value).unwrap();
-        std::fs::write(bundle.join("metadata.json"), &metadata).unwrap();
-
-        assert!(scan_recording_root(&root).is_empty());
-        assert_eq!(
-            std::fs::read(bundle.join("metadata.json")).unwrap(),
-            metadata
-        );
-        assert!(bundle.join("stream.flv").is_file());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn only_background_sidecar_recordings_retain_danmaku_connections() {
-        let mut stored = completed_recording("recording".into(), "room");
-        stored.status = RecordingStatus::Recording;
-        stored.include_danmaku = true;
-        stored.continue_on_leave = true;
-        assert!(stored_keeps_background_danmaku(
-            &stored,
-            "live:bilibili:room"
-        ));
-
-        stored.continue_on_leave = false;
-        assert!(!stored_keeps_background_danmaku(
-            &stored,
-            "live:bilibili:room"
-        ));
-        stored.continue_on_leave = true;
-        stored.include_danmaku = false;
-        assert!(!stored_keeps_background_danmaku(
-            &stored,
-            "live:bilibili:room"
-        ));
-        stored.include_danmaku = true;
-        assert!(!stored_keeps_background_danmaku(
-            &stored,
-            "live:bilibili:other"
-        ));
-    }
-
-    #[test]
-    fn pending_background_start_retains_danmaku_before_session_commit() {
-        let app_directory = std::env::temp_dir().join(format!(
-            "rlive-recording-pending-danmaku-{}",
-            Uuid::new_v4()
-        ));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let danmaku = crate::danmu_rs::DanmakuManager::new();
-        let source = "live:bilibili:pending-start";
-
-        assert!(danmaku.begin_connect(100, source.into(), false));
-        {
-            let _reservation = manager.reserve_background_danmaku_start(source, true);
-            assert!(manager.has_background_danmaku_recording(source));
-            // 这与录制启动路径仍在进行文件系统/后端初始化时
-            // danmaku_disconnect 做出的决定一致。
-            assert!(danmaku.detach_for_generation(101));
-        }
-        assert!(!manager.has_background_danmaku_recording(source));
-        assert!(danmaku.disconnect_background_for_source(source));
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[tokio::test]
-    async fn continue_on_leave_flag_retains_background_danmaku_after_leave_guard() {
-        let app_directory = std::env::temp_dir().join(format!(
-            "rlive-recording-continue-on-leave-{}",
-            Uuid::new_v4()
-        ));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let state = active_session_state(root.clone(), bundle.clone(), id.clone());
-        {
-            let mut stored = state.stored.lock().unwrap();
-            stored.source_key = "live:douyu:100".into();
-            stored.include_danmaku = true;
-            stored.continue_on_leave = false;
-            stored.danmaku_file = Some("danmaku.jsonl".into());
-        }
-        let (cancel, _cancel_rx) = watch::channel(false);
-        let task = tauri::async_runtime::spawn(std::future::pending::<()>());
-        manager.sessions.lock().unwrap().insert(
-            id.clone(),
-            Session {
-                active: Arc::new(ActiveSessionState::new(state.clone())),
-                cancel,
-                task,
-            },
-        );
-
-        // 未选择后台延续的房间录制不会保留任何弹幕连接，
-        // 直到离开拦截翻转标记。
-        assert!(!manager.has_background_danmaku_recording("live:douyu:100"));
-        let item = manager.set_continue_on_leave(&id, true).unwrap();
-        assert!(item.continue_on_leave);
-        assert!(manager.has_background_danmaku_recording("live:douyu:100"));
-        // 持久化的元数据携带新标记，重启后仍遵循同一契约。
-        assert!(read_stored(&root, &id).unwrap().continue_on_leave);
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn library_scan_is_deferred_until_the_first_list_call() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-lazy-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-
-        // 在启动完成之后写入一个已有录制，模拟“磁盘上有历史库”。
-        let stored = completed_recording(test_recording_id(), "historical");
-        let bundle = root.join(&stored.id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join(&stored.media_file), b"media").unwrap();
-        write_metadata(&bundle, &stored).unwrap();
-
-        // 启动路径不做库扫描：只读活动集合时看不到这个历史条目，
-        // 但它本身不应因为没扫描而丢失。
-        assert!(!manager.library_hydrated.load(Ordering::Acquire));
-        assert!(manager.active_items().is_empty());
-
-        // 首次 `list()` 才建立完整索引。
-        let items = manager.list().unwrap();
-        assert!(manager.library_hydrated.load(Ordering::Acquire));
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].title, "historical");
-        assert!(manager.active_items().is_empty());
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn active_items_only_report_tracked_sessions() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-active-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-
-        // 历史库里有一条已完成录制。
-        let stored = completed_recording(test_recording_id(), "completed");
-        let bundle = root.join(&stored.id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join(&stored.media_file), b"media").unwrap();
-        write_metadata(&bundle, &stored).unwrap();
-
-        // 一条进行中的会话（仅内存跟踪，不要求磁盘上有可扫描的 bundle）。
-        let active_id = test_recording_id();
-        let active_bundle = root.join(&active_id);
-        std::fs::create_dir_all(&active_bundle).unwrap();
-        let active = active_session_state(root.clone(), active_bundle, active_id.clone());
-        manager.sessions.lock().unwrap().insert(
-            active_id.clone(),
-            Session {
-                active: Arc::new(ActiveSessionState::new(active.clone())),
-                cancel: watch::channel(false).0,
-                task: tauri::async_runtime::spawn(async {}),
-            },
-        );
-
-        let active_items = manager.active_items();
-        assert_eq!(active_items.len(), 1);
-        assert_eq!(active_items[0].id, active_id);
-        assert_eq!(active_items[0].status, RecordingStatus::Recording);
-        // 活动集合不读历史库，因此未水合仍是假。
-        assert!(!manager.library_hydrated.load(Ordering::Acquire));
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
     fn active_session_state(root: PathBuf, bundle: PathBuf, id: String) -> Arc<SessionState> {
         let stored = StoredRecording {
             status: RecordingStatus::Recording,
@@ -4660,811 +4864,6 @@ mod tests {
             library: Arc::new(Mutex::new(RecordingLibraryIndex::default())),
             events: Arc::new(RecordingEventSink::default()),
         })
-    }
-
-    #[test]
-    fn finalizing_session_accepts_the_last_danmaku_batch() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-final-danmaku-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let state = active_session_state(root, bundle.clone(), id.clone());
-        let source = "live:bilibili:final-batch";
-        {
-            let mut stored = state.stored.lock().unwrap();
-            stored.source_key = source.into();
-            stored.include_danmaku = true;
-            stored.continue_on_leave = true;
-            stored.danmaku_file = Some("danmaku.jsonl".into());
-        }
-        *state.danmaku_writer.lock().unwrap() = Some(
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(bundle.join("danmaku.jsonl"))
-                .unwrap(),
-        );
-        manager.finalizing.lock().unwrap().insert(
-            id,
-            FinalizingSession {
-                state: state.clone(),
-            },
-        );
-
-        manager.capture_danmaku(
-            source,
-            &[DanmakuEvent {
-                kind: DanmakuKind::Chat,
-                user: "viewer".into(),
-                is_self: false,
-                user_id: None,
-                content: "final".into(),
-                color: None,
-                spans: None,
-                super_chat: None,
-                ts: 1,
-            }],
-        );
-
-        assert_eq!(state.danmaku_count.load(Ordering::Acquire), 1);
-        assert!(
-            !std::fs::read(bundle.join("danmaku.jsonl"))
-                .unwrap()
-                .is_empty()
-        );
-
-        drop(manager);
-        *state.danmaku_writer.lock().unwrap() = None;
-        drop(state);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    struct TaskDropFlag(Arc<AtomicBool>);
-
-    impl Drop for TaskDropFlag {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::Release);
-        }
-    }
-
-    #[tokio::test]
-    async fn graceful_shutdown_waits_for_recording_finalization() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-shutdown-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let state = active_session_state(root, bundle.clone(), id.clone());
-        let (cancel, mut cancel_rx) = watch::channel(false);
-        let task_state = state.clone();
-        let task = tauri::async_runtime::spawn(async move {
-            if !*cancel_rx.borrow() {
-                let _ = cancel_rx.changed().await;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            finish_session(
-                &task_state,
-                TaskOutcome {
-                    status: RecordingStatus::Completed,
-                    error: None,
-                    split: false,
-                },
-            );
-        });
-        manager.sessions.lock().unwrap().insert(
-            id.clone(),
-            Session {
-                active: Arc::new(ActiveSessionState::new(state.clone())),
-                cancel,
-                task,
-            },
-        );
-
-        manager.stop_all_graceful().await;
-        manager.stop_all_graceful().await;
-
-        assert!(manager.sessions.lock().unwrap().is_empty());
-        assert!(state.finished.load(Ordering::Acquire));
-        let stored = super::read_stored(&PathBuf::from(manager.storage_info().path), &id).unwrap();
-        assert_eq!(stored.status, RecordingStatus::Completed);
-        assert!(stored.ended_at.is_some());
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[tokio::test]
-    async fn graceful_shutdown_defers_hard_abort_recovery_until_restart() {
-        let root = std::env::temp_dir().join(format!("rlive-recording-timeout-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let state = active_session_state(root.clone(), bundle.clone(), id.clone());
-        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
-        state.bytes.store(13, Ordering::Relaxed);
-        let (cancel, cancel_rx) = watch::channel(false);
-        let task_dropped = Arc::new(AtomicBool::new(false));
-        let task_drop_flag = task_dropped.clone();
-        let (task_started, task_started_rx) = oneshot::channel();
-        let task = tauri::async_runtime::spawn(async move {
-            let _drop_flag = TaskDropFlag(task_drop_flag);
-            let _cancel_rx = cancel_rx;
-            let _ = task_started.send(());
-            std::future::pending::<()>().await;
-        });
-        task_started_rx.await.unwrap();
-
-        stop_sessions_until_deadline(
-            vec![(
-                id.clone(),
-                Session {
-                    active: Arc::new(ActiveSessionState::new(state.clone())),
-                    cancel,
-                    task,
-                },
-            )],
-            tokio::time::Instant::now(),
-        )
-        .await;
-
-        assert!(task_dropped.load(Ordering::Acquire));
-        assert!(!state.finished.load(Ordering::Acquire));
-        assert!(bundle.join("stream.flv.part").exists());
-        assert!(!bundle.join("stream.flv").exists());
-        assert_eq!(
-            super::read_stored(&root, &id).unwrap().status,
-            RecordingStatus::Recording
-        );
-
-        recover_stale_recordings(&root).unwrap();
-
-        assert!(!bundle.join("stream.flv.part").exists());
-        assert_eq!(
-            std::fs::read(bundle.join("stream.flv")).unwrap(),
-            b"partial-media"
-        );
-        let stored = super::read_stored(&root, &id).unwrap();
-        assert_eq!(stored.status, RecordingStatus::Interrupted);
-        assert!(stored.ended_at.is_some());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn recovery_adopts_a_media_part_left_by_a_failed_recording_task() {
-        let root = std::env::temp_dir().join(format!("rlive-recording-orphan-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let stored = StoredRecording {
-            id: id.clone(),
-            status: RecordingStatus::Failed,
-            media_file: "stream.flv".into(),
-            error: Some("发布录制文件失败".into()),
-            ..completed_recording(id.clone(), "orphan")
-        };
-        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
-        write_metadata(&bundle, &stored).unwrap();
-
-        recover_stale_recordings(&root).unwrap();
-
-        assert!(!bundle.join("stream.flv.part").exists());
-        assert_eq!(
-            std::fs::read(bundle.join("stream.flv")).unwrap(),
-            b"partial-media"
-        );
-        let recovered = read_stored(&root, &id).unwrap();
-        assert_eq!(recovered.status, RecordingStatus::Interrupted);
-        assert!(recovered.ended_at.is_some());
-        assert!(recovered.error.is_some());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn worker_failure_salvages_a_safe_media_part_without_overwriting_final_media() {
-        let root =
-            std::env::temp_dir().join(format!("rlive-recording-worker-failure-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let state = active_session_state(root.clone(), bundle.clone(), id);
-        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
-
-        salvage_temporary_media_after_worker_failure(&state);
-
-        assert!(!bundle.join("stream.flv.part").exists());
-        assert_eq!(
-            std::fs::read(bundle.join("stream.flv")).unwrap(),
-            b"partial-media"
-        );
-        std::fs::write(bundle.join("stream.flv.part"), b"new-partial").unwrap();
-        salvage_temporary_media_after_worker_failure(&state);
-        assert_eq!(
-            std::fs::read(bundle.join("stream.flv")).unwrap(),
-            b"partial-media"
-        );
-        assert_eq!(
-            std::fs::read(bundle.join("stream.flv.part")).unwrap(),
-            b"new-partial"
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn recovery_marks_missing_active_media_as_interrupted() {
-        let root = std::env::temp_dir().join(format!("rlive-recording-missing-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let stored = StoredRecording {
-            id: id.clone(),
-            status: RecordingStatus::Recording,
-            media_file: "stream.flv".into(),
-            ..completed_recording(id.clone(), "missing")
-        };
-        write_metadata(&bundle, &stored).unwrap();
-
-        recover_stale_recordings(&root).unwrap();
-
-        let recovered = read_stored(&root, &id).unwrap();
-        assert_eq!(recovered.status, RecordingStatus::Interrupted);
-        assert!(recovered.ended_at.is_some());
-        assert!(
-            recovered
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("媒体文件缺失"))
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn recovery_rejects_a_media_path_that_escapes_the_bundle() {
-        let root = std::env::temp_dir().join(format!("rlive-recording-path-{}", Uuid::new_v4()));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let stored = StoredRecording {
-            id: id.clone(),
-            status: RecordingStatus::Recording,
-            media_file: "../outside.flv".into(),
-            ..completed_recording(id.clone(), "invalid path")
-        };
-        write_metadata(&bundle, &stored).unwrap();
-
-        recover_stale_recordings(&root).unwrap();
-
-        let recovered = read_stored(&root, &id).unwrap();
-        assert_eq!(recovered.status, RecordingStatus::Interrupted);
-        assert!(
-            recovered
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("媒体路径无效"))
-        );
-        assert!(!root.join("outside.flv").exists());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn graceful_shutdown_leaves_another_stop_request_for_process_exit() {
-        let root = std::env::temp_dir().join(format!(
-            "rlive-recording-finalize-timeout-{}",
-            Uuid::new_v4()
-        ));
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let state = active_session_state(root.clone(), bundle.clone(), id.clone());
-        std::fs::write(bundle.join("stream.flv.part"), b"partial-media").unwrap();
-        state.bytes.store(13, Ordering::Relaxed);
-        let task_dropped = Arc::new(AtomicBool::new(false));
-        let task_drop_flag = task_dropped.clone();
-        let (task_started_tx, task_started_rx) = oneshot::channel();
-        let task = tauri::async_runtime::spawn(async move {
-            let _drop_flag = TaskDropFlag(task_drop_flag);
-            let _ = task_started_tx.send(());
-            std::future::pending::<()>().await;
-        });
-        task_started_rx.await.unwrap();
-        wait_for_finalizing_sessions(
-            vec![(id.clone(), state.clone())],
-            tokio::time::Instant::now(),
-        )
-        .await;
-        assert!(!task_dropped.load(Ordering::Acquire));
-        assert!(!state.finished.load(Ordering::Acquire));
-        assert!(bundle.join("stream.flv.part").exists());
-        assert_eq!(
-            super::read_stored(&root, &id).unwrap().status,
-            RecordingStatus::Recording
-        );
-
-        task.abort();
-        let _ = task.await;
-        assert!(
-            task_dropped.load(Ordering::Acquire),
-            "测试应模拟进程退出释放停止请求持有的任务"
-        );
-        recover_stale_recordings(&root).unwrap();
-
-        assert_eq!(
-            super::read_stored(&root, &id).unwrap().status,
-            RecordingStatus::Interrupted
-        );
-        assert_eq!(
-            std::fs::read(bundle.join("stream.flv")).unwrap(),
-            b"partial-media"
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn finalizing_session_remains_visible_and_fences_mutations() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-finalizing-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-        let id = test_recording_id();
-        let bundle = root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let state = active_session_state(root, bundle, id.clone());
-        let (_cancel, cancel_rx) = watch::channel(false);
-        let task = tauri::async_runtime::spawn(async move {
-            let _cancel_rx = cancel_rx;
-            std::future::pending::<()>().await;
-        });
-        manager
-            .finalizing
-            .lock()
-            .unwrap()
-            .insert(id.clone(), FinalizingSession { state });
-
-        let listed = manager
-            .list()
-            .unwrap()
-            .into_iter()
-            .find(|item| item.id == id)
-            .unwrap();
-        assert_eq!(listed.status, RecordingStatus::Recording);
-        assert_eq!(
-            manager.delete(&id).unwrap_err().code,
-            "recording_still_active"
-        );
-        assert_eq!(
-            manager.stop(&id).await.unwrap_err().code,
-            "recording_stopping"
-        );
-        task.abort();
-
-        let duplicate = manager
-            .start_with_ffmpeg_options(
-                RecordingStartInput {
-                    source: crate::models::live::PlayUrl::inferred(
-                        "test:shutdown",
-                        "测试线路",
-                        0,
-                        "https://example.test/live.flv".into(),
-                        Default::default(),
-                    ),
-                    source_key: "live:bilibili:shutdown".into(),
-                    source_kind: "live".into(),
-                    site_id: Some("bilibili".into()),
-                    room_id: Some("shutdown".into()),
-                    title: "停止中录制".into(),
-                    user_name: "主播".into(),
-                    cover: String::new(),
-                    user_avatar: String::new(),
-                    include_danmaku: Some(false),
-                    continue_on_leave: Some(false),
-                },
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(duplicate.code, "recording_already_active");
-
-        manager.finalizing.lock().unwrap().remove(&id);
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn recording_start_input_resolves_missing_options_from_configured_defaults() {
-        let mut value = serde_json::to_value(manager_test_input(
-            "https://example.test/live.flv",
-            "live:bilibili:defaults",
-            "defaults",
-        ))
-        .unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.remove("includeDanmaku");
-        object.remove("continueOnLeave");
-
-        let parsed: RecordingStartInput = serde_json::from_value(value).unwrap();
-        assert_eq!(parsed.include_danmaku, None);
-        assert_eq!(parsed.continue_on_leave, None);
-
-        // 后台延续已无可配置默认值，未指定的请求总是解析为保持任务存活。
-        let resolved = parsed.with_recording_defaults(true);
-        assert_eq!(resolved.include_danmaku, Some(true));
-        assert_eq!(resolved.continue_on_leave, Some(true));
-
-        let explicit = manager_test_input(
-            "https://example.test/live.flv",
-            "live:bilibili:explicit",
-            "explicit",
-        )
-        .with_recording_defaults(true);
-        assert_eq!(explicit.include_danmaku, Some(false));
-        assert_eq!(explicit.continue_on_leave, Some(false));
-    }
-
-    #[test]
-    fn continue_on_leave_default_is_unconditional() {
-        // `Manager::start` 解析出与命令层相同的默认值，因此跳过
-        // `with_recording_defaults` 的调用方仍获得后台延续，
-        // 而不是静默退出。
-        const { assert!(CONTINUE_ON_LEAVE_DEFAULT) };
-
-        let mut unspecified = manager_test_input("https://example.test/live.flv", "live:a", "a");
-        unspecified.continue_on_leave = None;
-        assert_eq!(
-            unspecified
-                .clone()
-                .with_recording_defaults(false)
-                .continue_on_leave,
-            Some(CONTINUE_ON_LEAVE_DEFAULT)
-        );
-
-        let mut opted_out = unspecified;
-        opted_out.continue_on_leave = Some(false);
-        assert_eq!(
-            opted_out.with_recording_defaults(false).continue_on_leave,
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn stored_recording_rejects_missing_background_continuation() {
-        let mut legacy_metadata =
-            serde_json::to_value(completed_recording("legacy".into(), "legacy")).unwrap();
-        let metadata = legacy_metadata.as_object_mut().unwrap();
-        metadata.remove("continue_on_leave");
-        assert!(serde_json::from_value::<StoredRecording>(legacy_metadata).is_err());
-    }
-
-    #[test]
-    fn storage_switch_migrates_existing_recordings() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-storage-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let default_root = PathBuf::from(manager.storage_info().path);
-        let first = completed_recording(test_recording_id(), "default");
-        let first_bundle = default_root.join(&first.id);
-        std::fs::create_dir_all(&first_bundle).unwrap();
-        std::fs::write(first_bundle.join("stream.flv"), b"a").unwrap();
-        std::fs::write(first_bundle.join("danmaku.jsonl"), b"{}\n").unwrap();
-        write_metadata(&first_bundle, &first).unwrap();
-
-        let custom_root = app_directory.join("custom-recordings ");
-        let custom_info = manager
-            .set_storage_path(Some(custom_root.display().to_string()))
-            .unwrap();
-        let migrated_bundle = PathBuf::from(&custom_info.path).join(&first.id);
-        assert!(!first_bundle.exists());
-        assert!(migrated_bundle.join("stream.flv").is_file());
-        assert!(migrated_bundle.join("danmaku.jsonl").is_file());
-        assert!(migrated_bundle.join("metadata.json").is_file());
-        assert_eq!(manager.list().unwrap().len(), 1);
-
-        drop(manager);
-        let restarted = RecordingManager::new(&app_directory).unwrap();
-        assert_eq!(restarted.list().unwrap().len(), 1);
-        drop(restarted);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn storage_switch_leaves_an_old_metadata_bundle_in_place() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-storage-old-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let default_root = PathBuf::from(manager.storage_info().path);
-        let old = completed_recording(test_recording_id(), "old metadata");
-        let bundle = default_root.join(&old.id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join("stream.flv"), b"old").unwrap();
-        let mut value = serde_json::to_value(old).unwrap();
-        value["schema_version"] = serde_json::json!(1);
-        let id = value["id"].as_str().unwrap().to_owned();
-        std::fs::write(
-            bundle.join("metadata.json"),
-            serde_json::to_vec_pretty(&value).unwrap(),
-        )
-        .unwrap();
-
-        let custom_root = app_directory.join("custom-recordings");
-        let custom_info = manager
-            .set_storage_path(Some(custom_root.display().to_string()))
-            .unwrap();
-
-        assert!(bundle.is_dir());
-        assert!(!PathBuf::from(custom_info.path).join(id).exists());
-        assert!(manager.list().unwrap().is_empty());
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn storage_switch_is_rejected_while_a_recording_is_finalizing() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-storage-busy-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let default_root = PathBuf::from(manager.storage_info().path);
-        let id = test_recording_id();
-        let bundle = default_root.join(&id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        let stored = completed_recording(id.clone(), "收尾中");
-        write_metadata(&bundle, &stored).unwrap();
-        let state = active_session_state(default_root.clone(), bundle.clone(), id.clone());
-        manager
-            .finalizing
-            .lock()
-            .unwrap()
-            .insert(id.clone(), FinalizingSession { state });
-
-        let custom_root = app_directory.join("busy-target");
-        let error = manager
-            .set_storage_path(Some(custom_root.display().to_string()))
-            .unwrap_err();
-        assert_eq!(error.code, "recording_storage_busy");
-        assert!(bundle.join("metadata.json").is_file());
-        assert_eq!(
-            manager.storage_info().path,
-            crate::app_paths::path_to_string(&default_root)
-        );
-
-        manager.finalizing.lock().unwrap().remove(&id);
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[tokio::test]
-    async fn danmaku_ass_export_writes_a_subtitle_beside_the_media() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-ass-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let root = PathBuf::from(manager.storage_info().path);
-        let mut stored = completed_recording(test_recording_id(), "字幕导出");
-        stored.include_danmaku = true;
-        stored.danmaku_file = Some("danmaku.jsonl".into());
-        let bundle = root.join(&stored.id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join("stream.flv"), b"a").unwrap();
-        std::fs::write(
-            bundle.join("danmaku.jsonl"),
-            br#"{"offset_ms":1200,"events":[{"kind":"chat","user":"viewer","is_self":false,"content":"\u4f60\u597d","color":null,"ts":1}]}
-"#,
-        )
-        .unwrap();
-        write_metadata(&bundle, &stored).unwrap();
-
-        let options =
-            AssExportOptions::try_from_settings(&crate::models::settings::AppSettings::default())
-                .unwrap();
-        let path = manager
-            .export_danmaku_ass(&stored.id, options.clone())
-            .await
-            .unwrap();
-
-        // 名字由媒体词干驱动，使外部播放器自动加载。
-        assert_eq!(
-            path,
-            crate::app_paths::path_to_string(&bundle.join("stream.ass"))
-        );
-        let script = std::fs::read_to_string(bundle.join("stream.ass")).unwrap();
-        assert!(script.contains("[Events]"));
-        assert!(script.contains("Dialogue: 0,0:00:01.20,"));
-        assert!(script.contains("你好"));
-
-        // 没有伴生文件的录制报告一个专门的错误，
-        // 而不是写出空字幕。
-        let mut plain = completed_recording(test_recording_id(), "无弹幕");
-        plain.include_danmaku = false;
-        let plain_bundle = root.join(&plain.id);
-        std::fs::create_dir_all(&plain_bundle).unwrap();
-        write_metadata(&plain_bundle, &plain).unwrap();
-        let error = manager
-            .export_danmaku_ass(&plain.id, options)
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "recording_danmaku_missing");
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn storage_switch_rolls_back_when_the_target_already_holds_the_bundle() {
-        let app_directory = std::env::temp_dir().join(format!(
-            "rlive-recording-storage-conflict-{}",
-            Uuid::new_v4()
-        ));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let default_root = PathBuf::from(manager.storage_info().path);
-        let stored = completed_recording(test_recording_id(), "冲突");
-        let bundle = default_root.join(&stored.id);
-        std::fs::create_dir_all(&bundle).unwrap();
-        std::fs::write(bundle.join("stream.flv"), b"a").unwrap();
-        write_metadata(&bundle, &stored).unwrap();
-
-        let custom_root = app_directory.join("conflict-target");
-        std::fs::create_dir_all(custom_root.join(&stored.id)).unwrap();
-        let error = manager
-            .set_storage_path(Some(custom_root.display().to_string()))
-            .unwrap_err();
-        assert_eq!(error.code, "recording_storage_conflict");
-        assert!(bundle.join("stream.flv").is_file());
-        assert_eq!(
-            manager.storage_info().path,
-            crate::app_paths::path_to_string(&default_root)
-        );
-
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn storage_config_recovers_the_committed_backup_after_an_interrupted_write() {
-        let app_directory = std::env::temp_dir().join(format!(
-            "rlive-recording-storage-recovery-{}",
-            Uuid::new_v4()
-        ));
-        let committed_root = app_directory.join("committed");
-        let uncommitted_root = app_directory.join("uncommitted");
-        std::fs::create_dir_all(&committed_root).unwrap();
-        std::fs::create_dir_all(&uncommitted_root).unwrap();
-        let config_path = app_directory.join(super::RECORDING_STORAGE_CONFIG_FILE);
-        let temporary = config_path.with_file_name("recording-storage-v2.json.tmp");
-        let backup = config_path.with_file_name("recording-storage-v2.json.bak");
-        std::fs::write(
-            &backup,
-            serde_json::to_vec_pretty(&RecordingStorageConfig {
-                schema_version: RECORDING_STORAGE_CONFIG_VERSION,
-                current_path: Some(crate::app_paths::path_to_string(&committed_root)),
-                known_paths: Vec::new(),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(&RecordingStorageConfig {
-                schema_version: RECORDING_STORAGE_CONFIG_VERSION,
-                current_path: Some(crate::app_paths::path_to_string(&uncommitted_root)),
-                known_paths: Vec::new(),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-
-        let storage = load_storage_state(&app_directory).unwrap();
-        assert_eq!(
-            storage.current_root,
-            std::fs::canonicalize(&committed_root).unwrap()
-        );
-        assert!(config_path.exists());
-        assert!(!temporary.exists());
-        assert!(!backup.exists());
-
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn corrupt_storage_config_is_reported_instead_of_silently_reset() {
-        let app_directory = std::env::temp_dir().join(format!(
-            "rlive-recording-storage-corrupt-{}",
-            Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&app_directory).unwrap();
-        std::fs::write(
-            app_directory.join(super::RECORDING_STORAGE_CONFIG_FILE),
-            b"not-json",
-        )
-        .unwrap();
-
-        let error = load_storage_state(&app_directory).unwrap_err();
-        assert_eq!(error.code, "recording_storage_error");
-        assert!(error.message.contains("恢复录制目录设置失败"));
-
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn recording_storage_rejects_a_symlink_to_the_filesystem_root() {
-        use std::os::unix::fs::symlink;
-
-        let base =
-            std::env::temp_dir().join(format!("rlive-recording-root-symlink-{}", Uuid::new_v4()));
-        let selected = base.join("selected");
-        std::fs::create_dir_all(&base).unwrap();
-        symlink("/", &selected).unwrap();
-
-        let error = prepare_storage_root(&selected).unwrap_err();
-        assert_eq!(error.code, "recording_storage_path_invalid");
-
-        std::fs::remove_file(selected).unwrap();
-        std::fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn recording_manager_rejects_a_second_instance_for_the_same_app_data() {
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-instance-lock-{}", Uuid::new_v4()));
-        let first = RecordingManager::new(&app_directory).unwrap();
-        let second = RecordingManager::new(&app_directory);
-        assert_eq!(
-            second.err().map(|error| error.code),
-            Some("recording_already_running".to_string())
-        );
-        drop(first);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[test]
-    fn recorded_danmaku_sidecar_never_serializes_backend_account_ids() {
-        let events = [DanmakuEvent {
-            kind: DanmakuKind::Chat,
-            user: "本地用户".into(),
-            is_self: true,
-            user_id: Some("private-account-id".into()),
-            content: "测试".into(),
-            color: Some("#ffffff".into()),
-            spans: None,
-            super_chat: None,
-            ts: 1,
-        }];
-        let json = serde_json::to_string(&StoredDanmakuBatch {
-            offset_ms: 250,
-            events: &events,
-        })
-        .unwrap();
-
-        assert!(json.contains("\"offset_ms\":250"));
-        assert!(json.contains("\"is_self\":true"));
-        assert!(!json.contains("private-account-id"));
-        assert!(!json.contains("user_id"));
-    }
-
-    fn manager_test_flv_body() -> Vec<u8> {
-        fn tag(timestamp: u32, payload: &[u8]) -> Vec<u8> {
-            let mut value = vec![9, 0, 0, payload.len() as u8];
-            value.extend_from_slice(&[
-                (timestamp >> 16) as u8,
-                (timestamp >> 8) as u8,
-                timestamp as u8,
-                (timestamp >> 24) as u8,
-                0,
-                0,
-                0,
-            ]);
-            value.extend_from_slice(payload);
-            value.extend_from_slice(&((payload.len() + 11) as u32).to_be_bytes());
-            value
-        }
-
-        let mut body = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
-        body.extend_from_slice(&tag(0, b"first"));
-        body.extend_from_slice(&tag(1_000, b"second"));
-        body
     }
 
     fn manager_test_valid_flv_body() -> Vec<u8> {
@@ -5502,85 +4901,6 @@ mod tests {
         body
     }
 
-    async fn spawn_manager_test_flv_server(body: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    break;
-                };
-                let mut request = [0_u8; 2048];
-                let Ok(length) = socket.read(&mut request).await else {
-                    continue;
-                };
-                if length == 0 {
-                    continue;
-                }
-                let response = "HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n";
-                if socket.write_all(response.as_bytes()).await.is_err() {
-                    continue;
-                }
-                if socket
-                    .write_all(format!("{:x}\r\n", body.len()).as_bytes())
-                    .await
-                    .is_err()
-                {
-                    continue;
-                }
-                if socket.write_all(&body).await.is_err()
-                    || socket.write_all(b"\r\n").await.is_err()
-                {
-                    continue;
-                }
-                let mut closed = [0_u8; 1];
-                let _ = socket.read(&mut closed).await;
-            }
-        });
-        (format!("http://{address}/live.flv"), server)
-    }
-
-    async fn spawn_manager_test_valid_flv_server(
-        body: Vec<u8>,
-    ) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    break;
-                };
-                let mut request = [0_u8; 4096];
-                let Ok(length) = socket.read(&mut request).await else {
-                    continue;
-                };
-                if length == 0 {
-                    continue;
-                }
-                if socket
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
-                    )
-                    .await
-                    .is_err()
-                    || socket
-                        .write_all(format!("{:x}\r\n", body.len()).as_bytes())
-                        .await
-                        .is_err()
-                    || socket.write_all(&body).await.is_err()
-                    || socket.write_all(b"\r\n").await.is_err()
-                {
-                    continue;
-                }
-                let mut closed = [0_u8; 1];
-                let _ = socket.read(&mut closed).await;
-            }
-        });
-        (format!("http://{address}/live.flv"), server)
-    }
-
-    /// 十二个一秒长的 H.264/AAC MPEG-TS 分片，可直接作为 HLS 媒体列表提供服务。
-    /// 第一个分片携带 PAT/PMT，因此比其余分片更长。
     fn manager_test_ts_segments() -> Vec<Vec<u8>> {
         use base64::Engine as _;
         use std::io::Read as _;
@@ -5628,170 +4948,227 @@ mod tests {
         }
     }
 
-    fn manager_lifecycle_test_input(
-        url: &str,
-        source_key: &str,
-        room_id: &str,
-    ) -> RecordingStartInput {
-        let mut input = manager_test_input(url, source_key, room_id);
-        // Manager 生命周期测试检验会话归属与收尾。
-        // 合法的 FLV 重封装在下方有专门的集成夹具。
-        input.source.protocol = PlaybackProtocol::Native;
-        input
+    enum Reply {
+        Body(&'static str, Vec<u8>),
+        Live(Vec<u8>),
+        Stalled,
     }
 
-    async fn wait_for_manager_recording_bytes(manager: &RecordingManager, id: &str, minimum: u64) {
-        let result = tokio::time::timeout(std::time::Duration::from_secs(8), async {
-            loop {
-                let bytes = manager
-                    .list()
-                    .unwrap()
-                    .into_iter()
-                    .find(|item| item.id == id)
-                    .map(|item| item.size_bytes)
-                    .unwrap_or(0);
-                if bytes >= minimum {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        if result.is_err() {
-            let item = manager
-                .list()
-                .unwrap()
-                .into_iter()
-                .find(|item| item.id == id);
-            panic!("录制任务应在超时前写入测试媒体: {item:?}");
+    struct TestServer {
+        url: String,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.task.abort();
         }
     }
 
-    #[tokio::test]
-    async fn ffmpeg_manager_remuxes_headers_and_finishes_a_live_flv() {
-        let body = manager_test_valid_flv_body();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (request_tx, request_rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 4096];
-            let length = socket.read(&mut request).await.unwrap();
-            let _ = request_tx.send(String::from_utf8_lossy(&request[..length]).into_owned());
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
-                )
-                .await
-                .unwrap();
-            socket
-                .write_all(format!("{:x}\r\n", body.len()).as_bytes())
-                .await
-                .unwrap();
-            socket.write_all(&body).await.unwrap();
-            socket.write_all(b"\r\n").await.unwrap();
-            let mut closed = [0_u8; 1];
-            let _ = socket.read(&mut closed).await;
+    async fn serve(handler: impl Fn(&str) -> Option<Reply> + Send + Sync + 'static) -> TestServer {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handler = Arc::new(handler);
+        let task = tokio::spawn(async move {
+            // 中止服务器时也取消尚未完成的客户端，避免停滞 HLS 请求泄漏。
+            let mut clients = tokio::task::JoinSet::new();
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let handler = handler.clone();
+                clients.spawn(async move {
+                    let mut request = [0; 4096];
+                    let length = socket.read(&mut request).await?;
+                    match handler(&String::from_utf8_lossy(&request[..length])) {
+                        Some(Reply::Body(kind, body)) => {
+                            let headers = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            socket.write_all(headers.as_bytes()).await?;
+                            socket.write_all(&body).await?;
+                        }
+                        Some(reply) => {
+                            match reply {
+                                Reply::Live(body) => {
+                                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/x-flv\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n").await?;
+                                    socket.write_all(format!("{:x}\r\n", body.len()).as_bytes()).await?;
+                                    socket.write_all(&body).await?;
+                                    socket.write_all(b"\r\n").await?;
+                                }
+                                Reply::Stalled => {
+                                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: 1504\r\nConnection: close\r\n\r\n").await?;
+                                }
+                                Reply::Body(..) => unreachable!(),
+                            }
+                            socket.read(&mut [0]).await?;
+                        }
+                        None => {
+                            socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
+                        }
+                    }
+                    Ok::<_, std::io::Error>(())
+                });
+                while clients.try_join_next().is_some() {}
+            }
         });
+        TestServer { url, task }
+    }
 
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-ffmpeg-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let mut input = manager_test_input(
-            &format!("http://{address}/live.flv"),
-            "live:bilibili:ffmpeg-manager",
-            "ffmpeg",
+    async fn wait_until(check: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            while !check() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("录制状态应在超时前满足条件");
+    }
+
+    async fn wait_for_bytes(lib: &Library, id: &str) {
+        wait_until(|| {
+            lib.list()
+                .unwrap()
+                .iter()
+                .any(|item| item.id == id && item.size_bytes > 0)
+        })
+        .await;
+    }
+
+    fn assert_completed_file(lib: &Library, stopped: &RecordingItem) -> PathBuf {
+        assert_eq!(
+            stopped.status,
+            RecordingStatus::Completed,
+            "{:?}",
+            stopped.error
         );
+        assert!(stopped.error.is_none());
+        assert!(stopped.ended_at.is_some());
+        let stored = read_stored(&lib.root, &stopped.id).unwrap();
+        assert_eq!(stored.status, RecordingStatus::Completed);
+        assert_eq!(stored.ended_at, stopped.ended_at);
+        assert_eq!(stored.size_bytes, stopped.size_bytes);
+        let bundle = lib.root.join(&stopped.id);
+        assert!(!bundle.join(format!("{}.part", stored.media_file)).exists());
+        let path = bundle.join(stored.media_file);
+        assert!(path.is_file());
+        assert_eq!(stopped.file_path, crate::app_paths::path_to_string(&path));
+        path
+    }
+
+    #[tokio::test]
+    async fn manager_persists_start_stop_and_enforces_dynamic_limits_and_source_identity() {
+        let body = manager_test_valid_flv_body();
+        let server = serve(move |_| Some(Reply::Live(body.clone()))).await;
+        let lib = Library::new();
+        let mut input = manager_test_input(&format!("{}/live.flv", server.url), SOURCE, "100");
+        // Native 路径只检验生命周期；下面另测实际 FFmpeg 重封装。
+        input.source.protocol = PlaybackProtocol::Native;
+        let active = lib.start(input.clone(), 1).await.unwrap();
+        assert_eq!(active.status, RecordingStatus::Recording);
+        assert!(active.ended_at.is_none());
+        let metadata = read_stored(&lib.root, &active.id).unwrap();
+        assert_eq!(metadata.status, RecordingStatus::Recording);
+        assert!(metadata.ended_at.is_none());
+        let bundle = lib.root.join(&active.id);
+        assert!(!bundle.join(&metadata.media_file).exists());
+        input.room_id = Some("different-room".into());
+        assert_eq!(
+            lib.start(input.clone(), 4).await.unwrap_err().code,
+            "recording_already_active"
+        );
+        assert_eq!(lib.active_items().len(), 1);
+        input.source_key = "live:bilibili:second".into();
+        assert_eq!(
+            lib.start(input.clone(), 1).await.unwrap_err().code,
+            "recording_limit_reached"
+        );
+        let second = lib.start(input, 2).await.unwrap();
+        wait_for_bytes(&lib, &active.id).await;
+        assert!(
+            bundle
+                .join(format!("{}.part", metadata.media_file))
+                .is_file()
+        );
+        let stopped = lib.stop(&active.id).await.unwrap();
+        let path = assert_completed_file(&lib, &stopped);
+        assert!(std::fs::read(path).unwrap().starts_with(b"FLV"));
+        lib.stop(&second.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_remuxes_live_flv_with_headers_and_seek_index() {
+        let body = manager_test_valid_flv_body();
+        let request = Arc::new(Mutex::new(String::new()));
+        let captured = request.clone();
+        let server = serve(move |head| {
+            *captured.lock().unwrap() = head.into();
+            Some(Reply::Live(body.clone()))
+        })
+        .await;
+        let lib = Library::new();
+        let mut input = manager_test_input(&format!("{}/live.flv", server.url), SOURCE, "ffmpeg");
         input
             .source
             .headers
             .insert("X-Recording-Test".into(), "ffmpeg".into());
-        let active = manager
-            .start_with_ffmpeg_options(
-                input,
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
-            )
-            .await
-            .unwrap();
-        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
-
-        let stopped = manager.stop(&active.id).await.unwrap();
-        assert_eq!(stopped.status, RecordingStatus::Completed);
-        assert!(stopped.error.is_none());
+        let active = lib.start(input, 4).await.unwrap();
+        wait_for_bytes(&lib, &active.id).await;
+        let stopped = lib.stop(&active.id).await.unwrap();
+        let path = assert_completed_file(&lib, &stopped);
         assert!(stopped.duration_ms > 0);
-        let request = request_rx.await.unwrap();
-        assert!(request.contains("X-Recording-Test: ffmpeg\r\n"));
-
-        let root = PathBuf::from(manager.storage_info().path);
-        let stored = super::read_stored(&root, &active.id).unwrap();
-        let final_path = root.join(&active.id).join(stored.media_file);
-        assert!(final_path.is_file());
-        let bytes = std::fs::read(&final_path).unwrap();
         assert!(
-            bytes
-                .windows(b"keyframes".len())
-                .any(|window| window == b"keyframes"),
-            "FLV 回放需要关键帧索引支持 Range 跳转"
+            request
+                .lock()
+                .unwrap()
+                .contains("X-Recording-Test: ffmpeg\r\n")
         );
-        let output = ffmpeg_next::format::input(&final_path).unwrap();
+        assert!(
+            std::fs::read(&path)
+                .unwrap()
+                .windows(9)
+                .any(|window| window == b"keyframes")
+        );
+        let output = ffmpeg_next::format::input(&path).unwrap();
         assert!(
             output
                 .streams()
-                .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Video })
+                .any(|stream| stream.parameters().medium() == ffmpeg_next::media::Type::Video)
         );
-
-        server.abort();
-        let _ = server.await;
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
     }
 
     #[tokio::test]
-    async fn ffmpeg_manager_auto_split_continues_in_a_new_bundle() {
-        let (url, server) =
-            spawn_manager_test_valid_flv_server(manager_test_valid_flv_body()).await;
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-split-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let initial = manager
+    async fn ffmpeg_auto_split_continues_and_original_id_stops_the_current_bundle() {
+        let body = manager_test_valid_flv_body();
+        let server = serve(move |_| Some(Reply::Live(body.clone()))).await;
+        let lib = Library::new();
+        let initial = lib
             .start_with_ffmpeg_options(
-                manager_test_input(&url, "live:bilibili:auto-split", "auto-split"),
+                manager_test_input(&format!("{}/live.flv", server.url), SOURCE, "auto-split"),
                 &crate::proxy::ProxyRoute::Direct,
                 FfmpegRecordingOptions {
-                    split_duration: Some(std::time::Duration::from_millis(500)),
-                    ..FfmpegRecordingOptions::default()
+                    split_duration: Some(Duration::from_millis(500)),
+                    ..Default::default()
                 },
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
+                4,
             )
             .await
             .unwrap();
-
-        tokio::time::timeout(std::time::Duration::from_secs(8), async {
-            loop {
-                let items = manager.list().unwrap();
-                let has_completed_initial = items
-                    .iter()
-                    .any(|item| item.id == initial.id && item.status == RecordingStatus::Completed);
-                let has_next_active = items.iter().any(|item| {
+        wait_until(|| {
+            let items = lib.list().unwrap();
+            items
+                .iter()
+                .any(|item| item.id == initial.id && item.status == RecordingStatus::Completed)
+                && items.iter().any(|item| {
                     item.id != initial.id
                         && item.status == RecordingStatus::Recording
                         && item.size_bytes > 0
-                });
-                if has_completed_initial && has_next_active {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
+                })
         })
-        .await
-        .expect("自动分割应完成当前 bundle 并继续下一段");
-
-        let stopped = manager.stop(&initial.id).await.unwrap();
+        .await;
+        let stopped = lib.stop(&initial.id).await.unwrap();
         assert_ne!(stopped.id, initial.id);
-        assert_eq!(stopped.status, RecordingStatus::Completed);
-        let items = manager.list().unwrap();
+        assert_completed_file(&lib, &stopped);
+        let items = lib.list().unwrap();
         assert!(
             !items
                 .iter()
@@ -5805,457 +5182,125 @@ mod tests {
         assert!(
             completed
                 .iter()
-                .all(|item| PathBuf::from(&item.file_path).is_file())
+                .all(|item| Path::new(&item.file_path).is_file())
         );
-
-        server.abort();
-        let _ = server.await;
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
     }
 
-    #[tokio::test]
-    async fn ffmpeg_manager_remuxes_hls_master_without_following_unused_variant() {
-        let segments = Arc::new(manager_test_ts_segments());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let high_revision = Arc::new(AtomicU64::new(0));
-        let low_revision = Arc::new(AtomicU64::new(0));
-        let high_segment_requests = Arc::new(AtomicU64::new(0));
-        let low_segment_requests = Arc::new(AtomicU64::new(0));
-        let server_high_requests = high_segment_requests.clone();
-        let server_low_requests = low_segment_requests.clone();
-        let server = tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    break;
+    struct HlsSource {
+        segments: Vec<Vec<u8>>,
+        master: bool,
+        sequence: [AtomicU64; 2],
+        requests: [AtomicU64; 2],
+        stall: AtomicBool,
+        stalled: AtomicU64,
+    }
+
+    impl HlsSource {
+        async fn serve(master: bool) -> (Arc<Self>, TestServer) {
+            let source = Arc::new(Self {
+                segments: manager_test_ts_segments(),
+                master,
+                sequence: Default::default(),
+                requests: Default::default(),
+                stall: AtomicBool::new(false),
+                stalled: AtomicU64::new(0),
+            });
+            let served = source.clone();
+            let server = serve(move |head| served.reply(head)).await;
+            (source, server)
+        }
+
+        fn reply(&self, head: &str) -> Option<Reply> {
+            let path = head.lines().next()?.split_whitespace().nth(1)?;
+            if path == "/master.m3u8" {
+                return Some(Reply::Body("application/vnd.apple.mpegurl", b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720\nhigh.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=320x180\nlow.m3u8\n".to_vec()));
+            }
+            let variant = usize::from(path.starts_with("/low"));
+            let name = if variant == 0 { "high" } else { "low" };
+            if path.ends_with(".m3u8") {
+                let sequence = if self.master {
+                    self.sequence[variant]
+                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                            Some((value + 1).min(self.segments.len() as u64 - 3))
+                        })
+                        .unwrap()
+                } else {
+                    self.sequence[variant].load(Ordering::Relaxed)
                 };
-                let segments = segments.clone();
-                let high_revision = high_revision.clone();
-                let low_revision = low_revision.clone();
-                let high_segment_requests = server_high_requests.clone();
-                let low_segment_requests = server_low_requests.clone();
-                tokio::spawn(async move {
-                    let mut request = [0_u8; 4096];
-                    let Ok(length) = socket.read(&mut request).await else {
-                        return;
-                    };
-                    let head = String::from_utf8_lossy(&request[..length]);
-                    let path = head
-                        .lines()
-                        .next()
-                        .and_then(|line| line.split_whitespace().nth(1))
-                        .unwrap_or("");
-                    let (content_type, body) = if path == "/master.m3u8" {
-                        (
-                            "application/vnd.apple.mpegurl",
-                            b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720\nhigh.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=320x180\nlow.m3u8\n"
-                                .to_vec(),
-                        )
-                    } else if matches!(path, "/high.m3u8" | "/low.m3u8") {
-                        let final_sequence = segments.len().saturating_sub(3) as u64;
-                        let (variant, revision) = if path == "/high.m3u8" {
-                            ("high", &high_revision)
-                        } else {
-                            ("low", &low_revision)
-                        };
-                        let sequence = revision
-                            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |sequence| {
-                                Some((sequence + 1).min(final_sequence))
-                            })
-                            .unwrap();
-                        (
-                            "application/vnd.apple.mpegurl",
-                            format!(
-                                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n#EXTINF:1.000,\n{variant}-segment-{sequence}.ts\n#EXTINF:1.000,\n{variant}-segment-{}.ts\n#EXTINF:1.000,\n{variant}-segment-{}.ts\n",
-                                sequence + 1,
-                                sequence + 2
-                            )
-                            .into_bytes(),
-                        )
-                    } else {
-                        let requested_segment = [
-                            ("/high-segment-", &high_segment_requests),
-                            ("/low-segment-", &low_segment_requests),
-                        ]
-                        .into_iter()
-                        .find_map(|(prefix, requests)| {
-                            path.strip_prefix(prefix)
-                                .and_then(|path| path.strip_suffix(".ts"))
-                                .and_then(|index| index.parse::<usize>().ok())
-                                .and_then(|index| segments.get(index))
-                                .map(|segment| (requests, segment))
-                        });
-                        let Some((requests, segment)) = requested_segment else {
-                            let _ = socket
-                                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                                .await;
-                            return;
-                        };
-                        requests.fetch_add(1, Ordering::Relaxed);
-                        ("video/mp2t", segment.clone())
-                    };
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    if socket.write_all(response.as_bytes()).await.is_ok() {
-                        let _ = socket.write_all(&body).await;
-                    }
-                });
+                let mut playlist = format!(
+                    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n"
+                );
+                for index in sequence..sequence + if self.master { 3 } else { 1 } {
+                    playlist.push_str(&format!("#EXTINF:1.000,\n{name}-segment-{index}.ts\n"));
+                }
+                return Some(Reply::Body(
+                    "application/vnd.apple.mpegurl",
+                    playlist.into_bytes(),
+                ));
             }
-        });
-
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-hls-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let active = manager
-            .start_with_ffmpeg_options(
-                manager_test_input(
-                    &format!("http://{address}/master.m3u8"),
-                    "live:bilibili:hls-manager",
-                    "hls",
-                ),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
-            )
-            .await
-            .unwrap();
-        assert_eq!(active.protocol, PlaybackProtocol::MpegTs);
-        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
-        let low_after_probe = low_segment_requests.load(Ordering::Relaxed);
-        let high_after_probe = high_segment_requests.load(Ordering::Relaxed);
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while high_segment_requests.load(Ordering::Relaxed) < high_after_probe + 2 {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let index = path
+                .strip_suffix(".ts")?
+                .rsplit('-')
+                .next()?
+                .parse::<usize>()
+                .ok()?;
+            let segment = self.segments.get(index)?;
+            self.requests[variant].fetch_add(1, Ordering::Relaxed);
+            if self.stall.load(Ordering::Relaxed) {
+                self.stalled.fetch_add(1, Ordering::Relaxed);
+                return Some(Reply::Stalled);
             }
-        })
-        .await
-        .expect("选中的 HLS variant 应继续下载媒体分片");
-        assert!(
-            low_segment_requests.load(Ordering::Relaxed) <= low_after_probe + 1,
-            "未选择的 HLS variant 不应在探测结束后持续下载"
-        );
-
-        let stopped = manager.stop(&active.id).await.unwrap();
-        assert_eq!(stopped.status, RecordingStatus::Completed);
-        assert!(stopped.error.is_none());
-        let root = PathBuf::from(manager.storage_info().path);
-        let stored = super::read_stored(&root, &active.id).unwrap();
-        assert_eq!(stored.protocol, PlaybackProtocol::MpegTs);
-        assert!(stored.media_file.ends_with(".ts"));
-        let final_path = root.join(&active.id).join(stored.media_file);
-        assert!(final_path.is_file());
-        let output = ffmpeg_next::format::input(&final_path).unwrap();
-        assert!(
-            output
-                .streams()
-                .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Video })
-        );
-        assert!(
-            output
-                .streams()
-                .any(|stream| { stream.parameters().medium() == ffmpeg_next::media::Type::Audio })
-        );
-
-        server.abort();
-        let _ = server.await;
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
+            if !self.master {
+                // 单分片窗口只在实际发送后推进，确保停止时阻塞在新分片读取。
+                self.sequence[variant].fetch_max(
+                    ((index + 1).min(self.segments.len() - 1)) as u64,
+                    Ordering::Relaxed,
+                );
+            }
+            Some(Reply::Body("video/mp2t", segment.clone()))
+        }
     }
 
-    /// 停止 HLS 录制必须报告「已保存」，而不是「已中断」，
-    /// 即使此时没有任何数据到达。
-    ///
-    /// 停止请求经中断回调抵达 libavformat 时，某个分片抓取正被阻塞，
-    /// 而真实录制正是在这种情况下以 `Interrupted` 和
-    /// 「直播流已结束」收场的：HLS 解复用器把被中止的抓取上报为
-    /// `AVERROR_EOF`，worker 把它读成了直播结束。
-    ///
-    /// 这里验证的是端到端契约，而不是那个分类本身。被中止的读取最终报错还是
-    /// 冲刷出最后一个数据包由 libavformat 内部决定，而在分片这么小的情况下它会
-    /// 冲刷，于是循环在自己的取消检查处结束。分类行为由
-    /// `recording_ffmpeg` 中 `classify_read_failure` 的单元测试固定。
     #[tokio::test(flavor = "multi_thread")]
-    async fn stopping_an_hls_recording_while_a_fetch_is_stalled_completes_it() {
-        let segments = Arc::new(manager_test_ts_segments());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let sequence = Arc::new(AtomicU64::new(0));
-        // 媒体落盘后翻转一次。从那时起分片抓取不再应答，
-        // 停止请求必须打断一次阻塞中的读取。
-        let stall = Arc::new(AtomicBool::new(false));
-        let stalled_fetches = Arc::new(AtomicU64::new(0));
-        let server_stall = stall.clone();
-        let server_stalled = stalled_fetches.clone();
-        let server = tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    break;
-                };
-                let segments = segments.clone();
-                let sequence = sequence.clone();
-                let stall = server_stall.clone();
-                let stalled = server_stalled.clone();
-                tokio::spawn(async move {
-                    let mut request = [0_u8; 4096];
-                    let Ok(length) = socket.read(&mut request).await else {
-                        return;
-                    };
-                    let head = String::from_utf8_lossy(&request[..length]);
-                    let path = head
-                        .lines()
-                        .next()
-                        .and_then(|line| line.split_whitespace().nth(1))
-                        .unwrap_or("");
-                    let (content_type, body) = if path == "/live.m3u8" {
-                        // 单分片滑动窗口：解复用器在每个分片之后都必须回来重新加载，
-                        // 而不能靠缓冲窗口一路领先。
-                        let current = sequence.load(Ordering::Relaxed);
-                        (
-                            "application/vnd.apple.mpegurl",
-                            format!(
-                                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:{current}\n#EXTINF:1.000,\nsegment-{current}.ts\n"
-                            )
-                            .into_bytes(),
-                        )
-                    } else {
-                        let requested = path
-                            .strip_prefix("/segment-")
-                            .and_then(|path| path.strip_suffix(".ts"))
-                            .and_then(|index| index.parse::<usize>().ok())
-                            .and_then(|index| Some((index, segments.get(index)?)));
-                        let Some((index, segment)) = requested else {
-                            let _ = socket
-                                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                                .await;
-                            return;
-                        };
-                        if stall.load(Ordering::Relaxed) {
-                            // 只有响应头，然后陷入沉默，
-                            // 使停止请求到达时解复用器正好阻塞在这场抓取里。
-                            let _ = socket
-                                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: 1504\r\nConnection: close\r\n\r\n")
-                                .await;
-                            stalled.fetch_add(1, Ordering::Relaxed);
-                            std::future::pending::<()>().await;
-                            return;
-                        }
-                        // 只有分片真正被服务过才推进窗口，保证任何分片都不会被跳过。
-                        let last = segments.len().saturating_sub(1) as u64;
-                        let next = ((index as u64) + 1).min(last);
-                        let _ = sequence.fetch_update(
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                            |sequence| Some(sequence.max(next)),
-                        );
-                        ("video/mp2t", segment.clone())
-                    };
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    if socket.write_all(response.as_bytes()).await.is_ok() {
-                        let _ = socket.write_all(&body).await;
-                    }
-                });
+    async fn ffmpeg_hls_selects_one_variant_and_stalled_stop_still_completes() {
+        for master in [true, false] {
+            let (hls, server) = HlsSource::serve(master).await;
+            let lib = Library::new();
+            let playlist = if master { "master" } else { "live" };
+            let input =
+                manager_test_input(&format!("{}/{playlist}.m3u8", server.url), SOURCE, "hls");
+            let active = lib.start(input, 4).await.unwrap();
+            assert_eq!(active.protocol, PlaybackProtocol::MpegTs);
+            wait_for_bytes(&lib, &active.id).await;
+            if master {
+                let high = hls.requests[0].load(Ordering::Relaxed);
+                let low = hls.requests[1].load(Ordering::Relaxed);
+                wait_until(|| hls.requests[0].load(Ordering::Relaxed) >= high + 2).await;
+                assert!(
+                    hls.requests[1].load(Ordering::Relaxed) <= low + 1,
+                    "未选中的 variant 不应持续下载"
+                );
+            } else {
+                hls.stall.store(true, Ordering::Relaxed);
+                wait_until(|| hls.stalled.load(Ordering::Relaxed) > 0).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
-        });
-
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-hls-stop-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let active = manager
-            .start_with_ffmpeg_options(
-                manager_test_input(
-                    &format!("http://{address}/live.m3u8"),
-                    "live:bilibili:hls-stop",
-                    "hls-stop",
-                ),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
-            )
-            .await
-            .unwrap();
-        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
-        stall.store(true, Ordering::Relaxed);
-        tokio::time::timeout(std::time::Duration::from_secs(8), async {
-            while stalled_fetches.load(Ordering::Relaxed) == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let stopped = lib.stop(&active.id).await.unwrap();
+            let path = assert_completed_file(&lib, &stopped);
+            let stored = read_stored(&lib.root, &active.id).unwrap();
+            assert_eq!(stored.protocol, PlaybackProtocol::MpegTs);
+            assert!(stored.media_file.ends_with(".ts"));
+            let output = ffmpeg_next::format::input(&path).unwrap();
+            for medium in [
+                ffmpeg_next::media::Type::Video,
+                ffmpeg_next::media::Type::Audio,
+            ] {
+                assert!(
+                    output
+                        .streams()
+                        .any(|stream| stream.parameters().medium() == medium)
+                );
             }
-        })
-        .await
-        .expect("测试服务器应开始一次会被停止打断的分片请求");
-        // 足够让解复用器排空已抓取的内容，
-        // 并阻塞在这个停滞的请求内部。
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        let stopped = manager.stop(&active.id).await.unwrap();
-        assert_eq!(
-            stopped.status,
-            RecordingStatus::Completed,
-            "停止 HLS 录制应保存而非中断: {:?}",
-            stopped.error
-        );
-        assert!(stopped.error.is_none(), "{:?}", stopped.error);
-        let root = PathBuf::from(manager.storage_info().path);
-        let stored = super::read_stored(&root, &active.id).unwrap();
-        let final_path = root.join(&active.id).join(stored.media_file);
-        assert!(final_path.is_file());
-
-        server.abort();
-        let _ = server.await;
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[tokio::test]
-    async fn manager_start_stop_persists_completed_recording() {
-        let body = manager_test_flv_body();
-        let (url, server) = spawn_manager_test_flv_server(body.clone()).await;
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-manager-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-
-        let active = manager
-            .start_with_ffmpeg_options(
-                manager_lifecycle_test_input(&url, "live:bilibili:manager-start-stop", "100"),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
-            )
-            .await
-            .unwrap();
-        assert_eq!(active.status, RecordingStatus::Recording);
-        assert!(active.ended_at.is_none());
-
-        let root = PathBuf::from(manager.storage_info().path);
-        let bundle = root.join(&active.id);
-        let active_metadata = super::read_stored(&root, &active.id).unwrap();
-        assert_eq!(active_metadata.status, RecordingStatus::Recording);
-        assert!(active_metadata.ended_at.is_none());
-        let final_path = bundle.join(&active_metadata.media_file);
-        let part_path = bundle.join(format!("{}.part", active_metadata.media_file));
-        assert!(!final_path.exists());
-
-        wait_for_manager_recording_bytes(&manager, &active.id, 1).await;
-        assert!(part_path.is_file());
-
-        let stopped = manager.stop(&active.id).await.unwrap();
-        assert_eq!(stopped.status, RecordingStatus::Completed);
-        assert!(stopped.ended_at.is_some());
-        assert!(stopped.error.is_none());
-        assert!(!part_path.exists());
-        assert!(final_path.is_file());
-        assert!(std::fs::read(&final_path).unwrap().starts_with(b"FLV"));
-
-        let completed_metadata = super::read_stored(&root, &active.id).unwrap();
-        assert_eq!(completed_metadata.status, RecordingStatus::Completed);
-        assert_eq!(completed_metadata.ended_at, stopped.ended_at);
-        assert_eq!(completed_metadata.size_bytes, stopped.size_bytes);
-        assert_eq!(stopped.file_path, final_path.display().to_string());
-
-        server.abort();
-        let _ = server.await;
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[tokio::test]
-    async fn manager_rejects_duplicate_source_key() {
-        let body = manager_test_flv_body();
-        let (url, server) = spawn_manager_test_flv_server(body.clone()).await;
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-duplicate-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-        let source_key = "live:stable:duplicate";
-
-        let first = manager
-            .start_with_ffmpeg_options(
-                manager_lifecycle_test_input(&url, source_key, "100"),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
-            )
-            .await
-            .unwrap();
-        let duplicate = manager
-            .start_with_ffmpeg_options(
-                manager_lifecycle_test_input(&url, source_key, "different-room"),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                DEFAULT_MAX_ACTIVE_RECORDINGS,
-            )
-            .await
-            .unwrap_err();
-
-        assert_eq!(duplicate.code, "recording_already_active");
-        assert_eq!(
-            manager
-                .list()
-                .unwrap()
-                .into_iter()
-                .filter(|item| item.status == RecordingStatus::Recording)
-                .count(),
-            1
-        );
-
-        wait_for_manager_recording_bytes(&manager, &first.id, 1).await;
-        manager.stop(&first.id).await.unwrap();
-        server.abort();
-        let _ = server.await;
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
-    }
-
-    #[tokio::test]
-    async fn manager_enforces_the_configured_concurrency_limit() {
-        let body = manager_test_flv_body();
-        let (url, server) = spawn_manager_test_flv_server(body.clone()).await;
-        let app_directory =
-            std::env::temp_dir().join(format!("rlive-recording-limit-{}", Uuid::new_v4()));
-        let manager = RecordingManager::new(&app_directory).unwrap();
-
-        let first = manager
-            .start_with_ffmpeg_options(
-                manager_lifecycle_test_input(&url, "live:bilibili:limit-1", "1"),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                1,
-            )
-            .await
-            .unwrap();
-        // 上限为 1 时第二路被拒；同一个 manager 把上限改到 2 后立即放行，
-        // 证明上限每次启动重读而不是固定在进程启动时。
-        let rejected = manager
-            .start_with_ffmpeg_options(
-                manager_lifecycle_test_input(&url, "live:bilibili:limit-2", "2"),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                1,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(rejected.code, "recording_limit_reached");
-
-        let second = manager
-            .start_with_ffmpeg_options(
-                manager_lifecycle_test_input(&url, "live:bilibili:limit-2", "2"),
-                &crate::proxy::ProxyRoute::Direct,
-                FfmpegRecordingOptions::default(),
-                2,
-            )
-            .await
-            .unwrap();
-
-        wait_for_manager_recording_bytes(&manager, &first.id, 1).await;
-        manager.stop(&first.id).await.unwrap();
-        manager.stop(&second.id).await.unwrap();
-        server.abort();
-        let _ = server.await;
-        drop(manager);
-        std::fs::remove_dir_all(app_directory).unwrap();
+        }
     }
 }
