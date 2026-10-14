@@ -24,8 +24,6 @@ type Options = {
   panelWidth: number;
   panelHeight: number;
   scrolledUp: boolean;
-  /** 仅测试：冻结现有及后续弹幕的 WAAPI，原生轨道、到期与事件摄入保持运行。 */
-  motion: "running" | "paused";
   /**
    * P2 合成层策略。动画包装节点（`[data-rlive-danmaku-id]` 的父节点）内联带
    * `will-change:transform`，这里用 `!important` 样式表覆盖它，从而在不改生产代码的
@@ -50,7 +48,7 @@ const until = async (test: () => boolean, message: string, timeout = 10000) => {
   const deadline = performance.now() + timeout;
   while (!test()) { if (performance.now() > deadline) throw new Error(message); await sleep(25); }
 };
-const defaults: Options = { variant: "current", mode: "panel", rate: 150, width: 1920, height: 1080, panelWidth: 340, panelHeight: 480, scrolledUp: false, motion: "running", willChange: "node" };
+const defaults: Options = { variant: "current", mode: "panel", rate: 150, width: 1920, height: 1080, panelWidth: 340, panelHeight: 480, scrolledUp: false, willChange: "node" };
 const epoch = 710023;
 let options: Options | null = null;
 let root: Root | null = null;
@@ -59,7 +57,6 @@ let timer: number | null = null;
 let unsubscribe: (() => void) | null = null;
 let restoreSettings: (() => void) | null = null;
 let restoreEmit: (() => void) | null = null;
-let restoreAnimate: (() => void) | null = null;
 let restoreWillChange: (() => void) | null = null;
 let serial = 0;
 let sent = 0;
@@ -154,8 +151,6 @@ async function dispose() {
     clearExpectedDanmakuConnectionEpoch(epoch);
     restoreEmit?.();
     restoreEmit = null;
-    restoreAnimate?.();
-    restoreAnimate = null;
     restoreWillChange?.();
     restoreWillChange = null;
     renderers.clear();
@@ -176,7 +171,6 @@ async function prepare(input: Partial<Options> = {}) {
   const next = { ...defaults, ...input };
   assert(import.meta.env.PROD, "必须使用独立 production build，禁止用 Vite dev 采性能");
   assert(["baseline", "current"].includes(next.variant), "未知 variant");
-  assert(["running", "paused"].includes(next.motion), "未知 motion");
   assert(["node", "none", "group"].includes(next.willChange), "未知 willChange 策略");
   assert(["panel", "layer", "both", "idle"].includes(next.mode), "未知 mode");
   assert(Number.isFinite(next.rate) && next.rate >= 0 && next.rate <= 10000, "rate 必须为 0..10000");
@@ -199,16 +193,6 @@ async function prepare(input: Partial<Options> = {}) {
     };
     useSettingsStore.setState({ danmakuFontSize: 12, danmakuArea: 1, danmakuMergeWindowSeconds: 0, danmakuSpeed: 100, danmakuFontStroke: 0, danmakuOpacity: 0.8, danmakuShieldWords: [], danmakuBlockedUsers: [], danmakuFilterGifts: false });
     if (!nativeIPC) mockIPC((command) => { throw new Error(`禁止非事件 IPC：${command}`); }, { shouldMockEvents: true });
-    if (next.motion === "paused") {
-      const original = Element.prototype.animate;
-      const wrapped: typeof original = function (keyframes, animationOptions) {
-        const motion = original.call(this, keyframes, animationOptions);
-        if (this.parentElement?.closest("[data-danmaku-group]")) motion.pause();
-        return motion;
-      };
-      Element.prototype.animate = wrapped;
-      restoreAnimate = () => { if (Element.prototype.animate === wrapped) Element.prototype.animate = original; };
-    }
     // P2：节点内联样式固定带 `will-change:transform`，普通声明无法覆盖它，
     // 必须用 `!important` 样式表。组容器不带内联 will-change，所以可以直接声明。
     if (next.willChange !== "node") {
@@ -399,4 +383,4 @@ const api = {
 globals.__danmakuP0Bench = api;
 status.dataset.production = String(import.meta.env.PROD);
 status.textContent = `React ${React.version} · ${import.meta.env.PROD ? "production" : "非生产：禁止采样"} · 等待 start()`;
-window.addEventListener("pagehide", () => { stop(); restoreEmit?.(); restoreAnimate?.(); restoreWillChange?.(); restoreWillChange = null; restoreSettings?.(); restoreSettings = null; });
+window.addEventListener("pagehide", () => { stop(); restoreEmit?.(); restoreWillChange?.(); restoreWillChange = null; restoreSettings?.(); restoreSettings = null; });

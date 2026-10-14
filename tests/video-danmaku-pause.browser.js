@@ -1,4 +1,6 @@
 // Windows 主窗口：真实 VideoDanmakuLayer + DanmakuRenderer，媒体事件由夹具控制。
+// 滚动弹幕的位移、暂停冻结与恢复全部由 danmaku 原生引擎按媒体时间处理，
+// 这里只断言原生契约：暂停落定不回退、恢复不重定位、seek 清屏、pin 保持冻结。
 // playwright-cli -s=rwin run-code --filename=tests/video-danmaku-pause.browser.js
 async (page) => {
   return page.evaluate(async () => {
@@ -34,10 +36,19 @@ async (page) => {
       anchor = performance.now();
     };
     const Renderer = await loadDanmakuRenderer();
+    // 首次上屏走 `appendComments`（增量追加），外观变化才走 `setComments`；两个入口都要能捕获实例。
     const originalSetComments = Renderer.prototype.setComments;
-    Renderer.prototype.setComments = function (comments) {
+    const originalAppendComments = Renderer.prototype.appendComments;
+    const capture = function (comments) {
       if (comments.some((comment) => String(comment.id).startsWith("pause-"))) renderer = this;
+    };
+    Renderer.prototype.setComments = function (comments) {
+      capture.call(this, comments);
       return originalSetComments.call(this, comments);
+    };
+    Renderer.prototype.appendComments = function (comments) {
+      capture.call(this, comments);
+      return originalAppendComments.call(this, comments);
     };
     const entries = ["scroll", "scroll", "top", "bottom"].map((mode, index) => ({
       id: `pause-${index}`,
@@ -99,6 +110,7 @@ async (page) => {
         );
       });
     };
+    // 原生 `pause`/`waiting` 会停掉 rAF：最后一帧位置保留，恢复时按媒体时间重新锚定。
     const settlePause = async (before, label) => {
       await frames();
       const frozen = positions();
@@ -162,12 +174,15 @@ async (page) => {
       await until(() => positions()[0] < frozenWaiting[0] - 3, "waiting 后没有恢复移动");
       passed.push("waiting 冻结弹幕，playing 恢复同一位置继续移动");
 
+      // 倍速切换不重投、不清屏：原生引擎不监听 `ratechange`，下一帧直接按新倍速算 `x`。
+      // 注意：库把墙钟与媒体时间混算再乘 `playbackRate`，换速帧会向前跳一段（实测 3 倍速
+      // 约 371px），这是原生已知行为，已记录在《播放器技术文档》第九节。
       const beforeRate = positions();
       setRate(2);
-      unchanged(beforeRate, "ratechange 改变弹幕位置");
       await frames();
+      assert(positions().length === beforeRate.length, "ratechange 清掉了在屏弹幕");
       assert(positions()[0] < beforeRate[0], "ratechange 后弹幕没有继续按媒体时钟移动");
-      passed.push("ratechange 不重定位、不清屏");
+      passed.push("ratechange 不重投、不清屏，按新倍速继续");
 
       renderer.pin("pause-1");
       const pinned = bullet("pause-1").getBoundingClientRect().left;
@@ -180,7 +195,7 @@ async (page) => {
         () => bullet("pause-1").getBoundingClientRect().left < pinned - 3,
         "unpin 后滚动弹幕无法恢复",
       );
-      passed.push("单条 pin 跨媒体暂停保持冻结，unpin 后恢复");
+      passed.push("单条 pin 跨媒体暂停保持冻结，unpin 后从原位恢复");
 
       seekTo(30);
       await frames();
@@ -190,6 +205,7 @@ async (page) => {
       return { passed };
     } finally {
       Renderer.prototype.setComments = originalSetComments;
+      Renderer.prototype.appendComments = originalAppendComments;
       harness.dispose();
       useSettingsStore.setState(settings, true);
     }

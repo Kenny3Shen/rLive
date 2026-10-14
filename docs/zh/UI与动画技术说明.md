@@ -20,7 +20,7 @@
 | 运行时动画 | Web Animations API（`src/shared/motion/tween.ts`） | 页面入场、Zoom、手势回弹与可中断反馈 |
 | 文档快照 | View Transition API + CSS keyframes | 亮暗主题全局淡化 |
 | 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay、Drawer、主题淡化、加载旋转、短状态过渡 |
-| 直播画面弹幕 | `weizhenye/Danmaku` `DanmakuRenderer`（`requestAnimationFrame` 调度 + 每条滚动弹幕一条 WAAPI 位移动画） | 媒体时钟驱动的 DOM 轨道与飘屏，位移在合成器上推进，不属于页面 UI 动画层 |
+| 直播画面弹幕 | `weizhenye/Danmaku` `DanmakuRenderer`（`requestAnimationFrame` 调度，滚动弹幕逐帧按媒体时间写 `transform`） | 媒体时钟驱动的 DOM 轨道与飘屏，不属于页面 UI 动画层 |
 | 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 按平滑媒体时钟（`smoothMediaClock.ts`）绘制录制 sidecar；暂停、seek 时读真实 `currentTime` |
 
 硬性规则：

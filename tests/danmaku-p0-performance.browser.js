@@ -25,8 +25,6 @@ async (page) => {
   };
   for (const name of sceneNames) if (!scenes[name]) throw new Error(`未知 scene：${name}`);
   for (const variant of variants) if (!["baseline", "current"].includes(variant)) throw new Error(`未知 variant：${variant}`);
-  const motions = (params.get("motion") || "running").split(",");
-  if (motions.some((motion) => !["running", "paused"].includes(motion))) throw new Error("未知 motion");
   // P2：合成层策略。节点内联的 `will-change:transform` 由夹具用 `!important` 覆盖，
   // 不改生产代码。只对挂载了弹幕层的场景有意义，其余场景会报错而不是静默退化。
   const willChanges = (params.get("willChange") || "node").split(",");
@@ -53,9 +51,9 @@ async (page) => {
       const minimumWarmup = scene === "high-density" ? 22000 : scene.startsWith("mobile") || ["layer", "both"].includes(scene) ? 6000 : 3000;
       const warmupMs = Math.max(minimumWarmup, Number(params.get("warmup") || minimumWarmup));
       if (!Number.isFinite(warmupMs)) throw new Error("warmup 必须是毫秒数");
-      for (const cpu of cpus) for (const variant of variants) for (const motion of motions) for (const willChange of willChanges) {
+      for (const cpu of cpus) for (const variant of variants) for (const willChange of willChanges) {
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
-        const options = { ...scenes[scene], variant, motion, willChange };
+        const options = { ...scenes[scene], variant, willChange };
         // 可覆写 layer 几何/rate 但结果仍完整记录，便于有限档位的设备专项复跑。
         for (const name of ["width", "height", "panelWidth", "panelHeight", "rate"]) {
           if (params.has(name)) options[name] = Number(params.get(name));

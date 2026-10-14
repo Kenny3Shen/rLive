@@ -256,6 +256,24 @@ async (page) => {
         while (state.time < target) state.time = Math.min(target, state.time + 0.25);
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       },
+      /**
+       * 媒体时间与墙钟同步推进（真实播放）。
+       *
+       * 原生引擎把滚动弹幕的 `x` 锚在墙钟（`_utc`）上，只有调度与到期看媒体时间。
+       * 瞬时跳媒体时间会让在屏弹幕的位置停在起点附近，而按媒体时间算它「已经走了很远」，
+       * 两者不一致时新分段会被轨道准入判为重叠而拒绝 —— 那是夹具时序，不是产品行为。
+       * 需要验证新分段投放时用本方法；只看固定弹幕到期可用 `advance`。
+       */
+      advanceReal: async (seconds) => {
+        const target = state.time + seconds;
+        const wallStart = performance.now();
+        const mediaStart = state.time;
+        while (state.time < target) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          state.time = Math.min(target, mediaStart + (performance.now() - wallStart) / 1_000);
+        }
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      },
       appendEntry: (entry) => {
         render({ entries: [...state.entries, entry] });
       },
@@ -531,7 +549,7 @@ async (page) => {
     for (const id of ["action-top", "action-scroll", "action-bottom"]) {
       assert((await bulletCount(id)) === 1, `新分段到达清掉了在屏弹幕 ${id}`);
     }
-    await page.evaluate(() => window.__videoDanmakuActionsTest.advance(2));
+    await page.evaluate(() => window.__videoDanmakuActionsTest.advanceReal(2));
     assert((await bulletCount("action-late")) === 1, "新分段的弹幕没有按时投放");
     assert((await bulletCount("action-top")) === 1, "新分段导致旧弹幕重投或提前消失");
     await page.evaluate(() => window.__videoDanmakuActionsTest.pause());

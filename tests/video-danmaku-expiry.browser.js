@@ -26,11 +26,20 @@ async (page) => {
     let renderer;
     const passed = [];
     const Renderer = await loadDanmakuRenderer();
+    // 首次上屏走 `appendComments`（增量追加），外观变化才走 `setComments`；两个入口都要能捕获实例。
     const originalSetComments = Renderer.prototype.setComments;
+    const originalAppendComments = Renderer.prototype.appendComments;
     const testIds = new Set(["top-first", "top-next", "bottom-first", "bottom-next", "top-later"]);
-    Renderer.prototype.setComments = function (comments) {
+    const capture = function (comments) {
       if (comments.some((comment) => testIds.has(String(comment.id)))) renderer = this;
+    };
+    Renderer.prototype.setComments = function (comments) {
+      capture.call(this, comments);
       return originalSetComments.call(this, comments);
+    };
+    Renderer.prototype.appendComments = function (comments) {
+      capture.call(this, comments);
+      return originalAppendComments.call(this, comments);
     };
     const paint = () =>
       render(
@@ -138,6 +147,7 @@ async (page) => {
       return { passed };
     } finally {
       Renderer.prototype.setComments = originalSetComments;
+      Renderer.prototype.appendComments = originalAppendComments;
       harness.dispose();
       useSettingsStore.setState(settings, true);
     }
