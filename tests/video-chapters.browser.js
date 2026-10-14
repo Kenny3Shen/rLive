@@ -233,6 +233,70 @@ async (page) => {
     await drawer.waitFor({ state: "hidden" });
     passed.push("竖屏章节为底部抽屉：高亮、点选跳转与收起，且挂在侧栏视口");
 
+    /*
+      当前章节要真的被滚进可视区。章节多到列表溢出时，长列表默认停在顶部；
+      而弹层展开时 base-ui 会把焦点移到列表第一项，`focus()` 的默认行为会把该元素
+      滚进可视区 —— 正好把本帧写好的 `scrollTop` 清回 0。断言当前章可见即可覆盖
+      这条竞态（回归前本用例的 `scrollTop` 始终为 0）。
+    */
+    await page.evaluate(async () => {
+      const f = window.vodSessionFixture;
+      f.metadata[1] = {
+        subtitles: [],
+        chapters: Array.from({ length: 30 }, (_, index) => ({
+          start_time: index * 20,
+          end_time: index * 20 + 20,
+          title: `章节 ${index}`,
+        })),
+      };
+      await f.client.invalidateQueries({ queryKey: ["video_player_meta"] });
+      // 进度放进第 25 章，让当前章远离列表顶部。
+      document.querySelector("video").currentTime = 500;
+    });
+    await page.waitForFunction(
+      () => document.querySelector('video track[kind="chapters"]')?.track.cues?.length === 30,
+    );
+    await page.locator('[data-slot="player-chapter-pill"]').getByText("章节 25", { exact: true }).waitFor();
+    await revealControls();
+    await page.locator('[data-slot="player-chapter-pill"]').click();
+    await drawer.waitFor();
+    const scrolled = await drawer.evaluate((el) => {
+      const list = el.querySelector('[role="list"][aria-label="章节列表"]');
+      const current = list.querySelector('[aria-current="true"]');
+      const listRect = list.getBoundingClientRect();
+      const itemRect = current.getBoundingClientRect();
+      return {
+        scrollTop: Math.round(list.scrollTop),
+        currentVisible: itemRect.top >= listRect.top - 1 && itemRect.bottom <= listRect.bottom + 1,
+        current: current.textContent.trim(),
+      };
+    });
+    assert(
+      scrolled.scrollTop > 0 && scrolled.currentVisible,
+      `当前章节未滚进可视区：${JSON.stringify(scrolled)}`,
+    );
+    assert(scrolled.current.includes("章节 25"), `当前章节不对：${scrolled.current}`);
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "hidden" });
+    passed.push("章节多到溢出时当前章自动滚进可视区");
+
+    // 恢复三章夹具：后面的段落按「3 条章节 + 4 段进度条」断言。
+    await page.evaluate(async () => {
+      const f = window.vodSessionFixture;
+      f.metadata[1] = {
+        subtitles: [{ lan: "zh-CN", lan_doc: "测试 CC", url: "https://example.invalid/cc.json" }],
+        chapters: [
+          { start_time: 0, end_time: 120, title: "开场" },
+          { start_time: 180, end_time: 300, title: "演示" },
+          { start_time: 300, end_time: 900, title: "总结" },
+        ],
+      };
+      await f.client.invalidateQueries({ queryKey: ["video_player_meta"] });
+      document.querySelector("video").currentTime = 0;
+    });
+    await page.waitForFunction(() => document.querySelector('video track[kind="chapters"]')?.track.cues?.length === 3);
+    await page.waitForFunction(() => document.querySelectorAll('.media-time-slider [class~="group/chapter"]').length === 4);
+
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.getByRole("button", { name: "章节：开场", exact: true }).locator("xpath=ancestor::*[@data-slot='player-extension-controls']").waitFor();
 

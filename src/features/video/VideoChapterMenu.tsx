@@ -66,7 +66,7 @@ export function VideoChapterMenu({
   const activeTitle = activeIndex >= 0 ? chapters[activeIndex].title : null;
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  // 展开时把当前章节滚进可视区；只调列表自身的 scrollTop，不牵动舞台或页面滚动。
+  // 展开时把当前章节滚进可视区；只调列表自身的 `scrollTop`，不牵动舞台或页面滚动。
   const scrollActiveIntoView = useCallback(() => {
     const list = listRef.current;
     const item = list?.querySelector<HTMLElement>('[aria-current="true"]');
@@ -77,19 +77,37 @@ export function VideoChapterMenu({
       list.scrollTop = Math.max(0, top - (list.clientHeight - item.offsetHeight) / 2);
     }
   }, []);
+  /**
+   * 定位要跑两次（本帧 + 下一帧）。
+   *
+   * 弹层展开时 base-ui 会把焦点移到列表里的第一项（触摸时移到弹层本身），而
+   * `focus()` 的默认行为会把该元素滚进可视区 —— 第一项就在列表顶部，于是浏览器
+   * 把 `scrollTop` 清回 0，正好抹掉我们本帧刚写的位置。再跑一次即可落在焦点之后；
+   * 此时列表还在入场动画里，重写不可见。
+   */
+  const scheduleScrollActiveIntoView = useCallback(() => {
+    const first = requestAnimationFrame(() => {
+      scrollActiveIntoView();
+      second = requestAnimationFrame(scrollActiveIntoView);
+    });
+    let second = 0;
+    return () => {
+      cancelAnimationFrame(first);
+      if (second) cancelAnimationFrame(second);
+    };
+  }, [scrollActiveIntoView]);
   useEffect(() => {
     if (!open) return;
-    const frame = requestAnimationFrame(scrollActiveIntoView);
-    return () => cancelAnimationFrame(frame);
-  }, [open, scrollActiveIntoView]);
+    return scheduleScrollActiveIntoView();
+  }, [open, scheduleScrollActiveIntoView]);
   // 抽屉列表是挂载时才建 DOM（弹层带 Portal 与进出场动画），回调 ref 里补一次定位。
   const attachList = useCallback(
     (node: HTMLDivElement | null) => {
       listRef.current = node;
       if (!node || !open) return;
-      requestAnimationFrame(scrollActiveIntoView);
+      scheduleScrollActiveIntoView();
     },
-    [open, scrollActiveIntoView],
+    [open, scheduleScrollActiveIntoView],
   );
 
   const selectChapter = (chapter: VideoChapter) => {

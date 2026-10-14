@@ -133,9 +133,16 @@ async (page) => {
         flushSync(() => send("touchend", from + distance, { time: start + steps * 16 }));
         await frames();
       };
-      /** 等到惯性自己停下（速度低于阈值后 `stopMomentum` 会提交）。 */
-      const settleMomentum = async (limit = 200) => {
-        for (let i = 0; i < limit; i += 1) {
+      /**
+       * 等到惯性自己停下（速度低于阈值后 `stopMomentum` 会提交）。
+       *
+       * 按墙钟而不是帧数：`τ = 325ms` 下速度从 1px/ms 衰减到 0.02 的停止阈值要
+       * 约 1.3s，而 120Hz 屏上帧数是它的两倍。真机（Windows 主窗口）也可能跑在
+       * 120Hz 上，固定帧数会假失败。
+       */
+      const settleMomentum = async (timeoutMs = 6000) => {
+        const deadline = performance.now() + timeoutMs;
+        while (performance.now() < deadline) {
           const before = commits.length;
           await nextFrame();
           if (commits.length > before) return true;
