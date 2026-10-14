@@ -20,7 +20,7 @@
 | 运行时动画 | Web Animations API（`src/shared/motion/tween.ts`） | 页面入场、Zoom、手势回弹与可中断反馈 |
 | 文档快照 | View Transition API + CSS keyframes | 亮暗主题全局淡化 |
 | 原生 CSS 动画 | `tw-animate-css` + 自定义 utilities | Overlay、Drawer、主题淡化、加载旋转、短状态过渡 |
-| 直播画面弹幕 | `weizhenye/Danmaku` `DanmakuRenderer`（`requestAnimationFrame` 调度，滚动弹幕逐帧按媒体时间写 `transform`） | 媒体时钟驱动的 DOM 轨道与飘屏，不属于页面 UI 动画层 |
+| 直播画面弹幕 | `danmu` `DanmakuRenderer`（每条弹幕自己的 CSS transition 在合成器上推进，主线程只投放与准入） | 媒体时钟驱动的 DOM 轨道与飘屏，不属于页面 UI 动画层 |
 | 录制回放弹幕 | `RecordedDanmakuCanvas` + `requestAnimationFrame` | 按平滑媒体时钟（`smoothMediaClock.ts`）绘制录制 sidecar；暂停、seek 时读真实 `currentTime` |
 
 硬性规则：
@@ -324,8 +324,8 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 
 画面弹幕（`DanmakuRenderer`，会话与实例契约见 [播放器技术文档](播放器技术文档.md)）：
 
-- 位置与时序由 `DanmakuRenderer` 按媒体时钟在 `requestAnimationFrame` 中写入 `transform`。VOD 绑定真实媒体，暂停、缓冲等待、seek 和倍速变化跟随原生媒体事件；没有应用自建 `timeupdate` 投放循环，也没有 native CSS transition。滚动弹幕的实际移动时长由舞台宽度、弹幕宽度与标准 `speed` 共同决定，界面以 `speed / 100` 显示 `0.5×–2.0×` 倍率；SC 使用平台提供的持续时长。聚合只更新同一活动 bullet 的文本与计数槽。
-- 数据池、本地 metadata、聚合目标与固定时长分组都必须有界，并在 renderer 的 `remove` / `clear` / `destroy` 以及适配层的 attach/detach 时同步释放；实例必须等容器非零尺寸后才启动。单条 pin、固定弹幕按媒体时间到期、边界丢弃由共享适配层补齐，不把这些业务行为误记为库原生能力。
+- 滚动弹幕的位移由 `danmu` 在节点上写一次 CSS transition（`transform linear <duration>ms`）后在合成器上推进，主线程不再逐帧写 `transform`；VOD 的投放、暂停、缓冲等待、seek 和倍速变化由 `DanmakuRenderer` 读 `currentTime` 驱动（`danmu` 不绑定媒体）。滚动弹幕的实际移动时长由舞台宽度、弹幕宽度与标准 `speed` 共同决定，界面以 `speed / 100` 显示 `0.5×–2.0×` 倍率；SC 使用平台提供的持续时长。聚合只更新同一活动 bullet 的文本与计数槽。
+- 数据池、本地 metadata、聚合目标与在屏记账都必须有界，并在 renderer 的 `remove` / `clear` / `destroy` 以及适配层的 attach/detach 时同步释放；实例必须等容器非零尺寸后才启动。单条 pin、固定弹幕到期、车道占用与超量丢弃由共享适配层补齐，不把这些业务行为误记为库原生能力。
 
 ## 7. 流程与验证清单
 

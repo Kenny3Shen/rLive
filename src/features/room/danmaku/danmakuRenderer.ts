@@ -1,131 +1,178 @@
-import Danmaku from "danmaku";
+import { create, type Danmaku, type Manager } from "danmu";
+import { danmakuMaxActiveComments } from "./danmakuAdapter";
 import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
 
 /**
- * 私有字段集中在此处，锁定 danmaku 2.0.10。原生引擎负责唯一的 rAF、媒体事件、
- * 时间轴、轨道分配和 DOM 移动；应用仅补充公开 API 缺失的生命周期、单条冻结和移除。
- * 固定弹幕按时长分组，仍由原生媒体时间到期，绝不使用 CSS transition 或墙钟占位。
+ * 基于 `danmu` 的 DOM 弹幕引擎。运动由每条弹幕自己的 CSS transition 在合成器上推进，
+ * 主线程只负责投放、准入与生命周期，不再逐帧写 transform。
  *
- * 原生引擎负责每帧调度与 transform 写入。VOD 在 render 钩子中用媒体时间修正滚动位置，
- * 让位移、投放与到期共用同一时间轴；直播仍走原生墙钟，不新增动画循环或倍速状态。
+ * 两层管理器：滚动层限制在用户设置的显示区域内，固定层占满整个舞台，与旧实现的分层一致。
+ * `danmu` 不绑定媒体，因此 VOD 由本文件按媒体事件推进投放与暂停/倍速，直播按墙钟直接投放。
+ * 固定弹幕（top/bottom，含 SC 与自己的弹幕）和占两条车道的大表情走 flexible danmaku，
+ * 由本文件的 `LanePool` 按车道摆位；普通滚动弹幕交给 `danmu` 的轨道调度与碰撞预测。
  */
-type NativeComment = {
-  mode: "rtl" | "top" | "bottom";
-  time: number;
-  _utc: number;
-  render: () => HTMLElement;
-  node?: HTMLElement;
-  width: number;
-  height: number;
-  x: number;
-  y: number;
+type Layer = "scroll" | "fixed";
+
+type LayerRuntime = {
+  manager: Manager<DanmakuComment>;
+  lanes: LanePool;
 };
-type SpaceItem = { range: number; time: number; width: number; height: number };
-type NativeEngine = {
-  framing: (stage: HTMLElement) => void;
-  setup: (stage: HTMLElement, comments: NativeComment[]) => void;
-  render: (stage: HTMLElement, comment: NativeComment) => void;
-  remove: (stage: HTMLElement, comment: NativeComment) => void;
-  clear: (stage: HTMLElement) => void;
-};
-type NativeInstance = Danmaku & {
-  comments: NativeComment[];
-  _: {
-    engine: NativeEngine;
-    stage: HTMLElement;
-    runningList: NativeComment[];
-    position: number;
-    duration: number;
-    width: number;
-    height: number;
-    space: Record<NativeComment["mode"] | "ltr", SpaceItem[]>;
-  };
-};
-type Group = {
-  key: string;
-  duration?: number;
-  host: HTMLElement;
-  native: NativeInstance;
-  /** 最近一次有效尺寸；帧内只读缓存，避免在 transform 写入后强制布局。 */
-  width: number;
-  height: number;
-  /** 仍在记录中的弹幕数，用于 O(1) 判断空组。 */
-  count: number;
-};
+
 type RecordItem = {
-  definition: DanmakuComment;
-  group: Group;
-  comment: NativeComment;
+  comment: DanmakuComment;
+  danmaku: Danmaku<DanmakuComment>;
   element: HTMLElement;
-  attached: boolean;
-  pinned: boolean;
-  /** 固定弹幕最近一次写入的位置，未变化时跳过 style 写入。 */
-  px?: number;
-  py?: number;
-  /** 铉住时的媒体时间与墙钟，释放时顺延固定弹幕寿命。 */
-  pinnedAt?: { media: number; wall: number };
+  layer: Layer;
+  /** 占用的车道下标；空数组表示由 `danmu` 轨道自行调度。 */
+  lanes: number[];
+  /** 是否锁住了对应轨道（大表情让同层普通弹幕避开占用车道）。 */
+  locked: boolean;
 };
 
-const MAX_PENDING_PER_FRAME = 32;
-const MAX_LIVE_PENDING = 160;
-/**
- * 渲染器自己的在屏上限，对任何调用方都生效（VOD 侧只有这一道闸）。
- * 直播层的批次准入另有 `DANMAKU_MAX_ACTIVE_COMMENTS`（`danmakuAdapter.ts`）：
- * 那是业务侧按舞台车道算出的活动预算，与本判据不是同一件事，不要互相替代。
- */
-const MAX_ACTIVE = 800;
-/** 常规固定弹幕 1 组 + 同屏至多 3 条 SC 各自的时长。 */
-const MAX_FIXED_GROUPS = 4;
-const DEFAULT_DURATION_MS = 15_000;
-/** 容器尚无尺寸时的占位时长；原生 duration=0 会把所有待投弹幕判为过期。 */
-const FALLBACK_DURATION_S = 8;
-const clock = () => performance.now() / 1_000;
-const positive = (value: number | undefined, fallback: number) =>
-  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+/** 投放前登记的车道占用：`pushFlexibleDanmaku` 不返回实例，靠 comment id 在钩子里认领。 */
+type Reservation = {
+  layer: Layer;
+  lanes: number[];
+  locked: boolean;
+};
 
-function lowerBound(comments: NativeComment[], time: number): number {
+/** `limits.stash`：待投放上限，超出由库丢弃并触发 `limitWarning`（本文件静默处理）。 */
+const MAX_STASHED = 256;
+const DEFAULT_FIXED_DURATION_MS = 15_000;
+/** 媒体时间单帧跳变超过该值按 seek 处理：清屏并重新定位游标。 */
+const SEEK_JUMP_SECONDS = 0.5;
+/** 单帧投放上限：批量注入时把 DOM 工作摊到多帧，避免单帧长任务。 */
+const MAX_PUSH_PER_FRAME = 48;
+/** 库自身轮询间隔；滚动层另有批次内的显式 `render()`，这里只兜底重试。 */
+const SCROLL_INTERVAL_MS = 200;
+const FIXED_INTERVAL_MS = 500;
+/** 已登记但尚未上屏就被移除的 id 上限，超出即整体丢弃。 */
+const CANCELLED_LIMIT = 512;
+/**
+ * `danmu` 的 `speed` 单位是 px/毫秒，而业务设置（与旧引擎）用 px/秒，
+ * 两者差 1000 倍；漏了这一步会让每条弹幕在数毫秒内跑完并消失。
+ */
+const SPEED_UNIT_SCALE = 1 / 1_000;
+
+const clock = () => performance.now() / 1_000;
+
+function positive(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function clampArea(value: number | undefined): number {
+  const next = typeof value === "number" && Number.isFinite(value) ? value : 1;
+  return Math.max(0.1, Math.min(1, next));
+}
+
+function lowerBound(comments: readonly DanmakuComment[], time: number): number {
   let lo = 0;
   let hi = comments.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (comments[mid]!.time < time) lo = mid + 1;
+    if ((comments[mid]!.time ?? Number.POSITIVE_INFINITY) < time) lo = mid + 1;
     else hi = mid;
   }
   return lo;
 }
 
-function applyStyle(element: HTMLElement, style: DanmakuComment["style"]) {
-  for (const [key, value] of Object.entries(style ?? {})) {
-    const property = key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-    if (value === undefined) element.style.removeProperty(property);
-    else element.style.setProperty(property, String(value));
+function cssPropertyName(name: string): string {
+  if (name.startsWith("--")) return name;
+  return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
+function applyStyle(element: HTMLElement, style: DanmakuComment["style"]): void {
+  if (!style || typeof style !== "object") return;
+  for (const [name, value] of Object.entries(style)) {
+    if (value === undefined) continue;
+    element.style.setProperty(cssPropertyName(name), String(value));
   }
+}
+
+/** 时间轴里被替换掉的定义要清掉自己引入的样式，否则旧字号/描边会留在节点上。 */
+function clearStyleKeys(element: HTMLElement, style: DanmakuComment["style"]): void {
+  if (!style || typeof style !== "object") return;
+  for (const name of Object.keys(style)) element.style.removeProperty(cssPropertyName(name));
+}
+
+/**
+ * 车道占用表，用于 `danmu` 轨道无法表达的几何：固定弹幕（不参与轨道调度）
+ * 与占多条车道的大表情滚动弹幕。
+ */
+class LanePool {
+  private used: boolean[] = [];
+
+  reset(count: number): void {
+    this.used = Array.from({ length: Math.max(0, Math.floor(count)) }, () => false);
+  }
+
+  /** 自顶向下找第一段连续空闲车道；`span` 超过车道总数时返回 null。 */
+  allocate(span: number): number | null {
+    const need = Math.max(1, Math.floor(span));
+    const total = this.used.length;
+    if (need > total) return null;
+    for (let start = 0; start + need <= total; start += 1) {
+      let index = start;
+      while (index < start + need && !this.used[index]) index += 1;
+      if (index < start + need) {
+        start = index;
+        continue;
+      }
+      for (let lane = start; lane < start + need; lane += 1) this.used[lane] = true;
+      return start;
+    }
+    return null;
+  }
+
+  /** 尝试占用一段指定车道；已被占用或越界时返回 false。 */
+  reserveRange(start: number, span: number): boolean {
+    if (start < 0 || start + span > this.used.length) return false;
+    for (let lane = start; lane < start + span; lane += 1) if (this.used[lane]) return false;
+    for (let lane = start; lane < start + span; lane += 1) this.used[lane] = true;
+    return true;
+  }
+
+  release(index: number): void {
+    if (index >= 0 && index < this.used.length) this.used[index] = false;
+  }
+}
+
+function fallbackElement(comment: DanmakuComment): HTMLElement {
+  const element = document.createElement("span");
+  element.textContent = comment.text;
+  element.dataset.rliveDanmakuId = comment.id;
+  applyStyle(element, comment.style);
+  return element;
 }
 
 export class DanmakuRenderer {
   readonly container: HTMLElement;
   private readonly media?: HTMLMediaElement;
   private readonly options: DanmakuRendererOptions;
-  private readonly groups = new Map<string, Group>();
+  private readonly scroll: LayerRuntime;
+  private readonly fixed: LayerRuntime;
   private readonly records = new Map<string, RecordItem>();
+  private readonly reservations = new Map<string, Reservation>();
   /**
-   * 已登记进时间轴的 id。`appendComments` 靠它跳过已转换的条目，避免每次分段加载都重建
-   * 整条时间轴。整体替换时直接换掉这个 Set（O(1)），不逐条清理。
-   * 直播走 `emit`，不入此表：无媒体时原生会回收已消费前缀，登记会随会话无限增长。
+   * 已受理但尚未回调 `onDetach` 的 id。调用方按「每条受理的弹幕恰好一次 detach」
+   * 记账（活动预算、记录表都靠它回收），因此被库丢弃、被移除、被清屏的条目都要在这里结算。
    */
-  private timelineIds = new Set<string>();
-  /**
-   * 已移除但仍在分组时间轴里的 id（墓碑）。从数组中 `splice` 一条需要先知道下标，
-   * 而 `indexOf` 是 O(时间轴)；时间轴可能到十万条，而 `remove` 在直播 SC 集中到期时
-   * 会连续触发。这里只记墓碑，让原生跳过它，再在安全时机一次性压实。
-   */
-  private readonly removedIds = new Set<string>();
-  /** 墓碑数量的压实阈值：限制墓碑内存，同时把 O(时间轴) 的压实摊薄到亚毫秒每次移除。 */
-  private static readonly COMPACT_THRESHOLD = 512;
-  private readonly definitions = new WeakMap<NativeComment["render"], DanmakuComment>();
+  private readonly live = new Set<string>();
+  /** 在屏滚动弹幕的 id 集合：唯一准入判据的计数来源，随 `detach` 回收。 */
+  private readonly scrollLive = new Set<string>();
+  private readonly cancelled = new Set<string>();
   private readonly observer?: ResizeObserver;
+  /** VOD 时间轴与游标；直播不走这里，`emit` 直接投放。 */
+  private timeline: DanmakuComment[] = [];
+  private timelineIds = new Set<string>();
+  private cursor = 0;
   private speed: number;
   private area: number;
+  private laneHeight: number;
+  private lastMediaTime = 0;
+  private frozen = false;
+  private frame = 0;
+  private renderQueued = false;
   private destroyed = false;
 
   constructor(options: DanmakuRendererOptions) {
@@ -133,508 +180,614 @@ export class DanmakuRenderer {
     this.container = options.container;
     this.media = options.media;
     this.speed = positive(options.speed, 100);
-    this.area = this.normalizedArea(options.area ?? 1);
-    this.container.dataset.danmakuRenderer = "weizhenye";
+    this.area = clampArea(options.area);
+    this.laneHeight = Math.max(1, Math.round(positive(options.laneHeight, 24)));
+    this.scroll = this.createLayer("scroll");
+    this.fixed = this.createLayer("fixed");
+    this.applyScrollArea();
+    if (this.media) this.bindMedia(this.media);
     if (typeof ResizeObserver !== "undefined") {
       this.observer = new ResizeObserver(() => this.resize());
       this.observer.observe(this.container);
     } else {
       window.addEventListener("resize", this.onResize);
     }
+    this.container.dataset.danmakuRenderer = "danmu";
   }
 
-  get size(): number {
-    let size = 0;
-    for (const record of this.records.values()) if (record.attached) size += 1;
-    return size;
-  }
-
-  has(id: string): boolean {
-    return this.records.get(id)?.attached === true;
-  }
-
-  emit(definition: DanmakuComment): void {
-    if (this.destroyed || this.records.has(definition.id)) return;
-    const group = this.groupFor(definition);
-    const state = group.native._;
-    // 未挂载消息必须有界；原生下一帧会按轨道饱和度进一步拒绝新消息。
-    if (group.native.comments.length - state.position >= MAX_LIVE_PENDING) {
-      this.options.onDetach?.(definition.id);
-      return;
-    }
-    const native = this.toNative(definition);
-    group.native.emit(native);
-    group.native.show();
+  /** 直播：一条事件立即投放，按 `mode` 与车道占用选择普通/固定/大表情通道。 */
+  emit(comment: DanmakuComment): void {
+    if (this.destroyed || this.live.has(comment.id)) return;
+    if (this.push(comment)) this.scheduleRender();
   }
 
   /**
-   * 替换未来时间轴，不清除/重投在途弹幕。每次 seek 仍由原生重新定位。
-   * 分段追加走 `appendComments`；只有外观变化、条目减少（屏蔽词命中）或换视频才需要整体替换。
+   * 替换未来时间轴，不清除在途弹幕。同一 id 已在屏时只更新样式，保留节点身份与运动位置。
+   * 只有外观变化、条目减少（屏蔽词命中）或换视频才需要整体替换；分段追加走 `appendComments`。
    */
   setComments(comments: readonly DanmakuComment[]): void {
     if (this.destroyed) return;
-    const grouped = new Map<Group, NativeComment[]>();
-    const seen = new Set<string>();
-    for (const definition of comments) {
-      if (seen.has(definition.id)) continue;
-      seen.add(definition.id);
-      const group = this.groupFor(definition);
-      let list = grouped.get(group);
-      if (!list) grouped.set(group, list = []);
-      const native = this.toNative(definition);
-      list.push(native);
-      this.applyDefinition(definition);
+    const byId = new Map<string, DanmakuComment>();
+    for (const comment of comments) if (!byId.has(comment.id)) byId.set(comment.id, comment);
+    this.timeline = Array.from(byId.values()).sort(
+      (left, right) => (left.time ?? 0) - (right.time ?? 0),
+    );
+    this.timelineIds = new Set(byId.keys());
+    this.cursor = lowerBound(this.timeline, this.now());
+    for (const record of this.records.values()) {
+      const next = byId.get(record.comment.id);
+      if (!next || next === record.comment) continue;
+      clearStyleKeys(record.element, record.comment.style);
+      applyStyle(record.element, next.style);
+      record.comment = next;
     }
-    // 整体替换：整个 Set 一次换掉，不逐条删除也不额外分配临时数组。数组是重建的，
-    // 旧墓碑也随之消失，不需要保留。
-    this.timelineIds = seen;
-    this.removedIds.clear();
-    const now = this.now();
-    for (const group of this.groups.values()) {
-      const list = grouped.get(group) ?? [];
-      list.sort((a, b) => a.time - b.time);
-      group.native.comments = list;
-      group.native._.position = lowerBound(list, now);
-    }
-    this.refreshLayout();
   }
 
   /**
-   * 增量追加时间轴：只对尚未登记的 id 做分组、转换与有序插入，不重建已有分组。
-   * VOD 分段加载的语义是追加而不是替换，而整条时间轴全量重建的代价随视频时长线性增长。
-   *
-   * 只处理未登记的 id；外观变化（字号、描边、透明度、减少动态效果）会改变已上屏节点的样式，
-   * 必须走 `setComments` 整体替换，不能靠本方法。
+   * 增量追加时间轴：只登记新 id，不重建已有条目。
+   * 追加段全在未来时直接接在末尾；乱序分段（向后 seek 后补回旧段）整批归并并重新定位游标，
+   * 与 `setComments` 一致——过去的不补投，从当前位置往后继续。
    */
   appendComments(comments: readonly DanmakuComment[]): void {
     if (this.destroyed) return;
-    // 分段追加是天然的压实时机：只在真有墓碑时才付 O(时间轴) 的代价，
-    // 否则重复 append 会在数组里留下同一 id 的墓碑与新条目各一份。
-    if (this.removedIds.size > 0) this.compact();
-    const additions = new Map<Group, NativeComment[]>();
-    for (const definition of comments) {
-      if (this.timelineIds.has(definition.id)) continue;
-      this.timelineIds.add(definition.id);
-      const group = this.groupFor(definition);
-      const native = this.toNative(definition);
-      let list = additions.get(group);
-      if (!list) additions.set(group, list = []);
-      list.push(native);
+    const additions: DanmakuComment[] = [];
+    for (const comment of comments) {
+      if (this.timelineIds.has(comment.id)) continue;
+      this.timelineIds.add(comment.id);
+      additions.push(comment);
     }
-    if (additions.size === 0) return;
-    const now = this.now();
-    for (const [group, list] of additions) {
-      const existing = group.native.comments;
-      list.sort((a, b) => a.time - b.time);
-      const last = existing[existing.length - 1];
-      // 常见路径：新分段接在现有时间轴末尾且全在未来。整批 push，不动游标，也不重建数组。
-      if ((!last || list[0]!.time >= last.time) && list[0]!.time >= now) {
-        existing.push(...list);
-        continue;
-      }
-      // 乱序分段（向后 seek 后补回旧段）或含已过去的时间：整批归并并重新定位游标，
-      // 与 `setComments` 的语义一致——过去的不补投，从当前位置往后继续。
-      const merged: NativeComment[] = [];
-      let left = 0;
-      let right = 0;
-      while (left < existing.length && right < list.length) {
-        merged.push(existing[left]!.time <= list[right]!.time ? existing[left++]! : list[right++]!);
-      }
-      while (left < existing.length) merged.push(existing[left++]!);
-      while (right < list.length) merged.push(list[right++]!);
-      group.native.comments = merged;
-      group.native._.position = lowerBound(merged, now);
+    if (additions.length === 0) return;
+    additions.sort((left, right) => (left.time ?? 0) - (right.time ?? 0));
+    const last = this.timeline[this.timeline.length - 1];
+    const first = additions[0]!.time ?? 0;
+    if (last && first >= (last.time ?? 0) && first >= this.now()) {
+      this.timeline = this.timeline.concat(additions);
+      return;
     }
+    const merged: DanmakuComment[] = [];
+    let left = 0;
+    let right = 0;
+    while (left < this.timeline.length && right < additions.length) {
+      merged.push(
+        (this.timeline[left]!.time ?? 0) <= (additions[right]!.time ?? 0)
+          ? this.timeline[left++]!
+          : additions[right++]!,
+      );
+    }
+    while (left < this.timeline.length) merged.push(this.timeline[left++]!);
+    while (right < additions.length) merged.push(additions[right++]!);
+    this.timeline = merged;
+    this.cursor = lowerBound(merged, this.now());
   }
 
   /**
-   * 移除一条弹幕。O(1)：只记墓碑并从在屏列表摘出，不扫描时间轴。
-   * 时间轴里的条目由原生推进游标时经 `setup` 钩子跳过，累积到阈值再一次性压实。
+   * 移除一条弹幕。在屏的直接销毁，未投放的从时间轴摘除；
+   * 已受理但尚未上屏的记入墓碑，上屏时立即销毁。
    */
   remove(id: string): void {
     if (this.destroyed) return;
-    this.timelineIds.delete(id);
-    this.removedIds.add(id);
     const record = this.records.get(id);
     if (record) {
-      // 在屏弹幕：从运行列表摘出（规模由在屏数限制），移除节点并回收记录。
-      const running = record.group.native._.runningList;
-      const at = running.indexOf(record.comment);
-      if (at >= 0) running.splice(at, 1);
-      record.comment.node?.remove();
-      this.detach(record);
-    } else {
-      this.options.onDetach?.(id);
+      void record.danmaku.destroy();
+      return;
     }
-    // 只阻止新消息进入，不主动清屏；墓碑到位即生效，不等待压实。
-    if (this.removedIds.size >= DanmakuRenderer.COMPACT_THRESHOLD) this.compact();
+    const at = this.timeline.findIndex((comment) => comment.id === id);
+    if (at >= 0 && this.timelineIds.delete(id)) {
+      this.timeline.splice(at, 1);
+      if (at < this.cursor) this.cursor -= 1;
+      this.detach(id);
+      return;
+    }
+    if (this.cancelled.size >= CANCELLED_LIMIT) this.cancelled.clear();
+    this.cancelled.add(id);
   }
 
-  /**
-   * 把墓碑从各分组时间轴里真正摘掉，并修正原生游标。
-   * 这是唯一需要 O(时间轴) 的操作，只在墓碑累积到阈值或分段追加时发生。
-   */
-  private compact(): void {
-    if (this.removedIds.size === 0) return;
-    const removed = this.removedIds;
-    for (const group of this.groups.values()) {
-      const list = group.native.comments;
-      // 游标之前被摘掉的条目会让 position 偏移，不同步会把整段历史重播一遍。
-      const before = Math.min(group.native._.position, list.length);
-      let droppedBefore = 0;
-      let dropped = 0;
-      const kept: NativeComment[] = [];
-      for (let index = 0; index < list.length; index += 1) {
-        const comment = list[index]!;
-        const definition = this.definitions.get(comment.render);
-        if (definition && removed.has(definition.id)) {
-          dropped += 1;
-          if (index < before) droppedBefore += 1;
-        } else {
-          kept.push(comment);
-        }
-      }
-      if (dropped === 0) continue;
-      group.native.comments = kept;
-      group.native._.position = before - droppedBefore;
-    }
-    removed.clear();
-  }
-
+  /** 钉住即暂停运动（含固定弹幕的到期计时）；返回 false 表示尚未开始运动，调用方不应选中。 */
   pin(id: string): boolean {
     const record = this.records.get(id);
-    if (!record?.attached || this.destroyed) return false;
-    if (record.pinned) return true;
-    // 从原生运行列表暂时摘出，DOM 和最后一帧 transform 原封不动地保留。
-    // 不能修改持久 comments 的 time，否则反向 seek 会重播错误时间。
-    record.group.native._.runningList = record.group.native._.runningList.filter((c) => c !== record.comment);
-    record.pinned = true;
-    record.pinnedAt = { media: this.now(), wall: clock() };
-    return true;
+    if (!record || this.destroyed) return false;
+    record.danmaku.pause();
+    return record.danmaku.paused === true;
   }
 
   unpin(id: string): void {
     const record = this.records.get(id);
-    if (!record?.pinned || this.destroyed) return;
-    const comment = record.comment;
-    if (record.pinnedAt) {
-      // 钉住期间寿命暂停：顺延铉住时长，否则释放后会被原生立即判为到期。
-      // 同一次顺延把 `_utc` 锚点一起前移，抵消钉住期间走掉的墙钟，
-      // 滚动弹幕重回原生运行列表时从钉住位置继续。
-      const mediaPinned = Math.max(0, this.now() - record.pinnedAt.media);
-      const wallPinned = Math.max(0, clock() - record.pinnedAt.wall);
-      comment.time += mediaPinned;
-      comment._utc += wallPinned;
-    }
-    record.pinned = false;
-    record.pinnedAt = undefined;
-    record.group.native._.runningList.push(comment);
-    // 不启动媒体、不手动 play 原生循环；暂停/缓冲期间继续保持静止。
+    if (!record || this.destroyed) return;
+    record.danmaku.resume();
   }
 
   clear(): void {
     if (this.destroyed) return;
-    for (const group of Array.from(this.groups.values())) this.destroyGroup(group);
-    // 分组已全部销毁，注册表一并失效；不清会让后续 `appendComments` 跳过本该重投的条目。
+    this.clearActive();
+    this.timeline = [];
     this.timelineIds = new Set();
-    this.removedIds.clear();
+    this.cursor = 0;
   }
 
   resize(): void {
     if (this.destroyed) return;
-    for (const group of this.groups.values()) this.resizeGroup(group);
-    this.refreshLayout();
+    this.scroll.manager.format();
+    this.fixed.manager.format();
+    this.syncLanes();
   }
 
   setSpeed(speed: number): void {
     const next = positive(speed, this.speed);
     if (next === this.speed) return;
     this.speed = next;
-    this.resize();
+    this.scroll.manager.setSpeed(next * SPEED_UNIT_SCALE);
   }
 
   setArea(area: number): void {
-    const next = this.normalizedArea(area);
+    const next = clampArea(area);
     if (next === this.area) return;
     this.area = next;
-    this.resize();
+    this.applyScrollArea();
   }
 
-  /**
-   * 重新测量在途弹幕的节点尺寸，供原生轨道准入使用。
-   */
-  refreshLayout(): void {
-    if (this.destroyed) return;
-    for (const record of this.records.values()) {
-      const node = record.comment.node;
-      if (!node) continue;
-      const width = node.offsetWidth;
-      const height = node.offsetHeight;
-      if (width === record.comment.width && height === record.comment.height) continue;
-      record.comment.width = width;
-      record.comment.height = height;
-    }
+  /** 字号变化同时改变车道高：轨道与车道占用表一起重建。 */
+  setLaneHeight(laneHeight: number): void {
+    const next = Math.max(1, Math.round(positive(laneHeight, this.laneHeight)));
+    if (next === this.laneHeight) return;
+    this.laneHeight = next;
+    this.scroll.manager.setTrackHeight(next);
+    this.fixed.manager.setTrackHeight(next);
+    this.syncLanes();
   }
 
   destroy(): void {
     if (this.destroyed) return;
+    this.destroyed = true;
     this.observer?.disconnect();
     window.removeEventListener("resize", this.onResize);
-    this.clear();
-    this.destroyed = true;
+    this.stopClock();
+    if (this.media) {
+      this.media.removeEventListener("seeking", this.onSeeking);
+      this.media.removeEventListener("seeked", this.onSeeked);
+      this.media.removeEventListener("playing", this.onPlaying);
+      this.media.removeEventListener("waiting", this.onWaiting);
+      this.media.removeEventListener("stalled", this.onWaiting);
+      this.media.removeEventListener("pause", this.onPause);
+      this.media.removeEventListener("ended", this.onPause);
+      this.media.removeEventListener("ratechange", this.onRateChange);
+    }
+    for (const runtime of [this.scroll, this.fixed]) {
+      runtime.manager.stopPlaying();
+      runtime.manager.clear();
+    }
+    this.settleAll();
+    for (const runtime of [this.scroll, this.fixed]) {
+      runtime.lanes.reset(0);
+      runtime.manager.unmount();
+    }
+    this.timeline = [];
+    this.timelineIds = new Set();
     delete this.container.dataset.danmakuRenderer;
   }
 
   private readonly onResize = () => this.resize();
-  private normalizedArea(area: number) {
-    return Number.isFinite(area) ? Math.max(0.1, Math.min(1, area)) : 1;
+
+  private createLayer(layer: Layer): LayerRuntime {
+    const manager = create<DanmakuComment>({
+      // 饱和时宁可丢弃也不叠放：`adaptive` 在轨道占满时会随机挑一条轨道直接上屏
+      // （实测同车道 5 条弹幕停在同一个 x，文字互相覆盖），`strict` 则留在待投队列等车道空出。
+      // 队列长度由调用方的 `scrollCapacity` 卡住，因此不会积压出可见延迟。
+      mode: "strict",
+      distribution: "order",
+      interval: layer === "scroll" ? SCROLL_INTERVAL_MS : FIXED_INTERVAL_MS,
+      speed: layer === "scroll" ? this.speed * SPEED_UNIT_SCALE : null,
+      trackHeight: this.laneHeight,
+      limits: { stash: MAX_STASHED },
+      plugin: {
+        $createNode: (danmaku) => this.onCreateNode(danmaku),
+        $appendNode: (danmaku) => this.onAppendNode(danmaku),
+        $moved: (danmaku) => this.onMoved(danmaku),
+        $destroyed: (danmaku) => this.onDestroyed(danmaku),
+        limitWarning: () => {},
+      },
+    });
+    // 两层管理器各有一个容器节点：必须是绝对定位，否则两个相对定位的块会在流里上下堆叠。
+    manager.container.setStyle("position", "absolute");
+    manager.container.setStyle("top", "0");
+    manager.container.setStyle("left", "0");
+    manager.container.setStyle("pointerEvents", "none");
+    manager.mount(this.container);
+    manager.startPlaying();
+    return { manager, lanes: new LanePool() };
   }
-  private now() {
+
+  private applyScrollArea(): void {
+    this.scroll.manager.setArea({ y: { start: 0, end: `${this.area * 100}%` } });
+  }
+
+  private now(): number {
     return this.media ? this.media.currentTime : clock();
   }
 
-  /** 时间轴已有同一 id 时只更新样式：保留节点身份、菜单命中和原来的运动位置。 */
-  private applyDefinition(definition: DanmakuComment): void {
-    const record = this.records.get(definition.id);
-    if (!record) return;
-    for (const key of Object.keys(record.definition.style ?? {})) {
-      if (!(key in (definition.style ?? {}))) {
-        record.element.style.removeProperty(key.replace(/[A-Z]/g, (l) => `-${l.toLowerCase()}`));
+  private runtimeOf(layer: Layer): LayerRuntime {
+    return layer === "scroll" ? this.scroll : this.fixed;
+  }
+
+  private layerOf(comment: DanmakuComment): Layer {
+    return comment.mode === "scroll" ? "scroll" : "fixed";
+  }
+
+  /** 车道下标的顶部像素；底部弹幕自下而上排。 */
+  private laneY(layer: Layer, lane: number, mode: DanmakuComment["mode"]): number {
+    const height = this.runtimeOf(layer).manager.container.height;
+    if (mode === "bottom") return Math.max(0, height - (lane + 1) * this.laneHeight);
+    return lane * this.laneHeight;
+  }
+
+  private reserve(layer: Layer, span: number, locked: boolean): Reservation | null {
+    const runtime = this.runtimeOf(layer);
+    const lane = runtime.lanes.allocate(span);
+    if (lane === null) return null;
+    const lanes = Array.from({ length: span }, (_, index) => lane + index);
+    if (locked) {
+      for (const index of lanes) {
+        if (index < runtime.manager.trackCount) runtime.manager.getTrack(index)?.lock();
       }
     }
-    record.definition = definition;
-    applyStyle(record.element, definition.style);
+    return { layer, lanes, locked };
   }
 
-  private toNative(definition: DanmakuComment): NativeComment {
-    const render = () => {
-      // 与原生契约一致：有自定义 render 时 text 与 style 都由它自己负责。
-      // 直播与 VOD 的 render 都是 `createDanmuBulletElement`，它已应用同一份 style。
-      if (definition.render) {
-        const element = definition.render();
-        element.dataset.rliveDanmakuId = definition.id;
-        return element;
-      }
-      const element = document.createElement("span");
-      element.textContent = definition.text;
-      element.dataset.rliveDanmakuId = definition.id;
-      applyStyle(element, definition.style);
-      return element;
-    };
-    this.definitions.set(render, definition);
-    return {
-      mode: definition.mode === "scroll" ? "rtl" : definition.mode,
-      time: Number.isFinite(definition.time) ? definition.time! : this.now(),
-      _utc: clock(),
-      render,
-      width: 0, height: 0, x: 0, y: 0,
-    };
-  }
-
-  /** 以当前容器尺寸更新一个原生实例，并缓存尺寸供帧内读取。 */
-  private resizeGroup(group: Group): void {
-    group.host.style.height = group.duration ? "100%" : `${this.area * 100}%`;
-    const width = group.host.offsetWidth;
-    const height = group.host.offsetHeight;
-    group.width = width;
-    group.height = height;
-    // 隐藏/折叠时保留上次的原生尺寸：duration=0 会让在途弹幕位置变成 NaN、待投弹幕全部跳过。
-    // 此时 setup 会拒绝新弹幕，恢复尺寸后 ResizeObserver 再走一次这里。
-    if (width <= 0 || height <= 0) return;
-    group.native.resize();
-    group.native.speed = group.duration ? width / group.duration : this.speed;
-    // 原生 allocate 在恰好一行高时会对 0 取模；只为分配加极小余量，真实边界仍做准入检查。
-    group.native._.height = height + 0.01;
-  }
-
-  private groupFor(definition: DanmakuComment): Group {
-    let duration = definition.mode === "scroll" ? undefined : positive(definition.duration, DEFAULT_DURATION_MS) / 1_000;
-    if (duration !== undefined && !this.groups.has(`fixed:${duration}`)) {
-      // SC 时长随价位变化；固定层原生实例有上限，超出时并入不短于自身时长的最接近一组，
-      // 避免并入更短的组被提前判为到期（直播 SC 另有按自身时长移除的计时器）。
-      const fixed = Array.from(this.groups.values()).filter((group) => group.duration !== undefined);
-      if (fixed.length >= MAX_FIXED_GROUPS) {
-        const target = duration;
-        const longer = fixed.filter((group) => group.duration! >= target);
-        const candidates = longer.length > 0 ? longer : fixed;
-        duration = candidates.reduce((best, group) =>
-          Math.abs(group.duration! - target) < Math.abs(best.duration! - target) ? group : best,
-        ).duration;
-      }
+  private unlock(reservation: Reservation): void {
+    if (!reservation.locked) return;
+    const manager = this.runtimeOf(reservation.layer).manager;
+    for (const lane of reservation.lanes) {
+      if (lane < manager.trackCount) manager.getTrack(lane)?.unlock();
     }
-    const key = duration === undefined ? "scroll" : `fixed:${duration}`;
-    const existing = this.groups.get(key);
-    if (existing) return existing;
-    const host = document.createElement("div");
-    host.style.cssText = `position:absolute;top:0;left:0;width:100%;height:${duration ? 100 : this.area * 100}%;pointer-events:none;overflow:hidden`;
-    host.dataset.danmakuGroup = key;
-    this.container.appendChild(host);
-    const native = new Danmaku({
-      container: host, media: this.media, engine: "dom",
-      speed: duration ? Math.max(1, host.offsetWidth) / duration : this.speed,
-    }) as NativeInstance;
-    // 构造时原生可能已经捕获引擎回调，先停下，再以实例级钩子启动。
-    native.hide();
-    const group: Group = {
-      key, duration, host, native, width: 0, height: 0, count: 0,
-    };
-    this.groups.set(key, group);
-    this.installLifecycle(group);
-    this.resizeGroup(group);
-    if (group.width <= 0) native._.duration = duration ?? FALLBACK_DURATION_S;
-    if (this.media) native.show();
-    return group;
   }
 
-  private installLifecycle(group: Group): void {
-    const native = group.native;
-    const original = native._.engine;
-    // 引擎对象在库内是全局共享的，必须每实例复制，避免另一个播放器被打补丁。
-    native._.engine = {
-      ...original,
-      framing: (stage) => {
-        original.framing.call(native, stage);
-        // 原生直播 emit 会不断追加已消费的 comments，及时释放前缀而不另建调度器。
-        if (!this.media && native._.position > 0) {
-          native.comments.splice(0, native._.position);
-          native._.position = 0;
-        }
-      },
-      setup: (stage, pending) => {
-        const selected: NativeComment[] = [];
-        const seen = new Set<string>();
-        for (const scheduled of pending) {
-          const definition = this.definitions.get(scheduled.render);
-          if (!definition || this.records.has(definition.id) || seen.has(definition.id)) continue;
-          // 墓碑：已移除但尚未压实的条目。在此跳过，不建节点也不进运行列表。
-          if (this.removedIds.has(definition.id)) continue;
-          seen.add(definition.id);
-          if (selected.length >= MAX_PENDING_PER_FRAME || this.records.size + selected.length >= MAX_ACTIVE ||
-              group.width <= 0 || group.height <= 0) {
-            this.options.onDetach?.(definition.id);
-            continue;
-          }
-          // 运行副本与原始时间轴分离，pin/unpin 不影响下次 seek。
-          // 节点在这里建好并先设 flex（避免 inline-flex 内容多出 baseline 行盒），
-          // 原生 setup 再一次性插入 fragment 并统一测量：整批只触发一次布局。
-          // 原生引擎每帧写 transform 而非 CSS 动画，浏览器不会自动提升图层；不加
-          // will-change 时整个舞台会逐帧重绘光栅（实测 Style 约 3 倍劣化）。
-          const node = document.createElement("div");
-          node.style.cssText = "position:absolute;display:flex;will-change:transform;";
-          node.appendChild(scheduled.render());
-          selected.push({ ...scheduled, node, width: 0, height: 0 });
-        }
-        pending.splice(0, pending.length, ...selected);
-        original.setup.call(native, stage, pending);
-        for (let i = pending.length - 1; i >= 0; i--) {
-          const comment = pending[i]!;
-          const definition = this.definitions.get(comment.render)!;
-          if (!comment.node || comment.height > group.height + 0.5) {
-            comment.node?.remove();
-            pending.splice(i, 1);
-            this.options.onDetach?.(definition.id);
-            continue;
-          }
-          const element = comment.node.firstElementChild as HTMLElement;
-          this.records.set(definition.id, { definition, group, comment, element, attached: false, pinned: false });
-          group.count += 1;
-        }
-      },
-      render: (stage, comment) => {
-        const definition = this.definitions.get(comment.render);
-        const record = definition && this.records.get(definition.id);
-        if (!record) return;
-        if (this.media && comment.mode === "rtl") {
-          // 2.0.10 用「累计墙钟 × 当前倍速」算位移，长按进出倍速会追溯放大/缩小旧路程。
-          // currentTime 已包含分段倍速；与原生到期判定共用它，不能再乘 playbackRate。
-          comment.x =
-            native._.width -
-            ((native._.width + comment.width) * (this.media.currentTime - comment.time)) / native._.duration;
-        }
-        if (!record.attached && !this.canAttach(record)) {
-          comment.node?.remove();
-          this.detach(record);
-          // 引擎仍在遍历 runningList，不在钩子中 splice；下一帧原生到期删除这个无 DOM 条目。
-          comment.time = -Number.MAX_SAFE_INTEGER;
-          comment._utc = -Number.MAX_SAFE_INTEGER;
-          return;
-        }
-        // 固定弹幕位置只在尺寸变化时改变，未变化时不再重复写 style。
-        if (
-          record.attached &&
-          comment.mode !== "rtl" &&
-          record.px === comment.x &&
-          record.py === comment.y
-        )
-          return;
-        original.render.call(native, stage, comment);
-        record.px = comment.x;
-        record.py = comment.y;
-        if (!record.attached) {
-          record.attached = true;
-          this.options.onAttach?.(record.definition, record.element);
-        }
-      },
-      remove: (_stage, comment) => {
-        // 被准入拒绝的节点可能已脱离 stage，不能再调用无条件 removeChild 的原实现。
-        comment.node?.remove();
-        const id = this.definitions.get(comment.render)?.id;
-        const record = id && this.records.get(id);
-        if (record && record.comment === comment) this.detach(record);
-      },
-      clear: (stage) => {
-        original.clear.call(native, stage);
-        for (const record of Array.from(this.records.values())) {
-          if (record.group === group) this.detach(record);
-        }
-      },
-    };
+  private releaseLanes(reservation: Reservation): void {
+    const runtime = this.runtimeOf(reservation.layer);
+    for (const lane of reservation.lanes) runtime.lanes.release(lane);
+    this.unlock(reservation);
   }
 
-  private canAttach(record: RecordItem): boolean {
-    const current = record.comment;
-    const height = record.group.height;
-    if (!Number.isFinite(current.x) || !Number.isFinite(current.y) ||
-        current.y < 0 || current.y + current.height > height + 0.5) return false;
-    const scroll = current.mode === "rtl";
-    for (const other of this.records.values()) {
-      if (other === record || !other.attached || (other.comment.mode === "rtl") !== scroll) continue;
-      const previous = other.comment;
-      if (current.y >= previous.y + previous.height || previous.y >= current.y + current.height) continue;
-      if (!scroll) return false;
-      const gap = current.x - previous.x - previous.width;
-      if (gap < 2) return false;
-      // 补充原生 modulo 饱和回绕和冻结时的碰撞保护：只拒绝新弹幕，不提前移除旧弹幕。
-      const oldSpeed = other.pinned ? 0 : (other.group.native._.width + previous.width) / other.group.native._.duration;
-      const newSpeed = (record.group.native._.width + current.width) / record.group.native._.duration;
-      if (oldSpeed === 0 || (newSpeed > oldSpeed &&
-          gap / (newSpeed - oldSpeed) < (previous.x + previous.width) / oldSpeed)) return false;
+  /**
+   * 投放一条弹幕；被库拒绝（待投放已满、未在播放）时立即结算 detach。
+   * 返回是否已受理。
+   */
+  private push(comment: DanmakuComment): boolean {
+    if (this.live.has(comment.id)) return false;
+    const span = Math.max(1, Math.floor(comment.lanes ?? 1));
+    if (comment.mode !== "scroll") return this.pushFixed(comment, span);
+    if (this.scrollLive.size >= this.scrollCapacity()) {
+      this.options.onDetach?.(comment.id);
+      return false;
     }
+    if (span > 1) return this.pushWide(comment, span);
+    if (!this.scroll.manager.push(comment)) {
+      this.options.onDetach?.(comment.id);
+      return false;
+    }
+    this.live.add(comment.id);
+    this.scrollLive.add(comment.id);
     return true;
   }
 
-  private detach(record: RecordItem): void {
-    const id = record.definition.id;
-    if (this.records.get(id) !== record) return;
-    this.records.delete(id);
-    record.group.count -= 1;
+  /**
+   * 在屏滚动弹幕上限。滚动层容器本身已按用户设置裁到显示区域，因此这里 `area = 1`；
+   * 公式与直播层的批次准入（`danmakuMaxActiveComments`）共用，两处判据不会漂移。
+   * 库在 `strict` 下只会排队、不会丢弃，超出的新弹幕必须在这里丢掉，
+   * 才能保持与旧引擎车道准入一致的密度。
+   */
+  private scrollCapacity(): number {
+    return danmakuMaxActiveComments(this.scroll.manager.container.height, this.laneHeight, 1);
+  }
+
+  /** 固定弹幕：不参与轨道调度，由本文件按车道摆位，`direction: none` 静止到期。 */
+  private pushFixed(comment: DanmakuComment, span: number): boolean {
+    const reservation = this.reserve("fixed", span, false);
+    if (!reservation) {
+      this.options.onDetach?.(comment.id);
+      return false;
+    }
+    const lane = reservation.lanes[0]!;
+    const duration = positive(comment.duration, DEFAULT_FIXED_DURATION_MS);
+    const ok = this.fixed.manager.pushFlexibleDanmaku(comment, {
+      duration,
+      // 全局 speed 会让库用 (x + 自身宽) / speed 覆盖 duration；固定弹幕必须显式关掉。
+      speed: null,
+      direction: "none",
+      position: (danmaku) => this.fixedPosition(danmaku, lane, comment.mode),
+    });
+    if (!ok) {
+      this.releaseLanes(reservation);
+      this.options.onDetach?.(comment.id);
+      return false;
+    }
+    this.reservations.set(comment.id, reservation);
+    this.live.add(comment.id);
+    return true;
+  }
+
+  /**
+   * 大表情滚动弹幕：占多条车道，用 flexible danmaku 按车道摆位并锁住对应轨道，
+   * 让同层普通弹幕不再落进被占用的车道。速度与普通滚动弹幕一致。
+   */
+  private pushWide(comment: DanmakuComment, span: number): boolean {
+    const reservation = this.reserve("scroll", span, true);
+    if (!reservation) {
+      this.options.onDetach?.(comment.id);
+      return false;
+    }
+    const lane = reservation.lanes[0]!;
+    const ok = this.scroll.manager.pushFlexibleDanmaku(comment, {
+      speed: this.speed * SPEED_UNIT_SCALE,
+      direction: "right",
+      position: (_danmaku, container) => ({
+        x: container.width,
+        y: this.laneY("scroll", lane, comment.mode),
+      }),
+    });
+    if (!ok) {
+      this.releaseLanes(reservation);
+      this.options.onDetach?.(comment.id);
+      return false;
+    }
+    this.reservations.set(comment.id, reservation);
+    this.live.add(comment.id);
+    this.scrollLive.add(comment.id);
+    return true;
+  }
+
+  private fixedPosition(
+    danmaku: Danmaku<DanmakuComment>,
+    lane: number,
+    mode: DanmakuComment["mode"],
+  ): { x: number; y: number } {
+    const container = this.fixed.manager.container;
+    return {
+      x: (container.width - danmaku.getWidth()) * 0.5,
+      y: this.laneY("fixed", lane, mode),
+    };
+  }
+
+  private scheduleRender(): void {
+    if (this.renderQueued) return;
+    this.renderQueued = true;
+    queueMicrotask(() => {
+      this.renderQueued = false;
+      if (!this.destroyed) this.scroll.manager.render();
+    });
+  }
+
+  /** 唯一结算点：每条受理过的弹幕只回调一次 `onDetach`。 */
+  private detach(id: string): void {
+    this.scrollLive.delete(id);
+    if (!this.live.delete(id)) return;
     this.options.onDetach?.(id);
-    if (!this.media && record.group.count === 0) {
-      // 直播空闲时销毁空组以停掉原生 rAF；必须等原生 frame 完成，否则它会在 destroy 后重新安排下一帧。
-      queueMicrotask(() => {
-        const group = record.group;
-        if (this.destroyed || this.groups.get(group.key) !== group || group.count > 0) return;
-        if (group.native.comments.length > group.native._.position) return;
-        this.destroyGroup(group);
-      });
+  }
+
+  private settleAll(): void {
+    const ids = Array.from(this.live);
+    this.records.clear();
+    this.reservations.clear();
+    this.cancelled.clear();
+    for (const id of ids) this.detach(id);
+  }
+
+  private onCreateNode(danmaku: Danmaku<DanmakuComment>): void {
+    const comment = danmaku.data;
+    const element = comment.render ? comment.render() : fallbackElement(comment);
+    danmaku.node?.appendChild(element);
+  }
+
+  private onAppendNode(danmaku: Danmaku<DanmakuComment>): void {
+    const comment = danmaku.data;
+    const element = danmaku.node?.firstElementChild;
+    if (!(element instanceof HTMLElement)) return;
+    if (this.cancelled.delete(comment.id)) {
+      void danmaku.destroy();
+      return;
+    }
+    const reservation = this.reservations.get(comment.id);
+    this.reservations.delete(comment.id);
+    this.records.set(comment.id, {
+      comment,
+      danmaku,
+      element,
+      layer: reservation?.layer ?? this.layerOf(comment),
+      lanes: reservation?.lanes ?? [],
+      locked: reservation?.locked ?? false,
+    });
+    this.options.onAttach?.(comment, element);
+  }
+
+  /** 运动结束立即回收 DOM，不等库的批量销毁（默认 3s 一批）；车道在销毁钩子里释放。 */
+  private onMoved(danmaku: Danmaku<DanmakuComment>): void {
+    void danmaku.destroy();
+  }
+
+  /**
+   * 记录与车道的唯一回收点：库的 `destroy()`、被丢弃的待投放弹幕都经过这里。
+   * 已受理但从未上屏的条目在此结算 detach，调用方的活动预算才不会泄漏。
+   */
+  private onDestroyed(danmaku: Danmaku<DanmakuComment>): void {
+    const comment = danmaku.data;
+    const reservation = this.reservations.get(comment.id);
+    if (reservation) {
+      this.reservations.delete(comment.id);
+      this.releaseLanes(reservation);
+    }
+    const record = this.records.get(comment.id);
+    if (record) {
+      this.records.delete(comment.id);
+      // 固定弹幕（`locked: false`）同样占用车道，必须一并归还，否则固定层很快无车道可用。
+      if (record.lanes.length > 0) {
+        this.releaseLanes({ layer: record.layer, lanes: record.lanes, locked: record.locked });
+      }
+    }
+    this.detach(comment.id);
+  }
+
+  private clearActive(): void {
+    // 轨道锁是 Track 对象上的状态，`manager.clear()` 不会重置它；先解锁再清屏，
+    // 否则被大表情锁住的轨道会永久拒绝普通滚动弹幕。
+    for (const record of this.records.values()) {
+      if (record.locked) this.unlock({ layer: record.layer, lanes: record.lanes, locked: true });
+    }
+    for (const runtime of [this.scroll, this.fixed]) runtime.manager.clear();
+    this.settleAll();
+    for (const runtime of [this.scroll, this.fixed]) runtime.lanes.reset(runtime.manager.trackCount);
+  }
+
+  /**
+   * 尺寸或车道高变化后重建占用表。大表情必须留在原车道（滚动中的 y 已随 transition 推进，
+   * 改车道就会跳位），因此先按原车道重占，占不到再丢弃；固定弹幕随后按新几何重新落位。
+   */
+  private syncLanes(): void {
+    const records = Array.from(this.records.values());
+    for (const record of records) {
+      if (record.locked) this.unlock({ layer: record.layer, lanes: record.lanes, locked: true });
+    }
+    for (const runtime of [this.scroll, this.fixed]) runtime.lanes.reset(runtime.manager.trackCount);
+    for (const record of records) {
+      if (!record.locked) continue;
+      const runtime = this.runtimeOf(record.layer);
+      const start = record.lanes[0]!;
+      const span = record.lanes.length;
+      if (!runtime.lanes.reserveRange(start, span)) {
+        record.lanes = [];
+        void record.danmaku.destroy();
+        continue;
+      }
+      for (const lane of record.lanes) {
+        if (lane < runtime.manager.trackCount) runtime.manager.getTrack(lane)?.lock();
+      }
+    }
+    for (const record of records) {
+      if (record.locked || record.lanes.length === 0 || !this.records.has(record.comment.id)) continue;
+      const runtime = this.runtimeOf(record.layer);
+      const span = record.lanes.length;
+      const lane = runtime.lanes.allocate(span);
+      if (lane === null) {
+        record.lanes = [];
+        void record.danmaku.destroy();
+        continue;
+      }
+      record.lanes = Array.from({ length: span }, (_, index) => lane + index);
+      // 静止弹幕的 x 居中、y 由车道决定，尺寸变化后都要按新几何重写；滚动弹幕的位置由
+      // transition 推进，不能回写。
+      const position = this.fixedPosition(record.danmaku, lane, record.comment.mode);
+      record.danmaku.position.x = position.x;
+      record.danmaku.position.y = position.y;
+      record.danmaku.setStyle(
+        "transform",
+        `translateX(${position.x}px) translateY(${position.y}px)`,
+      );
     }
   }
 
-  private destroyGroup(group: Group): void {
-    this.groups.delete(group.key);
-    group.native.destroy();
-    // 原生 destroy 经 clear 调用我们的清理钩子，包含从 runningList 摘出的钉住 DOM。
-    for (const record of Array.from(this.records.values())) if (record.group === group) this.detach(record);
-    group.host.remove();
+  private bindMedia(media: HTMLMediaElement): void {
+    media.addEventListener("seeking", this.onSeeking);
+    media.addEventListener("seeked", this.onSeeked);
+    media.addEventListener("playing", this.onPlaying);
+    media.addEventListener("waiting", this.onWaiting);
+    media.addEventListener("stalled", this.onWaiting);
+    media.addEventListener("pause", this.onPause);
+    media.addEventListener("ended", this.onPause);
+    media.addEventListener("ratechange", this.onRateChange);
+    this.onRateChange();
+    if (media.paused || media.seeking || media.ended) this.onPause();
+    else this.onPlaying();
   }
+
+  private freeze(): void {
+    if (this.frozen) return;
+    this.frozen = true;
+    this.scroll.manager.freeze();
+    this.fixed.manager.freeze();
+  }
+
+  private unfreeze(): void {
+    if (!this.frozen) return;
+    this.frozen = false;
+    this.scroll.manager.unfreeze();
+    this.fixed.manager.unfreeze();
+  }
+
+  /** seek 清屏并从新位置往后继续投放（过去的不补投），与旧实现语义一致。 */
+  private readonly onSeeking = () => {
+    if (this.destroyed) return;
+    this.freeze();
+    this.stopClock();
+    this.clearActive();
+    this.lastMediaTime = this.now();
+    this.cursor = lowerBound(this.timeline, this.lastMediaTime);
+  };
+
+  private readonly onSeeked = () => {
+    if (this.destroyed || !this.media) return;
+    if (this.media.paused || this.media.ended) return;
+    this.lastMediaTime = this.media.currentTime;
+    this.unfreeze();
+    this.startClock();
+  };
+
+  /** `playing` 而不是 `play`：缓冲结束后才恢复运动，与旧实现按媒体时间推进一致。 */
+  private readonly onPlaying = () => {
+    if (this.destroyed) return;
+    this.lastMediaTime = this.now();
+    this.unfreeze();
+    this.startClock();
+  };
+
+  private readonly onWaiting = () => {
+    if (this.destroyed) return;
+    this.freeze();
+    this.stopClock();
+  };
+
+  private readonly onPause = () => {
+    if (this.destroyed) return;
+    this.stopClock();
+    this.freeze();
+    this.lastMediaTime = this.now();
+  };
+
+  private readonly onRateChange = () => {
+    if (this.destroyed || !this.media) return;
+    const rate = this.media.playbackRate > 0 ? this.media.playbackRate : 1;
+    this.scroll.manager.setRate(rate);
+    this.fixed.manager.setRate(rate);
+  };
+
+  private startClock(): void {
+    if (this.frame !== 0 || this.destroyed || !this.media) return;
+    this.frame = requestAnimationFrame(this.tick);
+  }
+
+  private stopClock(): void {
+    if (this.frame === 0) return;
+    cancelAnimationFrame(this.frame);
+    this.frame = 0;
+  }
+
+  private readonly tick = () => {
+    if (this.destroyed) return;
+    this.frame = requestAnimationFrame(this.tick);
+    const media = this.media;
+    if (!media || this.frozen) return;
+    const time = media.currentTime;
+    if (Math.abs(time - this.lastMediaTime) > SEEK_JUMP_SECONDS) {
+      this.onSeeking();
+      return;
+    }
+    this.lastMediaTime = time;
+    if (this.cursor >= this.timeline.length) return;
+    let pushed = 0;
+    while (this.cursor < this.timeline.length && pushed < MAX_PUSH_PER_FRAME) {
+      const comment = this.timeline[this.cursor]!;
+      if ((comment.time ?? Number.POSITIVE_INFINITY) > time) break;
+      this.cursor += 1;
+      if (this.live.has(comment.id)) continue;
+      this.push(comment);
+      pushed += 1;
+    }
+    if (pushed > 0) this.scheduleRender();
+  };
 }

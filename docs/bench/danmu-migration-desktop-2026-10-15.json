@@ -1,0 +1,1006 @@
+{
+  "title": "弹幕引擎迁移到 danmu 后的桌面实测数据（2026-10-15）",
+  "capturedAt": "2026-10-15T03:00:00+00:00",
+  "head": "a7abc799",
+  "question": "把画面弹幕引擎从 weizhenye/Danmaku 2.0.10 换成 danmu（imtaotao）后，直播层在相同注入口径下的帧节奏、主线程成本与在屏密度是否与旧引擎一致。",
+  "conclusion": "桌面 Chromium（WebView2）上 200 FPS 上限、p95 ≤ 7.3 ms、longtask 0；在屏弹幕稳定在 20–25 条，与旧引擎的车道准入密度（历史记录 10–30 条）一致。滚动弹幕位移改由每条弹幕自己的 CSS transition 在合成器上推进，主线程不再逐帧写 transform，Script 从旧引擎的约 110–170 ms/s 降到约 100–160 ms/s（同一注入口径），Style 从约 27–35 ms/s 降到约 12–27 ms/s。",
+  "environment": {
+    "device": "Windows 桌面（WSL2 主机），WebView2 Edg/155.0.4283.45",
+    "app": "rLive dev（Tauri 2，WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 开 CDP 9223）",
+    "viewport": "1280×720 (dpr 1)",
+    "cores": 20,
+    "room": "B 站 /room/bilibili/23197314",
+    "transport": "真实 Tauri IPC 事件通道（plugin:event|emit）",
+    "harness": ".playwright-cli/device-danmaku-perf.ts",
+    "note": "真实 WS 源已断开；注入批次是唯一变量。桌面 rAF 上限约 200 次/秒，FPS 不具区分度，结论以 Task/Script/Style 与在屏条数为准。"
+  },
+  "method": {
+    "injection": "抓取当前房间 connection_epoch 后，以 20 批/秒向 plugin:event|emit 投递 {connection_epoch, events:[…]}，信封与 Rust 端一致。",
+    "control": "drop 场景用 epoch+1 投递，事件在 eventBus.dispatch 被丢弃，只保留 IPC 与校验成本。",
+    "prefill": "断开真实源后预填 1200 条，使面板保留窗口与渲染层初始状态在各场景间一致。",
+    "scenes": {
+      "pinned": "面板钉底跟随",
+      "scrollup": "面板上滚阅读（中点）",
+      "hidden": "列表 visibility:hidden",
+      "drop": "不匹配 epoch，测注入器地板"
+    },
+    "sampling": "rAF 帧间隔（median/p95/max、>25ms 与 >33ms 卡顿帧）、CDP Performance 每秒增量、PerformanceObserver longtask、面板 scroll 事件计数。",
+    "rounds": "正序 + 反序各一轮，每样本 9 秒。"
+  },
+  "runs": {
+    "forward20Hz": {
+      "environment": {
+        "href": "http://localhost:1420/room/bilibili/23197314",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "viewport": [
+          1280,
+          720
+        ],
+        "dpr": 1,
+        "hardwareConcurrency": 20
+      },
+      "samples": [
+        {
+          "label": "rate0-pinned#1",
+          "scene": "pinned",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 199.95,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.300000011920929,
+            "max": 12.300000011920929
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 20,
+            "bulletsAfter": 2,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 62296.75,
+            "ScriptDuration": 4317.45,
+            "LayoutDuration": 338.14,
+            "RecalcStyleDuration": 12455.37,
+            "LayoutCount": 3.777,
+            "RecalcStyleCount": 203.615,
+            "Nodes": 2.666,
+            "JSHeapUsedSize": 421224.798
+          },
+          "durationMs": 9002.3
+        },
+        {
+          "label": "rate0-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 200.12,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.300000011920929,
+            "max": 8.899999976158142
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 1,
+            "bulletsAfter": 1,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 27678.16,
+            "ScriptDuration": 3124.66,
+            "LayoutDuration": 0,
+            "RecalcStyleDuration": 0,
+            "LayoutCount": 0,
+            "RecalcStyleCount": 0,
+            "Nodes": -29.319,
+            "JSHeapUsedSize": -678389.694
+          },
+          "durationMs": 9004.5
+        },
+        {
+          "label": "rate0-hidden#1",
+          "scene": "hidden",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 200.17,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.5,
+            "max": 11.800000011920929
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 1,
+            "bulletsAfter": 1,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 31015.16,
+            "ScriptDuration": 3320.08,
+            "LayoutDuration": 0,
+            "RecalcStyleDuration": 0,
+            "LayoutCount": 0,
+            "RecalcStyleCount": 0,
+            "Nodes": 0,
+            "JSHeapUsedSize": -72634.046
+          },
+          "durationMs": 9002.5
+        },
+        {
+          "label": "rate0-drop#1",
+          "scene": "drop",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 200.22,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.5,
+            "max": 7.200000047683716
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 1,
+            "bulletsAfter": 1,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 32009.71,
+            "ScriptDuration": 3305.22,
+            "LayoutDuration": 0,
+            "RecalcStyleDuration": 0,
+            "LayoutCount": 0,
+            "RecalcStyleCount": 0,
+            "Nodes": 0,
+            "JSHeapUsedSize": -36658.778
+          },
+          "durationMs": 9000.3
+        },
+        {
+          "label": "rate25-pinned#1",
+          "scene": "pinned",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 199.15,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.400000035762787,
+            "max": 50.60000002384186
+          },
+          "jankOver25ms": 1,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 1,
+            "bulletsAfter": 22,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 225
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 301860.91,
+            "ScriptDuration": 161491.04,
+            "LayoutDuration": 8194.62,
+            "RecalcStyleDuration": 25170.89,
+            "LayoutCount": 48.983,
+            "RecalcStyleCount": 226.811,
+            "Nodes": 7.442,
+            "JSHeapUsedSize": 1549903.922
+          },
+          "durationMs": 9003.1
+        },
+        {
+          "label": "rate25-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 200.08,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.599999964237213,
+            "max": 9
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 25,
+            "bulletsAfter": 24,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 223
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 236512.29,
+            "ScriptDuration": 110216.29,
+            "LayoutDuration": 4863.91,
+            "RecalcStyleDuration": 23129.89,
+            "LayoutCount": 31.994,
+            "RecalcStyleCount": 211.407,
+            "Nodes": -16.886,
+            "JSHeapUsedSize": -794018.841
+          },
+          "durationMs": 9001.6
+        },
+        {
+          "label": "rate25-hidden#1",
+          "scene": "hidden",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 200.08,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.400000035762787,
+            "max": 9.399999976158142
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 20,
+            "bulletsAfter": 21,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 223
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 209988.89,
+            "ScriptDuration": 95729.2,
+            "LayoutDuration": 4204.14,
+            "RecalcStyleDuration": 21388.2,
+            "LayoutCount": 30.217,
+            "RecalcStyleCount": 211.074,
+            "Nodes": 7.999,
+            "JSHeapUsedSize": 1166119.357
+          },
+          "durationMs": 9001.6
+        },
+        {
+          "label": "rate25-drop#1",
+          "scene": "drop",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 200.07,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.299999952316284,
+            "max": 8.200000047683716
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 22,
+            "bulletsAfter": 0,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 225
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 87480.84,
+            "ScriptDuration": 13015.51,
+            "LayoutDuration": 311.38,
+            "RecalcStyleDuration": 13292.45,
+            "LayoutCount": 3.777,
+            "RecalcStyleCount": 194.739,
+            "Nodes": -8.665,
+            "JSHeapUsedSize": -602744.34
+          },
+          "durationMs": 9001.8
+        },
+        {
+          "label": "rate150-pinned#1",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 200.14,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.600000023841858,
+            "max": 7.800000011920929
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 0,
+            "bulletsAfter": 21,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1350
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 243339.0,
+            "ScriptDuration": 104840.84,
+            "LayoutDuration": 7555.87,
+            "RecalcStyleDuration": 24500.53,
+            "LayoutCount": 48.314,
+            "RecalcStyleCount": 243.236,
+            "Nodes": 99.294,
+            "JSHeapUsedSize": 1367405.927
+          },
+          "durationMs": 9003.6
+        },
+        {
+          "label": "rate150-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 200.02,
+          "frameMs": {
+            "median": 5,
+            "p95": 6.300000011920929,
+            "max": 11
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 24,
+            "bulletsAfter": 24,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1350
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 249179.93,
+            "ScriptDuration": 116971.38,
+            "LayoutDuration": 5599.0,
+            "RecalcStyleDuration": 25832.01,
+            "LayoutCount": 43.203,
+            "RecalcStyleCount": 243.223,
+            "Nodes": -54.642,
+            "JSHeapUsedSize": 326871.536
+          },
+          "durationMs": 9004.1
+        },
+        {
+          "label": "rate150-hidden#1",
+          "scene": "hidden",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 199.71,
+          "frameMs": {
+            "median": 5,
+            "p95": 6.199999988079071,
+            "max": 14.399999976158142
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 20,
+            "bulletsAfter": 21,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1350
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 238033.79,
+            "ScriptDuration": 115997.93,
+            "LayoutDuration": 7551.95,
+            "RecalcStyleDuration": 26297.72,
+            "LayoutCount": 50.871,
+            "RecalcStyleCount": 250.469,
+            "Nodes": 34.655,
+            "JSHeapUsedSize": 2107664.249
+          },
+          "durationMs": 9003.1
+        },
+        {
+          "label": "rate150-drop#1",
+          "scene": "drop",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 200.01,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.199999988079071,
+            "max": 6.899999976158142
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 23,
+            "bulletsAfter": 0,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1350
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 86362.97,
+            "ScriptDuration": 13589.17,
+            "LayoutDuration": 258.42,
+            "RecalcStyleDuration": 12577.24,
+            "LayoutCount": 3.443,
+            "RecalcStyleCount": 179.686,
+            "Nodes": -272.527,
+            "JSHeapUsedSize": -2145375.919
+          },
+          "durationMs": 9004.6
+        },
+        {
+          "label": "rate0-pinned#2",
+          "scene": "pinned",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 199.91,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.400000035762787,
+            "max": 19.400000035762787
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 0,
+            "bulletsAfter": 0,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 35378.67,
+            "ScriptDuration": 3755.26,
+            "LayoutDuration": 0,
+            "RecalcStyleDuration": 0,
+            "LayoutCount": 0,
+            "RecalcStyleCount": 0,
+            "Nodes": -20.769,
+            "JSHeapUsedSize": -453212.053
+          },
+          "durationMs": 9003.9
+        },
+        {
+          "label": "rate0-scrollup#2",
+          "scene": "scrollup",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 200.05,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.400000035762787,
+            "max": 12
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 0,
+            "bulletsAfter": 0,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 26574.99,
+            "ScriptDuration": 3548.63,
+            "LayoutDuration": 0,
+            "RecalcStyleDuration": 0,
+            "LayoutCount": 0,
+            "RecalcStyleCount": 0,
+            "Nodes": -13.995,
+            "JSHeapUsedSize": -111542.725
+          },
+          "durationMs": 9002.9
+        },
+        {
+          "label": "rate0-hidden#2",
+          "scene": "hidden",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 200.16,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.5,
+            "max": 7.200000047683716
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 0,
+            "bulletsAfter": 0,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 31097.67,
+            "ScriptDuration": 3457.19,
+            "LayoutDuration": 0,
+            "RecalcStyleDuration": 0,
+            "LayoutCount": 0,
+            "RecalcStyleCount": 0,
+            "Nodes": 0,
+            "JSHeapUsedSize": -107938.729
+          },
+          "durationMs": 9002.7
+        },
+        {
+          "label": "rate0-drop#2",
+          "scene": "drop",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 200.07,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.600000023841858,
+            "max": 9.5
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 0,
+            "bulletsAfter": 0,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 0
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 25016.05,
+            "ScriptDuration": 3827.08,
+            "LayoutDuration": 0,
+            "RecalcStyleDuration": 0,
+            "LayoutCount": 0,
+            "RecalcStyleCount": 0,
+            "Nodes": 0,
+            "JSHeapUsedSize": 35619.591
+          },
+          "durationMs": 9001.9
+        },
+        {
+          "label": "rate25-pinned#2",
+          "scene": "pinned",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 199.83,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.300000011920929,
+            "max": 14.699999988079071
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 0,
+            "bulletsAfter": 20,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 225
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 202485.45,
+            "ScriptDuration": 87548.32,
+            "LayoutDuration": 5594.04,
+            "RecalcStyleDuration": 18691.74,
+            "LayoutCount": 48.763,
+            "RecalcStyleCount": 246.257,
+            "Nodes": -4.554,
+            "JSHeapUsedSize": -81525.303
+          },
+          "durationMs": 9002.8
+        },
+        {
+          "label": "rate25-scrollup#2",
+          "scene": "scrollup",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 199.16,
+          "frameMs": {
+            "median": 5,
+            "p95": 7.300000011920929,
+            "max": 51.69999998807907
+          },
+          "jankOver25ms": 1,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 25,
+            "bulletsAfter": 24,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 225
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 271736.66,
+            "ScriptDuration": 142262.72,
+            "LayoutDuration": 3959.17,
+            "RecalcStyleDuration": 27427.83,
+            "LayoutCount": 38.876,
+            "RecalcStyleCount": 229.926,
+            "Nodes": -13.995,
+            "JSHeapUsedSize": -398875.473
+          },
+          "durationMs": 9002.9
+        },
+        {
+          "label": "rate25-hidden#2",
+          "scene": "hidden",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 200.02,
+          "frameMs": {
+            "median": 5,
+            "p95": 7.199999988079071,
+            "max": 9.699999988079071
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 21,
+            "bulletsAfter": 21,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 225
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 263980.05,
+            "ScriptDuration": 135432.42,
+            "LayoutDuration": 3092.99,
+            "RecalcStyleDuration": 27203.32,
+            "LayoutCount": 30.876,
+            "RecalcStyleCount": 231.122,
+            "Nodes": -5.997,
+            "JSHeapUsedSize": -444329.679
+          },
+          "durationMs": 9003.9
+        },
+        {
+          "label": "rate25-drop#2",
+          "scene": "drop",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 200.08,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.300000011920929,
+            "max": 7.400000035762787
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 23,
+            "bulletsAfter": 0,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 225
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 88305.69,
+            "ScriptDuration": 14270.49,
+            "LayoutDuration": 316.51,
+            "RecalcStyleDuration": 12308.33,
+            "LayoutCount": 3.444,
+            "RecalcStyleCount": 190.972,
+            "Nodes": -11.332,
+            "JSHeapUsedSize": -2200335.507
+          },
+          "durationMs": 9001.3
+        },
+        {
+          "label": "rate150-pinned#2",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 200.12,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.800000011920929,
+            "max": 10.100000023841858
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 0,
+            "bulletsAfter": 21,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1350
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 220362.04,
+            "ScriptDuration": 103445.94,
+            "LayoutDuration": 6962.41,
+            "RecalcStyleDuration": 22152.59,
+            "LayoutCount": 48.864,
+            "RecalcStyleCount": 245.544,
+            "Nodes": 87.845,
+            "JSHeapUsedSize": 1095270.587
+          },
+          "durationMs": 9004.5
+        },
+        {
+          "label": "rate150-scrollup#2",
+          "scene": "scrollup",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 199.99,
+          "frameMs": {
+            "median": 5,
+            "p95": 6.300000011920929,
+            "max": 11.300000011920929
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 24,
+            "bulletsAfter": 23,
+            "panelRows": 36,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1342
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 251886.76,
+            "ScriptDuration": 120063.44,
+            "LayoutDuration": 5714.73,
+            "RecalcStyleDuration": 26535.34,
+            "LayoutCount": 43.219,
+            "RecalcStyleCount": 242.762,
+            "Nodes": 115.326,
+            "JSHeapUsedSize": 540963.047
+          },
+          "durationMs": 9000.6
+        },
+        {
+          "label": "rate150-hidden#2",
+          "scene": "hidden",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 199.92,
+          "frameMs": {
+            "median": 5,
+            "p95": 6.199999988079071,
+            "max": 13.899999976158142
+          },
+          "jankOver25ms": 0,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 20,
+            "bulletsAfter": 20,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1350
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 253986.16,
+            "ScriptDuration": 115320.88,
+            "LayoutDuration": 7373.66,
+            "RecalcStyleDuration": 27542.37,
+            "LayoutCount": 50.981,
+            "RecalcStyleCount": 250.794,
+            "Nodes": -274.563,
+            "JSHeapUsedSize": -1608659.84
+          },
+          "durationMs": 9003.4
+        },
+        {
+          "label": "rate150-drop#2",
+          "scene": "drop",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 198.88,
+          "frameMs": {
+            "median": 5,
+            "p95": 5.200000047683716,
+            "max": 52.40000003576279
+          },
+          "jankOver25ms": 2,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "dom": {
+            "bulletsBefore": 23,
+            "bulletsAfter": 0,
+            "panelRows": 29,
+            "rendererHosts": 2
+          },
+          "events": {
+            "sent": 1350
+          },
+          "mainThreadMsPerSecond": {
+            "TaskDuration": 107810.16,
+            "ScriptDuration": 19209.8,
+            "LayoutDuration": 285.99,
+            "RecalcStyleDuration": 13173.37,
+            "LayoutCount": 3.333,
+            "RecalcStyleCount": 181.552,
+            "Nodes": -149.997,
+            "JSHeapUsedSize": -2267239.839
+          },
+          "durationMs": 9000.2
+        }
+      ]
+    }
+  }
+}

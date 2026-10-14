@@ -14,6 +14,7 @@ import {
   clampDanmuFontSize,
   clampDanmuFontStroke,
   clampDanmuOpacity,
+  danmuLaneHeight,
 } from "@/features/room/danmaku/danmakuAdapter";
 import { loadDanmakuRenderer } from "@/features/room/danmaku/danmakuLoader";
 import {
@@ -31,7 +32,7 @@ import {
 } from "./videoDanmaku";
 
 /**
- * VOD 与直播共用 weizhenye/Danmaku DOM 引擎、富文本样式和点选交互。
+ * VOD 与直播共用 `danmu` DOM 引擎、富文本样式和点选交互。
  * 媒体直接绑定渲染器，投放、暂停、缓冲等待、倍速和 seek 共用原生媒体时间轴，
  * 不再在 timeupdate 上维护第二份游标、位置推算或固定弹幕到期计时。
  * 关闭只隐藏并禁用命中，分段增量更新也不清屏，已经上屏的弹幕保留到正常结束。
@@ -112,10 +113,10 @@ export function VideoDanmakuLayer({
     for (const id of Array.from(commentCache.keys())) if (!byId.has(id)) commentCache.delete(id);
     return { list, byId };
   }, [schedule, fontSize, fontStroke, opacity, commentCache]);
-  const latestRef = useRef({ schedule, scheduleComments, speed, area });
+  const latestRef = useRef({ schedule, scheduleComments, speed, area, fontSize });
   useLayoutEffect(() => {
-    latestRef.current = { schedule, scheduleComments, speed, area };
-  }, [schedule, scheduleComments, speed, area]);
+    latestRef.current = { schedule, scheduleComments, speed, area, fontSize };
+  }, [schedule, scheduleComments, speed, area, fontSize]);
 
   const releaseSelection = useCallback((dropped = false) => {
     const id = selectedIdRef.current;
@@ -238,6 +239,7 @@ export function VideoDanmakuLayer({
           media,
           speed: latest.speed,
           area: latest.area,
+          laneHeight: danmuLaneHeight(latest.fontSize),
           onAttach: (comment, element) => {
             const entry = latestRef.current.schedule.byId.get(comment.id);
             if (entry) records.set(comment.id, { entry, element });
@@ -277,6 +279,9 @@ export function VideoDanmakuLayer({
   useEffect(() => {
     instanceRef.current?.setArea(area);
   }, [area]);
+  useEffect(() => {
+    instanceRef.current?.setLaneHeight(danmuLaneHeight(fontSize));
+  }, [fontSize]);
 
   return (
     <div ref={hostRef} className="pointer-events-none absolute inset-0">

@@ -12,8 +12,15 @@ import { superChatDurationMs } from "../superChat";
 
 /** 直播层的本地活动预算和零尺寸待处理队列上限。 */
 export const DANMAKU_MAX_ACTIVE_COMMENTS = 800;
-export const DANMAKU_MIN_ACTIVE_COMMENTS = 120;
-export const DANMAKU_LANE_ACTIVE_COMMENTS = 12;
+/**
+ * 每条车道稳态在屏条数：`danmu` 的轨道准入是「前一条尾部完全进屏」才放行，
+ * 于是单车道在屏 = 行程时长 / 放行间隔 ≈ 1 + 舞台宽 / 弹幕宽 ≈ 5。
+ * 预算按它取值，超出的新弹幕由调用方直接丢弃，与旧引擎的车道准入语义一致；
+ * 取值过大时库会退化为叠放（`adaptive`）或长队列延迟（`strict`）。
+ */
+export const DANMAKU_LANE_ACTIVE_COMMENTS = 5;
+/** 预算下限：一条车道的容量，保证极矮舞台不会因为取整被压到 0 条。 */
+export const DANMAKU_MIN_ACTIVE_COMMENTS = DANMAKU_LANE_ACTIVE_COMMENTS;
 export const DANMAKU_IMAGE_TRACK_SPAN = 2;
 export const DANMAKU_MAX_PENDING_COMMENTS = 80;
 export const DANMAKU_MAX_SUPER_CHATS = 3;
@@ -261,6 +268,7 @@ export function danmakuCommentFromEvent(
         ? superChatDurationMs(event.super_chat)
         : DANMAKU_DEFAULT_DURATION_MS
       : undefined,
+    lanes: trackSpan,
     style: danmakuStyleForEvent(event, options, trackSpan),
     __rliveMeta: meta,
     render: () => createDanmuBulletElement(comment),

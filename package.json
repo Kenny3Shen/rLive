@@ -31,7 +31,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cn": "^0.3.0",
-    "danmaku": "2.0.10",
+    "danmu": "^0.20.0",
     "google-translate-api-x": "10.7.3",
     "lucide-react": "^1.45.0",
     "mpegts.js": "1.8.2",

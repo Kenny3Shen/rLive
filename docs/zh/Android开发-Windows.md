@@ -222,7 +222,7 @@ unzip -Z1 "$APK" | awk '/^lib\// { print }'
 - 普通直播与视频播放时，视频画面从状态栏下方开始；加载/失败态顶栏只预留一份安全区，进入全屏仍铺满窗口，退出后恢复占位。
 - 高刷设备用开发者选项的刷新率叠层确认前台刷新率与系统设置一致（60 Hz 与高刷各验证一次），再开省电模式确认系统降帧时动画速度不变。
 
-刷新率完全跟随系统：应用不请求固定显示模式或刷新率偏好，省电模式、温控与厂商动态刷新策略直接生效。已知取舍是部分厂商 ROM 只给「主动表达高刷意图」的应用高刷，这类设备上 rLive 可能稳定在 60 Hz。Web 动画和 Canvas 全部按时间基准推进（WAAPI/CSS 时长、DanmakuRenderer 的媒体时钟与标准 `speed`、按平滑媒体时钟绘制的回放弹幕），因此不同刷新率下观感时长一致。滚动弹幕由原生引擎逐帧按媒体时间写 `transform`，回放 Canvas 用 `src/shared/smoothMediaClock.ts` 把抖动的 `currentTime` 外推成匀速时间。
+刷新率完全跟随系统：应用不请求固定显示模式或刷新率偏好，省电模式、温控与厂商动态刷新策略直接生效。已知取舍是部分厂商 ROM 只给「主动表达高刷意图」的应用高刷，这类设备上 rLive 可能稳定在 60 Hz。Web 动画和 Canvas 全部按时间基准推进（WAAPI/CSS 时长、DanmakuRenderer 的媒体时钟与标准 `speed`、按平滑媒体时钟绘制的回放弹幕），因此不同刷新率下观感时长一致。滚动弹幕的位移由 `danmu` 写成一次 CSS transition 后在合成器上推进，回放 Canvas 用 `src/shared/smoothMediaClock.ts` 把抖动的 `currentTime` 外推成匀速时间。
 
 模拟器验证 120 Hz：把 AVD `config.ini` 的 `hw.lcd.vsync` 改成 `120` 后冷启动（`-no-snapshot-load`），再执行 `adb shell settings put system peak_refresh_rate 120.0` 和 `min_refresh_rate 120.0`，`dumpsys display` 的 `renderFrameRate` 才会变成 120。也可不改 `config.ini`，直接给模拟器传 `-vsync-rate 120`（实测 `dumpsys display` 的 `mActiveSfDisplayMode.vsyncRate=120.00001`、`presentationDeadlineNanos=8333333`，SurfaceFlinger `activeMode` 为 `vsyncRate=120.00 Hz`）。验证完删除这两项设置并改回 `hw.lcd.vsync=60`。
 

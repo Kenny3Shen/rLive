@@ -597,6 +597,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
           container,
           speed: configRef.current.danmakuSpeed,
           area: danmakuLayerAreaConfig("scroll", areaRef.current),
+          laneHeight: laneHeightRef.current,
           onAttach: (comment: DanmakuComment, element: HTMLElement) => {
             const meta = commentMeta(comment);
             if (!meta) return;
@@ -644,7 +645,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     const renderer = rendererRef.current;
     if (!renderer) return;
     renderer.setArea(danmakuLayerAreaConfig("scroll", normalizedArea));
-    renderer.refreshLayout();
+    renderer.setLaneHeight(laneHeight);
     const scrollLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeight, normalizedArea);
     const topLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeight, 1);
     for (const { comment, layer } of recordsRef.current.values()) {
@@ -655,7 +656,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         laneCount: layer === "top" ? topLaneCount : scrollLaneCount,
       });
     }
-    renderer.refreshLayout();
   }, [fontSize, fontStroke, laneHeight, normalizedArea, opacity]);
 
   useEffect(() => {
