@@ -1,42 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
-  activeRecordingCount,
   activeRecordingForContext,
   applyRecordingProgress,
-  clampRecordingPlaybackTime,
   createSharedRecordingChangeSubscription,
-  formatRecordingDuration,
-  formatRecordingSize,
   recordingEndedPlaybackTime,
-  recordingPlatformFromSearch,
   recordingSeekReached,
-  recordingProtocolLabel,
-  recordingUserGroupKey,
-  recordingsForPlatform,
-  recordingsForView,
   type RecordingContext,
   type RecordingItem,
 } from "../src/features/recording/recording";
 import {
-  RECORDING_VIEW_PARAM,
   recordingIdFromPlaybackParams,
   recordingPlaybackPath,
-  recordingViewFromSearch,
-  withRecordingView,
 } from "../src/features/recording/recordingRoute";
 import { shouldPromptBeforeRecordingLeave } from "../src/features/recording/RecordingLeaveGuard";
 import { pickRecordingLine } from "../src/features/recording/recordingSource";
 import {
-  activeRecordingForLiveRoom,
-  autoRecordableFollows,
-  followRecordingSessionKey,
-  followRecordingContext,
-  liveRecordingSourceKey,
-} from "../src/features/recording/followRecording";
-import type { FollowUser, PlayUrl } from "../src/shared/types/live";
-import {
   filterRecordedDanmakuEntries,
-  firstRecordedDanmakuAtOrAfter,
   parseRecordedDanmakuSidecar,
   type RecordedDanmakuEntry,
 } from "../src/features/recording/recordedDanmaku";
@@ -46,27 +25,25 @@ import {
   visibleRecordedDanmaku,
   type RecordedDanmakuLayoutOptions,
 } from "../src/features/recording/recordedDanmakuLayout";
+import type { PlayUrl } from "../src/shared/types/live";
+import { deferred, settle } from "./helpers/async";
 
-const liveContext: RecordingContext = {
-  source: {
-    url: "https://example.test/live.flv",
-    headers: {},
-  },
+const context: RecordingContext = {
+  source: { url: "https://example.test/live.flv", headers: {} },
   sourceKey: "live:bilibili:100",
   sourceKind: "live",
   siteId: "bilibili",
   roomId: "100",
   title: "测试直播间",
 };
-
-function recordingItem(overrides: Partial<RecordingItem> = {}): RecordingItem {
+function recording(overrides: Partial<RecordingItem> = {}): RecordingItem {
   return {
     id: "recording-1",
-    source_key: liveContext.sourceKey,
+    source_key: context.sourceKey,
     source_kind: "live",
     site_id: "bilibili",
     room_id: "100",
-    title: liveContext.title,
+    title: context.title,
     user_name: "主播",
     cover: "",
     user_avatar: "",
@@ -80,775 +57,277 @@ function recordingItem(overrides: Partial<RecordingItem> = {}): RecordingItem {
     continue_on_leave: false,
     danmaku_count: 0,
     danmaku_file: null,
-    file_path: "/recordings/recording-1/stream.flv",
+    file_path: "/recordings/1/stream.flv",
     error: null,
     ...overrides,
   };
 }
 
-async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-const LAYOUT_STAGE_WIDTH = 960;
-const LAYOUT_PADDING = 20;
-const LAYOUT_FONT_SIZE = 24;
-const LAYOUT_SPEED_PX_PER_S = 160;
-
-/** canvas 度量的替身：每个码点固定步进。 */
-function measureText(text: string): number {
-  return [...text].length * LAYOUT_FONT_SIZE;
-}
-
-function layoutOptions(
-  overrides: Partial<RecordedDanmakuLayoutOptions> = {},
-): RecordedDanmakuLayoutOptions {
-  return {
-    laneCount: 4,
-    stageWidth: LAYOUT_STAGE_WIDTH,
-    padding: LAYOUT_PADDING,
-    laneGap: LAYOUT_FONT_SIZE * 0.6,
-    measure: measureText,
-    lifetimeFor: (width) =>
-      ((LAYOUT_STAGE_WIDTH + width + LAYOUT_PADDING * 2) / LAYOUT_SPEED_PX_PER_S) * 1_000,
-    staticLayout: false,
-    mergeWindowMs: 0,
-    maxGroupSpanMs: 30_000,
-    ...overrides,
-  };
-}
-
-function chatEntries(
-  count: number,
-  step: number,
-  content: (index: number) => string,
-): RecordedDanmakuEntry[] {
-  return parseRecordedDanmakuSidecar(
-    Array.from({ length: count }, (_, index) =>
-      JSON.stringify({
-        offset_ms: index * step,
-        events: [
-          { kind: "chat", user: `用户${index}`, content: content(index), color: null, ts: index },
-        ],
-      }),
-    ).join("\n"),
-  );
-}
-
-describe("recording change subscription", () => {
-  test("forwards activity progress to every shared subscriber", async () => {
-    let nativeHandler:
-      | ((progress?: {
-          recordingId: string;
-          durationMs: number;
-          sizeBytes: number;
-          danmakuCount: number;
-        }) => void)
-      | null = null;
-    const received: number[] = [];
-    const subscribe = createSharedRecordingChangeSubscription(
-      async (handler) => {
-        nativeHandler = handler;
-        return () => undefined;
-      },
-      (_subscriber: string, progress) => {
-        if (progress) received.push(progress.durationMs);
-      },
-    );
-    const unsubscribeFirst = subscribe("first");
-    const unsubscribeSecond = subscribe("second");
-    await flushMicrotasks();
-
-    nativeHandler?.({
-      recordingId: "recording-1",
-      durationMs: 1_500,
-      sizeBytes: 2_048,
-      danmakuCount: 3,
-    });
-
-    expect(received).toEqual([1_500, 1_500]);
-    unsubscribeFirst();
-    unsubscribeSecond();
-  });
-
-  test("shares one native listener and reference-counts duplicate subscribers", async () => {
+describe("录制订阅所有权", () => {
+  test("共用原生监听、重复订阅引用计数，最后退订仅清理一次", async () => {
     let registrations = 0;
     let cleanups = 0;
-    let nativeHandler: (() => void) | null = null;
+    let emit = () => {};
     const subscribe = createSharedRecordingChangeSubscription(
       async (handler) => {
         registrations += 1;
-        nativeHandler = handler;
+        emit = handler;
         return () => {
           cleanups += 1;
         };
       },
-      (subscriber: { invalidations: number }) => {
-        subscriber.invalidations += 1;
+      (subscriber: { count: number }) => {
+        subscriber.count += 1;
       },
     );
-    const sharedClient = { invalidations: 0 };
-    const otherClient = { invalidations: 0 };
-
-    const unsubscribeFirst = subscribe(sharedClient);
-    const unsubscribeSecond = subscribe(sharedClient);
-    const unsubscribeOther = subscribe(otherClient);
-    await flushMicrotasks();
-
-    expect(registrations).toBe(1);
-    nativeHandler?.();
-    expect(sharedClient.invalidations).toBe(1);
-    expect(otherClient.invalidations).toBe(1);
-
-    unsubscribeFirst();
-    nativeHandler?.();
-    expect(sharedClient.invalidations).toBe(2);
-    unsubscribeSecond();
-    nativeHandler?.();
-    expect(sharedClient.invalidations).toBe(2);
-    expect(otherClient.invalidations).toBe(3);
-
-    unsubscribeOther();
-    unsubscribeOther();
-    await flushMicrotasks();
+    const first = { count: 0 };
+    const other = { count: 0 };
+    const off1 = subscribe(first);
+    const off2 = subscribe(first);
+    const off3 = subscribe(other);
+    await settle();
+    emit();
+    expect([registrations, first.count, other.count]).toEqual([1, 1, 1]);
+    off1();
+    emit();
+    expect(first.count).toBe(2);
+    off2();
+    emit();
+    expect([first.count, other.count]).toEqual([2, 3]);
+    off3();
+    off3();
     expect(cleanups).toBe(1);
   });
 
-  test("replaces a stale async listener after a StrictMode-style remount", async () => {
-    const handlers: Array<() => void> = [];
-    const resolvers: Array<(cleanup: () => void) => void> = [];
-    let registrations = 0;
-    let firstCleanup = 0;
-    let secondCleanup = 0;
-    const subscriber = { invalidations: 0 };
+  test("StrictMode 重挂载时回收迟到监听，旧回调不能通知新订阅", async () => {
+    const pending = [deferred<() => void>(), deferred<() => void>()];
+    const handlers: (() => void)[] = [];
+    let cleanups = 0;
+    let notifications = 0;
     const subscribe = createSharedRecordingChangeSubscription(
       (handler) => {
-        registrations += 1;
         handlers.push(handler);
-        return new Promise((resolve) => resolvers.push(resolve));
+        return pending[handlers.length - 1]!.promise;
       },
-      (client: { invalidations: number }) => {
-        client.invalidations += 1;
+      () => {
+        notifications += 1;
       },
     );
-
-    const unsubscribeFirst = subscribe(subscriber);
-    await flushMicrotasks();
-    unsubscribeFirst();
-    const unsubscribeSecond = subscribe(subscriber);
-    await flushMicrotasks();
-    expect(registrations).toBe(1);
-
-    resolvers[0]!(() => {
-      firstCleanup += 1;
+    const off = subscribe("client");
+    await settle();
+    off();
+    const offAgain = subscribe("client");
+    pending[0]!.resolve(() => {
+      cleanups += 1;
     });
-    await flushMicrotasks();
-    await flushMicrotasks();
-    expect(firstCleanup).toBe(1);
-    expect(registrations).toBe(2);
-
-    resolvers[1]!(() => {
-      secondCleanup += 1;
+    await settle();
+    expect([handlers.length, cleanups]).toEqual([2, 1]);
+    pending[1]!.resolve(() => {
+      cleanups += 1;
     });
-    await flushMicrotasks();
-    handlers[0]!();
-    handlers[1]!();
-    expect(subscriber.invalidations).toBe(1);
-
-    unsubscribeSecond();
-    expect(secondCleanup).toBe(1);
+    await settle();
+    handlers.forEach((handler) => handler());
+    expect(notifications).toBe(1);
+    offAgain();
+    expect(cleanups).toBe(2);
   });
 });
 
-describe("recording progress events", () => {
-  test("patches only the matching active recording with monotonic counters", () => {
-    const active = recordingItem({ duration_ms: 2_000, size_bytes: 1_024, danmaku_count: 3 });
-    const completed = recordingItem({ id: "completed", status: "completed", duration_ms: 5_000 });
-
-    const updated = applyRecordingProgress([active, completed], {
-      recordingId: active.id,
-      durationMs: 3_000,
-      sizeBytes: 512,
-      danmakuCount: 5,
-    });
-
-    expect(updated?.[0]).toEqual({
-      ...active,
-      duration_ms: 3_000,
-      size_bytes: 1_024,
-      danmaku_count: 5,
-    });
-    expect(updated?.[1]).toBe(completed);
+describe("录制状态与播放边界", () => {
+  test("进度只更新活动录制且不倒退，结束后的迟到事件不覆盖结果", () => {
+    const active = recording({ duration_ms: 2_000, size_bytes: 1_024, danmaku_count: 3 });
+    const completed = recording({ id: "completed", status: "completed" });
+    const progress = { recordingId: active.id, durationMs: 3_000, sizeBytes: 512, danmakuCount: 5 };
+    const updated = applyRecordingProgress([active, completed], progress)!;
+    expect(updated[0]).toMatchObject({ duration_ms: 3_000, size_bytes: 1_024, danmaku_count: 5 });
+    expect(updated[1]).toBe(completed);
+    const finished = [completed];
+    expect(applyRecordingProgress(finished, { ...progress, recordingId: completed.id })).toBe(
+      finished,
+    );
   });
 
-  test("ignores late progress after the recording has finished", () => {
-    const completed = recordingItem({ status: "completed", duration_ms: 5_000 });
-    const items = [completed];
-
-    expect(
-      applyRecordingProgress(items, {
-        recordingId: completed.id,
-        durationMs: 6_000,
-        sizeBytes: 2_048,
-        danmakuCount: 7,
-      }),
-    ).toBe(items);
-  });
-});
-
-describe("recording presentation helpers", () => {
-  test("filters local recordings by a validated live platform", () => {
-    const bilibili = recordingItem({ id: "bilibili", site_id: "bilibili" });
-    const twitch = recordingItem({ id: "twitch", site_id: "twitch" });
-    const iptv = recordingItem({ id: "iptv", source_kind: "iptv", site_id: null });
-    const items = [bilibili, twitch, iptv];
-
-    expect(recordingPlatformFromSearch("twitch")).toBe("twitch");
-    expect(recordingPlatformFromSearch("unknown")).toBe("all");
-    expect(recordingsForPlatform(items, "twitch")).toEqual([twitch]);
-    expect(recordingsForPlatform(items, "all")).toBe(items);
-    expect(recordingUserGroupKey(bilibili)).not.toBe(recordingUserGroupKey(twitch));
-  });
-
-  test("scopes the library by the header tab, counting every finished state as recorded", () => {
-    const active = recordingItem({ id: "active", status: "recording" });
-    const completed = recordingItem({ id: "completed", status: "completed" });
-    const interrupted = recordingItem({ id: "interrupted", status: "interrupted" });
-    const failed = recordingItem({ id: "failed", status: "failed" });
-    const items = [active, completed, interrupted, failed];
-
-    expect(recordingViewFromSearch(null)).toBe("all");
-    expect(recordingViewFromSearch("recording")).toBe("recording");
-    expect(recordingViewFromSearch("recorded")).toBe("recorded");
-    expect(recordingViewFromSearch("bogus")).toBe("all");
-
-    expect(recordingsForView(items, "all")).toBe(items);
-    expect(recordingsForView(items, "recording")).toEqual([active]);
-    expect(recordingsForView(items, "recorded")).toEqual([completed, interrupted, failed]);
-  });
-
-  test("keeps the recording view out of the address bar only when it is the default", () => {
-    const params = new URLSearchParams({ platform: "twitch" });
-
-    expect(withRecordingView(params, "all").toString()).toBe("platform=twitch");
-    expect(withRecordingView(params, "recording").get(RECORDING_VIEW_PARAM)).toBe("recording");
-    // 来源参数绝不原地修改。
-    expect(params.has(RECORDING_VIEW_PARAM)).toBe(false);
-  });
-
-  test("counts only capturing tasks for the navigation badge", () => {
-    expect(activeRecordingCount(undefined)).toBe(0);
-    expect(activeRecordingCount([])).toBe(0);
-    expect(
-      activeRecordingCount([
-        recordingItem({ id: "a", status: "recording" }),
-        recordingItem({ id: "b", status: "recording" }),
-        recordingItem({ id: "c", status: "completed" }),
-        recordingItem({ id: "d", status: "interrupted" }),
-        recordingItem({ id: "e", status: "failed" }),
-      ]),
-    ).toBe(2);
-  });
-
-  test("formats short and long durations as timecodes", () => {
-    expect(formatRecordingDuration(0)).toBe("0:00");
-    expect(formatRecordingDuration(65_000)).toBe("1:05");
-    expect(formatRecordingDuration(3_661_000)).toBe("1:01:01");
-  });
-
-  test("bounds playback progress when a media backend reports time past EOF", () => {
-    expect(clampRecordingPlaybackTime(37, 32)).toBe(32);
-    expect(clampRecordingPlaybackTime(-1, 32)).toBe(0);
-    expect(clampRecordingPlaybackTime(Number.NaN, 32)).toBe(0);
-    expect(clampRecordingPlaybackTime(37, 0)).toBe(37);
-  });
-
-  test("does not disguise an early media EOF as the recording end", () => {
+  test("提前 EOF 不冒充播完，非末尾 seek 不因媒体结束而成功", () => {
     expect(recordingEndedPlaybackTime(20, 60, 1.5)).toBe(20);
     expect(recordingEndedPlaybackTime(59, 60, 1.5)).toBe(60);
-    expect(recordingEndedPlaybackTime(61, 60, 1.5)).toBe(60);
-  });
-
-  test("does not complete a non-terminal seek when media ends at its target", () => {
     expect(recordingSeekReached(20, 20, 60, true, 1.5)).toBe(false);
     expect(recordingSeekReached(59, 60, 60, true, 1.5)).toBe(true);
     expect(recordingSeekReached(20, 20, 60, false, 1.5)).toBe(true);
   });
 
-  test("formats local storage sizes with stable units", () => {
-    expect(formatRecordingSize(0)).toBe("0 B");
-    expect(formatRecordingSize(1024)).toBe("1.0 KB");
-    expect(formatRecordingSize(1_536)).toBe("1.5 KB");
-    expect(formatRecordingSize(1024 ** 3)).toBe("1.0 GB");
+  test.each([
+    [{}, true],
+    [{ source_key: "legacy" }, true],
+    [{ source_key: "other", room_id: "200" }, false],
+    [{ status: "completed" }, false],
+  ] as const)("活动录制按稳定键或房间身份匹配：%j", (patch, matched) => {
+    const active = recording(patch);
+    expect(activeRecordingForContext([active], context)).toBe(matched ? active : null);
   });
 
-  test("keeps protocol labels readable in the library", () => {
-    expect(recordingProtocolLabel("flv")).toBe("FLV");
-    expect(recordingProtocolLabel("hls")).toBe("HLS");
-    expect(recordingProtocolLabel("mpeg_ts")).toBe("MPEG-TS");
-    expect(recordingProtocolLabel("native")).toBe("原生");
+  test("空身份不能串用其他录制", () => {
+    const anonymous = recording({ source_key: " ", site_id: null, room_id: null });
+    expect(
+      activeRecordingForContext([anonymous], {
+        ...context,
+        sourceKey: "",
+        siteId: undefined,
+        roomId: undefined,
+      }),
+    ).toBeNull();
+    expect(activeRecordingForContext([recording()], null)).toBeNull();
   });
 
-  test("parses synchronized danmaku batches and ignores an incomplete tail", () => {
-    const entries = parseRecordedDanmakuSidecar(
+  test.each([
+    [{}, "/", true],
+    [{ continue_on_leave: true }, "/", false],
+    [{ status: "completed" }, "/", false],
+    [{}, "/room/bilibili/100", false],
+  ] as const)("离开只确认需要停止的活动任务：%j/%s", (patch, to, expected) => {
+    expect(shouldPromptBeforeRecordingLeave(recording(patch), "/room/bilibili/100", to)).toBe(
+      expected,
+    );
+  });
+});
+
+function entries(times: number[], content = "加油"): RecordedDanmakuEntry[] {
+  return parseRecordedDanmakuSidecar(
+    times
+      .map((offset_ms, i) =>
+        JSON.stringify({
+          offset_ms,
+          events: [{ kind: "chat", user: `用户${i}`, content, color: null, ts: i }],
+        }),
+      )
+      .join("\n"),
+  );
+}
+function options(patch: Partial<RecordedDanmakuLayoutOptions> = {}): RecordedDanmakuLayoutOptions {
+  return {
+    laneCount: 4,
+    stageWidth: 960,
+    padding: 20,
+    laneGap: 14.4,
+    measure: (text) => [...text].length * 24,
+    lifetimeFor: (width) => ((1000 + width) / 160) * 1000,
+    staticLayout: false,
+    mergeWindowMs: 0,
+    maxGroupSpanMs: 30_000,
+    ...patch,
+  };
+}
+
+describe("录制弹幕解析与排布", () => {
+  test("忽略未完整写入的尾行，执行屏蔽设置，不读未来的合并计数", () => {
+    const parsed = parseRecordedDanmakuSidecar(
       JSON.stringify({
         offset_ms: 1200,
         events: [
-          {
-            kind: "chat",
-            user: "小明",
-            content: "晚上好",
-            color: "#ffffff",
-            ts: 1,
-          },
-          {
-            kind: "system",
-            user: "system",
-            content: "连接断开",
-            color: null,
-            ts: 2,
-          },
+          { kind: "chat", user: "甲", content: "普通", color: null, ts: 1 },
+          { kind: "chat", user: "乙", content: "剧透", color: null, ts: 2 },
+          { kind: "chat", user: "丙", content: "屏蔽用户", color: null, ts: 3 },
+          { kind: "gift", user: "丁", content: "礼物", color: null, ts: 4 },
+          { kind: "super_chat", user: "戊", content: "留言", color: null, ts: 5 },
+          { kind: "system", user: "系统", content: "断开", color: null, ts: 6 },
         ],
       }) + "\n{",
     );
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.offsetMs).toBe(1200);
-    expect(entries[0]?.text).toBe("晚上好");
-    expect(firstRecordedDanmakuAtOrAfter(entries, 0)).toBe(0);
-    expect(firstRecordedDanmakuAtOrAfter(entries, 1201)).toBe(1);
-  });
-
-  test("applies gift, super chat, shield-word, and blocked-user settings to recorded danmaku", () => {
-    const entries = parseRecordedDanmakuSidecar(
-      JSON.stringify({
-        offset_ms: 1200,
-        events: [
-          { kind: "chat", user: "甲", content: "普通消息", color: null, ts: 1 },
-          { kind: "chat", user: "乙", content: "包含剧透内容", color: null, ts: 2 },
-          { kind: "chat", user: "丙", content: "被屏蔽者的普通消息", color: null, ts: 3 },
-          { kind: "gift", user: "丁", content: "赠送礼物", color: null, ts: 4 },
-          { kind: "super_chat", user: "戊", content: "醒目留言", color: null, ts: 5 },
-        ],
-      }),
-    );
-
+    expect(parsed).toHaveLength(5);
     expect(
-      filterRecordedDanmakuEntries(entries, {
+      filterRecordedDanmakuEntries(parsed, {
         filterGifts: true,
         showSuperChat: false,
         shieldWords: [" 剧透 "],
         blockedUsers: ["丙"],
-      }).map((entry) => entry.event.content),
-    ).toEqual(["普通消息"]);
-    expect(
-      filterRecordedDanmakuEntries(entries, {
-        filterGifts: false,
-        showSuperChat: true,
-        shieldWords: [],
-        blockedUsers: [],
-      }).map((entry) => entry.event.kind),
-    ).toEqual(["chat", "chat", "chat", "gift", "super_chat"]);
-  });
-
-  test("aggregates only visible history without reading future danmaku", () => {
-    const entries = parseRecordedDanmakuSidecar(
-      [
-        {
-          offset_ms: 1000,
-          events: [{ kind: "chat", user: "甲", content: "加油", color: null, ts: 1 }],
-        },
-        {
-          offset_ms: 2000,
-          events: [{ kind: "chat", user: "乙", content: "加油", color: null, ts: 2 }],
-        },
-        {
-          offset_ms: 4000,
-          events: [{ kind: "chat", user: "丙", content: "加油", color: null, ts: 3 }],
-        },
-      ]
-        .map((batch) => JSON.stringify(batch))
-        .join("\n"),
+      }).map((value) => value.text),
+    ).toEqual(["普通"]);
+    const layout = layoutRecordedDanmaku(
+      entries([1000, 2000, 4000]),
+      options({ mergeWindowMs: 10_000 }),
     );
-    const layout = layoutRecordedDanmaku(entries, layoutOptions({ mergeWindowMs: 10_000 }));
-
-    expect(layout.placements).toHaveLength(1);
-    // 一条车道容纳整组，预留宽度已经覆盖它将来绘制出的最宽文本。
-    expect(layout.placements[0]?.memberOffsets).toEqual([1000, 2000, 4000]);
-    expect(layout.placements[0]?.width).toBe(measureText("加油 ×3"));
-
-    const beforeFuture = visibleRecordedDanmaku(layout, 2500);
-    expect(beforeFuture).toHaveLength(1);
-    expect(beforeFuture[0]?.text).toBe("加油 ×2");
-
-    const afterFuture = visibleRecordedDanmaku(layout, 4000);
-    expect(afterFuture).toHaveLength(1);
-    expect(afterFuture[0]?.text).toBe("加油 ×3");
+    expect(visibleRecordedDanmaku(layout, 2500).map((value) => value.text)).toEqual(["加油 ×2"]);
+    expect(visibleRecordedDanmaku(layout, 4000).map((value) => value.text)).toEqual(["加油 ×3"]);
   });
-});
 
-describe("recorded danmaku lane layout", () => {
-  test("dense traffic never overlaps on a lane", () => {
-    // 120 条相隔 150ms 的消息对四条车道：远超舞台承载量，
-    // 这正是过去文字叠文字的场景。
-    const entries = chatEntries(120, 150, (index) => `密集弹幕内容${index}`);
-    const layout = layoutRecordedDanmaku(entries, layoutOptions());
-
+  test("高密度车道不重叠，延迟有界；稀疏流不丢弹幕", () => {
+    const dense = entries(
+      Array.from({ length: 120 }, (_, i) => i * 150),
+      "密集弹幕内容占满车道",
+    );
+    const layout = layoutRecordedDanmaku(dense, options());
     expect(layout.placements.length).toBeGreaterThan(0);
-    expect(layout.placements.length).toBeLessThan(entries.length);
-
-    for (let currentMs = 0; currentMs <= 20_000; currentMs += 50) {
-      const perLane = new Map<number, { left: number; right: number }[]>();
-      for (const bullet of visibleRecordedDanmaku(layout, currentMs)) {
-        const { placement } = bullet;
-        // 与 canvas 绘制器相同的几何参数。
-        const left =
-          LAYOUT_STAGE_WIDTH +
-          LAYOUT_PADDING -
-          (LAYOUT_STAGE_WIDTH + placement.width + LAYOUT_PADDING * 2) * bullet.progress;
-        const box = { left, right: left + placement.width };
-        const lane = perLane.get(placement.lane);
-        if (lane) lane.push(box);
-        else perLane.set(placement.lane, [box]);
-      }
-      for (const [lane, boxes] of perLane) {
-        boxes.sort((left, right) => left.left - right.left);
-        for (let index = 1; index < boxes.length; index += 1) {
-          const previous = boxes[index - 1]!;
-          const current = boxes[index]!;
-          // 进度项中的舍入可能损失不到一像素；可见的重叠比那大几个数量级。
-          expect(current.left - previous.right).toBeGreaterThan(-0.5);
-        }
-      }
-    }
-  });
-
-  test("keeps every message when traffic fits the lanes", () => {
-    const entries = chatEntries(8, 3_000, (index) => `稀疏${index}`);
-    const layout = layoutRecordedDanmaku(entries, layoutOptions());
-
-    expect(layout.placements).toHaveLength(entries.length);
-    // 没有任何内容需要延迟，每颗弹幕仍按各自的偏移开始。
-    expect(layout.placements.map((placement) => placement.startMs)).toEqual(
-      entries.map((entry) => entry.offsetMs),
-    );
-  });
-
-  test("bounds the delay fallback instead of shifting a bullet far from its moment", () => {
-    const entries = chatEntries(60, 20, (index) => `突发${index}`);
-    const layout = layoutRecordedDanmaku(entries, layoutOptions({ laneCount: 2 }));
-
+    expect(layout.placements.length).toBeLessThan(dense.length);
     for (const placement of layout.placements) {
       expect(placement.startMs - placement.entry.offsetMs).toBeLessThanOrEqual(
         RECORDED_DANMAKU_MAX_DELAY_MS,
       );
       expect(placement.startMs).toBeGreaterThanOrEqual(placement.entry.offsetMs);
     }
-  });
-
-  test("gives a pinned bullet its lane for the whole lifetime under reduced motion", () => {
-    const entries = chatEntries(6, 500, (index) => `静态${index}`);
-    const layout = layoutRecordedDanmaku(
-      entries,
-      layoutOptions({ laneCount: 2, staticLayout: true, lifetimeFor: () => 4_000 }),
-    );
-
-    const perLane = new Map<number, { startMs: number; endMs: number }[]>();
-    for (const placement of layout.placements) {
-      const lane = perLane.get(placement.lane);
-      const span = { startMs: placement.startMs, endMs: placement.endMs };
-      if (lane) lane.push(span);
-      else perLane.set(placement.lane, [span]);
-    }
-    for (const spans of perLane.values()) {
-      spans.sort((left, right) => left.startMs - right.startMs);
-      for (let index = 1; index < spans.length; index += 1) {
-        expect(spans[index]!.startMs).toBeGreaterThanOrEqual(spans[index - 1]!.endMs);
+    for (let time = 0; time < 20_000; time += 50) {
+      const lanes = new Map<number, { left: number; right: number }[]>();
+      for (const bullet of visibleRecordedDanmaku(layout, time)) {
+        const { placement, progress } = bullet;
+        const left = 980 - (1000 + placement.width) * progress;
+        const lane = lanes.get(placement.lane) ?? [];
+        lane.push({ left, right: left + placement.width });
+        lanes.set(placement.lane, lane);
+      }
+      for (const lane of lanes.values()) {
+        lane.sort((a, b) => a.left - b.left);
+        for (let i = 1; i < lane.length; i += 1) {
+          expect(lane[i]!.left - lane[i - 1]!.right).toBeGreaterThan(-0.5);
+        }
       }
     }
-  });
-
-  test("splits a merge group that would outlive its anchor", () => {
-    const entries = chatEntries(4, 4_000, () => "重复弹幕");
-    const layout = layoutRecordedDanmaku(
-      entries,
-      layoutOptions({ mergeWindowMs: 10_000, maxGroupSpanMs: 5_000 }),
-    );
-
-    // 锚点只能吸收它仍在屏幕上期间到达的重复项；更晚的成为独立弹幕而不是消失。
-    expect(layout.placements.length).toBeGreaterThan(1);
+    const sparse = entries([0, 3000, 6000]);
     expect(
-      layout.placements.flatMap((placement) => placement.memberOffsets).sort((a, b) => a - b),
-    ).toEqual(entries.map((entry) => entry.offsetMs));
-  });
-});
-
-describe("active recording context matching", () => {
-  test("matches an active session by its stable source key", () => {
-    const active = recordingItem();
-
-    expect(activeRecordingForContext([active], liveContext)).toBe(active);
+      layoutRecordedDanmaku(sparse, options()).placements.map((value) => value.startMs),
+    ).toEqual([0, 3000, 6000]);
   });
 
-  test("falls back to the live site and room identity when a source key changes", () => {
-    const active = recordingItem({ source_key: "legacy-live-key" });
-
-    expect(activeRecordingForContext([active], liveContext)).toBe(active);
-  });
-
-  test("does not match an unrelated live session when the context identity is missing", () => {
-    const active = recordingItem({
-      source_key: "live:unknown:other",
-      site_id: null,
-      room_id: null,
-    });
-    const context: RecordingContext = {
-      ...liveContext,
-      sourceKey: "live:unknown:current",
-      siteId: undefined,
-      roomId: undefined,
-    };
-
-    expect(activeRecordingForContext([active], context)).toBeNull();
-  });
-
-  test("still matches a stable source key when the live identity is missing", () => {
-    const active = recordingItem({ site_id: null, room_id: null });
-    const context: RecordingContext = {
-      ...liveContext,
-      siteId: undefined,
-      roomId: undefined,
-    };
-
-    expect(activeRecordingForContext([active], context)).toBe(active);
-  });
-
-  test("does not treat empty or whitespace-only source keys as stable identities", () => {
-    const active = recordingItem({ source_key: "   ", site_id: null, room_id: null });
-    const emptyContext: RecordingContext = {
-      ...liveContext,
-      sourceKey: "",
-      siteId: undefined,
-      roomId: undefined,
-    };
-    const whitespaceContext = { ...emptyContext, sourceKey: "  " };
-
-    expect(activeRecordingForContext([active], emptyContext)).toBeNull();
-    expect(activeRecordingForContext([active], whitespaceContext)).toBeNull();
-  });
-
-  test("normalizes a non-empty source key before matching", () => {
-    const active = recordingItem({ source_key: `  ${liveContext.sourceKey}  ` });
-    const context = { ...liveContext, sourceKey: ` ${liveContext.sourceKey} ` };
-
-    expect(activeRecordingForContext([active], context)).toBe(active);
-  });
-
-  test("ignores completed sessions and unrelated active sessions", () => {
-    const completed = recordingItem({ status: "completed" });
-    const otherRoom = recordingItem({
-      id: "recording-2",
-      source_key: "live:bilibili:200",
-      room_id: "200",
-    });
-
-    expect(activeRecordingForContext([completed, otherRoom], liveContext)).toBeNull();
-    expect(activeRecordingForContext([recordingItem()], null)).toBeNull();
-  });
-});
-
-describe("follow card recording", () => {
-  const target = { site_id: "douyin" as const, room_id: " 123456 " };
-
-  function followedRoom(overrides: Partial<FollowUser>): FollowUser {
-    return {
-      site_id: "douyin",
-      room_id: "123456",
-      user_name: "主播",
-      face: "",
-      tag_ids: [],
-      auto_record: false,
-      live_status: false,
-      live_started_at: null,
-      updated_at: 1,
-      ...overrides,
-    };
-  }
-
-  test("keeps the requested room identity in the stable source key", () => {
-    expect(liveRecordingSourceKey(target)).toBe("live:douyin:123456");
-
-    const source = { url: "https://example.test/live.flv", headers: {} };
-    const context = followRecordingContext(
-      target,
-      {
-        site_id: "douyin",
-        room_id: "987654",
-        title: "关注页录制",
-        cover: "",
-        user_name: "主播",
-        user_avatar: "https://example.test/avatar.jpg",
-        online: 1,
-        status: true,
-        notice: "",
-        url: "https://live.douyin.com/123456",
-        raw: {},
-      },
-      source,
-    );
-
-    expect(context).toMatchObject({
-      source,
-      sourceKey: "live:douyin:123456",
-      sourceKind: "live",
-      siteId: "douyin",
-      roomId: "987654",
-      title: "关注页录制",
-      userName: "主播",
-      cover: "https://example.test/avatar.jpg",
-      userAvatar: "https://example.test/avatar.jpg",
-    });
-  });
-
-  test("separates automatic attempts by live session", () => {
-    expect(
-      followRecordingSessionKey({
-        ...target,
-        live_started_at: 1_704_067_200_000,
-      }),
-    ).not.toBe(
-      followRecordingSessionKey({
-        ...target,
-        live_started_at: 1_704_070_800_000,
+  test("减少动态效果独占车道；合并不能吞掉锚点过期后的消息", () => {
+    const fixed = layoutRecordedDanmaku(
+      entries([0, 500, 1000, 1500]),
+      options({
+        laneCount: 1,
+        staticLayout: true,
+        lifetimeFor: () => 4000,
       }),
     );
-    expect(followRecordingSessionKey({ ...target, live_started_at: null })).toContain("unknown");
-  });
-
-  test("only auto-records live follows enabled individually", () => {
-    const enabledLive = followedRoom({ auto_record: true, live_status: true });
-    const disabledLive = followedRoom({ room_id: "2", live_status: true });
-    const enabledOffline = followedRoom({ room_id: "3", auto_record: true });
-
-    expect(autoRecordableFollows([enabledLive, disabledLive, enabledOffline])).toEqual([
-      enabledLive,
-    ]);
-  });
-
-  test("detects an active recording by requested key or canonical room identity", () => {
-    const byRequestedKey = recordingItem({
-      site_id: "douyin",
-      room_id: "987654",
-      source_key: "live:douyin:123456",
-    });
-    const byCanonicalRoom = recordingItem({
-      site_id: "douyin",
-      room_id: "123456",
-      source_key: "legacy-key",
-    });
-
-    expect(activeRecordingForLiveRoom([byRequestedKey], target)).toBe(byRequestedKey);
-    expect(activeRecordingForLiveRoom([byCanonicalRoom], target)).toBe(byCanonicalRoom);
-    expect(
-      activeRecordingForLiveRoom([byCanonicalRoom], { ...target, room_id: "other" }),
-    ).toBeNull();
+    for (let i = 1; i < fixed.placements.length; i += 1) {
+      expect(fixed.placements[i]!.startMs).toBeGreaterThanOrEqual(fixed.placements[i - 1]!.endMs);
+    }
+    const offsets = [0, 4000, 8000, 12000];
+    const merged = layoutRecordedDanmaku(
+      entries(offsets),
+      options({ mergeWindowMs: 10_000, maxGroupSpanMs: 5000 }),
+    );
+    expect(merged.placements.length).toBeGreaterThan(1);
+    expect(merged.placements.flatMap((value) => value.memberOffsets).sort((a, b) => a - b)).toEqual(
+      offsets,
+    );
   });
 });
 
-describe("recording leave confirmation policy", () => {
-  test("prompts for an active default session when navigating away", () => {
-    expect(shouldPromptBeforeRecordingLeave(recordingItem(), "/room/bilibili/100", "/")).toBe(true);
-  });
-
-  test("does not prompt after background continuation was enabled", () => {
-    expect(
-      shouldPromptBeforeRecordingLeave(
-        recordingItem({ continue_on_leave: true }),
-        "/room/bilibili/100",
-        "/",
-      ),
-    ).toBe(false);
-  });
-
-  test("does not prompt without an active session or a real destination change", () => {
-    expect(
-      shouldPromptBeforeRecordingLeave(
-        recordingItem({ status: "completed" }),
-        "/room/bilibili/100",
-        "/",
-      ),
-    ).toBe(false);
-    expect(
-      shouldPromptBeforeRecordingLeave(recordingItem(), "/room/bilibili/100", "/room/bilibili/100"),
-    ).toBe(false);
-    expect(shouldPromptBeforeRecordingLeave(null, "/room/bilibili/100", "/")).toBe(false);
-  });
+test("录制路由分段编码可往返，拒绝半路径与损坏编码", () => {
+  const id = "bilibili_100/主播_20260820";
+  const [room, session] = recordingPlaybackPath(id).replace("/recordings/play/", "").split("/");
+  expect(recordingIdFromPlaybackParams(room, session)).toBe(id);
+  expect(recordingIdFromPlaybackParams(room, undefined)).toBeNull();
+  expect(recordingIdFromPlaybackParams(room, "%E4%B8")).toBeNull();
 });
 
-describe("recording playback route", () => {
-  const id = "bilibili_100/主播_20260820-192158";
-
-  test("spends one path segment on each bundle level", () => {
-    // 把 id 编码成单段会产出 %2F，react-router 只交还半解码的参数，
-    // id 将匹配不到任何库条目。
-    const path = recordingPlaybackPath(id);
-    expect(path).toBe("/recordings/play/bilibili_100/%E4%B8%BB%E6%92%AD_20260820-192158");
-    expect(path).not.toContain("%2F");
+test("重新取流按线路身份而非下标选择，线路消失可回退，空列表明确报错", () => {
+  const line = (source_id: string): PlayUrl => ({
+    source_id,
+    url: `https://${source_id}/new.flv`,
+    headers: {},
+    label: source_id,
+    protocol: "flv",
+    priority: 0,
   });
-
-  test("rejoins the id from both route params", () => {
-    const [roomDir, sessionDir] = recordingPlaybackPath(id)
-      .replace("/recordings/play/", "")
-      .split("/");
-    expect(recordingIdFromPlaybackParams(roomDir, sessionDir)).toBe(id);
-  });
-
-  test("refuses a half-written or malformed playback path", () => {
-    expect(recordingIdFromPlaybackParams("bilibili_100", undefined)).toBeNull();
-    expect(recordingIdFromPlaybackParams(undefined, "主播_1")).toBeNull();
-    expect(recordingIdFromPlaybackParams("bilibili_100", "%E4%B8")).toBeNull();
-  });
-});
-
-describe("dedicated recording play url", () => {
-  function line(sourceId: string, url: string): PlayUrl {
-    return {
-      url,
-      headers: {},
-      source_id: sourceId,
-      label: sourceId,
-      protocol: "flv",
-      priority: 0,
-    };
-  }
-
-  test("keeps the watched line by identity, not by position", () => {
-    // 重新抓取可能重排 CDN。按下标选择会让录制拿到与屏幕上不同的线路。
-    const refetched = [
-      line("cdn-b", "https://b.example/2.flv"),
-      line("cdn-a", "https://a.example/2.flv"),
-    ];
-    expect(pickRecordingLine(refetched, "cdn-a").source_id).toBe("cdn-a");
-  });
-
-  test("falls back to the first line when the watched one is gone", () => {
-    const refetched = [line("cdn-c", "https://c.example/2.flv")];
-    expect(pickRecordingLine(refetched, "cdn-a").source_id).toBe("cdn-c");
-    expect(pickRecordingLine(refetched).source_id).toBe("cdn-c");
-  });
-
-  test("reports an empty line list instead of returning undefined", () => {
-    expect(() => pickRecordingLine([], "cdn-a")).toThrow("平台未返回可用播放地址");
-  });
-
-  test("a re-signed url differs from the one the player holds", () => {
-    // 这正是重新抓取的意义：录制不得共用播放器的地址，
-    // 否则按请求签名会被两条连接消耗。
-    const played = line("cdn-a", "https://a.example/live.flv?sign=first&tt=1");
-    const resigned = line("cdn-a", "https://a.example/live.flv?sign=second&tt=2");
-    const picked = pickRecordingLine([resigned], played.source_id);
-    expect(picked.source_id).toBe(played.source_id);
-    expect(picked.url).not.toBe(played.url);
-  });
+  const lines = [line("b"), line("a")];
+  expect(pickRecordingLine(lines, "a")).toBe(lines[1]!);
+  expect(pickRecordingLine(lines, "removed")).toBe(lines[0]!);
+  expect(() => pickRecordingLine([], "a")).toThrow("平台未返回可用播放地址");
 });

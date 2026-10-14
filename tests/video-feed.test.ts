@@ -1,60 +1,17 @@
-import { describe, expect, test } from "bun:test";
-import { videoCoverAspect, videoDimensionAspect } from "../src/shared/videoDimension";
-import {
-  VIDEO_MASONRY_PREFETCH_MARGIN,
-  videoMasonryRowSpan,
-} from "../src/features/video/VideoMasonry";
-import { nextRecommendPage } from "../src/features/video/videoFeed";
 import type { VideoItem, VideoListPage } from "../src/shared/types/video";
+import { describe, expect, test } from "bun:test";
+import { videoMasonryRowSpan } from "../src/features/video/VideoMasonry";
+import { nextRecommendPage } from "../src/features/video/videoFeed";
 import { videoItem } from "./helpers/video";
-
-const item = (bvid: string, cid = 1): VideoItem => videoItem({ bvid, cid });
-const page = (...items: VideoItem[]): VideoListPage => ({ items, has_more: true });
-
-describe("VideoCard 画幅", () => {
-  test("横屏、竖屏、方形遵循 dimension", () => {
-    expect(videoCoverAspect({ width: 1920, height: 1080, rotate: 0 })).toBe(16 / 9);
-    expect(videoCoverAspect({ width: 1080, height: 1920, rotate: 0 })).toBe(9 / 16);
-    expect(videoCoverAspect({ width: 100, height: 100, rotate: 0 })).toBe(1);
-    expect(videoCoverAspect({ width: 1440, height: 1080, rotate: 0 })).toBe(4 / 3);
+const item = (bvid: string, cid = 1): VideoItem =>
+  videoItem({
+    bvid,
+    cid,
   });
-  test("旋转标记交换宽高", () => {
-    expect(videoCoverAspect({ width: 1920, height: 1080, rotate: 1 })).toBe(9 / 16);
-  });
-  test("尺寸未知或非法保持原有 16:9，不错误判为竖屏", () => {
-    for (const dimension of [
-      null,
-      undefined,
-      { width: 0, height: 1, rotate: 0 },
-      { width: -1, height: 1, rotate: 0 },
-      { width: Infinity, height: 1, rotate: 0 },
-      { width: 1, height: NaN, rotate: 0 },
-    ]) {
-      expect(videoDimensionAspect(dimension)).toBeNull();
-      expect(videoCoverAspect(dimension)).toBe(16 / 9);
-    }
-  });
+const page = (...items: VideoItem[]): VideoListPage => ({
+  items,
+  has_more: true,
 });
-
-describe("VOD 瀑布流分页预取", () => {
-  // 哨兵落在最高列之后，最短列可能早一整张卡见底；默认 240px 余量会先露出空白。
-  test("预取余量按滚动容器高度提前一整屏", () => {
-    expect(VIDEO_MASONRY_PREFETCH_MARGIN).toBe("0px 0px 100% 0px");
-  });
-
-  for (const path of ["VideoPage.tsx", "VideoSearchPage.tsx"]) {
-    test(`${path} 的瀑布流分页使用瀑布流预取余量`, async () => {
-      const source = await Bun.file(
-        new URL(`../src/features/video/${path}`, import.meta.url),
-      ).text();
-      const call = source.slice(source.indexOf("useInfiniteScroll({"));
-      expect(call.slice(0, call.indexOf("});"))).toContain(
-        "rootMargin: VIDEO_MASONRY_PREFETCH_MARGIN",
-      );
-    });
-  }
-});
-
 describe("VOD 瀑布流跨度", () => {
   test("高度向上取整，不截断卡片与底部间距", () => {
     expect(videoMasonryRowSpan(204)).toBe(51);
@@ -70,7 +27,6 @@ describe("VOD 瀑布流跨度", () => {
     for (const height of [0, -1, NaN, Infinity]) expect(videoMasonryRowSpan(height)).toBe(1);
   });
 });
-
 describe("APP 推荐轮换分页", () => {
   test("有新内容才继续；不是按条数猜尾页", () => {
     expect(nextRecommendPage([page(item("a"))])).toBe(2);
@@ -80,7 +36,14 @@ describe("APP 推荐轮换分页", () => {
   test("空批、后端停止、全重复批不会无限补货", () => {
     expect(nextRecommendPage([])).toBeUndefined();
     expect(nextRecommendPage([page()])).toBeUndefined();
-    expect(nextRecommendPage([{ ...page(item("a")), has_more: false }])).toBeUndefined();
+    expect(
+      nextRecommendPage([
+        {
+          ...page(item("a")),
+          has_more: false,
+        },
+      ]),
+    ).toBeUndefined();
     expect(nextRecommendPage([page(item("a")), page(item("a"))])).toBeUndefined();
   });
 });

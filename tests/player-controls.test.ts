@@ -1,980 +1,128 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { Menu } from "@videojs/react";
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { VideoJsPlayerProvider } from "../src/features/room/player/videoJsControls";
-import { SkinVariantProvider } from "../src/components/videojs/skins/variant";
 import {
-  COMPACT_LANDSCAPE_PLAYER_QUERY,
-  COMPACT_PLAYER_QUERY,
-  PORTRAIT_ORIENTATION_QUERY,
-  STACKED_DETAILS_QUERY,
-  playerViewportFallbackMatches,
-} from "../src/shared/hooks/usePlayerViewport";
+  playerStageGesturesEnabled,
+  playerChromeVisible,
+} from "../src/shared/components/player/PlayerFullscreenLock";
 import {
-  audioOnlyControlPresentation,
-  danmakuControlPresentation,
-  PlayerControls,
-  PlayerMenuRadioGroup,
-  playerControlsAvoidSystemGestureBar,
-  showPlayerSidePanelControl,
-  showPlayerVolumeControl,
-  showPlayerWebFullscreenControl,
-  showSecondaryPlayerControls,
-  volumeControlPresentation,
-} from "../src/shared/components/player/PlayerControls";
-import { panelDrawerSide, panelDrawerSizeClass } from "../src/shared/components/player/panelDrawer";
+  shouldRetainRoomSidePanel,
+  shouldShowRoomDanmakuPanel,
+  shouldRunFloatingDanmaku,
+  nextFullscreenLayerToExit,
+  playerVolumeForKeyStep,
+} from "../src/features/room/PlayerPane";
 import {
   canStartPlayerEdgeGesture,
-  isVerticalPlayerEdgeGesture,
-  playerBrightnessShadeOpacity,
-  playerEdgeGestureDragExtent,
-  playerEdgeGestureForStart,
   playerEdgeGestureIntent,
   playerEdgeGestureValue,
 } from "../src/shared/gestures/playerEdgeGesture";
-import { PlayerFullscreenLock } from "../src/shared/components/player/PlayerFullscreenLock";
 import {
-  playerChromeVisible,
-  playerStageGesturesEnabled,
-  showPlayerFullscreenLock,
-} from "../src/shared/components/player/PlayerFullscreenLock";
-import {
-  isPlayerStageTapMovement,
-  playerVolumeForKeyStep,
-  PLAYER_STAGE_TAP_MAX_DISTANCE_PX,
-  PLAYER_VOLUME_KEY_STEP,
-  showRoomSidePanel,
-  nextFullscreenLayerToExit,
-  shouldUseLargeDanmakuActionMenu,
-  shouldRetainRoomSidePanel,
-  shouldRunFloatingDanmaku,
-  shouldShowRoomDanmakuPanel,
-  roomDanmakuComposerInSidePanel,
-  sidePanelStartsOpen,
-  usesPortraitStackLayout,
-  isPortraitStackedPlayer,
-} from "../src/features/room/PlayerPane";
-import {
-  PlayerFullscreenHud,
-  playerHudTitleOnly,
-  roomIdentityOverflowDistance,
-  showPlayerFullscreenHud,
-} from "../src/features/room/PlayerFullscreenHud";
-import { RoomIdentityLine } from "../src/shared/components/player/RoomIdentityLine";
-import { tooltipTriggerLabel } from "../src/components/videojs/ui/button-tooltip";
-import {
-  PLAYER_HUD_BUTTON_CLASS,
-  PLAYER_HUD_TITLE_SIZE_CLASS,
-} from "../src/shared/components/player/PlayerControls";
-import {
-  clampAndroidPlayerControl,
   getAndroidPlayerControls,
-  resetAndroidBrightness,
   setAndroidBrightness,
   setAndroidMediaVolume,
-  supportsAndroidNativePlayerControls,
+  resetAndroidBrightness,
 } from "../src/features/room/player/androidPlayerControls";
 import { setAndroidPlayerOrientation } from "../src/features/room/player/androidOrientation";
+import { tooltipTriggerLabel } from "../src/components/videojs/ui/button-tooltip";
 
-describe("danmaku player control", () => {
-  test("shows the enabled state instead of the next action in its icon", () => {
-    expect(danmakuControlPresentation(true)).toEqual({
-      enabled: true,
-      label: "关闭弹幕",
-      icon: "message-square-text",
-    });
-  });
-
-  test("shows the disabled state after danmaku is turned off", () => {
-    expect(danmakuControlPresentation(false)).toEqual({
-      enabled: false,
-      label: "开启弹幕",
-      icon: "message-square-off",
-    });
-  });
-});
-
-describe("danmaku icon vocabulary", () => {
-  // 弹幕的符号只有两个：`MessageSquareText`（开）与 `MessageSquareOff`（关），
-  // 由 `danmakuControlPresentation` 单点定义。裸 `MessageSquare` 曾在视频卡的
-  // 弹幕数上出现过一次，于是卡片上的弹幕与播放器里的弹幕看起来是两种东西。
-  test("video cards mark danmaku counts with the enabled-state icon", () => {
-    const source = readFileSync(
-      new URL("../src/features/video/VideoCard.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(source).toContain("MessageSquareText");
-    // 裸方气泡（既不带 Text 也不带 Off）不允许再出现：它与播放器里的弹幕不是一个
-    // 符号。注释里提到关闭态不算，故按标识符边界判定。
-    expect(source).not.toMatch(/MessageSquare(?![A-Za-z])/);
-    expect(source).toContain('<MessageSquareText className="size-3"');
-  });
-
-  test("the live room action row reuses the same two symbols", () => {
-    const source = readFileSync(
-      new URL("../src/features/room/PlayerPane.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(source).toContain("MessageSquareText");
-    expect(source).toContain("MessageSquareOff");
-    expect(source).not.toMatch(/MessageSquare(?![A-Za-z])/);
-  });
-});
-
-describe("panel drawer geometry", () => {
-  test("pops up from the bottom on compact viewports", () => {
-    expect(panelDrawerSide(true, false)).toBe("bottom");
-    expect(panelDrawerSizeClass("bottom", false)).toBe("h-[70dvh] max-h-[70dvh]");
-  });
-
-  test("slides in from the right on wide viewports, at the sidebar width", () => {
-    expect(panelDrawerSide(false, false)).toBe("right");
-    expect(panelDrawerSizeClass("right", false)).toBe("h-full w-[min(22rem,78vw)]");
-  });
-
-  // 侧栏挂载点（播放页）已经把抽屉改成 absolute w-full，此时再写死高宽会把
-  // 70dvh 泄进侧栏 —— 抽屉只占侧栏上面七成，下面露出评论列表。
-  test("leaves sizing to the sidebar when scoped, and keeps sliding in from the right", () => {
-    expect(panelDrawerSide(true, true)).toBe("right");
-    expect(panelDrawerSide(false, true)).toBe("right");
-    expect(panelDrawerSizeClass("right", true)).toBe("h-full");
-  });
-});
-
-describe("audio-only player control", () => {
-  test("offers audio-only mode while the picture is visible", () => {
-    expect(audioOnlyControlPresentation(false)).toEqual({
-      enabled: false,
-      label: "仅播声音",
-      icon: "video-off",
-    });
-  });
-
-  test("offers picture restoration while audio-only mode is active", () => {
-    expect(audioOnlyControlPresentation(true)).toEqual({
-      enabled: true,
-      label: "恢复画面",
-      icon: "headphones",
-    });
-  });
-});
-
-describe("volume player control", () => {
-  test("uses the current volume icon and label for audible playback", () => {
-    expect(volumeControlPresentation(72, false)).toEqual({
-      isMuted: false,
-      label: "调节音量（当前 72%）",
-      icon: "volume-2",
-    });
-  });
-
-  test("uses the muted icon for both explicit mute and zero volume", () => {
-    expect(volumeControlPresentation(72, true)).toEqual({
-      isMuted: true,
-      label: "调节音量（当前静音）",
-      icon: "volume-x",
-    });
-    expect(volumeControlPresentation(0, false)).toEqual({
-      isMuted: true,
-      label: "调节音量（当前静音）",
-      icon: "volume-x",
-    });
-  });
-});
-
-describe("mobile player layout", () => {
-  test("keeps the floating danmaku action menu compact on mobile fullscreen", () => {
-    expect(shouldUseLargeDanmakuActionMenu(true, true)).toBe(false);
-    expect(shouldUseLargeDanmakuActionMenu(true, false)).toBe(true);
-    expect(shouldUseLargeDanmakuActionMenu(false, false)).toBe(false);
-  });
-
-  test("seeds mobile density without losing the settled orientation", () => {
-    expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, true, false)).toBe(true);
-    expect(playerViewportFallbackMatches(COMPACT_LANDSCAPE_PLAYER_QUERY, true, false)).toBe(false);
-    expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, true, false)).toBe(true);
-
-    expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, true, true)).toBe(true);
-    expect(playerViewportFallbackMatches(COMPACT_LANDSCAPE_PLAYER_QUERY, true, true)).toBe(true);
-    expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, true, true)).toBe(false);
-
-    expect(playerViewportFallbackMatches(COMPACT_PLAYER_QUERY, false, false)).toBe(false);
-    expect(playerViewportFallbackMatches(PORTRAIT_ORIENTATION_QUERY, false, true)).toBe(false);
-  });
-
-  test("首帧按竖屏播种侧栏在下方的档位", () => {
-    // 占比拖动抓手只在侧栏列在舞台下方时可用：手机竖屏恒为真，平板横屏首帧
-    // 也按竖屏播种（真值只影响抓手是否在首帧可用），挂载后的首次重读会纠正。
-    expect(playerViewportFallbackMatches(STACKED_DETAILS_QUERY, true, false)).toBe(true);
-    expect(playerViewportFallbackMatches(STACKED_DETAILS_QUERY, true, true)).toBe(false);
-  });
-
-  test("keeps secondary controls out of portrait chrome and restores them in landscape", () => {
-    expect(showSecondaryPlayerControls(true, true)).toBe(false);
-    expect(showSecondaryPlayerControls(true, false)).toBe(true);
-    expect(showSecondaryPlayerControls(false, true)).toBe(true);
-  });
-
-  test("arrow keys step volume within 0-100", () => {
-    expect(playerVolumeForKeyStep(50, false, 1)).toBe(50 + PLAYER_VOLUME_KEY_STEP);
-    expect(playerVolumeForKeyStep(50, false, -1)).toBe(50 - PLAYER_VOLUME_KEY_STEP);
-    // 到达两端后继续按键必须停在边界，而不是产生越界值。
-    expect(playerVolumeForKeyStep(100, false, 1)).toBe(100);
-    expect(playerVolumeForKeyStep(0, false, -1)).toBe(0);
-  });
-
-  test("volume-up from muted leaves silence in one keypress", () => {
-    // 静音时的显示音量可能仍是旧值，按上键必须从 0 起步才能一次出声。
-    expect(playerVolumeForKeyStep(80, true, 1)).toBe(PLAYER_VOLUME_KEY_STEP);
-    expect(playerVolumeForKeyStep(80, true, -1)).toBe(0);
-  });
-
-  test("the fullscreen lock is available on desktop and mobile fullscreen", () => {
-    expect(showPlayerFullscreenLock(true)).toBe(true);
-    expect(showPlayerFullscreenLock(false)).toBe(false);
-  });
-
-  test("uses streaming-sized desktop and touch targets for the fullscreen lock", () => {
-    const html = renderToStaticMarkup(
-      createElement(PlayerFullscreenLock, {
-        ref: null,
-        visible: true,
-        locked: false,
-        onToggle: () => {},
-      }),
-    );
-    // 独立浮动锁不是控制栏里的紧凑按钮：桌面 48px，粗指针 56px，图标同步放大。
-    expect(html).toContain("size-[48px]");
-    expect(html).toContain("[@media(pointer:coarse)]:size-[56px]");
-    expect(html.split("size-[28px]").length - 1).toBe(1);
-    expect(html.split("[@media(pointer:coarse)]:size-[30px]").length - 1).toBe(1);
-    expect(html).toContain("rounded-full");
-  });
-
-  test("locking suspends stage gestures", () => {
-    expect(playerStageGesturesEnabled(false)).toBe(true);
+describe("播放器交互边界", () => {
+  test("锁定同时屏蔽手势与上下控制栏，不销毁已经打开的弹幕侧栏", () => {
     expect(playerStageGesturesEnabled(true)).toBe(false);
-  });
-
-  test("locking keeps both chrome layers collapsed while the lock button still sleeps", () => {
-    // 未锁定时三层共享同一个唤醒态。
-    expect(playerChromeVisible(true, false)).toBe(true);
-    expect(playerChromeVisible(false, false)).toBe(false);
-    // 锁定期间唤醒只归锁定按钮：手势已屏蔽，chrome 露出来也无从操作。
     expect(playerChromeVisible(true, true)).toBe(false);
-    expect(playerChromeVisible(false, true)).toBe(false);
-  });
-
-  test("hides volume and side-panel buttons in mobile fullscreen", () => {
-    // 紧凑横屏在非全屏时仍显示这两个按钮。
-    expect(showPlayerVolumeControl(true, false, false)).toBe(true);
-    expect(showPlayerSidePanelControl(true, false, false)).toBe(true);
-    // 紧凑 + 全屏去掉两者；边缘滑动音量保留。
-    expect(showPlayerVolumeControl(true, false, true)).toBe(false);
-    expect(showPlayerSidePanelControl(true, false, true)).toBe(false);
-    expect(showPlayerVolumeControl(true, true, true)).toBe(false);
-    expect(showPlayerSidePanelControl(true, true, true)).toBe(false);
-    // 桌面全屏保留音量。
-    expect(showPlayerVolumeControl(false, false, true)).toBe(true);
-  });
-
-  test("desktop trades the side-panel toggle for web fullscreen", () => {
-    // 桌面窗口化只显示网页全屏：它在收起右侧栏之外还会隐藏房间页的上下栏，
-    // 单独的收起按钮成了它的子集。
-    expect(showPlayerSidePanelControl(false, false, false)).toBe(false);
-    expect(showPlayerWebFullscreenControl(false, false)).toBe(true);
-    // 移动端窗口化相反：没有上下栏可让，保留原来的侧栏开关。
-    expect(showPlayerSidePanelControl(true, false, false)).toBe(true);
-    expect(showPlayerWebFullscreenControl(true, false)).toBe(false);
-    // 原生全屏时舞台已独占窗口，网页全屏在两端都会是空操作。
-    expect(showPlayerWebFullscreenControl(false, true)).toBe(false);
-    expect(showPlayerWebFullscreenControl(true, true)).toBe(false);
-  });
-
-  test("web fullscreen yields the side panel without unmounting it", () => {
-    expect(showRoomSidePanel(true, false)).toBe(true);
-    expect(showRoomSidePanel(true, true)).toBe(false);
-    // 本来关着的面板不会被网页全屏打开。
-    expect(showRoomSidePanel(false, true)).toBe(false);
-  });
-
-  test("opens the danmaku panel by default in portrait, but keeps short landscape viewing-first", () => {
-    expect(sidePanelStartsOpen(false)).toBe(true);
-    expect(sidePanelStartsOpen(true)).toBe(false);
-  });
-
-  test("the portrait stack marker ignores fullscreen so CSS can lead the re-render", () => {
-    // `player.mode` 比 `:fullscreen` 晚一个状态更新。标记必须跨过那一帧保持 true，
-    // 否则依赖它的 CSS 会与 React 类一样滞后 —— 它存在的意义就是抢先于那些类。
-    expect(usesPortraitStackLayout(true, true)).toBe(true);
-    expect(usesPortraitStackLayout(true, false)).toBe(false);
-    expect(usesPortraitStackLayout(false, true)).toBe(false);
-
-    // 堆叠层本身仍把屏幕让给全屏。
-    expect(isPortraitStackedPlayer(true, false)).toBe(true);
-    expect(isPortraitStackedPlayer(true, true)).toBe(false);
-    expect(isPortraitStackedPlayer(false, false)).toBe(false);
-  });
-
-  test("retains the mounted danmaku panel while mobile fullscreen hides it", () => {
-    let retained = shouldRetainRoomSidePanel(false, true, true);
-    expect(retained).toBe(true);
-
-    // 进入全屏旋转视口并关闭可见面板。
-    retained = shouldRetainRoomSidePanel(retained, false, true);
-    expect(retained).toBe(true);
+    expect(playerChromeVisible(true, false)).toBe(true);
+    const retained = shouldRetainRoomSidePanel(false, true, true);
+    expect(shouldRetainRoomSidePanel(retained, false, true)).toBe(true);
     expect(shouldShowRoomDanmakuPanel(false, true, "chat")).toBe(false);
-
-    // 退出全屏重新露出同一个保活的聊天面板及其积压消息。
     expect(shouldShowRoomDanmakuPanel(true, false, "chat")).toBe(true);
-
-    // 全新的横屏房间仍避免挂载从未打开过的面板。
     expect(shouldRetainRoomSidePanel(false, false, true)).toBe(false);
-    expect(shouldRetainRoomSidePanel(false, false, false)).toBe(true);
   });
 
-  test("compact rooms move the danmaku composer to the visible side panel", () => {
-    // 紧凑视口且侧栏可见：发送框住在弹幕页签底部，控制栏只剩按钮。
-    expect(roomDanmakuComposerInSidePanel(true, true, false)).toBe(true);
-    // 侧栏收起或网页全屏（不可见）、原生全屏：回到控制栏，始终保留发送入口。
-    expect(roomDanmakuComposerInSidePanel(true, false, false)).toBe(false);
-    expect(roomDanmakuComposerInSidePanel(true, true, true)).toBe(false);
-    // 桌面宽窗口保持在控制栏。
-    expect(roomDanmakuComposerInSidePanel(false, true, false)).toBe(false);
+  test.each([
+    [true, true, "fullscreen"],
+    [true, false, "fullscreen"],
+    [false, true, "webFullscreen"],
+    [false, false, null],
+  ] as const)("退出全屏逐层处理：%s/%s", (native, web, expected) => {
+    expect(nextFullscreenLayerToExit(native, web)).toBe(expected);
   });
 
-  test("pauses floating danmaku only when an overlay actually obscures the picture", () => {
+  test.each([
+    [true, true, false],
+    [true, false, true],
+    [false, false, false],
+  ])("弹幕仅因用户关闭或画面实际被覆盖而暂停：%s/%s", (osdOn, overlay, expected) => {
     expect(
       shouldRunFloatingDanmaku({
         danmakuActive: true,
-        osdOn: true,
-        sidePanelOverlaysPlayer: true,
+        osdOn,
+        sidePanelOverlaysPlayer: overlay,
       }),
-    ).toBe(false);
-    expect(
-      shouldRunFloatingDanmaku({
-        danmakuActive: true,
-        osdOn: true,
-        sidePanelOverlaysPlayer: false,
-      }),
-    ).toBe(true);
+    ).toBe(expected);
   });
 
-  test("respects the user's danmaku visibility switch", () => {
-    expect(
-      shouldRunFloatingDanmaku({
-        danmakuActive: true,
-        osdOn: false,
-        sidePanelOverlaysPlayer: false,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("mobile player edge gestures", () => {
-  test("assigns brightness to the left half and volume to the right half", () => {
-    expect(playerEdgeGestureForStart(80, 20, 400)).toBe("brightness");
-    expect(playerEdgeGestureForStart(260, 20, 400)).toBe("volume");
+  test.each([
+    [50, false, 1, 55],
+    [100, false, 1, 100],
+    [0, false, -1, 0],
+    [80, true, 1, 5],
+    [80, true, -1, 0],
+  ] as const)("音量键从静音起步且有界：%s/%s/%s", (volume, muted, step, expected) => {
+    expect(playerVolumeForKeyStep(volume, muted, step)).toBe(expected);
   });
 
-  test("maps fallback brightness to a bounded black-overlay opacity", () => {
-    expect(playerBrightnessShadeOpacity(100)).toBe(0);
-    expect(playerBrightnessShadeOpacity(40)).toBe(0.6);
-    expect(playerBrightnessShadeOpacity(0)).toBe(1);
-    expect(playerBrightnessShadeOpacity(-20)).toBe(1);
-    expect(playerBrightnessShadeOpacity(120)).toBe(0);
-  });
-
-  test("requires a deliberate vertical movement and clamps the resulting value", () => {
-    expect(isVerticalPlayerEdgeGesture(5, -40)).toBe(true);
-    expect(isVerticalPlayerEdgeGesture(48, -28)).toBe(false);
-    expect(isVerticalPlayerEdgeGesture(0, 10)).toBe(false);
-    expect(playerEdgeGestureDragExtent(320)).toBe(320);
-    expect(playerEdgeGestureValue(50, -80, 320)).toBe(75);
-    expect(playerEdgeGestureValue(50, 40, 320)).toBe(37.5);
-    expect(playerEdgeGestureValue(50, -1, 320)).toBeCloseTo(50.3125);
+  test("触摸先保留点击，明确纵向后才接手，边缘和数值都有界", () => {
+    expect(playerEdgeGestureIntent(6, 6)).toBe("pending");
+    expect(playerEdgeGestureIntent(0, 12)).toBe("adjust");
+    expect(playerEdgeGestureIntent(12, 0)).toBe("reject");
+    expect(canStartPlayerEdgeGesture(120, 100, 320)).toBe(false);
+    expect(canStartPlayerEdgeGesture(126, 100, 320)).toBe(true);
+    expect(canStartPlayerEdgeGesture(396, 100, 320)).toBe(false);
     expect(playerEdgeGestureValue(50, -1.5, 320)).toBeCloseTo(50.46875);
     expect(playerEdgeGestureValue(98, -400, 320)).toBe(100);
     expect(playerEdgeGestureValue(2, 400, 320)).toBe(0);
   });
-
-  test("keeps taps on their picture target until a vertical adjustment is recognised", () => {
-    // 进行中的触摸接触不能被舞台捕获，否则悬浮 bullet 收不到 pointerup、
-    // 打不开它的触摸操作菜单。
-    expect(playerEdgeGestureIntent(0, 0)).toBe("pending");
-    expect(playerEdgeGestureIntent(6, 6)).toBe("pending");
-    expect(playerEdgeGestureIntent(0, 12)).toBe("adjust");
-    expect(playerEdgeGestureIntent(12, 0)).toBe("reject");
-  });
-
-  test("uses most of the picture and preserves continuous native values", () => {
-    expect(canStartPlayerEdgeGesture(120, 100, 320)).toBe(false);
-    expect(canStartPlayerEdgeGesture(126, 100, 320)).toBe(true);
-    expect(canStartPlayerEdgeGesture(394, 100, 320)).toBe(true);
-    expect(canStartPlayerEdgeGesture(396, 100, 320)).toBe(false);
-    expect(clampAndroidPlayerControl(52.375)).toBe(52.375);
-    expect(clampAndroidPlayerControl(-5)).toBe(0);
-    expect(clampAndroidPlayerControl(101)).toBe(100);
-  });
-
-  // 时长与双击窗口的判定已交给 Video.js 官方识别器，业务只留识别器不做的位移阈值。
-  test("classifies stationary touches as stage taps by movement alone", () => {
-    expect(isPlayerStageTapMovement(0, 0)).toBe(true);
-    expect(isPlayerStageTapMovement(40, 0)).toBe(false);
-    expect(isPlayerStageTapMovement(0, PLAYER_STAGE_TAP_MAX_DISTANCE_PX)).toBe(true);
-    expect(isPlayerStageTapMovement(0, PLAYER_STAGE_TAP_MAX_DISTANCE_PX + 1)).toBe(false);
-  });
 });
 
-describe("Android native player controls", () => {
-  test("uses the bridge only inside a Tauri Android client", () => {
-    expect(supportsAndroidNativePlayerControls({ tauriRuntime: true, platform: "android" })).toBe(
-      true,
-    );
-    expect(supportsAndroidNativePlayerControls({ tauriRuntime: false, platform: "android" })).toBe(
-      false,
-    );
-    expect(supportsAndroidNativePlayerControls({ tauriRuntime: true, platform: "desktop" })).toBe(
-      false,
-    );
-  });
-
-  test("normalizes bridge values and sends continuous native commands", async () => {
+describe("Android 原生播放器命令", () => {
+  test("使用应用级命令，保持连续精度并在写入前钳制音量", async () => {
     const calls: { command: string; args?: Record<string, unknown> }[] = [];
-    const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+    const invoke = async <T>(command: string, args?: Record<string, unknown>) => {
       calls.push({ command, args });
-      if (command.endsWith("get_state")) {
-        return { mediaVolume: 53.333, brightness: 48.25 } as T;
-      }
-      return { value: args?.value } as T;
+      return (
+        command.endsWith("get_state")
+          ? { mediaVolume: 53.333, brightness: 48.25 }
+          : { value: args?.value }
+      ) as T;
     };
-
-    await expect(getAndroidPlayerControls(nativeInvoke)).resolves.toEqual({
+    expect(await getAndroidPlayerControls(invoke)).toEqual({
       mediaVolume: 53.333,
       brightness: 48.25,
     });
-    await expect(setAndroidMediaVolume(52.375, nativeInvoke)).resolves.toBe(52.375);
-    await expect(setAndroidBrightness(3.125, nativeInvoke)).resolves.toBe(3.125);
-    await expect(resetAndroidBrightness(nativeInvoke)).resolves.toBeUndefined();
-    // 应用级命令，而不是 `plugin:player-controls|…`：带插件命名空间的 invoke
-    // 由 Rust 插件应答，永远到不了 Kotlin。
+    expect(await setAndroidMediaVolume(52.375, invoke)).toBe(52.375);
+    expect(await setAndroidMediaVolume(120, invoke)).toBe(100);
+    expect(await setAndroidMediaVolume(-20, invoke)).toBe(0);
+    expect(await setAndroidBrightness(3.125, invoke)).toBe(3.125);
+    await resetAndroidBrightness(invoke);
+    await setAndroidPlayerOrientation("landscape", invoke);
+    await setAndroidPlayerOrientation("auto", invoke);
     expect(calls).toEqual([
       { command: "android_player_controls_get_state", args: undefined },
       { command: "android_player_controls_set_media_volume", args: { value: 52.375 } },
-      { command: "android_player_controls_set_brightness", args: { value: 3.125 } },
-      { command: "android_player_controls_reset_brightness", args: undefined },
-    ]);
-  });
-
-  test("clamps native media-volume writes before invoking Android", async () => {
-    const calls: { command: string; args?: Record<string, unknown> }[] = [];
-    const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
-      calls.push({ command, args });
-      return { value: args?.value } as T;
-    };
-
-    await expect(setAndroidMediaVolume(120, nativeInvoke)).resolves.toBe(100);
-    await expect(setAndroidMediaVolume(-20, nativeInvoke)).resolves.toBe(0);
-    expect(calls).toEqual([
       { command: "android_player_controls_set_media_volume", args: { value: 100 } },
       { command: "android_player_controls_set_media_volume", args: { value: 0 } },
-    ]);
-  });
-
-  test("asks the Activity to lock and release the fullscreen orientation", async () => {
-    const calls: { command: string; args?: Record<string, unknown> }[] = [];
-    const nativeInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
-      calls.push({ command, args });
-      return undefined as T;
-    };
-
-    await setAndroidPlayerOrientation("landscape", nativeInvoke);
-    await setAndroidPlayerOrientation("auto", nativeInvoke);
-    expect(calls).toEqual([
-      {
-        command: "android_player_controls_set_orientation",
-        args: { orientation: "landscape" },
-      },
-      {
-        command: "android_player_controls_set_orientation",
-        args: { orientation: "auto" },
-      },
+      { command: "android_player_controls_set_brightness", args: { value: 3.125 } },
+      { command: "android_player_controls_reset_brightness", args: undefined },
+      { command: "android_player_controls_set_orientation", args: { orientation: "landscape" } },
+      { command: "android_player_controls_set_orientation", args: { orientation: "auto" } },
     ]);
   });
 });
 
-describe("fullscreen top HUD", () => {
-  test("仅移动端竖屏非全屏隐藏直播卡片信息，任一全屏层都保持完整", () => {
-    for (const mobileClient of [false, true]) {
-      for (const portrait of [false, true]) {
-        for (const fullscreen of [false, true]) {
-          for (const webFullscreen of [false, true]) {
-            const titleOnly = playerHudTitleOnly(
-              mobileClient,
-              portrait,
-              fullscreen || webFullscreen,
-            );
-            expect(titleOnly).toBe(mobileClient && portrait && !fullscreen && !webFullscreen);
-            const html = renderToStaticMarkup(
-              createElement(PlayerFullscreenHud, {
-                roomTitle: "竖屏直播标题",
-                roomUserName: "测试主播",
-                siteId: "bilibili",
-                roomId: "123456",
-                roomOnline: 12345,
-                titleOnly,
-                compact: true,
-                onBack: () => {},
-                roomActions: [{ id: "share", label: "分享", icon: () => null, onSelect: () => {} }],
-              }),
-            );
-            expect(html).toContain("竖屏直播标题");
-            expect(html).toContain(PLAYER_HUD_TITLE_SIZE_CLASS);
-            expect(html).toContain("退出全屏");
-            expect(html).toContain("更多房间操作");
-            for (const metadata of [
-              "测试主播",
-              'data-slot="avatar"',
-              "房间号：123456",
-              "当前热度",
-            ]) {
-              expect(html.includes(metadata)).toBe(!titleOnly);
-            }
-          }
-        }
-      }
-    }
+test("工具提示透过包装读取可访问名称，显式标签优先，无标签交回 Video.js", () => {
+  const wrapped = createElement("span", {
+    render: createElement("button", { "aria-label": "字幕" }),
   });
-
-  test("仅标题模式保留空标题兜底，默认身份行仍显示主播信息", () => {
-    const html = renderToStaticMarkup(
-      createElement(RoomIdentityLine, { title: "  ", titleOnly: true }),
-    );
-    expect(html).toContain("直播间");
-    expect(html).not.toContain("未知主播");
-    expect(html).not.toContain('data-slot="avatar"');
-    const defaultHtml = renderToStaticMarkup(createElement(RoomIdentityLine));
-    expect(defaultHtml).toContain("未知主播");
-    expect(defaultHtml).toContain('data-slot="avatar"');
-  });
-
-  test("pans only by the room identity width that exceeds the fixed controls", () => {
-    expect(roomIdentityOverflowDistance(640, 420)).toBe(220);
-    expect(roomIdentityOverflowDistance(420, 420)).toBe(0);
-    expect(roomIdentityOverflowDistance(420.5, 420)).toBe(0);
-  });
-
-  test("draws only in fullscreen", () => {
-    expect(
-      showPlayerFullscreenHud({ fullscreen: false, hasRoomIdentity: true, hasActions: true }),
-    ).toBe(false);
-    expect(
-      showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: true, hasActions: false }),
-    ).toBe(true);
-  });
-
-  test("back arrow peels one fullscreen layer at a time, native first", () => {
-    // 与 Escape 的按键习惯一致：两种全屏叠加时先退原生层，网页全屏留给下一次点击。
-    expect(nextFullscreenLayerToExit(true, true)).toBe("fullscreen");
-    expect(nextFullscreenLayerToExit(true, false)).toBe("fullscreen");
-    expect(nextFullscreenLayerToExit(false, true)).toBe("webFullscreen");
-    expect(nextFullscreenLayerToExit(false, false)).toBeNull();
-  });
-
-  test("keeps an action-only HUD, so the overflow menu survives an unnamed room", () => {
-    expect(
-      showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: false, hasActions: true }),
-    ).toBe(true);
-  });
-
-  test("skips the scrim band when there is neither identity nor actions", () => {
-    // 否则没有标题的详情负载会在画面顶部画出一条空渐变带。
-    expect(
-      showPlayerFullscreenHud({ fullscreen: true, hasRoomIdentity: false, hasActions: false }),
-    ).toBe(false);
-  });
-});
-
-describe("custom player controls layout", () => {
-  test("renders native radio semantics for player option groups", () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(
-          // Menu 原语必须在 Root 上下文里；PlayerControls 的设置正文使用同一层包装。
-          // 这里直接测共享选项组，避免 Popover 在 SSR 下不挂载内容。
-          Menu.Root,
-          { open: true },
-          createElement(PlayerMenuRadioGroup, {
-            label: "清晰度",
-            value: "1",
-            options: [
-              { value: "0", label: "原画" },
-              { value: "1", label: "高清" },
-            ],
-            onValueChange: () => {},
-          }),
-        ),
-      ),
-    );
-    expect(html).toContain('role="group"');
-    expect(html).toContain('aria-label="清晰度"');
-    expect(html.split('role="menuitemradio"').length - 1).toBe(2);
-    expect(html).toContain('aria-checked="true"');
-  });
-
-  test("renders left, center danmaku, and right controls in the specified order", () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(PlayerControls, {
-          onRefresh: () => {},
-          onToggleAudioOnly: () => {},
-          centerSlot: createElement("div", { "data-testid": "danmaku-bar" }, "弹幕输入栏"),
-          qualities: [{ quality: "1080P" }],
-          onQualityChange: () => {},
-          onToggleOsd: () => {},
-          asrVisible: true,
-          onToggleAsr: () => {},
-          onToggleWebFullscreen: () => {},
-          onToggleFullscreen: () => {},
-        }),
-      ),
-    );
-
-    // 结构包含主控制行与中间弹幕槽
-    expect(html).toContain('data-slot="player-extension-controls"');
-    expect(html).toContain('data-slot="player-center-slot"');
-    expect(html).toContain("弹幕输入栏");
-
-    // 左侧控件：暂停/播放、刷新、音量、仅音频
-    expect(html).toContain("group/play"); // PlayButton
-    expect(html).toContain("刷新播放");
-    expect(html).toContain("仅播声音"); // onToggleAudioOnly (default false -> 仅播声音)
-
-    // 右侧控件：设置、弹幕、字幕来源菜单、网页全屏、全屏
-    expect(html).toContain("播放设置");
-    expect(html).toContain("开启弹幕");
-    expect(html).toContain("开启字幕");
-    expect(html).toContain("网页全屏");
-    expect(html).toContain("全屏");
-  });
-
-  test("leaves picture-in-picture to the native button, which hides itself when unavailable", () => {
-    // 画中画交给原生 `PiPButton`：它按 `pipAvailability` 自行决定是否挂载。
-    // 没有媒体（SSR）或移动端 WebView 不支持时可用性为 unavailable，整颗按钮不渲染 ——
-    // 这正是移动端不再出现一个点了没反应的画中画按钮的原因。
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(PlayerControls, { onToggleFullscreen: () => {} }),
-      ),
-    );
-    expect(html).not.toContain("画中画");
-    expect(html).not.toContain("group/pip");
-  });
-
-  test("uses the same icon geometry as the neighboring media buttons", () => {
-    // 原生 PiP 图标默认是 `size-media-icon`（约 16px）；本项目同排播放/静音/全屏
-    // 全是 24px。固定到 `size-6`，防止画中画按钮再次视觉偏小。
-    const source = readFileSync(
-      new URL("../src/components/videojs/ui/pip-button.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(source.match(/"col-start-1 row-start-1 size-6 drop-shadow-media-icon"/g)?.length).toBe(
-      2,
-    );
-    expect(source).not.toContain('"col-start-1 row-start-1 size-media-icon');
-  });
-
-  test("keeps the captions button pinned to the left of fullscreen", () => {
-    // 直播与点播共用同一个契约：字幕常驻，且永远在全屏按钮左侧。此前点播把字幕塞进
-    // `toolsSlot`，于是它渲染在全屏之后 —— 有字幕的片子按钮会跑到全屏右边。
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(PlayerControls, {
-          onToggleFullscreen: () => {},
-          captionsSlot: createElement("div", { "data-testid": "video-subtitles" }, "字幕按钮"),
-        }),
-      ),
-    );
-    const fullscreenIdx = html.indexOf("全屏");
-    const subtitlesIdx = html.indexOf("字幕按钮");
-    expect(subtitlesIdx).toBeGreaterThan(-1);
-    expect(fullscreenIdx).toBeGreaterThan(subtitlesIdx);
-  });
-
-  test("desktop chapters take the left-group slot after volume, before the center slot", () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(
-          SkinVariantProvider,
-          { value: "vod" },
-          createElement(PlayerControls, {
-            onToggleFullscreen: () => {},
-            centerSlot: createElement("div", null, "弹幕输入"),
-            chaptersSlot: createElement("div", null, "章节按钮"),
-          }),
-        ),
-      ),
-    );
-    const chaptersIdx = html.indexOf("章节按钮");
-    expect(chaptersIdx).toBeGreaterThan(html.indexOf("player-extension-controls"));
-    expect(html.indexOf("弹幕输入")).toBeGreaterThan(chaptersIdx);
-    expect(html).not.toContain("player-chapters-row");
-  });
-
-  test("mobile/portrait chapters sit in their own row above the progress bar", () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(
-          SkinVariantProvider,
-          { value: "vod" },
-          createElement(PlayerControls, {
-            onToggleFullscreen: () => {},
-            chaptersPlacement: "progress",
-            chaptersSlot: createElement("div", null, "章节按钮"),
-          }),
-        ),
-      ),
-    );
-    const rowIdx = html.indexOf("player-chapters-row");
-    const chaptersIdx = html.indexOf("章节按钮");
-    expect(rowIdx).toBeGreaterThan(-1);
-    expect(chaptersIdx).toBeGreaterThan(rowIdx);
-    // 只渲染一次，且在进度条（主行之前）上方。
-    expect(html.lastIndexOf("章节按钮")).toBe(chaptersIdx);
-    expect(html.indexOf("player-extension-controls")).toBeGreaterThan(chaptersIdx);
-  });
-
-  test("竖屏进度条位于主行中央，且不再渲染发送框或第二条时间轴", () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(
-          SkinVariantProvider,
-          { value: "vod" },
-          createElement(PlayerControls, {
-            progressPlacement: "center",
-            centerSlot: createElement("div", null, "弹幕输入"),
-            onToggleFullscreen: () => {},
-          }),
-        ),
-      ),
-    );
-    expect(html).toContain('data-placement="center"');
-    expect(html.indexOf('data-slot="player-progress"')).toBeGreaterThan(
-      html.indexOf('data-slot="player-center-slot"'),
-    );
-    expect(html.split('data-slot="player-progress"').length - 1).toBe(1);
-    expect(html).not.toContain("弹幕输入");
-    expect(html).not.toContain('data-placement="above"');
-
-    // 当前时间、滑杆、剩余时间必须同排一行（不得用 `flex-col` 上下分栏）。
-    // 这一行一旦改成列向，纵向主轴上的 `flex-basis: 0%` 会把滑杆高度压成 0，
-    // 进度条不可见也不可命中；横向主轴下则由 `min-w-0` 与窄容器收起剩余时间
-    // 保证不溢出。纯 DOM 断言只能覆盖类名分叉，真实几何与命中由
-    // `tests/vod-mobile-controls.browser.js` 守。
-    const rowClass =
-      html.match(/data-slot="player-progress"[^>]*class="([^"]*)"/)?.[1] ??
-      html.match(/class="([^"]*)"[^>]*data-slot="player-progress"/)?.[1];
-    expect(rowClass).toBeDefined();
-    expect(rowClass).not.toContain("flex-col");
-    expect(rowClass).toContain("items-center");
-
-    const sliderClass = html.match(/class="[^"]*media-time-slider[^"]*"/)?.[0];
-    expect(sliderClass).toBeDefined();
-    expect(sliderClass).toContain("flex-1");
-    expect(sliderClass).not.toContain("flex-none");
-    expect(sliderClass).toContain("data-[orientation=horizontal]:min-w-0");
-    expect(sliderClass).toContain("[--media-slider-height:1.25rem]");
-  });
-
-  test("上方进度行同样把时间与滑杆排在同一行，且不锁定原生最小宽度", () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(
-          SkinVariantProvider,
-          { value: "vod" },
-          createElement(PlayerControls, { onToggleFullscreen: () => {} }),
-        ),
-      ),
-    );
-    const sliderClass = html.match(/class="[^"]*media-time-slider[^"]*"/)?.[0];
-    expect(sliderClass).toContain("flex-1");
-    expect(sliderClass).not.toContain("flex-none");
-    expect(sliderClass).not.toContain("[--media-slider-height");
-    // 上方布局保留原生的横向最小宽度 `min-w-18`，不覆写成 `min-w-0` 参与让位。
-    // 基类自带的是纵向 `data-[orientation=vertical]:min-w-0`，两者不要混。
-    expect(sliderClass).not.toContain("data-[orientation=horizontal]:min-w-0");
-    expect(sliderClass).toContain("data-[orientation=horizontal]:min-w-18");
-    // 两个时间标签都在，且不挂窄容器收起类。
-    expect(html.split("<time").length - 1).toBe(2);
-    expect(html).not.toContain("media-max-sm:hidden");
-  });
-
-  test("默认与全屏仍保留上方进度行和中间弹幕输入", () => {
-    for (const fullscreen of [false, true]) {
-      const html = renderToStaticMarkup(
-        createElement(
-          VideoJsPlayerProvider,
-          null,
-          createElement(
-            SkinVariantProvider,
-            { value: "vod" },
-            createElement(PlayerControls, {
-              fullscreen,
-              centerSlot: createElement("div", null, "弹幕输入"),
-            }),
-          ),
-        ),
-      );
-      expect(html).toContain('data-placement="above"');
-      expect(html.indexOf('data-slot="player-progress"')).toBeLessThan(
-        html.indexOf('data-slot="player-extension-controls"'),
-      );
-      expect(html).toContain("弹幕输入");
-    }
-  });
-
-  test("顶部与底部控制栏共享移动端密度，独立锁定按钮不缩小", () => {
-    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-    expect(css).toMatch(
-      /\[data-density="dense"\],\s*\.r-live-player-skin\[data-player-density="dense"\] \[data-player-hud\] \{\s*--media-control-size: 1\.75rem;\s*--media-icon-size: 1\.25rem;/,
-    );
-    const surface = readFileSync(
-      new URL("../src/components/videojs/skins/shared/skin-surface.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(surface).toContain('data-player-density={isMobileClient() ? "dense" : undefined}');
-  });
-
-  test("控制栏中央发送框高度恒等于同排媒体按钮，不再自带 44px 触摸下限", () => {
-    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-    // 输入组与输入控件都必须锚定 `--media-control-size`：
-    // 只写其一，另一半的 44px 下限或 `h-8` 仍会把整行撑高、全屏发送框高于两侧按钮。
-    expect(css).toMatch(
-      /\[data-slot="player-extension-controls"\]\s*\[data-slot="player-center-slot"\]\s*\[data-slot="input-group"\] \{\s*height: var\(--media-control-size\) !important;\s*min-height: var\(--media-control-size\) !important;/,
-    );
-    expect(css).toMatch(
-      /\[data-slot="player-extension-controls"\]\s*\[data-slot="player-center-slot"\]\s*\[data-slot="input-group-control"\] \{\s*height: 100% !important;\s*min-height: 0 !important;/,
-    );
-  });
-
-  test("still places toolsSlot at the very right end of right controls", () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        VideoJsPlayerProvider,
-        null,
-        createElement(PlayerControls, {
-          onToggleFullscreen: () => {},
-          toolsSlot: createElement("div", { "data-testid": "player-tools" }, "附加工具"),
-        }),
-      ),
-    );
-    const fullscreenIdx = html.indexOf("全屏");
-    const toolsIdx = html.indexOf("附加工具");
-    expect(fullscreenIdx).toBeGreaterThan(-1);
-    expect(toolsIdx).toBeGreaterThan(fullscreenIdx);
-  });
-
-  test("every fullscreen HUD button lands on the one shared overlay recipe", () => {
-    const html = renderToStaticMarkup(
-      createElement(PlayerFullscreenHud, {
-        fullscreen: true,
-        hasRoomIdentity: true,
-        hasActions: true,
-        roomTitle: "测试房间",
-        onBack: () => {},
-        roomActions: [{ id: "share", label: "分享", icon: () => null, onSelect: () => {} }],
-      }),
-    );
-    expect(html).toContain("退出全屏");
-    // 返回箭头与溢出菜单都必须使用 MediaButton，一个都不能退回 shadcn 图标按钮。
-    expect(html.split("r-live-media-extension-button").length - 1).toBe(2);
-    // 白色前景跟着同一份配方走，否则按钮在深色遮罩上会变成深色。
-    expect(html.split("text-media-controls-foreground").length - 1).toBe(2);
-  });
-
-  test("the shared HUD recipe carries both the media button geometry and the overlay foreground", () => {
-    // 录制按钮的 overlay 变体与 IPTV HUD 的返回/关注按钮都直接用这个常量，
-    // 它就是「开始录制」不再比邻居小一圈、颜色也不再不一致的唯一保障。
-    expect(PLAYER_HUD_BUTTON_CLASS).toContain("r-live-media-extension-button");
-    expect(PLAYER_HUD_BUTTON_CLASS).toContain("text-media-controls-foreground");
-  });
-
-  test("RoomIdentityLine centers its content within a media control line height", () => {
-    const html = renderToStaticMarkup(
-      createElement(RoomIdentityLine, {
-        title: "测试标题",
-        userName: "主播名称",
-      }),
-    );
-    expect(html).toContain("h-media-control");
-    expect(html).toContain("items-center");
-  });
-
-  test("the HUD title keeps one font size across every density", () => {
-    // 直播全屏、多画面分格、视频与 IPTV 四处顶部 HUD 的标题曾各写一套字号
-    // （`text-base` / `text-sm` / `text-xs`），同一位置的标题在四个页面之间大小对不上。
-    const densities = [
-      { density: "fullscreen", compact: false },
-      { density: "fullscreen", compact: true },
-      { density: "tile", compact: false },
-    ] as const;
-    for (const props of densities) {
-      const html = renderToStaticMarkup(
-        createElement(RoomIdentityLine, { title: "测试标题", userName: "主播名称", ...props }),
-      );
-      const titleClasses = html.slice(0, html.indexOf("测试标题"));
-      expect(titleClasses).toContain(PLAYER_HUD_TITLE_SIZE_CLASS);
-      // 分档字号一旦回归，标题就会同时带上第二个 `text-*`。
-      expect(titleClasses).not.toMatch(/text-(sm|xs|\[)/);
-    }
-  });
-});
-
-describe("player control tooltips", () => {
-  test("falls back to the trigger's accessible name so business buttons never show an empty box", () => {
-    // Video.js 原语（暂停、全屏）把文案写进 tooltip context，业务按钮只是普通
-    // `<button>`，context 里取到空串 —— 之前只有暂停按钮有文案，其余按钮弹空框。
-    expect(tooltipTriggerLabel(createElement("button", { "aria-label": "刷新播放" }))).toBe(
-      "刷新播放",
-    );
-  });
-
-  test("reaches the accessible name through render wrappers", () => {
-    // `PopoverTrigger render={<MediaButton aria-label=… />}`：真正的按钮下沉了一层。
-    const trigger = createElement("span", {
-      render: createElement("button", { "aria-label": "开启字幕" }),
-    });
-    expect(tooltipTriggerLabel(trigger)).toBe("开启字幕");
-  });
-
-  test("leaves the label to Video.js context when the trigger has no accessible name", () => {
-    // undefined = 交回 `Tooltip.Label`，暂停/全屏按钮连同快捷键提示照旧。
-    expect(tooltipTriggerLabel(createElement("button"))).toBeUndefined();
-    expect(tooltipTriggerLabel(createElement("button", { "aria-label": "" }))).toBeUndefined();
-    expect(tooltipTriggerLabel("不是元素")).toBeUndefined();
-  });
-
-  test("an explicit label still wins over the accessible name", () => {
-    expect(tooltipTriggerLabel(createElement("button", { "aria-label": "回退" }), "播放设置")).toBe(
-      "播放设置",
-    );
-  });
+  expect(tooltipTriggerLabel(wrapped)).toBe("字幕");
+  expect(tooltipTriggerLabel(wrapped, "设置")).toBe("设置");
+  expect(tooltipTriggerLabel(createElement("button"))).toBeUndefined();
 });

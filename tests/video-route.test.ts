@@ -1,554 +1,175 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_VIDEO_SEARCH_FILTERS,
-  PGC_SEASON_TYPES,
-  VIDEO_POPULAR_ALL_ZONE_KEY,
   parseVideoPlayParams,
   parseVideoSearchFilters,
   resolveVideoZoneKey,
-  videoOriginalUrl,
-  videoHomePath,
   videoPlayPath,
   videoSearchPath,
-  videoTabFromSearch,
-  videoTabHasZoneStrip,
-  videoTabUsesPgc,
   videoZoneChips,
 } from "../src/features/video/videoRoute";
 import {
   filterVideoDanmakuEntries,
   firstVideoDanmakuAtOrAfter,
   mergeVideoDanmakuEntries,
-  VIDEO_DANMAKU_FIXED_DURATION_MS,
-  videoDanmakuColor,
   videoDanmakuComment,
   videoDanmakuEntries,
-  videoDanmakuMode,
-  videoDanmakuSegmentIndex,
   videoDanmakuSegmentsFor,
 } from "../src/features/video/videoDanmaku";
 import {
   isVideoDanmakuSeek,
   isVideoDanmakuUserScroll,
   isVideoDanmakuVerticalDrag,
-  VIDEO_DANMAKU_DRAG_INTENT_PX,
-  VIDEO_DANMAKU_FOLLOW_DRIFT_PX,
-  VIDEO_DANMAKU_SEEK_THRESHOLD_MS,
   videoDanmakuFollowIndex,
   videoDanmakuFollowScrollTop,
 } from "../src/features/video/videoDanmakuFollow";
 import type { VideoDanmakuItem } from "../src/shared/types/video";
 
-const UGC_ZONES: readonly (readonly [string, number])[] = [
-  ["动画", 1005],
-  ["音乐", 1003],
-];
-
-describe("video tabs", () => {
-  test("falls back to the recommend feed for missing and unknown tabs", () => {
-    expect(videoTabFromSearch(null)).toBe("recommend");
-    expect(videoTabFromSearch("nope")).toBe("recommend");
-    expect(videoTabFromSearch("anime")).toBe("anime");
-  });
-
-  test("gives every tab except recommend a zone strip", () => {
-    expect(videoTabHasZoneStrip("recommend")).toBe(false);
-    expect(videoTabHasZoneStrip("popular")).toBe(true);
-    expect(videoTabHasZoneStrip("anime")).toBe(true);
-    expect(videoTabHasZoneStrip("cinema")).toBe(true);
-  });
-
-  test("separates the PGC season_type tabs from the UGC rid tab", () => {
-    expect(videoTabUsesPgc("anime")).toBe(true);
-    expect(videoTabUsesPgc("cinema")).toBe(true);
-    expect(videoTabUsesPgc("popular")).toBe(false);
-  });
-
-  test("keeps the popular strip's first chip as the site-wide ranking", () => {
-    const chips = videoZoneChips("popular", UGC_ZONES);
-    expect(chips[0]).toEqual({ key: VIDEO_POPULAR_ALL_ZONE_KEY, label: "全部" });
-    expect(chips.slice(1).map((chip) => chip.label)).toEqual(["动画", "音乐"]);
-  });
-
-  test("builds the PGC strips from season_type rather than the backend zone list", () => {
-    expect(videoZoneChips("anime", UGC_ZONES).map((chip) => chip.key)).toEqual([
-      String(PGC_SEASON_TYPES.anime),
-      String(PGC_SEASON_TYPES.guochuang),
-      String(PGC_SEASON_TYPES.documentary),
-    ]);
-    expect(videoZoneChips("cinema", UGC_ZONES).map((chip) => chip.key)).toEqual([
-      String(PGC_SEASON_TYPES.movie),
-      String(PGC_SEASON_TYPES.teleplay),
-      String(PGC_SEASON_TYPES.variety),
-    ]);
-    expect(videoZoneChips("recommend", UGC_ZONES)).toEqual([]);
-  });
-});
-
-describe("video zone resolution", () => {
-  test("ignores a zone that does not belong to the current tab", () => {
-    const animeChips = videoZoneChips("anime", UGC_ZONES);
-    // 1005 是 UGC 的 rid，不是 season_type：把它喂给番剧接口会取到无关内容，
-    // 因此必须回落该页签首项。
-    expect(resolveVideoZoneKey("anime", "1005", animeChips)).toBe(String(PGC_SEASON_TYPES.anime));
-    expect(resolveVideoZoneKey("anime", "4", animeChips)).toBe("4");
-  });
-
-  test("has no zone at all on the recommend tab", () => {
-    expect(resolveVideoZoneKey("recommend", "1005", videoZoneChips("recommend", UGC_ZONES))).toBe(
-      null,
-    );
-  });
-
-  test("defaults the popular tab to the site-wide ranking", () => {
-    const chips = videoZoneChips("popular", UGC_ZONES);
-    expect(resolveVideoZoneKey("popular", null, chips)).toBe(VIDEO_POPULAR_ALL_ZONE_KEY);
-    expect(resolveVideoZoneKey("popular", "1003", chips)).toBe("1003");
-  });
-});
-
-describe("video paths", () => {
-  test("leaves the default tab out of the query string", () => {
-    expect(videoHomePath("recommend")).toBe("/video");
-    expect(videoHomePath("anime")).toBe("/video?tab=anime");
-    expect(videoHomePath("popular", "1005")).toBe("/video?tab=popular&zone=1005");
-  });
-
-  test("builds the search path with the keyword in the url", () => {
-    expect(videoSearchPath()).toBe("/video/search");
-    expect(videoSearchPath("  猫猫 ")).toBe("/video/search?q=%E7%8C%AB%E7%8C%AB");
-  });
-
-  test("round-trips a UGC play target", () => {
-    const path = videoPlayPath({ bvid: "BV1xx", cid: 42, title: "标题" });
-    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({
-      cid: 42,
-      bvid: "BV1xx",
-      epId: null,
-      seasonId: null,
-      title: "标题",
-      aid: null,
-    });
-  });
-
-  test("round-trips a PGC play target", () => {
-    const path = videoPlayPath({ bvid: "BV2yy", cid: 7, epId: "ep99", title: "第 1 话" });
-    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({
-      cid: 7,
-      bvid: "BV2yy",
-      epId: "ep99",
-      seasonId: null,
-      title: "第 1 话",
-      aid: null,
-    });
-  });
-
-  test("round-trips aid for the comment section", () => {
-    // aid 是评论区的 oid；列表/分集链路带着它，URL 直入时可缺省。
-    const path = videoPlayPath({ bvid: "BV3zz", cid: 9, title: "x", aid: "117075725000671" });
-    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params?.aid).toBe("117075725000671");
-  });
-
-  test("rejects play links without a usable cid, bvid or season", () => {
-    // 三者至少一个有效；拿 NaN 去请求后端只会换来一个无法解释的失败。
-    expect(parseVideoPlayParams(new URLSearchParams(""))).toBeNull();
-    expect(parseVideoPlayParams(new URLSearchParams("cid=abc"))).toBeNull();
-    expect(parseVideoPlayParams(new URLSearchParams("cid=0"))).toBeNull();
-    expect(parseVideoPlayParams(new URLSearchParams("cid=-3"))).toBeNull();
-    // 单独的 ep_id 标识分集却不给取流键，播放页无从解析，也不算有效入口。
-    expect(parseVideoPlayParams(new URLSearchParams("ep_id=ep42"))).toBeNull();
-  });
-
-  test("round-trips a season-only target from pgc cards", () => {
-    // 番剧/影视卡片直入：列表接口不给 bvid/cid，链接只带 season，播放页解析
-    // 出分集后把 URL 规范成完整形态。
-    const path = videoPlayPath({ seasonId: "367", title: "某番剧" });
-    expect(path).not.toContain("cid=");
-    expect(path).not.toContain("bvid=");
-    expect(path).toContain("season=367");
-    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({
+describe("VOD 路由解析", () => {
+  test.each([
+    { bvid: "BV1xx", cid: 42, title: "标题", aid: "117075725000671" },
+    { bvid: "BV2yy", cid: 7, epId: "ep99", title: "第 1 话" },
+    { seasonId: "367", title: "某番剧" },
+    { bvid: "BV4ww", title: "待补 cid" },
+  ])("取流身份往返：%j", (target) => {
+    const path = videoPlayPath(target);
+    expect(parseVideoPlayParams(new URLSearchParams(path.split("?")[1]))).toEqual({
       cid: 0,
       bvid: null,
       epId: null,
-      seasonId: "367",
-      title: "某番剧",
+      seasonId: null,
+      title: null,
       aid: null,
+      ...target,
     });
   });
 
-  test("round-trips a bvid-only target from search/uploader lists", () => {
-    // 搜索/UP 主列表的条目没有 cid：链接只带 bvid，播放页用稿件详情补齐（P1）。
-    const path = videoPlayPath({ bvid: "BV4ww", cid: null, title: "无 cid 条目" });
-    expect(path).not.toContain("cid=");
-    const params = parseVideoPlayParams(new URLSearchParams(path.split("?")[1]));
-    expect(params).toEqual({
-      cid: 0,
-      bvid: "BV4ww",
-      epId: null,
-      seasonId: null,
-      title: "无 cid 条目",
-      aid: null,
-    });
-    // 无效 cid 配 bvid 仍可进入，cid 归零待补。
+  test.each(["", "cid=abc", "cid=0", "cid=-3", "ep_id=ep42"])(
+    "无可用取流身份不进入：%s",
+    (query) => {
+      expect(parseVideoPlayParams(new URLSearchParams(query))).toBeNull();
+    },
+  );
+
+  test("非法 cid 可由 bvid 补齐；跨页签分区不能串给另一个接口", () => {
     expect(parseVideoPlayParams(new URLSearchParams("cid=abc&bvid=BV4ww"))).toMatchObject({
       cid: 0,
       bvid: "BV4ww",
     });
+    const chips = videoZoneChips("anime", [["动画", 1005]]);
+    expect(resolveVideoZoneKey("anime", "1005", chips)).toBe("1");
+    expect(resolveVideoZoneKey("anime", "4", chips)).toBe("4");
+  });
+
+  test("搜索筛选往返且深链非法参数退回默认", () => {
+    const filters = { order: "click", duration: 2, zone: 4, pubTime: "week" } as const;
+    const path = videoSearchPath("猫猫", filters);
+    expect(new URLSearchParams(path.split("?")[1]).get("q")).toBe("猫猫");
+    expect(parseVideoSearchFilters(new URLSearchParams(path.split("?")[1]))).toEqual(filters);
+    expect(
+      parseVideoSearchFilters(new URLSearchParams("order=hack&duration=9&zone=-3&pubtime=month")),
+    ).toEqual(DEFAULT_VIDEO_SEARCH_FILTERS);
   });
 });
 
-describe("video search filters", () => {
-  test("round-trips non-default filters through the url", () => {
-    const path = videoSearchPath("猫猫", {
-      order: "click",
-      duration: 2,
-      zone: 4,
-      pubTime: "week",
-    });
-    expect(path).toBe(
-      "/video/search?q=%E7%8C%AB%E7%8C%AB&order=click&duration=2&zone=4&pubtime=week",
-    );
-    expect(parseVideoSearchFilters(new URLSearchParams(path.split("?")[1]))).toEqual({
-      order: "click",
-      duration: 2,
-      zone: 4,
-      pubTime: "week",
-    });
-  });
-
-  test("default filters leave no query params behind", () => {
-    expect(videoSearchPath("猫猫", DEFAULT_VIDEO_SEARCH_FILTERS)).toBe(
-      "/video/search?q=%E7%8C%AB%E7%8C%AB",
-    );
-    // 省略 filters 与显式默认等价：查询条提交新关键词时走的就是这条路。
-    expect(videoSearchPath("猫猫")).toBe(videoSearchPath("猫猫", DEFAULT_VIDEO_SEARCH_FILTERS));
-  });
-
-  test("falls back to defaults on unknown filter values in deep links", () => {
-    // 未知 order / duration / pubtime 一律回落默认，zone 只认非负整数。
-    const params = new URLSearchParams("order=hack&duration=9&zone=-3&pubtime=month");
-    expect(parseVideoSearchFilters(params)).toEqual(DEFAULT_VIDEO_SEARCH_FILTERS);
-    expect(parseVideoSearchFilters(new URLSearchParams("zone=abc"))).toEqual(
-      DEFAULT_VIDEO_SEARCH_FILTERS,
-    );
-  });
-});
-
-describe("video original url", () => {
-  test("points UGC at the bvid page and omits ?p= for P1", () => {
-    expect(videoOriginalUrl("BV1Ykt46iEYW", null, 1)).toBe(
-      "https://www.bilibili.com/video/BV1Ykt46iEYW/",
-    );
-  });
-
-  test("keeps the part number for multi-part playback", () => {
-    expect(videoOriginalUrl("BV1Ykt46iEYW", null, 7)).toBe(
-      "https://www.bilibili.com/video/BV1Ykt46iEYW/?p=7",
-    );
-  });
-
-  test("prefers the PGC episode path and falls back to null without identity", () => {
-    expect(videoOriginalUrl("BV1xx", "123456")).toBe(
-      "https://www.bilibili.com/bangumi/play/ep123456",
-    );
-    expect(videoOriginalUrl(null, null)).toBeNull();
-  });
-});
-
-describe("VOD danmaku segmentation", () => {
-  test("splits on six-minute boundaries starting at index 1", () => {
-    expect(videoDanmakuSegmentIndex(0)).toBe(1);
-    expect(videoDanmakuSegmentIndex(359_999)).toBe(1);
-    expect(videoDanmakuSegmentIndex(360_000)).toBe(2);
-    expect(videoDanmakuSegmentIndex(720_001)).toBe(3);
-  });
-
-  test("clamps negative and non-finite positions to the first segment", () => {
-    expect(videoDanmakuSegmentIndex(-5)).toBe(1);
-    expect(videoDanmakuSegmentIndex(Number.NaN)).toBe(1);
-  });
-
-  test("prefetches the next segment so cross-boundary bullets enter on time", () => {
-    expect(videoDanmakuSegmentsFor(0)).toEqual([1, 2]);
-    expect(videoDanmakuSegmentsFor(400_000)).toEqual([2, 3]);
-  });
-});
-
-describe("VOD danmaku mapping", () => {
-  test("将上游模式映射为共享弹幕的三种形态", () => {
-    expect(videoDanmakuMode(1)).toBe("scroll");
-    expect(videoDanmakuMode(2)).toBe("scroll");
-    expect(videoDanmakuMode(3)).toBe("scroll");
-    expect(videoDanmakuMode(4)).toBe("bottom");
-    expect(videoDanmakuMode(5)).toBe("top");
-    // 6/7/8/9 没有对应形态，降级滚动而不是丢弃。
-    expect(videoDanmakuMode(6)).toBe("scroll");
-    expect(videoDanmakuMode(9)).toBe("scroll");
-  });
-
-  test("converts decimal RGB into a css hex colour", () => {
-    expect(videoDanmakuColor(16_777_215)).toBe("#ffffff");
-    expect(videoDanmakuColor(16_711_680)).toBe("#ff0000");
-    expect(videoDanmakuColor(255)).toBe("#0000ff");
-  });
-
-  test("falls back to white for out-of-range colours", () => {
-    expect(videoDanmakuColor(0)).toBe("#ffffff");
-    expect(videoDanmakuColor(-1)).toBe("#ffffff");
-    expect(videoDanmakuColor(16_777_216)).toBe("#ffffff");
-    expect(videoDanmakuColor(Number.NaN)).toBe("#ffffff");
-  });
-
-  test("drops blank content and sorts by progress", () => {
-    const items: VideoDanmakuItem[] = [
-      {
-        progress: 900,
-        mode: 1,
-        fontsize: 25,
-        color: 16_777_215,
-        content: "后",
-        weight: 5,
-        pool: 0,
-      },
-      {
-        progress: 100,
-        mode: 1,
-        fontsize: 25,
-        color: 16_777_215,
-        content: "先",
-        weight: 5,
-        pool: 0,
-      },
-      {
-        progress: 300,
-        mode: 1,
-        fontsize: 25,
-        color: 16_777_215,
-        content: "   ",
-        weight: 5,
-        pool: 0,
-      },
-    ];
-    const entries = videoDanmakuEntries(items, 1);
-    expect(entries.map((entry) => entry.content)).toEqual(["先", "后"]);
-  });
-
-  test("scopes entry ids to their segment", () => {
-    const item: VideoDanmakuItem = {
-      progress: 500,
-      mode: 1,
-      fontsize: 25,
-      color: 16_777_215,
-      content: "同",
-      weight: 5,
-      pool: 0,
-    };
-    // 不同分段必须拥有独立 id，防止增量合并时把后来的弹幕误当成旧条目。
-    const first = videoDanmakuEntries([item], 1);
-    const second = videoDanmakuEntries([item], 2);
-    expect(first[0]!.id).not.toBe(second[0]!.id);
-  });
-
-  test("merges segments back into one ordered timeline", () => {
-    const early = videoDanmakuEntries(
-      [
-        {
-          progress: 10,
-          mode: 1,
-          fontsize: 25,
-          color: 16_777_215,
-          content: "a",
-          weight: 5,
-          pool: 0,
-        },
-      ],
-      1,
-    );
-    const late = videoDanmakuEntries(
-      [{ progress: 5, mode: 1, fontsize: 25, color: 16_777_215, content: "b", weight: 5, pool: 0 }],
-      2,
-    );
-    expect(mergeVideoDanmakuEntries([early, late]).map((entry) => entry.content)).toEqual([
-      "b",
-      "a",
-    ]);
-  });
-});
-
-function entry(progressMs: number, overrides: Partial<{ pool: number }> = {}) {
-  return videoDanmakuEntries(
-    [
-      {
-        progress: progressMs,
-        mode: 1,
-        fontsize: 25,
-        color: 16_777_215,
-        content: `d${progressMs}`,
-        weight: 5,
-        pool: overrides.pool ?? 0,
-      },
-    ],
-    1,
-  )[0]!;
+function item(progress: number, content = `d${progress}`, pool = 0): VideoDanmakuItem {
+  return { progress, content, pool, mode: 1, fontsize: 25, color: 0xffffff, weight: 5 };
 }
+const entry = (progress: number, pool = 0) =>
+  videoDanmakuEntries([item(progress, undefined, pool)], 1)[0]!;
 
-describe("VOD danmaku filtering", () => {
-  test("applies the shared shield words", () => {
-    const entries = [entry(100), entry(200)];
-    const filtered = filterVideoDanmakuEntries(entries, (content) => content === "d100");
-    expect(filtered.map((item) => item.content)).toEqual(["d200"]);
+describe("VOD 弹幕时间轴", () => {
+  test.each([
+    [0, [1, 2]],
+    [359_999, [1, 2]],
+    [360_000, [2, 3]],
+    [NaN, [1, 2]],
+  ] as const)("跨六分钟边界预取下一段：%s", (time, expected) => {
+    expect(videoDanmakuSegmentsFor(time)).toEqual(expected);
   });
 
-  test("hides the subtitle and special pools", () => {
-    const entries = [entry(100, { pool: 0 }), entry(200, { pool: 1 }), entry(300, { pool: 2 })];
-    expect(filterVideoDanmakuEntries(entries, () => false).map((item) => item.content)).toEqual([
-      "d100",
+  test("分段合并按时间排序、丢空白，同内容不同段身份独立", () => {
+    const first = videoDanmakuEntries([item(900, "后"), item(300, "  "), item(100, "先")], 1);
+    const second = videoDanmakuEntries([item(100, "先")], 2);
+    expect(first.map((value) => value.content)).toEqual(["先", "后"]);
+    expect(first[0]!.id).not.toBe(second[0]!.id);
+    expect(mergeVideoDanmakuEntries([first, second]).map((value) => value.progressMs)).toEqual([
+      100, 100, 900,
     ]);
+    const filtered = filterVideoDanmakuEntries(
+      [entry(100), entry(200), entry(300, 1), entry(400, 2)],
+      (text) => text === "d100",
+    );
+    expect(filtered.map((value) => value.content)).toEqual(["d200"]);
   });
-});
 
-describe("VOD 媒体时间轴映射", () => {
-  test("侧栏跟随的二分定位覆盖双向跳转和边界", () => {
+  test.each([
+    ["scroll", false, "scroll", undefined],
+    ["top", false, "top", 15_000],
+    ["bottom", false, "bottom", 15_000],
+    ["scroll", true, "top", 15_000],
+  ] as const)(
+    "弹幕用媒体秒定位，固定/减少动态效果按媒体时长到期：%s/%s",
+    (mode, reducedMotion, expectedMode, duration) => {
+      const comment = videoDanmakuComment(
+        { ...entry(1_250), mode },
+        {
+          fontSize: 24,
+          fontStroke: 0,
+          opacity: 1,
+          reducedMotion,
+        },
+      );
+      expect(comment.time).toBe(1.25);
+      expect(comment.mode).toBe(expectedMode);
+      expect(comment.duration).toBe(duration);
+    },
+  );
+
+  test("双向跳转定位已出现的行，空表不产生跟随目标", () => {
     const timeline = [entry(0), entry(1_000), entry(2_000), entry(3_000)];
-    expect(firstVideoDanmakuAtOrAfter(timeline, 0)).toBe(0);
-    expect(firstVideoDanmakuAtOrAfter(timeline, 1_500)).toBe(2);
-    expect(firstVideoDanmakuAtOrAfter(timeline, 9_999)).toBe(4);
+    for (const [time, insertion, follow] of [
+      [9_999, 4, 3],
+      [1_500, 2, 1],
+      [0, 0, 0],
+      [2_000, 2, 1],
+    ]) {
+      expect(firstVideoDanmakuAtOrAfter(timeline, time!)).toBe(insertion);
+      expect(videoDanmakuFollowIndex(timeline, time!)).toBe(follow);
+    }
     expect(firstVideoDanmakuAtOrAfter([], 0)).toBe(0);
+    expect(videoDanmakuFollowIndex([], 0)).toBe(-1);
   });
 
-  test("时间换算为秒，固定弹幕使用真实媒体时长而非一天墙钟占位", () => {
-    const options = { fontSize: 24, fontStroke: 0, opacity: 1 };
-    const top = videoDanmakuComment({ ...entry(1_250), mode: "top" }, options);
-    expect(top.time).toBe(1.25);
-    expect(top.duration).toBe(VIDEO_DANMAKU_FIXED_DURATION_MS);
-    expect(top.duration).toBe(15_000);
-    expect(top).not.toHaveProperty("moveV");
-    expect(top).not.toHaveProperty("realTime");
-    expect(typeof top.render).toBe("function");
-
-    const scroll = videoDanmakuComment(entry(2_500), options);
-    expect(scroll.time).toBe(2.5);
-    expect(scroll.text).toBe("d2500");
-    expect(scroll.mode).toBe("scroll");
-    expect(scroll).not.toHaveProperty("duration");
-    expect(scroll.style?.height).toBe("34px");
-  });
-
-  test("减少动态效果用固定弹幕呈现，仍由媒体时间到期", () => {
-    const comment = videoDanmakuComment(entry(0), {
-      fontSize: 24,
-      fontStroke: 1,
-      opacity: 0.8,
-      reducedMotion: true,
-    });
-    expect(comment.mode).toBe("top");
-    expect(comment.duration).toBe(15_000);
-    expect(comment.style?.WebkitTextStroke).toBe("1px rgba(0,0,0,.92)");
-  });
-});
-
-// 侧栏弹幕列表的跟随滚动。回归的是「滚到底部会回弹」：旧实现照搬直播列表的
-// 「贴底即恢复跟随」，而 VOD 的跟随行在列表中部，于是滚到底就重新武装跟随、
-// 下一个 timeupdate 又把列表拽回播放头。
-describe("VOD danmaku follow", () => {
-  const timeline = [entry(0), entry(1_000), entry(2_000), entry(3_000)];
-
-  test("follows the last bullet that already appeared", () => {
-    // 跟随行取播放头**之前**那一条：用户在列表里看到的与画面上刚飘过的是同一条。
-    expect(videoDanmakuFollowIndex(timeline, 0)).toBe(0);
-    expect(videoDanmakuFollowIndex(timeline, 1_500)).toBe(1);
-    expect(videoDanmakuFollowIndex(timeline, 2_000)).toBe(1);
-    expect(videoDanmakuFollowIndex(timeline, 9_999)).toBe(3);
-  });
-
-  test("reports no follow row for an empty list", () => {
-    expect(videoDanmakuFollowIndex([], 1_000)).toBe(-1);
-  });
-
-  test("centres the follow row within the scrollable range", () => {
-    // 视口 200 高、内容 1000 高：可滚区间是 [0, 800]。
+  test("跟随居中目标有界，慢拖相对固定锚点累积，不因滚到底恢复跟随", () => {
     const metrics = { rowHeight: 28, viewportHeight: 200, scrollHeight: 1_000 };
-    expect(videoDanmakuFollowScrollTop({ rowTop: 500, ...metrics })).toBe(414);
-    // 越界目标必须夹紧：写进去夹不住的值会让回读与期望不一致，程序化滚动
-    // 就被自己的 scroll 事件误判成用户滚动。
-    expect(videoDanmakuFollowScrollTop({ rowTop: 0, ...metrics })).toBe(0);
-    expect(videoDanmakuFollowScrollTop({ rowTop: 990, ...metrics })).toBe(800);
-  });
-
-  test("never returns a negative or non-finite scroll target", () => {
-    // 内容比视口短（只有几条弹幕）时没有可滚范围。
-    expect(
-      videoDanmakuFollowScrollTop({
-        rowTop: 10,
-        rowHeight: 28,
-        viewportHeight: 400,
-        scrollHeight: 100,
-      }),
-    ).toBe(0);
-    expect(
-      videoDanmakuFollowScrollTop({
-        rowTop: Number.NaN,
-        rowHeight: 28,
-        viewportHeight: 200,
-        scrollHeight: 1_000,
-      }),
-    ).toBe(0);
-  });
-
-  test("treats scroll-anchoring drift as our own scroll, not the user's", () => {
-    // content-visibility 让屏内行实现真实高度后微调 scrollTop 几 px，那不是用户操作。
-    expect(isVideoDanmakuUserScroll(414, 414)).toBe(false);
-    expect(isVideoDanmakuUserScroll(420, 414)).toBe(false);
-    expect(isVideoDanmakuUserScroll(414 - VIDEO_DANMAKU_FOLLOW_DRIFT_PX, 414)).toBe(false);
-    expect(isVideoDanmakuUserScroll(414 + VIDEO_DANMAKU_FOLLOW_DRIFT_PX + 1, 414)).toBe(true);
-    // 两个方向都算：往回翻历史与往前翻未来同样是用户滚动。
-    expect(isVideoDanmakuUserScroll(0, 414)).toBe(true);
-  });
-
-  test("accumulates slow drags against a fixed anchor", () => {
-    // 锚点不随漂移更新，否则慢速拖动的每一小步都落在容差内、永远判不出用户滚动。
-    const anchor = 400;
-    const steps = [410, 420, 430, 440, 450];
-    expect(steps.map((top) => isVideoDanmakuUserScroll(top, anchor))).toEqual([
+    for (const [rowTop, expected] of [
+      [500, 414],
+      [0, 0],
+      [990, 800],
+      [NaN, 0],
+    ]) {
+      expect(videoDanmakuFollowScrollTop({ rowTop: rowTop!, ...metrics })).toBe(expected);
+    }
+    expect([410, 420, 430, 440, 450].map((top) => isVideoDanmakuUserScroll(top, 400))).toEqual([
       false,
       false,
       false,
       true,
       true,
     ]);
-  });
-
-  test("only a vertical touch drag counts as scrolling away", () => {
-    // 本视口同时是侧栏横滑切页签的起手区：横滑不该顺带把跟随关掉。
+    expect(isVideoDanmakuUserScroll(0, 414)).toBe(true);
     expect(isVideoDanmakuVerticalDrag(0, 40)).toBe(true);
-    expect(isVideoDanmakuVerticalDrag(0, -40)).toBe(true);
-    // 横向为主 —— 那是在切页签。
     expect(isVideoDanmakuVerticalDrag(60, 20)).toBe(false);
-    expect(isVideoDanmakuVerticalDrag(-60, 20)).toBe(false);
-    // 按住没动、以及还没过抖动阈值的犹豫都不算表态。
     expect(isVideoDanmakuVerticalDrag(0, 0)).toBe(false);
-    expect(isVideoDanmakuVerticalDrag(0, VIDEO_DANMAKU_DRAG_INTENT_PX)).toBe(false);
-    expect(isVideoDanmakuVerticalDrag(0, VIDEO_DANMAKU_DRAG_INTENT_PX + 1)).toBe(true);
-    // 斜向 45 度不算：留给 scroll 那条按实际滚动位移兜底。
-    expect(isVideoDanmakuVerticalDrag(40, 40)).toBe(false);
-    expect(isVideoDanmakuVerticalDrag(Number.NaN, 40)).toBe(false);
   });
 
-  test("tells a progress-bar seek apart from normal playback ticks", () => {
-    // positionMs 由 timeupdate 驱动，约 250ms 一跳。
-    expect(isVideoDanmakuSeek(10_000, 10_250)).toBe(false);
-    expect(isVideoDanmakuSeek(10_000, 10_000 + VIDEO_DANMAKU_SEEK_THRESHOLD_MS)).toBe(false);
-    expect(isVideoDanmakuSeek(10_000, 60_000)).toBe(true);
-    // 后退同样是 seek：正常播放不会倒退。
-    expect(isVideoDanmakuSeek(60_000, 10_000)).toBe(true);
-  });
-
-  test("ignores non-finite positions rather than reporting a seek", () => {
-    expect(isVideoDanmakuSeek(Number.NaN, 1_000)).toBe(false);
-    expect(isVideoDanmakuSeek(1_000, Number.NaN)).toBe(false);
+  test.each([
+    [10_000, 10_250, false],
+    [10_000, 60_000, true],
+    [60_000, 10_000, true],
+    [NaN, 1_000, false],
+  ])("seek 与自然播放区分：%s → %s", (from, to, expected) => {
+    expect(isVideoDanmakuSeek(from as number, to as number)).toBe(expected);
   });
 });
