@@ -1,0 +1,1683 @@
+{
+  "title": "Android 真机弹幕性能实测数据（2026-10-15）",
+  "capturedAt": "2026-10-14T16:24:17.133446+00:00",
+  "head": "07621a55",
+  "question": "在真实 arm64 平板（非 x86_64 模拟器）上，弹幕渲染层与侧栏面板的主线程成本、帧节奏表现如何；弹幕负载以「每批事件数」还是「每秒总事件数」影响流畅度。",
+  "conclusion": "面板虚拟化后的真机主线程成本由渲染层与 IPC 批次共同决定，而非面板列表：150 条/秒时 Task 约 900 ms/s，其中注入器（IPC 序列化 + 批次校验）地板约 680 ms/s，渲染层增量约 230 ms/s，隐藏面板仅省约 1–2%。真正的卡顿变量是每批事件数：同样 150 条/秒，5 批/秒（30 条/批）掉到 42 FPS、p95 80 ms，20 批/秒为 57–59 FPS、p95 29–30 ms，40 批/秒回到 56 FPS、p95 28 ms；即总 Task 几乎不变而帧节奏显著恶化，说明瓶颈是单批同步处理时长而非平均吞吐。面板钉底跟随在真机上不再复现模拟器 P0 的滚动事件回归（钉底稳态 0 次/秒）。",
+  "environment": {
+    "device": "Huawei MatePad 11 (DBY-W09), Snapdragon 865 (kona), 8 核, 5.6GB RAM",
+    "os": "Android 12 (SDK 31)",
+    "webview": "com.huawei.webview 114.0.5.302",
+    "app": "com.shenss.rlive 8.1.0 (debug, arm64-v8a)",
+    "display": "1600×2560 物理, 400dpi, 默认 60Hz（支持 120Hz，采样期间为 60Hz）",
+    "viewportLandscape": "1024×640 (dpr 2.5)",
+    "room": "斗鱼 /room/douyu/36252",
+    "transport": "真实 Tauri IPC 事件通道（plugin:event|emit，与已删除的生产夹具同路径）",
+    "harness": ".playwright-cli/device-danmaku-perf.ts",
+    "note": "真实 WS 源已用 danmaku_disconnect 断开，注入批次是唯一变量；真实源关闭不改变 app 期望的 connection_epoch，注入得以进入正常渲染路径。注入器本身有成本（见 control 行），所有结论以同口径对照为准。"
+  },
+  "method": {
+    "injection": "抓取当前房间 connection_epoch 后，以固定批次率向 plugin:event|emit 投递 {connection_epoch, events:[{kind:'chat',user,is_self,content,color,spans,super_chat,ts}]}，信封与原生 Rust 端一致。",
+    "control": "drop 场景用 epoch+1 投递，事件在 eventBus.dispatch 被丢弃，只保留 IPC 与校验成本。",
+    "prefill": "断开真实源后先预填 1200 条，使面板保留窗口与渲染层初始状态在各场景间一致。",
+    "sampling": "rAF 帧间隔（median/p95/max、>25ms 与 >33ms 卡顿帧）、CDP Performance 每秒增量、PerformanceObserver longtask、面板 scroll 事件计数。",
+    "scenes": {
+      "pinned": "面板钉底跟随",
+      "scrollup": "面板上滚阅读（中点）",
+      "hidden": "列表 visibility:hidden",
+      "layeronly": "面板列 display:none（仅渲染层）",
+      "panelonly": "渲染层 visibility:hidden（仅面板）",
+      "drop": "epoch 不匹配，事件被丢弃（注入器地板）",
+      "idle2": "与 both 相同的重复场景（噪声基线）"
+    },
+    "rounds": "正序与反序各一轮，样本 9 秒；prefill 后行数稳定在 25/32 行。"
+  },
+  "runs": {
+    "forward20Hz": {
+      "environment": {
+        "href": "http://tauri.localhost/room/douyu/36252",
+        "userAgent": "Mozilla/5.0 (Linux; Android 12; DBY-W09 Build/HUAWEIDBY-W09; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/114.0.5735.196 Safari/537.36",
+        "viewport": [
+          1024,
+          640
+        ],
+        "dpr": 2.5,
+        "hardwareConcurrency": 8
+      },
+      "samples": [
+        {
+          "label": "rate0-pinned#1",
+          "scene": "pinned",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 59.29,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 23.8,
+            "max": 136.2
+          },
+          "jankOver25ms": 11,
+          "jankOver33ms": 3,
+          "longtasks": {
+            "supported": true,
+            "count": 1,
+            "totalMs": 112,
+            "maxMs": 112
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 66.09,
+            "RecalcStyle": 35.1,
+            "Layout": 0.57,
+            "Task": 515.88
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 512,
+          "elapsedSeconds": 9.007
+        },
+        {
+          "label": "rate0-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 59.94,
+          "frameMs": {
+            "median": 16.8,
+            "p95": 24.5,
+            "max": 58.8
+          },
+          "jankOver25ms": 12,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 34.74,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 237.82
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 538,
+          "elapsedSeconds": 9.009
+        },
+        {
+          "label": "rate0-hidden#1",
+          "scene": "hidden",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 60.01,
+          "frameMs": {
+            "median": 16.8,
+            "p95": 24.7,
+            "max": 29.9
+          },
+          "jankOver25ms": 18,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 34.52,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 226.64
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 538,
+          "elapsedSeconds": 9.015
+        },
+        {
+          "label": "rate25-pinned#1",
+          "scene": "pinned",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 59.54,
+          "frameMs": {
+            "median": 16.8,
+            "p95": 23.4,
+            "max": 55.8
+          },
+          "jankOver25ms": 18,
+          "jankOver33ms": 3,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 223,
+            "actualRate": 24.77
+          },
+          "cdpMsPerSecond": {
+            "Script": 277.81,
+            "RecalcStyle": 86.06,
+            "Layout": 63.55,
+            "Task": 855.08
+          },
+          "panelScrollEvents": 174,
+          "panelScrollEventsPerSecond": 19.33,
+          "panelDOMRows": 26,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 622,
+          "elapsedSeconds": 9.002
+        },
+        {
+          "label": "rate25-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 56.99,
+          "frameMs": {
+            "median": 17.3,
+            "p95": 25.9,
+            "max": 59.7
+          },
+          "jankOver25ms": 36,
+          "jankOver33ms": 6,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 223,
+            "actualRate": 24.77
+          },
+          "cdpMsPerSecond": {
+            "Script": 247.73,
+            "RecalcStyle": 79.0,
+            "Layout": 63.06,
+            "Task": 849.45
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 641,
+          "elapsedSeconds": 9.001
+        },
+        {
+          "label": "rate25-hidden#1",
+          "scene": "hidden",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 57.97,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 26.3,
+            "max": 43
+          },
+          "jankOver25ms": 39,
+          "jankOver33ms": 7,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "actualRate": 24.94
+          },
+          "cdpMsPerSecond": {
+            "Script": 258.84,
+            "RecalcStyle": 88.12,
+            "Layout": 55.64,
+            "Task": 844.12
+          },
+          "panelScrollEvents": 73,
+          "panelScrollEventsPerSecond": 8.09,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 646,
+          "elapsedSeconds": 9.021
+        },
+        {
+          "label": "rate50-pinned#1",
+          "scene": "pinned",
+          "targetRate": 50,
+          "valid": true,
+          "fps": 59.94,
+          "frameMs": {
+            "median": 16,
+            "p95": 23.8,
+            "max": 33.1
+          },
+          "jankOver25ms": 19,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 450,
+            "actualRate": 49.95
+          },
+          "cdpMsPerSecond": {
+            "Script": 245.37,
+            "RecalcStyle": 92.72,
+            "Layout": 71.12,
+            "Task": 867.86
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.009
+        },
+        {
+          "label": "rate50-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 50,
+          "valid": true,
+          "fps": 59.12,
+          "frameMs": {
+            "median": 16.1,
+            "p95": 26.6,
+            "max": 41.4
+          },
+          "jankOver25ms": 38,
+          "jankOver33ms": 3,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 445,
+            "actualRate": 49.36
+          },
+          "cdpMsPerSecond": {
+            "Script": 262.45,
+            "RecalcStyle": 92.49,
+            "Layout": 49.27,
+            "Task": 864.49
+          },
+          "panelScrollEvents": 177,
+          "panelScrollEventsPerSecond": 19.63,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 22,
+          "totalNodes": 651,
+          "elapsedSeconds": 9.016
+        },
+        {
+          "label": "rate50-hidden#1",
+          "scene": "hidden",
+          "targetRate": 50,
+          "valid": true,
+          "fps": 58.48,
+          "frameMs": {
+            "median": 16.4,
+            "p95": 26.1,
+            "max": 41.7
+          },
+          "jankOver25ms": 32,
+          "jankOver33ms": 8,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 447,
+            "actualRate": 49.6
+          },
+          "cdpMsPerSecond": {
+            "Script": 262.66,
+            "RecalcStyle": 106.42,
+            "Layout": 74.18,
+            "Task": 850.12
+          },
+          "panelScrollEvents": 25,
+          "panelScrollEventsPerSecond": 2.77,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 625,
+          "elapsedSeconds": 9.011
+        },
+        {
+          "label": "rate150-pinned#1",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 56.56,
+          "frameMs": {
+            "median": 16.3,
+            "p95": 30.3,
+            "max": 62
+          },
+          "jankOver25ms": 77,
+          "jankOver33ms": 16,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.73
+          },
+          "cdpMsPerSecond": {
+            "Script": 283.9,
+            "RecalcStyle": 132.8,
+            "Layout": 94.82,
+            "Task": 927.91
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 619,
+          "elapsedSeconds": 9.016
+        },
+        {
+          "label": "rate150-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 58.4,
+          "frameMs": {
+            "median": 15.9,
+            "p95": 29.9,
+            "max": 36.9
+          },
+          "jankOver25ms": 66,
+          "jankOver33ms": 14,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1343,
+            "actualRate": 149.1
+          },
+          "cdpMsPerSecond": {
+            "Script": 288.27,
+            "RecalcStyle": 125.75,
+            "Layout": 78.95,
+            "Task": 913.86
+          },
+          "panelScrollEvents": 60,
+          "panelScrollEventsPerSecond": 6.66,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 625,
+          "elapsedSeconds": 9.008
+        },
+        {
+          "label": "rate150-hidden#1",
+          "scene": "hidden",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 56.85,
+          "frameMs": {
+            "median": 17.2,
+            "p95": 30.2,
+            "max": 44.7
+          },
+          "jankOver25ms": 83,
+          "jankOver33ms": 10,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1343,
+            "actualRate": 149.12
+          },
+          "cdpMsPerSecond": {
+            "Script": 305.02,
+            "RecalcStyle": 147.42,
+            "Layout": 98.29,
+            "Task": 924.4
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 625,
+          "elapsedSeconds": 9.006
+        }
+      ]
+    },
+    "reverse20Hz": {
+      "environment": {
+        "href": "http://tauri.localhost/room/douyu/36252",
+        "userAgent": "Mozilla/5.0 (Linux; Android 12; DBY-W09 Build/HUAWEIDBY-W09; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/114.0.5735.196 Safari/537.36",
+        "viewport": [
+          1024,
+          640
+        ],
+        "dpr": 2.5,
+        "hardwareConcurrency": 8
+      },
+      "samples": [
+        {
+          "label": "rate150-hidden#1",
+          "scene": "hidden",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 58.66,
+          "frameMs": {
+            "median": 16.3,
+            "p95": 28.2,
+            "max": 48.9
+          },
+          "jankOver25ms": 69,
+          "jankOver33ms": 9,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.71
+          },
+          "cdpMsPerSecond": {
+            "Script": 315.89,
+            "RecalcStyle": 140.4,
+            "Layout": 96.16,
+            "Task": 910.95
+          },
+          "panelScrollEvents": 78,
+          "panelScrollEventsPerSecond": 8.65,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 22,
+          "totalNodes": 624,
+          "elapsedSeconds": 9.018
+        },
+        {
+          "label": "rate150-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 57.92,
+          "frameMs": {
+            "median": 16.1,
+            "p95": 30.3,
+            "max": 41.4
+          },
+          "jankOver25ms": 74,
+          "jankOver33ms": 11,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.5
+          },
+          "cdpMsPerSecond": {
+            "Script": 299.41,
+            "RecalcStyle": 127.9,
+            "Layout": 83.31,
+            "Task": 927.69
+          },
+          "panelScrollEvents": 56,
+          "panelScrollEventsPerSecond": 6.2,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 620,
+          "elapsedSeconds": 9.03
+        },
+        {
+          "label": "rate150-pinned#1",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 56.93,
+          "frameMs": {
+            "median": 16.2,
+            "p95": 30.3,
+            "max": 47.9
+          },
+          "jankOver25ms": 78,
+          "jankOver33ms": 17,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1343,
+            "actualRate": 149.04
+          },
+          "cdpMsPerSecond": {
+            "Script": 286.31,
+            "RecalcStyle": 132.89,
+            "Layout": 93.54,
+            "Task": 922.76
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 619,
+          "elapsedSeconds": 9.011
+        },
+        {
+          "label": "rate50-hidden#1",
+          "scene": "hidden",
+          "targetRate": 50,
+          "valid": true,
+          "fps": 58.87,
+          "frameMs": {
+            "median": 15.8,
+            "p95": 25.8,
+            "max": 42.2
+          },
+          "jankOver25ms": 30,
+          "jankOver33ms": 4,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 450,
+            "actualRate": 49.98
+          },
+          "cdpMsPerSecond": {
+            "Script": 251.1,
+            "RecalcStyle": 101.83,
+            "Layout": 76.94,
+            "Task": 847.16
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 619,
+          "elapsedSeconds": 9.003
+        },
+        {
+          "label": "rate50-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 50,
+          "valid": true,
+          "fps": 59.37,
+          "frameMs": {
+            "median": 16,
+            "p95": 26.8,
+            "max": 45.8
+          },
+          "jankOver25ms": 36,
+          "jankOver33ms": 3,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 450,
+            "actualRate": 49.94
+          },
+          "cdpMsPerSecond": {
+            "Script": 262.19,
+            "RecalcStyle": 92.45,
+            "Layout": 49.59,
+            "Task": 869.08
+          },
+          "panelScrollEvents": 178,
+          "panelScrollEventsPerSecond": 19.75,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 646,
+          "elapsedSeconds": 9.012
+        },
+        {
+          "label": "rate50-pinned#1",
+          "scene": "pinned",
+          "targetRate": 50,
+          "valid": true,
+          "fps": 59.64,
+          "frameMs": {
+            "median": 16.1,
+            "p95": 25.9,
+            "max": 40.3
+          },
+          "jankOver25ms": 30,
+          "jankOver33ms": 3,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 450,
+            "actualRate": 49.97
+          },
+          "cdpMsPerSecond": {
+            "Script": 248.4,
+            "RecalcStyle": 96.67,
+            "Layout": 72.67,
+            "Task": 870.81
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 619,
+          "elapsedSeconds": 9.005
+        },
+        {
+          "label": "rate25-hidden#1",
+          "scene": "hidden",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 59.65,
+          "frameMs": {
+            "median": 16,
+            "p95": 24.4,
+            "max": 36.3
+          },
+          "jankOver25ms": 22,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "actualRate": 24.99
+          },
+          "cdpMsPerSecond": {
+            "Script": 236.35,
+            "RecalcStyle": 91.04,
+            "Layout": 69.97,
+            "Task": 825.39
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.002
+        },
+        {
+          "label": "rate25-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 59.53,
+          "frameMs": {
+            "median": 16.3,
+            "p95": 24.7,
+            "max": 40.9
+          },
+          "jankOver25ms": 22,
+          "jankOver33ms": 3,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 226,
+            "actualRate": 25.1
+          },
+          "cdpMsPerSecond": {
+            "Script": 250.18,
+            "RecalcStyle": 85.05,
+            "Layout": 45.74,
+            "Task": 859.48
+          },
+          "panelScrollEvents": 177,
+          "panelScrollEventsPerSecond": 19.66,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 22,
+          "totalNodes": 651,
+          "elapsedSeconds": 9.005
+        },
+        {
+          "label": "rate25-pinned#1",
+          "scene": "pinned",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 59.84,
+          "frameMs": {
+            "median": 16.4,
+            "p95": 24,
+            "max": 33.5
+          },
+          "jankOver25ms": 17,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 225,
+            "actualRate": 24.98
+          },
+          "cdpMsPerSecond": {
+            "Script": 218.74,
+            "RecalcStyle": 79.37,
+            "Layout": 60.85,
+            "Task": 822.42
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 22,
+          "totalNodes": 624,
+          "elapsedSeconds": 9.008
+        },
+        {
+          "label": "rate0-hidden#1",
+          "scene": "hidden",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 60.08,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 23.2,
+            "max": 34.1
+          },
+          "jankOver25ms": 4,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 55.23,
+            "RecalcStyle": 43.77,
+            "Layout": 3.38,
+            "Task": 549.79
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 512,
+          "elapsedSeconds": 9.005
+        },
+        {
+          "label": "rate0-scrollup#1",
+          "scene": "scrollup",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 60.11,
+          "frameMs": {
+            "median": 17,
+            "p95": 24.8,
+            "max": 31.8
+          },
+          "jankOver25ms": 20,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 32.37,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 226.52
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 32,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 538,
+          "elapsedSeconds": 9.001
+        },
+        {
+          "label": "rate0-pinned#1",
+          "scene": "pinned",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 60.11,
+          "frameMs": {
+            "median": 16.8,
+            "p95": 24.4,
+            "max": 28.3
+          },
+          "jankOver25ms": 13,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 35.54,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 230.08
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 512,
+          "elapsedSeconds": 9.018
+        }
+      ]
+    },
+    "attribution20Hz": {
+      "environment": {
+        "href": "http://tauri.localhost/room/douyu/36252",
+        "userAgent": "Mozilla/5.0 (Linux; Android 12; DBY-W09 Build/HUAWEIDBY-W09; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/114.0.5735.196 Safari/537.36",
+        "viewport": [
+          1024,
+          640
+        ],
+        "dpr": 2.5,
+        "hardwareConcurrency": 8
+      },
+      "samples": [
+        {
+          "label": "rate150-both#1",
+          "scene": "both",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 55.69,
+          "frameMs": {
+            "median": 17,
+            "p95": 31.2,
+            "max": 53.3
+          },
+          "jankOver25ms": 88,
+          "jankOver33ms": 22,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1357,
+            "actualRate": 150.53
+          },
+          "cdpMsPerSecond": {
+            "Script": 315.24,
+            "RecalcStyle": 138.07,
+            "Layout": 91.5,
+            "Task": 951.72
+          },
+          "panelScrollEvents": 78,
+          "panelScrollEventsPerSecond": 8.65,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 19,
+          "totalNodes": 609,
+          "elapsedSeconds": 9.015
+        },
+        {
+          "label": "rate150-layeronly#1",
+          "scene": "layeronly",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 56.53,
+          "frameMs": {
+            "median": 16.1,
+            "p95": 33.6,
+            "max": 47.8
+          },
+          "jankOver25ms": 129,
+          "jankOver33ms": 27,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.94
+          },
+          "cdpMsPerSecond": {
+            "Script": 323.58,
+            "RecalcStyle": 148.46,
+            "Layout": 73.06,
+            "Task": 874.3
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 6,
+          "layerOnScreenBullets": 29,
+          "totalNodes": 602,
+          "elapsedSeconds": 9.004
+        },
+        {
+          "label": "rate150-panelonly#1",
+          "scene": "panelonly",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 58.15,
+          "frameMs": {
+            "median": 15.9,
+            "p95": 29.9,
+            "max": 54.8
+          },
+          "jankOver25ms": 74,
+          "jankOver33ms": 11,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.82
+          },
+          "cdpMsPerSecond": {
+            "Script": 297.04,
+            "RecalcStyle": 131.8,
+            "Layout": 91.44,
+            "Task": 891.08
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.011
+        },
+        {
+          "label": "rate150-idle2#1",
+          "scene": "idle2",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 58.22,
+          "frameMs": {
+            "median": 16.1,
+            "p95": 30.7,
+            "max": 49.3
+          },
+          "jankOver25ms": 70,
+          "jankOver33ms": 15,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1343,
+            "actualRate": 148.93
+          },
+          "cdpMsPerSecond": {
+            "Script": 289.92,
+            "RecalcStyle": 132.87,
+            "Layout": 94.6,
+            "Task": 929.38
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.018
+        }
+      ]
+    },
+    "control20Hz": {
+      "environment": {
+        "href": "http://tauri.localhost/room/douyu/36252",
+        "userAgent": "Mozilla/5.0 (Linux; Android 12; DBY-W09 Build/HUAWEIDBY-W09; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/114.0.5735.196 Safari/537.36",
+        "viewport": [
+          1024,
+          640
+        ],
+        "dpr": 2.5,
+        "hardwareConcurrency": 8
+      },
+      "samples": [
+        {
+          "label": "rate0-drop#1",
+          "scene": "drop",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 59.66,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 24.1,
+            "max": 70.8
+          },
+          "jankOver25ms": 15,
+          "jankOver33ms": 2,
+          "longtasks": {
+            "supported": true,
+            "count": 1,
+            "totalMs": 55,
+            "maxMs": 55
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 45.93,
+            "RecalcStyle": 22.91,
+            "Layout": 0.55,
+            "Task": 234.3
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 7,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 455,
+          "elapsedSeconds": 9.001
+        },
+        {
+          "label": "rate0-pinned#1",
+          "scene": "pinned",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 59.93,
+          "frameMs": {
+            "median": 16.4,
+            "p95": 24.7,
+            "max": 67
+          },
+          "jankOver25ms": 22,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 36.06,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 240.83
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 7,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 455,
+          "elapsedSeconds": 9.01
+        },
+        {
+          "label": "rate0-hidden#1",
+          "scene": "hidden",
+          "targetRate": 0,
+          "valid": true,
+          "fps": 60.19,
+          "frameMs": {
+            "median": 16.1,
+            "p95": 24.6,
+            "max": 34.6
+          },
+          "jankOver25ms": 17,
+          "jankOver33ms": 2,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 0,
+            "actualRate": 0.0
+          },
+          "cdpMsPerSecond": {
+            "Script": 33.6,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 229.63
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 7,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 455,
+          "elapsedSeconds": 9.005
+        },
+        {
+          "label": "rate150-drop#1",
+          "scene": "drop",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 60.19,
+          "frameMs": {
+            "median": 16.6,
+            "p95": 24.7,
+            "max": 32.4
+          },
+          "jankOver25ms": 21,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.91
+          },
+          "cdpMsPerSecond": {
+            "Script": 152.95,
+            "RecalcStyle": 0,
+            "Layout": 0,
+            "Task": 379.46
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 7,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 455,
+          "elapsedSeconds": 9.005
+        },
+        {
+          "label": "rate150-pinned#1",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 55.99,
+          "frameMs": {
+            "median": 17.5,
+            "p95": 29.6,
+            "max": 103.4
+          },
+          "jankOver25ms": 65,
+          "jankOver33ms": 10,
+          "longtasks": {
+            "supported": true,
+            "count": 1,
+            "totalMs": 90,
+            "maxMs": 90
+          },
+          "events": {
+            "sent": 1335,
+            "actualRate": 148.31
+          },
+          "cdpMsPerSecond": {
+            "Script": 333.58,
+            "RecalcStyle": 128.86,
+            "Layout": 89.75,
+            "Task": 935.5
+          },
+          "panelScrollEvents": 142,
+          "panelScrollEventsPerSecond": 15.78,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 16,
+          "totalNodes": 594,
+          "elapsedSeconds": 9.001
+        },
+        {
+          "label": "rate150-hidden#1",
+          "scene": "hidden",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 57.73,
+          "frameMs": {
+            "median": 15.9,
+            "p95": 30,
+            "max": 55.9
+          },
+          "jankOver25ms": 75,
+          "jankOver33ms": 20,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.87
+          },
+          "cdpMsPerSecond": {
+            "Script": 305.9,
+            "RecalcStyle": 142.89,
+            "Layout": 97.43,
+            "Task": 911.84
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 619,
+          "elapsedSeconds": 9.008
+        }
+      ]
+    },
+    "controlMatched20Hz": {
+      "environment": {
+        "href": "http://tauri.localhost/room/douyu/36252",
+        "userAgent": "Mozilla/5.0 (Linux; Android 12; DBY-W09 Build/HUAWEIDBY-W09; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/114.0.5735.196 Safari/537.36",
+        "viewport": [
+          1024,
+          640
+        ],
+        "dpr": 2.5,
+        "hardwareConcurrency": 8
+      },
+      "samples": [
+        {
+          "label": "rate25-drop#1",
+          "scene": "drop",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 59.83,
+          "frameMs": {
+            "median": 16.7,
+            "p95": 23.6,
+            "max": 67
+          },
+          "jankOver25ms": 15,
+          "jankOver33ms": 1,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 223,
+            "actualRate": 24.75
+          },
+          "cdpMsPerSecond": {
+            "Script": 157.05,
+            "RecalcStyle": 65.52,
+            "Layout": 1.45,
+            "Task": 643.39
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 512,
+          "elapsedSeconds": 9.008
+        },
+        {
+          "label": "rate25-pinned#1",
+          "scene": "pinned",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 58.34,
+          "frameMs": {
+            "median": 16.9,
+            "p95": 24.1,
+            "max": 72.6
+          },
+          "jankOver25ms": 21,
+          "jankOver33ms": 8,
+          "longtasks": {
+            "supported": true,
+            "count": 1,
+            "totalMs": 66,
+            "maxMs": 66
+          },
+          "events": {
+            "sent": 223,
+            "actualRate": 24.73
+          },
+          "cdpMsPerSecond": {
+            "Script": 270.84,
+            "RecalcStyle": 95.86,
+            "Layout": 62.66,
+            "Task": 869.99
+          },
+          "panelScrollEvents": 171,
+          "panelScrollEventsPerSecond": 18.97,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.016
+        },
+        {
+          "label": "rate25-hidden#1",
+          "scene": "hidden",
+          "targetRate": 25,
+          "valid": true,
+          "fps": 59.62,
+          "frameMs": {
+            "median": 16.8,
+            "p95": 24.4,
+            "max": 37.5
+          },
+          "jankOver25ms": 18,
+          "jankOver33ms": 2,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 223,
+            "actualRate": 24.76
+          },
+          "cdpMsPerSecond": {
+            "Script": 264.59,
+            "RecalcStyle": 95.07,
+            "Layout": 66.03,
+            "Task": 854.55
+          },
+          "panelScrollEvents": 177,
+          "panelScrollEventsPerSecond": 19.65,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.007
+        },
+        {
+          "label": "rate150-drop#1",
+          "scene": "drop",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 59.83,
+          "frameMs": {
+            "median": 16.8,
+            "p95": 24,
+            "max": 30.9
+          },
+          "jankOver25ms": 21,
+          "jankOver33ms": 0,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.86
+          },
+          "cdpMsPerSecond": {
+            "Script": 155.32,
+            "RecalcStyle": 40.74,
+            "Layout": 2.65,
+            "Task": 677.49
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 0,
+          "totalNodes": 512,
+          "elapsedSeconds": 9.009
+        },
+        {
+          "label": "rate150-pinned#1",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 57.9,
+          "frameMs": {
+            "median": 17,
+            "p95": 29.1,
+            "max": 41.6
+          },
+          "jankOver25ms": 60,
+          "jankOver33ms": 11,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.73
+          },
+          "cdpMsPerSecond": {
+            "Script": 291.27,
+            "RecalcStyle": 128.4,
+            "Layout": 91.77,
+            "Task": 901.45
+          },
+          "panelScrollEvents": 14,
+          "panelScrollEventsPerSecond": 1.55,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 18,
+          "totalNodes": 604,
+          "elapsedSeconds": 9.016
+        },
+        {
+          "label": "rate150-hidden#1",
+          "scene": "hidden",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 58.07,
+          "frameMs": {
+            "median": 16.4,
+            "p95": 29.5,
+            "max": 52.2
+          },
+          "jankOver25ms": 77,
+          "jankOver33ms": 12,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1343,
+            "actualRate": 149.11
+          },
+          "cdpMsPerSecond": {
+            "Script": 299.22,
+            "RecalcStyle": 145.71,
+            "Layout": 98.67,
+            "Task": 912.09
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 22,
+          "totalNodes": 624,
+          "elapsedSeconds": 9.007
+        }
+      ]
+    },
+    "batchHz5": {
+      "environment": {
+        "href": "http://tauri.localhost/room/douyu/36252",
+        "userAgent": "Mozilla/5.0 (Linux; Android 12; DBY-W09 Build/HUAWEIDBY-W09; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/114.0.5735.196 Safari/537.36",
+        "viewport": [
+          1024,
+          640
+        ],
+        "dpr": 2.5,
+        "hardwareConcurrency": 8
+      },
+      "samples": [
+        {
+          "label": "rate150-pinned#1",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 42.17,
+          "frameMs": {
+            "median": 17.2,
+            "p95": 61.1,
+            "max": 162.8
+          },
+          "jankOver25ms": 93,
+          "jankOver33ms": 63,
+          "longtasks": {
+            "supported": true,
+            "count": 19,
+            "totalMs": 1527,
+            "maxMs": 116
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.42
+          },
+          "cdpMsPerSecond": {
+            "Script": 269.05,
+            "RecalcStyle": 161.77,
+            "Layout": 81.94,
+            "Task": 876.38
+          },
+          "panelScrollEvents": 22,
+          "panelScrollEventsPerSecond": 2.44,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.035
+        },
+        {
+          "label": "rate150-hidden#1",
+          "scene": "hidden",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 41.77,
+          "frameMs": {
+            "median": 16.9,
+            "p95": 80.7,
+            "max": 145.9
+          },
+          "jankOver25ms": 89,
+          "jankOver33ms": 67,
+          "longtasks": {
+            "supported": true,
+            "count": 25,
+            "totalMs": 1885,
+            "maxMs": 100
+          },
+          "events": {
+            "sent": 1350,
+            "actualRate": 149.58
+          },
+          "cdpMsPerSecond": {
+            "Script": 264.87,
+            "RecalcStyle": 167.8,
+            "Layout": 85.85,
+            "Task": 863.35
+          },
+          "panelScrollEvents": 0,
+          "panelScrollEventsPerSecond": 0.0,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 21,
+          "totalNodes": 619,
+          "elapsedSeconds": 9.025
+        }
+      ]
+    },
+    "batchHz40": {
+      "environment": {
+        "href": "http://tauri.localhost/room/douyu/36252",
+        "userAgent": "Mozilla/5.0 (Linux; Android 12; DBY-W09 Build/HUAWEIDBY-W09; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/114.0.5735.196 Safari/537.36",
+        "viewport": [
+          1024,
+          640
+        ],
+        "dpr": 2.5,
+        "hardwareConcurrency": 8
+      },
+      "samples": [
+        {
+          "label": "rate150-pinned#1",
+          "scene": "pinned",
+          "targetRate": 150,
+          "valid": true,
+          "fps": 55.94,
+          "frameMs": {
+            "median": 17.3,
+            "p95": 28.1,
+            "max": 47.8
+          },
+          "jankOver25ms": 65,
+          "jankOver33ms": 12,
+          "longtasks": {
+            "supported": true,
+            "count": 0,
+            "totalMs": 0,
+            "maxMs": 0
+          },
+          "events": {
+            "sent": 1110,
+            "actualRate": 123.21
+          },
+          "cdpMsPerSecond": {
+            "Script": 351.29,
+            "RecalcStyle": 123.98,
+            "Layout": 94.79,
+            "Task": 981.17
+          },
+          "panelScrollEvents": 91,
+          "panelScrollEventsPerSecond": 10.1,
+          "panelDOMRows": 25,
+          "layerOnScreenBullets": 20,
+          "totalNodes": 614,
+          "elapsedSeconds": 9.009
+        }
+      ]
+    }
+  }
+}

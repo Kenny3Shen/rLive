@@ -116,6 +116,15 @@ bun run tauri -- android build --debug --target aarch64
 adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
 ```
 
+真机走 USB 时 **Windows 侧 adb 必须独占 5037**：WSL 与 Windows 共享 loopback，谁先起 server 谁持有端口，而只有 Windows 侧能看到 USB 设备。若 `adb devices` 在两侧都为空而设备管理器里已有 `ADB Interface`，先杀掉 WSL 侧 daemon 再让 Windows 起：
+
+```bash
+adb kill-server; pkill -9 -f adb
+cd /mnt/c && /mnt/c/Windows/System32/cmd.exe /c "taskkill /F /IM adb.exe & cd /d D:\dev\android-sdk\platform-tools && adb.exe devices -l"
+```
+
+Windows server 起来后 WSL 的 `adb` 直接复用（同一 5037），无需 `-H`。`adb forward` 等命令两侧都可发。
+
 ### 模拟器调试（Windows emulator + WSL 驱动）
 
 模拟器进程跑在 Windows（WHPX），构建、`adb`、CDP 全留在 WSL。带窗口时图形走宿主 Vulkan，H.264 硬解不依赖 `libcuda`，也能直接用 VS Code Emulate 扩展开窗。
