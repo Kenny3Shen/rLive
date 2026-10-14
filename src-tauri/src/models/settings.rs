@@ -15,6 +15,7 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "video_next_episode_preload",
     "video_blocked_uploaders",
     "proxy_mode",
+    "danmaku_collision_mode",
 ];
 
 /// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
@@ -124,6 +125,23 @@ pub enum VideoRecommendApi {
     Web,
 }
 
+/// 画面弹幕的碰撞检测算法（`danmu` 的 `mode`）。
+///
+/// `strict` 严格检测，车道不满足时留在待投队列等空位，宁可延后也不重叠；
+/// `adaptive` 在保证即时渲染的前提下尽量做碰撞预测，饱和时宁可叠放；
+/// `none` 不做碰撞检测，立即渲染。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DanmakuCollisionMode {
+    /// 不检测碰撞，来一条渲染一条。
+    None,
+    /// 严格检测，不满足条件就延后（本应用默认，饱和时由在屏预算丢弃）。
+    #[default]
+    Strict,
+    /// 尽量检测，同时保证即时渲染。
+    Adaptive,
+}
+
 /// 持久化的应用偏好设置（`settings_kv` 中 key 为 `app_settings` 的 JSON）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -168,6 +186,9 @@ pub struct AppSettings {
     pub danmaku_speed: u32,
     /// 滚动弹幕占视频高度的比例，0.1 ..= 1.0。
     pub danmaku_area: f32,
+    /// 画面弹幕的碰撞检测算法。旧记录回填 `strict`，见 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default)]
+    pub danmaku_collision_mode: DanmakuCollisionMode,
     /// 合并重复聊天消息的滑动窗口，单位为秒。
     /// 为零时禁用合并；
     /// 在设置持久化边界处归一化到 0 ..= 30。
@@ -331,6 +352,7 @@ impl Default for AppSettings {
             danmaku_font_size: 20,
             danmaku_speed: 100,
             danmaku_area: 0.25,
+            danmaku_collision_mode: DanmakuCollisionMode::default(),
             danmaku_filter_gifts: true,
             danmaku_merge_window_seconds: 10,
             super_chat_enabled: true,

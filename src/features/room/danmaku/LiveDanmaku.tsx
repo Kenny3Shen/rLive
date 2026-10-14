@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DanmakuComment } from "./danmakuTypes";
-import type { DanmakuEvent, SiteId } from "@/shared/types/live";
+import type { DanmakuCollisionMode, DanmakuEvent, SiteId } from "@/shared/types/live";
 import { prefersReducedMotion } from "@/shared/motion/tokens";
 import {
   DANMAKU_FONT_STROKE_DEFAULT,
@@ -99,6 +99,7 @@ type RuntimeConfig = {
   shieldMatcher: (event: DanmakuEvent) => boolean;
   blockedUserMatcher: (event: DanmakuEvent) => boolean;
   superChatEnabled: boolean;
+  collisionMode: DanmakuCollisionMode;
   siteId?: SiteId;
 };
 
@@ -229,6 +230,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
   const blockedUsers = useSettingsStore((state) => state.danmakuBlockedUsers);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
+  const collisionMode = useSettingsStore((state) => state.danmakuCollisionMode);
   const shieldMatcher = useMemo(() => createShieldMatcher(shieldWords), [shieldWords]);
   const blockedUserMatcher = useMemo(() => createBlockedUserMatcher(blockedUsers), [blockedUsers]);
   const normalizedArea = clampDanmuArea(area);
@@ -248,6 +250,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     shieldMatcher: () => false,
     blockedUserMatcher: () => false,
     superChatEnabled: true,
+    collisionMode: "strict",
     siteId,
   });
   const aggregatorRef = useRef(createDanmakuContentAggregator(true, 10_000));
@@ -267,10 +270,12 @@ export const LiveDanmaku = memo(function LiveDanmaku({
       shieldMatcher,
       blockedUserMatcher,
       superChatEnabled,
+      collisionMode,
       siteId,
     };
   }, [
     blockedUserMatcher,
+    collisionMode,
     danmakuSpeed,
     filterGifts,
     fontSize,
@@ -598,6 +603,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
           speed: configRef.current.danmakuSpeed,
           area: danmakuLayerAreaConfig("scroll", areaRef.current),
           laneHeight: laneHeightRef.current,
+          collisionMode: configRef.current.collisionMode,
           onAttach: (comment: DanmakuComment, element: HTMLElement) => {
             const meta = commentMeta(comment);
             if (!meta) return;
@@ -640,6 +646,10 @@ export const LiveDanmaku = memo(function LiveDanmaku({
   useEffect(() => {
     rendererRef.current?.setSpeed(danmakuSpeed);
   }, [danmakuSpeed]);
+
+  useEffect(() => {
+    rendererRef.current?.setCollisionMode(collisionMode);
+  }, [collisionMode]);
 
   useEffect(() => {
     const renderer = rendererRef.current;

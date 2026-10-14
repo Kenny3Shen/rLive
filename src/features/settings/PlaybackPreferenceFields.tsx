@@ -6,6 +6,7 @@ import {
   ASR_HOTWORDS_MAX,
   DANMAKU_AREA_DEFAULT,
   DANMAKU_BLOCKED_USERS_MAX,
+  DANMAKU_COLLISION_MODE_DEFAULT,
   DANMAKU_FONT_STROKE_DEFAULT,
   DANMAKU_FONT_STROKE_MAX,
   DANMAKU_FONT_STROKE_MIN,
@@ -41,6 +42,7 @@ import { Separator } from "@/components/ui/separator";
 import { FieldTip } from "@/features/settings/FieldTip";
 import { SwitchField } from "@/features/settings/SwitchField";
 import { Slider } from "@/components/ui/slider";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { notify } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { isMobileClient } from "@/shared/clientPlatform";
@@ -58,6 +60,7 @@ const DANMAKU_APPEARANCE_DEFAULTS = {
   danmakuFontStroke: DANMAKU_FONT_STROKE_DEFAULT,
   danmakuSpeed: DANMAKU_SPEED_DEFAULT,
   danmakuArea: DANMAKU_AREA_DEFAULT,
+  danmakuCollisionMode: DANMAKU_COLLISION_MODE_DEFAULT,
   danmakuFilterGifts: true,
   danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
 };
@@ -571,6 +574,50 @@ export function DanmakuTrackSettingsFields({
   );
 }
 
+export function DanmakuCollisionModeField({
+  idPrefix,
+  layout,
+}: {
+  idPrefix: string;
+  layout: PlaybackSettingsFieldLayout;
+}) {
+  const mode = useSettingsStore((state) => state.danmakuCollisionMode);
+  const labelId = `${idPrefix}-danmaku-collision-mode-label`;
+
+  return (
+    <Field orientation="horizontal" className={fieldSurfaceClass(layout)}>
+      <FieldContent className="min-w-0">
+        <FieldTitle>
+          <span id={labelId}>碰撞检测</span>
+          <FieldTip>
+            弹幕轨道的排布算法。严格：车道不空就排队等待，不重叠；自适应：先保证立刻上屏，
+            车道占满时允许叠放；关闭：不检测碰撞，来一条就渲染。改变后新弹幕按新算法投放，
+            已在屏的弹幕不受影响。
+          </FieldTip>
+        </FieldTitle>
+      </FieldContent>
+      <ToggleGroup
+        aria-labelledby={labelId}
+        value={[mode]}
+        variant="outline"
+        size="sm"
+        spacing={1}
+        className="shrink-0"
+        onValueChange={(values) => {
+          const next = values[0];
+          if (next === "strict" || next === "adaptive" || next === "none") {
+            useSettingsStore.getState().setDanmakuCollisionMode(next);
+          }
+        }}
+      >
+        <ToggleGroupItem value="strict">严格</ToggleGroupItem>
+        <ToggleGroupItem value="adaptive">自适应</ToggleGroupItem>
+        <ToggleGroupItem value="none">关闭</ToggleGroupItem>
+      </ToggleGroup>
+    </Field>
+  );
+}
+
 export function DanmakuAppearanceSettingsFields({
   idPrefix,
   layout,
@@ -658,6 +705,7 @@ export function resetDanmakuAppearanceSettings() {
     danmaku_font_stroke: DANMAKU_APPEARANCE_DEFAULTS.danmakuFontStroke,
     danmaku_speed: DANMAKU_APPEARANCE_DEFAULTS.danmakuSpeed,
     danmaku_area: DANMAKU_APPEARANCE_DEFAULTS.danmakuArea,
+    danmaku_collision_mode: DANMAKU_APPEARANCE_DEFAULTS.danmakuCollisionMode,
     danmaku_filter_gifts: DANMAKU_APPEARANCE_DEFAULTS.danmakuFilterGifts,
     danmaku_merge_window_seconds: DANMAKU_APPEARANCE_DEFAULTS.danmakuMergeWindowSeconds,
   });

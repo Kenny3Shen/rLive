@@ -1,3 +1,5 @@
+import type { DanmakuCollisionMode } from "@/shared/types/live";
+
 /** 业务层共享的弹幕描述；与渲染器私有字段分离。 */
 export type DanmakuComment = {
   id: string;
@@ -21,6 +23,11 @@ export type DanmakuRendererOptions = {
   area?: number;
   /** 单条车道高度（像素），同时是引擎轨道高；调用方按字号推导。 */
   laneHeight?: number;
+  /**
+   * 碰撞检测算法，直接透传给 `danmu` 的 `mode`。默认 `strict`：
+   * 车道占满时新弹幕留在待投队列，配合在屏预算丢弃，不会叠放。
+   */
+  collisionMode?: DanmakuCollisionMode;
   onAttach?: (comment: DanmakuComment, element: HTMLElement) => void;
   onDetach?: (id: string) => void;
 };

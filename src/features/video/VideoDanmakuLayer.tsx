@@ -77,6 +77,7 @@ export function VideoDanmakuLayer({
   const opacity = clampDanmuOpacity(useSettingsStore((state) => state.danmakuOpacity));
   const speed = parseDanmakuSpeed(useSettingsStore((state) => state.danmakuSpeed));
   const area = clampDanmuArea(useSettingsStore((state) => state.danmakuArea));
+  const collisionMode = useSettingsStore((state) => state.danmakuCollisionMode);
   const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
 
   const schedule = useMemo(() => {
@@ -113,10 +114,10 @@ export function VideoDanmakuLayer({
     for (const id of Array.from(commentCache.keys())) if (!byId.has(id)) commentCache.delete(id);
     return { list, byId };
   }, [schedule, fontSize, fontStroke, opacity, commentCache]);
-  const latestRef = useRef({ schedule, scheduleComments, speed, area, fontSize });
+  const latestRef = useRef({ schedule, scheduleComments, speed, area, fontSize, collisionMode });
   useLayoutEffect(() => {
-    latestRef.current = { schedule, scheduleComments, speed, area, fontSize };
-  }, [schedule, scheduleComments, speed, area, fontSize]);
+    latestRef.current = { schedule, scheduleComments, speed, area, fontSize, collisionMode };
+  }, [schedule, scheduleComments, speed, area, fontSize, collisionMode]);
 
   const releaseSelection = useCallback((dropped = false) => {
     const id = selectedIdRef.current;
@@ -240,6 +241,7 @@ export function VideoDanmakuLayer({
           speed: latest.speed,
           area: latest.area,
           laneHeight: danmuLaneHeight(latest.fontSize),
+          collisionMode: latest.collisionMode,
           onAttach: (comment, element) => {
             const entry = latestRef.current.schedule.byId.get(comment.id);
             if (entry) records.set(comment.id, { entry, element });
@@ -282,6 +284,9 @@ export function VideoDanmakuLayer({
   useEffect(() => {
     instanceRef.current?.setLaneHeight(danmuLaneHeight(fontSize));
   }, [fontSize]);
+  useEffect(() => {
+    instanceRef.current?.setCollisionMode(collisionMode);
+  }, [collisionMode]);
 
   return (
     <div ref={hostRef} className="pointer-events-none absolute inset-0">

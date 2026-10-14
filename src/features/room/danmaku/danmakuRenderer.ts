@@ -1,4 +1,5 @@
 import { create, type Danmaku, type Manager } from "danmu";
+import type { DanmakuCollisionMode } from "@/shared/types/live";
 import { danmakuMaxActiveComments } from "./danmakuAdapter";
 import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
 
@@ -169,6 +170,7 @@ export class DanmakuRenderer {
   private speed: number;
   private area: number;
   private laneHeight: number;
+  private collisionMode: DanmakuCollisionMode;
   private lastMediaTime = 0;
   private frozen = false;
   private frame = 0;
@@ -182,6 +184,7 @@ export class DanmakuRenderer {
     this.speed = positive(options.speed, 100);
     this.area = clampArea(options.area);
     this.laneHeight = Math.max(1, Math.round(positive(options.laneHeight, 24)));
+    this.collisionMode = options.collisionMode ?? "strict";
     this.scroll = this.createLayer("scroll");
     this.fixed = this.createLayer("fixed");
     this.applyScrollArea();
@@ -304,6 +307,23 @@ export class DanmakuRenderer {
     this.cursor = 0;
   }
 
+  /**
+   * 切换碰撞检测算法。在屏预算（`scrollCapacity`）与算法无关，始终生效：
+   * 它是应用侧的密度上限，不是碰撞策略的一部分。
+   */
+  setCollisionMode(mode: DanmakuCollisionMode): void {
+    if (this.destroyed || mode === this.collisionMode) return;
+    this.collisionMode = mode;
+    for (const runtime of [this.scroll, this.fixed]) {
+      runtime.manager.updateOptions({
+        mode,
+        // `none` 与 `order` 组合会把每条弹幕都放在第一条轨道上，见 `createLayer`。
+        distribution: mode === "none" ? "random" : "order",
+      });
+    }
+    this.scheduleRender();
+  }
+
   resize(): void {
     if (this.destroyed) return;
     this.scroll.manager.format();
@@ -369,11 +389,10 @@ export class DanmakuRenderer {
 
   private createLayer(layer: Layer): LayerRuntime {
     const manager = create<DanmakuComment>({
-      // 饱和时宁可丢弃也不叠放：`adaptive` 在轨道占满时会随机挑一条轨道直接上屏
-      // （实测同车道 5 条弹幕停在同一个 x，文字互相覆盖），`strict` 则留在待投队列等车道空出。
-      // 队列长度由调用方的 `scrollCapacity` 卡住，因此不会积压出可见延迟。
-      mode: "strict",
-      distribution: "order",
+      mode: this.collisionMode,
+      // `none` 与 `order` 组合会把每条弹幕都放在第一条轨道上（`getTrackIdx` 恒返回 0），
+      // 与「不检测碰撞」的语义相反，因此关闭检测时改用随机分布。
+      distribution: this.collisionMode === "none" ? "random" : "order",
       interval: layer === "scroll" ? SCROLL_INTERVAL_MS : FIXED_INTERVAL_MS,
       speed: layer === "scroll" ? this.speed * SPEED_UNIT_SCALE : null,
       trackHeight: this.laneHeight,
