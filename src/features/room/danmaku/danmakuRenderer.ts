@@ -6,8 +6,8 @@ import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
  * 时间轴、轨道分配和 DOM 移动；应用仅补充公开 API 缺失的生命周期、单条冻结和移除。
  * 固定弹幕按时长分组，仍由原生媒体时间到期，绝不使用 CSS transition 或墙钟占位。
  *
- * 滚动弹幕的位移完全交给原生引擎：每帧按媒体时间（无媒体时为墙钟）算 `x` 并写 transform，
- * 暂停、缓冲、倍速与 seek 由库自己的媒体事件处理，应用不再维护动画时间轴或校时。
+ * 原生引擎负责每帧调度与 transform 写入。VOD 在 render 钩子中用媒体时间修正滚动位置，
+ * 让位移、投放与到期共用同一时间轴；直播仍走原生墙钟，不新增动画循环或倍速状态。
  */
 type NativeComment = {
   mode: "rtl" | "top" | "bottom";
@@ -544,6 +544,13 @@ export class DanmakuRenderer {
         const definition = this.definitions.get(comment.render);
         const record = definition && this.records.get(definition.id);
         if (!record) return;
+        if (this.media && comment.mode === "rtl") {
+          // 2.0.10 用「累计墙钟 × 当前倍速」算位移，长按进出倍速会追溯放大/缩小旧路程。
+          // currentTime 已包含分段倍速；与原生到期判定共用它，不能再乘 playbackRate。
+          comment.x =
+            native._.width -
+            ((native._.width + comment.width) * (this.media.currentTime - comment.time)) / native._.duration;
+        }
         if (!record.attached && !this.canAttach(record)) {
           comment.node?.remove();
           this.detach(record);
