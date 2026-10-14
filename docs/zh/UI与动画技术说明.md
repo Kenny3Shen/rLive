@@ -51,7 +51,7 @@
 
 新增 UI 时先复用 `src/components/ui/` 现有组件，再考虑扩展 variant，最后才创建新的基础组件。
 
-- 明确命令用 `Button`；二元设置用 `Switch` / `Toggle` / `Checkbox`；有限选项用 `Select` / `ToggleGroup`；页面视图切换用 `Tabs`（`TabsTrigger` 必须在 `TabsList` 内）。`variant="line"` 的选中指示条画在页签自己的底边上（水平方向 `-bottom-px`，与 `SiteSwitcher` / `VideoTabSwitcher` 同一画法），因此该变体的 `TabsList` 不保留纵向内边距、页签在水平方向撑满页签条：`TabsList` 的 3px 内边距会把页签底边抬高，而窄屏 `max-md:min-h-11` 又把页签撑满，同一份相对页签的偏移在两种页签高度下无法都对齐（曾让 401px 宽的安卓上整条指示条落到页签栏下方）。回归：`tests/tabs-indicator.browser.js`。
+- 明确命令用 `Button`；二元设置用 `Switch` / `Toggle` / `Checkbox`；有限选项用 `Select` / `ToggleGroup`；页面视图切换用 `Tabs`（`TabsTrigger` 必须在 `TabsList` 内）。`variant="line"` 的选中指示条画在页签自己的底边上（水平方向 `-bottom-px`，与 `SiteSwitcher` / `VideoTabSwitcher` 同一画法），因此该变体的 `TabsList` 不保留纵向内边距、页签在水平方向撑满页签条：`TabsList` 的 3px 内边距会把页签底边抬高，而窄屏 `max-md:min-h-11` 又把页签撑满，同一份相对页签的偏移在两种页签高度下无法都对齐（曾让 401px 宽的安卓上整条指示条落到页签栏下方）。
 - 选日期用 `Calendar`（配 `Popover` 组成 date picker，`locale={zhCN}` 取自 `react-day-picker/locale`），不用原生 `<input type="date">`：原生控件的弹出层由 WebView 提供，桌面与 Android 上样式、语言与暗色表现都不受项目控制。
 - 可展开的详情面板用 `Collapsible`（`src/components/ui/collapsible.tsx`，Base UI）；高度过渡走 `--collapsible-panel-height`，需要 `aria-controls` 在收起态也能解析时开 `keepMounted`（收起态由基料挂 `hidden`）。播放页 UP 卡简介是第一个调用方，见 `docs/zh/B站视频功能-设计.md`。
 - 表单用 `Field` 系列；加载、空状态与通知分别用 `Skeleton`、`Empty`、`Spinner` 和项目 Base UI toast 封装导出的 `notify`。
@@ -153,7 +153,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 
 - 入场：`translate + scale` 从来源矩形到全视口，使用 WAAPI transform/opacity，不改变布局尺寸；播放层位于来源列表之上。空间动画遵循 `prefers-reduced-motion`，全屏期间不变换舞台祖先，结束后清除合成样式。
 - 退出：旧播放 subtree 连同冻结路由上下文留在离场层；目标列表恢复后按卡片身份读取当前位置，若卡片未挂载则退回进入时窗口。播放器反向缩放并淡出，目标列表保持静止；退出动画结束后先隐藏离场层、释放合成层，再卸载播放器。
-- VOD 同路径层级（`/video/play?bvid=A → B → C`）：`zoomKey` 保持 pathname，另外用 `motionKey` 跟随浏览器历史 `idx`，动画身份与播放器挂载身份分离。PUSH / POP 前进仍从来源卡片或轻缩放展开，POP 返回沿当前帧反向接管；REPLACE 补齐参数不重播。全屏期间同路径换片也跳过缩放。回归 `tests/vod-navigation-motion.browser.js` 覆盖三层往返、REPLACE、快速返回、减少动态效果与媒体节点复用；`tests/page-zoom-origin.browser.js` 覆盖来源矩形、滚动恢复、缺失卡片、键盘入口及减少动态效果。
+- VOD 同路径层级（`/video/play?bvid=A → B → C`）：`zoomKey` 保持 pathname，另外用 `motionKey` 跟随浏览器历史 `idx`，动画身份与播放器挂载身份分离。PUSH / POP 前进仍从来源卡片或轻缩放展开，POP 返回沿当前帧反向接管；REPLACE 补齐参数不重播。全屏期间同路径换片也跳过缩放。验证需覆盖三层往返、REPLACE、快速返回、媒体节点复用、来源矩形、滚动恢复、缺失卡片、键盘入口及减少动态效果。
 - 快速反向导航从当前合成 transform/opacity 接管，不跳回预设起点；离场层使用 `inert` 与 `aria-hidden`，动画取消、结束与卸载均清理 `will-change` 和 WAAPI。
 
 来源身份目前覆盖直播、IPTV、视频、番剧、历史与短视频入口。房间 A 通过右侧关注栏切到房间 B 时使用 replace，B 的返回目标固定为 `/follow`；若目标列表没有相同卡片身份，则退回进入时记忆的窗口或轻缩放。
@@ -183,15 +183,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - 手势禁用时终止在途手势；`enabled: false` 只关闭触摸，仍允许桌面点击动画。取消收尾动画前先把当前像素位置写回 inline style，结束或卸载后清理 Animation 与 `will-change`。
 - 移动层的 `transform` 会让它成为 `position: fixed` 后代的包含块：`track` 连静止时都带着 `translate3d(-活动索引 × width, 0, 0)`，落在其中的固定定位层会被整层平移（RefreshFab 曾随内容滚走，关注页 dnd-kit `DragOverlay` 曾偏移一个 track 左上角）。这类层必须 `createPortal` 到 `document.body`，不能只靠 `position: fixed`。
 
-Windows Debug 回归按[开发指南](开发指南.md#桌面端实机调试)接入真实主窗口后运行，不需要创建浏览器标签或构建 release：
-
-```bash
-playwright-cli -s=tab-fix attach --cdp=http://127.0.0.1:9223
-playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-motion.browser.js
-playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser.js
-```
-
-前者在独立临时 React root 上验证真实 hook 的生命周期，结束后自动清理；后者切换真实的视频、直播平台、历史、关注和 IPTV 页签，检查逐帧面板覆盖、即时启动和最终落位，并把截图写入 `.playwright-cli/windows-*-tabs.png`。
+Windows Debug 验证按[开发指南](开发指南.md#桌面端实机调试)接入真实主窗口，通过真实入口切换视频、直播平台、历史、关注和 IPTV 页签，检查动画即时启动、逐帧面板覆盖和最终落位；包含连续点击、反向接管及离页清理。
 
 ### 4.5.1 `useImageZoom`：图片查看器的缩放与平移
 
@@ -248,11 +240,7 @@ playwright-cli -s=tab-fix --raw run-code --filename=tests/tab-navigation.browser
 - 放大后光标换成 `cursor-grab` / `cursor-grabbing` 给出可操作性暗示；鼠标拖拽补一次显式
   `setPointerCapture`（触摸本来就有隐式捕获），拖出弹层甚至拖出窗口也不会丢事件。
 
-回归：`tests/image-viewer-zoom.browser.js` 挂真实 `ImageViewer`（真实 base-ui Dialog 与两个手势 hook，
-只把图片请求换成内联 SVG）。触屏部分覆盖双击锚点、一比一平移、边缘收口、缩回归位、翻页恢复与按图复位；
-桌面部分由外层真实输入驱动（`page.mouse.dblclick` / `page.mouse.wheel` / `Keyboard`），
-覆盖滚轮缩放不穿透到页面、触控板捏合、键盘 `+` / `-` / `0` 与鼠标拖拽平移 —— 这些路径的
-命中测试与 passive 监听器语义是合成事件替代不了的。
+图片查看器验证：触屏检查双击锚点、一比一平移、边缘收口、缩回归位、翻页恢复与按图复位；桌面用真实输入检查滚轮缩放不穿透到页面、触控板捏合、键盘 `+` / `-` / `0` 与鼠标拖拽。命中测试与 passive 监听器语义不能由合成事件替代。
 
 ### 4.6 `useLongPress`：触摸长按
 
@@ -347,9 +335,9 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 
 浏览器检查至少覆盖桌面 `1280x720` 以上、手机竖屏约 `360x732`、coarse pointer 短横屏约 `844x390`，以及系统开启 `prefers-reduced-motion: reduce` 的情况（页面导航跳过空间动画、弹层仅淡化；直播飘屏按既有策略停用，录制回放弹幕停止横向飘移并按媒体时间短暂静态显示，偏好恢复后直播弹幕建立全新会话、不补放旧消息）。
 
-底栏点击回归：`tests/sidebar-fling-tap.browser.js` 用 CDP 真实合成器触摸（夹具合成的 PointerEvent 不经合成器，测不出这条路径）在真实 Shell 里制造惯性滚动后点底栏，断言当场切页且只导航一次。
+底栏点击验证：在真实 Shell 中惯性滚动后点底栏，应当场切页且只导航一次。使用真实触摸或合成器触摸注入，普通合成 PointerEvent 不能覆盖这条路径。
 
-共享动效回归：`playwright-cli -s=motion run-code --filename=tests/system-motion.browser.js` 在 Windows Debug 主窗口检查三种视口与真实 OS 媒体查询下的页面接管、弹层反向/卸载和菜单方向样式，结束后清理 CDP 视口与触摸模拟。
+共享动效验证：在 Windows Debug 主窗口检查三种视口与真实 OS 媒体查询下的页面接管、弹层反向/卸载和菜单方向样式，结束后清理 CDP 视口与触摸模拟。
 
 每个动画检查开始帧、中间帧、最终帧与快速重复操作：
 

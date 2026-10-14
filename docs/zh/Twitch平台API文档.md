@@ -97,7 +97,7 @@ Twitch 拒绝所有没有浏览器完整性上下文的 Relay 游标：只要请
 4. 若所有备用播放列表仍含广告，代理把广告分片标记为 HLS `#EXT-X-GAP` 并停止低延迟预取，等待正常分片恢复；此时不播放广告占位内容，但画面可能短暂停顿。
 5. 录制归档解析 `#EXT-X-DISCONTINUITY-SEQUENCE`，把 GAP 或已滚出窗口的不连续边界传递到下一段实际保存的媒体；重签名后以 `PROGRAM-DATE-TIME`/媒体序号去重，避免同一直播窗口被追加两次。
 
-判定会随时间变化，可运行 `cargo test --lib -- --ignored --nocapture live_kaicenat` 重新测量；测试会打印每个档位的判定、清晰度阶梯，以及不干净时的 `roll_type` 与 `stream_source` 证据。策略参考 MIT 许可的 [TwitchAdSolutions `vaft`](https://github.com/pixeltris/TwitchAdSolutions/tree/f8f86706daf90daa534b26bce5b2f01238667d5f/vaft) 与 [ttv-lol-pro](https://github.com/younesaassila/ttv-lol-pro)，其备用顺序注释（`embed`/`popout` = Source、`autoplay` = 360p）与本次测到的清晰度阶梯一致。
+判定会随时间变化，上述实网测量仅对应当时版本，原手工测试已随测试精简移除。重新验收时需在真实客户端检查各档位的清晰度阶梯、`roll_type` 与 `stream_source`，不能只凭这份历史表判断当前可用性。策略参考 MIT 许可的 [TwitchAdSolutions `vaft`](https://github.com/pixeltris/TwitchAdSolutions/tree/f8f86706daf90daa534b26bce5b2f01238667d5f/vaft) 与 [ttv-lol-pro](https://github.com/younesaassila/ttv-lol-pro)，其备用顺序注释（`embed`/`popout` = Source、`autoplay` = 360p）与本次测到的清晰度阶梯一致。
 
 ## 账号与弹幕边界
 

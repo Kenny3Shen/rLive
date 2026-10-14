@@ -1,5 +1,7 @@
 # Windows Debug VOD 加载与续播性能实测
 
+> 历史记录：文中的 JS/HTML 夹具及配套媒体样本已移除，可从 Git 历史查阅。测试数量、通过情况与性能数字仅对应当时版本，不代表当前覆盖或性能保证；原始数据保留不变。
+
 首轮测试日期：2026-09-24。基线：`dc88f704`，rLive `5.2.0`。前半部分记录首轮只读瓶颈测量；后续实施和优化前后对照见本文末尾「第二轮：优化实现与实测对照」。
 
 ## 结论
@@ -127,23 +129,11 @@
 
 已有 `stream_proxy_telemetry` 可以报告上游请求数、失败数、转发字节和响应头耗时；其 `first_response_ms` / `latest_response_ms` **不是完整分片下载耗时**。本轮结合这些指标和 CDP 已定位主要等待阶段，因此未接入 CrabNebula DevTools。未新增 Rust span，也未采集 Rust CPU profile，不能进一步给 playurl、sidx、签名、MPD 分配精确占比。
 
-## 可复跑采样
+## 采样记录与重新验证
 
-脚本：[`tests/vod-performance.browser.js`](../../tests/vod-performance.browser.js)。必须连接真实主窗口，具体启动见[开发指南](开发指南.md#桌面端实机调试)。
+原采样脚本已移除。当前验证按[开发指南](开发指南.md#桌面端实机调试)连接真实主窗口，从历史卡片进入同一稿件，分别记录从头与固定位置续播的媒体事件、首帧媒体时间、CDP Range 请求和代理遥测。固定清晰度与代理设置，交错重复采样；超时保留为失败样本，不计入成功首帧。正常观看会更新历史，验证后清理探针并恢复临时设置。
 
-1. 在应用中播放目标视频并定位到待测位置，暂停并返回视频历史，确认历史已保存。
-2. 为卡片可访问名称设置一个唯一匹配的正则表达式，再运行脚本：
-
-```bash
-playwright-cli -s=rwin attach --cdp=http://127.0.0.1:9223
-playwright-cli -s=rwin eval 'window.__vodPerformanceConfig = {cardName:"^27:11 选哪个？iPhone",timeoutMs:45000}'
-playwright-cli -s=rwin --raw run-code --filename=tests/vod-performance.browser.js > .playwright-cli/vod-result.json
-playwright-cli -s=rwin --raw eval 'window.__vodPerformanceProfile' > .playwright-cli/vod.cpuprofile
-```
-
-脚本真实点击卡片，返回媒体事件、IPC 观测、CDP Range 时间线、后端代理遥测和 CPU 热点。结果保存在 `window.__vodPerformanceResult`；CPU profile 可导入 Chromium DevTools。请求 URL 去除 query，结果不保存 Cookie、认证头或带签名的上游媒体 URL。
-
-正常完成后暂停视频，`finally` 中恢复 `fetch` / `currentTime`，移除事件探针并断开此次 CDP 会话。`timeout:true` 表示超时，不能把该轮记为成功首帧。脚本不清空缓存、不改写历史、不修改清晰度；正常观看产生的历史上报仍会发生。
+以下是原脚本运行时的记录，不是当前可执行入口；完整旧工具可从 Git 历史查阅。原结果去除了请求 URL 的 query，不保存 Cookie、认证头或带签名的上游媒体 URL。
 
 本次本地原始证据保存在未跟踪的 `.playwright-cli/`：
 

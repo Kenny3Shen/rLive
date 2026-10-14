@@ -34,7 +34,7 @@
 
 通用约束：
 
-- 桌面 CDP 会话没有 `hasTouch`，`page.touchscreen.*` 会失败；要触摸语义就合成 `pointerType: "touch"` 的 PointerEvent（`tests/browser/harness.js` 的 `touchTap`）。
+- 桌面 CDP 会话没有 `hasTouch`，`page.touchscreen.*` 会失败；要触摸语义就合成 `pointerType: "touch"` 的 PointerEvent；合成事件不替代真机手势验证。
 - 手势用 `adb shell input tap/swipe` 注入，坐标按 `物理坐标 = CSS 坐标 × devicePixelRatio` 换算；排查触摸前先注入 touch/click/contextmenu/cancel 事件探针；长按类问题只能真机手动按住。
 - 生产 React 只有 minified 错误码，组件栈必须用 dev 构建（`bun run tauri dev` / `android dev`），`vite build --mode development` 不产出 dev React。
 - 视频画面走硬件层，CDP 截图拍不到，视觉证据用 `adb exec-out screencap -p > /tmp/x.png`。

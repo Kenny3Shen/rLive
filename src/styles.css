@@ -819,7 +819,7 @@ body {
   scale: 0.98;
   opacity: 0;
   will-change: scale, opacity;
-  /* 单值时长：遮罩按同一时长退场（tests/system-motion.browser.js 断言二者同拍）。
+  /* 单值时长：遮罩按同一时长退场，与内容动画同拍。
      透明度用 ease-out 先走，缩放与位移用 ease-exit 收尾。 */
   transition-duration: var(--motion-dialog-exit-duration);
   transition-timing-function: var(--motion-ease-exit), var(--motion-ease-exit), var(--motion-ease-out);
