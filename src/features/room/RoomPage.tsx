@@ -5,7 +5,7 @@ import { ChevronLeft, Heart, Link2, PanelsTopLeft, Share2, UserRoundX } from "lu
 import { invokeCmd } from "@/shared/api/tauri";
 import { canNavigateBackInApp } from "@/shared/appHistory";
 import { copyText } from "@/shared/clipboard";
-import { supportsMultiRoom } from "@/shared/clientPlatform";
+import { isMobileClient, supportsMultiRoom } from "@/shared/clientPlatform";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { RoomStageSkeleton } from "./RoomStageSkeleton";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
@@ -55,6 +55,8 @@ function RoomPageContent() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const recordedHistoryRoomRef = useRef<string | null>(null);
+  // 底部操作行只在桌面常驻（见下方 footer 注释），与点播播放页同一条判据。
+  const mobileClient = isMobileClient();
 
   const [followBusy, setFollowBusy] = useState(false);
   const [followGroupOpen, setFollowGroupOpen] = useState(false);
@@ -423,7 +425,10 @@ function RoomPageContent() {
         />
       </div>
 
-      {!webFullscreen && (
+      {/* 底部操作行只在细指针桌面常驻：移动端（含平板）的两个入口收进画面内 HUD 的
+          「更多房间操作」，与点播播放页底部同一条判据（`!mobileClient`）。平板竖屏
+          宽度虽已越过 `md`，但那里的 44px 行只是重复 HUD 里已有的动作。 */}
+      {!webFullscreen && !mobileClient && (
         <div className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
           <Button
             variant="ghost"

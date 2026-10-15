@@ -435,10 +435,13 @@ export function IptvPlayerPage() {
           </aside>
         )}
       </main>
+      {/* 底部状态栏在手机（窄屏）与桌面保留；平板宽度已越过 `md`，但那条 37px 的横杠
+          只是应用外壳画法的重复：频道来源与分组在 HUD 页码里，播放状态在画面中央的浮层
+          （`status !== "playing"`）里都已给出。 */}
       {!webFullscreen && (
         <footer
           data-slot="iptv-player-footer"
-          className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/80 bg-sidebar/90 px-3 py-2"
+          className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/80 bg-sidebar/90 px-3 py-2 touch-wide:hidden"
         >
           <Badge variant="outline">{source.label}</Badge>
           {channel.group && <Badge variant="secondary">{channel.group}</Badge>}
