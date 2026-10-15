@@ -5,7 +5,6 @@ import {
   insertBilibiliDanmakuText,
   truncateBilibiliDanmaku,
 } from "../src/features/room/danmaku/outgoing";
-import { tokenizeDanmakuContent } from "../src/features/room/danmaku/emoji";
 describe("Bilibili outgoing danmaku boundaries", () => {
   test("matches the official web UTF-16-unit limit without splitting emoji", () => {
     expect(BILIBILI_LIVE_DANMAKU_MAX_UTF16_UNITS).toBe(20);
@@ -23,39 +22,5 @@ describe("Bilibili outgoing danmaku boundaries", () => {
       draft: "a".repeat(19),
       caret: 19,
     });
-  });
-});
-describe("local danmaku emoji tokens", () => {
-  test("maps picker Unicode and common Bilibili aliases to local emoji entries", () => {
-    expect(tokenizeDanmakuContent("你好😀[doge]！")).toEqual([
-      {
-        type: "text",
-        value: "你好",
-      },
-      expect.objectContaining({
-        type: "emoji",
-        value: expect.objectContaining({
-          id: "smile",
-        }),
-      }),
-      expect.objectContaining({
-        type: "emoji",
-        value: expect.objectContaining({
-          id: "doge",
-        }),
-      }),
-      {
-        type: "text",
-        value: "！",
-      },
-    ]);
-  });
-  test("leaves unrecognised chat text untouched", () => {
-    expect(tokenizeDanmakuContent("自定义 [not-an-emote] 🙂")).toEqual([
-      {
-        type: "text",
-        value: "自定义 [not-an-emote] 🙂",
-      },
-    ]);
   });
 });

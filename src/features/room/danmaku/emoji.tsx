@@ -9,7 +9,9 @@ import smileSrc from "@/assets/danmaku-emoji/smile.svg";
 import wowSrc from "@/assets/danmaku-emoji/wow.svg";
 import {
   BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY,
+  DANMAKU_IMAGE_FALLBACK_TEXT,
   DANMAKU_IMAGE_SCALE,
+  danmakuImageRequestUrl,
   richDanmakuContent,
 } from "./content";
 
@@ -88,91 +90,9 @@ export const BILIBILI_NATIVE_TEXT_EMOJIS = [
   "(苦笑)",
 ] as const;
 
-export type DanmakuContentSegment =
-  | { type: "text"; value: string }
-  | { type: "emoji"; value: DanmakuEmoji };
-
-const emojiByToken = new Map<string, DanmakuEmoji>();
-for (const emoji of DANMAKU_EMOJIS) {
-  emojiByToken.set(emoji.text, emoji);
-  for (const alias of emoji.aliases ?? []) emojiByToken.set(alias, emoji);
-}
-
-// 最长的优先，为将来共享前缀的别名做准备。
-const emojiTokens = [...emojiByToken.keys()].sort((left, right) => right.length - left.length);
-
-/** 只拆分已知、本地的 emoji 记号；其余文本保持原样。 */
-export function tokenizeDanmakuContent(content: string): DanmakuContentSegment[] {
-  if (!content) return [];
-
-  const segments: DanmakuContentSegment[] = [];
-  let textStart = 0;
-  let index = 0;
-
-  while (index < content.length) {
-    const token = emojiTokens.find((candidate) => content.startsWith(candidate, index));
-    if (!token) {
-      index += 1;
-      continue;
-    }
-
-    if (textStart < index) {
-      segments.push({ type: "text", value: content.slice(textStart, index) });
-    }
-    const emoji = emojiByToken.get(token);
-    if (emoji) segments.push({ type: "emoji", value: emoji });
-    index += token.length;
-    textStart = index;
-  }
-
-  if (textStart < content.length) {
-    segments.push({ type: "text", value: content.slice(textStart) });
-  }
-  return segments;
-}
-
-/** 右侧消息列表的安全文本渲染器；绝不解析 HTML。 */
-export function DanmakuEmojiText({
-  content,
-  className,
-  emojiClassName,
-}: {
-  content: string;
-  className?: string;
-  emojiClassName?: string;
-}) {
-  const segments = tokenizeDanmakuContent(content);
-  if (segments.length === 0) return null;
-
-  return (
-    <span className={className}>
-      {segments.map((segment, index) =>
-        segment.type === "text" ? (
-          <span key={`text-${index}`}>{segment.value}</span>
-        ) : (
-          <img
-            key={`emoji-${segment.value.id}-${index}`}
-            src={segment.value.src}
-            alt={segment.value.label}
-            draggable={false}
-            className={cn(
-              "mx-px inline-block select-none align-[-0.25em] object-contain",
-              emojiClassName,
-            )}
-            style={{
-              width: `${DANMAKU_IMAGE_SCALE}em`,
-              height: `${DANMAKU_IMAGE_SCALE}em`,
-            }}
-          />
-        ),
-      )}
-    </span>
-  );
-}
-
 /**
- * 当后端提供已校验的富片段时渲染平台下发的 Bilibili 图片表情。纯文本继续走
- * 本地表情渲染器，使每个受支持的站点保持同样轻量的兜底行为。
+ * 当后端提供已校验的富片段时渲染平台下发的 Bilibili 图片表情。
+ * text 片段原样输出；调用方保证只有携带图片片段的消息才进入本组件。
  */
 export function DanmakuRichText({
   content,
@@ -187,20 +107,18 @@ export function DanmakuRichText({
 }) {
   const richContent = richDanmakuContent(spans);
   if (!richContent) {
-    return (
-      <DanmakuEmojiText content={content} className={className} emojiClassName={emojiClassName} />
-    );
+    return <span className={className}>{content}</span>;
   }
 
   return (
     <span className={className}>
       {richContent.map((span, index) =>
         span.type === "text" ? (
-          <DanmakuEmojiText key={`text-${index}`} content={span.text} />
+          <span key={`text-${index}`}>{span.text}</span>
         ) : (
           <img
             key={`image-${span.image_url}-${index}`}
-            src={span.image_url}
+            src={danmakuImageRequestUrl(span.image_url)}
             alt="表情"
             draggable={false}
             referrerPolicy={BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY}
@@ -211,6 +129,15 @@ export function DanmakuRichText({
             style={{
               width: `${DANMAKU_IMAGE_SCALE}em`,
               height: `${DANMAKU_IMAGE_SCALE}em`,
+            }}
+            onError={(event) => {
+              const image = event.currentTarget;
+              // 与悬浮层一致：代理失败先回退直连 CDN，再失败才替换为占位文本。
+              if (!image.src.startsWith("http")) {
+                image.src = span.image_url;
+                return;
+              }
+              image.replaceWith(document.createTextNode(DANMAKU_IMAGE_FALLBACK_TEXT));
             }}
           />
         ),

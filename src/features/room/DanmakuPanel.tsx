@@ -32,6 +32,7 @@ import {
   type DanmakuListSurface,
 } from "./danmaku/listColor";
 import { formatDanmakuClipboardText, useDanmakuActions } from "./danmaku/useDanmakuActions";
+import { DanmakuRichText } from "./danmaku/emoji";
 import { cn } from "@/lib/utils";
 
 // 有界队列只负责隐藏页签或突发流量期间的待提交事件；已提交的历史由虚拟器窗口化渲染。
@@ -107,6 +108,8 @@ const DanmakuRow = memo(function DanmakuRow({
   const user = event.user.trim() || "匿名";
   const message = formatDanmakuClipboardText(event.content);
   const selectable = event.kind !== "system" && message.length > 0;
+  // 只有确实携带平台图片表情的行才走富文本路径；普通文本行保持零分配的原样输出。
+  const hasImageSpan = event.spans?.some((span) => span.type === "image") ?? false;
 
   const Row = selectable ? "button" : "div";
 
@@ -127,7 +130,11 @@ const DanmakuRow = memo(function DanmakuRow({
       )}
     >
       {event.kind !== "system" && <DanmakuSender event={event} user={user} surface={surface} />}
-      {event.content}
+      {hasImageSpan ? (
+        <DanmakuRichText content={event.content} spans={event.spans} />
+      ) : (
+        event.content
+      )}
     </Row>
   );
 });
