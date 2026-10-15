@@ -40,6 +40,7 @@ import { Slider } from "@/components/ui/slider";
 import { SpinnerIcon } from "@videojs/react/icons";
 import { Switch } from "@/components/ui/switch";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
+import { LiveDurationClock } from "./LiveDurationClock";
 import {
   mediaPopupMotionClass,
   mediaPopupResetClass,
@@ -195,6 +196,11 @@ export type PlayerControlsProps = {
   progressPlacement?: "above" | "center";
   disabled?: boolean;
   stackedBelowPlayer?: boolean;
+  /**
+   * 当前直播场次的开始时间（Unix 毫秒）。仅直播形态传入：控制栏左组右端据此显示
+   * 已播时长，缺省（IPTV、点播、平台未提供开播时间）时该处不出现任何内容。
+   */
+  liveStartedAt?: number | null;
   centerSlot?: ReactNode;
   playbackSettings?: ReactNode;
   playbackSettingsTitle?: string;
@@ -592,6 +598,7 @@ export function PlayerControls({
   chaptersPlacement = "controls",
   progressPlacement = "above",
   stackedBelowPlayer = false,
+  liveStartedAt,
   disabled = false,
   compact = false,
   centerSlot,
@@ -862,6 +869,9 @@ export function PlayerControls({
 
           {/* 5. 章节（桌面）：占用点播原仅音频的位置。 */}
           {showSecondary && chaptersPlacement === "controls" && chaptersSlot}
+
+          {/* 6. 当前直播时长：左组最右端，贴着中央槽位。只有直播页提供开播时间。 */}
+          {liveStartedAt != null && <LiveDurationClock liveStartedAt={liveStartedAt} />}
         </div>
 
         {/* 中间：弹幕发送栏，或移动端 VOD 竖屏的进度条。 */}

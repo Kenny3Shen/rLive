@@ -300,6 +300,8 @@ type PlayerPaneProps = {
   roomUserName?: string;
   roomUserAvatar?: string;
   roomOnline?: number;
+  /** 当前直播场次的开始时间（Unix 毫秒）；平台未提供时控制栏不显示已播时长。 */
+  liveStartedAt?: number | null;
   /** 由标题栏和全屏 HUD 渲染的房间级工具。 */
   autoDanmakuSend?: AutoDanmakuSendController;
   sleepTimer?: SleepTimerController;
@@ -372,6 +374,7 @@ function PlayerPaneContent({
   roomUserName,
   roomUserAvatar,
   roomOnline,
+  liveStartedAt,
   autoDanmakuSend,
   sleepTimer,
   fullscreenRoomActions = [],
@@ -1513,6 +1516,8 @@ function PlayerPaneContent({
               // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
               // 那里没有手势栏 inset。
               stackedBelowPlayer={stackedPlayer}
+              // 只按详情里的开播时间显示已播时长；详情刷新带上新场次后会跟着归零。
+              liveStartedAt={liveStartedAt}
               compact={compactViewport}
               portalContainer={playerStageRef}
               centerSlot={

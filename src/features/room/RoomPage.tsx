@@ -414,6 +414,8 @@ function RoomPageContent() {
           roomUserName={detail.user_name}
           roomUserAvatar={detail.user_avatar}
           roomOnline={detail.online}
+          // 未开播时平台可能留着上一场的时间戳，不能拿它算「已播时长」。
+          liveStartedAt={detail.status ? (detail.live_started_at ?? null) : null}
           autoDanmakuSend={autoDanmakuSend}
           sleepTimer={sleepTimer}
           fullscreenRoomActions={fullscreenRoomActions}

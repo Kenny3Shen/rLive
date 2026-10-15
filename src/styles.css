@@ -366,6 +366,18 @@
   height: var(--media-icon-size);
 }
 
+/* 控制栏里的只读读数（当前直播时长）跟着同一排按钮缩放：`0.45 × --media-control-size`
+   在桌面是 14.6px（按钮 32.4px、图标 24px），移动端 dense 档是 12.6px（按钮 28px、
+   图标 20px）。与按钮成比例而不是取固定 px —— 移动端整条控制栏小一档时，固定的
+   12px 会让读数相对按钮显得偏大，而 `text-media` 那档（11.7px）在桌面上又明显
+   小于按钮的视觉重量，两边都不像同一套尺寸。
+
+   行高与按钮同高：读数与相邻按钮的中心线对齐不靠基线凑，整块读数就是一行控件高度。 */
+.r-live-player-skin [data-slot="player-live-duration"] {
+  font-size: calc(var(--media-control-size) * 0.45);
+  line-height: var(--media-control-size);
+}
+
 /* 移动端上下控制栏使用同一档密度：按钮 28px、图标 20px。
    只在 chrome 层设置变量，不缩放画面、标题或独立的全屏锁定按钮。 */
 .r-live-player-skin [data-density="dense"],

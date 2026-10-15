@@ -47,31 +47,8 @@ export function withFollowPlatform(
  * 把校验过的开播时间戳转换为关注列表使用的紧凑中文文案。未知、非法和未来
  * 的时间刻意渲染为空，
  * 而不暗示平台并未提供的时长。
+ *
+ * 实现已移到 `@/shared/liveDuration`：播放器控制栏的秒级时钟要用同一份校验与
+ * 同一档中文阈值。这里保留导出名，关注页与房间侧栏无需改动。
  */
-export function formatFollowLiveDuration(
-  liveStartedAt: number | null | undefined,
-  now = Date.now(),
-): string | null {
-  if (
-    liveStartedAt == null ||
-    !Number.isFinite(liveStartedAt) ||
-    liveStartedAt <= 0 ||
-    liveStartedAt > now
-  ) {
-    return null;
-  }
-
-  const minutes = Math.floor((now - liveStartedAt) / 60_000);
-  if (minutes < 1) return "刚刚开播";
-  if (minutes < 60) return `${minutes} 分钟`;
-
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  if (hours < 24) {
-    return remainingMinutes > 0 ? `${hours} 小时 ${remainingMinutes} 分钟` : `${hours} 小时`;
-  }
-
-  const days = Math.floor(hours / 24);
-  const remainingHours = hours % 24;
-  return remainingHours > 0 ? `${days} 天 ${remainingHours} 小时` : `${days} 天`;
-}
+export { formatLiveDurationText as formatFollowLiveDuration } from "@/shared/liveDuration";
