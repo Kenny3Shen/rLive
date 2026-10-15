@@ -10,17 +10,6 @@ import {
 import { floatingDanmakuText } from "./filter";
 import { superChatDurationMs } from "../superChat";
 
-/** 直播层的本地在屏条数预算上限。 */
-export const DANMAKU_MAX_ACTIVE_COMMENTS = 800;
-/**
- * 每条车道稳态在屏条数：`danmu` 的轨道准入是「前一条尾部完全进屏」才放行，
- * 于是单车道在屏 = 行程时长 / 放行间隔 ≈ 1 + 舞台宽 / 弹幕宽 ≈ 5。
- * 预算按它取值，超出的新弹幕由调用方直接丢弃，与旧引擎的车道准入语义一致；
- * 取值过大时库会退化为叠放（`adaptive`）或长队列延迟（`strict`）。
- */
-export const DANMAKU_LANE_ACTIVE_COMMENTS = 5;
-/** 预算下限：一条车道的容量，保证极矮舞台不会因为取整被压到 0 条。 */
-export const DANMAKU_MIN_ACTIVE_COMMENTS = DANMAKU_LANE_ACTIVE_COMMENTS;
 export const DANMAKU_IMAGE_TRACK_SPAN = 2;
 export const DANMAKU_DEFAULT_DURATION_MS = 15_000;
 export const DANMAKU_DEFAULT_SPEED = 100;
@@ -105,15 +94,6 @@ export function danmakuLaneCount(stageHeight: number, laneHeight: number, area: 
   const safeHeight = Number.isFinite(stageHeight) ? Math.max(0, stageHeight) : 0;
   const safeLaneHeight = Math.max(1, Number.isFinite(laneHeight) ? Math.floor(laneHeight) : 16);
   return Math.max(0, Math.floor(Math.floor(safeHeight * clampDanmuArea(area)) / safeLaneHeight));
-}
-
-export function danmakuMaxActiveComments(
-  stageHeight: number,
-  laneHeight: number,
-  area: number,
-): number {
-  const budget = danmakuLaneCount(stageHeight, laneHeight, area) * DANMAKU_LANE_ACTIVE_COMMENTS;
-  return Math.min(DANMAKU_MAX_ACTIVE_COMMENTS, Math.max(DANMAKU_MIN_ACTIVE_COMMENTS, budget));
 }
 
 export function danmakuAreaConfig(area: number): number {

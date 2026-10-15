@@ -21,7 +21,6 @@ import {
   danmakuLayerAreaConfig,
   danmakuLaneCount,
   danmuLaneHeight,
-  danmakuMaxActiveComments,
   danmakuRenderLayer,
   isPinnedDanmakuEvent,
   updateDanmakuAggregation,
@@ -390,11 +389,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         queueEvents(events);
         return;
       }
-      const maxActiveComments = danmakuMaxActiveComments(
-        stageHeightRef.current,
-        laneHeightRef.current,
-        areaRef.current,
-      );
       const scrollLaneCount = danmakuLaneCount(
         stageHeightRef.current,
         laneHeightRef.current,
@@ -403,9 +397,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
       const topLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeightRef.current, 1);
       const config = configRef.current;
       const supportsSuperChat = config.superChatEnabled && siteSupportsSuperChat(config.siteId);
-      // 每批只统计一次，循环内随新增滚动记录递增；逐条遍历全部记录在高峰批次会退化为 O(n²)。
-      let activeScrollCount = 0;
-      for (const record of recordsRef.current.values()) if (record.layer === "scroll") activeScrollCount += 1;
       for (const event of events) {
         if (!shouldShowValidatedOnFloatingDanmaku(event, config.filterGifts)) continue;
         if (config.shieldMatcher(event) || config.blockedUserMatcher(event)) continue;
@@ -432,7 +423,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
           aggregatorRef.current.forget(aggregation.key);
           aggregation = aggregatorRef.current.aggregate(event);
         }
-        if (!isPinnedDanmakuEvent(event) && activeScrollCount >= maxActiveComments) continue;
 
         const id = `rlive-danmaku-${runtimeEpochRef.current}-${++sequenceRef.current}`;
         const comment = danmakuCommentFromEvent(event, {
@@ -448,7 +438,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         const layer = danmakuRenderLayer(comment);
         const meta = comment.__rliveMeta;
         recordsRef.current.set(id, { comment, meta, layer, attached: false });
-        if (layer === "scroll") activeScrollCount += 1;
         if (meta.aggregationKey) aggregationTargetsRef.current.set(meta.aggregationKey, id);
 
         renderer.emit(comment);

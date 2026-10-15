@@ -1,6 +1,6 @@
 import { create, type Danmaku, type Manager } from "danmu";
 import type { DanmakuCollisionMode } from "@/shared/types/live";
-import { applyCommentStyle, danmakuMaxActiveComments } from "./danmakuAdapter";
+import { applyCommentStyle } from "./danmakuAdapter";
 import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
 
 /**
@@ -184,11 +184,9 @@ export class DanmakuRenderer {
   private readonly pendingWide = new Map<string, PendingWide>();
   /**
    * 已受理但尚未回调 `onDetach` 的 id。调用方按「每条受理的弹幕恰好一次 detach」
-   * 记账（活动预算、记录表都靠它回收），因此被库丢弃、被移除、被清屏的条目都要在这里结算。
+   * 记账（记录表靠它回收），因此被库丢弃、被移除、被清屏的条目都要在这里结算。
    */
   private readonly live = new Set<string>();
-  /** 在屏滚动弹幕的 id 集合：唯一准入判据的计数来源，随 `detach` 回收。 */
-  private readonly scrollLive = new Set<string>();
   private readonly observer?: ResizeObserver;
   /** VOD 时间轴与游标；直播不走这里，`emit` 直接投放。 */
   private timeline: DanmakuComment[] = [];
@@ -313,8 +311,9 @@ export class DanmakuRenderer {
   }
 
   /**
-   * 切换碰撞检测算法。在屏预算（`scrollCapacity`）与算法无关，始终生效：
-   * 它是应用侧的密度上限，不是碰撞策略的一部分。
+   * 切换碰撞检测算法，透传给两层管理器。
+   * 密度不再由应用侧的在屏预算控制：饱和时 `strict` 由库排队延后、`adaptive` 叠放、
+   * `none` 不拦，三种行为都由所选算法本身决定。
    */
   setCollisionMode(mode: DanmakuCollisionMode): void {
     if (this.destroyed || mode === this.collisionMode) return;
@@ -489,33 +488,21 @@ export class DanmakuRenderer {
   /**
    * 投放一条弹幕；被库拒绝（待投放已满、未在播放）时立即结算 detach。
    * 返回是否已受理。
+   *
+   * 饱和时不在这里丢弃：库的 `strict` 把超量弹幕留在待投队列延后投放，
+   * 上界是 `limits.stash`（`MAX_STASHED`）。
    */
   private push(comment: DanmakuComment): boolean {
     if (this.live.has(comment.id)) return false;
     const span = Math.max(1, Math.floor(comment.lanes ?? 1));
     if (comment.mode !== "scroll") return this.pushFixed(comment, span);
-    if (this.scrollLive.size >= this.scrollCapacity()) {
-      this.options.onDetach?.(comment.id);
-      return false;
-    }
     if (span > 1) return this.pushWide(comment, span);
     if (!this.scroll.manager.push(comment)) {
       this.options.onDetach?.(comment.id);
       return false;
     }
     this.live.add(comment.id);
-    this.scrollLive.add(comment.id);
     return true;
-  }
-
-  /**
-   * 在屏滚动弹幕上限。滚动层容器本身已按用户设置裁到显示区域，因此这里 `area = 1`；
-   * 公式与直播层的批次准入（`danmakuMaxActiveComments`）共用，两处判据不会漂移。
-   * 库在 `strict` 下只会排队、不会丢弃，超出的新弹幕必须在这里丢掉，
-   * 才能保持与旧引擎车道准入一致的密度。
-   */
-  private scrollCapacity(): number {
-    return danmakuMaxActiveComments(this.scroll.manager.container.height, this.laneHeight, 1);
   }
 
   /** 固定弹幕：不参与轨道调度，由本文件按车道摆位，`direction: none` 静止到期。 */
@@ -564,7 +551,6 @@ export class DanmakuRenderer {
       return false;
     }
     this.live.add(comment.id);
-    this.scrollLive.add(comment.id);
     if (choice.wait <= 0) {
       this.launchWide(comment, reservation);
       return true;
@@ -678,7 +664,6 @@ export class DanmakuRenderer {
 
   /** 唯一结算点：每条受理过的弹幕只回调一次 `onDetach`。 */
   private detach(id: string): void {
-    this.scrollLive.delete(id);
     if (!this.live.delete(id)) return;
     this.options.onDetach?.(id);
   }
