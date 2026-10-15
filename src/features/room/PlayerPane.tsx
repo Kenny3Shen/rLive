@@ -15,11 +15,9 @@ import {
 import {
   Captions,
   CaptionsOff,
-  Headphones,
   MessageSquareOff,
   MessageSquareText,
   PictureInPicture2,
-  VideoOff,
   Volume2,
   VolumeX,
   type LucideIcon,
@@ -40,7 +38,6 @@ import {
   type PlayerHudRoomAction,
 } from "./PlayerFullscreenHud";
 import {
-  audioOnlyControlPresentation,
   danmakuControlPresentation,
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
@@ -91,7 +88,8 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 export type RoomSideTab = "chat" | "settings" | "follow";
 
 type PlayerMobileRoomAction = {
-  id: "mute" | "audio-only" | "danmaku" | "asr" | "picture-in-picture";
+  // 仅音频不在这里：它是画面态开关，已统一到顶部 HUD 的常驻图标。
+  id: "mute" | "danmaku" | "asr" | "picture-in-picture";
   label: string;
   icon: LucideIcon;
   pressed?: boolean;
@@ -602,7 +600,6 @@ function PlayerPaneContent({
       : pictureInPicture.requestPictureInPicture());
   }, [pictureInPicture]);
   const mobileRoomActions = useMemo<readonly PlayerMobileRoomAction[]>(() => {
-    const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
     const danmakuControl = danmakuControlPresentation(osdOn);
     const actions: PlayerMobileRoomAction[] = [
       {
@@ -612,14 +609,6 @@ function PlayerPaneContent({
         pressed: playerControlMuted,
         disabled: transportDisabled,
         onSelect: handleToggleMute,
-      },
-      {
-        id: "audio-only",
-        label: audioOnlyControl.label,
-        icon: audioOnlyControl.icon === "headphones" ? Headphones : VideoOff,
-        pressed: audioOnlyControl.enabled,
-        disabled: transportDisabled && !audioOnly,
-        onSelect: handleToggleAudioOnly,
       },
       {
         id: "danmaku",
@@ -657,7 +646,6 @@ function PlayerPaneContent({
     asr.desktopClient,
     asr.toggle,
     audioOnly,
-    handleToggleAudioOnly,
     handleToggleMute,
     handleToggleOsd,
     handleTogglePictureInPicture,
@@ -1487,7 +1475,6 @@ function PlayerPaneContent({
                     }
                   : undefined
               }
-              audioOnly={audioOnly}
               sidePanelOpen={sidePanelOpen}
               sidePanelLabel={
                 compactViewport ? (sidePanelOpen ? "收起直播间面板" : "打开直播间面板") : undefined
@@ -1540,7 +1527,6 @@ function PlayerPaneContent({
               onOverlayInteractionChange={handleControlsOverlayInteractionChange}
               refreshDisabled={refreshDisabled}
               onRefresh={onRefresh}
-              onToggleAudioOnly={handleToggleAudioOnly}
               onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
               onToggleWebFullscreen={
                 onWebFullscreenChange ? () => onWebFullscreenChange(!webFullscreen) : undefined
@@ -1708,6 +1694,8 @@ function PlayerPaneContent({
                   onDeviceChange: setCastingDevice,
                 }}
                 toolsSlot={player.mode === "fullscreen" ? undefined : hudToolsSlot}
+                audioOnly={audioOnly}
+                onToggleAudioOnly={handleToggleAudioOnly}
                 compact={compactViewport}
                 titleOnly={playerHudTitleOnly(
                   mobileClient,

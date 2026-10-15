@@ -12,14 +12,12 @@ import {
   CaptionsOff,
   Check,
   Expand,
-  Headphones,
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
   Settings,
   Shrink,
   SkipForward,
-  VideoOff,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -162,7 +160,6 @@ export type PlayerControlsProps = {
   /** 控制层外壳：定位类名、ref、显隐 data 属性与指针/焦点事件由播放页提供。 */
   chrome?: ControlsChromeProps;
   externalAudioControls?: ExternalPlayerAudioControls;
-  audioOnly?: boolean;
   sidePanelOpen?: boolean;
   sidePanelLabel?: string;
   webFullscreen?: boolean;
@@ -213,7 +210,6 @@ export type PlayerControlsProps = {
   loadError?: string | null; // 由 ErrorDialog 展示
   onRefresh?: () => void;
   onNext?: () => void;
-  onToggleAudioOnly?: () => void;
   onToggleSidePanel?: () => void;
   onToggleWebFullscreen?: () => void;
   onToggleOsd?: () => void;
@@ -284,11 +280,11 @@ function ExtensionButton({
         // 开启态只用图标区分，不再铺底色。
         //
         // 这里曾用玻璃菜单的选中填充（中性白 18%）表示开启，但它与控制栏悬停的
-        // `--media-muted`（白 15%）几乎无法分辨：点开弹幕/仅播声音/网页全屏后移开
-        // 指针，按钮看上去仍像停在被悬停的状态。四个开关的图标本身已经区分了开与
-        // 关（弹幕 `MessageSquareText` / `MessageSquareOff`、仅播声音
-        // `Headphones` / `VideoOff`、网页全屏 `Shrink` / `Expand`、侧栏
-        // `PanelRightClose` / `PanelRightOpen`），底色只留给悬停反馈。
+        // `--media-muted`（白 15%）几乎无法分辨：点开弹幕/侧栏后移开
+        // 指针，按钮看上去仍像停在被悬停的状态。开关的图标本身已经区分了开与
+        // 关（弹幕 `MessageSquareText` / `MessageSquareOff`、网页全屏
+        // `Shrink` / `Expand`、侧栏 `PanelRightClose` / `PanelRightOpen`），
+        // 底色只留给悬停反馈。仅播声音已移到顶部 HUD，不再走本函数。
         className,
       )}
     >
@@ -573,7 +569,6 @@ export function AsrSettingsBody({
 export function PlayerControls({
   chrome,
   externalAudioControls,
-  audioOnly = false,
   sidePanelOpen = false,
   sidePanelLabel,
   webFullscreen = false,
@@ -612,7 +607,6 @@ export function PlayerControls({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 由 ErrorDialog 展示
   onRefresh,
   onNext,
-  onToggleAudioOnly,
   onToggleSidePanel,
   onToggleWebFullscreen,
   onToggleOsd,
@@ -645,7 +639,6 @@ export function PlayerControls({
   const settingsVisible = qualities.length > 0 || lines.length > 0 || playbackSettings != null;
   const settingsDisabled = playbackSettingsDisabled ?? (disabled && playbackSettings == null);
   const danmaku = danmakuControlPresentation(osdOn);
-  const audio = audioOnlyControlPresentation(audioOnly);
   const asr = asrControlPresentation(asrOn, asrBusy);
   const externalVolume = volumeControlPresentation(
     externalAudioControls?.volume ?? 0,
@@ -755,7 +748,7 @@ export function PlayerControls({
       {/* 桌面、横屏、全屏与录制回放保留独立进度行。 */}
       {!inlineProgress && progress}
 
-      {/* 控制条主行：左侧为暂停|刷新|音量|仅音频（点播为章节），中间为弹幕发送栏，右侧为设置|弹幕|字幕|画中画|窗口全屏|全屏 */}
+      {/* 控制条主行：左侧为暂停|刷新|音量（点播为章节），中间为弹幕发送栏，右侧为设置|弹幕|字幕|画中画|窗口全屏|全屏 */}
       <div
         data-slot="player-extension-controls"
         data-compact={compact || undefined}
@@ -764,7 +757,7 @@ export function PlayerControls({
           inlineProgress ? "gap-1" : "gap-2",
         )}
       >
-        {/* 左侧控制栏：暂停 | 刷新 | 音量 | 仅音频（点播：章节，仅音频移到顶部 HUD） */}
+        {/* 左侧控制栏：暂停 | 刷新 | 音量（点播：章节）。仅音频是画面态开关，统一在顶部 HUD。 */}
         <div className="flex shrink-0 items-center gap-1">
           {/* 1. 暂停 / 播放 */}
           <ButtonTooltip side="top">
@@ -860,17 +853,10 @@ export function PlayerControls({
               <VolumePopover />
             ))}
 
-          {/* 4. 仅音频 */}
-          {showSecondary && onToggleAudioOnly && (
-            <ExtensionButton label={audio.label} active={audio.enabled} onClick={onToggleAudioOnly}>
-              {audio.enabled ? <Headphones /> : <VideoOff />}
-            </ExtensionButton>
-          )}
-
-          {/* 5. 章节（桌面）：占用点播原仅音频的位置。 */}
+          {/* 4. 章节（桌面）：占用点播原仅音频的位置。 */}
           {showSecondary && chaptersPlacement === "controls" && chaptersSlot}
 
-          {/* 6. 当前直播时长：左组最右端，贴着中央槽位。只有直播页提供开播时间。 */}
+          {/* 5. 当前直播时长：左组最右端，贴着中央槽位。只有直播页提供开播时间。 */}
           {liveStartedAt != null && <LiveDurationClock liveStartedAt={liveStartedAt} />}
         </div>
 

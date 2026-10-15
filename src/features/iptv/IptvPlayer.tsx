@@ -20,6 +20,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
+import { PlayerAudioOnlyButton } from "@/shared/components/player/PlayerAudioOnlyButton";
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
@@ -587,7 +588,6 @@ function IptvPlayerContent({
                   }
                 : undefined
             }
-            audioOnly={audioOnly}
             webFullscreen={webFullscreen}
             fullscreen={fullscreen}
             asrVisible={asr.desktopClient}
@@ -608,7 +608,6 @@ function IptvPlayerContent({
             refreshDisabled={!channel || status === "connecting"}
             loadError={player.fullscreenError}
             onRefresh={onReconnect}
-            onToggleAudioOnly={() => setAudioOnly((current) => !current)}
             onToggleWebFullscreen={() => onWebFullscreenChange?.(!webFullscreen)}
             onToggleAsr={asr.toggle}
             onAsrTranslationEnabledChange={setAsrTranslationEnabled}
@@ -737,6 +736,11 @@ function IptvPlayerContent({
                   {hudToolsSlot({ portalContainer: fullscreen ? playerStageRef : null })}
                 </div>
               )}
+              {/* 仅播声音：画面态开关，统一在顶部 HUD（原先在底部控制栏）。 */}
+              <PlayerAudioOnlyButton
+                audioOnly={audioOnly}
+                onToggle={() => setAudioOnly((current) => !current)}
+              />
             </div>
           </div>
         )}

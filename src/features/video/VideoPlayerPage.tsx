@@ -21,11 +21,9 @@ import {
   ChevronLeft,
   ExternalLink,
   FastForward,
-  Headphones,
   Home,
   Link2,
   Smartphone,
-  VideoOff,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -48,11 +46,11 @@ import {
   PLAYER_HUD_TITLE_SIZE_CLASS,
   PlayerControls,
   VOD_PLAYBACK_RATES,
-  audioOnlyControlPresentation,
   formatPlaybackRateLabel,
   PlayerMenuRadioGroup,
   type PlayerMenuRadioOption,
 } from "@/shared/components/player/PlayerControls";
+import { PlayerAudioOnlyButton } from "@/shared/components/player/PlayerAudioOnlyButton";
 import {
   useCompactPlayerViewport,
   usePortraitOrientation,
@@ -2676,7 +2674,6 @@ function VideoPlayerPageContent() {
    * 按 `DrawerScope` 挂进侧栏的 `DrawerViewport`，全屏时落在舞台内。
    */
   const chaptersDrawer = mobileClient || compact;
-  const audioOnlyControl = audioOnlyControlPresentation(audioOnly);
   const chaptersSlot = hasMenuChapters ? (
     <VideoChapterMenu
       variant={chaptersPlacement === "progress" ? "pill" : "button"}
@@ -3127,21 +3124,8 @@ function VideoPlayerPageContent() {
                           {title}
                         </p>
                       </div>
-                      {/* 仅播声音：点播从底部控制栏移到 HUD，把左组让给章节。 */}
-                      <MediaButton
-                        type="button"
-                        aria-label={audioOnlyControl.label}
-                        aria-pressed={audioOnlyControl.enabled}
-                        title={audioOnlyControl.label}
-                        className={PLAYER_HUD_BUTTON_CLASS}
-                        onClick={toggleAudioOnly}
-                      >
-                        {audioOnlyControl.enabled ? (
-                          <Headphones className={PLAYER_HUD_ICON_CLASS} aria-hidden />
-                        ) : (
-                          <VideoOff className={PLAYER_HUD_ICON_CLASS} aria-hidden />
-                        )}
-                      </MediaButton>
+                      {/* 仅播声音：与直播、IPTV、多画面统一在顶部 HUD，一处入口。 */}
+                      <PlayerAudioOnlyButton audioOnly={audioOnly} onToggle={toggleAudioOnly} />
                       {/* 短视频入口：以当前这条为种子进入竖屏流（滑到哪就从哪继续）。
                         与 `⋮` 同级常驻，不藏进溢出菜单 —— 它是这一页的消费方式切换，
                         不是低频工具。bvid 缺失（PGC）时退回首屏默认窗口。 */}

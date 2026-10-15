@@ -3,6 +3,7 @@ import { Car, Cast, ChevronLeft, Timer, type LucideIcon } from "lucide-react";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { glassSeparatorClass } from "@/shared/components/player/glassSurface";
+import { PlayerAudioOnlyButton } from "@/shared/components/player/PlayerAudioOnlyButton";
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
@@ -72,6 +73,13 @@ export type PlayerFullscreenHudProps = {
    * 而原生全屏的 stage 位于 top layer，会把它们整个压在下面。
    */
   toolsSlot?: ReactNode;
+  /**
+   * 「仅播声音 / 恢复画面」开关。只传 `onToggleAudioOnly` 才渲染这枚常驻图标，
+   * 摆在溢出菜单左侧、录制槽之后。仅音频是画面态开关，与返回箭头同层；
+   * 点播页不用本组件，它自己把 `PlayerAudioOnlyButton` 画在同一位置。
+   */
+  audioOnly?: boolean;
+  onToggleAudioOnly?: () => void;
   /** 紧凑视口（竖屏手机或较矮的横屏）。 */
   compact?: boolean;
   /** 移动端竖屏非全屏时，房间信息区只保留标题。 */
@@ -135,6 +143,8 @@ export function PlayerFullscreenHud({
   sleepTimer,
   cast,
   toolsSlot,
+  audioOnly = false,
+  onToggleAudioOnly,
   compact = false,
   titleOnly = false,
   portalContainer,
@@ -296,6 +306,11 @@ export function PlayerFullscreenHud({
       />
 
       {toolsSlot}
+
+      {/* 仅播声音：画面态开关，摆在溢出菜单左侧，与视频播放页同一处。 */}
+      {onToggleAudioOnly && (
+        <PlayerAudioOnlyButton audioOnly={audioOnly} onToggle={onToggleAudioOnly} />
+      )}
 
       {hasMenu && (
         <PlayerHudOverflowMenu

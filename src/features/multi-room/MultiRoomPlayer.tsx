@@ -21,6 +21,7 @@ import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
+import { PlayerAudioOnlyButton } from "@/shared/components/player/PlayerAudioOnlyButton";
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
@@ -119,7 +120,6 @@ type MainMultiRoomControlsProps = {
   loading: boolean;
   error: unknown;
   audioOnly: boolean;
-  onToggleAudioOnly: () => void;
   onRefresh: () => void;
   osdOn: boolean;
   onToggleOsd: () => void;
@@ -287,7 +287,6 @@ function MainMultiRoomControls({
   loading,
   error,
   audioOnly,
-  onToggleAudioOnly,
   onRefresh,
   osdOn,
   onToggleOsd,
@@ -308,17 +307,9 @@ function MainMultiRoomControls({
   } = useMainMultiRoomAsr();
   const showHost = !loading && error == null && !!playback.playUrl;
   const loadError = playback.loadError ?? player.loadError ?? player.fullscreenError;
-  const pictureInPicture = useVideoJsPiP();
-  const toggleAudioOnly = useCallback(() => {
-    if (!audioOnly && pictureInPicture?.isPictureInPicture) {
-      void pictureInPicture.exitPictureInPicture();
-    }
-    onToggleAudioOnly();
-  }, [audioOnly, onToggleAudioOnly, pictureInPicture]);
   return (
     <PlayerControls
       chrome={chrome}
-      audioOnly={audioOnly}
       osdOn={osdOn}
       asrVisible={asr.desktopClient}
       asrOn={asr.captionsOn}
@@ -353,7 +344,6 @@ function MainMultiRoomControls({
       }
       onOverlayInteractionChange={onControlsOverlayInteractionChange}
       onRefresh={onRefresh}
-      onToggleAudioOnly={toggleAudioOnly}
       onToggleOsd={onToggleOsd}
       onToggleAsr={asr.toggle}
       onAsrTranslationEnabledChange={setAsrTranslationEnabled}
@@ -468,6 +458,19 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
   const playerMuted = player.muted;
   const setPlayerAudio = player.setAudio;
   const exitPlayerFullscreen = player.exitFullscreen;
+  /**
+   * 仅播声音：进入前先退画中画，否则原生 PiP 窗口会留住画面而不只是声音。
+   *
+   * 这段逻辑原先住在 `MainMultiRoomControls`（底部控制栏），随开关一起上移到 HUD。
+   * 状态归本组件所有，因此切换不再需要经 `PlayerControls` 回传一层。
+   */
+  const pictureInPicture = useVideoJsPiP();
+  const toggleAudioOnly = useCallback(() => {
+    if (!audioOnly && pictureInPicture?.isPictureInPicture) {
+      void pictureInPicture.exitPictureInPicture();
+    }
+    setAudioOnly((enabled) => !enabled);
+  }, [audioOnly, pictureInPicture]);
 
   usePlayerChromeVisibility({ controlsRef, hudRef, visibleRef: controlsVisibleRef, enabled: main });
   // 副画面双击设为主画面：识别器来自 Video.js 官方钩子，动作仍是本页的 store 操作。
@@ -782,7 +785,6 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
             error={error}
             audioOnly={audioOnly}
             osdOn={osdOn}
-            onToggleAudioOnly={() => setAudioOnly((enabled) => !enabled)}
             onRefresh={retry}
             onToggleOsd={() => setOsdOn((visible) => !visible)}
             onControlsOverlayInteractionChange={handleControlsOverlayInteractionChange}
@@ -929,6 +931,11 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
           <OverlayIconButton label="刷新此路" portalContainer={playerStageRef} onClick={retry}>
             <RefreshCw aria-hidden />
           </OverlayIconButton>
+          {/* 仅播声音：只有主画面有业务意义（副画面不承载这条切换），
+              原先在底部控制栏，统一到 HUD 后与其它页面同处。 */}
+          {main && (
+            <PlayerAudioOnlyButton audioOnly={audioOnly} onToggle={toggleAudioOnly} />
+          )}
           <OverlayIconButton
             label="移除此路"
             portalContainer={playerStageRef}
