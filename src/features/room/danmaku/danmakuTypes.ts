@@ -12,7 +12,11 @@ export type DanmakuComment = {
   /** 占用车道数：大于 1 的滚动弹幕按大表情处理，占多条车道并放大。 */
   lanes?: number;
   style?: Record<string, string | number | undefined>;
-  render?: () => HTMLElement;
+  /**
+   * 构建弹幕的业务节点，由渲染器挂到库的包裹节点（`danmaku.node`）下。
+   * 必填：样式作用于这个子元素，库的 `setStyle` 只写包裹节点，无法替代。
+   */
+  render: () => HTMLElement;
 };
 
 export type DanmakuRendererOptions = {

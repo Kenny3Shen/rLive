@@ -1,6 +1,6 @@
 import { create, type Danmaku, type Manager } from "danmu";
 import type { DanmakuCollisionMode } from "@/shared/types/live";
-import { danmakuMaxActiveComments } from "./danmakuAdapter";
+import { applyCommentStyle, danmakuMaxActiveComments } from "./danmakuAdapter";
 import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
 
 /**
@@ -118,25 +118,6 @@ function lowerBound(comments: readonly DanmakuComment[], time: number): number {
   return lo;
 }
 
-function cssPropertyName(name: string): string {
-  if (name.startsWith("--")) return name;
-  return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-}
-
-function applyStyle(element: HTMLElement, style: DanmakuComment["style"]): void {
-  if (!style || typeof style !== "object") return;
-  for (const [name, value] of Object.entries(style)) {
-    if (value === undefined) continue;
-    element.style.setProperty(cssPropertyName(name), String(value));
-  }
-}
-
-/** 时间轴里被替换掉的定义要清掉自己引入的样式，否则旧字号/描边会留在节点上。 */
-function clearStyleKeys(element: HTMLElement, style: DanmakuComment["style"]): void {
-  if (!style || typeof style !== "object") return;
-  for (const name of Object.keys(style)) element.style.removeProperty(cssPropertyName(name));
-}
-
 /**
  * 车道占用表，用于 `danmu` 轨道无法表达的几何：固定弹幕（不参与轨道调度）
  * 与占多条车道的大表情滚动弹幕。
@@ -189,14 +170,6 @@ class LanePool {
   release(index: number): void {
     if (index >= 0 && index < this.used.length) this.used[index] = false;
   }
-}
-
-function fallbackElement(comment: DanmakuComment): HTMLElement {
-  const element = document.createElement("span");
-  element.textContent = comment.text;
-  element.dataset.rliveDanmakuId = comment.id;
-  applyStyle(element, comment.style);
-  return element;
 }
 
 export class DanmakuRenderer {
@@ -274,8 +247,8 @@ export class DanmakuRenderer {
     for (const record of this.records.values()) {
       const next = byId.get(record.comment.id);
       if (!next || next === record.comment) continue;
-      clearStyleKeys(record.element, record.comment.style);
-      applyStyle(record.element, next.style);
+      // 样式构造器总是给出完整键集，条件键（描边）取空串即删除，因此无需先清旧值。
+      applyCommentStyle(record.element, next.style);
       record.comment = next;
     }
   }
@@ -718,9 +691,7 @@ export class DanmakuRenderer {
   }
 
   private onCreateNode(danmaku: Danmaku<DanmakuComment>): void {
-    const comment = danmaku.data;
-    const element = comment.render ? comment.render() : fallbackElement(comment);
-    danmaku.node?.appendChild(element);
+    danmaku.node?.appendChild(danmaku.data.render());
   }
 
   private onAppendNode(danmaku: Danmaku<DanmakuComment>): void {

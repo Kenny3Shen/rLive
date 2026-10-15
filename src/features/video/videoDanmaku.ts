@@ -120,11 +120,10 @@ export function videoDanmakuComment(
     whiteSpace: "nowrap",
     textShadow: "0 1px 2px rgba(0,0,0,.92), 0 0 3px rgba(0,0,0,.72)",
     pointerEvents: "none",
+    // 条件键也总是给出：空串按 CSSOM 语义删除属性，样式替换时旧描边不会残留。
+    WebkitTextStroke: fontStroke > 0 ? `${fontStroke}px rgba(0,0,0,.92)` : "",
+    paintOrder: fontStroke > 0 ? "stroke fill" : "",
   };
-  if (fontStroke > 0) {
-    style.WebkitTextStroke = `${fontStroke}px rgba(0,0,0,.92)`;
-    style.paintOrder = "stroke fill";
-  }
   const comment: DanmakuComment = {
     id: entry.id,
     text: entry.content,
@@ -132,8 +131,8 @@ export function videoDanmakuComment(
     mode,
     ...(mode === "scroll" ? {} : { duration: VIDEO_DANMAKU_FIXED_DURATION_MS }),
     style,
+    // 自定义 DOM 只在原生调度实际投放时创建，沿用直播的安全文本和点选标记。
+    render: () => createDanmuBulletElement(comment),
   };
-  // 自定义 DOM 只在原生调度实际投放时创建，沿用直播的安全文本和点选标记。
-  comment.render = () => createDanmuBulletElement(comment);
   return comment;
 }

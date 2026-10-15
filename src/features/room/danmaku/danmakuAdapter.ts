@@ -230,11 +230,10 @@ export function danmakuStyleForEvent(
     lineHeight: "1.35",
     textShadow: "0 1px 2px rgba(0,0,0,.92), 0 0 3px rgba(0,0,0,.72)",
     pointerEvents: isSuperChat ? "auto" : "none",
+    // 条件键也总是给出：空串按 CSSOM 语义删除属性，样式替换时旧描边不会残留。
+    WebkitTextStroke: fontStroke > 0 ? `${fontStroke}px rgba(0,0,0,.92)` : "",
+    paintOrder: fontStroke > 0 ? "stroke fill" : "",
   };
-  if (fontStroke > 0) {
-    style.WebkitTextStroke = `${fontStroke}px rgba(0,0,0,.92)`;
-    style.paintOrder = "stroke fill";
-  }
   return style;
 }
 
@@ -324,12 +323,16 @@ export function danmuReservesLeadingCountSpacer(
   return Boolean(aggregationKey) && isPinnedDanmakuEvent(event);
 }
 
-function cssPropertyName(name: string): string {
+export function cssPropertyName(name: string): string {
   if (name.startsWith("--")) return name;
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
-function applyCommentStyle(element: HTMLElement, style: DanmakuComment["style"]): void {
+/**
+ * 逐条把业务样式写到弹幕的业务节点上。空串按 CSSOM 语义删除该属性，
+ * 因此样式构造器必须把条件键（描边）也一并给出，否则旧值会残留在节点上。
+ */
+export function applyCommentStyle(element: HTMLElement, style: DanmakuComment["style"]): void {
   if (!style || typeof style !== "object") return;
   for (const [name, value] of Object.entries(style)) {
     if (value === undefined) continue;
