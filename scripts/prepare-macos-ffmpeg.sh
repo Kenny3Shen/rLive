@@ -34,12 +34,12 @@
 # 构建结果为 LGPL：刻意不传 `--enable-gpl`，也不启用任何外部编解码库。
 set -euo pipefail
 
-FFMPEG_VERSION="9.0.1"
+FFMPEG_VERSION="9.0.2"
 FFMPEG_ARCHIVE="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_URL="https://ffmpeg.org/releases/${FFMPEG_ARCHIVE}"
 # 校验官方 tarball 的分离签名后计算得出，签名对应 FFmpeg 发布签名密钥
 # FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>。
-FFMPEG_SHA256="cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
+FFMPEG_SHA256="8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
 
 usage() {
   cat >&2 <<'USAGE'

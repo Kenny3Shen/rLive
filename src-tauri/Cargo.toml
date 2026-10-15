@@ -88,6 +88,12 @@ bzip2 = "0.6"
 # Desktop build environments must provide matching headers/import libraries
 # and package the corresponding runtime libraries.
 ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["format"] }
+# `ffmpeg-sys-next` is pinned through `ffmpeg-next`'s own `=9.0.0` requirement;
+# do not relax that to a range. 9.0.1 crashes its own build script with
+# STATUS_STACK_OVERFLOW on Windows (reproduced by swapping only this version in
+# an otherwise identical tree, where 9.0.0 builds). Its only changes are a
+# bindgen `-fno-builtin` flag and a `libavutil/spherical.h` header, neither of
+# which rLive needs. Revisit once upstream fixes the crash.
 fs2 = "0.4"
 
 [target.'cfg(windows)'.dependencies]

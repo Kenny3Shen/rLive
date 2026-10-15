@@ -32,14 +32,14 @@ $ErrorActionPreference = "Stop"
 # 不再抛异常，pacman/make/cygpath 的正常进度输出不会中断构建。
 $PSNativeCommandUseErrorActionPreference = $false
 $ProgressPreference = "SilentlyContinue"
-$FfmpegVersion = "9.0.1"
+$FfmpegVersion = "9.0.2"
 $FfmpegArchiveName = "ffmpeg-$FfmpegVersion.tar.xz"
 $FfmpegDownloadUrl = "https://ffmpeg.org/releases/$FfmpegArchiveName"
 # 校验官方 tarball 的分离签名后计算得出，签名对应 FFmpeg 发布签名密钥
 # FCF986EA15E6E293A5644F10B4322F04D67658D8 <ffmpeg-devel@ffmpeg.org>。
 # 与 prepare-macos-ffmpeg.sh、prepare-linux-ffmpeg.sh 中固定的版本一致：
 # 三个桌面平台构建同一个上游发布版本。
-$FfmpegArchiveSha256 = "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"
+$FfmpegArchiveSha256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
 
 # 在 `configure` 运行后，于生成的 config_components.h 中断言这些项。
 # `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
@@ -470,7 +470,7 @@ Configure options:
 $($ConfigureOptions -join "`n")
 
 These libraries are linked dynamically, so they can be replaced with your own
-build of the same FFmpeg 9.0.1 ABI. The exact source and the options above are
+build of the same FFmpeg 9.0.2 ABI. The exact source and the options above are
 also recorded in the rLive project at https://github.com/Kenny3Shen/rLive.
 "@ | Set-Content (Join-Path $stageRoot "README.txt") -Encoding ascii
 

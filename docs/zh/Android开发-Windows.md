@@ -9,14 +9,14 @@
 | ---------------- | --------------------------------------------------------------------- |
 | Android platform | `android-36`（compileSdk / targetSdk 36，minSdk 24）                |
 | Build Tools      | `36.0.0`                                                            |
-| NDK              | `29.0.13846066`                                                     |
+| NDK              | `29.0.14206865`（r29 稳定版）                                       |
 | Rust target      | `aarch64-linux-android`（真机）、`x86_64-linux-android`（模拟器） |
 | 其他             | Tauri 2、Bun、JDK 17                                                  |
 
 ```bash
 export ANDROID_HOME="$HOME/Android/Sdk"
-export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.13846066"
-sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
 rustup target add aarch64-linux-android x86_64-linux-android
 ```
 

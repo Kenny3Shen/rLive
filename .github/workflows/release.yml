@@ -25,7 +25,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
 
       - name: Check tag and package versions
         id: version
@@ -59,12 +59,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable at 2026-07-28
         with:
-          toolchain: 1.98.1
+          toolchain: 1.99.0
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
@@ -304,7 +304,7 @@ jobs:
           }
 
       - name: Upload Windows packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-release
           path: |
@@ -328,12 +328,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable at 2026-07-28
         with:
-          toolchain: 1.98.1
+          toolchain: 1.99.0
 
       - name: Install Linux build dependencies
         run: |
@@ -735,7 +735,7 @@ jobs:
 
       - name: Upload the rpm that failed extraction
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-rpm-failure
           path: rpm-failure/*.rpm
@@ -743,7 +743,7 @@ jobs:
           retention-days: 7
 
       - name: Upload Linux packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-release
           path: |
@@ -778,12 +778,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable at 2026-07-28
         with:
-          toolchain: 1.98.1
+          toolchain: 1.99.0
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
@@ -855,7 +855,7 @@ jobs:
             "release-assets/macos/rLive_${RELEASE_VERSION}_macos-${{ matrix.arch }}.dmg"
 
       - name: Upload macOS package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-${{ matrix.arch }}-release
           path: release-assets/macos/*.dmg
@@ -883,10 +883,10 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
 
       - name: Set up Java
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "17"
@@ -897,7 +897,7 @@ jobs:
       # Only platform-tools is needed here — the exact platforms, build-tools
       # and NDK are installed explicitly in the next step.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           packages: platform-tools
 
@@ -906,12 +906,12 @@ jobs:
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066"
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
 
       - name: Set up Rust Android target
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable at 2026-07-28
         with:
-          toolchain: 1.98.1
+          toolchain: 1.99.0
           targets: aarch64-linux-android
 
       - name: Install frontend dependencies
@@ -946,7 +946,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.13846066"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
           bun run tauri -- android build --ci --target aarch64 --apk
 
           mapfile -t apk_files < <(
@@ -992,7 +992,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/rlive-release.jks" src-tauri/gen/android/app/keystore.properties
 
       - name: Upload signed Android artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-release
           path: release-assets/android/*
@@ -1012,7 +1012,7 @@ jobs:
       contents: write
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: "*-release"
           path: release-assets
@@ -1029,7 +1029,7 @@ jobs:
           cat release-assets/SHA256SUMS.txt
 
       - name: Create draft release and attach assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true
           generate_release_notes: true
