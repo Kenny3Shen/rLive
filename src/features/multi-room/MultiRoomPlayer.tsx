@@ -159,7 +159,6 @@ function MainMultiRoomDanmaku({
   loading,
   error,
   audioOnly,
-  osdOn,
 }: {
   room: MultiRoomEntry;
   detail: LiveRoomDetail | undefined;
@@ -168,7 +167,6 @@ function MainMultiRoomDanmaku({
   loading: boolean;
   error: unknown;
   audioOnly: boolean;
-  osdOn: boolean;
 }) {
   const syncStatus = useMultiRoomLiveSyncStatus(room.key);
   const danmaku = useDanmakuConnection({
@@ -183,7 +181,7 @@ function MainMultiRoomDanmaku({
   const sessionKey = `multi-room:${room.key}`;
   return (
     <LiveDanmaku
-      active={danmaku.active && osdOn}
+      active={danmaku.active}
       sessionKey={sessionKey}
       siteId={room.siteId}
       roomId={detail?.room_id || room.roomId}
@@ -831,7 +829,10 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
         />
       </div>
 
-      {main && (
+      {/* 多画面主画面的画面弹幕默认关闭（`osdOn` 初始 false）：关闭时不挂载，
+          6 路网格下不为看不见的弹幕保留渲染器与连接。直播间则相反，
+          关闭只隐藏、实例继续跑，见 `LiveDanmaku` 的 `active` 契约。 */}
+      {main && osdOn && (
         <MainMultiRoomDanmaku
           room={room}
           detail={detail}
@@ -840,7 +841,6 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
           loading={loading}
           error={error}
           audioOnly={audioOnly}
-          osdOn={osdOn}
         />
       )}
 

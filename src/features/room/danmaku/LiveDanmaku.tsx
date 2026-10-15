@@ -80,6 +80,7 @@ export function danmakuVisibleContentRect(
 
 type LiveDanmakuProps = {
   className?: string;
+  /** 关闭时仅隐藏并停止点选，实例、事件订阅与在途弹幕保持运行，与 VOD 的 `VideoDanmakuLayer` 一致。 */
   active?: boolean;
   sessionKey?: number | string | null;
   siteId?: SiteId;
@@ -307,7 +308,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     const observer = new ResizeObserver(measure);
     observer.observe(host);
     return () => observer.disconnect();
-  }, [active, pageVisible]);
+  }, [pageVisible]);
 
   const dropRecordRef = useRef<(id: string) => void>(() => {});
   const releaseSelection = useCallback((dropped = false) => {
@@ -472,11 +473,11 @@ export const LiveDanmaku = memo(function LiveDanmaku({
 
   const processBatch = useCallback(
     (events: readonly DanmakuEvent[]) => {
-      if (!active || reducedMotion || !pageVisible) return;
+      if (reducedMotion || !pageVisible) return;
       if (!sizeReadyRef.current || !rendererRef.current || document.hidden) queueEvents(events);
       else renderEventsRef.current(events);
     },
-    [active, pageVisible, queueEvents, reducedMotion],
+    [pageVisible, queueEvents, reducedMotion],
   );
   const processBatchRef = useRef(processBatch);
   useLayoutEffect(() => {
@@ -497,7 +498,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
   }, [delayMs]);
 
   useEffect(() => {
-    if (!active || reducedMotion || !pageVisible) return;
+    if (reducedMotion || !pageVisible) return;
     const pendingTimers = new Set<number>();
     const unsubscribe = subscribeDanmakuBatches((events) => {
       const delay = delayMsRef.current;
@@ -516,14 +517,14 @@ export const LiveDanmaku = memo(function LiveDanmaku({
       for (const timer of pendingTimers) window.clearTimeout(timer);
       pendingTimers.clear();
     };
-  }, [active, pageVisible, reducedMotion, sessionKey]);
+  }, [pageVisible, reducedMotion, sessionKey]);
 
   useEffect(() => {
     const pendingEvents = pendingEventsRef.current;
     return () => {
       pendingEvents.length = 0;
     };
-  }, [active, pageVisible, reducedMotion, sessionKey]);
+  }, [pageVisible, reducedMotion, sessionKey]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -535,7 +536,8 @@ export const LiveDanmaku = memo(function LiveDanmaku({
 
     const clearRenderedState = (preservePending: boolean) => {
       releaseSelectionRef.current(true);
-      renderer?.clear();
+      // 不调 `renderer.clear()`：`destroy()` 内部已 stopPlaying 并清屏，
+      // 单独 clear 只会多走一遍解锁与结算。
       renderer?.destroy();
       renderer = null;
       if (rendererRef.current) rendererRef.current = null;
@@ -555,7 +557,9 @@ export const LiveDanmaku = memo(function LiveDanmaku({
       container.replaceChildren();
     };
 
-    if (!active || reducedMotion || !pageVisible) {
+    // 用户显隐（`active`）只切容器的 `data-visible`，不经过这里：
+    // 关闭弹幕时实例与在途弹幕保持运行，与 VOD 的 `VideoDanmakuLayer` 一致。
+    if (reducedMotion || !pageVisible) {
       clearRenderedState(false);
       return;
     }
@@ -606,7 +610,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
       disposed = true;
       clearRenderedState(true);
     };
-  }, [active, pageVisible, reducedMotion, sessionKey, sizeReady]);
+  }, [pageVisible, reducedMotion, sessionKey, sizeReady]);
 
   useEffect(() => {
     rendererRef.current?.resize();
@@ -639,7 +643,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
 
   useEffect(() => {
     releaseSelectionRef.current(true);
-  }, [active, reducedMotion, sessionKey]);
+  }, [reducedMotion, sessionKey]);
 
   useEffect(() => {
     const selectedId = hoverTarget?.hoverKey;
@@ -680,12 +684,14 @@ export const LiveDanmaku = memo(function LiveDanmaku({
 
   return (
     <div ref={hostRef} className={cn("pointer-events-none absolute inset-0", className)}>
+      {/* 不用 renderer.hide()：其原生语义会清屏；这里只隐藏且禁用全部后代命中，
+          在途弹幕照常飘动，与 VOD 的 `VideoDanmakuLayer` 同一处理。 */}
       <div
         ref={containerRef}
         aria-hidden="true"
         data-rlive-danmaku-layer="live"
-        className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
-        style={{ opacity: 1 }}
+        data-visible={active}
+        className="pointer-events-none absolute inset-0 z-0 overflow-hidden data-[visible=false]:opacity-0 data-[visible=false]:[&_*]:pointer-events-none!"
       />
       {hoverTarget && (
         <>

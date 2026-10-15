@@ -1608,8 +1608,9 @@ function PlayerPaneContent({
               </div>
 
               {/* 悬浮弹幕跟随画面亮度，
-                  而控件与房间信息保持正常对比度。 */}
-              {showHost && osdOn && !audioOnly && (
+                  而控件与房间信息保持正常对比度。
+                  关闭弹幕只隐藏、不卸载：实例与在途弹幕保持运行，与 VOD 一致。 */}
+              {showHost && !audioOnly && (
                 <LiveDanmaku
                   active={floatingDanmakuActive}
                   sessionKey={danmakuSessionKey}
