@@ -20,7 +20,7 @@ import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
 import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
-import { videoCoverAspect } from "@/shared/videoDimension";
+import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
 import {
@@ -31,7 +31,6 @@ import {
 } from "./playlistStore";
 import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
 import { videoPlayPath } from "./videoRoute";
-import { VideoMasonry } from "./VideoMasonry";
 
 /**
  * 视频卡片。
@@ -47,8 +46,8 @@ import { VideoMasonry } from "./VideoMasonry";
  */
 
 // 卡片自带底色与细描边（表面定义见 `shared/components/cardSurface.ts`，与直播
-// `RoomCard`、关注页卡片共用）：瀑布流里相邻卡片只隔 12px，透明卡片的边界完全
-// 由封面撑出，横竖画幅混排时读不出标题归属上一张还是下一张。
+// `RoomCard`、关注页卡片共用）：网格里相邻卡片只隔 12px，透明卡片的边界完全
+// 由封面撑出，标题与下一张封面之间读不出归属。
 //
 // 底色从封面自然向下延伸：封面满幅占住卡片顶部，卡片的圆角与描边正好落在封面边缘，
 // 于是读作封面自己的边界继续包住下面的文字，而不是把封面又套进一层内边距。因此
@@ -56,11 +55,11 @@ import { VideoMasonry } from "./VideoMasonry";
 // 会在卡片边界内侧再画一道，读成两层边框。
 // 行式卡片是例外：文本块高于 16:9 缩略图且垂直居中，缩略图无法满幅，仍走内边距画法。
 const CARD_CLASS = cn(
-  "group flex w-full self-start flex-col overflow-hidden rounded-xl text-left",
+  "group flex w-full flex-col overflow-hidden rounded-xl text-left",
   CARD_SURFACE_CLASS,
   CARD_SURFACE_HOVER_CLASS,
 );
-const COVER_CLASS = "relative w-full overflow-hidden bg-muted";
+const COVER_CLASS = "relative aspect-video w-full overflow-hidden bg-muted";
 const COVER_IMAGE_CLASS =
   "absolute inset-0 h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none";
 // 封面角标分两类，视觉上不能混：
@@ -76,7 +75,14 @@ const BADGE_CLASS =
   "absolute inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm";
 
 /**
- * 卡片封面。`overlay` 里放角标，它们自己带绝对定位，因此堆在渐变之上。
+ * 卡片封面，固定 16:9。
+ *
+ * 与直播 `RoomCard` 同一比例：VOD 网格现在也是等宽等高卡片（与直播首页同一套
+ * 列数与间距，见 `shared/components/cardGrid.ts`），封面若跟随源画幅，横竖混排
+ * 时同一行卡片高度参差、标题行基线对不齐。竖屏稿件因此在这里被裁成 16:9 ——
+ * 列表只需要认出这条内容，完整画幅留给播放页与竖屏流。
+ *
+ * `overlay` 里放角标，它们自己带绝对定位，因此堆在渐变之上。
  * `previewMount` / `previewLoading` 由 UGC 卡片传入（悬停预览，见
  * `videoCardPreview.ts`）；PGC 卡片不悬停预览（列表没有取流键，season 解析
  * 在播放页，悬停阶段无从取流），不传。
@@ -87,22 +93,16 @@ function CoverImage({
   previewMount,
   previewLoading,
   className,
-  aspectRatio = 16 / 9,
 }: {
   cover: string;
   overlay?: React.ReactNode;
   previewMount?: RefObject<HTMLDivElement | null>;
   previewLoading?: boolean;
   className?: string;
-  aspectRatio?: number;
 }) {
   const normalized = normalizeVideoCoverUrl(cover);
   return (
-    <div
-      data-slot="video-card-cover"
-      className={cn(COVER_CLASS, className)}
-      style={{ aspectRatio }}
-    >
+    <div data-slot="video-card-cover" className={cn(COVER_CLASS, className)}>
       {normalized ? (
         <img
           src={normalized}
@@ -140,7 +140,6 @@ export const VideoCard = memo(function VideoCard({
   playlistUploader,
   onNavigate,
   orientation = "grid",
-  coverAspect = "source",
   showAuthor = true,
 }: {
   item: VideoItem;
@@ -153,8 +152,6 @@ export const VideoCard = memo(function VideoCard({
   onNavigate?: () => void;
   /** `row`：缩略图在左、文本列在右（相关视频与 UP 主投稿列表）。 */
   orientation?: "grid" | "row";
-  /** 默认遵循视频画幅；相关视频以 landscape 固定为 16:9 缩略图。 */
-  coverAspect?: "source" | "landscape";
   /** 是否在发布日期旁显示 UP 主名；投稿抽屉按 PiliPlus 语义只显示发布日期。 */
   showAuthor?: boolean;
 }) {
@@ -221,7 +218,6 @@ export const VideoCard = memo(function VideoCard({
   const cardBody = (
     <>
       <CoverImage
-        aspectRatio={coverAspect === "landscape" ? 16 / 9 : videoCoverAspect(item.dimension)}
         cover={item.cover}
         // 封面按列宽取比例而不是固定 w-40:侧栏只有 300px,固定宽度会把文本列
         // 挤到 90 px 出头，标题每行只剩几个字。行式缩略图不贴卡片边，自带圆角与描边。
@@ -243,7 +239,7 @@ export const VideoCard = memo(function VideoCard({
               </span>
             )}
             {orientation === "grid" ? (
-              // 播放/弹幕搬到封面左下、与右下时长同一排：卡片少一行文字，瀑布流更紧凑，
+              // 播放/弹幕搬到封面左下、与右下时长同一排：卡片少一行文字，
               // 统计也贴着封面读。行式卡的缩略图只有 2/5 列宽，放不下这一排，
               // 统计仍留在文本块第三行（见下方）。
               //
@@ -444,7 +440,9 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
         }
       />
       <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2 pb-2.5">
-        <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
+        {/* 标题固定两行（与 UGC 卡片同一档）：等宽网格里同排卡片必须等高，
+            短标题不占位会让这一行比其他行矮一截。 */}
+        <p className="line-clamp-2 min-h-[2lh] text-[13px] font-medium leading-snug text-foreground">
           {item.title}
         </p>
         <p className="min-h-4 truncate text-xs text-muted-foreground">{item.index_show ?? ""}</p>
@@ -453,7 +451,7 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
   );
 });
 
-/** 视频卡片瀑布流。带 `playlist` 时点击卡片即从该卡连播。 */
+/** 视频卡片网格，列数与间距对齐直播首页。带 `playlist` 时点击卡片即从该卡连播。 */
 export const VideoGrid = memo(function VideoGrid({
   items,
   playlist,
@@ -464,7 +462,7 @@ export const VideoGrid = memo(function VideoGrid({
   playlistKind?: PlaylistKind;
 }) {
   return (
-    <VideoMasonry>
+    <div className={CARD_GRID_CLASS}>
       {items.map((item) => (
         <VideoCard
           key={`${item.bvid}:${item.cid ?? ""}`}
@@ -473,6 +471,6 @@ export const VideoGrid = memo(function VideoGrid({
           playlistKind={playlistKind}
         />
       ))}
-    </VideoMasonry>
+    </div>
   );
 });

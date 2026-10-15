@@ -22,6 +22,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { cn } from "@/lib/utils";
 import type { PgcItem, PgcListPage, VideoListPage, VideoZone } from "@/shared/types/video";
@@ -33,7 +34,6 @@ import {
   videoZoneList,
 } from "./videoApi";
 import { PgcCard, VideoGrid } from "./VideoCard";
-import { VIDEO_MASONRY_PREFETCH_MARGIN, VideoMasonry } from "./VideoMasonry";
 import { VideoZoneBar } from "./VideoZoneBar";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -68,17 +68,17 @@ type VideoFeedPage = ({ kind: "ugc" } & VideoListPage) | ({ kind: "pgc" } & PgcL
 
 const PgcGrid = memo(function PgcGrid({ items }: { items: readonly PgcItem[] }) {
   return (
-    <VideoMasonry>
+    <div className={CARD_GRID_CLASS}>
       {items.map((item) => (
         <PgcCard key={item.season_id} item={item} />
       ))}
-    </VideoMasonry>
+    </div>
   );
 });
 
 function GridSkeleton() {
   return (
-    <VideoMasonry aria-hidden>
+    <div className={CARD_GRID_CLASS} aria-hidden>
       {Array.from({ length: 12 }).map((_, index) => (
         // 骨架屏复制 VideoCard 的卡片表面：封面满幅顶到卡片边缘，文字区自带内边距。
         <div
@@ -92,7 +92,7 @@ function GridSkeleton() {
           </div>
         </div>
       ))}
-    </VideoMasonry>
+    </div>
   );
 }
 
@@ -198,8 +198,6 @@ export function VideoPage() {
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
-    // 瀑布流列尾参差，按最短列提前一屏预取，见常量注释。
-    rootMargin: VIDEO_MASONRY_PREFETCH_MARGIN,
   });
 
   // 刷新是一个手动动作，用独立 state 表达它的进行中状态：不能复用 `isRefetching`，

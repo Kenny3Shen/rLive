@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { invokeCmd } from "@/shared/api/tauri";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { RoomCard } from "@/shared/components/RoomCard";
+import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import { SearchHistoryField } from "@/shared/components/SearchHistoryField";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
@@ -233,7 +234,7 @@ export function SearchPage() {
           <p className="text-sm text-muted-foreground">
             当前 {rooms.length} 项 · 按{scopeLabel}
           </p>
-          <ul className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 [@media(min-width:80rem)_and_(pointer:coarse)]:grid-cols-5!">
+          <ul className={CARD_GRID_CLASS}>
             {rooms.map((room) => {
               const match: SearchMatch = scope === "all" ? searchMatch(room, keyword) : scope;
               return (
@@ -284,7 +285,7 @@ export function SearchPage() {
 
 function SearchGridSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 [@media(min-width:80rem)_and_(pointer:coarse)]:grid-cols-5!">
+    <div className={CARD_GRID_CLASS}>
       {Array.from({ length: 8 }).map((_, index) => (
         // 骨架屏复制 RoomCard 的卡片表面：封面满幅顶到卡片边缘，文字区自带内边距。
         <div

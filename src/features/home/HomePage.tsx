@@ -14,6 +14,7 @@ import { ErrorState } from "@/shared/components/ErrorState";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
 import { RefreshFab } from "@/shared/components/RefreshFab";
 import { RoomCard } from "@/shared/components/RoomCard";
+import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
@@ -57,7 +58,7 @@ type RoomGridProps = {
 
 const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
   return (
-    <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 [@media(min-width:80rem)_and_(pointer:coarse)]:grid-cols-5!">
+    <div className={CARD_GRID_CLASS}>
       {rooms.map((room) => (
         <div key={`${room.site_id}:${room.room_id}`}>
           <RoomCard room={room} />
@@ -242,7 +243,7 @@ export function HomePage() {
         )}
 
         {query.isLoading && (
-          <div className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 [@media(min-width:80rem)_and_(pointer:coarse)]:grid-cols-5!">
+          <div className={CARD_GRID_CLASS}>
             {Array.from({ length: 12 }).map((_, i) => (
               // 骨架屏复制 RoomCard 的卡片表面：底色与描边在外壳，封面满幅顶到
               // 卡片边缘（圆角由外壳的 overflow-hidden 裁），文字区自带内边距。

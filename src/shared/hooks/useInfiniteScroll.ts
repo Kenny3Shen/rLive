@@ -6,8 +6,10 @@ type UseInfiniteScrollOptions = {
   isFetchingNextPage: boolean;
   isFetchNextPageError: boolean;
   fetchNextPage: () => Promise<unknown>;
-  rootMargin?: string;
 };
+
+/** 哨兵的预取余量：提前一屏底部 240px 请求下一页。 */
+const LOAD_MORE_ROOT_MARGIN = "0px 0px 240px 0px";
 
 /**
  * 在列表末尾哨兵可见前不久加载下一页。
@@ -21,7 +23,6 @@ export function useInfiniteScroll({
   isFetchingNextPage,
   isFetchNextPageError,
   fetchNextPage,
-  rootMargin = "0px 0px 240px 0px",
 }: UseInfiniteScrollOptions): InfiniteScrollController {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const loadMoreInFlightRef = useRef(false);
@@ -68,7 +69,7 @@ export function useInfiniteScroll({
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) loadMore();
       },
-      { root, rootMargin },
+      { root, rootMargin: LOAD_MORE_ROOT_MARGIN },
     );
     observer.observe(target);
     return () => observer.disconnect();
@@ -77,7 +78,6 @@ export function useInfiniteScroll({
     isFetchingNextPage,
     isFetchNextPageError,
     loadMore,
-    rootMargin,
     supportsIntersectionObserver,
   ]);
 
