@@ -26,6 +26,7 @@ import {
 import { subscribeDanmakuBatches } from "./danmaku/eventBus";
 import { BoundedQueue } from "./danmaku/boundedQueue";
 import { appendWithinDanmakuListWindow } from "./danmaku/listWindow";
+import { isDanmakuViewportAtBottom } from "./danmaku/pinnedFollow";
 import {
   danmakuListSurfaceFromTheme,
   resolveDanmakuListUserColor,
@@ -48,8 +49,6 @@ const SCROLL_VIEWPORT_SELECTOR = '[data-slot="scroll-area-viewport"]';
 // 已挂载行校准，估值与实测不一致会让列表总高逐批漂移。
 const DANMAKU_ROW_ESTIMATE_PX = 33;
 const DANMAKU_LIST_OVERSCAN = 6;
-// 贴底 48px 内视为「跟随最新消息」。
-const DANMAKU_PINNED_THRESHOLD_PX = 48;
 
 type DanmakuLine = { id: number; event: DanmakuEvent };
 
@@ -617,7 +616,8 @@ export const DanmakuPanel = memo(function DanmakuPanel({
       readingKeyRef.current = typeof key === "number" ? key : null;
       if (menuTargetRef.current) return;
       const distanceToBottom = viewport.scrollHeight - offset - viewport.clientHeight;
-      const next = distanceToBottom < DANMAKU_PINNED_THRESHOLD_PX;
+      // 钉底与阅读态用的是两条不同量级的容差，理由见 pinnedFollow.ts。
+      const next = isDanmakuViewportAtBottom(distanceToBottom, autoScroll.current);
       const repinned = next && !autoScroll.current;
       autoScroll.current = next;
       if (!next) cancelPin();
