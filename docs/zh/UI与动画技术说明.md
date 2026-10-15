@@ -325,7 +325,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 
 画面弹幕（`DanmakuRenderer`，会话与实例契约见 [播放器技术文档](播放器技术文档.md)）：
 
-- 滚动弹幕的位移由 `danmu` 在节点上写一次 CSS transition（`transform linear <duration>ms`）后在合成器上推进，主线程不再逐帧写 `transform`；VOD 的投放、暂停、缓冲等待、seek 和倍速变化由 `DanmakuRenderer` 读 `currentTime` 驱动（`danmu` 不绑定媒体）。滚动弹幕的实际移动时长由舞台宽度、弹幕宽度与标准 `speed` 共同决定，界面以 `speed / 100` 显示 `0.5×–2.0×` 倍率；SC 使用平台提供的持续时长。聚合只更新同一活动 bullet 的文本与计数槽。
+- 滚动弹幕的位移由 `danmu` 在节点上写一次 CSS transition（`transform linear <duration>ms`）后在合成器上推进，主线程不再逐帧写 `transform`；VOD 的投放、暂停、缓冲等待、seek 和倍速变化由 `DanmakuRenderer` 读 `currentTime` 驱动（`danmu` 不绑定媒体）。滚动弹幕的实际移动时长由舞台宽度、弹幕宽度与标准 `speed` 共同决定，界面以 `speed / 100` 显示 `0.5×–2.0×` 倍率；SC 使用平台提供的持续时长，到期计时同样由库负责。聚合只更新同一活动 bullet 的文本与计数槽。
 - 数据池、本地 metadata、聚合目标与在屏记账都必须有界，并在 renderer 的 `remove` / `clear` / `destroy` 以及适配层的 attach/detach 时同步释放；实例必须等容器非零尺寸后才启动。单条 pin、固定弹幕到期、车道占用与超量丢弃由共享适配层补齐，不把这些业务行为误记为库原生能力。
 
 ## 7. 流程与验证清单

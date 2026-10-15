@@ -331,16 +331,6 @@ export const DanmakuPanel = memo(function DanmakuPanel({
     matchersRef.current = { shieldMatcher, blockedUserMatcher, filterGifts };
   }, [shieldMatcher, blockedUserMatcher, filterGifts]);
 
-  // 屏蔽用户是即时承诺：点击后既有行立即消失；解除屏蔽不回填历史。
-  const [prevBlockedMatcher, setPrevBlockedMatcher] = useState(() => blockedUserMatcher);
-  if (blockedUserMatcher !== prevBlockedMatcher) {
-    setPrevBlockedMatcher(() => blockedUserMatcher);
-    setItems((previous) => {
-      const next = previous.filter((line) => !blockedUserMatcher(line.event));
-      return next.length === previous.length ? previous : next;
-    });
-  }
-
   useLayoutEffect(() => {
     activeRef.current = active;
     return () => {

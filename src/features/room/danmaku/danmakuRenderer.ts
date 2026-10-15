@@ -67,8 +67,6 @@ const MAX_PUSH_PER_FRAME = 48;
 /** 库自身轮询间隔；滚动层另有批次内的显式 `render()`，这里只兜底重试。 */
 const SCROLL_INTERVAL_MS = 200;
 const FIXED_INTERVAL_MS = 500;
-/** 已登记但尚未上屏就被移除的 id 上限，超出即整体丢弃。 */
-const CANCELLED_LIMIT = 512;
 /**
  * `danmu` 的 `speed` 单位是 px/毫秒，而业务设置（与旧引擎）用 px/秒，
  * 两者差 1000 倍；漏了这一步会让每条弹幕在数毫秒内跑完并消失。
@@ -218,7 +216,6 @@ export class DanmakuRenderer {
   private readonly live = new Set<string>();
   /** 在屏滚动弹幕的 id 集合：唯一准入判据的计数来源，随 `detach` 回收。 */
   private readonly scrollLive = new Set<string>();
-  private readonly cancelled = new Set<string>();
   private readonly observer?: ResizeObserver;
   /** VOD 时间轴与游标；直播不走这里，`emit` 直接投放。 */
   private timeline: DanmakuComment[] = [];
@@ -318,36 +315,6 @@ export class DanmakuRenderer {
     while (right < additions.length) merged.push(additions[right++]!);
     this.timeline = merged;
     this.cursor = lowerBound(merged, this.now());
-  }
-
-  /**
-   * 移除一条弹幕。在屏的直接销毁，未投放的从时间轴摘除；
-   * 已受理但尚未上屏的记入墓碑，上屏时立即销毁。
-   */
-  remove(id: string): void {
-    if (this.destroyed) return;
-    const record = this.records.get(id);
-    if (record) {
-      void record.danmaku.destroy();
-      return;
-    }
-    const pending = this.pendingWide.get(id);
-    if (pending) {
-      this.pendingWide.delete(id);
-      window.clearTimeout(pending.timer);
-      this.releaseLanes(pending.reservation);
-      this.detach(id);
-      return;
-    }
-    const at = this.timeline.findIndex((comment) => comment.id === id);
-    if (at >= 0 && this.timelineIds.delete(id)) {
-      this.timeline.splice(at, 1);
-      if (at < this.cursor) this.cursor -= 1;
-      this.detach(id);
-      return;
-    }
-    if (this.cancelled.size >= CANCELLED_LIMIT) this.cancelled.clear();
-    this.cancelled.add(id);
   }
 
   /** 钉住即暂停运动（含固定弹幕的到期计时）；返回 false 表示尚未开始运动，调用方不应选中。 */
@@ -747,7 +714,6 @@ export class DanmakuRenderer {
     const ids = Array.from(this.live);
     this.records.clear();
     this.reservations.clear();
-    this.cancelled.clear();
     for (const id of ids) this.detach(id);
   }
 
@@ -761,10 +727,6 @@ export class DanmakuRenderer {
     const comment = danmaku.data;
     const element = danmaku.node?.firstElementChild;
     if (!(element instanceof HTMLElement)) return;
-    if (this.cancelled.delete(comment.id)) {
-      void danmaku.destroy();
-      return;
-    }
     const reservation = this.reservations.get(comment.id);
     this.reservations.delete(comment.id);
     this.records.set(comment.id, {

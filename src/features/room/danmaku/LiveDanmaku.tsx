@@ -33,7 +33,6 @@ import {
   type DanmakuPendingEvent,
   type DanmakuRenderLayer,
   DANMAKU_DEFAULT_SPEED,
-  DANMAKU_MAX_SUPER_CHATS,
 } from "./danmakuAdapter";
 import { loadDanmakuRenderer } from "./danmakuLoader";
 import {
@@ -205,11 +204,8 @@ export const LiveDanmaku = memo(function LiveDanmaku({
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const recordsRef = useRef(new Map<string, RuntimeBullet>());
-  const recordOrderRef = useRef<string[]>([]);
   const aggregationTargetsRef = useRef(new Map<string, string>());
   const pendingEventsRef = useRef<DanmakuPendingEvent[]>([]);
-  const superChatIdsRef = useRef<string[]>([]);
-  const superChatTimersRef = useRef(new Map<string, number>());
   const superChatDedupeKeysRef = useRef(new Set<string>());
   const superChatDedupeOrderRef = useRef<string[]>([]);
   const sequenceRef = useRef(0);
@@ -311,7 +307,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     return () => observer.disconnect();
   }, [active, pageVisible]);
 
-  const removeRecordRef = useRef<(id: string, removeFromRenderer: boolean) => void>(() => {});
+  const dropRecordRef = useRef<(id: string) => void>(() => {});
   const releaseSelection = useCallback((dropped = false) => {
     const selectedId = selectedIdRef.current;
     selectedIdRef.current = null;
@@ -324,19 +320,13 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     releaseSelectionRef.current = releaseSelection;
   }, [releaseSelection]);
 
-  const removeRecord = useCallback((id: string, removeFromRenderer: boolean) => {
+  /**
+   * 只清记账，不销毁 DOM：调用方是渲染器的 `onDetach`，节点此时已由库销毁。
+   */
+  const dropRecord = useCallback((id: string) => {
     const record = recordsRef.current.get(id);
     if (!record) return;
-    const timer = superChatTimersRef.current.get(id);
-    if (timer !== undefined) {
-      window.clearTimeout(timer);
-      superChatTimersRef.current.delete(id);
-    }
     recordsRef.current.delete(id);
-    const recordIndex = recordOrderRef.current.indexOf(id);
-    if (recordIndex >= 0) recordOrderRef.current.splice(recordIndex, 1);
-    const superChatIndex = superChatIdsRef.current.indexOf(id);
-    if (superChatIndex >= 0) superChatIdsRef.current.splice(superChatIndex, 1);
     const key = record.meta.aggregationKey;
     if (key && aggregationTargetsRef.current.get(key) === id) {
       aggregationTargetsRef.current.delete(key);
@@ -345,24 +335,19 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     if (selectedIdRef.current === id) {
       selectedIdRef.current = null;
       setHoverTarget(null);
-      rendererRef.current?.unpin(id);
     }
     record.meta.element = undefined;
     record.meta.contentElement = undefined;
     record.meta.countElement = undefined;
     record.meta.countSlotElement = undefined;
-    if (removeFromRenderer) rendererRef.current?.remove(id);
   }, []);
   useLayoutEffect(() => {
-    removeRecordRef.current = removeRecord;
-  }, [removeRecord]);
+    dropRecordRef.current = dropRecord;
+  }, [dropRecord]);
 
+  // 屏蔽只作用于尚未投放的待处理事件；已上屏的弹幕保留到自然结束。
   useLayoutEffect(() => {
     const matcher = blockedUserMatcher;
-    for (const id of recordOrderRef.current.slice()) {
-      const record = recordsRef.current.get(id);
-      if (record && matcher(record.meta.event)) removeRecordRef.current(id, true);
-    }
     pendingEventsRef.current = pendingEventsRef.current.filter((pending) => !matcher(pending.event));
   }, [blockedUserMatcher]);
 
@@ -461,22 +446,8 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         const meta = comment.__rliveMeta;
         recordsRef.current.set(id, { comment, meta, layer, attached: false });
         if (layer === "scroll") activeScrollCount += 1;
-        recordOrderRef.current.push(id);
         if (meta.aggregationKey) aggregationTargetsRef.current.set(meta.aggregationKey, id);
 
-        if (event.kind === "super_chat") {
-          superChatIdsRef.current.push(id);
-          const duration = Math.max(1, comment.duration ?? 0);
-          superChatTimersRef.current.set(
-            id,
-            window.setTimeout(() => removeRecordRef.current(id, true), duration),
-          );
-          while (superChatIdsRef.current.length > DANMAKU_MAX_SUPER_CHATS) {
-            const oldest = superChatIdsRef.current[0];
-            if (!oldest) break;
-            removeRecordRef.current(oldest, true);
-          }
-        }
         renderer.emit(comment);
       }
     },
@@ -562,8 +533,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
 
     const clearRenderedState = (preservePending: boolean) => {
       releaseSelectionRef.current(true);
-      for (const timer of superChatTimersRef.current.values()) window.clearTimeout(timer);
-      superChatTimersRef.current.clear();
       renderer?.clear();
       renderer?.destroy();
       renderer = null;
@@ -575,11 +544,9 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         record.meta.countSlotElement = undefined;
       }
       records.clear();
-      recordOrderRef.current.length = 0;
       aggregationTargetsRef.current.clear();
       aggregatorRef.current.clear();
       if (!preservePending) pendingEvents.length = 0;
-      superChatIdsRef.current.length = 0;
       superChatDedupeKeysRef.current.clear();
       superChatDedupeOrderRef.current.length = 0;
       sequenceRef.current = 0;
@@ -613,7 +580,7 @@ export const LiveDanmaku = memo(function LiveDanmaku({
             if (record) record.attached = true;
             if (selectedIdRef.current === meta.id) element.dataset.rliveDanmakuSelected = "true";
           },
-          onDetach: (id: string) => removeRecordRef.current(id, false),
+          onDetach: (id: string) => dropRecordRef.current(id),
         });
         renderer = instance;
         rendererRef.current = instance;
@@ -667,13 +634,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
       });
     }
   }, [fontSize, fontStroke, laneHeight, normalizedArea, opacity]);
-
-  useEffect(() => {
-    if (superChatEnabled && siteSupportsSuperChat(siteId)) return;
-    for (const id of superChatIdsRef.current.slice()) removeRecordRef.current(id, true);
-    superChatDedupeKeysRef.current.clear();
-    superChatDedupeOrderRef.current.length = 0;
-  }, [siteId, superChatEnabled]);
 
   useEffect(() => {
     releaseSelectionRef.current(true);

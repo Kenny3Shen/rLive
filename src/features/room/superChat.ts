@@ -1,8 +1,10 @@
 import type { DanmakuEvent, SiteId, SuperChatInfo } from "@/shared/types/live";
 
-export const MAX_SUPER_CHAT_ITEMS = 80;
-export const MAX_BUFFERED_SUPER_CHATS = 160;
-export const MAX_SUPER_CHAT_DEDUPE_KEYS = MAX_SUPER_CHAT_ITEMS + MAX_BUFFERED_SUPER_CHATS;
+/**
+ * 悬浮层 SC 重连去重的键预算：覆盖在屏与一批重放负载。
+ * SC 的到期由渲染器交给库的固定弹幕计时，这里只约束去重键集合。
+ */
+export const MAX_SUPER_CHAT_DEDUPE_KEYS = 240;
 
 /** 其直播事件流目前提供已校验 SC 元数据的平台。 */
 export function siteSupportsSuperChat(siteId: SiteId | null | undefined): boolean {

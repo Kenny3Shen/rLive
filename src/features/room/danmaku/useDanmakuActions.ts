@@ -53,7 +53,7 @@ export function danmakuActionStatusMessage(
     case "sent":
       return "已发送相同的弹幕";
     case "blocked":
-      return "已屏蔽该用户，其消息立即隐藏";
+      return "已屏蔽该用户，其新消息不再显示";
     case "send-failed":
       return target === "video"
         ? "发送失败，请检查账号登录状态或视频限制"
