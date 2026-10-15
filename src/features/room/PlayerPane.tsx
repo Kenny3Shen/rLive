@@ -81,6 +81,7 @@ import {
   useCompactLandscapePlayerViewport,
   useCompactPlayerViewport,
   usePortraitOrientation,
+  useStackedDetailsViewport,
 } from "@/shared/hooks/usePlayerViewport";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { DrawerViewport } from "@/components/ui/drawer";
@@ -195,22 +196,6 @@ export function shouldShowRoomDanmakuPanel(
 }
 
 /**
- * 弹幕发送框是否住在侧栏「弹幕」页签底部，而不是播放器控制栏中间。
- *
- * 紧凑视口（手机竖屏堆叠、横屏抽屉）里控制栏只有 28px 按钮，输入框会把整行撑高，
- * 与点播控制栏尺寸不一致；侧栏可见时发送框随聊天列表放在页签底部（与视频页弹幕页签
- * 同构）。全屏和网页全屏盖住侧栏，侧栏收起时也看不到，这几种情况仍放回控制栏，
- * 保证始终有一个入口。桌面宽窗口保持原样。
- */
-export function roomDanmakuComposerInSidePanel(
-  compactViewport: boolean,
-  sidePanelVisible: boolean,
-  fullscreen: boolean,
-): boolean {
-  return compactViewport && sidePanelVisible && !fullscreen;
-}
-
-/**
  * 右侧栏是否可见。
  *
  * 只看网页全屏：原生全屏下舞台已经盘据浏览器 top layer，侧栏自然被盖住，
@@ -237,26 +222,23 @@ export function nextFullscreenLayerToExit(
 }
 
 /**
- * 窗口化时该播放器是否把画面堆叠在聊天上方。
+ * 直播间侧栏是否列在舞台**下方**（而不是按桌面形态并排在右侧）。
  *
- * 刻意与全屏无关。`player.mode` 派生自 `fullscreenchange` 状态更新，
- * 比浏览器自身的 `:fullscreen` 晚一帧；弥补这一差距的 CSS
- * （见 styles.css 的 `data-portrait-stack`）
- * 需要一个在过渡期间就已经正确的标记。
+ * 与点播、IPTV 播放页同一条判据：视口宽度不足 `64rem`（`useStackedDetailsViewport`，
+ * 与那两页 `lg:flex-row` 的断点同源）时侧栏接在舞台下方。平板竖屏（实测 800×1280）
+ * 在旧判据（`max-width: 767px`）之外，于是落到桌面布局：舞台撑满整列高度，16:9 画面
+ * 缩在中间一条 —— 800 宽的列里画面只有 450 高，上下近 800px 全黑，右侧栏还要吃掉
+ * 40% 宽度；同一台设备上的点播与 IPTV 早就按 `64rem` 堆叠了。
+ *
+ * 矮横屏（手机横屏）除外：那里侧栏收进可关闭的浮层抽屉，不属于「列在下方」。
  */
-export function usesPortraitStackLayout(
-  inlineCompactSidePanel: boolean,
-  sidePanelOpen: boolean,
+export function usesStackedRoomSidePanel(
+  compactViewport: boolean,
+  compactLandscapeViewport: boolean,
+  stackedDetailsViewport: boolean,
 ): boolean {
-  return inlineCompactSidePanel && sidePanelOpen;
-}
-
-/** 堆叠只适用于窗口化状态；全屏时画面拥有整个屏幕。 */
-export function isPortraitStackedPlayer(
-  portraitStackLayout: boolean,
-  fullscreen: boolean,
-): boolean {
-  return portraitStackLayout && !fullscreen;
+  if (compactLandscapeViewport) return false;
+  return compactViewport || stackedDetailsViewport;
 }
 
 function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
@@ -694,7 +676,12 @@ function PlayerPaneContent({
     lockRef,
     locked: fullscreenLocked,
   });
-  const inlineCompactSidePanel = compactViewport && !compactLandscapeViewport;
+  const stackedDetailsViewport = useStackedDetailsViewport();
+  const stackedSidePanel = usesStackedRoomSidePanel(
+    compactViewport,
+    compactLandscapeViewport,
+    stackedDetailsViewport,
+  );
   const mobileDrawerOpen = compactLandscapeViewport && sidePanelOpen;
   // 网页全屏要让出右侧栏。只影响可见性，不影响挂载，因此退出后弹幕队列与滚动位置都还在。
   const sidePanelVisible = showRoomSidePanel(sidePanelOpen, webFullscreen);
@@ -703,18 +690,17 @@ function PlayerPaneContent({
     osdOn,
     sidePanelOverlaysPlayer: mobileDrawerOpen,
   });
-  const composerInSidePanel = roomDanmakuComposerInSidePanel(
-    compactViewport,
-    sidePanelVisible,
-    player.mode === "fullscreen",
-  );
+  const composerInSidePanel =
+    (stackedSidePanel || compactLandscapeViewport) &&
+    sidePanelVisible &&
+    player.mode !== "fullscreen";
   const compactLandscapeSidePanelClassName =
     "absolute inset-y-0 right-0 z-50 h-full w-[min(22rem,78vw)] max-w-full overscroll-contain rounded-l-2xl border-l border-border/80 pb-[env(safe-area-inset-bottom)] pr-[env(safe-area-inset-right)] shadow-2xl";
-  const portraitStackLayout = usesPortraitStackLayout(inlineCompactSidePanel, sidePanelOpen);
-  const portraitStackedPlayer = isPortraitStackedPlayer(
-    portraitStackLayout,
-    player.mode === "fullscreen",
-  );
+  // 堆叠只与「侧栏可见」和「非原生全屏」有关：`player.mode` 比浏览器
+  // `:fullscreen` 晚一帧，而 CSS 要在同一帧恢复 16:9（见 styles.css 的
+  // `data-stage-stacked`），因此这个标记不能读 `player.mode` 的过渡态。
+  const stackedPlayerLayout = stackedSidePanel && sidePanelOpen;
+  const stackedPlayer = stackedPlayerLayout && player.mode !== "fullscreen";
   // 流内顶栏已删除（所有端统一）：房间身份与工具始终住在画面内的 HUD，
   // HUD 只要身份或动作有东西可画就挂载。
   const fullscreenHudVisible = showPlayerFullscreenHud({
@@ -1423,14 +1409,14 @@ function PlayerPaneContent({
       data-room-player-shell
       className={cn(
         "relative flex h-full min-h-0 min-w-0 w-full bg-black",
-        inlineCompactSidePanel && "flex-col",
+        stackedSidePanel && "flex-col",
       )}
     >
       <div
         data-room-player-frame
         className={cn(
           "relative flex min-w-0 flex-col bg-black",
-          portraitStackedPlayer ? "aspect-video w-full flex-none" : "min-h-0 flex-1",
+          stackedPlayer ? "aspect-video w-full flex-none" : "min-h-0 flex-1",
         )}
       >
         <VideoJsContainer
@@ -1439,20 +1425,20 @@ function PlayerPaneContent({
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
           // 与全屏无关，使 CSS 能在浏览器离开全屏的同一帧恢复 16:9 堆叠。
-          data-portrait-stack={portraitStackLayout ? "true" : undefined}
+          data-stage-stacked={stackedPlayerLayout ? "true" : undefined}
           data-audio-only={audioOnly ? "true" : undefined}
           // 锚定在控件上方的浮层（超级留言、字幕）必须清出与 chrome 相同的手势栏预留，
           // 且仅在 chrome 真正预留时生效。
           style={
             {
-              "--player-chrome-inset": portraitStackedPlayer
+              "--player-chrome-inset": stackedPlayer
                 ? "0px"
                 : "env(safe-area-inset-bottom)",
             } as CSSProperties
           }
           className={cn(
             "relative flex min-w-0 flex-col overflow-hidden bg-black",
-            portraitStackedPlayer ? "aspect-video w-full flex-none" : "min-h-0 flex-1",
+            stackedPlayer ? "aspect-video w-full flex-none" : "min-h-0 flex-1",
             mobileClient && showHost && "touch-none",
           )}
           tabIndex={0}
@@ -1526,7 +1512,7 @@ function PlayerPaneContent({
               disabled={transportDisabled}
               // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
               // 那里没有手势栏 inset。
-              stackedBelowPlayer={portraitStackedPlayer}
+              stackedBelowPlayer={stackedPlayer}
               compact={compactViewport}
               portalContainer={playerStageRef}
               centerSlot={
@@ -1570,7 +1556,7 @@ function PlayerPaneContent({
             data-player-video-surface
             className={cn(
               "relative min-w-0 overflow-hidden bg-black",
-              portraitStackedPlayer ? "aspect-video w-full shrink-0" : "min-h-0 flex-1",
+              stackedPlayer ? "aspect-video w-full shrink-0" : "min-h-0 flex-1",
             )}
           >
             {loading && (
@@ -1769,7 +1755,7 @@ function PlayerPaneContent({
           data-horizontal-swipe-surface
           className={cn(
             "relative isolate flex min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar touch-pan-y overscroll-y-contain",
-            inlineCompactSidePanel
+            stackedSidePanel
               ? "min-h-0 w-full flex-1 border-t border-border/80"
               : compactLandscapeViewport
                 ? `${compactLandscapeSidePanelClassName} shrink-0`
@@ -1849,7 +1835,7 @@ function PlayerPaneContent({
                         "shrink-0 border-t border-border/80",
                         // 竖屏堆叠时侧栏贴着窗口底边，发送框要让出手势栏；横屏抽屉自身已留 inset。
                         // Android WebView 的 env() 常为 0，优先用原生注入的 inset（见 styles.css）。
-                        inlineCompactSidePanel && "pb-[var(--app-safe-area-bottom)]",
+                        stackedSidePanel && "pb-[var(--app-safe-area-bottom)]",
                       )}
                     >
                       <DanmakuComposer

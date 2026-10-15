@@ -10,6 +10,7 @@ import {
   shouldRunFloatingDanmaku,
   nextFullscreenLayerToExit,
   playerVolumeForKeyStep,
+  usesStackedRoomSidePanel,
 } from "../src/features/room/PlayerPane";
 import {
   canStartPlayerEdgeGesture,
@@ -81,6 +82,24 @@ describe("播放器交互边界", () => {
     expect(playerEdgeGestureValue(98, -400, 320)).toBe(100);
     expect(playerEdgeGestureValue(2, 400, 320)).toBe(0);
   });
+
+  // 平板竖屏曾落在两侧判据之外（宽度越过 767px，指针又是粗指针），于是走桌面并排：
+  // 800 宽的列里 16:9 画面只占中间 450px，右侧栏再吃掉 40% 宽度。
+  test.each([
+    // compact / 矮横屏 / 窄于 64rem -> 侧栏列在舞台下方
+    [true, true, true, false, "手机横屏收进抽屉"],
+    [true, false, true, true, "手机竖屏"],
+    [false, true, false, false, "矮横屏但已越过 767px"],
+    [false, false, true, true, "平板竖屏"],
+    [false, false, false, false, "桌面与平板横屏并排"],
+  ] as const)(
+    "侧栏堆叠判据：compact=%s 矮横屏=%s 窄屏=%s -> %s（%s）",
+    (compact, compactLandscape, stackedDetails, expected) => {
+      expect(
+        usesStackedRoomSidePanel(compact, compactLandscape, stackedDetails),
+      ).toBe(expected);
+    },
+  );
 });
 
 describe("Android 原生播放器命令", () => {

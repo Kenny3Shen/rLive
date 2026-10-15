@@ -1236,7 +1236,7 @@ html[data-fullscreen-transition="true"] .app-shell {
 
 /* 让画面在变为全屏的同一帧铺满该舞台。
 
-   浏览器同步应用 `:fullscreen`，但对应的 React 布局（`portraitStackedPlayer`）要等
+   浏览器同步应用 `:fullscreen`，但对应的 React 布局（`stackedPlayer`）要等
    fullscreenchange 派发状态更新后才翻转。中间那一帧里舞台已经盖住屏幕而视频表面
    还带着竖屏堆叠尺寸（`aspect-video` + `shrink-0`）—— 画面停在顶部一条 16:9 带、
    下方全黑。这一帧正是安全区冻结消除回流后用户仍看到的闪烁。
@@ -1257,9 +1257,9 @@ html[data-fullscreen-transition="true"] .app-shell {
    有一帧舞台回到文档流、画面被 `flex-1` 拉伸而不是保持 16:9 ——
    视频看起来先跳高再弹回。
 
-   `data-portrait-stack` 的推导不依赖 `player.mode`，所以那一刻它已经为 true，
+   `data-stage-stacked` 的推导不依赖 `player.mode`，所以那一刻它已经为 true，
    在同一帧恢复比例。`:not()` 守卫在全屏真正生效时把控制权交还给上面的规则。 */
-[data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"])
+[data-player-stage][data-stage-stacked="true"]:not(:fullscreen):not([data-fullscreen="true"])
   > [data-player-video-surface] {
   flex: none;
   aspect-ratio: 16 / 9;
@@ -1269,9 +1269,9 @@ html[data-fullscreen-transition="true"] .app-shell {
 /* 舞台与其包装层在同一帧脱掉各自的全屏尺寸，
    使上面的比例有一个贴合它的父级，而不是仍在填满列的父级。 */
 [data-room-player-frame]:has(
-  > [data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"])
+  > [data-player-stage][data-stage-stacked="true"]:not(:fullscreen):not([data-fullscreen="true"])
 ),
-[data-player-stage][data-portrait-stack="true"]:not(:fullscreen):not([data-fullscreen="true"]) {
+[data-player-stage][data-stage-stacked="true"]:not(:fullscreen):not([data-fullscreen="true"]) {
   flex: none;
   width: 100%;
   aspect-ratio: 16 / 9;

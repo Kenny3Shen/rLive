@@ -2,16 +2,18 @@ import { ChevronLeft } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { cn } from "@/lib/utils";
+import { isMobileClient } from "@/shared/clientPlatform";
 import {
   useCompactLandscapePlayerViewport,
   useCompactPlayerViewport,
+  useStackedDetailsViewport,
 } from "@/shared/hooks/usePlayerViewport";
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
 } from "@/shared/components/player/PlayerControls";
 import { PlayerStageSkeleton } from "@/shared/components/player/PlayerStageSkeleton";
-import { sidePanelStartsOpen } from "./PlayerPane";
+import { sidePanelStartsOpen, usesStackedRoomSidePanel } from "./PlayerPane";
 
 /**
  * 直播间详情未落定时的加载骨架。
@@ -26,10 +28,15 @@ import { sidePanelStartsOpen } from "./PlayerPane";
 export function RoomStageSkeleton({ onBack }: { onBack: () => void }) {
   const compactViewport = useCompactPlayerViewport();
   const compactLandscapeViewport = useCompactLandscapePlayerViewport();
+  const stackedDetailsViewport = useStackedDetailsViewport();
   // 与 `PlayerPane` 同一个初始取值：矮横屏的面板收进抽屉（不占位），
   // 其余形态一开始就把面板摆在画面旁边/下方。
   const showSidePanel = sidePanelStartsOpen(compactLandscapeViewport);
-  const stacked = compactViewport && !compactLandscapeViewport && showSidePanel;
+  const stacked = usesStackedRoomSidePanel(
+    compactViewport,
+    compactLandscapeViewport,
+    stackedDetailsViewport,
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -63,13 +70,15 @@ export function RoomStageSkeleton({ onBack }: { onBack: () => void }) {
           {showSidePanel && <RoomSidePanelSkeleton stacked={stacked} />}
         </div>
       </div>
-      {/* 桌面底部操作行只占高，不模拟按钮；移动端不占位。 */}
-      <div
-        aria-hidden
-        className="hidden shrink-0 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:block"
-      >
-        <div className="h-7" />
-      </div>
+      {/* 桌面底部操作行只占高，不模拟按钮；移动端与平板不占位（与真实页同一条判据）。 */}
+      {!isMobileClient() && (
+        <div
+          aria-hidden
+          className="hidden shrink-0 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:block"
+        >
+          <div className="h-7" />
+        </div>
+      )}
     </div>
   );
 }
