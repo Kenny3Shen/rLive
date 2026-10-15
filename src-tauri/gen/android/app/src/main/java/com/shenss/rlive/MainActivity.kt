@@ -9,7 +9,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
-  private lateinit var fallbackChromeClient: RustWebChromeClient
+  private var fallbackChromeClient: RustWebChromeClient? = null
   private var fullscreenChromeClient: RliveFullscreenWebChromeClient? = null
   private var fullscreenBackCallback: OnBackPressedCallback? = null
 
@@ -28,10 +28,6 @@ class MainActivity : TauriActivity() {
     // 以窗口模式启动。这里先清掉，否则 onResume 会让系统栏在窗口模式的
     // 房间下保持隐藏。
     RlivePlayerControlsPlugin.forgetImmersive()
-
-    // Android 7.0/7.1 拿不到 WebView 当前已安装的 Chrome client。
-    // 为这类设备备一个等价的 Tauri client。
-    fallbackChromeClient = RustWebChromeClient(this)
   }
 
   override fun onResume() {
@@ -107,10 +103,16 @@ class MainActivity : TauriActivity() {
         return@post
       }
 
+      // Android 7.0/7.1 拿不到 WebView 当前已安装的 Chrome client。
+      // 为这类设备备一个等价的 Tauri client；wry 要求把自己的 webview id
+      // 一起传进构造器，权限与定位回调都按 id 查找处理器。
+      val webViewId = (webView as? RustWebView)?.id ?: "main"
+      val fallback = fallbackChromeClient
+        ?: RustWebChromeClient(this, webViewId).also { fallbackChromeClient = it }
       val delegate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        webView.webChromeClient ?: fallbackChromeClient
+        webView.webChromeClient ?: fallback
       } else {
-        fallbackChromeClient
+        fallback
       }
       fullscreenChromeClient = RliveFullscreenWebChromeClient(this, delegate)
       webView.webChromeClient = fullscreenChromeClient
