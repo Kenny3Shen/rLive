@@ -10,7 +10,7 @@ import {
 import { floatingDanmakuText } from "./filter";
 import { superChatDurationMs } from "../superChat";
 
-/** 直播层的本地活动预算和零尺寸待处理队列上限。 */
+/** 直播层的本地在屏条数预算上限。 */
 export const DANMAKU_MAX_ACTIVE_COMMENTS = 800;
 /**
  * 每条车道稳态在屏条数：`danmu` 的轨道准入是「前一条尾部完全进屏」才放行，
@@ -22,44 +22,11 @@ export const DANMAKU_LANE_ACTIVE_COMMENTS = 5;
 /** 预算下限：一条车道的容量，保证极矮舞台不会因为取整被压到 0 条。 */
 export const DANMAKU_MIN_ACTIVE_COMMENTS = DANMAKU_LANE_ACTIVE_COMMENTS;
 export const DANMAKU_IMAGE_TRACK_SPAN = 2;
-export const DANMAKU_MAX_PENDING_COMMENTS = 80;
-export const DANMAKU_PENDING_MAX_AGE_MS = 5_000;
 export const DANMAKU_DEFAULT_DURATION_MS = 15_000;
 export const DANMAKU_DEFAULT_SPEED = 100;
 export const DANMAKU_FONT_WEIGHT = 700;
 export const DANMAKU_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
 const DANMAKU_COUNT_SLOT_WIDTH = "5.25ch";
-
-export type DanmakuPendingEvent = {
-  event: DanmakuEvent;
-  queuedAt: number;
-};
-
-export function enqueueDanmakuPending(
-  queue: DanmakuPendingEvent[],
-  events: readonly DanmakuEvent[],
-  queuedAt = Date.now(),
-  capacity = DANMAKU_MAX_PENDING_COMMENTS,
-): void {
-  for (const event of events) queue.push({ event, queuedAt });
-  const safeCapacity = Number.isFinite(capacity)
-    ? Math.max(0, Math.floor(capacity))
-    : DANMAKU_MAX_PENDING_COMMENTS;
-  const overflow = queue.length - safeCapacity;
-  if (overflow > 0) queue.splice(0, overflow);
-}
-
-export function flushDanmakuPending(
-  queue: DanmakuPendingEvent[],
-  now = Date.now(),
-  maxAge = DANMAKU_PENDING_MAX_AGE_MS,
-): DanmakuEvent[] {
-  const safeMaxAge = Math.max(0, Number.isFinite(maxAge) ? maxAge : DANMAKU_PENDING_MAX_AGE_MS);
-  return queue
-    .splice(0)
-    .filter((pending) => now - pending.queuedAt <= safeMaxAge)
-    .map((pending) => pending.event);
-}
 
 export type DanmakuBulletMeta = {
   id: string;

@@ -23,17 +23,19 @@ import {
   danmuLaneHeight,
   danmakuMaxActiveComments,
   danmakuRenderLayer,
-  enqueueDanmakuPending,
-  flushDanmakuPending,
   isPinnedDanmakuEvent,
   updateDanmakuAggregation,
   updateDanmakuAppearance,
   type DanmakuBulletMeta,
   type DanmakuCommentWithMeta,
-  type DanmakuPendingEvent,
   type DanmakuRenderLayer,
   DANMAKU_DEFAULT_SPEED,
 } from "./danmakuAdapter";
+import {
+  enqueueDanmakuPending,
+  flushDanmakuPending,
+  type DanmakuPendingEvent,
+} from "./pendingQueue";
 import { loadDanmakuRenderer } from "./danmakuLoader";
 import {
   MAX_SUPER_CHAT_DEDUPE_KEYS,
