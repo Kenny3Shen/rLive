@@ -70,7 +70,6 @@ import {
   AsrChunkIntervalField,
   AsrHotwordsField,
   DanmakuAppearanceSettingsFields,
-  DanmakuCollisionModeField,
   DanmakuFilterSettingsFields,
   DanmakuTrackSettingsFields,
   VideoBlockedUploaderField,
@@ -2405,7 +2404,6 @@ export function SettingsPage() {
         )}
         <Section title="弹幕设置">
           <DanmakuTrackSettingsFields idPrefix="settings" layout="page" />
-          <DanmakuCollisionModeField idPrefix="settings" layout="page" />
           <DanmakuAppearanceSettingsFields idPrefix="settings" layout="page" />
         </Section>
         <Section title="消息过滤">

@@ -1,5 +1,4 @@
 import { create, type Danmaku, type Manager } from "danmu";
-import type { DanmakuCollisionMode } from "@/shared/types/live";
 import { applyCommentStyle } from "./danmakuAdapter";
 import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
 
@@ -12,6 +11,9 @@ import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
  * 固定弹幕（top/bottom，含 SC 与自己的弹幕）和占两条车道的大表情走 flexible danmaku，
  * 由本文件的 `LanePool` 按车道摆位；普通滚动弹幕交给 `danmu` 的轨道调度与碰撞预测。
  * 大表情不经过库的轨道准入，进入前由 `pushWide` 按同一判据等车道内普通弹幕尾部进屏。
+ *
+ * 碰撞检测档位不开放：库的 `mode` 固定 `strict`（饱和时排队延后而非叠放），
+ * 轨道分配固定 `random`，见 `COLLISION_MODE` 与 `TRACK_DISTRIBUTION`。
  */
 type Layer = "scroll" | "fixed";
 
@@ -67,6 +69,18 @@ const MAX_PUSH_PER_FRAME = 48;
 /** 库自身轮询间隔；滚动层另有批次内的显式 `render()`，这里只兜底重试。 */
 const SCROLL_INTERVAL_MS = 200;
 const FIXED_INTERVAL_MS = 500;
+/**
+ * 碰撞检测档位固定为库的 `strict`：车道不满足准入时留在待投队列等空位，宁可延后也不重叠。
+ * `adaptive` 在轨道占满时会随机挑一条轨道直接上屏（实测同车道多条弹幕停在同一个 x），
+ * `none` 完全不检测，两者都会让文字互相压字。
+ */
+const COLLISION_MODE = "strict";
+/**
+ * 轨道分配固定用随机分布，不用库的 `order`（自顶向下填满）。库的 `getTrackIdx` 形参默认值
+ * 也是 `random`，这里显式写出、不依赖它：随机分布让同屏弹幕在可用轨道间散开，
+ * 不会挤在顶部几条。
+ */
+const TRACK_DISTRIBUTION = "random";
 /**
  * `danmu` 的 `speed` 单位是 px/毫秒，而业务设置（与旧引擎）用 px/秒，
  * 两者差 1000 倍；漏了这一步会让每条弹幕在数毫秒内跑完并消失。
@@ -195,7 +209,6 @@ export class DanmakuRenderer {
   private speed: number;
   private area: number;
   private laneHeight: number;
-  private collisionMode: DanmakuCollisionMode;
   private lastMediaTime = 0;
   private frozen = false;
   private frame = 0;
@@ -209,7 +222,6 @@ export class DanmakuRenderer {
     this.speed = positive(options.speed, 100);
     this.area = clampArea(options.area);
     this.laneHeight = Math.max(1, Math.round(positive(options.laneHeight, 24)));
-    this.collisionMode = options.collisionMode ?? "strict";
     this.scroll = this.createLayer("scroll");
     this.fixed = this.createLayer("fixed");
     this.applyScrollArea();
@@ -310,24 +322,6 @@ export class DanmakuRenderer {
     this.cursor = 0;
   }
 
-  /**
-   * 切换碰撞检测算法，透传给两层管理器。
-   * 密度不再由应用侧的在屏预算控制：饱和时 `strict` 由库排队延后、`adaptive` 叠放、
-   * `none` 不拦，三种行为都由所选算法本身决定。
-   */
-  setCollisionMode(mode: DanmakuCollisionMode): void {
-    if (this.destroyed || mode === this.collisionMode) return;
-    this.collisionMode = mode;
-    for (const runtime of [this.scroll, this.fixed]) {
-      runtime.manager.updateOptions({
-        mode,
-        // `none` 与 `order` 组合会把每条弹幕都放在第一条轨道上，见 `createLayer`。
-        distribution: mode === "none" ? "random" : "order",
-      });
-    }
-    this.scheduleRender();
-  }
-
   resize(): void {
     if (this.destroyed) return;
     this.scroll.manager.format();
@@ -394,10 +388,8 @@ export class DanmakuRenderer {
 
   private createLayer(layer: Layer): LayerRuntime {
     const manager = create<DanmakuComment>({
-      mode: this.collisionMode,
-      // `none` 与 `order` 组合会把每条弹幕都放在第一条轨道上（`getTrackIdx` 恒返回 0），
-      // 与「不检测碰撞」的语义相反，因此关闭检测时改用随机分布。
-      distribution: this.collisionMode === "none" ? "random" : "order",
+      mode: COLLISION_MODE,
+      distribution: TRACK_DISTRIBUTION,
       interval: layer === "scroll" ? SCROLL_INTERVAL_MS : FIXED_INTERVAL_MS,
       speed: layer === "scroll" ? this.speed * SPEED_UNIT_SCALE : null,
       trackHeight: this.laneHeight,
@@ -574,9 +566,8 @@ export class DanmakuRenderer {
     return best && best.wait <= WIDE_MAX_WAIT_MS ? best : null;
   }
 
-  /** 一段车道内普通弹幕全部尾部进屏还需的毫秒数；关闭碰撞检测时不等待。 */
+  /** 一段车道内普通弹幕全部尾部进屏还需的毫秒数。 */
   private wideEntryWait(start: number, span: number): number {
-    if (this.collisionMode === "none") return 0;
     const manager = this.scroll.manager;
     const gap = typeof manager.options.gap === "number" ? manager.options.gap : 0;
     const occupants: LaneOccupant[] = [];

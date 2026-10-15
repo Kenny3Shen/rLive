@@ -1,30 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   DANMAKU_BLOCKED_USERS_MAX,
-  DANMAKU_COLLISION_MODE_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   DANMAKU_MERGE_WINDOW_SECONDS_MAX,
   DANMAKU_MERGE_WINDOW_SECONDS_MIN,
   DANMAKU_SHIELD_ENTRY_MAX_LENGTH,
   normalizeDanmakuBlockedUsers,
-  parseDanmakuCollisionMode,
   parseDanmakuMergeWindowSeconds,
 } from "../src/shared/stores/settingsStore";
-describe("danmaku collision mode settings", () => {
-  test("keeps every supported algorithm", () => {
-    expect(parseDanmakuCollisionMode("strict")).toBe("strict");
-    expect(parseDanmakuCollisionMode("adaptive")).toBe("adaptive");
-    expect(parseDanmakuCollisionMode("none")).toBe("none");
-  });
-  test("falls back to strict instead of an algorithm that stacks danmaku", () => {
-    // 未知取值（旧记录、手改配置包、上游新增档位）必须退回严格检测：
-    // 静默落到 `adaptive` 或 `none` 会让饱和时的弹幕互相压字，属于可见退化。
-    expect(DANMAKU_COLLISION_MODE_DEFAULT).toBe("strict");
-    for (const value of [undefined, null, "", "ADAPTIVE", "unknown", 1, {}]) {
-      expect(parseDanmakuCollisionMode(value)).toBe(DANMAKU_COLLISION_MODE_DEFAULT);
-    }
-  });
-});
 describe("danmaku merge window settings", () => {
   test("clamps values to the supported range", () => {
     expect(parseDanmakuMergeWindowSeconds(DANMAKU_MERGE_WINDOW_SECONDS_MIN - 1)).toBe(

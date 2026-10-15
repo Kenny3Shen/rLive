@@ -314,7 +314,6 @@ pub fn merge_into_db(
     settings.danmaku_font_size = package.settings.danmaku_font_size;
     settings.danmaku_speed = package.settings.danmaku_speed;
     settings.danmaku_area = package.settings.danmaku_area;
-    settings.danmaku_collision_mode = package.settings.danmaku_collision_mode;
     settings.danmaku_filter_gifts = package.settings.danmaku_filter_gifts;
     settings.danmaku_merge_window_seconds = package.settings.danmaku_merge_window_seconds;
     settings.super_chat_enabled = package.settings.super_chat_enabled;
@@ -499,29 +498,31 @@ mod tests {
         }
     }
 
-    /// 旧配置包里没有 `danmaku_collision_mode`，导入时回填严格检测；
-    /// 它随配置包导出导入（不是本机专属字段），因此显式选择必须原样保留。
+    /// 旧配置包与旧记录里的 `danmaku_collision_mode` 必须被消费掉而不是拒绝：
+    /// 档位已固定为 `strict`，字段只用于兼容 `deny_unknown_fields`，导入后不再写回。
     #[test]
-    fn profile_backfills_collision_mode_and_keeps_explicit_choice() {
-        use crate::models::settings::DanmakuCollisionMode;
+    fn profile_consumes_retired_collision_mode_field() {
+        let mut value = portable_profile_value(&ProfilePackage::sample()).unwrap();
+        value["settings"]["danmaku_collision_mode"] = serde_json::json!("adaptive");
+        let package = decode_package(&value.to_string()).unwrap();
+        assert_eq!(
+            package.settings.legacy_danmaku_collision_mode,
+            Some(serde_json::json!("adaptive"))
+        );
+        let encoded = serde_json::to_value(&package).unwrap();
+        assert!(
+            encoded["settings"].get("danmaku_collision_mode").is_none(),
+            "已退役字段不应再写回"
+        );
 
+        // 没有该字段的旧包同样接受，退役字段按 `None` 补齐。
         let mut value = portable_profile_value(&ProfilePackage::sample()).unwrap();
         value["settings"]
             .as_object_mut()
             .unwrap()
             .remove("danmaku_collision_mode");
         let package = decode_package(&value.to_string()).unwrap();
-        assert_eq!(
-            package.settings.danmaku_collision_mode,
-            DanmakuCollisionMode::Strict
-        );
-
-        value["settings"]["danmaku_collision_mode"] = serde_json::json!("adaptive");
-        let package = decode_package(&value.to_string()).unwrap();
-        assert_eq!(
-            package.settings.danmaku_collision_mode,
-            DanmakuCollisionMode::Adaptive
-        );
+        assert_eq!(package.settings.legacy_danmaku_collision_mode, None);
     }
 
     #[test]

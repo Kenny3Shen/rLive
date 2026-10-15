@@ -22,7 +22,6 @@ import type {
   AsrProvider,
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
-  DanmakuCollisionMode,
   ProxyMode,
   RecordingAssOverflowPolicy,
   RecordingAssSettings,
@@ -41,13 +40,6 @@ export const DANMAKU_FONT_STROKE_MAX = 1.5;
 export const DANMAKU_FONT_STROKE_STEP = 0.5;
 export const DANMAKU_FONT_STROKE_DEFAULT = 0;
 export const DANMAKU_AREA_DEFAULT = 0.25;
-/**
- * 默认的碰撞检测算法。
- *
- * `strict` 是唯一不会在饱和时叠放的选项：`adaptive` 在车道占满时会随机挑一条轨道
- * 直接上屏（实测同车道多条弹幕停在同一个 x），`none` 完全不检测。
- */
-export const DANMAKU_COLLISION_MODE_DEFAULT: DanmakuCollisionMode = "strict";
 export const DANMAKU_SPEED_MIN = 50;
 export const DANMAKU_SPEED_MAX = 200;
 export const DANMAKU_SPEED_DEFAULT = 100;
@@ -100,11 +92,6 @@ function parseQualityLevel(value: unknown): QualityLevel {
 
 function parseVideoRecommendApi(value: unknown): VideoRecommendApi {
   return value === "web" ? "web" : VIDEO_RECOMMEND_API_DEFAULT;
-}
-
-/** 碰撞检测算法。未知取值回退到默认的严格检测，不静默改成会叠放的算法。 */
-export function parseDanmakuCollisionMode(value: unknown): DanmakuCollisionMode {
-  return value === "none" || value === "adaptive" ? value : DANMAKU_COLLISION_MODE_DEFAULT;
 }
 
 function parseAsrProvider(value: unknown): AsrProvider {
@@ -471,8 +458,6 @@ type SettingsState = {
   danmakuFontSize: number;
   danmakuSpeed: number;
   danmakuArea: number;
-  /** 画面弹幕的碰撞检测算法；`danmu` 的 `mode`。 */
-  danmakuCollisionMode: DanmakuCollisionMode;
   danmakuFilterGifts: boolean;
   danmakuMergeWindowSeconds: number;
   superChatEnabled: boolean;
@@ -536,7 +521,6 @@ type SettingsState = {
   /** 屏蔽一个 UP 主；已在名单中时为无操作。 */
   blockVideoUploader: (mid: string) => void;
   setRoomCardPreviewEnabled: (enabled: boolean) => void;
-  setDanmakuCollisionMode: (mode: DanmakuCollisionMode) => void;
   setSuperChatEnabled: (enabled: boolean) => void;
   /** 屏蔽一个用户；已在列表中时为无操作。 */
   blockDanmakuUser: (user: string) => void;
@@ -579,7 +563,6 @@ const defaultSettings: AppSettings = {
   danmaku_font_size: defaultDanmakuFontSize(),
   danmaku_speed: DANMAKU_SPEED_DEFAULT,
   danmaku_area: DANMAKU_AREA_DEFAULT,
-  danmaku_collision_mode: DANMAKU_COLLISION_MODE_DEFAULT,
   danmaku_filter_gifts: true,
   danmaku_merge_window_seconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
   super_chat_enabled: true,
@@ -626,7 +609,6 @@ function toAppSettings(state: SettingsState): AppSettings {
     danmaku_font_size: state.danmakuFontSize,
     danmaku_speed: state.danmakuSpeed,
     danmaku_area: state.danmakuArea,
-    danmaku_collision_mode: state.danmakuCollisionMode,
     danmaku_filter_gifts: state.danmakuFilterGifts,
     danmaku_merge_window_seconds: state.danmakuMergeWindowSeconds,
     super_chat_enabled: state.superChatEnabled,
@@ -685,7 +667,6 @@ function forwardedSetters(
     setVideoRecommendApi: forward("videoRecommendApi", "video_recommend_api"),
     setVideoNextEpisodePreload: forward("videoNextEpisodePreload", "video_next_episode_preload"),
     setRoomCardPreviewEnabled: forward("roomCardPreviewEnabled", "room_card_preview_enabled"),
-    setDanmakuCollisionMode: forward("danmakuCollisionMode", "danmaku_collision_mode"),
     setDynamicBackgroundEnabled: forward("dynamicBackgroundEnabled", "dynamic_background_enabled"),
     setSuperChatEnabled: forward("superChatEnabled", "super_chat_enabled"),
     setAsrTranslationEnabled: forward("asrTranslationEnabled", "asr_translation_enabled"),
@@ -780,7 +761,6 @@ export const useSettingsStore = create<SettingsState>()(
       danmakuFontSize: defaultDanmakuFontSize(),
       danmakuSpeed: DANMAKU_SPEED_DEFAULT,
       danmakuArea: DANMAKU_AREA_DEFAULT,
-      danmakuCollisionMode: DANMAKU_COLLISION_MODE_DEFAULT,
       danmakuFilterGifts: true,
       danmakuMergeWindowSeconds: DANMAKU_MERGE_WINDOW_SECONDS_DEFAULT,
       superChatEnabled: true,
@@ -1008,7 +988,6 @@ export const useSettingsStore = create<SettingsState>()(
           danmakuFontSize: settings.danmaku_font_size,
           danmakuSpeed: parseDanmakuSpeed(settings.danmaku_speed),
           danmakuArea: settings.danmaku_area,
-          danmakuCollisionMode: parseDanmakuCollisionMode(settings.danmaku_collision_mode),
           danmakuFilterGifts: settings.danmaku_filter_gifts,
           danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(
             settings.danmaku_merge_window_seconds,

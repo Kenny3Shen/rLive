@@ -265,9 +265,6 @@ export type RecordingAssSettings = {
 /** 镜像 Rust `VideoRecommendApi` 的 serde snake_case 取值。 */
 export type VideoRecommendApi = "app" | "web";
 
-/** 镜像 Rust `DanmakuCollisionMode`：`danmu` 引擎的三种碰撞检测算法。 */
-export type DanmakuCollisionMode = "none" | "strict" | "adaptive";
-
 /** 镜像 Rust `ProxyMode`：跟随系统、关闭代理、使用自定义地址。 */
 export type ProxyMode = "auto" | "off" | "custom";
 
@@ -284,8 +281,6 @@ export type AppSettings = {
   /** 滚动弹幕速度，CSS 像素每秒，50..=200。 */
   danmaku_speed: number;
   danmaku_area: number;
-  /** 画面弹幕的碰撞检测算法；默认 `strict`。 */
-  danmaku_collision_mode: DanmakuCollisionMode;
   danmaku_filter_gifts: boolean;
   /** 重复聊天的合并窗口秒数，0..=30；0 关闭合并。 */
   danmaku_merge_window_seconds: number;

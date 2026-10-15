@@ -11,7 +11,6 @@ import {
   AsrChunkIntervalField,
   AsrHotwordsField,
   DanmakuAppearanceSettingsFields,
-  DanmakuCollisionModeField,
   DanmakuFilterSettingsFields,
   DanmakuTrackSettingsFields,
 } from "@/features/settings/PlaybackPreferenceFields";
@@ -58,7 +57,6 @@ export const DanmakuSettingsPanel = memo(function DanmakuSettingsPanel({
           <CardContent className="pt-0">
             <FieldGroup className="gap-2">
               <DanmakuTrackSettingsFields idPrefix="room" layout="panel" />
-              <DanmakuCollisionModeField idPrefix="room" layout="panel" />
               <DanmakuAppearanceSettingsFields idPrefix="room" layout="panel" />
             </FieldGroup>
           </CardContent>

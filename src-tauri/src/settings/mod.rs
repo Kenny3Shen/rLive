@@ -415,7 +415,6 @@ pub fn set(conn: &Connection, settings: &AppSettings) -> AppResult<()> {
 mod tests {
     use super::*;
     use crate::db::schema::open_in_memory;
-    use crate::models::settings::DanmakuCollisionMode;
 
     #[test]
     fn proxy_mode_migrates_legacy_addresses_but_preserves_explicit_modes() {
@@ -776,7 +775,6 @@ mod tests {
             "room_card_preview_enabled",
             "recording_max_concurrent",
             "dynamic_background_enabled",
-            "danmaku_collision_mode",
         ] {
             value.as_object_mut().unwrap().remove(field);
         }
@@ -800,8 +798,6 @@ mod tests {
         assert!(actual.room_card_preview_enabled);
         assert!(!actual.dynamic_background_enabled);
         assert_eq!(actual.recording_max_concurrent, 4);
-        // 旧记录没有碰撞检测算法，回填为严格检测；`adaptive` 会在车道占满时叠放。
-        assert_eq!(actual.danmaku_collision_mode, DanmakuCollisionMode::Strict);
         assert_eq!(actual.recording_ass.overflow_policy, "delay");
         assert_eq!(actual.recording_ass.max_delay_seconds, 5);
     }
