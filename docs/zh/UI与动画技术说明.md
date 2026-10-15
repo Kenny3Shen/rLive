@@ -180,6 +180,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - `ResizeObserver` 只在视口宽度实际变化时重新停靠，初次通知、列表增高或高度变化不能取消横向动画；导航未提交时按待提交目标定位，不能跳回旧页。节点重绑和路由卸载要清理旧动画、延迟通知及回滚计时器。
 - 中途抓住正在收尾的页面时从其当前实际像素位置（`DOMMatrixReadOnly`）接管，不回跳。相邻平台页为无缝预览保持挂载，但用 layout/paint/style containment 隔离；完全离屏页的 CSS animation 暂停。
 - Slider、Input、Textarea、Select、可编辑区域与 ScrollArea scrollbar 拥有自己的连续手势，不被页面 swipe 接管；已识别 swipe 后短暂抑制合成 click。
+- **每个 `data-horizontal-swipe-surface` 都必须自带 `touch-pan-y`（或 `touch-none`）**：Chromium 按命中元素所在的最近滚动容器决定手势归属，表面为默认 `touch-action: auto` 且命中处没有可滚动祖先时，横向拖动被合成器当成滚动接走，第一次 `pointermove` 之后即派发 `pointercancel`，手势永远攒不到 `10px` 锁定阈值 —— 真机实测就是「页签条本身怎么滑都不切页」，而同一页的内容区（本身是 `touch-pan-y` 的滚动页）滑动正常。Shell 头部的平台/视频/IPTV 三条页签条都栽在这上面（条带自身 `overflow: visible`、不可横向滚动），房间侧栏与内容区因为已经声明而一直正常。合成 `PointerEvent` 不经合成器，这类缺陷只能在真实触摸环境验证。
 - 手势禁用时终止在途手势；`enabled: false` 只关闭触摸，仍允许桌面点击动画。取消收尾动画前先把当前像素位置写回 inline style，结束或卸载后清理 Animation 与 `will-change`。
 - 移动层的 `transform` 会让它成为 `position: fixed` 后代的包含块：`track` 连静止时都带着 `translate3d(-活动索引 × width, 0, 0)`，落在其中的固定定位层会被整层平移（RefreshFab 曾随内容滚走，关注页 dnd-kit `DragOverlay` 曾偏移一个 track 左上角）。这类层必须 `createPortal` 到 `document.body`，不能只靠 `position: fixed`。
 

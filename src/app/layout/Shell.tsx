@@ -889,7 +889,11 @@ export function Shell() {
                           ) : hasIptvSourceShell ? (
                             <div
                               data-horizontal-swipe-surface
-                              className="h-full min-w-0"
+                              // `touch-pan-y` 是本 hook 的契约（见 `useHorizontalSwipe` 文档）：
+                              // 表面为 `auto` 时合成器会把横向拖动当成滚动接走，
+                              // 第一次 `pointermove` 之后即派发 `pointercancel`，
+                              // 手势永远攒不到锁定阈值 —— 表现为「页签条上怎么滑都不切来源」。
+                              className="h-full min-w-0 touch-pan-y"
                               {...bindSwipe(iptvSourceSwipe)}
                             >
                               <IptvSourceSwitcher
@@ -902,7 +906,10 @@ export function Shell() {
                           ) : isVideo ? (
                             <div
                               data-horizontal-swipe-surface
-                              className="h-full min-w-0"
+                              // 同 IPTV 来源条：表面必须声明 `touch-pan-y`，
+                              // 否则合成器接走横向拖动，
+                              // 平板（与手机）上页签条本身怎么滑都不切页。
+                              className="h-full min-w-0 touch-pan-y"
                               {...bindSwipe(videoTabSwipe)}
                             >
                               <VideoTabSwitcher
@@ -912,14 +919,23 @@ export function Shell() {
                               />
                             </div>
                           ) : (
-                            <SiteSwitcher
-                              value={activeSiteId}
-                              onValueIntent={preloadHomePlatform}
-                              onValueChange={(value) => {
-                                if (value === "all") return;
-                                sitePlatformSwipe.selectValue(value);
-                              }}
-                            />
+                            <div
+                              data-horizontal-swipe-surface
+                              // 首页/分类/搜索的平台条也是页面切换器，与视频页签条同一处理：
+                              // 只在内容区可滑、条带本身把手势交给合成器，
+                              // 用户按直觉在页签上横滑时会看到「滑不动」。
+                              className="h-full min-w-0 touch-pan-y"
+                              {...bindSwipe(sitePlatformSwipe)}
+                            >
+                              <SiteSwitcher
+                                value={activeSiteId}
+                                onValueIntent={preloadHomePlatform}
+                                onValueChange={(value) => {
+                                  if (value === "all") return;
+                                  sitePlatformSwipe.selectValue(value);
+                                }}
+                              />
+                            </div>
                           )}
                         </div>
                       )}
