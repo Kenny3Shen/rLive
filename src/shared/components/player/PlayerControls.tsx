@@ -689,6 +689,83 @@ export function PlayerControls({
     />
   );
 
+  const asrIcon =
+    asr.icon === "spinner" ? (
+      <SpinnerIcon className="size-4" />
+    ) : asr.icon === "captions" ? (
+      <Captions />
+    ) : (
+      <CaptionsOff />
+    );
+
+  /**
+   * 字幕来源菜单的正文：「关闭字幕」→「字幕（本地）」→ 识别设置三段。
+   *
+   * 弹层与抽屉共用同一份行。自带 `Menu.Root` + `EmbeddedMenuContent` 是为了让抽屉
+   * 形态也有方向键与 roving tabindex —— 紧凑形态不再有外层的 `Menu.Content`，
+   * 与播放设置抽屉同一条做法（`settingsBody`）。
+   */
+  // 菜单只在 `onToggleAsr` 存在时渲染；这里先收窄，供两种形态共用同一份正文。
+  const toggleAsr = onToggleAsr;
+  const asrMenuBody = toggleAsr && (
+    <Menu.Root
+      open={asrOpen}
+      closeOnEscape={false}
+      closeOnOutsideClick={false}
+      onOpenChange={(open) => {
+        if (!open) setAsrMenuOpen(false);
+      }}
+    >
+      <EmbeddedMenuContent>
+        <Button
+          variant="ghost"
+          className={cn(
+            "w-full justify-between max-md:h-10",
+            glassOptionClass(),
+            !asr.enabled && glassOptionSelectedClass(),
+          )}
+          aria-pressed={!asr.enabled}
+          onClick={() => {
+            if (asr.enabled) toggleAsr();
+            setAsrMenuOpen(false);
+          }}
+        >
+          <span className="truncate">关闭字幕</span>
+          {!asr.enabled && <Check data-icon="inline-end" aria-hidden />}
+        </Button>
+        <Button
+          variant="ghost"
+          className={cn(
+            "h-auto min-h-9 w-full justify-between py-1.5 max-md:min-h-10",
+            glassOptionClass(),
+            asr.enabled && glassOptionSelectedClass(),
+          )}
+          aria-pressed={asr.enabled}
+          aria-disabled={asrDisabled || undefined}
+          disabled={asrDisabled}
+          onClick={() => {
+            if (!asr.enabled) toggleAsr();
+            setAsrMenuOpen(false);
+          }}
+        >
+          <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+            <span className="truncate">字幕（本地）</span>
+            {asrDisabled && (
+              <span className={cn("text-xs font-normal", glassMutedTextClass())}>{asrLabel}</span>
+            )}
+          </span>
+          {asrBusy ? (
+            <SpinnerIcon className="size-4" data-icon="inline-end" aria-hidden />
+          ) : asr.enabled ? (
+            <Check data-icon="inline-end" aria-hidden />
+          ) : null}
+        </Button>
+        <Separator className={cn("my-1", glassSeparatorClass())} />
+        <div className="px-2 py-2">{asrBody}</div>
+      </EmbeddedMenuContent>
+    </Menu.Root>
+  );
+
   // 容器宽度不足时按优先级让位：与原生控件同一套 media 容器断点，
   // 保证业务按钮行永远不会被 `overflow-hidden` 拦腰截断。
   const secondaryClass = "media-max-sm:hidden";
@@ -961,108 +1038,84 @@ export function PlayerControls({
             </ExtensionButton>
           )}
 
-          {/* 3. 字幕：点击只打开来源菜单，不再直接启动本地识别。 */}
-          {showSecondary && asrVisible && onToggleAsr && (
-            <Menu.Root
-              open={asrOpen}
-              closeOnEscape={true}
-              closeOnOutsideClick={true}
-              onOpenChange={asrHover.onOpenChange}
-            >
-              <Menu.Trigger
-                aria-label={asr.enabled ? "关闭字幕" : "开启字幕"}
-                aria-pressed={asr.enabled}
-                // 与播放设置触发器同构：render 组合 MediaButton 拿回皮肤基类。
-                render={
-                  <MediaButton
-                    className={cn(
-                      "r-live-media-extension-button",
-                      asrOpen && mediaPopupTriggerOpenClass,
-                      asr.enabled && glassOptionSelectedClass(),
-                    )}
-                  />
-                }
-                {...asrHover.trigger}
-              >
-                {asr.icon === "spinner" ? (
-                  <SpinnerIcon className="size-4" />
-                ) : asr.icon === "captions" ? (
-                  <Captions />
-                ) : (
-                  <CaptionsOff />
-                )}
-              </Menu.Trigger>
-              <Menu.Popup
-                keepMounted={false}
-                /* 与播放设置菜单同构：重置 UA `[popover]` 外观，玻璃留在 Content 上。 */
-                className={cn(
-                  mediaPopupResetClass,
-                  mediaPopupMotionClass,
-                  "bg-transparent p-0 [--media-popup-side-offset:var(--media-popover-side-offset)]",
-                )}
-                {...asrHover.popup}
-              >
-                <Menu.Content
-                  className={cn(
-                    "z-50 flex w-72 flex-col overflow-y-auto rounded-media-popup p-1.5",
-                    glassPanelClass({ overlay: true }),
-                    /* 字幕菜单整体禁止换行：长提示一律 truncate 省略。 */
-                    "whitespace-nowrap [&_*]:whitespace-nowrap",
-                  )}
+          {/* 3. 字幕：点击只打开来源菜单，不再直接启动本地识别。
+              紧凑视口走抽屉（与相邻的播放设置抽屉同一判据），其余走悬停弹层。 */}
+          {showSecondary &&
+            asrVisible &&
+            onToggleAsr &&
+            (compact ? (
+              <>
+                <ExtensionButton
+                  label={asr.enabled ? "关闭字幕" : "开启字幕"}
+                  active={asrOpen}
+                  onClick={() => setAsrOpen((open) => !open)}
                 >
-                  <>
-                    <Button
-                      variant="ghost"
+                  {asrIcon}
+                </ExtensionButton>
+                <Drawer open={asrOpen} onOpenChange={setAsrOpen}>
+                  <DrawerContent
+                    side={portrait ? "bottom" : "right"}
+                    container={portalContainer}
+                    glass
+                    className={cn(
+                      "flex flex-col gap-0",
+                      glassPanelClass({ overlay: true }),
+                      /* 字幕菜单整体禁止换行：长提示一律 truncate 省略。 */
+                      "whitespace-nowrap [&_*]:whitespace-nowrap",
+                    )}
+                  >
+                    <DrawerTitle className={glassTitleClass({ overlay: true })}>字幕</DrawerTitle>
+                    {asrMenuBody}
+                  </DrawerContent>
+                </Drawer>
+              </>
+            ) : (
+              <Menu.Root
+                open={asrOpen}
+                closeOnEscape={true}
+                closeOnOutsideClick={true}
+                onOpenChange={asrHover.onOpenChange}
+              >
+                <Menu.Trigger
+                  aria-label={asr.enabled ? "关闭字幕" : "开启字幕"}
+                  aria-pressed={asr.enabled}
+                  // 与播放设置触发器同构：render 组合 MediaButton 拿回皮肤基类。
+                  render={
+                    <MediaButton
                       className={cn(
-                        "w-full justify-between max-md:h-10",
-                        glassOptionClass(),
-                        !asr.enabled && glassOptionSelectedClass(),
-                      )}
-                      aria-pressed={!asr.enabled}
-                      onClick={() => {
-                        if (asr.enabled) onToggleAsr();
-                        setAsrMenuOpen(false);
-                      }}
-                    >
-                      <span className="truncate">关闭字幕</span>
-                      {!asr.enabled && <Check data-icon="inline-end" aria-hidden />}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className={cn(
-                        "h-auto min-h-9 w-full justify-between py-1.5 max-md:min-h-10",
-                        glassOptionClass(),
+                        "r-live-media-extension-button",
+                        asrOpen && mediaPopupTriggerOpenClass,
                         asr.enabled && glassOptionSelectedClass(),
                       )}
-                      aria-pressed={asr.enabled}
-                      aria-disabled={asrDisabled || undefined}
-                      disabled={asrDisabled}
-                      onClick={() => {
-                        if (!asr.enabled) onToggleAsr();
-                        setAsrMenuOpen(false);
-                      }}
-                    >
-                      <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
-                        <span className="truncate">字幕（本地）</span>
-                        {asrDisabled && (
-                          <span className={cn("text-xs font-normal", glassMutedTextClass())}>
-                            {asrLabel}
-                          </span>
-                        )}
-                      </span>
-                      {asrBusy ? (
-                        <SpinnerIcon className="size-4" data-icon="inline-end" aria-hidden />
-                      ) : asr.enabled ? (
-                        <Check data-icon="inline-end" aria-hidden />
-                      ) : null}
-                    </Button>
-                    <Separator className={cn("my-1", glassSeparatorClass())} />
-                    <div className="px-2 py-2">{asrBody}</div>
-                  </>
-                </Menu.Content>
-              </Menu.Popup>
-            </Menu.Root>
-          )}
+                    />
+                  }
+                  {...asrHover.trigger}
+                >
+                  {asrIcon}
+                </Menu.Trigger>
+                <Menu.Popup
+                  keepMounted={false}
+                  /* 与播放设置菜单同构：重置 UA `[popover]` 外观，玻璃留在 Content 上。 */
+                  className={cn(
+                    mediaPopupResetClass,
+                    mediaPopupMotionClass,
+                    "bg-transparent p-0 [--media-popup-side-offset:var(--media-popover-side-offset)]",
+                  )}
+                  {...asrHover.popup}
+                >
+                  <Menu.Content
+                    className={cn(
+                      "z-50 flex w-72 flex-col overflow-y-auto rounded-media-popup p-1.5",
+                      glassPanelClass({ overlay: true }),
+                      /* 字幕菜单整体禁止换行：长提示一律 truncate 省略。 */
+                      "whitespace-nowrap [&_*]:whitespace-nowrap",
+                    )}
+                  >
+                    {asrMenuBody}
+                  </Menu.Content>
+                </Menu.Popup>
+              </Menu.Root>
+            ))}
 
           {/* 4. 字幕：常驻控制栏，不可用时为禁用按钮（位置固定在全屏按钮左侧）。 */}
           {captionsSlot}
