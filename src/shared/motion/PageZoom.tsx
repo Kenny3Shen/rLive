@@ -1,5 +1,4 @@
 import {
-  startTransition,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -8,6 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 import { RouterScope, useFrozenRouter, type FrozenRouter } from "./FrozenRouter";
 import { clearMotionStyles } from "./tween";
@@ -200,21 +200,25 @@ export function PageZoom({
       void Promise.all(animations.map(({ animation }) => animation.finished))
         .then(() => {
           if (disposed) return;
-          nextFrame(() => {
-            settled = true;
-            // 离场先隐藏再 cancel，即使 WebView 没有 commitStyles 也不会闪回原画面。
-            if (leaving) leaving.style.visibility = "hidden";
-            for (const { element, animation } of animations) {
+          settled = true;
+          for (const { element, animation } of animations) {
+            if (element === leaving) {
+              try {
+                animation.commitStyles();
+              } catch {
+                // 旧 WebView 用下方显式隐藏和同步移除兜底。
+              }
+            } else {
               animation.cancel();
               clearMotionStyles(element);
             }
-            if (leaving) {
-              leaving.style.visibility = "hidden";
-              leaving.style.willChange = "";
-              // 等合成器释放旧纹理，再卸载路由冻结的活跃 subtree。
-              nextFrame(() => startTransition(dropOutgoing));
-            }
-          });
+          }
+          if (leaving) {
+            // 固化终态后隐藏；取消离场动画前同步卸载，避免活弹幕纹理闪回。
+            leaving.style.opacity = "0";
+            leaving.style.visibility = "hidden";
+          }
+          if (outgoing) flushSync(dropOutgoing);
         })
         .catch(() => {
           /* 快速导航取消旧动画。 */
@@ -268,7 +272,12 @@ export function PageZoom({
           });
         }
         animation.cancel();
-        clearMotionStyles(element);
+        if (settled && element === leaving) {
+          // 完成后的离场层不恢复自然态，隐藏保护一直保留到 DOM 脱离。
+          element.style.willChange = "";
+        } else {
+          clearMotionStyles(element);
+        }
       }
       // StrictMode 的副作用重放需要重新启动；自然清理背景层则不能重播入场。
       if (!settled && !exiting) lastEntryRef.current = null;
