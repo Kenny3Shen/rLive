@@ -9,6 +9,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useStat
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
+  ArrowUpCircle,
   ChevronRight,
   CircleDot,
   Clapperboard,
@@ -2118,13 +2119,12 @@ function AboutSettings() {
               {updateStatus === "available" && release ? (
                 <Button
                   size="icon-sm"
+                  className="rounded-full"
                   onClick={showUpdateDialog}
                   title={`发现新版本 v${release.version}`}
                   aria-label={`发现新版本 v${release.version}，查看更新内容`}
                 >
-                  <span aria-hidden className="text-base leading-none">
-                    ⬆️
-                  </span>
+                  <ArrowUpCircle aria-hidden />
                 </Button>
               ) : null}
               <Button
