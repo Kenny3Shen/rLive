@@ -110,6 +110,7 @@ import {
 } from "@/features/room/player/videoJsControls";
 import { useAndroidPlayerControls } from "@/features/room/player/androidPlayerControls";
 import {
+  retainMeasuredAspectRatio,
   videoAspectRatio,
   useAndroidFullscreenOrientation,
 } from "@/features/room/player/androidOrientation";
@@ -1417,7 +1418,18 @@ function VideoPlayerPageContent() {
       waitingRecovery.notifyPaused();
     }
     function syncAspectRatio() {
-      if (!cancelled) setFrameSize({ key: videoKey, ratio: videoAspectRatio(media) });
+      if (cancelled) return;
+      const measured = videoAspectRatio(media);
+      setFrameSize((current) => {
+        // 换画质、重试与「仅音频」切换都会重建媒体，新节点在首个元数据前报告 0×0。
+        // 那不是「画幅未知」而是「还没量」，当成 null 会撤销 Android 的方向锁，
+        // 正在全屏的播放器随物理方向转回竖屏并连带退出全屏。同一稿件内沿用旧值，
+        // 换集（videoKey 变化）才丢弃。
+        const previous = current?.key === videoKey ? current.ratio : null;
+        const ratio = retainMeasuredAspectRatio(previous, measured);
+        if (current?.key === videoKey && current.ratio === ratio) return current;
+        return { key: videoKey, ratio };
+      });
     }
     function onReady() {
       if (cancelled) return;

@@ -16,7 +16,7 @@ import {
 import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { useFullscreenInsetFreeze } from "@/shared/hooks/useFullscreenInsetFreeze";
 import { runningOnAndroidTauri, setAndroidImmersive } from "./androidImmersive";
-import { videoAspectRatio } from "./androidOrientation";
+import { videoAspectRatio, retainMeasuredAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
 import { watchDesktopFullscreen } from "./desktopFullscreenWatcher";
 import { createSerialTaskQueue } from "./serialTaskQueue";
@@ -674,6 +674,15 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [mediaKey, setMediaKey] = useState(0);
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  /**
+   * 上一次量到的画幅及其所属内容身份。
+   *
+   * 画幅是**流**的属性而不是 `<video>` 节点的属性，因此换线路、故障转移与元数据
+   * 续期重建出来的新节点（首个元数据前恒为 0×0）不该把它抹成 `null`：那会连带
+   * 释放 Android 的方向锁，正在全屏的播放器随物理方向转回竖屏，全屏也跟着旋转
+   * 联动一起退出。只有内容真的换了（换房、换片）才丢弃。
+   */
+  const measuredAspectRatioRef = useRef<{ sessionKey: string; ratio: number } | null>(null);
   const [softFallbackToken, setSoftFallbackToken] = useState(0);
   const [activeSourceKey, setActiveSourceKey] = useState("");
 
@@ -1444,9 +1453,15 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
     // Android 全屏自动全屏依据解码后的帧尺寸决定，
     // 因此比例既要跟随首个元数据，也要跟随自适应阶梯在流中进行的后续分辨率切换。
+    // 重建出来的节点在元数据到达前报告 0×0，那不是「未知画幅」而是「还没量」，
+    // 因此同内容期间沿用上一次量到的值（见 `measuredAspectRatioRef`）。
     const syncAspectRatio = () => {
       if (videoRef.current !== video) return;
-      setAspectRatio(videoAspectRatio(video));
+      const measured = videoAspectRatio(video);
+      const retained = measuredAspectRatioRef.current;
+      const previous = retained?.sessionKey === sessionKey ? retained.ratio : null;
+      if (measured != null) measuredAspectRatioRef.current = { sessionKey, ratio: measured };
+      setAspectRatio(retainMeasuredAspectRatio(previous, measured));
     };
     const onCanPlay = () => {
       if (!isCurrentMedia()) return;
@@ -1487,7 +1502,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       video.removeEventListener("resize", syncAspectRatio);
       video.removeEventListener("volumechange", onVolumeChange);
     };
-  }, [effectivePlaybackKind, mediaKey, streamKey, releaseMediaReady]);
+  }, [effectivePlaybackKind, mediaKey, sessionKey, streamKey, releaseMediaReady]);
+  // `sessionKey` 已包含在 `streamKey` 里，多列一次不会多跑 effect；它被单列是因为
+  // `syncAspectRatio` 直接读它来判断画幅该不该跨媒体重建保留。
 
   useEffect(() => {
     if (!profile.telemetry) return;

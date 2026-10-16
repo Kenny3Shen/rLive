@@ -42,6 +42,27 @@ export function videoAspectRatio(
   return width / height;
 }
 
+/**
+ * 媒体重建期间保留上一次量到的画幅。
+ *
+ * 换线路、故障转移与元数据续期都会重建媒体，新的 `<video>` 在首个元数据到达前
+ * 报告 0×0。那不是「画幅未知」，只是还没来得及量：画幅是这条流的属性，不是这个
+ * DOM 节点的属性。把它当成 `null` 会连带撤销 Android 的方向锁
+ * （`fullscreenPlayerOrientation` 对未知比例返回 `auto`），正在全屏的播放器因此
+ * 在加载间隙里被释放方向锁、随物理方向转回竖屏，全屏也跟着旋转联动一起退出 ——
+ * 用户看到的就是「网络卡一下先掉出全屏，加载完再切回去」。
+ *
+ * `previous` 由调用方按内容身份给出：内容真的换了（换房、换片）时传 `null`，
+ * 让新内容从零开始量。真实测量值永远优先，因此自适应阶梯在流中切换分辨率
+ * 仍会照常更新。
+ */
+export function retainMeasuredAspectRatio(
+  previous: number | null,
+  measured: number | null,
+): number | null {
+  return measured ?? previous;
+}
+
 function runningOnAndroidTauri(): boolean {
   return supportsAndroidNativePlayerControls({
     tauriRuntime: isTauri(),

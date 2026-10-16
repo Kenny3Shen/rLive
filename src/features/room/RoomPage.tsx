@@ -311,7 +311,13 @@ function RoomPageContent() {
     return <RoomStageSkeleton onBack={goBack} />;
   }
 
-  if (detailQuery.isError) {
+  // 只有首屏就没拿到详情才整页报错。刷新失败（`isError` 但 `data` 仍在）必须让
+  // 播放器继续挂载：元数据续期会在网络抖动时重取详情，把已挂载的播放器换成错误页
+  // 会连同卸载 `useWebPlayer`，正在全屏的舞台因此被拆掉（`mode` 复位为窗口化并恢复
+  // 系统栏），加载恢复后再切回全屏 —— 用户看到的就是「网络卡一下先掉出全屏」。
+  // 那条失败仍会在播放器内可见：`refreshPlaybackDetail` 抛错后由恢复会话发布
+  // `loadError`，`PlayerPane` 照常渲染错误态与重试入口。
+  if (detailQuery.isError && !detailQuery.data) {
     return (
       <div className="flex h-full flex-col">
         <RoomFallbackHeader title="加载失败" onBack={goBack} />
