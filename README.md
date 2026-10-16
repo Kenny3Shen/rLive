@@ -106,7 +106,7 @@ bun test tests/  # 前端单元测试
 bun run build    # 前端生产构建
 ```
 
-桌面打包、FFmpeg 配置与实机调试见[开发指南](docs/zh/开发指南.md)；Android 环境与 APK 构建见 [Android 开发与构建](docs/zh/Android开发-Windows.md)。
+桌面打包、FFmpeg 配置与实机调试见[开发指南](docs/zh/开发指南.md)；Android 环境与 APK 构建见 [Android 开发与构建](docs/zh/Android开发与构建.md)。
 
 ## 技术概览
 

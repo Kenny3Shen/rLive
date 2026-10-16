@@ -19,7 +19,7 @@
 
 - 技术栈：Tauri 2、Rust、React 19、TypeScript 7、Vite 8、Tailwind CSS 4、shadcn-style/Base UI、Video.js、Sherpa-onnx
 - `src/` 为前端，`src-tauri/` 为后端；`src/app/` 管路由与 Shell，`src/features/` 管业务，`src/components/ui/` 管通用 UI，`src/shared/` 管跨功能代码。
-- 后端命令、站点、弹幕、数据库、IPTV、ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmaku/`、`db/`、`iptv/`、`asr.rs`。
+- 后端命令、站点、弹幕、数据库、IPTV、ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmu_rs/`、`db/`、`iptv/`、`asr.rs`。
 - 服务端/IPC 缓存用 TanStack Query；设置和轻量状态用 Zustand。
 - 动效仅用 Web Animations API 和 CSS，封装于 `src/shared/motion/`。
 - 前后端复用现有 Tauri commands/events；优先复用现有组件、hooks、stores 和边界，不在前端复制 Rust 业务逻辑或建立平行实现。
@@ -41,7 +41,7 @@
 - Windows dev 会话的 vite 占 1420 且与 WSL 共享 loopback，与 WSL 的 `bun run dev` / `tauri android dev` 互斥。
 - 模拟器用 Windows emulator（`D:\dev\android-sdk`，AVD `rlive_win`）；带窗口可从 WSL 启动，headless 必须用 pwsh 7 `Start-Process`，否则随 WSL 会话被回收。多设备/多模拟器时显式传 `-s`。
 
-完整步骤、探针代码与排错清单：`docs/zh/开发指南.md`「桌面端实机调试」、`docs/zh/Android开发-Windows.md`「调试」。
+完整步骤、探针代码与排错清单：`docs/zh/开发指南.md`「桌面端实机调试」、`docs/zh/Android开发与构建.md`「调试」。
 
 ## 播放与功能边界
 

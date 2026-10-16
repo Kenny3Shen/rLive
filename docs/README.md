@@ -20,22 +20,40 @@
 | ---- | ---- |
 | [开发指南](zh/开发指南.md) | 环境要求、启动、检查命令、应用图标生成、Windows/WSL 构建、FFmpeg 与 Android 调试 |
 | [架构说明](zh/架构说明.md) | 前后端分层、五条核心数据路径、会话边界、存储与模块地图 |
-| [B 站视频功能设计](zh/B站视频功能-设计.md) | 视频页、UGC / PGC 播放、来源队列与选集、连播、DASH 合成与 VOD 弹幕 |
+| [B 站视频功能设计](zh/B站视频功能设计.md) | 视频页、UGC / PGC 播放、来源队列与选集、连播、DASH 合成与 VOD 弹幕 |
 | [播放器技术文档](zh/播放器技术文档.md) | 播放分层、结构化播放源、代理生命周期、多画面、故障转移与遥测 |
-| [UI 与动画技术说明](zh/UI与动画技术说明.md) | 组件与主题令牌、响应式布局、Web Animations / CSS 动效规范与验证清单 |
-| [Android 开发与构建](zh/Android开发-Windows.md) | Windows/WSL 下的 JDK/SDK/NDK、APK 构建、真机与模拟器调试 |
+| [UI 与动画技术文档](zh/UI与动画技术文档.md) | 组件与主题令牌、响应式布局、Web Animations / CSS 动效规范与验证清单 |
+| [Android 开发与构建](zh/Android开发与构建.md) | Windows/WSL 下的 JDK/SDK/NDK、APK 构建、真机与模拟器调试 |
 | [发布流程](zh/发布流程.md) | 版本递增、签名配置、产物清单与发布前核验 |
 | [代码审计与优化方向](zh/代码审计与优化方向.md) | 性能/功能优化的代码证据、优先级、实施边界与验收指标（不等于已实施） |
 | [性能优化](zh/性能优化.md) | 播放链路性能问题、根因与实机测试前后对比（VOD/短视频首屏、分片卡死、刷新） |
 | [弹幕性能实测](zh/弹幕性能实测.md) | 直播与 VOD 弹幕链路的优化前后对照、瓶颈定位与侧栏钉底回归修复 |
-| [Windows Debug VOD 性能实测](zh/VOD性能实测.md) | 从头加载与深位置续播的历史实机时间线、前后端瓶颈、网络边界及重新验证口径 |
+| [VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md) | 从头加载与深位置续播的历史实机时间线、前后端瓶颈、网络边界及重新验证口径 |
 
 ## 我要接入或排查某个平台
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [哔哩哔哩](zh/B站平台API文档.md) | 接口、签名、弹幕协议与发送边界 |
+| [哔哩哔哩](zh/哔哩哔哩平台API文档.md) | 接口、签名、弹幕协议与发送边界 |
 | [斗鱼](zh/斗鱼平台API文档.md) | betard / h5room、纯 Rust 签名链、弹幕收发与结果语义 |
 | [虎牙](zh/虎牙平台API文档.md) | 移动端页解析、anticode、FLV 与发送条件 |
 | [抖音](zh/抖音平台API文档.md) | feed 与分区列表、`a_bogus` 验签、本地签名实时弹幕 |
 | [Twitch](zh/Twitch平台API文档.md) | 公开 GraphQL、语言分片分页、HLS 与匿名 IRC |
+
+## 性能原始数据
+
+`bench/` 存放各篇性能文档引用的原始采集结果，命名规则为 `主题-日期.json`（如
+`danmu-migration-desktop-2026-10-15.json`）。文件是采集时的原始记录，不随代码演进重写；
+文档里的结论、口径与失效说明以对应正文为准。
+
+| 文件 | 来源 |
+| ---- | ---- |
+| [danmu-migration-desktop-2026-10-15.json](bench/danmu-migration-desktop-2026-10-15.json) · [danmu-migration-android-2026-10-15.json](bench/danmu-migration-android-2026-10-15.json) | 弹幕引擎迁移到 `danmu` 的桌面与真机对照（[弹幕性能实测](zh/弹幕性能实测.md)） |
+| [danmaku-android-device-2026-10-15.json](bench/danmaku-android-device-2026-10-15.json) | Android 真机 7 组运行（同上，上一轮） |
+| [danmaku-panel-pinned-fix-2026-10-13.json](bench/danmaku-panel-pinned-fix-2026-10-13.json) · [danmaku-android-rerun-2026-10-13.json](bench/danmaku-android-rerun-2026-10-13.json) | 钉底跟随修复的同包对照与模拟器重测 |
+| [danmaku-p0-2026-10-12.json](bench/danmaku-p0-2026-10-12.json) · [danmaku-p1-2026-10-13.json](bench/danmaku-p1-2026-10-13.json) · [danmaku-p2-2026-10-13.json](bench/danmaku-p2-2026-10-13.json) | 弹幕优化 P0 / P1 / P2 归档 |
+| [danmaku-android-120hz-2026-10-12.json](bench/danmaku-android-120hz-2026-10-12.json) · [vod-danmaku-android-2026-10-12.json](bench/vod-danmaku-android-2026-10-12.json) | 120Hz 显示节奏与 VOD 弹幕对照 |
+| [vod-optimization-2026-09-24.json](bench/vod-optimization-2026-09-24.json) | VOD 首屏与续播阶段数据（[VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md)） |
+
+架构图有两套，用途不同：`assets/architecture.svg` 是项目首页展示用的分层总览；
+运行架构的详细图由本机工具生成在 `diagrams/`，该目录不入库。
