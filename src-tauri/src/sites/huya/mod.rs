@@ -14,6 +14,7 @@ use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
     PlayUrl, RoomListPage, SiteId, accept_room_id, parse_live_started_at,
 };
+use crate::sites::json::{json_i64, json_str};
 use crate::sites::traits::LiveSite;
 
 use self::sign::process_anticode;
@@ -330,23 +331,6 @@ fn parse_js_json_assignment(html: &str, marker: &str) -> Option<Value> {
     let source = &rest[brace..];
     let end = find_matching_brace(source)?;
     serde_json::from_str(&source[..=end]).ok()
-}
-
-fn json_i64(v: &Value) -> i64 {
-    v.as_i64()
-        .or_else(|| v.as_u64().map(|u| u as i64))
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        .unwrap_or(0)
-}
-
-fn json_str(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => String::new(),
-        _ => v.to_string(),
-    }
 }
 
 fn urlencoding_encode(s: &str) -> String {

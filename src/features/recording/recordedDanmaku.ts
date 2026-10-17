@@ -75,20 +75,6 @@ export function parseRecordedDanmakuSidecar(text: string): RecordedDanmakuEntry[
   );
 }
 
-export function firstRecordedDanmakuAtOrAfter(
-  entries: readonly RecordedDanmakuEntry[],
-  offsetMs: number,
-): number {
-  let low = 0;
-  let high = entries.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    if (entries[middle]!.offsetMs < offsetMs) low = middle + 1;
-    else high = middle;
-  }
-  return low;
-}
-
 /** 应用与直播悬浮层一致的消息可见性策略。 */
 export function filterRecordedDanmakuEntries(
   entries: readonly RecordedDanmakuEntry[],

@@ -311,13 +311,9 @@ fn parse_device_description(xml: &str, location: &str) -> AppResult<ResolvedDevi
 
     Ok(ResolvedDevice {
         name,
-        control_url: resolve_url(location, &control_url),
+        // 以设备描述地址为基准解析 controlURL（支持绝对/相对路径）。
+        control_url: resolve_relative(location, &control_url),
     })
-}
-
-/// 以设备描述地址为基准解析 controlURL（支持绝对/相对路径）。
-fn resolve_url(base: &str, target: &str) -> String {
-    resolve_relative(base, target)
 }
 
 fn xml_escape(value: &str) -> String {

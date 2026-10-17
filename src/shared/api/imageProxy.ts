@@ -46,11 +46,6 @@ export function shouldProxyHost(hostname: string): boolean {
   return PROXIED_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
-/** 供渲染期决策使用的同步检查；失败时回退直连 URL。 */
-export function isImageProxyReady(): boolean {
-  return proxyBase !== null;
-}
-
 /** 启动时预加载一次回环图片代理。在它就绪前渲染的图片回退到直连 CDN URL。 */
 export function preloadImageProxy(): Promise<string | null> {
   return getImageProxyBase();

@@ -225,7 +225,6 @@ export type PlayerControlsProps = {
 };
 
 export const PLAYER_CONTROL_BUTTON_CLASS = "shrink-0";
-export const PLAYER_CONTROL_ICON_CLASS = "[&_svg]:size-6";
 export const PLAYER_OVERLAY_CONTROL_BUTTON_CLASS =
   "text-media-controls-foreground hover:bg-media-muted hover:text-inherit";
 

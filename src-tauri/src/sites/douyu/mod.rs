@@ -17,6 +17,7 @@ use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
     PlayUrl, RoomListPage, SiteId, accept_room_id, parse_live_started_at,
 };
+use crate::sites::json::{json_i64, json_str};
 use crate::sites::traits::LiveSite;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43";
@@ -233,23 +234,6 @@ fn has_more_page(
         i64::from(page) < upstream_page_count
     } else {
         item_count >= expected_page_size
-    }
-}
-
-fn json_i64(v: &Value) -> i64 {
-    v.as_i64()
-        .or_else(|| v.as_u64().map(|u| u as i64))
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        .unwrap_or(0)
-}
-
-fn json_str(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => String::new(),
-        _ => v.to_string(),
     }
 }
 

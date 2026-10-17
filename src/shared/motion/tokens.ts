@@ -9,8 +9,6 @@ export { prefersReducedMotion } from "./preference";
 export const EASE_OUT = "cubic-bezier(0.2, 0, 0, 1)";
 /** 页面和抽屉共用的强调减速：快速到达可读位置，尾段平稳落位，不越冲。 */
 export const EASE_EMPHASIZED = "cubic-bezier(0.32, 0.72, 0, 1)";
-/** 离场加速清场，不沿用入场的长减速尾巴。 */
-export const EASE_EXIT = "cubic-bezier(0.4, 0, 1, 1)";
 /**
  * 跟手释放保留非零起始速度，不能用从静止起步的 EASE_OUT。
  * 时长仍由 horizontalSwipeSettleDuration 根据剩余距离与松手速度推导。

@@ -1,7 +1,7 @@
 import "../styles/theme.css";
 import type { VolumeSliderProps as CoreVolumeSliderProps } from "@videojs/core";
 import { VolumePopover as VolumePopoverPrimitive } from "@videojs/react";
-import type { ClassValue } from "cn";
+import type { ClassValue } from "clsx";
 
 import { cn } from "@/components/videojs/lib/resolve-class-name";
 import {

@@ -22,11 +22,6 @@ export function shouldRunIptvEntryProbe(
   return active && channelCount > 0 && !probedSourceUrls.has(sourceUrl);
 }
 
-/** 仅测试使用：清空会话级预热记忆。 */
-export function resetIptvEntryProbeMemory(): void {
-  entryProbedSourceUrls.clear();
-}
-
 /**
  * 首次进入 IPTV 发现页时，为当前来源做一次静默的浅探测预热。
  *

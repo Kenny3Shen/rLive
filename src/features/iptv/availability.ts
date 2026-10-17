@@ -109,17 +109,3 @@ export function filterIptvChannelsByAvailability(
     return status === filter;
   });
 }
-
-/**
- * 可用性筛选的可选值。
- *
- * 把「已陈旧」单独列出来，是因为「网络可达」不是「现在还能播」：
- * 结果会过期，用户需要能只挑出该重查的条目。
- */
-export const IPTV_AVAILABILITY_FILTERS: readonly IptvAvailabilityFilter[] = [
-  "all",
-  "available",
-  "unavailable",
-  "unchecked",
-  "stale",
-];

@@ -81,10 +81,6 @@ export function rememberPageScrollAnchor(
   });
 }
 
-export function recallPageScroll(key: string): number {
-  return positions.get(key)?.top ?? 0;
-}
-
 export function recallPageScrollSnapshot(key: string): PageScrollSnapshot {
   return positions.get(key) ?? { top: 0, anchor: null };
 }
@@ -112,11 +108,6 @@ export function beginPageScrollRestore(key: string): () => void {
   return () => {
     if (restore === token) restore = null;
   };
-}
-
-export function clearPageScrollMemory(): void {
-  positions.clear();
-  restore = null;
 }
 
 export type PageScrollTransition = {

@@ -141,13 +141,6 @@ export function shouldShowValidatedInDanmakuPanel(
   );
 }
 
-export function shouldShowInDanmakuPanel(
-  event: unknown,
-  filterGifts = false,
-): event is DanmakuEvent {
-  return isDanmakuEvent(event) && shouldShowValidatedInDanmakuPanel(event, filterGifts);
-}
-
 export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MS = 10_000;
 export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MIN_MS = 1_000;
 export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS = 30_000;
@@ -252,11 +245,4 @@ export function shouldShowValidatedOnFloatingDanmaku(
   if (!shouldShowValidatedInDanmakuPanel(event, filterGifts)) return false;
   if (event.kind === "system") return false;
   return true;
-}
-
-export function shouldShowOnFloatingDanmaku(
-  event: unknown,
-  filterGifts = false,
-): event is DanmakuEvent {
-  return isDanmakuEvent(event) && shouldShowValidatedOnFloatingDanmaku(event, filterGifts);
 }

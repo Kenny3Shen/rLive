@@ -126,7 +126,7 @@ fn normalize_display_name(value: String) -> Option<String> {
 /// 解码百分号转义，但不套用 URL 表单中 `+` → 空格的规则。
 /// 浏览器 Cookie 值使用的是字面加号，且多个平台会用百分号转义
 /// 编码中文账号名。
-fn percent_decode_cookie_value(value: &str) -> String {
+pub(crate) fn percent_decode_cookie_value(value: &str) -> String {
     match percent_decode_str(value).decode_utf8() {
         Ok(decoded) => decoded.into_owned(),
         // 解码结果不是合法 UTF-8 时回退到原始值。

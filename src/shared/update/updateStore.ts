@@ -97,13 +97,6 @@ export function compareVersions(left: ParsedVersion, right: ParsedVersion): numb
   return 0;
 }
 
-/** 比较两个 SemVer 字符串；输入无效时返回 null。 */
-export function compareVersionStrings(left: string, right: string): number | null {
-  const parsedLeft = parseVersion(left);
-  const parsedRight = parseVersion(right);
-  return parsedLeft && parsedRight ? compareVersions(parsedLeft, parsedRight) : null;
-}
-
 async function currentAppVersion(): Promise<string> {
   if (!isTauri()) return packageMetadata.version;
   try {

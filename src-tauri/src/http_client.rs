@@ -9,7 +9,6 @@ use reqwest::{Client, ClientBuilder, Url};
 use crate::error::{AppError, AppResult};
 use crate::proxy::ProxyRoute;
 
-static DEFAULT_CLIENT: OnceLock<Client> = OnceLock::new();
 static DIRECT_CLIENT: OnceLock<Client> = OnceLock::new();
 
 /// 按代理路由缓存已构建的客户端。
@@ -187,11 +186,11 @@ pub fn direct_client() -> Client {
 
 /// 共享默认客户端（完全直连）。
 ///
-/// 它与 [`direct_client`] 是同一个实例：调用方要么已经解析出路由，
+/// 它就是 [`direct_client`]：调用方要么已经解析出路由，
 /// 要么明确需要一条不受设置影响的出口，不存在「隐式跟随系统」的第三种语义。
 /// 克隆开销低（内部为 Arc）。
 pub fn default_client() -> Client {
-    DEFAULT_CLIENT.get_or_init(direct_client).clone()
+    direct_client()
 }
 
 /// 记录请求失败时保留根因和安全的 endpoint，但移除 query、fragment 与 user-info。

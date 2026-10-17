@@ -12,7 +12,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use percent_encoding::percent_decode_str;
 use serde::Serialize;
 #[cfg(not(target_os = "android"))]
 use tauri::Manager;
@@ -21,6 +20,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 
+use crate::account::percent_decode_cookie_value;
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind, SiteId};
 
@@ -124,14 +124,6 @@ fn cookie_values(cookie: &str, names: &[&str]) -> Vec<String> {
             (value.len() <= MAX_ACCOUNT_NAME_CHARS * 4).then(|| percent_decode_cookie_value(value))
         })
         .collect()
-}
-
-/// 在多个 Web 登录流程中，Cookie 值会用百分号转义编码显示名。
-/// 与 URL 表单不同，Cookie 编码把 `+` 当作字面字符；非法或截断的
-/// 转义序列原样保留，解码出非 UTF-8 字节时回退到原字符串。
-fn percent_decode_cookie_value(value: &str) -> String {
-    let decoded = percent_decode_str(value).collect::<Vec<u8>>();
-    String::from_utf8(decoded).unwrap_or_else(|_| value.to_owned())
 }
 
 fn normalize_user_id(value: &str) -> Option<String> {

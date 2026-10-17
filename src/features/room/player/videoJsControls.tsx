@@ -18,8 +18,6 @@ const videoJsPlayer = createPlayer({
 });
 
 export const VideoJsPlayerProvider = videoJsPlayer.Player;
-export const useVideoJsPlayer = videoJsPlayer.usePlayer;
-export const useVideoJsMedia = videoJsPlayer.useMedia;
 /** 订阅官方 PiP 状态；浏览器拒绝切换只提示，不升级为致命播放错误。 */
 export function useVideoJsPiP() {
   const pip = videoJsPlayer.usePlayer(selectPiP);
