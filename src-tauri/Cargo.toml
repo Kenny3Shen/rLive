@@ -127,3 +127,9 @@ strip = true # 确保移除调试符号。
 
 [patch.crates-io]
 sherpa-onnx-sys = { path = "vendor/sherpa-onnx-sys" }
+
+[lints.rust]
+# MSVC 链接器每次都会往 stdout 打印「正在创建库 rlive_lib.dll.lib 和对象 ...」，
+# 这是 `#[warn(linker_messages)]` 的提示而非问题。真正的链接警告走 stderr，
+# 不受这条影响；关掉它以免每次构建都显示一条无意义的 warning。
+linker_messages = "allow"

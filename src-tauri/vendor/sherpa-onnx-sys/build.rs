@@ -536,6 +536,7 @@ fn copy_windows_runtime_dlls(lib_dir: &Path) -> Result<(), DynError> {
     }
 
     let [profile_dir, examples_dir] = profile_output_dirs()?;
+    let mut copied = false;
     for dest_dir in [profile_dir.clone(), examples_dir] {
         fs::create_dir_all(&dest_dir)?;
         for dll in &dlls {
@@ -553,14 +554,18 @@ fn copy_windows_runtime_dlls(lib_dir: &Path) -> Result<(), DynError> {
                 continue;
             }
             fs::copy(dll, &dest)?;
+            copied = true;
         }
     }
 
-    println!(
-        "cargo:warning=Copied Windows runtime DLLs to {} and {}/examples",
-        profile_dir.display(),
-        profile_dir.display()
-    );
+    // 只在真的复制时提示：否则每次增量构建都会重复打印一条 Cargo warning。
+    if copied {
+        println!(
+            "cargo:warning=Copied Windows runtime DLLs to {} and {}/examples",
+            profile_dir.display(),
+            profile_dir.display()
+        );
+    }
 
     Ok(())
 }
