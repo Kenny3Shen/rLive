@@ -136,8 +136,8 @@ export function IptvPlayerPage() {
   const isDirectPlayback = directUrl !== null;
   const sourceId = searchParams.get("source");
   const favoriteSourceOverride = iptvFavoriteSourceIdFromRoute(searchParams.get("favoriteSource"));
-  // 继续接受旧版本生成的链接，但新的自定义来源从私有的设备本地设置值解析。
-  const customSourceUrl = searchParams.get("m3u") ?? iptvCustomM3uUrl;
+  // 自定义来源只从私有的设备本地设置值解析，不进 URL。
+  const customSourceUrl = iptvCustomM3uUrl;
   const sourceIsValid = directRequested
     ? isDirectPlayback
     : sourceId === null ||

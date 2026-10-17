@@ -28,9 +28,6 @@ export type PlaybackTelemetrySession = {
   longTaskMs: number;
 };
 
-const MAX_TELEMETRY_SNAPSHOTS = 120;
-const snapshots: PlaybackTelemetrySnapshot[] = [];
-
 function finiteNonNegative(value: number): number | null {
   return Number.isFinite(value) ? Math.max(0, value) : null;
 }
@@ -139,16 +136,5 @@ export function samplePlaybackTelemetry(input: {
     long_task_ms: Math.max(0, Math.round(session.longTaskMs)),
     proxy: input.proxy,
   };
-  snapshots.push(snapshot);
-  if (snapshots.length > MAX_TELEMETRY_SNAPSHOTS) snapshots.shift();
   return snapshot;
-}
-
-/** 供本地开发工具和未来 UI 使用的只读诊断访问。 */
-export function playbackTelemetrySnapshots(): readonly PlaybackTelemetrySnapshot[] {
-  return snapshots;
-}
-
-export function clearPlaybackTelemetrySnapshots(): void {
-  snapshots.length = 0;
 }

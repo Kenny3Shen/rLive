@@ -19,7 +19,6 @@ use crate::local_http;
 use crate::profile::MAX_PROFILE_BYTES;
 
 const PROFILE_PATH: &str = "/rlive-sync/v2/profile";
-const LEGACY_PROFILE_PATH: &str = "/rlive-sync/v1/profile";
 const SYNC_PROTOCOL_VERSION: &str = "2";
 const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -430,12 +429,6 @@ fn normalized_receive_url(endpoint: &str) -> AppResult<reqwest::Url> {
                 "同步地址必须是私有局域网 IP，不能使用公网地址或域名",
             )
         })?;
-    if url.path() == LEGACY_PROFILE_PATH {
-        return Err(AppError::new(
-            "lan_sync_protocol_error",
-            "目标地址使用了不再支持的 rLive 局域网同步协议",
-        ));
-    }
     if !matches!(url.path(), "" | "/" | PROFILE_PATH) {
         return Err(AppError::new(
             "lan_sync_invalid_address",
@@ -561,9 +554,6 @@ mod tests {
                 .as_str(),
             "http://[::1]:43210/rlive-sync/v2/profile"
         );
-        let error =
-            normalized_receive_url("http://192.168.1.20:43210/rlive-sync/v1/profile").unwrap_err();
-        assert_eq!(error.code, "lan_sync_protocol_error");
     }
 
     #[test]

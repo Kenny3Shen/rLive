@@ -291,10 +291,9 @@ export function Shell() {
   // 视频搜索页的头部槽位是查询条，同样需要这条头部（移动端否则整条隐藏）。
   const showTopNavigation = useGroupedPageContainer || isHistory || isRecordings || isVideoSearch;
   const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
-  const iptvSourceUrl = isIptv ? searchParams.get("m3u") : null;
   const iptvSource = useMemo(
-    () => playlistSourceFromRoute(iptvSourceId, iptvSourceUrl ?? iptvCustomM3uUrl),
-    [iptvCustomM3uUrl, iptvSourceId, iptvSourceUrl],
+    () => playlistSourceFromRoute(iptvSourceId, iptvCustomM3uUrl),
+    [iptvCustomM3uUrl, iptvSourceId],
   );
   const iptvSources = useMemo(() => {
     const sources = playlistSourcesForSettings(iptvCustomM3uUrl);
