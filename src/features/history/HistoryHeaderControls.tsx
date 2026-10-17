@@ -218,11 +218,17 @@ export function HistoryDateFilterControl({
     setPrevOpen(open);
     setDraft(committedRange ?? undefined);
   }
-  // 每次渲染取当天：挂机过夜后再打开，未来日期仍然按新的今天封锁。
-  const today = new Date();
+  // 打开时取当天：挂机过夜后再打开，未来日期仍然按新的今天封锁。
+  const [today, setToday] = useState(() => new Date());
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) setToday(new Date());
+        setOpen(next);
+      }}
+    >
       <Tooltip>
         <TooltipTrigger
           render={
