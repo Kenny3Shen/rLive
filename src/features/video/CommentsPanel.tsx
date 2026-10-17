@@ -16,6 +16,7 @@ import {
   DrawerContent,
   DrawerTitle,
   useDrawerScoped,
+  useDrawerScopedSide,
 } from "@/components/ui/drawer";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -599,8 +600,11 @@ function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?:
   // 而短视频的评论抽屉是全窗口浮层 —— 二级必须自己拿到与一级相同的宽度与侧别，
   // 否则手机上一级是底部抽屉而二级从右侧滑入一条窄条（看上去不像同一套面板）。
   const scoped = useDrawerScoped();
+  // 局部容器可能是侧栏（右侧推入）或短视频的评论 dock（底部推入）：侧别由
+  // `DrawerScope` 声明，二级抽屉必须与一级同向，不能一律按 `right` 猜。
+  const scopedSide = useDrawerScopedSide();
   const compact = useCompactPlayerViewport();
-  const repliesSide = panelDrawerSide(compact, scoped);
+  const repliesSide = scopedSide ?? panelDrawerSide(compact, scoped);
   const commentsQuery = useInfiniteQuery({
     queryKey: ["video_comments", aid, mode],
     enabled: aid !== "",
@@ -734,6 +738,9 @@ function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?:
               key={selectedComment.rpid}
               aid={aid}
               comment={selectedComment}
+              // 二级抽屉与一级同侧：底部形态（含挂在评论 dock 里的局部形态）
+              // 自己是在最底下一层，必须消费底部安全区；右侧形态从侧栏里推入，
+              // 安全区由一级滚动容器负责。
               bottomInset={repliesSide === "bottom" ? bottomInset : undefined}
             />
           )}

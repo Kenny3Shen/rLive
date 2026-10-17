@@ -15,23 +15,29 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive, videoGetPlayerMeta } from "@/features/video/videoApi";
 import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoHistory";
-import { videoPlayPath } from "@/features/video/videoRoute";
+import {
+  videoDetailsNavigationState,
+  videoPlayPath,
+  videoShortsEntryFromState,
+  type VideoShortsEntry,
+} from "@/features/video/videoRoute";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
-import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerScope,
+  DrawerTitle,
+  DrawerViewport,
+} from "@/components/ui/drawer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { BilibiliAppAuthAction } from "@/shared/components/BilibiliAppAuthAction";
@@ -52,7 +58,11 @@ import {
 } from "@/components/ui/empty";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { useCoarsePointer } from "@/shared/hooks/useCoarsePointer";
-import { ANDROID_BACK_EVENT, DISMISSIBLE_POPUP_SELECTOR, hasBrowserHistoryEntry } from "@/app/androidBackNavigation";
+import {
+  ANDROID_BACK_EVENT,
+  DISMISSIBLE_POPUP_SELECTOR,
+  hasBrowserHistoryEntry,
+} from "@/app/androidBackNavigation";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import { notify } from "@/components/ui/toast";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
@@ -64,6 +74,7 @@ import {
   SHORTS_BOTTOM_BAR_HEIGHT_PX,
   SHORTS_BOTTOM_CONTROLS_HEIGHT_PX,
   SHORTS_SAFE_AREA_BOTTOM,
+  shortsCommentDockHeight,
   SHORTS_SEEK_BAR_HIT_OVERHANG_PX,
   SHORTS_SEED_PARAM,
   SHORTS_SLOT_IDS,
@@ -110,6 +121,9 @@ export function ShortsPage() {
    */
   const [searchParams] = useSearchParams();
   const entrySeed = searchParams.get(SHORTS_SEED_PARAM);
+  // 自动入口把播放页 replace 掉了，失败时唯一的「回到那条视频」线索就在这里。
+  // 只认合法形状：深链、手动进入与历史前进后退都没有它。
+  const entrySource = videoShortsEntryFromState(useLocation().state);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -180,6 +194,60 @@ export function ShortsPage() {
   });
   const panels = useShortsPanels(current);
   const controlsAvailable = playback.hasFrame || playback.ready || !!playback.error;
+  /**
+   * 评论 dock：紧凑视口里评论区不再是盖住画面的浮层，而是占真实布局高度的下栏。
+   *
+   * 外层把「视口」切成上下两段（播放区 + dock），舞台只量到播放区，因此画面会自己
+   * 缩小、等比内切进剩下的空间 —— 不需要给播放器或手势层任何缩放逻辑。
+   *
+   * `commentsOpen` 与 dock 高度分开记：关闭时高度要保留到退场动画结束（
+   * `onOpenChangeComplete`），否则抽屉还没滑完、画面就已经扩张到它下面。快速重开
+   * 时 `open` 先变 true，释放计时被取消，不会出现「开着开着突然收走一截」。
+   */
+  // 量外层（播放区 + dock 的总高），不是播放区自己：dock 占位后播放区变矮，
+  // 若按它算占比会在「打开 → 变矮 → 算出更小的 dock → 再变矮」里循环。
+  //
+  // 传给占比函数的是**播放区实际可用的高度**（外层高度减掉底部操作栏），而不是
+  // 整条视口：底栏是绝对定位、不参与 flex 分配，但舞台的媒体框确实让出了它。
+  // 不减这一截，`SHORTS_COMMENT_DOCK_MIN_STAGE_PX` 承诺的「至少留 240px 画面」
+  // 会被底栏再吃掉 59px，矮视口上实际只剩 181px。
+  //
+  // 安全区不用再减：外层的高度来自 `.app-shell` 已经扣掉状态栏/手势条的可用视口，
+  // 那里的 padding 就是页面为 `SHORTS_SAFE_AREA_BOTTOM` 让出的部分。
+  const { size: dockShellSize, measure: measureDockShell } = useDockShellSize();
+  const dockStageHeight = Math.max(0, dockShellSize.height - SHORTS_BOTTOM_BAR_HEIGHT_PX);
+  const dockCandidate = compact ? shortsCommentDockHeight(dockStageHeight) : 0;
+  /**
+   * 退场期间仍在保留的 dock 高度；0 表示没有占位。
+   *
+   * 关闭时**不立刻**归零：抽屉要往下滑出 dock，画面也必须等它滑完再扩张，
+   * 否则两层在动画中途重叠。`onOpenChangeComplete` 收到 false 才清零。
+   */
+  const [retainedDockHeight, setRetainedDockHeight] = useState(0);
+  // 打开时立刻占位（并把上一轮退场残留清掉，快速重开不会先收窄再展开）。
+  // 在事件里写：`onOpenChange` 是唯一改变打开态的地方，effect 里同步 state 会
+  // 多跑一轮渲染，且 `enabled` 的切换不该由外部状态驱动。
+  const setPanelsCommentsOpen = panels.setCommentsOpen;
+  const setCommentsOpen = useCallback(
+    (open: boolean) => {
+      if (open) setRetainedDockHeight(dockCandidate);
+      setPanelsCommentsOpen(open);
+    },
+    [dockCandidate, setPanelsCommentsOpen],
+  );
+  // 退场保留值要按当前视口收口：旋转或键盘把可用高度改小后，旧值可能大于现在的
+  // 候选高度；若不夹住，收起的 dock 会在播放区下方留一截空栏（甚至超过剩余空间）。
+  const dockHeight = panels.commentsOpen
+    ? dockCandidate
+    : Math.min(retainedDockHeight, dockCandidate);
+  const commentsDockActive = compact && dockHeight > 0;
+  /**
+   * 评论是否走 dock 形态。
+   *
+   * 紧凑视口且量得到可用高度时恒走 dock（打开、退场期间都是），没有可用高度
+   * （极矮视口）时退回整窗口抽屉 —— 那种高度下留不出画面，dock 也就失去意义。
+   */
+  const commentsInDock = compact && dockCandidate > 0;
 
   /**
    * 章节：与播放页同一个 player v2 请求与缓存键（`video_player_meta`），从竖屏点进播放页
@@ -269,6 +337,7 @@ export function ShortsPage() {
         title: current.title,
         aid: current.aid,
       }),
+      { state: videoDetailsNavigationState(`${current.bvid}:${current.cid ?? 0}`) },
     );
   }, [current, navigate]);
 
@@ -283,9 +352,14 @@ export function ShortsPage() {
       panels.aid ? (
         // `bottomInset` 只影响二级回复抽屉自己的滚动容器：那一层是与评论抽屉并列的
         // 浮层（不是它的后代），因此拿不到这里外壳补的安全区，得自己让位。
-        <CommentsPanel key={panels.aid} aid={panels.aid} bottomInset={SHORTS_SAFE_AREA_BOTTOM} />
+        <CommentsPanel
+          key={panels.aid}
+          aid={panels.aid}
+          // dock 形态下二级回复抽屉的下沿在 dock 里，安全区已由下方操作栏消费。
+          bottomInset={commentsDockActive ? undefined : SHORTS_SAFE_AREA_BOTTOM}
+        />
       ) : null,
-    [panels.aid],
+    [commentsDockActive, panels.aid],
   );
   const detailBody = useMemo(
     () =>
@@ -316,7 +390,12 @@ export function ShortsPage() {
           error={feedQuery.error}
           title="短视频加载失败"
           onRetry={() => void feedQuery.refetch()}
-          action={<BilibiliAppAuthAction error={feedQuery.error} />}
+          action={
+            <>
+              <BilibiliAppAuthAction error={feedQuery.error} />
+              {entrySource && <ShortsSourceBackButton entry={entrySource} />}
+            </>
+          }
           className="max-w-md"
         />
       </div>
@@ -335,9 +414,12 @@ export function ShortsPage() {
             <EmptyTitle>暂时没有短视频</EmptyTitle>
             <EmptyDescription>上游轮换流这一批没有可播条目，稍后再试。</EmptyDescription>
           </EmptyHeader>
-          <Button variant="outline" onClick={() => void feedQuery.refetch()}>
-            重新加载
-          </Button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button variant="outline" onClick={() => void feedQuery.refetch()}>
+              重新加载
+            </Button>
+            {entrySource && <ShortsSourceBackButton entry={entrySource} />}
+          </div>
         </Empty>
       </div>
     );
@@ -355,37 +437,48 @@ export function ShortsPage() {
 
   return (
     <ShortsSeekPlayer>
-      <div
-        ref={viewportRef}
-        data-slot="shorts-viewport"
-        data-feed-mode={feed.uploaderMode ? "uploader" : "recommendation"}
-        data-current-aid={current?.aid}
-        // `media-skin` 提供 `--media-*` 令牌（白字 + 白色半透明悬停底）。复用播放器
-        // HUD 的溢出菜单需要它：那些控件的配色走令牌，不在这个作用域里会落到应用
-        // 前景色 —— 在黑舞台上变成看不见的深色图标。
-        //
-        // `select-none` 是长按倍速的前提：画面上没有任何可选文本，而 Android WebView
-        // 的长按一旦命中文字节点就会改走「选择文字」分支，我们的计时器再触发也只会
-        // 被系统菜单盖住。与播放页画面同一处理（那里还多一层 `touch-none`）。
-        // 评论抽屉走 portal、底部发送框是输入框，都不受影响，正文仍可选择。
-        className="media-skin relative h-full min-h-0 select-none overflow-hidden bg-black"
-        style={
-          {
-            // 纵向手势由本页接管，横向留给系统返回手势。
-            touchAction: "pan-x",
-            // 进度条与悬停预览保持现有缩放；顶栏按钮另有自己的尺寸作用域。
-            "--media-scale-unit": "1.2rem",
-          } as React.CSSProperties
-        }
-        onPointerDownCapture={onPointerDownCapture}
-        onPointerMoveCapture={onPointerMoveCapture}
-        onPointerUpCapture={onPointerUpCapture}
-        onPointerCancelCapture={onPointerCancelCapture}
-        onWheel={onWheel}
-        onContextMenu={onContextMenu}
-      >
-        <div ref={trackRef} data-slot="shorts-track" className="relative h-full">
-          {/*
+      {/*
+        评论 dock 的挂载范围：紧凑视口里评论区从整窗口浮层改为播放区之下的真实下栏。
+        范围必须包住下面两段（播放区与 dock 本身），且**始终存在** —— 抽屉打开时
+        `Drawer` 才会取到容器，关闭时容器消失会让它退回整窗口浮层，退场动画因此
+        从下栏跳到屏幕底部。`DrawerScope` 只是个 context，不改变布局。
+      */}
+      <DrawerScope side="bottom">
+        <div ref={measureDockShell} className="flex h-full min-h-0 flex-col">
+          <div
+            ref={viewportRef}
+            data-slot="shorts-viewport"
+            // 播放区与 dock 是外层 flex 列的两段：dock 固定高度、播放区吃掉剩余空间。
+            // 舞台只量到这一块，评论打开时画面据此等比内切进变矮的区域；关闭后
+            // dock 高度归还，几何回到整视口。
+            data-feed-mode={feed.uploaderMode ? "uploader" : "recommendation"}
+            data-current-aid={current?.aid}
+            // `media-skin` 提供 `--media-*` 令牌（白字 + 白色半透明悬停底）。复用播放器
+            // HUD 的溢出菜单需要它：那些控件的配色走令牌，不在这个作用域里会落到应用
+            // 前景色 —— 在黑舞台上变成看不见的深色图标。
+            //
+            // `select-none` 是长按倍速的前提：画面上没有任何可选文本，而 Android WebView
+            // 的长按一旦命中文字节点就会改走「选择文字」分支，我们的计时器再触发也只会
+            // 被系统菜单盖住。与播放页画面同一处理（那里还多一层 `touch-none`）。
+            // 评论抽屉走 portal、底部发送框是输入框，都不受影响，正文仍可选择。
+            className="media-skin relative min-h-0 flex-1 select-none overflow-hidden bg-black"
+            style={
+              {
+                // 纵向手势由本页接管，横向留给系统返回手势。
+                touchAction: "pan-x",
+                // 进度条与悬停预览保持现有缩放；顶栏按钮另有自己的尺寸作用域。
+                "--media-scale-unit": "1.2rem",
+              } as React.CSSProperties
+            }
+            onPointerDownCapture={onPointerDownCapture}
+            onPointerMoveCapture={onPointerMoveCapture}
+            onPointerUpCapture={onPointerUpCapture}
+            onPointerCancelCapture={onPointerCancelCapture}
+            onWheel={onWheel}
+            onContextMenu={onContextMenu}
+          >
+            <div ref={trackRef} data-slot="shorts-track" className="relative h-full">
+              {/*
             槽位面板：key 恒定（`slot-a` / `slot-b` / `slot-c`），换片只改变
             `top` 与角色。
 
@@ -396,72 +489,73 @@ export function ShortsPage() {
             三个槽位都渲染 `ShortsStage`：两个预热槽位分别在前后邻居上缓冲到
             `canplay`，换片与回滑时它们才可能立刻出画。
           */}
-          {slotIds.map((slotId) => {
-            const held = slots.held[slotId];
-            const item = held == null ? null : items[held];
-            if (!item) return null;
-            const active = slotId === slots.active;
-            return (
-              <div
-                key={`slot-${slotId}`}
-                data-slot="shorts-panel"
-                data-slot-id={slotId}
-                aria-hidden={active ? undefined : true}
-                inert={active ? undefined : true}
-                className="absolute inset-x-0 h-full"
-                // 条目按绝对下标定位，换片不移动其中任何一个：收尾只动 track。
-                style={{ top: shortsSlotTop(held) }}
-              >
-                <ShortsStage
-                  item={item}
-                  playback={slotStates[slotId]}
-                  videoRef={slotRefs[slotId]}
-                  mode={active ? "play" : "warm"}
-                  danmaku={danmaku}
-                  danmakuVisible={danmakuVisible}
-                  gestureActive={gestureActive}
-                  onSurfaceTap={onSurfaceTap}
-                  onChromeColumn={setStageChromeColumn}
-                />
-              </div>
-            );
-          })}
+              {slotIds.map((slotId) => {
+                const held = slots.held[slotId];
+                const item = held == null ? null : items[held];
+                if (!item) return null;
+                const active = slotId === slots.active;
+                return (
+                  <div
+                    key={`slot-${slotId}`}
+                    data-slot="shorts-panel"
+                    data-slot-id={slotId}
+                    aria-hidden={active ? undefined : true}
+                    inert={active ? undefined : true}
+                    className="absolute inset-x-0 h-full"
+                    // 条目按绝对下标定位，换片不移动其中任何一个：收尾只动 track。
+                    style={{ top: shortsSlotTop(held) }}
+                  >
+                    <ShortsStage
+                      item={item}
+                      playback={slotStates[slotId]}
+                      videoRef={slotRefs[slotId]}
+                      mode={active ? "play" : "warm"}
+                      danmaku={danmaku}
+                      danmakuVisible={danmakuVisible}
+                      gestureActive={gestureActive}
+                      safeAreaBottom={!commentsDockActive}
+                      onSurfaceTap={onSurfaceTap}
+                      onChromeColumn={setStageChromeColumn}
+                    />
+                  </div>
+                );
+              })}
 
-          {/*
+              {/*
             挂载窗口里剩下的位置（第三条邻居）渲染空舞台占位：它们只需要有一块
             参与平移的黑底，不需要能播 —— 一条短视频等于一次签名 playurl + 两条
             sidx + 三个本机代理会话，为跟手再多起一份是把上游取流成本翻倍。
             占位刻意不画封面：加载期间统一是黑屏加转圈（见 `ShortsStage`）。
           */}
-          {mounted.map((itemIndex) => {
-            if (slotCovered.has(itemIndex)) return null;
-            const item = items[itemIndex];
-            if (!item) return null;
-            return (
-              <div
-                key={shortsItemKey(item)}
-                data-slot="shorts-panel"
-                aria-hidden
-                inert
-                className="absolute inset-x-0 h-full"
-                style={{ top: `${itemIndex * 100}%` }}
-              >
-                <ShortsBlankStage item={item} />
-              </div>
-            );
-          })}
-        </div>
+              {mounted.map((itemIndex) => {
+                if (slotCovered.has(itemIndex)) return null;
+                const item = items[itemIndex];
+                if (!item) return null;
+                return (
+                  <div
+                    key={shortsItemKey(item)}
+                    data-slot="shorts-panel"
+                    aria-hidden
+                    inert
+                    className="absolute inset-x-0 h-full"
+                    style={{ top: `${itemIndex * 100}%` }}
+                  >
+                    <ShortsBlankStage item={item} safeAreaBottom={!commentsDockActive} />
+                  </div>
+                );
+              })}
+            </div>
 
-        {/*
+            {/*
           把活动槽位的 `<video>` 桥接进进度条的播放器 store。
 
           必须渲染在槽位面板**之外**：面板里还有一层 `ShortsStagePlayer`（状态指示用的
           store），渲染在它里面会被那个更近的 Player 上下文截走。也不属于条带，
           否则换片时会跟着平移一起被变换。
         */}
-        <ShortsSeekBridge videoRef={slotRefs[slots.active]} active={slots.active} />
+            <ShortsSeekBridge videoRef={slotRefs[slots.active]} active={slots.active} />
 
-        {/*
+            {/*
           页面层控件列：顶栏、信息与评论、换片箭头都收进这一层。
 
           宽屏（平板横屏、桌面）上竖屏画面会收成居中的竖卡，控件若还贴**屏幕**的边，
@@ -473,19 +567,19 @@ export function ShortsPage() {
           那一整块挖掉。真正需要交互的子层（顶栏、换片箭头、信息浮层里的按钮）各自
           开 `pointer-events-auto`。
         */}
-        <div
-          data-slot="shorts-chrome-column"
-          className={cn(
-            "pointer-events-none absolute inset-y-0 z-20",
-            chromeColumn === 0 && "inset-x-0",
-          )}
-          style={
-            chromeColumn > 0
-              ? { left: `calc(50% - ${chromeColumn / 2}px)`, width: `${chromeColumn}px` }
-              : undefined
-          }
-        >
-        {/* 顶部控制栏：返回 + 更多操作。固定在视口上，不随条带平移。
+            <div
+              data-slot="shorts-chrome-column"
+              className={cn(
+                "pointer-events-none absolute inset-y-0 z-20",
+                chromeColumn === 0 && "inset-x-0",
+              )}
+              style={
+                chromeColumn > 0
+                  ? { left: `calc(50% - ${chromeColumn / 2}px)`, width: `${chromeColumn}px` }
+                  : undefined
+              }
+            >
+              {/* 顶部控制栏：返回 + 更多操作。固定在视口上，不随条带平移。
 
             紧贴视口顶边，也就是系统状态栏的下沿：状态栏的让位由 `.app-shell` 的
             `padding-top` 统一做（见 `styles.css`），这里再补一份顶部安全区会把返回/更多
@@ -493,132 +587,151 @@ export function ShortsPage() {
 
             收进控件列后，返回/更多就落在画面框的左右两条竖线上，与信息浮层的头像、
             评论按钮对齐。 */}
-        {!controlsAvailable && (
-          <div className="pointer-events-auto">
-            <ShortsBackButton onClick={goBack} label={feed.uploaderMode ? "返回推荐流" : "返回上一页"} />
-          </div>
-        )}
-        {controlsAvailable && <div
-          data-slot="shorts-top-bar"
-          className={cn(
-            SHORTS_TOP_CONTROLS_CLASS,
-            "pointer-events-auto absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2",
-          )}
-          style={{ height: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
-        >
-          <ShortsBackButton onClick={goBack} inline label={feed.uploaderMode ? "返回推荐流" : "返回上一页"} />
-          {feed.uploaderMode && (
-            <span
-              data-slot="shorts-uploader-position"
-              role="status"
-              aria-label={feed.counter ? `UP 主列表，第 ${feed.counter.replace("/", " 条，共 ")} 条` : "UP 主列表"}
-              className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-sm font-medium text-white tabular-nums"
-            >
-              {feed.counter ?? (feed.uploaderQuery.isError ? "UP 主列表" : "加载中…")}
-            </span>
-          )}
-          <span className="ml-auto">
-            <ShortsMoreMenu
-              compact={compact}
-              muted={playback.muted}
-              onToggleMuted={playback.toggleMuted}
-              onRefresh={playback.retry}
-            />
-          </span>
-        </div>}
+              {!controlsAvailable && (
+                <div className="pointer-events-auto">
+                  <ShortsBackButton
+                    onClick={goBack}
+                    label={feed.uploaderMode ? "返回推荐流" : "返回上一页"}
+                  />
+                </div>
+              )}
+              {controlsAvailable && (
+                <div
+                  data-slot="shorts-top-bar"
+                  className={cn(
+                    SHORTS_TOP_CONTROLS_CLASS,
+                    "pointer-events-auto absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 px-2",
+                  )}
+                  style={{ height: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
+                >
+                  <ShortsBackButton
+                    onClick={goBack}
+                    inline
+                    label={feed.uploaderMode ? "返回推荐流" : "返回上一页"}
+                  />
+                  {feed.uploaderMode && (
+                    <span
+                      data-slot="shorts-uploader-position"
+                      role="status"
+                      aria-label={
+                        feed.counter
+                          ? `UP 主列表，第 ${feed.counter.replace("/", " 条，共 ")} 条`
+                          : "UP 主列表"
+                      }
+                      className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-sm font-medium text-white tabular-nums"
+                    >
+                      {feed.counter ?? (feed.uploaderQuery.isError ? "UP 主列表" : "加载中…")}
+                    </span>
+                  )}
+                  <span className="ml-auto">
+                    <ShortsMoreMenu
+                      compact={compact}
+                      muted={playback.muted}
+                      onToggleMuted={playback.toggleMuted}
+                      onRefresh={playback.retry}
+                    />
+                  </span>
+                </div>
+              )}
 
-        {feed.uploaderMode && (
-          <div
-            data-slot="shorts-uploader-status"
-            className="pointer-events-auto absolute inset-x-12 z-20 flex flex-col items-center gap-1 text-center text-xs text-white"
-            style={{ top: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
-          >
-            {!feed.uploaderReady && feed.uploaderQuery.isError && (
-              <ErrorState
-                error={feed.uploaderQuery.error}
-                title="UP 主列表加载失败"
-                onRetry={() => {
-                  if (!feed.uploaderQuery.isFetching) void feed.uploaderQuery.refetch({ cancelRefetch: false });
-                }}
-                className="bg-black/90 px-3 py-2"
-              />
-            )}
-            {(["prev", "next"] as const).map((direction) => {
-              const error = feed.directionFailures?.[direction];
-              if (!error) return null;
-              return (
-                <ErrorState
-                  key={direction}
-                  error={error}
-                  title={`${direction === "prev" ? "前面" : "后面"}的条目加载失败`}
-                  onRetry={() => void feed.load(direction, true)}
-                  className="bg-black/90 px-3 py-2"
-                />
-              );
-            })}
-            {(feed.uploaderQuery.isFetchingPreviousPage || feed.uploaderQuery.isFetchingNextPage) && (
-              <span role="status" className="rounded-md bg-black/75 px-3 py-1">正在加载{feed.uploaderQuery.isFetchingPreviousPage ? "前面" : "后面"}的条目…</span>
-            )}
-          </div>
-        )}
+              {feed.uploaderMode && (
+                <div
+                  data-slot="shorts-uploader-status"
+                  className="pointer-events-auto absolute inset-x-12 z-20 flex flex-col items-center gap-1 text-center text-xs text-white"
+                  style={{ top: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
+                >
+                  {!feed.uploaderReady && feed.uploaderQuery.isError && (
+                    <ErrorState
+                      error={feed.uploaderQuery.error}
+                      title="UP 主列表加载失败"
+                      onRetry={() => {
+                        if (!feed.uploaderQuery.isFetching)
+                          void feed.uploaderQuery.refetch({ cancelRefetch: false });
+                      }}
+                      className="bg-black/90 px-3 py-2"
+                    />
+                  )}
+                  {(["prev", "next"] as const).map((direction) => {
+                    const error = feed.directionFailures?.[direction];
+                    if (!error) return null;
+                    return (
+                      <ErrorState
+                        key={direction}
+                        error={error}
+                        title={`${direction === "prev" ? "前面" : "后面"}的条目加载失败`}
+                        onRetry={() => void feed.load(direction, true)}
+                        className="bg-black/90 px-3 py-2"
+                      />
+                    );
+                  })}
+                  {(feed.uploaderQuery.isFetchingPreviousPage ||
+                    feed.uploaderQuery.isFetchingNextPage) && (
+                    <span role="status" className="rounded-md bg-black/75 px-3 py-1">
+                      正在加载{feed.uploaderQuery.isFetchingPreviousPage ? "前面" : "后面"}的条目…
+                    </span>
+                  )}
+                </div>
+              )}
 
-        {/*
+              {/*
           长按倍速提示。挂在顶栏之下、视口固定层里：它描述的是「当前这一条正在被
           按住快放」，随条带平移会在换片时跟着画面滑走。
 
           读 `playback.rate` 而不是另存一个「倍速中」布尔：倍速的真相在媒体元素上，
           两处各存一份就会出现「提示还在、倍速已经回落」。
         */}
-        {playback.rate > 1 && (
-          <div
-            data-slot="shorts-speed-hint"
-            role="status"
-            aria-live="polite"
-            className="pointer-events-none absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
-            style={{ top: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
-          >
-            <FastForward className="size-3.5" aria-hidden />
-            {playback.rate.toFixed(1)}x 倍速中
-          </div>
-        )}
+              {playback.rate > 1 && (
+                <div
+                  data-slot="shorts-speed-hint"
+                  role="status"
+                  aria-live="polite"
+                  className="pointer-events-none absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm"
+                  style={{ top: `${SHORTS_TOP_BAR_HEIGHT_PX}px` }}
+                >
+                  <FastForward className="size-3.5" aria-hidden />
+                  {playback.rate.toFixed(1)}x 倍速中
+                </div>
+              )}
 
-        {/* 桌面换片按钮：没有触摸时上下滑动无从进行，滚轮之外给一对显式入口。
+              {/* 桌面换片按钮：没有触摸时上下滑动无从进行，滚轮之外给一对显式入口。
 
             贴着控件列的外侧：宽屏上画面居中、两侧本来就有黑边，箭头放那儿不会盖住
             画面；铺满时（`chromeColumn === 0`）退回原来的贴屏幕右边。 */}
-        <div
-          className={cn(
-            "pointer-events-auto absolute bottom-1/2 z-20 hidden translate-y-1/2 flex-col gap-2 md:flex",
-            chromeColumn > 0 ? "left-full ml-3" : "right-3",
-          )}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="上一条"
-            title="上一条（↑）"
-            disabled={feed.navigationLocked || (index === 0 && !feed.hasPreviousPage)}
-            className="size-10 rounded-full bg-black/40 text-white/90 hover:bg-white/20 hover:text-white disabled:opacity-30"
-            onClick={() => goToIndex(index - 1)}
-          >
-            <ChevronUp aria-hidden />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="下一条"
-            title="下一条（↓）"
-            disabled={feed.navigationLocked || (index >= items.length - 1 && !feed.hasNextPage)}
-            className="size-10 rounded-full bg-black/40 text-white/90 hover:bg-white/20 hover:text-white disabled:opacity-30"
-            onClick={() => goToIndex(index + 1)}
-          >
-            <ChevronDown aria-hidden />
-          </Button>
-        </div>
+              <div
+                className={cn(
+                  "pointer-events-auto absolute bottom-1/2 z-20 hidden translate-y-1/2 flex-col gap-2 md:flex",
+                  chromeColumn > 0 ? "left-full ml-3" : "right-3",
+                )}
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="上一条"
+                  title="上一条（↑）"
+                  disabled={feed.navigationLocked || (index === 0 && !feed.hasPreviousPage)}
+                  className="size-10 rounded-full bg-black/40 text-white/90 hover:bg-white/20 hover:text-white disabled:opacity-30"
+                  onClick={() => goToIndex(index - 1)}
+                >
+                  <ChevronUp aria-hidden />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="下一条"
+                  title="下一条（↓）"
+                  disabled={
+                    feed.navigationLocked || (index >= items.length - 1 && !feed.hasNextPage)
+                  }
+                  className="size-10 rounded-full bg-black/40 text-white/90 hover:bg-white/20 hover:text-white disabled:opacity-30"
+                  onClick={() => goToIndex(index + 1)}
+                >
+                  <ChevronDown aria-hidden />
+                </Button>
+              </div>
 
-        {/*
+              {/*
           信息与评论：浮在画面上、紧贴进度条上方，属于**页面层**而不是舞台层。
 
           这是与上一版的关键区别：它们以前长在画面框里（会随换片的条带平移一起滑走），
@@ -636,152 +749,176 @@ export function ShortsPage() {
           整块跟着「信息开关」一起显隐（评论按钮也在内）：那个开关的语义是「把画面让出来」，
           留一个按钮在角上就没让干净。渐变垫底也一起消失 —— 它只为白字可读性存在。
         */}
-        {infoVisible && current && (
-          <div
-            data-slot="shorts-info-float"
-            // `px-2` 与顶栏一致：左边的头像与返回按钮、右边的评论与 `⋮` 各自成一条竖线。
-            className="pointer-events-none absolute inset-x-0 z-20 flex items-end justify-between gap-3 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8"
-            style={{
-              bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
-              // 底部内边距让开进度条的命中区：那块区域只占 3px 布局、却向上盖住 17px，
-              // 不让位的话点在评论数字上会变成一次 seek（实测会把进度拖到 0）。
-              paddingBottom: `${SHORTS_SEEK_BAR_HIT_OVERHANG_PX}px`,
-            }}
-          >
-            {/*
+              {infoVisible && current && (
+                <div
+                  data-slot="shorts-info-float"
+                  // `px-2` 与顶栏一致：左边的头像与返回按钮、右边的评论与 `⋮` 各自成一条竖线。
+                  className="pointer-events-none absolute inset-x-0 z-20 flex items-end justify-between gap-3 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8"
+                  style={{
+                    bottom: commentsDockActive
+                      ? `${SHORTS_BOTTOM_BAR_HEIGHT_PX}px`
+                      : `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
+                    // 底部内边距让开进度条的命中区：那块区域只占 3px 布局、却向上盖住 17px，
+                    // 不让位的话点在评论数字上会变成一次 seek（实测会把进度拖到 0）。
+                    paddingBottom: `${SHORTS_SEEK_BAR_HIT_OVERHANG_PX}px`,
+                  }}
+                >
+                  {/*
               信息块贴左下角，但宽度封顶：桌面上视口有 1400px 宽，不封顶的话标题会拉成
               一行到屏幕另一头（`max-w-md` ≈ 原来那个定宽容器减去评论按钮之后的可用宽度，
               因此手机与桌面的折行位置都不变）。
             */}
-            <div className="flex min-w-0 max-w-md flex-1 flex-col gap-2">
-              {/*
+                  <div className="flex min-w-0 max-w-md flex-1 flex-col gap-2">
+                    {/*
                 UP 主块：头像跨「名字」与「粉丝数」两行。
 
                 头像从右侧操作栏搬到这里。评论按钮离开右侧栏之后那根栏只剩一个不可点的
                 头像 —— 一根只有装饰的操作栏不如不要。放在名字左边也更符合它本来的语义：
                 这是这条的作者。
               */}
-              <Button
-                type="button"
-                variant="ghost"
-                data-slot="shorts-uploader-entry"
-                aria-label={`查看 ${current.author || "该 UP 主"} 的竖屏流`}
-                title={current.author_mid?.trim() ? "从当前稿件浏览此 UP 主的竖屏流" : "UP 主标识缺失，暂不可查看列表"}
-                disabled={!current.author_mid?.trim() || feed.navigationLocked}
-                className="pointer-events-auto h-auto max-w-full justify-start gap-2 self-start rounded-md px-0 py-1 text-left text-white hover:bg-white/15 hover:text-white"
-                onClick={feed.enterUploader}
-              >
-                <Avatar className="size-8 shrink-0 after:border-white/40">
-                  <AvatarImage
-                    src={normalizeImageUrl(current.author_face)}
-                    alt=""
-                    aria-hidden
-                    referrerPolicy="no-referrer"
-                  />
-                  <AvatarFallback className="bg-black/40 text-xs text-white/90">
-                    {current.author?.slice(0, 1) || "U"}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-white">
-                    @{current.author || "未知 UP 主"}
-                  </span>
-                  {/*
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      data-slot="shorts-uploader-entry"
+                      aria-label={`查看 ${current.author || "该 UP 主"} 的竖屏流`}
+                      title={
+                        current.author_mid?.trim()
+                          ? "从当前稿件浏览此 UP 主的竖屏流"
+                          : "UP 主标识缺失，暂不可查看列表"
+                      }
+                      disabled={!current.author_mid?.trim() || feed.navigationLocked}
+                      className="pointer-events-auto h-auto max-w-full justify-start gap-2 self-start rounded-md px-0 py-1 text-left text-white hover:bg-white/15 hover:text-white"
+                      onClick={feed.enterUploader}
+                    >
+                      <Avatar className="size-8 shrink-0 after:border-white/40">
+                        <AvatarImage
+                          src={normalizeImageUrl(current.author_face)}
+                          alt=""
+                          aria-hidden
+                          referrerPolicy="no-referrer"
+                        />
+                        <AvatarFallback className="bg-black/40 text-xs text-white/90">
+                          {current.author?.slice(0, 1) || "U"}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-white">
+                          @{current.author || "未知 UP 主"}
+                        </span>
+                        {/*
                     粉丝数只有 story 流白带（`owner.fans`），其余列表接口不给。
                     `null` 是「上游没说」而不是「0 个粉丝」，因此不渲染这一行。
                   */}
-                  {current.author_fans != null && (
-                    <span className="block truncate text-xs text-white/70">
-                      {formatOnline(current.author_fans)} 粉丝
-                    </span>
-                  )}
-                </span>
-              </Button>
-              {!current.author_mid?.trim() && <p className="text-xs text-white/70">UP 主标识缺失，暂不可查看列表</p>}
+                        {current.author_fans != null && (
+                          <span className="block truncate text-xs text-white/70">
+                            {formatOnline(current.author_fans)} 粉丝
+                          </span>
+                        )}
+                      </span>
+                    </Button>
+                    {!current.author_mid?.trim() && (
+                      <p className="text-xs text-white/70">UP 主标识缺失，暂不可查看列表</p>
+                    )}
 
-              {/*
+                    {/*
                 标题块：点标题开详情抽屉。
 
                 详情入口从底栏搬到标题上（底栏那个改为去播放页），因此这里必须
                 `pointer-events-auto`：整个浮层是不接指针的，否则会在画面底部挖出一块
                 点不动的区域。箭头朝下是因为抽屉从下方推入。
               */}
-              <div className="flex min-w-0 flex-col gap-0.5">
-                {/*
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      {/*
                   展开箭头跟在标题文字末尾而不是右边界：内层 `w-fit` 让盒子收到内容宽，
                   短标题的箭头因此紧跟文字（而不是隔着一大片空白飘在右侧）；长标题被
                   `max-w-full` 撑满后剪到两行，箭头落在第二行末尾，仍然是「跟着文字」。
 
                   外层按钮仍然 `w-full`：触发区是整个标题区，只能点在字上的话命中太小。
                 */}
-                <button
-                  type="button"
-                  aria-label={`视频详情：${current.title}`}
-                  title="视频详情"
-                  className="pointer-events-auto block w-full text-left"
-                  onClick={panels.openDetail}
-                >
-                  <span className="flex w-fit max-w-full items-end gap-1.5">
-                    <span className="line-clamp-2 min-w-0 text-sm text-white/90">
-                      {current.title}
-                    </span>
-                    {/* `mb-0.5` 把 16px 的箭头对到 20px 行高的文字中线上。 */}
-                    <ChevronDown className="mb-0.5 size-4 shrink-0 text-white/70" aria-hidden />
-                  </span>
-                </button>
-                <p className="text-xs text-white/70">
-                  {formatOnline(current.view)} 次播放
-                  {playback.duration > 0 || current.duration > 0
-                    ? ` · ${formatVideoDuration(playback.duration || current.duration)}`
-                    : ""}
-                </p>
-              </div>
-              {/* 章节：与播放页竖屏一致，贴在进度条上方左侧；没有章节时不占位。
+                      <button
+                        type="button"
+                        aria-label={`视频详情：${current.title}`}
+                        title="视频详情"
+                        className="pointer-events-auto block w-full text-left"
+                        onClick={panels.openDetail}
+                      >
+                        <span className="flex w-fit max-w-full items-end gap-1.5">
+                          <span className="line-clamp-2 min-w-0 text-sm text-white/90">
+                            {current.title}
+                          </span>
+                          {/* `mb-0.5` 把 16px 的箭头对到 20px 行高的文字中线上。 */}
+                          <ChevronDown
+                            className="mb-0.5 size-4 shrink-0 text-white/70"
+                            aria-hidden
+                          />
+                        </span>
+                      </button>
+                      <p className="text-xs text-white/70">
+                        {formatOnline(current.view)} 次播放
+                        {playback.duration > 0 || current.duration > 0
+                          ? ` · ${formatVideoDuration(playback.duration || current.duration)}`
+                          : ""}
+                      </p>
+                    </div>
+                    {/* 章节：与播放页竖屏一致，贴在进度条上方左侧；没有章节时不占位。
                   浮层整体不接指针，这一格要单独接回来。 */}
-              <div data-slot="shorts-chapters" className="pointer-events-auto flex min-w-0 empty:hidden">
-                <ShortsChapterMenu
-                  chapters={chapters}
-                  open={chapterMenuOpen}
-                  onOpenChange={setChapterMenuOpen}
-                  container={viewportRef}
-                  compact={compact}
-                />
-              </div>
-            </div>
+                    <div
+                      data-slot="shorts-chapters"
+                      className="pointer-events-auto flex min-w-0 empty:hidden"
+                    >
+                      <ShortsChapterMenu
+                        chapters={chapters}
+                        open={chapterMenuOpen}
+                        onOpenChange={setChapterMenuOpen}
+                        container={viewportRef}
+                        compact={compact}
+                      />
+                    </div>
+                  </div>
 
-            {/*
-              评论贴右下角。跟信息一起显隐（外层已经判了 `infoVisible`）。
+                  {/*
+              评论入口贴着信息行的右侧、略高于它 —— 但**不抬高整块信息**。
+
+              此前它和信息同在一行（`items-end`），于是点击命中区与作者/标题的底边
+              齐平，正文一长，按钮就跟着往下挪到进度条命中区上。现在按钮自成右上角
+              一列，信息块保持原来的左下角位置。
 
               数字取 `reply`（评论数），不是 `danmaku`（弹幕数）：这个按钮开的是评论区，
               底下那行数字必须是评论数。此前误用了 `danmaku`，于是「评论 5」实际是
               「弹幕 5 条」—— 与评论区里真实条数（同一稿件 56 条）对不上。
               弹幕数在底部操作栏与信息行里各自有位置，不需要在这里重复一遍。
-            */}
-            <span className="pointer-events-auto flex shrink-0 flex-col items-center">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={
-                  current.reply != null && current.reply > 0
-                    ? `评论，${formatOnline(current.reply)} 条`
-                    : "评论"
-                }
-                title="评论"
-                className="size-11 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
-                onClick={panels.openComments}
-              >
-                <MessageCircle className="size-6" aria-hidden />
-              </Button>
-              {current.reply != null && current.reply > 0 && (
-                <span className="text-[11px] text-white/80">{formatOnline(current.reply)}</span>
-              )}
-            </span>
-          </div>
-        )}
-        </div>
 
-        {/*
+              打开评论后按钮随播放区一起上移（它仍锚在信息行上，而行随播放区收窄
+              而上移）；关闭入口在评论表头，不要求用户再找到这颗按钮。
+            */}
+                  <span className="pointer-events-auto flex shrink-0 flex-col items-center self-start">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={
+                        current.reply != null && current.reply > 0
+                          ? `评论，${formatOnline(current.reply)} 条`
+                          : "评论"
+                      }
+                      aria-expanded={panels.commentsOpen}
+                      title="评论"
+                      className="size-11 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
+                      onClick={() => setCommentsOpen(true)}
+                    >
+                      <MessageCircle className="size-6" aria-hidden />
+                    </Button>
+                    {current.reply != null && current.reply > 0 && (
+                      <span className="text-[11px] text-white/80">
+                        {formatOnline(current.reply)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/*
           底部操作栏：进度条（上沿）+ 弹幕输入与三个开关（控制行）。
 
           占真实空间而不是浮在画面上（画面区域已经减掉了这条的高度，见
@@ -792,60 +929,65 @@ export function ShortsPage() {
           像素，同时存在只会让进度条看起来带了一圈描边。不被 `max-w-lg` 收窄 ——
           它描述的是时间而不是内容，通栏才读得出比例。
         */}
-        {controlsAvailable && <div
-          data-slot="shorts-bottom-bar"
-          className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-black/85"
-          style={{
-            height: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
-            paddingBottom: SHORTS_SAFE_AREA_BOTTOM,
-          }}
-        >
-          {/* 进度条也跟着控件列收窄；铺满时 `w-full` 铺满，与从前一致。
+            {controlsAvailable && (
+              <div
+                data-slot="shorts-bottom-bar"
+                className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-black/85"
+                style={{
+                  // 评论 dock 打开时页面最底部变成评论区，安全区已由它消费；底栏此时
+                  // 夹在画面与评论之间，再留一段只会在两者之间凭空多出一条黑带。
+                  height: commentsDockActive
+                    ? `${SHORTS_BOTTOM_BAR_HEIGHT_PX}px`
+                    : `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
+                  paddingBottom: commentsDockActive ? undefined : SHORTS_SAFE_AREA_BOTTOM,
+                }}
+              >
+                {/* 进度条也跟着控件列收窄；铺满时 `w-full` 铺满，与从前一致。
 
               包一层相对定位：进度条的命中层是 `absolute inset-x-0`，需要以这一层为
               定位基准，否则会去对齐整条底栏、又与画面错位。`mx-auto` 只在设了定宽时
               用 —— 它对一个 flex 交叉轴项会把宽度收成内容宽（进度条内容都是绝对定位，
               因此是 0），手机竖屏上会把进度条压成一条 0 宽的线。 */}
-          <div
-            className={cn("relative", chromeColumn > 0 ? "mx-auto" : "w-full")}
-            style={chromeColumn > 0 ? { width: `${chromeColumn}px` } : undefined}
-          >
-            <ShortsSeekBar thumbnails={thumbnails} onArmed={armSeek} />
-          </div>
-          {/*
+                <div
+                  className={cn("relative", chromeColumn > 0 ? "mx-auto" : "w-full")}
+                  style={chromeColumn > 0 ? { width: `${chromeColumn}px` } : undefined}
+                >
+                  <ShortsSeekBar thumbnails={thumbnails} onArmed={armSeek} />
+                </div>
+                {/*
             控件收在一个居中的定宽容器里，而不是铺满栏宽。
 
             背景条必须通栏（它是画面区的下边界），但内容不该跟着摊开：桌面上把输入框
             拉到 1440px 宽、按钮甩到最右角，与居中的竖屏画面完全脱节。手机上
             `max-w` 不起作用，仍是通栏。
           */}
-          <div
-            className="flex flex-1 items-center px-2"
-            style={{ height: `${SHORTS_BOTTOM_CONTROLS_HEIGHT_PX}px` }}
-          >
-            <div
-              className={cn(
-                "mx-auto flex w-full items-center gap-1.5",
-                // 宽屏上控件列宽就是画面宽，不再另设 `max-w-lg` —— 两者同时存在时较小的那个
-                // 生效，会在画面比 512px 略宽时对不齐（实测差 2px）。
-                chromeColumn === 0 && "max-w-lg",
-              )}
-              style={chromeColumn > 0 ? { width: `${chromeColumn}px` } : undefined}
-            >
-              <div className="min-w-0 flex-1">
-                {current && (
-                  <DanmakuComposer
-                    overlay
-                    roomTitle={current.title}
-                    video={{
-                      cid: current.cid ?? 0,
-                      aid: current.aid,
-                      getProgressMs: () => playback.getCurrentTime() * 1000,
-                    }}
-                  />
-                )}
-              </div>
-              {/*
+                <div
+                  className="flex flex-1 items-center px-2"
+                  style={{ height: `${SHORTS_BOTTOM_CONTROLS_HEIGHT_PX}px` }}
+                >
+                  <div
+                    className={cn(
+                      "mx-auto flex w-full items-center gap-1.5",
+                      // 宽屏上控件列宽就是画面宽，不再另设 `max-w-lg` —— 两者同时存在时较小的那个
+                      // 生效，会在画面比 512px 略宽时对不齐（实测差 2px）。
+                      chromeColumn === 0 && "max-w-lg",
+                    )}
+                    style={chromeColumn > 0 ? { width: `${chromeColumn}px` } : undefined}
+                  >
+                    <div className="min-w-0 flex-1">
+                      {current && (
+                        <DanmakuComposer
+                          overlay
+                          roomTitle={current.title}
+                          video={{
+                            cid: current.cid ?? 0,
+                            aid: current.aid,
+                            getProgressMs: () => playback.getCurrentTime() * 1000,
+                          }}
+                        />
+                      )}
+                    </div>
+                    {/*
                 弹幕开关。
 
                 图标与标签取自与直播间、播放页**同一个** `danmakuControlPresentation`：
@@ -856,77 +998,129 @@ export function ShortsPage() {
                 16px 的线图标在竖屏画面下方偏小 —— 20px 在 40px 的按钮里留 10px 的呼吸，
                 与浮层里那个 24px 的评论图标也不再差一档。
               */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={danmakuControl.label}
-                title={danmakuControl.label}
-                aria-pressed={danmakuVisible}
-                className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
-                onClick={() => setDanmakuVisible((value) => !value)}
-              >
-                {danmakuControl.icon === "message-square-text" ? (
-                  <MessageSquareText className="size-5" aria-hidden />
-                ) : (
-                  <MessageSquareOff className="size-5" aria-hidden />
-                )}
-              </Button>
-              {/*
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={danmakuControl.label}
+                      title={danmakuControl.label}
+                      aria-pressed={danmakuVisible}
+                      className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
+                      onClick={() => setDanmakuVisible((value) => !value)}
+                    >
+                      {danmakuControl.icon === "message-square-text" ? (
+                        <MessageSquareText className="size-5" aria-hidden />
+                      ) : (
+                        <MessageSquareOff className="size-5" aria-hidden />
+                      )}
+                    </Button>
+                    {/*
                 信息开关同时收起画面底部那一整块浮层 —— 信息与评论按钮一起显隐。
 
                 评论按钮曾经留在原地（当时的理由是「它不是信息，是入口」），但那样一来
                 「隐藏信息」并不能真的把画面下沿让干净：一个按钮加一行弹幕数仍然压在那儿。
                 想看清画面的人要的是**整块**让位，因此文案也一并说明范围。
               */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
-                title={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
-                aria-pressed={infoVisible}
-                className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
-                onClick={() => setInfoVisible((value) => !value)}
-              >
-                <Info className="size-5" aria-hidden />
-              </Button>
-              {/*
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
+                      title={infoVisible ? "隐藏视频信息与评论按钮" : "显示视频信息与评论按钮"}
+                      aria-pressed={infoVisible}
+                      className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
+                      onClick={() => setInfoVisible((value) => !value)}
+                    >
+                      <Info className="size-5" aria-hidden />
+                    </Button>
+                    {/*
                 详情入口：直接去播放页。
 
                 点它不再开抽屉 —— 抽屉改由信息行里的标题打开（那里是「看简介」的自然
                 位置）。保留原文案与 `ScrollText` 图标，但 tooltip 说明目的地：这里没有
                 独立的详情页，完整详情栏在播放页上。
               */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="视频详情"
-                title="视频详情（在播放页打开）"
-                disabled={!current}
-                className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
-                onClick={openInPlayer}
-              >
-                <ScrollText className="size-5" aria-hidden />
-              </Button>
-            </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="视频详情"
+                      title="视频详情（在播放页打开）"
+                      disabled={!current}
+                      className="size-10 shrink-0 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
+                      onClick={openInPlayer}
+                    >
+                      <ScrollText className="size-5" aria-hidden />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        </div>}
-      </div>
+
+          {/*
+        评论 dock（仅紧凑视口 + 评论打开/退场期间）：占真实高度，不再是盖住画面的
+        浮层。抽屉本身走 portal 挂进本层的 `DrawerViewport`（`absolute inset-0`），
+        因此它的进出动画、圆角与宽度都以这块下栏为边界。
+      */}
+          {commentsInDock && (
+            <div
+              data-slot="shorts-comments-dock"
+              className={cn(
+                "relative min-h-0 shrink-0 overflow-hidden bg-popover",
+                // 关闭且高度归零后不再画分隔线，否则底栏上方会常驻一条 1px 的边。
+                commentsDockActive && "border-t border-white/10",
+              )}
+              // dock 停在底部操作栏之上，操作栏仍是页面最底层、照旧消费一次安全区，
+              // dock 不再叠加（否则评论末尾多出一条空白）。舞台侧要停掉重复的安全区
+              // 让位，见 `safeAreaBottom={!commentsDockActive}`。
+              //
+              // 关闭时保留 0 高占位而不是卸载：`DrawerViewport` 必须在第一次打开之前
+              // 就已挂载，否则 `Drawer` 首帧拿到 null 容器会先 portal 到 body，再切回
+              // dock —— 退场时也可能反向跳一次。
+              style={{ height: `${dockHeight}px` }}
+            >
+              <DrawerViewport />
+              <Drawer
+                open={panels.commentsOpen}
+                onOpenChange={setCommentsOpen}
+                // 非模态：点视频只做视频自己的事（播放/暂停），不收起评论 —— dock 里
+                // 画面在抽屉外面，base-ui 的 outside-press 默认会把它当成「点外面」。
+                // 关闭走表头按钮、系统 Back 与 Escape。
+                disablePointerDismissal
+                onOpenChangeComplete={(open) => {
+                  // 退场动画结束后才把高度还给画面：否则抽屉还在往下滑，画面已经
+                  // 扩张到它下面，两层重叠一帧。快速重开时此回调不会以 false 到达
+                  // （`open` 已是 true），dock 不会中途收窄。
+                  if (!open) setRetainedDockHeight(0);
+                }}
+              >
+                <ShortsDrawerContent compact title="评论" scoped>
+                  {commentsBody}
+                </ShortsDrawerContent>
+              </Drawer>
+            </div>
+          )}
+        </div>
+      </DrawerScope>
 
       {/*
-        抽屉在视口**之外**。
+        以下抽屉都在视口**之外**。
 
         React 的合成事件按组件树冒泡，与 portal 把 DOM 挂到哪儿无关：放在视口
         div 里面时，抽屉内的滚动与拖动会先经过视口的 pointer 捕获处理器，被当成
         换片手势吃掉。移出来之后抽屉不再是视口的 React 后代，事件不再经过它。
+
+        非 dock 形态的评论抽屉（桌面宽视口与极矮视口）与详情抽屉都是整窗口浮层；
+        紧凑视口的评论走上面的 dock（`commentsInDock`）。
       */}
-      <Drawer open={panels.commentsOpen} onOpenChange={panels.setCommentsOpen}>
-        <ShortsDrawerContent compact={compact} title="评论">
-          {commentsBody}
-        </ShortsDrawerContent>
-      </Drawer>
+      {!commentsInDock && (
+        <Drawer open={panels.commentsOpen} onOpenChange={setCommentsOpen}>
+          <ShortsDrawerContent compact={compact} title="评论">
+            {commentsBody}
+          </ShortsDrawerContent>
+        </Drawer>
+      )}
       <Drawer open={panels.detailOpen} onOpenChange={panels.setDetailOpen}>
         <ShortsDrawerContent compact={compact} title="视频详情">
           {detailBody}
@@ -948,19 +1142,36 @@ function ShortsDrawerContent({
   compact,
   title,
   children,
+  scoped = false,
 }: {
   compact: boolean;
   title: string;
   children: React.ReactNode;
+  /** 挂在 `DrawerViewport`（评论 dock）里：尺寸与侧别都由那块容器决定。 */
+  scoped?: boolean;
 }) {
-  const side = panelDrawerSide(compact);
+  // 评论 dock 是一条横栏，从下方推入；整窗口形态仍按视口宽窄决定侧别。
+  const side = scoped ? "bottom" : panelDrawerSide(compact);
   return (
     <DrawerContent
       side={side}
-      className={cn("flex flex-col overflow-hidden p-0", panelDrawerSizeClass(side))}
+      className={cn(
+        "flex flex-col overflow-hidden p-0",
+        // dock 形态铺满下栏：基础组件的底部抽屉带 `max-w-[36rem]`，平板横屏的
+        // dock 比它宽，不覆盖会在两侧露出下面的画面。
+        scoped && "max-w-full",
+        panelDrawerSizeClass(side, scoped),
+      )}
     >
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
         <DrawerTitle>{title}</DrawerTitle>
+        {/* 明确的关闭入口：dock 形态下视频点按不再收起评论（那是播放/暂停），
+            系统 Back / Escape 之外必须有一个看得见的口。 */}
+        <DrawerClose
+          render={<Button variant="ghost" size="icon-sm" aria-label="关闭" title="关闭" />}
+        >
+          <ChevronDown aria-hidden />
+        </DrawerClose>
       </div>
       {/*
         内容体不自带滚动容器，由这里提供。
@@ -972,7 +1183,9 @@ function ShortsDrawerContent({
       */}
       <div
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-        style={{ paddingBottom: compact ? SHORTS_SAFE_AREA_BOTTOM : undefined }}
+        // dock 形态的下沿停在底部操作栏之上，那里已经由操作栏消费过一次安全区；
+        // 再补一份会在评论末尾多出一条空白。整窗口抽屉仍是页面最底层，照旧补。
+        style={{ paddingBottom: compact && !scoped ? SHORTS_SAFE_AREA_BOTTOM : undefined }}
       >
         {children}
       </div>
@@ -1137,10 +1350,41 @@ function ShortsMoreMenu({
           onClick={runAndClose(onToggleMuted)}
         />
         <PlayerToolTile icon={RefreshCw} label="重新加载" onClick={runAndClose(onRefresh)} />
-        <PlayerToolTile icon={Film} label="抖音推荐" onClick={runAndClose(() => navigate("/shorts/douyin"))} />
+        <PlayerToolTile
+          icon={Film}
+          label="抖音推荐"
+          onClick={runAndClose(() => navigate("/shorts/douyin"))}
+        />
       </div>
     </PlayerHudOverflowMenu>
   );
+}
+
+/**
+ * 评论 dock 外层的尺寸（播放区 + dock 的总高）。
+ *
+ * 与 `ShortsStage` 里量画面区的 ref 同构，但这里量的是**外层**：按播放区自己算
+ * 占比会在「打开 → 播放区变矮 → 算出更小的 dock → 再变矮」里循环。
+ */
+function useDockShellSize() {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const measure = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const apply = () => {
+      const { clientWidth, clientHeight } = node;
+      setSize((current) =>
+        current.width === clientWidth && current.height === clientHeight
+          ? current
+          : { width: clientWidth, height: clientHeight },
+      );
+    };
+    apply();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(apply);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return { size, measure };
 }
 
 /**
@@ -1184,6 +1428,42 @@ function useShortsPanels(item: { aid: string } | null) {
   );
 }
 
+/**
+ * 从自动入口回原视频详情的出口。
+ *
+ * 只在首屏真正失败时出现：短视频流按 seed 与推荐窗口取内容，上游拒绝（凭据失效、
+ * 风控）或这一轮没有可播条目时，用户手里那条视频本来是能看的 —— 回到它，而不是
+ * 让人对着一个无法自解释的推荐流反复重试。
+ *
+ * 回详情时带上「详情意图」：自动入口看到它会留在播放页，不会立刻再把人推回来。
+ * replace 而不是 push：短视频这一条是自动入口压进来/换进来的，恢复应当把它换掉，
+ * 否则 Back 会退回同一个失败页。
+ */
+function ShortsSourceBackButton({ entry }: { entry: VideoShortsEntry }) {
+  const navigate = useNavigate();
+  return (
+    <Button
+      variant="outline"
+      onClick={() =>
+        navigate(
+          videoPlayPath({
+            bvid: entry.bvid,
+            cid: entry.cid,
+            title: entry.title,
+            aid: entry.aid,
+          }),
+          {
+            replace: true,
+            state: videoDetailsNavigationState(entry.videoKey),
+          },
+        )
+      }
+    >
+      回到视频详情
+    </Button>
+  );
+}
+
 function ShortsBackButton({
   onClick,
   inline,
@@ -1198,25 +1478,31 @@ function ShortsBackButton({
 }) {
   return (
     <>
-    {!inline && showDouyinEntry && (
-      <Link to="/shorts/douyin" className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "absolute top-3 right-3 z-10")}>
-        抖音推荐
-      </Link>
-    )}
-    <MediaButton
-      type="button"
-      aria-label={label}
-      title={label}
-      // 加载、错误和空态没有外层皮肤，需自行提供同一套尺寸与颜色令牌。
-      className={cn(
-        PLAYER_HUD_BUTTON_CLASS,
-        !inline && SHORTS_TOP_CONTROLS_CLASS,
-        !inline && "absolute top-3 left-3 z-10",
+      {!inline && showDouyinEntry && (
+        <Link
+          to="/shorts/douyin"
+          className={cn(
+            buttonVariants({ variant: "secondary", size: "sm" }),
+            "absolute top-3 right-3 z-10",
+          )}
+        >
+          抖音推荐
+        </Link>
       )}
-      onClick={onClick}
-    >
-      <ChevronLeft className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
-    </MediaButton>
+      <MediaButton
+        type="button"
+        aria-label={label}
+        title={label}
+        // 加载、错误和空态没有外层皮肤，需自行提供同一套尺寸与颜色令牌。
+        className={cn(
+          PLAYER_HUD_BUTTON_CLASS,
+          !inline && SHORTS_TOP_CONTROLS_CLASS,
+          !inline && "absolute top-3 left-3 z-10",
+        )}
+        onClick={onClick}
+      >
+        <ChevronLeft className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
+      </MediaButton>
     </>
   );
 }

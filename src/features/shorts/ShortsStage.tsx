@@ -71,10 +71,17 @@ function useShortsStageSize() {
  * （见 `shortsFeed` 的安全区注释）。顶栏是浮层，压在画面顶部这一条上，弹幕另有
  * 起始线让位（见 `--video-danmaku-top`）。
  */
-const SHORTS_MEDIA_AREA_STYLE = {
-  top: 0,
-  bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
-} as const;
+function shortsMediaAreaStyle(safeAreaBottom: boolean) {
+  return {
+    top: 0,
+    // 底部安全区默认由这条栏消费（页面最底层是底部操作栏）。评论 dock 出现后，
+    // 最底层变成 dock，安全区在那里消费一次 —— 这里必须停掉，否则画面区会再缩
+    // 一条手势条的高度，画面凭空上移一段。
+    bottom: safeAreaBottom
+      ? `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`
+      : `${SHORTS_BOTTOM_BAR_HEIGHT_PX}px`,
+  } as const;
+}
 
 /**
  * 画面框的定位样式：等比内切出的尺寸 + 纵向落点。
@@ -173,6 +180,13 @@ type ShortsStageProps = {
   /** 手势进行中：此时禁掉点按，避免滑动尾声的合成 click 误暂停。 */
   gestureActive: boolean;
   /**
+   * 画面区下沿是否再减掉一截底部安全区。
+   *
+   * 默认 true：页面最底层是底部操作栏，安全区由它让位。评论 dock 打开时页面最底层
+   * 变成 dock（安全区在那里消费），这里传 false，画面区不再重复收窄。
+   */
+  safeAreaBottom?: boolean;
+  /**
    * 画面点按的动作。
    *
    * 由页面提供而不是这里直接调 `playback.togglePlay`：长按倍速松手后浏览器仍会补一次
@@ -200,6 +214,7 @@ export function ShortsStage({
   danmaku,
   danmakuVisible,
   gestureActive,
+  safeAreaBottom = true,
   onSurfaceTap,
   onChromeColumn,
 }: ShortsStageProps) {
@@ -230,7 +245,7 @@ export function ShortsStage({
         ref={measure}
         data-slot="shorts-media-area"
         className="absolute inset-x-0 flex items-start justify-center"
-        style={SHORTS_MEDIA_AREA_STYLE}
+        style={shortsMediaAreaStyle(safeAreaBottom)}
       >
         <div
           data-slot="shorts-frame"
@@ -405,16 +420,15 @@ export function ShortsStage({
             刻意是 div 而不是 button：铺满画面的按钮会进 Tab 序并被读屏当作一个
             巨大的控件，而它只是指针便利。键盘路径由 Space / K 承担（见 `ShortsPage`）。
           */}
-          {!warming &&
-            !playback.error && (
-              // oxlint-disable-next-line click-events-have-key-events, no-static-element-interactions
-              <div
-                aria-hidden
-                // 手势进行中不响应：Android WebView 在识别出的滑动之后仍可能补发 click。
-                onClick={gestureActive ? undefined : onSurfaceTap}
-                className="absolute inset-0"
-              />
-            )}
+          {!warming && !playback.error && (
+            // oxlint-disable-next-line click-events-have-key-events, no-static-element-interactions
+            <div
+              aria-hidden
+              // 手势进行中不响应：Android WebView 在识别出的滑动之后仍可能补发 click。
+              onClick={gestureActive ? undefined : onSurfaceTap}
+              className="absolute inset-0"
+            />
+          )}
         </div>
 
         {/*
@@ -502,7 +516,13 @@ function ShortsDynamicBackground({
  * 不画信息与操作入口：那些住在页面的固定层里，只描述**当前**条目。占位上再画
  * 一份会在滑动过程中出现两套信息。
  */
-export function ShortsBlankStage({ item }: { item: Pick<ShortsStageItem, "dimension"> }) {
+export function ShortsBlankStage({
+  item,
+  safeAreaBottom = true,
+}: {
+  item: Pick<ShortsStageItem, "dimension">;
+  safeAreaBottom?: boolean;
+}) {
   const { size: area, measure } = useShortsStageSize();
   // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。
   const aspect = shortsMediaAspect(item.dimension);
@@ -512,7 +532,7 @@ export function ShortsBlankStage({ item }: { item: Pick<ShortsStageItem, "dimens
       <div
         ref={measure}
         className="absolute inset-x-0 flex items-start justify-center"
-        style={SHORTS_MEDIA_AREA_STYLE}
+        style={shortsMediaAreaStyle(safeAreaBottom)}
       >
         <div
           className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}

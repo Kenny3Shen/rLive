@@ -8,12 +8,26 @@ export type DrawerSide = "bottom" | "right";
 const DrawerScopeContext = React.createContext<{
   container: HTMLDivElement | null;
   setContainer: React.Dispatch<React.SetStateAction<HTMLDivElement | null>>;
+  /**
+   * 局部抽屉在里面「从哪里推入」。
+   *
+   * 局部容器的形状决定动画方向：播放页的侧栏是一列，从右侧推入；短视频的评论
+   * dock 是一条横栏，从下方推入。尺寸始终由容器决定（`absolute max-h-full w-full`），
+   * 这个值只影响进/退场的位移方向，以及嵌套抽屉表头箭头的朝向。
+   */
+  side: DrawerSide;
 } | null>(null);
 
 /** 播放页共用侧栏挂载点，播放器和顶栏触发的抽屉也能进入同一范围。 */
-function DrawerScope({ children }: { children: React.ReactNode }) {
+function DrawerScope({
+  children,
+  side = "right",
+}: {
+  children: React.ReactNode;
+  side?: DrawerSide;
+}) {
   const [container, setContainer] = React.useState<HTMLDivElement | null>(null);
-  const value = React.useMemo(() => ({ container, setContainer }), [container]);
+  const value = React.useMemo(() => ({ container, setContainer, side }), [container, side]);
   return <DrawerScopeContext value={value}>{children}</DrawerScopeContext>;
 }
 
@@ -26,6 +40,15 @@ function DrawerScope({ children }: { children: React.ReactNode }) {
  */
 function useDrawerScoped(): boolean {
   return Boolean(React.useContext(DrawerScopeContext)?.container);
+}
+
+/**
+ * 局部抽屉的推入方向；不在 `DrawerViewport` 里时返回 null（调用方回退到整窗口的
+ * 侧别规则）。只用于已经 `scoped` 的表面。
+ */
+function useDrawerScopedSide(): DrawerSide | null {
+  const context = React.useContext(DrawerScopeContext);
+  return context?.container ? context.side : null;
 }
 
 /** 放在侧栏的定位容器内，独立于滚动区和带 transform 的页签轨道。 */
@@ -167,4 +190,5 @@ export {
   DrawerTrigger,
   DrawerViewport,
   useDrawerScoped,
+  useDrawerScopedSide,
 };

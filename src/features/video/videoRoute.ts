@@ -5,6 +5,8 @@
  * 参数组合都能单测，同时 Shell 只为一条页签切换器付出一次 import。
  */
 
+import type { VideoArchive } from "@/shared/types/video";
+
 export const VIDEO_HOME_PATH = "/video";
 export const VIDEO_PLAY_PATH = "/video/play";
 export const VIDEO_SEARCH_PATH = "/video/search";
@@ -237,6 +239,169 @@ export function videoHomePath(tab: VideoTab, zone?: string | null): string {
   if (zone) params.set(VIDEO_ZONE_PARAM, zone);
   const query = params.toString();
   return query ? `${VIDEO_HOME_PATH}?${query}` : VIDEO_HOME_PATH;
+}
+
+/** 详情意图只属于这条内容与这次历史条目，不是持久化的播放偏好。 */
+export type VideoDetailsNavigationState = {
+  videoDetailsKey: string;
+};
+
+/**
+ * 从播放页进入短视频流时捎带的来源信息。
+ *
+ * 只为一条恢复路径存在：自动入口把播放页 replace 掉之后，如果短视频流首屏加载
+ * 失败（推荐接口错误、APP 凭据失效），用户需要一个回到**这条视频详情**的出口。
+ * 短视频页的 URL 按既有约定只带 `seed`，因此来源（cid、标题、aid）走 navigation
+ * state，既不污染可分享的链接，也随历史条目一起丢弃。
+ */
+export type VideoShortsEntry = {
+  bvid: string;
+  cid: number;
+  title: string | null;
+  aid: string | null;
+  /** 进入时的内容键：回详情时用它标记详情意图，自动入口不会再把人推回短视频。 */
+  videoKey: string;
+};
+
+export function videoShortsEntryNavigationState(
+  entry: VideoShortsEntry,
+  previousState?: unknown,
+): { videoShortsEntry: VideoShortsEntry } {
+  const previous =
+    previousState && typeof previousState === "object" && !Array.isArray(previousState)
+      ? previousState
+      : {};
+  return { ...previous, videoShortsEntry: entry };
+}
+
+/** 从 route state 取回来源；形状不符或字段不合法时视为「不是从播放页进来的」。 */
+export function videoShortsEntryFromState(state: unknown): VideoShortsEntry | null {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const raw = (state as { videoShortsEntry?: unknown }).videoShortsEntry;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const entry = raw as Partial<Record<keyof VideoShortsEntry, unknown>>;
+  if (
+    typeof entry.bvid !== "string" ||
+    !/^BV[0-9A-Za-z]{10}$/.test(entry.bvid) ||
+    typeof entry.cid !== "number" ||
+    !Number.isSafeInteger(entry.cid) ||
+    entry.cid <= 0 ||
+    entry.videoKey !== `${entry.bvid}:${entry.cid}` ||
+    (entry.title !== null && typeof entry.title !== "string") ||
+    (entry.aid !== null && typeof entry.aid !== "string")
+  ) {
+    return null;
+  }
+  return {
+    bvid: entry.bvid,
+    cid: entry.cid,
+    title: entry.title,
+    aid: entry.aid,
+    videoKey: entry.videoKey,
+  };
+}
+
+export function videoDetailsNavigationState(
+  videoKey: string,
+  previousState?: unknown,
+): VideoDetailsNavigationState {
+  const previous =
+    previousState && typeof previousState === "object" && !Array.isArray(previousState)
+      ? previousState
+      : {};
+  return { ...previous, videoDetailsKey: videoKey };
+}
+
+export function videoDetailsIntentForKey(state: unknown, videoKey: string): boolean {
+  return (
+    videoKey.length > 0 &&
+    !!state &&
+    typeof state === "object" &&
+    !Array.isArray(state) &&
+    "videoDetailsKey" in state &&
+    state.videoDetailsKey === videoKey
+  );
+}
+
+/**
+ * 移动端单 P UGC 的实测竖画幅默认进入已有短视频流。`frameAspectRatio` 必须由
+ * 调用方按当前 videoKey 取值，不能借用上一条的尺寸或容器的竖屏方向。
+ * Rust 的 archive 契约里单 P 的 pages 为空；有分 P 时 seed 不能表达当前 P，保留详情页。
+ */
+export function shouldAutoEnterVideoShorts({
+  mobileClient,
+  bvid,
+  cid,
+  epId,
+  seasonId,
+  archive,
+  frameAspectRatio,
+  audioOnly,
+  videoKey,
+  navigationState,
+  blockedUploader = false,
+}: {
+  mobileClient: boolean;
+  bvid: string | null;
+  cid: number;
+  epId: string | null;
+  seasonId: string | null;
+  archive: Pick<VideoArchive, "bvid" | "cid" | "pages"> | null | undefined;
+  frameAspectRatio: number | null;
+  audioOnly: boolean;
+  videoKey: string;
+  navigationState: unknown;
+  /**
+   * 这条稿件的作者在屏蔽名单里。
+   *
+   * 屏蔽名单的语义是「别再推给我」，不拦用户显式打开；但自动分流**就是**一次推荐
+   * 行为 —— 把人从详情页直接推进推荐流，等于把刚被屏蔽的内容换个表面又推了一遍。
+   */
+  blockedUploader?: boolean;
+}): boolean {
+  return (
+    mobileClient &&
+    !audioOnly &&
+    !blockedUploader &&
+    !epId &&
+    !seasonId &&
+    !!bvid &&
+    /^BV[0-9A-Za-z]{10}$/.test(bvid) &&
+    Number.isSafeInteger(cid) &&
+    cid > 0 &&
+    videoKey === `${bvid}:${cid}` &&
+    !!archive &&
+    archive.bvid === bvid &&
+    archive.cid === cid &&
+    archive.pages.length === 0 &&
+    frameAspectRatio !== null &&
+    Number.isFinite(frameAspectRatio) &&
+    frameAspectRatio > 0 &&
+    frameAspectRatio < 1 &&
+    !videoDetailsIntentForKey(navigationState, videoKey)
+  );
+}
+
+/** 退出全屏是异步的：内容换片、离页或历史条目变化后，不再提交旧导航。 */
+export function canCompleteVideoShortsNavigation({
+  requestedKey,
+  currentKey,
+  requestedEntryKey,
+  currentEntryKey,
+  cancelled,
+}: {
+  requestedKey: string;
+  currentKey: string;
+  requestedEntryKey: string;
+  currentEntryKey: string;
+  cancelled: boolean;
+}): boolean {
+  return (
+    !cancelled &&
+    requestedKey.length > 0 &&
+    requestedKey === currentKey &&
+    requestedEntryKey === currentEntryKey
+  );
 }
 
 export type VideoPlayTarget = {

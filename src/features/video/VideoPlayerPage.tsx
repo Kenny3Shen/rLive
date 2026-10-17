@@ -25,7 +25,7 @@ import {
   Link2,
   Smartphone,
 } from "lucide-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { preloadImageProxy } from "@/shared/api/imageProxy";
 import { Button } from "@/components/ui/button";
@@ -200,8 +200,13 @@ import {
 } from "./videoDanmaku";
 import {
   VIDEO_HOME_PATH,
+  canCompleteVideoShortsNavigation,
   parseVideoPlayParams,
+  shouldAutoEnterVideoShorts,
+  videoDetailsIntentForKey,
+  videoDetailsNavigationState,
   videoOriginalUrl,
+  videoShortsEntryNavigationState,
   videoPlayPath,
 } from "./videoRoute";
 import { shortsPath } from "@/features/shorts/shortsFeed";
@@ -277,6 +282,7 @@ export function VideoPlayerPage() {
 function VideoPlayerPageContent() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const detailsRef = useRef<HTMLElement | null>(null);
   /** 舞台 + 详情区的外框：内容滑动调整占比时以它为分母。 */
   const detailsFrameRef = useRef<HTMLElement | null>(null);
@@ -640,6 +646,22 @@ function VideoPlayerPageContent() {
   const aid = params?.aid || archiveQuery.data?.aid || null;
 
   const videoKey = `${params?.bvid ?? params?.epId ?? ""}:${cid}`;
+  // 不按播放器换代重置：同内容的 metadata/resize/重试不能重复发起自动导航。
+  const autoShortsKeyRef = useRef<string | null>(null);
+  const shortsNavigationRef = useRef<{ cancelled: boolean } | null>(null);
+  const cancelShortsNavigation = useCallback(() => {
+    if (shortsNavigationRef.current) shortsNavigationRef.current.cancelled = true;
+    shortsNavigationRef.current = null;
+  }, []);
+  useLayoutEffect(() => {
+    autoShortsKeyRef.current = null;
+  }, [videoKey]);
+  useLayoutEffect(() => cancelShortsNavigation, [cancelShortsNavigation, location.key, videoKey]);
+  // 离场动画会保留旧页面与冻结路由；浏览器 Back 已经发生时要立即取消在途导航。
+  useEffect(() => {
+    window.addEventListener("popstate", cancelShortsNavigation);
+    return () => window.removeEventListener("popstate", cancelShortsNavigation);
+  }, [cancelShortsNavigation]);
   const { ready: mediaReady, release: releaseStartup } = usePlayerStartupGate(videoKey);
   // 渲染期不读 ref：内容键同步给记录续播快照的回调。
   useLayoutEffect(() => {
@@ -2412,16 +2434,119 @@ function VideoPlayerPageContent() {
   }, [originalUrl]);
 
   /**
-   * 进入短视频流，并以当前这条为种子（上游据此换出一组从本片开始的新窗口）。
-   * bvid 缺失（PGC 分集）时退回裸 `/shorts/bilibili`，首屏就是上游默认窗口。
-   * 先把全屏收干净再走：短视频页是沉浸路由，留着元素全屏会盖在它上面。
+   * 自动入口替换当前条目；手动入口仍 push，但先标记来源页的详情意图，Back 不循环。
+   * 全屏收干净后重新核对内容和真实历史条目，兼容离场动画里的冻结路由。
    */
+  const enterShorts = useCallback(
+    async (replace: boolean) => {
+      cancelShortsNavigation();
+      const request = { cancelled: false };
+      shortsNavigationRef.current = request;
+      const canNavigate = () =>
+        canCompleteVideoShortsNavigation({
+          requestedKey: videoKey,
+          currentKey: videoKeyRef.current,
+          requestedEntryKey: location.key,
+          currentEntryKey: window.history.state?.key ?? "default",
+          cancelled: request.cancelled,
+        });
+      if (!canNavigate()) return;
+      await fullscreenExit();
+      if (!canNavigate()) return;
+      if (!replace) {
+        // 只改当前条目的 usr，保留 React Router 的 idx/key 与其他 history 字段。
+        // 不触发一次中间导航，避免 replace→push 的异步间隙与自动入口竞争。
+        const historyState = window.history.state;
+        window.history.replaceState(
+          {
+            ...historyState,
+            usr: videoDetailsNavigationState(videoKey, historyState?.usr),
+          },
+          "",
+        );
+      } else if (videoDetailsIntentForKey(window.history.state?.usr, videoKey)) {
+        return;
+      }
+      // 来源信息随 entry 一起走：短视频首屏失败时，它要能带用户回到**这条**视频
+      // 的详情，而不是一个无法自解释的推荐流。链接本身仍只有 `seed`。
+      navigate(
+        shortsPath(bvid),
+        replace
+          ? {
+              replace,
+              state: videoShortsEntryNavigationState({
+                bvid: videoKey.slice(0, videoKey.indexOf(":")),
+                cid,
+                title: params?.title ?? null,
+                aid,
+                videoKey,
+              }),
+            }
+          : { replace },
+      );
+    },
+    [
+      aid,
+      bvid,
+      cancelShortsNavigation,
+      cid,
+      fullscreenExit,
+      location.key,
+      navigate,
+      params?.title,
+      videoKey,
+    ],
+  );
+
+  const autoEnterShorts = shouldAutoEnterVideoShorts({
+    mobileClient,
+    bvid,
+    cid,
+    epId,
+    seasonId: params?.seasonId ?? null,
+    archive: archiveQuery.data,
+    frameAspectRatio,
+    audioOnly,
+    videoKey,
+    navigationState: location.state,
+    // 显式打开被屏蔽 UP 的视频（屏蔽名单只影响推荐，不拦路）时留在详情：
+    // 自动分流等于把这条内容又推了一次，正好违背用户屏蔽的意图。
+    blockedUploader: Boolean(
+      archiveQuery.data && blockedUploaders?.has(archiveQuery.data.author_mid?.trim() ?? ""),
+    ),
+  });
+  useEffect(() => {
+    if (autoShortsKeyRef.current === videoKey) return;
+    // 用户在画幅落定前按过暂停：那是一次明确的「我要留在这里」。记下这条内容已
+    // 经做过决定，随后恢复播放也不再补做分流 —— 否则暂停只是把导航推迟到下一次
+    // 播放，仍然是一次用户没要求的跳转。
+    //
+    // 判据用 `userPausedRef` 而不是 `paused`：后者在进页时恒为 true（自动起播还
+    // 没发生），拿它当「用户暂停」会把自动入口整个关掉。`paused` 进依赖只是为了
+    // 在暂停发生时再跑一次；暂停也会触发上一轮 effect 的清理，把正在等退全屏的
+    // 导航一并取消。
+    if (userPausedRef.current) {
+      autoShortsKeyRef.current = videoKey;
+      return;
+    }
+    if (!autoEnterShorts) return;
+    autoShortsKeyRef.current = videoKey;
+    void enterShorts(true);
+    const request = shortsNavigationRef.current;
+    return () => {
+      // 等待退全屏时切到仅音频、改为详情意图或换片，取消这一轮自动请求。
+      if (request) request.cancelled = true;
+    };
+  }, [autoEnterShorts, enterShorts, paused, videoKey]);
+
+  /** 手动短视频入口保留原有 seed 与 PGC/缺 bvid 时的裸流回退。 */
   const openShorts = useCallback(async () => {
+    // 手动导航等待退全屏时，晚到的详情/画幅不能抢成一次自动 replace。
+    autoShortsKeyRef.current = videoKey;
     setHudMenuOpen(false);
     setOverlayInteractionOpen(false);
-    await fullscreenExit();
-    navigate(shortsPath(bvid));
-  }, [bvid, fullscreenExit, navigate]);
+    await enterShorts(false);
+  }, [enterShorts, videoKey]);
 
   const title = params?.title || "视频播放";
 

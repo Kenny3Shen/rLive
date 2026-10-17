@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  SHORTS_COMMENT_DOCK_MIN_STAGE_PX,
+  SHORTS_COMMENT_DOCK_SHARE,
+  shortsCommentDockHeight,
   shortsMediaAspect,
   shortsMediaFrame,
   shortsFrameFill,
@@ -116,5 +119,25 @@ describe("三槽所有权与补货", () => {
     expect(shortsShouldFetchMore(9, 10, true, true)).toBe(false);
     expect(shortsShouldFetchMore(9, 10, false, false)).toBe(false);
     expect(shortsShouldFetchMore(0, 0, true, false)).toBe(false);
+  });
+});
+
+describe("评论 dock 高度", () => {
+  test("约占一半，但总为画面保留最小高度", () => {
+    // 入参是播放区可用高度：视口总高已减掉底部操作栏（592 + 59 = 651 等）。
+    // 800px 里 50% = 400，画面保留 400，够用。
+    expect(shortsCommentDockHeight(800)).toBe(400);
+    expect(shortsCommentDockHeight(700)).toBe(350);
+    // 矮视口：480px 时 50% = 240 且画面下限也是 240 —— 恰好相等。
+    expect(shortsCommentDockHeight(480)).toBe(SHORTS_COMMENT_DOCK_MIN_STAGE_PX);
+    // 更矮：画面下限先触发，dock 随之变矮而不是压没画面。
+    expect(shortsCommentDockHeight(400)).toBe(400 - SHORTS_COMMENT_DOCK_MIN_STAGE_PX);
+    expect(shortsCommentDockHeight(400)).toBeLessThan(400 * SHORTS_COMMENT_DOCK_SHARE);
+  });
+
+  test("没有可用高度或极矮视口返回 0（调用方退回整窗口抽屉）", () => {
+    for (const height of [0, -1, NaN, Infinity, 200, SHORTS_COMMENT_DOCK_MIN_STAGE_PX]) {
+      expect(shortsCommentDockHeight(height)).toBe(0);
+    }
   });
 });

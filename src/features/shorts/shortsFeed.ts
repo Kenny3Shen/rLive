@@ -35,7 +35,9 @@ export const SHORTS_SEED_PARAM = "seed";
  */
 export function shortsPath(seedBvid?: string | null): string {
   const bvid = seedBvid?.trim();
-  return bvid ? `${BILIBILI_SHORTS_PATH}?${SHORTS_SEED_PARAM}=${encodeURIComponent(bvid)}` : BILIBILI_SHORTS_PATH;
+  return bvid
+    ? `${BILIBILI_SHORTS_PATH}?${SHORTS_SEED_PARAM}=${encodeURIComponent(bvid)}`
+    : BILIBILI_SHORTS_PATH;
 }
 
 /** 媒体自己报出的原始画幅（`videoWidth` / `videoHeight`），起播后才有。 */
@@ -264,6 +266,48 @@ export const SHORTS_CHROME_MIN_SIDE_INSET_PX = 48;
 export function shortsChromeColumn(frameWidth: number, areaWidth: number): number {
   if (!(frameWidth > 0) || !(areaWidth > 0)) return 0;
   return areaWidth - frameWidth >= SHORTS_CHROME_MIN_SIDE_INSET_PX * 2 ? frameWidth : 0;
+}
+
+/**
+ * 评论 dock 允许占用的最大高度比例（紧凑布局）。
+ *
+ * 约占一半：评论区要能读到两条以上的评论，画面也要留出一块能看清内容的窗口。
+ * 「不遮挡」是这一档的硬要求 —— dock 占的是真实布局高度，不是浮层。
+ */
+export const SHORTS_COMMENT_DOCK_SHARE = 0.5;
+
+/**
+ * 评论 dock 之上必须留给画面的最小高度（px）。
+ *
+ * 只按比例分会在矮视口上把画面压没：横屏手机视口总高约 360px，减掉底栏与安全区后
+ * 画面区本来只有 ~300px，对半分只剩 150px —— 一块连 16:9 预览都放不下的窗口。
+ * 这个下限保证任何视口下画面都还有可看的面积；剩余高度不足时 dock 自己变矮
+ * （它内部可滚动，矮一截仍能用）。
+ */
+export const SHORTS_COMMENT_DOCK_MIN_STAGE_PX = 240;
+
+/**
+ * 评论 dock 的高度（px）。
+ *
+ * `availableHeight` 是**播放区实际可用的高度** —— 短视频视口总高减掉底部操作栏
+ * （以及页面为状态栏/手势条让出的部分）。不要传整条视口：操作栏是绝对定位、
+ * 不参与 flex 分配，但它确实压在舞台下缘，算进占比会让「至少留 240px 画面」
+ * 的承诺少掉一整个操作栏的高度。
+ *
+ * 两个约束同时成立时取较小者：
+ *
+ * - 不超过 `availableHeight × SHORTS_COMMENT_DOCK_SHARE`（约一半）；
+ * - 为画面留下至少 `SHORTS_COMMENT_DOCK_MIN_STAGE_PX`。
+ *
+ * 返回 0 表示这个高度下不该开 dock（没有任何可用高度时退化成不显示）。
+ * 极矮视口（可用高度 < 下限）下画面上限会让 dock 变成 0，此时应当**不进入**
+ * dock 形态，由调用方按 `> 0` 判断，而不是渲染一条 0 高的抽屉。
+ */
+export function shortsCommentDockHeight(availableHeight: number): number {
+  if (!(availableHeight > 0) || !Number.isFinite(availableHeight)) return 0;
+  const share = availableHeight * SHORTS_COMMENT_DOCK_SHARE;
+  const stageKeep = availableHeight - SHORTS_COMMENT_DOCK_MIN_STAGE_PX;
+  return Math.max(0, Math.floor(Math.min(share, stageKeep)));
 }
 
 /**
@@ -679,11 +723,7 @@ export type ShortsSlots = {
  * 幂等：三个槽位的持有都没变时返回**原对象**，调用方因此可以直接把它放进
  * 依赖数组而不触发多余的重跑。
  */
-export function shortsNextSlots(
-  index: number,
-  length: number,
-  current: ShortsSlots,
-): ShortsSlots {
+export function shortsNextSlots(index: number, length: number, current: ShortsSlots): ShortsSlots {
   if (length <= 0 || index < 0 || index >= length) return current;
 
   /**
