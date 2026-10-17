@@ -563,6 +563,73 @@ export function isInterruptedPlayRequest(error: unknown): boolean {
   return !!error && typeof error === "object" && "name" in error && error.name === "AbortError";
 }
 
+/**
+ * dash.js 在重试预算耗尽后上报的下载/解析类错误码。
+ *
+ * `downloadErrorToRequestTypeMap`（dash.js `DashHandler`）里 25/26/27/28 分别是
+ * manifest / sidx / 内容分片 / init 段。分片与 sidx 的失败只影响当前这一段：
+ * dash.js 上报后仍会继续调度（必要时换档），因此不能把播放层直接判死；manifest
+ * 与 init 段失败则没有可播内容，仍按致命处理。其余可恢复项是时间同步、空请求、
+ * 缓冲移除/数据更新与字幕解析。
+ */
+const RECOVERABLE_DASH_ERROR_CODES: ReadonlySet<number> = new Set([
+  15, // SEGMENT_BASE_LOADER：sidx 段时间轴读取失败
+  16, // TIME_SYNC_FAILED：时钟同步失败不影响媒体本身
+  17, // FRAGMENT_LOADER_LOADING_FAILURE：单次分片请求失败
+  18, // FRAGMENT_LOADER_NULL_REQUEST：请求被并发 seek/换档作废
+  21, // REMOVE：从 SourceBuffer 移除数据失败
+  22, // DATA_UPDATE_FAILED
+  26, // DOWNLOAD_ERROR_ID_SIDX
+  27, // DOWNLOAD_ERROR_ID_CONTENT
+  33, // TIMED_TEXT_ERROR_ID_PARSE：只影响字幕轨
+]);
+
+/**
+ * 引擎错误是否意味着「当前媒体已经不能继续」。
+ *
+ * 播放页与短视频都把引擎 `error` 事件转成用户可见的失败卡片。dash.js 的分片下载
+ * 错误在内部重试耗尽后仍会上报，但它随后会继续调度、换档，画面可能一直没有中断；
+ * 把这类事件当作致命错误，就会出现「正在播放却弹出无法获取视频」的错位。这里只
+ * 负责任务分类，不代替现有的卡顿恢复看门狗 —— 真正停住的播放仍会由 `waiting`
+ * 判定升级成可见错误。
+ *
+ * 结构识别而不是匹配错误文案：dash.js 的 `DashJSError` 有数值 `code`，hls.js 的
+ * `ErrorData` 有布尔 `fatal`，原生 `MediaError` 的 `code` 是 1~4（全部致命）。
+ */
+export type VideoJsPlaybackErrorSeverity = "fatal" | "recoverable";
+
+export function videoJsPlaybackErrorSeverity(error: unknown): VideoJsPlaybackErrorSeverity {
+  if (!error || typeof error !== "object") return "fatal";
+  const candidate = error as {
+    code?: unknown;
+    fatal?: unknown;
+    error?: unknown;
+  };
+  if (typeof candidate.fatal === "boolean") return candidate.fatal ? "fatal" : "recoverable";
+  if (typeof candidate.code === "number") {
+    return RECOVERABLE_DASH_ERROR_CODES.has(candidate.code) ? "recoverable" : "fatal";
+  }
+  if (candidate.error && candidate.error !== error) {
+    return videoJsPlaybackErrorSeverity(candidate.error);
+  }
+  return "fatal";
+}
+
+/**
+ * 可恢复错误的一句话说明。
+ *
+ * 只给用户「发生了什么、播放器正在做什么」，不铺原始 code 与堆栈 —— 那些在错误卡
+ * 的技术详情里才有位置。区分分片与字幕两类，是因为字幕失败不该暗示画面有问题。
+ */
+export function videoJsRecoverableErrorMessage(error: unknown): string {
+  const code =
+    error && typeof error === "object" && typeof (error as { code?: unknown }).code === "number"
+      ? (error as { code: number }).code
+      : null;
+  if (code === 33) return "字幕轨加载失败，画面不受影响。";
+  return "部分分片加载失败，播放器正在自动重试。若画面长时间不动，可点重试。";
+}
+
 /** 识别原生解码失败；hls.js mediaError 也包含可恢复的缓冲问题，不能一概当成解码失败。 */
 export function isVideoJsDecodeError(error: unknown): boolean {
   if (typeof error === "string") {

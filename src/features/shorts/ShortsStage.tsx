@@ -6,6 +6,7 @@ import { PlayButton } from "@/components/videojs/ui/play-button";
 import { ShortsStagePlayer } from "./shortsStagePlayer";
 import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/shared/components/ErrorState";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn, normalizeImageUrl } from "@/lib/utils";
 import type { VideoItem } from "@/shared/types/video";
@@ -359,11 +360,39 @@ export function ShortsStage({
           )}
 
           {!warming && playback.error && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-8 text-center">
-              <p className="text-sm text-white/90">{playback.error}</p>
-              <Button variant="outline" size="sm" onClick={playback.retry}>
-                重试
-              </Button>
+            <div className="absolute inset-0 flex items-center justify-center bg-black/70 px-4 py-6">
+              {/* 与播放页同一张错误卡：说明与原始诊断分开，长串不再把舞台撑破。 */}
+              <ErrorState
+                error={playback.error}
+                title="视频播放失败"
+                onRetry={playback.retry}
+                className="w-full max-w-sm bg-card shadow-2xl shadow-black/50"
+              />
+            </div>
+          )}
+
+          {/*
+            可恢复的引擎错误：画面仍在播，只提示刚才有一次分片/字幕失败。失败卡挂着
+            时不再叠加 —— 那时用户要处理的是「这条播不了」。位置放在画面框顶部，避开
+            底部信息浮层与进度条。
+          */}
+          {!warming && !playback.error && playback.recoverableError && (
+            <div
+              role="status"
+              className="pointer-events-none absolute inset-x-2 top-2 z-10 flex justify-center"
+            >
+              <div className="pointer-events-auto flex max-w-sm items-center gap-2 rounded-lg bg-black/75 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-sm">
+                <span className="min-w-0">{playback.recoverableError}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto shrink-0 px-1.5 py-0.5 text-xs text-white/80 hover:bg-white/15 hover:text-white"
+                  aria-label="关闭提示"
+                  onClick={playback.dismissRecoverableError}
+                >
+                  关闭
+                </Button>
+              </div>
             </div>
           )}
 

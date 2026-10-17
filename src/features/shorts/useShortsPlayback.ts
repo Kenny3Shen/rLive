@@ -14,12 +14,15 @@ import {
   createVideoJsPlayer,
   loadVideoJsModules,
   switchVideoJsDashSource,
+  videoJsPlaybackErrorSeverity,
   videoJsPlayerErrorMessage,
+  videoJsRecoverableErrorMessage,
   videoJsDashBufferSettings,
   type VideoJsPlayerInstance,
 } from "@/features/room/player/videoJsPlayer";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
 import { type ShortsIntrinsicSize, type ShortsSlotId } from "./shortsFeed";
+import { shortsPlaybackError } from "./shortsPlaybackError";
 import type { ShortsPlaybackSource } from "./shortsPlaybackSource";
 import { PendingPlaybackRequests } from "./pendingPlaybackRequests";
 
@@ -68,6 +71,15 @@ export type ShortsPlaybackState = {
   paused: boolean;
   /** 可读的失败原因；null 表示没有错误。 */
   error: string | null;
+  /**
+   * 非致命引擎错误的一句话说明；null 表示没有。
+   *
+   * 与 `error` 分开：`error` 会盖住整个画面，这一条只提示「刚才有一次分片/字幕
+   * 请求失败」，等当前条目真正恢复播放后清除。
+   */
+  recoverableError: string | null;
+  /** 手动收起可恢复错误提示。 */
+  dismissRecoverableError: () => void;
   /** 按需读取进度，不用 timeupdate 驱动整页渲染。 */
   getCurrentTime: () => number;
   /** 总时长（秒）：后端 sidx 累加值优先，缺失时退回媒体元数据。 */
@@ -176,6 +188,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
   const [ready, setReady] = useState(false);
   const [hasFrame, setHasFrame] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recoverableError, setRecoverableError] = useState<string | null>(null);
   const ownerId = useId();
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -563,6 +576,11 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
       function onPlaying() {
         setReady(true);
         setLoading(false);
+        // 当前会话真的在出画了：此前记录的可恢复错误已经过期。`playing` 监听读
+        // `sessionRef`，换片后旧条目的迟到事件不带当前 itemKey，清不到新提示。
+        if (sessionRef.current.itemKey === expectedItemRef.current) {
+          setRecoverableError(null);
+        }
       }
       function onPause() {
         setPaused(true);
@@ -760,6 +778,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     setReady(false);
     setHasFrame(false);
     setError(null);
+    setRecoverableError(null);
     setPaused(true);
     setDuration(playInfo ? source.duration(playInfo) : 0);
     setIntrinsicSize(null);
@@ -808,6 +827,15 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
             sessionRef.current.itemKey !== expectedItemRef.current
           )
             return;
+          // dash.js 的分片/sidx 下载与时间同步错误在重试耗尽后仍会上报，但它会继续
+          // 调度甚至换档；这里只让真正致命的错误停掉画面，其余交给缓冲指示与后续
+          // 帧回调表达「还在恢复」。
+          if (videoJsPlaybackErrorSeverity(cause) === "recoverable") {
+            // 分片/字幕失败不打断画面，但也不能完全静默：给一条可关闭的提示，
+            // 当前条目下一次真实 `playing` 时自动清掉。
+            setRecoverableError(videoJsRecoverableErrorMessage(cause));
+            return;
+          }
           setReady(false);
           setError(videoJsPlayerErrorMessage(cause, "视频播放失败"));
           setLoading(false);
@@ -949,6 +977,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     setHasFrame(false);
     setLoading(true);
     setError(null);
+    setRecoverableError(null);
     setRevision((value) => value + 1);
   }, [itemKey]);
 
@@ -957,6 +986,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
   if (settledKey !== itemKey) {
     setSettledKey(itemKey);
     setError(null);
+    setRecoverableError(null);
     setLoading(true);
     setReady(false);
     setHasFrame(false);
@@ -966,15 +996,33 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     setIntrinsicSize(null);
   }
 
+  /**
+   * 当前条目是否已有一份仍存活的附着媒体。
+   *
+   * 重试会先让 `playInfo` 落到 null（新查询键没有缓存），但旧槽位仍挂在媒体元素上
+   * 继续播 —— 那正是「换片/重试失败不能黑屏」要保护的窗口。因此看播放器与已附着
+   * 地址，而不是当前渲染期的 `playInfo`。
+   */
+  const sourceLive =
+    playerRef.current !== null &&
+    attachedUrlRef.current !== null &&
+    sessionRef.current.itemKey === itemKey;
+
+  const dismissRecoverableError = useCallback(() => setRecoverableError(null), []);
+
   return {
     // 取流本身也算加载，避免就绪前闪现暂停指示。
     loading: loading || (mediaAllowed && playInfoQuery.isFetching),
     paused,
-    error:
-      error ??
-      (playInfoQuery.error
-        ? videoJsPlayerErrorMessage(playInfoQuery.error, "取流失败，请重试")
-        : null),
+    // 换片失败不能盖掉还在播的旧会话：查询错误只在当前条目没有存活媒体时上报。
+    error: shortsPlaybackError({
+      playerError: error,
+      queryError: playInfoQuery.error,
+      sourceLive,
+    }),
+    // 失败卡接管舞台时，可恢复提示没有意义：两者互斥显示（见 `ShortsStage`）。
+    recoverableError,
+    dismissRecoverableError,
     getCurrentTime,
     duration,
     muted,

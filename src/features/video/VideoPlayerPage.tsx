@@ -102,7 +102,9 @@ import {
   createVideoJsPlayer,
   isInterruptedPlayRequest,
   loadVideoJsModules,
+  videoJsPlaybackErrorSeverity,
   videoJsPlayerErrorMessage,
+  videoJsRecoverableErrorMessage,
   type VideoJsPlaybackKind,
   type VideoJsPlayerInstance,
 } from "@/features/room/player/videoJsPlayer";
@@ -347,6 +349,14 @@ function VideoPlayerPageContent() {
   // 桌面方向键跳转的短暂缓冲只显示缓冲提示，不唤醒上下控制栏。
   const [keyboardSeeking, setKeyboardSeeking] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  /**
+   * 非致命引擎错误：画面可以继续播，但这是「刚才有一次请求没成」的事实。
+   *
+   * 与 `playbackError` 分开：后者是铺满舞台的失败卡，前者只该是一条可关闭的提示。
+   * 只由**真实恢复播放**清除（见 `onPlaying`），而不是按时间自动消失 —— 清早了用户
+   * 看不到，清晚了提示会一直挂在已经稳定的画面上。
+   */
+  const [recoverableError, setRecoverableError] = useState<string | null>(null);
   const [paused, setPaused] = useState(true);
   const [muted, setMuted] = useState(initialAudio.muted);
   const [volume, setVolume] = useState(initialAudio.volume);
@@ -1353,6 +1363,7 @@ function VideoPlayerPageContent() {
     setWaiting(false);
     setKeyboardSeeking(false);
     setPlaybackError(null);
+    setRecoverableError(null);
     setPaused(true);
     userPausedRef.current = false;
     playbackClock.set(0);
@@ -1473,6 +1484,9 @@ function VideoPlayerPageContent() {
       setWaiting(false);
       setKeyboardSeeking(false);
       setLoading(false);
+      // 这一轮会话真的出画了：此前记录的引擎可恢复错误已经过期。`cancelled`
+      // 已在上面挡住旧会话的迟到事件，因此这里只可能清掉本轮自己的提示。
+      setRecoverableError(null);
       // 缓冲恢复的权威信号：waiting 判定计时必须在这里解除。play 事件只在
       // 暂停→播放转换时触发，覆盖不了卡顿恢复；漏掉 playing 会让正常播放
       // 中的视频被看门狗误重建、耗尽预算后弹出错误面板。
@@ -1649,6 +1663,15 @@ function VideoPlayerPageContent() {
         player.on("ended", onEnded);
         player.on("error", (cause) => {
           if (cancelled) return;
+          // dash.js 的分片/sidx 下载与时间同步错误在重试预算耗尽后仍会上报，但它
+          // 会继续调度甚至换档：把这类事件升级成失败卡，就会出现「画面还在播、
+          // 却弹出无法播放」。这类事件单独记一条提示，等真实的 `playing` 恢复后
+          // 再清掉；这里刻意不动 waiting 恢复链 —— 正在等待缓冲的会话仍可能靠它
+          // 换一轮代理。
+          if (videoJsPlaybackErrorSeverity(cause) === "recoverable") {
+            setRecoverableError(videoJsRecoverableErrorMessage(cause));
+            return;
+          }
           setPlaybackError(videoJsPlayerErrorMessage(cause, "视频播放失败"));
           setLoading(false);
           setWaiting(false);
@@ -2784,11 +2807,22 @@ function VideoPlayerPageContent() {
     </div>
   );
 
-  const fatalError = playInfoQuery.isError
-    ? playInfoQuery.error
-    : cid <= 0 && archiveQuery.isError
-      ? archiveQuery.error
-      : null;
+  /**
+   * 当前内容是否已有可用的取流结果。
+   *
+   * 查询失败不总等于「这条视频不能播」：同一内容键的刷新失败会保留上一次成功数据
+   * （TanStack 的 `isRefetchError`），此时播放器与代理会话都还在，画面可以继续。
+   * 只有当前内容拿不到任何有效 `playInfo` 时，失败才接管整个舞台。
+   */
+  const currentSourceAvailable = playInfo !== undefined;
+  const sourceFailure =
+    !currentSourceAvailable && playInfoQuery.isError ? playInfoQuery.error : null;
+  // 稿件详情失败只在取流键还没补齐时阻塞：cid 已有时详情只用于侧栏与选集。
+  const archiveFailure = cid <= 0 && archiveQuery.isError ? archiveQuery.error : null;
+  const fatalError = sourceFailure ?? archiveFailure ?? null;
+  /** 内容还在播、只是同内容刷新失败：非阻塞提示，不黑屏。 */
+  const retainedSourceFailure =
+    currentSourceAvailable && playInfoQuery.isError ? playInfoQuery.error : null;
   const controlsAvailable = transportReady || Boolean(playbackError || fatalError);
   const playerBackLabel = fullscreen.fullscreen
     ? "退出全屏"
@@ -2799,6 +2833,21 @@ function VideoPlayerPageContent() {
     if (fullscreen.fullscreen) void fullscreenExit();
     else if (webFullscreen) setWebFullscreen(false);
     else goBack();
+  }
+
+  /**
+   * 错误卡的重试入口按失败来源分派。
+   *
+   * 取流键还没补齐时（cid 为 0）重取详情才有意义；播放器重建改变不了详情的失败。
+   * 其余两种失败共用现有重建链：它会重取播放信息并重建播放器，代理会话也随新一
+   * 轮取流重新建立 —— 不另建一套「只重试某一层」的平行实现。
+   */
+  function retryPlaybackFailure() {
+    if (cid <= 0 && archiveQuery.isError) {
+      void archiveQuery.refetch();
+      return;
+    }
+    retryPlayback();
   }
 
   return (
@@ -3081,10 +3130,56 @@ function VideoPlayerPageContent() {
                     <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
                       <ErrorState
                         error={playbackError ?? fatalError}
-                        title="视频播放失败"
-                        onRetry={retryPlayback}
+                        title={
+                          playbackError
+                            ? "视频播放失败"
+                            : archiveFailure
+                              ? "无法读取视频信息"
+                              : "无法获取播放地址"
+                        }
+                        onRetry={retryPlaybackFailure}
                         className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
                       />
+                    </div>
+                  )}
+
+                  {/* 可恢复的引擎错误：画面仍在播，只提示刚才有分片/字幕失败。
+                      与上面的失败卡互斥（后者接管舞台时前者没有意义）。 */}
+                  {!playbackError && !fatalError && recoverableError && (
+                    <div
+                      role="status"
+                      className="pointer-events-none absolute inset-x-3 top-3 z-20 flex justify-center"
+                    >
+                      <div className="pointer-events-auto flex max-w-md items-center gap-2 rounded-lg bg-black/80 px-3 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+                        <span className="min-w-0">{recoverableError}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 text-white/80 hover:bg-white/15 hover:text-white"
+                          aria-label="关闭提示"
+                          onClick={() => setRecoverableError(null)}
+                        >
+                          关闭
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 同内容刷新失败但旧取流仍在：画面继续播，只给一条可重试的提示。
+                      这里不能铺满错误卡 —— 那会把正在播放的内容说成不可播放。 */}
+                  {!playbackError && !fatalError && retainedSourceFailure && (
+                    <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center">
+                      <div className="pointer-events-auto flex max-w-md items-center gap-2 rounded-lg bg-black/80 px-3 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+                        <span className="min-w-0">刷新播放地址失败，正在使用上一次的流</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="shrink-0 border-white/30 bg-transparent text-white hover:bg-white/15 hover:text-white"
+                          onClick={retryPlaybackFailure}
+                        >
+                          重试
+                        </Button>
+                      </div>
                     </div>
                   )}
                   <PlayerEdgeGestureFeedback refs={edgeGestureFeedback} />
