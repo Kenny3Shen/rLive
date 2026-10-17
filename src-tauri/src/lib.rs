@@ -13,6 +13,7 @@ mod image_cache;
 mod image_proxy;
 mod iptv;
 mod lan_sync;
+mod local_http;
 mod media_cache;
 mod models;
 mod profile;

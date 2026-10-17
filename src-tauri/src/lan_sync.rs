@@ -9,12 +9,13 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use reqwest::redirect::Policy;
 use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::error::{AppError, AppResult};
+use crate::local_http;
 use crate::profile::MAX_PROFILE_BYTES;
 
 const PROFILE_PATH: &str = "/rlive-sync/v2/profile";
@@ -337,24 +338,10 @@ struct SyncRequest {
 }
 
 async fn read_request(stream: &mut TcpStream) -> io::Result<SyncRequest> {
-    let mut buffer = Vec::with_capacity(1024);
-    while buffer.len() < MAX_REQUEST_BYTES {
-        let mut chunk = [0u8; 1024];
-        let read = stream.read(&mut chunk).await?;
-        if read == 0 {
-            break;
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
-    }
-    if !buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "incomplete HTTP request",
-        ));
-    }
+    let buffer = local_http::read_request_head(stream, MAX_REQUEST_BYTES)
+        .await?
+        .filter(|buffer| buffer.windows(4).any(|window| window == b"\r\n\r\n"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "incomplete HTTP request"))?;
     let text = std::str::from_utf8(&buffer)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "request is not UTF-8"))?;
     let mut lines = text.split("\r\n");

@@ -306,12 +306,7 @@ pub fn optional_text(data: &Value, keys: &[&str], max_len: usize) -> Option<Stri
 }
 
 /// 宽容读取整数：接受 JSON number（i64/u64）与十进制字符串。
-pub fn value_as_i64(value: &Value) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-        .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
-}
+pub(crate) use crate::sites::json::json_i64_opt as value_as_i64;
 
 #[cfg(test)]
 mod tests {

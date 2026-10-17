@@ -24,6 +24,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{WebSocketStream, client_async_tls_with_config, tungstenite::Message};
 use uuid::Uuid;
 
+use crate::danmu_rs::bilibili::cookie_value;
 use crate::danmu_rs::proxy::{ConnectProxy, PROXY_CONNECT_TIMEOUT, open_websocket_transport};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
@@ -195,21 +196,6 @@ pub fn args_from_raw(room_id: &str, raw: &Value) -> AppResult<DouyuDanmakuArgs> 
     Ok(DouyuDanmakuArgs { room_id: rid })
 }
 
-/// 从浏览器风格的 Cookie header 中读取指定字段，且不记录其值。
-fn cookie_value<'a>(cookie: &'a str, key: &str) -> Option<&'a str> {
-    let cookie = cookie
-        .trim()
-        .strip_prefix("Cookie:")
-        .unwrap_or(cookie)
-        .trim();
-    cookie.split(';').find_map(|part| {
-        let (candidate, value) = part.trim().split_once('=')?;
-        (candidate.trim() == key)
-            .then_some(value.trim())
-            .filter(|value| !value.is_empty())
-    })
-}
-
 fn cookie_value_any(cookie: &str, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         cookie_value(cookie, key)
@@ -217,7 +203,6 @@ fn cookie_value_any(cookie: &str, keys: &[&str]) -> Option<String> {
             // 在它变成 websocket 帧之前先拒绝异常的手工输入，
             // 同时把真实取值保留在本地。
             .filter(|value| value.len() <= 4_096)
-            .map(str::to_owned)
     })
 }
 

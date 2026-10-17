@@ -13,12 +13,13 @@ use futures_util::StreamExt;
 use reqwest::{Client, Url};
 use serde::Serialize;
 use tauri::async_runtime::JoinHandle;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio::task::JoinSet;
 
 use crate::error::{AppError, AppResult};
+use crate::local_http::{self, MAX_REQUEST_HEAD_BYTES};
 use crate::media_cache::{
     MAX_SEGMENT_BYTES, MediaCacheSpec, SharedMediaCache, content_range_matches, parse_range_bounds,
 };
@@ -2102,23 +2103,11 @@ async fn serve_text_client(
     socket: &mut tokio::net::TcpStream,
     text: &TextResponse,
 ) -> Result<(), String> {
-    // 读取请求头（只需要方法）。
-    let mut buf = [0u8; 4096];
-    let n = socket
-        .read(&mut buf)
-        .await
-        .map_err(|e| format!("read request: {e}"))?;
-    if n == 0 {
+    let Some(buf) = read_client_head(socket).await? else {
         return Ok(());
-    }
-    let head = String::from_utf8_lossy(&buf[..n]);
-    let method = head
-        .lines()
-        .next()
-        .unwrap_or("")
-        .split_whitespace()
-        .next()
-        .unwrap_or("");
+    };
+    let head = String::from_utf8_lossy(&buf);
+    let (method, _) = local_http::request_line(&head);
     if answer_method_preflight(socket, method).await? {
         return Ok(());
     }
@@ -2144,32 +2133,21 @@ async fn serve_text_client(
     Ok(())
 }
 
-/// 只按方法分流的公共前置：OPTIONS 回 CORS 预检（204），非 GET/HEAD 回 405。
-/// 返回 true 表示该请求已应答完毕，调用方直接结束这条连接。
+/// 读取请求头；空连接、超长或不完整的请求头返回 `None`，调用方直接结束连接。
+async fn read_client_head(socket: &mut tokio::net::TcpStream) -> Result<Option<Vec<u8>>, String> {
+    let head = local_http::read_request_head(socket, MAX_REQUEST_HEAD_BYTES)
+        .await
+        .map_err(|e| format!("read request: {e}"))?;
+    Ok(head.filter(|head| !head.is_empty()))
+}
+
 async fn answer_method_preflight(
     socket: &mut tokio::net::TcpStream,
     method: &str,
 ) -> Result<bool, String> {
-    if method == "OPTIONS" {
-        let resp = concat!(
-            "HTTP/1.1 204 No Content\r\n",
-            "Access-Control-Allow-Origin: *\r\n",
-            "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n",
-            "Access-Control-Allow-Headers: *\r\n",
-            "Connection: close\r\n\r\n"
-        );
-        socket
-            .write_all(resp.as_bytes())
-            .await
-            .map_err(|e| format!("write options: {e}"))?;
-        return Ok(true);
-    }
-    if method != "GET" && method != "HEAD" {
-        let resp = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n";
-        let _ = socket.write_all(resp.as_bytes()).await;
-        return Ok(true);
-    }
-    Ok(false)
+    local_http::answer_method_preflight(socket, method)
+        .await
+        .map_err(|e| format!("write options: {e}"))
 }
 
 async fn wait_for_proxy_shutdown(shutdown: &mut watch::Receiver<bool>) {
@@ -2202,20 +2180,12 @@ async fn handle_client(
         initialization,
     } = context;
 
-    // 读取请求头（只需要方法/路径；GET 不使用 body）。
-    let mut buf = [0u8; 4096];
-    let n = socket
-        .read(&mut buf)
-        .await
-        .map_err(|e| format!("read request: {e}"))?;
-    if n == 0 {
+    // 读取请求头（只需要方法/路径与少数请求头；GET 不使用 body）。
+    let Some(buf) = read_client_head(socket).await? else {
         return Ok(());
-    }
-    let head = String::from_utf8_lossy(&buf[..n]);
-    let first = head.lines().next().unwrap_or("");
-    let mut request_parts = first.split_whitespace();
-    let method = request_parts.next().unwrap_or("");
-    let request_target = request_parts.next().unwrap_or("");
+    };
+    let head = String::from_utf8_lossy(&buf);
+    let (method, request_target) = local_http::request_line(&head);
     let is_primary_request = request_target
         .split_once('?')
         .map_or(request_target, |(path, _)| path)
@@ -2875,68 +2845,9 @@ fn rewrite_hls_manifest(
     local_origin: &str,
     hls_resources: &HlsResources,
 ) -> String {
-    let mut output = manifest
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with('#') {
-                rewrite_hls_tag_uris(line, upstream_url, local_origin, hls_resources)
-            } else {
-                rewrite_hls_uri_line(line, upstream_url, local_origin, hls_resources)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if manifest.ends_with('\n') {
-        output.push('\n');
-    }
-    output
-}
-
-fn rewrite_hls_uri_line(
-    line: &str,
-    upstream_url: &Url,
-    local_origin: &str,
-    hls_resources: &HlsResources,
-) -> String {
-    let candidate = line.trim();
-    if candidate.is_empty() {
-        return line.to_string();
-    }
-    let leading_len = line.len() - line.trim_start().len();
-    let trailing_len = line.len() - line.trim_end().len();
-    let prefix = &line[..leading_len];
-    let suffix = &line[line.len() - trailing_len..];
-    match hls_local_url(candidate, upstream_url, local_origin, hls_resources) {
-        Some(local) => format!("{prefix}{local}{suffix}"),
-        None => line.to_string(),
-    }
-}
-
-fn rewrite_hls_tag_uris(
-    line: &str,
-    upstream_url: &Url,
-    local_origin: &str,
-    hls_resources: &HlsResources,
-) -> String {
-    let mut output = String::with_capacity(line.len());
-    let mut remainder = line;
-    while let Some(uri_start) = remainder.find("URI=\"") {
-        let value_start = uri_start + "URI=\"".len();
-        let Some(value_end) = remainder[value_start..].find('"') else {
-            output.push_str(remainder);
-            return output;
-        };
-        let value_end = value_start + value_end;
-        output.push_str(&remainder[..value_start]);
-        let original = &remainder[value_start..value_end];
-        output.push_str(
-            &hls_local_url(original, upstream_url, local_origin, hls_resources)
-                .unwrap_or_else(|| original.to_string()),
-        );
-        remainder = &remainder[value_end..];
-    }
-    output.push_str(remainder);
-    output
+    local_http::rewrite_hls_uris(manifest, |uri| {
+        hls_local_url(uri, upstream_url, local_origin, hls_resources)
+    })
 }
 
 fn hls_local_url(

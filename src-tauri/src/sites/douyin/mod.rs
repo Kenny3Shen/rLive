@@ -24,6 +24,7 @@ use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
     PlayUrl, RoomListPage, SiteId, parse_live_started_at,
 };
+use crate::sites::json::{json_i64, json_i64_opt};
 use crate::sites::traits::LiveSite;
 
 pub use api::DEFAULT_USER_AGENT;
@@ -581,17 +582,6 @@ fn feed_room_item(envelope: &Value) -> Option<LiveRoomItem> {
         item.room_id = web_rid;
     }
     Some(item)
-}
-
-fn json_i64_opt(value: &Value) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
-        .or_else(|| value.as_str().and_then(|number| number.trim().parse().ok()))
-}
-
-fn json_i64(value: &Value) -> i64 {
-    json_i64_opt(value).unwrap_or(0)
 }
 
 fn json_str(value: &Value) -> String {

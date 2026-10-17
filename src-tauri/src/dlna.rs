@@ -15,10 +15,11 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 use crate::error::{AppError, AppResult};
+use crate::local_http;
 
 const SSDP_MULTICAST_ADDR: &str = "239.255.255.250:1900";
 /// SSDP 搜索窗口。多数渲染器在 MX 秒内响应，3 秒足够覆盖局域网。
@@ -34,7 +35,6 @@ static SERVICE_BLOCK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<service>(.*?)</service>").unwrap());
 static CONTROL_URL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<controlURL>\s*([^<\s]+)\s*</controlURL>").unwrap());
-static URI_ATTR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"URI="([^"]+)""#).unwrap());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DlnaDevice {
@@ -467,25 +467,16 @@ async fn stop_relay(relay: &RelayHandle) {
 ///
 /// HLS 播放列表需要整体改写子地址；其余内容按字节流转发。
 async fn handle_relay_connection(mut socket: TcpStream, config: Arc<RelayConfig>) {
-    let mut buffer = Vec::with_capacity(1024);
-    let mut byte = [0_u8; 1];
-    // 逐字节读到行尾空行，避免把 body 字节吞进缓冲区。
-    loop {
-        match socket.read(&mut byte).await {
-            Ok(1) => {
-                buffer.push(byte[0]);
-                if buffer.ends_with(b"\r\n\r\n") || buffer.ends_with(b"\n\n") {
-                    break;
-                }
-                if buffer.len() > 8192 {
-                    return;
-                }
-            }
-            _ => return,
-        }
+    let Ok(Some(buffer)) =
+        local_http::read_request_head(&mut socket, local_http::MAX_REQUEST_HEAD_BYTES).await
+    else {
+        return;
+    };
+    if buffer.is_empty() {
+        return;
     }
     let request = String::from_utf8_lossy(&buffer);
-    let path = request.split_whitespace().nth(1).unwrap_or_default();
+    let (_, path) = local_http::request_line(&request);
     let Some((_, query)) = path.split_once('?') else {
         let _ = write_simple_response(&mut socket, 400, "text/plain", b"missing query").await;
         return;
@@ -604,30 +595,11 @@ async fn write_simple_response(
     socket.flush().await
 }
 
-/// 把 HLS 播放列表中的子地址改写为本机中继地址。
+/// 把 HLS 播放列表中的子地址（含 EXT-X-KEY / EXT-X-MEDIA 等的 `URI="…"`）改写为本机中继地址。
 fn rewrite_hls_manifest(manifest: &str, manifest_url: &str, token: &str) -> String {
-    manifest
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                // URI="..." 属性（EXT-X-KEY / EXT-X-MEDIA / EXT-X-I-FRAME等）同样要改写。
-                return rewrite_uri_attributes(line, manifest_url, token);
-            }
-            let absolute = resolve_relative(manifest_url, trimmed);
-            relay_url(&absolute, token)
-        })
-        .collect::<Vec<_>>()
-        .join("\r\n")
-}
-
-fn rewrite_uri_attributes(line: &str, base: &str, token: &str) -> String {
-    URI_ATTR_RE
-        .replace_all(line, |captures: &regex::Captures| {
-            let absolute = resolve_relative(base, &captures[1]);
-            format!("URI=\"{}\"", relay_url(&absolute, token))
-        })
-        .to_string()
+    local_http::rewrite_hls_uris(manifest, |uri| {
+        (!uri.is_empty()).then(|| relay_url(&resolve_relative(manifest_url, uri), token))
+    })
 }
 
 fn relay_url(target: &str, token: &str) -> String {
@@ -651,6 +623,7 @@ fn resolve_relative(base: &str, target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
 
     #[test]
     fn device_description_extracts_avtransport_control_url() {

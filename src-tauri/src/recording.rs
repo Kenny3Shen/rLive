@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::http_client;
+use crate::local_http;
 use crate::models::live::{DanmakuEvent, PlayUrl, PlaybackProtocol};
 use crate::stream_proxy::{StreamProxyStartOptions, request_header};
 
@@ -3655,40 +3656,18 @@ async fn handle_playback_client(
     storage: &Arc<Mutex<RecordingStorageState>>,
     token: &str,
 ) -> Result<(), String> {
-    let mut buffer = [0_u8; 8192];
-    let mut count = 0;
-    while count < buffer.len() {
-        let read = socket
-            .read(&mut buffer[count..])
-            .await
-            .map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        count += read;
-        if buffer[..count]
-            .windows(4)
-            .any(|window| window == b"\r\n\r\n")
-        {
-            break;
-        }
-    }
-    if count == 0 {
+    let head = local_http::read_request_head(socket, local_http::MAX_REQUEST_HEAD_BYTES)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(head) = head.filter(|head| !head.is_empty()) else {
         return Ok(());
-    }
-    let head = String::from_utf8_lossy(&buffer[..count]);
-    let mut parts = head.lines().next().unwrap_or("").split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let target = parts.next().unwrap_or("");
-    if method == "OPTIONS" {
-        socket
-            .write_all(b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nConnection: close\r\n\r\n")
-            .await
-            .map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-    if method != "GET" && method != "HEAD" {
-        write_simple_response(socket, 405, "Method Not Allowed", "").await?;
+    };
+    let head = String::from_utf8_lossy(&head);
+    let (method, target) = local_http::request_line(&head);
+    if local_http::answer_method_preflight(socket, method)
+        .await
+        .map_err(|error| error.to_string())?
+    {
         return Ok(());
     }
     let path = target.split_once('?').map_or(target, |(path, _)| path);

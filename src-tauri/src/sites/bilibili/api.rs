@@ -9,6 +9,7 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use regex::Regex;
 use serde_json::Value;
 
+use crate::danmu_rs::bilibili::cookie_value;
 use crate::error::{AppError, AppResult};
 use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
@@ -447,13 +448,7 @@ pub fn parse_room_detail_from_data(
         .unwrap_or_else(|| "broadcastlv.chat.bilibili.com".into());
 
     // WS 认证用的观众 mid（来自 cookie DedeUserID），不是主播 uid。
-    let viewer_uid: i64 = cookie
-        .split(';')
-        .filter_map(|p| {
-            let p = p.trim();
-            p.strip_prefix("DedeUserID=").map(|v| v.trim().to_string())
-        })
-        .find(|v| !v.is_empty())
+    let viewer_uid: i64 = cookie_value(cookie, "DedeUserID")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
@@ -738,23 +733,13 @@ pub fn now_unix() -> i64 {
 
 /// 若存在，从 cookie 字符串提取 buvid3/buvid4。
 pub fn buvid_from_cookie(cookie: &str) -> Option<(String, String)> {
-    let b3 = extract_cookie_value(cookie, "buvid3").unwrap_or_default();
-    let b4 = extract_cookie_value(cookie, "buvid4").unwrap_or_default();
+    let b3 = cookie_value(cookie, "buvid3").unwrap_or_default();
+    let b4 = cookie_value(cookie, "buvid4").unwrap_or_default();
     // 浏览器导出可能只包含两个设备 id 之一。保留可用的那个值，
     // 让调用方只需抓取并合并缺失的一个；
     // 像 `cookie.contains("buvid3")` 这样的子串检查还会把无关的 cookie 值
     // 误判成设备标识符。
     (!b3.is_empty() || !b4.is_empty()).then_some((b3, b4))
-}
-
-fn extract_cookie_value(cookie: &str, key: &str) -> Option<String> {
-    for part in cookie.split(';') {
-        let part = part.trim();
-        if let Some(rest) = part.strip_prefix(&format!("{key}=")) {
-            return Some(rest.to_string());
-        }
-    }
-    None
 }
 
 #[cfg(test)]

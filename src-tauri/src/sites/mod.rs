@@ -3,7 +3,7 @@ mod cookie;
 pub mod douyin;
 pub mod douyu;
 pub mod huya;
-mod json;
+pub(crate) mod json;
 pub mod registry;
 pub mod traits;
 pub mod twitch;

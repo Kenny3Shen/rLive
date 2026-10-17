@@ -18,12 +18,14 @@ use tokio_tungstenite::tungstenite::{Message, http::HeaderValue};
 use tokio_tungstenite::{WebSocketStream, client_async_tls_with_config};
 use uuid::Uuid;
 
+use crate::danmu_rs::bilibili::cookie_value;
 use crate::danmu_rs::proxy::{ConnectProxy, PROXY_CONNECT_TIMEOUT, open_websocket_transport};
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
 use crate::danmu_rs::tars::{TarsReader, TarsWriter, decode_wup_v3, encode_wup_v3};
 use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
+use crate::sites::json::json_i64_opt as json_i64;
 /// 心跳负载：base64 `ABQdAAwsNgBM`
 const SERVER_URL: &str = "wss://cdnws.api.huya.com";
 const HEARTBEAT_SECS: u64 = 60;
@@ -57,12 +59,6 @@ pub struct HuyaDanmakuArgs {
     pub sub_sid: i64,
     /// `HUYA.SendMessageReq` 用作 `lPid` 的主播 id。
     pub presenter_id: i64,
-}
-
-fn json_i64(v: &Value) -> Option<i64> {
-    v.as_i64()
-        .or_else(|| v.as_u64().map(|u| u as i64))
-        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
 pub fn args_from_raw(raw: &Value) -> AppResult<HuyaDanmakuArgs> {
@@ -178,15 +174,6 @@ struct HuyaSendCredentials {
     cookie: String,
 }
 
-fn cookie_value<'a>(cookie: &'a str, key: &str) -> Option<&'a str> {
-    cookie.split(';').find_map(|segment| {
-        let (candidate, value) = segment.trim().split_once('=')?;
-        (candidate.trim() == key)
-            .then_some(value.trim())
-            .filter(|value| !value.is_empty())
-    })
-}
-
 fn numeric_cookie_value(cookie: &str, names: &[&str]) -> Option<i64> {
     names.iter().find_map(|name| {
         let value = cookie_value(cookie, name)?;
@@ -219,7 +206,6 @@ fn credentials_from_cookie(cookie: &str) -> Option<HuyaSendCredentials> {
     let uid = numeric_cookie_value(cookie, &["yyuid", "udb_uid"])?;
     let guid = cookie_value(cookie, "guid")
         .filter(|value| value.len() <= 256 && !value.contains(['\r', '\n']))
-        .map(str::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     Some(HuyaSendCredentials {
         uid,

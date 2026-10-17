@@ -13,12 +13,13 @@ use std::sync::{Arc, Mutex};
 use percent_encoding::percent_decode_str;
 use reqwest::Url;
 use tauri::async_runtime::JoinHandle;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::error::{AppError, AppResult};
 use crate::image_cache::{ImageCache, MAX_IMAGE_BYTES, sniff_image_type};
+use crate::local_http;
 
 /// 代理愿意抓取的主机。前端只改写这些 CDN
 /// （见 `src/shared/api/imageProxy.ts` 的 `shouldProxyHost`），
@@ -258,41 +259,20 @@ async fn handle_image_request(
     allowed_hosts: &'static [&'static str],
     cache: Arc<ImageCache>,
 ) -> Result<(), String> {
-    let mut buf = [0u8; 4096];
-    let n = socket
-        .read(&mut buf)
+    let head = local_http::read_request_head(socket, local_http::MAX_REQUEST_HEAD_BYTES)
         .await
         .map_err(|e| format!("read request: {e}"))?;
-    if n == 0 {
+    let Some(head) = head.filter(|head| !head.is_empty()) else {
         return Ok(());
-    }
-    let head = String::from_utf8_lossy(&buf[..n]);
-    let first = head.lines().next().unwrap_or("");
-    let mut parts = first.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let target = parts.next().unwrap_or("");
+    };
+    let head = String::from_utf8_lossy(&head);
+    let (method, target) = local_http::request_line(&head);
 
-    if method == "OPTIONS" {
-        return write_response_bytes(
-            socket,
-            204,
-            "No Content",
-            "text/plain; charset=utf-8",
-            &[],
-            None,
-        )
-        .await;
-    }
-    if method != "GET" && method != "HEAD" {
-        return write_response_bytes(
-            socket,
-            405,
-            "Method Not Allowed",
-            "text/plain; charset=utf-8",
-            &[],
-            None,
-        )
-        .await;
+    if local_http::answer_method_preflight(socket, method)
+        .await
+        .map_err(|e| format!("write options: {e}"))?
+    {
+        return Ok(());
     }
 
     let query = target
@@ -453,23 +433,16 @@ async fn write_response_bytes(
         Some(seconds) => format!("Cache-Control: private, max-age={seconds}\r\n"),
         None => "Cache-Control: no-store\r\n".to_string(),
     };
-    let header = if status == 204 {
-        "HTTP/1.1 204 No Content\r\n\
+    let header = format!(
+        "HTTP/1.1 {status} {reason}\r\n\
+         Content-Type: {content_type}\r\n\
          Access-Control-Allow-Origin: *\r\n\
-         Connection: close\r\n\r\n"
-            .to_string()
-    } else {
-        format!(
-            "HTTP/1.1 {status} {reason}\r\n\
-             Content-Type: {content_type}\r\n\
-             Access-Control-Allow-Origin: *\r\n\
-             {}\
-             Connection: close\r\n\
-             Content-Length: {}\r\n\r\n",
-            cache_control,
-            body.len()
-        )
-    };
+         {}\
+         Connection: close\r\n\
+         Content-Length: {}\r\n\r\n",
+        cache_control,
+        body.len()
+    );
     socket
         .write_all(header.as_bytes())
         .await

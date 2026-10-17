@@ -6,6 +6,9 @@ use serde_json::Value;
 use super::{UA, sign};
 use crate::http_client;
 pub(super) use crate::sites::cookie::{merge_cookie_values, normalize_cookie};
+// 与 `json_i64` 不同：不把缺失或无法解析的字段折成 `0`。会话判定不能把
+// 无法识别的响应当成一次成功的登录确认。
+use crate::sites::json::json_i64_opt as json_strict_i64;
 
 /// 只需要登录态、返回体最小的斗鱼 Web 接口。斗鱼没有第一方的「账号资料」
 /// 读接口，因此用关注列表的第一页作为会话探针。
@@ -63,15 +66,6 @@ fn parse_session_status(body: &str) -> Option<bool> {
         SESSION_REJECTED_ERROR => Some(false),
         _ => None,
     }
-}
-
-/// 与 [`super::json_i64`] 不同：不把缺失或无法解析的字段折成 `0`。会话判定不能把
-/// 无法识别的响应当成一次成功的登录确认。
-fn json_strict_i64(value: &Value) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().map(|value| value as i64))
-        .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
 }
 
 /// 账号 Cookie 的作用域限定在斗鱼的 HTTPS Web 主机。保持显式声明，
