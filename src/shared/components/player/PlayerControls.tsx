@@ -747,10 +747,16 @@ export function PlayerControls({
             setAsrMenuOpen(false);
           }}
         >
+          {/* nowrap 下 `items-start` 子项按 max-content 定宽，须 `max-w-full` 才能 truncate，
+              否则长提示（如下载进度）撑出按钮，弹层出现横向滚动条。 */}
           <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
-            <span className="truncate">字幕（本地）</span>
+            <span className="max-w-full truncate">字幕（本地）</span>
             {asrDisabled && (
-              <span className={cn("text-xs font-normal", glassMutedTextClass())}>{asrLabel}</span>
+              <span
+                className={cn("max-w-full truncate text-xs font-normal", glassMutedTextClass())}
+              >
+                {asrLabel}
+              </span>
             )}
           </span>
           {asrBusy ? (
