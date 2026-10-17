@@ -5,7 +5,6 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import type { PlayerEvent, PlayerUiMode, StreamProxyTelemetry } from "@/shared/types/player";
 import type { AppError } from "@/shared/types/error";
-import { playbackProtocol, playbackSourceId } from "@/lib/playUrl";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import {
   createNativeFullscreenSession,
@@ -36,15 +35,6 @@ import {
   type VideoJsHlsOptions,
   type VideoJsMpegtsOptions,
 } from "./videoJsPlayer";
-import {
-  createPlaybackTelemetrySession,
-  markTelemetryLongTask,
-  markTelemetryPlaying,
-  markTelemetryStalled,
-  markTelemetryWaiting,
-  samplePlaybackTelemetry,
-  type PlaybackTelemetrySession,
-} from "./playbackTelemetry";
 
 /**
  * 位于 `media.currentTime` 处那一帧的挂钟时间，取自播放列表的
@@ -197,7 +187,6 @@ export type MediaLifecycleProfile = Readonly<{
   retainSourceDuringGap: boolean;
   resetAudioOnSessionChange: boolean;
   softSwitch: "settings" | "disabled";
-  telemetry: boolean;
   flvOptions(mobileClient: boolean, syncHold: boolean): VideoJsMpegtsOptions;
 }>;
 
@@ -455,7 +444,6 @@ export const LIVE_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
   retainSourceDuringGap: true,
   resetAudioOnSessionChange: true,
   softSwitch: "settings",
-  telemetry: true,
   flvOptions: liveFlvPlaybackOptions,
 };
 
@@ -463,7 +451,6 @@ export const IPTV_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
   retainSourceDuringGap: false,
   resetAudioOnSessionChange: false,
   softSwitch: "disabled",
-  telemetry: false,
   flvOptions: () => iptvFlvPlaybackOptions(),
 };
 
@@ -644,7 +631,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const activeProxySessionIdRef = useRef<string | null>(null);
   const activeSourceKeyRef = useRef("");
   const activePlaybackKindRef = useRef<VideoJsPlaybackKind | null>(null);
-  const telemetrySessionRef = useRef<PlaybackTelemetrySession | null>(null);
   const hlsCoreRef = useRef<VideoJsHlsCore | null>(null);
   const mpegtsCoreRef = useRef<VideoJsMpegtsCore | null>(null);
   /** 当前媒体时间轴的身份；下方所有锚点都属于它。 */
@@ -755,7 +741,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     syncStreamAnchorRef.current = null;
     syncMediaTimeOriginRef.current = null;
     softSwitchInFlightRef.current = null;
-    telemetrySessionRef.current = null;
     setMediaAvailable(false);
     setRunning(false);
   }, []);
@@ -908,16 +893,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           if (!selectedSource) {
             throw new Error("播放源已失效");
           }
-          telemetrySessionRef.current = profile.telemetry
-            ? createPlaybackTelemetrySession({
-                sessionId: proxySessionId,
-                siteId: siteId ?? null,
-                sourceId: playbackSourceId(selectedSource),
-                protocol: playbackProtocol(selectedSource),
-                quality: qualityRef.current,
-                switchMode: "hard",
-              })
-            : null;
 
           // 3) 全新代理（新端口）+ 缓存穿透 query，
           // 使浏览器绝不会复用到上一个监听器的已关闭 keep-alive 连接。
@@ -1309,16 +1284,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             return null;
           }
           const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
-          telemetrySessionRef.current = profile.telemetry
-            ? createPlaybackTelemetrySession({
-                sessionId: `${proxySessionId}:soft:${sequence}`,
-                siteId: siteId ?? null,
-                sourceId: playbackSourceId(targetSource),
-                protocol: playbackProtocol(targetSource),
-                quality: qualityRef.current,
-                switchMode: "soft",
-              })
-            : null;
           // 换源在队列内发起，与代理所有权变更保持有序；媒体就绪的等待放到队列外。
           // 它最长 12 秒，把它留在队列里会让本实例后续的切源、硬重建和退出一起等。
           const ready = switchVideoJsPlaybackSource(player, localSource, targetKind);
@@ -1418,8 +1383,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const onPlaying = () => {
       if (!isCurrentMedia()) return;
       releaseMediaReady();
-      const telemetry = telemetrySessionRef.current;
-      if (telemetry) markTelemetryPlaying(telemetry, performance.now());
       setPaused(false);
       setRunning(true);
       setLoadError(null);
@@ -1442,14 +1405,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
     const onWaiting = () => {
       if (!isCurrentMedia()) return;
-      const telemetry = telemetrySessionRef.current;
-      if (telemetry) markTelemetryWaiting(telemetry, performance.now());
       onWaitingRef.current?.();
-    };
-    const onStalled = () => {
-      if (!isCurrentMedia()) return;
-      const telemetry = telemetrySessionRef.current;
-      if (telemetry) markTelemetryStalled(telemetry, performance.now());
     };
     // Android 全屏自动全屏依据解码后的帧尺寸决定，
     // 因此比例既要跟随首个元数据，也要跟随自适应阶梯在流中进行的后续分辨率切换。
@@ -1485,7 +1441,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     video.addEventListener("pause", onPause);
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("canplay", onCanPlay);
-    video.addEventListener("stalled", onStalled);
     video.addEventListener("ended", onEnded);
     video.addEventListener("loadedmetadata", syncAspectRatio);
     video.addEventListener("resize", syncAspectRatio);
@@ -1496,7 +1451,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       video.removeEventListener("pause", onPause);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("canplay", onCanPlay);
-      video.removeEventListener("stalled", onStalled);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("loadedmetadata", syncAspectRatio);
       video.removeEventListener("resize", syncAspectRatio);
@@ -1505,61 +1459,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   }, [effectivePlaybackKind, mediaKey, sessionKey, streamKey, releaseMediaReady]);
   // `sessionKey` 已包含在 `streamKey` 里，多列一次不会多跑 effect；它被单列是因为
   // `syncAspectRatio` 直接读它来判断画幅该不该跨媒体重建保留。
-
-  useEffect(() => {
-    if (!profile.telemetry) return;
-    if (typeof PerformanceObserver === "undefined") return;
-    if (!PerformanceObserver.supportedEntryTypes?.includes("longtask")) return;
-    let observer: PerformanceObserver | null = null;
-    try {
-      observer = new PerformanceObserver((list) => {
-        const telemetry = telemetrySessionRef.current;
-        if (!telemetry) return;
-        for (const entry of list.getEntries()) {
-          markTelemetryLongTask(telemetry, entry.duration);
-        }
-      });
-      observer.observe({ entryTypes: ["longtask"] });
-    } catch {
-      observer?.disconnect();
-      return;
-    }
-    return () => observer?.disconnect();
-  }, [profile.telemetry]);
-
-  useEffect(() => {
-    if (!profile.telemetry) return;
-    let cancelled = false;
-    let sampling = false;
-    const sample = async () => {
-      if (cancelled || sampling) return;
-      const telemetry = telemetrySessionRef.current;
-      const video = videoRef.current;
-      const proxySessionId = activeProxySessionIdRef.current;
-      if (!telemetry || !video || !proxySessionId) return;
-      sampling = true;
-      let proxy: StreamProxyTelemetry | null = null;
-      try {
-        proxy = await invokeCmd<StreamProxyTelemetry | null>("stream_proxy_telemetry", {
-          sessionId: proxySessionId,
-        });
-      } catch {
-        // 浏览器预览和正在关闭的原生会话在没有代理计数器的情况下
-        // 也能产出有用的媒体元素指标。
-      } finally {
-        sampling = false;
-      }
-      if (cancelled || telemetrySessionRef.current !== telemetry || videoRef.current !== video) {
-        return;
-      }
-      samplePlaybackTelemetry({ session: telemetry, video, proxy });
-    };
-    const interval = window.setInterval(() => void sample(), 2_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [hardStreamKey, mediaKey, profile.telemetry]);
 
   /**
    * 为没有节目时钟的容器推导挂钟锚点。

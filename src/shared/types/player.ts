@@ -38,27 +38,3 @@ export type StreamProxyTelemetry = {
    */
   first_media_at_ms: number | null;
 };
-
-export type PlaybackTelemetrySnapshot = {
-  session_id: string;
-  sampled_at_ms: number;
-  site_id: string | null;
-  source_id: string;
-  protocol: string;
-  quality: string | null;
-  switch_mode: "hard" | "soft";
-  startup_ms: number | null;
-  playing_ms: number;
-  waiting_count: number;
-  stalled_count: number;
-  rebuffer_ms: number;
-  buffered_seconds: number | null;
-  live_latency_seconds: number | null;
-  total_video_frames: number | null;
-  dropped_video_frames: number | null;
-  video_width: number;
-  video_height: number;
-  long_task_count: number;
-  long_task_ms: number;
-  proxy: StreamProxyTelemetry | null;
-};
