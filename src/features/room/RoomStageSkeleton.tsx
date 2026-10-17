@@ -1,5 +1,5 @@
 import { ChevronLeft } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { cn } from "@/lib/utils";
 import { isMobileClient } from "@/shared/clientPlatform";
@@ -16,10 +16,11 @@ import { PlayerStageSkeleton } from "@/shared/components/player/PlayerStageSkele
 import { sidePanelStartsOpen, usesStackedRoomSidePanel } from "./PlayerPane";
 
 /**
- * 直播间详情未落定时的加载骨架。
+ * 直播间详情未落定时的加载占位。
  *
- * 纯黑舞台仅保留返回按钮，右侧主播/弹幕面板保留信息骨架。
- * 控制栏不做骨架；桌面底部操作行仅保留高度，避免详情到达后布局跳动。
+ * 直播侧栏的内容（主播信息、页签、弹幕行）在数据到达前无法预测行数，用脉冲骨架
+ * 只会先画出一组会全部被替换的假内容，短请求下反而加剧闪动。这里保留黑舞台、
+ * 真实返回按钮、侧栏与底栏的几何占位和一个明确的加载指示：空间不跳，内容不假。
  *
  * 与真实布局共用同一组断点判据（`useCompactPlayerViewport` /
  * `sidePanelStartsOpen`），因此手机竖屏的「画面在上、聊天在下」与桌面端的
@@ -66,8 +67,15 @@ export function RoomStageSkeleton({ onBack }: { onBack: () => void }) {
               </MediaButton>
             }
             className={cn(stacked ? "h-auto aspect-video w-full flex-none" : "min-h-0 flex-1")}
-          />
-          {showSidePanel && <RoomSidePanelSkeleton stacked={stacked} />}
+          >
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 grid place-items-center"
+            >
+              <Spinner className="size-5 text-white/80" />
+            </div>
+          </PlayerStageSkeleton>
+          {showSidePanel && <RoomSidePanelLoading stacked={stacked} />}
         </div>
       </div>
       {/* 桌面底部操作行只占高，不模拟按钮；移动端与平板不占位（与真实页同一条判据）。 */}
@@ -84,13 +92,12 @@ export function RoomStageSkeleton({ onBack }: { onBack: () => void }) {
 }
 
 /**
- * 右侧/下方面板的骨架：主播信息卡 + 页签条 + 弹幕行。
+ * 右侧/下方面板的加载占位：只保留真实页的几处固定几何。
  *
- * 信息卡照抄 `RoomHostInfo` 的几何（44px 头像、两行文字、`rounded-xl` 卡片外壳），
- * 页签条与真实页签同高（`h-11`），弹幕行给错落的宽度 —— 等宽的骨架看起来像
- * 表格，不像聊天。
+ * 信息卡外壳、页签条高度与列表区都按真实布局摆好，内容位置只放一个加载指示；
+ * 弹幕行不再画错落的假宽度 —— 聊天内容的行数与宽度本来就要等上游给。
  */
-function RoomSidePanelSkeleton({ stacked }: { stacked: boolean }) {
+function RoomSidePanelLoading({ stacked }: { stacked: boolean }) {
   return (
     <aside
       aria-hidden
@@ -102,25 +109,11 @@ function RoomSidePanelSkeleton({ stacked }: { stacked: boolean }) {
       )}
     >
       <section className="shrink-0 border-b border-border px-2.5 py-2">
-        <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <Skeleton className="size-11 shrink-0 rounded-full ring-1 ring-border/80" />
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="h-3 w-40" />
-            </div>
-          </div>
-        </div>
+        <div className="h-[3.75rem] rounded-xl border border-border-subtle bg-card/75 shadow-sm" />
       </section>
-      <div className="flex h-11 shrink-0 items-center gap-4 border-b border-border/80 px-4">
-        {[0, 1, 2].map((index) => (
-          <Skeleton key={index} className="h-4 w-8" />
-        ))}
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 px-2.5 py-2.5">
-        {[92, 68, 84, 56, 76, 64, 88, 52, 72, 60].map((width, index) => (
-          <Skeleton key={index} className="h-3.5" style={{ width: `${width}%` }} />
-        ))}
+      <div className="h-11 shrink-0 border-b border-border/80" />
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <Spinner className="size-5 text-muted-foreground" />
       </div>
     </aside>
   );

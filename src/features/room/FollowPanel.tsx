@@ -8,7 +8,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -151,10 +150,10 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
           className="h-full min-h-0 p-2 pb-14"
         >
           {followsQuery.isLoading && (
-            <div className="flex flex-col gap-2">
-              {Array.from({ length: 5 }).map((_, index) => (
-                <Skeleton key={index} className="h-14 w-full" />
-              ))}
+            // 关注列表的行数无法预测：给一个居中的加载指示，不画一组随后会被
+            // 真实卡片整体替换的假条目。缓存刷新时列表仍在，不进入这个分支。
+            <div className="flex min-h-14 items-center justify-center">
+              <Spinner className="size-5 text-muted-foreground" aria-label="正在加载关注列表" />
             </div>
           )}
 
