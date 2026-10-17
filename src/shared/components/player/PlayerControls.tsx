@@ -320,6 +320,9 @@ export function formatPlaybackRateLabel(rate: number): string {
  *
  * `Menu.Popup` 自带定位与 top-layer 生命周期，不能与现有外壳叠用；这里仅借用
  * `Menu.Content` 的 roving tabindex、方向键、Home/End、Enter/Space 与 type-ahead。
+ *
+ * 必须是纵向 flex：外壳整体 `whitespace-nowrap`，若这里是普通块，相邻的
+ * `inline-flex` 行（`Button`）之间不能换行，会并排挤成一行撑出横向滚动条。
  */
 function EmbeddedMenuContent({ children }: { children: ReactNode }) {
   const { menu, state, contentId, core } = useMenuContext();
@@ -340,6 +343,7 @@ function EmbeddedMenuContent({ children }: { children: ReactNode }) {
       id={contentId}
       {...core.getContentAttrs()}
       data-open={state.open || undefined}
+      className="flex min-w-0 flex-col"
       onKeyDown={handleKeyDown}
     >
       {children}
@@ -747,16 +751,10 @@ export function PlayerControls({
             setAsrMenuOpen(false);
           }}
         >
-          {/* nowrap 下 `items-start` 子项按 max-content 定宽，须 `max-w-full` 才能 truncate，
-              否则长提示（如下载进度）撑出按钮，弹层出现横向滚动条。 */}
           <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
-            <span className="max-w-full truncate">字幕（本地）</span>
+            <span className="truncate">字幕（本地）</span>
             {asrDisabled && (
-              <span
-                className={cn("max-w-full truncate text-xs font-normal", glassMutedTextClass())}
-              >
-                {asrLabel}
-              </span>
+              <span className={cn("text-xs font-normal", glassMutedTextClass())}>{asrLabel}</span>
             )}
           </span>
           {asrBusy ? (
