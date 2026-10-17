@@ -1,4 +1,5 @@
 import { type RefObject, useCallback, useLayoutEffect, useRef } from "react";
+import { detailsScrollTopFor, scrollDetailsContent } from "@/shared/gestures/detailsScroll";
 import {
   clampDetailsSharePercent,
   DETAILS_MOMENTUM_MIN_VELOCITY,
@@ -115,15 +116,6 @@ function contentScrollers(target: Element, viewport: HTMLElement): HTMLElement[]
     }
   }
   return scrollers;
-}
-
-function scrollContent(scrollers: HTMLElement[], delta: number): void {
-  for (const node of scrollers) {
-    const before = node.scrollTop;
-    node.scrollTop += delta;
-    delta -= node.scrollTop - before;
-    if (Math.abs(delta) < 0.5) break;
-  }
 }
 
 /**
@@ -282,10 +274,8 @@ export function useDetailsResize({
         const { delta, velocity: nextVelocity } = detailsMomentumStep(momentum.velocity, dt);
         momentum.velocity = nextVelocity;
         const previousPercent = momentum.percent;
-        const scrollTopBefore = momentum.scrollers.reduce(
-          (sum, node) => sum + Math.max(0, node.scrollTop),
-          0,
-        );
+        // 上滑与纯扩大布局的帧不读取滚动链；下滑先回顶才需要真实 scrollTop。
+        const scrollTopBefore = detailsScrollTopFor(momentum.scrollers, delta);
         const next = detailsContentScrollStep(
           previousPercent,
           delta,
@@ -295,16 +285,14 @@ export function useDetailsResize({
           momentum.minPercent,
         );
         momentum.percent = next.percent;
-        callbacksRef.current.onPreview(next.percent);
-        scrollContent(momentum.scrollers, next.scrollDelta);
-        const scrollTopAfter = momentum.scrollers.reduce(
-          (sum, node) => sum + Math.max(0, node.scrollTop),
-          0,
-        );
+        // 先消费内容滚动、再写占比：写 grid 会改布局，之后任何 scrollTop 读写都要
+        // 先结算刚写的布局。纯内容滚动帧不写占比，也不触发整张网格重排。
+        const scrolled = scrollDetailsContent(momentum.scrollers, next.scrollDelta);
+        if (Math.abs(next.percent - previousPercent) > 1e-9) {
+          callbacksRef.current.onPreview(next.percent);
+        }
         // 占比与滚动都不再变化（上限处内容也到底了）：继续跑只是空转，直接停下并提交。
-        const stalled =
-          Math.abs(next.percent - previousPercent) < 1e-9 &&
-          Math.abs(scrollTopAfter - scrollTopBefore) < 0.5;
+        const stalled = Math.abs(next.percent - previousPercent) < 1e-9 && Math.abs(scrolled) < 0.5;
         if (stalled || Math.abs(momentum.velocity) < DETAILS_MOMENTUM_STOP_VELOCITY) {
           stopMomentum(true);
           return;
@@ -377,10 +365,7 @@ export function useDetailsResize({
         if (Math.abs(offsetY) <= Math.abs(offsetX)) return;
         const metrics = measureResize();
         if (!metrics) return;
-        const scrollTop = press.scrollers.reduce(
-          (sum, node) => sum + Math.max(0, node.scrollTop),
-          0,
-        );
+        const scrollTop = detailsScrollTopFor(press.scrollers, deltaY);
         const next = detailsContentScrollStep(
           metrics.percent,
           deltaY,
@@ -438,7 +423,7 @@ export function useDetailsResize({
         const next = detailsContentScrollStep(
           state.lastPercent,
           delta,
-          state.scrollers.reduce((sum, node) => sum + Math.max(0, node.scrollTop), 0),
+          detailsScrollTopFor(state.scrollers, delta),
           state.containerHeight,
           state.maxPercent,
           state.minPercent,
@@ -456,13 +441,14 @@ export function useDetailsResize({
         event.preventDefault();
         state.active = true;
         state.lastPercent = next.percent;
+        // 与惯性同一读写顺序：滚动先于占比写入，避免写 grid 后立刻回读滚动几何。
+        scrollDetailsContent(state.scrollers, next.scrollDelta);
         if (changed && previewFrameRef.current === null) {
           previewFrameRef.current = window.requestAnimationFrame(() => {
             previewFrameRef.current = null;
             if (stateRef.current === state) callbacksRef.current.onPreview(state.lastPercent);
           });
         }
-        scrollContent(state.scrollers, next.scrollDelta);
       };
       /** 抬手/取消共用：`cancel` 为真时绝不接惯性（合成器收回手势，方向与速度都无意义）。 */
       const end = (event: TouchEvent, cancel: boolean) => {
