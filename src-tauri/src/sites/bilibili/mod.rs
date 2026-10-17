@@ -373,7 +373,7 @@ impl BilibiliSite {
     }
 
     /// 五个 GET JSON 包装共享的传输与校验实现：header 注入、逐对追加 query、
-    /// 429 检查、HTTP 状态检查与 `code != 0` 解包。
+    /// 429/412 检查、HTTP 状态检查与 `code != 0` 解包。
     ///
     /// `public_headers = true` 时不引导 buvid 也不携带 cookie（见
     /// [`Self::get_public_json`]）；`checks` 决定校验档位。
@@ -434,6 +434,15 @@ impl BilibiliSite {
                 AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili")
                     .with_site("bilibili")
                     .retryable(),
+            );
+        }
+        // 412 是风控拦截，与 429 同属「暂时受限」而不是请求本身有问题。单独给一个
+        // 稳定错误码，让调用方（如 APP 推荐的发布日期补齐）按结构分类并进入冷却，
+        // 而不是去解析 message。响应体可能是一整页 HTML，不能带进错误信息。
+        if strict && status.as_u16() == 412 {
+            return Err(
+                AppError::new("bilibili_restricted", "HTTP 412 from Bilibili")
+                    .with_site("bilibili"),
             );
         }
         if !status.is_success() {
@@ -818,11 +827,13 @@ fn map_http(e: reqwest::Error) -> AppError {
 
 /// GET JSON 包装的响应校验档位。
 enum ResponseChecks {
-    /// 429 → `bilibili_rate_limit`；HTTP 错误信息附带响应体摘要；解包 `code != 0`。
+    /// 429 → `bilibili_rate_limit`、412 → `bilibili_restricted`；HTTP 错误信息附带
+    /// 响应体摘要；解包 `code != 0`。
     Full,
-    /// 429 → `bilibili_rate_limit`；HTTP 错误信息不带摘要；解包 `code != 0`。
+    /// 429 → `bilibili_rate_limit`、412 → `bilibili_restricted`；HTTP 错误信息不带
+    /// 摘要；解包 `code != 0`。
     Standard,
-    /// 仅要求 HTTP 成功：不检查 429，也不解包 `code`（nav / WBI 密钥路径）。
+    /// 仅要求 HTTP 成功：不单独识别 429/412，也不解包 `code`（nav / WBI 密钥路径）。
     Raw,
 }
 
@@ -1069,6 +1080,67 @@ mod live_tests {
         .expect_err("失效凭据应直接失败");
         assert_eq!(error.code, "bilibili_app_auth_required");
         assert_eq!(calls.get(), 1, "失效结论不该被重试拖慢");
+    }
+
+    /// 412/429 是暂时受限，必须给稳定错误码；412 的响应体可能是整页 HTML，
+    /// 不能像其他 HTTP 错误那样附进 message（会进日志、进错误卡）。
+    #[tokio::test]
+    async fn restricted_statuses_map_to_structured_codes_without_body() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        async fn classify(status: &'static str, body: &'static str) -> AppResult<()> {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 2048];
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let length = stream.read(&mut buffer).unwrap();
+                    request.extend_from_slice(&buffer[..length]);
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+            let site = BilibiliSite::new(reqwest::Client::new(), String::new());
+            let result = site
+                .get_json_request(
+                    &format!("http://{address}/x/v3/fav/resource/infos"),
+                    &[("platform", "web".to_owned())],
+                    true,
+                    ResponseChecks::Full,
+                )
+                .await;
+            server.join().unwrap();
+            result.map(|_| ())
+        }
+
+        let error = classify(
+            "412 Precondition Failed",
+            "<!DOCTYPE html><html>denied</html>",
+        )
+        .await
+        .expect_err("412 不能当成功响应");
+        assert_eq!(error.code, "bilibili_restricted");
+        assert_eq!(error.site.as_deref(), Some("bilibili"));
+        assert!(
+            !error.message.contains("<!DOCTYPE"),
+            "响应体不得进入错误信息"
+        );
+
+        let error = classify("429 Too Many Requests", r#"{"code":-509}"#)
+            .await
+            .expect_err("429 不能当成功响应");
+        assert_eq!(error.code, "bilibili_rate_limit");
+        assert!(error.retryable);
+        assert_eq!(error.site.as_deref(), Some("bilibili"));
     }
 
     #[test]

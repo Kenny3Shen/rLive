@@ -4,14 +4,15 @@
 //! APP 不给 bvid，在本地按完整整数 aid 转换，避免每条卡片补一次 view 请求。
 //! 发布时间缺失时，在去重、截取后通过资源信息接口一次批量补齐。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use reqwest::Url;
 use serde_json::Value;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::video::{VideoDimension, VideoItem, VideoListPage};
 
 use super::{BilibiliSite, avatar_thumb, strip_em_tags, video_cover, video_dimension, video_err};
@@ -36,6 +37,181 @@ const FEED_BATCHES: usize = 4;
 /// 日期是补充信息，不能让慢请求拖住整页推荐。
 const PUBDATE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// 发布日期补齐用的公开元数据接口。
+///
+/// 与推荐流本身是两个上游：推荐成功、这条却可能被风控拒绝（实测连续 412）。
+/// 它只补「发布日期」这一项可选信息，因此任何失败都不该影响列表。
+const PUBDATE_ENDPOINT: &str = "https://api.bilibili.com/x/v3/fav/resource/infos";
+
+/// 被风控/限流拒绝后的冷却时长。
+///
+/// 412 与 429 是上游对**这台设备**的暂时限制：短时间重试只会继续被拒，还会让
+/// 限制持续得更久。实测日志里两次 412 相隔不到 1 秒，说明此前每次推荐都会重试
+/// 一次；5 分钟是「让限制自然过去」与「不要让日期空缺太久」之间的折中。
+const PUBDATE_RESTRICTED_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+/// 其他传输/解析失败后的短冷却。
+///
+/// 网络抖动、超时、JSON 形状变化都可能在下一次调用时恢复，30 秒足够跨过多数
+/// 瞬时故障；再短就会让每一条推荐都重新付一次 2 秒超时的代价。
+const PUBDATE_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// 发布日期缓存的上限（条）。
+///
+/// 只缓存已经验证为视频、且 pubtime 为正整数的真实日期。条目按插入顺序淘汰，
+/// 20 条一页的推荐流连续刷约 100 轮才会填满；这个上限保证长时间运行也不会无限
+/// 增长，同时远大于一次会话里会反复看到的条目数。
+const PUBDATE_CACHE_LIMIT: usize = 2048;
+
+/// 进程级发布日期门控。
+///
+/// [`BilibiliSite`] 按 IPC 命令新建（见 `commands::video::resolve_bilibili`），
+/// 缓存与冷却必须跨实例共享，否则每条命令都会重新请求一次、冷却也形同虚设 ——
+/// 与 [`super::DEVICE_BUVIDS`] 是同一类进程级状态。只放内存：日期缺失只会让卡片
+/// 少一行相对时间，不值得落盘。
+fn pubdate_gate() -> &'static PubdateGate {
+    static GATE: OnceLock<PubdateGate> = OnceLock::new();
+    GATE.get_or_init(PubdateGate::default)
+}
+
+/// 发布日期补齐的共享状态：已验证日期、冷却截止时间、单一在途标记。
+#[derive(Default)]
+struct PubdateState {
+    dates: HashMap<u64, i64>,
+    /// 插入顺序，用于达到上限时淘汰最早的一批。
+    order: VecDeque<u64>,
+    cooldown_until: Option<Instant>,
+    /// 是否已有一次补齐在途。并发调用直接返回列表，不排队 —— 日期是可选信息，
+    /// 让它拖住推荐流是本末倒置。
+    in_flight: bool,
+}
+
+#[derive(Default)]
+struct PubdateGate {
+    state: Mutex<PubdateState>,
+}
+
+/// 一次补齐为何结束；决定冷却时长与日志分类。
+enum PubdateFailure {
+    /// 412 / 429：上游明确限制，进入长冷却。
+    Restricted,
+    /// 传输、解析、接口 code 等其他失败：短冷却。
+    Other,
+    /// 被取消（页面关闭等）或超时：短冷却，同时释放门控。
+    Abandoned,
+}
+
+impl PubdateGate {
+    /// 读取已缓存的日期并写回缺日期的条目；不发起任何请求。
+    fn apply_cached(&self, items: &mut [VideoItem]) {
+        let Ok(state) = self.state.lock() else { return };
+        if state.dates.is_empty() {
+            return;
+        }
+        for item in items.iter_mut().filter(|item| item.pubdate <= 0) {
+            if let Some(pubdate) = decimal_u64(&item.aid).and_then(|aid| state.dates.get(&aid)) {
+                item.pubdate = *pubdate;
+            }
+        }
+    }
+
+    /// 是否允许发起一次补齐。冷却中或有在途请求时返回 false（调用方立即返回列表）。
+    fn try_begin(&self, now: Instant) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.in_flight {
+            return false;
+        }
+        if state.cooldown_until.is_some_and(|until| now < until) {
+            return false;
+        }
+        state.cooldown_until = None;
+        state.in_flight = true;
+        true
+    }
+
+    /// 成功：写入缓存、清掉冷却、释放门控。
+    fn finish_success(&self, dates: Vec<(u64, i64)>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.in_flight = false;
+        state.cooldown_until = None;
+        for (aid, pubdate) in dates {
+            if pubdate <= 0 || aid == 0 {
+                continue;
+            }
+            if !state.dates.contains_key(&aid) {
+                state.order.push_back(aid);
+            }
+            state.dates.insert(aid, pubdate);
+            while state.order.len() > PUBDATE_CACHE_LIMIT {
+                if let Some(evicted) = state.order.pop_front() {
+                    state.dates.remove(&evicted);
+                }
+            }
+        }
+    }
+
+    /// 失败：释放门控并按分类进入冷却。
+    fn finish_failure(&self, now: Instant, failure: PubdateFailure) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.in_flight = false;
+        state.cooldown_until = Some(
+            now + match failure {
+                PubdateFailure::Restricted => PUBDATE_RESTRICTED_COOLDOWN,
+                PubdateFailure::Other | PubdateFailure::Abandoned => PUBDATE_FAILURE_COOLDOWN,
+            },
+        );
+    }
+}
+
+/// 在途标记的 RAII 释放器。
+///
+/// 补齐 future 被整体丢弃（页面关闭、任务取消）时 `finish_*` 不会执行，门控会永久
+/// 卡在 `in_flight = true`，之后的推荐再也不补日期。Drop 里按「短冷却」收尾：
+/// 取消不是上游的错，但也别让它立刻再发一次。
+struct InFlight<'a> {
+    gate: &'a PubdateGate,
+    finished: bool,
+}
+
+impl InFlight<'_> {
+    fn success(mut self, dates: Vec<(u64, i64)>) {
+        self.finished = true;
+        self.gate.finish_success(dates);
+    }
+
+    fn fail(mut self, failure: PubdateFailure) {
+        self.finished = true;
+        self.gate.finish_failure(Instant::now(), failure);
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.gate
+                .finish_failure(Instant::now(), PubdateFailure::Abandoned);
+        }
+    }
+}
+
+fn pubdate_failure(error: &AppError) -> PubdateFailure {
+    // 按结构化错误码分类，不解析 message：412/429 的响应体可能是整页 HTML。
+    if matches!(
+        error.code.as_str(),
+        "bilibili_restricted" | "bilibili_rate_limit"
+    ) {
+        PubdateFailure::Restricted
+    } else {
+        PubdateFailure::Other
+    }
+}
+
 const MAX_AID: u64 = 1 << 51;
 const BV_XOR: u64 = 23_442_827_791_579;
 const BV_TABLE: &[u8; 58] = b"FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf";
@@ -59,11 +235,11 @@ impl BilibiliSite {
     pub(super) async fn video_app_recommend(&self, page_size: u32) -> AppResult<VideoListPage> {
         let params = app_feed_params();
         let mut page = collect_app_feed(page_size, || self.get_app_feed("", &params)).await?;
-        fill_app_feed_pubdates(&mut page.items, |resources| async move {
+        fill_app_feed_pubdates(&mut page.items, pubdate_gate(), |resources| async move {
             // 实测一次支持整页（最多 30 条），pubtime 与 view.pubdate 一致。
             // 公开元数据不带 Web Cookie、TV 凭据，也不额外请求 Tags / UP 主信息。
             self.get_public_json(
-                "https://api.bilibili.com/x/v3/fav/resource/infos",
+                PUBDATE_ENDPOINT,
                 &[("resources", resources), ("platform", "web".to_owned())],
             )
             .await
@@ -74,32 +250,91 @@ impl BilibiliSite {
 }
 
 /// 只查询最终返回且缺日期的稿件；补齐失败保持原卡片与分页语义，不回退推荐源。
-async fn fill_app_feed_pubdates<F, Fut>(items: &mut [VideoItem], fetch: F)
+///
+/// 顺序：先套用已有缓存，再判断是否还缺日期，最后才尝试发起至多一次批量请求。
+/// 冷却中或已有补齐在途时直接返回 —— 可选日期不该让推荐列表排队等待。
+async fn fill_app_feed_pubdates<F, Fut>(items: &mut [VideoItem], gate: &PubdateGate, fetch: F)
 where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = AppResult<String>>,
 {
+    gate.apply_cached(items);
+    let missing = items.iter().filter(|item| item.pubdate <= 0).count();
+    if missing == 0 {
+        return;
+    }
+    if !gate.try_begin(Instant::now()) {
+        // 冷却中/在途时是预期分支，不打日志，避免每个推荐请求都刷一行。
+        return;
+    }
+    let in_flight = InFlight {
+        gate,
+        finished: false,
+    };
     let resources = items
         .iter()
         .filter(|item| item.pubdate <= 0)
         .map(|item| format!("{}:2", item.aid))
         .collect::<Vec<_>>()
         .join(",");
-    if resources.is_empty() {
-        return;
-    }
     match tokio::time::timeout(PUBDATE_TIMEOUT, fetch(resources)).await {
-        Ok(Ok(raw)) => {
-            if let Err(error) = apply_app_feed_pubdates(items, &raw) {
-                tracing::warn!(%error, "APP 推荐发布日期解析失败，保留推荐列表");
+        Ok(Ok(raw)) => match parse_app_feed_pubdates(&raw) {
+            Ok(dates) => {
+                let applied = apply_pubdates(items, &dates);
+                tracing::debug!(
+                    endpoint = PUBDATE_ENDPOINT,
+                    missing,
+                    applied,
+                    "APP 推荐发布日期补齐完成"
+                );
+                in_flight.success(dates.into_iter().collect());
             }
+            Err(error) => {
+                // 只记分类与错误码：解析失败可能带着上游整页 HTML，不能进日志。
+                tracing::warn!(
+                    endpoint = PUBDATE_ENDPOINT,
+                    classification = "parse",
+                    code = %error.code,
+                    missing,
+                    cooldown_secs = PUBDATE_FAILURE_COOLDOWN.as_secs(),
+                    "APP 推荐发布日期解析失败，保留推荐列表并短暂冷却"
+                );
+                in_flight.fail(PubdateFailure::Other);
+            }
+        },
+        Ok(Err(error)) => {
+            let failure = pubdate_failure(&error);
+            let (classification, cooldown) = match failure {
+                PubdateFailure::Restricted => ("restricted", PUBDATE_RESTRICTED_COOLDOWN),
+                PubdateFailure::Other | PubdateFailure::Abandoned => {
+                    ("transport", PUBDATE_FAILURE_COOLDOWN)
+                }
+            };
+            tracing::warn!(
+                endpoint = PUBDATE_ENDPOINT,
+                classification,
+                code = %error.code,
+                missing,
+                cooldown_secs = cooldown.as_secs(),
+                "APP 推荐发布日期补齐失败，保留推荐列表并冷却"
+            );
+            in_flight.fail(failure);
         }
-        Ok(Err(error)) => tracing::warn!(%error, "APP 推荐发布日期补齐失败，保留推荐列表"),
-        Err(_) => tracing::warn!("APP 推荐发布日期补齐超时，保留推荐列表"),
+        Err(_) => {
+            tracing::warn!(
+                endpoint = PUBDATE_ENDPOINT,
+                classification = "timeout",
+                missing,
+                cooldown_secs = PUBDATE_FAILURE_COOLDOWN.as_secs(),
+                "APP 推荐发布日期补齐超时，保留推荐列表并短暂冷却"
+            );
+            in_flight.fail(PubdateFailure::Abandoned);
+        }
     }
 }
 
-fn apply_app_feed_pubdates(items: &mut [VideoItem], raw: &str) -> AppResult<()> {
+/// 解析资源信息响应，只保留验证为视频且发布日期为正整数的条目。
+fn parse_app_feed_pubdates(raw: &str) -> AppResult<HashMap<u64, i64>> {
     let root: Value = serde_json::from_str(raw)
         .map_err(|error| video_err(format!("APP 推荐发布日期 JSON: {error}")))?;
     if root.get("code").and_then(Value::as_i64) != Some(0) {
@@ -109,7 +344,7 @@ fn apply_app_feed_pubdates(items: &mut [VideoItem], raw: &str) -> AppResult<()> 
         .get("data")
         .and_then(Value::as_array)
         .ok_or_else(|| video_err("APP 推荐发布日期接口缺少 data"))?;
-    let dates: HashMap<u64, i64> = data
+    Ok(data
         .iter()
         .filter_map(|entry| {
             // type=2 才是视频；ctime 是创建时间、fav_time 是收藏时间，都不是发布日期。
@@ -123,13 +358,26 @@ fn apply_app_feed_pubdates(items: &mut [VideoItem], raw: &str) -> AppResult<()> 
                 .and_then(positive_i64)?;
             Some((aid, pubdate))
         })
-        .collect();
+        .collect())
+}
+
+/// 按 aid 关联写回缺失日期，不依赖上游顺序；返回实际填上的条数。
+fn apply_pubdates(items: &mut [VideoItem], dates: &HashMap<u64, i64>) -> usize {
+    let mut applied = 0;
     for item in items.iter_mut().filter(|item| item.pubdate <= 0) {
-        // 按 aid 关联，不依赖上游顺序；缺项、畸形日期不影响其他条目。
+        // 缺项、畸形日期不影响其他条目。
         if let Some(pubdate) = decimal_u64(&item.aid).and_then(|aid| dates.get(&aid)) {
             item.pubdate = *pubdate;
+            applied += 1;
         }
     }
+    applied
+}
+
+#[cfg(test)]
+fn apply_app_feed_pubdates(items: &mut [VideoItem], raw: &str) -> AppResult<()> {
+    let dates = parse_app_feed_pubdates(raw)?;
+    apply_pubdates(items, &dates);
     Ok(())
 }
 
@@ -504,8 +752,9 @@ mod tests {
         let mut expected = serde_json::to_value(&page).unwrap();
         expected["items"][0]["pubdate"] = json!(1320850533);
         expected["items"][2]["pubdate"] = json!(1759000000);
+        let gate = PubdateGate::default();
         let mut calls = 0;
-        fill_app_feed_pubdates(&mut page.items, |resources| {
+        fill_app_feed_pubdates(&mut page.items, &gate, |resources| {
             calls += 1;
             assert_eq!(resources, "170001:2,117274736399643:2");
             ready(Ok(json!({ "code": 0, "data": [
@@ -526,10 +775,11 @@ mod tests {
     async fn skips_pubdate_request_when_no_dates_are_missing() {
         let mut entry = card(170001, "av");
         entry["pubdate"] = json!("1320850533");
+        let gate = PubdateGate::default();
         let mut items = parse_app_feed(&body(vec![entry])).unwrap();
         for items in [&mut items[..], &mut [][..]] {
             let mut calls = 0;
-            fill_app_feed_pubdates(items, |_| {
+            fill_app_feed_pubdates(items, &gate, |_| {
                 calls += 1;
                 ready(Ok(String::new()))
             })
@@ -575,6 +825,7 @@ mod tests {
 
     #[tokio::test]
     async fn pubdate_failures_preserve_the_feed() {
+        let gate = PubdateGate::default();
         let mut items = parse_app_feed(&body(vec![card(170001, "av")])).unwrap();
         let expected = serde_json::to_value(&items).unwrap();
         for result in [
@@ -587,17 +838,237 @@ mod tests {
             Ok(r#"{"code":0,"data":{}}"#.to_owned()),
             Ok(r#"{"code":0,"data":[]}"#.to_owned()),
         ] {
-            fill_app_feed_pubdates(&mut items, |_| ready(result)).await;
+            // 每次失败都会进入冷却；逐个用例重置，保持「每次失败都保留列表」的独立断言。
+            *gate.state.lock().unwrap() = PubdateState::default();
+            fill_app_feed_pubdates(&mut items, &gate, |_| ready(result)).await;
             assert_eq!(serde_json::to_value(&items).unwrap(), expected);
         }
     }
 
+    fn missing_dates_items() -> Vec<VideoItem> {
+        parse_app_feed(&body(vec![card(170001, "av"), card(455017605, "av")])).unwrap()
+    }
+
+    /// 成功补齐后，同一批 aid 再出现时只读缓存，不再请求；已有日期不被缓存覆盖。
+    #[tokio::test]
+    async fn cached_dates_skip_the_next_request() {
+        let gate = PubdateGate::default();
+        let mut items = missing_dates_items();
+        let mut calls = 0;
+        fill_app_feed_pubdates(&mut items, &gate, |_| {
+            calls += 1;
+            ready(Ok(json!({ "code": 0, "data": [
+                { "id": 170001, "type": 2, "pubtime": 1320850533 },
+                { "id": 455017605, "type": 2, "pubtime": 1584949634 }
+            ] })
+            .to_string()))
+        })
+        .await;
+        assert_eq!(calls, 1);
+        assert_eq!(items[0].pubdate, 1320850533);
+        assert_eq!(items[1].pubdate, 1584949634);
+
+        let mut again = missing_dates_items();
+        fill_app_feed_pubdates(&mut again, &gate, |_| {
+            calls += 1;
+            ready(Ok(String::new()))
+        })
+        .await;
+        assert_eq!(calls, 1, "缓存命中时不得再发请求");
+        assert_eq!(again[0].pubdate, 1320850533);
+        assert_eq!(again[1].pubdate, 1584949634);
+
+        let mut dated = missing_dates_items();
+        dated[0].pubdate = 170001;
+        fill_app_feed_pubdates(&mut dated, &gate, |_| {
+            calls += 1;
+            ready(Ok(String::new()))
+        })
+        .await;
+        assert_eq!(dated[0].pubdate, 170001, "已有日期不因缓存改写");
+        assert_eq!(calls, 1);
+    }
+
+    /// 412/429 进入长冷却：冷却期内并发或后续调用都立即返回列表，不排队也不重试。
+    #[tokio::test]
+    async fn restricted_failure_blocks_requests_during_cooldown() {
+        let gate = PubdateGate::default();
+        let mut items = missing_dates_items();
+        let mut calls = 0;
+        fill_app_feed_pubdates(&mut items, &gate, |_| {
+            calls += 1;
+            ready(Err(AppError::new(
+                "bilibili_restricted",
+                "HTTP 412 from Bilibili",
+            )))
+        })
+        .await;
+        assert_eq!(calls, 1);
+        assert!(
+            items.iter().all(|item| item.pubdate == 0),
+            "失败保留推荐列表"
+        );
+
+        fill_app_feed_pubdates(&mut items, &gate, |_| {
+            calls += 1;
+            ready(Ok(String::new()))
+        })
+        .await;
+        assert_eq!(calls, 1, "长冷却期内不得请求");
+        let state = gate.state.lock().unwrap();
+        let until = state.cooldown_until.expect("412 必须进入冷却");
+        assert!(until > Instant::now() + PUBDATE_RESTRICTED_COOLDOWN / 2);
+    }
+
+    /// 冷却到期后允许且只允许一次探测；成功后清掉冷却并恢复缓存。
+    #[tokio::test]
+    async fn cooldown_after_other_failure_expires_into_one_probe() {
+        let gate = PubdateGate::default();
+        let mut items = missing_dates_items();
+        let mut calls = 0;
+        fill_app_feed_pubdates(&mut items, &gate, |_| {
+            calls += 1;
+            ready(Err(video_err("网络不可用")))
+        })
+        .await;
+        assert_eq!(calls, 1);
+        // 到期：模拟时间已过，下一次允许探测。
+        gate.state.lock().unwrap().cooldown_until = Some(Instant::now());
+
+        fill_app_feed_pubdates(&mut items, &gate, |_| {
+            calls += 1;
+            ready(Ok(json!({ "code": 0, "data": [
+                { "id": 170001, "type": 2, "pubtime": 1320850533 }
+            ] })
+            .to_string()))
+        })
+        .await;
+        assert_eq!(calls, 2, "到期后应探测一次");
+        assert_eq!(items[0].pubdate, 1320850533);
+        assert_eq!(gate.state.lock().unwrap().cooldown_until, None);
+    }
+
+    /// 已有补齐在途时，并发调用立即返回，不发第二个请求，也不排队等待。
+    #[tokio::test]
+    async fn concurrent_calls_do_not_queue_a_second_request() {
+        let gate = std::sync::Arc::new(PubdateGate::default());
+        let task_gate = gate.clone();
+        let mut first_items = missing_dates_items();
+        let task = tokio::spawn(async move {
+            fill_app_feed_pubdates(&mut first_items, &task_gate, |_| std::future::pending()).await;
+            first_items
+        });
+        // 等第一个任务真正拿到在途标记。
+        for _ in 0..100 {
+            if gate.state.lock().unwrap().in_flight {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(gate.state.lock().unwrap().in_flight);
+        assert!(gate.state.lock().unwrap().cooldown_until.is_none());
+
+        let mut second_items = missing_dates_items();
+        let mut calls = 0;
+        fill_app_feed_pubdates(&mut second_items, &gate, |_| {
+            calls += 1;
+            ready(Ok(String::new()))
+        })
+        .await;
+        assert_eq!(calls, 0, "在途期间不得发起第二个请求");
+        assert!(second_items.iter().all(|item| item.pubdate == 0));
+
+        task.abort();
+        let _ = task.await;
+        // 取消（Drop）必须释放门控，否则之后的推荐永远不再补日期。
+        assert!(!gate.state.lock().unwrap().in_flight);
+        assert!(gate.state.lock().unwrap().cooldown_until.is_some());
+    }
+
+    /// 成功补齐后，下一次调用的日期由缓存直接给出：不请求、也不进入在途。
+    ///
+    /// 这是「先读 feed 自带日期与缓存，只批量请求剩余缺项」的直接断言：
+    /// 全部缺项都被缓存覆盖时，连门控都不该占用。
+    #[tokio::test]
+    async fn cache_hit_does_not_touch_the_gate() {
+        let gate = PubdateGate::default();
+        gate.finish_success(vec![(170001, 1320850533), (455017605, 1584949634)]);
+        let mut items = missing_dates_items();
+        let mut calls = 0;
+        fill_app_feed_pubdates(&mut items, &gate, |_| {
+            calls += 1;
+            ready(Ok(String::new()))
+        })
+        .await;
+        assert_eq!(calls, 0);
+        assert!(items.iter().all(|item| item.pubdate > 0));
+        let state = gate.state.lock().unwrap();
+        assert!(!state.in_flight, "缓存命中不得占用在途标记");
+        assert!(state.cooldown_until.is_none());
+    }
+
+    /// 只请求仍缺日期的剩余项：已有日期（含 feed 自带）不进 resources。
+    #[tokio::test]
+    async fn only_missing_items_are_requested() {
+        let gate = PubdateGate::default();
+        let mut items = missing_dates_items();
+        items[0].pubdate = 1320850533;
+        fill_app_feed_pubdates(&mut items, &gate, |resources| {
+            assert_eq!(resources, "455017605:2", "已有日期不重复请求");
+            ready(Ok(json!({ "code": 0, "data": [
+                { "id": "455017605", "type": 2, "pubtime": 1584949634 }
+            ] })
+            .to_string()))
+        })
+        .await;
+        assert_eq!(items[1].pubdate, 1584949634);
+    }
+
+    /// 超时同样释放门控；之后到期可以恢复探测。
+    #[tokio::test]
+    async fn timeout_releases_the_in_flight_gate() {
+        let gate = PubdateGate::default();
+        let mut items = missing_dates_items();
+        tokio::time::timeout(
+            PUBDATE_TIMEOUT + Duration::from_secs(1),
+            fill_app_feed_pubdates(&mut items, &gate, |_| std::future::pending()),
+        )
+        .await
+        .expect("超时也必须返回推荐列表");
+        assert!(!gate.state.lock().unwrap().in_flight, "超时后门控必须释放");
+        assert!(gate.state.lock().unwrap().cooldown_until.is_some());
+    }
+
+    /// 只缓存验证为正整数的真实日期，畸形值不进缓存。
+    #[test]
+    fn gate_never_caches_invalid_dates() {
+        let gate = PubdateGate::default();
+        gate.finish_success(vec![(170001, 0), (455017605, -1), (882584971, 1320850533)]);
+        let state = gate.state.lock().unwrap();
+        assert!(!state.dates.contains_key(&170001));
+        assert!(!state.dates.contains_key(&455017605));
+        assert_eq!(state.dates.get(&882584971), Some(&1320850533));
+    }
+
+    /// 缓存有界：超过上限时淘汰最早写入的条目，不会无限增长。
+    #[test]
+    fn gate_cache_is_bounded() {
+        let gate = PubdateGate::default();
+        let total = PUBDATE_CACHE_LIMIT + 10;
+        gate.finish_success((1..=total as u64).map(|aid| (aid, 1320850533)).collect());
+        let state = gate.state.lock().unwrap();
+        assert_eq!(state.dates.len(), PUBDATE_CACHE_LIMIT);
+        assert!(!state.dates.contains_key(&1));
+        assert!(state.dates.contains_key(&(total as u64)));
+    }
+
     #[tokio::test]
     async fn pubdate_timeout_does_not_block_the_feed() {
+        let gate = PubdateGate::default();
         let mut items = parse_app_feed(&body(vec![card(170001, "av")])).unwrap();
         tokio::time::timeout(
             PUBDATE_TIMEOUT + Duration::from_secs(1),
-            fill_app_feed_pubdates(&mut items, |_| std::future::pending()),
+            fill_app_feed_pubdates(&mut items, &gate, |_| std::future::pending()),
         )
         .await
         .expect("日期请求未完成也必须返回推荐列表");
