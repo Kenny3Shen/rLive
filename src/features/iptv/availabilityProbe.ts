@@ -10,6 +10,7 @@ import {
 } from "./availability";
 import { useIptvAvailabilityStore } from "./availabilityStore";
 import type { IptvChannel } from "./types";
+import { errorText } from "@/shared/components/errorPresentation";
 
 export type IptvAvailabilityProbeOptions = {
   sourceUrl: string;
@@ -20,14 +21,6 @@ export type IptvAvailabilityProbeOptions = {
 };
 
 let probeEpoch = 0;
-
-function messageFromError(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    return String(error.message);
-  }
-  if (error instanceof Error) return error.message;
-  return String(error ?? "未知错误");
-}
 
 /** 更改或替换来源之前先使进行中的探测失效。 */
 export function cancelIptvAvailabilityProbe(): void {
@@ -87,7 +80,7 @@ export async function probeIptvAvailability(
   } catch (error) {
     if (probeEpoch !== runId) return null;
     store.getState().revertChecking(identities, previousAvailability);
-    if (options.notify) toast.error("频道可用性检测失败", messageFromError(error));
+    if (options.notify) toast.error("频道可用性检测失败", errorText(error));
     return null;
   }
 

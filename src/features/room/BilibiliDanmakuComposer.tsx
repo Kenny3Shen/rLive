@@ -33,13 +33,7 @@ import {
   type DanmakuSendSiteId,
   type DanmakuSendStatus,
 } from "./danmaku/sending";
-
-function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    return String((error as { message: string }).message);
-  }
-  return "发送失败，请稍后重试";
-}
+import { errorText } from "@/shared/components/errorPresentation";
 
 function truncateUtf16(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -775,7 +769,7 @@ export function DanmakuComposer({
       setDraft("");
       setResult("发送请求已提交。");
     } catch (error) {
-      setResult(`发送失败：${errorMessage(error)}`);
+      setResult(`发送失败：${errorText(error, "发送失败，请稍后重试")}`);
     } finally {
       sendInFlightRef.current = false;
       setSending(false);

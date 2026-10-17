@@ -9,7 +9,7 @@ export type HistoryDateGroup<T> = {
 
 export type HistoryPlatformFilter = "all" | SiteId;
 
-function startOfLocalDay(timestamp: number): number {
+export function startOfLocalDay(timestamp: number): number {
   const date = new Date(timestamp);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }

@@ -27,6 +27,11 @@ function messageFromError(error: unknown): string {
   return "";
 }
 
+/** 取 IPC / 上游错误中可直接拼进提示的说明文字；没有可读说明时用 `fallback`。 */
+export function errorText(error: unknown, fallback = "未知错误"): string {
+  return messageFromError(error).trim() || fallback;
+}
+
 function codeFromError(error: unknown): string | null {
   if (typeof error === "object" && error && "code" in error) {
     return String((error as AppError).code);

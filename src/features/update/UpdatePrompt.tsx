@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { ArrowUpCircle, ExternalLink } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,14 +12,9 @@ import {
 } from "@/components/ui/dialog";
 import { useUpdateStore, releaseNotes } from "@/shared/update/updateStore";
 import { Markdown } from "@/shared/markdown/Markdown";
+import { openExternalUrl } from "@/shared/externalUrl";
 
 const PROJECT_RELEASES_URL = "https://github.com/Kenny3Shen/rLive/releases";
-
-function openExternalUrl(url: string): void {
-  void openUrl(url).catch(() => {
-    window.open(url, "_blank", "noopener,noreferrer");
-  });
-}
 
 export function UpdatePrompt() {
   const release = useUpdateStore((state) => state.release);
@@ -58,7 +52,7 @@ export function UpdatePrompt() {
           </Button>
           <Button
             onClick={() => {
-              openExternalUrl(release?.htmlUrl ?? PROJECT_RELEASES_URL);
+              void openExternalUrl(release?.htmlUrl ?? PROJECT_RELEASES_URL);
               dismissDialog();
             }}
           >

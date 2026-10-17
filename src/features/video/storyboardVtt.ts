@@ -9,15 +9,7 @@
 
 import type { VideoStoryboard } from "@/shared/types/video";
 import { proxyImageUrl } from "@/shared/api/imageProxy";
-
-function vttTimestamp(seconds: number): string {
-  const total = Math.max(0, seconds);
-  const hrs = Math.floor(total / 3600);
-  const mins = Math.floor((total % 3600) / 60);
-  const secs = Math.floor(total % 60);
-  const millis = Math.round((total - Math.floor(total)) * 1000);
-  return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
-}
+import { vttTimestamp } from "./subtitleVtt";
 
 export function storyboardToVtt(
   storyboard: VideoStoryboard | null | undefined,

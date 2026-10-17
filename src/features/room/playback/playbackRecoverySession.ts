@@ -12,6 +12,7 @@ import {
 } from "./linePreference";
 import { pickDefaultQualityIndex } from "./quality";
 import { nextRankedLineIndex } from "./sourceSelection";
+import { errorText } from "@/shared/components/errorPresentation";
 
 const MAX_PLAYBACK_METADATA_RENEWALS = 3;
 const STABLE_PLAYBACK_RESET_MS = 30_000;
@@ -114,12 +115,6 @@ const EMPTY_SNAPSHOT: PlaybackRecoverySnapshot = {
   loadError: null,
   reloadToken: 0,
 };
-
-function playbackErrorMessage(error: unknown, fallback: string): string {
-  if (!error || typeof error !== "object" || !("message" in error)) return fallback;
-  const message = String(error.message ?? "").trim();
-  return message || fallback;
-}
 
 export function playbackWasStable(
   startedAt: number | null,
@@ -539,7 +534,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     this.metadataRenewalInFlight = false;
     this.publish({
       loading: false,
-      loadError: playbackErrorMessage(error, fallbackMessage),
+      loadError: errorText(error, fallbackMessage),
     });
   }
 

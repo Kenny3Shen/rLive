@@ -58,18 +58,10 @@ import {
 } from "./MultiRoomLiveSyncProvider";
 import { liveSyncDanmakuDelayMs, liveSyncFeedStatusText } from "./liveSyncRegistry";
 import { useMultiRoomStore, type MultiRoomEntry } from "./multiRoomStore";
+import { errorText } from "@/shared/components/errorPresentation";
 
 const MULTI_ROOM_CONTROLS_HIDE_DELAY_MS = 2_000;
 type MultiRoomOverlayInteractionSource = "controls" | "composer";
-
-function playbackErrorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error) {
-    const message = String(error.message ?? "").trim();
-    if (message) return message;
-  }
-  return "当前直播流不可用";
-}
 
 /**
  * 多画面分格 HUD 上图标按钮的唯一画法：与直播 HUD 同一套 36px `MediaButton`、药丸
@@ -855,7 +847,9 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
       {!loading && error && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 px-4 text-center text-white">
           <CircleAlert className="size-5 text-white/75" aria-hidden />
-          <p className="line-clamp-2 text-xs text-white/80">{playbackErrorMessage(error)}</p>
+          <p className="line-clamp-2 text-xs text-white/80">
+            {errorText(error, "当前直播流不可用")}
+          </p>
           <Button type="button" variant="secondary" size="sm" onClick={retry}>
             <RefreshCw data-icon="inline-start" aria-hidden />
             重试

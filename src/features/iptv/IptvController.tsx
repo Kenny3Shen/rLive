@@ -25,6 +25,7 @@ import { filterIptvChannels, getIptvGroupOptions, type IptvGroupOption } from ".
 import { iptvHomePath, iptvPlayerPath } from "./iptvRoute";
 import type { PlaylistSource } from "./playlistSource";
 import type { IptvChannel } from "./types";
+import { errorText } from "@/shared/components/errorPresentation";
 
 const EMPTY_CHANNELS: IptvChannel[] = [];
 
@@ -55,14 +56,6 @@ export type IptvController = {
 };
 
 const IptvControllerContext = createContext<IptvController | null>(null);
-
-function messageFromError(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    return String(error.message);
-  }
-  if (error instanceof Error) return error.message;
-  return String(error ?? "未知错误");
-}
 
 export function IptvControllerProvider({
   source,
@@ -181,12 +174,12 @@ export function IptvControllerProvider({
     try {
       const result = await playlistQuery.refetch();
       if (result.isError) {
-        notify.error("频道源更新失败", messageFromError(result.error));
+        notify.error("频道源更新失败", errorText(result.error));
         return;
       }
       notify.success("频道源已更新", `${source.label} · ${result.data?.length ?? 0} 个频道`);
     } catch (error) {
-      notify.error("频道源更新失败", messageFromError(error));
+      notify.error("频道源更新失败", errorText(error));
     }
   }, [playlistQuery, source.label, source.url]);
 

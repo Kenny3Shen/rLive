@@ -33,14 +33,9 @@ import {
   type LanSyncSessionInfo,
   type ProfileImportResult,
 } from "./lanSync";
+import { errorText } from "@/shared/components/errorPresentation";
 
 type LanSyncMode = "send" | "receive";
-
-function messageFromError(error: unknown): string {
-  return typeof error === "object" && error && "message" in error
-    ? String(error.message)
-    : String(error ?? "未知错误");
-}
 
 function sessionStatusLabel(session: LanSyncSessionInfo): string {
   switch (session.status) {
@@ -115,7 +110,7 @@ export function LanSyncField() {
       setSession(next);
     } catch (cause) {
       setSession(null);
-      setError(`创建同步会话失败：${messageFromError(cause)}`);
+      setError(`创建同步会话失败：${errorText(cause)}`);
     } finally {
       setSendPending(false);
     }
@@ -127,7 +122,7 @@ export function LanSyncField() {
       setSession(null);
       return true;
     } catch (cause) {
-      setError(`停止同步会话失败：${messageFromError(cause)}`);
+      setError(`停止同步会话失败：${errorText(cause)}`);
       return false;
     }
   }
@@ -161,7 +156,7 @@ export function LanSyncField() {
       setResult(imported);
       notify.success("局域网同步完成");
     } catch (cause) {
-      setError(`同步失败：${messageFromError(cause)}`);
+      setError(`同步失败：${errorText(cause)}`);
     } finally {
       setReceivePending(false);
     }

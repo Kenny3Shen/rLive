@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform, type ClientPlatform } from "@/shared/clientPlatform";
+import { errorText } from "@/shared/components/errorPresentation";
 
 export type AsrModelState =
   | "not_downloaded"
@@ -184,13 +185,6 @@ export function describeAsrModelStatus(
   }
 }
 
-function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    return String((error as { message: unknown }).message);
-  }
-  return String(error);
-}
-
 export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boolean }) {
   const queryClient = useQueryClient();
   const supported = supportsLocalAsr();
@@ -253,7 +247,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
   return {
     supported,
     status: query.data ?? null,
-    queryError: query.error ? errorMessage(query.error) : null,
+    queryError: query.error ? errorText(query.error) : null,
     isPending: query.isPending,
     prepare,
     loadSession,

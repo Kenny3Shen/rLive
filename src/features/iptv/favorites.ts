@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { notify } from "@/components/ui/toast";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { IptvChannel } from "./types";
+import { errorText } from "@/shared/components/errorPresentation";
 
 export type IptvFavorite = IptvChannel & {
   source_id: string;
@@ -63,13 +64,6 @@ function favoriteFromChannel(sourceId: string, channel: IptvChannel): IptvFavori
     protocol: channel.protocol,
     updated_at: Date.now(),
   };
-}
-
-function messageFromError(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    return String(error.message);
-  }
-  return String(error ?? "未知错误");
 }
 
 export function useIptvFavorites(sourceId: string, enabled = true) {
@@ -163,7 +157,7 @@ export function useIptvFavoriteMutation(sourceId: string) {
       notify.success(action === "added" ? "已关注频道" : "已取消关注");
     },
     onError: (error) => {
-      notify.error("关注操作失败", messageFromError(error));
+      notify.error("关注操作失败", errorText(error));
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: IPTV_FAVORITES_QUERY_KEY });
@@ -187,7 +181,7 @@ export function useRemoveIptvFavoriteMutation() {
       notify.success("已取消关注");
     },
     onError: (error) => {
-      notify.error("取消关注失败", messageFromError(error));
+      notify.error("取消关注失败", errorText(error));
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: IPTV_FAVORITES_QUERY_KEY });
@@ -242,7 +236,7 @@ export function useSetIptvFavoriteGroupMutation(groups: readonly IptvFavoriteGro
       if (context?.previousSource) {
         queryClient.setQueryData(context.sourceKey, context.previousSource);
       }
-      notify.error("移动分组失败", messageFromError(error));
+      notify.error("移动分组失败", errorText(error));
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: IPTV_FAVORITES_QUERY_KEY });

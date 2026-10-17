@@ -1,5 +1,5 @@
 import { isSiteId } from "@/shared/siteId";
-import type { HistoryPlatformFilter } from "./historyGrouping";
+import { startOfLocalDay, type HistoryPlatformFilter } from "./historyGrouping";
 
 export const HISTORY_QUERY_PARAM = "q";
 export const HISTORY_DATE_PARAM = "date";
@@ -101,11 +101,6 @@ export function historyPlatformFilterFromSearch(
   value: string | null | undefined,
 ): HistoryPlatformFilter {
   return value && isSiteId(value) ? value : "all";
-}
-
-function startOfLocalDay(timestamp: number): number {
-  const date = new Date(timestamp);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
 function shiftLocalDay(timestamp: number, days: number): number {

@@ -27,6 +27,16 @@ export function isTouchLikePointer(pointerType: string): boolean {
   return pointerType === "touch" || pointerType === "pen" || pointerType === "";
 }
 
+/** 起点落在控件上的指针交给控件本身，不进入画面手势与点击切换。 */
+export function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(
+    target.closest(
+      'button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
+    ),
+  );
+}
+
 /** 左半边调节画面亮度；右半边调节音量。 */
 export function playerEdgeGestureForStart(
   clientX: number,

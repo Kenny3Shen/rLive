@@ -7,7 +7,7 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import { isSiteId } from "@/shared/siteId";
 import type { PlayUrl, PlaybackProtocol, SiteId } from "@/shared/types/live";
 import { notify } from "@/components/ui/toast";
-import { formatByteSize } from "@/lib/utils";
+import { formatByteSize, SITE_LABELS } from "@/lib/utils";
 import type { RecordingView } from "./recordingRoute";
 
 export type RecordingStatus = "recording" | "completed" | "interrupted" | "failed";
@@ -106,6 +106,25 @@ export const RECORDING_WATCH_PROGRESS_QUERY_KEY = ["recording-watch-progress"] a
 export const RECORDING_WATCH_PROGRESS_RESUME_KEY = "recording-watch-progress-resume";
 const RECORDING_CHANGED_EVENT = "recording-changed";
 const RECORDING_PROGRESS_EVENT = "recording-progress";
+
+export function recordingStatusLabel(status: RecordingStatus): string {
+  switch (status) {
+    case "recording":
+      return "录制中";
+    case "interrupted":
+      return "已中断";
+    case "failed":
+      return "失败";
+    default:
+      return "已保存";
+  }
+}
+
+export function recordingSourceLabel(item: RecordingItem): string {
+  if (item.source_kind === "iptv") return "IPTV";
+  if (item.site_id) return SITE_LABELS[item.site_id] ?? item.site_id;
+  return "直播";
+}
 
 export type RecordingPlatformFilter = "all" | SiteId;
 

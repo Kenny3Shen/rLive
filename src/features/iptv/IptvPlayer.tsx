@@ -29,6 +29,7 @@ import {
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport, usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { isPlayerInteractiveTarget } from "@/shared/gestures/playerEdgeGesture";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { AsrCaptionOverlay } from "@/features/asr/AsrCaptionOverlay";
 import { readPlayerVolume, rememberPlayerVolume } from "@/shared/playerVolume";
@@ -76,15 +77,6 @@ export function iptvLifecycleReloadToken(
   automaticReconnectToken: number,
 ): string {
   return `${manualReloadToken}:${automaticReconnectToken}`;
-}
-
-function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return Boolean(
-    target.closest(
-      'button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
-    ),
-  );
 }
 
 export function iptvPlaybackKind(

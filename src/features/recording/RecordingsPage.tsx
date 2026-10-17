@@ -50,7 +50,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { cn, normalizeImageUrl } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import {
   PlatformFilterSelect,
@@ -58,7 +58,6 @@ import {
 } from "@/shared/components/PlatformFilterSelect";
 import { Separator } from "@/components/ui/separator";
 import { LIVE_SITE_IDS } from "@/shared/siteId";
-import type { SiteId } from "@/shared/types/live";
 import { useRecordingHeaderState } from "./recordingHeaderState";
 import {
   RECORDING_VIEW_PARAM,
@@ -82,6 +81,8 @@ import {
   RECORDING_WATCH_PROGRESS_RESUME_KEY,
   recordingErrorMessage,
   recordingPlatformFromSearch,
+  recordingSourceLabel,
+  recordingStatusLabel,
   recordingStorageInfo,
   recordingSupported,
   recordingUserGroupKey,
@@ -95,24 +96,6 @@ import {
   type RecordingStatus,
   type RecordingWatchProgress,
 } from "./recording";
-function recordingStatusLabel(status: RecordingStatus): string {
-  switch (status) {
-    case "recording":
-      return "录制中";
-    case "interrupted":
-      return "已中断";
-    case "failed":
-      return "失败";
-    default:
-      return "已保存";
-  }
-}
-
-function recordingSourceLabel(item: RecordingItem): string {
-  if (item.source_kind === "iptv") return "IPTV";
-  if (item.site_id) return SITE_LABELS[item.site_id as SiteId] ?? item.site_id;
-  return "直播";
-}
 
 function recordingUserLabel(item: RecordingItem): string {
   return item.user_name.trim() || recordingSourceLabel(item);

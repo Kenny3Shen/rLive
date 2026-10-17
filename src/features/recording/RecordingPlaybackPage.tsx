@@ -18,10 +18,9 @@ import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
+import { normalizeImageUrl } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { SiteLogo } from "@/shared/components/SiteLogo";
-import type { SiteId } from "@/shared/types/live";
 import { RecordingPlayer } from "./RecordingPlayer";
 import { recordingIdFromPlaybackParams } from "./recordingRoute";
 import {
@@ -32,31 +31,13 @@ import {
   recordingErrorMessage,
   recordingPlaybackUrl,
   recordingProtocolLabel,
+  recordingSourceLabel,
+  recordingStatusLabel,
   recordingSupported,
   recordingUserGroupKey,
   useRecordings,
   type RecordingItem,
-  type RecordingStatus,
 } from "./recording";
-
-function recordingStatusLabel(status: RecordingStatus): string {
-  switch (status) {
-    case "recording":
-      return "录制中";
-    case "interrupted":
-      return "已中断";
-    case "failed":
-      return "失败";
-    default:
-      return "已保存";
-  }
-}
-
-function recordingSourceLabel(item: RecordingItem): string {
-  if (item.source_kind === "iptv") return "IPTV";
-  if (item.site_id) return SITE_LABELS[item.site_id as SiteId] ?? item.site_id;
-  return "直播";
-}
 
 function PlaybackTopBar({ title, onBack }: { title: string; onBack: () => void }) {
   return (

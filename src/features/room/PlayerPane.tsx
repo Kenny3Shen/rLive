@@ -66,6 +66,7 @@ import {
   VideoJsVideo,
 } from "./player/videoJsControls";
 import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
+import { isPlayerInteractiveTarget } from "@/shared/gestures/playerEdgeGesture";
 import { useAndroidPlayerControls } from "./player/androidPlayerControls";
 import { useAndroidFullscreenOrientation } from "./player/androidOrientation";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -237,15 +238,6 @@ export function usesStackedRoomSidePanel(
 ): boolean {
   if (compactLandscapeViewport) return false;
   return compactViewport || stackedDetailsViewport;
-}
-
-function isPlayerInteractiveTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return Boolean(
-    target.closest(
-      'button, input, select, textarea, [role="button"], [role="combobox"], [role="slider"], [contenteditable="true"]',
-    ),
-  );
 }
 
 /**

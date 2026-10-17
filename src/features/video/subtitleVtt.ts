@@ -11,7 +11,7 @@ type SubtitleBodyLine = {
   content: string;
 };
 
-function vttTimestamp(seconds: number): string {
+export function vttTimestamp(seconds: number): string {
   const total = Math.max(0, seconds);
   const hrs = Math.floor(total / 3600);
   const mins = Math.floor((total % 3600) / 60);

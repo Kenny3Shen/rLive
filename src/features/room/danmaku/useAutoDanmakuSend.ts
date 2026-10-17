@@ -11,6 +11,7 @@ import {
   splitAutoDanmakuText,
 } from "./autoSend";
 import { getDanmakuSendConfig, type DanmakuSendStatus } from "./sending";
+import { errorText } from "@/shared/components/errorPresentation";
 
 export type AutoDanmakuSendPhase = "off" | "waiting" | "sending" | "paused";
 
@@ -44,14 +45,6 @@ type AvailabilitySnapshot = {
   key: string;
   status: DanmakuSendStatus;
 };
-
-function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    const message = String((error as { message: unknown }).message).trim();
-    if (message) return message;
-  }
-  return "发送请求失败，请检查账号状态或直播间限制。";
-}
 
 function immediateSendMessage(index: number, count: number): string {
   return `第 ${index + 1}/${count} 段将立即发送。`;
@@ -347,7 +340,9 @@ export function useAutoDanmakuSend({
         setEnabled(false);
         setPhase("paused");
         setCurrentSegmentIndex(segmentIndex);
-        setStatusMessage(`已暂停：发送失败：${errorMessage(error)}`);
+        setStatusMessage(
+          `已暂停：发送失败：${errorText(error, "发送请求失败，请检查账号状态或直播间限制。")}`,
+        );
       } finally {
         inFlightRef.current = false;
         inFlight.finish();

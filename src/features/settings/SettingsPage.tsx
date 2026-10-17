@@ -145,6 +145,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { errorText } from "@/shared/components/errorPresentation";
 
 type SettingsCategory =
   | "home"
@@ -365,12 +366,6 @@ function matchesSearch(value: string, query: string): boolean {
   const tokens = searchTokens(query);
   const haystack = value.toLocaleLowerCase();
   return tokens.every((token) => haystack.includes(token));
-}
-
-function errorMessage(cause: unknown): string {
-  return typeof cause === "object" && cause && "message" in cause
-    ? String((cause as { message: string }).message)
-    : String(cause);
 }
 
 function isDanmakuSendCookieSite(siteId: SiteId): boolean {
@@ -641,7 +636,7 @@ export function BilibiliAppAuthField() {
       await invalidateBilibiliAppQueries(queryClient);
     } catch (error) {
       // 凭据已写入；推荐刷新失败不能反过来冒充授权失败。
-      notify.error("推荐刷新失败", `可在推荐页重试：${errorMessage(error)}`);
+      notify.error("推荐刷新失败", `可在推荐页重试：${errorText(error)}`);
     }
   }, [queryClient]);
 
@@ -680,7 +675,7 @@ export function BilibiliAppAuthField() {
       notify.success("已移除 Bilibili TV 授权");
     } catch (error) {
       setActionError(
-        `${removed ? "授权已移除，但推荐刷新失败" : "移除 Bilibili TV 授权失败"}：${errorMessage(error)}`,
+        `${removed ? "授权已移除，但推荐刷新失败" : "移除 Bilibili TV 授权失败"}：${errorText(error)}`,
       );
     } finally {
       setClearing(false);
@@ -714,7 +709,7 @@ export function BilibiliAppAuthField() {
             </FieldDescription>
           )}
           {profileError && (
-            <FieldError>授权状态读取失败，请刷新重试：{errorMessage(profileError)}</FieldError>
+            <FieldError>授权状态读取失败，请刷新重试：{errorText(profileError)}</FieldError>
           )}
           {actionError && <FieldError>{actionError}</FieldError>}
           {notice && (
@@ -907,7 +902,7 @@ export function AccountCard({
       setProfile(next);
     } catch (error) {
       setProfile(null);
-      setProfileError(`账号状态读取失败：${errorMessage(error)}`);
+      setProfileError(`账号状态读取失败：${errorText(error)}`);
     } finally {
       setProfileLoading(false);
     }
@@ -935,7 +930,7 @@ export function AccountCard({
       })
       .catch((error) => {
         if (cancelled) return;
-        setManualError(`读取失败：${errorMessage(error)}`);
+        setManualError(`读取失败：${errorText(error)}`);
       })
       .finally(() => {
         if (!cancelled) setManualLoading(false);
@@ -979,7 +974,7 @@ export function AccountCard({
       setCookieDraft(cookie);
       setManualCookieLoaded(true);
     } catch (error) {
-      setManualError(`保存失败：${errorMessage(error)}`);
+      setManualError(`保存失败：${errorText(error)}`);
     } finally {
       setSaving(false);
     }
@@ -995,7 +990,7 @@ export function AccountCard({
       setManualCookieLoaded(true);
       setLogoutOpen(false);
     } catch (error) {
-      setLogoutError(`退出登录失败：${errorMessage(error)}`);
+      setLogoutError(`退出登录失败：${errorText(error)}`);
     } finally {
       setClearing(false);
     }
@@ -1308,7 +1303,7 @@ function PlaybackSettingsResetField() {
       setStatus("已恢复本页全部设置项的默认值。");
       setConfirmOpen(false);
     } catch (cause) {
-      setError(`恢复默认设置失败：${errorMessage(cause)}`);
+      setError(`恢复默认设置失败：${errorText(cause)}`);
     } finally {
       setResetting(false);
     }
@@ -1387,7 +1382,7 @@ function AsrModelField() {
       await setEnabled(next);
       await model.refetch();
     } catch (error) {
-      setActionError(errorMessage(error));
+      setActionError(errorText(error));
     }
   }
 
@@ -1398,7 +1393,7 @@ function AsrModelField() {
       await model.loadSession();
       await model.refetch();
     } catch (error) {
-      setActionError(errorMessage(error));
+      setActionError(errorText(error));
     }
   }
 
@@ -1408,7 +1403,7 @@ function AsrModelField() {
       await setSpeakerEnabled(next);
       await model.refetch();
     } catch (error) {
-      setActionError(errorMessage(error));
+      setActionError(errorText(error));
     }
   }
 
@@ -1418,7 +1413,7 @@ function AsrModelField() {
       await setProvider(next);
       await model.refetch();
     } catch (error) {
-      setActionError(errorMessage(error));
+      setActionError(errorText(error));
     }
   }
 
@@ -1428,7 +1423,7 @@ function AsrModelField() {
       await setVadEnabled(next);
       await model.refetch();
     } catch (error) {
-      setActionError(errorMessage(error));
+      setActionError(errorText(error));
     }
   }
 
@@ -1438,7 +1433,7 @@ function AsrModelField() {
       await setPunctuationEnabled(next);
       await model.refetch();
     } catch (error) {
-      setActionError(errorMessage(error));
+      setActionError(errorText(error));
     }
   }
 
@@ -2250,7 +2245,7 @@ export function SettingsPage() {
       await invokeCmd("profile_export", { path });
       setProfileStatus("配置已导出。档案不包含 Cookie 或本机路径。");
     } catch (cause) {
-      setProfileError(`导出失败：${errorMessage(cause)}`);
+      setProfileError(`导出失败：${errorText(cause)}`);
     } finally {
       setProfileAction(null);
     }
@@ -2277,7 +2272,7 @@ export function SettingsPage() {
         `已导入：${r.follows} 个主播关注、${r.iptv_favorites ?? 0} 个 IPTV 关注、${r.iptv_favorite_groups ?? 0} 个 IPTV 分组、${r.tags} 个标签、${r.history} 条历史记录。`,
       );
     } catch (cause) {
-      setProfileError(`导入失败：${errorMessage(cause)}`);
+      setProfileError(`导入失败：${errorText(cause)}`);
     } finally {
       setProfileAction(null);
     }
@@ -2298,7 +2293,7 @@ export function SettingsPage() {
         await importProfile(path);
       }
     } catch (cause) {
-      setProfileError(`打开导入文件失败：${errorMessage(cause)}`);
+      setProfileError(`打开导入文件失败：${errorText(cause)}`);
     }
   }
 
@@ -2316,7 +2311,7 @@ export function SettingsPage() {
         await exportProfile(path);
       }
     } catch (cause) {
-      setProfileError(`选择导出位置失败：${errorMessage(cause)}`);
+      setProfileError(`选择导出位置失败：${errorText(cause)}`);
     }
   }
 

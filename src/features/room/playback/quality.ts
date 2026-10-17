@@ -7,8 +7,3 @@ export function pickDefaultQualityIndex(length: number, level: QualityLevel = "h
   if (level === "low") return length - 1;
   return Math.floor(length / 2);
 }
-
-export function parseQualityLevel(value: unknown): QualityLevel {
-  if (value === "mid" || value === "low" || value === "high") return value;
-  return "high";
-}

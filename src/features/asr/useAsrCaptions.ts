@@ -16,6 +16,7 @@ import {
 import { createAsrCaptionTextStore, type AsrCaptionTextStore } from "./asrCaptionText";
 import { describeAsrModelStatus, useAsrModelStatus, type AsrModelStatus } from "./model";
 import { useCaptionTranslation } from "./useCaptionTranslation";
+import { errorText } from "@/shared/components/errorPresentation";
 
 type AsrCaptionSegment = {
   text: string;
@@ -37,13 +38,6 @@ type TranscriptionJob = {
   pcm: Float32Array;
   epoch: number;
 };
-
-function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) {
-    return String((error as { message: unknown }).message);
-  }
-  return String(error);
-}
 
 export type AsrCaptionsOptions = {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -148,7 +142,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
           }, CAPTION_RETENTION_MS);
         } catch (error) {
           if (job.epoch !== epochRef.current) continue;
-          setNotice(`语音识别失败：${errorMessage(error)}`);
+          setNotice(`语音识别失败：${errorText(error)}`);
         }
       }
     } finally {
@@ -272,7 +266,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       })
       .catch((error) => {
         if (cancelled || epoch !== epochRef.current) return;
-        const message = errorMessage(error);
+        const message = errorText(error);
         setCaptureError(message);
         setNotice(`无法开启语音字幕：${message}`);
         setCaptionsOn(false);
@@ -323,7 +317,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       pendingEnableRef.current = true;
       void loadSession().catch((error) => {
         pendingEnableRef.current = false;
-        setNotice(`模型准备失败：${errorMessage(error)}`);
+        setNotice(`模型准备失败：${errorText(error)}`);
       });
       return;
     }
@@ -336,7 +330,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       pendingEnableRef.current = true;
       void loadSession().catch((error) => {
         pendingEnableRef.current = false;
-        setNotice(`模型加载失败：${errorMessage(error)}`);
+        setNotice(`模型加载失败：${errorText(error)}`);
       });
       return;
     }
