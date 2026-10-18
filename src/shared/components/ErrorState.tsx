@@ -41,15 +41,15 @@ export function ErrorState({
       role="alert"
       data-slot="error-state"
       className={cn(
-        "flex min-w-0 flex-col items-start gap-3 rounded-xl border border-danger/25 bg-danger/10 px-4 py-4",
+        "flex min-w-0 flex-col items-start gap-3 rounded-xl border border-destructive/25 bg-destructive/10 px-4 py-4",
         className,
       )}
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <AlertCircle className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+        <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-danger">{title}</h2>
-          <p className="mt-1 break-words text-sm text-danger/90 [overflow-wrap:anywhere]">
+          <h2 className="text-sm font-semibold text-destructive">{title}</h2>
+          <p className="mt-1 break-words text-sm text-destructive/90 [overflow-wrap:anywhere]">
             {description}
           </p>
         </div>
@@ -74,7 +74,7 @@ export function ErrorState({
                 size="sm"
                 // `group` 落在触发器本身：`data-panel-open` 由 base-ui 写在按钮上，
                 // 图标是它的后代，只能靠祖先选择器旋转（写在图标上永远命中不了）。
-                className="group h-auto gap-1 px-0 py-0.5 text-xs font-normal text-danger/75 hover:bg-transparent hover:text-danger"
+                className="group h-auto gap-1 px-0 py-0.5 text-xs font-normal text-destructive/75 hover:bg-transparent hover:text-destructive"
               />
             }
           >
