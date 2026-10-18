@@ -149,9 +149,49 @@ pub async fn app_log_clear(state: State<'_, AppState>) -> AppResult<()> {
     Ok(())
 }
 
+/// 前端单条诊断写进日志的最大字符数；hls.js 偶尔把整页 HTML 响应带进 message。
+const MAX_REPORT_CHARS: usize = 2_000;
+
+/// 把前端报来的诊断压成一行可安全落盘的文本。
+///
+/// 播放错误里常带完整流地址，而直播 CDN 的签名（`wsSecret`、`txSecret`、`sign`
+/// 等）都放在 query 里；日志只记录失败、不记录凭据，因此 URL 一律只保留到路径。
+/// 多行堆栈折成 ` | ` 连接的一行，避免伪造出看起来像独立日志记录的行。
+fn sanitize_report(text: &str) -> String {
+    static URL_QUERY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)(https?://[^\s?#"'<>]*)[?#][^\s"'<>]*"#).expect("valid regex")
+    });
+    let line = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
+        .replace(|c: char| c.is_control(), " ");
+    let line = URL_QUERY.replace_all(&line, "$1?…");
+    match line.char_indices().nth(MAX_REPORT_CHARS) {
+        Some((end, _)) => format!("{}…", &line[..end]),
+        None => line.into_owned(),
+    }
+}
+
+/// 把前端的播放失败写进 `rlive.log`。
+///
+/// 播放器弹窗只给用户看可读的说明，hls.js / 浏览器给出的原始报错不再铺在界面上，
+/// 改为落到这里，用户在「设置 → 日志」里与后端失败按时间对齐查看。
+#[tauri::command]
+pub fn app_log_report(source: String, message: String) {
+    let source = sanitize_report(&source);
+    let message = sanitize_report(&message);
+    if message.is_empty() {
+        return;
+    }
+    tracing::warn!(source = %source, "前端报告：{message}");
+}
+
 #[cfg(test)]
 mod tests {
-    use super::snapshot_logs;
+    use super::{MAX_REPORT_CHARS, sanitize_report, snapshot_logs};
     use std::fs;
     use std::path::PathBuf;
 
@@ -190,5 +230,26 @@ mod tests {
         assert_eq!(snapshot.previous.text, "previous log");
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn report_strips_url_query_and_folds_lines() {
+        let text =
+            "HTTP 403\n  at https://cdn.example.com/live/a.m3u8?wsSecret=abc&wsTime=1#frag\n\nend";
+
+        assert_eq!(
+            sanitize_report(text),
+            "HTTP 403 | at https://cdn.example.com/live/a.m3u8?… | end"
+        );
+    }
+
+    #[test]
+    fn report_caps_length_on_char_boundary() {
+        let text = "错".repeat(MAX_REPORT_CHARS + 10);
+
+        let line = sanitize_report(&text);
+
+        assert_eq!(line.chars().count(), MAX_REPORT_CHARS + 1);
+        assert!(line.ends_with('…'));
     }
 }

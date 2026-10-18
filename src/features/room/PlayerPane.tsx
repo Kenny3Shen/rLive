@@ -26,7 +26,6 @@ import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import { readPlayerVolume, rememberPlayerVolume } from "@/shared/playerVolume";
-import { ErrorState } from "@/shared/components/ErrorState";
 import { DanmakuPanel } from "./DanmakuPanel";
 import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
@@ -1405,6 +1404,7 @@ function PlayerPaneContent({
         <VideoJsContainer
           onToggleFullscreen={() => void player.toggleFullscreen()}
           ref={playerStageRef}
+          errorDialog={{ error: loading ? null : displayError, title: "播放不可用", onRetry }}
           data-player-stage
           data-fullscreen={player.mode === "fullscreen" ? "true" : undefined}
           // 与全屏无关，使 CSS 能在浏览器离开全屏的同一帧恢复 16:9 堆叠。
@@ -1546,18 +1546,6 @@ function PlayerPaneContent({
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                 <Spinner className="size-8 text-primary" />
                 <p className="text-sm">正在解析线路…</p>
-              </div>
-            )}
-            {!loading && displayError != null && (
-              <div className="absolute inset-0 z-20 flex items-center justify-center p-6">
-                <div className="w-full max-w-md">
-                  <ErrorState
-                    error={displayError}
-                    title="播放不可用"
-                    onRetry={onRetry}
-                    className="bg-card shadow-2xl shadow-black/50"
-                  />
-                </div>
               </div>
             )}
             {!loading && displayError == null && !playUrl && (

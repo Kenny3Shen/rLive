@@ -6,6 +6,7 @@ import { notify } from "@/components/ui/toast";
 import { videoJsPlayerErrorMessage } from "./videoJsPlayer";
 import { Video, videoFeatures } from "@videojs/react/video";
 import { PlayerSurface } from "@/components/videojs/skins/shared/skin-surface";
+import type { PlayerErrorDialogState } from "@/components/videojs/ui/error-dialog";
 import { LiveVideoHotkeys } from "@/components/videojs/skins/live-video/hotkeys";
 import { LiveVideoStatusIndicators } from "@/components/videojs/skins/live-video/status-indicators";
 import { VideoHotkeys } from "@/components/videojs/skins/video/hotkeys";
@@ -46,6 +47,8 @@ type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"
   variant?: "live" | "vod";
   /** 自定义控制条，由 PlayerControls 渲染在媒体表面之上。 */
   controls: ReactNode;
+  /** 宿主的播放失败与重试；传入后由同一个 Video.js 风格弹窗展示，页面不再另绘错误卡。 */
+  errorDialog?: PlayerErrorDialogState;
 };
 
 /** 统一播放器表面。直播使用实时快捷键与状态提示，点播/录制显式传 `variant="vod"`。 */

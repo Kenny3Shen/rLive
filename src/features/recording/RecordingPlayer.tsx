@@ -17,7 +17,6 @@ import {
   PlayerMenuRadioGroup,
   VOD_PLAYBACK_RATES,
 } from "@/shared/components/player/PlayerControls";
-import { ErrorState } from "@/shared/components/ErrorState";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
@@ -786,6 +785,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     <VideoJsContainer
       variant="vod"
       ref={stageRef}
+      errorDialog={{ error, title: "录制回放失败", onRetry: retryPlayback }}
       data-player-stage
       data-recording-player
       data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
@@ -863,16 +863,6 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         {(loading || waiting) && !error && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/25">
             <Spinner className="text-white" aria-label={loading ? "正在加载录制" : "正在缓冲"} />
-          </div>
-        )}
-        {error && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
-            <ErrorState
-              error={error}
-              title="录制回放失败"
-              onRetry={retryPlayback}
-              className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
-            />
           </div>
         )}
       </div>

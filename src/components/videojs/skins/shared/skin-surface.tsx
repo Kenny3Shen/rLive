@@ -6,7 +6,7 @@ import { cn } from "@/components/videojs/lib/resolve-class-name";
 import { SkinVariantProvider, type SkinVariant } from "@/components/videojs/skins/variant";
 import { BufferingIndicator } from "@/components/videojs/ui/buffering-indicator";
 import { Container } from "@/components/videojs/ui/container";
-import { ErrorDialog } from "@/components/videojs/ui/error-dialog";
+import { ErrorDialog, type PlayerErrorDialogState } from "@/components/videojs/ui/error-dialog";
 import { Poster } from "@/components/videojs/ui/poster";
 
 /** 统一播放器表面的 props：媒体内容与业务控制条。 */
@@ -18,6 +18,8 @@ export interface PlayerSurfaceProps extends Omit<
   renderPoster?: NonNullable<ComponentProps<typeof Poster>>["renderImage"];
   /** 控制条：业务侧用 PlayerControls 组合原生控件与业务按钮后传入。 */
   controlsSlot?: ReactNode;
+  /** 宿主自己的播放失败；缺省时错误弹窗跟随 Video.js 的 `media.error`。 */
+  errorDialog?: PlayerErrorDialogState;
 }
 
 type PlayerSurfacePropsInternal = PlayerSurfaceProps & {
@@ -37,6 +39,7 @@ export function PlayerSurface({
   className,
   renderPoster,
   controlsSlot,
+  errorDialog,
   onToggleFullscreen: _onToggleFullscreen,
   ...props
 }: PlayerSurfacePropsInternal) {
@@ -53,7 +56,7 @@ export function PlayerSurface({
         {children}
         <Poster renderImage={renderPoster} />
         <BufferingIndicator />
-        <ErrorDialog />
+        <ErrorDialog state={errorDialog} />
         {controlsSlot}
         {hotkeys}
         {statusIndicators}

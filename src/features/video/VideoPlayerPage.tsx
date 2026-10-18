@@ -3021,6 +3021,17 @@ function VideoPlayerPageContent() {
           <VideoJsContainer
             variant="vod"
             ref={stageRef}
+            // 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
+            // 静默失败会让用户看到「在播但没声音」而无从下手。
+            errorDialog={{
+              error: playbackError ?? fatalError,
+              title: playbackError
+                ? "视频播放失败"
+                : archiveFailure
+                  ? "无法读取视频信息"
+                  : "无法获取播放地址",
+              onRetry: retryPlaybackFailure,
+            }}
             data-player-stage
             data-video-mode="details"
             data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
@@ -3248,25 +3259,6 @@ function VideoPlayerPageContent() {
                         <Spinner className="text-white" aria-label="正在加载视频" />
                       </div>
                     )}
-
-                  {/* 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
-              静默失败会让用户看到「在播但没声音」而无从下手。 */}
-                  {(playbackError || fatalError) && (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 p-6">
-                      <ErrorState
-                        error={playbackError ?? fatalError}
-                        title={
-                          playbackError
-                            ? "视频播放失败"
-                            : archiveFailure
-                              ? "无法读取视频信息"
-                              : "无法获取播放地址"
-                        }
-                        onRetry={retryPlaybackFailure}
-                        className="w-full max-w-md bg-card shadow-2xl shadow-black/50"
-                      />
-                    </div>
-                  )}
 
                   {/* 可恢复的引擎错误：画面仍在播，只提示刚才有分片/字幕失败。
                       与上面的失败卡互斥（后者接管舞台时前者没有意义）。 */}
