@@ -158,9 +158,8 @@ export const VideoCard = memo(function VideoCard({
   /**
    * 是否显示发布日期。
    *
-   * VOD 首页（推荐/热门/番剧/影视）关闭：APP 推荐流不下发日期，补齐它的接口
-   * 又会被风控拒绝，一半卡片有日期、一半没有反而更乱。搜索、相关视频与 UP 投稿
-   * 等上游自带日期的列表保持显示。
+   * 只有 APP 推荐流关闭：该接口不下发日期，补齐它的接口又会被风控拒绝。热门、
+   * 分区榜、Web 推荐、搜索、相关视频与 UP 投稿等自带日期的列表保持显示。
    */
   showPubdate?: boolean;
 }) {
@@ -470,7 +469,7 @@ export const VideoGrid = memo(function VideoGrid({
   items: readonly VideoItem[];
   playlist?: readonly PlaylistItem[];
   playlistKind?: PlaylistKind;
-  /** 见 `VideoCard` 的同名属性；VOD 首页传 false。 */
+  /** 见 `VideoCard` 的同名属性；APP 推荐流传 false。 */
   showPubdate?: boolean;
 }) {
   return (

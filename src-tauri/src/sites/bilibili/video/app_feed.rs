@@ -4,8 +4,8 @@
 //! APP 不给 bvid，在本地按完整整数 aid 转换，避免每条卡片补一次 view 请求。
 //!
 //! 上游不下发发布日期，这里也不补：补齐接口（`x/v3/fav/resource/infos`）实测会被
-//! 风控连续拒绝（412），而它只影响首页卡片上的一行相对时间。VOD 首页因此不再展示
-//! 发布日期；搜索、UP 投稿、相关视频等自带日期的列表不受影响。
+//! 风控连续拒绝（412），而它只影响卡片上的一行相对时间。因此只有 APP 推荐流的卡片
+//! 不展示发布日期；热门、搜索、UP 投稿、相关视频等自带日期的列表不受影响。
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -58,7 +58,7 @@ impl BilibiliSite {
     pub(super) async fn video_app_recommend(&self, page_size: u32) -> AppResult<VideoListPage> {
         let params = app_feed_params();
         // 不补发布日期：APP 卡片流不下发该字段，补齐接口又会被风控拒绝。
-        // 条目因此保留 `pubdate = 0`，VOD 首页卡片据此不渲染日期。
+        // 条目因此保留 `pubdate = 0`，推荐页签的卡片据此不渲染日期。
         collect_app_feed(page_size, || self.get_app_feed("", &params)).await
     }
 }

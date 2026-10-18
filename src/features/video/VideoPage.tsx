@@ -185,6 +185,9 @@ export function VideoPage() {
     [blockedUploaders, pages],
   );
   const playlistItems = useMemo(() => ugcItems.map(playlistItemFromVideoItem), [ugcItems]);
+  // 只有 APP 推荐流不下发发布日期，也没有再补齐它（补齐接口会被风控拒绝）；
+  // 热门、分区榜、Web 推荐都自带 Unix 秒，照常展示。
+  const showPubdate = !(tab === "recommend" && videoRecommendApi === "app");
   const pgcItems = useMemo(
     () => pages?.flatMap((page) => (page.kind === "pgc" ? page.items : [])) ?? [],
     [pages],
@@ -279,7 +282,7 @@ export function VideoPage() {
               items={ugcItems}
               playlist={playlistItems}
               playlistKind="feed"
-              showPubdate={false}
+              showPubdate={showPubdate}
             />
           ))}
 
