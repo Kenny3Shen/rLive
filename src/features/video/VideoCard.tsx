@@ -141,6 +141,7 @@ export const VideoCard = memo(function VideoCard({
   onNavigate,
   orientation = "grid",
   showAuthor = true,
+  showPubdate = true,
 }: {
   item: VideoItem;
   /** 列表上下文（搜索/UP 主投稿）：点击时把该列表设为播放列表，从这张卡开始连播。 */
@@ -154,6 +155,14 @@ export const VideoCard = memo(function VideoCard({
   orientation?: "grid" | "row";
   /** 是否在发布日期旁显示 UP 主名；投稿抽屉按 PiliPlus 语义只显示发布日期。 */
   showAuthor?: boolean;
+  /**
+   * 是否显示发布日期。
+   *
+   * VOD 首页（推荐/热门/番剧/影视）关闭：APP 推荐流不下发日期，补齐它的接口
+   * 又会被风控拒绝，一半卡片有日期、一半没有反而更乱。搜索、相关视频与 UP 投稿
+   * 等上游自带日期的列表保持显示。
+   */
+  showPubdate?: boolean;
 }) {
   const navigate = useNavigate();
   // 搜索与 UP 主空间列表的条目没有 cid：只要带 bvid 就可点，播放页用稿件详情
@@ -283,7 +292,7 @@ export const VideoCard = memo(function VideoCard({
           {item.title}
         </p>
         <p className="flex min-h-4 min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/85">
-          {item.pubdate > 0 && (
+          {showPubdate && item.pubdate > 0 && (
             <>
               {/* 日期不参与压缩：长 UP 主名会把可压缩的日期挤成「3 …」。 */}
               <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap">
@@ -456,10 +465,13 @@ export const VideoGrid = memo(function VideoGrid({
   items,
   playlist,
   playlistKind,
+  showPubdate = true,
 }: {
   items: readonly VideoItem[];
   playlist?: readonly PlaylistItem[];
   playlistKind?: PlaylistKind;
+  /** 见 `VideoCard` 的同名属性；VOD 首页传 false。 */
+  showPubdate?: boolean;
 }) {
   return (
     <div className={CARD_GRID_CLASS}>
@@ -469,6 +481,7 @@ export const VideoGrid = memo(function VideoGrid({
           item={item}
           playlist={playlist}
           playlistKind={playlistKind}
+          showPubdate={showPubdate}
         />
       ))}
     </div>

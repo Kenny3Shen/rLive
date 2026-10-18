@@ -60,6 +60,10 @@ pub struct VideoItem {
     /// 与「上游没说」是两件事 —— 后者应该退回不显示数字，而不是显示「0」。
     #[serde(default)]
     pub reply: Option<i64>,
+    /// 发布时间，Unix 秒；UP 主投稿列表由上游 `created` 换算，缺失为 0。
+    ///
+    /// APP 推荐流不下发该字段，也不再批量补齐（补齐接口会被风控拒绝），
+    /// 因此 VOD 首页条目恒为 0，前端首页卡片不渲染日期。
     pub pubdate: i64,
     /// 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。
     pub rcmd_reason: Option<String>,

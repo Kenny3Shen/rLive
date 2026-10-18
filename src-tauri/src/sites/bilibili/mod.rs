@@ -437,8 +437,8 @@ impl BilibiliSite {
             );
         }
         // 412 是风控拦截，与 429 同属「暂时受限」而不是请求本身有问题。单独给一个
-        // 稳定错误码，让调用方（如 APP 推荐的发布日期补齐）按结构分类并进入冷却，
-        // 而不是去解析 message。响应体可能是一整页 HTML，不能带进错误信息。
+        // 稳定错误码，让调用方能按结构分类（例如提示或退避），而不是去解析 message。
+        // 响应体可能是一整页 HTML，不能带进错误信息。
         if strict && status.as_u16() == 412 {
             return Err(
                 AppError::new("bilibili_restricted", "HTTP 412 from Bilibili")
@@ -1112,8 +1112,8 @@ mod live_tests {
             let site = BilibiliSite::new(reqwest::Client::new(), String::new());
             let result = site
                 .get_json_request(
-                    &format!("http://{address}/x/v3/fav/resource/infos"),
-                    &[("platform", "web".to_owned())],
+                    &format!("http://{address}/x/web-interface/view"),
+                    &[("bvid", "BV17x411w7KC".to_owned())],
                     true,
                     ResponseChecks::Full,
                 )

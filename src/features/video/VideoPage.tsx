@@ -275,7 +275,12 @@ export function VideoPage() {
           (feedKind === "pgc" ? (
             <PgcGrid items={pgcItems} />
           ) : (
-            <VideoGrid items={ugcItems} playlist={playlistItems} playlistKind="feed" />
+            <VideoGrid
+              items={ugcItems}
+              playlist={playlistItems}
+              playlistKind="feed"
+              showPubdate={false}
+            />
           ))}
 
         {hasNextPage && (

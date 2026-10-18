@@ -60,7 +60,12 @@ export type VideoItem = {
    * 与「上游没说」是两件事 —— 后者不显示数字，而不是显示「0」。
    */
   reply: number | null;
-  /** 发布时间，Unix 秒；UP 主投稿列表由上游 `created` 字符串换算，缺失为 0。 */
+  /**
+   * 发布时间，Unix 秒；UP 主投稿列表由上游 `created` 字符串换算，缺失为 0。
+   *
+   * APP 推荐流不下发该字段，也不在本地补齐（补齐接口会被风控拒绝），因此 VOD
+   * 首页的条目恒为 0，首页卡片也不渲染日期。
+   */
   pubdate: number;
   /** 平台给出的推荐理由（如「百万播放」），仅推荐与热门流提供。 */
   rcmd_reason: string | null;
