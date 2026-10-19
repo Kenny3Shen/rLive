@@ -207,15 +207,13 @@ export function ShortsPage() {
   // 量外层（播放区 + dock 的总高），不是播放区自己：dock 占位后播放区变矮，
   // 若按它算占比会在「打开 → 变矮 → 算出更小的 dock → 再变矮」里循环。
   //
-  // 传给占比函数的是**播放区实际可用的高度**（外层高度减掉底部操作栏），而不是
-  // 整条视口：底栏是绝对定位、不参与 flex 分配，但舞台的媒体框确实让出了它。
-  // 不减这一截，`SHORTS_COMMENT_DOCK_MIN_STAGE_PX` 承诺的「至少留 240px 画面」
-  // 会被底栏再吃掉 59px，矮视口上实际只剩 181px。
+  // 直接传外层高度，不再减底部操作栏：dock 打开时那条栏连同顶栏、信息浮层一起收起
+  // （画面区只剩画面本身），播放区的可用高度就是外层的整条高度。这样 60% 这个比例
+  // 说的就是「评论区占视口六成」，与用户看到的一致。
   //
-  // 安全区不用再减：外层的高度来自 `.app-shell` 已经扣掉状态栏/手势条的可用视口，
-  // 那里的 padding 就是页面为 `SHORTS_SAFE_AREA_BOTTOM` 让出的部分。
+  // 安全区不用再减：外层的高度来自 `.app-shell` 已经扣掉状态栏/手势条的可用视口。
   const { size: dockShellSize, measure: measureDockShell } = useDockShellSize();
-  const dockStageHeight = Math.max(0, dockShellSize.height - SHORTS_BOTTOM_BAR_HEIGHT_PX);
+  const dockStageHeight = Math.max(0, dockShellSize.height);
   const dockCandidate = compact ? shortsCommentDockHeight(dockStageHeight) : 0;
   /**
    * 退场期间仍在保留的 dock 高度；0 表示没有占位。
@@ -241,6 +239,17 @@ export function ShortsPage() {
     ? dockCandidate
     : Math.min(retainedDockHeight, dockCandidate);
   const commentsDockActive = compact && dockHeight > 0;
+  /**
+   * 评论 dock 打开期间把画面上的所有控件收起。
+   *
+   * dock 形态的语义是「把这一页切成画面与评论两段」，两段各管各的：画面段里只留
+   * 画面本身，进度条、顶栏、信息与评论入口随底栏一起让位。控件若还浮在画面上，
+   * 一半视口里就同时有画面、浮层文字与两条栏，评论反而成了夹在中间的一条。
+   *
+   * 收起入口在评论表头（向下箭头），系统 Back 与 Escape 同样可用；退出动画期间
+   * 继续隐藏，等 dock 高度归零后才一起回来，避免两层在动画中途重叠。
+   */
+  const stageChromeHidden = commentsDockActive;
   /**
    * 评论是否走 dock 形态。
    *
@@ -351,15 +360,11 @@ export function ShortsPage() {
     () =>
       panels.aid ? (
         // `bottomInset` 只影响二级回复抽屉自己的滚动容器：那一层是与评论抽屉并列的
-        // 浮层（不是它的后代），因此拿不到这里外壳补的安全区，得自己让位。
-        <CommentsPanel
-          key={panels.aid}
-          aid={panels.aid}
-          // dock 形态下二级回复抽屉的下沿在 dock 里，安全区已由下方操作栏消费。
-          bottomInset={commentsDockActive ? undefined : SHORTS_SAFE_AREA_BOTTOM}
-        />
+        // 浮层（不是它的后代），因此拿不到这里外壳补的安全区，得自己让位。底部形态
+        // （dock 与整窗口两种）都是页面最底层，安全区由它自己消费。
+        <CommentsPanel key={panels.aid} aid={panels.aid} bottomInset={SHORTS_SAFE_AREA_BOTTOM} />
       ) : null,
-    [commentsDockActive, panels.aid],
+    [panels.aid],
   );
   const detailBody = useMemo(
     () =>
@@ -513,7 +518,10 @@ export function ShortsPage() {
                       danmaku={danmaku}
                       danmakuVisible={danmakuVisible}
                       gestureActive={gestureActive}
+                      // 评论 dock 打开时操作栏收起，画面区铺到 dock 上沿：这一块只剩
+                      // 画面本身（进度条、信息、顶栏都不在）。安全区由 dock 消费，不相干。
                       safeAreaBottom={!commentsDockActive}
+                      bottomBar={!commentsDockActive}
                       onSurfaceTap={onSurfaceTap}
                       onChromeColumn={setStageChromeColumn}
                     />
@@ -540,7 +548,11 @@ export function ShortsPage() {
                     className="absolute inset-x-0 h-full"
                     style={{ top: `${itemIndex * 100}%` }}
                   >
-                    <ShortsBlankStage item={item} safeAreaBottom={!commentsDockActive} />
+                    <ShortsBlankStage
+                      item={item}
+                      safeAreaBottom={!commentsDockActive}
+                      bottomBar={!commentsDockActive}
+                    />
                   </div>
                 );
               })}
@@ -566,12 +578,17 @@ export function ShortsPage() {
           本层不接指针（`pointer-events-none`）：它盖在画面上，接了就会把点按暂停
           那一整块挖掉。真正需要交互的子层（顶栏、换片箭头、信息浮层里的按钮）各自
           开 `pointer-events-auto`。
+
+          评论 dock 打开时本层整列让位（见 `stageChromeHidden`）：画面段只剩画面，
+          顶栏、信息与评论入口都收进评论表头与系统返回。
         */}
             <div
               data-slot="shorts-chrome-column"
               className={cn(
                 "pointer-events-none absolute inset-y-0 z-20",
                 chromeColumn === 0 && "inset-x-0",
+                // 评论 dock 打开时整列让位：画面段里只留画面本身（见 `stageChromeHidden`）。
+                stageChromeHidden && "hidden",
               )}
               style={
                 chromeColumn > 0
@@ -755,9 +772,7 @@ export function ShortsPage() {
                   // `px-2` 与顶栏一致：左边的头像与返回按钮、右边的评论与 `⋮` 各自成一条竖线。
                   className="pointer-events-none absolute inset-x-0 z-20 flex items-end justify-between gap-3 bg-gradient-to-t from-black/70 to-transparent px-2 pt-8"
                   style={{
-                    bottom: commentsDockActive
-                      ? `${SHORTS_BOTTOM_BAR_HEIGHT_PX}px`
-                      : `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
+                    bottom: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
                     // 底部内边距让开进度条的命中区：那块区域只占 3px 布局、却向上盖住 17px，
                     // 不让位的话点在评论数字上会变成一次 seek（实测会把进度拖到 0）。
                     paddingBottom: `${SHORTS_SEEK_BAR_HIT_OVERHANG_PX}px`,
@@ -929,17 +944,15 @@ export function ShortsPage() {
           像素，同时存在只会让进度条看起来带了一圈描边。不被 `max-w-lg` 收窄 ——
           它描述的是时间而不是内容，通栏才读得出比例。
         */}
-            {controlsAvailable && (
+            {controlsAvailable && !stageChromeHidden && (
               <div
                 data-slot="shorts-bottom-bar"
                 className="absolute inset-x-0 bottom-0 z-20 flex flex-col bg-black/85"
                 style={{
-                  // 评论 dock 打开时页面最底部变成评论区，安全区已由它消费；底栏此时
-                  // 夹在画面与评论之间，再留一段只会在两者之间凭空多出一条黑带。
-                  height: commentsDockActive
-                    ? `${SHORTS_BOTTOM_BAR_HEIGHT_PX}px`
-                    : `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
-                  paddingBottom: commentsDockActive ? undefined : SHORTS_SAFE_AREA_BOTTOM,
+                  // 评论 dock 打开时这条栏整体不渲染（画面段只剩画面），因此这里只
+                  // 需要表达「页面最底层是操作栏、安全区由它消费」这一种高度。
+                  height: `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`,
+                  paddingBottom: SHORTS_SAFE_AREA_BOTTOM,
                 }}
               >
                 {/* 进度条也跟着控件列收窄；铺满时 `w-full` 铺满，与从前一致。
@@ -1071,9 +1084,9 @@ export function ShortsPage() {
                 // 关闭且高度归零后不再画分隔线，否则底栏上方会常驻一条 1px 的边。
                 commentsDockActive && "border-t border-white/10",
               )}
-              // dock 停在底部操作栏之上，操作栏仍是页面最底层、照旧消费一次安全区，
-              // dock 不再叠加（否则评论末尾多出一条空白）。舞台侧要停掉重复的安全区
-              // 让位，见 `safeAreaBottom={!commentsDockActive}`。
+              // dock 打开时底部操作栏整条收起，dock 是页面最底层：安全区由它消费一次
+              // （`ShortsDrawerContent` 的滚动容器与二级回复抽屉各补一份）。舞台侧
+              // 同时停掉对操作栏与安全区的让位，见 `bottomBar={!commentsDockActive}`。
               //
               // 关闭时保留 0 高占位而不是卸载：`DrawerViewport` 必须在第一次打开之前
               // 就已挂载，否则 `Drawer` 首帧拿到 null 容器会先 portal 到 body，再切回
@@ -1183,9 +1196,9 @@ function ShortsDrawerContent({
       */}
       <div
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-        // dock 形态的下沿停在底部操作栏之上，那里已经由操作栏消费过一次安全区；
-        // 再补一份会在评论末尾多出一条空白。整窗口抽屉仍是页面最底层，照旧补。
-        style={{ paddingBottom: compact && !scoped ? SHORTS_SAFE_AREA_BOTTOM : undefined }}
+        // dock 形态是页面最底层（底部操作栏在它打开时整条收起），安全区得由它自己
+        // 消费 —— 不补的话手机上最后一条评论会压在系统手势条下面。
+        style={{ paddingBottom: compact ? SHORTS_SAFE_AREA_BOTTOM : undefined }}
       >
         {children}
       </div>

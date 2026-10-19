@@ -269,20 +269,21 @@ export function shortsChromeColumn(frameWidth: number, areaWidth: number): numbe
 }
 
 /**
- * 评论 dock 允许占用的最大高度比例（紧凑布局）。
+ * 评论 dock 占用的高度比例（紧凑布局）。
  *
- * 约占一半：评论区要能读到两条以上的评论，画面也要留出一块能看清内容的窗口。
+ * 六成而不是一半：评论区是这一档的主角，半屏只够看到两条评论就得再滚；剩下的四成
+ * 仍能完整容纳竖屏画面（`SHORTS_COMMENT_DOCK_MIN_STAGE_PX` 再兜一层）。
  * 「不遮挡」是这一档的硬要求 —— dock 占的是真实布局高度，不是浮层。
  */
-export const SHORTS_COMMENT_DOCK_SHARE = 0.5;
+export const SHORTS_COMMENT_DOCK_SHARE = 0.6;
 
 /**
  * 评论 dock 之上必须留给画面的最小高度（px）。
  *
- * 只按比例分会在矮视口上把画面压没：横屏手机视口总高约 360px，减掉底栏与安全区后
- * 画面区本来只有 ~300px，对半分只剩 150px —— 一块连 16:9 预览都放不下的窗口。
- * 这个下限保证任何视口下画面都还有可看的面积；剩余高度不足时 dock 自己变矮
- * （它内部可滚动，矮一截仍能用）。
+ * 只按比例分会在矮视口上把画面压没：横屏手机视口总高约 360px，减掉状态栏后可用
+ * 高度约 330px，按六成分只剩 132px —— 一块连 16:9 预览都放不下的窗口。这个下限
+ * 保证任何视口下画面都还有可看的面积；剩余高度不足时 dock 自己变矮（它内部可滚动，
+ * 矮一截仍能用）。
  */
 export const SHORTS_COMMENT_DOCK_MIN_STAGE_PX = 240;
 
@@ -296,7 +297,7 @@ export const SHORTS_COMMENT_DOCK_MIN_STAGE_PX = 240;
  *
  * 两个约束同时成立时取较小者：
  *
- * - 不超过 `availableHeight × SHORTS_COMMENT_DOCK_SHARE`（约一半）；
+ * - 不超过 `availableHeight × SHORTS_COMMENT_DOCK_SHARE`（六成）；
  * - 为画面留下至少 `SHORTS_COMMENT_DOCK_MIN_STAGE_PX`。
  *
  * 返回 0 表示这个高度下不该开 dock（没有任何可用高度时退化成不显示）。

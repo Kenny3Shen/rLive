@@ -66,12 +66,18 @@ function useShortsStageSize() {
  * 底部让位是硬性的：操作栏（进度条 + 弹幕输入 + 几个按钮）占真实空间而不是浮在
  * 画面上，因此画面可用高度必须先减掉它，否则输入框会盖住画面底部。
  *
+ * 评论 dock 打开时传 `bottomBar: false`：那条操作栏连同画面底部浮层与顶栏一起整体
+ * 收起，画面区只剩画面本身。此时画面区直接铺到播放区下沿（dock 的上沿），没有任何
+ * 控件压在画面上 —— 这也是「评论打开后视频窗口只有视频」的几何落点。底部安全区
+ * 随之由 dock 自己消费（它是页面最底层），画面区不再让位。
+ *
  * 顶部相反，一点不减：状态栏已由 `.app-shell` 的 `padding-top` 统一预留，短视频
  * 视口的顶边就是状态栏下沿，这里再减一次会在顶部空出一条状态栏高的黑带
  * （见 `shortsFeed` 的安全区注释）。顶栏是浮层，压在画面顶部这一条上，弹幕另有
  * 起始线让位（见 `--video-danmaku-top`）。
  */
-function shortsMediaAreaStyle(safeAreaBottom: boolean) {
+function shortsMediaAreaStyle(safeAreaBottom: boolean, bottomBar = true) {
+  if (!bottomBar) return { top: 0, bottom: 0 } as const;
   return {
     top: 0,
     // 底部安全区默认由这条栏消费（页面最底层是底部操作栏）。评论 dock 出现后，
@@ -187,6 +193,14 @@ type ShortsStageProps = {
    */
   safeAreaBottom?: boolean;
   /**
+   * 画面区下沿是否让开底部操作栏。
+   *
+   * 默认 true：操作栏占真实空间，画面不能压到它下面。评论 dock 打开时操作栏整体
+   * 收起（页面层把顶栏、信息浮层与底栏一起藏掉），画面区直接铺到播放区下沿 ——
+   * 这一段里画面就是整块播放区，没有任何控件叠在上面。
+   */
+  bottomBar?: boolean;
+  /**
    * 画面点按的动作。
    *
    * 由页面提供而不是这里直接调 `playback.togglePlay`：长按倍速松手后浏览器仍会补一次
@@ -215,6 +229,7 @@ export function ShortsStage({
   danmakuVisible,
   gestureActive,
   safeAreaBottom = true,
+  bottomBar = true,
   onSurfaceTap,
   onChromeColumn,
 }: ShortsStageProps) {
@@ -245,7 +260,7 @@ export function ShortsStage({
         ref={measure}
         data-slot="shorts-media-area"
         className="absolute inset-x-0 flex items-start justify-center"
-        style={shortsMediaAreaStyle(safeAreaBottom)}
+        style={shortsMediaAreaStyle(safeAreaBottom, bottomBar)}
       >
         <div
           data-slot="shorts-frame"
@@ -519,9 +534,12 @@ function ShortsDynamicBackground({
 export function ShortsBlankStage({
   item,
   safeAreaBottom = true,
+  bottomBar = true,
 }: {
   item: Pick<ShortsStageItem, "dimension">;
   safeAreaBottom?: boolean;
+  /** 是否让开底部操作栏；与 `ShortsStage` 同名参数同一含义。 */
+  bottomBar?: boolean;
 }) {
   const { size: area, measure } = useShortsStageSize();
   // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。
@@ -532,7 +550,7 @@ export function ShortsBlankStage({
       <div
         ref={measure}
         className="absolute inset-x-0 flex items-start justify-center"
-        style={shortsMediaAreaStyle(safeAreaBottom)}
+        style={shortsMediaAreaStyle(safeAreaBottom, bottomBar)}
       >
         <div
           className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}

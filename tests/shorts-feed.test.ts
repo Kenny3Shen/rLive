@@ -123,14 +123,15 @@ describe("三槽所有权与补货", () => {
 });
 
 describe("评论 dock 高度", () => {
-  test("约占一半，但总为画面保留最小高度", () => {
-    // 入参是播放区可用高度：视口总高已减掉底部操作栏（592 + 59 = 651 等）。
-    // 800px 里 50% = 400，画面保留 400，够用。
-    expect(shortsCommentDockHeight(800)).toBe(400);
-    expect(shortsCommentDockHeight(700)).toBe(350);
-    // 矮视口：480px 时 50% = 240 且画面下限也是 240 —— 恰好相等。
+  test("约占六成，但总为画面保留最小高度", () => {
+    // 入参是外层可用高度。dock 打开时底部操作栏整条收起，因此这里不再先减操作栏：
+    // 800px 里 60% = 480，上方画面留 320，够用。
+    expect(shortsCommentDockHeight(800)).toBe(480);
+    expect(shortsCommentDockHeight(700)).toBe(420);
+    // 矮视口：600px 是分界点（60% 与「留 240px 画面」相等），更矮时画面下限先触发。
+    expect(shortsCommentDockHeight(600)).toBe(360);
     expect(shortsCommentDockHeight(480)).toBe(SHORTS_COMMENT_DOCK_MIN_STAGE_PX);
-    // 更矮：画面下限先触发，dock 随之变矮而不是压没画面。
+    // 更矮：dock 随之变矮而不是压没画面。
     expect(shortsCommentDockHeight(400)).toBe(400 - SHORTS_COMMENT_DOCK_MIN_STAGE_PX);
     expect(shortsCommentDockHeight(400)).toBeLessThan(400 * SHORTS_COMMENT_DOCK_SHARE);
   });
