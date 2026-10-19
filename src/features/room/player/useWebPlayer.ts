@@ -20,6 +20,11 @@ import { requestPlayerAutoplay } from "./autoplay";
 import { watchDesktopFullscreen } from "./desktopFullscreenWatcher";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import {
+  playbackSourceFromKey,
+  playUrlKey,
+  shouldSoftSwitchToSource,
+} from "../playback/sourceIdentity";
+import {
   createVideoJsPlayer,
   getVideoJsHlsCore,
   getVideoJsMpegtsCore,
@@ -318,20 +323,6 @@ export function hlsResponseStatus(error: unknown): number | null {
   return status ?? null;
 }
 
-export function playUrlKey(playUrl: PlayUrl | null): string {
-  if (!playUrl) return "";
-  // 包含稳定的头部指纹，使 cookie/referer 变化也会触发重载。JSON 使 URL 与请求头
-  // 取值中的分隔符无歧义，并可在下方重建为不可变的播放快照。
-  return JSON.stringify([
-    playUrl.url,
-    Object.entries(playUrl.headers).sort(([a], [b]) => a.localeCompare(b)),
-    playUrl.source_id,
-    playUrl.label,
-    playUrl.protocol,
-    playUrl.priority,
-  ]);
-}
-
 /**
  * 为连续 FLV 保持适度的延迟与清理窗口。移动端解码和调度预算更紧，
  * 获得更宽的直播窗口。
@@ -484,68 +475,6 @@ export function shouldUsePlaybackSoftSwitch(
   );
 }
 
-export function canSoftSwitchPlaybackSource(input: {
-  enabled: boolean;
-  activeSourceKey: string;
-  targetSourceKey: string;
-  activeKind: VideoJsPlaybackKind | null;
-  targetKind: VideoJsPlaybackKind | null;
-}): boolean {
-  return Boolean(
-    input.enabled &&
-    input.activeSourceKey &&
-    input.targetSourceKey &&
-    input.activeSourceKey !== input.targetSourceKey &&
-    input.activeKind &&
-    input.activeKind === input.targetKind,
-  );
-}
-
-function playbackSourceFromKey(key: string): PlayUrl | null {
-  if (!key) return null;
-  try {
-    const parsed: unknown = JSON.parse(key);
-    if (!Array.isArray(parsed) || typeof parsed[0] !== "string" || !Array.isArray(parsed[1])) {
-      return null;
-    }
-    const entries = parsed[1].filter(
-      (entry): entry is [string, string] =>
-        Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string",
-    );
-    const protocol = parsed[4];
-    if (
-      protocol !== "flv" &&
-      protocol !== "hls" &&
-      protocol !== "mpeg_ts" &&
-      protocol !== "native" &&
-      protocol !== "unknown"
-    ) {
-      return null;
-    }
-    const sourceId = parsed[2];
-    const label = parsed[3];
-    const priority = parsed[5];
-    if (
-      typeof sourceId !== "string" ||
-      typeof label !== "string" ||
-      typeof priority !== "number" ||
-      !Number.isFinite(priority)
-    ) {
-      return null;
-    }
-    return {
-      url: parsed[0],
-      headers: Object.fromEntries(entries),
-      source_id: sourceId,
-      label,
-      protocol,
-      priority,
-    };
-  } catch {
-    return null;
-  }
-}
-
 let nextPlayerInstanceId = 0;
 
 function createPlayerInstanceId(): string {
@@ -581,6 +510,12 @@ export type MediaLifecycleOptions = {
   /** 语义重建 key；变化时为同一来源重建传输层。 */
   reloadToken?: number | string;
   /**
+   * 「同一来源需要重新打开传输」的信号。变化时优先保留媒体元素与适配器，
+   * 只重新打开本机代理与传输；做不到时才完整重建。用于自动续期，
+   * 使用户看不到一次整窗重载。
+   */
+  renewToken?: number | string;
+  /**
    * 为多视图时钟对齐配置传输层：关闭内建延迟追赶并加宽后向缓冲。变更它会重建
    * 传输层，因为两个协议插件都只在创建时读取这些选项。
    */
@@ -605,6 +540,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     initialMuted = false,
     fullscreenOwner = true,
     reloadToken = 0,
+    renewToken = 0,
     liveSyncHold = false,
     onMediaFailure,
     onReady,
@@ -671,6 +607,19 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const measuredAspectRatioRef = useRef<{ sessionKey: string; ratio: number } | null>(null);
   const [softFallbackToken, setSoftFallbackToken] = useState(0);
   const [activeSourceKey, setActiveSourceKey] = useState("");
+  /**
+   * 已被应用（或由新建传输直接吸收）的续期序号。
+   *
+   * 它是「这次续期是否还需要软切换」的唯一判据：初始化 effect 新建传输时会把
+   * 当时的 token 记入，因此同一 token 不会再多触发一次重连；而重渲染本身不会
+   * 让 token 变化，恢复会话也不会重复发布同一个值。
+   */
+  const appliedRenewTokenRef = useRef<number | string>(renewToken);
+  /** 初始化 effect 读取的是本次运行生效的续期序号，不能依赖 ref 的旧值。 */
+  const renewTokenRef = useRef<number | string>(renewToken);
+  useLayoutEffect(() => {
+    renewTokenRef.current = renewToken;
+  }, [renewToken]);
 
   const ownsFullscreen = playerOwnsFullscreen(fullscreenOwner);
 
@@ -707,6 +656,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   }, [onMediaFailure, onReady, onWaiting, onPause, onPlaying]);
 
   const destroyPlayer = useCallback(() => {
+    // 销毁者（初始化 effect、离开页面、硬回退）之后的续期由新传输承担，
+    // 不应再由软切换对着一个已拆除的播放器重连。
+    appliedRenewTokenRef.current = renewTokenRef.current;
     const video = videoRef.current;
     const p = playerRef.current;
     playerRef.current = null;
@@ -797,9 +749,12 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   useLayoutEffect(() => {
     effectivePlaybackSourceRef.current = effectivePlaybackSource;
   }, [effectivePlaybackSource]);
+  // 软切换开启时，同一房间的硬 key 不包含具体来源：换线与续期都走原地软切换
+  // （失败才递增 `softFallbackToken` 硬回退），媒体元素与播放器不再因每次地址
+  // 变化被拆除重建。关闭软切换时任何来源变化仍直接硬重建，续期同样如此。
   const hardStreamKey = softSwitchEnabled
     ? `${sessionKey}::${effectivePlaybackKind ?? "none"}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`
-    : `${streamKey}::${softFallbackToken}::${liveSyncHold ? "sync" : "free"}`;
+    : `${streamKey}::${softFallbackToken}::${renewToken}::${liveSyncHold ? "sync" : "free"}`;
 
   // 逻辑流身份变化时打开/替换流。
   useEffect(() => {
@@ -808,6 +763,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const proxySessionId = `${playerInstanceId}:${gen}`;
     let playbackSource = effectivePlaybackSourceRef.current;
     let sourceKey = playUrlKey(playbackSource);
+    // 这次硬重建本身就从当前来源重新打开传输，续期信号已被吸收。
+    appliedRenewTokenRef.current = renewTokenRef.current;
 
     const stopProxy = async () => {
       try {
@@ -1227,15 +1184,19 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
   // 同协议的来源变化可以保留媒体元素与 MSE 状态。各直播 CDN 的时间戳连续性并不
   // 统一，任何初始化/切换失败都会自增硬 key 并干净重建。
+  // 每次续期都要重新打开传输，即使 `playUrlKey` 没变（签名地址常常原样返回）。
+  // `appliedRenewTokenRef` 记录已消费的续期序号：同一 token 只重连一次，
+  // 重渲染不会重复应用；新建传输则直接吸收当前 token。
   useEffect(() => {
     if (!effectivePlaybackSource || !effectivePlaybackKind) return;
     if (
-      !canSoftSwitchPlaybackSource({
+      !shouldSoftSwitchToSource({
         enabled: softSwitchEnabled,
         activeSourceKey,
         targetSourceKey: effectivePlaybackSourceKey,
         activeKind: activePlaybackKindRef.current,
         targetKind: effectivePlaybackKind,
+        force: renewToken !== appliedRenewTokenRef.current,
       })
     ) {
       return;
@@ -1244,6 +1205,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const player = playerRef.current;
     const proxySessionId = activeProxySessionIdRef.current;
     if (!player || !proxySessionId) {
+      appliedRenewTokenRef.current = renewToken;
       setSoftFallbackToken((token) => token + 1);
       return;
     }
@@ -1253,6 +1215,13 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const targetSource = effectivePlaybackSource;
     const targetKey = effectivePlaybackSourceKey;
     const targetKind = effectivePlaybackKind;
+    // 续期重连保留用户的暂停意图；普通换源维持「原本在播就继续播」。
+    const isRenewal = renewToken !== appliedRenewTokenRef.current;
+    // 续期只在同协议时走到这里；即便来源 key 不变，传输也要重新打开。
+    appliedRenewTokenRef.current = renewToken;
+    // 只尊重用户自己的暂停意图：`ended` 或流中断造成的 `paused` 必须照常恢复，
+    // 否则一次自动续期只会把画面停在黑屏上。
+    const resumePlayback = !userPausedRef.current;
 
     void proxyLifecycleQueue
       .enqueue(async () => {
@@ -1286,7 +1255,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
           // 换源在队列内发起，与代理所有权变更保持有序；媒体就绪的等待放到队列外。
           // 它最长 12 秒，把它留在队列里会让本实例后续的切源、硬重建和退出一起等。
-          const ready = switchVideoJsPlaybackSource(player, localSource, targetKind);
+          const ready = switchVideoJsPlaybackSource(player, localSource, targetKind, undefined, {
+            autoPlay: isRenewal ? resumePlayback : undefined,
+          });
           // 真正的处理在队列外，这里立刻吸收拒绝，避免中间的微任务窗口产生
           // 未处理拒绝告警；取消与超时仍按下方 settled 的结果走原有分支。
           const settled = ready.then(
@@ -1354,6 +1325,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     effectivePlaybackSourceKey,
     profile,
     proxyLifecycleQueue,
+    renewToken,
     siteId,
     softSwitchEnabled,
   ]);

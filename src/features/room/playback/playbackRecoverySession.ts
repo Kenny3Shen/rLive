@@ -11,6 +11,7 @@ import {
   type PlaybackLinePreference,
 } from "./linePreference";
 import { pickDefaultQualityIndex } from "./quality";
+import { canRenewPlaybackInPlace } from "./sourceIdentity";
 import { nextRankedLineIndex } from "./sourceSelection";
 import { errorText } from "@/shared/components/errorPresentation";
 
@@ -36,6 +37,14 @@ export type PlaybackRecoverySnapshot = {
   error: unknown;
   loadError: string | null;
   reloadToken: number;
+  /**
+   * 「同一来源需要重新打开传输」的递增信号，例如签名过期后重新取到同一地址。
+   *
+   * 与 `reloadToken` 的区别只在播放器如何处理：播放器优先在现有媒体元素与
+   * 适配器上原地重连，只有原地重连失败才完整重建。语义 key 变化本身已经能
+   * 触发软切换，这个信号只服务于 key 没变的续期。
+   */
+  renewToken: number;
 };
 
 export type PlaybackRecoveryMetadataInput = {
@@ -114,6 +123,7 @@ const EMPTY_SNAPSHOT: PlaybackRecoverySnapshot = {
   error: undefined,
   loadError: null,
   reloadToken: 0,
+  renewToken: 0,
 };
 
 export function playbackWasStable(
@@ -240,7 +250,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     const generation = this.beginUserIntent();
     this.metadataRenewalInFlight = true;
     this.publish({ loading: true, error: undefined, loadError: null });
-    void this.refreshMetadata(generation, "播放地址刷新失败，请重试");
+    void this.refreshMetadata(generation, "播放地址刷新失败，请重试", "rebuild");
   }
 
   acceptTransportFact(event: PlayerEvent): void {
@@ -378,7 +388,11 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     }
   }
 
-  private async refreshMetadata(generation: number, fallbackMessage: string): Promise<void> {
+  private async refreshMetadata(
+    generation: number,
+    fallbackMessage: string,
+    mode: "rebuild" | "renew",
+  ): Promise<void> {
     const currentInput = this.metadataInput();
     if (!currentInput) {
       this.finishMetadataFailure(generation, new Error("缺少播放元数据"), fallbackMessage);
@@ -386,6 +400,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     }
     const preferredQuality = this.snapshot.qualities[this.snapshot.qualityIndex]?.quality;
     const preferredSourceId = this.snapshot.playUrl?.source_id;
+    const activePlayUrl = this.snapshot.playUrl;
     const fallbackLineIndex = this.snapshot.lineIndex;
     try {
       const refreshedDetail = (await this.config.refreshDetail?.()) ?? currentInput.detail;
@@ -415,16 +430,23 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
       this.metadata.cacheQualities(input, qualities);
       this.metadata.cacheLines(linesInput, lines);
       this.metadataRenewalInFlight = false;
+      const nextPlayUrl = lines[lineIndex] ?? null;
+      // 自动续期不拆媒体元素：同协议时由播放器原地重连；协议变化或原地连接
+      // 不可用时，播放器再自行升级为完整重建。手动刷新语义要求一次全新的
+      // MSE 会话，因此始终递增 `reloadToken`。
+      const renewInPlace = mode === "renew" && canRenewPlaybackInPlace(activePlayUrl, nextPlayUrl);
       this.publish({
         qualities,
         qualityIndex,
         lines,
         lineIndex,
-        playUrl: lines[lineIndex] ?? null,
+        playUrl: nextPlayUrl,
         loading: false,
         error: undefined,
         loadError: null,
-        reloadToken: this.snapshot.reloadToken + 1,
+        ...(renewInPlace
+          ? { renewToken: this.snapshot.renewToken + 1 }
+          : { reloadToken: this.snapshot.reloadToken + 1 }),
       });
     } catch (error) {
       this.finishMetadataFailure(generation, error, fallbackMessage);
@@ -446,7 +468,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     this.metadataRenewalInFlight = true;
     const renew = () => {
       this.failoverTimer = null;
-      void this.refreshMetadata(generation, "播放地址更新失败，请点击刷新后重试");
+      void this.refreshMetadata(generation, "播放地址更新失败，请点击刷新后重试", "renew");
     };
     if (delayMs > 0) this.failoverTimer = this.clock.setTimer(renew, delayMs);
     else renew();
@@ -494,7 +516,9 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
           playUrl: this.snapshot.lines[action.lineIndex] ?? null,
         });
       } else {
-        this.publish({ reloadToken: this.snapshot.reloadToken + 1 });
+        // 同一线路原地重试：地址没变，但传输已经失效，必须重新打开连接。
+        // 播放器优先保留媒体元素与适配器；做不到时才自行完整重建。
+        this.publish({ renewToken: this.snapshot.renewToken + 1 });
       }
     };
     if (action.delayMs > 0) this.failoverTimer = this.clock.setTimer(apply, action.delayMs);

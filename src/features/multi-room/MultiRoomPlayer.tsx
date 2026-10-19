@@ -438,6 +438,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
     // 否则六条流都会声称自己在全屏。
     fullscreenOwner: main,
     reloadToken: playback.reloadToken,
+    renewToken: playback.renewToken,
     // 协议插件只在创建时读取延迟选项，
     // 因此对齐配置属于传输身份的一部分。
     liveSyncHold: syncMode !== "off",

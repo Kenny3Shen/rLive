@@ -33,6 +33,8 @@ export type PlaybackController = {
   onPlayerMediaFailure: (event: PlayerEvent) => void;
   onPlayerPlaying: () => void;
   reloadToken: number;
+  /** 同一来源需要重新打开传输时的递增信号（见 `renewToken`）。 */
+  renewToken: number;
 };
 
 export function usePlaybackController(opts: {

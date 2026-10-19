@@ -407,6 +407,7 @@ function RoomPageContent() {
           onRefresh={playback.retryPlay}
           loadError={playback.loadError}
           reloadToken={playback.reloadToken}
+          renewToken={playback.renewToken}
           onPlayerMediaFailure={playback.onPlayerMediaFailure}
           onPlayerPlaying={onPlayerPlaying}
           onPlayerReady={releaseStartup}

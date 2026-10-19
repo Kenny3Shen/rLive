@@ -272,6 +272,8 @@ type PlayerPaneProps = {
   onRefresh?: () => void;
   loadError?: string | null;
   reloadToken?: number;
+  /** 自动续期信号：同源原地重连，用户不应看到一次整窗重载。 */
+  renewToken?: number;
   onPlayerMediaFailure?: (event: PlayerEvent) => void;
   onPlayerPlaying?: () => void;
   onPlayerReady?: () => void;
@@ -350,6 +352,7 @@ function PlayerPaneContent({
   onRefresh,
   loadError: externalLoadError,
   reloadToken = 0,
+  renewToken = 0,
   onPlayerMediaFailure,
   onPlayerPlaying,
   onPlayerReady,
@@ -462,6 +465,7 @@ function PlayerPaneContent({
     initialMuted: androidClient ? false : initialAudio.muted,
     sessionKey: roomSessionKey,
     reloadToken,
+    renewToken,
     onMediaFailure: onPlayerMediaFailure,
     onPlaying: onPlayerPlaying,
     onReady: onPlayerReady,

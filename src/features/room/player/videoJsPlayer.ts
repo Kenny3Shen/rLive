@@ -419,6 +419,7 @@ class VideoJsPlayer {
     url: string,
     kind: VideoJsPlaybackKind,
     timeoutMs = VIDEO_JS_PLAYBACK_SWITCH_TIMEOUT_MS,
+    options: { autoPlay?: boolean } = {},
   ): Promise<void> {
     if (this.destroyed) return Promise.reject(new Error("播放器已销毁"));
     if (kind !== this.options.kind || (kind !== "hls" && kind !== "flv" && kind !== "mpegts")) {
@@ -427,7 +428,11 @@ class VideoJsPlayer {
     this.pendingSwitch?.abort();
     this.endedAt = null;
     const controller = (this.pendingSwitch = new AbortController());
-    this.playRequested ||= !this.media.paused;
+    // 续期重连只在原本正在播放时才自动起播：用户暂停着的画面不该被一次后台
+    // 重连拉起来。普通换源保持既有语义（沿用当前播放意图）。
+    const resumePlayback = options.autoPlay ?? true;
+    const shouldAutoPlay = resumePlayback ? this.playRequested || !this.media.paused : false;
+    this.playRequested ||= resumePlayback && !this.media.paused;
     return new Promise<void>((resolve, reject) => {
       let started = false;
       let settled = false;
@@ -449,7 +454,9 @@ class VideoJsPlayer {
       const onAbort = () => finish(new DOMException("播放源切换已取消", "AbortError"));
       const offReady = this.on("canplay", () => {
         if (!started || this.media.readyState < 3) return;
-        if (this.playRequested) {
+        // `autoPlay: false` 是续期对用户暂停意图的显式覆盖，
+        // 不能被此前残留的 `playRequested` 重新拉起。
+        if (shouldAutoPlay) {
           void this.media.play().catch((error: unknown) => {
             if (!isInterruptedPlayRequest(error)) this.reportError(error);
           });
@@ -544,8 +551,9 @@ export function switchVideoJsPlaybackSource(
   url: string,
   kind: VideoJsPlaybackKind,
   timeoutMs = VIDEO_JS_PLAYBACK_SWITCH_TIMEOUT_MS,
+  options: { autoPlay?: boolean } = {},
 ): Promise<void> {
-  return player.switchSource(url, kind, timeoutMs);
+  return player.switchSource(url, kind, timeoutMs, options);
 }
 
 export function videoJsPlayerErrorMessage(error: unknown, fallback = "播放失败"): string {

@@ -11,6 +11,12 @@ import {
   playbackSourceId,
   playbackSourcePriority,
 } from "../src/lib/playUrl";
+import {
+  canRenewPlaybackInPlace,
+  playbackSourceFromKey,
+  playUrlKey,
+  shouldSoftSwitchToSource,
+} from "../src/features/room/playback/sourceIdentity";
 
 const sources: PlayUrl[] = [
   {
@@ -76,5 +82,48 @@ describe("smart playback source selection", () => {
         exhaustedIndices: new Set([1, 2]),
       }),
     ).toBe(0);
+  });
+});
+
+describe("播放源身份与原地续期", () => {
+  test("语义 key 可还原，且对请求头顺序不敏感", () => {
+    const source: PlayUrl = {
+      ...sources[0],
+      headers: { referer: "https://live.bilibili.com", "user-agent": "ua" },
+    };
+    const reordered = {
+      ...source,
+      headers: { "user-agent": "ua", referer: "https://live.bilibili.com" },
+    };
+    expect(playUrlKey(source)).toBe(playUrlKey(reordered));
+    expect(playbackSourceFromKey(playUrlKey(source))).toEqual(source);
+    expect(playbackSourceFromKey("not-json")).toBeNull();
+  });
+
+  test("只有同协议才允许原地重连，地址没变也算", () => {
+    const renewed = { ...sources[0], url: "https://one.example/live?token=next" };
+    expect(canRenewPlaybackInPlace(sources[0], renewed)).toBe(true);
+    // 续期原样返回同一个签名地址：连接仍需重新打开。
+    expect(canRenewPlaybackInPlace(sources[0], { ...sources[0] })).toBe(true);
+    expect(canRenewPlaybackInPlace(sources[0], sources[1])).toBe(false);
+    expect(canRenewPlaybackInPlace(null, sources[0])).toBe(false);
+    expect(canRenewPlaybackInPlace(sources[0], null)).toBe(false);
+  });
+
+  test("续期可以强制重连，没有活动播放器时让初始化路径接手", () => {
+    const base = {
+      enabled: true,
+      activeSourceKey: playUrlKey(sources[0]),
+      targetSourceKey: playUrlKey(sources[0]),
+      activeKind: "flv" as const,
+      targetKind: "flv" as const,
+    };
+    expect(shouldSoftSwitchToSource(base)).toBe(false);
+    expect(shouldSoftSwitchToSource({ ...base, force: true })).toBe(true);
+    const changed = { ...base, targetSourceKey: playUrlKey({ ...sources[0], url: "https://x" }) };
+    expect(shouldSoftSwitchToSource(changed)).toBe(true);
+    expect(shouldSoftSwitchToSource({ ...changed, activeKind: "hls" })).toBe(false);
+    expect(shouldSoftSwitchToSource({ ...changed, activeSourceKey: "" })).toBe(false);
+    expect(shouldSoftSwitchToSource({ ...changed, enabled: false })).toBe(false);
   });
 });
