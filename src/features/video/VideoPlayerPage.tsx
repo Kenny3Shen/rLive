@@ -157,6 +157,8 @@ import { videoSeekGestureIntent, videoSeekGestureTarget } from "./videoSurfaceGe
 import { isVideoTailBuffered } from "./videoTailBuffer";
 import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWaitingRecovery";
 import {
+  resumeSnapshotFor,
+  shouldCaptureResume,
   VideoPlaybackHistory,
   VideoPlaybackSessions,
   videoPlaybackForKey,
@@ -1365,8 +1367,18 @@ function VideoPlayerPageContent() {
         positionReady = true;
       }
     }
-    function captureResume() {
-      if (videoKeyRef.current !== videoKey) return;
+    /**
+     * 记下本轮会话的位置，供同内容重建（画质/仅音频/重试）接着播。
+     *
+     * 默认只接受「全局内容键仍是本轮」的调用：内容已经切走之后迟到的
+     * `waiting` 等事件不能把上一轮的位置写进下一轮。但 cleanup 是本轮会话
+     * 的终点，必须用它自己的 key 记录，不能因此被闸门拦下 —— 离开播放页
+     * 时 layout 已先一步把全局键指向新视频，拦下就等于丢掉「离开前的位置」，
+     * 而 `resumeAtRef` 里还会留着更早一次重建的旧位置，返回时反而用它
+     * 覆盖正确的磁盘历史。
+     */
+    function captureResume(options?: { readonly force?: boolean }) {
+      if (!shouldCaptureResume(videoKeyRef.current, videoKey, options?.force ?? false)) return;
       resumeAtRef.current = videoPlaybackSnapshot(
         resumeAtRef.current,
         videoKey,
@@ -1663,9 +1675,8 @@ function VideoPlayerPageContent() {
         if (cancelled) return;
         // 必须在设置 DASH source 之前交付起播位置，避免先调度 0 秒分片。
         // 同集的画质/恢复快照优先；别的分集快照不能污染本集历史续播。
-        const snapshot = resumeAtRef.current;
         // 快照不在 source 创建前消费；MPD/初始化失败后的下一次重试仍需它。
-        const resume = snapshot?.key === videoKey ? snapshot : null;
+        const resume = resumeSnapshotFor(resumeAtRef.current, videoKey);
         const historyResumeAt = historyResumeAtRef.current;
         pendingInitialResume = resume
           ? { position: resume.position, playing: resume.playing }
@@ -1723,7 +1734,9 @@ function VideoPlayerPageContent() {
     return () => {
       // keepPreviousData 期间仍能播放/seek/暂停。同内容交接以销毁前的最新现场
       // 为准，不能退回点击切画质/重试时的旧位置与旧播放意图。
-      captureResume();
+      // 这里必须忽略全局内容键：换视频时 layout 已经把 key 指向新内容，
+      // 但本轮的位置仍要记下（见 `captureResume`）。
+      captureResume({ force: true });
       if (captureResumeRef.current === captureResume) captureResumeRef.current = null;
       // 销毁前记下最后一次进度，使用本轮的历史身份，即使路由已切到下一集。
       reportProgress(Number.isFinite(media.currentTime) ? media.currentTime : 0, true);

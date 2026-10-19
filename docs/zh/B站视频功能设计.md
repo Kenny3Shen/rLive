@@ -213,6 +213,7 @@ message DanmakuElem {
 - 菜单复用 `PlayerControls` 既有的 `qualities/qualityIndex/onQualityChange` 约定（录制回放同源），不可用档位列出但置灰并提示「登录或大会员后可用」。
 - 切换 = 记录当前位置与播放状态 → 带 `qn` 重取 play-info。新的代理端口 = 新的 MPD 地址，播放器必然重建；DASH 在首次 source 上携带 `#t=秒` 的 MPD anchor，让引擎直接调度目标分片，metadata 回调只恢复播放意图、不再二次 seek。仅音频的原生媒体仍在 metadata 就绪后赋 `currentTime`。
 - 重取期间 `keepPreviousData` 保留同内容旧数据：旧播放器继续播到新信息就位，不黑屏。交接时重新读取旧播放器的最新位置与播放/暂停状态，覆盖点击切换时的快照，避免请求期间继续观看、seek 或暂停后被回滚；新播放器尚未建立有效位置就失败时，不用它的 0 秒覆盖断点，后续重试继续沿用原快照。
+- **离场快照必须按本轮内容记录**：快照只在同一 `videoKey` 内复用，换到别的视频后旧快照作废，否则上一集的卡顿现场会被下一集当成续播点。点相关视频时布局阶段会先把全局内容键指向新视频，随后旧播放器才在 passive cleanup 里收尾；若 cleanup 也受「全局键仍是本轮」约束，离开前的位置就永远进不了快照，`resumeAtRef` 还会留着更早一次重建（刷新播放/切画质/仅音频）的位置。返回同一视频时它优先于磁盘历史命中，表现为「回到的是上次刷新的位置而不是离开时的位置」——典型顺序是先刷新播放再连续看一段、点相关视频、返回。判定收敛在 `shouldCaptureResume(currentKey, sessionKey, closing)`：普通媒体事件仍受全局键约束以挡住迟到事件，cleanup 以 `closing` 放行；取快照统一走 `resumeSnapshotFor`。回归见 `tests/video-playback-lifecycle.test.ts`。
 
 ### 右侧栏（`VideoSidebar`）
 

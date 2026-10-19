@@ -64,6 +64,34 @@ export class VideoPlaybackSessions {
 export type VideoResumeSnapshot = { key: string; position: number; playing: boolean };
 
 /**
+ * 一份快照是否属于当前内容。
+ *
+ * 只在「同一份内容重建播放器」（画质/仅音频/重试）时复用；换到别的视频后
+ * 旧 key 的快照必须作废，否则上一集的卡顿现场（waiting）会被下一集当成续播点。
+ */
+export function resumeSnapshotFor(
+  snapshot: VideoResumeSnapshot | null,
+  key: string,
+): VideoResumeSnapshot | null {
+  return snapshot?.key === key ? snapshot : null;
+}
+
+/**
+ * 一次快照请求是否该写进 `resumeAtRef`。
+ *
+ * 普通事件（timeupdate/waiting/pause）只认「全局内容键仍是本轮」：内容切走后
+ * 迟到的旧会话事件不能污染下一轮。会话 cleanup 是终点的例外 —— 换视频时布局
+ * 阶段已经把全局键指向新视频，若在这里拦下，离开前的位置就永远不会落进快照。
+ */
+export function shouldCaptureResume(
+  currentKey: string,
+  sessionKey: string,
+  closing: boolean,
+): boolean {
+  return closing || currentKey === sessionKey;
+}
+
+/**
  * 只用已建立的媒体位置覆盖快照。初始化失败时的 0 秒不是新断点；
  * 真正就绪后用户 seek 到 0 则是有效选择，必须允许覆盖原来的历史位置。
  */

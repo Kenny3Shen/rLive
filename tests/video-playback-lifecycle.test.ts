@@ -4,6 +4,8 @@ import type { VideoHistoryItem, VideoPlayInfo } from "../src/shared/types/video"
 import {
   VideoPlaybackHistory,
   VideoPlaybackSessions,
+  resumeSnapshotFor,
+  shouldCaptureResume,
   videoPlaybackForKey,
   videoPlaybackSnapshot,
   type VideoPlaybackResult,
@@ -221,6 +223,26 @@ describe("VOD 同内容重建的断点", () => {
     expect(videoPlaybackSnapshot(resume, "A:1", { currentTime: NaN, paused: false }, true)).toBe(
       resume,
     );
+  });
+});
+
+describe("VOD 相关视频返回后的续播位置", () => {
+  test("换视频时 cleanup 仍记下本轮位置，不被已切走的全局 key 拦下", () => {
+    // 点相关视频的瞬间，布局阶段先把全局键指向 B，随后 A 的播放器才 cleanup。
+    expect(shouldCaptureResume("B:2", "A:1", false)).toBe(false);
+    expect(shouldCaptureResume("B:2", "A:1", true)).toBe(true);
+  });
+
+  test("同内容重建与内容未切换的事件照常写快照", () => {
+    expect(shouldCaptureResume("A:1", "A:1", false)).toBe(true);
+    expect(shouldCaptureResume("A:1", "A:1", true)).toBe(true);
+  });
+
+  test("返回 A 时只接受 A 自己的快照，旧内容快照不会顶替磁盘历史", () => {
+    const stale = { key: "A:1", position: 40, playing: true };
+    expect(resumeSnapshotFor(stale, "A:1")).toEqual(stale);
+    expect(resumeSnapshotFor(stale, "B:2")).toBeNull();
+    expect(resumeSnapshotFor(null, "A:1")).toBeNull();
   });
 });
 
