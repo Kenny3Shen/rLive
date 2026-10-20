@@ -171,7 +171,7 @@ export type ShortsStageItem = Pick<VideoItem, "title" | "cover" | "dimension"> &
   Partial<Pick<VideoItem, "aid" | "cid">>;
 
 type ShortsStageProps = {
-  /** 仅依赖展示字段；抖音不伪造 B 站 aid/cid，弹幕由能力参数控制。 */
+  /** 仅依赖展示字段；弹幕所需身份由能力参数控制，舞台不自行补 B 站 aid/cid。 */
   item: ShortsStageItem;
   playback: ShortsPlaybackState;
   videoRef: RefObject<HTMLVideoElement | null>;

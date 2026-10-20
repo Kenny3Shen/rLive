@@ -36,7 +36,7 @@ export type ShortsSessionRetention<Info = VideoPlayInfo> = {
   park: (itemKey: string, playInfo: Info) => void;
 };
 
-/** B 站兼容入口；抖音与后续来源共用下面的保留位生命周期。 */
+/** B 站兼容入口；其他来源直接使用下面的保留位生命周期。 */
 export function useShortsSessionRetention(
   ttlMs: number = SHORTS_SESSION_RETENTION_MS,
 ): ShortsSessionRetention {

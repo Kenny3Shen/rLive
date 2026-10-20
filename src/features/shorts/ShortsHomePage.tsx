@@ -2,7 +2,7 @@ import { ChevronRight } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { SiteLogo } from "@/shared/components/SiteLogo";
-import { BILIBILI_SHORTS_PATH, DOUYIN_SHORTS_PATH, SHORTS_SEED_PARAM } from "./shortsFeed";
+import { BILIBILI_SHORTS_PATH, SHORTS_SEED_PARAM } from "./shortsFeed";
 
 const platforms = [
   {
@@ -10,14 +10,9 @@ const platforms = [
     title: "B 站短视频",
     to: BILIBILI_SHORTS_PATH,
   },
-  {
-    siteId: "douyin",
-    title: "抖音短视频",
-    to: DOUYIN_SHORTS_PATH,
-  },
 ] as const;
 
-/** 只选平台，不挂载推荐查询或播放器；旧 seed 深链仍直达 B 站。 */
+/** 只展示保留的平台，不挂载推荐查询或播放器；旧 seed 深链仍直达 B 站。 */
 export function ShortsHomePage() {
   const [searchParams] = useSearchParams();
   if (searchParams.get(SHORTS_SEED_PARAM)?.trim()) {
@@ -35,7 +30,8 @@ export function ShortsHomePage() {
           短视频
         </h1>
       </header>
-      <nav aria-label="短视频平台" className="grid gap-4 sm:grid-cols-2">
+      {/* 下线抖音后只剩 B 站一个平台，单列铺满，不再留一格空的网格位。 */}
+      <nav aria-label="短视频平台" className="grid gap-4">
         {platforms.map(({ siteId, title, to }) => (
           <Link
             key={siteId}

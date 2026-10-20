@@ -474,7 +474,7 @@ export function useShortsMediaPlaybackSlot<Item, Info extends object>({
     (position: number, force: boolean) => {
       const session = sessionRef.current;
       // 预热不记账：它从未播放过，写进历史等于把没看的条目记成看过。
-      // 未提供平台历史能力时直接退出；抖音绝不调用 B 站的历史接口。
+      // 未提供平台历史能力时直接退出；来源自己的历史只由它自己的适配器写。
       if (session.mode !== "play" || !session.source.reportProgress) return;
       const current = session.item;
       if (!current || session.source.key(current) !== session.itemKey) return;

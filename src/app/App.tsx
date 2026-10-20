@@ -9,6 +9,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
+import { legacyDouyinShortsRedirect } from "./legacyShortsRoutes";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { Shell } from "./layout/Shell";
@@ -31,7 +32,6 @@ import {
   loadVideoSearchPage,
   loadShortsPage,
   loadShortsHomePage,
-  loadDouyinVideoPage,
 } from "./routeModules";
 import { HomePage } from "../features/home/HomePage";
 import { BilibiliAppAuthStartupCheck } from "../features/settings/BilibiliAppAuthStartupCheck";
@@ -57,7 +57,6 @@ const VideoPlayerPage = lazy(loadVideoPlayerPage);
 const VideoSearchPage = lazy(loadVideoSearchPage);
 const ShortsHomePage = lazy(loadShortsHomePage);
 const ShortsPage = lazy(loadShortsPage);
-const DouyinVideoPage = lazy(loadDouyinVideoPage);
 const RoomPage = lazy(loadRoomPage);
 
 /** 防止过期链接打开用户已选择隐藏的平台。 */
@@ -114,7 +113,10 @@ const router = createBrowserRouter(
         <Route path="video" element={<VideoPage />} />
         <Route path="shorts" element={<ShortsHomePage />} />
         <Route path="shorts/bilibili" element={<ShortsPage />} />
-        <Route path="shorts/douyin" element={<DouyinVideoPage />} />
+        {/* 抖音短视频已下线：旧入口（含任意 query）无请求地 replace 回平台选择页，
+            不转发 seed，也不挂载任何推荐流或播放器。放在 loader 里重定向，
+            页面模块不会被求值；`element: null` 让渲染只在极短的过渡中出现空内容。 */}
+        <Route path="shorts/douyin" loader={legacyDouyinShortsRedirect} element={null} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="multi-room" element={<MultiRoomPage />} />
         <Route path="room/:siteId/:roomId" element={<EnabledRoomRoute />} />

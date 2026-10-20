@@ -148,7 +148,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 
 ### 4.4 `PageZoom`：沉浸式播放页进出
 
-`src/shared/motion/PageZoom.tsx` 覆盖 `/room/*`、`/iptv/play`、`/video/play` 与两条竖屏流，`zoomKey` 取各自 pathname，因此两者之间切换不会被当成同一页而跳过过渡。沉浸式播放页只有 Zoom 一层路由动画：`Shell` 沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支。
+`src/shared/motion/PageZoom.tsx` 覆盖 `/room/*`、`/iptv/play`、`/video/play` 与唯一的竖屏流 `/shorts/bilibili`，`zoomKey` 取各自 pathname，因此从播放页切到竖屏流不会被当成同一页而跳过过渡（抖音短视频已于 2026-10-21 下线，`/shorts/douyin` 只由 loader 退回 `/shorts`，不进入这套动画）。沉浸式播放页只有 Zoom 一层路由动画：`Shell` 沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支。
 
 沉浸式播放页由 `PageZoom` 覆盖。从可定位的播放卡片进入时，播放 subtree 从该卡片在 `PageZoom` 视口中的归一化矩形展开，来源列表保留在下方且滚动位置不重置；返回时列表先按路由滚动记忆恢复，活跃播放器再缩回匹配的卡片。来源卡片暂不可用时用进入时记忆的归一化窗口，深链接或无来源入口沿用中心轻缩放。`data-player-origin` 是稳定的卡片身份；不要将列表索引、播放时间等易变数据作为来源身份。
 
@@ -368,4 +368,4 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 | `src/shared/gestures/detailsResize.ts`、`src/shared/hooks/useDetailsResize.ts` | VOD 侧栏内容滑动自适应占比的阈值/换算、松手惯性（`detailsResizeVelocity` / `detailsMomentumStep`）与手势接线 |
 | `src/shared/gestures/imageZoom.ts`、`src/shared/hooks/useImageZoom.ts` | 图片查看器双指缩放 / 双击 / 平移的阈值换算与手势接线 |
 | `src/shared/components/player/PlayerControls.tsx` | 共享播放控制条与安全区避让 |
-| `src/shared/components/player/PlayerStageSkeleton.tsx` | 沉浸播放页的轻量加载占位（纯黑画面与可选返回入口，不绘制顶部身份行、控制栏或假按钮骨架），直播详情、两条竖屏流与沉浸路由 Suspense 占位共用 |
+| `src/shared/components/player/PlayerStageSkeleton.tsx` | 沉浸播放页的轻量加载占位（纯黑画面与可选返回入口，不绘制顶部身份行、控制栏或假按钮骨架），直播详情、竖屏流 `/shorts/bilibili` 与沉浸路由 Suspense 占位共用 |

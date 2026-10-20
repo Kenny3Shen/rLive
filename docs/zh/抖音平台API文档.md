@@ -2,6 +2,7 @@
 
 面向要修改抖音适配器的开发者，说明网页数据、列表验签、播放和实时弹幕的接入边界。
 当前状态：浏览、搜索、房间与播放、扫码/Cookie 登录、实时弹幕接收已支持；不提供弹幕发送。
+短视频推荐已于 2026-10-21 下线，原因与调查边界见「抖音短视频已下线」。
 
 ## 能力总览
 
@@ -12,8 +13,7 @@
 | 房间详情与播放 | 已支持 | 解析网页和回流接口，提供上游实际下发的清晰度与播放地址。 |
 | 账号 | 已支持 | 桌面端在独立的抖音官方窗口扫码登录，移动端手动保存 Cookie；账号设置验证登录态并显示昵称；匿名浏览会建立短时网页会话。 |
 | 实时弹幕接收 | 已支持 | 本地计算短时 MSSDK 签名，直连官方 WSS，接收聊天、礼物、点赞、进场等事件。 |
-| 短视频推荐 | 已支持 | `/shorts/douyin` 沉浸式滑动流，携带本机登录 Cookie 请求 `tab/feed`，三槽预热并临近末尾自动补货；无账号级个性化保证，不自动降级匿名。 |
-| 作品链接 | 已移除 | 不再提供单作品输入；`douyin_video_resolve` 只接受推荐条目自带的字符串作品 ID，且与推荐一样要求登录 Cookie。 |
+| 短视频推荐 | 已下线 | 2026-10-21 移除 `/shorts/douyin` 入口、推荐与取流实现；旧链接退回 `/shorts`，不再请求上游。见下文「抖音短视频已下线」。 |
 | 弹幕发送 | 未支持 | 仅接收实时弹幕，不提供手动或会话级自动发送。 |
 
 ## rLive 接入接口
@@ -27,30 +27,118 @@
 - 翻页终止：该接口不下发 `has_more`，只有在「返回满页」且「上游 `offset` 确实前进」时才认为还有下一页，避免无限滚动反复拉取同一批房间。
 - 性能：匿名 `ttwid` 引导结果在进程内缓存（30 分钟 TTL），站点实例按命令创建时直接复用，避免每个列表请求重新下载约 1 MB 的直播首页；缓存只保存首页响应新增的匿名 Cookie，绝不缓存账号 Cookie，且已保存的登录值始终优先于缓存值。
 
-## 短视频推荐
+## 抖音短视频已下线
 
-与直播 `webcast/feed` 不同，点播推荐使用
-`GET https://www.douyin.com/aweme/v1/web/tab/feed/`，必须沿用本地 `a_bogus` 签名。
-进入推荐舞台时调用 `douyin_video_feed()`，后端检查保存的登录 Cookie 字段后才发请求；复用当前账号、临时 `ttwid`
-和应用代理。接口无可靠分页游标，每次一批，前端批内/跨批去重并在全重复时停止；每轮最多 20 批。
-没有图集、广告或不支持编码的占位卡，也不为整批作品建立代理。
+短视频推荐（`/shorts/douyin`）已于 **2026-10-21 下线**，不再提供入口、推荐列表或作品取流。
+抖音直播（推荐、分区、搜索、房间播放）、账号扫码/ Cookie 保存与实时弹幕接收均保留，行为不变。
+本章保留调查记录，方便后来者判断是否值得重新接入；旧实现的接入细节见下文「历史实现与链接」。
 
-`DouyinVideoFeedPage` 只返回元数据，当前作品和两个邻居经共享三槽调用详情与 `stream_proxy`；
-当前可播后仅下一条预热媒体，原生 MP4 不加载 DASH 内核。
-详情取流命令 `douyin_video_resolve` 只接受推荐流下发的字符串作品 ID：链接、`v.douyin.com` 短链
-与分享文字解析随「作品链接」功能一起移除，命令也不再有不强制登录的分支。
-推荐请求前的 Cookie 字段检查不是有效性认证，不将 Cookie 存在或推荐返回成功描述为个性化已经生效；不采集 Cookie
-用于 A/B，不绕过验证。产品行为、错误恢复、生命周期与测试入口见[短视频功能](短视频功能.md)。
+### 下线依据
 
-媒体选流过滤 H.265 / bytevc1，默认取 H.264 兼容版本；渐进式 MP4 经 `stream_proxy` 注入
-`Referer: https://www.douyin.com/`，由原生媒体元素播放。媒体地址有时效，失败时重新取详情。
+2026-10-21 在 Windows WebView2 真主窗口里单次进入 `/shorts/douyin`：
+
+- 推荐接口返回了 6 条作品元数据，说明列表这一层可用；
+- 首条作品取流失败，展开错误卡的「技术详情」后看到以下提示：
+
+  > 抖音风控拒绝了当前网络出口的请求（HTTP 403），重试也未通过；请在「设置 → 网络」更换代理或改用其他网络后重试
+
+- 代码路径上，`sites/douyin/api.rs` 的 `get_text` 只在 `is_argus_security_block`（状态 `403` 且正文含
+  `ArgusSecurityPlugin`）命中时返回这条提示；本次实机观察的是技术详情文案，未独立核对上游响应正文；
+- 当时的实现已经对这条特征做原样重试（同一条已签名请求，不换参数、不换账号），仍失败。
+
+据此下线。需要明确区分已证实与未证实：
+
+| 结论 | 状态 |
+| --- | --- |
+| 该次进入时推荐返回 6 条、首条播放失败，技术详情提示风控拒绝（HTTP 403） | 已证实（单次实机样本）；Argus 分支归属由技术详情文案与源码推导，未独立核对正文 |
+| 失败原因是当前请求出口被风控 | **未证实**。同一出口被拒通常意味着风控针对出口，但本次没有做换出口对照，不能确认唯一根因是出口 |
+| 降低请求频率、加延时或增加重试能修复 | **未证实**。没有做限流/退避的对照实验，403 也可能与签名、Cookie、设备指纹或上游策略有关 |
+| 其余作品同样会被拒 | 未验证。只观察到首条取流失败，没有逐条重放 |
+
+### 为什么选择下线而不是继续规避
+
+下线前的抖音短视频走的是**网页端私有接口**（`aweme/v1/web/tab/feed/` 与作品详情）加本地 `a_bogus` 签名，
+依赖未公开的参数约定，也没有经过验证的稳定修复路径：验证码、风控页都没有可靠的处理办法，
+限制请求频率、延迟或增加重试也都没有对照实验支持。保留这条私有链路的持续成本高于收益，
+因此决定不再维护它，直接下线该功能。
+
+这不表示抖音官方没有开发者能力，也不把这条链路描述成可以任意读取推荐或作品的能力；
+rLive 不采取更换代理、轮换出口或伪造设备指纹等规避风控的做法。
+
+### 未验证的候选方向
+
+以下只是将来若要重新接入时值得先做对照实验的假设，**均未验证，不构成修复承诺**：
+
+- 推荐响应 `aweme_list` 里本身带媒体地址（旧实现在返回前端前刻意剥离，只留元数据再单独取详情）；
+  若直接复用可省掉一次作品详情请求，从而减少触发风控的请求数；但这些地址的时效、
+  是否与详情接口同等受限都没有验证过；
+- 推荐、详情与 CDN 三段请求之间的会话 token 一致性，以及短时会话的缓存能否减少重复请求；
+- 走抖音官方播放器或官网播放页路径，而不是自建签名调用私有接口。
+
+这些方向都只从现有实现结构推导，没有做过对照验证，不能据此宣称可以恢复播放；
+本文也不记录任何规避风控的具体手段。
+
+### 下线后的行为
+
+- 平台选择页 `/shorts` 只保留「B 站短视频」；B 站短视频页的「更多操作 → 抖音推荐」与失败／空态备用入口已移除。
+- 旧链接 `/shorts/douyin`（含 query，例如 `?tab=link`）以 `replace` 退回 `/shorts`，
+  不发起推荐或取流请求，也不加载播放器。
+- 前后端删除了抖音短视频的入口、推荐查询与取流实现，以及 `douyin_video_feed`、
+  `douyin_video_resolve`、`douyin_video_stop` 三个 IPC。
+- 抖音直播、抖音账号、实时弹幕接收，以及 B 站短视频都不受影响。
+
+#### 下线后的实机核对（2026-10-21，Windows 主窗口）
+
+- 三条旧链接（含带 query 的）都落到 `/shorts`，没有进入播放舞台；
+- 页面内没有 `<video>` 元素，也没有 `douyin_video_*` 调用；
+- 探针覆盖 `fetch` 的 `ipc.localhost` 请求与 WebView2 `postMessage` 两条 IPC 通道；
+  每次进入旧链接都捕获到 19 个启动 IPC，证明探针已生效，其中不含抖音短视频相关命令；
+- 直接调用已删除的 `douyin_video_feed` / `douyin_video_resolve` / `douyin_video_stop`
+  均返回 command not found。
+
+这组核对只证明「旧入口已不再取流」，不构成对 B 站短视频实机播放的验证：同轮一次 B 站试播
+返回 `ERR_EMPTY_RESPONSE`，媒体停在 `readyState=1`、`currentTime=0` 没有推进，原因未查明。
+B 站竖屏流的播放能力仍以既有记录为准，本轮**没有**通过实机播放验证。
+抖音直播、账号与弹幕业务代码未改动；本轮仅核对直播平台与账号设置入口保留，未复验其播放、登录或弹幕收取。
+
+### 历史实现与链接
+
+下面这些路径在本轮下线中已从当前代码删除。它们在 Git 历史里的两组锚点可用于 `git show <commit>:<路径>`：
+
+- **`74063c43`**（2026-10-20，下线前的最后一个完整实现）——下表全部路径都存在，适合查看完整形态；
+- **`806632ff`**（2026-09-22，「抖音新增默认关闭的 Cookie 推荐灰度」）——初次灰度实施，
+  只有 `douyinFeed.ts`、`douyinVideoApi.ts`、`DouyinVideoPage.tsx`、`tests/douyin-feed.test.ts`
+  与三个 Rust 文件；`DouyinShortsFeed.tsx`、`useDouyinShortsFeed.ts` 要等 `efdf7e68`（2026-09-27
+  正式推荐流）才出现。
+
+审计文档的基线 `7ce8ec22`（2026-09-20）早于灰度：部分下表路径已有「作品链接」单作品实现，
+但尚无 `tab/feed` 推荐、`douyin_video_feed` 以及后来的推荐查询 hook 和滑动舞台；查看下线前的完整行为应使用 `74063c43`。
+
+| 曾用路径 | 作用 |
+| --- | --- |
+| `src-tauri/src/sites/douyin/video.rs` | 点播详情与媒体选流；`tab/feed` 推荐自 `806632ff` 起 |
+| `src-tauri/src/commands/douyin_video.rs` | `douyin_video_feed`、`douyin_video_resolve`、`douyin_video_stop` 三个 IPC（`806632ff` 起） |
+| `src-tauri/src/models/douyin_video.rs` | 推荐/取流的 IPC 模型 |
+| `src/features/shorts/DouyinVideoPage.tsx`、`DouyinShortsFeed.tsx` | 推荐入口页与共享舞台适配（后者自 `efdf7e68` 起） |
+| `src/features/shorts/douyinFeed.ts`、`douyinVideoApi.ts`、`useDouyinShortsFeed.ts` | 批次去重、IPC 封装与查询 hook（`useDouyinShortsFeed.ts` 自 `efdf7e68` 起） |
+| `tests/douyin-feed.test.ts` | 批次合并与终止条件的单测 |
+
+`DOUYIN_SHORTS_SOURCE` 不在上面三个前端文件里，它定义在 `src/features/shorts/shortsPlaybackSource.ts`
+（`74063c43` 第 76 行），把抖音原生媒体适配成与 B 站共用的 `ShortsPlaybackSource`；
+该文件本身仍在使用，只是其中的抖音条目随下线删除。
+
+保留的部分：`src-tauri/src/sites/douyin/mod.rs`（直播）、`api.rs`（直播请求、匿名会话与签名 query）、
+`a_bogus.rs`（列表验签）、账号与弹幕相关模块，以及前端 B 站短视频的共享舞台与三槽编排。
 
 ### 历史调研边界
 
 以下仅保留旧方案的排除依据，不构成当前匿名访问或产品支持承诺：
 
-- 旧分享页的 `_ROUTER_DATA` 与 `web/api/v2/aweme/iteminfo/` 曾返回空作品数据；不带签名的详情请求也曾返回空响应，不能作为可靠的免签名取流旁路。当前推荐与详情仍沿用 `a_bogus`。
+- 旧分享页的 `_ROUTER_DATA` 与 `web/api/v2/aweme/iteminfo/` 曾返回空作品数据；不带签名的详情请求也曾返回空响应，不能作为可靠的免签名取流旁路。下线前推荐与详情仍沿用 `a_bogus`。
 - 曾探测 `aweme/v1/web/aweme/related/`（相关推荐）与 `aweme/v1/web/comment/list/`（评论），当时匿名会话配合签名可得到响应；`aweme/v1/web/aweme/post/`（作者作品）和 `aweme/v1/web/general/search/single/`（综合搜索）则受登录限制。这些历史结果没有转换为产品能力，也不保证当前仍可访问。
+- 详情接口按请求出口风控的历史特征仍是 `403` + `Blocked by ArgusSecurityPlugin`；抖音 Web 请求的统一入口
+  `get_text` 会在命中该特征时原样重试一次，因此直播推荐、分区列表、搜索、房间与 SSR 都在覆盖范围内
+  （`get_json` / `get_signed_json` 都经由它）。抖音短视频已下线，不再有这条路径。
 
 ## 上游数据与播放
 
@@ -115,16 +203,14 @@
 - 搜索无法覆盖未开播主播。`aweme/v1/web/live/search/`（`search_channel=aweme_live`）是直播频道搜索，命中结果本身就只包含正在直播的房间；匿名请求还会直接返回 `status_code: 2483`「请先登录，再继续搜索吧」，因此**登录 Cookie 是这个接口能用的前提，而不是能搜到未开播主播的开关**。用户频道（`aweme_user_web`）匿名请求返回空响应体，也不是可靠的替代路径。所以其他四个平台已支持的「搜索未开播主播」在抖音仍是空缺，rLive 不用推荐流或猜测数据伪造这个能力。
 - 登录窗口、搜索等网页流程可能要求访问验证；请在官网窗口中自行完成，或在常用浏览器登录后手动复制完整 Cookie。
 - 访问验证、Cookie 时效、地区和平台风控仍可能导致列表、搜索、房间、播放或弹幕失败；应用会保留已验证的结果，而不是重复或伪造数据。
-- 详情类接口可能按请求出口做风控：被拒的出口返回 `403 Blocked by ArgusSecurityPlugin`（正文为 `Uifid Not Found` 或 `Signature Not Found`）。命中这一特征时 rLive 保留当前应用代理路由原样重试一次，不自动绕过代理改走直连；仍被拒则提示用户更换代理或网络。普通 4xx/5xx 不触发回退。
+- 抖音 Web 请求可能按请求出口做风控：被拒的出口返回 `403`（正文为 `Blocked by ArgusSecurityPlugin`，其中可能是 `Uifid Not Found` 或 `Signature Not Found`）。统一入口 `get_text` 命中这一特征时会保留当前应用代理路由原样重试一次，不自动绕过代理改走直连；仍被拒则提示用户更换代理或网络，提示文案为「抖音风控拒绝了当前网络出口的请求（HTTP 403），重试也未通过」。普通 4xx/5xx 不触发回退。抖音短视频已下线，不能再据此认为换出口即可继续观看。
 - 列表验签依赖抖音网页端的算法与参数约定，上游调整后可能需要同步更新。
 - Cookie、短时签名 URL、短时 WSS URL 和上游原始响应不写入日志、前端缓存或配置导出；`a_bogus` 与 `msToken` 均为短时请求参数，不写入数据库或配置导出。
 
 ## 代码位置
 
 - 站点与直播业务：`src-tauri/src/sites/douyin/mod.rs`
-- 直播与点播共用的请求、匿名会话、Cookie 作用域及签名 query 编码：`src-tauri/src/sites/douyin/api.rs`
-- 点播推荐/详情：`src-tauri/src/sites/douyin/video.rs`、`src-tauri/src/commands/douyin_video.rs`
-- 推荐入口/共享舞台与媒体适配器：`src/features/shorts/DouyinVideoPage.tsx`、`DouyinShortsFeed.tsx`、`shortsPlaybackSource.ts`
+- 直播请求、匿名会话、Cookie 作用域及签名 query 编码：`src-tauri/src/sites/douyin/api.rs`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
 - 官网登录窗口与临时会话：`src-tauri/src/account/douyin_qr.rs`
 - Cookie 验证：`src-tauri/src/account/douyin_profile.rs`，由 `src-tauri/src/commands/account.rs` 接入账号摘要

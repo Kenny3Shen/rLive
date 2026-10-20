@@ -102,12 +102,6 @@ export const loadShortsPage = createCachedRouteLoader(() =>
   import("../features/shorts/ShortsPage").then(({ ShortsPage }) => ({ default: ShortsPage })),
 );
 
-export const loadDouyinVideoPage = createCachedRouteLoader(() =>
-  import("../features/shorts/DouyinVideoPage").then(({ DouyinVideoPage }) => ({
-    default: DouyinVideoPage,
-  })),
-);
-
 /** 昂贵的播放器代码放在最后，让小而常用的目的地先就绪。 */
 const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadIptvPage,
@@ -167,7 +161,9 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/video") return loadVideoPage;
   if (pathname === "/shorts") return loadShortsHomePage;
   if (pathname === "/shorts/bilibili") return loadShortsPage;
-  if (pathname === "/shorts/douyin") return loadDouyinVideoPage;
+  // 抖音短视频已下线：旧入口在 App 里原地 replace 回 `/shorts`。预加载它指向
+  // 重定向后的目的地，而不是引用任何已删除的推荐流或播放器模块。
+  if (pathname === "/shorts/douyin") return loadShortsHomePage;
   if (pathname === "/settings") return loadSettingsPage;
   if (pathname === "/multi-room") return loadMultiRoomPage;
   if (pathname.startsWith("/room/")) return loadRoomPage;

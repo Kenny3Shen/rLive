@@ -4,7 +4,6 @@ import {
   ChevronLeft,
   ChevronUp,
   FastForward,
-  Film,
   Info,
   MessageCircle,
   MessageSquareOff,
@@ -16,7 +15,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive, videoGetPlayerMeta } from "@/features/video/videoApi";
@@ -28,7 +27,7 @@ import {
   type VideoShortsEntry,
 } from "@/features/video/videoRoute";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import {
   Drawer,
@@ -390,7 +389,7 @@ export function ShortsPage() {
   if (feedQuery.isError && items.length === 0) {
     return (
       <div className="relative flex h-full min-h-0 flex-col items-center justify-center bg-black px-6">
-        <ShortsBackButton onClick={goBack} showDouyinEntry />
+        <ShortsBackButton onClick={goBack} />
         <ErrorState
           error={feedQuery.error}
           title="短视频加载失败"
@@ -410,7 +409,7 @@ export function ShortsPage() {
   if (items.length === 0) {
     return (
       <div className="relative flex h-full min-h-0 flex-col items-center justify-center bg-black">
-        <ShortsBackButton onClick={goBack} showDouyinEntry />
+        <ShortsBackButton onClick={goBack} />
         <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
@@ -1341,7 +1340,6 @@ function ShortsMoreMenu({
   onRefresh: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
   const runAndClose = (action: () => void) => () => {
     setOpen(false);
     action();
@@ -1354,7 +1352,7 @@ function ShortsMoreMenu({
       onOpenChange={setOpen}
       compact={compact}
     >
-      {/* 两列：跳播放页的入口已经搬到底栏（那个按钮直接导航），菜单里不再重复。 */}
+      {/* 跳播放页的入口已经搬到底栏（那个按钮直接导航），菜单里不再重复。 */}
       <div className="grid grid-cols-2 gap-1.5 max-md:gap-2">
         <PlayerToolTile
           icon={muted ? VolumeX : Volume2}
@@ -1363,11 +1361,6 @@ function ShortsMoreMenu({
           onClick={runAndClose(onToggleMuted)}
         />
         <PlayerToolTile icon={RefreshCw} label="重新加载" onClick={runAndClose(onRefresh)} />
-        <PlayerToolTile
-          icon={Film}
-          label="抖音推荐"
-          onClick={runAndClose(() => navigate("/shorts/douyin"))}
-        />
       </div>
     </PlayerHudOverflowMenu>
   );
@@ -1481,27 +1474,13 @@ function ShortsBackButton({
   onClick,
   inline,
   label = "返回上一页",
-  showDouyinEntry = false,
 }: {
   onClick: () => void;
   inline?: boolean;
   label?: string;
-  /** 仅失败或空态提供备用入口，首次加载不闪现平台切换按钮。 */
-  showDouyinEntry?: boolean;
 }) {
   return (
     <>
-      {!inline && showDouyinEntry && (
-        <Link
-          to="/shorts/douyin"
-          className={cn(
-            buttonVariants({ variant: "secondary", size: "sm" }),
-            "absolute top-3 right-3 z-10",
-          )}
-        >
-          抖音推荐
-        </Link>
-      )}
       <MediaButton
         type="button"
         aria-label={label}

@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import {
-  BILIBILI_SHORTS_SOURCE,
-  DOUYIN_SHORTS_SOURCE,
-} from "../src/features/shorts/shortsPlaybackSource";
-import type { DouyinVideoItem, DouyinVideoPlayback } from "../src/features/shorts/douyinVideoApi";
+import { BILIBILI_SHORTS_SOURCE } from "../src/features/shorts/shortsPlaybackSource";
 import { VIDEO_HISTORY_QUERY_KEY } from "../src/features/video/videoHistory";
 import type { VideoItem, VideoPlayInfo } from "../src/shared/types/video";
 const video: VideoItem = {
@@ -38,22 +34,8 @@ const dash: VideoPlayInfo = {
     audio: "audio-1",
   },
 };
-const douyin: DouyinVideoItem = {
-  id: "90071992547409931",
-  title: "抖音测试",
-  author: "作者",
-  cover: "cover",
-  width: 720,
-  height: 1280,
-  duration: 13.5,
-};
-const native: DouyinVideoPlayback = {
-  item: douyin,
-  play_url: "http://127.0.0.1/native",
-  session_id: "douyin-session-1",
-};
-
 // 仅桩 IPC 边界，不启动 WebView、浏览器或真实代理；每例恢复全局，避免污染别的测试。
+// 抖音短视频已下线，这里只剩 B 站适配器：多余的 IPC 直接判失败，防止旧取流命令复活。
 describe("短视频平台适配器", () => {
   let windowDescriptor: PropertyDescriptor | undefined;
   let tauriDescriptor: PropertyDescriptor | undefined;
@@ -79,7 +61,8 @@ describe("短视频平台适配器", () => {
         payload,
       });
       if (cmd === "video_get_play_info") return dash;
-      if (cmd === "douyin_video_resolve") return native;
+      // 抖音取流命令随下线一起删除；若适配器退回旧命令，这里会直接失败。
+      if (cmd.startsWith("douyin_")) throw new Error(`已下线的抖音命令被调用：${cmd}`);
       return undefined;
     });
   });
@@ -114,40 +97,7 @@ describe("短视频平台适配器", () => {
       },
     ]);
   });
-  test("抖音身份保留字符串命名空间，元数据无需伪造 bvid/cid", async () => {
-    const source = DOUYIN_SHORTS_SOURCE;
-    expect(source.id).not.toBe(BILIBILI_SHORTS_SOURCE.id);
-    expect(source.kind).toBe("native");
-    expect(source.key(douyin)).toBe(`douyin:${douyin.id}`);
-    expect(source.canPlay(douyin)).toBe(true);
-    expect(
-      source.canPlay({
-        ...douyin,
-        id: " ",
-      }),
-    ).toBe(false);
-    expect(source.sessionId(native)).toBe(native.session_id);
-    expect(source.url(native)).toBe(native.play_url);
-    expect(source.duration(native)).toBe(13.5);
-    expect(source.reportProgress).toBeUndefined();
-    expect(await source.load(douyin)).toBe(native);
-    await source.stop(native);
-    expect(calls).toEqual([
-      {
-        cmd: "douyin_video_resolve",
-        payload: {
-          input: douyin.id,
-        },
-      },
-      {
-        cmd: "douyin_video_stop",
-        payload: {
-          sessionId: native.session_id,
-        },
-      },
-    ]);
-  });
-  test("只有 B 站适配器写观看历史，并失效原历史查询", async () => {
+  test("B 站适配器写观看历史，并失效原历史查询", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(VIDEO_HISTORY_QUERY_KEY, []);
     let finish!: () => void;
@@ -182,8 +132,6 @@ describe("短视频平台适配器", () => {
           },
         },
       ]);
-      DOUYIN_SHORTS_SOURCE.reportProgress?.(douyin, native, 10, 123456, queryClient);
-      expect(calls).toHaveLength(1);
     } finally {
       unsubscribe();
       queryClient.clear();

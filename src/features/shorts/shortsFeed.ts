@@ -16,7 +16,9 @@ import type { VideoDimension, VideoItem } from "@/shared/types/video";
 /** 短视频平台选择页。刻意不挂在 `/video` 下，避免侧栏「视频」跟着高亮。 */
 export const SHORTS_PATH = "/shorts";
 export const BILIBILI_SHORTS_PATH = "/shorts/bilibili";
-export const DOUYIN_SHORTS_PATH = "/shorts/douyin";
+
+/** 已下线的抖音旧深链，仅供重定向与 Android 返回兼容；没有对应推荐或播放器。 */
+export const LEGACY_DOUYIN_SHORTS_PATH = "/shorts/douyin";
 
 /**
  * 进入短视频流时的种子参数：以这条 `bvid` 为起点。
@@ -379,8 +381,8 @@ export function shortsFrameFill(
  * 出现「上面比下面大一圈」。只收窄 `--media-control-size`，不动 `--media-scale-unit`
  * （进度条与它的悬停预览挂在那个变量上）。
  *
- * B 站与抖音两个竖屏流共用这一份：两处顶栏按钮的尺寸契约是同一条，各留一份常量
- * 会在改其中一处时悄悄分叉。
+ * 顶栏按钮的尺寸契约只有这一份：主页面与加载/错误/空态各自的返回口共用它，
+ * 各留一份常量会在改其中一处时悄悄分叉。
  */
 export const SHORTS_TOP_CONTROLS_CLASS =
   "media-skin [--media-control-size:2.5rem] [@media(pointer:coarse)]:[--media-control-size:2.75rem]";

@@ -2,12 +2,6 @@ import type { QueryClient } from "@tanstack/react-query";
 import { videoGetPlayInfo, videoStopPlay } from "@/features/video/videoApi";
 import { VIDEO_HISTORY_QUERY_KEY, videoHistoryAdd } from "@/features/video/videoHistory";
 import type { VideoItem, VideoPlayInfo } from "@/shared/types/video";
-import {
-  douyinVideoResolve,
-  douyinVideoStop,
-  type DouyinVideoItem,
-  type DouyinVideoPlayback,
-} from "./douyinVideoApi";
 import { shortsItemKey } from "./shortsFeed";
 
 /** 平台只提供身份、取流与元数据；槽位、预热及会话所有权共用同一实现。 */
@@ -70,17 +64,4 @@ export const BILIBILI_SHORTS_SOURCE: ShortsPlaybackSource<VideoItem, VideoPlayIn
       .then(() => queryClient.invalidateQueries({ queryKey: VIDEO_HISTORY_QUERY_KEY }))
       .catch(() => undefined);
   },
-};
-
-/** 抖音推荐只用原生媒体与 Rust 代理，不伪造 B 站身份，也不上报 B 站历史。 */
-export const DOUYIN_SHORTS_SOURCE: ShortsPlaybackSource<DouyinVideoItem, DouyinVideoPlayback> = {
-  id: "douyin",
-  kind: "native",
-  key: (item) => `douyin:${item.id}`,
-  canPlay: (item) => item.id.trim() !== "",
-  load: (item) => douyinVideoResolve(item.id),
-  stop: douyinVideoStop,
-  sessionId: (info) => info.session_id,
-  url: (info) => info.play_url,
-  duration: (info) => info.item.duration,
 };

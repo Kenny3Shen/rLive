@@ -9,7 +9,6 @@
 
 mod a_bogus;
 mod api;
-pub mod video;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;

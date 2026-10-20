@@ -58,6 +58,7 @@ describe("Android Back navigation", () => {
 
   test("短视频深链无历史时返回平台选择页", () => {
     expect(androidBackFallbackPath("/shorts/bilibili")).toBe("/shorts");
+    // 抖音短视频已下线：兜住仍停在旧入口上的会话，落点与路由层 replace 一致。
     expect(androidBackFallbackPath("/shorts/douyin")).toBe("/shorts");
     expect(androidBackFallbackPath("/shorts")).toBe("/");
     expect(androidBackFallbackPath("/video/play")).toBe("/");
