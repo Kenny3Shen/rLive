@@ -34,6 +34,16 @@ const POPUP_CLASS =
 const BUTTON_CLASS = "h-media-control w-full flex-1 px-4 py-2 font-medium";
 const PRIMARY_BUTTON_CLASS = `${BUTTON_CLASS} bg-media-primary! text-media-primary-foreground!`;
 const SECONDARY_BUTTON_CLASS = `${BUTTON_CLASS} bg-media-muted!`;
+/**
+ * 说明文字的弱化用不透明灰，不用半透明白。
+ *
+ * WebView2 绘制半透明字形时不按「前景与背景按 α 混合」出图：同一块面板上，
+ * `color: #fff` 的实心笔画峰值是 255，而 `opacity: .7`、`rgba(255 255 255 / .7)`、
+ * `oklch(1 0 0 / .7)` 全都停在 180–192。11.7px 的中文笔画本来就细，峰值上不去就
+ * 读成「发虚」，字号越小越明显。不透明的灰没有这条限制（`#e0e0e0` 实测 224），
+ * 所以这里用 `--media-dialog-muted` 的实心灰来表达次级层级。
+ */
+const DESCRIPTION_CLASS = "m-0 text-media-dialog-muted wrap-anywhere";
 
 /**
  * 播放器内的错误弹窗，沿用 Video.js 原生对话框的玻璃面板与动效。
@@ -152,7 +162,7 @@ function DialogFrame({ title, description, renderClose, onRetry }: DialogFramePr
           <AlertDialogPrimitive.Title className="m-0 text-media-lg font-semibold leading-tight">
             {title}
           </AlertDialogPrimitive.Title>
-          <AlertDialogPrimitive.Description className="m-0 opacity-70 wrap-anywhere">
+          <AlertDialogPrimitive.Description className={DESCRIPTION_CLASS}>
             {description}
           </AlertDialogPrimitive.Description>
         </div>

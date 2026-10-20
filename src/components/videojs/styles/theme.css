@@ -123,6 +123,10 @@
     );
     --media-muted: oklch(100% 0 0 / 0.15);
     --media-muted-foreground: oklch(100% 0 0 / 0.65);
+    /* 弹窗内次级文案用的不透明灰。不能用 alpha：WebView2 对半透明字形
+       限幅在 180–192/255，小字号正文会因此发虚，见 `error-dialog.tsx` 的说明。
+       亮度取 70% 白在深色面板上的混合结果再提亮一档，保证实心笔画的上限。 */
+    --media-dialog-muted: oklch(88% 0 0);
     --media-border: oklch(0% 0 0 / 0.1);
     --media-backdrop: oklch(0% 0 0);
     --media-live-color: oklch(65% 0.22 27);

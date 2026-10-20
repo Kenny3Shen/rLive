@@ -67,6 +67,7 @@
 - `applyTheme()` 按 `light` / `dark` / `system` 切换根元素 `.dark` class，Zustand 设置变化由 `src/main.tsx` 订阅并立即应用。Android 上同一次调用还经 `src/app/androidSystemBars.ts` 把 resolved 亮暗同步到系统栏图标颜色（Kotlin `RliveSystemBars` 唯一写入；冷启动用 SharedPreferences 记忆值恢复图标外观并同步启动窗口与 WebView 预绘制底色；全屏覆盖为白图标）。
 - 新增颜色先确定语义，再同时补齐亮暗值与 `@theme inline` 映射。组件中只用语义 token，不写 `bg-white dark:bg-gray-*`，不用原始蓝红绿代替状态语义。仅当 `RecordedDanmakuCanvas` 这类底层绘图无法消费 Tailwind class 时，才使用明确记录用途的中性描边颜色。
 - 字体栈以 Geist Variable 的 Latin 子集为首选，中文依次回退 `PingFang SC`、`Microsoft YaHei`、`Noto Sans SC`。紧凑面板保持小字号、短行高，不按视口宽度缩放字体。
+- 小字号正文的次级层级用**不透明**的浅色表达，不用 `opacity` 或带 alpha 的前景色。WebView2 绘制半透明字形时不按前景/背景按 α 混合出图：在播放器面板上，`color: #fff` 的实心笔画峰值是 255，而 `opacity: .7`、`rgba(255 255 255 / .7)`、`oklch(1 0 0 / .7)` 全部停在 180–190，11.7px 的中文因此读起来发虚。播放器报错弹窗的说明文字是第一个调用方（`--media-dialog-muted` / `text-media-dialog-muted`），实测峰值从 190 回到 215。
 
 ### 3.3 图标、文案与可访问性
 

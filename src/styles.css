@@ -275,6 +275,7 @@
   --color-media-live: var(--media-live-color);
   --color-media-muted: var(--media-muted);
   --color-media-muted-foreground: var(--media-muted-foreground);
+  --color-media-dialog-muted: var(--media-dialog-muted);
   --color-media-popover: var(--media-popover);
   --color-media-popover-foreground: var(--media-popover-foreground);
   --color-media-primary: var(--media-primary);
