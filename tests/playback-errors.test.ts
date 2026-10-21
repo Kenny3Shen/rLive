@@ -36,6 +36,34 @@ describe("引擎错误分级", () => {
     expect(videoJsPlaybackErrorSeverity({ error: { code: 25 } })).toBe("fatal");
   });
 
+  test("循环与多分支载荷不会让分级遍历失控", () => {
+    const self: { error?: unknown } = {};
+    self.error = self;
+    expect(videoJsPlaybackErrorSeverity(self)).toBe("fatal");
+
+    const first: { error?: unknown } = {};
+    const second: { error?: unknown } = { error: first };
+    first.error = second;
+    expect(videoJsPlaybackErrorSeverity(first)).toBe("fatal");
+
+    expect(videoJsPlaybackErrorSeverity({ error: { error: { fatal: false } } })).toBe(
+      "recoverable",
+    );
+    // fatal 布尔仍优先于内层 code，多分支不改变既有优先序。
+    expect(videoJsPlaybackErrorSeverity({ fatal: true, error: { code: 27 } })).toBe("fatal");
+    expect(videoJsPlaybackErrorSeverity({ code: 25, error: { code: 27 } })).toBe("fatal");
+  });
+
+  test("超深 error 链在节点预算内降级为致命", () => {
+    const chain = (depth: number, leaf: unknown): unknown => {
+      let value = leaf;
+      for (let index = 0; index < depth; index += 1) value = { error: value };
+      return value;
+    };
+    expect(videoJsPlaybackErrorSeverity(chain(5, { code: 27 }))).toBe("recoverable");
+    expect(videoJsPlaybackErrorSeverity(chain(64, { code: 27 }))).toBe("fatal");
+  });
+
   test("可恢复提示区分字幕轨与分片", () => {
     expect(videoJsRecoverableErrorMessage({ code: 33 })).toContain("字幕");
     expect(videoJsRecoverableErrorMessage({ code: 27 })).toContain("分片");

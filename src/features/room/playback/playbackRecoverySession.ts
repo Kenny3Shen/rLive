@@ -430,6 +430,11 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
       this.metadata.cacheQualities(input, qualities);
       this.metadata.cacheLines(linesInput, lines);
       this.metadataRenewalInFlight = false;
+      // 成功交接新元数据即意味着下一段传输要重新打开连接。旧传输的失败标记
+      // 只描述上一段连接：同一 generation 下新连接常在 750 ms 内就早断，若沿用
+      // 旧标记会被当成重复事件合并掉，播放器停在「无恢复」状态。预算
+      // （`metadataRenewalCount`）属于本轮恢复尝试，不在这里重置。
+      this.lastFailure = null;
       const nextPlayUrl = lines[lineIndex] ?? null;
       // 自动续期不拆媒体元素：同协议时由播放器原地重连；协议变化或原地连接
       // 不可用时，播放器再自行升级为完整重建。手动刷新语义要求一次全新的
@@ -474,6 +479,15 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     else renew();
   }
 
+  /**
+   * 传输事实能否靠重新取播放地址续上。
+   *
+   * FLV 的 `eof` 既包含正常结束，也包含 mpegts 的早断流（上游提前关闭且内部
+   * 重连失败）：两者都只是「这条连接不再有数据」，因此尝试重新取一次播放地址。
+   * 取回的地址通常带新签名，但平台也可能原样返回或取不到地址，重新取元数据
+   * 本身并不保证恢复；失败由续签预算与 `loadError` 兜底。MPEG-TS 与 HLS 维持
+   * 原有错误语义，不做这类续签。
+   */
   private shouldRenewPlaybackMetadata(event: PlayerEvent): boolean {
     if (event.recoveryExhausted) return true;
     if (event.kind === "eof" && event.protocol === "flv") return true;

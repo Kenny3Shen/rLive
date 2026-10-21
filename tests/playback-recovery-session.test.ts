@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { LivePlayQuality, LiveRoomDetail, PlayUrl } from "../src/shared/types/live";
 import {
   createPlaybackRecoverySession,
+  type PlaybackRecoveryClockAdapter,
   type PlaybackRecoveryMetadataAdapter,
   type PlaybackRecoverySession,
 } from "../src/features/room/playback/playbackRecoverySession";
@@ -34,6 +35,65 @@ function flvSource(url = "https://cdn.example/live.flv?token=one"): PlayUrl {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** 续签退避（1s、2s）用可控时钟推进，测试不真的等待。 */
+function manualClock() {
+  let now = 1_000;
+  let nextId = 0;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  const clock: PlaybackRecoveryClockAdapter = {
+    now: () => now,
+    setTimer: (callback, delayMs) => {
+      nextId += 1;
+      timers.set(nextId, { at: now + delayMs, callback });
+      return nextId;
+    },
+    clearTimer: (handle) => {
+      timers.delete(handle as number);
+    },
+  };
+  const advanceToNext = async () => {
+    const entry = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!entry) return false;
+    timers.delete(entry[0]);
+    now = Math.max(now, entry[1].at);
+    entry[1].callback();
+    await flush();
+    await flush();
+    return true;
+  };
+  return { clock, advanceToNext, pending: () => timers.size };
+}
+
+function sessionWithClock(
+  lines: () => PlayUrl[],
+  clock: PlaybackRecoveryClockAdapter,
+): PlaybackRecoverySession {
+  const metadata: PlaybackRecoveryMetadataAdapter = {
+    fetchQualities: async () => [quality],
+    fetchLines: async () => lines(),
+    cacheQualities: () => {},
+    cacheLines: () => {},
+  };
+  const session = createPlaybackRecoverySession(
+    {
+      siteId: "bilibili",
+      roomId: "1000",
+      detail: undefined,
+      qualityLevel: "high",
+      enabled: false,
+    },
+    { metadata, clock },
+  );
+  session.updateConfig({
+    siteId: "bilibili",
+    roomId: "1000",
+    detail,
+    qualityLevel: "high",
+    enabled: true,
+  });
+  return session;
+}
 
 function createSession(lines: () => PlayUrl[]) {
   const metadata: PlaybackRecoveryMetadataAdapter = {
@@ -112,6 +172,333 @@ describe("播放恢复会话的续期语义", () => {
     const snapshot = session.getSnapshot();
     expect(snapshot.renewToken).toBe(1);
     expect(snapshot.reloadToken).toBe(0);
+    session.dispose();
+  });
+
+  test("FLV 早断流进入既有续签预算并重新取元数据", async () => {
+    let linesFetched = 0;
+    let qualitiesFetched = 0;
+    const clock = manualClock();
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => {
+        qualitiesFetched += 1;
+        return [quality];
+      },
+      fetchLines: async () => {
+        linesFetched += 1;
+        return [flvSource()];
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const session = createPlaybackRecoverySession(
+      {
+        siteId: "bilibili",
+        roomId: "1000",
+        detail: undefined,
+        qualityLevel: "high",
+        enabled: false,
+      },
+      { metadata, clock: clock.clock },
+    );
+    session.updateConfig({
+      siteId: "bilibili",
+      roomId: "1000",
+      detail,
+      qualityLevel: "high",
+      enabled: true,
+    });
+    await flush();
+    await flush();
+    expect(linesFetched).toBe(1);
+
+    // 早断流与正常结束共享同一份续签预算：每次只递增 renewToken 并重取地址。
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "Fetch stream meet Early-EOF",
+    });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(session.getSnapshot().reloadToken).toBe(0);
+    expect(linesFetched).toBe(2);
+    expect(qualitiesFetched).toBe(2);
+
+    // 第二次续签带 1 秒退避；时钟推进后同样只重取地址。
+    session.acceptTransportFact({
+      epoch: 2,
+      generation: 2,
+      kind: "eof",
+      protocol: "flv",
+      message: "Fetch stream meet Early-EOF",
+    });
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(await clock.advanceToNext()).toBe(true);
+    expect(session.getSnapshot().renewToken).toBe(2);
+    expect(session.getSnapshot().reloadToken).toBe(0);
+    expect(linesFetched).toBe(3);
+    session.dispose();
+  });
+
+  test("早断流续签次数受既有预算约束", async () => {
+    const clock = manualClock();
+    const session = sessionWithClock(() => [flvSource()], clock.clock);
+    await flush();
+    await flush();
+
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "early eof 1",
+    });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(1);
+
+    session.acceptTransportFact({
+      epoch: 2,
+      generation: 2,
+      kind: "eof",
+      protocol: "flv",
+      message: "early eof 2",
+    });
+    await clock.advanceToNext();
+    expect(session.getSnapshot().renewToken).toBe(2);
+
+    session.acceptTransportFact({
+      epoch: 3,
+      generation: 3,
+      kind: "eof",
+      protocol: "flv",
+      message: "early eof 3",
+    });
+    await clock.advanceToNext();
+    expect(session.getSnapshot().renewToken).toBe(3);
+
+    // 预算耗尽后不再续签，改为对用户可见的失败提示，也不留下定时器。
+    session.acceptTransportFact({
+      epoch: 4,
+      generation: 4,
+      kind: "eof",
+      protocol: "flv",
+      message: "early eof over budget",
+    });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(3);
+    expect(session.getSnapshot().loadError).toContain("刷新");
+    expect(clock.pending()).toBe(0);
+    session.dispose();
+  });
+
+  test("成功交接新元数据后，同一 generation 的新传输早断仍可续期", async () => {
+    const clock = manualClock();
+    let linesFetched = 0;
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => [quality],
+      fetchLines: async () => {
+        linesFetched += 1;
+        return [flvSource()];
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const session = createPlaybackRecoverySession(
+      {
+        siteId: "bilibili",
+        roomId: "1000",
+        detail: undefined,
+        qualityLevel: "high",
+        enabled: false,
+      },
+      { metadata, clock: clock.clock },
+    );
+    session.updateConfig({
+      siteId: "bilibili",
+      roomId: "1000",
+      detail,
+      qualityLevel: "high",
+      enabled: true,
+    });
+    await flush();
+    await flush();
+    expect(linesFetched).toBe(1);
+
+    // 第一次早断：立即续期，旧传输的错误事实只描述上一段连接。
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "Fetch stream meet Early-EOF",
+    });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(1);
+
+    // 播放器沿用同一 epoch / generation，新连接又在 750 ms 内早断：不能按
+    // 「同一 transmission 的重复事件」合并，必须排 1 秒后续期。
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "Fetch stream meet Early-EOF",
+    });
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(clock.pending()).toBe(1);
+    expect(await clock.advanceToNext()).toBe(true);
+    expect(session.getSnapshot().renewToken).toBe(2);
+    expect(linesFetched).toBe(3);
+
+    // 第三次仍在既有 3 次预算内，退避 2 秒。
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "Fetch stream meet Early-EOF",
+    });
+    expect(clock.pending()).toBe(1);
+    expect(await clock.advanceToNext()).toBe(true);
+    expect(session.getSnapshot().renewToken).toBe(3);
+    expect(linesFetched).toBe(4);
+
+    // 第四次耗尽预算：不再续期，给出用户可见提示，也不留下定时器。
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "Fetch stream meet Early-EOF",
+    });
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(3);
+    expect(session.getSnapshot().loadError).toContain("刷新");
+    expect(clock.pending()).toBe(0);
+    session.dispose();
+  });
+
+  test("元数据续期在途时重复失败仍合并", async () => {
+    let linesFetched = 0;
+    let releaseLines: (() => void) | null = null;
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => [quality],
+      fetchLines: async () => {
+        linesFetched += 1;
+        if (linesFetched === 2) {
+          await new Promise<void>((resolve) => {
+            releaseLines = resolve;
+          });
+        }
+        return [flvSource()];
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const session = createPlaybackRecoverySession(
+      {
+        siteId: "bilibili",
+        roomId: "1000",
+        detail: undefined,
+        qualityLevel: "high",
+        enabled: false,
+      },
+      { metadata },
+    );
+    session.updateConfig({
+      siteId: "bilibili",
+      roomId: "1000",
+      detail,
+      qualityLevel: "high",
+      enabled: true,
+    });
+    await flush();
+    await flush();
+
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "early eof 1",
+    });
+    await flush();
+    expect(linesFetched).toBe(2);
+    expect(releaseLines).not.toBeNull();
+
+    // 元数据仍在下发时，同一传输再报失败不能另起一次续期。
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "flv",
+      message: "early eof 2",
+    });
+    await flush();
+    expect(linesFetched).toBe(2);
+
+    (releaseLines as unknown as () => void)();
+    await flush();
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(linesFetched).toBe(2);
+    session.dispose();
+  });
+
+  test("MPEG-TS 早断流走普通失败切换而不是元数据续签", async () => {
+    let qualitiesFetched = 0;
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => {
+        qualitiesFetched += 1;
+        return [quality];
+      },
+      fetchLines: async () => [
+        { ...flvSource("https://cdn.example/live.ts?token=one"), protocol: "mpeg_ts" },
+      ],
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const session = createPlaybackRecoverySession(
+      {
+        siteId: "bilibili",
+        roomId: "1000",
+        detail: undefined,
+        qualityLevel: "high",
+        enabled: false,
+      },
+      { metadata },
+    );
+    session.updateConfig({
+      siteId: "bilibili",
+      roomId: "1000",
+      detail,
+      qualityLevel: "high",
+      enabled: true,
+    });
+    await flush();
+    await flush();
+    expect(qualitiesFetched).toBe(1);
+
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "eof",
+      protocol: "mpegts",
+      message: "Fetch stream meet Early-EOF",
+    });
+    await flush();
+    await flush();
+
+    // 同线路原地重试同样递增 renewToken，但不重取元数据；这是既有失败切换
+    // 预算，和 FLV 的续签预算不是同一份。
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(qualitiesFetched).toBe(1);
     session.dispose();
   });
 

@@ -101,6 +101,34 @@ describe("video.js transport selection", () => {
     expect(videoJsPlayerErrorMessage({}, "fallback")).toBe("fallback");
   });
 
+  test("循环与多分支错误载荷会终止遍历", () => {
+    const self: { error?: unknown; message?: unknown } = {};
+    self.error = self;
+    self.message = self;
+    expect(videoJsPlayerErrorMessage(self, "fallback")).toBe("fallback");
+
+    const first: { error?: unknown } = {};
+    const second: { error?: unknown } = { error: first };
+    first.error = second;
+    expect(videoJsPlayerErrorMessage(first, "fallback")).toBe("fallback");
+    expect(
+      videoJsPlayerErrorMessage({ message: "", error: { details: "manifestLoadError" } }),
+    ).toBe("manifestLoadError");
+    expect(videoJsPlayerErrorMessage({ error: { error: { message: "deep" } } })).toBe("deep");
+  });
+
+  test("超深错误链在节点预算内取到文案", () => {
+    const chain = (depth: number, leaf: unknown): unknown => {
+      let value = leaf;
+      for (let index = 0; index < depth; index += 1) value = { error: value };
+      return value;
+    };
+    expect(videoJsPlayerErrorMessage(chain(5, { message: "reachable" }))).toBe("reachable");
+    expect(videoJsPlayerErrorMessage(chain(64, { message: "unreachable" }), "fallback")).toBe(
+      "fallback",
+    );
+  });
+
   test("treats a superseded play() request as no failure at all", () => {
     const pauseInterrupt = new DOMException(
       "The play() request was interrupted by a call to pause().",
@@ -128,5 +156,43 @@ describe("video.js transport selection", () => {
     // hls.js 网络错误只带 details 与响应信息，没有解码码位。
     expect(isVideoJsDecodeError({ details: "manifestLoadError" })).toBe(false);
     expect(isVideoJsDecodeError({ message: "bad network response" })).toBe(false);
+  });
+
+  test("循环载荷不会让解码检测失控", () => {
+    const self: { error?: unknown; message?: unknown } = {};
+    self.error = self;
+    self.message = self;
+    expect(isVideoJsDecodeError(self)).toBe(false);
+
+    const first: { error?: unknown } = {};
+    const second: { error?: unknown } = { error: first };
+    first.error = second;
+    expect(isVideoJsDecodeError(first)).toBe(false);
+  });
+
+  test("解码检测同时遍历 message 与 error 分支", () => {
+    expect(isVideoJsDecodeError({ message: "bad network response", error: { code: 3 } })).toBe(
+      true,
+    );
+    expect(isVideoJsDecodeError({ message: { message: "MEDIA_ERR_DECODE" } })).toBe(true);
+    expect(isVideoJsDecodeError({ message: "", error: { message: "decode failed" } })).toBe(true);
+    expect(isVideoJsDecodeError({ message: "network failed", error: { code: 4 } })).toBe(false);
+  });
+
+  test("解码检测受节点预算约束且两分支共用", () => {
+    const chain = (depth: number, leaf: unknown): unknown => {
+      let value = leaf;
+      for (let index = 0; index < depth; index += 1) value = { message: value };
+      return value;
+    };
+    expect(isVideoJsDecodeError({ error: { code: 3 } })).toBe(true);
+    expect(isVideoJsDecodeError(chain(64, { code: 3 }))).toBe(false);
+    // message 分支耗尽预算后，同一载荷的 error 分支不再另给预算。
+    expect(
+      isVideoJsDecodeError({
+        message: chain(15, "network failed"),
+        error: { code: 3 },
+      }),
+    ).toBe(false);
   });
 });

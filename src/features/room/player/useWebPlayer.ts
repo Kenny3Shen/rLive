@@ -19,12 +19,14 @@ import { videoAspectRatio, retainMeasuredAspectRatio } from "./androidOrientatio
 import { requestPlayerAutoplay } from "./autoplay";
 import { watchDesktopFullscreen } from "./desktopFullscreenWatcher";
 import { createSerialTaskQueue } from "./serialTaskQueue";
+import { softSwitchOwnsTransport } from "./softSwitchTransaction";
 import {
   playbackSourceFromKey,
   playUrlKey,
   shouldSoftSwitchToSource,
 } from "../playback/sourceIdentity";
 import {
+  classifyTransportFailure,
   createVideoJsPlayer,
   getVideoJsHlsCore,
   getVideoJsMpegtsCore,
@@ -345,6 +347,11 @@ export function liveFlvPlaybackOptions(
       enableWorker: false,
       enableStashBuffer: true,
       stashInitialSize: 384,
+      // mpegts.js 默认按音频时间戳缺口补静音帧，且帧数没有上限：上游时间戳
+      // 跳变过大时会一次性构造十几万个帧并撑爆调用栈（`push.apply`），
+      // 表现为一次 NetworkError。关闭后不再批量补静音帧，时间戳异常时音画
+      // 同步不做保证。
+      fixAudioTimestampGap: false,
       liveBufferLatencyChasing: !syncHold,
       liveBufferLatencyMaxLatency: mobileClient ? 6 : 5,
       liveBufferLatencyMinRemain: mobileClient ? 1.5 : 1,
@@ -397,6 +404,9 @@ export function liveMpegtsPlaybackOptions(syncHold = false): VideoJsMpegtsOption
       enableWorker: false,
       enableStashBuffer: true,
       stashInitialSize: 384,
+      // 同 FLV：不再批量补静音帧，避免时间戳跳变打爆调用栈；异常时间戳下
+      // 音画同步不做保证。
+      fixAudioTimestampGap: false,
       liveBufferLatencyChasing: !syncHold,
       liveBufferLatencyMaxLatency: 3,
       liveBufferLatencyMinRemain: 0.5,
@@ -423,6 +433,9 @@ export function iptvFlvPlaybackOptions(): VideoJsMpegtsOptions {
       enableWorker: false,
       enableStashBuffer: true,
       stashInitialSize: 384,
+      // 同直播 FLV：不再批量补静音帧，避免时间戳跳变打爆调用栈；异常时间戳下
+      // 音画同步不做保证。
+      fixAudioTimestampGap: false,
       liveBufferLatencyChasing: true,
       liveBufferLatencyMaxLatency: 3,
       liveBufferLatencyMinRemain: 0.5,
@@ -584,6 +597,18 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
   // 否则卡加载时点暂停会被重试重新拉起，按钮状态与实际播放相反。
   const userPausedRef = useRef(false);
+  /**
+   * 上一次硬重建的身份。
+   *
+   * 只有「同一房间、未手动刷新、仅因续期或软切换失败而自动重建」这一种重建要
+   * 沿用用户的暂停意图；首次进入房间、换房与手动刷新仍按原有语义自动起播。
+   */
+  const lastHardBuildRef = useRef<{
+    sessionKey: string;
+    reloadToken: number | string;
+    renewToken: number | string;
+    softFallbackToken: number;
+  } | null>(null);
 
   const [mode, setMode] = useState<PlayerUiMode>("windowed");
   const [paused, setPaused] = useState(false);
@@ -792,8 +817,25 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
     setLoadError(null);
     setFullscreenError(null);
-    setPaused(false);
-    userPausedRef.current = false;
+    // 仅同房间的自动重建沿用用户暂停：解码失败等场景下用户按下的暂停不该被
+    // 一次后台重建重新拉起。换房与手动刷新保持自动起播的既有语义。
+    // 软切换关闭时续期直接改 `renewToken` 触发硬重建，也算自动重建。
+    const previousBuild = lastHardBuildRef.current;
+    const preserveUserPause =
+      previousBuild !== null &&
+      previousBuild.sessionKey === sessionKey &&
+      previousBuild.reloadToken === reloadToken &&
+      (softFallbackToken !== previousBuild.softFallbackToken ||
+        renewTokenRef.current !== previousBuild.renewToken) &&
+      userPausedRef.current;
+    lastHardBuildRef.current = {
+      sessionKey,
+      reloadToken,
+      renewToken: renewTokenRef.current,
+      softFallbackToken,
+    };
+    setPaused(preserveUserPause);
+    userPausedRef.current = preserveUserPause;
     const playbackKind = webPlaybackKind(playbackSource);
     const hlsSource = playbackKind === "hls";
     // 在串行化代理队列拆除上一会话的同时，开始加载所选的 Video.js 适配器。
@@ -940,15 +982,24 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           // 两条路径共用同一个 adapter error 事件，但只有 MSE 暴露恢复 API。
           const reportPlayerError = (error: unknown) => {
             if (!isCurrentPlayer()) return;
-            const message = videoJsPlayerErrorMessage(error);
-            setLoadError(message);
+            // 软切进行中，本次失败的传输由 `switchSource` 的 error 监听认领：
+            // 它会 reject，调用方据此走既有硬回退。这里若再发布一次失败，恢复
+            // 会话会在代理重开与 `switchSource` 结算之前另起一次恢复，形成双恢复。
+            // 准备期的旧错误同样只退役旧传输，新传输仍按事务建立。
+            if (softSwitchOwnsTransport(softSwitchInFlightRef.current, player)) return;
+            const failure = classifyTransportFailure(error, playbackKind);
+            const message = failure.message;
+            // 早断流与 `loading_complete` 同属可续签的结束事实：先不弹错误卡，
+            // 续期失败或预算耗尽时由恢复会话给出提示。
+            setLoadError(failure.kind === "eof" ? null : message);
             setRunning(false);
             onMediaFailureRef.current?.({
               epoch: gen,
               generation: gen,
-              kind: "error",
+              kind: failure.kind,
               message,
               protocol: playbackKind,
+              ...(failure.decodeError ? { decodeError: true } : {}),
             });
           };
           if (!hlsCore) player.on("error", reportPlayerError);
@@ -1179,7 +1230,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     playerInstanceId,
     profile,
     proxyLifecycleQueue,
+    sessionKey,
     siteId,
+    softFallbackToken,
   ]);
 
   // 同协议的来源变化可以保留媒体元素与 MSE 状态。各直播 CDN 的时间戳连续性并不
@@ -1222,6 +1275,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     // 只尊重用户自己的暂停意图：`ended` 或流中断造成的 `paused` 必须照常恢复，
     // 否则一次自动续期只会把画面停在黑屏上。
     const resumePlayback = !userPausedRef.current;
+    // 事务要在排队前就登记：从这一刻起旧传输的失败都归 `switchSource` 处理。
+    // 若等到队列内再登记，排在后面的旧 core 错误会先一步发布给恢复会话。
+    const inFlight = { player, sequence };
+    softSwitchInFlightRef.current = inFlight;
 
     void proxyLifecycleQueue
       .enqueue(async () => {
@@ -1231,11 +1288,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           playerRef.current !== player ||
           activeProxySessionIdRef.current !== proxySessionId
         ) {
+          if (softSwitchInFlightRef.current === inFlight) softSwitchInFlightRef.current = null;
           return null;
         }
 
-        const inFlight = { player, sequence };
-        softSwitchInFlightRef.current = inFlight;
         let handedOff = false;
         try {
           const localUrl = await invokeCmd<string>("stream_proxy_start", {
@@ -1317,6 +1373,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
     return () => {
       cancelled = true;
+      // 取消只解除本次事务对错误的认领；已在 `switchSource` 内的失败仍由它
+      // 自己的监听 reject，交给调用方走既有硬回退。
+      if (softSwitchInFlightRef.current === inFlight) softSwitchInFlightRef.current = null;
     };
   }, [
     activeSourceKey,

@@ -53,6 +53,45 @@ export type VideoJsPlayerModules = {
   mpegts?: typeof Mpegts;
 };
 export type VideoJsPlayerInstance = VideoJsPlayer;
+/**
+ * mpegts.js 在直播网络层判定「上游提前结束且内部重连也失败」时的错误事实。
+ *
+ * 只认枚举值：`ErrorTypes.NETWORK_ERROR`（`"NetworkError"`）配
+ * `ErrorDetails.NETWORK_UNRECOVERABLE_EARLY_EOF`（`"UnrecoverableEarlyEof"`）。
+ * 直播下 io-controller 会先把 LoaderErrors 的 `EarlyEof` 归一成这个值再上报，
+ * 因此不需要再接受前者。不按 message 里的英文文案猜，避免把普通网络异常
+ * 误当成可续签的断流。
+ */
+export function isMpegtsEarlyEof(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { type, detail } = error as { type?: unknown; detail?: unknown };
+  return type === "NetworkError" && detail === "UnrecoverableEarlyEof";
+}
+
+export type VideoJsTransportFailure = {
+  /** `eof` 表示传输事实是上游断流，应走签名刷新预算而不是一次性失败。 */
+  kind: "eof" | "error";
+  message: string;
+  decodeError: boolean;
+};
+
+/**
+ * 把 mpegts 引擎错误映射成播放层传输事实。
+ *
+ * 只有 FLV 的早断流算 `eof`：它和正常结束一样可以通过重新取播放地址续上。
+ * MPEG-TS 与 HLS 保持原有错误语义。解码失败单独标记，供恢复会话选择硬媒体
+ * 重建而不是在同一媒体上重连。
+ */
+export function classifyTransportFailure(
+  error: unknown,
+  kind: VideoJsPlaybackKind,
+): VideoJsTransportFailure {
+  const message = videoJsPlayerErrorMessage(error);
+  if (kind === "flv" && isMpegtsEarlyEof(error)) {
+    return { kind: "eof", message, decodeError: false };
+  }
+  return { kind: "error", message, decodeError: isVideoJsDecodeError(error) };
+}
 export type VideoJsHlsCore = {
   /** HLS 适配器可能选择浏览器原生 HLS；只有 MSE 路径才有 hls.js 恢复能力。 */
   isMse: () => boolean;
@@ -114,12 +153,34 @@ class VideoJsPlayer {
   private hls: HlsJsAdapter | null = null;
   private dash: DashAdapter | null = null;
   private mpegts: Mpegts.Player | null = null;
+  /** 已断开所有权、等待微任务销毁的失败传输。 */
+  private retiringMpegts: Promise<void> | null = null;
+  /** 仍待销毁的失败传输；`destroy()` 会同步清掉它们。 */
+  private readonly retiringCores = new Set<Mpegts.Player>();
+  /** 当前是否正运行在 mpegts 自己的事件栈里（此时不能同步销毁实例）。 */
+  private mpegtsDispatching = false;
   private readonly events = new EventTarget();
   private readonly listeners = new Set<() => void>();
   private destroyed = false;
+  /**
+   * 当前媒体元素的首个错误。
+   *
+   * 媒体元素一旦报错，同一个元素就不能再承载新的传输：浏览器不会在 `load()`
+   * 之外清除 `error`，而断开旧传输时调用 `load()` 又恰好会清掉它。把首个事实
+   * 留在适配器上，后续的原地重连请求才能稳定地被拒绝并升级成硬重建。
+   */
+  private mediaElementFailure: unknown = null;
   private playRequested = false;
   private pendingSwitch: AbortController | null = null;
   private endedAt: number | null = null;
+  /**
+   * 本传输首个解码失败事实。
+   *
+   * 媒体元素上的 `MediaError` 会被随后的一次 `load()`（例如失败传输在
+   * detach 时自己调用）清成 `null`，但同媒体上的软重连改变不了解码器的决定。
+   * 因此这里留一份事实，供 `switchSource` 判断该走硬媒体重建。
+   */
+  private firstDecodeFailure: unknown = null;
 
   constructor(
     private readonly modules: VideoJsPlayerModules,
@@ -184,7 +245,7 @@ class VideoJsPlayer {
         }
         adapter.source = { src, engine: { dashJs: options.dash } };
       } else {
-        this.listenForMediaErrors(this.media);
+        this.listenForMediaErrors(this.media, true);
         if (options.kind === "flv" || options.kind === "mpegts") {
           this.createMpegts(options.url);
         } else {
@@ -198,15 +259,32 @@ class VideoJsPlayer {
     }
   }
 
-  private listenForMediaErrors(target: EventTarget): void {
+  private listenForMediaErrors(target: EventTarget, mediaElement = false): void {
     const onError = (event: Event) => {
       const error: unknown =
         event instanceof ErrorEvent ? (event.error ?? this.media.error) : this.media.error;
+      const reported = error ?? event;
+      if (mediaElement) {
+        // 媒体元素上的首个错误就是这一轮传输的最终事实；后续重复的 error 只会
+        // 覆盖首错，不能再上报一次。
+        if (this.mediaElementFailure !== null) return;
+        this.mediaElementFailure = reported;
+      }
+      if (mediaElement && this.firstDecodeFailure === null && isVideoJsDecodeError(reported)) {
+        this.firstDecodeFailure = reported;
+        // 解码失败后旧传输再 append 只会继续报同一类错误。先断开所有权，把销毁
+        // 排到微任务：这里仍在媒体事件栈里，不能同步拆掉正在处理事件的传输。
+        const core = this.mpegts;
+        if (core) {
+          this.mpegts = null;
+          this.retireMpegts(core);
+        }
+      }
       // Video.js HLS 的 MediaError.data 是完整 hls.js ErrorData，保留 fatal/type/response。
       if (error && typeof error === "object" && "data" in error && error.data) {
         this.reportError(error.data);
       } else {
-        this.reportError(error ?? event);
+        this.reportError(reported);
       }
     };
     target.addEventListener("error", onError);
@@ -259,16 +337,83 @@ class VideoJsPlayer {
     ));
     core.on(
       library.Events.ERROR,
-      (type: string, detail: string, info: { msg?: string } | undefined) => {
-        if (this.mpegts === core) this.reportError({ type, detail, message: info?.msg || detail });
+      (type: string, detail: string, info: { msg?: string; code?: number } | undefined) => {
+        // 旧实例在交出所有权后的迟到事件不能覆盖新传输或首个错误事实。
+        if (this.mpegts !== core) return;
+        // 先断开所有权，再排微任务销毁：这条回调正运行在 mpegts 自己的事件栈里，
+        // 同步 destroy 会重入其卸载流程。
+        this.mpegts = null;
+        this.retireMpegts(core);
+        this.mpegtsDispatching = true;
+        try {
+          // `info.code` 是 Loader / MSE 的错误码（如 HTTP 状态或 -1），不是
+          // `MediaError.code`。放到顶层会被当成 HTMLMediaError 或 dash.js 错误码
+          // 误分类，因此只保留在引擎专用字段里。
+          this.reportError({
+            type,
+            detail,
+            ...(typeof info?.code === "number" ? { engineCode: info.code } : {}),
+            message: info?.msg || detail,
+          });
+        } finally {
+          this.mpegtsDispatching = false;
+        }
       },
     );
     core.on(library.Events.LOADING_COMPLETE, () => {
-      if (!this.destroyed && this.mpegts === core)
+      if (this.destroyed || this.mpegts !== core) return;
+      this.mpegtsDispatching = true;
+      try {
         this.events.dispatchEvent(new Event("loading_complete"));
+      } finally {
+        this.mpegtsDispatching = false;
+      }
     });
     core.attachMediaElement(this.media);
     core.load();
+  }
+
+  /**
+   * 失败传输的销毁排队到微任务，并与更早的退休任务串行。
+   *
+   * `destroy()` 会 detach 媒体并调用 `load()`；如果它在新传输附着之后才执行，
+   * 会把新 MSE 一并清掉，因此换源前要等这里释放完。
+   */
+  private retireMpegts(core: Mpegts.Player): void {
+    this.retiringCores.add(core);
+    const retirement: Promise<void> = (this.retiringMpegts ?? Promise.resolve())
+      .then(() => {
+        // `destroy()` 可能已经同步清掉这个实例。
+        if (!this.retiringCores.delete(core)) return;
+        try {
+          core.destroy();
+        } catch {
+          /* 失败路径可能已经释放了内部状态。 */
+        }
+      })
+      .then(() => {
+        if (this.retiringMpegts === retirement) this.retiringMpegts = null;
+      });
+    this.retiringMpegts = retirement;
+  }
+
+  /**
+   * 在 `destroy()` 里立即回收待销毁的失败传输。
+   *
+   * 正常路径把它们排到微任务；但调用方可能在 `destroy()` 之后立刻用同一个
+   * `<video>` 构造新播放器，此时旧实例的 detach 会清掉新附着的 MSE。这里在
+   * 安全时同步销毁，事件栈内则只能继续排队（那种情况下调用方也不该同步复用）。
+   */
+  private flushRetiringMpegts(): void {
+    if (this.mpegtsDispatching) return;
+    for (const core of this.retiringCores) {
+      try {
+        core.destroy();
+      } catch {
+        /* 失败路径可能已经释放了内部状态。 */
+      }
+    }
+    this.retiringCores.clear();
   }
 
   private releaseMpegts(): void {
@@ -411,6 +556,10 @@ class VideoJsPlayer {
     if (this.destroyed || this.options.kind !== "native" || this.options.url === url) return;
     this.endedAt = null;
     this.options.url = url;
+    // 新的 load() 会清掉媒体错误；首错事实也只属于上一段媒体，随之作废，
+    // 否则同一个元素上的下一次真实失败会被静默吞掉。
+    this.mediaElementFailure = null;
+    this.firstDecodeFailure = null;
     this.media.src = url;
     this.media.load();
   }
@@ -425,6 +574,14 @@ class VideoJsPlayer {
     if (kind !== this.options.kind || (kind !== "hls" && kind !== "flv" && kind !== "mpegts")) {
       return Promise.reject(new Error("当前协议不支持软切换"));
     }
+    // 媒体元素已经报过错（解码失败等）时，同一个元素上的原地重连只会把新传输
+    // 挂回一个失效的 MSE。直接拒绝，让调用方走既有的硬回退新建元素与传输。
+    // 首个解码事实优先于当前 `media.error`：失败传输 detach 时的 `load()` 可能
+    // 已经把它清成 null，但解码器对同一媒体的决定没有改变。
+    // HLS 的可恢复 `mediaError` 走 hls.js 自己的 `recoverMediaError()`，不经过
+    // 这里；但元素确实已进入错误态时，续期也只能靠硬重建。
+    const failedMedia = this.media.error ?? this.firstDecodeFailure ?? this.mediaElementFailure;
+    if (failedMedia) return Promise.reject(failedMedia);
     this.pendingSwitch?.abort();
     this.endedAt = null;
     const controller = (this.pendingSwitch = new AbortController());
@@ -470,12 +627,30 @@ class VideoJsPlayer {
         () => finish(new Error("软切换等待媒体就绪超时")),
         Math.max(0, timeoutMs),
       );
-      try {
+      const startTransport = () => {
         if (this.hls) {
           this.hls.src = url;
         } else {
           this.releaseMpegts();
           this.createMpegts(url);
+        }
+      };
+      try {
+        // 失败的旧传输可能还排在微任务里销毁。等它 detach 完再附着新 MSE，
+        // 否则它的 `load()` 会把刚挂上的新 MediaSource 一并清掉。
+        const retiring = this.retiringMpegts;
+        if (retiring) {
+          void retiring.then(() => {
+            // 等待期间可能被取消、被销毁，或已被下一次换源取代。
+            if (settled || this.destroyed || this.pendingSwitch !== controller) return;
+            try {
+              startTransport();
+            } catch (error) {
+              finish(error);
+            }
+          });
+        } else {
+          startTransport();
         }
       } catch (error) {
         finish(error);
@@ -501,6 +676,7 @@ class VideoJsPlayer {
     this.listeners.clear();
     try {
       this.releaseMpegts();
+      this.flushRetiringMpegts();
     } finally {
       try {
         if (this.hls) {
@@ -556,15 +732,41 @@ export function switchVideoJsPlaybackSource(
   return player.switchSource(url, kind, timeoutMs, options);
 }
 
-export function videoJsPlayerErrorMessage(error: unknown, fallback = "播放失败"): string {
+/**
+ * 引擎错误载荷来自外部对象，结构不保证是树。三个解析函数统一按节点预算 + seen
+ * 遍历，挡住自环、多对象环和超深链，避免递归不收敛。
+ */
+const VIDEO_JS_ERROR_MAX_NODES = 16;
+
+type VideoJsErrorWalk = {
+  readonly seen: Set<object>;
+  remaining: number;
+};
+
+function videoJsErrorWalk(): VideoJsErrorWalk {
+  return { seen: new Set(), remaining: VIDEO_JS_ERROR_MAX_NODES };
+}
+
+function videoJsErrorMessageWithin(
+  error: unknown,
+  fallback: string,
+  walk: VideoJsErrorWalk,
+): string {
   if (typeof error === "string") return error.trim() || fallback;
   if (!error || typeof error !== "object") return fallback;
+  if (walk.remaining <= 0 || walk.seen.has(error)) return fallback;
+  walk.remaining -= 1;
+  walk.seen.add(error);
   if ("message" in error && typeof error.message === "string" && error.message.trim())
     return error.message;
   if ("error" in error && error.error !== error)
-    return videoJsPlayerErrorMessage(error.error, fallback);
+    return videoJsErrorMessageWithin(error.error, fallback, walk);
   if ("details" in error && typeof error.details === "string") return error.details || fallback;
   return fallback;
+}
+
+export function videoJsPlayerErrorMessage(error: unknown, fallback = "播放失败"): string {
+  return videoJsErrorMessageWithin(error, fallback, videoJsErrorWalk());
 }
 
 export function isInterruptedPlayRequest(error: unknown): boolean {
@@ -607,7 +809,17 @@ const RECOVERABLE_DASH_ERROR_CODES: ReadonlySet<number> = new Set([
 export type VideoJsPlaybackErrorSeverity = "fatal" | "recoverable";
 
 export function videoJsPlaybackErrorSeverity(error: unknown): VideoJsPlaybackErrorSeverity {
+  return videoJsPlaybackErrorSeverityWithin(error, videoJsErrorWalk());
+}
+
+function videoJsPlaybackErrorSeverityWithin(
+  error: unknown,
+  walk: VideoJsErrorWalk,
+): VideoJsPlaybackErrorSeverity {
   if (!error || typeof error !== "object") return "fatal";
+  if (walk.remaining <= 0 || walk.seen.has(error)) return "fatal";
+  walk.remaining -= 1;
+  walk.seen.add(error);
   const candidate = error as {
     code?: unknown;
     fatal?: unknown;
@@ -617,8 +829,8 @@ export function videoJsPlaybackErrorSeverity(error: unknown): VideoJsPlaybackErr
   if (typeof candidate.code === "number") {
     return RECOVERABLE_DASH_ERROR_CODES.has(candidate.code) ? "recoverable" : "fatal";
   }
-  if (candidate.error && candidate.error !== error) {
-    return videoJsPlaybackErrorSeverity(candidate.error);
+  if (candidate.error) {
+    return videoJsPlaybackErrorSeverityWithin(candidate.error, walk);
   }
   return "fatal";
 }
@@ -640,13 +852,20 @@ export function videoJsRecoverableErrorMessage(error: unknown): string {
 
 /** 识别原生解码失败；hls.js mediaError 也包含可恢复的缓冲问题，不能一概当成解码失败。 */
 export function isVideoJsDecodeError(error: unknown): boolean {
+  return videoJsDecodeErrorWithin(error, videoJsErrorWalk());
+}
+
+function videoJsDecodeErrorWithin(error: unknown, walk: VideoJsErrorWalk): boolean {
   if (typeof error === "string") {
     return /chunk_demuxer_error_append_failed|pipeline_error_decode|media_err_decode|decod(?:e|ing|er)/i.test(
       error,
     );
   }
   if (!error || typeof error !== "object") return false;
+  if (walk.remaining <= 0 || walk.seen.has(error)) return false;
+  walk.remaining -= 1;
+  walk.seen.add(error);
   if ("code" in error && error.code === 3) return true;
-  if ("message" in error && isVideoJsDecodeError(error.message)) return true;
-  return "error" in error && error.error !== error && isVideoJsDecodeError(error.error);
+  if ("message" in error && videoJsDecodeErrorWithin(error.message, walk)) return true;
+  return "error" in error && videoJsDecodeErrorWithin(error.error, walk);
 }

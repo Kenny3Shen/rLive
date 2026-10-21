@@ -818,7 +818,6 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
           className="absolute inset-0 size-full bg-black object-contain"
           crossOrigin="anonymous"
           playsInline
-          autoPlay
           controls={false}
           disablePictureInPicture={audioOnly}
         />
