@@ -56,10 +56,11 @@ describe("Android Back navigation", () => {
     expect(isAndroidHomeTabRoot("/recordings", "")).toBe(false);
   });
 
-  test("短视频深链无历史时返回平台选择页", () => {
-    expect(androidBackFallbackPath("/shorts/bilibili")).toBe("/shorts");
+  test("短视频深链无历史时返回视频发现页", () => {
+    expect(androidBackFallbackPath("/shorts/bilibili")).toBe("/video");
     // 抖音短视频已下线：兜住仍停在旧入口上的会话，落点与路由层 replace 一致。
-    expect(androidBackFallbackPath("/shorts/douyin")).toBe("/shorts");
+    expect(androidBackFallbackPath("/shorts/douyin")).toBe("/video");
+    // 旧的平台选择页只在 loader 里重定向，不再是返回落点。
     expect(androidBackFallbackPath("/shorts")).toBe("/");
     expect(androidBackFallbackPath("/video/play")).toBe("/");
     for (const path of ["/shorts", "/shorts/bilibili", "/shorts/douyin"]) {

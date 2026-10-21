@@ -1,5 +1,8 @@
 import type { ComponentType } from "react";
 import type { ClientPlatform } from "@/shared/clientPlatform";
+import { SHORTS_PATH } from "@/features/shorts/shortsFeed";
+import { VIDEO_HOME_PATH } from "@/features/video/videoRoute";
+import { legacyShortsRedirectTarget } from "./legacyShortsRoutes";
 
 export type LazyRouteModule = { default: ComponentType };
 export type RouteModuleLoader = () => Promise<LazyRouteModule>;
@@ -94,10 +97,6 @@ export const loadVideoSearchPage = createCachedRouteLoader(() =>
   })),
 );
 
-export const loadShortsHomePage = createCachedRouteLoader(() =>
-  import("../features/shorts/ShortsHomePage").then(({ ShortsHomePage }) => ({ default: ShortsHomePage })),
-);
-
 export const loadShortsPage = createCachedRouteLoader(() =>
   import("../features/shorts/ShortsPage").then(({ ShortsPage }) => ({ default: ShortsPage })),
 );
@@ -109,7 +108,6 @@ const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadCategoryBrowsePage,
   loadFollowPage,
   loadVideoPage,
-  loadShortsHomePage,
   loadVideoSearchPage,
   loadHistoryPage,
   loadRecordingsPage,
@@ -135,17 +133,18 @@ export function idleRouteModuleLoadersForPlatform(
   return platform === "desktop" ? IDLE_ROUTE_MODULE_LOADERS : MOBILE_IDLE_ROUTE_MODULE_LOADERS;
 }
 
-function pathnameFromTarget(target: string): string | null {
+function urlFromTarget(target: string): URL | null {
   try {
-    return new URL(target, "https://rlive.local").pathname;
+    return new URL(target, "https://rlive.local");
   } catch {
     return null;
   }
 }
 
 export function routeModuleLoaderForPath(target: string): RouteModuleLoader | null {
-  const pathname = pathnameFromTarget(target);
-  if (!pathname || pathname === "/") return null;
+  const url = urlFromTarget(target);
+  if (!url || url.pathname === "/") return null;
+  const { pathname } = url;
 
   if (pathname === "/category") return loadCategoryBrowsePage;
   if (pathname === "/search") return loadSearchPage;
@@ -159,11 +158,15 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/video/play") return loadVideoPlayerPage;
   if (pathname === "/video/search") return loadVideoSearchPage;
   if (pathname === "/video") return loadVideoPage;
-  if (pathname === "/shorts") return loadShortsHomePage;
+  // 旧的 `/shorts` 入口只在 loader 里重定向：带有效 seed 时预加载 B 站推荐流，
+  // 否则预加载视频发现页。`/shorts/douyin` 已下线，落点固定为视频发现页。
+  if (pathname === SHORTS_PATH) {
+    return legacyShortsRedirectTarget(url.search) === VIDEO_HOME_PATH
+      ? loadVideoPage
+      : loadShortsPage;
+  }
   if (pathname === "/shorts/bilibili") return loadShortsPage;
-  // 抖音短视频已下线：旧入口在 App 里原地 replace 回 `/shorts`。预加载它指向
-  // 重定向后的目的地，而不是引用任何已删除的推荐流或播放器模块。
-  if (pathname === "/shorts/douyin") return loadShortsHomePage;
+  if (pathname === "/shorts/douyin") return loadVideoPage;
   if (pathname === "/settings") return loadSettingsPage;
   if (pathname === "/multi-room") return loadMultiRoomPage;
   if (pathname.startsWith("/room/")) return loadRoomPage;

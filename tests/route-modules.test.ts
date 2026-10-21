@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { shouldSkipIdleRoutePreloading } from "../src/app/RouteModulePreloader";
+import * as routeModules from "../src/app/routeModules";
 import {
   createCachedRouteLoader,
+  idleRouteModuleLoadersForPlatform,
+  loadShortsPage,
   loadVideoPage,
   loadVideoPlayerPage,
   routeModuleLoaderForPath,
@@ -41,6 +44,16 @@ describe("route module loading", () => {
     expect(routeModuleLoaderForPath("/video")).toBe(loadVideoPage);
     expect(routeModuleLoaderForPath("/video?tab=anime")).toBe(loadVideoPage);
     expect(routeModuleLoaderForPath("/video/play?cid=123&bvid=BV1")).toBe(loadVideoPlayerPage);
+  });
+  test("no longer exposes a standalone shorts home module", () => {
+    // 旧的平台选择页已删除；`/shorts` 只按 seed 预加载重定向落点。
+    expect("loadShortsHomePage" in routeModules).toBe(false);
+    expect(routeModuleLoaderForPath("/shorts")).toBe(loadVideoPage);
+    expect(routeModuleLoaderForPath("/shorts?seed=BV17x411w7KC")).toBe(loadShortsPage);
+    // 空闲预加载里保留 B 站推荐流，但不该再出现已删除的模块。
+    const idle = idleRouteModuleLoadersForPlatform("desktop");
+    expect(idle).toContain(loadShortsPage);
+    expect(idle).toContain(loadVideoPage);
   });
 });
 describe("idle route preloading policy", () => {

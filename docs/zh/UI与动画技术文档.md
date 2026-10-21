@@ -148,7 +148,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 
 ### 4.4 `PageZoom`：沉浸式播放页进出
 
-`src/shared/motion/PageZoom.tsx` 覆盖 `/room/*`、`/iptv/play`、`/video/play` 与唯一的竖屏流 `/shorts/bilibili`，`zoomKey` 取各自 pathname，因此从播放页切到竖屏流不会被当成同一页而跳过过渡（抖音短视频已于 2026-10-21 下线，`/shorts/douyin` 只由 loader 退回 `/shorts`，不进入这套动画）。沉浸式播放页只有 Zoom 一层路由动画：`Shell` 沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支。
+`src/shared/motion/PageZoom.tsx` 覆盖 `/room/*`、`/iptv/play`、`/video/play` 与唯一的竖屏流 `/shorts/bilibili`，`zoomKey` 取各自 pathname，因此从播放页切到竖屏流不会被当成同一页而跳过过渡（抖音短视频已于 2026-10-21 下线，`/shorts/douyin` 以 `replace` 回到 `/video`，不进入这套动画）。沉浸式播放页只有 Zoom 一层路由动画：`Shell` 沉浸式分支渲染裸容器，路由级 `PagePan` 只作用于非沉浸式分支。
 
 沉浸式播放页由 `PageZoom` 覆盖。从可定位的播放卡片进入时，播放 subtree 从该卡片在 `PageZoom` 视口中的归一化矩形展开，来源列表保留在下方且滚动位置不重置；返回时列表先按路由滚动记忆恢复，活跃播放器再缩回匹配的卡片。来源卡片暂不可用时用进入时记忆的归一化窗口，深链接或无来源入口沿用中心轻缩放。`data-player-origin` 是稳定的卡片身份；不要将列表索引、播放时间等易变数据作为来源身份。
 
@@ -157,7 +157,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - VOD 同路径层级（`/video/play?bvid=A → B → C`）：`zoomKey` 保持 pathname，另外用 `motionKey` 跟随浏览器历史 `idx`，动画身份与播放器挂载身份分离。PUSH / POP 前进仍从来源卡片或轻缩放展开，POP 返回沿当前帧反向接管；REPLACE 补齐参数不重播。全屏期间同路径换片也跳过缩放。验证需覆盖三层往返、REPLACE、快速返回、媒体节点复用、来源矩形、滚动恢复、缺失卡片、键盘入口及减少动态效果。
 - 快速反向导航从当前合成 transform/opacity 接管，不跳回预设起点；离场层使用 `inert` 与 `aria-hidden`，动画取消、结束与卸载均清理 `will-change` 和 WAAPI。
 
-来源身份目前覆盖直播、IPTV、视频、番剧、历史与短视频入口。房间 A 通过右侧关注栏切到房间 B 时使用 replace，B 的返回目标固定为 `/follow`；若目标列表没有相同卡片身份，则退回进入时记忆的窗口或轻缩放。
+来源身份目前覆盖直播、IPTV、视频、番剧与历史。短视频不再有独立列表入口，由播放页 HUD 的「看短视频」按钮或移动端竖画幅自动接续进入，沿用既有沉浸路由转场。房间 A 通过右侧关注栏切到房间 B 时使用 replace，B 的返回目标固定为 `/follow`；若目标列表没有相同卡片身份，则退回进入时记忆的窗口或轻缩放。
 
 ### 4.5 `useHorizontalSwipe`：横向手势
 

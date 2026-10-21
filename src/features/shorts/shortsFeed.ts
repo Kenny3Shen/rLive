@@ -13,7 +13,7 @@
 import { videoDimensionAspect } from "@/shared/videoDimension";
 import type { VideoDimension, VideoItem } from "@/shared/types/video";
 
-/** 短视频平台选择页。刻意不挂在 `/video` 下，避免侧栏「视频」跟着高亮。 */
+/** 旧短视频平台选择页的路径。页面已下线，只在 loader 里重定向，保留常量供兼容判定。 */
 export const SHORTS_PATH = "/shorts";
 export const BILIBILI_SHORTS_PATH = "/shorts/bilibili";
 
@@ -30,7 +30,7 @@ export const SHORTS_SEED_PARAM = "seed";
 
 /**
  * B 站推荐流链接。`seedBvid` 给定时以该稿件为起点，否则进入 `/shorts/bilibili`
- * （首屏不带种子）。平台选择页始终使用 `SHORTS_PATH`。
+ * （首屏不带种子）。旧的 `/shorts` 选择页已下线，旧深链由路由 loader 重定向。
  *
  * 只编码 bvid：`encodeURIComponent` 对 `BV` 串是恒等的，写上是为了不把
  * 「参数值来自别处」这条假设留成隐患。

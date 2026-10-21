@@ -9,7 +9,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { isSiteEnabled, isSiteId } from "@/shared/siteId";
-import { legacyDouyinShortsRedirect } from "./legacyShortsRoutes";
+import { legacyDouyinShortsRedirect, legacyShortsRedirect } from "./legacyShortsRoutes";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { Shell } from "./layout/Shell";
@@ -31,7 +31,6 @@ import {
   loadVideoPlayerPage,
   loadVideoSearchPage,
   loadShortsPage,
-  loadShortsHomePage,
 } from "./routeModules";
 import { HomePage } from "../features/home/HomePage";
 import { BilibiliAppAuthStartupCheck } from "../features/settings/BilibiliAppAuthStartupCheck";
@@ -55,7 +54,6 @@ const MultiRoomPage = lazy(loadMultiRoomPage);
 const VideoPage = lazy(loadVideoPage);
 const VideoPlayerPage = lazy(loadVideoPlayerPage);
 const VideoSearchPage = lazy(loadVideoSearchPage);
-const ShortsHomePage = lazy(loadShortsHomePage);
 const ShortsPage = lazy(loadShortsPage);
 const RoomPage = lazy(loadRoomPage);
 
@@ -111,9 +109,12 @@ const router = createBrowserRouter(
         <Route path="video/play" element={<VideoPlayerPage />} />
         <Route path="video/search" element={<VideoSearchPage />} />
         <Route path="video" element={<VideoPage />} />
-        <Route path="shorts" element={<ShortsHomePage />} />
+        {/* 旧的短视频平台选择页已下线。入口只保留在播放页的「短视频」按钮与
+            移动端自动分流里；旧深链在 loader 阶段 replace：有效 seed 转到 B 站
+            推荐流并保留 query，其余回视频发现页。页面模块不会被求值。 */}
+        <Route path="shorts" loader={legacyShortsRedirect} element={null} />
         <Route path="shorts/bilibili" element={<ShortsPage />} />
-        {/* 抖音短视频已下线：旧入口（含任意 query）无请求地 replace 回平台选择页，
+        {/* 抖音短视频已下线：旧入口（含任意 query）无请求地 replace 回视频发现页，
             不转发 seed，也不挂载任何推荐流或播放器。放在 loader 里重定向，
             页面模块不会被求值；`element: null` 让渲染只在极短的过渡中出现空内容。 */}
         <Route path="shorts/douyin" loader={legacyDouyinShortsRedirect} element={null} />

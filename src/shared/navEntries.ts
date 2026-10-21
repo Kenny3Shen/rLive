@@ -6,8 +6,11 @@
  *
  * 只包含导航栏里的内容型目的地。首页、关注、设置是应用的基本骨架，
  * 不参与这项偏好 —— 用户关掉它们会让应用无法导航回来。
+ *
+ * 短视频已不再占导航目的地，旧的 `shorts` 值会在净化时被丢弃；Rust 侧仍接受
+ * 这个旧 id，避免升级时持久化数据读取失败。
  */
-export const HOME_ENTRY_IDS = ["video", "shorts", "iptv"] as const;
+export const HOME_ENTRY_IDS = ["video", "iptv"] as const;
 
 export type HomeEntryId = (typeof HOME_ENTRY_IDS)[number];
 

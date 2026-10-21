@@ -6,11 +6,9 @@ import {
   Home,
   PanelsTopLeft,
   Settings,
-  Smartphone,
   Tv,
   Videotape,
 } from "lucide-react";
-import { SHORTS_PATH } from "@/features/shorts/shortsFeed";
 import { normalizeHiddenHomeEntryIds, type HomeEntryId } from "@/shared/navEntries";
 
 export const SIDEBAR_NAVIGATION_STATE = {
@@ -42,10 +40,8 @@ export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   // B 站视频（VOD）。它不是直播平台中的一个，因此是自己的目的地而不是
   // 首页平台条上的一项 —— 首页那条条带完全不动。
   { to: "/video", label: "视频", icon: Clapperboard, homeEntry: "video" },
-  // 短视频（竖屏流）。不做成 `/video` 的第五个页签：那条轨道的面板常挂载、
-  // 套纵向滚动容器、且横滑切页签，三者都与「上下滑动换片」直接冲突。
-  // 路径也不放在 `/video` 之下：侧栏目的地按前缀匹配，那样「视频」会跟着高亮。
-  { to: SHORTS_PATH, label: "短视频", icon: Smartphone, homeEntry: "shorts" },
+  // 短视频不再占一个导航目的地：它从播放页的「短视频」按钮或移动端竖画幅
+  // 自动入口进入 `/shorts/bilibili`。旧路径 `/shorts` 只作为深链兼容入口。
   { to: "/iptv", label: "IPTV", icon: Tv, homeEntry: "iptv" },
   {
     to: "/multi-room",
@@ -99,7 +95,6 @@ const SIDEBAR_DESTINATIONS = [
   "/",
   "/follow",
   "/video",
-  SHORTS_PATH,
   "/iptv",
   "/multi-room",
   "/recordings",

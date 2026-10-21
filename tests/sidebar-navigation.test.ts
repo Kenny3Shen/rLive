@@ -3,6 +3,7 @@ import {
   SIDEBAR_NAVIGATION_STATE,
   isSidebarNavigation,
   routeScopedPreviousGroup,
+  sidebarNavigationDirection,
 } from "../src/app/layout/sidebarNavigation";
 describe("sidebar navigation transitions", () => {
   test("recognizes a direct sidebar push", () => {
@@ -27,5 +28,18 @@ describe("route-scoped platform panels", () => {
   });
   test("starts a new destination from its own active platform", () => {
     expect(routeScopedPreviousGroup("/", "huya", "/follow", "all")).toBe("all");
+  });
+});
+
+describe("sidebar direction strip after removing the shorts destination", () => {
+  test("orders video directly before iptv", () => {
+    expect(sidebarNavigationDirection("/iptv", "/video")).toBe(-1);
+    expect(sidebarNavigationDirection("/video", "/iptv")).toBe(1);
+  });
+  test("does not know the retired shorts path as a destination", () => {
+    // `/shorts` 已不是侧栏目的地：它只经旧深链进入，不参与方向判定，
+    // 因此与任何目的地之间都按默认的正向平移。
+    expect(sidebarNavigationDirection("/settings", "/shorts")).toBe(1);
+    expect(sidebarNavigationDirection("/shorts", "/settings")).toBe(1);
   });
 });

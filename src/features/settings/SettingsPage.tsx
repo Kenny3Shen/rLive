@@ -31,7 +31,6 @@ import {
   Search,
   SearchX,
   ShieldAlert,
-  Smartphone,
   Tv,
   Upload,
   UserRound,
@@ -305,7 +304,7 @@ const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
 const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
 
 export const settingsCategorySearchText: Record<SettingsCategory, string> = {
-  home: "主页 首页 入口 导航 侧栏 侧边栏 底栏 视频 短视频 IPTV 显示 隐藏 home",
+  home: "主页 首页 入口 导航 侧栏 侧边栏 底栏 视频 IPTV 显示 隐藏 home",
   appearance:
     "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式 控制栏",
   playback:
@@ -1828,10 +1827,6 @@ const HOME_ENTRY_PRESENTATION: Record<HomeEntryId, { label: string; icon: Lucide
   video: {
     label: "视频",
     icon: Clapperboard,
-  },
-  shorts: {
-    label: "短视频",
-    icon: Smartphone,
   },
   iptv: {
     label: "IPTV",

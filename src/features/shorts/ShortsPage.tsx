@@ -21,6 +21,7 @@ import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive, videoGetPlayerMeta } from "@/features/video/videoApi";
 import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoHistory";
 import {
+  VIDEO_HOME_PATH,
   videoDetailsNavigationState,
   videoPlayPath,
   videoShortsEntryFromState,
@@ -312,7 +313,7 @@ export function ShortsPage() {
       return;
     }
     if (hasBrowserHistoryEntry(window.history.state)) navigate(-1);
-    else navigate("/shorts", { replace: true });
+    else navigate(VIDEO_HOME_PATH, { replace: true });
   }, [feed, navigate, resetInteraction]);
 
   // 作者模式是页内的一层：系统 Back / Escape 与顶栏返回采用相同优先级。
