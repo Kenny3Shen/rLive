@@ -41,7 +41,8 @@ export type IptvAvailabilityState =
   | {
       /** `available` 只代表「网络可达且拿到了可识别清单或媒体字节」，不代表一定能播。 */
       status: "available" | "unavailable";
-      latencyMs: number;
+      /** 播放反馈没有探测耗时，不能伪造为 0 ms。 */
+      latencyMs: number | null;
       httpStatus: number | null;
       message: string | null;
       /** 该结果产生的时刻，用于判定陈旧。 */

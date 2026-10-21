@@ -32,6 +32,8 @@ import {
   playlistSourceFromRoute,
 } from "./playlistSource";
 import type { IptvChannel } from "./types";
+import { iptvCheckIdentity } from "./availability";
+import { useIptvAvailabilityStore } from "./availabilityStore";
 
 type IptvPlayerTopBarProps = {
   title: string;
@@ -169,14 +171,6 @@ export function IptvPlayerPage() {
     : iptvHomePath({ source, group, query });
   const returnPath = stateReturnPath ?? homePath;
 
-  const handlePlaybackStatus = useCallback(
-    (nextStatus: IptvPlaybackStatus, nextError: string | null) => {
-      setPlaybackStatus(nextStatus);
-      setPlaybackError(nextError);
-    },
-    [],
-  );
-
   const handleReconnect = useCallback(() => {
     setPlaybackStatus("connecting");
     setPlaybackError(null);
@@ -204,6 +198,19 @@ export function IptvPlayerPage() {
     }
     return resolveIptvChannel(channelUrl, playlistQuery.data, favoritesQuery.data);
   }, [channelUrl, favoritesQuery.data, isDirectPlayback, playlistQuery.data]);
+
+  const handlePlaybackStatus = useCallback(
+    (nextStatus: IptvPlaybackStatus, nextError: string | null) => {
+      setPlaybackStatus(nextStatus);
+      setPlaybackError(nextError);
+      if (channel && !isDirectPlayback) {
+        useIptvAvailabilityStore
+          .getState()
+          .recordPlaybackStatus(source.url, channel, nextStatus, nextError);
+      }
+    },
+    [channel, isDirectPlayback, source.url],
+  );
 
   const title = channel?.name ?? "IPTV 播放器";
   const recordingContext = useMemo<RecordingContext | null>(
@@ -410,6 +417,7 @@ export function IptvPlayerPage() {
           )}
         >
           <IptvPlayer
+            key={`${source.url}\n${iptvCheckIdentity(channel)}`}
             channel={channel}
             reloadToken={reloadToken}
             webFullscreen={webFullscreen}

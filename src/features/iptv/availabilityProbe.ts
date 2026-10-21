@@ -7,6 +7,7 @@ import {
   getIptvChannelChecks,
   iptvCheckIdentity,
   type IptvChannelAvailability,
+  type IptvAvailabilityState,
 } from "./availability";
 import { useIptvAvailabilityStore } from "./availabilityStore";
 import type { IptvChannel } from "./types";
@@ -25,11 +26,13 @@ let probeEpoch = 0;
 /** 更改或替换来源之前先使进行中的探测失效。 */
 export function cancelIptvAvailabilityProbe(): void {
   probeEpoch += 1;
-  useIptvAvailabilityStore.getState().setProgress(null);
+  const store = useIptvAvailabilityStore.getState();
+  const previous = store.sourceUrl ? store.cacheBySource.get(store.sourceUrl) : undefined;
+  store.revertChecking([...store.byIdentity.keys()], previous ?? new Map());
 }
 
 /**
- * 探测有界的 IPTV 条目标识集合，并把结果保存在会话缓存中。
+ * 探测有界的 IPTV 条目标识集合，并把结果保存在本机缓存中。
  * 纪元守卫使先前来源的迟到响应无害。
  */
 export async function probeIptvAvailability(
@@ -48,15 +51,16 @@ export async function probeIptvAvailability(
     store.getState().resetForSource(options.sourceUrl);
   }
 
+  cancelIptvAvailabilityProbe();
   const previousAvailability = store.getState().byIdentity;
+  const checkingState: IptvAvailabilityState = { status: "checking" };
   const runId = ++probeEpoch;
   const results: IptvChannelAvailability[] = [];
   store.getState().setProgress({ completed: 0, total: checks.length });
-  store
-    .getState()
-    .setManyAvailability(
-      identities.map((identity) => ({ identity, state: { status: "checking" } })),
-    );
+  store.getState().setManyAvailability(
+    identities.map((identity) => ({ identity, state: checkingState })),
+    options.sourceUrl,
+  );
 
   try {
     for (let offset = 0; offset < checks.length; offset += IPTV_AVAILABILITY_BATCH_SIZE) {
@@ -74,6 +78,8 @@ export async function probeIptvAvailability(
           identity: batchIdentities[index] ?? result.url.trim(),
           state: availabilityStateFromResult(result),
         })),
+        options.sourceUrl,
+        checkingState,
       );
       store.getState().setProgress({ completed: results.length, total: checks.length });
     }

@@ -1,28 +1,46 @@
-// 预热从「应用启动」改为「首次进入 IPTV」：不进入该路由就不产生探测流量。
 import { describe, expect, test } from "bun:test";
+import { getIptvEntryProbeChannels } from "../src/features/iptv/entryProbe";
+import { iptvCheckIdentity, type IptvAvailabilityState } from "../src/features/iptv/availability";
+import type { IptvChannel } from "../src/features/iptv/types";
 
-import { shouldRunIptvEntryProbe } from "../src/features/iptv/entryProbe";
+function channel(url: string, headers: Record<string, string> = {}): IptvChannel {
+  return { id: url, name: url, group: "", logo: null, url, protocol: "hls", headers };
+}
+const a = channel("https://a/live.m3u8");
+const b = channel("https://b/live.m3u8");
+const cached: IptvAvailabilityState = {
+  status: "available",
+  latencyMs: 12,
+  httpStatus: 200,
+  message: null,
+  checkedAt: 0,
+};
 
-describe("IPTV 首次进入预热", () => {
-  test("未进入 IPTV 时不探测", () => {
-    expect(shouldRunIptvEntryProbe(new Set(), "https://a/list.m3u", false, 12)).toBe(false);
+describe("IPTV 按缓存进入检测", () => {
+  test("未进入或没有频道时不检测", () => {
+    expect(getIptvEntryProbeChannels([a], new Map(), false)).toEqual([]);
+    expect(getIptvEntryProbeChannels([], new Map(), true)).toEqual([]);
   });
-
-  test("进入但播放列表还没到时不探测", () => {
-    expect(shouldRunIptvEntryProbe(new Set(), "https://a/list.m3u", true, 0)).toBe(false);
+  test("没有缓存时检测，已有检测运行时不叠加", () => {
+    expect(getIptvEntryProbeChannels([a, b], new Map(), true)).toEqual([a, b]);
+    expect(getIptvEntryProbeChannels([a], new Map(), true, true)).toEqual([]);
   });
-
-  test("首次进入且有频道时探测一次", () => {
-    expect(shouldRunIptvEntryProbe(new Set(), "https://a/list.m3u", true, 12)).toBe(true);
+  test("已有结果即使陈旧或不可用也不自动重测", () => {
+    const availability = new Map<string, IptvAvailabilityState>([
+      [iptvCheckIdentity(a), cached],
+      [iptvCheckIdentity(b), { ...cached, status: "unavailable" }],
+    ]);
+    expect(getIptvEntryProbeChannels([a, b], availability, true)).toEqual([]);
   });
-
-  test("同一来源离开再返回不重复探测", () => {
-    const probed = new Set(["https://a/list.m3u"]);
-    expect(shouldRunIptvEntryProbe(probed, "https://a/list.m3u", true, 12)).toBe(false);
+  test("更新列表只检测新增或请求头改变的配置", () => {
+    const changed = channel(a.url, { Referer: "https://site" });
+    const availability = new Map([[iptvCheckIdentity(a), cached]]);
+    expect(getIptvEntryProbeChannels([a, b, changed], availability, true)).toEqual([b, changed]);
   });
-
-  test("换一个来源是新的一次进入", () => {
-    const probed = new Set(["https://a/list.m3u"]);
-    expect(shouldRunIptvEntryProbe(probed, "https://b/list.m3u", true, 12)).toBe(true);
+  test("检测中条目不重复加入", () => {
+    const availability = new Map<string, IptvAvailabilityState>([
+      [iptvCheckIdentity(a), { status: "checking" }],
+    ]);
+    expect(getIptvEntryProbeChannels([a, b], availability, true)).toEqual([b]);
   });
 });

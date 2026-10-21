@@ -98,9 +98,6 @@ export function IptvControllerProvider({
     selectedGroup !== "all" || keyword.trim().length > 0 || availabilityFilter !== "all";
   const isCheckingAvailability = availabilityProgress !== null;
 
-  // 首次进入 IPTV 时才做静默浅探测：不进入该路由就不会为它产生网络流量。
-  useIptvEntryProbe(source, active, channels);
-
   useEffect(() => {
     if (
       !active ||
@@ -122,11 +119,14 @@ export function IptvControllerProvider({
         : cachedSource !== null && cachedSource !== source.url;
     if (sourceChanged) {
       cancelIptvAvailabilityProbe();
-      useIptvAvailabilityStore.getState().resetForSource(source.url);
       setAvailabilityFilter("all");
     }
+    useIptvAvailabilityStore.getState().resetForSource(source.url);
     activeSourceRef.current = source.url;
   }, [active, source.url]);
+
+  // 来源切换先恢复对应缓存，再对无缓存条目静默检测。
+  useIptvEntryProbe(source, active, channels);
 
   const navigateHome = useCallback(
     (
@@ -168,8 +168,6 @@ export function IptvControllerProvider({
 
   const updateSource = useCallback(async () => {
     cancelIptvAvailabilityProbe();
-    const availabilityStore = useIptvAvailabilityStore.getState();
-    availabilityStore.clearForSource(source.url);
     setAvailabilityFilter("all");
     try {
       const result = await playlistQuery.refetch();
@@ -181,7 +179,7 @@ export function IptvControllerProvider({
     } catch (error) {
       notify.error("频道源更新失败", errorText(error));
     }
-  }, [playlistQuery, source.label, source.url]);
+  }, [playlistQuery, source.label]);
 
   const checkChannelAvailability = useCallback(
     () => probeIptvAvailability(matchingChannels, { sourceUrl: source.url, notify: true }),

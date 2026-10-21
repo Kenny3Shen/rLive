@@ -63,7 +63,8 @@ function groupTargets(channelsCount: number, options: readonly IptvGroupOption[]
   ];
 }
 
-function formatLatency(latencyMs: number): string {
+function formatLatency(latencyMs: number | null): string {
+  if (latencyMs === null) return "已播放";
   if (latencyMs < 1_000) return `${Math.max(1, Math.round(latencyMs))} ms`;
   return `${(latencyMs / 1_000).toFixed(1)} s`;
 }
@@ -252,8 +253,12 @@ function IptvCardAvailability({
     return (
       <span
         className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums"
-        aria-label={`网络可达，响应 ${formatLatency(availability.latencyMs)}`}
-        title="网络可达"
+        aria-label={
+          availability.latencyMs === null
+            ? "已实际播放"
+            : `网络可达，响应 ${formatLatency(availability.latencyMs)}`
+        }
+        title={availability.latencyMs === null ? "已实际播放" : "网络可达"}
       >
         <CircleCheck className="size-4 text-success" aria-hidden />
         {formatLatency(availability.latencyMs)}
@@ -281,7 +286,9 @@ function IptvChannelCard({
   const group = channel.group || "未分组";
   const availabilityLabel =
     availability?.status === "available"
-      ? `，可用，响应 ${formatLatency(availability.latencyMs)}`
+      ? availability.latencyMs === null
+        ? "，已实际播放"
+        : `，网络可达，响应 ${formatLatency(availability.latencyMs)}`
       : availability?.status === "unavailable"
         ? `，不可用，${availability.message ?? "连接失败"}`
         : availability?.status === "checking"
