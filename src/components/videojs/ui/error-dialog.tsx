@@ -4,6 +4,8 @@ import { translateText } from "@videojs/core/i18n";
 import {
   AlertDialog as AlertDialogPrimitive,
   ErrorDialog as ErrorDialogPrimitive,
+  useContainer,
+  useDialogContext,
   useErrorDialogContext,
   useTranslator,
 } from "@videojs/react";
@@ -83,6 +85,7 @@ function HostErrorDialog({ error, title, onRetry }: PlayerErrorDialogState) {
         if (!next && current) setDismissedKey(current.key);
       }}
     >
+      <HostErrorDialogScope />
       <DialogFrame
         title={shown?.title ?? title}
         description={shown?.description ?? ""}
@@ -91,6 +94,17 @@ function HostErrorDialog({ error, title, onRetry }: PlayerErrorDialogState) {
       />
     </AlertDialogPrimitive.Root>
   );
+}
+
+/** 与原生媒体错误一致，仅锁定播放器；侧栏与应用导航仍可交互。 */
+function HostErrorDialogScope() {
+  const container = useContainer();
+  const { dialog } = useDialogContext();
+  useEffect(() => {
+    // Root 的 layout effect 先初始化作用域；这里在它打开弹窗的 effect 之前收窄。
+    dialog.setInteractionRoot(container);
+  }, [container, dialog]);
+  return null;
 }
 
 function hostError(error: unknown, title: string): ShownError | null {

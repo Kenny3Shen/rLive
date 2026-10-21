@@ -1,5 +1,6 @@
 import { useMemo, type RefObject } from "react";
 import { VideoChapterMenu } from "@/features/video/VideoChapterMenu";
+import { DrawerScope } from "@/components/ui/drawer";
 import { activeChapterIndex, playableChapters } from "@/features/video/videoChapters";
 import { isMobileClient } from "@/shared/clientPlatform";
 import type { VideoChapter } from "@/shared/types/video";
@@ -37,15 +38,19 @@ export function ShortsChapterMenu({
     void time.seek(clamped);
   };
   return (
-    <VideoChapterMenu
-      variant="pill"
-      presentation={isMobileClient() || compact ? "drawer" : "popover"}
-      chapters={items}
-      activeIndex={activeChapterIndex(items, time.currentTime)}
-      open={open}
-      onOpenChange={onOpenChange}
-      onSeek={seek}
-      container={container}
-    />
+    // 独立 scope 不设 DrawerViewport，避免继承关闭时高度为 0 的评论 dock。
+    // 章节抽屉始终使用显式传入的播放视口；桌面 Popover 不受影响。
+    <DrawerScope>
+      <VideoChapterMenu
+        variant="pill"
+        presentation={isMobileClient() || compact ? "drawer" : "popover"}
+        chapters={items}
+        activeIndex={activeChapterIndex(items, time.currentTime)}
+        open={open}
+        onOpenChange={onOpenChange}
+        onSeek={seek}
+        container={container}
+      />
+    </DrawerScope>
   );
 }
