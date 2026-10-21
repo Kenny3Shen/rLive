@@ -491,17 +491,129 @@ pub fn parse_room_detail_from_data(
     })
 }
 
+/// JSON 值的形状。诊断日志只记录这个，不记录任何字段内容。
+fn json_shape(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "missing",
+        Some(Value::Null) => "null",
+        Some(Value::Object(_)) => "object",
+        Some(Value::Array(_)) => "array",
+        Some(Value::String(_)) => "string",
+        Some(Value::Bool(_)) => "bool",
+        Some(Value::Number(_)) => "number",
+    }
+}
+
+/// 诊断用的房间号：只放行长度受限的纯 ASCII 数字串，
+/// 避免把 token、URL 等任意字符串写进日志。
+pub(super) fn diagnostic_room_id_str(text: &str) -> &str {
+    let digits = !text.is_empty() && text.len() <= 20 && text.bytes().all(|b| b.is_ascii_digit());
+    if digits { text } else { "" }
+}
+
+fn diagnostic_room_id(data: &Value) -> String {
+    match data.get("room_id") {
+        Some(Value::Number(number)) if number.as_u64().is_some_and(|id| id > 0) => {
+            number.to_string()
+        }
+        Some(Value::String(room_id)) => diagnostic_room_id_str(room_id).to_string(),
+        _ => String::new(),
+    }
+}
+
+/// 记录一次播放信息失败。字段是 allowlist：房间号、开播状态与 JSON 形状。
+///
+/// 不记录 query、Cookie、响应正文、上游 message 或任何播放 token。
+fn log_play_info_failure(
+    data: &Value,
+    playurl_info: &'static str,
+    playurl: &'static str,
+    error_code: &str,
+) {
+    tracing::warn!(
+        room_id = %diagnostic_room_id(data),
+        live_status = ?data.get("live_status").and_then(|v| v.as_i64()),
+        playurl_info,
+        playurl,
+        error_code,
+        "bilibili play info unavailable"
+    );
+}
+
+/// 上游明确表示没有可播放直播流时的分类错误。
+///
+/// 只采信显式布尔值和显式数字：字段缺失、类型不符、`pwd_verified = false`
+/// 单独出现都不足以断定上锁，一律落回可重试的 `bilibili_play_info`。
+fn play_info_unavailable(data: &Value) -> AppError {
+    let explicit_true = |key: &str| data.get(key).and_then(Value::as_bool) == Some(true);
+    let pwd_verified = data.get("pwd_verified").and_then(Value::as_bool);
+
+    // 只有 `is_locked` 明确为 true，或 `encrypted` 明确为 true 且密码尚未验证时才解释为受限。
+    if explicit_true("is_locked") || (explicit_true("encrypted") && pwd_verified != Some(true)) {
+        return AppError::new("bilibili_room_locked", "该直播间当前受限，无法获取播放地址")
+            .with_site("bilibili");
+    }
+    if explicit_true("is_hidden") {
+        return AppError::new(
+            "bilibili_room_hidden",
+            "该直播间当前不可见，无法获取播放地址",
+        )
+        .with_site("bilibili");
+    }
+
+    match data.get("live_status").and_then(Value::as_i64) {
+        Some(0) => AppError::new("bilibili_not_live", "该直播间当前未开播，无法获取播放地址")
+            .with_site("bilibili"),
+        Some(2) => AppError::new(
+            "bilibili_room_round",
+            "该直播间正在轮播，暂无可用的直播播放地址",
+        )
+        .with_site("bilibili"),
+        _ => AppError::new("bilibili_play_info", "B站播放信息响应异常，请稍后重试")
+            .with_site("bilibili")
+            .retryable(),
+    }
+}
+
 /// 从 getRoomPlayInfo 响应中提取 playurl map。
+///
+/// 缺失、`null` 或非对象都不能当成可播放结果。失败分类与 WARN 只在这里
+/// 落一次，两个解析器共用，避免 qualities / urls 各记一遍。
 pub fn read_playurl(result: &Value) -> AppResult<&Value> {
-    result.pointer("/data/playurl_info/playurl").ok_or_else(|| {
-        AppError::new("bilibili_play_info", "B站播放信息响应异常，请稍后重试").with_site("bilibili")
+    let data = result.get("data").unwrap_or(&Value::Null);
+    let playurl_info = json_shape(result.pointer("/data/playurl_info"));
+    let playurl = result.pointer("/data/playurl_info/playurl");
+
+    if let Some(value @ Value::Object(_)) = playurl {
+        return Ok(value);
+    }
+
+    let error = play_info_unavailable(data);
+    log_play_info_failure(data, playurl_info, json_shape(playurl), &error.code);
+    Err(error)
+}
+
+/// 解析 play-info 根 JSON；失败时落 WARN，错误信息与日志都不带 serde 原文本。
+///
+/// message 会直接展示给用户，因此固定为中文；`scope` 只作为日志字段，
+/// 不拼进 message。
+fn parse_play_root(raw: &str, scope: &'static str) -> AppResult<Value> {
+    serde_json::from_str(raw).map_err(|_| {
+        let error = json_err("B站播放信息响应无法解析，请稍后重试");
+        tracing::warn!(
+            error_code = %error.code,
+            scope,
+            playurl = "invalid_json",
+            "bilibili play info parse failed"
+        );
+        error
     })
 }
 
 /// 从 play-info 响应解析画质列表。
 pub fn parse_play_qualities(raw: &str) -> AppResult<Vec<LivePlayQuality>> {
-    let root: Value =
-        serde_json::from_str(raw).map_err(|e| json_err(format!("play qualities: {e}")))?;
+    let root = parse_play_root(raw, "play qualities")?;
+    let data = root.get("data").unwrap_or(&Value::Null);
     let playurl = read_playurl(&root)?;
 
     let mut qualities_map: BTreeMap<i64, String> = BTreeMap::new();
@@ -532,18 +644,29 @@ pub fn parse_play_qualities(raw: &str) -> AppResult<Vec<LivePlayQuality>> {
     }
 
     if qualities.is_empty() {
-        return Err(AppError::new(
-            "bilibili_play_qualities_empty",
-            "B站暂时无法获取播放清晰度，请稍后重试",
-        )
-        .with_site("bilibili"));
+        // 上游已明确表示未开播/轮播/受限/不可见时，与 urls 链路给同一分类；
+        // 其余未知情况（如 live_status 1 但缺 accept_qn）保留清晰度专用错误。
+        let business = play_info_unavailable(data);
+        let error = if business.code != "bilibili_play_info" {
+            business
+        } else {
+            AppError::new(
+                "bilibili_play_qualities_empty",
+                "B站暂时无法获取播放清晰度，请稍后重试",
+            )
+            .with_site("bilibili")
+            .retryable()
+        };
+        log_play_info_failure(data, "object", "object", &error.code);
+        return Err(error);
     }
     Ok(qualities)
 }
 
 /// 从 play-info 响应解析播放地址（含选定的 qn）。
 pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
-    let root: Value = serde_json::from_str(raw).map_err(|e| json_err(format!("play urls: {e}")))?;
+    let root = parse_play_root(raw, "play urls")?;
+    let data = root.get("data").unwrap_or(&Value::Null);
     let playurl = read_playurl(&root)?;
     let mut urls: Vec<String> = Vec::new();
 
@@ -574,10 +697,23 @@ pub fn parse_play_urls(raw: &str) -> AppResult<Vec<PlayUrl>> {
                 for url_item in url_list {
                     let host = as_str(url_item.get("host").unwrap_or(&Value::Null));
                     let extra = as_str(url_item.get("extra").unwrap_or(&Value::Null));
+                    // 缺 host 或 base_url 的条目拼不出可用地址：空串、空白或仅
+                    // `extra` 里的 query 都不是线路，直接跳过；有效条目拼接保持原样。
+                    if host.trim().is_empty() || base_url.trim().is_empty() {
+                        continue;
+                    }
                     urls.push(format!("{host}{base_url}{extra}"));
                 }
             }
         }
+    }
+
+    // 上游给了 playurl 对象却没有可用线路时同样不能静默返回空列表：
+    // 明确未开播/轮播给出分类错误，其余保持可重试的通用错误。
+    if urls.is_empty() {
+        let error = play_info_unavailable(data);
+        log_play_info_failure(data, "object", "object", &error.code);
+        return Err(error);
     }
 
     // 优先使用非 mcdn 主机（与上游排序一致）。
@@ -971,6 +1107,400 @@ mod tests {
         assert_eq!(urls[0].label, "线路1");
         assert_eq!(urls[0].protocol, crate::models::live::PlaybackProtocol::Flv);
         assert_eq!(urls[0].priority, 0);
+    }
+
+    /// play-info 失败分类的真实执行测试。
+    ///
+    /// 每个用例同时走 qualities 与 urls，确认两条链路给出同一个分类；
+    /// 未知形状必须保持可重试的 `bilibili_play_info`，不能被猜成「未开播」。
+    mod play_info_failures {
+        use super::*;
+
+        /// 最小可用 playurl（一条 flv 线路 + 一个可接受 qn）。
+        fn playable_playurl() -> Value {
+            serde_json::json!({
+                "g_qn_desc": [{ "qn": 10000, "desc": "原画" }],
+                "stream": [{
+                    "protocol_name": "http_stream",
+                    "format": [{
+                        "format_name": "flv",
+                        "codec": [{
+                            "codec_name": "avc",
+                            "accept_qn": [10000],
+                            "base_url": "/live-bvc/room.flv",
+                            "url_info": [{ "host": "https://cdn.example", "extra": "?token=secret" }]
+                        }]
+                    }]
+                }]
+            })
+        }
+
+        /// 构造上游响应；`playurl` 为 `None` 时把 `playurl_info` 置为 `null`
+        /// （`playurl_info` 整个字段缺失的场景由 `missing_playurl_info_is_not_playable` 覆盖）。
+        fn response(data_extra: Value, playurl: Option<Value>) -> String {
+            let mut data = serde_json::json!({ "room_id": 23058 });
+            if let (Value::Object(extra), Value::Object(data)) = (data_extra, &mut data) {
+                data.extend(extra);
+            }
+            match playurl {
+                Some(playurl) => {
+                    data["playurl_info"] = serde_json::json!({ "playurl": playurl });
+                }
+                None => {
+                    data["playurl_info"] = Value::Null;
+                }
+            }
+            serde_json::json!({ "code": 0, "data": data }).to_string()
+        }
+
+        /// 按 codec 列表构造 playurl，便于覆盖缺字段的线路条目。
+        fn playurl_with_codecs(codecs: Vec<Value>) -> Value {
+            serde_json::json!({
+                "g_qn_desc": [{ "qn": 10000, "desc": "原画" }],
+                "stream": [{
+                    "protocol_name": "http_stream",
+                    "format": [{ "format_name": "flv", "codec": codecs }]
+                }]
+            })
+        }
+
+        /// 单个 codec；`base_url` 为 `None` 时不写该字段（模拟缺失）。
+        fn codec_entry(base_url: Option<&str>, url_info: Value) -> Value {
+            let mut entry = serde_json::json!({ "accept_qn": [10000], "url_info": url_info });
+            if let Some(base_url) = base_url {
+                entry["base_url"] = Value::String(base_url.into());
+            }
+            entry
+        }
+
+        fn codes(raw: &str) -> (String, String) {
+            let qualities = parse_play_qualities(raw).expect_err("qualities 必须失败");
+            let urls = parse_play_urls(raw).expect_err("urls 必须失败");
+            assert_eq!(qualities.code, urls.code, "两条链路必须给同一分类");
+            assert_eq!(qualities.site.as_deref(), Some("bilibili"));
+            (qualities.code, qualities.message)
+        }
+
+        #[test]
+        fn offline_and_round_rooms_are_classified() {
+            for (status, expected) in [(0, "bilibili_not_live"), (2, "bilibili_room_round")] {
+                let raw = response(serde_json::json!({ "live_status": status }), None);
+                let (code, message) = codes(&raw);
+                assert_eq!(code, expected);
+                assert!(message.contains("直播间"));
+            }
+        }
+
+        #[test]
+        fn locked_and_hidden_rooms_are_classified() {
+            let locked = response(
+                serde_json::json!({ "live_status": 1, "is_locked": true }),
+                None,
+            );
+            assert_eq!(codes(&locked).0, "bilibili_room_locked");
+
+            let encrypted = response(
+                serde_json::json!({ "live_status": 1, "encrypted": true, "pwd_verified": false }),
+                None,
+            );
+            assert_eq!(codes(&encrypted).0, "bilibili_room_locked");
+
+            let hidden = response(
+                serde_json::json!({ "live_status": 1, "is_hidden": true }),
+                None,
+            );
+            assert_eq!(codes(&hidden).0, "bilibili_room_hidden");
+        }
+
+        /// 密码已验证的加密房、缺失的布尔字段、类型错误的布尔字段都不能推断上锁。
+        #[test]
+        fn lock_signals_need_an_explicit_boolean() {
+            for extra in [
+                serde_json::json!({ "live_status": 1, "encrypted": true, "pwd_verified": true }),
+                serde_json::json!({ "live_status": 1, "is_locked": false }),
+                serde_json::json!({ "live_status": 1, "pwd_verified": false }),
+                serde_json::json!({ "live_status": 1, "is_locked": "true", "is_hidden": "true" }),
+                serde_json::json!({ "live_status": 1 }),
+            ] {
+                let raw = response(extra.clone(), None);
+                let (code, _) = codes(&raw);
+                assert_eq!(code, "bilibili_play_info", "不应臆测上锁/未开播：{extra}");
+            }
+        }
+
+        #[test]
+        fn live_room_without_playurl_stays_generic_and_retryable() {
+            let raw = response(serde_json::json!({ "live_status": 1 }), None);
+            let error = parse_play_qualities(&raw).expect_err("null playurl 不能通过");
+            assert_eq!(error.code, "bilibili_play_info");
+            assert!(error.retryable, "未知原因应允许重试");
+            assert_eq!(
+                parse_play_urls(&raw).unwrap_err().code,
+                "bilibili_play_info"
+            );
+        }
+
+        #[test]
+        fn missing_playurl_info_is_not_playable() {
+            let raw = r#"{"code":0,"data":{"room_id":23058,"live_status":1}}"#;
+            assert_eq!(codes(raw).0, "bilibili_play_info");
+        }
+
+        #[test]
+        fn non_object_playurl_is_rejected() {
+            for playurl in [
+                Value::String("not-a-map".into()),
+                Value::Array(vec![]),
+                Value::Number(1.into()),
+            ] {
+                let raw = response(serde_json::json!({ "live_status": 1 }), Some(playurl));
+                assert_eq!(codes(&raw).0, "bilibili_play_info");
+            }
+        }
+
+        /// 根节点缺字段或字段类型错误时不能被读成「未开播」。
+        #[test]
+        fn malformed_root_fields_never_look_offline() {
+            for raw in [
+                r#"{"code":0}"#,
+                r#"{"code":0,"data":null}"#,
+                r#"{"code":0,"data":{"live_status":"0"}}"#,
+                r#"{"code":0,"data":{"live_status":null}}"#,
+                r#"{"code":0,"data":{"live_status":true}}"#,
+                r#"{"code":0,"data":{"live_status":0.5}}"#,
+            ] {
+                let (code, _) = codes(raw);
+                assert_eq!(code, "bilibili_play_info", "畸形字段不得判成未开播：{raw}");
+            }
+        }
+
+        /// 明确业务状态优先于「清晰度为空」：playurl 是空对象或空 stream 时，
+        /// 两条链路给同一分类。
+        #[test]
+        fn empty_playurl_keeps_explicit_business_status() {
+            for (status, expected) in [(0, "bilibili_not_live"), (2, "bilibili_room_round")] {
+                for playurl in [serde_json::json!({}), serde_json::json!({ "stream": [] })] {
+                    let raw = response(
+                        serde_json::json!({ "live_status": status }),
+                        Some(playurl.clone()),
+                    );
+                    let (code, _) = codes(&raw);
+                    assert_eq!(code, expected, "live_status={status} playurl={playurl}");
+                }
+            }
+
+            for (extra, expected) in [
+                (
+                    serde_json::json!({ "live_status": 1, "is_locked": true }),
+                    "bilibili_room_locked",
+                ),
+                (
+                    serde_json::json!({ "live_status": 1, "encrypted": true, "pwd_verified": false }),
+                    "bilibili_room_locked",
+                ),
+                (
+                    serde_json::json!({ "live_status": 1, "is_hidden": true }),
+                    "bilibili_room_hidden",
+                ),
+            ] {
+                let raw = response(extra.clone(), Some(serde_json::json!({})));
+                let (code, _) = codes(&raw);
+                assert_eq!(code, expected, "{extra}");
+            }
+        }
+
+        /// 未知状态或 live_status 1 缺 accept_qn 时，qualities 保留原有专用错误；
+        /// urls 仍是可重试的通用错误，不承诺两条链路同 code。
+        #[test]
+        fn unknown_status_keeps_qualities_specific_error() {
+            let raw = response(
+                serde_json::json!({ "live_status": 1 }),
+                Some(serde_json::json!({ "g_qn_desc": [] })),
+            );
+            let qualities = parse_play_qualities(&raw).expect_err("qualities 必须失败");
+            assert_eq!(qualities.code, "bilibili_play_qualities_empty");
+            assert!(qualities.retryable);
+            assert_eq!(
+                parse_play_urls(&raw).unwrap_err().code,
+                "bilibili_play_info"
+            );
+
+            let unknown = response(
+                serde_json::json!({}),
+                Some(serde_json::json!({ "stream": [] })),
+            );
+            assert_eq!(
+                parse_play_qualities(&unknown).unwrap_err().code,
+                "bilibili_play_qualities_empty"
+            );
+        }
+
+        /// 非法 JSON 的 message 直接展示给用户，必须是中文且不带 scope。
+        #[test]
+        fn invalid_json_message_is_chinese() {
+            for raw in [
+                r#"{"token":"super-secret","live_status":"#,
+                "not json at all",
+            ] {
+                for message in [
+                    parse_play_qualities(raw).unwrap_err().message,
+                    parse_play_urls(raw).unwrap_err().message,
+                ] {
+                    assert_eq!(message, "B站播放信息响应无法解析，请稍后重试");
+                    assert!(!message.contains("invalid json"), "{message}");
+                    assert!(!message.contains("play qualities"), "{message}");
+                    assert!(!message.contains("play urls"), "{message}");
+                }
+            }
+        }
+
+        /// 有效 playurl 保留现有能力：清晰度与线路都能解析。
+        #[test]
+        fn valid_playurl_keeps_existing_capabilities() {
+            let raw = response(
+                serde_json::json!({ "live_status": 1, "is_locked": false }),
+                Some(playable_playurl()),
+            );
+            let qualities = parse_play_qualities(&raw).unwrap();
+            assert_eq!(qualities.len(), 1);
+            assert_eq!(qualities[0].quality, "原画");
+            let urls = parse_play_urls(&raw).unwrap();
+            assert_eq!(urls.len(), 1);
+            assert_eq!(
+                urls[0].url,
+                "https://cdn.example/live-bvc/room.flv?token=secret"
+            );
+        }
+
+        /// 缺 host / base_url 的条目拼不出线路：全部无效时按业务状态或可重试错误失败，
+        /// 只有 `extra`（query）也不能当成地址。
+        #[test]
+        fn urls_without_host_or_base_url_are_skipped() {
+            let invalid_codecs = [
+                codec_entry(
+                    Some("/live-bvc/room.flv"),
+                    serde_json::json!([{ "extra": "?token=secret" }]),
+                ),
+                codec_entry(
+                    Some("/live-bvc/room.flv"),
+                    serde_json::json!([{ "host": "", "extra": "?token=secret" }]),
+                ),
+                codec_entry(
+                    Some("/live-bvc/room.flv"),
+                    serde_json::json!([{ "host": null, "extra": "?token=secret" }]),
+                ),
+                codec_entry(None, serde_json::json!([{ "host": "https://cdn.example" }])),
+                codec_entry(
+                    Some("  "),
+                    serde_json::json!([{ "host": "https://cdn.example" }]),
+                ),
+            ];
+
+            for codec in invalid_codecs {
+                let raw = response(
+                    serde_json::json!({ "live_status": 1 }),
+                    Some(playurl_with_codecs(vec![codec.clone()])),
+                );
+                let error = parse_play_urls(&raw).expect_err("无可用线路必须失败");
+                assert_eq!(error.code, "bilibili_play_info", "{codec}");
+                assert!(error.retryable, "{codec}");
+            }
+
+            // 明确业务状态优先于「没有可用线路」。
+            for (status, expected) in [(0, "bilibili_not_live"), (2, "bilibili_room_round")] {
+                let raw = response(
+                    serde_json::json!({ "live_status": status }),
+                    Some(playurl_with_codecs(vec![codec_entry(
+                        Some("/live-bvc/room.flv"),
+                        serde_json::json!([{ "host": "" }]),
+                    )])),
+                );
+                assert_eq!(parse_play_urls(&raw).unwrap_err().code, expected);
+            }
+        }
+
+        /// 无效条目与有效条目混合时只丢无效的，有效线路保留，且优先级和顺序保持原有语义。
+        #[test]
+        fn mixed_entries_keep_only_valid_urls() {
+            let raw = response(
+                serde_json::json!({ "live_status": 1 }),
+                Some(playurl_with_codecs(vec![codec_entry(
+                    Some("/live-bvc/room.flv"),
+                    serde_json::json!([
+                        { "host": "" },
+                        { "host": "https://mcdn.example", "extra": "?token=mcdn" },
+                        { "host": "https://cdn.example", "extra": "?token=secret" },
+                        { "extra": "?token=orphan" }
+                    ]),
+                )])),
+            );
+            let urls = parse_play_urls(&raw).unwrap();
+            assert_eq!(urls.len(), 2, "空 host / 仅 query 的条目应被跳过");
+            assert_eq!(
+                urls[0].url,
+                "https://cdn.example/live-bvc/room.flv?token=secret"
+            );
+            assert_eq!(
+                urls[1].url,
+                "https://mcdn.example/live-bvc/room.flv?token=mcdn"
+            );
+            assert_eq!(urls[0].priority, 0);
+            assert_eq!(urls[1].priority, 1);
+            assert_eq!(urls[0].source_id, "bilibili:1");
+            assert_eq!(urls[0].headers["referer"], "https://live.bilibili.com");
+            assert!(urls.iter().all(|url| !url.url.is_empty()));
+        }
+
+        #[test]
+        fn diagnostic_room_id_only_accepts_bounded_digits() {
+            assert_eq!(diagnostic_room_id_str("23058"), "23058");
+            assert_eq!(diagnostic_room_id_str(""), "");
+            assert_eq!(diagnostic_room_id_str("SESSDATA=secret"), "");
+            assert_eq!(diagnostic_room_id_str("https://cdn.example/x?token=1"), "");
+            assert_eq!(diagnostic_room_id_str("12 34"), "");
+            assert_eq!(diagnostic_room_id_str(&"1".repeat(21)), "");
+        }
+
+        #[test]
+        fn invalid_json_message_does_not_echo_body() {
+            let raw = r#"{"token":"super-secret","live_status":"#;
+            let quality_message = parse_play_qualities(raw).unwrap_err().message;
+            let url_message = parse_play_urls(raw).unwrap_err().message;
+            for message in [quality_message, url_message] {
+                assert!(
+                    !message.contains("super-secret"),
+                    "message 回显了正文：{message}"
+                );
+                assert!(
+                    !message.contains("EOF"),
+                    "message 不应带 serde 原文本：{message}"
+                );
+            }
+        }
+
+        /// 凭据与上游正文不得出现在用户可见的 message 中。
+        #[test]
+        fn messages_never_carry_credentials() {
+            let raw = response(
+                serde_json::json!({
+                    "live_status": 0,
+                    "is_locked": true,
+                    "message": "upstream-secret-token",
+                    "pwd": "room-password",
+                }),
+                None,
+            );
+            let quality_error = parse_play_qualities(&raw).unwrap_err();
+            let url_error = parse_play_urls(&raw).unwrap_err();
+            for message in [quality_error.message, url_error.message] {
+                for secret in ["upstream-secret-token", "room-password", "SESSDATA"] {
+                    assert!(
+                        !message.contains(secret),
+                        "message 泄露了 {secret}: {message}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

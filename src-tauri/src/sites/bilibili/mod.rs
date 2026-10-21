@@ -628,15 +628,9 @@ impl BilibiliSite {
     }
 
     async fn get_room_play_info(&self, query: BTreeMap<String, String>) -> AppResult<String> {
-        const RETRY_DELAYS_MS: &[u64] = &[800, 1600];
-        let url = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
-        let mut last_err = None;
-        for (attempt, delay) in RETRY_DELAYS_MS
-            .iter()
-            .copied()
-            .chain(std::iter::once(0))
-            .enumerate()
-        {
+        const URL: &str = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo";
+        let mut attempt = 0;
+        loop {
             // 节流：play-info 调用之间至少间隔 450ms。
             {
                 let mut gate = self.play_gate.lock().await;
@@ -649,27 +643,31 @@ impl BilibiliSite {
                 *gate = Some(Instant::now());
             }
 
-            match self.get_json_with_map(url, &query).await {
+            match self.get_json_with_map(URL, &query).await {
                 Ok(text) => return Ok(text),
-                Err(e) => {
-                    let is_429 = e.code == "bilibili_rate_limit";
-                    if is_429 && attempt < RETRY_DELAYS_MS.len() {
+                Err(error) => {
+                    let Some(delay) = play_info_retry_delay_ms(&error, attempt) else {
+                        let error = play_info_final_error(error);
+                        // 只记录安全字段：房间号（数字白名单）、错误分类，不打印原始错误。
                         tracing::warn!(
-                            attempt = attempt + 1,
-                            delay_ms = delay,
-                            "bilibili play info 429; retrying"
+                            room_id = %api::diagnostic_room_id_str(
+                                query.get("room_id").map(String::as_str).unwrap_or_default()
+                            ),
+                            error_code = %error.code,
+                            "bilibili play info request failed"
                         );
-                        tokio::time::sleep(Duration::from_millis(delay)).await;
-                        last_err = Some(e);
-                        continue;
-                    }
-                    return Err(e);
+                        return Err(error);
+                    };
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        delay_ms = delay,
+                        "bilibili play info 429; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    attempt += 1;
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            AppError::new("bilibili_play_info", "B站播放信息接口重试失败").with_site("bilibili")
-        }))
     }
 
     async fn get_json_with_map(
@@ -823,6 +821,32 @@ fn map_http(e: reqwest::Error) -> AppError {
     )
     .with_site("bilibili")
     .retryable()
+}
+
+/// 只有 429 才重试，且最多两次；间隔沿用原有值。
+const PLAY_INFO_RETRY_DELAYS_MS: [u64; 2] = [800, 1600];
+
+/// 第 `attempt` 次（从 0 起）失败后是否重试，以及等待多久。
+///
+/// 只认 `bilibili_rate_limit`；其他错误（HTTP、风控、API code）重试不会变好。
+fn play_info_retry_delay_ms(error: &AppError, attempt: usize) -> Option<u64> {
+    if error.code != "bilibili_rate_limit" {
+        return None;
+    }
+    PLAY_INFO_RETRY_DELAYS_MS.get(attempt).copied()
+}
+
+/// 重试耗尽后的最终错误。
+///
+/// 429 换成中文文案，避免把上游原始错误（可能含请求细节）带给用户；
+/// 其余错误保持原有分类与文案不变。
+fn play_info_final_error(error: AppError) -> AppError {
+    if error.code == "bilibili_rate_limit" {
+        return AppError::new("bilibili_rate_limit", "B站播放信息请求过于频繁，请稍后重试")
+            .with_site("bilibili")
+            .retryable();
+    }
+    error
 }
 
 /// GET JSON 包装的响应校验档位。
@@ -1141,6 +1165,50 @@ mod live_tests {
         assert_eq!(error.code, "bilibili_rate_limit");
         assert!(error.retryable);
         assert_eq!(error.site.as_deref(), Some("bilibili"));
+    }
+
+    /// 只有 429 走原有 800/1600ms 两次重试；其他错误立即失败。
+    #[test]
+    fn play_info_retries_only_rate_limits_with_bounded_delays() {
+        let rate_limited = AppError::new("bilibili_rate_limit", "HTTP 429 from Bilibili");
+        assert_eq!(play_info_retry_delay_ms(&rate_limited, 0), Some(800));
+        assert_eq!(play_info_retry_delay_ms(&rate_limited, 1), Some(1600));
+        assert_eq!(play_info_retry_delay_ms(&rate_limited, 2), None);
+        assert_eq!(play_info_retry_delay_ms(&rate_limited, 99), None);
+
+        for code in [
+            "bilibili_restricted",
+            "bilibili_http_error",
+            "bilibili_api_error",
+            "bilibili_play_info",
+        ] {
+            assert_eq!(
+                play_info_retry_delay_ms(&AppError::new(code, "x"), 0),
+                None,
+                "{code} 不应重试"
+            );
+        }
+    }
+
+    /// 最终 429 用中文文案；其他错误保留原分类与文案。
+    #[test]
+    fn play_info_final_error_localizes_only_rate_limits() {
+        let error = play_info_final_error(AppError::new(
+            "bilibili_rate_limit",
+            "HTTP 429 from Bilibili",
+        ));
+        assert_eq!(error.code, "bilibili_rate_limit");
+        assert!(error.retryable);
+        assert!(error.message.contains("稍后重试"));
+        assert!(!error.message.contains("429"));
+        assert_eq!(error.site.as_deref(), Some("bilibili"));
+
+        let other = play_info_final_error(AppError::new(
+            "bilibili_http_error",
+            "HTTP 503 Service Unavailable",
+        ));
+        assert_eq!(other.code, "bilibili_http_error");
+        assert_eq!(other.message, "HTTP 503 Service Unavailable");
     }
 
     #[test]

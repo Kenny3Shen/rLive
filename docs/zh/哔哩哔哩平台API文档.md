@@ -36,6 +36,7 @@
 - 搜索用 `x/web-interface/search/type?search_type=live`，响应里 `data.result.live_room` 是在播房间、`data.result.live_user` 是命中关键词的主播（多数未开播）。两个数组都收，按 `roomid` 去重，开播状态取条目自身的 `live_status == 1` 而不是按它来自哪个数组。`live_user` 不带直播标题和封面，封面退回主播头像 `uface`，标题留空。`live_user` 不受 `page` 影响（实测同一关键词第 1~3 页返回完全相同的一批主播），因此只在第一页读它，翻页也只看 `live_room` 的条数，否则滚动永不停止。
 - 房间详情会解析真实 `room_id`，因此短号、展示号和发送所需的真实房间号不会混用。
 - 播放地址与短时签名不进入前端持久化缓存；刷新房间或切换清晰度时重新获取。
+- `getRoomPlayInfo` 没有有效播放对象（`playurl` 缺失、`null` 或非对象）时不再静默通过：只按明确的 `live_status` 0 / 2 判为未开播 / 轮播，只按明确的布尔 `is_locked`、`encrypted` 且 `pwd_verified` 非 true、`is_hidden` 判为受限 / 不可见；字段缺失、类型不符或形状未知一律保留可重试的 `bilibili_play_info`，不臆测未开播或上锁，qualities 与 urls 两条解析链路在这一类上给出同一分类。`playurl` 是对象但没有可用清晰度或线路时，同样先按上述明确业务状态分类，未开播、轮播、受限、不可见在两条链路上同码；`live_status` 为 1 却缺 `accept_qn` / `stream` 等未知情况不承诺同码，qualities 保留可重试的 `bilibili_play_qualities_empty`，urls 用可重试的 `bilibili_play_info`。诊断 WARN 只记录数字房间号、`live_status`、JSON 形状与错误分类，不记录响应正文、query、Cookie 或上游 message；响应 JSON 解析失败时两条链路都返回固定中文文案，不带 serde 原文，`scope` 只进日志字段。该接口仅在 429 时按原有 800 / 1600ms 重试两次，其他错误立即失败；鉴权仍只认 Web Cookie，TV 凭据白名单不变。
 - 可用清晰度与线路以上游下发为准，会随直播状态、账号、地区和平台策略变化。**播放地址会受登录态影响**：实测同一房间匿名请求 `current_qn=250`（最低档），带 Web Cookie 才默认 `current_qn=10000`（原画），因此这条链路必须保留 Web Cookie。
 
 ## 账号与弹幕发送
