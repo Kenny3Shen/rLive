@@ -212,6 +212,7 @@ import {
   videoPlayPath,
 } from "./videoRoute";
 import { shortsPath } from "@/features/shorts/shortsFeed";
+import { navigateToVideoHome } from "./videoHomeNavigation";
 import {
   dedupeVideoItems,
   nextSelectionItem,
@@ -2419,6 +2420,16 @@ function VideoPlayerPageContent() {
     navigate(VIDEO_HOME_PATH, { replace: true });
   }, [navigate]);
 
+  const handleReturnHome = useCallback(() => {
+    setOverlayInteractionOpen(false);
+    void navigateToVideoHome({
+      fullscreen: fullscreen.fullscreen,
+      exitFullscreen: fullscreenExit,
+      isCurrentEntry: () => (window.history.state?.key ?? "default") === location.key,
+      navigateHome: () => navigate(VIDEO_HOME_PATH),
+    });
+  }, [fullscreen.fullscreen, fullscreenExit, location.key, navigate]);
+
   // 当前分 P 序号：多 P 稿件按 cid 从详情对出（链接缺 cid 时详情已补齐首 P），
   // 单 P 或详情未到时为 1，不影响地址正确性（P1 省略 ?p=）。
   const originalUrl = useMemo(() => {
@@ -2609,7 +2620,7 @@ function VideoPlayerPageContent() {
                 size="icon-sm"
                 className="rounded-lg hover:bg-muted/70"
                 aria-label="返回主页"
-                onClick={() => navigate(VIDEO_HOME_PATH)}
+                onClick={handleReturnHome}
               />
             }
           >
@@ -3364,19 +3375,14 @@ function VideoPlayerPageContent() {
                           aria-hidden
                         />
                       </MediaButton>
-                      {/* 返回主页：桌面与移动端共用同一份挂载，与只回上一层的返回箭头
-                        分工。先收干净全屏层再走，否则固定层会盖在首页上。 */}
+                      {/* 普通窗口直接返回；实际全屏才先退出，避免原生 IPC 阻塞导航。 */}
                       {showHomeInHud && (
                         <MediaButton
                           type="button"
                           aria-label="返回主页"
                           title="返回主页"
                           className={PLAYER_HUD_BUTTON_CLASS}
-                          onClick={async () => {
-                            setOverlayInteractionOpen(false);
-                            await fullscreenExit();
-                            navigate(VIDEO_HOME_PATH);
-                          }}
+                          onClick={handleReturnHome}
                         >
                           <Home
                             className={PLAYER_HUD_ICON_CLASS}
