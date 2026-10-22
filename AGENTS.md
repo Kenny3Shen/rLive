@@ -6,6 +6,8 @@
 - 仅编辑 `/home/shenss/python/rLive`；`/mnt/d/dev/rLive` 只作 Windows 镜像。
 - Windows 侧脚本统一用 PowerShell 7（`pwsh`，脚本内 `#Requires -Version 7.0`），不再兼容 Windows PowerShell 5.1。
 - 代码修改后运行最聚焦的检查（如`bun run check` 、`bun test`、`cargo test`、`cargo check`等）。
+- 禁止编写 JS 夹具；减少冒烟测试和重复验证，优先使用最聚焦的现有检查，但不取消必要的回归验证。
+- 主 Agent 负责规划与任务拆分，子 Agent 负责执行，主 Agent 汇总验收。
 - 检查通过后、交付前运行 `bash scripts/sync-to-windows.sh`，只读任务不需同步。
 - 交付时说明检查、同步结果及已知限制。
 
