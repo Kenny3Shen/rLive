@@ -385,6 +385,7 @@ export function updateDanmakuAppearance(
   const trackSpan = danmakuTrackSpan(meta.spans, options.laneCount);
   const trackSpanChanged = meta.trackSpan !== trackSpan;
   meta.trackSpan = trackSpan;
+  comment.lanes = trackSpan;
   const style = danmakuStyleForEvent(event, options, trackSpan);
   comment.style = style;
   const element = meta.element;
