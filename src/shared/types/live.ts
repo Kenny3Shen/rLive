@@ -64,6 +64,13 @@ export type TwitchAdRecovery = {
   target_frame_rate_milli: number;
 };
 
+/** 斗鱼 HTTP-FLV 长时间播放时，本机代理重新签名的必要上下文。 */
+export type DouyuFlvRecovery = {
+  room_id: string;
+  rate: number;
+  cdn: string;
+};
+
 /** 原生站点适配器返回的结构化播放候选。 */
 export type PlayUrl = {
   /** 在同一份画质数据内稳定；绝不包含签名 URL 或请求头。 */
@@ -78,6 +85,8 @@ export type PlayUrl = {
   headers: Record<string, string>;
   /** 仅原生使用的上下文，用于在本机代理后面替换 Twitch 广告清单。 */
   twitch_ad_recovery?: TwitchAdRecovery;
+  /** 仅斗鱼 FLV 使用；代理在上游正常结束后据此续签并保持同一下游响应。 */
+  douyu_flv_recovery?: DouyuFlvRecovery;
 };
 
 export type LivePlayQuality = {

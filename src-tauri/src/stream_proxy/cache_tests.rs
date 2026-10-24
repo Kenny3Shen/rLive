@@ -108,6 +108,7 @@ impl Fixture {
             local_origin: "http://127.0.0.1".into(),
             force_hls: false,
             twitch_ad_recovery: None,
+            douyu_flv_recovery: None,
             manifest_pin: Arc::new(ManifestPin::default()),
             telemetry: Arc::new(ProxyTelemetryCounters::new()),
             media_cache: Some(spec),

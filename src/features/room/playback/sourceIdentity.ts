@@ -1,16 +1,68 @@
-import type { PlayUrl } from "@/shared/types/live";
+import type { DouyuFlvRecovery, PlayUrl, TwitchAdRecovery } from "@/shared/types/live";
 import { webPlaybackKind, type VideoJsPlaybackKind } from "../player/videoJsPlayer";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseTwitchAdRecovery(value: unknown): TwitchAdRecovery | null {
+  if (
+    !isRecord(value) ||
+    typeof value.login !== "string" ||
+    typeof value.selector !== "string" ||
+    typeof value.target_width !== "number" ||
+    !Number.isFinite(value.target_width) ||
+    typeof value.target_height !== "number" ||
+    !Number.isFinite(value.target_height) ||
+    typeof value.target_frame_rate_milli !== "number" ||
+    !Number.isFinite(value.target_frame_rate_milli)
+  ) {
+    return null;
+  }
+  return {
+    login: value.login,
+    selector: value.selector,
+    target_width: value.target_width,
+    target_height: value.target_height,
+    target_frame_rate_milli: value.target_frame_rate_milli,
+  };
+}
+
+function parseDouyuFlvRecovery(value: unknown): DouyuFlvRecovery | null {
+  if (
+    !isRecord(value) ||
+    typeof value.room_id !== "string" ||
+    typeof value.rate !== "number" ||
+    !Number.isFinite(value.rate) ||
+    typeof value.cdn !== "string"
+  ) {
+    return null;
+  }
+  return {
+    room_id: value.room_id,
+    rate: value.rate,
+    cdn: value.cdn,
+  };
+}
 
 /**
  * 播放源的语义身份。
  *
  * 等价对象不重建播放器，任一路由信息变化都会被识别：URL、排序后的请求头、
- * `source_id`、`label`、`protocol` 与 `priority`。JSON 让 URL 与请求头取值中的
- * 分隔符无歧义，并可在下方重建为不可变的播放快照。该 key 只存在于当前
- * WebView 内存。
+ * `source_id`、`label`、`protocol`、`priority` 与恢复元数据。JSON 让 URL 与
+ * 请求头取值中的分隔符无歧义，并可在下方重建为不可变的播放快照。该 key 只
+ * 存在于当前 WebView 内存。
  */
 export function playUrlKey(playUrl: PlayUrl | null): string {
   if (!playUrl) return "";
+  // 恢复对象也来自运行时数据，不能依赖对象字面量或反序列化后的属性顺序。
+  // 先按协议字段顺序重建，再进入语义 key。
+  const twitchAdRecovery = playUrl.twitch_ad_recovery
+    ? parseTwitchAdRecovery(playUrl.twitch_ad_recovery)
+    : null;
+  const douyuFlvRecovery = playUrl.douyu_flv_recovery
+    ? parseDouyuFlvRecovery(playUrl.douyu_flv_recovery)
+    : null;
   return JSON.stringify([
     playUrl.url,
     Object.entries(playUrl.headers).sort(([a], [b]) => a.localeCompare(b)),
@@ -18,6 +70,8 @@ export function playUrlKey(playUrl: PlayUrl | null): string {
     playUrl.label,
     playUrl.protocol,
     playUrl.priority,
+    twitchAdRecovery,
+    douyuFlvRecovery,
   ]);
 }
 
@@ -54,6 +108,18 @@ export function playbackSourceFromKey(key: string): PlayUrl | null {
     ) {
       return null;
     }
+    let twitchAdRecovery: TwitchAdRecovery | undefined;
+    if (parsed[6] != null) {
+      const recovery = parseTwitchAdRecovery(parsed[6]);
+      if (!recovery) return null;
+      twitchAdRecovery = recovery;
+    }
+    let douyuFlvRecovery: DouyuFlvRecovery | undefined;
+    if (parsed[7] != null) {
+      const recovery = parseDouyuFlvRecovery(parsed[7]);
+      if (!recovery) return null;
+      douyuFlvRecovery = recovery;
+    }
     return {
       url: parsed[0],
       headers: Object.fromEntries(entries),
@@ -61,6 +127,8 @@ export function playbackSourceFromKey(key: string): PlayUrl | null {
       label,
       protocol,
       priority,
+      ...(twitchAdRecovery ? { twitch_ad_recovery: twitchAdRecovery } : {}),
+      ...(douyuFlvRecovery ? { douyu_flv_recovery: douyuFlvRecovery } : {}),
     };
   } catch {
     return null;

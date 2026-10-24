@@ -100,6 +100,61 @@ describe("播放源身份与原地续期", () => {
     expect(playbackSourceFromKey("not-json")).toBeNull();
   });
 
+  test("恢复元数据参与语义 key 并可完整还原", () => {
+    const source: PlayUrl = {
+      ...sources[0],
+      twitch_ad_recovery: {
+        login: "channel",
+        selector: "video",
+        target_width: 1920,
+        target_height: 1080,
+        target_frame_rate_milli: 30_000,
+      },
+      douyu_flv_recovery: {
+        room_id: "6979222",
+        rate: 4,
+        cdn: "hw-h5",
+      },
+    };
+    const key = playUrlKey(source);
+    expect(playbackSourceFromKey(key)).toEqual(source);
+    expect(
+      playUrlKey({
+        ...source,
+        twitch_ad_recovery: {
+          target_frame_rate_milli: 30_000,
+          target_height: 1080,
+          target_width: 1920,
+          selector: "video",
+          login: "channel",
+        },
+        douyu_flv_recovery: {
+          cdn: "hw-h5",
+          rate: 4,
+          room_id: "6979222",
+        },
+      }),
+    ).toBe(key);
+    expect(
+      playUrlKey({
+        ...source,
+        douyu_flv_recovery: { ...source.douyu_flv_recovery!, rate: 0 },
+      }),
+    ).not.toBe(key);
+    expect(
+      playUrlKey({
+        ...source,
+        twitch_ad_recovery: { ...source.twitch_ad_recovery!, selector: "next" },
+      }),
+    ).not.toBe(key);
+  });
+
+  test("损坏的恢复元数据不会还原成播放源", () => {
+    const malformed = JSON.parse(playUrlKey(sources[0])) as unknown[];
+    malformed[7] = { room_id: "6979222", rate: "4", cdn: "hw-h5" };
+    expect(playbackSourceFromKey(JSON.stringify(malformed))).toBeNull();
+  });
+
   test("只有同协议才允许原地重连，地址没变也算", () => {
     const renewed = { ...sources[0], url: "https://one.example/live?token=next" };
     expect(canRenewPlaybackInPlace(sources[0], renewed)).toBe(true);

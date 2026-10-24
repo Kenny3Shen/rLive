@@ -17,7 +17,7 @@ use crate::models::live::{
     LiveCategory, LivePlayQuality, LiveRoomDetail, LiveRoomItem, LiveRoomStatus, LiveSubCategory,
     PlayUrl, RoomListPage, SiteId, accept_room_id, parse_live_started_at,
 };
-use crate::sites::json::{json_i64, json_str};
+use crate::sites::json::{json_i64, json_i64_opt, json_str};
 use crate::sites::traits::LiveSite;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43";
@@ -53,6 +53,34 @@ impl DouyuSite {
         AppError::new("douyu_api_error", msg)
             .with_site("douyu")
             .retryable()
+    }
+
+    /// 用原播放地址的同一房间、实际画质与 CDN 刷新一条签名 URL。
+    ///
+    /// 斗鱼把播放地址有效期固定在约 300 秒，过期由 CDN 正常关闭连接。代理
+    /// 只在同一条已建立的响应内替换上游地址，因此这里不重新选择线路或画质。
+    pub async fn refresh_play_url(
+        &self,
+        recovery: &crate::models::live::DouyuFlvRecovery,
+    ) -> AppResult<String> {
+        self.refresh_play_url_with(&recovery.room_id, recovery.rate, &recovery.cdn)
+            .await
+    }
+
+    async fn refresh_play_url_with(
+        &self,
+        room_id: &str,
+        rate: i64,
+        cdn: &str,
+    ) -> AppResult<String> {
+        let v = self.request_play_data(room_id, rate, cdn).await?;
+        let data = v.get("data").cloned().unwrap_or(Value::Null);
+        let rtmp_url = json_str(data.get("rtmp_url").unwrap_or(&Value::Null));
+        let rtmp_live = html_unescape(&json_str(data.get("rtmp_live").unwrap_or(&Value::Null)));
+        if rtmp_url.is_empty() || rtmp_live.is_empty() {
+            return Err(Self::err("斗鱼续期未返回可用播放地址"));
+        }
+        Ok(format!("{rtmp_url}/{rtmp_live}"))
     }
 
     async fn get_json(&self, url: &str, referer: &str) -> AppResult<Value> {
@@ -775,14 +803,18 @@ impl LiveSite for DouyuSite {
             if rtmp_url.is_empty() || rtmp_live.is_empty() {
                 continue;
             }
+            let actual_rate = recovery_rate(&v, rate);
             let url = format!("{rtmp_url}/{rtmp_live}");
-            urls.push(PlayUrl::inferred(
-                format!("douyu:{cdn}"),
-                format!("线路{}", index + 1),
-                index as u32,
-                url,
-                headers.clone(),
-            ));
+            urls.push(
+                PlayUrl::inferred(
+                    format!("douyu:{cdn}"),
+                    format!("线路{}", index + 1),
+                    index as u32,
+                    url,
+                    headers.clone(),
+                )
+                .with_douyu_flv_recovery(room_id.clone(), actual_rate, cdn.clone()),
+            );
         }
         if urls.is_empty() {
             return Err(Self::err("no douyu play urls"));
@@ -802,6 +834,13 @@ fn urlencoding_encode(s: &str) -> String {
         }
     }
     out
+}
+
+fn recovery_rate(play_data: &Value, requested_rate: i64) -> i64 {
+    play_data
+        .pointer("/data/rate")
+        .and_then(json_i64_opt)
+        .unwrap_or(requested_rate)
 }
 
 #[cfg(test)]
@@ -935,6 +974,23 @@ mod tests {
         assert!(cookie.contains("auth=fixture"));
         assert!(cookie.contains("dy_did=custom-did"));
         assert!(cookie.contains("acf_did=10000000000000000000000000001501"));
+    }
+
+    #[test]
+    fn recovery_rate_keeps_original_quality_zero_and_uses_returned_value() {
+        assert_eq!(
+            recovery_rate(&serde_json::json!({"data": {"rate": 0}}), 4),
+            0
+        );
+        assert_eq!(
+            recovery_rate(&serde_json::json!({"data": {"rate": 4}}), 0),
+            4
+        );
+        assert_eq!(recovery_rate(&serde_json::json!({"data": {}}), 4), 4);
+        assert_eq!(
+            recovery_rate(&serde_json::json!({"data": {"rate": null}}), 4),
+            4
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ import { requestPlayerAutoplay } from "./autoplay";
 import { watchDesktopFullscreen } from "./desktopFullscreenWatcher";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import { softSwitchOwnsTransport } from "./softSwitchTransaction";
+import { streamProxyStartArgs } from "./streamProxyStart";
 import {
   playbackSourceFromKey,
   playUrlKey,
@@ -895,14 +896,11 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
           // 3) 全新代理（新端口）+ 缓存穿透 query，
           // 使浏览器绝不会复用到上一个监听器的已关闭 keep-alive 连接。
-          const localUrl = await invokeCmd<string>("stream_proxy_start", {
-            url: selectedSource.url,
-            headers: selectedSource.headers,
-            sessionId: proxySessionId,
+          const localUrl = await invokeCmd<string>(
+            "stream_proxy_start",
             // Twitch 等 HLS 站点需要代理把子播放列表、密钥和分片改写到同一个本地会话。
-            hls: hlsSource,
-            twitchAdRecovery: selectedSource.twitch_ad_recovery,
-          });
+            streamProxyStartArgs(selectedSource, proxySessionId, hlsSource),
+          );
           if (cancelled || genRef.current !== gen) {
             await stopProxy();
             return;
@@ -1294,13 +1292,10 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
         let handedOff = false;
         try {
-          const localUrl = await invokeCmd<string>("stream_proxy_start", {
-            url: targetSource.url,
-            headers: targetSource.headers,
-            sessionId: proxySessionId,
-            hls: targetKind === "hls",
-            twitchAdRecovery: targetSource.twitch_ad_recovery,
-          });
+          const localUrl = await invokeCmd<string>(
+            "stream_proxy_start",
+            streamProxyStartArgs(targetSource, proxySessionId, targetKind === "hls"),
+          );
           if (
             cancelled ||
             sequence !== softSwitchSequenceRef.current ||

@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::models::live::TwitchAdRecovery;
+use crate::models::live::{DouyuFlvRecovery, SiteId, TwitchAdRecovery};
 use crate::state::AppState;
-use crate::stream_proxy::{StreamProxyStartOptions, StreamProxyTelemetry};
+use crate::stream_proxy::{DouyuFlvRecoveryContext, StreamProxyStartOptions, StreamProxyTelemetry};
 
 fn configured_route(state: &State<'_, AppState>) -> AppResult<crate::proxy::ProxyRoute> {
     let conn = state.conn()?;
@@ -22,6 +22,7 @@ pub async fn stream_proxy_start(
     session_id: String,
     hls: Option<bool>,
     twitch_ad_recovery: Option<TwitchAdRecovery>,
+    douyu_flv_recovery: Option<DouyuFlvRecovery>,
 ) -> AppResult<String> {
     if url.trim().is_empty() {
         return Err(crate::error::AppError::new(
@@ -38,6 +39,32 @@ pub async fn stream_proxy_start(
     // 浏览器只会连接这个回环监听器。因此它的上游 reqwest 客户端必须显式收到
     // 已保存的代理设置；WebView 自身的网络配置无法为 HLS 子资源提供路由。
     let route = configured_route(&state)?;
+    let douyu_flv_recovery = match douyu_flv_recovery {
+        Some(recovery) if recovery.room_id.trim().is_empty() || recovery.cdn.trim().is_empty() => {
+            return Err(crate::error::AppError::new(
+                "douyu_flv_recovery_invalid",
+                "斗鱼续流上下文不完整",
+            ));
+        }
+        Some(recovery) => {
+            let recovery_client = crate::stream_proxy::build_stream_client(&route)?;
+            let cookie = {
+                let conn = state.conn()?;
+                crate::account::get_cookie(&conn, &SiteId::Douyu)?
+            };
+            let site = crate::sites::douyu::DouyuSite::new_with_cookie(
+                crate::http_client::client_for_route(&route)?,
+                cookie.unwrap_or_default(),
+            );
+            Some(DouyuFlvRecoveryContext::new(
+                site,
+                recovery_client,
+                headers.clone(),
+                recovery,
+            ))
+        }
+        None => None,
+    };
     state
         .stream_proxy
         .start(
@@ -48,6 +75,7 @@ pub async fn stream_proxy_start(
                 force_hls: hls.unwrap_or(false),
                 route: &route,
                 twitch_ad_recovery,
+                douyu_flv_recovery,
                 ..Default::default()
             },
         )

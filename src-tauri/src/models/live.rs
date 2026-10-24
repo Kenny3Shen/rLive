@@ -234,6 +234,19 @@ pub struct PlayUrl {
     pub headers: std::collections::HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub twitch_ad_recovery: Option<TwitchAdRecovery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub douyu_flv_recovery: Option<DouyuFlvRecovery>,
+}
+
+/// 斗鱼 FLV 签名地址续接所需的稳定上下文。
+///
+/// `rate` 取 `getH5PlayV1` 实际返回的值，而不是请求时的画质值：匿名会话
+/// 请求原画时服务端可能静默降级，续接必须继续请求同一条实际线路。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DouyuFlvRecovery {
+    pub room_id: String,
+    pub rate: i64,
+    pub cdn: String,
 }
 
 impl PlayUrl {
@@ -252,6 +265,7 @@ impl PlayUrl {
             url,
             headers,
             twitch_ad_recovery: None,
+            douyu_flv_recovery: None,
         }
     }
 
@@ -274,6 +288,20 @@ impl PlayUrl {
             target_width,
             target_height,
             target_frame_rate_milli,
+        });
+        self
+    }
+
+    pub fn with_douyu_flv_recovery(
+        mut self,
+        room_id: impl Into<String>,
+        rate: i64,
+        cdn: impl Into<String>,
+    ) -> Self {
+        self.douyu_flv_recovery = Some(DouyuFlvRecovery {
+            room_id: room_id.into(),
+            rate,
+            cdn: cdn.into(),
         });
         self
     }

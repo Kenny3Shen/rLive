@@ -4,6 +4,8 @@
 //! `User-Agent`。该代理绑定 `127.0.0.1:0`，携带所需请求头转发直播地址，
 //! 并为 Video.js 媒体适配器返回一个同源友好的流地址 —— 无需 mpv HWND。
 
+mod douyu_flv;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +26,8 @@ use crate::media_cache::{
     MAX_SEGMENT_BYTES, MediaCacheSpec, SharedMediaCache, content_range_matches, parse_range_bounds,
 };
 use crate::models::live::TwitchAdRecovery;
+
+pub use douyu_flv::RecoveryContext as DouyuFlvRecoveryContext;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -71,6 +75,8 @@ pub struct StreamProxyStartOptions<'a> {
     pub route: &'a crate::proxy::ProxyRoute,
     /// Twitch 服务端广告插播的恢复配置。
     pub twitch_ad_recovery: Option<TwitchAdRecovery>,
+    /// 斗鱼 FLV 在同一浏览器响应内续签所需的站点客户端与稳定上下文。
+    pub douyu_flv_recovery: Option<DouyuFlvRecoveryContext>,
     /// VOD 媒体分片的磁盘缓存规格：哪些字节区间可缓存、按什么键缓存。
     /// 直播与清单代理一律不给。
     pub media_cache: Option<Arc<MediaCacheSpec>>,
@@ -88,6 +94,7 @@ impl Default for StreamProxyStartOptions<'_> {
             force_hls: false,
             route: &crate::proxy::ProxyRoute::Direct,
             twitch_ad_recovery: None,
+            douyu_flv_recovery: None,
             media_cache: None,
             media_cache_store: None,
             initialization: None,
@@ -307,6 +314,7 @@ struct ProxyLoopContext {
     local_origin: Arc<str>,
     force_hls: bool,
     twitch_ad_recovery: Option<Arc<TwitchAdRecoverySession>>,
+    douyu_flv_recovery: Option<DouyuFlvRecoveryContext>,
     /// `/live` 主清单的 302 钉扎状态，同一代理会话内共享。
     manifest_pin: Arc<ManifestPin>,
     telemetry: Arc<ProxyTelemetryCounters>,
@@ -810,6 +818,7 @@ impl StreamProxy {
             force_hls,
             route,
             twitch_ad_recovery,
+            douyu_flv_recovery,
             media_cache,
             media_cache_store,
             initialization,
@@ -854,6 +863,7 @@ impl StreamProxy {
                 local_origin,
                 force_hls,
                 twitch_ad_recovery,
+                douyu_flv_recovery,
                 manifest_pin: Arc::new(ManifestPin::default()),
                 telemetry: telemetry.clone(),
                 media_cache,
@@ -1983,7 +1993,7 @@ mod tests {
 /// 第二分片「卡死失败」。读超时让 stall 的读在 `SEGMENT_READ_TIMEOUT` 后报错，
 /// 死连接随即被丢出池外，dash.js 的下一次重取拿到新连接即可自愈。健康的直播/
 /// VOD 流字节持续到达，永远不会触及这个间隔上限，因此对正常播放无影响。
-fn build_stream_client(route: &crate::proxy::ProxyRoute) -> AppResult<Client> {
+pub(crate) fn build_stream_client(route: &crate::proxy::ProxyRoute) -> AppResult<Client> {
     crate::http_client::with_route(
         Client::builder()
             .use_native_tls()
@@ -2173,6 +2183,7 @@ async fn handle_client(
         local_origin,
         force_hls,
         twitch_ad_recovery,
+        douyu_flv_recovery,
         manifest_pin,
         telemetry,
         media_cache,
@@ -2521,6 +2532,18 @@ async fn handle_client(
         }
         let _ = socket.flush().await;
         return Ok(());
+    }
+
+    let douyu_flv = douyu_flv_recovery.filter(|_| {
+        is_primary_request
+            && method == "GET"
+            && !force_hls
+            && requested_range.is_none()
+            && douyu_flv::is_flv_response(&content_type, &url)
+            && status == 200
+    });
+    if let Some(recovery) = douyu_flv {
+        return douyu_flv::proxy(socket, upstream, recovery, telemetry, request_started).await;
     }
 
     write_media_headers(

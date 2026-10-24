@@ -1120,6 +1120,7 @@ mod tests {
             url: "https://example.com/live".into(),
             headers: Default::default(),
             twitch_ad_recovery: None,
+            douyu_flv_recovery: None,
         }
     }
 

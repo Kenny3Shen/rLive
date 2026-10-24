@@ -58,6 +58,20 @@
 2. `auth` 由描述符的 `key` / `rand_str` / `enc_time` 迭代 MD5 链得到，每次播放请求都用当前时间戳重新计算。
 3. 签名只在内存中短暂使用；播放请求发往 `lapi/live/getH5PlayV1`。旧 `getH5Play` 端点已被上游下线（HTTP 403）。
 
+### 长时播放与签名续接
+
+斗鱼返回的 HTTP-FLV 地址带 `expire=300` 等签名参数。约 300 秒后 CDN 会正常关闭旧连接，而不是返回传输错误；`mpegts.js` 因此发出 `loading_complete`。若前端把它当成直播结束并重新取地址、销毁 MSE，画面会短暂变黑且进度归零。
+
+房间主播放与多画面使用的 `PlayUrl.douyu_flv_recovery` 携带 `room_id`、`rate` 与 `cdn`，并通过 `stream_proxy_start` 的 `douyuFlvRecovery` 交给 Rust 代理。代理在旧上游正常结束后用同一组上下文取得新签名地址，继续写入原下游 HTTP-FLV 响应；续接段会去掉重复的 FLV 头、metadata 与音视频 sequence header，保留连续时间轴并过滤重叠帧，因此 Video.js / MSE 无需重建。卡片悬停预览是短时低画质会话，不透传该字段。
+
+续接失败、CDN 不可达或编码配置变化时，代理结束原响应，前端仍按既有恢复路径重新取签名与切换线路，不把失败伪装成连续播放。提前 EOF、网络错误等异常仍直接走原有故障处理。
+
+### 实机验收（2026-10-24）
+
+Windows WebView2（Edg155）实测房间 6979222，实际播放蓝光4M AVC/AAC：连续播放约 1204 秒（20 分钟），期间完成四次 300 秒续期，`upstream_requests = 5`、`failures = 0`。同一 `<video>` 与 blob 未变化；从第 179 秒起每秒采样一次，共 1024 次，全部 `readyState = 4` 且未暂停，`source` 变化、回退、`waiting`、`loadstart`、`emptied`、`adapter_error`、`loading_complete` 均为 0。
+
+该结果仅覆盖上述环境、房间及当时返回的蓝光4M AVC/AAC，不外推其他平台、清晰度或编码。真实网络异常或换编码仍可能走既有恢复路径，不保证任意网络条件下都无卡顿。
+
 ### 原画与账号 Cookie
 
 斗鱼按会话放行高码率档位：**未登录时服务端会把原画（`rate = 0`）请求静默降级为蓝光4M（`rate = 4`）**，接口仍返回 `error = 0`，因此调用方不能以响应码判断是否拿到原画，只能看 `rtmp_live` 是否带 `_4000` 后缀。实测同一房间同一时刻：
