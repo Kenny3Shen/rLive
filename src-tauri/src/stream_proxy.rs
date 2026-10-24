@@ -41,6 +41,17 @@ const SEGMENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
 // 留出足够时间交付一份 gap 播放列表。
 const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
+/// Twitch 主清单持续失效时，播放代理最多尝试恢复的时间。
+///
+/// hls.js 会持续轮询一份 HTTP 200 的纯 GAP 清单，单次刷新失败不能成为终态；
+/// 但也不能无限申请播放 token。首次 owned 刷新失败后至少等待 20 秒，并至少
+/// 经历 3 次 owned 失败（正常轮询约 12 秒）才结束本轮恢复。成功拿到真正
+/// 可播放的 live 清单会重置这组状态，因此健康长直播没有总次数上限。
+const TWITCH_MANIFEST_REFRESH_DEADLINE: Duration = Duration::from_secs(20);
+const TWITCH_MANIFEST_REFRESH_MIN_FAILURES: u32 = 3;
+/// 已有 owned 刷新在途时，并发 follower 最多短暂等待其完成；
+/// 超时后仍返回 GAP，不能把一次网络请求串行拖到整段恢复预算。
+const TWITCH_MANIFEST_FOLLOWER_WAIT: Duration = Duration::from_millis(100);
 /// 录制等待 Twitch 清单代理产出带真实分片的播放列表的最长时间。
 /// 最慢的情况是广告插播叠加对兜底播放 profile 的完整轮询；
 /// 超过此时限后，录制会报告无法启动的原因，
@@ -266,6 +277,10 @@ struct TwitchAdRecoverySession {
     client: Client,
     state: AsyncMutex<TwitchAdRecoveryState>,
     recovery_in_flight: AtomicBool,
+    renewal_in_flight: AtomicBool,
+    renewal_finished: watch::Sender<u64>,
+    #[cfg(test)]
+    test_refresh_urls: Mutex<Option<VecDeque<String>>>,
 }
 
 struct TwitchAdRecoveryState {
@@ -276,6 +291,46 @@ struct TwitchAdRecoveryState {
     last_clean_manifest: Option<(String, Url)>,
     current_manifest_url: Option<String>,
     revision: u64,
+    refresh_budget: TwitchManifestRefreshBudget,
+}
+
+/// Twitch 主清单连续续期失败的预算。
+///
+/// 时间与次数必须同时达到门槛：只按时间会在慢轮询下频繁误判，只按次数又会
+/// 在清单每两秒重载时过早结束恢复。成功取得干净 live 清单后整组状态清零，
+/// 因此它限制的是一次故障恢复，而不是一场直播的总续期次数。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct TwitchManifestRefreshBudget {
+    first_failure_at: Option<Instant>,
+    consecutive_failures: u32,
+    exhausted: bool,
+}
+
+impl TwitchManifestRefreshBudget {
+    fn can_attempt(&self) -> bool {
+        !self.exhausted
+    }
+
+    fn record_failure(&mut self) {
+        self.record_failure_at(Instant::now());
+    }
+
+    fn record_failure_at(&mut self, now: Instant) {
+        if self.exhausted {
+            return;
+        }
+        let first_failure_at = *self.first_failure_at.get_or_insert(now);
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= TWITCH_MANIFEST_REFRESH_MIN_FAILURES
+            && now.saturating_duration_since(first_failure_at) >= TWITCH_MANIFEST_REFRESH_DEADLINE
+        {
+            self.exhausted = true;
+        }
+    }
+
+    fn record_success(&mut self) {
+        *self = Self::default();
+    }
 }
 
 #[derive(Clone)]
@@ -291,18 +346,42 @@ struct TwitchAdRecoveryAttempt {
 }
 
 struct TwitchRecoveryLease<'a> {
-    in_flight: &'a AtomicBool,
+    recovery_in_flight: &'a AtomicBool,
+    renewal: Option<(&'a AtomicBool, &'a watch::Sender<u64>)>,
 }
 
 impl Drop for TwitchRecoveryLease<'_> {
     fn drop(&mut self) {
-        self.in_flight.store(false, Ordering::Release);
+        // 先清续期标记再释放共享 owner：否则下一次续期可能在两步之间拿到
+        // owner 并设置标记，随后被旧 lease 误清。
+        if let Some((in_flight, finished)) = self.renewal {
+            in_flight.store(false, Ordering::Release);
+            self.recovery_in_flight.store(false, Ordering::Release);
+            finished.send_modify(|revision| *revision = revision.wrapping_add(1));
+        } else {
+            self.recovery_in_flight.store(false, Ordering::Release);
+        }
     }
 }
 
 struct TwitchManifestReplacement {
     body: String,
     upstream_url: Url,
+}
+
+enum TwitchManifestRefreshOutcome {
+    Manifest(TwitchManifestReplacement),
+    Exhausted,
+}
+
+impl TwitchManifestRefreshOutcome {
+    #[cfg(test)]
+    fn into_manifest(self) -> Option<TwitchManifestReplacement> {
+        match self {
+            Self::Manifest(replacement) => Some(replacement),
+            Self::Exhausted => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -343,8 +422,13 @@ impl TwitchAdRecoverySession {
                 last_clean_manifest: None,
                 current_manifest_url: None,
                 revision: 0,
+                refresh_budget: TwitchManifestRefreshBudget::default(),
             }),
             recovery_in_flight: AtomicBool::new(false),
+            renewal_in_flight: AtomicBool::new(false),
+            renewal_finished: watch::channel(0).0,
+            #[cfg(test)]
+            test_refresh_urls: Mutex::new(None),
         }
     }
 
@@ -357,10 +441,14 @@ impl TwitchAdRecoverySession {
         if !is_twitch_ad_manifest(manifest) {
             let mut state = self.state.lock().await;
             state.active_profile = None;
-            if looks_like_hls_manifest(manifest.as_bytes()) {
+            if looks_like_hls_manifest(manifest.as_bytes())
+                && manifest_has_playable_segment(manifest)
+                && !manifest.contains("#EXT-X-ENDLIST")
+            {
                 state.last_clean_manifest = Some((manifest.to_string(), upstream_url.clone()));
                 state.current_manifest_url = Some(upstream_url.to_string());
                 state.revision = state.revision.wrapping_add(1);
+                state.refresh_budget.record_success();
             }
             return None;
         }
@@ -386,6 +474,7 @@ impl TwitchAdRecoverySession {
                         state.current_manifest_url = Some(replacement.upstream_url.to_string());
                         state.revision = state.revision.wrapping_add(1);
                     }
+                    state.refresh_budget.record_success();
                     tracing::debug!(
                         player_type =
                             crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES[profile_index].0,
@@ -448,7 +537,10 @@ impl TwitchAdRecoverySession {
 
                 match fetch_twitch_playlist(&self.client, &candidate_url, headers).await {
                     Ok((body, effective_url)) => {
-                        if looks_like_hls_manifest(body.as_bytes()) && !is_twitch_ad_manifest(&body)
+                        if looks_like_hls_manifest(body.as_bytes())
+                            && manifest_has_playable_segment(&body)
+                            && !is_twitch_ad_manifest(&body)
+                            && !body.contains("#EXT-X-ENDLIST")
                         {
                             return TwitchAdRecoveryAttempt {
                                 fallback_urls,
@@ -510,37 +602,117 @@ impl TwitchAdRecoverySession {
     async fn refresh_manifest(
         &self,
         headers: &HashMap<String, String>,
-    ) -> TwitchManifestReplacement {
-        let Some(_lease) = self.try_start_recovery() else {
-            return self.waiting_manifest().await;
+    ) -> TwitchManifestRefreshOutcome {
+        let Some(lease) = self.try_start_renewal() else {
+            return self.wait_for_renewal_or_wait_manifest().await;
         };
+
+        {
+            let state = self.state.lock().await;
+            if !state.refresh_budget.can_attempt() {
+                drop(state);
+                return TwitchManifestRefreshOutcome::Exhausted;
+            }
+        }
+
         let snapshot = self.snapshot().await;
         let replacement = tokio::time::timeout(
             TWITCH_MANIFEST_RECOVERY_BUDGET,
             self.find_refreshed_manifest(headers),
         )
         .await;
-        match replacement {
-            Ok(Some((active_profile, replacement))) => {
-                let mut state = self.state.lock().await;
-                if state.revision == snapshot.revision {
-                    state.active_profile = active_profile;
-                    state.current_manifest_url = Some(replacement.upstream_url.to_string());
-                    state.last_clean_manifest =
-                        Some((replacement.body.clone(), replacement.upstream_url.clone()));
-                    state.revision = state.revision.wrapping_add(1);
-                }
-                tracing::debug!("Twitch manifest URL renewed");
-                return replacement;
+        let refreshed = match replacement {
+            Ok(Some((active_profile, replacement))) => Some((active_profile, replacement)),
+            Ok(None) => None,
+            Err(_) => {
+                tracing::warn!(
+                    budget_ms = TWITCH_MANIFEST_RECOVERY_BUDGET.as_millis(),
+                    "Twitch 清单续期超出响应预算"
+                );
+                None
             }
-            Ok(None) => {}
-            Err(_) => tracing::warn!(
-                budget_ms = TWITCH_MANIFEST_RECOVERY_BUDGET.as_millis(),
-                "Twitch 清单续期超出响应预算"
-            ),
+        };
+
+        let mut state = self.state.lock().await;
+        let revision_unchanged = state.revision == snapshot.revision;
+        if let Some((active_profile, replacement)) = refreshed {
+            if revision_unchanged {
+                state.active_profile = active_profile;
+                state.current_manifest_url = Some(replacement.upstream_url.to_string());
+                state.last_clean_manifest =
+                    Some((replacement.body.clone(), replacement.upstream_url.clone()));
+                state.revision = state.revision.wrapping_add(1);
+                state.refresh_budget.record_success();
+                drop(state);
+                drop(lease);
+                tracing::debug!("Twitch manifest URL renewed");
+                return TwitchManifestRefreshOutcome::Manifest(replacement);
+            }
+
+            // 并发干净清单已经推进 revision 时，本次候选属于旧快照，不能
+            // 覆盖新状态；返回当前最新清单，避免把旧候选交给播放器。
+            let latest = state.last_clean_manifest.as_ref().map(|(manifest, url)| {
+                TwitchManifestReplacement {
+                    body: manifest.clone(),
+                    upstream_url: url.clone(),
+                }
+            });
+            drop(state);
+            drop(lease);
+            return match latest {
+                Some(latest) => TwitchManifestRefreshOutcome::Manifest(latest),
+                None => TwitchManifestRefreshOutcome::Manifest(self.waiting_manifest().await),
+            };
         }
 
-        self.waiting_manifest().await
+        // 广告替换或并发请求已经更新了干净清单时，本次旧快照的失败不能
+        // 重新累计预算，也不能覆盖新 revision。
+        if !revision_unchanged {
+            let replacement = state.last_clean_manifest.as_ref().map(|(manifest, url)| {
+                TwitchManifestReplacement {
+                    body: manifest.clone(),
+                    upstream_url: url.clone(),
+                }
+            });
+            drop(state);
+            drop(lease);
+            return match replacement {
+                Some(replacement) => TwitchManifestRefreshOutcome::Manifest(replacement),
+                None => TwitchManifestRefreshOutcome::Manifest(self.waiting_manifest().await),
+            };
+        }
+
+        state.refresh_budget.record_failure();
+        let exhausted = !state.refresh_budget.can_attempt();
+        drop(state);
+        drop(lease);
+        if exhausted {
+            tracing::warn!(
+                deadline_ms = TWITCH_MANIFEST_REFRESH_DEADLINE.as_millis(),
+                min_failures = TWITCH_MANIFEST_REFRESH_MIN_FAILURES,
+                "Twitch 清单连续续期失败，结束本轮恢复"
+            );
+            return TwitchManifestRefreshOutcome::Exhausted;
+        }
+
+        TwitchManifestRefreshOutcome::Manifest(self.waiting_manifest().await)
+    }
+
+    async fn wait_for_renewal_or_wait_manifest(&self) -> TwitchManifestRefreshOutcome {
+        // 先订阅再检查标志，避免 owner 恰好在两次检查之间结束时丢失唤醒。
+        let mut finished = self.renewal_finished.subscribe();
+        if self.renewal_in_flight.load(Ordering::Acquire) {
+            let _ = tokio::time::timeout(TWITCH_MANIFEST_FOLLOWER_WAIT, finished.changed()).await;
+        }
+        let exhausted = {
+            let state = self.state.lock().await;
+            !state.refresh_budget.can_attempt()
+        };
+        if exhausted {
+            TwitchManifestRefreshOutcome::Exhausted
+        } else {
+            TwitchManifestRefreshOutcome::Manifest(self.waiting_manifest().await)
+        }
     }
 
     async fn find_refreshed_manifest(
@@ -550,14 +722,7 @@ impl TwitchAdRecoverySession {
         let profiles = std::iter::once(crate::sites::twitch::TWITCH_PRIMARY_PLAYER_TYPE)
             .chain(crate::sites::twitch::TWITCH_AD_FALLBACK_PROFILES);
         for (profile_index, (player_type, platform)) in profiles.enumerate() {
-            let candidate_url = match crate::sites::twitch::twitch_ad_fallback_url(
-                self.client.clone(),
-                &self.config,
-                player_type,
-                platform,
-            )
-            .await
-            {
+            let candidate_url = match self.refresh_url(player_type, platform).await {
                 Ok(url) => url,
                 Err(error) => {
                     tracing::debug!(
@@ -576,6 +741,7 @@ impl TwitchAdRecoverySession {
             if looks_like_hls_manifest(body.as_bytes())
                 && !is_twitch_ad_manifest(&body)
                 && !body.contains("#EXT-X-ENDLIST")
+                && manifest_has_playable_segment(&body)
             {
                 return Some((
                     profile_index.checked_sub(1),
@@ -588,6 +754,29 @@ impl TwitchAdRecoverySession {
         }
 
         None
+    }
+
+    async fn refresh_url(&self, player_type: &str, platform: &str) -> AppResult<String> {
+        #[cfg(test)]
+        {
+            let mut urls = self
+                .test_refresh_urls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(urls) = urls.as_mut() {
+                return urls.pop_front().ok_or_else(|| {
+                    AppError::new("twitch_test_refresh_exhausted", "测试续期地址已耗尽")
+                });
+            }
+        }
+
+        crate::sites::twitch::twitch_ad_fallback_url(
+            self.client.clone(),
+            &self.config,
+            player_type,
+            platform,
+        )
+        .await
     }
 
     async fn waiting_manifest(&self) -> TwitchManifestReplacement {
@@ -622,8 +811,22 @@ impl TwitchAdRecoverySession {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .ok()
             .map(|_| TwitchRecoveryLease {
-                in_flight: &self.recovery_in_flight,
+                recovery_in_flight: &self.recovery_in_flight,
+                renewal: None,
             })
+    }
+
+    fn try_start_renewal(&self) -> Option<TwitchRecoveryLease<'_>> {
+        let lease = self
+            .recovery_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| TwitchRecoveryLease {
+                recovery_in_flight: &self.recovery_in_flight,
+                renewal: Some((&self.renewal_in_flight, &self.renewal_finished)),
+            })?;
+        self.renewal_in_flight.store(true, Ordering::Release);
+        Some(lease)
     }
 }
 
@@ -1017,7 +1220,7 @@ mod cache_tests;
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -1027,14 +1230,135 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::{
-        HlsResources, ProxyInner, ProxyTelemetryCounters, StreamProxy, StreamProxyStartOptions,
-        TwitchAdRecoverySession, hls_path_extension, is_twitch_ad_manifest,
+        HlsResources, ManifestPin, ProxyInner, ProxyLoopContext, ProxyTelemetryCounters,
+        StreamProxy, StreamProxyStartOptions, TwitchAdRecoverySession, TwitchManifestRefreshBudget,
+        TwitchManifestRefreshOutcome, handle_client, hls_path_extension, is_twitch_ad_manifest,
         looks_like_hls_manifest, manifest_has_playable_segment, mark_all_hls_segments_as_gaps,
         mark_twitch_ad_segments_as_gaps, resolve_upstream_target, rewrite_hls_manifest,
-        twitch_wait_manifest,
+        twitch_manifest_needs_refresh, twitch_wait_manifest,
     };
     use crate::models::live::TwitchAdRecovery;
     use tokio::sync::{oneshot, watch};
+
+    const CLEAN_TWITCH_PLAYLIST: &str = concat!(
+        "#EXTM3U\n",
+        "#EXT-X-VERSION:6\n",
+        "#EXT-X-TARGETDURATION:2\n",
+        "#EXTINF:2.000,live\n",
+        "live-1.ts\n",
+        "#EXTINF:2.000,live\n",
+        "live-2.ts\n"
+    );
+    const GAP_TWITCH_PLAYLIST: &str = concat!(
+        "#EXTM3U\n",
+        "#EXT-X-VERSION:6\n",
+        "#EXT-X-TARGETDURATION:2\n",
+        "#EXTINF:2.000,\n",
+        "#EXT-X-GAP\n",
+        "gap.ts\n"
+    );
+
+    fn twitch_recovery_for_test() -> Arc<TwitchAdRecoverySession> {
+        Arc::new(TwitchAdRecoverySession::new(
+            TwitchAdRecovery {
+                login: "channel".into(),
+                selector: "video-group:chunked".into(),
+                target_width: 1920,
+                target_height: 1080,
+                target_frame_rate_milli: 60_000,
+            },
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+        ))
+    }
+
+    fn set_refresh_url(recovery: &TwitchAdRecoverySession, url: String) {
+        *recovery
+            .test_refresh_urls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(VecDeque::from([url]));
+    }
+
+    async fn spawn_playlist_server(body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (format!("http://{address}/playlist.m3u8"), server)
+    }
+
+    async fn spawn_blocked_playlist_server(
+        body: &'static str,
+    ) -> (
+        String,
+        oneshot::Receiver<()>,
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (seen_tx, seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).await;
+            let _ = seen_tx.send(());
+            let _ = release_rx.await;
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+        (
+            format!("http://{address}/playlist.m3u8"),
+            seen_rx,
+            release_tx,
+            server,
+        )
+    }
+
+    async fn spawn_blocked_error_server() -> (
+        String,
+        oneshot::Receiver<()>,
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (seen_tx, seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).await;
+            let _ = seen_tx.send(());
+            let _ = release_rx.await;
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        });
+        (
+            format!("http://{address}/playlist.m3u8"),
+            seen_rx,
+            release_tx,
+            server,
+        )
+    }
 
     #[test]
     fn matching_stop_cancels_a_pending_start() {
@@ -1480,6 +1804,338 @@ mod tests {
         assert!(manifest.contains("#EXT-X-GAP"));
     }
 
+    #[test]
+    fn twitch_gap_only_manifests_require_refresh_but_clean_live_ones_do_not() {
+        assert!(twitch_manifest_needs_refresh(&twitch_wait_manifest()));
+        assert!(twitch_manifest_needs_refresh(GAP_TWITCH_PLAYLIST));
+        assert!(twitch_manifest_needs_refresh(concat!(
+            "#EXTM3U\n#EXT-X-ENDLIST\n"
+        )));
+        assert!(!twitch_manifest_needs_refresh(CLEAN_TWITCH_PLAYLIST));
+        assert!(manifest_has_playable_segment(CLEAN_TWITCH_PLAYLIST));
+    }
+
+    #[test]
+    fn twitch_refresh_budget_requires_both_elapsed_time_and_failures() {
+        let started = std::time::Instant::now();
+        let mut budget = TwitchManifestRefreshBudget::default();
+        budget.record_failure_at(started);
+        budget.record_failure_at(started + std::time::Duration::from_secs(4));
+        budget.record_failure_at(started + std::time::Duration::from_secs(8));
+        assert!(budget.can_attempt());
+
+        budget.record_failure_at(started + std::time::Duration::from_secs(19));
+        assert!(budget.can_attempt());
+        budget.record_failure_at(started + std::time::Duration::from_secs(20));
+        assert!(!budget.can_attempt());
+
+        let mut too_few = TwitchManifestRefreshBudget::default();
+        too_few.record_failure_at(started);
+        too_few.record_failure_at(started + std::time::Duration::from_secs(30));
+        assert!(too_few.can_attempt());
+    }
+
+    #[test]
+    fn twitch_refresh_budget_resets_after_a_clean_manifest() {
+        let started = std::time::Instant::now();
+        let mut budget = TwitchManifestRefreshBudget::default();
+        for offset in [0, 10, 20] {
+            budget.record_failure_at(started + std::time::Duration::from_secs(offset));
+        }
+        assert!(!budget.can_attempt());
+
+        budget.record_success();
+        assert_eq!(budget, TwitchManifestRefreshBudget::default());
+        assert!(budget.can_attempt());
+    }
+
+    #[tokio::test]
+    async fn twitch_refresh_renews_an_expired_main_manifest() {
+        let (playlist_url, server) = spawn_playlist_server(CLEAN_TWITCH_PLAYLIST).await;
+        let recovery = twitch_recovery_for_test();
+        set_refresh_url(&recovery, playlist_url);
+
+        let outcome = recovery.refresh_manifest(&HashMap::new()).await;
+        let replacement = outcome
+            .into_manifest()
+            .expect("a clean live manifest must renew the main URL");
+        assert_eq!(replacement.body, CLEAN_TWITCH_PLAYLIST);
+        assert!(recovery.state.lock().await.refresh_budget.can_attempt());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn twitch_old_renewal_success_does_not_overwrite_a_newer_clean_manifest() {
+        let (playlist_url, seen_rx, release_tx, server) =
+            spawn_blocked_playlist_server(CLEAN_TWITCH_PLAYLIST).await;
+        let recovery = twitch_recovery_for_test();
+        set_refresh_url(&recovery, playlist_url);
+
+        let newer_url = Url::parse("https://cdn.example.test/newer.m3u8").unwrap();
+        let owner_recovery = recovery.clone();
+        let owner =
+            tokio::spawn(async move { owner_recovery.refresh_manifest(&HashMap::new()).await });
+        seen_rx.await.unwrap();
+        let newer_revision = {
+            let mut state = recovery.state.lock().await;
+            state.last_clean_manifest = Some((CLEAN_TWITCH_PLAYLIST.into(), newer_url.clone()));
+            state.current_manifest_url = Some(newer_url.to_string());
+            state.revision = state.revision.wrapping_add(1);
+            state.revision
+        };
+        release_tx.send(()).unwrap();
+
+        let outcome = owner.await.unwrap();
+        let replacement = outcome
+            .into_manifest()
+            .expect("the stale candidate must fall back to the current manifest");
+        assert_eq!(replacement.upstream_url, newer_url);
+        let state = recovery.state.lock().await;
+        assert_eq!(state.revision, newer_revision);
+        assert_eq!(
+            state.current_manifest_url.as_deref(),
+            Some("https://cdn.example.test/newer.m3u8")
+        );
+        drop(state);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn twitch_old_renewal_failure_does_not_accumulate_after_a_newer_clean_manifest() {
+        let (playlist_url, seen_rx, release_tx, server) = spawn_blocked_error_server().await;
+        let recovery = twitch_recovery_for_test();
+        set_refresh_url(&recovery, playlist_url);
+        let owner_recovery = recovery.clone();
+        let owner =
+            tokio::spawn(async move { owner_recovery.refresh_manifest(&HashMap::new()).await });
+        seen_rx.await.unwrap();
+        let newer_url = Url::parse("https://cdn.example.test/newer.m3u8").unwrap();
+        let newer_revision = {
+            let mut state = recovery.state.lock().await;
+            state.last_clean_manifest = Some((CLEAN_TWITCH_PLAYLIST.into(), newer_url.clone()));
+            state.current_manifest_url = Some(newer_url.to_string());
+            state.revision = state.revision.wrapping_add(1);
+            state.revision
+        };
+        release_tx.send(()).unwrap();
+
+        let outcome = owner.await.unwrap();
+        let replacement = outcome
+            .into_manifest()
+            .expect("a stale failure must return the current manifest");
+        assert_eq!(replacement.upstream_url, newer_url);
+        let state = recovery.state.lock().await;
+        assert_eq!(state.revision, newer_revision);
+        assert_eq!(state.refresh_budget, TwitchManifestRefreshBudget::default());
+        drop(state);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn twitch_refresh_serves_gap_while_a_failure_is_temporary() {
+        let recovery = twitch_recovery_for_test();
+        set_refresh_url(&recovery, "http://127.0.0.1:1/unreachable.m3u8".into());
+
+        let outcome = recovery.refresh_manifest(&HashMap::new()).await;
+        let replacement = outcome
+            .into_manifest()
+            .expect("the first failure must remain recoverable");
+        assert!(looks_like_hls_manifest(replacement.body.as_bytes()));
+        assert!(replacement.body.contains("#EXT-X-GAP"));
+        assert_eq!(
+            recovery
+                .state
+                .lock()
+                .await
+                .refresh_budget
+                .consecutive_failures,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn twitch_refresh_does_not_treat_a_gap_only_playlist_as_clean() {
+        let (playlist_url, server) = spawn_playlist_server(GAP_TWITCH_PLAYLIST).await;
+        let recovery = twitch_recovery_for_test();
+        set_refresh_url(&recovery, playlist_url);
+
+        let outcome = recovery.refresh_manifest(&HashMap::new()).await;
+        let replacement = outcome
+            .into_manifest()
+            .expect("a gap-only playlist is a recoverable failure");
+        assert!(replacement.body.contains("#EXT-X-GAP"));
+        let state = recovery.state.lock().await;
+        assert!(state.last_clean_manifest.is_none());
+        assert_eq!(state.refresh_budget.consecutive_failures, 1);
+        drop(state);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn twitch_gap_only_main_manifest_is_not_cached_as_clean() {
+        let recovery = twitch_recovery_for_test();
+        let upstream_url = Url::parse("https://cdn.example.test/live.m3u8").unwrap();
+
+        let replacement = recovery
+            .replace_ad_manifest(GAP_TWITCH_PLAYLIST, &upstream_url, &HashMap::new())
+            .await;
+        assert!(replacement.is_none());
+        let state = recovery.state.lock().await;
+        assert!(state.last_clean_manifest.is_none());
+        assert_eq!(state.refresh_budget, TwitchManifestRefreshBudget::default());
+    }
+
+    #[tokio::test]
+    async fn twitch_ad_replacement_does_not_consume_the_refresh_budget() {
+        let (playlist_url, server) = spawn_playlist_server(GAP_TWITCH_PLAYLIST).await;
+        let recovery = twitch_recovery_for_test();
+        {
+            let mut state = recovery.state.lock().await;
+            state.fallback_urls = std::array::from_fn(|_| Some(playlist_url.clone()));
+        }
+        let ad_manifest = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"source-ad\",CLASS=\"twitch-stream-source\",",
+            "X-TV-TWITCH-STREAM-SOURCE=\"Amazon|ad\"\n",
+            "#EXTINF:2.000,\n",
+            "ad.ts\n"
+        );
+        let upstream_url = Url::parse("https://cdn.example.test/live.m3u8").unwrap();
+
+        let replacement = recovery
+            .replace_ad_manifest(ad_manifest, &upstream_url, &HashMap::new())
+            .await
+            .expect("an ad manifest must still return a GAP fallback");
+        assert!(replacement.body.contains("#EXT-X-GAP"));
+        let state = recovery.state.lock().await;
+        assert_eq!(state.refresh_budget, TwitchManifestRefreshBudget::default());
+        drop(state);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn twitch_refresh_success_resets_the_failure_budget() {
+        let recovery = twitch_recovery_for_test();
+        set_refresh_url(&recovery, "http://127.0.0.1:1/unreachable.m3u8".into());
+        let _ = recovery.refresh_manifest(&HashMap::new()).await;
+        assert_eq!(
+            recovery
+                .state
+                .lock()
+                .await
+                .refresh_budget
+                .consecutive_failures,
+            1
+        );
+
+        let (playlist_url, server) = spawn_playlist_server(CLEAN_TWITCH_PLAYLIST).await;
+        set_refresh_url(&recovery, playlist_url);
+        let _ = recovery.refresh_manifest(&HashMap::new()).await;
+        let state = recovery.state.lock().await;
+        assert_eq!(state.refresh_budget, TwitchManifestRefreshBudget::default());
+        assert_eq!(
+            state
+                .last_clean_manifest
+                .as_ref()
+                .map(|(body, _)| body.as_str()),
+            Some(CLEAN_TWITCH_PLAYLIST)
+        );
+        drop(state);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn twitch_refresh_exhaustion_returns_a_terminal_error() {
+        let recovery = twitch_recovery_for_test();
+        {
+            let mut state = recovery.state.lock().await;
+            let started = std::time::Instant::now();
+            for offset in [0, 10, 20] {
+                state
+                    .refresh_budget
+                    .record_failure_at(started + std::time::Duration::from_secs(offset));
+            }
+            assert!(!state.refresh_budget.can_attempt());
+        }
+
+        assert!(matches!(
+            recovery.refresh_manifest(&HashMap::new()).await,
+            TwitchManifestRefreshOutcome::Exhausted
+        ));
+        assert!(
+            recovery
+                .test_refresh_urls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none(),
+            "an exhausted session must not request another token"
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_twitch_refresh_returns_504_from_the_proxy() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        let upstream_server = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).await;
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        });
+
+        let proxy = StreamProxy::new();
+        let session_id = "twitch-exhausted:1";
+        let recovery = twitch_recovery_for_test();
+        {
+            let mut state = recovery.state.lock().await;
+            let started = std::time::Instant::now();
+            for offset in [0, 10, 20] {
+                state
+                    .refresh_budget
+                    .record_failure_at(started + std::time::Duration::from_secs(offset));
+            }
+        }
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let context = ProxyLoopContext {
+            client,
+            url: Arc::<str>::from(format!("http://{upstream_address}/live.m3u8")),
+            headers: Arc::new(HashMap::new()),
+            hls_resources: Arc::new(HlsResources::new()),
+            local_origin: Arc::<str>::from("http://127.0.0.1:41500"),
+            force_hls: true,
+            twitch_ad_recovery: Some(recovery),
+            douyu_flv_recovery: None,
+            manifest_pin: Arc::new(ManifestPin::default()),
+            telemetry: Arc::new(ProxyTelemetryCounters::new()),
+            media_cache: None,
+            media_cache_store: None,
+            initialization: None,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_address = listener.local_addr().unwrap();
+        let proxy_server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = handle_client(&mut socket, context).await;
+        });
+        let mut local = tokio::net::TcpStream::connect(local_address).await.unwrap();
+        local
+            .write_all(b"GET /live HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        local.read_to_end(&mut response).await.unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 504 Gateway Timeout"));
+        assert!(response.contains("连续续期失败"));
+        proxy.stop_for_session(session_id);
+        proxy_server.await.unwrap();
+        upstream_server.await.unwrap();
+    }
+
     /// 可播放性检查的唯一目的就是不让纯 gap 播放列表到达 `avformat_open_input`，
     /// 因此恢复路径发出的等待清单和完全 gap 化的干净清单都必须判为不可播放。
     #[test]
@@ -1671,6 +2327,7 @@ mod tests {
             },
             client,
         ));
+        set_refresh_url(&recovery, "https://cdn.example.test/owner.m3u8".into());
         let owner_recovery = recovery.clone();
         let owner =
             tokio::spawn(async move { owner_recovery.refresh_manifest(&HashMap::new()).await });
@@ -1680,18 +2337,143 @@ mod tests {
             .unwrap();
 
         let follower = tokio::time::timeout(
-            std::time::Duration::from_millis(250),
+            std::time::Duration::from_millis(500),
             recovery.refresh_manifest(&HashMap::new()),
         )
         .await
         .expect("follower must not wait for the in-flight network request");
+        let follower = follower
+            .into_manifest()
+            .expect("a follower must not consume the owner's refresh budget");
         assert!(looks_like_hls_manifest(follower.body.as_bytes()));
         assert!(follower.body.contains("#EXT-X-GAP"));
+        assert_eq!(
+            recovery
+                .state
+                .lock()
+                .await
+                .refresh_budget
+                .consecutive_failures,
+            0
+        );
 
         owner.abort();
         let _ = owner.await;
         assert!(!recovery.recovery_in_flight.load(Ordering::Acquire));
         proxy_server.abort();
+    }
+
+    #[tokio::test]
+    async fn twitch_ad_owner_blocks_renewal_without_a_second_token_request() {
+        let (fallback_url, seen_rx, release_tx, server) = spawn_blocked_error_server().await;
+        let recovery = twitch_recovery_for_test();
+        {
+            let mut state = recovery.state.lock().await;
+            state.fallback_urls = std::array::from_fn(|_| Some(fallback_url.clone()));
+        }
+        let ad_manifest = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"source-ad\",CLASS=\"twitch-stream-source\",",
+            "X-TV-TWITCH-STREAM-SOURCE=\"Amazon|ad\"\n",
+            "#EXTINF:2.000,\n",
+            "ad.ts\n"
+        );
+        let upstream_url = Url::parse("https://cdn.example.test/live.m3u8").unwrap();
+        let owner_recovery = recovery.clone();
+        let owner = tokio::spawn(async move {
+            owner_recovery
+                .replace_ad_manifest(ad_manifest, &upstream_url, &HashMap::new())
+                .await
+        });
+        seen_rx.await.unwrap();
+        assert!(recovery.recovery_in_flight.load(Ordering::Acquire));
+        assert!(!recovery.renewal_in_flight.load(Ordering::Acquire));
+
+        let follower = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            recovery.refresh_manifest(&HashMap::new()),
+        )
+        .await
+        .expect("renewal follower must not wait for the ad owner");
+        let follower = follower
+            .into_manifest()
+            .expect("an ad owner must not make renewal terminal");
+        assert!(follower.body.contains("#EXT-X-GAP"));
+        assert!(
+            recovery
+                .test_refresh_urls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none(),
+            "renewal follower must not request a token"
+        );
+        assert_eq!(
+            recovery
+                .state
+                .lock()
+                .await
+                .refresh_budget
+                .consecutive_failures,
+            0
+        );
+
+        release_tx.send(()).unwrap();
+        let replacement = owner
+            .await
+            .unwrap()
+            .expect("the ad owner still returns its GAP fallback");
+        assert!(replacement.body.contains("#EXT-X-GAP"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn twitch_renewal_owner_blocks_ad_recovery_without_a_second_token_request() {
+        let (refresh_url, seen_rx, release_tx, server) =
+            spawn_blocked_playlist_server(CLEAN_TWITCH_PLAYLIST).await;
+        let recovery = twitch_recovery_for_test();
+        set_refresh_url(&recovery, refresh_url);
+        let owner_recovery = recovery.clone();
+        let owner =
+            tokio::spawn(async move { owner_recovery.refresh_manifest(&HashMap::new()).await });
+        seen_rx.await.unwrap();
+        assert!(recovery.recovery_in_flight.load(Ordering::Acquire));
+        assert!(recovery.renewal_in_flight.load(Ordering::Acquire));
+
+        let ad_manifest = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-DATERANGE:ID=\"source-ad\",CLASS=\"twitch-stream-source\",",
+            "X-TV-TWITCH-STREAM-SOURCE=\"Amazon|ad\"\n",
+            "#EXTINF:2.000,\n",
+            "ad.ts\n"
+        );
+        let upstream_url = Url::parse("https://cdn.example.test/live.m3u8").unwrap();
+        let follower = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            recovery.replace_ad_manifest(ad_manifest, &upstream_url, &HashMap::new()),
+        )
+        .await
+        .expect("ad follower must not wait for the renewal owner")
+        .expect("ad follower must still return a GAP fallback");
+        assert!(follower.body.contains("#EXT-X-GAP"));
+        assert!(
+            recovery
+                .state
+                .lock()
+                .await
+                .fallback_urls
+                .iter()
+                .all(Option::is_none),
+            "ad follower must not request a fallback token"
+        );
+
+        release_tx.send(()).unwrap();
+        let replacement = owner
+            .await
+            .unwrap()
+            .into_manifest()
+            .expect("the renewal owner must complete successfully");
+        assert_eq!(replacement.body, CLEAN_TWITCH_PLAYLIST);
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -2402,13 +3184,10 @@ async fn handle_client(
             return Ok(());
         }
         if is_primary_request && let Some(recovery) = twitch_ad_recovery.as_deref() {
-            let replacement = recovery.refresh_manifest(headers.as_ref()).await;
-            write_hls_manifest(
+            let refresh = recovery.refresh_manifest(headers.as_ref()).await;
+            write_twitch_manifest_refresh(
                 socket,
-                200,
-                "OK",
-                &replacement.body,
-                &replacement.upstream_url,
+                refresh,
                 local_origin.as_ref(),
                 hls_resources.as_ref(),
             )
@@ -2434,7 +3213,7 @@ async fn handle_client(
             .map_err(|e| format!("read hls manifest: {e}"))?;
         telemetry.record_bytes(manifest.len());
         let mut manifest_url = upstream_url;
-        if is_primary_request
+        let ad_manifest_replaced = if is_primary_request
             && let Some(recovery) = twitch_ad_recovery.as_deref()
             && let Some(replacement) = recovery
                 .replace_ad_manifest(&manifest, &manifest_url, headers.as_ref())
@@ -2442,15 +3221,24 @@ async fn handle_client(
         {
             manifest = replacement.body;
             manifest_url = replacement.upstream_url;
-        }
+            true
+        } else {
+            false
+        };
         if is_primary_request
-            && (manifest.contains("#EXT-X-ENDLIST")
-                || !looks_like_hls_manifest(manifest.as_bytes()))
+            && !ad_manifest_replaced
+            && twitch_manifest_needs_refresh(&manifest)
             && let Some(recovery) = twitch_ad_recovery.as_deref()
         {
-            let replacement = recovery.refresh_manifest(headers.as_ref()).await;
-            manifest = replacement.body;
-            manifest_url = replacement.upstream_url;
+            let refresh = recovery.refresh_manifest(headers.as_ref()).await;
+            write_twitch_manifest_refresh(
+                socket,
+                refresh,
+                local_origin.as_ref(),
+                hls_resources.as_ref(),
+            )
+            .await?;
+            return Ok(());
         }
         write_hls_manifest(
             socket,
@@ -2764,13 +3552,12 @@ fn build_loopback_client() -> AppResult<Client> {
         .map_err(|_| AppError::new("stream_proxy_warmup_client", "本地清单预热客户端初始化失败"))
 }
 
-/// 判断某份 HLS 媒体清单是否至少提供一个解复用器真正可读的分片。
+/// 判断某份 HLS 媒体清单是否至少提供一个真正可播放的分片。
 ///
 /// `#EXT-X-GAP` 声明其后的 URI 不含媒体，这正是 Twitch 的广告/等待路径产出的
-/// 内容。仅由它组成的清单是合法 HLS，轮询式播放器可以扛过去，
-/// 但 `avformat_open_input` 读一次占位符、一无所获，
-/// 直接判定录制失败。
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+/// 内容。仅由它组成的清单是合法 HLS，轮询式播放器会持续重载；录制路径也因
+/// `avformat_open_input` 读一次占位符、一无所获而直接失败。Twitch 的续期成功
+/// 判定同样复用它，避免把纯 GAP 清单写进 `last_clean_manifest`。
 fn manifest_has_playable_segment(manifest: &str) -> bool {
     if !looks_like_hls_manifest(manifest.as_bytes()) {
         return false;
@@ -2803,6 +3590,17 @@ fn manifest_has_playable_segment(manifest: &str) -> bool {
         }
     }
     false
+}
+
+/// 主清单是否已经失去可播放内容，需要重新申请 Twitch 播放 token。
+///
+/// 纯 GAP 清单仍会被 hls.js 当作合法 live 清单持续轮询；若代理只是原样转发，
+/// 上层永远收不到可恢复的终止错误。这里把它与 ENDLIST、非清单响应一起交给
+/// 有界续期路径，而广告 replace 自行产生的 GAP 已由调用方排除。
+fn twitch_manifest_needs_refresh(manifest: &str) -> bool {
+    manifest.contains("#EXT-X-ENDLIST")
+        || !looks_like_hls_manifest(manifest.as_bytes())
+        || !manifest_has_playable_segment(manifest)
 }
 
 fn twitch_wait_manifest() -> String {
@@ -2860,6 +3658,39 @@ async fn write_hls_manifest(
         .map_err(|e| format!("write hls manifest: {e}"))?;
     let _ = socket.flush().await;
     Ok(())
+}
+
+async fn write_twitch_manifest_refresh(
+    socket: &mut tokio::net::TcpStream,
+    refresh: TwitchManifestRefreshOutcome,
+    local_origin: &str,
+    hls_resources: &HlsResources,
+) -> Result<(), String> {
+    match refresh {
+        TwitchManifestRefreshOutcome::Manifest(replacement) => {
+            write_hls_manifest(
+                socket,
+                200,
+                "OK",
+                &replacement.body,
+                &replacement.upstream_url,
+                local_origin,
+                hls_resources,
+            )
+            .await?;
+            Ok(())
+        }
+        TwitchManifestRefreshOutcome::Exhausted => {
+            write_text_response(
+                socket,
+                504,
+                "Gateway Timeout",
+                "Twitch 播放清单连续续期失败，请稍后重试",
+            )
+            .await?;
+            Ok(())
+        }
+    }
 }
 
 fn rewrite_hls_manifest(

@@ -95,7 +95,8 @@ Twitch 拒绝所有没有浏览器完整性上下文的 Relay 游标：只要请
 2. 按实测排序依次申请备用令牌：`popout/web`（干净且保留完整清晰度）、`autoplay/android`（干净但降到 `360p`）、`embed/web` 与 `picture-by-picture/web`（实测带广告，仅作前两档也被插播时的兜底）。申请时优先保留当前清晰度，备用档位缺该清晰度时选最接近的变体。
 3. 找到无广告标记的播放列表后，代理在原 localhost 播放地址内完成替换，前端不需要注入 userscript 或连接第三方中转服务。
 4. 若所有备用播放列表仍含广告，代理把广告分片标记为 HLS `#EXT-X-GAP` 并停止低延迟预取，等待正常分片恢复；此时不播放广告占位内容，但画面可能短暂停顿。
-5. 录制归档解析 `#EXT-X-DISCONTINUITY-SEQUENCE`，把 GAP 或已滚出窗口的不连续边界传递到下一段实际保存的媒体；重签名后以 `PROGRAM-DATE-TIME`/媒体序号去重，避免同一直播窗口被追加两次。
+5. 主清单因 token 失效、上游错误或只剩纯 GAP 分片而续期时，代理以首次失败为起点设置 20 秒恢复窗口，并要求至少 3 次 owned 续期失败才结束；并发 follower 不消耗预算，也不重复申请 token。成功取得带真实分片的非广告 live 清单会立即清零失败状态。窗口耗尽后 `/live` 返回 `504 Gateway Timeout`，由播放器的既有恢复流程收口，不再无限返回 HTTP 200 的等待清单。正常长直播只有单次故障恢复预算，没有总续期次数上限。
+6. 录制归档解析 `#EXT-X-DISCONTINUITY-SEQUENCE`，把 GAP 或已滚出窗口的不连续边界传递到下一段实际保存的媒体；重签名后以 `PROGRAM-DATE-TIME`/媒体序号去重，避免同一直播窗口被追加两次。
 
 判定会随时间变化，上述实网测量仅对应当时版本，原手工测试已随测试精简移除。重新验收时需在真实客户端检查各档位的清晰度阶梯、`roll_type` 与 `stream_source`，不能只凭这份历史表判断当前可用性。策略参考 MIT 许可的 [TwitchAdSolutions `vaft`](https://github.com/pixeltris/TwitchAdSolutions/tree/f8f86706daf90daa534b26bce5b2f01238667d5f/vaft) 与 [ttv-lol-pro](https://github.com/younesaassila/ttv-lol-pro)，其备用顺序注释（`embed`/`popout` = Source、`autoplay` = 360p）与本次测到的清晰度阶梯一致。
 

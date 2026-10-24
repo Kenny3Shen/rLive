@@ -18,6 +18,13 @@ import { runningOnAndroidTauri, setAndroidImmersive } from "./androidImmersive";
 import { videoAspectRatio, retainMeasuredAspectRatio } from "./androidOrientation";
 import { requestPlayerAutoplay } from "./autoplay";
 import { watchDesktopFullscreen } from "./desktopFullscreenWatcher";
+import {
+  classifyHlsPlayerError,
+  createHlsRecoveryBudget,
+  hlsResponseStatus,
+  isTwitchCommercialBreak,
+} from "./hlsRecoveryBudget";
+import { watchHlsMediaProgress } from "./hlsMediaWatch";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import { softSwitchOwnsTransport } from "./softSwitchTransaction";
 import { streamProxyStartArgs } from "./streamProxyStart";
@@ -237,93 +244,6 @@ export function hasStartedPlayback(
   video: Pick<HTMLMediaElement, "paused" | "readyState">,
 ): boolean {
   return !video.paused && video.readyState >= 2;
-}
-
-export const BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS = 20_000;
-
-export function shouldEscalateNonTwitchHlsFatal(input: {
-  siteId: SiteId | undefined;
-  failureCount: number;
-  firstFailureAt: number;
-  now: number;
-}): boolean {
-  if (input.failureCount <= 1) return false;
-  if (input.siteId !== "bilibili") return true;
-  return input.now - input.firstFailureAt >= BILIBILI_HLS_FATAL_RECOVERY_GRACE_MS;
-}
-
-export type HlsFatalRecoveryAction = { type: "restart" } | { type: "recovery_exhausted" };
-
-/**
- * 播放器错误到达这一边界之前 hls.js 已经尝试过其内建恢复。再重试一次，
- * 然后报告传输恢复已耗尽，让播放会话选择下一个领域动作。
- */
-export function nextHlsFatalRecoveryAction(
-  failureCount: number,
-  commercialBreak = false,
-  authorizationFailed = false,
-): HlsFatalRecoveryAction {
-  // Twitch 媒体清单上的 401/403 通常只是短时效签名 URL 过期。
-  // 对着同一 URL 重放只会重复失败。
-  if (authorizationFailed && !commercialBreak) {
-    return { type: "recovery_exhausted" };
-  }
-  if (failureCount <= 1) return { type: "restart" };
-  return { type: "recovery_exhausted" };
-}
-
-/**
- * 广告插播是平台下发的内容，不是要绕过的错误。部分瞬态清单响应以此文本代替
- * 清单；识别它可以等待并在插播结束后正常刷新。
- */
-export function isTwitchCommercialBreak(error: unknown): boolean {
-  if (typeof error === "string") {
-    return /commercial\s+break\s+in\s+progress/i.test(error);
-  }
-  if (!error || typeof error !== "object") return false;
-  const value = error as {
-    message?: unknown;
-    errorMessage?: unknown;
-    reason?: unknown;
-    originError?: unknown;
-    error?: { message?: unknown };
-    response?: { data?: unknown };
-  };
-  const candidates = [
-    value.message,
-    value.errorMessage,
-    value.reason,
-    value.originError,
-    value.error?.message,
-    value.response?.data,
-  ];
-  return candidates.some(
-    (candidate) =>
-      typeof candidate === "string" && /commercial\s+break\s+in\s+progress/i.test(candidate),
-  );
-}
-
-export function hlsResponseStatus(error: unknown): number | null {
-  if (!error || typeof error !== "object") return null;
-  const value = error as {
-    httpCode?: unknown;
-    status?: unknown;
-    response?: { code?: unknown; status?: unknown };
-    ext?: { httpCode?: unknown; response?: { code?: unknown; status?: unknown } };
-  };
-  const candidates = [
-    value.httpCode,
-    value.status,
-    value.response?.status,
-    value.response?.code,
-    value.ext?.httpCode,
-    value.ext?.response?.status,
-    value.ext?.response?.code,
-  ];
-  const status = candidates.find(
-    (candidate): candidate is number => typeof candidate === "number" && Number.isFinite(candidate),
-  );
-  return status ?? null;
 }
 
 /**
@@ -785,6 +705,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   // 逻辑流身份变化时打开/替换流。
   useEffect(() => {
     let cancelled = false;
+    let stopHlsMediaProgress: (() => void) | null = null;
     const gen = ++genRef.current;
     const proxySessionId = `${playerInstanceId}:${gen}`;
     let playbackSource = effectivePlaybackSourceRef.current;
@@ -1003,13 +924,17 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           if (!hlsCore) player.on("error", reportPlayerError);
 
           if (hlsCore && siteId !== "twitch") {
-            let hlsFatalFailureCount = 0;
-            let firstHlsFatalFailureAt: number | null = null;
+            const recoveryBudget = createHlsRecoveryBudget({ siteId });
             player.on("playing", () => {
               if (!isCurrentPlayer()) return;
-              hlsFatalFailureCount = 0;
-              firstHlsFatalFailureAt = null;
+              recoveryBudget.notePlaying();
             });
+            stopHlsMediaProgress = watchHlsMediaProgress(
+              video,
+              () => recoveryBudget.noteProgress(),
+              () => recoveryBudget.noteInterrupted(),
+              isCurrentPlayer,
+            );
             const reportHlsFailure = (cause: unknown, recoveryExhausted = false) => {
               if (!isCurrentPlayer()) return;
               const message = videoJsPlayerErrorMessage(cause, "HLS 连接中断");
@@ -1035,37 +960,30 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               });
             };
             player.on("error", (cause) => {
+              // hls.js 的 fatal 可能已经释放 engine；MSE 判定必须在事件栈内快照。
+              const isMse = hlsCore.isMse();
+              const disposition = classifyHlsPlayerError(cause);
               queueMicrotask(() => {
                 if (!isCurrentPlayer()) return;
-                if (!hlsCore.isMse()) {
+                if (!isMse) {
                   reportPlayerError(cause);
                   return;
                 }
-                const event = cause as { fatal?: boolean; type?: string } | null;
-                if (
-                  !event?.fatal ||
-                  (event.type !== "networkError" && event.type !== "mediaError")
-                ) {
-                  reportHlsFailure(cause);
+                if (disposition.type === "ignore") return;
+                if (disposition.type === "player_error") {
+                  reportPlayerError(cause);
                   return;
                 }
-                hlsFatalFailureCount += 1;
-                const now = Date.now();
-                firstHlsFatalFailureAt ??= now;
-                if (
-                  shouldEscalateNonTwitchHlsFatal({
-                    siteId,
-                    failureCount: hlsFatalFailureCount,
-                    firstFailureAt: firstHlsFatalFailureAt,
-                    now,
-                  })
-                ) {
+                const action = recoveryBudget.recordFatal({
+                  recovery: disposition.recovery,
+                });
+                if (action.type === "recovery_exhausted") {
                   reportHlsFailure(cause, true);
                   return;
                 }
                 setRunning(false);
                 // Video.js 上报终止错误但不替应用重启；使用 hls.js 的公开恢复 API。
-                if (event.type === "mediaError") hlsCore.recoverMediaError();
+                if (disposition.recovery === "recoverMediaError") hlsCore.recoverMediaError();
                 else hlsCore.startLoad();
               });
             });
@@ -1073,8 +991,48 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
           if (hlsCore && siteId === "twitch") {
             const twitchHlsCore = hlsCore;
-            let hlsFatalFailureCount = 0;
+            const recoveryBudget = createHlsRecoveryBudget({ siteId });
             let decoderFailureReported = false;
+            /**
+             * Twitch 的 HLS 失败与播放器自身错误共用 adapter 的 error 事件。
+             * 只有已确认的 hls.js fatal 才进入 startLoad / 续期；其余错误必须
+             * 回到既有 reportPlayerError，尤其不能把 play() 拒绝当成清单失败。
+             */
+            function reportTwitchHlsFailure(cause: unknown, recoveryExhausted: boolean) {
+              const event = cause as { details?: string } | null;
+              const hlsJsDetails = event?.details ?? "";
+              const errorMessage = hlsJsDetails
+                ? `Twitch HLS ${hlsJsDetails}`
+                : videoJsPlayerErrorMessage(cause, "Twitch HLS 连接中断");
+              const commercialBreak = isTwitchCommercialBreak(cause);
+              const responseStatus = hlsResponseStatus(cause);
+              if (recoveryExhausted) {
+                playerRef.current = null;
+                try {
+                  player.destroy();
+                } catch {
+                  /* 致命 HLS 错误可能已经释放了内部状态。 */
+                }
+                setLoadError(null);
+              } else {
+                setLoadError(errorMessage);
+              }
+              setRunning(false);
+              onMediaFailureRef.current?.({
+                epoch: gen,
+                generation: gen,
+                kind: "error",
+                message: recoveryExhausted
+                  ? commercialBreak
+                    ? "Twitch 正在播放广告"
+                    : `${errorMessage}，HLS 内部恢复已耗尽`
+                  : errorMessage,
+                protocol: "hls",
+                ...(responseStatus != null ? { httpStatus: responseStatus } : {}),
+                ...(recoveryExhausted ? { recoveryExhausted: true } : {}),
+                ...(commercialBreak ? { commercialBreak: true } : {}),
+              });
+            }
             function failDecoder() {
               if (decoderFailureReported || !isCurrentPlayer()) return;
               decoderFailureReported = true;
@@ -1098,22 +1056,22 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               });
             }
             player.on("playing", () => {
-              if (isCurrentPlayer()) hlsFatalFailureCount = 0;
+              if (isCurrentPlayer()) recoveryBudget.notePlaying();
             });
+            stopHlsMediaProgress = watchHlsMediaProgress(
+              video,
+              () => recoveryBudget.noteProgress(),
+              () => recoveryBudget.noteInterrupted(),
+              isCurrentPlayer,
+            );
             function handleFatalHlsFailure(cause: unknown) {
               if (!isCurrentPlayer()) return;
-              // 原生 HLS 没有 hls.js 的 fatal/type 语义，交给统一媒体错误路径，
-              // 不要尝试对不存在的 engine 做恢复或解码降级。
-              if (!twitchHlsCore.isMse()) {
+              const disposition = classifyHlsPlayerError(cause);
+              if (disposition.type === "ignore") return;
+              if (disposition.type === "player_error") {
                 reportPlayerError(cause);
                 return;
               }
-
-              const event = cause as { details?: string; type?: string } | null;
-              const hlsJsDetails = event?.details ?? "";
-              const errorMessage = hlsJsDetails
-                ? `Twitch HLS ${hlsJsDetails}`
-                : videoJsPlayerErrorMessage(cause, "Twitch HLS 连接中断");
               if (isVideoJsDecodeError(cause)) {
                 failDecoder();
                 return;
@@ -1121,46 +1079,39 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
               const commercialBreak = isTwitchCommercialBreak(cause);
               const responseStatus = hlsResponseStatus(cause);
-              const action = nextHlsFatalRecoveryAction(
-                ++hlsFatalFailureCount,
+              const action = recoveryBudget.recordFatal({
+                recovery: disposition.recovery,
                 commercialBreak,
-                responseStatus === 401 || responseStatus === 403,
-              );
+                responseStatus,
+              });
               if (action.type === "restart") {
                 setRunning(false);
                 try {
-                  if (event?.type === "mediaError") twitchHlsCore.recoverMediaError();
-                  else twitchHlsCore.startLoad();
+                  if (action.recovery === "recoverMediaError") {
+                    twitchHlsCore.recoverMediaError();
+                  } else {
+                    twitchHlsCore.startLoad();
+                  }
                 } catch {
                   // 后续致命事件推进到播放地址续期。
                 }
                 return;
               }
 
-              const message = commercialBreak
-                ? "Twitch 正在播放广告"
-                : `${errorMessage}，HLS 内部恢复已耗尽`;
-              playerRef.current = null;
-              try {
-                player.destroy();
-              } catch {
-                /* 致命 HLS 错误可能已经释放了内部状态。 */
-              }
-              setLoadError(null);
-              setRunning(false);
-              onMediaFailureRef.current?.({
-                epoch: gen,
-                generation: gen,
-                kind: "error",
-                message,
-                protocol: "hls",
-                httpStatus: responseStatus,
-                recoveryExhausted: true,
-                commercialBreak,
-              });
+              reportTwitchHlsFailure(cause, true);
             }
             player.on("error", (cause) => {
-              queueMicrotask(() => handleFatalHlsFailure(cause));
+              // fatal 可能同步释放 engine；在事件栈内快照原生/MSE 分流。
+              // 微任务中的 helper 只处理已确认的 MSE 路径。
+              const isMse = twitchHlsCore.isMse();
+              queueMicrotask(() => {
+                if (!isCurrentPlayer()) return;
+                if (!isMse) {
+                  reportPlayerError(cause);
+                  return;
+                }
+                handleFatalHlsFailure(cause);
+              });
             });
           }
 
@@ -1216,6 +1167,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
     return () => {
       cancelled = true;
+      stopHlsMediaProgress?.();
+      stopHlsMediaProgress = null;
       destroyPlayer();
       void proxyLifecycleQueue.enqueue(stopProxy);
     };
