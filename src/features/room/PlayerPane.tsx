@@ -1523,6 +1523,7 @@ function PlayerPaneContent({
               onOverlayInteractionChange={handleControlsOverlayInteractionChange}
               refreshDisabled={refreshDisabled}
               onRefresh={onRefresh}
+              onTogglePause={player.togglePause}
               onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
               onToggleWebFullscreen={
                 onWebFullscreenChange ? () => onWebFullscreenChange(!webFullscreen) : undefined

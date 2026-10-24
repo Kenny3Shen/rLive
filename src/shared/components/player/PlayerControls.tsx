@@ -210,6 +210,8 @@ export type PlayerControlsProps = {
   loadError?: string | null; // 由 ErrorDialog 展示
   onRefresh?: () => void;
   onNext?: () => void;
+  /** 直播、IPTV 与多画面接管暂停，确保用户暂停意图写入播放器。 */
+  onTogglePause?: () => void;
   onToggleSidePanel?: () => void;
   onToggleWebFullscreen?: () => void;
   onToggleOsd?: () => void;
@@ -610,6 +612,7 @@ export function PlayerControls({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 由 ErrorDialog 展示
   onRefresh,
   onNext,
+  onTogglePause,
   onToggleSidePanel,
   onToggleWebFullscreen,
   onToggleOsd,
@@ -841,7 +844,7 @@ export function PlayerControls({
         <div className="flex shrink-0 items-center gap-1">
           {/* 1. 暂停 / 播放 */}
           <ButtonTooltip side="top">
-            <PlayButton disabled={disabled} />
+            <PlayButton disabled={disabled} onTogglePause={onTogglePause} />
           </ButtonTooltip>
 
           {/* 2. 刷新 */}

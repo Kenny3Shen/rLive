@@ -336,6 +336,7 @@ function MainMultiRoomControls({
       }
       onOverlayInteractionChange={onControlsOverlayInteractionChange}
       onRefresh={onRefresh}
+      onTogglePause={player.togglePause}
       onToggleOsd={onToggleOsd}
       onToggleAsr={asr.toggle}
       onAsrTranslationEnabledChange={setAsrTranslationEnabled}
@@ -789,6 +790,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
           <PlayerControls
             compact
             nativeFullscreen
+            onTogglePause={player.togglePause}
             chrome={{
               className:
                 "absolute inset-x-0 bottom-0 z-30 opacity-0 transition-opacity group-focus-within/player:opacity-100 group-hover/player:opacity-100",

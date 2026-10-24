@@ -44,16 +44,19 @@ describe("直播 <video> 不再自带浏览器自动起播", () => {
   test("唯一自动起播入口仍是 requestPlayerAutoplay，并核对用户暂停意图", () => {
     const source = readFileSync(join(root, "src/features/room/player/useWebPlayer.ts"), "utf8");
     const call = extractRequestPlayerAutoplayCall(source);
-    // 锁定真实调用本身：player / video 在前，第三参数是起播判定回调。
-    expect(call).toMatch(/^requestPlayerAutoplay\(\s*player,\s*video,/);
+    // 锁定真实调用本身：player / video 在前，第三参数必须是核对暂停意图的
+    // canAutoPlay，而不是内联或另起的宽泛判定。
+    const guardedCall = /^requestPlayerAutoplay\(\s*player,\s*video,\s*canAutoPlay,/;
+    expect(call).toMatch(guardedCall);
     // 起播判定与异步重试都经由这个 isCurrent 回调；用户暂停后它返回 false。
-    const pauseGuard = /\(\)\s*=>\s*isCurrentPlayer\(\)\s*&&\s*!userPausedRef\.current/;
-    expect(call).toMatch(pauseGuard);
+    const pauseGuard =
+      /const canAutoPlay\s*=\s*\(\)\s*=>\s*isCurrentPlayer\(\)\s*&&\s*!userPausedRef\.current;[\s\S]*requestPlayerAutoplay\(player, video, canAutoPlay,/;
+    expect(source).toMatch(pauseGuard);
 
     // 负向对照：把回调改成只判 isCurrentPlayer 后，后文 resumePlayback 里的
     // !userPausedRef.current 仍在（宽泛的跨调用 regex 会因此误判通过），
     // 但收窄到调用内部的断言必须失败。
-    const tamperedCall = call.replace(pauseGuard, "() => isCurrentPlayer()");
+    const tamperedCall = call.replace("canAutoPlay,", "() => isCurrentPlayer(),");
     expect(tamperedCall).not.toBe(call);
     const tamperedSource =
       source.slice(0, source.indexOf(call)) +
@@ -61,7 +64,9 @@ describe("直播 <video> 不再自带浏览器自动起播", () => {
       source.slice(source.indexOf(call) + call.length);
     expect(tamperedSource).toContain("resumePlayback = !userPausedRef.current");
     expect(tamperedSource).toContain("!userPausedRef.current");
-    expect(extractRequestPlayerAutoplayCall(tamperedSource)).not.toMatch(pauseGuard);
+    const tamperedExtracted = extractRequestPlayerAutoplayCall(tamperedSource);
+    expect(tamperedExtracted).toMatch(/\(\) => isCurrentPlayer\(\)/);
+    expect(tamperedExtracted).not.toMatch(guardedCall);
   });
 
   test("用户已暂停时既有入口不发起播放", async () => {

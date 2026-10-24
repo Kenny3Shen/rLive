@@ -600,6 +600,7 @@ function IptvPlayerContent({
             refreshDisabled={!channel || status === "connecting"}
             loadError={player.fullscreenError}
             onRefresh={onReconnect}
+            onTogglePause={togglePause}
             onToggleWebFullscreen={() => onWebFullscreenChange?.(!webFullscreen)}
             onToggleAsr={asr.toggle}
             onAsrTranslationEnabledChange={setAsrTranslationEnabled}
