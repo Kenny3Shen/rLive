@@ -14,7 +14,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
@@ -93,6 +93,11 @@ import { useShortsFeed } from "./useShortsFeed";
 import { useShortsSessionRetention } from "./useShortsSessionRetention";
 import { useShortsInteraction } from "./useShortsInteraction";
 
+/** 触摸端的评论入口：底栏上方留出的拇指操作区，以及避让顶栏的最小间距。 */
+const SHORTS_MOBILE_COMMENT_BOTTOM_OFFSET_PX = 128;
+const SHORTS_MOBILE_COMMENT_TOP_INSET_PX = 12;
+const SHORTS_MOBILE_COMMENT_STACK_HEIGHT_PX = 60;
+
 /**
  * `/shorts/bilibili`：B 站短视频（story feed）的竖屏消费页。
  *
@@ -158,8 +163,9 @@ export function ShortsPage() {
    */
   const [stageChromeColumn, setStageChromeColumn] = useState(0);
   const coarsePointer = useCoarsePointer();
-  const chromeColumn = coarsePointer ? stageChromeColumn : 0;
   const compact = useCompactPlayerViewport();
+  const compactOrTouch = compact || coarsePointer;
+  const chromeColumn = coarsePointer ? stageChromeColumn : 0;
 
   const feed = useShortsFeed(entrySeed, feedMotionActive);
   const { items, index, setIndex, feedQuery } = feed;
@@ -892,44 +898,43 @@ export function ShortsPage() {
                   </div>
 
                   {/*
-              评论入口贴着信息行的右侧、略高于它 —— 但**不抬高整块信息**。
-
-              此前它和信息同在一行（`items-end`），于是点击命中区与作者/标题的底边
-              齐平，正文一长，按钮就跟着往下挪到进度条命中区上。现在按钮自成右上角
-              一列，信息块保持原来的左下角位置。
-
-              数字取 `reply`（评论数），不是 `danmaku`（弹幕数）：这个按钮开的是评论区，
-              底下那行数字必须是评论数。此前误用了 `danmaku`，于是「评论 5」实际是
-              「弹幕 5 条」—— 与评论区里真实条数（同一稿件 56 条）对不上。
-              弹幕数在底部操作栏与信息行里各自有位置，不需要在这里重复一遍。
-
-              打开评论后按钮随播放区一起上移（它仍锚在信息行上，而行随播放区收窄
-              而上移）；关闭入口在评论表头，不要求用户再找到这颗按钮。
+              桌面把评论入口留在信息行的右上角。触摸端不放进信息行：信息块的高度
+              会随标题和章节变化，按钮跟着它走就落不到稳定的拇指位置；独立的
+              `ShortsCommentButton` 在控件列右侧定位，信息块本身保持不动。
             */}
-                  <span className="pointer-events-auto flex shrink-0 flex-col items-center self-start">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={
-                        current.reply != null && current.reply > 0
-                          ? `评论，${formatOnline(current.reply)} 条`
-                          : "评论"
-                      }
-                      aria-expanded={panels.commentsOpen}
-                      title="评论"
-                      className="size-11 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
+                  {!compactOrTouch && (
+                    <ShortsCommentButton
+                      reply={current.reply}
+                      open={panels.commentsOpen}
                       onClick={() => setCommentsOpen(true)}
-                    >
-                      <MessageCircle className="size-6" aria-hidden />
-                    </Button>
-                    {current.reply != null && current.reply > 0 && (
-                      <span className="text-[11px] text-white/80">
-                        {formatOnline(current.reply)}
-                      </span>
-                    )}
-                  </span>
+                      className="self-start"
+                    />
+                  )}
+                  {/*
+                  触摸端的按钮已经独立定位，这里仍保留它原来占的宽度列：父层
+                  `gap-3` 与按钮的 `w-11` 共同决定信息块的换行宽度，不能因为
+                  按钮移出 flex 就让标题多出一截。
+                */}
+                  {compactOrTouch && <span aria-hidden className="w-11 shrink-0" />}
                 </div>
+              )}
+
+              {/*
+              触摸端评论入口：底边距底栏约 128px，右边缘与信息浮层同一条 8px 内边线。
+              顶部用 `min()` 夹住，矮视口不会钻进顶部控制栏；按钮高度与评论数行固定
+              为 60px，因此 128px 是可解释的「按钮底部到操作栏顶部」距离。
+              */}
+              {infoVisible && current && compactOrTouch && (
+                <ShortsCommentButton
+                  reply={current.reply}
+                  open={panels.commentsOpen}
+                  onClick={() => setCommentsOpen(true)}
+                  className="absolute right-2 z-20"
+                  buttonClassName="bg-black/40 text-white hover:bg-black/55 hover:text-white"
+                  style={{
+                    bottom: `min(calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM} + ${SHORTS_MOBILE_COMMENT_BOTTOM_OFFSET_PX}px), calc(100% - ${SHORTS_TOP_BAR_HEIGHT_PX + SHORTS_MOBILE_COMMENT_TOP_INSET_PX + SHORTS_MOBILE_COMMENT_STACK_HEIGHT_PX}px))`,
+                  }}
+                />
               )}
             </div>
 
@@ -991,6 +996,7 @@ export function ShortsPage() {
                       {current && (
                         <DanmakuComposer
                           overlay
+                          overlayButtonHeight
                           roomTitle={current.title}
                           video={{
                             cid: current.cid ?? 0,
@@ -1140,6 +1146,53 @@ export function ShortsPage() {
         </ShortsDrawerContent>
       </Drawer>
     </ShortsSeekPlayer>
+  );
+}
+
+/**
+ * 评论入口：桌面嵌在信息行里，触摸端独立定位在控件列右侧。
+ *
+ * 两种位置共用同一颗按钮与评论数，避免读错 `reply` 或两处出现不同的图标。
+ */
+function ShortsCommentButton({
+  reply,
+  open,
+  onClick,
+  className,
+  buttonClassName,
+  style,
+}: {
+  reply: number | null;
+  open: boolean;
+  onClick: () => void;
+  className?: string;
+  buttonClassName?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <span
+      className={cn("pointer-events-auto flex shrink-0 flex-col items-center", className)}
+      style={style}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label={reply != null && reply > 0 ? `评论，${formatOnline(reply)} 条` : "评论"}
+        aria-expanded={open}
+        title="评论"
+        className={cn(
+          "size-11 rounded-full text-white/90 hover:bg-white/15 hover:text-white",
+          buttonClassName,
+        )}
+        onClick={onClick}
+      >
+        <MessageCircle className="size-6" aria-hidden />
+      </Button>
+      {reply != null && reply > 0 && (
+        <span className="text-[11px] text-white/80">{formatOnline(reply)}</span>
+      )}
+    </span>
   );
 }
 

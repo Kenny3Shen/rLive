@@ -101,15 +101,6 @@ function shortsFrameStyle(frame: { width: number; height: number }, offset: numb
     : { width: "100%", height: "100%" };
 }
 
-/** 画面框是否小于可用区域（桌面上的居中卡片形态）：只有这时才给圆角。 */
-function shortsFrameInset(
-  frame: { width: number; height: number },
-  area: { width: number; height: number },
-): boolean {
-  if (!(frame.width > 0) || !(area.width > 0)) return false;
-  return frame.width < area.width - 1 || frame.height < area.height - 1;
-}
-
 /**
  * 画面框的几何：铺满还是等比留边，以及它在画面区里的纵向落点。
  *
@@ -125,7 +116,7 @@ function useShortsFrameGeometry(aspect: number | null, area: { width: number; he
   // 横屏源偏顶部（不再垂直居中）：偏移是个比例值（留白的 1/4），
   // `align-items` 表达不了，因此写成 `margin-top`。
   const offset = shortsFrameTop(frame.height, area.height, aspect);
-  return { fill, frame, offset, inset: shortsFrameInset(frame, area) };
+  return { fill, frame, offset };
 }
 
 /**
@@ -237,7 +228,7 @@ export function ShortsStage({
   const { size: area, measure } = useShortsStageSize();
   // 起播后以媒体自报画幅为准，起播前用列表下发的 dimension 定框。
   const aspect = shortsMediaAspect(item.dimension, playback.intrinsicSize);
-  const { fill, frame, offset, inset } = useShortsFrameGeometry(aspect, area);
+  const { fill, frame, offset } = useShortsFrameGeometry(aspect, area);
   const warming = mode !== "play";
 
   // 页面层控件的收窄宽度。只由活动舞台报，且只报「比画面区窄」的那些：铺满时给 0，
@@ -264,7 +255,8 @@ export function ShortsStage({
       >
         <div
           data-slot="shorts-frame"
-          className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}
+          // 短视频始终用直角画面框：桌面居中卡片与手机铺满形态保持同一画法。
+          className="relative shrink-0 overflow-hidden"
           style={shortsFrameStyle(frame, offset) as React.CSSProperties}
         >
           {/*
@@ -544,7 +536,7 @@ export function ShortsBlankStage({
   const { size: area, measure } = useShortsStageSize();
   // 占位阶段没有媒体自报画幅，只有列表下发的 dimension。
   const aspect = shortsMediaAspect(item.dimension);
-  const { frame, offset, inset } = useShortsFrameGeometry(aspect, area);
+  const { frame, offset } = useShortsFrameGeometry(aspect, area);
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
       <div
@@ -553,7 +545,7 @@ export function ShortsBlankStage({
         style={shortsMediaAreaStyle(safeAreaBottom, bottomBar)}
       >
         <div
-          className={cn("relative shrink-0", inset && "overflow-hidden rounded-sm")}
+          className="relative shrink-0 overflow-hidden"
           style={shortsFrameStyle(frame, offset) as React.CSSProperties}
         />
       </div>

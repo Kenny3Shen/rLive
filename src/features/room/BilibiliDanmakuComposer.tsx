@@ -62,6 +62,8 @@ type DanmakuComposerProps = {
   roomUserName?: string;
   /** 供播放器浮层控制条使用的紧凑透明变体。 */
   overlay?: boolean;
+  /** 浮层输入框是否与同一行的按钮同高；短视频底栏使用。 */
+  overlayButtonHeight?: boolean;
   /** 全屏播放器浮层使用的 Portal 目标。 */
   portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
   /** 表情选择器打开期间保持播放器 chrome 可见。 */
@@ -613,6 +615,7 @@ export function DanmakuComposer({
   roomTitle,
   roomUserName,
   overlay = false,
+  overlayButtonHeight = false,
   portalContainer,
   onOverlayInteractionChange,
   video,
@@ -788,6 +791,9 @@ export function DanmakuComposer({
       <InputGroup
         className={cn(
           overlay ? "h-8 min-w-0" : MESSAGE_COMPOSER_GROUP_CLASS,
+          overlay &&
+            overlayButtonHeight &&
+            "h-10 min-h-10 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-h-11",
           overlay && "border-white/25 bg-black/30 text-white has-[>input:disabled]:bg-black/20",
           result?.startsWith("发送失败") && "border-destructive/80",
         )}
