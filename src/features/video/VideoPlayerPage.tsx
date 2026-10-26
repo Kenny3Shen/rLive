@@ -219,6 +219,7 @@ import {
   playlistContainsCurrentItem,
   playlistItemFromArchivePage,
   playlistItemFromVideoItem,
+  shouldReplacePlaylistHistory,
   usePlaylistStore,
   videoEndedAction,
   videoEndedTargets,
@@ -905,7 +906,7 @@ function VideoPlayerPageContent() {
     selectionNextItemRef.current = selectionNextItem;
   }, [selectionNextItem]);
 
-  /** 自动连播、控件、快捷键与滑动共用导航；滑动不往返回栈里逐条堆视频。 */
+  /** 自动连播、控件与快捷键共用导航；是否替换历史由调用方按目标语义决定。 */
   const goToPlaylistItem = useCallback(
     (item: PlaylistItem, replace = false) => {
       navigate(
@@ -1642,7 +1643,12 @@ function VideoPlayerPageContent() {
           action === "next"
             ? latest.episode
             : ((current.autoPlayNext ? latest.episode : null) ?? latest.list);
-        if (target) goToPlaylistItem(target);
+        if (target) {
+          goToPlaylistItem(
+            target,
+            shouldReplacePlaylistHistory(target === latest.episode ? "selection" : current.kind),
+          );
+        }
       }, delay);
     }
 
@@ -2375,10 +2381,10 @@ function VideoPlayerPageContent() {
         setPlayerVolume((playerControlMuted ? 0 : playerControlVolume) - 5);
       } else if ((key === "n" || key === "]") && nextItem && !event.repeat) {
         event.preventDefault();
-        goToPlaylistItem(nextItem);
+        goToPlaylistItem(nextItem, shouldReplacePlaylistHistory(playlistKind));
       } else if ((key === "p" || key === "[") && prevItem && !event.repeat) {
         event.preventDefault();
-        goToPlaylistItem(prevItem);
+        goToPlaylistItem(prevItem, shouldReplacePlaylistHistory(playlistKind));
       } else {
         return;
       }
@@ -2394,6 +2400,7 @@ function VideoPlayerPageContent() {
       webFullscreen,
       mobileClient,
       nextItem,
+      playlistKind,
       prevItem,
       revealControls,
       seekTo,
@@ -3155,7 +3162,15 @@ function VideoPlayerPageContent() {
                   }}
                   onOverlayInteractionChange={setOverlayInteractionOpen}
                   onRefresh={retryPlayback}
-                  onNext={selectionNextItem ? () => goToPlaylistItem(selectionNextItem) : undefined}
+                  onNext={
+                    selectionNextItem
+                      ? () =>
+                          goToPlaylistItem(
+                            selectionNextItem,
+                            shouldReplacePlaylistHistory("selection"),
+                          )
+                      : undefined
+                  }
                   captionsSlot={captionsSlot}
                   chaptersSlot={chaptersSlot}
                   chaptersPlacement={chaptersPlacement}

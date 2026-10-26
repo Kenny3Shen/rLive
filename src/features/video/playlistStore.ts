@@ -254,6 +254,20 @@ export type PlaylistUploader = { mid: string; name: string };
  */
 export type PlaylistKind = "feed" | "list" | "sequence";
 
+/** 导航目标的来源：选集内换集，或播放队列中的相邻项。 */
+export type PlaylistHistorySource = PlaylistKind | "selection";
+
+/**
+ * 选集切换是否替换当前历史条目。
+ *
+ * `selection` 是侧栏、控制栏与自动切集明确选中的同一作品下一项，不论来源队列
+ * 是什么都应替换；`sequence` 队列的邻项也属于同一作品。`list` / `feed` 的邻项
+ * 是另一条视频，仍需保留 push 层级。
+ */
+export function shouldReplacePlaylistHistory(source: PlaylistHistorySource): boolean {
+  return source === "selection" || source === "sequence";
+}
+
 type PlaylistState = {
   /** 当前播放列表。空数组表示无列表（单视频播放）。 */
   items: PlaylistItem[];

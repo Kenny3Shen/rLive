@@ -49,6 +49,7 @@ import {
   playlistItemFromArchivePage,
   playlistItemFromPgcEpisode,
   playlistItemFromSeasonEpisode,
+  shouldReplacePlaylistHistory,
   usePlaylistStore,
   type PlaylistItem,
 } from "./playlistStore";
@@ -816,7 +817,11 @@ export function VideoSidebar({
     title: string;
     aid: string;
   }) => {
-    navigate(videoPlayPath({ ...target, epId: target.epId ?? null }));
+    // 分集 / 选集 / 合集都由这里进入，属于同一作品的换集；替换当前条目，
+    // 返回时回到进入播放页之前的视频层级，而不是上一集。
+    navigate(videoPlayPath({ ...target, epId: target.epId ?? null }), {
+      replace: shouldReplacePlaylistHistory("selection"),
+    });
   };
 
   const archive = archiveQuery.data;
