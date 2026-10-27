@@ -66,6 +66,16 @@ jobs:
         with:
           toolchain: 1.99.0
 
+      # rLive's Windows ASR runtime is built against CUDA 12.6 / cuDNN 9.
+      # Pin the toolkit instead of inheriting whichever CUDA version happens
+      # to be preinstalled on the runner, and verify the exact nvcc release
+      # before spending time on the native build. Neither cuDNN nor the CUDA
+      # runtime is a build input: sherpa-onnx links only its import library,
+      # and the application downloads its own provider archive on first use.
+      - name: Install and verify CUDA Toolkit 12.6.3
+        shell: pwsh
+        run: ./scripts/install-windows-cuda.ps1
+
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
@@ -79,6 +89,26 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $expectedCudaRoot = "D:\dev\CUDAToolkit"
+          if (-not $env:CUDA_PATH -or $env:CUDA_PATH.TrimEnd("\") -ne $expectedCudaRoot) {
+            throw "Expected CUDA_PATH=$expectedCudaRoot, got '$env:CUDA_PATH'."
+          }
+          if (-not $env:CUDA_PATH_V12_6 -or
+              $env:CUDA_PATH_V12_6.TrimEnd("\") -ne $expectedCudaRoot) {
+            throw "Expected CUDA_PATH_V12_6=$expectedCudaRoot, got '$env:CUDA_PATH_V12_6'."
+          }
+          $expectedNvcc = Join-Path $expectedCudaRoot "bin\nvcc.exe"
+          $nvccCommand = Get-Command nvcc -ErrorAction SilentlyContinue
+          if (-not $nvccCommand -or
+              [IO.Path]::GetFullPath($nvccCommand.Source) -ine
+              [IO.Path]::GetFullPath($expectedNvcc)) {
+            throw "nvcc does not resolve to $expectedNvcc."
+          }
+          $nvccVersion = (& nvcc -V | Out-String)
+          if ($LASTEXITCODE -ne 0 -or
+              $nvccVersion -notmatch "release 12\.6, V12\.6\.85") {
+            throw "Expected CUDA Toolkit 12.6.3 (nvcc V12.6.85):`n$nvccVersion"
+          }
           & ./scripts/prepare-windows-ffmpeg.ps1 `
             -ProjectRoot $PWD `
             -StageDestination "$PWD/src-tauri/target/release"

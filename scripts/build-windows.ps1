@@ -7,7 +7,7 @@
 # - bun 和/或 Node.js
 # - 与 MSVC 兼容的 LLVM/Clang + libclang（自动探测，或设置 LIBCLANG_PATH）
 # - 首次构建需要网络（下载已固定版本的共享 FFmpeg SDK）
-# - NVIDIA CUDA 11.x + x86-64 cuDNN 8.x 运行时，以及兼容的 NVIDIA 驱动
+# - NVIDIA CUDA 12.6 + x86-64 cuDNN 9.x 运行时，以及兼容的 NVIDIA 驱动
 #
 # 用法（需要 PowerShell 7，脚本会拒绝在 Windows PowerShell 5.1 上运行）：
 # pwsh -File .\scripts\build-windows.ps1

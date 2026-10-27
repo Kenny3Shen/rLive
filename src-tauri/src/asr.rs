@@ -44,31 +44,38 @@ const HOTWORDS_FILE: &str = "hotwords.txt";
 const HOTWORDS_SCORE: f32 = 2.0;
 
 #[cfg(windows)]
-const WINDOWS_RUNTIME_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-x64-cuda.tar.bz2";
+const WINDOWS_RUNTIME_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2";
 #[cfg(windows)]
-const WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES: u64 = 221_905_418;
+const WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES: u64 = 310_807_279;
 #[cfg(windows)]
 const WINDOWS_RUNTIME_ARCHIVE_SHA256: &str =
-    "9cc16169fb073ab0acd304ae144ccad21af03e8360921a12285105599f0f692a";
+    "11b56076060c109e16d85eba3acfb03f6d0c4a738ecd2a99dd45eb689b2051a4";
 #[cfg(windows)]
-const WINDOWS_RUNTIME_ARCHIVE_ROOT: &str = "sherpa-onnx-v1.13.4-win-x64-cuda";
+const WINDOWS_RUNTIME_ARCHIVE_ROOT: &str = "sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-win-x64-cuda";
 #[cfg(windows)]
 const WINDOWS_RUNTIME_DIR_NAME: &str = "asr-runtime";
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const WINDOWS_RUNTIME_DLLS: &[&str] = &[
     "onnxruntime.dll",
     "onnxruntime_providers_cuda.dll",
     "onnxruntime_providers_shared.dll",
     "sherpa-onnx-c-api.dll",
 ];
+#[cfg(any(windows, test))]
+const WINDOWS_RUNTIME_VERSION_FILE: &str = ".rlive-runtime-version";
+#[cfg(any(windows, test))]
+const WINDOWS_RUNTIME_VERSION: &str = "sherpa-onnx-1.13.4-cuda-12.x-cudnn-9.x";
 
 const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
 #[cfg(any(windows, test))]
 const ASR_PROVIDER_CUDA: &str = "cuda";
-// Windows 版 v1.13.4 CUDA 压缩包支持 Pascal（sm_61）及更新的 NVIDIA 架构。
+// Windows 版 v1.13.4 CUDA 12 压缩包内的 ONNX Runtime CUDA provider
+// 只接受下列架构。CUDA 12.6.3 的 nvcc 本身可以编译 sm_61，但官方预编译
+// provider 没有 Pascal 内核，不能据此放开 GTX 10 系列。
 #[cfg(windows)]
-const CUDA_MIN_COMPUTE_CAPABILITY: (i32, i32) = (6, 1);
+const CUDA_SUPPORTED_COMPUTE_CAPABILITIES: &[(i32, i32)] =
+    &[(7, 0), (7, 5), (8, 0), (8, 6), (8, 9), (9, 0)];
 
 const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
 const DECODER_FILE: &str = "decoder-epoch-99-avg-1.onnx";
@@ -1517,13 +1524,19 @@ impl AsrManager {
         let _ = remove_file_if_present(&archive).await;
 
         let extracted_lib = staging.join(WINDOWS_RUNTIME_ARCHIVE_ROOT).join("lib");
-        if !windows_runtime_is_complete(&extracted_lib) {
+        if !windows_runtime_files_present(&extracted_lib) {
             let _ = remove_dir_if_present(&staging).await;
             return Err(AppError::new(
                 "asr_runtime_extract",
                 "字幕运行库解压结果不完整",
             ));
         }
+        tokio::fs::write(
+            extracted_lib.join(WINDOWS_RUNTIME_VERSION_FILE),
+            WINDOWS_RUNTIME_VERSION,
+        )
+        .await
+        .map_err(|_| AppError::new("asr_runtime_write", "无法写入字幕运行库版本标记"))?;
         tokio::fs::rename(&extracted_lib, &self.inner.runtime_dir)
             .await
             .map_err(|_| AppError::new("asr_runtime_write", "字幕运行库替换失败"))?;
@@ -1873,7 +1886,7 @@ fn cuda_provider_fallback_message() -> String {
         && !cuda_compute_capability_supported(major, minor)
     {
         return format!(
-            "当前 NVIDIA GPU Compute Capability {major}.{minor}，官方 CUDA 运行库要求 6.1 及以上，已回退 CPU"
+            "当前 NVIDIA GPU Compute Capability {major}.{minor}，官方 CUDA 12 运行库仅支持 7.0 / 7.5 / 8.0 / 8.6 / 8.9 / 9.0，已回退 CPU"
         );
     }
     "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
@@ -1881,7 +1894,7 @@ fn cuda_provider_fallback_message() -> String {
 
 #[cfg(windows)]
 fn cuda_compute_capability_supported(major: i32, minor: i32) -> bool {
-    (major, minor) >= CUDA_MIN_COMPUTE_CAPABILITY
+    CUDA_SUPPORTED_COMPUTE_CAPABILITIES.contains(&(major, minor))
 }
 
 #[cfg(windows)]
@@ -1935,10 +1948,9 @@ fn cuda_runtime_available() -> bool {
     // 下载并加载它。
     let runtime_dir = crate::app_paths::application_data_root()
         .map(|directory| directory.join(WINDOWS_RUNTIME_DIR_NAME));
-    let provider_is_staged = runtime_dir.as_ref().is_some_and(|directory| {
-        directory.join("onnxruntime_providers_cuda.dll").is_file()
-            && directory.join("onnxruntime_providers_shared.dll").is_file()
-    });
+    let provider_is_staged = runtime_dir
+        .as_ref()
+        .is_some_and(|directory| windows_runtime_is_complete(directory));
     if !provider_is_staged {
         return false;
     }
@@ -1964,11 +1976,11 @@ fn cuda_runtime_available() -> bool {
     // 这里校验已暂存的 provider 文件，以及可独立加载的驱动/运行时依赖。
     [
         "nvcuda.dll",
-        "cublasLt64_11.dll",
-        "cublas64_11.dll",
-        "cufft64_10.dll",
-        "cudart64_110.dll",
-        "cudnn64_8.dll",
+        "cublasLt64_12.dll",
+        "cublas64_12.dll",
+        "cufft64_11.dll",
+        "cudart64_12.dll",
+        "cudnn64_9.dll",
         "onnxruntime_providers_shared.dll",
     ]
     .into_iter()
@@ -1988,11 +2000,18 @@ fn extract_tar_bz2(archive: &Path, destination: &Path) -> AppResult<()> {
         .map_err(|_| AppError::new("asr_model_extract", "模型解压失败"))
 }
 
-#[cfg(windows)]
-fn windows_runtime_is_complete(directory: &Path) -> bool {
+#[cfg(any(windows, test))]
+fn windows_runtime_files_present(directory: &Path) -> bool {
     WINDOWS_RUNTIME_DLLS
         .iter()
         .all(|name| file_len(&directory.join(name)) > Some(0))
+}
+
+#[cfg(any(windows, test))]
+fn windows_runtime_is_complete(directory: &Path) -> bool {
+    windows_runtime_files_present(directory)
+        && std::fs::read_to_string(directory.join(WINDOWS_RUNTIME_VERSION_FILE))
+            .is_ok_and(|version| version == WINDOWS_RUNTIME_VERSION)
 }
 
 #[cfg(windows)]
@@ -2095,7 +2114,40 @@ mod tests {
         configured_model_size, decode_base64_pcm, effective_asr_provider, normalize_asr_provider,
         normalize_hotwords, samples_to_millis,
     };
+    #[cfg(any(windows, test))]
+    use super::{
+        WINDOWS_RUNTIME_VERSION, WINDOWS_RUNTIME_VERSION_FILE, windows_runtime_is_complete,
+    };
     use base64::Engine;
+
+    #[cfg(any(windows, test))]
+    #[test]
+    fn rejects_a_windows_runtime_without_the_current_version_marker() {
+        let directory =
+            std::env::temp_dir().join(format!("rlive-asr-runtime-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        for name in super::WINDOWS_RUNTIME_DLLS {
+            std::fs::write(directory.join(name), b"test").unwrap();
+        }
+        assert!(!windows_runtime_is_complete(&directory));
+
+        std::fs::write(
+            directory.join(WINDOWS_RUNTIME_VERSION_FILE),
+            WINDOWS_RUNTIME_VERSION,
+        )
+        .unwrap();
+        assert!(windows_runtime_is_complete(&directory));
+
+        std::fs::write(
+            directory.join(WINDOWS_RUNTIME_VERSION_FILE),
+            "sherpa-onnx-1.13.4-win-x64-cuda",
+        )
+        .unwrap();
+        assert!(!windows_runtime_is_complete(&directory));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 
     #[test]
     fn decodes_little_endian_pcm() {
@@ -2144,12 +2196,17 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn rejects_cuda_devices_below_the_prebuilt_runtime_architecture() {
+    fn accepts_only_architectures_embedded_in_the_prebuilt_cuda_runtime() {
         assert!(!cuda_compute_capability_supported(6, 0));
-        assert!(cuda_compute_capability_supported(6, 1));
+        assert!(!cuda_compute_capability_supported(6, 1));
         assert!(!cuda_compute_capability_supported(5, 2));
+        assert!(cuda_compute_capability_supported(7, 0));
         assert!(cuda_compute_capability_supported(7, 5));
+        assert!(cuda_compute_capability_supported(8, 0));
         assert!(cuda_compute_capability_supported(8, 6));
+        assert!(cuda_compute_capability_supported(8, 9));
+        assert!(cuda_compute_capability_supported(9, 0));
+        assert!(!cuda_compute_capability_supported(10, 0));
     }
 
     #[test]

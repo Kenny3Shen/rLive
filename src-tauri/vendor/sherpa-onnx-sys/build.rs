@@ -255,9 +255,7 @@ fn archive_name(
         }
         (LinkMode::Shared, "windows", "x86_64") => {
             if gpu_enabled(target_os, target_arch) {
-                format!(
-                    "sherpa-onnx-v{version}-win-x64-cuda.tar.bz2"
-                )
+                format!("sherpa-onnx-v{version}-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2")
             } else {
                 format!("sherpa-onnx-v{version}-win-x64-shared-MT-Release-lib.tar.bz2")
             }
