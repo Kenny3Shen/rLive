@@ -2253,6 +2253,8 @@ export function SettingsPage() {
     try {
       const r = await invokeCmd<{
         follows: number;
+        video_follows?: number;
+        video_follow_groups?: number;
         iptv_favorites?: number;
         iptv_favorite_groups?: number;
         tags: number;
@@ -2264,7 +2266,7 @@ export function SettingsPage() {
       // 当前屏幕上的页面，使外壳无法展示旧平台或过期的本地数据。
       await queryClient.invalidateQueries({ refetchType: "active" });
       setProfileStatus(
-        `已导入：${r.follows} 个主播关注、${r.iptv_favorites ?? 0} 个 IPTV 关注、${r.iptv_favorite_groups ?? 0} 个 IPTV 分组、${r.tags} 个标签、${r.history} 条历史记录。`,
+        `已导入：${r.follows} 个主播关注、${r.video_follows ?? 0} 个视频关注、${r.video_follow_groups ?? 0} 个视频关注分组、${r.iptv_favorites ?? 0} 个 IPTV 关注、${r.iptv_favorite_groups ?? 0} 个 IPTV 分组、${r.tags} 个标签、${r.history} 条历史记录。`,
       );
     } catch (cause) {
       setProfileError(`导入失败：${errorText(cause)}`);

@@ -5,6 +5,7 @@ pub mod history;
 pub mod iptv_favorite;
 pub mod recording_watch;
 pub mod schema;
+pub mod video_follow;
 pub mod video_history;
 
 pub use schema::Db;

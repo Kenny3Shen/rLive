@@ -13,7 +13,7 @@ pub const VIDEO_HISTORY_RETENTION_LIMIT: i64 = 500;
 /// 上限主要防的是用户在应用外删掉录像目录后留下的孤行——没有可依赖的
 /// 扫描联动去清它们，只能靠容量兜底让旧进度最终被汰汰。
 pub const RECORDING_WATCH_PROGRESS_RETENTION_LIMIT: i64 = 1_000;
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DB_CACHE_SIZE_KIB: i64 = 8 * 1_024;
@@ -150,6 +150,28 @@ CREATE INDEX IF NOT EXISTS idx_recording_watch_progress_recent
   ON recording_watch_progress (watched_at DESC, id ASC);
 "#;
 
+/// 视频关注与直播关注分离：UP 主以 B 站 UID 标识，不参与开播状态刷新。
+/// 新库初始化与 v6→v7 迁移共用同一份 DDL。
+const VIDEO_FOLLOW_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS video_follow_groups (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS video_follows (
+  site_id TEXT NOT NULL,
+  mid TEXT NOT NULL,
+  name TEXT NOT NULL,
+  face TEXT NOT NULL DEFAULT '',
+  group_id TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (site_id, mid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_follows_recent
+  ON video_follows (updated_at DESC, mid ASC);
+"#;
+
 /// APP 登录凭据与 Web Cookie、可导出设置分离；只允许一个本机账号。
 const BILIBILI_APP_AUTH_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS bilibili_app_auth (
@@ -237,7 +259,7 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         return Ok(());
     }
 
-    // v3→v6 均为增量建表，保留原有 Cookie、设置及观看历史。
+    // v3→v7 均为增量建表，保留原有 Cookie、设置及观看历史。
     if (3..SCHEMA_VERSION).contains(&version) {
         let transaction = conn
             .unchecked_transaction()
@@ -247,6 +269,9 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         }
         if version < 5 {
             create_recording_watch_progress_objects(&transaction)?;
+        }
+        if version < 7 {
+            create_video_follow_objects(&transaction)?;
         }
         transaction
             .execute_batch(BILIBILI_APP_AUTH_SCHEMA)
@@ -284,6 +309,7 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
     create_video_history_objects(&transaction)?;
     create_recording_watch_progress_objects(&transaction)?;
+    create_video_follow_objects(&transaction)?;
     transaction
         .execute_batch(BILIBILI_APP_AUTH_SCHEMA)
         .map_err(map_db_err)?;
@@ -337,6 +363,11 @@ fn create_recording_watch_progress_objects(tx: &Connection) -> AppResult<()> {
     Ok(())
 }
 
+fn create_video_follow_objects(tx: &Connection) -> AppResult<()> {
+    tx.execute_batch(VIDEO_FOLLOW_SCHEMA)
+        .map_err(|error| AppError::new("db_schema_error", error.to_string()))
+}
+
 pub fn map_db_err(err: rusqlite::Error) -> AppError {
     AppError::new("db_error", err.to_string())
 }
@@ -352,7 +383,7 @@ mod tests {
 
     #[test]
     fn upgrades_supported_versions_without_losing_existing_data() {
-        for old_version in [0, 3, 4, 5, SCHEMA_VERSION] {
+        for old_version in [0, 3, 4, 5, 6, SCHEMA_VERSION] {
             let conn = Connection::open_in_memory().unwrap();
             if old_version == SCHEMA_VERSION {
                 initialize_schema(&conn).unwrap();
@@ -363,6 +394,9 @@ mod tests {
                 }
                 if old_version >= 5 {
                     create_recording_watch_progress_objects(&conn).unwrap();
+                }
+                if old_version >= 6 {
+                    create_video_follow_objects(&conn).unwrap();
                 }
                 conn.pragma_update(None, "user_version", old_version)
                     .unwrap();
@@ -385,6 +419,15 @@ mod tests {
                  INSERT INTO bilibili_app_auth VALUES (1, 'a', 'r', '42', 1);",
             )
             .unwrap();
+            if old_version >= 6 {
+                conn.execute_batch(
+                    "INSERT INTO video_follow_groups VALUES ('tech', '科技');
+                     INSERT INTO video_follows
+                       (site_id, mid, name, face, group_id, updated_at)
+                     VALUES ('bilibili', '42', 'UP', '', 'tech', 1);",
+                )
+                .unwrap();
+            }
             assert!(
                 conn.execute(
                     "INSERT INTO bilibili_app_auth VALUES (2, 'b', 'r', '43', 1)",
@@ -410,6 +453,16 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(progress, 30.5);
+            if old_version >= 6 {
+                let video_follow: (String, Option<String>) = conn
+                    .query_row(
+                        "SELECT name, group_id FROM video_follows WHERE mid = '42'",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!(video_follow, ("UP".into(), Some("tech".into())));
+            }
         }
     }
 

@@ -5,6 +5,7 @@ import {
   CalendarDays,
   ChevronDown,
   Eye,
+  Heart,
   MessageCircle,
   Play,
   Users,
@@ -20,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { LinkText } from "@/shared/components/LinkText";
 import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
@@ -58,6 +60,13 @@ import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
 import { videoSelectionDefaultOpen } from "./videoSelectionDefaults";
 import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { UploaderDrawer } from "./UploaderDrawer";
+import { VideoFollowGroupPickerDialog } from "./VideoFollowGroupPickerDialog";
+import {
+  useRemoveVideoFollowMutation,
+  useUpsertVideoFollowMutation,
+  useVideoFollows,
+  type VideoFollow,
+} from "./videoFollows";
 
 /**
  * 侧栏「相关视频」页签里所有卡片共用的一列：纵向间距与左右内缩只在这里定义一次。
@@ -788,6 +797,10 @@ export function VideoSidebar({
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
+  const [videoFollowPickerOpen, setVideoFollowPickerOpen] = useState(false);
+  const [videoFollowRemoveOpen, setVideoFollowRemoveOpen] = useState(false);
+  /** 对话框绑定打开时的 UP 快照：请求期间换稿或换 P 不应把确认落到另一位 UP。 */
+  const [videoFollowTarget, setVideoFollowTarget] = useState<VideoFollow | null>(null);
   // 简介默认收起（卡片不先露出简介）；换稿件时由 UP 信息卡 section 上按 bvid 生成的 key 重挂载复位。
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
@@ -825,6 +838,18 @@ export function VideoSidebar({
   };
 
   const archive = archiveQuery.data;
+  const videoFollowsQuery = useVideoFollows(Boolean(archive?.author_mid));
+  const currentVideoFollow =
+    archive?.author_mid && videoFollowsQuery.data
+      ? (videoFollowsQuery.data.find((follow) => follow.mid === archive.author_mid) ?? null)
+      : null;
+  const upsertVideoFollow = useUpsertVideoFollowMutation();
+  const removeVideoFollow = useRemoveVideoFollowMutation();
+  const videoFollowBusy =
+    videoFollowsQuery.isLoading ||
+    videoFollowsQuery.isError ||
+    upsertVideoFollow.isPending ||
+    removeVideoFollow.isPending;
   // 简介与 Tags 至少有一项时标题才是可展开的开关；两者都没有时标题只是标题。
   const hasArchiveDetail = Boolean(archive?.desc || archive?.tags.length);
   const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
@@ -877,6 +902,26 @@ export function VideoSidebar({
       setUploaderDrawerOpen(true);
     }
   };
+
+  const handleVideoFollowClick = () => {
+    if (!archive?.author_mid || videoFollowBusy) return;
+    if (currentVideoFollow) {
+      setVideoFollowTarget(currentVideoFollow);
+      setVideoFollowRemoveOpen(true);
+    } else {
+      setVideoFollowTarget({
+        site_id: "bilibili",
+        mid: archive.author_mid,
+        name: archive.author,
+        face: archive.author_face,
+        group_id: null,
+        updated_at: Date.now(),
+      });
+      setVideoFollowPickerOpen(true);
+    }
+  };
+
+  const videoFollowStatusError = videoFollowsQuery.isError;
 
   /** 页签内容。所有页签常驻条带，因此按 value 取而不是只画当前一个。 */
   const sidebarPanel = (value: SidebarTab): ReactNode => {
@@ -980,9 +1025,9 @@ export function VideoSidebar({
             aria-label={`UP 主信息：${archive.author}`}
           >
             <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
-              {/* 右侧 pr-16 是预留位（关注/更多之类的操作），只留在头像+名称行， */}
+              {/* 右侧 pr-12 是关注按钮位，只留在头像+名称行， */}
               {/* 不影响下方标题行与统计行的可用宽度。 */}
-              <div className="flex min-w-0 items-start gap-2.5 pr-16">
+              <div className="relative flex min-w-0 items-start gap-2.5 pr-12">
                 <button
                   type="button"
                   onClick={handleUploaderClick}
@@ -1031,6 +1076,45 @@ export function VideoSidebar({
                     </span>
                   </div>
                 </div>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      videoFollowStatusError ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="absolute top-1/2 right-0 -translate-y-1/2 text-muted-foreground"
+                          onClick={() => void videoFollowsQuery.refetch()}
+                          aria-label="关注状态加载失败，重试"
+                        >
+                          <Heart />
+                        </Button>
+                      ) : (
+                        <Button
+                          variant={currentVideoFollow ? "secondary" : "ghost"}
+                          size="icon-sm"
+                          className={cn(
+                            "absolute top-1/2 right-0 -translate-y-1/2",
+                            currentVideoFollow && "text-primary hover:text-primary",
+                          )}
+                          disabled={videoFollowBusy}
+                          onClick={handleVideoFollowClick}
+                          aria-label={currentVideoFollow ? "取消关注 UP 主" : "关注 UP 主"}
+                          aria-pressed={Boolean(currentVideoFollow)}
+                        >
+                          <Heart className={cn(currentVideoFollow && "fill-current")} />
+                        </Button>
+                      )
+                    }
+                  />
+                  <TooltipContent>
+                    {videoFollowStatusError
+                      ? "关注状态加载失败，点击重试"
+                      : currentVideoFollow
+                        ? "取消关注"
+                        : "关注 UP 主"}
+                  </TooltipContent>
+                </Tooltip>
               </div>
               {/* 稿件标题一行，整行即简介/Tags 的展开-收起开关。
 
@@ -1276,6 +1360,54 @@ export function VideoSidebar({
           uploaderName={archive.author}
           currentBvid={bvid ?? ""}
         />
+      )}
+      {videoFollowTarget && (
+        <>
+          <VideoFollowGroupPickerDialog
+            open={videoFollowPickerOpen}
+            uploaderName={videoFollowTarget.name}
+            pending={upsertVideoFollow.isPending}
+            onOpenChange={(open) => {
+              if (upsertVideoFollow.isPending) return;
+              setVideoFollowPickerOpen(open);
+              if (!open) setVideoFollowTarget(null);
+            }}
+            onConfirm={async (groupId) => {
+              await upsertVideoFollow.mutateAsync({
+                mid: videoFollowTarget.mid,
+                name: videoFollowTarget.name,
+                face: videoFollowTarget.face,
+                groupId,
+              });
+              setVideoFollowPickerOpen(false);
+              setVideoFollowTarget(null);
+            }}
+          />
+          <ConfirmDialog
+            open={videoFollowRemoveOpen}
+            onOpenChange={(nextOpen) => {
+              if (removeVideoFollow.isPending) return;
+              setVideoFollowRemoveOpen(nextOpen);
+              if (!nextOpen) setVideoFollowTarget(null);
+            }}
+            icon={<Heart aria-hidden />}
+            title="取消关注 UP 主"
+            description={
+              <>确定不再关注 {videoFollowTarget.name} 吗？取消后将从关注页的「视频关注」中移除。</>
+            }
+            busy={removeVideoFollow.isPending}
+            actionIcon={<Heart data-icon="inline-start" aria-hidden />}
+            confirmText="取消关注"
+            onConfirm={() => {
+              removeVideoFollow.mutate(videoFollowTarget, {
+                onSuccess: () => {
+                  setVideoFollowRemoveOpen(false);
+                  setVideoFollowTarget(null);
+                },
+              });
+            }}
+          />
+        </>
       )}
     </Tabs>
   );

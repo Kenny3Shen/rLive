@@ -2,13 +2,14 @@ import { isSiteEnabled } from "@/shared/siteId";
 import type { SiteId } from "@/shared/types/live";
 
 export type FollowPlatformFilter = SiteId | "all";
-export type FollowView = "live" | "iptv";
+export type FollowView = "live" | "video" | "iptv";
 
 export const FOLLOW_PLATFORM_PARAM = "platform";
 export const FOLLOW_VIEW_PARAM = "view";
 
 export function followViewFromSearch(value: string | null): FollowView {
-  return value === "iptv" ? "iptv" : "live";
+  if (value === "video" || value === "iptv") return value;
+  return "live";
 }
 
 export function withFollowView(searchParams: URLSearchParams, view: FollowView): URLSearchParams {

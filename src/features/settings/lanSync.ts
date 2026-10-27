@@ -11,6 +11,8 @@ export type LanSyncSessionInfo = {
 
 export type ProfileImportResult = {
   follows: number;
+  video_follows?: number;
+  video_follow_groups?: number;
   iptv_favorites?: number;
   iptv_favorite_groups?: number;
   tags: number;
@@ -36,5 +38,5 @@ export function lanSyncCountdown(expiresAt: number, now: number): string {
 }
 
 export function profileImportSummary(result: ProfileImportResult): string {
-  return `已合并 ${result.follows} 个主播关注、${result.iptv_favorites ?? 0} 个 IPTV 关注、${result.iptv_favorite_groups ?? 0} 个 IPTV 分组、${result.tags} 个标签和 ${result.history} 条历史记录。`;
+  return `已合并 ${result.follows} 个主播关注、${result.video_follows ?? 0} 个视频关注、${result.video_follow_groups ?? 0} 个视频关注分组、${result.iptv_favorites ?? 0} 个 IPTV 关注、${result.iptv_favorite_groups ?? 0} 个 IPTV 分组、${result.tags} 个标签和 ${result.history} 条历史记录。`;
 }

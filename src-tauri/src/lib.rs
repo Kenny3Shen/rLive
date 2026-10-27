@@ -108,6 +108,10 @@ use commands::video::{
     video_preload_next, video_search, video_search_zone_list, video_stop_play,
     video_uploader_videos, video_zone_list,
 };
+use commands::video_follow::{
+    video_follow_group_list, video_follow_group_remove, video_follow_group_upsert,
+    video_follow_list, video_follow_remove, video_follow_set_group, video_follow_upsert,
+};
 use commands::video_history::{
     video_history_add, video_history_clear, video_history_find, video_history_list,
     video_history_remove,
@@ -458,6 +462,13 @@ pub fn run() {
             video_history_add,
             video_history_remove,
             video_history_clear,
+            video_follow_list,
+            video_follow_upsert,
+            video_follow_remove,
+            video_follow_set_group,
+            video_follow_group_list,
+            video_follow_group_upsert,
+            video_follow_group_remove,
             image_proxy_url,
             cache_usage,
             cache_clear,

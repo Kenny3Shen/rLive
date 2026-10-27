@@ -6,6 +6,7 @@ use crate::db::follow::{self, FollowRecord, TagRecord};
 use crate::db::history::{self, HistoryRecord};
 use crate::db::iptv_favorite::{self, IptvFavoriteGroupRecord, IptvFavoriteRecord};
 use crate::db::schema::map_db_err;
+use crate::db::video_follow::{self, VideoFollowGroupRecord, VideoFollowRecord};
 use crate::db::video_history::{self, VideoHistoryRecord};
 use crate::error::{AppError, AppResult};
 use crate::models::settings::AppSettings;
@@ -53,6 +54,12 @@ pub struct ProfilePackage {
     /// 视频观看历史。旧版本导出的配置没有这一项，按空表导入。
     #[serde(default)]
     pub video_history: Vec<VideoHistoryRecord>,
+    /// UP 主视频关注。旧版本导出的配置没有这一项，按空表导入。
+    #[serde(default)]
+    pub video_follows: Vec<VideoFollowRecord>,
+    /// 视频关注独立分组。旧版本导出的配置没有这一项，按空表导入。
+    #[serde(default)]
+    pub video_follow_groups: Vec<VideoFollowGroupRecord>,
     pub danmaku_shield_words: Vec<String>,
     /// 顶层副本；`settings.danmaku_blocked_users` 与它合并导入。
     #[serde(default)]
@@ -72,6 +79,8 @@ impl ProfilePackage {
             tags: vec![],
             history: vec![],
             video_history: vec![],
+            video_follows: vec![],
+            video_follow_groups: vec![],
             danmaku_shield_words: vec![],
             danmaku_blocked_users: vec![],
         }
@@ -145,6 +154,8 @@ pub fn export_package(conn: &Connection) -> AppResult<ProfilePackage> {
         tags: follow::list_tags(conn)?,
         history: history::list(conn)?,
         video_history: video_history::list(conn)?,
+        video_follows: video_follow::list(conn)?,
+        video_follow_groups: video_follow::list_groups(conn)?,
         danmaku_shield_words: shield,
         danmaku_blocked_users: blocked,
     })
@@ -171,6 +182,8 @@ pub fn encode_package(package: &ProfilePackage) -> AppResult<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileImportResult {
     pub follows: usize,
+    pub video_follows: usize,
+    pub video_follow_groups: usize,
     pub iptv_favorites: usize,
     pub iptv_favorite_groups: usize,
     pub tags: usize,
@@ -284,6 +297,40 @@ pub fn merge_into_db(
     for f in &package.follows {
         follow::upsert(&transaction, f.clone())?;
     }
+    // 视频关注分组必须先于 UP 主写入，后续引用才能在同一事务内解析。
+    let mut video_groups = std::collections::BTreeMap::new();
+    let mut group_names = std::collections::HashMap::new();
+    for group in &package.video_follow_groups {
+        let group = video_follow::normalize_group(group.clone())?;
+        if let Some(existing_id) = group_names.insert(group.name.clone(), group.id.clone())
+            && existing_id != group.id
+        {
+            return Err(AppError::new(
+                "profile_schema_invalid",
+                "视频关注分组名称重复",
+            ));
+        }
+        video_groups.insert(group.id.clone(), group);
+    }
+    for group in video_groups.values() {
+        video_follow::upsert_group(&transaction, group.clone())?;
+    }
+
+    let mut video_follows = std::collections::BTreeMap::new();
+    for follow in &package.video_follows {
+        let mut follow = video_follow::normalize_record(follow.clone())?;
+        if let Some(group_id) = follow.group_id.as_deref()
+            && !video_groups.contains_key(group_id)
+            && !video_follow::group_exists(&transaction, group_id)?
+        {
+            // 未知分组不产生孤儿引用；UP 主仍导入到未分组。
+            follow.group_id = None;
+        }
+        video_follows.insert((follow.site_id.clone(), follow.mid.clone()), follow);
+    }
+    for follow in video_follows.values() {
+        video_follow::upsert(&transaction, follow.clone())?;
+    }
     for group in &package.iptv_favorite_groups {
         iptv_favorite::upsert_group(&transaction, group.clone())?;
     }
@@ -373,6 +420,8 @@ pub fn merge_into_db(
 
     Ok(ProfileImportResult {
         follows: package.follows.len(),
+        video_follows: video_follows.len(),
+        video_follow_groups: video_groups.len(),
         iptv_favorites: imported_iptv_favorites,
         iptv_favorite_groups: package.iptv_favorite_groups.len(),
         tags: package.tags.len(),
@@ -400,6 +449,17 @@ mod tests {
             protocol: Some(PlaybackProtocol::Hls),
             headers: Default::default(),
             updated_at: 1,
+        }
+    }
+
+    fn video_follow(mid: &str, group_id: Option<&str>) -> VideoFollowRecord {
+        VideoFollowRecord {
+            site_id: "bilibili".into(),
+            mid: mid.into(),
+            name: "测试 UP".into(),
+            face: Some("https://example.test/face.jpg".into()),
+            group_id: group_id.map(str::to_owned),
+            updated_at: 10,
         }
     }
 
@@ -671,6 +731,90 @@ mod tests {
                 .as_deref(),
             Some("sports")
         );
+    }
+
+    #[test]
+    fn legacy_profile_defaults_video_follows_to_empty_and_export_includes_them() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value.as_object_mut().unwrap().remove("video_follows");
+        value.as_object_mut().unwrap().remove("video_follow_groups");
+        let package = decode_package(&serde_json::to_string(&value).unwrap()).unwrap();
+        assert!(package.video_follows.is_empty());
+        assert!(package.video_follow_groups.is_empty());
+
+        let conn = open_in_memory().unwrap();
+        video_follow::upsert_group(
+            &conn,
+            VideoFollowGroupRecord {
+                id: "tech".into(),
+                name: "科技".into(),
+            },
+        )
+        .unwrap();
+        video_follow::upsert(&conn, video_follow("42", Some("tech"))).unwrap();
+        let exported = export_package(&conn).unwrap();
+        assert_eq!(exported.video_follows.len(), 1);
+        assert_eq!(exported.video_follow_groups.len(), 1);
+    }
+
+    #[test]
+    fn merge_imports_video_groups_before_follows_and_deduplicates_normalized_mids() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.video_follow_groups = vec![VideoFollowGroupRecord {
+            id: "tech".into(),
+            name: "科技".into(),
+        }];
+        let mut first = video_follow("00042", Some("tech"));
+        first.name = "旧快照".into();
+        let mut second = video_follow("42", Some("tech"));
+        second.name = "新快照".into();
+        second.updated_at = 20;
+        package.video_follows = vec![first, second];
+
+        let result = merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(result.video_follow_groups, 1);
+        assert_eq!(result.video_follows, 1);
+        let follows = video_follow::list(&conn).unwrap();
+        assert_eq!(follows.len(), 1);
+        assert_eq!(follows[0].mid, "42");
+        assert_eq!(follows[0].name, "新快照");
+        assert_eq!(follows[0].group_id.as_deref(), Some("tech"));
+    }
+
+    #[test]
+    fn merge_moves_video_follows_with_unknown_groups_to_ungrouped() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.video_follows = vec![video_follow("42", Some("missing"))];
+
+        merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(video_follow::list(&conn).unwrap()[0].group_id, None);
+    }
+
+    #[test]
+    fn merge_rolls_back_video_follows_when_a_later_group_name_conflicts() {
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.video_follow_groups = vec![
+            VideoFollowGroupRecord {
+                id: "first".into(),
+                name: "同名分组".into(),
+            },
+            VideoFollowGroupRecord {
+                id: "second".into(),
+                name: "同名分组".into(),
+            },
+        ];
+        package.video_follows = vec![video_follow("42", Some("first"))];
+
+        let error = merge_into_db(&mut conn, &package).unwrap_err();
+
+        assert_eq!(error.code, "profile_schema_invalid");
+        assert!(video_follow::list(&conn).unwrap().is_empty());
+        assert!(video_follow::list_groups(&conn).unwrap().is_empty());
     }
 
     #[test]

@@ -25,4 +25,5 @@ pub mod settings;
 pub mod site;
 pub mod stream_proxy;
 pub mod video;
+pub mod video_follow;
 pub mod video_history;

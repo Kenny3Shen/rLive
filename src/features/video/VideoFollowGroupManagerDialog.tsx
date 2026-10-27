@@ -1,0 +1,303 @@
+import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Check, Folder, FolderPlus, Pencil, Trash2, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
+import { notify } from "@/components/ui/toast";
+import { invokeCmd } from "@/shared/api/tauri";
+import { errorText } from "@/shared/components/errorPresentation";
+import {
+  sortVideoFollowGroups,
+  VIDEO_FOLLOW_GROUPS_QUERY_KEY,
+  VIDEO_FOLLOWS_QUERY_KEY,
+  type VideoFollow,
+  type VideoFollowGroup,
+} from "./videoFollows";
+
+type VideoFollowGroupManagerDialogProps = {
+  open: boolean;
+  groups: readonly VideoFollowGroup[];
+  counts: ReadonlyMap<string, number>;
+  onOpenChange: (open: boolean) => void;
+};
+
+export function VideoFollowGroupManagerDialog({
+  open,
+  groups,
+  counts,
+  onOpenChange,
+}: VideoFollowGroupManagerDialogProps) {
+  const queryClient = useQueryClient();
+  const [newGroupName, setNewGroupName] = useState("");
+  const [editing, setEditing] = useState<VideoFollowGroup | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<VideoFollowGroup | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function updateGroupCache(group: VideoFollowGroup) {
+    queryClient.setQueryData<VideoFollowGroup[]>(VIDEO_FOLLOW_GROUPS_QUERY_KEY, (current = []) =>
+      sortVideoFollowGroups([...current.filter((item) => item.id !== group.id), group]),
+    );
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: ({ name, id }: { name: string; id?: string }) =>
+      invokeCmd<VideoFollowGroup>("video_follow_group_upsert", { name, id }),
+    onSuccess: (group, variables) => {
+      updateGroupCache(group);
+      setError(null);
+      if (variables.id) {
+        setEditing(null);
+        setEditingName("");
+        notify.success("视频关注分组已重命名");
+      } else {
+        setNewGroupName("");
+        notify.success("视频关注分组已创建");
+      }
+    },
+    onError: () => setError("保存失败，请检查名称是否重复。"),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (group: VideoFollowGroup) =>
+      invokeCmd("video_follow_group_remove", { id: group.id }),
+    onSuccess: async (_, group) => {
+      queryClient.setQueryData<VideoFollowGroup[]>(VIDEO_FOLLOW_GROUPS_QUERY_KEY, (current = []) =>
+        current.filter((item) => item.id !== group.id),
+      );
+      queryClient.setQueryData<VideoFollow[]>(VIDEO_FOLLOWS_QUERY_KEY, (current) =>
+        current?.map((follow) =>
+          follow.group_id === group.id ? { ...follow, group_id: null } : follow,
+        ),
+      );
+      await queryClient.invalidateQueries({ queryKey: VIDEO_FOLLOWS_QUERY_KEY });
+      setPendingDelete(null);
+      notify.success("视频关注分组已删除", "其中的 UP 主已移至未分组。");
+    },
+    onError: (error) => notify.error("删除视频关注分组失败", errorText(error)),
+  });
+
+  function createGroup() {
+    const name = newGroupName.trim();
+    if (!name) {
+      setError("请输入分组名称。");
+      return;
+    }
+    saveMutation.mutate({ name });
+  }
+
+  function renameGroup() {
+    const name = editingName.trim();
+    if (!editing || !name) {
+      setError("请输入分组名称。");
+      return;
+    }
+    saveMutation.mutate({ id: editing.id, name });
+  }
+
+  const busy = saveMutation.isPending || removeMutation.isPending;
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>管理视频关注分组</DialogTitle>
+            <DialogDescription>
+              分组独立于直播关注和 IPTV 频道，保存在当前设备并包含在配置同步中。
+            </DialogDescription>
+          </DialogHeader>
+
+          <FieldGroup>
+            <Field data-invalid={error ? true : undefined} data-disabled={busy || undefined}>
+              <FieldLabel htmlFor="video-follow-group-manager-new">新建分组</FieldLabel>
+              <InputGroup>
+                <InputGroupAddon>
+                  <FolderPlus aria-hidden />
+                </InputGroupAddon>
+                <InputGroupInput
+                  id="video-follow-group-manager-new"
+                  value={newGroupName}
+                  maxLength={32}
+                  disabled={busy}
+                  aria-invalid={error ? true : undefined}
+                  placeholder="分组名称"
+                  onChange={(event) => {
+                    setNewGroupName(event.target.value);
+                    setError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    createGroup();
+                  }}
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    disabled={busy || !newGroupName.trim()}
+                    aria-label="创建视频关注分组"
+                    onClick={createGroup}
+                  >
+                    {saveMutation.isPending && !saveMutation.variables?.id ? (
+                      <Spinner aria-hidden />
+                    ) : (
+                      <FolderPlus aria-hidden />
+                    )}
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+              {error && <FieldError className="text-xs">{error}</FieldError>}
+            </Field>
+          </FieldGroup>
+
+          <Separator />
+
+          <div className="flex max-h-72 flex-col overflow-y-auto">
+            {groups.length === 0 ? (
+              <Empty className="min-h-32 py-8">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Folder aria-hidden />
+                  </EmptyMedia>
+                  <EmptyTitle>还没有视频关注分组</EmptyTitle>
+                  <EmptyDescription>在上方输入名称即可创建第一个分组。</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              groups.map((group, index) => (
+                <div key={group.id}>
+                  <div className="flex min-h-12 items-center gap-2 py-2">
+                    <Folder className="shrink-0 text-muted-foreground" aria-hidden />
+                    {editing?.id === group.id ? (
+                      <InputGroup className="min-w-0 flex-1">
+                        <InputGroupInput
+                          value={editingName}
+                          maxLength={32}
+                          autoFocus
+                          aria-label="视频关注分组名称"
+                          disabled={busy}
+                          onChange={(event) => {
+                            setEditingName(event.target.value);
+                            setError(null);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              renameGroup();
+                            }
+                            if (event.key === "Escape") setEditing(null);
+                          }}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label="保存视频关注分组名称"
+                            disabled={busy || !editingName.trim()}
+                            onClick={renameGroup}
+                          >
+                            {saveMutation.isPending && saveMutation.variables?.id === group.id ? (
+                              <Spinner aria-hidden />
+                            ) : (
+                              <Check aria-hidden />
+                            )}
+                          </InputGroupButton>
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label="取消重命名"
+                            disabled={busy}
+                            onClick={() => setEditing(null)}
+                          >
+                            <X aria-hidden />
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      </InputGroup>
+                    ) : (
+                      <>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                          {group.name}
+                        </span>
+                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                          {counts.get(group.id) ?? 0}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`重命名${group.name}`}
+                          disabled={busy}
+                          onClick={() => {
+                            setEditing(group);
+                            setEditingName(group.name);
+                            setError(null);
+                          }}
+                        >
+                          <Pencil aria-hidden />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="hover:text-destructive"
+                          aria-label={`删除${group.name}`}
+                          disabled={busy}
+                          onClick={() => setPendingDelete(group)}
+                        >
+                          <Trash2 aria-hidden />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  {index < groups.length - 1 && <Separator />}
+                </div>
+              ))
+            )}
+          </div>
+
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" disabled={busy} />}>完成</DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={pendingDelete != null}
+        onOpenChange={(nextOpen) =>
+          !removeMutation.isPending && !nextOpen && setPendingDelete(null)
+        }
+        icon={<Trash2 aria-hidden />}
+        title="删除视频关注分组"
+        description={<>删除“{pendingDelete?.name}”后，其中的 UP 主会移至未分组。</>}
+        busy={removeMutation.isPending}
+        actionIcon={<Trash2 data-icon="inline-start" aria-hidden />}
+        confirmText="删除分组"
+        onConfirm={() => pendingDelete && removeMutation.mutate(pendingDelete)}
+      />
+    </>
+  );
+}
