@@ -138,6 +138,23 @@ export function playerVolumeForKeyStep(volume: number, muted: boolean, direction
   return Math.max(0, Math.min(100, Math.round(next)));
 }
 
+/** 恢复会话的终止错误优先于播放器本地错误；没有外部错误时才回退到播放器文案。 */
+export function roomPlayerDisplayError(
+  queryError: unknown,
+  externalLoadError: string | null | undefined,
+  playerLoadError: string | null | undefined,
+): unknown {
+  if (queryError != null) return queryError;
+  const message = externalLoadError || playerLoadError;
+  if (!message) return null;
+  return {
+    code: "play_error",
+    message,
+    site: null,
+    retryable: true,
+  };
+}
+
 function isRoomSideTab(value: string): value is RoomSideTab {
   return ROOM_SIDE_TABS.includes(value as RoomSideTab);
 }
@@ -489,16 +506,7 @@ function PlayerPaneContent({
   const togglePlayerFullscreen = player.toggleFullscreen;
   const pictureInPicture = useVideoJsPiP();
   useScreenWakeLock(player.running && !player.paused && !audioOnly);
-  const displayError =
-    error ??
-    (player.loadError
-      ? {
-          code: "play_error",
-          message: player.loadError,
-          site: null,
-          retryable: true,
-        }
-      : null);
+  const displayError = roomPlayerDisplayError(error, externalLoadError, player.loadError);
   const showHost = !loading && displayError == null && !!playUrl;
   const controlsAvailable = !loading && (player.ready || displayError != null);
   const transportDisabled = !showHost;

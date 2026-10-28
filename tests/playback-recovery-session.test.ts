@@ -522,4 +522,90 @@ describe("播放恢复会话的续期语义", () => {
     expect(snapshot.renewToken).toBe(0);
     session.dispose();
   });
+
+  test("解码失败耗完既有线路预算后才发布终止错误", async () => {
+    const clock = manualClock();
+    const session = sessionWithClock(() => [flvSource()], clock.clock);
+    await flush();
+    await flush();
+    const message = "PipelineStatus::PIPELINE_ERROR_DECODE: video decode error!";
+    const decodeFailure = {
+      kind: "error" as const,
+      protocol: "flv" as const,
+      message,
+      decodeError: true,
+    };
+
+    session.acceptTransportFact({ epoch: 1, generation: 1, ...decodeFailure });
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(session.getSnapshot().loadError).toBeNull();
+
+    session.acceptTransportFact({ epoch: 2, generation: 2, ...decodeFailure });
+    expect(await clock.advanceToNext()).toBe(true);
+    expect(session.getSnapshot().renewToken).toBe(2);
+    expect(session.getSnapshot().loadError).toBeNull();
+
+    session.acceptTransportFact({ epoch: 3, generation: 3, ...decodeFailure });
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(2);
+    expect(session.getSnapshot().loadError).toContain("PIPELINE_ERROR_DECODE");
+    session.dispose();
+  });
+
+  test("Twitch 解码失败仍先降低清晰度而不发布终止错误", async () => {
+    const qualities: LivePlayQuality[] = [
+      { quality: "1080p60", data: 10000 },
+      { quality: "720p60", data: 7200 },
+    ];
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => qualities,
+      fetchLines: async () => [
+        {
+          ...flvSource("https://cdn.example/live.m3u8?token=one"),
+          protocol: "hls",
+        },
+      ],
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const session = createPlaybackRecoverySession(
+      {
+        siteId: "twitch",
+        roomId: "1000",
+        detail: undefined,
+        qualityLevel: "high",
+        enabled: false,
+      },
+      { metadata },
+    );
+    session.updateConfig({
+      siteId: "twitch",
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" },
+      qualityLevel: "high",
+      enabled: true,
+    });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualityIndex).toBe(0);
+
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "error",
+      protocol: "hls",
+      message: "当前 Twitch 清晰度无法解码",
+      decodeError: true,
+    });
+    await flush();
+    await flush();
+
+    const snapshot = session.getSnapshot();
+    expect(snapshot.qualityIndex).toBe(1);
+    expect(snapshot.qualities[snapshot.qualityIndex]?.quality).toBe("720p60");
+    expect(snapshot.playUrl?.protocol).toBe("hls");
+    expect(snapshot.loadError).toBeNull();
+    session.dispose();
+  });
 });

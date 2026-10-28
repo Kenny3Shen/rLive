@@ -3,7 +3,6 @@ import type { DashAdapter, DashEngineConfig } from "@videojs/dash-video";
 import type Mpegts from "mpegts.js";
 import { playbackProtocol } from "@/lib/playUrl";
 import type { PlayUrl } from "@/shared/types/live";
-import { waitForContinuousBuffer } from "./liveStartupBuffer";
 
 /** Video.js 官方 HLS/DASH 适配器；FLV/裸 TS 使用 mpegts.js，其他容器用原生媒体。 */
 export type VideoJsPlaybackKind = "flv" | "hls" | "mpegts" | "native" | "dash";
@@ -128,8 +127,7 @@ type PlayerOptions = {
 };
 type SwitchSourceOptions = {
   autoPlay?: boolean;
-  /** 自动起播前等待连续可播缓冲；取消时拒绝，由调用方走既有恢复路径。 */
-  minBufferedAheadSeconds?: number;
+  /** 在异步等待媒体就绪后再次核对用户是否仍允许自动起播。 */
   canAutoPlay?: () => boolean;
 };
 type PlayerEvent = keyof HTMLMediaElementEventMap | "loading_complete";
@@ -356,12 +354,18 @@ class VideoJsPlayer {
           // `info.code` 是 Loader / MSE 的错误码（如 HTTP 状态或 -1），不是
           // `MediaError.code`。放到顶层会被当成 HTMLMediaError 或 dash.js 错误码
           // 误分类，因此只保留在引擎专用字段里。
-          this.reportError({
+          const failure = {
             type,
             detail,
             ...(typeof info?.code === "number" ? { engineCode: info.code } : {}),
             message: info?.msg || detail,
-          });
+          };
+          // 引擎先于 <video> 报出解码失败时也要留下首错事实，否则后续续期可能
+          // 在已经失效的同一 MediaSource 上软重连。
+          if (this.firstDecodeFailure === null && isVideoJsDecodeError(failure)) {
+            this.firstDecodeFailure = failure;
+          }
+          this.reportError(failure);
         } finally {
           this.mpegtsDispatching = false;
         }
@@ -571,6 +575,15 @@ class VideoJsPlayer {
     this.media.load();
   }
 
+  private sourceSwitchFailure(): unknown | null {
+    return this.media.error ?? this.firstDecodeFailure ?? this.mediaElementFailure;
+  }
+
+  /** 当前媒体是否仍可安全承载同协议的新传输。 */
+  canSwitchSource(): boolean {
+    return !this.destroyed && this.sourceSwitchFailure() === null;
+  }
+
   switchSource(
     url: string,
     kind: VideoJsPlaybackKind,
@@ -587,32 +600,22 @@ class VideoJsPlayer {
     // 已经把它清成 null，但解码器对同一媒体的决定没有改变。
     // HLS 的可恢复 `mediaError` 走 hls.js 自己的 `recoverMediaError()`，不经过
     // 这里；但元素确实已进入错误态时，续期也只能靠硬重建。
-    const failedMedia = this.media.error ?? this.firstDecodeFailure ?? this.mediaElementFailure;
+    const failedMedia = this.sourceSwitchFailure();
     if (failedMedia) return Promise.reject(failedMedia);
     this.pendingSwitch?.abort();
     this.endedAt = null;
     const controller = (this.pendingSwitch = new AbortController());
-    const bufferAbort = new AbortController();
     // 续期重连只在原本正在播放时才自动起播：用户暂停着的画面不该被一次后台
     // 重连拉起来。普通换源保持既有语义（沿用当前播放意图）。
     const resumePlayback = options.autoPlay ?? true;
     const shouldAutoPlay = resumePlayback && (this.playRequested || !this.media.paused);
-    const shouldPrimeStartupBuffer = shouldAutoPlay && (options.minBufferedAheadSeconds ?? 0) > 0;
     this.playRequested ||= resumePlayback && !this.media.paused;
     return new Promise<void>((resolve, reject) => {
       let started = false;
       let settled = false;
-      let waitingForBuffer = false;
       let offReady = () => {};
       const onLoad = () => {
         started = true;
-      };
-      const onUserPlayWhileBuffering = () => {
-        // 起播门闩期间应用不会调用 play；此时出现 play 只可能是用户手动起播。
-        // 立即结束等待，避免门闩随后再调用一次 play 打断用户意图。
-        if (waitingForBuffer) {
-          finish();
-        }
       };
       const finish = (error?: unknown) => {
         if (settled) return;
@@ -621,72 +624,25 @@ class VideoJsPlayer {
         offReady();
         offError();
         this.media.removeEventListener("loadstart", onLoad);
-        this.media.removeEventListener("play", onUserPlayWhileBuffering);
         controller.signal.removeEventListener("abort", onAbort);
-        bufferAbort.abort();
         if (this.pendingSwitch === controller) this.pendingSwitch = null;
         if (error !== undefined) reject(error);
         else resolve();
       };
       const onAbort = () => finish(new DOMException("播放源切换已取消", "AbortError"));
       const offError = this.on("error", (error) => finish(error));
-      // 已有可播数据时不会再等一次 canplay；缓冲门闩必须立即开始。
-      const maybeStartBuffering = () => {
-        if (!started || this.media.readyState < 3 || waitingForBuffer) return;
-        const minBufferedAheadSeconds = options.minBufferedAheadSeconds ?? 0;
-        const startPlayback = (requirePaused = false) => {
-          // `autoPlay: false` 是续期对用户暂停意图的显式覆盖，
-          // 不能被此前残留的 `playRequested` 重新拉起。
-          if (
-            shouldAutoPlay &&
-            (options.canAutoPlay?.() ?? true) &&
-            (!requirePaused || this.media.paused)
-          ) {
-            void this.media.play().catch((error: unknown) => {
-              if (!isInterruptedPlayRequest(error)) this.reportError(error);
-            });
-          }
-          finish();
-        };
-        // HLS、其他平台或用户原本暂停时不改变既有同步 canplay 语义；
-        // 只有确实要积累 Bilibili FLV 起播余量时才进入异步等待。
-        if (!shouldPrimeStartupBuffer) {
-          startPlayback();
-          return;
+      offReady = this.on("canplay", () => {
+        if (!started || this.media.readyState < 3) return;
+        // `autoPlay: false` 是续期对用户暂停意图的显式覆盖，
+        // 不能被此前残留的 `playRequested` 重新拉起。
+        if (shouldAutoPlay && this.playRequested && (options.canAutoPlay?.() ?? true)) {
+          void this.media.play().catch((error: unknown) => {
+            if (!isInterruptedPlayRequest(error)) this.reportError(error);
+          });
         }
-        waitingForBuffer = true;
-        void waitForContinuousBuffer(
-          this.media,
-          minBufferedAheadSeconds,
-          () =>
-            !settled &&
-            !this.destroyed &&
-            this.pendingSwitch === controller &&
-            shouldAutoPlay &&
-            this.playRequested &&
-            (options.canAutoPlay?.() ?? true),
-          bufferAbort.signal,
-        ).then((result) => {
-          if (settled) return;
-          if (result === "ready") {
-            startPlayback(true);
-            return;
-          }
-          if (result === "stopped") {
-            // 用户暂停或手动起播已经表达了新的播放意图，不把它升级成硬重建。
-            finish();
-            return;
-          }
-          if (result === "cancelled") {
-            finish(new DOMException("播放源切换已取消", "AbortError"));
-            return;
-          }
-          finish(new Error(result === "ended" ? "软切换期间媒体已结束" : "软切换期间媒体发生错误"));
-        });
-      };
-      offReady = this.on("canplay", maybeStartBuffering);
+        finish();
+      });
       this.media.addEventListener("loadstart", onLoad);
-      this.media.addEventListener("play", onUserPlayWhileBuffering);
       controller.signal.addEventListener("abort", onAbort, { once: true });
       const timer = setTimeout(
         () => finish(new Error("软切换等待媒体就绪超时")),
@@ -720,20 +676,12 @@ class VideoJsPlayer {
       } catch (error) {
         finish(error);
       }
-      // 普通协议仍只由 canplay 结算；已有 MSE 缓冲的 Bilibili FLV 才需要
-      // 立即检查门闩，否则会改变 HLS / MPEG-TS 原有的异步完成时机。
-      if (shouldPrimeStartupBuffer) maybeStartBuffering();
     });
   }
 
   play(): Promise<void> {
     this.playRequested = true;
     return this.media.play();
-  }
-
-  /** 只登记待自动起播意图，不提前调用媒体播放；用户 pause() 会清除它。 */
-  prepareAutoplay(): void {
-    this.playRequested = true;
   }
 
   pause(): void {
@@ -805,8 +753,8 @@ export function switchVideoJsPlaybackSource(
   return player.switchSource(url, kind, timeoutMs, options);
 }
 
-export function prepareVideoJsAutoplay(player: VideoJsPlayerInstance): void {
-  player.prepareAutoplay();
+export function canSwitchVideoJsSource(player: VideoJsPlayerInstance): boolean {
+  return player.canSwitchSource();
 }
 
 /**

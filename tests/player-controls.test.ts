@@ -10,6 +10,7 @@ import {
   shouldRunFloatingDanmaku,
   nextFullscreenLayerToExit,
   playerVolumeForKeyStep,
+  roomPlayerDisplayError,
   usesStackedRoomSidePanel,
 } from "../src/features/room/PlayerPane";
 import {
@@ -81,6 +82,22 @@ describe("播放器交互边界", () => {
     expect(playerEdgeGestureValue(50, -1.5, 320)).toBeCloseTo(50.46875);
     expect(playerEdgeGestureValue(98, -400, 320)).toBe(100);
     expect(playerEdgeGestureValue(2, 400, 320)).toBe(0);
+  });
+
+  test("直播舞台优先显示恢复会话的终止错误", () => {
+    expect(roomPlayerDisplayError(null, "当前线路无法解码", "MediaError: raw")).toEqual({
+      code: "play_error",
+      message: "当前线路无法解码",
+      site: null,
+      retryable: true,
+    });
+    expect(roomPlayerDisplayError(null, null, "MediaError: raw")).toMatchObject({
+      code: "play_error",
+      message: "MediaError: raw",
+    });
+    expect(roomPlayerDisplayError({ code: "detail_error" }, "终态错误", "播放器错误")).toEqual({
+      code: "detail_error",
+    });
   });
 
   // 平板竖屏曾落在两侧判据之外（宽度越过 767px，指针又是粗指针），于是走桌面并排：

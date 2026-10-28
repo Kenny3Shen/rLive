@@ -25,12 +25,6 @@ import {
   isTwitchCommercialBreak,
 } from "./hlsRecoveryBudget";
 import { watchHlsMediaProgress } from "./hlsMediaWatch";
-import {
-  BILIBILI_FLV_STARTUP_BUFFER_SECONDS,
-  bilibiliFlvLatencyConfig,
-  shouldPrimeBilibiliFlvStartup,
-  waitForContinuousBuffer,
-} from "./liveStartupBuffer";
 import { createSerialTaskQueue } from "./serialTaskQueue";
 import { softSwitchOwnsTransport } from "./softSwitchTransaction";
 import { streamProxyStartArgs } from "./streamProxyStart";
@@ -40,13 +34,13 @@ import {
   shouldSoftSwitchToSource,
 } from "../playback/sourceIdentity";
 import {
+  canSwitchVideoJsSource,
   classifyTransportFailure,
   createVideoJsPlayer,
   getVideoJsHlsCore,
   getVideoJsMpegtsCore,
   isVideoJsDecodeError,
   loadVideoJsModules,
-  prepareVideoJsAutoplay,
   switchVideoJsPlaybackSource,
   webPlaybackKind,
   videoJsPlayerErrorMessage,
@@ -209,7 +203,7 @@ export type MediaLifecycleProfile = Readonly<{
   retainSourceDuringGap: boolean;
   resetAudioOnSessionChange: boolean;
   softSwitch: "settings" | "disabled";
-  flvOptions(mobileClient: boolean, syncHold: boolean, siteId?: SiteId): VideoJsMpegtsOptions;
+  flvOptions(mobileClient: boolean, syncHold: boolean): VideoJsMpegtsOptions;
 }>;
 
 function clampWebPlayerVolume(value: number): number {
@@ -227,6 +221,18 @@ export function normalizeWebPlayerAudio(
     muted: initialMuted || volume === 0,
     previousVolume: volume > 0 ? volume : 80,
   };
+}
+
+/**
+ * 恢复会话存在时，播放器本地不抢先展示终止错误；没有会话所有者的 EOF
+ * 仍保持既有静默语义，其他终态错误则回退到本地文案。
+ */
+export function mediaFailureLocalError(
+  event: Pick<PlayerEvent, "kind" | "message">,
+  hasRecoveryOwner: boolean,
+): string | null {
+  if (hasRecoveryOwner || event.kind === "eof") return null;
+  return event.message?.trim() || "播放失败";
 }
 
 /** 把一份归一化的音频快照应用到活动房间的媒体元素上。 */
@@ -263,7 +269,6 @@ export function hasStartedPlayback(
 export function liveFlvPlaybackOptions(
   mobileClient: boolean,
   syncHold = false,
-  siteId?: SiteId,
 ): VideoJsMpegtsOptions {
   return {
     mediaDataSource: {
@@ -284,7 +289,6 @@ export function liveFlvPlaybackOptions(
       liveBufferLatencyChasing: !syncHold,
       liveBufferLatencyMaxLatency: mobileClient ? 6 : 5,
       liveBufferLatencyMinRemain: mobileClient ? 1.5 : 1,
-      ...bilibiliFlvLatencyConfig(siteId, syncHold),
       autoCleanupSourceBuffer: true,
       autoCleanupMaxBackwardDuration: syncHold
         ? LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS
@@ -520,8 +524,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const softSwitchInFlightRef = useRef<{ player: VideoJsPlayerInstance; sequence: number } | null>(
     null,
   );
-  /** 当前硬起播的 3 秒门闩；软切换开始时必须让旧门闩退出。 */
-  const startupBufferAbortRef = useRef<AbortController | null>(null);
   const qualityRef = useRef<string | null>(quality);
   const nativeFullscreenSessionRef = useRef(createNativeFullscreenSession());
   /** 为没有 `mode` 的销毁路径镜像页面内全屏状态。 */
@@ -611,6 +613,16 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     onPauseRef.current = onPause;
     onPlayingRef.current = onPlaying;
   }, [onMediaFailure, onReady, onWaiting, onPause, onPlaying]);
+
+  /**
+   * 有恢复会话所有者时，播放器只发布传输事实，由所有者持有恢复预算并决定
+   * 后续线路/续期，不在本地抢先展示错误卡；没有所有者时沿用本地错误文案。
+   */
+  const reportMediaFailure = useCallback((event: PlayerEvent) => {
+    const owner = onMediaFailureRef.current;
+    setLoadError(mediaFailureLocalError(event, owner != null));
+    owner?.(event);
+  }, []);
 
   const destroyPlayer = useCallback(() => {
     // 销毁者（初始化 effect、离开页面、硬回退）之后的续期由新传输承担，
@@ -717,8 +729,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   useEffect(() => {
     let cancelled = false;
     let stopHlsMediaProgress: (() => void) | null = null;
-    const startupBufferAbort = new AbortController();
-    startupBufferAbortRef.current = startupBufferAbort;
     const gen = ++genRef.current;
     const proxySessionId = `${playerInstanceId}:${gen}`;
     let playbackSource = effectivePlaybackSourceRef.current;
@@ -867,7 +877,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             kind: playbackKind,
             isLive: playbackKind !== "native",
             hls: liveHlsPlaybackOptions(liveSyncHold),
-            flv: profile.flvOptions(mobileClient, liveSyncHold, siteId),
+            flv: profile.flvOptions(mobileClient, liveSyncHold),
             mpegts: liveMpegtsPlaybackOptions(liveSyncHold),
           });
 
@@ -898,15 +908,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               if (!isCurrentPlayer() || softSwitchInFlightRef.current?.player === player) {
                 return;
               }
-              startupBufferAbort.abort();
-              setLoadError(null);
               setRunning(false);
-              // 门闩已取消：播放失败后的自动恢复必须走既有会话，不能让这里
-              // 没有恢复所有者；同时避免覆盖下一次硬重建的 controller。
-              if (startupBufferAbortRef.current === startupBufferAbort) {
-                startupBufferAbortRef.current = null;
-              }
-              onMediaFailureRef.current?.({
+              reportMediaFailure({
                 epoch: gen,
                 generation: gen,
                 kind: "eof",
@@ -920,12 +923,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           // 两条路径共用同一个 adapter error 事件，但只有 MSE 暴露恢复 API。
           const reportPlayerError = (error: unknown) => {
             if (!isCurrentPlayer()) return;
-            // 起播门闩和播放错误同轮到达时，错误监听可能先于 helper 的微任务。
-            // 先释放等待；否则 timer 会活到下一轮，期间还可能误调用 play。
-            startupBufferAbort.abort();
-            if (startupBufferAbortRef.current === startupBufferAbort) {
-              startupBufferAbortRef.current = null;
-            }
             // 软切进行中，本次失败的传输由 `switchSource` 的 error 监听认领：
             // 它会 reject，调用方据此走既有硬回退。这里若再发布一次失败，恢复
             // 会话会在代理重开与 `switchSource` 结算之前另起一次恢复，形成双恢复。
@@ -935,9 +932,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             const message = failure.message;
             // 早断流与 `loading_complete` 同属可续签的结束事实：先不弹错误卡，
             // 续期失败或预算耗尽时由恢复会话给出提示。
-            setLoadError(failure.kind === "eof" ? null : message);
             setRunning(false);
-            onMediaFailureRef.current?.({
+            reportMediaFailure({
               epoch: gen,
               generation: gen,
               kind: failure.kind,
@@ -947,14 +943,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             });
           };
           if (!hlsCore) player.on("error", reportPlayerError);
-          if (!hlsCore) {
-            player.on("ended", () => {
-              startupBufferAbort.abort();
-              if (startupBufferAbortRef.current === startupBufferAbort) {
-                startupBufferAbortRef.current = null;
-              }
-            });
-          }
 
           if (hlsCore && siteId !== "twitch") {
             const recoveryBudget = createHlsRecoveryBudget({ siteId });
@@ -979,11 +967,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 } catch {
                   /* 致命 HLS 错误可能已经释放了内部状态。 */
                 }
-                setLoadError(null);
-              } else {
-                setLoadError(message);
               }
-              onMediaFailureRef.current?.({
+              reportMediaFailure({
                 epoch: gen,
                 generation: gen,
                 kind: "error",
@@ -1046,12 +1031,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 } catch {
                   /* 致命 HLS 错误可能已经释放了内部状态。 */
                 }
-                setLoadError(null);
-              } else {
-                setLoadError(errorMessage);
               }
               setRunning(false);
-              onMediaFailureRef.current?.({
+              reportMediaFailure({
                 epoch: gen,
                 generation: gen,
                 kind: "error",
@@ -1077,9 +1059,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               } catch {
                 /* 致命解码错误可能已经释放了内部状态。 */
               }
-              setLoadError(null);
               setRunning(false);
-              onMediaFailureRef.current?.({
+              reportMediaFailure({
                 epoch: gen,
                 generation: gen,
                 kind: "error",
@@ -1152,24 +1133,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           // 直播媒体分片到达。队列必须保持空闲，路由清理才能停止本代理，
           // 重进的房间才能立刻启动替代会话。
           const canAutoPlay = () => isCurrentPlayer() && !userPausedRef.current;
-          if (shouldPrimeBilibiliFlvStartup(siteId, playbackKind, liveSyncHold)) {
-            // 初始门闩只登记普通播放意图，不提前调用 media.play()。后续同协议
-            // 软切或早断流续期因此能沿用同一份意图，不必另建镜像状态。
-            if (canAutoPlay()) prepareVideoJsAutoplay(player);
-            void waitForContinuousBuffer(
-              video,
-              BILIBILI_FLV_STARTUP_BUFFER_SECONDS,
-              () => canAutoPlay() && video.paused,
-              startupBufferAbort.signal,
-            ).then((result) => {
-              // 门闩结算与用户手动 play 可能落在同一轮事件里；再核对一次
-              // 元素仍处于暂停态，避免重复调用 play。
-              if (result !== "ready" || !canAutoPlay() || !video.paused) return;
-              requestPlayerAutoplay(player, video, canAutoPlay, onAutoplayMuted);
-            });
-          } else {
-            requestPlayerAutoplay(player, video, canAutoPlay, onAutoplayMuted);
-          }
+          requestPlayerAutoplay(player, video, canAutoPlay, onAutoplayMuted);
 
           // 已有帧则标记运行中；否则等待 play 事件。
           if (hasStartedPlayback(video)) {
@@ -1188,24 +1152,20 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
             }, 400);
           }
         } catch (e) {
-          startupBufferAbort.abort();
-          if (startupBufferAbortRef.current === startupBufferAbort) {
-            startupBufferAbortRef.current = null;
-          }
           if (cancelled || genRef.current !== gen) return;
           const msg =
             typeof e === "object" && e && "message" in e
               ? String((e as AppError).message)
               : String(e);
-          setLoadError(msg || "播放失败");
           setRunning(false);
           destroyPlayer();
           await stopProxy();
-          onMediaFailureRef.current?.({
+          if (cancelled || genRef.current !== gen) return;
+          reportMediaFailure({
             epoch: gen,
             generation: gen,
             kind: "error",
-            message: msg,
+            message: msg || "播放失败",
             protocol: playbackKind,
           });
         }
@@ -1217,10 +1177,6 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
 
     return () => {
       cancelled = true;
-      startupBufferAbort.abort();
-      if (startupBufferAbortRef.current === startupBufferAbort) {
-        startupBufferAbortRef.current = null;
-      }
       stopHlsMediaProgress?.();
       stopHlsMediaProgress = null;
       destroyPlayer();
@@ -1235,6 +1191,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     playerInstanceId,
     profile,
     proxyLifecycleQueue,
+    reportMediaFailure,
     sessionKey,
     siteId,
     softFallbackToken,
@@ -1277,18 +1234,22 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     const isRenewal = renewToken !== appliedRenewTokenRef.current;
     // 续期只在同协议时走到这里；即便来源 key 不变，传输也要重新打开。
     appliedRenewTokenRef.current = renewToken;
+    // 共享的媒体首错 guard：当前 <video> 已不能安全承载新传输时，直接触发
+    // 硬回退，不为一次必然失败的软切先重开代理。
+    if (!canSwitchVideoJsSource(player)) {
+      setLoadError(null);
+      setSoftFallbackToken((token) => token + 1);
+      return;
+    }
     // 只尊重用户自己的暂停意图：`ended` 或流中断造成的 `paused` 必须照常恢复，
     // 否则一次自动续期只会把画面停在黑屏上。
     const resumePlayback = !userPausedRef.current;
+    // 代理启动与媒体就绪都要经过 IPC/事件循环；届时重新读取同一份暂停意图。
+    const canAutoPlay = () => !userPausedRef.current;
     // 事务要在排队前就登记：从这一刻起旧传输的失败都归 `switchSource` 处理。
     // 若等到队列内再登记，排在后面的旧 core 错误会先一步发布给恢复会话。
     const inFlight = { player, sequence };
     softSwitchInFlightRef.current = inFlight;
-    // 软切一旦发起就重开了传输，旧初始门闩继续等待只会把已作废的媒体
-    // 结果结算给新传输。这里同步释放旧监听，让旧等待以 cancelled 退出。
-    startupBufferAbortRef.current?.abort();
-    // 清掉引用，避免同时到来的媒体错误或下一次硬重建重复释放旧 controller。
-    startupBufferAbortRef.current = null;
 
     void proxyLifecycleQueue
       .enqueue(async () => {
@@ -1318,19 +1279,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
           const localSource = `${localUrl}${localUrl.includes("?") ? "&" : "?"}switch=${Date.now()}_${sequence}`;
           // 换源在队列内发起，与代理所有权变更保持有序；媒体就绪的等待放到队列外。
           // 它最长 12 秒，把它留在队列里会让本实例后续的切源、硬重建和退出一起等。
-          const primeStartupBuffer = shouldPrimeBilibiliFlvStartup(
-            siteId,
-            targetKind,
-            liveSyncHold,
-          );
           const ready = switchVideoJsPlaybackSource(player, localSource, targetKind, undefined, {
             autoPlay: isRenewal ? resumePlayback : undefined,
-            ...(primeStartupBuffer
-              ? {
-                  minBufferedAheadSeconds: BILIBILI_FLV_STARTUP_BUFFER_SECONDS,
-                  canAutoPlay: () => !userPausedRef.current,
-                }
-              : {}),
+            canAutoPlay,
           });
           // 真正的处理在队列外，这里立刻吸收拒绝，避免中间的微任务窗口产生
           // 未处理拒绝告警；取消与超时仍按下方 settled 的结果走原有分支。
@@ -1477,7 +1428,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     };
     const onEnded = () => {
       if (!isCurrentMedia()) return;
-      onMediaFailureRef.current?.({
+      setRunning(false);
+      reportMediaFailure({
         epoch: generation,
         generation,
         kind: "eof",
@@ -1506,7 +1458,14 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
       video.removeEventListener("resize", syncAspectRatio);
       video.removeEventListener("volumechange", onVolumeChange);
     };
-  }, [effectivePlaybackKind, mediaKey, sessionKey, streamKey, releaseMediaReady]);
+  }, [
+    effectivePlaybackKind,
+    mediaKey,
+    sessionKey,
+    streamKey,
+    releaseMediaReady,
+    reportMediaFailure,
+  ]);
   // `sessionKey` 已包含在 `streamKey` 里，多列一次不会多跑 effect；它被单列是因为
   // `syncAspectRatio` 直接读它来判断画幅该不该跨媒体重建保留。
 

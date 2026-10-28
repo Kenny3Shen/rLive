@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  canSwitchVideoJsSource,
   classifyTransportFailure,
   createVideoJsPlayer,
   isMpegtsEarlyEof,
@@ -224,6 +225,23 @@ describe("mpegts 传输所有权", () => {
     await expect(state.player.switchSource("proxy://live.flv?token=two", "flv")).rejects.toBe(
       decodeError,
     );
+    expect(state.cores).toHaveLength(1);
+  });
+
+  test("mpegts 引擎先报解码失败时也锁存首错并拒绝原地重连", async () => {
+    const state = setup();
+    expect(canSwitchVideoJsSource(state.player)).toBe(true);
+
+    state.cores[0].emit("error", "MediaError", "MediaMSEError", {
+      msg: "PipelineStatus::PIPELINE_ERROR_DECODE: video decode error! source=player",
+    });
+
+    expect(canSwitchVideoJsSource(state.player)).toBe(false);
+    await expect(state.player.switchSource("proxy://live.flv?token=two", "flv")).rejects.toEqual({
+      type: "MediaError",
+      detail: "MediaMSEError",
+      message: "PipelineStatus::PIPELINE_ERROR_DECODE: video decode error! source=player",
+    });
     expect(state.cores).toHaveLength(1);
   });
 

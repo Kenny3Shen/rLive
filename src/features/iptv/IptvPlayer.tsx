@@ -188,7 +188,7 @@ function IptvPlayerContent({
     retryAttemptRef.current = action.attempt;
     setTransportEnabled(false);
     setStatus("connecting");
-    setError(`${message}，正在自动重连（${action.attempt}/${IPTV_AUTO_RECONNECT_MAX_ATTEMPTS}）…`);
+    setError(null);
     retryTimerRef.current = window.setTimeout(() => {
       retryTimerRef.current = null;
       setTransportEnabled(true);
