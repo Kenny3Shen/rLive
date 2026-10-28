@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import type { RefObject } from "react";
 import { createPlayer, selectTime, useMediaAttach } from "@videojs/react";
-import { bufferFeature, timeFeature } from "@videojs/core/dom";
+import { bufferFeature } from "@videojs/core/dom";
+import { throttledTimeFeature } from "@/components/videojs/lib/throttled-time-feature";
 
 /**
  * 短视频进度条专用的最小播放器 store。
@@ -21,7 +22,7 @@ import { bufferFeature, timeFeature } from "@videojs/core/dom";
  * 边沿……竖屏舞台一条都用不上，每个 feature 还要在 attach 时挂监听。
  */
 const shortsSeekPlayer = createPlayer({
-  features: [timeFeature, bufferFeature],
+  features: [throttledTimeFeature, bufferFeature],
   displayName: "rLiveShortsSeek",
 });
 export const ShortsSeekPlayer = shortsSeekPlayer.Player;

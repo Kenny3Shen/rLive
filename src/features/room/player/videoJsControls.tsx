@@ -5,6 +5,7 @@ import "@videojs/react/i18n/locales/zh-CN/register";
 import { notify } from "@/components/ui/toast";
 import { videoJsPlayerErrorMessage } from "./videoJsPlayer";
 import { Video, videoFeatures } from "@videojs/react/video";
+import { withThrottledTimeFeature } from "@/components/videojs/lib/throttled-time-feature";
 import { PlayerSurface } from "@/components/videojs/skins/shared/skin-surface";
 import type { PlayerErrorDialogState } from "@/components/videojs/ui/error-dialog";
 import { LiveVideoHotkeys } from "@/components/videojs/skins/live-video/hotkeys";
@@ -12,9 +13,12 @@ import { LiveVideoStatusIndicators } from "@/components/videojs/skins/live-video
 import { VideoHotkeys } from "@/components/videojs/skins/video/hotkeys";
 import { VideoStatusIndicators } from "@/components/videojs/skins/video/status-indicators";
 
-/** Video.js 原生 Player store；直播与点播共享媒体状态，控制栏由自定义控制栏渲染。 */
+/**
+ * Video.js 原生 Player store；直播与点播共享媒体状态，控制栏由自定义控制栏渲染。
+ * time feature 换成节流版：播放中进度只按约 10Hz 发布，避免控制栏逐帧提交。
+ */
 const videoJsPlayer = createPlayer({
-  features: [...videoFeatures, liveFeature],
+  features: [...withThrottledTimeFeature(videoFeatures), liveFeature],
   displayName: "rLiveVideoPlayer",
 });
 
