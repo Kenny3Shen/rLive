@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -9,13 +9,12 @@ import {
   MessageCircle,
   Play,
   Users,
-  ListMusic,
   Video,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -363,7 +362,14 @@ function SelectionSection({
   );
 }
 
-/** 当前剧集信息来自 season 接口，不请求或伪造 PGC 相关视频流。 */
+/**
+ * 当前剧集信息来自 season 接口，不请求或伪造 PGC 相关视频流。
+ *
+ * 三级字号区分层级：剧名 `text-base` 加粗、当前集标题 `text-sm`、简介 `text-xs`
+ * 弱化色。标题只用 `long_title`，集号已在分集卡里，「1 · 」前缀只是重复。
+ * 简介收起时截三行；只有确实被截断（或已展开）才给「展开简介」开关，
+ * 短简介不出现一个点了也没变化的按钮。
+ */
 function SeasonInfoCard({
   season,
   episode,
@@ -371,23 +377,61 @@ function SeasonInfoCard({
   season: VideoSeason;
   episode: SeasonEpisode | null;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  const evaluateRef = useRef<HTMLParagraphElement | null>(null);
+  const episodeTitle = episode ? episode.long_title || episode.title : "";
+
+  // 侧栏可拖宽、窄屏随视口变宽，截断与否要跟着尺寸重算；展开态不测（全文可见）。
+  useLayoutEffect(() => {
+    const node = evaluateRef.current;
+    if (!node || expanded) return;
+    const measure = () => setClamped(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [expanded, season.evaluate]);
+
   return (
     <section className="shrink-0" aria-label="当前剧集信息">
       <Card size="sm">
-        <CardHeader>
-          <CardTitle>{season.title}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          {episode && (
-            <p className="font-medium">
-              {[episode.title, episode.long_title].filter(Boolean).join(" · ")}
-            </p>
+        <CardContent>
+          <h3 className="text-base leading-6 font-semibold tracking-tight break-words">
+            {season.title}
+          </h3>
+          {episodeTitle && (
+            <p className="mt-0.5 text-sm leading-5 font-medium break-words">{episodeTitle}</p>
           )}
-          <p className="text-muted-foreground">
-            共 {season.episodes.length} 集
-            {episode && episode.duration > 0 && ` · ${formatVideoDuration(episode.duration)}`}
-          </p>
-          {season.evaluate && <p className="line-clamp-3">{season.evaluate}</p>}
+          {season.evaluate && (
+            <>
+              <p
+                ref={evaluateRef}
+                id="video-season-evaluate"
+                className={cn(
+                  "mt-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground",
+                  !expanded && "line-clamp-3",
+                )}
+              >
+                {season.evaluate}
+              </p>
+              {(clamped || expanded) && (
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-controls="video-season-evaluate"
+                  onClick={() => setExpanded((value) => !value)}
+                  className="mt-1 inline-flex min-h-6 items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {expanded ? "收起简介" : "展开简介"}
+                  <ChevronDown
+                    aria-hidden
+                    className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+                  />
+                </button>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
     </section>
@@ -424,28 +468,6 @@ function EpisodesPanel({
   // 当前集的位置标记：分集表还没到、或 epId 不在表里（改版、脏数据）时退回总数。
   const currentIndex = episodes.findIndex((episode) => episode.ep_id === epId);
 
-  // 播放全部：从第一集开始
-  const handlePlayAll = () => {
-    const firstItem = playlistItems[0];
-    if (!firstItem) return;
-    setPlaylist(playlistItems, firstItem.id, "sequence");
-    onNavigate({
-      bvid: firstItem.bvid,
-      cid: firstItem.cid,
-      epId: firstItem.epId!,
-      title: firstItem.title,
-      aid: firstItem.aid,
-    });
-  };
-
-  // 继续播放：从当前集开始设置播放列表
-  const handleContinuePlay = () => {
-    if (playlistItems.length === 0) return;
-    const currentItem = playlistItems.find((item) => item.epId === epId);
-    if (!currentItem) return;
-    setPlaylist(playlistItems, currentItem.id, "sequence");
-  };
-
   return (
     <SelectionSection
       label="分集"
@@ -453,49 +475,10 @@ function EpisodesPanel({
       open={open}
       onOpenChange={setOpen}
     >
-      {/* 播放控制栏 */}
-      {episodes.length > 1 && (
-        <div className="flex shrink-0 items-center gap-1.5 border-b border-border/50 px-2 py-2">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 gap-1.5 px-2.5 text-xs"
-                  onClick={handlePlayAll}
-                >
-                  <Play className="size-3.5" />
-                  <span>播放全部</span>
-                </Button>
-              }
-            />
-            <TooltipContent>从第一集开始播放</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 gap-1.5 px-2.5 text-xs"
-                  onClick={handleContinuePlay}
-                >
-                  <ListMusic className="size-3.5" />
-                  <span>加入列表</span>
-                </Button>
-              }
-            />
-            <TooltipContent>从当前集开始播放列表</TooltipContent>
-          </Tooltip>
-        </div>
-      )}
-
       <div
         ref={listRef}
         data-video-selection-list="episodes"
-        className="max-h-64 overflow-y-auto overscroll-contain px-2 pb-2 touch-pan-y"
+        className="max-h-64 overflow-y-auto overscroll-contain px-2 pt-1 pb-2 touch-pan-y"
       >
         {episodes.map((episode, index) => (
           <EpisodeRow
@@ -600,7 +583,7 @@ function UgcSeasonList({
     <div
       ref={listRef}
       data-video-selection-list="season"
-      className="max-h-64 overflow-y-auto overscroll-contain px-2 pb-2 touch-pan-y"
+      className="max-h-64 overflow-y-auto overscroll-contain px-2 pt-1 pb-2 touch-pan-y"
     >
       {season.episodes.map((episode, index) => {
         const current = episode.bvid === currentBvid;
@@ -675,7 +658,7 @@ function PartsPanel({
       <div
         ref={listRef}
         data-video-selection-list="parts"
-        className="max-h-64 overflow-y-auto overscroll-contain px-2 pb-2 touch-pan-y"
+        className="max-h-64 overflow-y-auto overscroll-contain px-2 pt-1 pb-2 touch-pan-y"
       >
         {pages.map((page) => {
           const current = currentCid > 0 && page.cid === currentCid;
@@ -999,7 +982,7 @@ export function VideoSidebar({
       const season = seasonQuery.data;
       return (
         <SidebarCardStack>
-          <SeasonInfoCard season={season} episode={currentEpisode} />
+          <SeasonInfoCard key={season.season_id} season={season} episode={currentEpisode} />
           <EpisodesPanel
             key={season.season_id}
             epId={epId!}

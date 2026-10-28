@@ -967,8 +967,8 @@ function VideoPlayerPageContent() {
 
   // PGC 分集不经 archiveQuery：进入的剧集不在播放列表（epId 维度，UGC
   // 列表项的 epId 恒为 null）时，那份列表是残留快照，同样清空——否则
-  // 「下一个」会跳回之前看过的 UGC 视频。侧栏「播放全部」/「加入列表」
-  // 装好分集列表后含当前 epId，不受影响。
+  // 「下一个」会跳回之前看过的 UGC 视频。侧栏点选分集装好的列表
+  // 含当前 epId，不受影响。
   useEffect(() => {
     const list = usePlaylistStore.getState();
     if (!epId || list.items.length === 0) return;
