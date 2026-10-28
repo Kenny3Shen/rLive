@@ -284,13 +284,14 @@ export function VideoDanmakuLayer({
   }, [fontSize]);
   return (
     <div ref={hostRef} className="pointer-events-none absolute inset-0">
-      {/* 不用 renderer.hide()：其原生语义会清屏；这里只隐藏且禁用全部后代命中。 */}
+      {/* 不用 renderer.hide()：其原生语义会清屏；这里只隐藏且禁用全部后代命中。
+          弹幕只响应点击：禁止文本选择与长按系统菜单，后代继承。 */}
       <div
         ref={containerRef}
         aria-hidden
         data-video-danmaku-layer
         data-visible={active}
-        className="pointer-events-none absolute inset-0 overflow-hidden data-[visible=false]:opacity-0 data-[visible=false]:[&_*]:pointer-events-none!"
+        className="pointer-events-none absolute inset-0 overflow-hidden select-none [-webkit-user-select:none] [-webkit-touch-callout:none] data-[visible=false]:opacity-0 data-[visible=false]:[&_*]:pointer-events-none!"
         style={{ top: "var(--video-danmaku-top, 0px)" }}
       />
       {target && active && interactive && (
