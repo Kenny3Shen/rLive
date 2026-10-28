@@ -38,6 +38,18 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// 分片块间隔远低于此），又足以在播放卡住时把死连接及时报错丢出池外，让
 /// dash.js/原生媒体元素的重取拿到新连接而自愈。
 const SEGMENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
+/// Range 分片转发的块间停顿上限，超过即从已转发的位置续传。
+///
+/// `SEGMENT_READ_TIMEOUT` 只保证死连接最终被丢弃，但 15 秒足以让短视频卡住；
+/// 实机里 B 站 m4s 偶发中途 stall 或截断，都表现为约 15 秒的加载转圈。分片
+/// 有确定的字节区间，可以安全地用新连接补齐剩余字节，所以这里更早放弃：
+/// 健康分片的块间隔远低于 4 秒，误判也只是多一次续传请求。
+#[cfg(not(test))]
+const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_secs(4);
+#[cfg(test)]
+const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_millis(300);
+/// 单个分片最多续传几次；仍失败就断开下游，交给 dash.js 自己的重试。
+const SEGMENT_RESUME_ATTEMPTS: u32 = 2;
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
 // 留出足够时间交付一份 gap 播放列表。
 const TWITCH_MANIFEST_RECOVERY_BUDGET: Duration = Duration::from_secs(4);
@@ -146,6 +158,8 @@ struct ProxyTelemetryCounters {
     started_at_ms: u64,
     upstream_requests: AtomicU64,
     upstream_failures: AtomicU64,
+    /// Range 分片中途停顿或截断后发起的续传请求数（同时计入 `upstream_requests`）。
+    upstream_resumes: AtomicU64,
     bytes_forwarded: AtomicU64,
     first_response_ms: AtomicU64,
     latest_response_ms: AtomicU64,
@@ -165,6 +179,7 @@ impl ProxyTelemetryCounters {
             started_at_ms: unix_timestamp_ms(),
             upstream_requests: AtomicU64::new(0),
             upstream_failures: AtomicU64::new(0),
+            upstream_resumes: AtomicU64::new(0),
             bytes_forwarded: AtomicU64::new(0),
             first_response_ms: AtomicU64::new(0),
             latest_response_ms: AtomicU64::new(0),
@@ -205,6 +220,7 @@ impl ProxyTelemetryCounters {
             started_at_ms: self.started_at_ms,
             upstream_requests: self.upstream_requests.load(Ordering::Relaxed),
             upstream_failures: self.upstream_failures.load(Ordering::Relaxed),
+            upstream_resumes: self.upstream_resumes.load(Ordering::Relaxed),
             bytes_forwarded: self.bytes_forwarded.load(Ordering::Relaxed),
             first_response_ms: optional(self.first_response_ms.load(Ordering::Relaxed)),
             latest_response_ms: optional(self.latest_response_ms.load(Ordering::Relaxed)),
@@ -218,6 +234,7 @@ pub struct StreamProxyTelemetry {
     pub started_at_ms: u64,
     pub upstream_requests: u64,
     pub upstream_failures: u64,
+    pub upstream_resumes: u64,
     pub bytes_forwarded: u64,
     pub first_response_ms: Option<u64>,
     pub latest_response_ms: Option<u64>,
@@ -3009,18 +3026,20 @@ async fn handle_client(
         }
     };
 
-    let build_request = |fetch_url: String| {
+    let build_request_with_range = |fetch_url: String, range: Option<&str>| {
         let mut req = client.get(fetch_url);
         for (k, v) in headers.as_ref() {
             req = req.header(k.as_str(), v.as_str());
         }
         // 避免会让 MSE 解复用器困惑的压缩 body。
         req = req.header("accept-encoding", "identity");
-        if let Some(range) = request_header(&head, "range") {
+        if let Some(range) = range {
             req = req.header(reqwest::header::RANGE, range);
         }
         req
     };
+    let build_request =
+        |fetch_url: String| build_request_with_range(fetch_url, request_header(&head, "range"));
 
     // 取流阶段已拿到的 init 只在本会话内复用，无须开启或等待磁盘缓存。
     // 严格匹配单个完整 Range，不把前缀当全文件，也不处理条件 Range。
@@ -3107,6 +3126,11 @@ async fn handle_client(
         None
     };
 
+    // 分片续传沿用原始入口：重新解析可能把请求调度到另一个边缘节点。
+    let resume_target = requested_range
+        .filter(|_| method == "GET" && !force_hls)
+        .map(|range| (target.clone(), range));
+
     telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
     let request_started = Instant::now();
     let send = async {
@@ -3119,10 +3143,25 @@ async fn handle_client(
                     build_request(target).send().await
                 }
             },
-            None => build_request(target).send().await,
+            None => match (build_request(target).send().await, resume_target.as_ref()) {
+                // 分片请求在发送阶段失败（连接被重置、池化的半死连接）时立即重试
+                // 一次；dash.js 自己的重试要等到它判定超时，用户已经看到卡顿。
+                (Err(_), Some((retry_target, _))) => {
+                    telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+                    build_request(retry_target.clone()).send().await
+                }
+                (result, _) => result,
+            },
         }
     };
-    let upstream = send.await.map_err(|e| format!("upstream: {e}"))?;
+    let upstream = match send.await {
+        Ok(upstream) => upstream,
+        Err(e) => {
+            // 必须给下游一个完整响应：直接断开在 WebView 里是 ERR_EMPTY_RESPONSE。
+            write_text_response(socket, 502, "Bad Gateway", "upstream request failed").await?;
+            return Err(format!("upstream: {e}"));
+        }
+    };
     telemetry.record_response(request_started.elapsed());
     if manifest_pin_scope && upstream.status().is_success() {
         manifest_pin.set(upstream.url().to_string());
@@ -3372,15 +3411,87 @@ async fn handle_client(
         _ => None,
     };
 
+    // 续传只适用于上游确认按 Range 回应的分片：206 且区间一致，才知道剩余字节
+    // 从哪里开始。200 全量或被改写的区间无法安全拼接，保持原来的直通行为。
+    let mut resume = resume_target.filter(|&(_, (start, end))| {
+        status == 206 && content_range_matches(content_range.as_deref(), start, end)
+    });
+    let mut resumes_left = SEGMENT_RESUME_ATTEMPTS;
+    let mut forwarded: u64 = 0;
+
     let mut stream = upstream.bytes_stream();
     // 缓冲只属于这一次完整转发：超长时释放并永久放弃本次缓存，不再重新累积。
     let mut buffered = cache_target.as_ref().map(|_| Vec::new());
-    while let Some(chunk) = stream.next().await {
-        // 读失败直接退出，不提交已经读到的前缀。
-        let chunk = chunk.map_err(|e| format!("upstream chunk: {e}"))?;
+    loop {
+        let next = match resume {
+            Some(_) => match tokio::time::timeout(SEGMENT_STALL_TIMEOUT, stream.next()).await {
+                Ok(next) => next.map(|chunk| chunk.map_err(|e| format!("upstream chunk: {e}"))),
+                Err(_) => Some(Err("upstream chunk stalled".to_string())),
+            },
+            None => stream
+                .next()
+                .await
+                .map(|chunk| chunk.map_err(|e| format!("upstream chunk: {e}"))),
+        };
+        let Some(next) = next else {
+            break;
+        };
+        let chunk = match next {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                // 停顿或截断：能续传就换一条连接补齐剩余字节，客户端看到的仍是
+                // 同一个连续的 206 响应体。续传不可行时读失败直接退出，
+                // 不提交已经读到的前缀。
+                let Some((resume_url, (start, end))) = resume.as_ref() else {
+                    return Err(error);
+                };
+                let Some(resume_start) = start
+                    .checked_add(forwarded)
+                    .filter(|resume_start| resume_start <= end)
+                else {
+                    return Err(error);
+                };
+                let mut resumed = None;
+                while resumed.is_none() && resumes_left > 0 {
+                    resumes_left -= 1;
+                    telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+                    telemetry.upstream_resumes.fetch_add(1, Ordering::Relaxed);
+                    let range = format!("bytes={resume_start}-{end}");
+                    let Ok(response) = build_request_with_range(resume_url.clone(), Some(&range))
+                        .send()
+                        .await
+                    else {
+                        continue;
+                    };
+                    let resumed_range = response
+                        .headers()
+                        .get(reqwest::header::CONTENT_RANGE)
+                        .and_then(|value| value.to_str().ok());
+                    if response.status().as_u16() != 206
+                        || !content_range_matches(resumed_range, resume_start, *end)
+                    {
+                        // 上游不按续传区间回应：再试也不会变，放弃。
+                        return Err(format!("{error}; resume rejected"));
+                    }
+                    resumed = Some(response);
+                }
+                let Some(response) = resumed else {
+                    return Err(format!("{error}; resume failed"));
+                };
+                stream = response.bytes_stream();
+                continue;
+            }
+        };
         telemetry.record_bytes(chunk.len());
         if chunk.is_empty() {
             continue;
+        }
+        forwarded = forwarded.saturating_add(chunk.len() as u64);
+        if let Some((_, (start, end))) = resume.as_ref()
+            && forwarded > end - start + 1
+        {
+            // 上游给的字节超出了请求区间，续传位置已不可信，后续只做直通。
+            resume = None;
         }
         telemetry.record_media_start();
         if let (Some(bytes), Some((_, expected_bytes, _))) =

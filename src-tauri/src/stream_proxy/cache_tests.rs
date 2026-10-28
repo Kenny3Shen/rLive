@@ -1,6 +1,6 @@
 //! P-01 回归：使用本地可控上游验证缓存提交边界，不依赖 CDN 或真实媒体解码。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -67,8 +67,16 @@ struct Fixture {
     key: String,
     root: PathBuf,
     reply: Arc<Mutex<Vec<u8>>>,
+    /// 按请求顺序消费的一次性回复，用完后回落到 `reply`。
+    scripted: Arc<Mutex<VecDeque<Scripted>>>,
     requests: Arc<Mutex<Vec<String>>>,
     server: JoinHandle<()>,
+}
+
+/// 一次性上游回复；`stall` 为真时写完字节后不关连接，模拟 CDN 中途停顿。
+struct Scripted {
+    bytes: Vec<u8>,
+    stall: bool,
 }
 
 impl Fixture {
@@ -77,14 +85,35 @@ impl Fixture {
         let upstream_address = upstream.local_addr().unwrap();
         let reply = Arc::new(Mutex::new(reply));
         let server_reply = reply.clone();
+        let scripted = Arc::new(Mutex::new(VecDeque::<Scripted>::new()));
+        let server_scripted = scripted.clone();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let server_requests = requests.clone();
         let server = tokio::spawn(async move {
             while let Ok((mut stream, _)) = upstream.accept().await {
                 let request = read_request_head(&mut stream).await;
                 server_requests.lock().unwrap().push(request);
-                let bytes = server_reply.lock().unwrap().clone();
-                let _ = stream.write_all(&bytes).await;
+                let next = server_scripted.lock().unwrap().pop_front();
+                match next {
+                    Some(Scripted { bytes, stall: true }) => {
+                        // 停顿的连接在后台挂着，不能阻塞下一次（续传）请求的 accept。
+                        tokio::spawn(async move {
+                            let _ = stream.write_all(&bytes).await;
+                            tokio::time::sleep(WAIT).await;
+                            drop(stream);
+                        });
+                    }
+                    Some(Scripted {
+                        bytes,
+                        stall: false,
+                    }) => {
+                        let _ = stream.write_all(&bytes).await;
+                    }
+                    None => {
+                        let bytes = server_reply.lock().unwrap().clone();
+                        let _ = stream.write_all(&bytes).await;
+                    }
+                }
             }
         });
         let root =
@@ -121,9 +150,37 @@ impl Fixture {
             key,
             root,
             reply,
+            scripted,
             requests,
             server,
         }
+    }
+
+    fn script(&self, bytes: Vec<u8>, stall: bool) {
+        self.scripted
+            .lock()
+            .unwrap()
+            .push_back(Scripted { bytes, stall });
+    }
+
+    fn requested_ranges(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| {
+                request_header(request, "range")
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn upstream_resumes(&self) -> u64 {
+        self.context
+            .telemetry
+            .upstream_resumes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 每次请求都等待真实 handle_client 结束，避免以“客户端收完”代替正常 EOF。
@@ -457,9 +514,9 @@ async fn media_cache_rejects_short_empty_and_long_bodies_even_with_clean_eof() {
 }
 
 #[tokio::test]
-async fn media_cache_rejects_read_failure_even_after_expected_bytes() {
-    // 第一种是 Content-Length 体中断；第二种已经收到精确字节数，
-    // 但 chunked 缺结束块，仍不算上游正常 EOF。
+async fn media_cache_rejects_read_failure_when_resume_is_unavailable() {
+    // 第一种是 Content-Length 体中断，续传请求又拿到不匹配的区间；第二种已经
+    // 收到精确字节数，没有剩余可续传，但 chunked 缺结束块，仍不算上游正常 EOF。
     let mut unterminated_chunk = b"320\r\n".to_vec();
     unterminated_chunk.extend_from_slice(&complete_body());
     unterminated_chunk.extend_from_slice(b"\r\n");
@@ -476,8 +533,84 @@ async fn media_cache_rejects_read_failure_even_after_expected_bytes() {
         let (_, result) = fixture.fetch().await;
         assert!(result.is_err(), "上游截断必须走读取失败路径");
         fixture.assert_not_cached().await;
-        fixture.assert_refetch_and_cache(1).await;
+        fixture
+            .assert_refetch_and_cache(fixture.upstream_requests())
+            .await;
     }
+}
+
+fn truncated_first_part() -> Vec<u8> {
+    response(
+        206,
+        "bytes 0-799/1600",
+        "Content-Length: 800",
+        &complete_body()[..300],
+    )
+}
+
+fn resumed_rest() -> Vec<u8> {
+    response(
+        206,
+        "bytes 300-799/1600",
+        "Content-Length: 500",
+        &complete_body()[300..],
+    )
+}
+
+#[tokio::test]
+async fn segment_resumes_from_forwarded_offset_after_truncation_or_stall() {
+    for stall in [false, true] {
+        let fixture = Fixture::new(complete_response()).await;
+        fixture.script(truncated_first_part(), stall);
+        fixture.script(resumed_rest(), false);
+        let (bytes, result) = fixture.fetch().await;
+        result.unwrap();
+        assert_eq!(body(&bytes), complete_body(), "续传后正文必须逐字节连续");
+        assert_eq!(
+            fixture.requested_ranges(),
+            ["bytes=0-799", "bytes=300-799"],
+            "续传必须从已转发的位置开始"
+        );
+        assert_eq!(fixture.upstream_resumes(), 1);
+        // 拼接出的完整分片与一次读完的分片等价，可以落盘。
+        fixture.wait_for_complete_cache().await;
+    }
+}
+
+#[tokio::test]
+async fn segment_resume_is_abandoned_when_upstream_ignores_resume_range() {
+    let fixture = Fixture::new(complete_response()).await;
+    fixture.script(truncated_first_part(), false);
+    fixture.script(
+        response(
+            200,
+            "bytes 0-799/1600",
+            "Content-Length: 800",
+            &complete_body(),
+        ),
+        false,
+    );
+    let (bytes, result) = fixture.fetch().await;
+    assert!(result.is_err(), "续传被拒必须走读取失败路径");
+    assert_eq!(body(&bytes), &complete_body()[..300], "不得拼接全量响应");
+    assert_eq!(fixture.upstream_resumes(), 1, "区间不符时不再重试");
+    fixture.assert_not_cached().await;
+}
+
+#[tokio::test]
+async fn unreachable_upstream_is_answered_with_bad_gateway_after_one_retry() {
+    let mut fixture = Fixture::new(complete_response()).await;
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    fixture.context.url = format!("http://{closed}/media.m4s").into();
+    let (bytes, result) = fixture.fetch().await;
+    assert!(result.is_err());
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.starts_with("HTTP/1.1 502 Bad Gateway"), "{text}");
+    assert!(!text.contains(&closed.to_string()), "不得回显上游地址");
+    assert_eq!(fixture.upstream_requests(), 2, "分片请求发送失败应重试一次");
 }
 
 #[tokio::test]

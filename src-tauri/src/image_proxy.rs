@@ -334,7 +334,15 @@ async fn handle_image_request(
         request = request.header("referer", referer);
     }
 
-    let upstream = request.send().await.map_err(|e| format!("upstream: {e}"))?;
+    // 上游失败也要回一个完整响应：直接断开会被 WebView 记成 ERR_EMPTY_RESPONSE，
+    // 看起来像本机代理坏了，而不是一张图片加载失败。
+    let upstream = match request.send().await {
+        Ok(upstream) => upstream,
+        Err(e) => {
+            write_bad_gateway(socket).await?;
+            return Err(format!("upstream: {e}"));
+        }
+    };
     let status = upstream.status().as_u16();
     let status_reason = upstream.status().canonical_reason().unwrap_or("Error");
     let content_type = upstream
@@ -362,7 +370,13 @@ async fn handle_image_request(
         .await;
     }
 
-    let bytes = upstream.bytes().await.map_err(|e| format!("body: {e}"))?;
+    let bytes = match upstream.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            write_bad_gateway(socket).await?;
+            return Err(format!("body: {e}"));
+        }
+    };
     if bytes.len() > MAX_IMAGE_BYTES {
         return write_response_bytes(
             socket,
@@ -417,6 +431,19 @@ fn parse_image_url(raw: &str) -> Option<Url> {
 /// `+` 不是空格，无效或截断的转义序列原样保留，无效 UTF-8 替换为 U+FFFD。
 fn percent_decode(s: &str) -> String {
     percent_decode_str(s).decode_utf8_lossy().into_owned()
+}
+
+/// 固定文本，不回显上游地址（可能带签名）。
+async fn write_bad_gateway(socket: &mut tokio::net::TcpStream) -> Result<(), String> {
+    write_response_bytes(
+        socket,
+        502,
+        "Bad Gateway",
+        "text/plain; charset=utf-8",
+        b"upstream image request failed",
+        None,
+    )
+    .await
 }
 
 async fn write_response_bytes(
@@ -732,6 +759,55 @@ mod tests {
         // 也没有写入任何缓存。
         server.join().unwrap();
         assert_eq!(proxy.cache_usage().await.files, 0);
+
+        proxy.stop();
+        let _ = std::fs::remove_dir_all(cache_root);
+    }
+
+    /// 上游连不上时必须回 502，而不是不写任何字节就断开（ERR_EMPTY_RESPONSE）。
+    #[tokio::test]
+    async fn unreachable_upstream_is_answered_with_bad_gateway() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // 先占一个端口再释放，得到一个当前无人监听的地址。
+        let closed_addr = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-image-proxy-unreachable-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let proxy = ImageProxy::new(cache_root.clone());
+        let base = proxy
+            .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
+            .await
+            .unwrap();
+        let encoded = format!("http%3A%2F%2F{closed_addr}%2Fpic.png").replace(':', "%3A");
+        let mut local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+            .await
+            .unwrap();
+        local
+            .write_all(
+                format!(
+                    "GET /img?url={encoded} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            local.read_to_end(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 502 Bad Gateway"), "{text}");
+        assert!(text.contains("Cache-Control: no-store"), "{text}");
+        assert!(!text.contains(&closed_addr.to_string()), "不得回显上游地址");
 
         proxy.stop();
         let _ = std::fs::remove_dir_all(cache_root);

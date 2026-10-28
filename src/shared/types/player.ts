@@ -27,6 +27,8 @@ export type StreamProxyTelemetry = {
   started_at_ms: number;
   upstream_requests: number;
   upstream_failures: number;
+  /** Range 分片中途停顿或截断后的续传请求数（同时计入 `upstream_requests`）。 */
+  upstream_resumes: number;
   bytes_forwarded: number;
   first_response_ms: number | null;
   latest_response_ms: number | null;
