@@ -1,5 +1,4 @@
 import { type RefObject, useCallback, useLayoutEffect, useRef } from "react";
-import { detailsScrollTopFor, scrollDetailsContent } from "@/shared/gestures/detailsScroll";
 import {
   clampDetailsSharePercent,
   DETAILS_MOMENTUM_MIN_VELOCITY,
@@ -8,102 +7,94 @@ import {
   DETAILS_RESIZE_TAP_SUPPRESSION_MS,
   detailsContentScrollStep,
   detailsMomentumStep,
-  detailsResizeCeiling,
   detailsResizeIntent,
+  detailsResizeLayout,
+  detailsResizePressIsHold,
   detailsResizeStepIsVisible,
   detailsResizeVelocity,
   detailsShareCssValue,
-  detailsShareFromHeights,
-  detailsShareMaxPercent,
-  detailsShareMinPercent,
+  roundDetailsShare,
   type DetailsMomentumSample,
+  type DetailsResizeLayout,
 } from "@/shared/gestures/detailsResize";
+import {
+  consumeDetailsResizeDeltas,
+  createDetailsResizeFrameQueue,
+  type DetailsResizeCursor,
+  type DetailsResizeFrameBounds,
+  type DetailsResizeFrameResult,
+} from "@/shared/gestures/detailsResizeFrame";
+import {
+  detailsResizeTransform,
+  type DetailsResizeTransform,
+  type DetailsResizeTransformInput,
+} from "@/shared/gestures/detailsResizeTransform";
+import { detailsScrollMetrics, scrollDetailsContent } from "@/shared/gestures/detailsScroll";
 
-type ResizeState = {
-  touchId: number;
-  lastY: number;
-  containerWidth: number;
-  containerHeight: number;
+type MeasuredLayout = {
+  width: number;
+  height: number;
   aspectRatio: number | null;
-  minPercent: number;
-  maxPercent: number;
-  active: boolean;
-  lastPercent: number;
-  scrollers: HTMLElement[];
+  layout: DetailsResizeLayout | null;
 };
 
-/**
- * 松手后仍在推进的惯性。
- *
- * 与 `ResizeState` 分开存：惯性期间没有手指、也没有触摸身份，但它和拖动
- * 共用同一套「位移分配 → 写 CSS 变量」的路径，因此只存跑动所需的最少状态。
- */
-type MomentumState = {
-  velocity: number;
-  lastTime: number;
-  containerHeight: number;
-  minPercent: number;
-  maxPercent: number;
-  percent: number;
-  scrollers: HTMLElement[];
-  frame: number | null;
-};
-
-/** 现场量出的本轮调整基准：容器尺寸、起算占比与双向边界。 */
-type ResizeMetrics = {
-  containerWidth: number;
-  containerHeight: number;
-  aspectRatio: number | null;
-  percent: number;
-  minPercent: number;
-  maxPercent: number;
-};
-
-/**
- * 已按下、但还没开始调整占比的一次按压。
- *
- * 与 `ResizeState` 分开存是有原因的：手势**启用**的时刻不由手指决定。首次进入
- * 播放页时画幅要等媒体报出 `videoWidth/videoHeight` 才可知（`enabled` 依赖它），
- * 而手指可能在那之前就按下了。若把「按下」和「可调整」合成同一份状态，
- * 启用那一刻的重算（`ResizeObserver` 的收口）就会把这份状态当作旧手势清掉，
- * 整次拖动随之丢失 —— 这正是「首次进入有时拖不动」的根因。
- *
- * 按压因此只记录与布局无关的东西（触摸身份、起点、滚动链），
- * 布局量（容器尺寸、起算占比、上下限）等到真正接管的那一刻再现场量。
- */
 type ResizePress = {
   touchId: number;
   startX: number;
   startY: number;
-  /**
-   * 最近一次**已派发** touchmove 的纵向位置。
-   *
-   * 接管那一帧的位移要算「本帧增量」（当前减上一次已派发位置），不能算「自按下
-   * 以来的总位移」：总位移跨过了布局变化（画幅刚到位、舞台刚变高），算进来会让
-   * 第一帧跳一下；也不能从当前位置起算（那是 0，本帧就不会认领手势，
-   * 浏览器随即开始原生滚动，整次拖动依然丢）。
-   */
   lastY: number;
-  scrollers: HTMLElement[];
+  target: Element;
+  scrollers: HTMLElement[] | null;
+  scrollTop: number;
+  maxScrollTop: number;
   intent: "pending" | "resize" | "swipe";
-  /** 最近几次位移采样（环形，最多 `DETAILS_MOMENTUM_SAMPLE_LIMIT` 条），松手时估算速度。 */
+  /**
+   * 轴锁前已对本次触摸调用过 `preventDefault`。一旦拦过就必须在锁定前持续拦截：
+   * 慢速上滑时后续 move 的单步位移常不足 1px，若中途放行一次，合成器就把触摸
+   * 交给原生滚动并派发 pointercancel，之后的 move 不可取消，侧栏不再跟手。
+   */
+  claimed: boolean;
+  pressedAt: number;
   samples: DetailsMomentumSample[];
 };
 
-export type UseDetailsResizeOptions = {
-  /** 仅移动端、上下布局、已知非 16:9 视频且不在全屏时启用。 */
-  enabled: boolean;
-  /** 原始源画幅，用于恢复默认舞台（满宽按比值撑高，最高占容器 70%）。 */
-  aspectRatio?: number | null;
-  containerRef: RefObject<HTMLElement | null>;
-  detailsRef: RefObject<HTMLElement | null>;
-  /** 逐帧预览不进入 React 状态；结束后由宿主提交。 */
-  onPreview: (percent: number) => void;
-  onCommit: (percent: number) => void;
-  onClamp?: (percent: number) => void;
+type ResizeGesture = {
+  touchId: number;
+  scrollers: HTMLElement[];
+  baseStageHeight: number;
+  cursor: DetailsResizeCursor;
+  bounds: DetailsResizeFrameBounds;
+  deltas: number[];
 };
 
-/** 只收集命中内容到页签视口内的滚动链，不滚动页面或后台页签。 */
+type MomentumState = {
+  velocity: number;
+  lastTime: number;
+  scrollers: HTMLElement[];
+  baseStageHeight: number;
+  cursor: DetailsResizeCursor;
+  bounds: DetailsResizeFrameBounds;
+  frame: number | null;
+};
+
+type DetailsResizeRenderTargets = {
+  playerFrame: HTMLElement | null;
+  playerStage: HTMLElement | null;
+  surface: HTMLElement | null;
+  controls: HTMLElement | null;
+  aside: HTMLElement | null;
+  composer: HTMLElement | null;
+  asr: HTMLElement | null;
+};
+
+export type UseDetailsResizeOptions = {
+  enabled: boolean;
+  aspectRatio: number | null;
+  containerRef: RefObject<HTMLElement | null>;
+  /** 视频/分 P 身份；变化时恢复原始布局。 */
+  resetKey: string;
+};
+
 function contentScrollers(target: Element, viewport: HTMLElement): HTMLElement[] {
   const scrollers: HTMLElement[] = [];
   for (let node: Element | null = target; node && node !== viewport; node = node.parentElement) {
@@ -118,204 +109,576 @@ function contentScrollers(target: Element, viewport: HTMLElement): HTMLElement[]
   return scrollers;
 }
 
+function clampScrollTop(value: number, maxScrollTop: number): number {
+  return Math.min(maxScrollTop, Math.max(0, value));
+}
+
+const resizeTargetCache = new WeakMap<HTMLElement, DetailsResizeRenderTargets>();
+const detailsShareProperty = "--vod-details-share";
+
+function queryResizeTargets(container: HTMLElement): DetailsResizeRenderTargets {
+  return {
+    playerFrame: container.querySelector<HTMLElement>("[data-vod-details-stage]"),
+    playerStage: container.querySelector<HTMLElement>("[data-vod-details-player-stage]"),
+    surface: container.querySelector<HTMLElement>("[data-vod-details-media-surface]"),
+    controls: container.querySelector<HTMLElement>("[data-vod-details-controls]"),
+    aside: container.querySelector<HTMLElement>("[data-vod-details-aside]"),
+    composer: container.querySelector<HTMLElement>("[data-vod-details-composer]"),
+    asr: container.querySelector<HTMLElement>('[data-vod-details-resize-anchor="true"]'),
+  };
+}
+
+function getResizeTargets(container: HTMLElement): DetailsResizeRenderTargets {
+  let targets = resizeTargetCache.get(container);
+  if (
+    !targets ||
+    !targets.playerFrame?.isConnected ||
+    !targets.playerStage?.isConnected ||
+    !targets.surface?.isConnected ||
+    !targets.aside?.isConnected
+  ) {
+    targets = queryResizeTargets(container);
+    resizeTargetCache.set(container, targets);
+    return targets;
+  }
+
+  // 字幕和发送框会按状态/页签挂载；缺失时继续按帧查找，出现后立即接上变换。
+  if (!targets.controls) {
+    targets.controls = container.querySelector<HTMLElement>("[data-vod-details-controls]");
+  }
+  if (targets.controls && !targets.controls.isConnected) {
+    targets.controls = container.querySelector<HTMLElement>("[data-vod-details-controls]");
+  }
+  if (!targets.composer) {
+    targets.composer = container.querySelector<HTMLElement>("[data-vod-details-composer]");
+  }
+  if (targets.composer && !targets.composer.isConnected) {
+    targets.composer = container.querySelector<HTMLElement>("[data-vod-details-composer]");
+  }
+  if (!targets.asr) {
+    targets.asr = container.querySelector<HTMLElement>('[data-vod-details-resize-anchor="true"]');
+  }
+  if (targets.asr && !targets.asr.isConnected) {
+    targets.asr = container.querySelector<HTMLElement>('[data-vod-details-resize-anchor="true"]');
+  }
+  return targets;
+}
+
+function setResizeStyle(element: HTMLElement | null, property: string, value: string): void {
+  if (element && element.style.getPropertyValue(property) !== value) {
+    element.style.setProperty(property, value);
+  }
+}
+
+function setResizeState(element: HTMLElement | null, attribute: string, active: boolean): void {
+  if (!element) return;
+  if (active) {
+    if (!element.hasAttribute(attribute)) element.setAttribute(attribute, "true");
+  } else {
+    element.removeAttribute(attribute);
+  }
+}
+
 /**
- * 移动端内容滑动自适应侧栏。返回值只绑定页签内容视口，Tab 栏不参与。
- *
- * touchmove 使用原生非 passive 监听器：纵向原生滚动会取消 PointerEvent，
- * React 的 passive touchmove 又无法阻止同一位移被浏览器和布局各消费一次。
- * 仅需改变占比时认领手势；到达边界的剩余位移交给命中的滚动链。完全不需调整
- * 时保留原生滚动及惯性，已由浏览器认领的不可取消事件不再抢回。
- *
- * 松手后按末段速度接着推进一段（见 `detailsMomentumStep`），并在下一次按下时
- * 立即停下并把当时的位置提交出去 —— 惯性不是“正在拖动”，但也不是可以随便
- * 推翻的临时状态。
- *
- * 监听器**不按 `enabled` 绑定**：首次进入播放页时画幅要等媒体报出尺寸才可知，
- * 手指可能先于它按下；按 `enabled` 绑定会让这一次拖动整个失效。绑定恒常、
- * 是否接管逐帧看 `enabled`，因此启用后手势能接着进行（见 `ResizePress`）。
+ * `--vod-details-share` 是不继承的注册属性，主容器上的值不会到达子元素。
+ * 占比同时写在实际消费它的舞台与 aside 上，清理时也从同一组目标移除。
+ */
+function syncDetailsShareTargets(
+  container: HTMLElement,
+  targets: DetailsResizeRenderTargets,
+): void {
+  const value = container.style.getPropertyValue(detailsShareProperty);
+  for (const target of [targets.playerFrame, targets.aside]) {
+    if (!target) continue;
+    if (value) {
+      setResizeStyle(target, detailsShareProperty, value);
+    } else {
+      target.style.removeProperty(detailsShareProperty);
+    }
+  }
+}
+
+/**
+ * prepared/resizing 只写在实际消费样式的元素上，主容器不匹配其后代。
+ * 可选元素晚挂载时也在这里补上状态，避免必须重新进入一次手势。
+ */
+function syncResizeTargetState(container: HTMLElement): void {
+  const targets = getResizeTargets(container);
+  syncDetailsShareTargets(container, targets);
+  const prepared = container.dataset.vodDetailsPrepared === "true";
+  const resizing = container.dataset.vodDetailsResizing === "true";
+  // 只有进入拖动后才需要放开 player stage 的裁切；单纯按下预备不应改变层级裁切。
+  setResizeState(targets.playerStage, "data-vod-details-overflow", resizing);
+  setResizeState(targets.aside, "data-vod-details-prepared", prepared);
+  setResizeState(targets.composer, "data-vod-details-prepared", prepared);
+  setResizeState(targets.surface, "data-vod-details-resizing", resizing);
+  setResizeState(targets.controls, "data-vod-details-resizing", resizing);
+  setResizeState(targets.asr, "data-vod-details-resizing", resizing);
+  setResizeState(targets.aside, "data-vod-details-resizing", resizing);
+}
+
+function resizeOffsetValue(value: number): string {
+  return `${value.toFixed(4)}px`;
+}
+
+function writeResizeTransform(container: HTMLElement, transform: DetailsResizeTransform): void {
+  const targets = getResizeTargets(container);
+  setResizeStyle(targets.surface, "--vod-resize-stage-scale", transform.stageScale.toFixed(6));
+  setResizeStyle(
+    targets.controls,
+    "--vod-resize-chrome-offset",
+    resizeOffsetValue(transform.chromeOffset),
+  );
+  setResizeStyle(
+    targets.asr,
+    "--vod-resize-chrome-offset",
+    resizeOffsetValue(transform.chromeOffset),
+  );
+  setResizeStyle(
+    targets.aside,
+    "--vod-resize-aside-height",
+    resizeOffsetValue(transform.maxAsideHeight),
+  );
+  setResizeStyle(
+    targets.aside,
+    "--vod-resize-aside-offset",
+    resizeOffsetValue(transform.asideOffset),
+  );
+  setResizeStyle(
+    targets.composer,
+    "--vod-resize-composer-offset",
+    resizeOffsetValue(transform.composerOffset),
+  );
+  syncResizeTargetState(container);
+}
+
+function clearResizeTransform(container: HTMLElement | null): void {
+  if (!container) return;
+  const properties = [
+    "--vod-resize-stage-scale",
+    "--vod-resize-chrome-offset",
+    "--vod-resize-aside-height",
+    "--vod-resize-aside-offset",
+    "--vod-resize-composer-offset",
+  ];
+  const elements = new Set<HTMLElement | null>([
+    container.querySelector<HTMLElement>("[data-vod-details-stage]"),
+    container.querySelector<HTMLElement>("[data-vod-details-player-stage]"),
+    container.querySelector<HTMLElement>("[data-vod-details-media-surface]"),
+    ...container.querySelectorAll<HTMLElement>("[data-vod-details-controls]"),
+    container.querySelector<HTMLElement>("[data-vod-details-aside]"),
+    ...container.querySelectorAll<HTMLElement>("[data-vod-details-composer]"),
+    ...container.querySelectorAll<HTMLElement>('[data-vod-details-resize-anchor="true"]'),
+  ]);
+  for (const element of elements) {
+    if (!element) continue;
+    for (const property of properties) element.style.removeProperty(property);
+  }
+  syncResizeTargetState(container);
+}
+
+function enterPreparedMode(
+  container: HTMLElement | null,
+  input: DetailsResizeTransformInput,
+): boolean {
+  if (!container) return false;
+  const transform = detailsResizeTransform(input);
+  if (!transform) return false;
+  // 先写 aside 上限高度和 composer 补偿，再切换标记；此时视频仍保持真实布局。
+  writeResizeTransform(container, transform);
+  markDetailsPrepared(container, true);
+  syncResizeTargetState(container);
+  return true;
+}
+
+function enterResizeMode(
+  container: HTMLElement | null,
+  input: DetailsResizeTransformInput,
+): boolean {
+  if (!container) return false;
+  const transform = detailsResizeTransform(input);
+  if (!transform) return false;
+  writeResizeTransform(container, transform);
+  markDetailsPrepared(container, true);
+  markDetailsResizing(container, true);
+  syncResizeTargetState(container);
+  return true;
+}
+
+function settleResizeMode(container: HTMLElement | null, percent: number): void {
+  if (!container) return;
+  // 同一任务内先落到最终真实布局，再撤掉临时布局和变换；浏览器只绘制最终结果。
+  writeDetailsShare(container, percent);
+  markDetailsPrepared(container, false);
+  clearDetailsResizing(container);
+  clearResizeTransform(container);
+  syncResizeTargetState(container);
+}
+
+/**
+ * 移动端 VOD 侧栏占比。事件只更新坐标与待消费位移，测量和 DOM 写入全部收口到
+ * 单个 RAF；静态布局只由同一个占比表达，按下预备后拖动不再改变真实布局。
  */
 export function useDetailsResize({
   enabled,
-  aspectRatio = null,
+  aspectRatio,
   containerRef,
-  detailsRef,
-  onPreview,
-  onCommit,
-  onClamp,
+  resetKey,
 }: UseDetailsResizeOptions) {
-  const stateRef = useRef<ResizeState | null>(null);
-  const pressRef = useRef<ResizePress | null>(null);
-  const momentumRef = useRef<MomentumState | null>(null);
-  const previewFrameRef = useRef<number | null>(null);
-  const suppressClickUntilRef = useRef(0);
-  const callbacksRef = useRef({ onPreview, onCommit, onClamp });
-  const aspectRatioRef = useRef(aspectRatio);
   const enabledRef = useRef(enabled);
-  useLayoutEffect(() => {
-    callbacksRef.current = { onPreview, onCommit, onClamp };
-    aspectRatioRef.current = aspectRatio;
-    enabledRef.current = enabled;
-  });
+  const aspectRatioRef = useRef(aspectRatio);
+  const resetKeyRef = useRef(resetKey);
+  const previousAspectRatioRef = useRef(aspectRatio);
+  const geometryRef = useRef<MeasuredLayout | null>(null);
+  const currentPercentRef = useRef<number | null>(null);
+  const userAdjustedRef = useRef(false);
+  const pressRef = useRef<ResizePress | null>(null);
+  const gestureRef = useRef<ResizeGesture | null>(null);
+  const momentumRef = useRef<MomentumState | null>(null);
+  const preparedStageHeightRef = useRef<number | null>(null);
+  const suppressClickUntilRef = useRef(0);
+  const frameQueueRef = useRef<ReturnType<typeof createDetailsResizeFrameQueue> | null>(null);
 
-  const cancelPreview = useCallback(() => {
-    if (previewFrameRef.current === null) return;
-    window.cancelAnimationFrame(previewFrameRef.current);
-    previewFrameRef.current = null;
-  }, []);
-
-  /**
-   * 停下惯性并提交停在的位置。
-   *
-   * `commit` 为假时只清状态（几何变化、禁用、卸载都不该把当前值写回宿主 ——
-   * 几何变化时宿主自己会按新边界收口，禁用时那个值已经无意义）。
-   */
-  const stopMomentum = useCallback((commit: boolean) => {
-    const momentum = momentumRef.current;
-    momentumRef.current = null;
-    if (!momentum) return false;
-    if (momentum.frame !== null) window.cancelAnimationFrame(momentum.frame);
-    if (commit) {
-      callbacksRef.current.onCommit(momentum.percent);
-      suppressClickUntilRef.current = Date.now() + DETAILS_RESIZE_TAP_SUPPRESSION_MS;
-    }
-    return true;
-  }, []);
-
-  const finish = useCallback(() => {
-    const state = stateRef.current;
-    stateRef.current = null;
-    pressRef.current = null;
-    cancelPreview();
-    if (state?.active) {
-      callbacksRef.current.onCommit(state.lastPercent);
-      suppressClickUntilRef.current = Date.now() + DETAILS_RESIZE_TAP_SUPPRESSION_MS;
-    }
-  }, [cancelPreview]);
-
-  /** 量取本轮调整的基准；只在需要时读 DOM，不写任何状态。 */
-  const measureResize = useCallback((): ResizeMetrics | null => {
-    const container = containerRef.current;
-    const details = detailsRef.current;
-    if (!container || !details || container.clientHeight <= 0) return null;
-    const containerWidth = container.clientWidth;
-    const containerHeight = container.clientHeight;
-    const percent = detailsShareFromHeights(
-      details.getBoundingClientRect().height,
-      containerHeight,
-    );
-    const minPercent = detailsShareMinPercent(
-      containerWidth,
-      containerHeight,
-      aspectRatioRef.current,
-    );
-    return {
-      containerWidth,
-      containerHeight,
-      aspectRatio: aspectRatioRef.current,
-      percent,
-      minPercent,
-      maxPercent: detailsResizeCeiling(percent, containerWidth, containerHeight, minPercent),
-    };
-  }, [containerRef, detailsRef]);
-
-  /**
-   * 真正接管一次按压：用现场量到的基准建立本轮调整。
-   *
-   * `lastY` 继承按压里记的上一次已派发位置，于是接管那一帧的位移正好是它自己的
-   * 增量，而按下到接管之间的位移不会被追溯应用。
-   */
-  const beginResize = useCallback(
-    (press: ResizePress): ResizeState | null => {
-      const metrics = measureResize();
-      if (!metrics) return null;
-      const state: ResizeState = {
-        touchId: press.touchId,
-        lastY: press.lastY,
-        containerWidth: metrics.containerWidth,
-        containerHeight: metrics.containerHeight,
-        aspectRatio: metrics.aspectRatio,
-        minPercent: metrics.minPercent,
-        maxPercent: metrics.maxPercent,
-        active: false,
-        lastPercent: metrics.percent,
-        scrollers: press.scrollers,
-      };
-      stateRef.current = state;
-      return state;
+  const settlePreparedLayout = useCallback(
+    (percent: number) => {
+      preparedStageHeightRef.current = null;
+      settleResizeMode(containerRef.current, percent);
     },
-    [measureResize],
+    [containerRef],
   );
 
-  /**
-   * 惯性循环：每帧把衰减后的位移交给同一套分配逻辑，并预览占比。
-   *
-   * 只调 `requestAnimationFrame`（不用 WAAPI/CSS）：惯性要写的是布局占比，
-   * 不是可交给合成器的位移，而且它必须与拖动手势共用 `detailsContentScrollStep`
-   * 的「先滚内容、到顶再缩侧栏」规则，否则甩到底时会跳。
-   */
+  const prepareResize = useCallback(
+    (containerHeight: number, layout: DetailsResizeLayout, percent: number): number | null => {
+      const preparedPercent = roundDetailsShare(percent);
+      const stageHeight = ((100 - preparedPercent) / 100) * containerHeight;
+      if (!(stageHeight > 0)) return null;
+      const entered = enterPreparedMode(containerRef.current, {
+        containerHeight,
+        stageHeight,
+        minPercent: layout.minPercent,
+        currentPercent: preparedPercent,
+        maxPercent: layout.maxPercent,
+      });
+      if (!entered) return null;
+      currentPercentRef.current = preparedPercent;
+      preparedStageHeightRef.current = stageHeight;
+      return stageHeight;
+    },
+    [containerRef],
+  );
+
+  const measureLayout = useCallback(
+    (width?: number, height?: number): MeasuredLayout | null => {
+      const container = containerRef.current;
+      if (!container) return null;
+      const measuredWidth = width ?? container.clientWidth;
+      const measuredHeight = height ?? container.clientHeight;
+      const cached = geometryRef.current;
+      if (
+        cached &&
+        Math.abs(cached.width - measuredWidth) < 0.5 &&
+        Math.abs(cached.height - measuredHeight) < 0.5 &&
+        Object.is(cached.aspectRatio, aspectRatioRef.current)
+      ) {
+        return cached;
+      }
+      const measured: MeasuredLayout = {
+        width: measuredWidth,
+        height: measuredHeight,
+        aspectRatio: aspectRatioRef.current,
+        layout: detailsResizeLayout(measuredWidth, measuredHeight, aspectRatioRef.current),
+      };
+      geometryRef.current = measured;
+      return measured;
+    },
+    [containerRef],
+  );
+
+  const initializeLayout = useCallback(
+    (width?: number, height?: number): MeasuredLayout | null => {
+      const container = containerRef.current;
+      if (!container || !enabledRef.current) return null;
+      const measured = measureLayout(width, height);
+      if (!measured?.layout) {
+        clearDetailsLayout(container);
+        return measured;
+      }
+      const percent = userAdjustedRef.current
+        ? clampDetailsSharePercent(
+            currentPercentRef.current ?? measured.layout.initialPercent,
+            measured.layout.maxPercent,
+            measured.layout.minPercent,
+          )
+        : measured.layout.initialPercent;
+      currentPercentRef.current = percent;
+      settlePreparedLayout(percent);
+      return measured;
+    },
+    [containerRef, measureLayout, settlePreparedLayout],
+  );
+
+  const applyFrameResult = useCallback(
+    (
+      cursorBefore: DetailsResizeCursor,
+      scrollers: readonly HTMLElement[],
+      result: DetailsResizeFrameResult,
+      baseStageHeight: number,
+      bounds: DetailsResizeFrameBounds,
+    ): DetailsResizeCursor => {
+      const applied = scrollDetailsContent(scrollers, result.scrollDelta);
+      let cursor = result.cursor;
+      if (applied !== result.scrollDelta) {
+        cursor = {
+          percent: result.cursor.percent,
+          scrollTop: clampScrollTop(cursorBefore.scrollTop + applied, bounds.maxScrollTop),
+        };
+      }
+      if (result.percentChanged) {
+        const container = containerRef.current;
+        if (container) {
+          const transform = detailsResizeTransform({
+            containerHeight: bounds.containerHeight,
+            stageHeight: baseStageHeight,
+            minPercent: bounds.minPercent,
+            currentPercent: cursor.percent,
+            maxPercent: bounds.maxPercent,
+          });
+          if (transform) writeResizeTransform(container, transform);
+        }
+        userAdjustedRef.current = true;
+      }
+      currentPercentRef.current = cursor.percent;
+      return cursor;
+    },
+    [containerRef],
+  );
+
+  const consumeFrame = useCallback(
+    (
+      cursor: DetailsResizeCursor,
+      scrollers: readonly HTMLElement[],
+      deltas: readonly number[],
+      bounds: DetailsResizeFrameBounds,
+    ): {
+      cursor: DetailsResizeCursor;
+      result: DetailsResizeFrameResult;
+      bounds: DetailsResizeFrameBounds;
+    } => {
+      let result = consumeDetailsResizeDeltas(cursor, deltas, bounds);
+      if (!result.needsScrollMetrics) {
+        result = {
+          ...result,
+          cursor: { ...result.cursor, scrollTop: cursor.scrollTop },
+        };
+        return { cursor, result, bounds };
+      }
+      // 只有真正要滚内容时才读 DOM；侧栏缩放和异步追加都会改变可滚余量。
+      const metrics = detailsScrollMetrics(scrollers);
+      const refreshedCursor = { percent: cursor.percent, scrollTop: metrics.top };
+      const refreshedBounds = { ...bounds, maxScrollTop: metrics.maxTop };
+      return {
+        cursor: refreshedCursor,
+        result: consumeDetailsResizeDeltas(refreshedCursor, deltas, refreshedBounds),
+        bounds: refreshedBounds,
+      };
+    },
+    [],
+  );
+
+  const flushGesture = useCallback(
+    (gesture: ResizeGesture) => {
+      if (gesture.deltas.length === 0) return;
+      const deltas = gesture.deltas;
+      gesture.deltas = [];
+      const consumed = consumeFrame(gesture.cursor, gesture.scrollers, deltas, gesture.bounds);
+      gesture.bounds = consumed.bounds;
+      gesture.cursor = applyFrameResult(
+        consumed.cursor,
+        gesture.scrollers,
+        consumed.result,
+        gesture.baseStageHeight,
+        consumed.bounds,
+      );
+    },
+    [applyFrameResult, consumeFrame],
+  );
+
+  useLayoutEffect(() => {
+    const queue = createDetailsResizeFrameQueue(() => {
+      const gesture = gestureRef.current;
+      if (gesture) flushGesture(gesture);
+    });
+    frameQueueRef.current = queue;
+    return () => {
+      queue.cancel();
+      if (frameQueueRef.current === queue) frameQueueRef.current = null;
+    };
+  }, [flushGesture]);
+
+  const stopMomentum = useCallback(
+    (commit: boolean) => {
+      const momentum = momentumRef.current;
+      momentumRef.current = null;
+      if (!momentum) return false;
+      if (momentum.frame !== null) window.cancelAnimationFrame(momentum.frame);
+      settlePreparedLayout(momentum.cursor.percent);
+      if (commit) {
+        suppressClickUntilRef.current = Date.now() + DETAILS_RESIZE_TAP_SUPPRESSION_MS;
+      }
+      return true;
+    },
+    [settlePreparedLayout],
+  );
+
+  const finishGesture = useCallback(
+    (suppressClick: boolean, flushPending: boolean, preserveUnclaimedPress = false) => {
+      const gesture = gestureRef.current;
+      gestureRef.current = null;
+      if (gesture || !preserveUnclaimedPress) pressRef.current = null;
+      if (gesture) {
+        frameQueueRef.current?.cancel();
+        if (flushPending) flushGesture(gesture);
+      }
+      const percent = gesture?.cursor.percent ?? currentPercentRef.current;
+      if ((gesture || preparedStageHeightRef.current !== null) && percent !== null) {
+        settlePreparedLayout(percent);
+      }
+      if (gesture && suppressClick) {
+        suppressClickUntilRef.current = Date.now() + DETAILS_RESIZE_TAP_SUPPRESSION_MS;
+      }
+    },
+    [flushGesture, settlePreparedLayout],
+  );
+
   const startMomentum = useCallback(
-    (velocity: number, state: ResizeState) => {
-      momentumRef.current = {
+    (
+      velocity: number,
+      cursor: DetailsResizeCursor,
+      scrollers: HTMLElement[],
+      baseStageHeight: number,
+      bounds: DetailsResizeFrameBounds,
+    ) => {
+      stopMomentum(false);
+      const momentum: MomentumState = {
         velocity,
         lastTime: performance.now(),
-        containerHeight: state.containerHeight,
-        minPercent: state.minPercent,
-        maxPercent: state.maxPercent,
-        percent: state.lastPercent,
-        scrollers: state.scrollers,
+        scrollers,
+        baseStageHeight,
+        cursor,
+        bounds,
         frame: null,
       };
+      momentumRef.current = momentum;
+      const entered = enterResizeMode(containerRef.current, {
+        containerHeight: bounds.containerHeight,
+        stageHeight: baseStageHeight,
+        minPercent: bounds.minPercent,
+        currentPercent: cursor.percent,
+        maxPercent: bounds.maxPercent,
+      });
+      if (!entered) {
+        momentumRef.current = null;
+        settlePreparedLayout(cursor.percent);
+        return;
+      }
+
       const step = (now: number) => {
-        const momentum = momentumRef.current;
-        if (!momentum) return;
+        if (momentumRef.current !== momentum) return;
         momentum.frame = null;
         const dt = now - momentum.lastTime;
         momentum.lastTime = now;
-        const { delta, velocity: nextVelocity } = detailsMomentumStep(momentum.velocity, dt);
-        momentum.velocity = nextVelocity;
-        const previousPercent = momentum.percent;
-        // 上滑与纯扩大布局的帧不读取滚动链；下滑先回顶才需要真实 scrollTop。
-        const scrollTopBefore = detailsScrollTopFor(momentum.scrollers, delta);
-        const next = detailsContentScrollStep(
-          previousPercent,
-          delta,
-          scrollTopBefore,
-          momentum.containerHeight,
-          momentum.maxPercent,
-          momentum.minPercent,
+        const motion = detailsMomentumStep(momentum.velocity, dt);
+        momentum.velocity = motion.velocity;
+        const before = momentum.cursor;
+        const consumed = consumeFrame(before, momentum.scrollers, [motion.delta], momentum.bounds);
+        momentum.bounds = consumed.bounds;
+        momentum.cursor = applyFrameResult(
+          consumed.cursor,
+          momentum.scrollers,
+          consumed.result,
+          momentum.baseStageHeight,
+          consumed.bounds,
         );
-        momentum.percent = next.percent;
-        // 先消费内容滚动、再写占比：写 grid 会改布局，之后任何 scrollTop 读写都要
-        // 先结算刚写的布局。纯内容滚动帧不写占比，也不触发整张网格重排。
-        const scrolled = scrollDetailsContent(momentum.scrollers, next.scrollDelta);
-        if (Math.abs(next.percent - previousPercent) > 1e-9) {
-          callbacksRef.current.onPreview(next.percent);
-        }
-        // 占比与滚动都不再变化（上限处内容也到底了）：继续跑只是空转，直接停下并提交。
-        const stalled = Math.abs(next.percent - previousPercent) < 1e-9 && Math.abs(scrolled) < 0.5;
+        const stalled =
+          Math.abs(momentum.cursor.percent - before.percent) < 1e-9 &&
+          Math.abs(momentum.cursor.scrollTop - before.scrollTop) < 1e-9;
         if (stalled || Math.abs(momentum.velocity) < DETAILS_MOMENTUM_STOP_VELOCITY) {
           stopMomentum(true);
           return;
         }
         momentum.frame = window.requestAnimationFrame(step);
       };
-      momentumRef.current.frame = window.requestAnimationFrame(step);
+      momentum.frame = window.requestAnimationFrame(step);
     },
-    [stopMomentum],
+    [applyFrameResult, consumeFrame, containerRef, settlePreparedLayout, stopMomentum],
+  );
+
+  const ensurePressScroll = useCallback(
+    (press: ResizePress, viewport: HTMLElement, refresh = false) => {
+      if (press.scrollers && !refresh) return;
+      const scrollers = press.scrollers ?? contentScrollers(press.target, viewport);
+      press.scrollers = scrollers;
+      const metrics = detailsScrollMetrics(scrollers);
+      press.scrollTop = metrics.top;
+      press.maxScrollTop = metrics.maxTop;
+    },
+    [],
+  );
+
+  const beginGesture = useCallback(
+    (
+      press: ResizePress,
+      measured: MeasuredLayout,
+      cursor: DetailsResizeCursor,
+    ): ResizeGesture | null => {
+      if (!enabledRef.current) return null;
+      if (!measured?.layout) return null;
+      const pressCursor = {
+        percent: roundDetailsShare(cursor.percent),
+        scrollTop: cursor.scrollTop,
+      };
+      currentPercentRef.current = pressCursor.percent;
+      const baseStageHeight =
+        preparedStageHeightRef.current ??
+        prepareResize(measured.height, measured.layout, pressCursor.percent);
+      if (baseStageHeight === null) return null;
+      const entered = enterResizeMode(containerRef.current, {
+        containerHeight: measured.height,
+        stageHeight: baseStageHeight,
+        minPercent: measured.layout.minPercent,
+        currentPercent: pressCursor.percent,
+        maxPercent: measured.layout.maxPercent,
+      });
+      if (!entered) return null;
+      const gesture: ResizeGesture = {
+        touchId: press.touchId,
+        scrollers: press.scrollers ?? [],
+        baseStageHeight,
+        cursor: pressCursor,
+        bounds: {
+          containerHeight: measured.height,
+          minPercent: measured.layout.minPercent,
+          maxPercent: measured.layout.maxPercent,
+          maxScrollTop: press.maxScrollTop,
+        },
+        deltas: [],
+      };
+      gestureRef.current = gesture;
+      return gesture;
+    },
+    [containerRef, prepareResize],
   );
 
   const bindContent = useCallback(
     (viewport: HTMLDivElement | null) => {
       if (!viewport) return;
+
       const start = (event: TouchEvent) => {
-        // 再次按下：惯性让位。先把当时的位置提交出去，否则新手势会从旧起点重算，
-        // 用户会看到侧栏弹回甩出去之前；并重新拉长点击抑制，否则抬起后第一下
-        // 点按会落在刚被甩过去的内容上。
         if (stopMomentum(true)) {
           suppressClickUntilRef.current = Date.now() + DETAILS_RESIZE_TAP_SUPPRESSION_MS;
         }
         if (event.touches.length !== 1) {
-          finish();
+          finishGesture(false, false);
           return;
         }
         const target = event.target;
@@ -324,36 +687,36 @@ export function useDetailsResize({
           target.closest(
             'input, textarea, select, [contenteditable="true"], [role="slider"], [role="switch"], [role="dialog"], [data-slot="scroll-area-scrollbar"]',
           )
-        )
+        ) {
           return;
+        }
         const touch = event.touches[0];
         pressRef.current = {
           touchId: touch.identifier,
           startX: touch.clientX,
           startY: touch.clientY,
           lastY: touch.clientY,
-          scrollers: contentScrollers(target, viewport),
+          target,
+          scrollers: null,
+          scrollTop: 0,
+          maxScrollTop: 0,
           intent: "pending",
+          claimed: false,
+          pressedAt: event.timeStamp,
           samples: [{ time: event.timeStamp, y: touch.clientY }],
         };
+        if (enabledRef.current) {
+          const measured = geometryRef.current ?? initializeLayout();
+          if (measured?.layout) {
+            prepareResize(
+              measured.height,
+              measured.layout,
+              currentPercentRef.current ?? measured.layout.initialPercent,
+            );
+          }
+        }
       };
-      /**
-       * 未越过锁定距离时的表态：只阻止默认行为，既不接管也不预览。
-       *
-       * 合成器按**第一个 touchmove 是否被阻止**决定手势归属：不阻止它就当场开始
-       * 原生滚动，并把后续 touchmove 全标成 `cancelable === false`。锁定距离是
-       * `10px`，而手指逐帧位移常常只有 3~4px，合成器的触摸 slop 又恰好也是这个
-       * 量级（实测 9px 的首帧已经会被判给原生滚动）—— 等攒够 10px 时事件早已不可
-       * 取消，`!event.cancelable` 把整次拖动丢掉。这正是「切换侧栏页签或点开信息卡
-       * 标题后，第一次滑动不改变侧栏高度」的根因：只有首帧位移就 ≥10px 的大跨度
-       * 滑动才抢得赢这场归属竞争。
-       *
-       * 只在纵向占优且这一步**真能**改变占比时按住不放：到达边界、以及下滑要先
-       * 滚回内容顶部的位移照旧让给原生滚动与惯性。画幅未知、或当前根本没启用调整
-       * （16:9、全屏、并排）时无从判断能否调整，也不能乐观接管 —— 一旦接管，
-       * 合成器到手指抬起前都不会再开始原生滚动，用户会白划一下。`preventDefault`
-       * 只作用于 touchmove，不吞 click，也不拦页签横滑用的 PointerEvent。
-       */
+
       const claimPendingMove = (
         event: TouchEvent,
         press: ResizePress,
@@ -363,36 +726,49 @@ export function useDetailsResize({
       ) => {
         if (!event.cancelable || !enabledRef.current) return;
         if (Math.abs(offsetY) <= Math.abs(offsetX)) return;
-        const metrics = measureResize();
-        if (!metrics) return;
-        const scrollTop = detailsScrollTopFor(press.scrollers, deltaY);
-        const next = detailsContentScrollStep(
-          metrics.percent,
-          deltaY,
-          scrollTop,
-          metrics.containerHeight,
-          metrics.maxPercent,
-          metrics.minPercent,
-        );
-        if (!detailsResizeStepIsVisible(metrics.percent, next.percent, metrics.containerHeight))
+        if (press.claimed) {
+          event.preventDefault();
           return;
-        event.preventDefault();
+        }
+        const measured = geometryRef.current ?? initializeLayout();
+        if (!measured?.layout) return;
+        ensurePressScroll(press, viewport);
+        const percent = currentPercentRef.current ?? measured.layout.initialPercent;
+        const next = detailsContentScrollStep(
+          percent,
+          deltaY,
+          press.scrollTop,
+          measured.height,
+          measured.layout.maxPercent,
+          measured.layout.minPercent,
+        );
+        if (detailsResizeStepIsVisible(percent, next.percent, measured.height)) {
+          press.claimed = true;
+          event.preventDefault();
+        }
       };
+
       const move = (event: TouchEvent) => {
         const press = pressRef.current;
         if (!press) return;
         if (event.touches.length !== 1) {
-          finish();
+          finishGesture(false, false);
           return;
         }
         const touch = Array.from(event.touches).find((item) => item.identifier === press.touchId);
         if (!touch) return;
         const previousY = press.lastY;
         press.lastY = touch.clientY;
-        // 速度采样只保留最近几条（环形）：更早的位移属于上一段动作，松手时要的是末段速度。
         press.samples.push({ time: event.timeStamp, y: touch.clientY });
         if (press.samples.length > DETAILS_MOMENTUM_SAMPLE_LIMIT) press.samples.shift();
+
+        const deltaY = touch.clientY - previousY;
         if (press.intent === "pending") {
+          // 按住超过长按时长仍未锁轴：让位给卡片长按，不再参与调整。
+          if (detailsResizePressIsHold(press.pressedAt, event.timeStamp)) {
+            finishGesture(false, false);
+            return;
+          }
           press.intent = detailsResizeIntent(
             touch.clientX - press.startX,
             touch.clientY - press.startY,
@@ -403,76 +779,90 @@ export function useDetailsResize({
               press,
               touch.clientX - press.startX,
               touch.clientY - press.startY,
-              touch.clientY - previousY,
+              deltaY,
             );
             return;
           }
         }
         if (press.intent === "swipe") {
-          pressRef.current = null;
+          finishGesture(false, false);
           return;
         }
-        // 原生滚动已开始后不能再改布局，否则同一手指位移会被消费两次。
-        if (!event.cancelable) return;
-        // 纵向意图已定但画幅还没到（首次进入的常见时序）：留住这次按压，
-        // 等 `enabled` 转真后的下一个 touchmove 再接管。
-        if (!enabledRef.current) return;
-        const state = stateRef.current ?? beginResize(press);
-        if (!state) return;
-        const delta = touch.clientY - previousY;
-        const next = detailsContentScrollStep(
-          state.lastPercent,
-          delta,
-          detailsScrollTopFor(state.scrollers, delta),
-          state.containerHeight,
-          state.maxPercent,
-          state.minPercent,
-        );
-        const changed = Math.abs(next.percent - state.lastPercent) > 0.0001;
-        // 尚未接管时，只有这一步**真能**改变布局才抢下归属：占比由侧栏真实高度反算，
-        // 而容器高度只有整数精度，边界处会留下亚像素偏差 —— 直接比百分比会把它读成
-        // 「还能再拖」，每次到达上限都恰好抢走原生滚动与惯性（见 `detailsResizeStepIsVisible`）。
-        // 已接管的手势不受此限：它本来就由我们逐帧分配位移。
-        if (
-          !state.active &&
-          !detailsResizeStepIsVisible(state.lastPercent, next.percent, state.containerHeight)
-        )
+        if (!event.cancelable) {
+          finishGesture(false, false);
           return;
-        event.preventDefault();
-        state.active = true;
-        state.lastPercent = next.percent;
-        // 与惯性同一读写顺序：滚动先于占比写入，避免写 grid 后立刻回读滚动几何。
-        scrollDetailsContent(state.scrollers, next.scrollDelta);
-        if (changed && previewFrameRef.current === null) {
-          previewFrameRef.current = window.requestAnimationFrame(() => {
-            previewFrameRef.current = null;
-            if (stateRef.current === state) callbacksRef.current.onPreview(state.lastPercent);
+        }
+        if (!enabledRef.current) return;
+        let gesture = gestureRef.current;
+        if (!gesture) {
+          const measured = geometryRef.current ?? initializeLayout();
+          if (!measured?.layout) {
+            finishGesture(false, false);
+            return;
+          }
+          ensurePressScroll(press, viewport, true);
+          const percent = currentPercentRef.current ?? measured.layout.initialPercent;
+          const next = detailsContentScrollStep(
+            percent,
+            deltaY,
+            press.scrollTop,
+            measured.height,
+            measured.layout.maxPercent,
+            measured.layout.minPercent,
+          );
+          // 慢速滑过轴锁时，本帧即使只移动不到 1px 也要保留这次手势；
+          // 只有占比完全不变（到边界或先消费内容滚动）才交还给原生滚动。
+          if (Math.abs(next.percent - percent) < 1e-9) {
+            finishGesture(false, false);
+            return;
+          }
+          gesture = beginGesture(press, measured, {
+            percent,
+            scrollTop: press.scrollTop,
           });
         }
+        if (!gesture) return;
+        event.preventDefault();
+        if (deltaY !== 0) {
+          gesture.deltas.push(deltaY);
+          frameQueueRef.current?.schedule();
+        }
       };
-      /** 抬手/取消共用：`cancel` 为真时绝不接惯性（合成器收回手势，方向与速度都无意义）。 */
+
       const end = (event: TouchEvent, cancel: boolean) => {
-        const touchId = stateRef.current?.touchId ?? pressRef.current?.touchId;
+        const gesture = gestureRef.current;
+        const press = pressRef.current;
+        const touchId = gesture?.touchId ?? press?.touchId;
         if (touchId === undefined) return;
-        if (!Array.from(event.changedTouches).some((item) => item.identifier === touchId)) return;
-        // 只有真正拖过占比、且末段速度足够快的手势才接惯性：慢速松手、刚认领就
-        // 抬起、以及只让内容滚了一段的手势都不该继续动侧栏。
-        const state = stateRef.current;
-        const samples = pressRef.current?.samples;
-        const velocity = !cancel && state?.active && samples ? detailsResizeVelocity(samples) : 0;
-        if (state?.active && Math.abs(velocity) >= DETAILS_MOMENTUM_MIN_VELOCITY) {
-          // 惯性接手：这里不提交，等它停下再一次性写回，免得中途先落到一个
-          // 马上就被覆盖的位置（React 会为它重渲染一次）。
-          stateRef.current = null;
+        const changed = Array.from(event.changedTouches).find(
+          (item) => item.identifier === touchId,
+        );
+        if (!changed) return;
+
+        if (!cancel && gesture) {
+          frameQueueRef.current?.cancel();
+          flushGesture(gesture);
+        }
+        let velocity = 0;
+        if (!cancel && gesture && press) {
+          velocity = detailsResizeVelocity(press.samples, event.timeStamp);
+        }
+        if (!cancel && gesture && Math.abs(velocity) >= DETAILS_MOMENTUM_MIN_VELOCITY) {
+          gestureRef.current = null;
           pressRef.current = null;
-          cancelPreview();
-          callbacksRef.current.onPreview(state.lastPercent);
           suppressClickUntilRef.current = Date.now() + DETAILS_RESIZE_TAP_SUPPRESSION_MS;
-          startMomentum(velocity, state);
+          startMomentum(
+            velocity,
+            gesture.cursor,
+            gesture.scrollers,
+            gesture.baseStageHeight,
+            gesture.bounds,
+          );
           return;
         }
-        finish();
+        finishGesture(!cancel && Boolean(gesture), false);
       };
+
       const touchEnd = (event: TouchEvent) => end(event, false);
       const touchCancel = (event: TouchEvent) => end(event, true);
       const click = (event: MouseEvent) => {
@@ -480,104 +870,144 @@ export function useDetailsResize({
         event.preventDefault();
         event.stopPropagation();
       };
+
       viewport.addEventListener("touchstart", start, { passive: true, capture: true });
       viewport.addEventListener("touchmove", move, { passive: false, capture: true });
       viewport.addEventListener("touchend", touchEnd, true);
       viewport.addEventListener("touchcancel", touchCancel, true);
       viewport.addEventListener("click", click, true);
-      // React 19 回调 ref 清理：移除监听器并丢弃未提交帧，卸载不更新宿主状态。
       return () => {
         viewport.removeEventListener("touchstart", start, true);
         viewport.removeEventListener("touchmove", move, true);
         viewport.removeEventListener("touchend", touchEnd, true);
         viewport.removeEventListener("touchcancel", touchCancel, true);
         viewport.removeEventListener("click", click, true);
-        cancelPreview();
-        // 卸载/解绑不提交惯性位置：宿主已经不在这一页了。
+        finishGesture(false, false);
         stopMomentum(false);
-        stateRef.current = null;
-        pressRef.current = null;
-        clearDetailsResizing(containerRef.current);
+        frameQueueRef.current?.cancel();
+        clearDetailsLayout(containerRef.current);
       };
     },
-    [beginResize, cancelPreview, containerRef, finish, measureResize, startMomentum, stopMomentum],
+    [
+      beginGesture,
+      containerRef,
+      ensurePressScroll,
+      finishGesture,
+      flushGesture,
+      initializeLayout,
+      prepareResize,
+      startMomentum,
+      stopMomentum,
+    ],
   );
 
-  /**
-   * 禁用时收掉正在进行的调整（旋转、全屏、切 16:9 都会走到这里）。
-   *
-   * 只丢调整状态，**保留尚未接管的按压**：`enabled` 是逐帧判定的，一次按住期间
-   * 它可能先假后真（画幅刚到位、刚从全屏退出）。按压在重新启用后还要能接着用，
-   * 否则同一次拖动会被切成两段。
-   */
   useLayoutEffect(() => {
-    if (enabled) return;
-    stateRef.current = null;
-    // 禁用时惯性也不能再推：它写的是同一个 CSS 变量，转屏后就是错的布局。
-    stopMomentum(false);
-    cancelPreview();
-    clearDetailsResizing(containerRef.current);
-  }, [cancelPreview, containerRef, enabled, stopMomentum]);
+    enabledRef.current = enabled;
+    aspectRatioRef.current = aspectRatio;
+    const reset = resetKeyRef.current !== resetKey;
+    const aspectChanged = !Object.is(previousAspectRatioRef.current, aspectRatio);
+    resetKeyRef.current = resetKey;
+    previousAspectRatioRef.current = aspectRatio;
 
-  // 旋转/分屏/画幅变化后重算双向边界；未调整过的默认布局不参与。
-  useLayoutEffect(() => {
-    if (!enabled || !onClamp) return;
-    const container = containerRef.current;
-    if (!container) return;
-    const apply = () => {
-      const width = container.clientWidth;
-      const height = container.clientHeight;
-      if (!(width > 0) || !(height > 0)) return;
-      const state = stateRef.current;
-      if (state) {
-        if (
-          state.containerWidth === width &&
-          state.containerHeight === height &&
-          Object.is(state.aspectRatio, aspectRatio)
-        ) {
-          return;
-        }
-        // 几何变化让本次位移尺度失效：先提交并结束，再按新边界收口，不能等下次手势。
-        finish();
-      }
-      // 惯性用的是旧尺寸与旧边界，同样不能继续跑；收口由下面的 clamp 接手。
+    if (reset || aspectChanged) {
+      frameQueueRef.current?.cancel();
+      finishGesture(false, false, !reset);
       stopMomentum(false);
-      const current = state?.active
-        ? state.lastPercent
-        : Number.parseFloat(container.style.getPropertyValue("--vod-details-share"));
-      if (!Number.isFinite(current)) return;
-      const minPercent = detailsShareMinPercent(width, height, aspectRatio);
-      const clamped = clampDetailsSharePercent(
-        current,
-        detailsShareMaxPercent(width, height),
-        minPercent,
-      );
-      if (Math.abs(clamped - current) > 0.01) callbacksRef.current.onClamp?.(clamped);
-    };
-    apply();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(apply);
+      geometryRef.current = null;
+      clearDetailsLayout(containerRef.current);
+      if (pressRef.current) {
+        pressRef.current.scrollers = null;
+        pressRef.current.scrollTop = 0;
+        pressRef.current.maxScrollTop = 0;
+      }
+      if (reset) {
+        currentPercentRef.current = null;
+        userAdjustedRef.current = false;
+      } else if (!userAdjustedRef.current) {
+        currentPercentRef.current = null;
+      }
+    }
+    if (!enabled) {
+      frameQueueRef.current?.cancel();
+      finishGesture(false, false, true);
+      stopMomentum(false);
+      clearDetailsLayout(containerRef.current);
+      return;
+    }
+    initializeLayout();
+  }, [aspectRatio, containerRef, enabled, finishGesture, initializeLayout, resetKey, stopMomentum]);
+
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[entries.length - 1]?.contentRect;
+      if (!rect) return;
+      const cached = geometryRef.current;
+      if (
+        cached &&
+        Math.abs(cached.width - rect.width) < 0.5 &&
+        Math.abs(cached.height - rect.height) < 0.5 &&
+        Object.is(cached.aspectRatio, aspectRatioRef.current)
+      ) {
+        return;
+      }
+      frameQueueRef.current?.cancel();
+      finishGesture(false, false, true);
+      stopMomentum(false);
+      geometryRef.current = null;
+      initializeLayout(rect.width, rect.height);
+    });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [aspectRatio, containerRef, enabled, finish, onClamp, stopMomentum]);
+  }, [aspectRatio, containerRef, enabled, finishGesture, initializeLayout, stopMomentum]);
 
   return bindContent;
 }
 
-/** 高频变量不继承到内容子树；预览标记只由手势写，避免 React 播放进度提交干扰。 */
+/** 写入统一的侧栏占比；初始布局与拖动共用这个入口。 */
 export function writeDetailsShare(container: HTMLElement | null, percent: number): void {
   if (!container) return;
-  const value = detailsShareCssValue(percent);
-  if (container.style.getPropertyValue("--vod-details-share") !== value) {
-    container.style.setProperty("--vod-details-share", value);
+  const value = detailsShareCssValue(roundDetailsShare(percent));
+  setResizeStyle(container, detailsShareProperty, value);
+  if (container.dataset.vodDetailsShare !== "true") {
+    container.dataset.vodDetailsShare = "true";
   }
-  if (container.dataset.vodDetailsResizing !== "true") {
-    container.dataset.vodDetailsResizing = "true";
+  syncResizeTargetState(container);
+}
+
+export function markDetailsResizing(container: HTMLElement | null, resizing: boolean): void {
+  if (!container) return;
+  if (resizing) {
+    if (container.dataset.vodDetailsResizing !== "true") {
+      container.dataset.vodDetailsResizing = "true";
+    }
+  } else {
+    delete container.dataset.vodDetailsResizing;
   }
 }
 
-/** 结束预览：保留最终占比，只撤掉实时调整标记。 */
-export function clearDetailsResizing(container: HTMLElement | null): void {
+export function markDetailsPrepared(container: HTMLElement | null, prepared: boolean): void {
   if (!container) return;
+  if (prepared) {
+    if (container.dataset.vodDetailsPrepared !== "true") {
+      container.dataset.vodDetailsPrepared = "true";
+    }
+  } else {
+    delete container.dataset.vodDetailsPrepared;
+  }
+}
+
+export function clearDetailsResizing(container: HTMLElement | null): void {
+  markDetailsResizing(container, false);
+}
+
+export function clearDetailsLayout(container: HTMLElement | null): void {
+  if (!container) return;
+  delete container.dataset.vodDetailsShare;
+  delete container.dataset.vodDetailsPrepared;
   delete container.dataset.vodDetailsResizing;
+  container.style.removeProperty(detailsShareProperty);
+  clearResizeTransform(container);
 }

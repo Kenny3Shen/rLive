@@ -1142,49 +1142,127 @@ html[data-platform="android"] .app-shell {
   padding-top: var(--android-safe-area-top, env(safe-area-inset-top));
 }
 
-/* 移动端 VOD 播放页：非 16:9 视频随侧栏内容滑动自适应高度。
+/* 移动端 VOD 播放页：高于 16:9 的视频随侧栏内容滑动自适应高度。
 
-   分界位置只由一个自定义属性 `--vod-details-share` 表达，它是**详情侧栏**占
-   播放页主区域高度的百分比；舞台高度是它的补集，因此两边永远精确地相加为 100%，
-   拖到极限也不会露出缝隙或重叠。
+   `--vod-details-share` 是详情侧栏占主区域高度的百分比，舞台高度 Hc 取补集。
+   只要进入自适应布局，骨架就固定为 block + absolute：舞台始终占 Hc，aside
+   始终从 Hc 开始。静止与拖动不再切换 display/position/grid，避免触屏开始时
+   让整棵子树重新布局。
 
-   这套规则只在拖动开始后生效（`data-vod-details-resizing` 由手势写、
-   `data-vod-details-share` 由 React 在提交后写）：未拖动时舞台仍按画幅比撑高、
-   最高 70%（与改动前逐像素一致，横屏视频不会因为多出一个默认占比而把评论区的
-   空间吃掉）。拖动后舞台改为显式高度，画幅比退居 `object-contain`，因此
-   「把侧栏拖大」真的能让画面变小而不是被比例锁住。
+   按下只做一次预备：aside 从可视高度扩到最大高度 H-Hm，composer 用 transform
+   抵消底部变化；舞台仍保持按下时的高度 Hs。手势锁定后只改视频缩放、控制栏/
+   字幕平移、aside 平移和 composer 补偿。松手时先写最终占比，再清 transform，
+   静止态重新成为纯真实布局。
 
    占比上限（舞台至少保住一个满宽 16:9）不由 CSS 表达：它依赖容器的像素宽高，
    由 `detailsResize.ts` 的 `detailsShareMaxPercent` 算出后夹在写到这里的取值里。
    这里只负责「拿到百分比就按它分配」。 */
-/* 高频取值只由容器自己消费，不继承进播放器、评论和所有后台页签。
-   普通自定义属性每改一次都会使整棵子树重算样式；这里用非继承属性和容器网格
-   分配两行，让每帧只重新布局必要的尺寸，不传播一份无人消费的变量。 */
+/* 占比直接写在消费它的舞台与 aside 上，不继承进播放器、评论和所有后台页签。 */
 @property --vod-details-share {
   syntax: "<percentage>";
   inherits: false;
   initial-value: 30%;
 }
 
+/* 拖动期参数写在真正消费它的元素上，保持不继承；每帧只改已合成图层的
+   transform 输入，不触发播放器/详情子树继承重算。 */
+@property --vod-resize-stage-scale {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
+@property --vod-resize-chrome-offset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --vod-resize-aside-height {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --vod-resize-aside-offset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --vod-resize-composer-offset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 @media (width < 64rem) {
-  [data-video-details-frame]:is(
-      [data-vod-details-share="true"],
-      [data-vod-details-resizing="true"]
-    ):has(> aside) {
-    display: grid;
-    grid-template-rows: minmax(0, calc(100% - var(--vod-details-share))) minmax(0, 1fr);
-    grid-template-columns: minmax(0, 1fr);
+  [data-video-details-frame][data-vod-details-share="true"] {
+    position: relative;
+    display: block;
+    overflow: hidden;
   }
 
-  [data-video-details-frame]:is(
-      [data-vod-details-share="true"],
-      [data-vod-details-resizing="true"]
-    ):has(> aside)
-    > [data-video-player-frame] {
-    aspect-ratio: auto;
-    height: 100%;
+  [data-video-details-frame][data-vod-details-share="true"] > [data-vod-details-stage] {
+    width: 100%;
+    height: calc(100% - var(--vod-details-share));
     min-height: 0;
     max-height: none;
+    flex: none;
+  }
+
+  [data-video-details-frame][data-vod-details-share="true"] > [data-vod-details-aside] {
+    position: absolute;
+    inset-inline: 0;
+    top: calc(100% - var(--vod-details-share));
+    bottom: auto;
+    height: var(--vod-details-share);
+    min-height: 0;
+    max-height: none;
+    flex: none;
+    contain: layout paint;
+  }
+
+  [data-video-details-frame][data-vod-details-share="true"] [data-vod-details-media-surface] {
+    contain: layout;
+  }
+
+  [data-vod-details-aside][data-vod-details-prepared="true"] {
+    height: var(--vod-resize-aside-height);
+  }
+
+  [data-vod-details-player-stage][data-vod-details-overflow="true"] {
+    overflow: visible;
+  }
+
+  [data-vod-details-composer][data-vod-details-prepared="true"] {
+    transform: translateY(var(--vod-resize-composer-offset));
+  }
+
+  [data-vod-details-media-surface][data-vod-details-resizing="true"] {
+    transform: scale(var(--vod-resize-stage-scale));
+    transform-origin: top center;
+  }
+
+  [data-vod-details-controls][data-vod-details-resizing="true"],
+  [data-vod-details-resize-anchor="true"][data-vod-details-resizing="true"] {
+    transform: translateY(var(--vod-resize-chrome-offset));
+  }
+
+  [data-vod-details-aside][data-vod-details-resizing="true"] {
+    transform: translateY(var(--vod-resize-aside-offset));
+  }
+
+  /* 仅手势期间把这几个 transform 节点提升为独立合成层：拖动中每帧只改 transform，
+     不提升时 aside 大列表和视频表面每帧都要重绘。结算时标记移除，图层随之回收，
+     静止态不常驻额外图层。 */
+  [data-vod-details-media-surface][data-vod-details-resizing="true"],
+  [data-vod-details-controls][data-vod-details-resizing="true"],
+  [data-vod-details-resize-anchor="true"][data-vod-details-resizing="true"],
+  [data-vod-details-aside][data-vod-details-resizing="true"],
+  [data-vod-details-composer][data-vod-details-prepared="true"] {
+    will-change: transform;
+    backface-visibility: hidden;
   }
 }
 

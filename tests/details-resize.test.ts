@@ -1,24 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import {
-  DETAILS_SHARE_HARD_MAX_PERCENT,
   canResizeVideoDetails,
-  detailsContentScrollStep,
   clampDetailsSharePercent,
+  detailsContentScrollStep,
   detailsMomentumStep,
-  detailsResizeCeiling,
+  detailsResizeLayout,
+  detailsResizePressIsHold,
   detailsResizeStepIsVisible,
   detailsResizeVelocity,
   detailsShareCssValue,
-  detailsShareMaxPercent,
-  detailsShareMinPercent,
   roundDetailsShare,
 } from "../src/shared/gestures/detailsResize";
+import { LONG_PRESS_TRIGGER_MS } from "../src/shared/gestures/longPress";
 describe("内容滑动自适应侧栏", () => {
-  test("只启用已知非 16:9 画幅，容忍编码取整", () => {
-    for (const ratio of [null, 0, -1, NaN, Infinity, 16 / 9, 1920 / 1088, 854 / 480]) {
+  test("只启用已知且比 16:9 更高的画幅，容忍编码取整", () => {
+    for (const ratio of [null, 0, -1, NaN, Infinity, 16 / 9, 1920 / 1088, 854 / 480, 21 / 9, 6]) {
       expect(canResizeVideoDetails(ratio)).toBe(false);
     }
-    for (const ratio of [9 / 16, 4 / 3, 1, 21 / 9]) {
+    for (const ratio of [9 / 16, 4 / 3, 1, 15 / 9]) {
       expect(canResizeVideoDetails(ratio)).toBe(true);
     }
   });
@@ -75,19 +74,20 @@ describe("原始画幅给出的恢复下限", () => {
     for (const ratio of [4 / 3, 1, 9 / 16]) {
       const width = 401;
       const height = 757;
-      const min = detailsShareMinPercent(width, height, ratio);
-      const max = detailsResizeCeiling(min, width, height, min);
+      const layout = detailsResizeLayout(width, height, ratio);
+      expect(layout).not.toBeNull();
+      const min = layout!.minPercent;
+      const max = layout!.maxPercent;
       const expanded = detailsContentScrollStep(min, -100, 0, height, max, min).percent;
       expect(expanded).toBeGreaterThan(min);
-      const nextMax = detailsResizeCeiling(expanded, width, height, min);
-      const restored = detailsContentScrollStep(expanded, 2000, 0, height, nextMax, min);
+      const restored = detailsContentScrollStep(expanded, 2000, 0, height, max, min);
       expect(restored.percent).toBe(min);
       expect(restored.scrollDelta).toBeLessThan(0);
-      expect(detailsContentScrollStep(min, 2000, 0, height, nextMax, min)).toEqual({
+      expect(detailsContentScrollStep(min, 2000, 0, height, max, min)).toEqual({
         percent: min,
         scrollDelta: -2000,
       });
-      expect(detailsContentScrollStep(min, -10, 0, height, nextMax, min).percent).toBeGreaterThan(
+      expect(detailsContentScrollStep(min, -10, 0, height, max, min).percent).toBeGreaterThan(
         min,
       );
       expect(((100 - restored.percent) / 100) * height).toBeCloseTo(
@@ -96,46 +96,53 @@ describe("原始画幅给出的恢复下限", () => {
       );
     }
   });
-  test("21:9和极宽画幅以原始布局硬停，超过85%的占比也完整传到CSS与提交", () => {
-    for (const ratio of [21 / 9, 6, 10]) {
-      const width = 401;
-      const height = 757;
-      const min = detailsShareMinPercent(width, height, ratio);
-      const max = detailsResizeCeiling(min, width, height, min);
-      expect(max).toBe(min);
-      for (const delta of [-2000, 2000]) {
-        expect(detailsContentScrollStep(min, delta, 0, height, max, min)).toEqual({
-          percent: min,
-          scrollDelta: -delta,
-        });
-      }
-      const clamped = clampDetailsSharePercent(30, detailsShareMaxPercent(width, height), min);
-      expect(clamped).toBe(min);
-      const committed = roundDetailsShare(clamped);
-      const css = Number.parseFloat(detailsShareCssValue(clamped));
-      expect(css).toBe(committed);
-      expect(css).toBeCloseTo(min, 3);
-      if (ratio >= 6) expect(css).toBeGreaterThan(DETAILS_SHARE_HARD_MAX_PERCENT);
-    }
-  });
-  test("尺寸与画幅变化按新原始布局双向收口，上限仍保住满宽16:9", () => {
-    const constrain = (current: number, width: number, height: number, ratio: number) =>
-      clampDetailsSharePercent(
-        current,
-        detailsShareMaxPercent(width, height),
-        detailsShareMinPercent(width, height, ratio),
-      );
-    const original = detailsShareMinPercent(401, 757, 4 / 3);
-    const taller = constrain(original, 401, 1000, 4 / 3);
-    expect(taller).toBeGreaterThan(original);
-    expect(taller).toBe(detailsShareMinPercent(401, 1000, 4 / 3));
-    const shorter = constrain(taller, 401, 500, 4 / 3);
+  test("尺寸变化按新布局双向收口，无 16:9 空间时保持固定布局", () => {
+    const original = detailsResizeLayout(401, 757, 4 / 3)!;
+    const tallerLayout = detailsResizeLayout(401, 1000, 4 / 3)!;
+    const taller = clampDetailsSharePercent(
+      original.initialPercent,
+      tallerLayout.maxPercent,
+      tallerLayout.minPercent,
+    );
+    expect(taller).toBeGreaterThan(original.initialPercent);
+    expect(taller).toBe(tallerLayout.initialPercent);
+    const shorterLayout = detailsResizeLayout(401, 500, 4 / 3)!;
+    const shorter = clampDetailsSharePercent(
+      taller,
+      shorterLayout.maxPercent,
+      shorterLayout.minPercent,
+    );
     expect(shorter).toBeLessThan(taller);
-    expect(shorter).toBe(detailsShareMaxPercent(401, 500));
-    expect(constrain(80, 757, 401, 4 / 3)).toBe(80);
-    const wide = constrain(shorter, 401, 757, 6);
-    expect(wide).toBeGreaterThan(85);
-    expect(constrain(wide, 401, 757, 9 / 16)).toBe(detailsShareMaxPercent(401, 757));
+    expect(shorter).toBe(shorterLayout.maxPercent);
+    expect(detailsResizeLayout(757, 401, 4 / 3)).toBeNull();
+    expect(detailsResizeLayout(401, 757, 6)).toBeNull();
+  });
+});
+describe("统一初始与拖动布局", () => {
+  test("初始占比就是拖动下限，只有更高的画幅进入联动", () => {
+    const layout = detailsResizeLayout(401, 757, 4 / 3);
+    expect(layout).not.toBeNull();
+    expect(layout!.minPercent).toBe(layout!.initialPercent);
+    expect(layout!.maxPercent).toBeGreaterThan(layout!.initialPercent);
+    expect(((100 - layout!.maxPercent) / 100) * 757).toBeCloseTo(
+      401 / (16 / 9),
+      8,
+    );
+    expect(
+      ((100 - layout!.initialPercent) / 100) * 757,
+    ).toBeCloseTo(Math.min(401 / (4 / 3), 757 * 0.7), 8);
+  });
+
+  test("16:9、超宽、放不下满宽16:9与非法尺寸保持固定布局", () => {
+    expect(detailsResizeLayout(401, 757, 16 / 9)).toBeNull();
+    expect(detailsResizeLayout(401, 757, 21 / 9)).toBeNull();
+    expect(detailsResizeLayout(401, 200, 4 / 3)).toBeNull();
+    expect(detailsResizeLayout(0, 757, 4 / 3)).toBeNull();
+    expect(detailsResizeLayout(401, 0, 4 / 3)).toBeNull();
+  });
+
+  test("占比提交只保留 DOM 写值需要的三位小数", () => {
+    expect(detailsShareCssValue(roundDetailsShare(66.66666))).toBe("66.667%");
   });
 });
 describe("松手后的侧栏惯性", () => {
@@ -184,6 +191,16 @@ describe("松手后的侧栏惯性", () => {
       ]),
     ).toBe(0);
   });
+  test("松手时末次移动已经过旧，不再沿停顿前的速度启动惯性", () => {
+    const samples = [
+      { time: 0, y: 300 },
+      { time: 50, y: 250 },
+    ];
+
+    expect(detailsResizeVelocity(samples, 60)).toBeCloseTo(-50 / 60, 8);
+    expect(detailsResizeVelocity(samples, 250)).toBe(0);
+    expect(detailsResizeVelocity(samples, Number.NaN)).toBeCloseTo(-1, 8);
+  });
   test("单帧时长被夹住：后台恢复的百毫秒不会把惯性一帧走完", () => {
     const velocity = 1;
     const capped = detailsMomentumStep(velocity, 1000);
@@ -191,5 +208,16 @@ describe("松手后的侧栏惯性", () => {
     expect(capped).toEqual(atCap);
     // 正常一帧不受影响。
     expect(detailsMomentumStep(velocity, 16)).not.toEqual(capped);
+  });
+});
+
+describe("轴锁前按住与卡片长按互斥", () => {
+  test("未满长按时长仍可锁定为调整", () => {
+    expect(detailsResizePressIsHold(1000, 1000 + LONG_PRESS_TRIGGER_MS - 1)).toBe(false);
+  });
+
+  test("满长按时长仍未锁轴则让位给长按", () => {
+    expect(detailsResizePressIsHold(1000, 1000 + LONG_PRESS_TRIGGER_MS)).toBe(true);
+    expect(detailsResizePressIsHold(1000, 1000 + 2000)).toBe(true);
   });
 });

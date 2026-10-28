@@ -1,4 +1,21 @@
 type DetailsScroller = Pick<HTMLElement, "scrollTop">;
+type DetailsScrollRange = Pick<HTMLElement, "scrollTop" | "scrollHeight" | "clientHeight">;
+
+export type DetailsScrollMetrics = {
+  top: number;
+  maxTop: number;
+};
+
+/** 每次 RAF 只读一次滚动链；舞台缩放和内容追加都会改变可滚余量。 */
+export function detailsScrollMetrics(scrollers: readonly DetailsScrollRange[]): DetailsScrollMetrics {
+  let top = 0;
+  let maxTop = 0;
+  for (const node of scrollers) {
+    top += Math.max(0, node.scrollTop);
+    maxTop += Math.max(0, node.scrollHeight - node.clientHeight);
+  }
+  return { top, maxTop };
+}
 
 /**
  * 下滑要先回内容顶部时，这次位移最多能消费掉多少滚动位置。

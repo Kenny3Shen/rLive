@@ -972,7 +972,11 @@ export function VideoSidebar({
             />
           </div>
           {danmakuComposer && (
-            <div data-slot="video-sidebar-danmaku-composer" className="shrink-0">
+            <div
+              data-slot="video-sidebar-danmaku-composer"
+              data-vod-details-composer
+              className="shrink-0"
+            >
               {danmakuComposer}
             </div>
           )}

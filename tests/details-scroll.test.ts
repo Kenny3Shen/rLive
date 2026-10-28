@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { detailsScrollTopFor, scrollDetailsContent } from "../src/shared/gestures/detailsScroll";
+import {
+  detailsScrollMetrics,
+  detailsScrollTopFor,
+  scrollDetailsContent,
+} from "../src/shared/gestures/detailsScroll";
 
 function scroller(top: number, max: number) {
   let value = top;
@@ -83,5 +87,39 @@ describe("详情侧栏滚动位置读取", () => {
     expect(scrollDetailsContent([inner, outer], -15)).toBe(-15);
     expect(inner.snapshot().value).toBe(0);
     expect(outer.snapshot().value).toBe(0);
+  });
+});
+
+describe("详情侧栏滚动链缓存", () => {
+  test("每帧一次读出逻辑位置与总可滚余量", () => {
+    let reads = 0;
+    const range = (scrollTop: number, scrollHeight: number, clientHeight: number) => ({
+      get scrollTop() {
+        reads += 1;
+        return scrollTop;
+      },
+      get scrollHeight() {
+        reads += 1;
+        return scrollHeight;
+      },
+      get clientHeight() {
+        reads += 1;
+        return clientHeight;
+      },
+    });
+    const inner = range(30, 180, 100);
+    const outer = range(12, 260, 100);
+
+    expect(detailsScrollMetrics([inner, outer])).toEqual({ top: 42, maxTop: 240 });
+    expect(reads).toBe(6);
+  });
+
+  test("负值与布局未就绪的滚动余量读作零", () => {
+    expect(
+      detailsScrollMetrics([
+        { scrollTop: -20, scrollHeight: 80, clientHeight: 100 },
+        { scrollTop: 0, scrollHeight: 100, clientHeight: 100 },
+      ]),
+    ).toEqual({ top: 0, maxTop: 0 });
   });
 });

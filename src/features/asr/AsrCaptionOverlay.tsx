@@ -23,11 +23,14 @@ export function AsrCaptionOverlay({
   fontSize,
   translationTo,
   className,
+  vodResizeAnchor = false,
 }: {
   asr: AsrCaptionOverlayState;
   fontSize: number;
   translationTo: CaptionTranslationLanguage;
   className?: string;
+  /** 点播拖动期单独平移字幕，不跟随视频表面缩放。 */
+  vodResizeAnchor?: boolean;
 }) {
   const { caption, partial, translatedCaption, translationNotice } = useAsrCaptionText(asr.text);
   const hasContent = asr.notice || caption || translatedCaption || translationNotice || partial;
@@ -38,6 +41,7 @@ export function AsrCaptionOverlay({
       role="status"
       aria-live="polite"
       aria-atomic="true"
+      data-vod-details-resize-anchor={vodResizeAnchor ? "true" : undefined}
       className={cn(
         "pointer-events-none absolute inset-x-4 bottom-[4.5rem] z-20 flex justify-center",
         className,

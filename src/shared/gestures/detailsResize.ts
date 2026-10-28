@@ -1,41 +1,18 @@
-/**
- * 移动端 VOD 详情侧栏的自适应占比（滑动内容区时让出或恢复画面空间）。
- *
- * 抽成纯函数模块（不 import React）是为了让占比换算、边界与上下限都能单测；
- * 组件侧只负责把指针位移喂进来、把结果写成 CSS 变量。
- *
- * 「占比」一律指**详情侧栏**占播放页主区域（舞台 + 详情区）高度的百分比 ——
- * 这正是用户拖动时看到的那块区域，舞台拿到剩下的部分。
- */
+/** 移动端 VOD 侧栏占比的纯计算：舞台取补集，手势模块只消费这些边界。 */
 
-/**
- * 尺寸或画幅不可用时的占比下限（%）。已知画幅使用 `detailsShareMinPercent`
- * 算出的原始布局作为下限，不能继续下滑到这个兜底值。
- */
-export const DETAILS_SHARE_MIN_PERCENT = 20;
+import { LONG_PRESS_TRIGGER_MS } from "./longPress";
 
-/**
- * 占比的兜底硬顶（%），不覆盖已知画幅的原始布局。
- *
- * 用于两种情况：16:9 窗口在容器里**放不下**时回退（见
- * `detailsShareMaxPercent`），以及容器尺寸不可用时的兜底。
- */
-export const DETAILS_SHARE_HARD_MAX_PERCENT = 85;
+const DETAILS_SHARE_MIN_PERCENT = 20;
+
+const DETAILS_SHARE_HARD_MAX_PERCENT = 100;
 
 /** 舞台至少要保住的窗口比例：满宽 16:9。 */
 export const DETAILS_STAGE_ASPECT_RATIO = 16 / 9;
 
-/** 与播放页默认舞台的 `max-h-[70%]` 保持一致。 */
-export const DETAILS_STAGE_DEFAULT_MAX_PERCENT = 70;
+const DETAILS_STAGE_DEFAULT_MAX_PERCENT = 70;
 
-/**
- * 恢复原始画幅布局时的侧栏占比下限（%）。
- *
- * 原始舞台高度为 `min(width / aspectRatio, height × 70%)`，侧栏拿剩余空间。
- * 此下限只依赖画幅与容器尺寸，不能取每次手势的起点，否则上滑松手后就缩不回去。
- * 超宽画幅的原始侧栏占比可能超过 85%，仍须完整保留，不能被兜底硬顶截断。
- */
-export function detailsShareMinPercent(
+/** 原始画幅布局的侧栏占比（也是拖动下限）。 */
+function detailsShareMinPercent(
   containerWidth: number,
   containerHeight: number,
   aspectRatio: number | null = null,
@@ -58,13 +35,13 @@ export function detailsShareMinPercent(
   return 100 - stageShare;
 }
 
-/** 只对已知的非 16:9 画幅启用；容忍编码取整/补边带来的 1% 偏差。 */
+/** 仅比 16:9 更高的画幅联动；超宽及 16:9 附近的取整误差保持固定。 */
 export function canResizeVideoDetails(aspectRatio: number | null): boolean {
   return (
     aspectRatio !== null &&
     Number.isFinite(aspectRatio) &&
     aspectRatio > 0 &&
-    Math.abs(aspectRatio / DETAILS_STAGE_ASPECT_RATIO - 1) > 0.01
+    aspectRatio < DETAILS_STAGE_ASPECT_RATIO * 0.99
   );
 }
 
@@ -94,63 +71,48 @@ export function detailsContentScrollStep(
   return { percent: next, scrollDelta: -deltaY + consumed };
 }
 
-/**
- * 满宽 16:9 画面的高度（px）。
- *
- * 「占比最大需要保留 16:9 视频窗口大小」是这条手势的产品约束：详情区再大，
- * 上面那块舞台也必须放得下一个**满宽 16:9** 的画面 —— 拖动因此是「把画面压小
- * 到刚好看得清」，而不是把画面压成一条。
- */
-export function detailsStageMinHeight(containerWidth: number): number {
+/** 满宽 16:9 画面的高度。 */
+function detailsStageMinHeight(containerWidth: number): number {
   if (!(containerWidth > 0)) return 0;
   return containerWidth / DETAILS_STAGE_ASPECT_RATIO;
 }
 
-/**
- * 16:9 约束给出的占比上限（%）。
- *
- * 舞台高度是容器高度的补集，要求 `(1 - share) × height ≥ minHeight`，解出
- * `share ≤ (1 - minHeight / height) × 100`。同一台手机上容器越矮，能给侧栏的
- * 份额越少：401×757 的手机上限约 `70.2%`（舞台高约 `225.6px`），
- * 900×1200 的平板约 `57.8%`。
- *
- * 两个回退：
- *
- * - **放不下**（横屏手机：满宽 16:9 比容器还高，解出的份额低于下限）时不做
- *   额外约束，回退到 `DETAILS_SHARE_HARD_MAX_PERCENT`。此时没有任何取值能满足
- *   该约束，硬夹会把侧栏顶到下限、连往上拖的余地都没有。
- * - 容器尺寸不可用（未布局 / `NaN`）同样回退到文本硬顶。
- */
-export function detailsShareMaxPercent(containerWidth: number, containerHeight: number): number {
+/** 缩到满宽 16:9 时侧栏可占的原始上限。 */
+function detailsShareMaxPercent(containerWidth: number, containerHeight: number): number {
   if (!(containerWidth > 0) || !(containerHeight > 0)) return DETAILS_SHARE_HARD_MAX_PERCENT;
   const percent = (1 - detailsStageMinHeight(containerWidth) / containerHeight) * 100;
-  if (!(percent >= DETAILS_SHARE_MIN_PERCENT)) return DETAILS_SHARE_HARD_MAX_PERCENT;
-  return Math.min(DETAILS_SHARE_HARD_MAX_PERCENT, percent);
+  return Math.min(DETAILS_SHARE_HARD_MAX_PERCENT, Math.max(0, percent));
 }
 
+export type DetailsResizeLayout = {
+  /** 原始画幅布局；也是拖动下限。 */
+  initialPercent: number;
+  minPercent: number;
+  maxPercent: number;
+};
+
 /**
- * 一次手势的实际占比上限（%）。
- *
- * 取 16:9 约束与**手势起点的占比**的较大者。默认布局本来就可能已经超过 16:9
- * 约束——宽画幅视频（≥16:9，含 16:9 本身）按比值撑高时给的舞台就比满宽 16:9
- * 窗口矮，横屏手机更是根本放不下。此时若严格夹到约束值，用户拖动的第一帧
- * 就会把侧栏直接弹掉一截；保住起点意味着不能再扩大侧栏，下滑则只允许恢复到
- * 原始布局。
- *
- * 尺寸或画幅变化后的收口还要保住原始布局下限；当它超过 16:9 约束时，区间
- * 收为原始占比一个点。默认超宽画幅因此上下滑都保持原位，不会突然扩大舞台。
- *
- * 因此不变量是：**拖动不会让占比超过 `max(起点, 原始布局, 16:9 约束)`**。
+ * 统一的初始/拖动边界。默认就是这个区间的下限，因此无需再维护 flex 与 grid
+ * 两套视觉规则；满宽 16:9 放不下时返回 null，保持原始布局。
  */
-export function detailsResizeCeiling(
-  startPercent: number,
+export function detailsResizeLayout(
   containerWidth: number,
   containerHeight: number,
-  minPercent: number = DETAILS_SHARE_MIN_PERCENT,
-): number {
-  const cap = Math.max(minPercent, detailsShareMaxPercent(containerWidth, containerHeight));
-  if (!Number.isFinite(startPercent)) return cap;
-  return Math.max(startPercent, cap);
+  aspectRatio: number | null,
+): DetailsResizeLayout | null {
+  if (
+    !canResizeVideoDetails(aspectRatio) ||
+    !Number.isFinite(containerWidth) ||
+    !(containerWidth > 0) ||
+    !Number.isFinite(containerHeight) ||
+    !(containerHeight > 0)
+  ) {
+    return null;
+  }
+  const initialPercent = detailsShareMinPercent(containerWidth, containerHeight, aspectRatio);
+  const maxPercent = Math.max(initialPercent, detailsShareMaxPercent(containerWidth, containerHeight));
+  if (initialPercent >= 100 || maxPercent - initialPercent < 0.01) return null;
+  return { initialPercent, minPercent: initialPercent, maxPercent };
 }
 
 /**
@@ -240,18 +202,25 @@ export type DetailsMomentumSample = { time: number; y: number };
  * 混进来会把「先慢后快」读成中等速度。采样不足、跨度太短或取值无效时返回 0
  * （不接惯性）—— 宁可少接一次，也不要用噪声把侧栏弹出去。
  */
-export function detailsResizeVelocity(samples: readonly DetailsMomentumSample[]): number {
+export function detailsResizeVelocity(
+  samples: readonly DetailsMomentumSample[],
+  releasedAt?: number,
+): number {
   if (samples.length < 2) return 0;
   const last = samples[samples.length - 1];
   if (!Number.isFinite(last.time) || !Number.isFinite(last.y)) return 0;
-  let first = last;
+  const releaseTime =
+    releasedAt !== undefined && Number.isFinite(releasedAt) && releasedAt >= last.time
+      ? releasedAt
+      : last.time;
+  let first = { time: releaseTime, y: last.y };
   for (let index = samples.length - 2; index >= 0; index -= 1) {
     const sample = samples[index];
     if (!Number.isFinite(sample.time) || !Number.isFinite(sample.y)) continue;
-    if (last.time - sample.time > DETAILS_MOMENTUM_WINDOW_MS) break;
+    if (releaseTime - sample.time > DETAILS_MOMENTUM_WINDOW_MS) break;
     first = sample;
   }
-  const span = last.time - first.time;
+  const span = releaseTime - first.time;
   if (span < DETAILS_MOMENTUM_MIN_SPAN_MS) return 0;
   return (last.y - first.y) / span;
 }
@@ -286,6 +255,17 @@ export function detailsMomentumStep(
  * 两套阈值刻意互斥：纵向要求 `|dy| > |dx|`，横向要求 `|dx| > 1.25|dy|`，
  * 因此同一次手势不会两边同时锁定。
  */
+/**
+ * 轴锁前按住超过系统长按时长仍未锁定，判为「按住」而不是拖动。
+ *
+ * 侧栏卡片的长按（打开操作抽屉）同样在 `LONG_PRESS_TRIGGER_MS` 触发，阈值 10px 与
+ * 本手势的轴锁距离相同。极慢的上滑在 500ms 内走不到 10px 时，两者会同时生效：
+ * 抽屉弹出的同时侧栏也被拉高。让慢于长按的未锁定按压让位给长按，两者互斥。
+ */
+export function detailsResizePressIsHold(pressedAt: number, now: number): boolean {
+  return now - pressedAt >= LONG_PRESS_TRIGGER_MS;
+}
+
 export function detailsResizeIntent(
   deltaX: number,
   deltaY: number,
@@ -336,17 +316,6 @@ export function clampDetailsSharePercent(
   if (Number.isNaN(percent)) return minPercent;
   const upper = Math.max(minPercent, maxPercent);
   return Math.min(upper, Math.max(minPercent, percent));
-}
-
-/**
- * 侧栏高度换算成占比。
- *
- * 直接量 DOM 而不是读 React 状态：占比未调整过时状态里没有值（舞台按画幅比撑高，
- * 侧栏拿剩下的），此时必须按当前真实布局起算，否则第一次拖动会跳一下。
- */
-export function detailsShareFromHeights(sidebarHeight: number, containerHeight: number): number {
-  if (!(containerHeight > 0)) return DETAILS_SHARE_MIN_PERCENT;
-  return (sidebarHeight / containerHeight) * 100;
 }
 
 /**

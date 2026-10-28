@@ -62,12 +62,8 @@ import {
   usePortraitOrientation,
   useStackedDetailsViewport,
 } from "@/shared/hooks/usePlayerViewport";
-import {
-  clearDetailsResizing,
-  useDetailsResize,
-  writeDetailsShare,
-} from "@/shared/hooks/useDetailsResize";
-import { canResizeVideoDetails, roundDetailsShare } from "@/shared/gestures/detailsResize";
+import { useDetailsResize } from "@/shared/hooks/useDetailsResize";
+import { canResizeVideoDetails } from "@/shared/gestures/detailsResize";
 import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
@@ -287,7 +283,6 @@ function VideoPlayerPageContent() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const detailsRef = useRef<HTMLElement | null>(null);
   /** 舞台 + 详情区的外框：内容滑动调整占比时以它为分母。 */
   const detailsFrameRef = useRef<HTMLElement | null>(null);
   const params = parseVideoPlayParams(searchParams);
@@ -390,8 +385,6 @@ function VideoPlayerPageContent() {
       },
     };
   });
-  /** 本次视频内容滑动调出的详情占比；切视频/分 P 不沿用。 */
-  const [detailsLayout, setDetailsLayout] = useState<{ key: string; percent: number } | null>(null);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
   const [speedHoldActive, setSpeedHoldActive] = useState(false);
@@ -691,34 +684,11 @@ function VideoPlayerPageContent() {
     !fullscreen.fullscreen &&
     !audioOnly &&
     canResizeVideoDetails(frameAspectRatio);
-  const detailsShare =
-    detailsResizeEnabled && detailsLayout?.key === videoKey ? detailsLayout.percent : null;
-  const previewDetailsShare = useCallback(
-    (percent: number) => writeDetailsShare(detailsFrameRef.current, percent),
-    [],
-  );
-  const commitDetailsShare = useCallback(
-    (percent: number) => {
-      writeDetailsShare(detailsFrameRef.current, percent);
-      clearDetailsResizing(detailsFrameRef.current);
-      setDetailsLayout({ key: videoKey, percent: roundDetailsShare(percent) });
-    },
-    [videoKey],
-  );
-  const clampDetailsShare = useCallback(
-    (percent: number) => {
-      setDetailsLayout({ key: videoKey, percent: roundDetailsShare(percent) });
-    },
-    [videoKey],
-  );
   const detailsContentRef = useDetailsResize({
     enabled: detailsResizeEnabled,
     aspectRatio: frameAspectRatio,
     containerRef: detailsFrameRef,
-    detailsRef,
-    onPreview: previewDetailsShare,
-    onCommit: commitDetailsShare,
-    onClamp: clampDetailsShare,
+    resetKey: videoKey,
   });
   const androidPlayerControls = useAndroidPlayerControls(clientPlatform === "android", videoKey);
   const nativePlayerControlsActive = androidPlayerControls.supported;
@@ -3025,25 +2995,16 @@ function VideoPlayerPageContent() {
           aspect-ratio，画幅比会被静默丢掉（这正是原先的黑边根因）。
           比值取实测源画幅（`--stage-ar`），元数据到位前回退 16/9。
 
-          用户拖动过页签条后（`data-vod-details-share`），舞台高度改由
-          容器网格的两行决定、画幅比退居 `object-contain`，因此「把侧栏
-          拖大」真的能让画面变小而不是被比例锁住；未拖动时一切照旧。 */}
+          已知为更高画幅时，手势模块在首帧写入原始占比；舞台始终按该占比取
+          真实高度，拖动期只改分层 transform，画面以 `object-contain` 居中。 */}
       <main
         ref={detailsFrameRef}
         data-video-details-frame
-        data-vod-details-share={detailsShare === null ? undefined : "true"}
-        // 拖动期间由手势直接写 CSS 变量（不触发 React 渲染）；松手提交后再由 state
-        // 接管，两者的取值完全一致，因此提交那一帧不会跳。未拖动过时不写内联值，
-        // 布局完全按样式表里的默认分配。
-        style={
-          detailsShare === null
-            ? undefined
-            : ({ "--vod-details-share": `${detailsShare}%` } as CSSProperties)
-        }
         className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row"
       >
         <div
           data-video-player-frame
+          data-vod-details-stage
           style={
             frameAspectRatio && frameAspectRatio > 0
               ? ({ "--stage-ar": String(frameAspectRatio) } as CSSProperties)
@@ -3076,6 +3037,7 @@ function VideoPlayerPageContent() {
               onRetry: retryPlaybackFailure,
             }}
             data-player-stage
+            data-vod-details-player-stage
             data-video-mode="details"
             data-fullscreen={fullscreen.fullscreen && fullscreen.nativeLayer ? "true" : undefined}
             className={cn(
@@ -3105,6 +3067,7 @@ function VideoPlayerPageContent() {
                   chrome={{
                     ref: controlsRef,
                     "data-player-controls": true,
+                    "data-vod-details-controls": true,
                     "data-visible": "true",
                     "aria-hidden": false,
                     className:
@@ -3196,6 +3159,7 @@ function VideoPlayerPageContent() {
               <div data-video-frame className="relative flex min-h-0 flex-1 flex-col">
                 <div
                   data-player-video-surface
+                  data-vod-details-media-surface
                   className={cn(
                     "relative min-h-0 flex-1 overflow-hidden bg-black",
                     mobileClient && "touch-none select-none",
@@ -3359,6 +3323,7 @@ function VideoPlayerPageContent() {
                   asr={asr}
                   fontSize={asrFontSize}
                   translationTo={asrTranslationTo}
+                  vodResizeAnchor
                 />
 
                 {!controlsAvailable && (
@@ -3521,7 +3486,7 @@ function VideoPlayerPageContent() {
         </div>
         {!webFullscreen && (
           <aside
-            ref={detailsRef}
+            data-vod-details-aside
             tabIndex={-1}
             aria-label="视频详情"
             className={cn(
