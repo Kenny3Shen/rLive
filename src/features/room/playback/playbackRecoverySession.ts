@@ -166,8 +166,8 @@ export function matchingQualityIndex(
   return matchingIndex >= 0 ? matchingIndex : clampIndex(fallbackIndex, qualities.length);
 }
 
-/** 浏览器解码失败后返回下一个 Twitch 视频渲染档。 */
-export function nextTwitchDecodeQualityIndex(
+/** 当前档之后的下一个视频清晰度（跳过 Twitch 的 audio only 档）；没有更低档时为 `null`。 */
+export function nextLowerVideoQualityIndex(
   qualities: Pick<LivePlayQuality, "quality">[],
   currentIndex: number,
 ): number | null {
@@ -195,6 +195,11 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
   private playingStartedAt: number | null = null;
   private lastFailure: PlaybackFailureMarker | null = null;
   private metadataRenewalInFlight = false;
+  /**
+   * 当前清晰度是否由用户手动选定。默认档（按「画质偏好」挑出来的）在线路与续签
+   * 预算都耗尽时会自动降一档；用户亲手选的档位则照旧报错，不替用户改选择。
+   */
+  private qualityPinnedByUser = false;
 
   constructor(config: PlaybackRecoverySessionConfig, adapters: PlaybackRecoverySessionAdapters) {
     this.config = config;
@@ -225,6 +230,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     const qualityIndex = clampIndex(index, this.snapshot.qualities.length);
     const quality = this.snapshot.qualities[qualityIndex];
     const generation = this.beginUserIntent();
+    this.qualityPinnedByUser = true;
     this.publish({
       qualityIndex,
       lines: [],
@@ -280,26 +286,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     const message = event.message?.trim() ?? "";
     const isDecodeError = event.decodeError === true || isVideoJsDecodeError(message);
     if (event.kind === "error" && this.config.siteId === "twitch" && isDecodeError) {
-      const fallbackQualityIndex = nextTwitchDecodeQualityIndex(
-        this.snapshot.qualities,
-        this.snapshot.qualityIndex,
-      );
-      if (fallbackQualityIndex != null) {
-        const quality = this.snapshot.qualities[fallbackQualityIndex];
-        const generation = this.invalidatePendingWork();
-        this.resetRecoveryBudget();
-        this.publish({
-          qualityIndex: fallbackQualityIndex,
-          lines: [],
-          lineIndex: 0,
-          playUrl: null,
-          loading: true,
-          error: undefined,
-          loadError: null,
-        });
-        if (quality) void this.loadLines(generation, quality, false);
-        return;
-      }
+      if (this.stepDownQuality()) return;
       this.publish({ loadError: "当前 Twitch 清晰度无法解码，请手动选择较低画质" });
       return;
     }
@@ -330,6 +317,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
       return;
     }
     this.started = true;
+    this.qualityPinnedByUser = false;
     const generation = this.invalidatePendingWork();
     this.resetRecoveryBudget();
     this.publish({ ...EMPTY_SNAPSHOT, loading: true });
@@ -460,6 +448,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
 
   private renewPlaybackMetadata(event: PlayerEvent): void {
     if (this.metadataRenewalCount >= MAX_PLAYBACK_METADATA_RENEWALS) {
+      if (this.stepDownDefaultQuality()) return;
       this.publish({ loadError: "播放地址多次更新失败，请点击刷新后重试" });
       return;
     }
@@ -514,6 +503,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
       nextLineIndex: rankedReplacement,
     });
     if (action.type === "fail") {
+      if (this.stepDownDefaultQuality()) return;
       this.publish({ loadError: message || action.message });
       return;
     }
@@ -537,6 +527,46 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     };
     if (action.delayMs > 0) this.failoverTimer = this.clock.setTimer(apply, action.delayMs);
     else apply();
+  }
+
+  /**
+   * 换到下一个更低的视频清晰度并重新取线路，换档后恢复预算从零开始。
+   * 已是最低档时返回 `false`，由调用方发布终止错误。
+   */
+  private stepDownQuality(): boolean {
+    const fallbackQualityIndex = nextLowerVideoQualityIndex(
+      this.snapshot.qualities,
+      this.snapshot.qualityIndex,
+    );
+    if (fallbackQualityIndex == null) return false;
+    const quality = this.snapshot.qualities[fallbackQualityIndex];
+    const generation = this.invalidatePendingWork();
+    this.resetRecoveryBudget();
+    this.metadataRenewalInFlight = false;
+    this.publish({
+      qualityIndex: fallbackQualityIndex,
+      lines: [],
+      lineIndex: 0,
+      playUrl: null,
+      loading: true,
+      error: undefined,
+      loadError: null,
+    });
+    if (quality) void this.loadLines(generation, quality, false);
+    return true;
+  }
+
+  /**
+   * 默认档的线路与续签预算都耗尽时自动降一档。
+   *
+   * 平台会把匿名不可取的高档也列进清晰度表：虎牙赛事房的 4K 档六条线路实测全部
+   * 403，或 302 到只发一小段数据就断开的占位流，而同房间的「超清」各线路正常出流。
+   * 只在同一档里换线路和续签永远恢复不了，用户只会看到「播放地址多次更新失败」。
+   * 用户手动选的档位不改，照旧报错。
+   */
+  private stepDownDefaultQuality(): boolean {
+    if (this.qualityPinnedByUser) return false;
+    return this.stepDownQuality();
   }
 
   private beginUserIntent(): number {

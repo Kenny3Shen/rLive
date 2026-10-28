@@ -609,3 +609,122 @@ describe("播放恢复会话的续期语义", () => {
     session.dispose();
   });
 });
+
+describe("默认清晰度在恢复预算耗尽后自动降档", () => {
+  const tiers: LivePlayQuality[] = [
+    { quality: "4K", data: { bitRate: 20000 } },
+    { quality: "超清", data: { bitRate: 2000 } },
+  ];
+
+  /** 虎牙房间：FLV 插件内部已重试，`playerRebuildRetryLimit` 为 1。 */
+  async function huyaSession(clock: PlaybackRecoveryClockAdapter) {
+    const requested: string[] = [];
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => tiers,
+      fetchLines: async ({ quality: tier }) => {
+        requested.push(tier.quality);
+        return [{ ...flvSource(`https://cdn.example/${tier.quality}.flv`), source_id: "huya:TX" }];
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "huya" as const,
+      roomId: "660000",
+      qualityLevel: "high" as const,
+    };
+    const session = createPlaybackRecoverySession(
+      { ...config, detail: undefined, enabled: false },
+      { metadata, clock },
+    );
+    session.updateConfig({
+      ...config,
+      detail: { ...detail, site_id: "huya", room_id: "660000" },
+      enabled: true,
+    });
+    await flush();
+    await flush();
+    return { session, requested };
+  }
+
+  const http403 = (epoch: number) => ({
+    epoch,
+    generation: epoch,
+    kind: "error" as const,
+    protocol: "flv" as const,
+    message: "HttpStatusCodeInvalid 403",
+  });
+
+  test("线路全部失败后换到下一档，而不是发布终止错误", async () => {
+    const clock = manualClock();
+    const { session, requested } = await huyaSession(clock.clock);
+    expect(session.getSnapshot().qualityIndex).toBe(0);
+
+    session.acceptTransportFact(http403(1));
+    await flush();
+    expect(session.getSnapshot().renewToken).toBe(1);
+
+    session.acceptTransportFact(http403(2));
+    await flush();
+    await flush();
+
+    const snapshot = session.getSnapshot();
+    expect(snapshot.qualityIndex).toBe(1);
+    expect(snapshot.playUrl?.url).toBe("https://cdn.example/超清.flv");
+    expect(snapshot.loadError).toBeNull();
+    expect(requested).toEqual(["4K", "超清"]);
+    session.dispose();
+  });
+
+  test("续签预算耗尽后换到下一档，最低档仍失败才报错", async () => {
+    const clock = manualClock();
+    const { session } = await huyaSession(clock.clock);
+    const earlyEof = (epoch: number) => ({
+      epoch,
+      generation: epoch,
+      kind: "eof" as const,
+      protocol: "flv" as const,
+      message: "Fetch stream meet Early-EOF",
+    });
+
+    let epoch = 0;
+    const drainRenewals = async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        session.acceptTransportFact(earlyEof(++epoch));
+        await flush();
+        await flush();
+        while (await clock.advanceToNext()) {}
+      }
+      session.acceptTransportFact(earlyEof(++epoch));
+      await flush();
+      await flush();
+    };
+
+    await drainRenewals();
+    expect(session.getSnapshot().qualityIndex).toBe(1);
+    expect(session.getSnapshot().loadError).toBeNull();
+
+    await drainRenewals();
+    expect(session.getSnapshot().qualityIndex).toBe(1);
+    expect(session.getSnapshot().loadError).toContain("刷新");
+    expect(clock.pending()).toBe(0);
+    session.dispose();
+  });
+
+  test("用户手动选的清晰度不自动降档", async () => {
+    const clock = manualClock();
+    const { session } = await huyaSession(clock.clock);
+    session.selectQuality(0);
+    await flush();
+    await flush();
+
+    session.acceptTransportFact(http403(1));
+    await flush();
+    session.acceptTransportFact(http403(2));
+    await flush();
+
+    expect(session.getSnapshot().qualityIndex).toBe(0);
+    expect(session.getSnapshot().loadError).toContain("403");
+    session.dispose();
+  });
+});

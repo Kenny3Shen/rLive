@@ -12,7 +12,7 @@ import {
 export {
   isDuplicatePlaybackFailure,
   matchingQualityIndex,
-  nextTwitchDecodeQualityIndex,
+  nextLowerVideoQualityIndex,
   playbackWasStable,
   playerRebuildRetryLimit,
 } from "./playbackRecoverySession";
