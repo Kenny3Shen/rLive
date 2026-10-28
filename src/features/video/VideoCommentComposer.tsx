@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type FormEvent } from "react";
+import { memo, useId, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { SendHorizontal } from "lucide-react";
@@ -36,10 +36,13 @@ type VideoCommentComposerProps = {
 };
 
 /** 放在评论滚动区之外，作为 comments 面板的固定底部；只发送一级文本评论。 */
-export function VideoCommentComposer({ aid, className }: VideoCommentComposerProps) {
+export const VideoCommentComposer = memo(function VideoCommentComposer({
+  aid,
+  className,
+}: VideoCommentComposerProps) {
   // 分 P 共用 aid，草稿保留；换稿件重新挂载，旧请求不得清空新稿件草稿。
   return <VideoCommentComposerForm key={aid} aid={aid} className={className} />;
-}
+});
 
 function VideoCommentComposerForm({ aid, className }: VideoCommentComposerProps) {
   const inputId = useId();

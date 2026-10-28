@@ -1,4 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -155,7 +164,7 @@ function UpCardSkeleton() {
 }
 
 /** 相关视频（UGC）。 */
-function RelatedPanel({ bvid }: { bvid: string }) {
+const RelatedPanel = memo(function RelatedPanel({ bvid }: { bvid: string }) {
   const relatedQuery = useQuery({
     queryKey: ["video_related", bvid],
     enabled: bvid !== "",
@@ -218,7 +227,7 @@ function RelatedPanel({ bvid }: { bvid: string }) {
       )}
     </div>
   );
-}
+});
 
 /**
  * 分集/合集/选集三种列表共用的行画法：左列集号（或序数、P 号），中间标题，
@@ -749,16 +758,18 @@ export function VideoSidebar({
   cid,
   danmaku,
   danmakuComposer,
-  tab: requestedTab,
-  onTabChange,
+  tabMemory,
   detailsContentRef,
   onSeek,
 }: {
   bvid: string | null;
   epId: string | null;
   aid: string | null;
-  tab: SidebarTab | null;
-  onTabChange: (tab: SidebarTab) => void;
+  /**
+   * 页签记忆，由播放页持有以便侧栏重挂（切集等待首帧）后回到原页签。
+   * 当前页签是侧栏自己的 state：切页只重渲染侧栏，不触发播放页提交。
+   */
+  tabMemory?: { get: () => SidebarTab | null; set: (tab: SidebarTab) => void };
   /** 当前播放的 cid：多 P 稿件的选集列表用它高亮当前 P。 */
   cid: number;
   /** 评论空降到当前视频的播放位置（秒），与弹幕是否开启无关。 */
@@ -779,6 +790,16 @@ export function VideoSidebar({
 }) {
   const navigate = useNavigate();
   const isPgc = Boolean(epId);
+  const [requestedTab, setRequestedTab] = useState<SidebarTab | null>(
+    () => tabMemory?.get() ?? null,
+  );
+  const onTabChange = useCallback(
+    (next: SidebarTab) => {
+      tabMemory?.set(next);
+      setRequestedTab(next);
+    },
+    [tabMemory],
+  );
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
   const [videoFollowPickerOpen, setVideoFollowPickerOpen] = useState(false);
   const [videoFollowRemoveOpen, setVideoFollowRemoveOpen] = useState(false);

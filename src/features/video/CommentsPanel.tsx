@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useState, type ReactNode } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ArrowUpDown,
@@ -573,7 +573,8 @@ function CommentReplies({
  * 短视频的评论抽屉直接复用它（导出而不是另写一份：评论的三个坑 —— 游标语义、
  * 回复预览、pn 翻页 —— 已经在这里跑通）。它不自带滚动容器，由调用方提供。
  */
-export function CommentsPanel({
+/** memo：侧栏切页签或父级重渲染时，props 未变的评论树不重新提交。 */
+export const CommentsPanel = memo(function CommentsPanel({
   onSeek,
   ...props
 }: {
@@ -587,7 +588,7 @@ export function CommentsPanel({
       <CommentsPanelContent {...props} />
     </CommentSeekContext>
   );
-}
+});
 
 function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?: string }) {
   const [mode, setMode] = useState(3);

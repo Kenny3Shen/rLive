@@ -377,7 +377,19 @@ function VideoPlayerPageContent() {
     key: string;
     ratio: number | null;
   } | null>(null);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab | null>(null);
+  /**
+   * 侧栏页签记忆：只由 VideoSidebar 读写。不放进本页 state，切页签只重渲染侧栏，
+   * 不带着播放页整棵树（播放器、控制栏、弹幕层）一起提交。
+   */
+  const [sidebarTabMemory] = useState(() => {
+    let remembered: SidebarTab | null = null;
+    return {
+      get: () => remembered,
+      set: (tab: SidebarTab) => {
+        remembered = tab;
+      },
+    };
+  });
   /** 本次视频内容滑动调出的详情占比；切视频/分 P 不沿用。 */
   const [detailsLayout, setDetailsLayout] = useState<{ key: string; percent: number } | null>(null);
   const [danmakuVisible, setDanmakuVisible] = useState(true);
@@ -3523,8 +3535,7 @@ function VideoPlayerPageContent() {
             {secondaryReady && (
               <Suspense fallback={null}>
                 <VideoSidebar
-                  tab={sidebarTab}
-                  onTabChange={setSidebarTab}
+                  tabMemory={sidebarTabMemory}
                   bvid={params.bvid}
                   epId={params.epId}
                   aid={params.aid}

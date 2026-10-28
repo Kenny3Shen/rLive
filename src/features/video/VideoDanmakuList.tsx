@@ -38,7 +38,7 @@ import {
 const VIDEO_DANMAKU_ROW_ESTIMATE_PX = 27;
 const VIDEO_DANMAKU_LIST_OVERSCAN = 8;
 
-export function VideoDanmakuList({
+export const VideoDanmakuList = memo(function VideoDanmakuList({
   entries,
   clock,
   loading,
@@ -279,7 +279,7 @@ export function VideoDanmakuList({
       )}
     </div>
   );
-}
+});
 
 /**
  * 单行 memo：播放推进时只有跨过「已出现」边界的那几行重渲染。
