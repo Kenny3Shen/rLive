@@ -7,7 +7,7 @@
 use reqwest::Client;
 use serde_json::Value;
 
-use super::comment_send::{error, normalize_aid};
+use super::comment_send::{error, limited, login_expired, normalize_aid};
 use crate::account::cookie_header_value;
 use crate::danmu_rs::bilibili::{cookie_value, has_send_credentials};
 use crate::error::AppResult;
@@ -68,7 +68,7 @@ async fn like_comment_to_url(
     match response.status().as_u16() {
         200..=299 => {}
         401 => return Err(login_expired()),
-        412 | 429 => return Err(limited()),
+        412 | 429 => return Err(limited("B站暂时限制点赞，请稍后再试")),
         500..=599 => return Err(unknown_result()),
         _ => return Err(rejected(None)),
     }
@@ -86,17 +86,6 @@ fn unknown_result() -> crate::error::AppError {
     )
 }
 
-fn login_expired() -> crate::error::AppError {
-    error(
-        "video_comment_login_expired",
-        "B站登录已失效，请在设置 → 账号重新登录",
-    )
-}
-
-fn limited() -> crate::error::AppError {
-    error("video_comment_send_limited", "B站暂时限制点赞，请稍后再试")
-}
-
 fn rejected(code: Option<i64>) -> crate::error::AppError {
     let message = match code {
         Some(code) => format!("B站未接受点赞（错误码 {code}），评论可能已被删除"),
@@ -109,7 +98,7 @@ fn parse_like_result(value: &Value) -> AppResult<()> {
     match value.get("code").and_then(Value::as_i64) {
         Some(0) => Ok(()),
         Some(-101 | -111) => Err(login_expired()),
-        Some(-412) => Err(limited()),
+        Some(-412) => Err(limited("B站暂时限制点赞，请稍后再试")),
         Some(code) => Err(rejected(Some(code))),
         None => Err(unknown_result()),
     }

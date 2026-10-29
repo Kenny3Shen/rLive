@@ -34,6 +34,19 @@ pub(super) fn unknown_result() -> AppError {
     )
 }
 
+/// 登录失效是评论写入与点赞共用的分类，错误码与措辞必须一致。
+pub(super) fn login_expired() -> AppError {
+    error(
+        "video_comment_login_expired",
+        "B站登录已失效，请在设置 → 账号重新登录",
+    )
+}
+
+/// 风控限流也共用同一错误码；具体动作由调用方在文案里区分。
+pub(super) fn limited(message: impl Into<String>) -> AppError {
+    error("video_comment_send_limited", message)
+}
+
 pub(super) fn normalize_aid(aid: &str) -> AppResult<String> {
     let aid = aid.trim();
     let parsed = aid.parse::<u64>().ok().filter(|value| *value > 0);
@@ -208,17 +221,9 @@ async fn send_comment_to_url(
         .map_err(|_| unknown_result())?;
     match response.status().as_u16() {
         200..=299 => {}
-        401 => {
-            return Err(error(
-                "video_comment_login_expired",
-                "B站登录已失效，请在设置 → 账号重新登录",
-            ));
-        }
+        401 => return Err(login_expired()),
         412 | 429 => {
-            return Err(error(
-                "video_comment_send_limited",
-                "B站暂时限制评论发送，请稍后再试",
-            ));
+            return Err(limited("B站暂时限制评论发送，请稍后再试"));
         }
         500..=599 => return Err(unknown_result()),
         _ => {
@@ -239,18 +244,12 @@ fn parse_send_result(value: &Value) -> AppResult<()> {
     match value.get("code").and_then(Value::as_i64) {
         // 与 PiliPlus 一样：code=0 即视为提交成功。缺少 reply 详情不能诱导重复发送。
         Some(0) => Ok(()),
-        Some(-101 | -111) => Err(error(
-            "video_comment_login_expired",
-            "B站登录已失效，请在设置 → 账号重新登录",
-        )),
+        Some(-101 | -111) => Err(login_expired()),
         Some(-102) => Err(error(
             "video_comment_permission",
             "账号权限不足，暂时无法发表评论",
         )),
-        Some(-412) => Err(error(
-            "video_comment_send_limited",
-            "B站暂时限制评论发送，请稍后再试",
-        )),
+        Some(-412) => Err(limited("B站暂时限制评论发送，请稍后再试")),
         Some(code) => Err(error(
             "video_comment_send_rejected",
             format!("B站未接受评论（错误码 {code}），请检查评论区限制或修改内容"),
