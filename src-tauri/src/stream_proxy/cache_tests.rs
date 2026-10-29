@@ -598,6 +598,31 @@ async fn segment_resume_is_abandoned_when_upstream_ignores_resume_range() {
 }
 
 #[tokio::test]
+async fn oversized_range_end_does_not_overflow_the_remaining_length_check() {
+    // `Range: bytes=0-18446744073709551615`（u64::MAX）配合匹配的 206 会让
+    // 「已转发字节是否超出区间」的比较在 debug 构建里溢出 panic；这里盯住
+    // 它只按饱和运算判定为未超出，并照常转发正文。
+    let payload = b"0123456789".to_vec();
+    let fixture = Fixture::new(response(
+        206,
+        "bytes 0-18446744073709551615/18446744073709551616",
+        "Content-Length: 10",
+        &payload,
+    ))
+    .await;
+    let (bytes, result) = fixture
+        .fetch_request(
+            b"GET /live HTTP/1.1\r\nHost: localhost\r\n\
+              Range: bytes=0-18446744073709551615\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+    result.unwrap();
+    assert_eq!(body(&bytes), payload.as_slice());
+    assert_eq!(fixture.upstream_resumes(), 0);
+    fixture.assert_not_cached().await;
+}
+
+#[tokio::test]
 async fn unreachable_upstream_is_answered_with_bad_gateway_after_one_retry() {
     let mut fixture = Fixture::new(complete_response()).await;
     let closed = std::net::TcpListener::bind("127.0.0.1:0")

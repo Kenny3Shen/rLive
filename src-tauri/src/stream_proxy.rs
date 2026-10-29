@@ -188,7 +188,13 @@ impl ProxyTelemetryCounters {
     }
 
     /// 锁存第一个媒体字节的纪元；后续分片沿用第一个的取值。
+    ///
+    /// 每个媒体块都会调用一次，先读一次锁存值，已锁存后不再为每一块付一次
+    /// 挂钟读取。
     fn record_media_start(&self) {
+        if self.first_media_at_ms.load(Ordering::Relaxed) != 0 {
+            return;
+        }
         let _ = self.first_media_at_ms.compare_exchange(
             0,
             unix_timestamp_ms().max(1),
@@ -309,6 +315,18 @@ struct TwitchAdRecoveryState {
     current_manifest_url: Option<String>,
     revision: u64,
     refresh_budget: TwitchManifestRefreshBudget,
+}
+
+impl TwitchAdRecoveryState {
+    /// 最近一次干净清单的应答体；没有历史清单时返回 `None`。
+    fn latest_clean_replacement(&self) -> Option<TwitchManifestReplacement> {
+        self.last_clean_manifest
+            .as_ref()
+            .map(|(manifest, url)| TwitchManifestReplacement {
+                body: manifest.clone(),
+                upstream_url: url.clone(),
+            })
+    }
 }
 
 /// Twitch 主清单连续续期失败的预算。
@@ -651,29 +669,10 @@ impl TwitchAdRecoverySession {
         };
 
         let mut state = self.state.lock().await;
-        let revision_unchanged = state.revision == snapshot.revision;
-        if let Some((active_profile, replacement)) = refreshed {
-            if revision_unchanged {
-                state.active_profile = active_profile;
-                state.current_manifest_url = Some(replacement.upstream_url.to_string());
-                state.last_clean_manifest =
-                    Some((replacement.body.clone(), replacement.upstream_url.clone()));
-                state.revision = state.revision.wrapping_add(1);
-                state.refresh_budget.record_success();
-                drop(state);
-                drop(lease);
-                tracing::debug!("Twitch manifest URL renewed");
-                return TwitchManifestRefreshOutcome::Manifest(replacement);
-            }
-
-            // 并发干净清单已经推进 revision 时，本次候选属于旧快照，不能
-            // 覆盖新状态；返回当前最新清单，避免把旧候选交给播放器。
-            let latest = state.last_clean_manifest.as_ref().map(|(manifest, url)| {
-                TwitchManifestReplacement {
-                    body: manifest.clone(),
-                    upstream_url: url.clone(),
-                }
-            });
+        // 广告替换或并发干净清单已经推进 revision 时，本次结果基于旧快照：
+        // 既不能覆盖新状态，也不能把旧候选或失败交给播放器，更不能累计预算。
+        if state.revision != snapshot.revision {
+            let latest = state.latest_clean_replacement();
             drop(state);
             drop(lease);
             return match latest {
@@ -682,21 +681,17 @@ impl TwitchAdRecoverySession {
             };
         }
 
-        // 广告替换或并发请求已经更新了干净清单时，本次旧快照的失败不能
-        // 重新累计预算，也不能覆盖新 revision。
-        if !revision_unchanged {
-            let replacement = state.last_clean_manifest.as_ref().map(|(manifest, url)| {
-                TwitchManifestReplacement {
-                    body: manifest.clone(),
-                    upstream_url: url.clone(),
-                }
-            });
+        if let Some((active_profile, replacement)) = refreshed {
+            state.active_profile = active_profile;
+            state.current_manifest_url = Some(replacement.upstream_url.to_string());
+            state.last_clean_manifest =
+                Some((replacement.body.clone(), replacement.upstream_url.clone()));
+            state.revision = state.revision.wrapping_add(1);
+            state.refresh_budget.record_success();
             drop(state);
             drop(lease);
-            return match replacement {
-                Some(replacement) => TwitchManifestRefreshOutcome::Manifest(replacement),
-                None => TwitchManifestRefreshOutcome::Manifest(self.waiting_manifest().await),
-            };
+            tracing::debug!("Twitch manifest URL renewed");
+            return TwitchManifestRefreshOutcome::Manifest(replacement);
         }
 
         state.refresh_budget.record_failure();
@@ -1825,9 +1820,7 @@ mod tests {
     fn twitch_gap_only_manifests_require_refresh_but_clean_live_ones_do_not() {
         assert!(twitch_manifest_needs_refresh(&twitch_wait_manifest()));
         assert!(twitch_manifest_needs_refresh(GAP_TWITCH_PLAYLIST));
-        assert!(twitch_manifest_needs_refresh(concat!(
-            "#EXTM3U\n#EXT-X-ENDLIST\n"
-        )));
+        assert!(twitch_manifest_needs_refresh("#EXTM3U\n#EXT-X-ENDLIST\n"));
         assert!(!twitch_manifest_needs_refresh(CLEAN_TWITCH_PLAYLIST));
         assert!(manifest_has_playable_segment(CLEAN_TWITCH_PLAYLIST));
     }
@@ -3487,8 +3480,10 @@ async fn handle_client(
             continue;
         }
         forwarded = forwarded.saturating_add(chunk.len() as u64);
+        // 区间长度用饱和加法：`Range: bytes=0-18446744073709551615` 这类客户端
+        // 输入会让 `end - start + 1` 在 debug 构建溢出 panic。
         if let Some((_, (start, end))) = resume.as_ref()
-            && forwarded > end - start + 1
+            && forwarded > end.saturating_sub(*start).saturating_add(1)
         {
             // 上游给的字节超出了请求区间，续传位置已不可信，后续只做直通。
             resume = None;
