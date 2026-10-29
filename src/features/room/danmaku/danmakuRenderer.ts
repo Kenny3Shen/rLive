@@ -87,6 +87,11 @@ const COLLISION_MODE = "strict";
  */
 const TRACK_DISTRIBUTION = "random";
 /**
+ * 同车道前后弹幕的横向间距（px）固定为 0：前车尾部一离开右缘，后车即可入场，最大限度及时上屏。
+ * 与库默认值相同，这里显式写出、不依赖它；`strict` 碰撞检测仍保证不压字。
+ */
+const LANE_GAP_PX = 0;
+/**
  * `danmu` 的 `speed` 单位是 px/毫秒，而业务设置（与旧引擎）用 px/秒，
  * 两者差 1000 倍；漏了这一步会让每条弹幕在数毫秒内跑完并消失。
  */
@@ -434,6 +439,7 @@ export class DanmakuRenderer {
     const manager = create<DanmakuComment>({
       mode: COLLISION_MODE,
       distribution: TRACK_DISTRIBUTION,
+      gap: LANE_GAP_PX,
       interval: layer === "scroll" ? SCROLL_INTERVAL_MS : FIXED_INTERVAL_MS,
       speed: layer === "scroll" ? this.speed * SPEED_UNIT_SCALE : null,
       trackHeight: this.laneHeight,
