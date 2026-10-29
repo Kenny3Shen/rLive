@@ -956,17 +956,16 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
               () => recoveryBudget.noteInterrupted(),
               isCurrentPlayer,
             );
-            const reportHlsFailure = (cause: unknown, recoveryExhausted = false) => {
+            // 只有预算耗尽才走到这里：先摘掉播放器，再交给播放恢复会话续期或报错。
+            const reportHlsFailure = (cause: unknown) => {
               if (!isCurrentPlayer()) return;
               const message = videoJsPlayerErrorMessage(cause, "HLS 连接中断");
               setRunning(false);
-              if (recoveryExhausted) {
-                playerRef.current = null;
-                try {
-                  player.destroy();
-                } catch {
-                  /* 致命 HLS 错误可能已经释放了内部状态。 */
-                }
+              playerRef.current = null;
+              try {
+                player.destroy();
+              } catch {
+                /* 致命 HLS 错误可能已经释放了内部状态。 */
               }
               reportMediaFailure({
                 epoch: gen,
@@ -974,7 +973,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 kind: "error",
                 message,
                 protocol: "hls",
-                recoveryExhausted,
+                recoveryExhausted: true,
               });
             };
             player.on("error", (cause) => {
@@ -996,7 +995,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                   recovery: disposition.recovery,
                 });
                 if (action.type === "recovery_exhausted") {
-                  reportHlsFailure(cause, true);
+                  reportHlsFailure(cause);
                   return;
                 }
                 setRunning(false);
@@ -1015,8 +1014,9 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
              * Twitch 的 HLS 失败与播放器自身错误共用 adapter 的 error 事件。
              * 只有已确认的 hls.js fatal 才进入 startLoad / 续期；其余错误必须
              * 回到既有 reportPlayerError，尤其不能把 play() 拒绝当成清单失败。
+             * 预算耗尽后才走到这里：先摘掉播放器，再交给播放恢复会话续期或报错。
              */
-            function reportTwitchHlsFailure(cause: unknown, recoveryExhausted: boolean) {
+            function reportTwitchHlsFailure(cause: unknown) {
               const event = cause as { details?: string } | null;
               const hlsJsDetails = event?.details ?? "";
               const errorMessage = hlsJsDetails
@@ -1024,27 +1024,23 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 : videoJsPlayerErrorMessage(cause, "Twitch HLS 连接中断");
               const commercialBreak = isTwitchCommercialBreak(cause);
               const responseStatus = hlsResponseStatus(cause);
-              if (recoveryExhausted) {
-                playerRef.current = null;
-                try {
-                  player.destroy();
-                } catch {
-                  /* 致命 HLS 错误可能已经释放了内部状态。 */
-                }
+              playerRef.current = null;
+              try {
+                player.destroy();
+              } catch {
+                /* 致命 HLS 错误可能已经释放了内部状态。 */
               }
               setRunning(false);
               reportMediaFailure({
                 epoch: gen,
                 generation: gen,
                 kind: "error",
-                message: recoveryExhausted
-                  ? commercialBreak
-                    ? "Twitch 正在播放广告"
-                    : `${errorMessage}，HLS 内部恢复已耗尽`
-                  : errorMessage,
+                message: commercialBreak
+                  ? "Twitch 正在播放广告"
+                  : `${errorMessage}，HLS 内部恢复已耗尽`,
                 protocol: "hls",
                 ...(responseStatus != null ? { httpStatus: responseStatus } : {}),
-                ...(recoveryExhausted ? { recoveryExhausted: true } : {}),
+                recoveryExhausted: true,
                 ...(commercialBreak ? { commercialBreak: true } : {}),
               });
             }
@@ -1112,7 +1108,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
                 return;
               }
 
-              reportTwitchHlsFailure(cause, true);
+              reportTwitchHlsFailure(cause);
             }
             player.on("error", (cause) => {
               // fatal 可能同步释放 engine；在事件栈内快照原生/MSE 分流。
@@ -1351,11 +1347,8 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
     effectivePlaybackKind,
     effectivePlaybackSource,
     effectivePlaybackSourceKey,
-    liveSyncHold,
-    profile,
     proxyLifecycleQueue,
     renewToken,
-    siteId,
     softSwitchEnabled,
   ]);
 
