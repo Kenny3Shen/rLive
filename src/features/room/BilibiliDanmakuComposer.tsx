@@ -22,9 +22,13 @@ import {
   MESSAGE_COMPOSER_SURFACE_CLASS,
   messageComposerSendButtonClass,
 } from "@/shared/components/messageComposerStyles";
-import { glassTitleClass } from "@/shared/components/player/glassSurface";
+import {
+  glassOptionClass,
+  glassPanelClass,
+  glassTitleClass,
+} from "@/shared/components/player/glassSurface";
 import { cn } from "@/lib/utils";
-import { BILIBILI_NATIVE_TEXT_EMOJIS, DANMAKU_EMOJIS } from "./danmaku/emoji";
+import { DANMAKU_EMOJIS } from "./danmaku/emoji";
 import { insertBilibiliDanmakuText } from "./danmaku/outgoing";
 import {
   getDanmakuSendConfig,
@@ -86,7 +90,6 @@ const COMPOSER_OVERLAY_GHOST_CLASS =
 type DanmakuQuickPickerProps = {
   siteId: DanmakuSendSiteId;
   siteLabel: string;
-  supportsNativeBilibiliEmoji: boolean;
   disabled: boolean;
   overlay: boolean;
   portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
@@ -97,6 +100,12 @@ type DanmakuQuickPickerProps = {
   onSelectMessage: (content: string) => void;
 };
 
+/**
+ * 页签面板占满固定高度的弹窗余下空间，切换页签时弹窗不跳动；列表在面板内滚动。
+ * `data-hidden` 必须盖过 `flex`，非当前页签才会隐藏。
+ */
+const PICKER_PANEL_CLASS = "mt-0 flex min-h-0 flex-col gap-1 data-[hidden]:hidden";
+
 function isDanmakuPickerTab(value: unknown): value is DanmakuPickerTab {
   return value === "emoji" || value === "favorites" || value === "history";
 }
@@ -104,7 +113,6 @@ function isDanmakuPickerTab(value: unknown): value is DanmakuPickerTab {
 function DanmakuQuickPicker({
   siteId,
   siteLabel,
-  supportsNativeBilibiliEmoji,
   disabled,
   overlay,
   portalContainer,
@@ -257,13 +265,13 @@ function DanmakuQuickPicker({
       </PopoverTrigger>
       <PopoverContent
         container={portalContainer}
-        data-mobile-static-backdrop
         side="top"
         align="start"
+        glass
         aria-label={`${siteLabel}快捷弹幕面板`}
         className={cn(
-          "w-80 max-h-(--available-height) max-w-(--available-width) overflow-x-hidden overflow-y-auto overscroll-contain gap-2 p-2",
-          overlay && "border-white/10 bg-black/90 text-white shadow-xl backdrop-blur-md",
+          "h-80 w-80 max-h-(--available-height) max-w-(--available-width) overflow-hidden gap-2 p-2",
+          glassPanelClass({ overlay }),
         )}
       >
         <PopoverTitle className={cn("px-0.5", glassTitleClass({ overlay }))}>快捷弹幕</PopoverTitle>
@@ -272,7 +280,7 @@ function DanmakuQuickPicker({
           onValueChange={(value) => {
             if (isDanmakuPickerTab(value)) setActiveTab(value);
           }}
-          className="gap-1"
+          className="min-h-0 flex-1 gap-1"
         >
           <TabsList
             variant="line"
@@ -285,7 +293,7 @@ function DanmakuQuickPicker({
             <TabsTrigger
               value="emoji"
               className={cn(
-                "h-7 px-2 text-xs",
+                "h-7 px-2",
                 overlay && "text-white/70 hover:text-white data-active:text-white after:bg-white",
               )}
             >
@@ -294,7 +302,7 @@ function DanmakuQuickPicker({
             <TabsTrigger
               value="favorites"
               className={cn(
-                "h-7 px-2 text-xs",
+                "h-7 px-2",
                 overlay && "text-white/70 hover:text-white data-active:text-white after:bg-white",
               )}
             >
@@ -303,7 +311,7 @@ function DanmakuQuickPicker({
             <TabsTrigger
               value="history"
               className={cn(
-                "h-7 px-2 text-xs",
+                "h-7 px-2",
                 overlay && "text-white/70 hover:text-white data-active:text-white after:bg-white",
               )}
             >
@@ -311,71 +319,13 @@ function DanmakuQuickPicker({
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="emoji" className="mt-0 data-[hidden]:hidden">
-            {supportsNativeBilibiliEmoji ? (
-              <Tabs defaultValue="bilibili" className="gap-1">
-                <TabsList
-                  variant="line"
-                  aria-label="表情分类"
-                  className={cn(
-                    "h-7 w-full justify-start border-b border-border-subtle px-0",
-                    overlay && "border-white/15 text-white/70",
-                  )}
-                >
-                  <TabsTrigger
-                    value="bilibili"
-                    className={cn(
-                      "h-7 px-2 text-xs",
-                      overlay &&
-                        "text-white/70 hover:text-white data-active:text-white after:bg-white",
-                    )}
-                  >
-                    B站表情
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="emoji"
-                    className={cn(
-                      "h-7 px-2 text-xs",
-                      overlay &&
-                        "text-white/70 hover:text-white data-active:text-white after:bg-white",
-                    )}
-                  >
-                    Emoji
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="bilibili" className="mt-0 data-[hidden]:hidden">
-                  <div className="max-h-[min(15rem,max(0px,calc(var(--available-height)-6rem)))] overflow-y-auto pr-1">
-                    <div className="grid grid-cols-2 gap-1">
-                      {BILIBILI_NATIVE_TEXT_EMOJIS.map((emoji) => (
-                        <Button
-                          key={emoji}
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className={cn(
-                            "min-w-0 justify-center truncate px-1 font-mono text-[11px]",
-                            overlay && "hover:bg-white/15",
-                          )}
-                          aria-label={`插入 B站表情 ${emoji}`}
-                          title={emoji}
-                          onClick={() => onSelectEmoji(emoji)}
-                        >
-                          {emoji}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                </TabsContent>
-                <TabsContent value="emoji" className="mt-0 data-[hidden]:hidden">
-                  <DanmakuEmojiGrid overlay={overlay} onSelect={onSelectEmoji} />
-                </TabsContent>
-              </Tabs>
-            ) : (
+          <TabsContent value="emoji" className={PICKER_PANEL_CLASS}>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <DanmakuEmojiGrid overlay={overlay} onSelect={onSelectEmoji} />
-            )}
+            </div>
           </TabsContent>
 
-          <TabsContent value="favorites" className="mt-0 data-[hidden]:hidden">
+          <TabsContent value="favorites" className={PICKER_PANEL_CLASS}>
             <div className="flex items-center justify-between gap-2 px-0.5">
               <span className={cn("text-xs", overlay ? "text-white/70" : "text-muted-foreground")}>
                 收藏弹幕
@@ -437,7 +387,7 @@ function DanmakuQuickPicker({
               </p>
             )}
             {favoriteItems.length > 0 && (
-              <ScrollArea className="h-52 max-h-[max(0px,calc(var(--available-height)-6rem))] pr-0.5">
+              <ScrollArea className="min-h-0 flex-1 pr-0.5">
                 <div className="flex flex-col gap-0.5">
                   {favoriteItems.map((item) => (
                     <div key={item.content} className="flex items-center gap-1">
@@ -447,7 +397,7 @@ function DanmakuQuickPicker({
                         size="sm"
                         className={cn(
                           "h-8 min-w-0 flex-1 justify-start truncate px-2 text-left text-sm font-normal",
-                          overlay && "hover:bg-white/15 hover:text-white",
+                          overlay && glassOptionClass(),
                         )}
                         title={item.content}
                         onClick={() => selectStoredMessage(item.content)}
@@ -483,7 +433,7 @@ function DanmakuQuickPicker({
             )}
           </TabsContent>
 
-          <TabsContent value="history" className="mt-0 data-[hidden]:hidden">
+          <TabsContent value="history" className={PICKER_PANEL_CLASS}>
             <div className="flex items-center justify-between gap-2 px-0.5">
               <span className={cn("text-xs", overlay ? "text-white/70" : "text-muted-foreground")}>
                 发送历史
@@ -548,7 +498,7 @@ function DanmakuQuickPicker({
               </p>
             )}
             {historyItems.length > 0 && (
-              <ScrollArea className="h-52 max-h-[max(0px,calc(var(--available-height)-6rem))] pr-0.5">
+              <ScrollArea className="min-h-0 flex-1 pr-0.5">
                 <div className="flex flex-col gap-0.5">
                   {historyItems.map((item) => {
                     const isFavorite = favoriteContents.has(item.content);
@@ -560,7 +510,7 @@ function DanmakuQuickPicker({
                           size="sm"
                           className={cn(
                             "h-8 min-w-0 flex-1 justify-start truncate px-2 text-left text-sm font-normal",
-                            overlay && "hover:bg-white/15 hover:text-white",
+                            overlay && glassOptionClass(),
                           )}
                           title={item.content}
                           onClick={() => selectStoredMessage(item.content)}
@@ -802,7 +752,6 @@ export function DanmakuComposer({
           <DanmakuQuickPicker
             siteId={pickerSiteId}
             siteLabel={config.siteLabel}
-            supportsNativeBilibiliEmoji={config.supportsNativeBilibiliEmoji === true}
             disabled={!ready || sending}
             overlay={overlay}
             portalContainer={portalContainer}
@@ -879,7 +828,7 @@ function DanmakuEmojiGrid({
           type="button"
           variant="ghost"
           size="icon"
-          className={cn("size-12", overlay && "hover:bg-white/15")}
+          className={cn("size-12", overlay && glassOptionClass())}
           aria-label={`插入 Emoji ${emoji.label}`}
           title={emoji.label}
           onClick={() => onSelect(emoji.text)}
