@@ -3,8 +3,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { createPlayButtonActivation } from "../src/components/videojs/lib/play-button-activation";
+import { businessTogglePauseHotkeyOptions } from "../src/components/videojs/skins/shared/live-playback-hotkeys";
 
 const root = join(import.meta.dir, "..");
+
+function source(file: string): string {
+  return readFileSync(join(root, file), "utf8");
+}
 
 type TestEvent = {
   target: EventTarget;
@@ -99,19 +104,16 @@ describe("播放按钮业务暂停接管", () => {
 });
 
 describe("播放按钮接线", () => {
-  function source(file: string): string {
-    return readFileSync(join(root, file), "utf8");
-  }
-
-  test("直播、多画面两处与 IPTV 传入业务暂停回调", () => {
+  test("直播、多画面与 IPTV 传入业务暂停回调", () => {
     expect(source("src/features/room/PlayerPane.tsx")).toContain(
       "onTogglePause={player.togglePause}",
     );
+    // 两处 PlayerControls 与一处 VideoJsContainer（Space/K 快捷键）。
     expect(
       source("src/features/multi-room/MultiRoomPlayer.tsx").match(
         /onTogglePause=\{player\.togglePause\}/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(source("src/features/iptv/IptvPlayer.tsx")).toContain("onTogglePause={togglePause}");
   });
 
@@ -126,5 +128,31 @@ describe("播放按钮接线", () => {
     expect(playButton).toContain("onClick={activation.onClick}");
     expect(playButton).toContain("onKeyDown={activation.onKeyDown}");
     expect(playButton).toContain("onKeyUp={activation.onKeyUp}");
+  });
+});
+
+describe("直播快捷键业务暂停接管", () => {
+  test("Space/K 保留 togglePaused action，激活只走一次业务暂停", () => {
+    let calls = 0;
+    const options = businessTogglePauseHotkeyOptions(() => {
+      calls += 1;
+    }, "Space");
+
+    expect(options.keys).toBe("Space");
+    expect(options.action).toBe("togglePaused");
+    expect(options.disabled).toBe(false);
+
+    options.onActivate();
+    expect(calls).toBe(1);
+  });
+
+  test("直播容器把业务暂停回调透传给快捷键", () => {
+    const container = source("src/features/room/player/videoJsControls.tsx");
+    expect(container).toContain("onTogglePause={onTogglePause}");
+    expect(source("src/components/videojs/skins/live-video/hotkeys.tsx")).toContain(
+      "onTogglePause={onTogglePause}",
+    );
+    const hotkeys = source("src/components/videojs/skins/shared/live-playback-hotkeys.tsx");
+    expect(hotkeys).toContain("useHotkey(businessTogglePauseHotkeyOptions(");
   });
 });

@@ -736,6 +736,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
   const stage = (
     <VideoJsContainer
       ref={playerStageRef}
+      onTogglePause={player.togglePause}
       data-multi-room-player={room.key}
       data-main={main ? "true" : "false"}
       // 只有主流携带舞台标记。全屏时这条 article 从 3x3 网格中提升为固定全窗口层

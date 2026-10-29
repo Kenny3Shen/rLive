@@ -527,6 +527,7 @@ function IptvPlayerContent({
         data-iptv-player-stage
         data-fullscreen={fullscreen ? "true" : undefined}
         data-audio-only={audioOnly ? "true" : undefined}
+        onTogglePause={togglePause}
         tabIndex={0}
         aria-label={channel ? `${channel.name} 播放器` : "IPTV 播放器"}
         aria-keyshortcuts="Space K M F"

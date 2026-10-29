@@ -47,6 +47,8 @@ export const useVideoJsPlaybackRate = () => videoJsPlayer.usePlayer(selectPlayba
 type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"> & {
   /** 全屏切换回调，传递给快捷键和按钮 */
   onToggleFullscreen?: () => void;
+  /** 业务暂停入口，直播时同时接管播放按钮与 Space/K 快捷键 */
+  onTogglePause?: () => void;
   children?: ComponentProps<"div">["children"];
   variant?: "live" | "vod";
   /** 自定义控制条，由 PlayerControls 渲染在媒体表面之上。 */
@@ -57,7 +59,10 @@ type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"
 
 /** 统一播放器表面。直播使用实时快捷键与状态提示，点播/录制显式传 `variant="vod"`。 */
 export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps>(
-  function VideoJsContainer({ variant = "live", controls, onToggleFullscreen, ...props }, ref) {
+  function VideoJsContainer(
+    { variant = "live", controls, onToggleFullscreen, onTogglePause, ...props },
+    ref,
+  ) {
     const isVod = variant === "vod";
     return (
       // 语言包随包注册，避免首帧英文；显式 locale 让 SSR 与 `<html lang>` 走同一套文案。
@@ -69,7 +74,10 @@ export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps
             isVod ? (
               <VideoHotkeys onToggleFullscreen={onToggleFullscreen} />
             ) : (
-              <LiveVideoHotkeys onToggleFullscreen={onToggleFullscreen} />
+              <LiveVideoHotkeys
+                onToggleFullscreen={onToggleFullscreen}
+                onTogglePause={onTogglePause}
+              />
             )
           }
           statusIndicators={isVod ? <VideoStatusIndicators /> : <LiveVideoStatusIndicators />}

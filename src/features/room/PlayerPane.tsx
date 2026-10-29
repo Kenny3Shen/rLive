@@ -1415,6 +1415,7 @@ function PlayerPaneContent({
       >
         <VideoJsContainer
           onToggleFullscreen={() => void player.toggleFullscreen()}
+          onTogglePause={player.togglePause}
           ref={playerStageRef}
           errorDialog={{ error: loading ? null : displayError, title: "播放不可用", onRetry }}
           data-player-stage
