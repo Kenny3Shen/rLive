@@ -117,6 +117,7 @@ type TestRenderer = {
   destroy(): void;
   syncLanes(): void;
   pushFixed(comment: DanmakuComment, span: number): boolean;
+  launchWide(comment: DanmakuComment, reservation: Reservation): void;
   coveredScrollLanes(danmaku: TestDanmaku): number[];
   onDestroyed(danmaku: TestDanmaku): void;
 };
@@ -845,4 +846,56 @@ test("resize 重分配的固定预约在 append 时按新车道定位", () => {
     position(danmaku: TestDanmaku, container: unknown): { x: number; y: number };
   };
   expect(options.position(makeDanmaku("fixed-narrow"), {})).toEqual({ x: 400, y: 0 });
+});
+
+test("滚动大表情 append 时按预约的当前车道定位", () => {
+  const { renderer } = makeRenderer(4);
+  const comment = wideComment("wide-1");
+  const reservation = { layer: "scroll" as const, lanes: [2, 3], locked: false };
+  renderer.live.add("wide-1");
+  renderer.launchWide(comment, reservation);
+
+  // 模拟 resize 或改字号后预约车道被改写：position 回调在 append 时才执行，必须读当前值。
+  reservation.lanes = [0, 1];
+
+  const pushed = renderer.scroll.manager.pushes.at(-1)!;
+  const options = pushed.options as {
+    position(danmaku: TestDanmaku, container: { width: number }): { x: number; y: number };
+  };
+  expect(options.position(makeDanmaku("wide-1"), { width: 1_000 })).toEqual({ x: 1_000, y: 0 });
+});
+
+test("缩小车道数时在途滚动大表情预约越界则销毁并只结算一次", () => {
+  const { renderer, detachIds } = makeRenderer(4);
+  const destroys = new Map<string, number>();
+  const launched: Array<[string, number[]]> = [
+    ["wide-low", [0, 1]],
+    ["wide-high", [2, 3]],
+  ];
+  for (const [id, lanes] of launched) {
+    renderer.live.add(id);
+    renderer.launchWide(wideComment(id), { layer: "scroll", lanes: [...lanes], locked: false });
+    expect(renderer.reservations.get(id)?.lanes).toEqual(lanes);
+    const starting = makeDanmaku(id, { type: "flexible", moving: false });
+    starting.destroy = async () => {
+      destroys.set(id, (destroys.get(id) ?? 0) + 1);
+      renderer.onDestroyed(starting);
+    };
+    renderer.scroll.manager.starting.push(starting);
+  }
+
+  renderer.scroll.manager.setTrackCount(2);
+  renderer.syncLanes();
+
+  // 新表仍放得下的预约保留原车道；越界的预约销毁实例并从 live 结算。
+  expect(renderer.reservations.get("wide-low")?.lanes).toEqual([0, 1]);
+  expect(renderer.reservations.has("wide-high")).toBe(false);
+  expect(destroys.get("wide-low")).toBeUndefined();
+  expect(destroys.get("wide-high")).toBe(1);
+  expect(detachIds).toEqual(["wide-high"]);
+
+  // 再同步一次不能重复销毁或重复结算。
+  renderer.syncLanes();
+  expect(destroys.get("wide-high")).toBe(1);
+  expect(detachIds).toEqual(["wide-high"]);
 });

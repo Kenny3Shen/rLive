@@ -875,13 +875,14 @@ export class DanmakuRenderer {
 
   /** 车道已就绪：真正投放；库拒绝时归还车道并结算 detach。 */
   private launchWide(comment: DanmakuComment, reservation: Reservation): void {
-    const lane = reservation.lanes[0]!;
     const ok = this.scroll.manager.pushFlexibleDanmaku(comment, {
       speed: this.speed * SPEED_UNIT_SCALE,
       direction: "right",
+      // 回调在 append 时才调用；resize 可能已在 launch 与 append 之间重建车道表并改写预约，
+      // 因此这里读预约的当前车道，而不是投放时捕获的下标。
       position: (_danmaku, container) => ({
         x: container.width,
-        y: this.laneY("scroll", lane, comment.mode),
+        y: this.laneY("scroll", reservation.lanes[0] ?? 0, comment.mode),
       }),
     });
     if (!ok) {
@@ -1014,7 +1015,8 @@ export class DanmakuRenderer {
    * 尺寸或车道高变化后重建占用表。滚动大表情的 y 已随 transition 推进，改车道会跳位，
    * 因此按实际 y/高度重新映射覆盖轨，越界即销毁；固定弹幕随后按新几何重新落位。
    * 已预约但尚未 append 的固定弹幕不在 `records` 里，也要按新表重新分配，否则新占用表
-   * 会把同一条车道再分给后一条固定弹幕，两条在 append 后叠放。
+   * 会把同一条车道再分给后一条固定弹幕，两条在 append 后叠放。滚动大表情的在途预约
+   * （已 launch、尚未 append）则校验新表是否仍放得下，越界即撤销，避免按旧下标上屏。
    */
   private syncLanes(): void {
     const records = Array.from(this.records.values());
@@ -1067,6 +1069,19 @@ export class DanmakuRenderer {
         continue;
       }
       reservation.lanes = Array.from({ length: span }, (_, index) => lane + index);
+    }
+    // 滚动大表情从 launch 到 append 之间同样只在预约里、不在 `records` 中，append 前还没有
+    // 实际落位。滚动层不经过 `LanePool`（占用由调度器的预约与动态锁维护），已投放实例也
+    // 无法重新排队，因此新表缩到预约车道之外时只能撤销：删预约、销毁实例并结算 detach。
+    for (const [id, reservation] of Array.from(this.reservations)) {
+      if (reservation.layer !== "scroll" || this.records.has(id)) continue;
+      const last = reservation.lanes[reservation.lanes.length - 1];
+      if (last !== undefined && last < this.scroll.manager.trackCount) continue;
+      this.reservations.delete(id);
+      this.scroll.manager.each((danmaku) => {
+        if (danmaku.data.id === id) void danmaku.destroy();
+      });
+      this.detach(id);
     }
     for (const record of records) {
       if (!this.isScrollWide(record)) continue;
