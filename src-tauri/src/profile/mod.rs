@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 
 use crate::db::follow::{self, FollowRecord, TagRecord};
@@ -283,6 +283,39 @@ fn fill_local_only_settings(value: &mut serde_json::Value) -> AppResult<()> {
     Ok(())
 }
 
+/// 导入分组与标签时按名称合并：本地已有同名记录就复用它的 id。
+///
+/// 两台设备各自新建的同名分组、标签会有不同的 id，直接按包内 id 写入会撞上
+/// `name` 列的 UNIQUE 约束并使整个导入事务回滚。`records` 是包内 `(id, name)`，
+/// `insert` 只被本地没有同名记录的下标调用；返回包内 id → 本地实际 id 的映射。
+/// 同名匹配只复用 id，不改写本地的名称与排序。
+fn merge_imported_names(
+    local_name_to_id: &HashMap<String, String>,
+    records: &[(String, String)],
+    mut insert: impl FnMut(usize) -> AppResult<()>,
+) -> AppResult<HashMap<String, String>> {
+    let mut matched = HashMap::new();
+    for (id, name) in records {
+        if let Some(local_id) = local_name_to_id.get(name) {
+            matched.insert(id.clone(), local_id.clone());
+        }
+    }
+    // 已被同名匹配保留的本地 id 不能再让另一条包内记录按 id 改写名称。
+    let reserved: HashSet<String> = matched.values().cloned().collect();
+    let mut effective = HashMap::new();
+    for (index, (id, _)) in records.iter().enumerate() {
+        if let Some(local_id) = matched.get(id) {
+            effective.insert(id.clone(), local_id.clone());
+            continue;
+        }
+        if !reserved.contains(id) {
+            insert(index)?;
+        }
+        effective.insert(id.clone(), id.clone());
+    }
+    Ok(effective)
+}
+
 pub fn merge_into_db(
     conn: &mut Connection,
     package: &ProfilePackage,
@@ -291,15 +324,35 @@ pub fn merge_into_db(
     // 使重复的标签或磁盘错误不会留下"关注/历史导入了一半、
     // 设置却还是旧的"这种状态。
     let transaction = conn.transaction().map_err(map_db_err)?;
-    for tag in &package.tags {
-        follow::upsert_tag(&transaction, tag.clone())?;
-    }
+    let local_tags: HashMap<String, String> = follow::list_tags(&transaction)?
+        .into_iter()
+        .map(|tag| (tag.name, tag.id))
+        .collect();
+    let tag_records: Vec<(String, String)> = package
+        .tags
+        .iter()
+        .map(|tag| (tag.id.clone(), tag.name.clone()))
+        .collect();
+    let effective_tag_ids = merge_imported_names(&local_tags, &tag_records, |index| {
+        follow::upsert_tag(&transaction, package.tags[index].clone())
+    })?;
     for f in &package.follows {
-        follow::upsert(&transaction, f.clone())?;
+        let mut f = f.clone();
+        f.tag_ids = f
+            .tag_ids
+            .iter()
+            .map(|id| {
+                effective_tag_ids
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| id.clone())
+            })
+            .collect();
+        follow::upsert(&transaction, f)?;
     }
     // 视频关注分组必须先于 UP 主写入，后续引用才能在同一事务内解析。
     let mut video_groups = std::collections::BTreeMap::new();
-    let mut group_names = std::collections::HashMap::new();
+    let mut group_names = HashMap::new();
     for group in &package.video_follow_groups {
         let group = video_follow::normalize_group(group.clone())?;
         if let Some(existing_id) = group_names.insert(group.name.clone(), group.id.clone())
@@ -312,32 +365,58 @@ pub fn merge_into_db(
         }
         video_groups.insert(group.id.clone(), group);
     }
-    for group in video_groups.values() {
-        video_follow::upsert_group(&transaction, group.clone())?;
-    }
+    let video_groups: Vec<VideoFollowGroupRecord> = video_groups.into_values().collect();
+    let group_records: Vec<(String, String)> = video_groups
+        .iter()
+        .map(|group| (group.id.clone(), group.name.clone()))
+        .collect();
+    let local_group_ids: HashMap<String, String> = video_follow::list_groups(&transaction)?
+        .into_iter()
+        .map(|group| (group.name, group.id))
+        .collect();
+    let effective_group_ids = merge_imported_names(&local_group_ids, &group_records, |index| {
+        video_follow::upsert_group(&transaction, video_groups[index].clone()).map(|_| ())
+    })?;
 
     let mut video_follows = std::collections::BTreeMap::new();
     for follow in &package.video_follows {
         let mut follow = video_follow::normalize_record(follow.clone())?;
-        if let Some(group_id) = follow.group_id.as_deref()
-            && !video_groups.contains_key(group_id)
-            && !video_follow::group_exists(&transaction, group_id)?
-        {
-            // 未知分组不产生孤儿引用；UP 主仍导入到未分组。
-            follow.group_id = None;
+        if let Some(group_id) = follow.group_id.as_deref() {
+            if let Some(effective_id) = effective_group_ids.get(group_id) {
+                follow.group_id = Some(effective_id.clone());
+            } else if !video_follow::group_exists(&transaction, group_id)? {
+                // 未知分组不产生孤儿引用；UP 主仍导入到未分组。
+                follow.group_id = None;
+            }
         }
         video_follows.insert((follow.site_id.clone(), follow.mid.clone()), follow);
     }
     for follow in video_follows.values() {
         video_follow::upsert(&transaction, follow.clone())?;
     }
-    for group in &package.iptv_favorite_groups {
-        iptv_favorite::upsert_group(&transaction, group.clone())?;
-    }
+    let local_iptv_group_ids: HashMap<String, String> = iptv_favorite::list_groups(&transaction)?
+        .into_iter()
+        .map(|group| (group.name, group.id))
+        .collect();
+    let iptv_group_records: Vec<(String, String)> = package
+        .iptv_favorite_groups
+        .iter()
+        .map(|group| (group.id.clone(), group.name.clone()))
+        .collect();
+    let effective_iptv_group_ids =
+        merge_imported_names(&local_iptv_group_ids, &iptv_group_records, |index| {
+            iptv_favorite::upsert_group(&transaction, package.iptv_favorite_groups[index].clone())
+        })?;
     let mut imported_iptv_favorites = 0;
     for favorite in &package.iptv_favorites {
         if is_portable_iptv_source(&favorite.source_id) {
-            iptv_favorite::upsert(&transaction, favorite.clone())?;
+            let mut favorite = favorite.clone();
+            if let Some(group_id) = favorite.favorite_group_id.as_deref()
+                && let Some(effective_id) = effective_iptv_group_ids.get(group_id)
+            {
+                favorite.favorite_group_id = Some(effective_id.clone());
+            }
+            iptv_favorite::upsert(&transaction, favorite)?;
             imported_iptv_favorites += 1;
         }
     }
@@ -460,6 +539,20 @@ mod tests {
             face: Some("https://example.test/face.jpg".into()),
             group_id: group_id.map(str::to_owned),
             updated_at: 10,
+        }
+    }
+
+    fn live_follow(room_id: &str, tag_ids: &[&str]) -> FollowRecord {
+        FollowRecord {
+            site_id: "bilibili".into(),
+            room_id: room_id.into(),
+            user_name: "主播".into(),
+            face: "".into(),
+            tag_ids: tag_ids.iter().map(|id| (*id).to_owned()).collect(),
+            auto_record: false,
+            live_status: None,
+            live_started_at: None,
+            updated_at: 1,
         }
     }
 
@@ -734,6 +827,42 @@ mod tests {
     }
 
     #[test]
+    fn merge_reuses_local_iptv_group_with_the_same_name() {
+        let mut conn = open_in_memory().unwrap();
+        iptv_favorite::upsert_group(
+            &conn,
+            IptvFavoriteGroupRecord {
+                id: "local-news".into(),
+                name: "新闻".into(),
+            },
+        )
+        .unwrap();
+
+        let mut package = ProfilePackage::sample();
+        package.iptv_favorite_groups = vec![IptvFavoriteGroupRecord {
+            id: "package-news".into(),
+            name: "新闻".into(),
+        }];
+        let mut favorite = iptv_favorite("mainland", "https://public.example.test/news.m3u8");
+        favorite.favorite_group_id = Some("package-news".into());
+        package.iptv_favorites = vec![favorite];
+
+        let result = merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(result.iptv_favorite_groups, 1);
+        let groups = iptv_favorite::list_groups(&conn).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].id, "local-news");
+        assert_eq!(groups[0].name, "新闻");
+        assert_eq!(
+            iptv_favorite::list(&conn, "mainland").unwrap()[0]
+                .favorite_group_id
+                .as_deref(),
+            Some("local-news")
+        );
+    }
+
+    #[test]
     fn legacy_profile_defaults_video_follows_to_empty_and_export_includes_them() {
         let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
         value.as_object_mut().unwrap().remove("video_follows");
@@ -781,6 +910,56 @@ mod tests {
         assert_eq!(follows[0].mid, "42");
         assert_eq!(follows[0].name, "新快照");
         assert_eq!(follows[0].group_id.as_deref(), Some("tech"));
+    }
+
+    /// 两台设备各自新建的同名分组 id 不同；导入时按名称复用本地分组，
+    /// 包内引用随之重映射，不能让 `name UNIQUE` 冲突回滚整份配置。
+    #[test]
+    fn merge_reuses_local_video_group_with_the_same_name() {
+        let mut conn = open_in_memory().unwrap();
+        video_follow::upsert_group(
+            &conn,
+            VideoFollowGroupRecord {
+                id: "local-tech".into(),
+                name: "科技".into(),
+            },
+        )
+        .unwrap();
+        video_follow::upsert(&conn, video_follow("1", Some("local-tech"))).unwrap();
+
+        let mut package = ProfilePackage::sample();
+        package.video_follow_groups = vec![VideoFollowGroupRecord {
+            id: "package-tech".into(),
+            name: "科技".into(),
+        }];
+        package.video_follows = vec![video_follow("42", Some("package-tech"))];
+
+        let result = merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(result.video_follow_groups, 1);
+        let groups = video_follow::list_groups(&conn).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].id, "local-tech");
+        assert_eq!(groups[0].name, "科技");
+        let follows = video_follow::list(&conn).unwrap();
+        assert_eq!(
+            follows
+                .iter()
+                .find(|follow| follow.mid == "42")
+                .unwrap()
+                .group_id
+                .as_deref(),
+            Some("local-tech")
+        );
+        assert_eq!(
+            follows
+                .iter()
+                .find(|follow| follow.mid == "1")
+                .unwrap()
+                .group_id
+                .as_deref(),
+            Some("local-tech")
+        );
     }
 
     #[test]
@@ -871,6 +1050,38 @@ mod tests {
         let follows = follow::list(&conn).unwrap();
         assert_eq!(follows.len(), 1);
         assert!(follows[0].auto_record);
+    }
+
+    #[test]
+    fn merge_reuses_local_live_tag_with_the_same_name() {
+        let mut conn = open_in_memory().unwrap();
+        follow::upsert_tag(
+            &conn,
+            TagRecord {
+                id: "local-tag".into(),
+                name: "收藏".into(),
+            },
+        )
+        .unwrap();
+
+        let mut package = ProfilePackage::sample();
+        package.tags = vec![TagRecord {
+            id: "package-tag".into(),
+            name: "收藏".into(),
+        }];
+        package.follows = vec![live_follow("1", &["package-tag"])];
+
+        let result = merge_into_db(&mut conn, &package).unwrap();
+
+        assert_eq!(result.tags, 1);
+        let tags = follow::list_tags(&conn).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].id, "local-tag");
+        assert_eq!(tags[0].name, "收藏");
+        assert_eq!(
+            follow::list(&conn).unwrap()[0].tag_ids,
+            vec!["local-tag".to_string()]
+        );
     }
 
     #[test]
