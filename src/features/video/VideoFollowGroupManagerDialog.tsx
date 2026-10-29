@@ -32,7 +32,7 @@ import { notify } from "@/components/ui/toast";
 import { invokeCmd } from "@/shared/api/tauri";
 import { errorText } from "@/shared/components/errorPresentation";
 import {
-  sortVideoFollowGroups,
+  upsertVideoFollowGroupInCache,
   VIDEO_FOLLOW_GROUPS_QUERY_KEY,
   VIDEO_FOLLOWS_QUERY_KEY,
   type VideoFollow,
@@ -59,17 +59,23 @@ export function VideoFollowGroupManagerDialog({
   const [pendingDelete, setPendingDelete] = useState<VideoFollowGroup | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  function updateGroupCache(group: VideoFollowGroup) {
-    queryClient.setQueryData<VideoFollowGroup[]>(VIDEO_FOLLOW_GROUPS_QUERY_KEY, (current = []) =>
-      sortVideoFollowGroups([...current.filter((item) => item.id !== group.id), group]),
-    );
+  // 对话框关闭时组件不卸载，重新打开必须回到干净的输入与错误状态。
+  const [previousOpen, setPreviousOpen] = useState(open);
+  if (open !== previousOpen) {
+    setPreviousOpen(open);
+    if (open) {
+      setNewGroupName("");
+      setEditing(null);
+      setEditingName("");
+      setError(null);
+    }
   }
 
   const saveMutation = useMutation({
     mutationFn: ({ name, id }: { name: string; id?: string }) =>
       invokeCmd<VideoFollowGroup>("video_follow_group_upsert", { name, id }),
     onSuccess: (group, variables) => {
-      updateGroupCache(group);
+      upsertVideoFollowGroupInCache(queryClient, group);
       setError(null);
       if (variables.id) {
         setEditing(null);

@@ -29,9 +29,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { invokeCmd } from "@/shared/api/tauri";
 import {
-  sortVideoFollowGroups,
+  upsertVideoFollowGroupInCache,
   useVideoFollowGroups,
-  VIDEO_FOLLOW_GROUPS_QUERY_KEY,
   type VideoFollowGroup,
 } from "./videoFollows";
 
@@ -62,9 +61,7 @@ export function VideoFollowGroupPickerDialog({
     mutationFn: (name: string) =>
       invokeCmd<VideoFollowGroup>("video_follow_group_upsert", { name }),
     onSuccess: (group) => {
-      queryClient.setQueryData<VideoFollowGroup[]>(VIDEO_FOLLOW_GROUPS_QUERY_KEY, (current = []) =>
-        sortVideoFollowGroups([...current.filter((item) => item.id !== group.id), group]),
-      );
+      upsertVideoFollowGroupInCache(queryClient, group);
       setSelectedGroupId(group.id);
       setNewGroupName("");
       setError(null);
@@ -190,9 +187,12 @@ export function VideoFollowGroupPickerDialog({
           <Button
             type="button"
             disabled={busy || groupsQuery.isLoading || groupsQuery.isError}
-            onClick={() =>
-              void onConfirm(selectedGroupId === UNGROUPED_VALUE ? null : selectedGroupId)
-            }
+            onClick={() => {
+              // 失败提示由调用方的 mutation 负责；这里接住 reject，避免未处理的 Promise。
+              void Promise.resolve(
+                onConfirm(selectedGroupId === UNGROUPED_VALUE ? null : selectedGroupId),
+              ).catch(() => undefined);
+            }}
           >
             {pending ? (
               <Spinner data-icon="inline-start" aria-hidden />

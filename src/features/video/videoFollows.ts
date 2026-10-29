@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { notify } from "@/components/ui/toast";
 import { invokeCmd } from "@/shared/api/tauri";
 import { errorText } from "@/shared/components/errorPresentation";
@@ -38,6 +38,16 @@ export function sortVideoFollows(follows: readonly VideoFollow[]): VideoFollow[]
 export function sortVideoFollowGroups(groups: readonly VideoFollowGroup[]): VideoFollowGroup[] {
   return [...groups].sort((left, right) =>
     left.name.localeCompare(right.name, "zh-CN", { numeric: true }),
+  );
+}
+
+/** 新建或重命名成功后同步分组列表缓存；两个分组对话框共用同一套排序与去重。 */
+export function upsertVideoFollowGroupInCache(
+  queryClient: QueryClient,
+  group: VideoFollowGroup,
+): void {
+  queryClient.setQueryData<VideoFollowGroup[]>(VIDEO_FOLLOW_GROUPS_QUERY_KEY, (current = []) =>
+    sortVideoFollowGroups([...current.filter((item) => item.id !== group.id), group]),
   );
 }
 
@@ -81,9 +91,9 @@ function replaceVideoFollow(
 
 function removeVideoFollow(
   current: VideoFollow[] | undefined,
-  mid: string,
+  follow: Pick<VideoFollow, "site_id" | "mid">,
 ): VideoFollow[] | undefined {
-  return current?.filter((item) => item.mid !== mid);
+  return current?.filter((item) => videoFollowIdentity(item) !== videoFollowIdentity(follow));
 }
 
 export function useUpsertVideoFollowMutation() {
@@ -117,7 +127,7 @@ export function useRemoveVideoFollowMutation() {
       invokeCmd("video_follow_remove", { siteId: follow.site_id, mid: follow.mid }),
     onSuccess: (_, follow) => {
       queryClient.setQueryData<VideoFollow[]>(VIDEO_FOLLOWS_QUERY_KEY, (current) =>
-        removeVideoFollow(current, follow.mid),
+        removeVideoFollow(current, follow),
       );
       notify.success("已取消关注 UP 主");
     },

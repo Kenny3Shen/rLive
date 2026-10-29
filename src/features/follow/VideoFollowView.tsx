@@ -396,10 +396,8 @@ export function VideoFollowView({
   const previousGroupIndex =
     // oxlint-disable-next-line react/refs
     previousGroupRef.current === null ? 0 : groupIds.indexOf(previousGroupRef.current) + 1;
-  const groupDirection =
-    previousGroupIndex >= 0 && selectedGroupIndex >= 0 && selectedGroupIndex < previousGroupIndex
-      ? -1
-      : 1;
+  // 两个下标都至少为 0（全部 = 0、未知分组 = 0），只需比较先后。
+  const groupDirection = selectedGroupIndex < previousGroupIndex ? -1 : 1;
 
   useEffect(() => {
     previousGroupRef.current = selectedGroup;
