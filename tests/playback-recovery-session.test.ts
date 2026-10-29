@@ -62,7 +62,11 @@ function manualClock() {
     await flush();
     return true;
   };
-  return { clock, advanceToNext, pending: () => timers.size };
+  /** 只推进挂钟，不触发定时器（用于跨过稳定播放阈值或重复窗口）。 */
+  const advance = (ms: number) => {
+    now += ms;
+  };
+  return { clock, advanceToNext, advance, pending: () => timers.size };
 }
 
 function sessionWithClock(
@@ -448,6 +452,53 @@ describe("播放恢复会话的续期语义", () => {
     await flush();
     expect(session.getSnapshot().renewToken).toBe(1);
     expect(linesFetched).toBe(2);
+    session.dispose();
+  });
+
+  test("稳定播放后的第一次失败仍能压下同一连接的重复事件", async () => {
+    const clock = manualClock();
+    const session = sessionWithClock(() => [flvSource()], clock.clock);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().playUrl).not.toBeNull();
+
+    // 播满 30 秒：下一次失败会先清零重试预算。
+    session.acceptTransportFact({ epoch: 1, generation: 1, kind: "playing" });
+    clock.advance(30_000);
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "error",
+      protocol: "flv",
+      message: "网络错误",
+    });
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(clock.pending()).toBe(0);
+
+    // 同一 epoch / generation / 线路在 750 ms 内再报一次：必须合并，不能把刚
+    // 清零的预算烧在第二次重试上。
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "error",
+      protocol: "flv",
+      message: "网络错误",
+    });
+    expect(session.getSnapshot().renewToken).toBe(1);
+    expect(clock.pending()).toBe(0);
+
+    // 超过 750 ms 后是新的失败事实，预算继续推进到第二次重试。
+    clock.advance(800);
+    session.acceptTransportFact({
+      epoch: 1,
+      generation: 1,
+      kind: "error",
+      protocol: "flv",
+      message: "网络错误",
+    });
+    expect(clock.pending()).toBe(1);
+    expect(await clock.advanceToNext()).toBe(true);
+    expect(session.getSnapshot().renewToken).toBe(2);
     session.dispose();
   });
 

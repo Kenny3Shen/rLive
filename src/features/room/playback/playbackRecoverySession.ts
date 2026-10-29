@@ -223,6 +223,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
   }
 
   setLoadError(message: string | null): void {
+    if (this.snapshot.loadError === message) return;
     this.publish({ loadError: message });
   }
 
@@ -263,7 +264,8 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     if (this.disposed) return;
     if (event.kind === "playing") {
       if (this.playingStartedAt == null) this.playingStartedAt = this.clock.now();
-      this.publish({ loadError: null });
+      // 每次重连都会报告 playing；没有待清的错误时不再换快照，免得白提交一帧。
+      if (this.snapshot.loadError !== null) this.publish({ loadError: null });
       return;
     }
     if (event.kind !== "error" && event.kind !== "eof") return;
@@ -272,16 +274,18 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     const failureAt = this.clock.now();
     const activeLineIndex = this.snapshot.lineIndex;
     if (isDuplicatePlaybackFailure(this.lastFailure, event, activeLineIndex, failureAt)) return;
+    this.clearFailoverTimer();
+
+    // 稳定播放后的第一次失败会清空预算，标记必须写在清空之后：它既记录这次失败，
+    // 也要压掉紧随其后的同一条连接的重复事件，否则刚清零的重试预算会被重复事件白烧。
+    if (playbackWasStable(this.playingStartedAt, failureAt)) this.resetRecoveryBudget();
+    this.playingStartedAt = null;
     this.lastFailure = {
       epoch: event.epoch,
       generation: event.generation,
       lineIndex: activeLineIndex,
       at: failureAt,
     };
-    this.clearFailoverTimer();
-
-    if (playbackWasStable(this.playingStartedAt, failureAt)) this.resetRecoveryBudget();
-    this.playingStartedAt = null;
 
     const message = event.message?.trim() ?? "";
     const isDecodeError = event.decodeError === true || isVideoJsDecodeError(message);
