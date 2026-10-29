@@ -1,4 +1,4 @@
-/** 评论正文切片；URL 与表情由上层先分离，不在这里解释。 */
+/** 正文切片（评论与简介共用）；URL 与表情由上层先分离，不在这里解释。 */
 export type CommentTimestampSegment =
   | { kind: "text"; text: string }
   | { kind: "timestamp"; text: string; seconds: number };

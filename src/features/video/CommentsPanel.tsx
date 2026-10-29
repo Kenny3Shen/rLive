@@ -40,7 +40,7 @@ import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
 import { CommentLevelBadge } from "./CommentLevelBadge";
-import { commentTimestampSegments } from "./commentTimestamp";
+import { renderTimestampText } from "./timestampText";
 import { VideoCommentComposer } from "./VideoCommentComposer";
 import { videoGetCommentReplies, videoGetComments, videoLikeComment } from "./videoApi";
 import {
@@ -128,28 +128,7 @@ const CommentReplyContext = createContext<((target: VideoCommentReplyTarget) => 
 /** 表情、外链与时间戳共存；只有 URL 之外的正文参与空降识别。 */
 function CommentMessage({ message, emotes }: Pick<VideoComment, "message" | "emotes">): ReactNode {
   const onSeek = useContext(CommentSeekContext);
-  const renderText = onSeek
-    ? (text: string) =>
-        commentTimestampSegments(text).map((segment, index) =>
-          segment.kind === "text" ? (
-            segment.text
-          ) : (
-            <Button
-              key={index}
-              variant="link"
-              className="h-auto p-0 align-baseline [@media(pointer:coarse)]:min-h-0"
-              aria-label={`跳转到 ${segment.text}`}
-              title={`空降到 ${segment.text}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                onSeek(segment.seconds);
-              }}
-            >
-              {segment.text}
-            </Button>
-          ),
-        )
-    : undefined;
+  const renderText = onSeek ? renderTimestampText(onSeek) : undefined;
   if (!message) return message;
   if (emotes.length === 0) return <LinkText text={message} renderText={renderText} />;
   const parts: ReactNode[] = [];

@@ -45,6 +45,7 @@ import type {
 } from "@/shared/types/video";
 import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { CommentsPanel } from "./CommentsPanel";
+import { renderTimestampText } from "./timestampText";
 import { VideoCommentComposer } from "./VideoCommentComposer";
 import type { VideoCommentReplyTarget } from "./videoCommentSubmission";
 import { VideoDanmakuList } from "./VideoDanmakuList";
@@ -1267,7 +1268,10 @@ export function VideoSidebar({
                   <div className="mt-2">
                     {archive.desc && (
                       <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
-                        <LinkText text={archive.desc} />
+                        <LinkText
+                          text={archive.desc}
+                          renderText={onSeek ? renderTimestampText(onSeek) : undefined}
+                        />
                       </p>
                     )}
                     {archive.tags.length > 0 && (
