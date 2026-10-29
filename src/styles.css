@@ -1227,7 +1227,12 @@ html[data-platform="android"] .app-shell {
     contain: layout;
   }
 
-  [data-vod-details-aside][data-vod-details-prepared="true"] {
+  /* 预备态要把 aside 真实高度撑到上限，必须压过上面那条骨架规则：骨架选择器由
+     3 个属性选择器组成（0,3,0），只写 aside 自身的单标记规则（0,2,0）会输掉，
+     aside 永远停在当前占比高度，拖动时底部露出主容器黑底、composer 补偿也落不到
+     帧底。带上主容器前缀后为（0,4,0），只在 prepared 期间覆盖 height。 */
+  [data-video-details-frame][data-vod-details-share="true"]
+    > [data-vod-details-aside][data-vod-details-prepared="true"] {
     height: var(--vod-resize-aside-height);
   }
 

@@ -128,6 +128,15 @@ function queryResizeTargets(container: HTMLElement): DetailsResizeRenderTargets 
   };
 }
 
+/** 可选目标缺失或已被重建时重新查找；已连接时沿用缓存，避免逐帧 querySelector。 */
+function refreshResizeTarget(
+  container: HTMLElement,
+  target: HTMLElement | null,
+  selector: string,
+): HTMLElement | null {
+  return target?.isConnected ? target : container.querySelector<HTMLElement>(selector);
+}
+
 function getResizeTargets(container: HTMLElement): DetailsResizeRenderTargets {
   let targets = resizeTargetCache.get(container);
   if (
@@ -143,24 +152,21 @@ function getResizeTargets(container: HTMLElement): DetailsResizeRenderTargets {
   }
 
   // 字幕和发送框会按状态/页签挂载；缺失时继续按帧查找，出现后立即接上变换。
-  if (!targets.controls) {
-    targets.controls = container.querySelector<HTMLElement>("[data-vod-details-controls]");
-  }
-  if (targets.controls && !targets.controls.isConnected) {
-    targets.controls = container.querySelector<HTMLElement>("[data-vod-details-controls]");
-  }
-  if (!targets.composer) {
-    targets.composer = container.querySelector<HTMLElement>("[data-vod-details-composer]");
-  }
-  if (targets.composer && !targets.composer.isConnected) {
-    targets.composer = container.querySelector<HTMLElement>("[data-vod-details-composer]");
-  }
-  if (!targets.asr) {
-    targets.asr = container.querySelector<HTMLElement>('[data-vod-details-resize-anchor="true"]');
-  }
-  if (targets.asr && !targets.asr.isConnected) {
-    targets.asr = container.querySelector<HTMLElement>('[data-vod-details-resize-anchor="true"]');
-  }
+  targets.controls = refreshResizeTarget(
+    container,
+    targets.controls,
+    "[data-vod-details-controls]",
+  );
+  targets.composer = refreshResizeTarget(
+    container,
+    targets.composer,
+    "[data-vod-details-composer]",
+  );
+  targets.asr = refreshResizeTarget(
+    container,
+    targets.asr,
+    '[data-vod-details-resize-anchor="true"]',
+  );
   return targets;
 }
 
@@ -311,8 +317,8 @@ function settleResizeMode(container: HTMLElement | null, percent: number): void 
   writeDetailsShare(container, percent);
   markDetailsPrepared(container, false);
   clearDetailsResizing(container);
+  // clearResizeTransform 末尾会按当前标记同步一次目标状态，无需再调用。
   clearResizeTransform(container);
-  syncResizeTargetState(container);
 }
 
 /**
@@ -674,9 +680,8 @@ export function useDetailsResize({
       if (!viewport) return;
 
       const start = (event: TouchEvent) => {
-        if (stopMomentum(true)) {
-          suppressClickUntilRef.current = Date.now() + DETAILS_RESIZE_TAP_SUPPRESSION_MS;
-        }
+        // stopMomentum(true) 已按提交路径拉长点击抑制，不再重复赋值。
+        stopMomentum(true);
         if (event.touches.length !== 1) {
           finishGesture(false, false);
           return;
@@ -705,16 +710,6 @@ export function useDetailsResize({
           pressedAt: event.timeStamp,
           samples: [{ time: event.timeStamp, y: touch.clientY }],
         };
-        if (enabledRef.current) {
-          const measured = geometryRef.current ?? initializeLayout();
-          if (measured?.layout) {
-            prepareResize(
-              measured.height,
-              measured.layout,
-              currentPercentRef.current ?? measured.layout.initialPercent,
-            );
-          }
-        }
       };
 
       const claimPendingMove = (
@@ -743,6 +738,11 @@ export function useDetailsResize({
           measured.layout.minPercent,
         );
         if (detailsResizeStepIsVisible(percent, next.percent, measured.height)) {
+          // 预备布局放在认领这一步而不是 touchstart：点按、交给原生滚动的触摸
+          // 不必把 aside 撑到最大高度。aside 变高会让接近底部的列表被浏览器
+          // 夹紧 scrollTop，松手后也回不到原位。认领仍发生在轴锁和首个运动帧
+          // 之前，重排依旧落在触摸 slop 期间。
+          if (prepareResize(measured.height, measured.layout, percent) === null) return;
           press.claimed = true;
           event.preventDefault();
         }
