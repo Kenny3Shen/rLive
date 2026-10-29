@@ -66,7 +66,7 @@ export function RoomHostInfo({
                 </dd>
               </div>
               <div
-                className="ml-2.5 flex shrink-0 items-center gap-1 border-l border-border-subtle pl-2.5 text-foreground"
+                className="ml-2.5 flex shrink-0 items-center gap-1 text-foreground"
                 title={`当前热度：${onlineLabel}`}
               >
                 <dt className="sr-only">当前热度</dt>
