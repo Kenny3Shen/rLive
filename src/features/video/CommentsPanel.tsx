@@ -1,11 +1,18 @@
 import { createContext, memo, useContext, useState, type ReactNode } from "react";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   ArrowUpDown,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  MessageCircle,
   ThumbsUp,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +28,7 @@ import {
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { notify } from "@/components/ui/toast";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { ImageViewer } from "@/shared/components/ImageViewer";
 import { LinkText } from "@/shared/components/LinkText";
@@ -33,7 +41,14 @@ import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
 import { CommentLevelBadge } from "./CommentLevelBadge";
 import { commentTimestampSegments } from "./commentTimestamp";
-import { videoGetCommentReplies, videoGetComments } from "./videoApi";
+import { VideoCommentComposer } from "./VideoCommentComposer";
+import { videoGetCommentReplies, videoGetComments, videoLikeComment } from "./videoApi";
+import {
+  setCommentLikedInCache,
+  videoCommentErrorMessage,
+  videoCommentReplyTarget,
+  type VideoCommentReplyTarget,
+} from "./videoCommentSubmission";
 import { formatRelativeTime } from "./videoHistory";
 
 /**
@@ -59,6 +74,56 @@ const DESKTOP_REPLIES_PAGE_SIZE = 10;
 
 /** 同一评论区的正文、预览与详情共用秒级跳转；短视频未接入时保持纯文本。 */
 const CommentSeekContext = createContext<((seconds: number) => void) | undefined>(undefined);
+
+/** 点赞写入与缓存改写都按稿件分区；由 `CommentsPanel` 提供，行组件不必层层透传。 */
+const CommentAidContext = createContext("");
+
+/** 点赞与回复共用的图标操作：与 11px 计数同档，不撑高行；粗指针下取消基础按钮的最小触控高度。 */
+const COMMENT_ACTION_CLASS =
+  "h-5 gap-1 px-1 text-[11px] font-normal text-muted-foreground hover:bg-transparent hover:text-foreground [@media(pointer:coarse)]:min-h-0 [&_svg:not([class*='size-'])]:size-3";
+
+/**
+ * 点赞 / 取消点赞：乐观切换缓存里同一 rpid 的所有副本（列表、预览、楼中楼），
+ * 失败回滚并提示。发送中禁用，避免连点把赞和取消交错送出。
+ */
+function CommentLikeButton({ comment }: { comment: VideoComment }) {
+  const aid = useContext(CommentAidContext);
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationKey: ["video_comment_like", aid, comment.rpid],
+    mutationFn: (like: boolean) => videoLikeComment(aid, comment.rpid, like),
+    // 写入结果未知时可能已生效，不自动重试。
+    retry: false,
+    onMutate: (like) => setCommentLikedInCache(queryClient, aid, comment.rpid, like),
+    onError: (error, like) => {
+      setCommentLikedInCache(queryClient, aid, comment.rpid, !like);
+      notify.error(like ? "点赞失败" : "取消点赞失败", videoCommentErrorMessage(error));
+    },
+  });
+  const label = comment.liked ? "取消点赞" : "点赞";
+  return (
+    <Button
+      variant="ghost"
+      className={cn(COMMENT_ACTION_CLASS, comment.liked && "text-primary hover:text-primary")}
+      aria-label={`${label}，${formatOnline(comment.like)} 个赞`}
+      aria-pressed={comment.liked}
+      title={label}
+      disabled={!aid || mutation.isPending}
+      onClick={() => mutation.mutate(!comment.liked)}
+    >
+      <ThumbsUp aria-hidden className={cn(comment.liked && "fill-current")} />
+      <span className="tabular-nums">{formatOnline(comment.like)}</span>
+    </Button>
+  );
+}
+
+/**
+ * 「回复」按钮的落点：一级列表交给调用方的输入框，移动端评论详情由抽屉自带的
+ * 输入框就近覆盖。不提供时（短视频没有输入框）不画按钮。
+ */
+const CommentReplyContext = createContext<((target: VideoCommentReplyTarget) => void) | undefined>(
+  undefined,
+);
 
 /** 表情、外链与时间戳共存；只有 URL 之外的正文参与空降识别。 */
 function CommentMessage({ message, emotes }: Pick<VideoComment, "message" | "emotes">): ReactNode {
@@ -229,11 +294,15 @@ function CommentAuthorBadges({
 
 function CommentRow({
   comment,
+  thread = comment,
   isThreadAuthor = false,
 }: {
   comment: VideoComment;
+  /** 所属楼层的一级评论；一级评论行就是它自己。 */
+  thread?: VideoComment;
   isThreadAuthor?: boolean;
 }) {
+  const onReply = useContext(CommentReplyContext);
   return (
     <div className="flex gap-2.5">
       {comment.avatar ? (
@@ -262,9 +331,20 @@ function CommentRow({
         <div className="mt-1">
           <CommentBody comment={comment} />
         </div>
-        <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
-          <ThumbsUp className="size-3" aria-hidden />
-          <span>{formatOnline(comment.like)}</span>
+        {/* -ml-1 抵消按钮内边距，图标与正文左缘对齐。 */}
+        <div className="mt-1 -ml-1 flex items-center gap-3">
+          <CommentLikeButton comment={comment} />
+          {onReply && (
+            <Button
+              variant="ghost"
+              className={COMMENT_ACTION_CLASS}
+              aria-label={`回复 ${comment.uname}`}
+              title="回复"
+              onClick={() => onReply(videoCommentReplyTarget(comment, thread))}
+            >
+              <MessageCircle aria-hidden />
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -427,6 +507,7 @@ function InlineCommentReplies({
             <div key={reply.rpid} className="border-b border-border/60 py-3 last:border-b-0">
               <CommentRow
                 comment={reply}
+                thread={comment}
                 isThreadAuthor={Boolean(
                   comment.mid && comment.mid !== "0" && reply.mid === comment.mid,
                 )}
@@ -546,6 +627,7 @@ function CommentReplies({
             <div key={reply.rpid} className="border-b border-border/60 py-4 last:border-b-0">
               <CommentRow
                 comment={reply}
+                thread={comment}
                 isThreadAuthor={Boolean(
                   comment.mid && comment.mid !== "0" && reply.mid === comment.mid,
                 )}
@@ -567,6 +649,40 @@ function CommentReplies({
   );
 }
 
+/**
+ * 移动端评论详情 + 自带输入框：抽屉盖住侧栏底部的输入框，回复只能就近发。
+ *
+ * 默认回复该楼的一级评论（与 PiliPlus 评论详情页一致）；楼内「回复」只改这里的
+ * 局部目标，不动侧栏输入框。父级按楼层 `key` 重挂，换楼层即回到默认目标。
+ */
+function CommentDetail({
+  aid,
+  comment,
+  bottomInset,
+}: {
+  aid: string;
+  comment: VideoComment;
+  bottomInset?: string;
+}) {
+  const [replyTarget, setReplyTarget] = useState(() => videoCommentReplyTarget(comment));
+  const isDefaultTarget = replyTarget.parent === comment.rpid;
+  return (
+    <CommentReplyContext value={setReplyTarget}>
+      <CommentReplies aid={aid} comment={comment} />
+      {/* 底部安全区改由最底下的输入框消费，滚动区不再重复补。 */}
+      <div className="shrink-0" style={{ paddingBottom: bottomInset }}>
+        <VideoCommentComposer
+          aid={aid}
+          replyTarget={replyTarget}
+          onCancelReply={
+            isDefaultTarget ? undefined : () => setReplyTarget(videoCommentReplyTarget(comment))
+          }
+        />
+      </div>
+    </CommentReplyContext>
+  );
+}
+
 /** 评论列表：排序切换 + 游标翻页。 */
 /**
  * 评论区。自带二级回复（形状按客户端分端，见文件头），只需一个 `aid`，因此
@@ -576,21 +692,36 @@ function CommentReplies({
 /** memo：侧栏切页签或父级重渲染时，props 未变的评论树不重新提交。 */
 export const CommentsPanel = memo(function CommentsPanel({
   onSeek,
+  onReply,
   ...props
 }: {
   aid: string;
   bottomInset?: string;
   /** VOD 空降到当前视频的秒级位置；不提供时不将时间戳变为控件。 */
   onSeek?: (seconds: number) => void;
+  /** 一级列表的「回复」交给调用方的输入框；不提供时不显示回复入口。 */
+  onReply?: (target: VideoCommentReplyTarget) => void;
 }) {
   return (
-    <CommentSeekContext value={onSeek}>
-      <CommentsPanelContent {...props} />
-    </CommentSeekContext>
+    <CommentAidContext value={props.aid}>
+      <CommentSeekContext value={onSeek}>
+        <CommentReplyContext value={onReply}>
+          <CommentsPanelContent {...props} canReply={onReply !== undefined} />
+        </CommentReplyContext>
+      </CommentSeekContext>
+    </CommentAidContext>
   );
 });
 
-function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?: string }) {
+function CommentsPanelContent({
+  aid,
+  bottomInset,
+  canReply,
+}: {
+  aid: string;
+  bottomInset?: string;
+  canReply: boolean;
+}) {
   const [mode, setMode] = useState(3);
   const [selectedComment, setSelectedComment] = useState<VideoComment | null>(null);
   const mobile = isMobileClient();
@@ -615,6 +746,10 @@ function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?:
   });
   const pages = commentsQuery.data?.pages ?? [];
   const comments = pages.flatMap((page) => page.items);
+  // 详情抽屉的表头跟随缓存：在抽屉里给楼主点赞后，快照不会自己更新。
+  const detailComment =
+    selectedComment &&
+    (comments.find((comment) => comment.rpid === selectedComment.rpid) ?? selectedComment);
   const allCount = pages[0]?.all_count ?? 0;
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     hasNextPage: commentsQuery.hasNextPage && selectedComment === null,
@@ -734,17 +869,26 @@ function CommentsPanelContent({ aid, bottomInset }: { aid: string; bottomInset?:
               }
             />
           </div>
-          {selectedComment && mobile && (
-            <CommentReplies
-              key={selectedComment.rpid}
-              aid={aid}
-              comment={selectedComment}
-              // 二级抽屉与一级同侧：底部形态（含挂在评论 dock 里的局部形态）
-              // 自己是在最底下一层，必须消费底部安全区；右侧形态从侧栏里推入，
-              // 安全区由一级滚动容器负责。
-              bottomInset={repliesSide === "bottom" ? bottomInset : undefined}
-            />
-          )}
+          {selectedComment &&
+            mobile &&
+            (canReply ? (
+              <CommentDetail
+                key={selectedComment.rpid}
+                aid={aid}
+                comment={detailComment ?? selectedComment}
+                bottomInset={repliesSide === "bottom" ? bottomInset : undefined}
+              />
+            ) : (
+              <CommentReplies
+                key={selectedComment.rpid}
+                aid={aid}
+                comment={detailComment ?? selectedComment}
+                // 二级抽屉与一级同侧：底部形态（含挂在评论 dock 里的局部形态）
+                // 自己是在最底下一层，必须消费底部安全区；右侧形态从侧栏里推入，
+                // 安全区由一级滚动容器负责。
+                bottomInset={repliesSide === "bottom" ? bottomInset : undefined}
+              />
+            ))}
         </DrawerContent>
       </Drawer>
     </div>

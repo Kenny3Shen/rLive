@@ -16,6 +16,7 @@ import type {
   VideoUploaderStoryPage,
 } from "@/shared/types/video";
 import type { VideoSearchFilters } from "./videoRoute";
+import type { VideoCommentReplyTarget } from "./videoCommentSubmission";
 
 /**
  * B 站视频命令的薄封装。
@@ -200,9 +201,27 @@ export function videoGetComments(
   return invokeCmd<VideoCommentPage>("video_get_comments", { aid, mode, next });
 }
 
-/** 用户主动发送一级文本评论。Cookie/CSRF、参数校验与上游协议均留在 Rust。 */
-export function videoSendComment(aid: string, message: string): Promise<void> {
-  return invokeCmd<void>("video_comment_send", { aid, message });
+/**
+ * 用户主动发送文本评论；带 `reply` 时回复楼层里的某条。
+ * Cookie/CSRF、参数校验、「回复 @昵称 :」前缀与上游协议均留在 Rust。
+ */
+export function videoSendComment(
+  aid: string,
+  message: string,
+  reply?: VideoCommentReplyTarget | null,
+): Promise<void> {
+  return invokeCmd<void>("video_comment_send", {
+    aid,
+    message,
+    root: reply?.root,
+    parent: reply?.parent,
+    parentUname: reply && reply.parent !== reply.root ? reply.uname : undefined,
+  });
+}
+
+/** 点赞（`like = true`）或取消点赞一条评论/回复。Cookie/CSRF 与上游协议留在 Rust。 */
+export function videoLikeComment(aid: string, rpid: number, like: boolean): Promise<void> {
+  return invokeCmd<void>("video_comment_like", { aid, rpid, like });
 }
 
 /** 二级回复（pn 翻页，首传 page = 1）。 */

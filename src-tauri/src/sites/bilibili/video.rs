@@ -6,12 +6,14 @@
 //! DASH 选流与清单合成由 `dash` 处理，分段弹幕解码由 `danmaku` 处理。
 
 mod app_feed;
+mod comment_like;
 mod comment_send;
 mod danmaku;
 mod dash;
 mod uploader_story;
 
-pub use comment_send::send_comment;
+pub use comment_like::like_comment;
+pub use comment_send::{normalize_reply, send_comment};
 pub use danmaku::{danmaku_segment_index, decode_danmaku_segment};
 // 保留既有类型路径；命令层测试通过这里构造分片表。
 #[allow(unused_imports)]
@@ -1079,6 +1081,8 @@ fn video_comment(item: &Value, upper_mid: &str) -> VideoComment {
         emotes: content.map(comment_emotes).unwrap_or_default(),
         pictures: content.map(comment_pictures).unwrap_or_default(),
         like: item.get("like").map(as_i64).unwrap_or_default(),
+        // 0 未操作、1 已赞、2 已踩；只有带 Cookie 的读取才会是非 0。
+        liked: item.get("action").map(as_i64) == Some(1),
         ctime: item.get("ctime").map(as_i64).unwrap_or_default(),
         rcount: item.get("rcount").map(as_i64).unwrap_or_default(),
         replies: item
@@ -3260,6 +3264,27 @@ mod tests {
                     .items[0]
                     .is_upper,
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn comment_liked_only_when_action_is_like() {
+        for (action, expected) in [
+            (serde_json::json!(1), true),
+            (serde_json::json!(2), false),
+            (serde_json::json!(0), false),
+            (serde_json::Value::Null, false),
+        ] {
+            let raw = serde_json::json!({"data": {
+                "page": {"count":1},
+                "replies": [{"rpid":2, "action": action, "content":{"message":"评论"}}]
+            }})
+            .to_string();
+            assert_eq!(
+                parse_comments(&raw).unwrap().items[0].liked,
+                expected,
+                "{action}"
             );
         }
     }

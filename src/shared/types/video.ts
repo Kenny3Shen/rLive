@@ -410,6 +410,8 @@ export type VideoComment = {
    * 用户身份未知（mid 为 0）时恒为 false，那类评论不显示 UP 标识。
    */
   is_upper: boolean;
+  /** 当前登录账号是否已点赞；匿名读取恒为 false。 */
+  liked: boolean;
 };
 
 /** 一页评论（游标翻页）。 */

@@ -849,13 +849,22 @@ pub async fn video_get_comments(
         .await
 }
 
-/// 由用户显式发送一级文本评论，复用 Web Cookie 授权；不记录到弹幕发送历史。
+/// 由用户显式发送文本评论或回复，复用 Web Cookie 授权；不记录到弹幕发送历史。
+///
+/// 一级评论不传 `root`/`parent`；回复一级评论传 `root = parent`；回复楼中楼的
+/// 某条回复传其 rpid 为 `parent` 并带 `parent_uname`，前缀在 Rust 拼接。
 #[tauri::command]
 pub async fn video_comment_send(
     state: State<'_, AppState>,
     aid: String,
     message: String,
+    root: Option<i64>,
+    parent: Option<i64>,
+    parent_uname: Option<String>,
 ) -> AppResult<()> {
+    use crate::sites::bilibili::video::{normalize_reply, send_comment};
+    // 非法目标在读 Cookie、加锁与联网之前拒绝。
+    let reply = normalize_reply(root, parent, parent_uname.as_deref())?;
     let (cookie, route) = {
         let conn = state.conn()?;
         (
@@ -865,7 +874,27 @@ pub async fn video_comment_send(
     };
     // 含 Cookie 的写入不能跟随重定向，也不能在失败后切换出口重发。
     let client = crate::http_client::build_no_redirect_client(&route)?;
-    crate::sites::bilibili::video::send_comment(&client, &cookie, &aid, &message).await
+    send_comment(&client, &cookie, &aid, &message, reply).await
+}
+
+/// 由用户显式点赞或取消点赞一条评论/回复，复用 Web Cookie 授权。
+#[tauri::command]
+pub async fn video_comment_like(
+    state: State<'_, AppState>,
+    aid: String,
+    rpid: i64,
+    like: bool,
+) -> AppResult<()> {
+    let (cookie, route) = {
+        let conn = state.conn()?;
+        (
+            account::get_cookie(&conn, &SiteId::Bilibili)?.unwrap_or_default(),
+            crate::settings::get(&conn)?.proxy_route(),
+        )
+    };
+    // 与发评论同理：携带 Cookie 的写入不跟随重定向。
+    let client = crate::http_client::build_no_redirect_client(&route)?;
+    crate::sites::bilibili::video::like_comment(&client, &cookie, &aid, rpid, like).await
 }
 
 /// 二级回复（pn 翻页，首传 page = 1）。

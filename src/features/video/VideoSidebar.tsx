@@ -46,6 +46,7 @@ import type {
 import type { VideoDanmakuEntry } from "./videoDanmaku";
 import { CommentsPanel } from "./CommentsPanel";
 import { VideoCommentComposer } from "./VideoCommentComposer";
+import type { VideoCommentReplyTarget } from "./videoCommentSubmission";
 import { VideoDanmakuList } from "./VideoDanmakuList";
 import type { PlaybackClock } from "./videoPlaybackClock";
 import { videoSelectionCount } from "./videoSelectionCount";
@@ -160,6 +161,40 @@ function UpCardSkeleton() {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * 评论页签：列表 + 底部输入框。回复目标的 state 放在这里而不是 `VideoSidebar`
+ * 本体上，选目标与取消只重渲染这一页签，不带着整个侧栏重提交。
+ * 调用方按 aid 重挂，换稿件即清空目标。
+ */
+function CommentsTab({
+  aid,
+  onSeek,
+  fallback,
+}: {
+  aid: string;
+  onSeek?: (seconds: number) => void;
+  /** aid 未就绪时代替列表的加载/错误态。 */
+  fallback: ReactNode;
+}) {
+  const [replyTarget, setReplyTarget] = useState<VideoCommentReplyTarget | null>(null);
+  const cancelReply = useCallback(() => setReplyTarget(null), []);
+  return (
+    <>
+      <div
+        data-slot="video-sidebar-comments-list"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y"
+      >
+        {aid ? <CommentsPanel aid={aid} onSeek={onSeek} onReply={setReplyTarget} /> : fallback}
+      </div>
+      <VideoCommentComposer
+        aid={aid}
+        replyTarget={replyTarget}
+        onCancelReply={replyTarget ? cancelReply : undefined}
+      />
+    </>
   );
 }
 
@@ -931,29 +966,24 @@ export function VideoSidebar({
   const sidebarPanel = (value: SidebarTab): ReactNode => {
     if (value === "comments") {
       return (
-        <>
-          <div
-            data-slot="video-sidebar-comments-list"
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y"
-          >
-            {resolvedAid ? (
-              <CommentsPanel key={resolvedAid} aid={resolvedAid} onSeek={onSeek} />
-            ) : (
-              <div className="px-3 py-6">
-                {(isPgc ? seasonQuery.isPending : archiveQuery.isPending) ? (
-                  <Spinner className="mx-auto size-4" aria-label="正在加载" />
-                ) : (
-                  <ErrorState
-                    error={new Error("没有取到评论区的稿件信息。")}
-                    title="评论不可用"
-                    onRetry={() => void (isPgc ? seasonQuery.refetch() : archiveQuery.refetch())}
-                  />
-                )}
-              </div>
-            )}
-          </div>
-          <VideoCommentComposer aid={resolvedAid} />
-        </>
+        <CommentsTab
+          key={resolvedAid}
+          aid={resolvedAid}
+          onSeek={onSeek}
+          fallback={
+            <div className="px-3 py-6">
+              {(isPgc ? seasonQuery.isPending : archiveQuery.isPending) ? (
+                <Spinner className="mx-auto size-4" aria-label="正在加载" />
+              ) : (
+                <ErrorState
+                  error={new Error("没有取到评论区的稿件信息。")}
+                  title="评论不可用"
+                  onRetry={() => void (isPgc ? seasonQuery.refetch() : archiveQuery.refetch())}
+                />
+              )}
+            </div>
+          }
+        />
       );
     }
     if (value === "danmaku") {

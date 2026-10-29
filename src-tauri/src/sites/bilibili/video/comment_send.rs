@@ -1,8 +1,10 @@
-//! 一级文本评论写入。Cookie/CSRF 只在后端使用，不自动重试或伪造评论回显。
+//! 文本评论与回复写入。Cookie/CSRF 只在后端使用，不自动重试或伪造评论回显。
 //!
 //! 协议参考 PiliPlus `VideoHttp.replyAdd`：
 //! https://github.com/bggRGjQaUbCoE/PiliPlus/blob/e154970443343ff61e849a67c69cb5fe50481870/lib/http/video.dart
 //! `type=1`、`oid=aid`，一级评论不传 `root`/`parent`，也不启用同步动态。
+//! 回复一级评论时 `root = parent = 一级 rpid`；回复楼中楼的某条回复时 `parent`
+//! 为该回复 rpid，正文加 `回复 @昵称 : ` 前缀（对照 PiliPlus `reply_new/view.dart`）。
 
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
@@ -20,11 +22,11 @@ const MAX_COMMENT_UTF16_UNITS: usize = 1000;
 static PENDING_COMMENTS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-fn error(code: &str, message: impl Into<String>) -> AppError {
+pub(super) fn error(code: &str, message: impl Into<String>) -> AppError {
     AppError::new(code, message).with_site("bilibili")
 }
 
-fn unknown_result() -> AppError {
+pub(super) fn unknown_result() -> AppError {
     // 写入超时也可能已送达，不能设置自动重试提示。
     error(
         "video_comment_send_unknown",
@@ -32,7 +34,7 @@ fn unknown_result() -> AppError {
     )
 }
 
-fn normalize_aid(aid: &str) -> AppResult<String> {
+pub(super) fn normalize_aid(aid: &str) -> AppResult<String> {
     let aid = aid.trim();
     let parsed = aid.parse::<u64>().ok().filter(|value| *value > 0);
     if !aid.bytes().all(|byte| byte.is_ascii_digit()) || parsed.is_none() {
@@ -59,6 +61,60 @@ fn normalize_message(message: &str) -> AppResult<&str> {
         ));
     }
     Ok(message)
+}
+
+/// 昵称只用于拼回复前缀；B站昵称远短于此，上限只防异常输入撑大正文。
+const MAX_PARENT_UNAME_CHARS: usize = 64;
+
+/// 归一后的回复目标；`prefix` 仅在回复二级回复时存在。
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReplyTarget {
+    root: i64,
+    parent: i64,
+    prefix: Option<String>,
+}
+
+fn invalid_reply() -> AppError {
+    error(
+        "video_comment_invalid_reply",
+        "回复目标无效，请刷新评论区后重试",
+    )
+}
+
+/// 三者都缺省为一级评论；只有 `root` 时视为回复一级评论（`parent = root`）。
+pub fn normalize_reply(
+    root: Option<i64>,
+    parent: Option<i64>,
+    parent_uname: Option<&str>,
+) -> AppResult<Option<ReplyTarget>> {
+    let root = match (root, parent) {
+        (None, None) => return Ok(None),
+        (None, Some(_)) => return Err(invalid_reply()),
+        (Some(root), _) => root,
+    };
+    let parent = parent.unwrap_or(root);
+    if root <= 0 || parent <= 0 {
+        return Err(invalid_reply());
+    }
+    if parent == root {
+        return Ok(Some(ReplyTarget {
+            root,
+            parent,
+            prefix: None,
+        }));
+    }
+    let uname = parent_uname.map(str::trim).unwrap_or_default();
+    if uname.is_empty()
+        || uname.chars().count() > MAX_PARENT_UNAME_CHARS
+        || uname.chars().any(char::is_control)
+    {
+        return Err(invalid_reply());
+    }
+    Ok(Some(ReplyTarget {
+        root,
+        parent,
+        prefix: Some(format!("回复 @{uname} : ")),
+    }))
 }
 
 /// 跨窗口也不允许对同一稿件并发提交；取消/异常返回时自动释放，不持锁跨 await。
@@ -100,8 +156,9 @@ pub async fn send_comment(
     cookie: &str,
     aid: &str,
     message: &str,
+    reply: Option<ReplyTarget>,
 ) -> AppResult<()> {
-    send_comment_to_url(client, cookie, aid, message, SEND_COMMENT_URL).await
+    send_comment_to_url(client, cookie, aid, message, reply, SEND_COMMENT_URL).await
 }
 
 async fn send_comment_to_url(
@@ -109,10 +166,16 @@ async fn send_comment_to_url(
     cookie: &str,
     aid: &str,
     message: &str,
+    reply: Option<ReplyTarget>,
     url: &str,
 ) -> AppResult<()> {
     let aid = normalize_aid(aid)?;
+    // 1000 码元上限只计用户正文，与 Web 文本框和 PiliPlus 一致；前缀由这里追加。
     let message = normalize_message(message)?;
+    let message = match reply.as_ref().and_then(|reply| reply.prefix.as_deref()) {
+        Some(prefix) => format!("{prefix}{message}"),
+        None => message.to_owned(),
+    };
     let cookie = cookie_header_value(cookie)
         .filter(|cookie| has_send_credentials(cookie))
         .ok_or_else(|| {
@@ -123,18 +186,23 @@ async fn send_comment_to_url(
         })?;
     let csrf = cookie_value(cookie, "bili_jct").unwrap_or_default();
     let _pending = PendingComment::reserve(&PENDING_COMMENTS, &aid)?;
+    let mut form = vec![
+        ("type", "1".to_owned()),
+        ("oid", aid.clone()),
+        ("message", message),
+        ("csrf", csrf),
+    ];
+    if let Some(reply) = &reply {
+        form.push(("root", reply.root.to_string()));
+        form.push(("parent", reply.parent.to_string()));
+    }
     let response = client
         .post(url)
         .header("user-agent", super::DEFAULT_USER_AGENT)
         .header("referer", format!("https://www.bilibili.com/video/av{aid}"))
         .header("origin", super::VIDEO_REFERER)
         .header("cookie", cookie)
-        .form(&[
-            ("type", "1"),
-            ("oid", aid.as_str()),
-            ("message", message),
-            ("csrf", csrf.as_str()),
-        ])
+        .form(&form)
         .send()
         .await
         .map_err(|_| unknown_result())?;
@@ -192,12 +260,12 @@ fn parse_send_result(value: &Value) -> AppResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    fn response_server(
+    pub(crate) fn response_server(
         status: &str,
         body: &str,
         headers: &str,
@@ -240,7 +308,7 @@ mod tests {
         (url, server)
     }
 
-    fn client() -> Client {
+    pub(crate) fn client() -> Client {
         crate::http_client::build_no_redirect_client(&crate::proxy::ProxyRoute::Direct).unwrap()
     }
 
@@ -288,6 +356,7 @@ mod tests {
             "Cookie: SESSDATA=session; bili_jct=csrf-token",
             "123",
             "  你好\n世界 & =  ",
+            None,
             &url,
         )
         .await
@@ -313,6 +382,88 @@ mod tests {
         assert_eq!(form["csrf"], "csrf-token");
     }
 
+    pub(crate) fn sent_form(request: &str) -> std::collections::BTreeMap<String, String> {
+        let (_, body) = request.split_once("\r\n\r\n").unwrap();
+        reqwest::Url::parse(&format!("http://localhost/?{body}"))
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect()
+    }
+
+    // 同稿件并发锁是进程级的，并行测试各用不同 aid，否则会互相撞上 busy。
+    #[tokio::test]
+    async fn reply_to_root_comment_posts_root_and_parent_without_prefix() {
+        let (url, server) = response_server("200 OK", r#"{"code":0}"#, "");
+        let reply = normalize_reply(Some(42), Some(42), Some("忽略")).unwrap();
+        send_comment_to_url(
+            &client(),
+            "SESSDATA=session; bili_jct=csrf",
+            "124",
+            " 同意 ",
+            reply,
+            &url,
+        )
+        .await
+        .unwrap();
+        let form = sent_form(&server.join().unwrap());
+        assert_eq!(form.len(), 6);
+        assert_eq!(form["root"], "42");
+        assert_eq!(form["parent"], "42");
+        assert_eq!(form["message"], "同意");
+    }
+
+    #[tokio::test]
+    async fn reply_to_nested_reply_prefixes_uname() {
+        let (url, server) = response_server("200 OK", r#"{"code":0}"#, "");
+        let reply = normalize_reply(Some(42), Some(77), Some(" 路人甲 ")).unwrap();
+        send_comment_to_url(
+            &client(),
+            "SESSDATA=session; bili_jct=csrf",
+            "125",
+            "说得对",
+            reply,
+            &url,
+        )
+        .await
+        .unwrap();
+        let form = sent_form(&server.join().unwrap());
+        assert_eq!(form.len(), 6);
+        assert_eq!(form["root"], "42");
+        assert_eq!(form["parent"], "77");
+        assert_eq!(form["message"], "回复 @路人甲 : 说得对");
+    }
+
+    #[test]
+    fn invalid_reply_targets_are_rejected() {
+        assert_eq!(normalize_reply(None, None, Some("x")).unwrap(), None);
+        assert_eq!(
+            normalize_reply(Some(5), None, None).unwrap(),
+            Some(ReplyTarget {
+                root: 5,
+                parent: 5,
+                prefix: None
+            })
+        );
+        for (root, parent, uname) in [
+            (None, Some(5), Some("x")),
+            (Some(0), None, None),
+            (Some(-1), Some(-1), None),
+            (Some(5), Some(0), Some("x")),
+            (Some(5), Some(6), None),
+            (Some(5), Some(6), Some("  ")),
+            (Some(5), Some(6), Some("a\nb")),
+        ] {
+            let err = normalize_reply(root, parent, uname).unwrap_err();
+            assert_eq!(
+                err.code, "video_comment_invalid_reply",
+                "{root:?} {parent:?}"
+            );
+        }
+        let long = "名".repeat(MAX_PARENT_UNAME_CHARS + 1);
+        assert!(normalize_reply(Some(5), Some(6), Some(&long)).is_err());
+    }
+
     #[tokio::test]
     async fn missing_or_invalid_cookie_never_reaches_network() {
         for cookie in [
@@ -322,7 +473,7 @@ mod tests {
             "SESSDATA=secret; bili_jct=csrf\nInjected: value",
         ] {
             let result =
-                send_comment_to_url(&client(), cookie, "456", "测试", "http://127.0.0.1:1")
+                send_comment_to_url(&client(), cookie, "456", "测试", None, "http://127.0.0.1:1")
                     .await
                     .unwrap_err();
             assert_eq!(result.code, "video_comment_login_required");
@@ -383,6 +534,7 @@ mod tests {
                 "SESSDATA=session; bili_jct=csrf",
                 "789",
                 "测试",
+                None,
                 &url,
             )
             .await

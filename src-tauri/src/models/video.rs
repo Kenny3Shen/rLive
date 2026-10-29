@@ -419,6 +419,9 @@ pub struct VideoComment {
     /// `upper` 缺失或 mid 为 0（身份未知）时一律 false，宁可少标不可错标。
     #[serde(default)]
     pub is_upper: bool,
+    /// 当前登录账号是否已点赞（上游 `action == 1`）；匿名读取恒为 false。
+    #[serde(default)]
+    pub liked: bool,
 }
 
 /// 一页评论（游标翻页）。
