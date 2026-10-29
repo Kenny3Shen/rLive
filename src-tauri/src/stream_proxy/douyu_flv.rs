@@ -182,7 +182,7 @@ async fn proxy_with_min_continuation(
 }
 
 async fn refresh_url(recovery: &RecoveryContext) -> Option<String> {
-    match tokio::time::timeout(Duration::from_secs(8), refresh_url_from(recovery)).await {
+    match tokio::time::timeout(Duration::from_secs(8), recovery.refresh_url()).await {
         Ok(Ok(url)) => Some(url),
         Ok(Err(error)) => {
             tracing::warn!(code = %error.code, "斗鱼 FLV 续期失败");
@@ -193,10 +193,6 @@ async fn refresh_url(recovery: &RecoveryContext) -> Option<String> {
             None
         }
     }
-}
-
-async fn refresh_url_from(recovery: &RecoveryContext) -> AppResult<String> {
-    recovery.refresh_url().await
 }
 
 async fn open_upstream(recovery: &RecoveryContext, url: &str) -> Option<reqwest::Response> {
@@ -224,8 +220,7 @@ struct Relay {
     pending: Vec<u8>,
     header_seen: bool,
     metadata_seen: bool,
-    audio_sequence_seen: bool,
-    video_sequence_seen: bool,
+    /// 首次看到的编解码配置；同时充当「已经见过配置」的标记。
     audio_config: Option<Vec<u8>>,
     video_config: Option<Vec<u8>>,
     last_audio_dts: Option<i64>,
@@ -255,7 +250,7 @@ impl Relay {
                 self.pending[7],
                 self.pending[8],
             ]) as usize;
-            if data_offset < FLV_HEADER_BYTES || data_offset > 1_024 {
+            if !(FLV_HEADER_BYTES..=1_024).contains(&data_offset) {
                 return Err("斗鱼 FLV 文件头偏移无效".into());
             }
             if self.pending.len() < data_offset + FLV_PREVIOUS_TAG_BYTES {
@@ -319,8 +314,7 @@ impl Relay {
             }
             if tag_type == FLV_TAG_AUDIO {
                 if is_audio_sequence_header(data) {
-                    if !self.audio_sequence_seen {
-                        self.audio_sequence_seen = true;
+                    if self.audio_config.is_none() {
                         self.audio_config = Some(data.to_vec());
                         if first_connection {
                             output.extend_from_slice(&tag);
@@ -346,8 +340,7 @@ impl Relay {
             }
             if tag_type == FLV_TAG_VIDEO {
                 if is_video_sequence_header(data) {
-                    if !self.video_sequence_seen {
-                        self.video_sequence_seen = true;
+                    if self.video_config.is_none() {
                         self.video_config = Some(data.to_vec());
                         if first_connection {
                             output.extend_from_slice(&tag);

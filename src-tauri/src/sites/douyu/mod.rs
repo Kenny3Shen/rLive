@@ -63,24 +63,11 @@ impl DouyuSite {
         &self,
         recovery: &crate::models::live::DouyuFlvRecovery,
     ) -> AppResult<String> {
-        self.refresh_play_url_with(&recovery.room_id, recovery.rate, &recovery.cdn)
-            .await
-    }
-
-    async fn refresh_play_url_with(
-        &self,
-        room_id: &str,
-        rate: i64,
-        cdn: &str,
-    ) -> AppResult<String> {
-        let v = self.request_play_data(room_id, rate, cdn).await?;
-        let data = v.get("data").cloned().unwrap_or(Value::Null);
-        let rtmp_url = json_str(data.get("rtmp_url").unwrap_or(&Value::Null));
-        let rtmp_live = html_unescape(&json_str(data.get("rtmp_live").unwrap_or(&Value::Null)));
-        if rtmp_url.is_empty() || rtmp_live.is_empty() {
-            return Err(Self::err("斗鱼续期未返回可用播放地址"));
-        }
-        Ok(format!("{rtmp_url}/{rtmp_live}"))
+        let v = self
+            .request_play_data(&recovery.room_id, recovery.rate, &recovery.cdn)
+            .await?;
+        play_stream_url(v.get("data").unwrap_or(&Value::Null))
+            .ok_or_else(|| Self::err("斗鱼续期未返回可用播放地址"))
     }
 
     async fn get_json(&self, url: &str, referer: &str) -> AppResult<Value> {
@@ -797,14 +784,10 @@ impl LiveSite for DouyuSite {
         for (index, cdn_v) in cdns.into_iter().enumerate() {
             let cdn = json_str(&cdn_v);
             let v = self.request_play_data(&room_id, rate, &cdn).await?;
-            let data = v.get("data").cloned().unwrap_or(Value::Null);
-            let rtmp_url = json_str(data.get("rtmp_url").unwrap_or(&Value::Null));
-            let rtmp_live = html_unescape(&json_str(data.get("rtmp_live").unwrap_or(&Value::Null)));
-            if rtmp_url.is_empty() || rtmp_live.is_empty() {
+            let Some(url) = play_stream_url(v.get("data").unwrap_or(&Value::Null)) else {
                 continue;
-            }
+            };
             let actual_rate = recovery_rate(&v, rate);
-            let url = format!("{rtmp_url}/{rtmp_live}");
             urls.push(
                 PlayUrl::inferred(
                     format!("douyu:{cdn}"),
@@ -834,6 +817,16 @@ fn urlencoding_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// 从 `getH5PlayV1` 的 `data` 中取出可播放地址；缺字段或为空时返回 `None`。
+///
+/// 首播取址与代理内的续签共用这段解析，避免两处对 `rtmp_url` / `rtmp_live`
+/// 的拼接与转义规则分叉。
+fn play_stream_url(data: &Value) -> Option<String> {
+    let rtmp_url = json_str(data.get("rtmp_url").unwrap_or(&Value::Null));
+    let rtmp_live = html_unescape(&json_str(data.get("rtmp_live").unwrap_or(&Value::Null)));
+    (!rtmp_url.is_empty() && !rtmp_live.is_empty()).then(|| format!("{rtmp_url}/{rtmp_live}"))
 }
 
 fn recovery_rate(play_data: &Value, requested_rate: i64) -> i64 {
@@ -974,6 +967,24 @@ mod tests {
         assert!(cookie.contains("auth=fixture"));
         assert!(cookie.contains("dy_did=custom-did"));
         assert!(cookie.contains("acf_did=10000000000000000000000000001501"));
+    }
+
+    #[test]
+    fn play_stream_url_joins_unescaped_paths_and_rejects_incomplete_data() {
+        let data = serde_json::json!({
+            "rtmp_url": "https://cdn.example/live",
+            "rtmp_live": "room.flv?token=1&amp;x=2",
+        });
+        assert_eq!(
+            play_stream_url(&data).as_deref(),
+            Some("https://cdn.example/live/room.flv?token=1&x=2")
+        );
+        assert!(play_stream_url(&serde_json::json!({"rtmp_url": "https://cdn.example"})).is_none());
+        assert!(
+            play_stream_url(&serde_json::json!({"rtmp_url": "", "rtmp_live": "room.flv"}))
+                .is_none()
+        );
+        assert!(play_stream_url(&Value::Null).is_none());
     }
 
     #[test]
