@@ -27,17 +27,14 @@ type RecordItem = {
   danmaku: Danmaku<DanmakuComment>;
   element: HTMLElement;
   layer: Layer;
-  /** 固定弹幕的独占车道，或滚动大表情进入时的起始车道；普通滚动弹幕为空。 */
+  /** 固定弹幕的独占车道，或滚动大表情当前覆盖的物理轨；普通滚动弹幕为空。 */
   lanes: number[];
-  /** 固定弹幕是否锁住对应轨道；滚动大表情的锁由调度器按几何统一重算。 */
-  locked: boolean;
 };
 
 /** 投放前登记的车道占用：`pushFlexibleDanmaku` 不返回实例，靠 comment id 在钩子里认领。 */
 type Reservation = {
   layer: Layer;
   lanes: number[];
-  locked: boolean;
   /** 滚动大表情已投放但尚未 append 的启动截止时间；固定弹幕不设。 */
   deadline?: number;
 };
@@ -63,6 +60,9 @@ export type LaneMotion = {
 type OrdinarySpeed = {
   speed: number;
 };
+
+/** 已投放但尚未 append 的图片位置/速度未知；统一按「不可放行」处理，复用同一只读快照。 */
+const BLOCKING_MOTION: LaneMotion = { paused: false, moving: false, left: 0, width: 1, speed: 1 };
 
 /** `limits.stash`：待投放上限，超出由库丢弃并触发 `limitWarning`（本文件静默处理）。 */
 const MAX_STASHED = 256;
@@ -164,8 +164,8 @@ function lowerBound(comments: readonly DanmakuComment[], time: number): number {
 }
 
 /**
- * 车道占用表，用于 `danmu` 轨道无法表达的几何：固定弹幕（不参与轨道调度）
- * 与占多条车道的大表情滚动弹幕。
+ * 车道占用表，用于 `danmu` 轨道无法表达的几何：固定弹幕走 flexible danmaku，
+ * 不进入库的轨道，车道完全由本表静态分配；滚动大表情的占用由调度器按轨道几何重算。
  */
 class LanePool {
   private used: boolean[] = [];
@@ -190,26 +190,6 @@ class LanePool {
       return start;
     }
     return null;
-  }
-
-  /** 所有能放下 `span` 条连续空闲车道的起点，自顶向下。 */
-  freeStarts(span: number): number[] {
-    const need = Math.max(1, Math.floor(span));
-    const starts: number[] = [];
-    let run = 0;
-    for (let lane = 0; lane < this.used.length; lane += 1) {
-      run = this.used[lane] ? 0 : run + 1;
-      if (run >= need) starts.push(lane - need + 1);
-    }
-    return starts;
-  }
-
-  /** 尝试占用一段指定车道；已被占用或越界时返回 false。 */
-  reserveRange(start: number, span: number): boolean {
-    if (start < 0 || start + span > this.used.length) return false;
-    for (let lane = start; lane < start + span; lane += 1) if (this.used[lane]) return false;
-    for (let lane = start; lane < start + span; lane += 1) this.used[lane] = true;
-    return true;
   }
 
   release(index: number): void {
@@ -485,36 +465,16 @@ export class DanmakuRenderer {
     return lane * this.laneHeight;
   }
 
-  private reserve(layer: Layer, span: number, locked: boolean): Reservation | null {
+  private reserve(layer: Layer, span: number): Reservation | null {
     const lane = this.runtimeOf(layer).lanes.allocate(span);
     if (lane === null) return null;
-    return this.lockLanes(layer, lane, span, locked);
-  }
-
-  /** 车道已在占用表中登记，按需锁住对应轨道。 */
-  private lockLanes(layer: Layer, start: number, span: number, locked: boolean): Reservation {
-    const runtime = this.runtimeOf(layer);
-    const lanes = Array.from({ length: span }, (_, index) => start + index);
-    if (locked) {
-      for (const index of lanes) {
-        if (index < runtime.manager.trackCount) runtime.manager.getTrack(index)?.lock();
-      }
-    }
-    return { layer, lanes, locked };
-  }
-
-  private unlock(reservation: Reservation): void {
-    if (!reservation.locked) return;
-    const manager = this.runtimeOf(reservation.layer).manager;
-    for (const lane of reservation.lanes) {
-      if (lane < manager.trackCount) manager.getTrack(lane)?.unlock();
-    }
+    const lanes = Array.from({ length: span }, (_, index) => lane + index);
+    return { layer, lanes };
   }
 
   private releaseLanes(reservation: Reservation): void {
     const runtime = this.runtimeOf(reservation.layer);
     for (const lane of reservation.lanes) runtime.lanes.release(lane);
-    if (reservation.layer === "fixed") this.unlock(reservation);
     if (!this.destroyed) {
       this.recomputeScrollLocks();
       this.ensureWideScheduler();
@@ -545,7 +505,7 @@ export class DanmakuRenderer {
 
   /** 固定弹幕：不参与轨道调度，由本文件按车道摆位，`direction: none` 静止到期。 */
   private pushFixed(comment: DanmakuComment, span: number): boolean {
-    const reservation = this.reserve("fixed", span, false);
+    const reservation = this.reserve("fixed", span);
     if (!reservation) {
       this.options.onDetach?.(comment.id);
       return false;
@@ -585,10 +545,12 @@ export class DanmakuRenderer {
       deadline: performance.now() + WIDE_MAX_WAIT_MS,
     };
     this.pendingWide.set(comment.id, pending);
-    this.recomputeScrollLocks();
     if (!this.frozen) this.tryLaunchWide(pending, span);
-    this.recomputeScrollLocks();
-    if (this.pendingWide.has(comment.id)) this.ensureWideScheduler();
+    // 未起步的 pending 需要按预约轨加锁；已投放的由 `launchWide` 自己重算并排下一次检查。
+    if (this.pendingWide.has(comment.id)) {
+      this.recomputeScrollLocks();
+      this.ensureWideScheduler();
+    }
     return true;
   }
 
@@ -621,7 +583,6 @@ export class DanmakuRenderer {
     pending.reservation = {
       layer: "scroll",
       lanes: Array.from({ length: span }, (_, index) => best!.start + index),
-      locked: false,
     };
     if (best.wait <= 0) this.launchWide(pending.comment, pending.reservation);
   }
@@ -639,22 +600,13 @@ export class DanmakuRenderer {
   }
 
   /**
-   * 普通滚动弹幕的实际入场速度。库在 push 时快照 speed/rate，尚未上屏的条目必须取
-   * 已保存的上界；已上屏但尚未 moving 的条目无法可靠读速度，调用方会保守重查。
+   * 后续普通滚动弹幕的入场速度上界：manager 当前配置与所有已受理条目的入库速度快照。
+   * `push` 对每条普通弹幕都记过快照（库在 push 时同样快照 speed/rate），快照随销毁删除，
+   * 所以不必逐轨读 `_getSpeed()`——那会对每条在屏弹幕触发一次强制同步布局。
    */
   private ordinaryEntrySpeed(): number {
-    const manager = this.scroll.manager;
-    const configured =
-      (typeof manager.options.speed === "number" ? manager.options.speed : 0) * manager.options.rate;
-    let speed = Number.isFinite(configured) && configured > 0 ? configured : 0;
+    let speed = this.currentOrdinarySpeed();
     for (const ordinary of this.ordinarySpeeds.values()) speed = Math.max(speed, ordinary.speed);
-    for (let lane = 0; lane < manager.trackCount; lane += 1) {
-      manager.getTrack(lane)?.each((danmaku) => {
-        if (danmaku.type !== "facile") return;
-        const actual = danmaku._getSpeed();
-        if (Number.isFinite(actual) && actual > 0) speed = Math.max(speed, actual);
-      });
-    }
     return speed;
   }
 
@@ -662,7 +614,8 @@ export class DanmakuRenderer {
   private currentOrdinarySpeed(): number {
     const manager = this.scroll.manager;
     const speed =
-      (typeof manager.options.speed === "number" ? manager.options.speed : 0) * manager.options.rate;
+      (typeof manager.options.speed === "number" ? manager.options.speed : 0) *
+      manager.options.rate;
     return Number.isFinite(speed) && speed > 0 ? speed : 0;
   }
 
@@ -690,12 +643,12 @@ export class DanmakuRenderer {
     for (const [id, reservation] of this.reservations) {
       if (id === selfId || reservation.layer !== "scroll") continue;
       if (!this.rangesOverlap(start, span, reservation.lanes)) continue;
-      occupants.push(this.blockingReservationMotion());
+      occupants.push(BLOCKING_MOTION);
     }
     for (const [id, pending] of this.pendingWide) {
       if (id === selfId || !pending.reservation) continue;
       if (!this.rangesOverlap(start, span, pending.reservation.lanes)) continue;
-      occupants.push(this.blockingReservationMotion());
+      occupants.push(BLOCKING_MOTION);
     }
     for (const record of this.records.values()) {
       if (!this.isScrollWide(record)) continue;
@@ -710,15 +663,15 @@ export class DanmakuRenderer {
   private isScrollWide(record: RecordItem): boolean {
     return (
       record.layer === "scroll" &&
-      (record.danmaku.type === "flexible" ||
-        Math.max(1, Math.floor(record.comment.lanes ?? 1)) > 1)
+      (record.danmaku.type === "flexible" || Math.max(1, Math.floor(record.comment.lanes ?? 1)) > 1)
     );
   }
 
   private recordMotion(record: RecordItem): LaneMotion {
-    const motion = record.danmaku.type === "flexible"
-      ? this.flexibleMotion(record.danmaku)
-      : this.facileMotion(record.danmaku);
+    const motion =
+      record.danmaku.type === "flexible"
+        ? this.flexibleMotion(record.danmaku)
+        : this.facileMotion(record.danmaku);
     if (Math.max(1, Math.floor(record.comment.lanes ?? 1)) > 1) {
       motion.paused = record.danmaku.paused;
     }
@@ -728,11 +681,6 @@ export class DanmakuRenderer {
   private rangesOverlap(start: number, span: number, lanes: readonly number[]): boolean {
     const last = lanes[lanes.length - 1];
     return last !== undefined && start < last + 1 && lanes[0]! < start + span;
-  }
-
-  /** 预约已投放但尚未 append，位置/宽度未知；保守地让它阻挡后来图片。 */
-  private blockingReservationMotion(): LaneMotion {
-    return { paused: false, moving: false, left: 0, width: 1, speed: 1 };
   }
 
   private facileMotion(danmaku: Danmaku<DanmakuComment>): LaneMotion {
@@ -782,27 +730,15 @@ export class DanmakuRenderer {
     return Array.from({ length: end - start }, (_, index) => start + index);
   }
 
+  /**
+   * 只在「还有未起步的图片」或「轨道仍被锁」时轮询：图片完全进屏后锁会解除，
+   * 此后不再需要定期重查；解除锁本身就在下一次 tick 内完成，不会漏掉。
+   */
   private ensureWideScheduler(): void {
     if (this.destroyed) return;
-    if (
-      this.pendingWide.size === 0 &&
-      this.scrollLocked.size === 0 &&
-      !this.hasScrollWide()
-    ) {
-      return;
-    }
+    if (this.pendingWide.size === 0 && this.scrollLocked.size === 0) return;
     if (this.wideTimer !== 0) return;
     this.wideTimer = window.setTimeout(() => this.runWideScheduler(), WIDE_RETRY_MS);
-  }
-
-  private hasScrollWide(): boolean {
-    for (const record of this.records.values()) {
-      if (this.isScrollWide(record)) return true;
-    }
-    for (const reservation of this.reservations.values()) {
-      if (reservation.layer === "scroll") return true;
-    }
-    return false;
   }
 
   private stopWideScheduler(): void {
@@ -890,6 +826,9 @@ export class DanmakuRenderer {
   /**
    * 重算滚动层锁：pending/未 append 的图片预约，以及在途图片仍有碰撞风险时锁定。
    * 普通弹幕的未起步状态由库的 `_getTrack` 自行拒绝，不在这里加锁以免失去解锁调度。
+   *
+   * 没有任何滚动图片时直接返回（锁已在上面整体释放）：`onAppendNode`/`onDestroyed`
+   * 会为每条普通弹幕调用到这里，逐条扫描轨道并读元素尺寸会把布局开销摊到热路径上。
    */
   private recomputeScrollLocks(): void {
     this.unlockScrollTracks();
@@ -903,13 +842,21 @@ export class DanmakuRenderer {
     for (const pending of this.pendingWide.values()) {
       if (pending.reservation) reservations.push(pending.reservation);
     }
+    let hasWideRecord = false;
+    for (const record of this.records.values()) {
+      if (this.isScrollWide(record)) {
+        hasWideRecord = true;
+        break;
+      }
+    }
+    if (reservations.length === 0 && !hasWideRecord) return;
     for (const reservation of reservations) {
       for (const lane of reservation.lanes) if (lane < manager.trackCount) locked.add(lane);
     }
     const entrantSpeed = this.ordinaryEntrySpeed();
     const gap = typeof manager.options.gap === "number" ? manager.options.gap : 0;
     for (const record of this.records.values()) {
-      if (!this.isScrollWide(record) || record.locked) continue;
+      if (!this.isScrollWide(record)) continue;
       record.lanes = this.coveredScrollLanes(record.danmaku);
       const motion = this.recordMotion(record);
       for (const lane of record.lanes) {
@@ -1005,15 +952,17 @@ export class DanmakuRenderer {
     if (!(reservation?.layer === "scroll" && reservation.deadline !== undefined)) {
       this.reservations.delete(comment.id);
     }
-    this.records.set(comment.id, {
+    const record: RecordItem = {
       comment,
       danmaku,
       element,
       layer: reservation?.layer ?? this.layerOf(comment),
       lanes: reservation?.lanes ?? [],
-      locked: reservation?.locked ?? false,
-    });
-    this.recomputeScrollLocks();
+    };
+    this.records.set(comment.id, record);
+    // 普通弹幕的入场速度已在 `push` 时记入 `ordinarySpeeds`，append 不改变图片的准入结论；
+    // 只有图片自身（或一轨大表情扩为两轨）需要立即重算锁。
+    if (this.isScrollWide(record)) this.recomputeScrollLocks();
     this.ensureWideScheduler();
     this.options.onAttach?.(comment, element);
   }
@@ -1038,9 +987,9 @@ export class DanmakuRenderer {
     const record = this.records.get(comment.id);
     if (record) {
       this.records.delete(comment.id);
-      // 固定弹幕（`locked: false`）同样占用车道，必须一并归还，否则固定层很快无车道可用。
+      // 固定弹幕同样占用车道，必须一并归还，否则固定层很快无车道可用。
       if (record.lanes.length > 0) {
-        this.releaseLanes({ layer: record.layer, lanes: record.lanes, locked: record.locked });
+        this.releaseLanes({ layer: record.layer, lanes: record.lanes });
       }
     }
     this.detach(comment.id);
@@ -1050,9 +999,6 @@ export class DanmakuRenderer {
   private clearActive(): void {
     // 轨道锁是 Track 对象上的状态，`manager.clear()` 不会重置它；先解锁再清屏，
     // 否则被大表情锁住的轨道会永久拒绝普通滚动弹幕。
-    for (const record of this.records.values()) {
-      if (record.locked) this.unlock({ layer: record.layer, lanes: record.lanes, locked: true });
-    }
     this.stopWideScheduler();
     this.unlockScrollTracks();
     this.cancelPendingWide();
@@ -1070,39 +1016,19 @@ export class DanmakuRenderer {
   private syncLanes(): void {
     const records = Array.from(this.records.values());
     this.stopWideScheduler();
-    for (const record of records) {
-      if (record.locked) this.unlock({ layer: record.layer, lanes: record.lanes, locked: true });
-    }
     this.unlockScrollTracks();
     for (const runtime of [this.scroll, this.fixed])
       runtime.lanes.reset(runtime.manager.trackCount);
-    for (const record of records) {
-      if (!record.locked) continue;
-      if (!this.records.has(record.comment.id)) continue;
-      const runtime = this.runtimeOf(record.layer);
-      const start = record.lanes[0]!;
-      const span = record.lanes.length;
-      if (!runtime.lanes.reserveRange(start, span)) {
-        record.lanes = [];
-        void record.danmaku.destroy();
-        continue;
-      }
-      for (const lane of record.lanes) {
-        if (lane < runtime.manager.trackCount) runtime.manager.getTrack(lane)?.lock();
-      }
-    }
-    // 等待中的大表情尚未起步，原车道占不到就丢弃；它的车道锁同样要按新轨道重建。
+    // 轨道重建后车道上限可能变小：等待中的大表情仍放得下就保留预约，稍后由调度器复核。
     for (const pending of this.pendingWide.values()) {
       const { reservation } = pending;
       if (!reservation) continue;
-      if (reservation.lanes[reservation.lanes.length - 1]! < this.scroll.manager.trackCount) {
-        pending.reservation = { ...reservation, locked: false };
-        continue;
+      if (reservation.lanes[reservation.lanes.length - 1]! >= this.scroll.manager.trackCount) {
+        pending.reservation = null;
       }
-      pending.reservation = null;
     }
     for (const record of records) {
-      if (record.layer !== "fixed" || record.locked || record.lanes.length === 0) continue;
+      if (record.layer !== "fixed" || record.lanes.length === 0) continue;
       if (!this.records.has(record.comment.id)) continue;
       const runtime = this.runtimeOf(record.layer);
       const span = record.lanes.length;

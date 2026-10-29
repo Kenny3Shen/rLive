@@ -718,6 +718,35 @@ test("destroy 清理滚动锁、定时器与 pending", () => {
   expect(detachIds).toEqual(["wide-1"]);
 });
 
+test("没有待投图片且轨道已解锁时不再排队下一次检查", () => {
+  const { renderer } = makeRenderer();
+  const image = makeDanmaku("wide-1", { left: 800, width: 200, speed: 0.1 });
+  addRecord(renderer, image);
+
+  renderer.recomputeScrollLocks();
+  expect(renderer.scrollLocked).toEqual(new Set());
+  renderer.ensureWideScheduler();
+
+  expect(renderer.wideTimer).toBe(0);
+  expect(timers.size).toBe(0);
+});
+
+test("没有图片时重算轨道锁不读取在屏普通弹幕尺寸", () => {
+  const { renderer } = makeRenderer();
+  const ordinary = makeDanmaku("ordinary-1", { type: "facile" });
+  let widthReads = 0;
+  ordinary.getWidth = () => {
+    widthReads += 1;
+    return 200;
+  };
+  addOrdinary(renderer, ordinary);
+
+  renderer.recomputeScrollLocks();
+
+  expect(widthReads).toBe(0);
+  expect(renderer.scrollLocked).toEqual(new Set());
+});
+
 test("resize 按当前 y 与元素高度重新映射图片触及的轨道", () => {
   const { renderer } = makeRenderer();
   const image = makeDanmaku("wide-1", { y: 40, height: 40 });
