@@ -1,14 +1,22 @@
 import { Hotkey } from "@videojs/react";
 
+import { TogglePauseHotkey } from "./toggle-pause-hotkey";
+
 export interface PlaybackHotkeysProps {
   disabled?: boolean | undefined;
+  /**
+   * 由业务播放器接管 Space/K 的播放暂停。传入后激活动作走业务入口（点播为
+   * `togglePlayback`），与页面手势共用同一份暂停意图记账；不传时保留
+   * Video.js 原生动作。
+   */
+  onTogglePause?: (() => void) | undefined;
 }
 
-export function PlaybackHotkeys({ disabled = false }: PlaybackHotkeysProps = {}) {
+export function PlaybackHotkeys({ disabled = false, onTogglePause }: PlaybackHotkeysProps = {}) {
   return (
     <>
-      <Hotkey disabled={disabled} keys="Space" action="togglePaused" />
-      <Hotkey disabled={disabled} keys="k" action="togglePaused" />
+      <TogglePauseHotkey keys="Space" disabled={disabled} onTogglePause={onTogglePause} />
+      <TogglePauseHotkey keys="k" disabled={disabled} onTogglePause={onTogglePause} />
       <Hotkey disabled={disabled} keys="m" action="toggleMuted" />
       <Hotkey disabled={disabled} keys="ArrowRight" action="seekStep" />
       <Hotkey disabled={disabled} keys="ArrowLeft" action="seekStep" />

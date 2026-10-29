@@ -1437,6 +1437,9 @@ function VideoPlayerPageContent() {
     }
     function onPlay() {
       if (cancelled) return;
+      // 原生播放按钮不经 `togglePlayback`：任何真实起播都结束上一次的暂停意图，
+      // 否则 Space/双击暂停后用按钮恢复，播完时连播与循环仍被当作用户暂停拦下。
+      userPausedRef.current = false;
       endedSequence += 1;
       setPaused(false);
       setWaiting(false);
@@ -2256,7 +2259,7 @@ function VideoPlayerPageContent() {
 
   /**
    * 画面点按：识别器与单双击判定窗口来自 Video.js 官方钩子，动作仍是本页的
-   * `togglePlayback`（唯一更新 `userPausedRef` 记账的入口）与 `togglePlayerFullscreen`
+   * `togglePlayback`（唯一记下用户暂停意图的入口，起播时由 `play` 事件清除）与 `togglePlayerFullscreen`
    * （Android 页内层 / 桌面原生窗口两路径由 fullscreen 钩子适配）。
    *
    * 语义按指针类型分叉，与直播页一致：
@@ -3025,6 +3028,8 @@ function VideoPlayerPageContent() {
           <VideoJsContainer
             variant="vod"
             ref={stageRef}
+            // Space/K 走业务暂停入口，键盘暂停同样写入 userPausedRef。
+            onTogglePause={togglePlayback}
             // 失败态必须可见、可重试：设计文档第四节记录过代理 502 会连带打掉音轨，
             // 静默失败会让用户看到「在播但没声音」而无从下手。
             errorDialog={{

@@ -47,7 +47,7 @@ export const useVideoJsPlaybackRate = () => videoJsPlayer.usePlayer(selectPlayba
 type VideoJsContainerProps = Omit<ComponentProps<"div">, "children" | "controls"> & {
   /** 全屏切换回调，传递给快捷键和按钮 */
   onToggleFullscreen?: () => void;
-  /** 业务暂停入口，直播时同时接管播放按钮与 Space/K 快捷键 */
+  /** 业务暂停入口：直播传给播放按钮与 Space/K，点播只传给 Space/K */
   onTogglePause?: () => void;
   children?: ComponentProps<"div">["children"];
   variant?: "live" | "vod";
@@ -72,7 +72,7 @@ export const VideoJsContainer = forwardRef<HTMLDivElement, VideoJsContainerProps
           variant={variant}
           hotkeys={
             isVod ? (
-              <VideoHotkeys onToggleFullscreen={onToggleFullscreen} />
+              <VideoHotkeys onToggleFullscreen={onToggleFullscreen} onTogglePause={onTogglePause} />
             ) : (
               <LiveVideoHotkeys
                 onToggleFullscreen={onToggleFullscreen}

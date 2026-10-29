@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { createPlayButtonActivation } from "../src/components/videojs/lib/play-button-activation";
-import { businessTogglePauseHotkeyOptions } from "../src/components/videojs/skins/shared/live-playback-hotkeys";
+import { businessTogglePauseHotkeyOptions } from "../src/components/videojs/skins/shared/toggle-pause-hotkey";
 
 const root = join(import.meta.dir, "..");
 
@@ -117,8 +117,20 @@ describe("播放按钮接线", () => {
     expect(source("src/features/iptv/IptvPlayer.tsx")).toContain("onTogglePause={togglePause}");
   });
 
-  test("点播不接管，继续使用 Video.js 原生 PlayButton", () => {
-    expect(source("src/features/video/VideoPlayerPage.tsx")).not.toContain("onTogglePause");
+  test("点播控制条仍用原生 PlayButton，Space/K 改走业务暂停", () => {
+    const page = source("src/features/video/VideoPlayerPage.tsx");
+    // 只传给 VideoJsContainer（快捷键），不传给控制条的原生 PlayButton。
+    expect(page.match(/onTogglePause=/g)).toHaveLength(1);
+    expect(page).toContain("onTogglePause={togglePlayback}");
+    // 录制回放的 togglePlayback 没有暂停意图记账，保持原生快捷键。
+    expect(source("src/features/recording/RecordingPlayer.tsx")).not.toContain("onTogglePause");
+  });
+
+  test("点播原生播放按钮起播时清除键盘暂停意图", () => {
+    // 原生 PlayButton 不经 togglePlayback；play 事件必须清掉暂停意图，否则播完时连播被拦。
+    const page = source("src/features/video/VideoPlayerPage.tsx");
+    const onPlay = page.slice(page.indexOf("function onPlay()"), page.indexOf("function onPause()"));
+    expect(onPlay).toContain("userPausedRef.current = false;");
   });
 
   test("包装层仅在业务回调存在时替换激活处理器", () => {
@@ -131,7 +143,7 @@ describe("播放按钮接线", () => {
   });
 });
 
-describe("直播快捷键业务暂停接管", () => {
+describe("快捷键业务暂停接管", () => {
   test("Space/K 保留 togglePaused action，激活只走一次业务暂停", () => {
     let calls = 0;
     const options = businessTogglePauseHotkeyOptions(() => {
@@ -152,7 +164,24 @@ describe("直播快捷键业务暂停接管", () => {
     expect(source("src/components/videojs/skins/live-video/hotkeys.tsx")).toContain(
       "onTogglePause={onTogglePause}",
     );
-    const hotkeys = source("src/components/videojs/skins/shared/live-playback-hotkeys.tsx");
-    expect(hotkeys).toContain("useHotkey(businessTogglePauseHotkeyOptions(");
+    const hotkey = source("src/components/videojs/skins/shared/toggle-pause-hotkey.tsx");
+    expect(hotkey).toContain("useHotkey(businessTogglePauseHotkeyOptions(");
+  });
+
+  test("点播容器把业务暂停回调透传给 PlaybackHotkeys", () => {
+    const container = source("src/features/room/player/videoJsControls.tsx");
+    expect(container).toContain(
+      "<VideoHotkeys onToggleFullscreen={onToggleFullscreen} onTogglePause={onTogglePause} />",
+    );
+    expect(source("src/components/videojs/skins/video/hotkeys.tsx")).toContain(
+      "<PlaybackHotkeys disabled={disabled} onTogglePause={onTogglePause} />",
+    );
+    const playback = source("src/components/videojs/skins/shared/playback-hotkeys.tsx");
+    expect(playback).toContain(
+      '<TogglePauseHotkey keys="Space" disabled={disabled} onTogglePause={onTogglePause} />',
+    );
+    expect(playback).toContain(
+      '<TogglePauseHotkey keys="k" disabled={disabled} onTogglePause={onTogglePause} />',
+    );
   });
 });
