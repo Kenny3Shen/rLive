@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -112,6 +113,9 @@ const TAB_LABELS: Record<SidebarTab, string> = {
 };
 
 const SIDEBAR_TABS: readonly SidebarTab[] = ["related", "danmaku", "comments", "settings"];
+
+/** 侧栏页签内容的展示顺序（与弹幕设置项的口径无关）。 */
+const SIDEBAR_PANEL_TABS: readonly SidebarTab[] = ["related", "comments", "danmaku", "settings"];
 
 function isSidebarTab(value: string): value is SidebarTab {
   return (SIDEBAR_TABS as readonly string[]).includes(value);
@@ -896,8 +900,12 @@ export function VideoSidebar({
   // 合集 / 分集 / 多 P 统一在相关视频的信息卡下，不再占独立页签。
   const showDanmakuTab = danmaku !== undefined;
   const hasSeason = Boolean(archive?.ugc_season);
-  const tabs: SidebarTab[] = ["related", "comments", "danmaku", "settings"];
-  const visibleTabs = showDanmakuTab ? tabs : tabs.filter((t) => t !== "danmaku");
+  // 稳定引用：useHorizontalSwipe 的 items 参与 effect 依赖，切页签时不应因数组
+  // 每次重建而重新执行停靠逻辑。
+  const visibleTabs = useMemo(
+    () => (showDanmakuTab ? SIDEBAR_PANEL_TABS : SIDEBAR_PANEL_TABS.filter((t) => t !== "danmaku")),
+    [showDanmakuTab],
+  );
   // 没有弹幕数据时无弹幕页签；请求的页签不存在时回退到相关视频。
   const tab: SidebarTab =
     requestedTab && visibleTabs.includes(requestedTab)

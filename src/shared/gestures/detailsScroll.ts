@@ -7,7 +7,9 @@ export type DetailsScrollMetrics = {
 };
 
 /** 每次 RAF 只读一次滚动链；舞台缩放和内容追加都会改变可滚余量。 */
-export function detailsScrollMetrics(scrollers: readonly DetailsScrollRange[]): DetailsScrollMetrics {
+export function detailsScrollMetrics(
+  scrollers: readonly DetailsScrollRange[],
+): DetailsScrollMetrics {
   let top = 0;
   let maxTop = 0;
   for (const node of scrollers) {
@@ -15,26 +17,6 @@ export function detailsScrollMetrics(scrollers: readonly DetailsScrollRange[]): 
     maxTop += Math.max(0, node.scrollHeight - node.clientHeight);
   }
   return { top, maxTop };
-}
-
-/**
- * 下滑要先回内容顶部时，这次位移最多能消费掉多少滚动位置。
- *
- * 只有向下（`delta > 0`）的位移会先消耗 `scrollTop`；上滑直接扩侧栏，不需要
- * 读取任何滚动容器。读取也在攒够本次位移后立即停止：滚动链后面的容器与这次
- * 分配无关，多读一次就多一次布局结算。
- */
-export function detailsScrollTopFor(scrollers: readonly DetailsScroller[], delta: number): number {
-  if (!(delta > 0)) return 0;
-  let top = 0;
-  let remaining = delta;
-  for (const node of scrollers) {
-    const value = Math.max(0, node.scrollTop);
-    top += value;
-    remaining -= value;
-    if (remaining <= 0) break;
-  }
-  return top;
 }
 
 /** 按命中顺序消费滚动位移，返回实际滚动量，供惯性判断是否已到边界。 */
