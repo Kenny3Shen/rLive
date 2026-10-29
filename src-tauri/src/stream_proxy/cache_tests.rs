@@ -26,8 +26,19 @@ fn complete_body() -> Vec<u8> {
 }
 
 fn response(status: u16, range: &str, framing: &str, body: &[u8]) -> Vec<u8> {
+    response_with_validators(status, range, "", framing, body)
+}
+
+/// 与 `response` 相同，但在 `Content-Range` 之后插入验证器响应头。
+fn response_with_validators(
+    status: u16,
+    range: &str,
+    validators: &str,
+    framing: &str,
+    body: &[u8],
+) -> Vec<u8> {
     let mut result = format!(
-        "HTTP/1.1 {status} Test\r\nContent-Type: video/mp4\r\nContent-Range: {range}\r\n{framing}\r\nConnection: close\r\n\r\n"
+        "HTTP/1.1 {status} Test\r\nContent-Type: video/mp4\r\nContent-Range: {range}\r\n{validators}{framing}\r\nConnection: close\r\n\r\n"
     )
     .into_bytes();
     result.extend_from_slice(body);
@@ -173,6 +184,15 @@ impl Fixture {
                     .unwrap_or_default()
                     .to_owned()
             })
+            .collect()
+    }
+
+    fn requested_if_ranges(&self) -> Vec<Option<String>> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request_header(request, "if-range").map(str::to_owned))
             .collect()
     }
 
@@ -594,6 +614,126 @@ async fn segment_resume_is_abandoned_when_upstream_ignores_resume_range() {
     assert!(result.is_err(), "续传被拒必须走读取失败路径");
     assert_eq!(body(&bytes), &complete_body()[..300], "不得拼接全量响应");
     assert_eq!(fixture.upstream_resumes(), 1, "区间不符时不再重试");
+    fixture.assert_not_cached().await;
+}
+
+#[tokio::test]
+async fn segment_resume_sends_if_range_from_strong_etag_or_last_modified() {
+    // 强 ETag 优先；没有强 ETag 时退到 Last-Modified；弱 ETag 不能用于
+    // If-Range（RFC 9110）；两者都没有时保持不带 If-Range 的旧行为。
+    for (validators, expected) in [
+        ("ETag: \"v1\"\r\n", Some("\"v1\"")),
+        (
+            "ETag: \"v1\"\r\nLast-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\n",
+            Some("\"v1\""),
+        ),
+        (
+            "Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\n",
+            Some("Wed, 21 Oct 2015 07:28:00 GMT"),
+        ),
+        ("ETag: W/\"v1\"\r\n", None),
+        ("", None),
+    ] {
+        let fixture = Fixture::new(complete_response()).await;
+        fixture.script(
+            response_with_validators(
+                206,
+                "bytes 0-799/1600",
+                validators,
+                "Content-Length: 800",
+                &complete_body()[..300],
+            ),
+            false,
+        );
+        fixture.script(
+            response_with_validators(
+                206,
+                "bytes 300-799/1600",
+                validators,
+                "Content-Length: 500",
+                &complete_body()[300..],
+            ),
+            false,
+        );
+        let (bytes, result) = fixture.fetch().await;
+        result.unwrap();
+        assert_eq!(body(&bytes), complete_body(), "验证器：{validators:?}");
+        assert_eq!(
+            fixture.requested_if_ranges(),
+            [None, expected.map(str::to_owned)],
+            "续传请求的 If-Range 应来自首段验证器：{validators:?}"
+        );
+        fixture.wait_for_complete_cache().await;
+    }
+}
+
+#[tokio::test]
+async fn segment_resume_is_rejected_when_validator_changes() {
+    let fixture = Fixture::new(complete_response()).await;
+    fixture.script(
+        response_with_validators(
+            206,
+            "bytes 0-799/1600",
+            "ETag: \"v1\"\r\n",
+            "Content-Length: 800",
+            &complete_body()[..300],
+        ),
+        false,
+    );
+    // 区间仍是续传要的那段，但 ETag 已经变了：内容不能拼接。
+    fixture.script(
+        response_with_validators(
+            206,
+            "bytes 300-799/1600",
+            "ETag: \"v2\"\r\n",
+            "Content-Length: 500",
+            &complete_body()[300..],
+        ),
+        false,
+    );
+    let (bytes, result) = fixture.fetch().await;
+    assert!(result.is_err(), "验证器变化必须走续传被拒路径");
+    assert_eq!(
+        body(&bytes),
+        &complete_body()[..300],
+        "不得拼接不同版本的内容"
+    );
+    assert_eq!(fixture.upstream_resumes(), 1, "验证器不符时不再重试");
+    fixture.assert_not_cached().await;
+}
+
+#[tokio::test]
+async fn segment_resume_is_rejected_when_if_range_falls_back_to_full_body() {
+    let fixture = Fixture::new(complete_response()).await;
+    fixture.script(
+        response_with_validators(
+            206,
+            "bytes 0-799/1600",
+            "ETag: \"v1\"\r\n",
+            "Content-Length: 800",
+            &complete_body()[..300],
+        ),
+        false,
+    );
+    // 服务器判定 If-Range 不匹配时按 RFC 回 200 全量：即使 ETag 一致也必须拒绝。
+    fixture.script(
+        response_with_validators(
+            200,
+            "bytes 0-799/1600",
+            "ETag: \"v1\"\r\n",
+            "Content-Length: 800",
+            &complete_body(),
+        ),
+        false,
+    );
+    let (bytes, result) = fixture.fetch().await;
+    assert!(result.is_err(), "If-Range 回落全量必须走续传被拒路径");
+    assert_eq!(body(&bytes), &complete_body()[..300], "不得拼接全量响应");
+    assert_eq!(
+        fixture.requested_if_ranges(),
+        [None, Some("\"v1\"".to_owned())],
+        "续传请求必须带上首段的强 ETag"
+    );
     fixture.assert_not_cached().await;
 }
 

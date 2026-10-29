@@ -3019,20 +3019,25 @@ async fn handle_client(
         }
     };
 
-    let build_request_with_range = |fetch_url: String, range: Option<&str>| {
-        let mut req = client.get(fetch_url);
-        for (k, v) in headers.as_ref() {
-            req = req.header(k.as_str(), v.as_str());
-        }
-        // 避免会让 MSE 解复用器困惑的压缩 body。
-        req = req.header("accept-encoding", "identity");
-        if let Some(range) = range {
-            req = req.header(reqwest::header::RANGE, range);
-        }
-        req
+    let build_request_with_range =
+        |fetch_url: String, range: Option<&str>, if_range: Option<&str>| {
+            let mut req = client.get(fetch_url);
+            for (k, v) in headers.as_ref() {
+                req = req.header(k.as_str(), v.as_str());
+            }
+            // 避免会让 MSE 解复用器困惑的压缩 body。
+            req = req.header("accept-encoding", "identity");
+            if let Some(range) = range {
+                req = req.header(reqwest::header::RANGE, range);
+            }
+            if let Some(if_range) = if_range {
+                req = req.header(reqwest::header::IF_RANGE, if_range);
+            }
+            req
+        };
+    let build_request = |fetch_url: String| {
+        build_request_with_range(fetch_url, request_header(&head, "range"), None)
     };
-    let build_request =
-        |fetch_url: String| build_request_with_range(fetch_url, request_header(&head, "range"));
 
     // 取流阶段已拿到的 init 只在本会话内复用，无须开启或等待磁盘缓存。
     // 严格匹配单个完整 Range，不把前缀当全文件，也不处理条件 Range。
@@ -3178,6 +3183,26 @@ async fn handle_client(
         .get(reqwest::header::CONTENT_RANGE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
+    // 续传验证器：强 ETag 优先，其次 Last-Modified。弱 ETag 不能用于 If-Range
+    // （RFC 9110 §13.1.5），但它仍是后续响应可比的版本标记。
+    let etag = upstream
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let last_modified = upstream
+        .headers()
+        .get(reqwest::header::LAST_MODIFIED)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let resume_validator = if status == 206 {
+        etag.as_deref()
+            .filter(|etag| !etag.starts_with("W/"))
+            .or(last_modified.as_deref())
+            .map(str::to_owned)
+    } else {
+        None
+    };
 
     if method == "HEAD" {
         write_media_headers(
@@ -3450,9 +3475,13 @@ async fn handle_client(
                     telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
                     telemetry.upstream_resumes.fetch_add(1, Ordering::Relaxed);
                     let range = format!("bytes={resume_start}-{end}");
-                    let Ok(response) = build_request_with_range(resume_url.clone(), Some(&range))
-                        .send()
-                        .await
+                    let Ok(response) = build_request_with_range(
+                        resume_url.clone(),
+                        Some(&range),
+                        resume_validator.as_deref(),
+                    )
+                    .send()
+                    .await
                     else {
                         continue;
                     };
@@ -3460,10 +3489,25 @@ async fn handle_client(
                         .headers()
                         .get(reqwest::header::CONTENT_RANGE)
                         .and_then(|value| value.to_str().ok());
+                    // 首段带验证器时，续传响应的 ETag/Last-Modified 必须一致：
+                    // If-Range 被忽略或服务器仍回 206 但内容已换，都不能拼接。
+                    let validator_changed = [
+                        (reqwest::header::ETAG, etag.as_deref()),
+                        (reqwest::header::LAST_MODIFIED, last_modified.as_deref()),
+                    ]
+                    .iter()
+                    .any(|(name, first)| {
+                        let resumed = response
+                            .headers()
+                            .get(name)
+                            .and_then(|value| value.to_str().ok());
+                        resumed.is_some() && resumed != *first
+                    });
                     if response.status().as_u16() != 206
                         || !content_range_matches(resumed_range, resume_start, *end)
+                        || validator_changed
                     {
-                        // 上游不按续传区间回应：再试也不会变，放弃。
+                        // 上游不按续传区间或同一版本回应：再试也不会变，放弃。
                         return Err(format!("{error}; resume rejected"));
                     }
                     resumed = Some(response);
