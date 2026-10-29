@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import type { Danmaku } from "danmu";
 import {
   DanmakuRenderer,
+  LanePool,
   type LaneMotion,
 } from "../src/features/room/danmaku/danmakuRenderer";
 import type { DanmakuComment } from "../src/features/room/danmaku/danmakuTypes";
@@ -53,17 +54,11 @@ type FakeTrack = {
   clear(): void;
 };
 
-type FakeLanePool = {
-  reset(count: number): void;
-  allocate(span: number): number | null;
-  reserveRange(start: number, span: number): boolean;
-  release(index: number): void;
-};
-
 type FakeManager = {
   options: { speed: number; rate: number; gap: number };
   container: { width: number; height: number };
   readonly trackCount: number;
+  setTrackCount(count: number): void;
   getTrack(index: number): FakeTrack;
   pushFlexibleDanmaku(comment: DanmakuComment, options: unknown): boolean;
   each(fn: (danmaku: TestDanmaku) => unknown): void;
@@ -83,8 +78,8 @@ type FakeManager = {
 type TestRenderer = {
   container: { dataset: Record<string, string> };
   options: { onDetach?: (id: string) => void };
-  scroll: { manager: FakeManager; lanes: FakeLanePool };
-  fixed: { manager: FakeManager; lanes: FakeLanePool };
+  scroll: { manager: FakeManager; lanes: LanePool };
+  fixed: { manager: FakeManager; lanes: LanePool };
   media?: undefined;
   observer?: undefined;
   records: Map<string, TestRecord>;
@@ -121,6 +116,7 @@ type TestRenderer = {
   clear(): void;
   destroy(): void;
   syncLanes(): void;
+  pushFixed(comment: DanmakuComment, span: number): boolean;
   coveredScrollLanes(danmaku: TestDanmaku): number[];
   onDestroyed(danmaku: TestDanmaku): void;
 };
@@ -171,6 +167,18 @@ function wideComment(id: string): DanmakuComment {
   return danmakuComment(id, 2);
 }
 
+function fixedComment(id: string, mode: DanmakuComment["mode"] = "top", lanes = 1): DanmakuComment {
+  return {
+    id,
+    text: id,
+    mode,
+    lanes,
+    render: () => {
+      throw new Error("车道测试不创建 DOM");
+    },
+  };
+}
+
 function makeTrack(): FakeTrack {
   return {
     list: [],
@@ -190,13 +198,8 @@ function makeTrack(): FakeTrack {
   };
 }
 
-function makeLanePool(): FakeLanePool {
-  return {
-    reset() {},
-    allocate: () => 0,
-    reserveRange: () => true,
-    release() {},
-  };
+function makeLanePool(): LanePool {
+  return new LanePool();
 }
 
 function makeManager(trackCount: number): FakeManager {
@@ -206,6 +209,10 @@ function makeManager(trackCount: number): FakeManager {
     container: { width: 1_000, height: 200 },
     get trackCount() {
       return tracks.length;
+    },
+    setTrackCount(count) {
+      while (tracks.length > count) tracks.pop();
+      while (tracks.length < count) tracks.push(makeTrack());
     },
     getTrack(index) {
       return tracks[index]!;
@@ -765,4 +772,77 @@ test("resize 重建轨道时保留普通弹幕入库速度快照", () => {
 
   expect(renderer.ordinarySpeeds.get("ordinary-1")).toEqual({ speed: 0.5 });
   expect(renderer.ordinaryEntrySpeed()).toBe(0.5);
+});
+
+test("固定弹幕 push 与 append 之间 resize 后不会把同一车道再分出去", () => {
+  const { renderer } = makeRenderer(4);
+  renderer.syncLanes();
+
+  expect(renderer.pushFixed(fixedComment("fixed-1"), 1)).toBe(true);
+  expect(renderer.reservations.get("fixed-1")?.lanes).toEqual([0]);
+
+  // 第一条尚未 append（不在 records 里），此时容器尺寸变化重建占用表。
+  renderer.syncLanes();
+
+  expect(renderer.pushFixed(fixedComment("fixed-2"), 1)).toBe(true);
+  expect(renderer.reservations.get("fixed-1")?.lanes).toEqual([0]);
+  expect(renderer.reservations.get("fixed-2")?.lanes).toEqual([1]);
+});
+
+test("缩小车道数时在途固定预约越界则撤销并只结算一次", () => {
+  const { renderer, detachIds } = makeRenderer(4);
+  renderer.syncLanes();
+  const destroys = new Map<string, number>();
+  for (let index = 1; index <= 4; index += 1) {
+    const id = `fixed-${index}`;
+    expect(renderer.pushFixed(fixedComment(id), 1)).toBe(true);
+    expect(renderer.reservations.get(id)?.lanes).toEqual([index - 1]);
+    const starting = makeDanmaku(id, { type: "flexible", moving: false });
+    starting.destroy = async () => {
+      destroys.set(id, (destroys.get(id) ?? 0) + 1);
+      renderer.onDestroyed(starting);
+    };
+    renderer.fixed.manager.starting.push(starting);
+  }
+
+  renderer.fixed.manager.setTrackCount(2);
+  renderer.syncLanes();
+
+  expect(renderer.reservations.get("fixed-1")?.lanes).toEqual([0]);
+  expect(renderer.reservations.get("fixed-2")?.lanes).toEqual([1]);
+  expect(renderer.reservations.has("fixed-3")).toBe(false);
+  expect(renderer.reservations.has("fixed-4")).toBe(false);
+  expect(destroys.get("fixed-1")).toBeUndefined();
+  expect(destroys.get("fixed-2")).toBeUndefined();
+  expect(destroys.get("fixed-3")).toBe(1);
+  expect(destroys.get("fixed-4")).toBe(1);
+  expect(renderer.live.has("fixed-3")).toBe(false);
+  expect(renderer.live.has("fixed-4")).toBe(false);
+  expect(detachIds.sort()).toEqual(["fixed-3", "fixed-4"]);
+});
+
+test("resize 重分配的固定预约在 append 时按新车道定位", () => {
+  const { renderer, detachIds } = makeRenderer(4);
+  renderer.syncLanes();
+
+  // 两条都还在等着 append：宽弹幕占三车道，后一条预约到第 3 车道。
+  expect(renderer.pushFixed(fixedComment("fixed-wide", "top", 3), 3)).toBe(true);
+  expect(renderer.pushFixed(fixedComment("fixed-narrow"), 1)).toBe(true);
+  expect(renderer.reservations.get("fixed-wide")?.lanes).toEqual([0, 1, 2]);
+  expect(renderer.reservations.get("fixed-narrow")?.lanes).toEqual([3]);
+  const wide = makeDanmaku("fixed-wide", { type: "flexible", moving: false });
+  wide.destroy = async () => renderer.onDestroyed(wide);
+  renderer.fixed.manager.starting.push(wide);
+
+  // 缩到两车道：宽预约放不下被撤销，窄预约回填到第 0 车道。
+  renderer.fixed.manager.setTrackCount(2);
+  renderer.syncLanes();
+  expect(renderer.reservations.get("fixed-narrow")?.lanes).toEqual([0]);
+  expect(detachIds).toEqual(["fixed-wide"]);
+
+  const pushed = renderer.fixed.manager.pushes.at(-1)!;
+  const options = pushed.options as {
+    position(danmaku: TestDanmaku, container: unknown): { x: number; y: number };
+  };
+  expect(options.position(makeDanmaku("fixed-narrow"), {})).toEqual({ x: 400, y: 0 });
 });

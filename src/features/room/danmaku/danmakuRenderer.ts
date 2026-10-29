@@ -167,7 +167,7 @@ function lowerBound(comments: readonly DanmakuComment[], time: number): number {
  * 车道占用表，用于 `danmu` 轨道无法表达的几何：固定弹幕走 flexible danmaku，
  * 不进入库的轨道，车道完全由本表静态分配；滚动大表情的占用由调度器按轨道几何重算。
  */
-class LanePool {
+export class LanePool {
   private used: boolean[] = [];
 
   reset(count: number): void {
@@ -510,14 +510,15 @@ export class DanmakuRenderer {
       this.options.onDetach?.(comment.id);
       return false;
     }
-    const lane = reservation.lanes[0]!;
     const duration = positive(comment.duration, DEFAULT_FIXED_DURATION_MS);
     const ok = this.fixed.manager.pushFlexibleDanmaku(comment, {
       duration,
       // 全局 speed 会让库用 (x + 自身宽) / speed 覆盖 duration；固定弹幕必须显式关掉。
       speed: null,
       direction: "none",
-      position: (danmaku) => this.fixedPosition(danmaku, lane, comment.mode),
+      // 回调在 append 时才调用；resize 可能已在 push 与 append 之间重建车道表并改写预约，
+      // 因此这里读预约的当前车道，而不是 push 时捕获的下标。
+      position: (danmaku) => this.fixedPosition(danmaku, reservation.lanes[0] ?? 0, comment.mode),
     });
     if (!ok) {
       this.releaseLanes(reservation);
@@ -1012,6 +1013,8 @@ export class DanmakuRenderer {
   /**
    * 尺寸或车道高变化后重建占用表。滚动大表情的 y 已随 transition 推进，改车道会跳位，
    * 因此按实际 y/高度重新映射覆盖轨，越界即销毁；固定弹幕随后按新几何重新落位。
+   * 已预约但尚未 append 的固定弹幕不在 `records` 里，也要按新表重新分配，否则新占用表
+   * 会把同一条车道再分给后一条固定弹幕，两条在 append 后叠放。
    */
   private syncLanes(): void {
     const records = Array.from(this.records.values());
@@ -1048,6 +1051,22 @@ export class DanmakuRenderer {
         "transform",
         `translateX(${position.x}px) translateY(${position.y}px)`,
       );
+    }
+    // 已上屏固定弹幕优先占位；在途预约（已受理、尚未 append）随后回填到新表。
+    // 放不下时与已上屏条目一致：撤销这条预约，结算 detach，不让它继续占用失效车道。
+    for (const [id, reservation] of Array.from(this.reservations)) {
+      if (reservation.layer !== "fixed" || this.records.has(id)) continue;
+      const span = reservation.lanes.length;
+      const lane = this.fixed.lanes.allocate(span);
+      if (lane === null) {
+        this.reservations.delete(id);
+        this.fixed.manager.each((danmaku) => {
+          if (danmaku.data.id === id) void danmaku.destroy();
+        });
+        this.detach(id);
+        continue;
+      }
+      reservation.lanes = Array.from({ length: span }, (_, index) => lane + index);
     }
     for (const record of records) {
       if (!this.isScrollWide(record)) continue;
