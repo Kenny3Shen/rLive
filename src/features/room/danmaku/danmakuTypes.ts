@@ -17,10 +17,15 @@ export type DanmakuComment = {
   render: () => HTMLElement;
 };
 
+/** 滚动层碰撞检测档位：`strict` 饱和时排队延后，`adaptive` 饱和时叠放到未锁轨道。 */
+export type DanmakuCollisionMode = "strict" | "adaptive";
+
 export type DanmakuRendererOptions = {
   container: HTMLElement;
   media?: HTMLMediaElement;
   speed?: number;
+  /** 默认 `strict`；直播传 `adaptive` 换取及时性。 */
+  collisionMode?: DanmakuCollisionMode;
   /** 只限制滚动弹幕区域，固定弹幕使用整个舞台。 */
   area?: number;
   /** 单条车道高度（像素），同时是引擎轨道高；调用方按字号推导。 */

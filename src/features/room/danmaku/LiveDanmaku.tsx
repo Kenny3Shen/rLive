@@ -558,6 +558,8 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         const instance = new RendererConstructor({
           container,
           speed: configRef.current.danmakuSpeed,
+          // 直播优先及时上屏：饱和时叠放而不是排队，大表情锁住的轨道仍不进。
+          collisionMode: "adaptive",
           area: danmakuLayerAreaConfig("scroll", areaRef.current),
           laneHeight: laneHeightRef.current,
           onAttach: (comment: DanmakuComment, element: HTMLElement) => {

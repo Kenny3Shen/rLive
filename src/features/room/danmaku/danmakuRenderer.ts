@@ -1,6 +1,6 @@
 import { create, type Danmaku, type Manager } from "danmu";
 import { applyCommentStyle } from "./danmakuAdapter";
-import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
+import type { DanmakuCollisionMode, DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
 
 /**
  * 基于 `danmu` 的 DOM 弹幕引擎。运动由每条弹幕自己的 CSS transition 在合成器上推进，
@@ -12,8 +12,9 @@ import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
  * 普通滚动弹幕交给 `danmu` 的轨道调度与碰撞预测。占两条车道的大表情不经过库的轨道准入，
  * 由本文件的单一调度器按实例真实位置/速度维护动态轨道锁：有碰撞风险才锁，安全后即允许复用。
  *
- * 碰撞检测档位不开放：库的 `mode` 固定 `strict`（饱和时排队延后而非叠放），
- * 轨道分配固定 `random`，见 `COLLISION_MODE` 与 `TRACK_DISTRIBUTION`。
+ * 碰撞检测档位不开放给用户：点播用 `strict`（饱和时排队延后而非叠放），直播用 `adaptive`
+ * （饱和时叠放，但不进被大表情锁住的轨道），轨道分配固定 `random`，
+ * 见 `DEFAULT_COLLISION_MODE`、`patchAdaptiveFallback` 与 `TRACK_DISTRIBUTION`。
  */
 type Layer = "scroll" | "fixed";
 
@@ -75,11 +76,11 @@ const MAX_PUSH_PER_FRAME = 48;
 const SCROLL_INTERVAL_MS = 200;
 const FIXED_INTERVAL_MS = 500;
 /**
- * 碰撞检测档位固定为库的 `strict`：车道不满足准入时留在待投队列等空位，宁可延后也不重叠。
- * `adaptive` 在轨道占满时会随机挑一条轨道直接上屏（实测同车道多条弹幕停在同一个 x），
- * `none` 完全不检测，两者都会让文字互相压字。
+ * 滚动层碰撞检测档位的默认值是库的 `strict`：车道不满足准入时留在待投队列等空位，宁可延后也不重叠。
+ * 直播显式传 `adaptive`：轨道占满时随机挑一条轨道直接上屏（普通弹幕之间允许叠放），换取及时性。
+ * 固定层只有 flexible 弹幕，不经过轨道准入，始终用默认值。
  */
-const COLLISION_MODE = "strict";
+const DEFAULT_COLLISION_MODE: DanmakuCollisionMode = "strict";
 /**
  * 轨道分配固定用随机分布，不用库的 `order`（自顶向下填满）。库的 `getTrackIdx` 形参默认值
  * 也是 `random`，这里显式写出、不依赖它：随机分布让同屏弹幕在可用轨道间散开，
@@ -88,7 +89,7 @@ const COLLISION_MODE = "strict";
 const TRACK_DISTRIBUTION = "random";
 /**
  * 同车道前后弹幕的横向间距（px）固定为 0：前车尾部一离开右缘，后车即可入场，最大限度及时上屏。
- * 与库默认值相同，这里显式写出、不依赖它；`strict` 碰撞检测仍保证不压字。
+ * 与库默认值相同，这里显式写出、不依赖它；轨道未饱和时碰撞检测仍保证不压字。
  */
 const LANE_GAP_PX = 0;
 /**
@@ -139,6 +140,40 @@ export function laneEntryWaitMs(
     wait = Math.max(wait, remaining / occupant.speed);
   }
   return Math.ceil(wait);
+}
+
+/** `danmu` 引擎上 adaptive 兜底涉及的内部字段。 */
+type AdaptiveFallbackEngine = {
+  tracks?: unknown;
+  _getTrackRandom?: unknown;
+};
+
+/**
+ * `adaptive` 在所有轨道都不满足准入时调用引擎的 `_getTrackRandom()` 随机挑一条轨道直接上屏，
+ * 这一步不看 `isLock`：被大表情锁住的两轨照样会进普通弹幕，文字压在图片上。
+ * 车道越少越容易全满，移动端舞台矮、车道少，饱和时几乎必然撞上。
+ * 这里把兜底换成只在未锁轨道里随机挑；全部锁住时返回 null，弹幕留在待投队列，与 `strict` 一致。
+ *
+ * 返回 false 表示库的内部形状已变，调用方应退回 `strict`，不在未知实现上叠放。
+ */
+export function patchAdaptiveFallback(engine: unknown): boolean {
+  if (typeof engine !== "object" || engine === null) return false;
+  const target = engine as AdaptiveFallbackEngine;
+  if (!Array.isArray(target.tracks) || typeof target._getTrackRandom !== "function") return false;
+  target._getTrackRandom = () => {
+    const tracks = target.tracks;
+    if (!Array.isArray(tracks)) return null;
+    // 蓄水池抽样：一次遍历在未锁轨道里等概率选一条，不分配临时数组。
+    let picked: unknown = null;
+    let open = 0;
+    for (const track of tracks as Array<{ isLock?: boolean } | undefined>) {
+      if (!track || track.isLock) continue;
+      open += 1;
+      if (Math.random() * open < 1) picked = track;
+    }
+    return picked;
+  };
+  return true;
 }
 
 const clock = () => performance.now() / 1_000;
@@ -224,6 +259,8 @@ export class DanmakuRenderer {
   private speed: number;
   private area: number;
   private laneHeight: number;
+  /** 滚动层请求的碰撞档位；adaptive 兜底补丁失败时 manager 实际退回 `strict`。 */
+  private readonly collisionMode: DanmakuCollisionMode;
   private lastMediaTime = 0;
   private frozen = false;
   private frame = 0;
@@ -238,6 +275,7 @@ export class DanmakuRenderer {
     this.speed = positive(options.speed, 100);
     this.area = clampArea(options.area);
     this.laneHeight = Math.max(1, Math.round(positive(options.laneHeight, 24)));
+    this.collisionMode = options.collisionMode ?? DEFAULT_COLLISION_MODE;
     this.scroll = this.createLayer("scroll");
     this.fixed = this.createLayer("fixed");
     this.applyScrollArea();
@@ -416,8 +454,9 @@ export class DanmakuRenderer {
   private readonly onResize = () => this.resize();
 
   private createLayer(layer: Layer): LayerRuntime {
+    const adaptive = layer === "scroll" && this.collisionMode === "adaptive";
     const manager = create<DanmakuComment>({
-      mode: COLLISION_MODE,
+      mode: adaptive ? "adaptive" : DEFAULT_COLLISION_MODE,
       distribution: TRACK_DISTRIBUTION,
       gap: LANE_GAP_PX,
       interval: layer === "scroll" ? SCROLL_INTERVAL_MS : FIXED_INTERVAL_MS,
@@ -437,6 +476,10 @@ export class DanmakuRenderer {
     manager.container.setStyle("top", "0");
     manager.container.setStyle("left", "0");
     manager.container.setStyle("pointerEvents", "none");
+    // `_engine` 是库的私有字段，类型上不可见；补丁失败就退回 strict，宁可延后也不压图。
+    if (adaptive && !patchAdaptiveFallback(Reflect.get(manager, "_engine"))) {
+      manager.setMode(DEFAULT_COLLISION_MODE);
+    }
     manager.mount(this.container);
     manager.startPlaying();
     return { manager, lanes: new LanePool() };
@@ -485,8 +528,8 @@ export class DanmakuRenderer {
    * 投放一条弹幕；被库拒绝（待投放已满、未在播放）时立即结算 detach。
    * 返回是否已受理。
    *
-   * 饱和时不在这里丢弃：库的 `strict` 把超量弹幕留在待投队列延后投放，
-   * 上界是 `limits.stash`（`MAX_STASHED`）。
+   * 饱和时不在这里丢弃：库的 `strict` 把超量弹幕留在待投队列延后投放，`adaptive` 叠放到
+   * 随机未锁轨道（全部锁住时同样留在队列），上界是 `limits.stash`（`MAX_STASHED`）。
    */
   private push(comment: DanmakuComment): boolean {
     if (this.live.has(comment.id)) return false;
