@@ -82,6 +82,7 @@ import {
   SHORTS_TOP_CONTROLS_CLASS,
   shortsItemKey,
   shortsMountedIndexes,
+  shortsPath,
   shortsSlotCoveredIndexes,
   shortsSlotTop,
   type ShortsSlotId,
@@ -344,6 +345,10 @@ export function ShortsPage() {
 
   const openInPlayer = useCallback(() => {
     if (!current) return;
+    // 离开即卸载，推荐流缓存（`gcTime: 0`）随之丢弃，Back 回来按 URL 的 seed 重新开流。
+    // 先把本条目的 seed 换成正在看的这条，否则会回到进入短视频时的那条。
+    // 只改 URL，保留 React Router 的 idx/key/usr，不触发一次中间导航。
+    window.history.replaceState(window.history.state, "", shortsPath(current.bvid));
     navigate(
       videoPlayPath({
         bvid: current.bvid,
