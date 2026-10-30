@@ -5,12 +5,12 @@
 # The network installer downloads only the components listed below. Keep the
 # exact Toolkit version pinned: rLive links against the CUDA 12 import
 # libraries, and the release workflow verifies nvcc before compiling. The
-# default path is shared by local development and CI so both environments
-# resolve the same nvcc and runtime DLLs.
+# NVIDIA network installer ignores a custom install directory in silent mode
+# (verified on a clean windows-2022 runner: `-path` was accepted but the
+# toolkit still landed in the standard location), so local development and CI
+# both use the installer's default path below.
 
-param(
-    [string]$CudaRoot = "D:\dev\CUDAToolkit"
-)
+$CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
 
 $ErrorActionPreference = "Stop"
 
@@ -63,10 +63,11 @@ if (-not $isExpectedVersion) {
         throw "CUDA installer checksum mismatch: $hash"
     }
 
+    # `-path` is not honored by the network installer (see the header), so the
+    # toolkit always lands in $CudaRoot; the checks below enforce that.
     $arguments = @(
         "-s",
         "-n",
-        "-path=`"$CudaRoot`"",
         "nvcc_12.6",
         "cudart_12.6",
         "cublas_12.6",
@@ -99,9 +100,9 @@ if ($LASTEXITCODE -ne 0 -or $version -notmatch "release 12\.6, V12\.6\.85") {
     throw "Expected CUDA Toolkit 12.6.3 (nvcc V12.6.85), got:`n$version"
 }
 
-# `-path` is supported by the installer, but only a successful silent install
-# on a clean runner proves it was honored. Verify the ARP entry and nvcc
-# location so a fallback to the default C: path fails loudly instead.
+# Verify the ARP entry and nvcc location agree with the standard toolkit path,
+# so an installer that changes its default directory fails loudly here instead
+# of producing a build against an unexpected compiler.
 $toolkit = @(
     Get-ItemProperty @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",

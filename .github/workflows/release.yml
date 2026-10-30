@@ -89,7 +89,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $expectedCudaRoot = "D:\dev\CUDAToolkit"
+          $expectedCudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
           if (-not $env:CUDA_PATH -or $env:CUDA_PATH.TrimEnd("\") -ne $expectedCudaRoot) {
             throw "Expected CUDA_PATH=$expectedCudaRoot, got '$env:CUDA_PATH'."
           }
