@@ -930,7 +930,6 @@ export function ShortsPage() {
                   open={panels.commentsOpen}
                   onClick={() => setCommentsOpen(true)}
                   className="absolute right-2 z-20"
-                  buttonClassName="bg-black/40 text-white hover:bg-black/55 hover:text-white"
                   style={{
                     bottom: `min(calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM} + ${SHORTS_MOBILE_COMMENT_BOTTOM_OFFSET_PX}px), calc(100% - ${SHORTS_TOP_BAR_HEIGHT_PX + SHORTS_MOBILE_COMMENT_TOP_INSET_PX + SHORTS_MOBILE_COMMENT_STACK_HEIGHT_PX}px))`,
                   }}
@@ -1159,14 +1158,12 @@ function ShortsCommentButton({
   open,
   onClick,
   className,
-  buttonClassName,
   style,
 }: {
   reply: number | null;
   open: boolean;
   onClick: () => void;
   className?: string;
-  buttonClassName?: string;
   style?: CSSProperties;
 }) {
   return (
@@ -1181,10 +1178,7 @@ function ShortsCommentButton({
         aria-label={reply != null && reply > 0 ? `评论，${formatOnline(reply)} 条` : "评论"}
         aria-expanded={open}
         title="评论"
-        className={cn(
-          "size-11 rounded-full text-white/90 hover:bg-white/15 hover:text-white",
-          buttonClassName,
-        )}
+        className="size-11 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
         onClick={onClick}
       >
         <MessageCircle className="size-6" aria-hidden />
