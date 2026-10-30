@@ -113,6 +113,12 @@ type RuntimeBullet = {
   attached: boolean;
 };
 
+/**
+ * 直播滚动弹幕在渲染器应用侧队列的最长等待。`strict` 不叠放，单轨吞吐有限；
+ * 超过 3 秒的旧弹幕不再上屏，把轨道留给新弹幕，避免高密度房间延迟累积到分钟级。
+ */
+const LIVE_DANMAKU_MAX_LATENCY_MS = 3_000;
+
 function useReducedMotionPreference(): boolean {
   const [reduced, setReduced] = useState(prefersReducedMotion);
   useEffect(() => {
@@ -558,8 +564,8 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         const instance = new RendererConstructor({
           container,
           speed: configRef.current.danmakuSpeed,
-          // 直播优先及时上屏：饱和时叠放而不是排队，大表情锁住的轨道仍不进。
-          collisionMode: "adaptive",
+          // strict 不叠放；应用侧限时队列保证旧弹幕不会无限期压在待投队列里。
+          maxLatencyMs: LIVE_DANMAKU_MAX_LATENCY_MS,
           area: danmakuLayerAreaConfig("scroll", areaRef.current),
           laneHeight: laneHeightRef.current,
           onAttach: (comment: DanmakuComment, element: HTMLElement) => {

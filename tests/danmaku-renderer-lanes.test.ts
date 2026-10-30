@@ -1,10 +1,5 @@
 import { expect, test } from "bun:test";
-import { create } from "danmu";
-import {
-  laneEntryWaitMs,
-  patchAdaptiveFallback,
-  type LaneMotion,
-} from "../src/features/room/danmaku/danmakuRenderer";
+import { laneEntryWaitMs, type LaneMotion } from "../src/features/room/danmaku/danmakuRenderer";
 
 const moving = (patch: Partial<LaneMotion>): LaneMotion => ({
   paused: false,
@@ -78,61 +73,4 @@ test("图片弹幕被钉住或运动快照不可用时保守重查", () => {
   expect(laneEntryWaitMs([moving()], 0, 1_000)).toBe(100);
   expect(laneEntryWaitMs([moving()], Number.NaN, 1_000)).toBe(100);
   expect(laneEntryWaitMs([moving()], 0.1, 0)).toBe(100);
-});
-
-type ProbeTrack = { index: number; isLock: boolean; _last: () => null };
-type ProbeEngine = {
-  rows: number;
-  tracks: ProbeTrack[];
-  _getTrack(): ProbeTrack | null;
-};
-
-/** 用最小 `document` 构造真实 `danmu` 引擎，让测试跑库自己的 `_getTrack`，库内部变形时会失败。 */
-function realAdaptiveEngine(locks: boolean[]): ProbeEngine {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
-  Object.defineProperty(globalThis, "document", {
-    configurable: true,
-    value: { createElement: () => ({ style: {}, setAttribute() {} }) },
-  });
-  try {
-    const engine = Reflect.get(create({ mode: "adaptive" }), "_engine") as ProbeEngine;
-    // 每条轨道都有一条未过门限的前车，`_getTrack` 逐条拒绝后走 adaptive 兜底。
-    const blocker = { getWidth: () => 200, _getMoveDistance: () => 0 };
-    engine.tracks = locks.map((isLock, index) => ({
-      index,
-      isLock,
-      _last: () => blocker as never,
-    }));
-    engine.rows = locks.length;
-    return engine;
-  } finally {
-    if (descriptor) Object.defineProperty(globalThis, "document", descriptor);
-    else Reflect.deleteProperty(globalThis, "document");
-  }
-}
-
-test("adaptive 轨道全满时兜底只落在未被大表情锁住的轨道", () => {
-  const locks = [true, true, false, true];
-  const engine = realAdaptiveEngine(locks);
-  expect(patchAdaptiveFallback(engine)).toBe(true);
-  for (let round = 0; round < 64; round += 1) {
-    expect(engine._getTrack()?.index).toBe(2);
-  }
-});
-
-test("adaptive 轨道全部被锁时不叠放，留在待投队列", () => {
-  const engine = realAdaptiveEngine([true, true]);
-  expect(patchAdaptiveFallback(engine)).toBe(true);
-  expect(engine._getTrack()).toBeNull();
-});
-
-test("未打补丁的 adaptive 兜底会进锁住的轨道（库行为基线）", () => {
-  const engine = realAdaptiveEngine([true, true]);
-  expect(engine._getTrack()).not.toBeNull();
-});
-
-test("库内部形状不符时拒绝打补丁，调用方退回 strict", () => {
-  expect(patchAdaptiveFallback(null)).toBe(false);
-  expect(patchAdaptiveFallback({ tracks: [] })).toBe(false);
-  expect(patchAdaptiveFallback({ _getTrackRandom() {} })).toBe(false);
 });

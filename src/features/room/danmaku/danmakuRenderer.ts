@@ -1,6 +1,6 @@
 import { create, type Danmaku, type Manager } from "danmu";
 import { applyCommentStyle } from "./danmakuAdapter";
-import type { DanmakuCollisionMode, DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
+import type { DanmakuComment, DanmakuRendererOptions } from "./danmakuTypes";
 
 /**
  * 基于 `danmu` 的 DOM 弹幕引擎。运动由每条弹幕自己的 CSS transition 在合成器上推进，
@@ -12,9 +12,9 @@ import type { DanmakuCollisionMode, DanmakuComment, DanmakuRendererOptions } fro
  * 普通滚动弹幕交给 `danmu` 的轨道调度与碰撞预测。占两条车道的大表情不经过库的轨道准入，
  * 由本文件的单一调度器按实例真实位置/速度维护动态轨道锁：有碰撞风险才锁，安全后即允许复用。
  *
- * 碰撞检测档位不开放给用户：点播用 `strict`（饱和时排队延后而非叠放），直播用 `adaptive`
- * （饱和时叠放，但不进被大表情锁住的轨道），轨道分配固定 `random`，
- * 见 `DEFAULT_COLLISION_MODE`、`patchAdaptiveFallback` 与 `TRACK_DISTRIBUTION`。
+ * 碰撞检测档位不开放给用户：两层都用库的 `strict`（饱和时排队延后而非叠放），
+ * 轨道分配固定 `random`，见 `COLLISION_MODE` 与 `TRACK_DISTRIBUTION`。直播另用应用侧
+ * 限时队列控制滚动弹幕的陈旧度（`maxLatencyMs`），点播不启用。
  */
 type Layer = "scroll" | "fixed";
 
@@ -57,9 +57,23 @@ export type LaneMotion = {
   speed: number;
 };
 
-/** 已受理普通滚动弹幕的 speed/rate 快照；strict 重试可能重新回 stash，故保留到销毁。 */
+/** 已受理普通滚动弹幕的 speed/rate 快照；strict 重试或停留在应用侧队列时保留到销毁。 */
 type OrdinarySpeed = {
   speed: number;
+};
+
+/** 应用侧限时队列里的普通滚动弹幕；`queuedAt` 是入队时的墙钟毫秒。 */
+type BacklogItem = {
+  comment: DanmakuComment;
+  queuedAt: number;
+};
+
+/** 库在弹幕从 stash 取出、即将上屏前回调的 `willRender` 事件。 */
+type WillRenderEvent = {
+  type: "facile" | "flexible";
+  prevent: boolean;
+  danmaku: Danmaku<DanmakuComment>;
+  trackIndex: number | null;
 };
 
 /** 已投放但尚未 append 的图片位置/速度未知；统一按「不可放行」处理，复用同一只读快照。 */
@@ -76,11 +90,11 @@ const MAX_PUSH_PER_FRAME = 48;
 const SCROLL_INTERVAL_MS = 200;
 const FIXED_INTERVAL_MS = 500;
 /**
- * 滚动层碰撞检测档位的默认值是库的 `strict`：车道不满足准入时留在待投队列等空位，宁可延后也不重叠。
- * 直播显式传 `adaptive`：轨道占满时随机挑一条轨道直接上屏（普通弹幕之间允许叠放），换取及时性。
- * 固定层只有 flexible 弹幕，不经过轨道准入，始终用默认值。
+ * 滚动层碰撞检测档位固定为库的 `strict`：车道不满足准入时留在待投队列等空位，宁可延后也不重叠。
+ * 不用 `adaptive`：轨道全满时它随机挑一条轨道直接上屏，这一步不看 `isLock`，会把普通弹幕
+ * 压到被大表情锁住的轨道上；`none` 完全不检测，同样会互相压字。
  */
-const DEFAULT_COLLISION_MODE: DanmakuCollisionMode = "strict";
+const COLLISION_MODE = "strict";
 /**
  * 轨道分配固定用随机分布，不用库的 `order`（自顶向下填满）。库的 `getTrackIdx` 形参默认值
  * 也是 `random`，这里显式写出、不依赖它：随机分布让同屏弹幕在可用轨道间散开，
@@ -89,7 +103,7 @@ const DEFAULT_COLLISION_MODE: DanmakuCollisionMode = "strict";
 const TRACK_DISTRIBUTION = "random";
 /**
  * 同车道前后弹幕的横向间距（px）固定为 0：前车尾部一离开右缘，后车即可入场，最大限度及时上屏。
- * 与库默认值相同，这里显式写出、不依赖它；轨道未饱和时碰撞检测仍保证不压字。
+ * 与库默认值相同，这里显式写出、不依赖它；`strict` 碰撞检测仍保证不压字。
  */
 const LANE_GAP_PX = 0;
 /**
@@ -99,7 +113,7 @@ const LANE_GAP_PX = 0;
 const SPEED_UNIT_SCALE = 1 / 1_000;
 /** 大表情与动态轨道锁的调度间隔；暂停、冻结或尚未起步时也靠它重查。 */
 const WIDE_RETRY_MS = 100;
-/** 大表情最多等待车道这么久，超出即丢弃，与直播待投放队列的过期时间一致。 */
+/** 大表情最多等待车道这么久，超出即丢弃；直播设置 `maxLatencyMs` 时改用该值。 */
 const WIDE_MAX_WAIT_MS = 5_000;
 
 /**
@@ -140,40 +154,6 @@ export function laneEntryWaitMs(
     wait = Math.max(wait, remaining / occupant.speed);
   }
   return Math.ceil(wait);
-}
-
-/** `danmu` 引擎上 adaptive 兜底涉及的内部字段。 */
-type AdaptiveFallbackEngine = {
-  tracks?: unknown;
-  _getTrackRandom?: unknown;
-};
-
-/**
- * `adaptive` 在所有轨道都不满足准入时调用引擎的 `_getTrackRandom()` 随机挑一条轨道直接上屏，
- * 这一步不看 `isLock`：被大表情锁住的两轨照样会进普通弹幕，文字压在图片上。
- * 车道越少越容易全满，移动端舞台矮、车道少，饱和时几乎必然撞上。
- * 这里把兜底换成只在未锁轨道里随机挑；全部锁住时返回 null，弹幕留在待投队列，与 `strict` 一致。
- *
- * 返回 false 表示库的内部形状已变，调用方应退回 `strict`，不在未知实现上叠放。
- */
-export function patchAdaptiveFallback(engine: unknown): boolean {
-  if (typeof engine !== "object" || engine === null) return false;
-  const target = engine as AdaptiveFallbackEngine;
-  if (!Array.isArray(target.tracks) || typeof target._getTrackRandom !== "function") return false;
-  target._getTrackRandom = () => {
-    const tracks = target.tracks;
-    if (!Array.isArray(tracks)) return null;
-    // 蓄水池抽样：一次遍历在未锁轨道里等概率选一条，不分配临时数组。
-    let picked: unknown = null;
-    let open = 0;
-    for (const track of tracks as Array<{ isLock?: boolean } | undefined>) {
-      if (!track || track.isLock) continue;
-      open += 1;
-      if (Math.random() * open < 1) picked = track;
-    }
-    return picked;
-  };
-  return true;
 }
 
 const clock = () => performance.now() / 1_000;
@@ -244,6 +224,12 @@ export class DanmakuRenderer {
   private readonly pendingWide = new Map<string, PendingWide>();
   /** 普通滚动弹幕入库时的速度快照，保留到销毁，覆盖 strict 重试后重新入 stash 的条目。 */
   private readonly ordinarySpeeds = new Map<string, OrdinarySpeed>();
+  /** 直播普通滚动弹幕的应用侧限时队列；`maxLatencyMs` 未设置时始终为空。 */
+  private readonly backlog: BacklogItem[] = [];
+  /** 直播普通滚动弹幕的入队墙钟；交给库后仍保留到结算，供 `willRender` 做端到端过期。 */
+  private readonly queuedAt = new Map<string, number>();
+  /** 泵正在进行时防止 `onAppendNode` 在库的渲染循环里重入。 */
+  private pumping = false;
   /** 当前由调度器锁住的滚动轨道；重算时先整体释放，再按最新几何重新锁定。 */
   private readonly scrollLocked = new Set<number>();
   /**
@@ -259,8 +245,8 @@ export class DanmakuRenderer {
   private speed: number;
   private area: number;
   private laneHeight: number;
-  /** 滚动层请求的碰撞档位；adaptive 兜底补丁失败时 manager 实际退回 `strict`。 */
-  private readonly collisionMode: DanmakuCollisionMode;
+  /** 普通滚动弹幕在应用侧的最长等待（毫秒）；0 表示不启用，直接交给库的 strict 队列。 */
+  private readonly maxLatencyMs: number;
   private lastMediaTime = 0;
   private frozen = false;
   private frame = 0;
@@ -275,7 +261,12 @@ export class DanmakuRenderer {
     this.speed = positive(options.speed, 100);
     this.area = clampArea(options.area);
     this.laneHeight = Math.max(1, Math.round(positive(options.laneHeight, 24)));
-    this.collisionMode = options.collisionMode ?? DEFAULT_COLLISION_MODE;
+    this.maxLatencyMs =
+      typeof options.maxLatencyMs === "number" &&
+      Number.isFinite(options.maxLatencyMs) &&
+      options.maxLatencyMs > 0
+        ? options.maxLatencyMs
+        : 0;
     this.scroll = this.createLayer("scroll");
     this.fixed = this.createLayer("fixed");
     this.applyScrollArea();
@@ -404,6 +395,10 @@ export class DanmakuRenderer {
     if (next === this.area) return;
     this.area = next;
     this.applyScrollArea();
+    // `setArea` 经库的 `format()` 重建轨道，容量与可投放数随之变化。
+    this.trimBacklog();
+    this.pumpBacklog();
+    this.ensureWideScheduler();
   }
 
   /** 字号变化同时改变车道高：轨道与车道占用表一起重建。 */
@@ -436,6 +431,7 @@ export class DanmakuRenderer {
       this.media.removeEventListener("ratechange", this.onRateChange);
     }
     this.cancelPendingWide();
+    this.cancelBacklog();
     this.ordinarySpeeds.clear();
     for (const runtime of [this.scroll, this.fixed]) {
       runtime.manager.stopPlaying();
@@ -454,9 +450,8 @@ export class DanmakuRenderer {
   private readonly onResize = () => this.resize();
 
   private createLayer(layer: Layer): LayerRuntime {
-    const adaptive = layer === "scroll" && this.collisionMode === "adaptive";
     const manager = create<DanmakuComment>({
-      mode: adaptive ? "adaptive" : DEFAULT_COLLISION_MODE,
+      mode: COLLISION_MODE,
       distribution: TRACK_DISTRIBUTION,
       gap: LANE_GAP_PX,
       interval: layer === "scroll" ? SCROLL_INTERVAL_MS : FIXED_INTERVAL_MS,
@@ -468,6 +463,7 @@ export class DanmakuRenderer {
         $appendNode: (danmaku) => this.onAppendNode(danmaku),
         $moved: (danmaku) => this.onMoved(danmaku),
         $destroyed: (danmaku) => this.onDestroyed(danmaku),
+        willRender: (event: WillRenderEvent) => this.onWillRender(event),
         limitWarning: () => {},
       },
     });
@@ -476,10 +472,6 @@ export class DanmakuRenderer {
     manager.container.setStyle("top", "0");
     manager.container.setStyle("left", "0");
     manager.container.setStyle("pointerEvents", "none");
-    // `_engine` 是库的私有字段，类型上不可见；补丁失败就退回 strict，宁可延后也不压图。
-    if (adaptive && !patchAdaptiveFallback(Reflect.get(manager, "_engine"))) {
-      manager.setMode(DEFAULT_COLLISION_MODE);
-    }
     manager.mount(this.container);
     manager.startPlaying();
     return { manager, lanes: new LanePool() };
@@ -528,14 +520,16 @@ export class DanmakuRenderer {
    * 投放一条弹幕；被库拒绝（待投放已满、未在播放）时立即结算 detach。
    * 返回是否已受理。
    *
-   * 饱和时不在这里丢弃：库的 `strict` 把超量弹幕留在待投队列延后投放，`adaptive` 叠放到
-   * 随机未锁轨道（全部锁住时同样留在队列），上界是 `limits.stash`（`MAX_STASHED`）。
+   * 饱和时不在这里丢弃：库的 `strict` 把超量弹幕留在待投队列延后投放，
+   * 上界是 `limits.stash`（`MAX_STASHED`）。直播设置 `maxLatencyMs` 后，普通滚动弹幕
+   * 先进入应用侧限时队列，由 `pumpBacklog` 按轨道数与陈旧度决定何时交给库。
    */
   private push(comment: DanmakuComment): boolean {
     if (this.live.has(comment.id)) return false;
     const span = Math.max(1, Math.floor(comment.lanes ?? 1));
     if (comment.mode !== "scroll") return this.pushFixed(comment, span);
     if (span > 1) return this.pushWide(comment, span);
+    if (this.maxLatencyMs > 0) return this.enqueueBacklog(comment);
     const speed = this.currentOrdinarySpeed();
     if (!this.scroll.manager.push(comment)) {
       this.options.onDetach?.(comment.id);
@@ -544,6 +538,111 @@ export class DanmakuRenderer {
     this.ordinarySpeeds.set(comment.id, { speed });
     this.live.add(comment.id);
     return true;
+  }
+
+  /**
+   * 受理一条普通滚动弹幕到应用侧队列。库的 `strict` 只看条数上限、不看时间，
+   * 饱和时会一直保留最旧的弹幕；直播要的恰好相反，因此陈旧度与容量都由这里控制。
+   */
+  private enqueueBacklog(comment: DanmakuComment): boolean {
+    const queuedAt = performance.now();
+    this.live.add(comment.id);
+    this.queuedAt.set(comment.id, queuedAt);
+    this.backlog.push({ comment, queuedAt });
+    this.trimBacklog();
+    this.pumpBacklog();
+    this.ensureWideScheduler();
+    return true;
+  }
+
+  /** 队列容量随轨道数变化：至少 4 条，约两轮轨道容量。 */
+  private backlogCapacity(): number {
+    return Math.max(4, this.scroll.manager.trackCount * 2);
+  }
+
+  /** 容量溢出时丢最旧的，与直播「丢旧留新」一致；每条恰好结算一次。 */
+  private trimBacklog(): void {
+    const capacity = this.backlogCapacity();
+    while (this.backlog.length > capacity) {
+      const dropped = this.backlog.shift();
+      if (!dropped) break;
+      this.detach(dropped.comment.id);
+    }
+  }
+
+  /** 按墙钟丢弃超龄项；冻结只暂停投放，不暂停过期。 */
+  private expireBacklog(): void {
+    if (!(this.maxLatencyMs > 0)) return;
+    const now = performance.now();
+    while (this.backlog.length > 0) {
+      const head = this.backlog[0]!;
+      if (now - head.queuedAt <= this.maxLatencyMs) break;
+      this.backlog.shift();
+      this.detach(head.comment.id);
+    }
+  }
+
+  /**
+   * 把队列头部交给库，直到库的 stash 接近一轮轨道容量。库在 `strict` 下每次渲染最多
+   * 消费 `trackCount` 条，stash 再多也只是把陈旧弹幕泡得更久，因此只保持约一轮。
+   */
+  private pumpBacklog(): void {
+    if (!(this.maxLatencyMs > 0) || this.destroyed || this.pumping) return;
+    this.expireBacklog();
+    if (this.frozen) return;
+    const manager = this.scroll.manager;
+    const limit = Math.max(1, manager.trackCount);
+    let pushed = 0;
+    this.pumping = true;
+    try {
+      while (this.backlog.length > 0 && manager.len().stash < limit) {
+        const item = this.backlog[0]!;
+        const speed = this.currentOrdinarySpeed();
+        if (!manager.push(item.comment)) {
+          this.backlog.shift();
+          this.detach(item.comment.id);
+          continue;
+        }
+        this.backlog.shift();
+        this.ordinarySpeeds.set(item.comment.id, { speed });
+        pushed += 1;
+      }
+    } finally {
+      this.pumping = false;
+    }
+    if (pushed > 0) this.scheduleRender();
+  }
+
+  /** 清空应用侧队列并逐条结算；`live` 保证与后续 `settleAll` 不会重复回调。 */
+  private cancelBacklog(): void {
+    const items = this.backlog.splice(0);
+    for (const item of items) this.detach(item.comment.id);
+  }
+
+  /**
+   * 库从 stash 取出一条、即将上屏前的最后一道端到端过期检查。`pumpBacklog` 只约束
+   * 应用侧队列；交给库的条目仍可能在大表情锁轨期间等待，因此这里按入队时刻再判一次。
+   * 库对 prevent 的条目不会 append、入 view 或 destroy，也不会触发 `$destroyed`，
+   * 所以必须在这里删除速度快照、回收记录并结算 `detach`。
+   */
+  private onWillRender(event: WillRenderEvent): WillRenderEvent {
+    if (event.prevent || event.type !== "facile" || !(this.maxLatencyMs > 0)) return event;
+    const id = event.danmaku.data.id;
+    const queuedAt = this.queuedAt.get(id);
+    if (queuedAt === undefined || performance.now() - queuedAt <= this.maxLatencyMs) return event;
+    // strict 重试可能已经 append 过一次；`_reset` 移除了 DOM，但本文件的记录还在。
+    const record = this.records.get(id);
+    if (record) {
+      this.records.delete(id);
+      if (record.lanes.length > 0) {
+        this.releaseLanes({ layer: record.layer, lanes: record.lanes });
+      }
+    }
+    this.ordinarySpeeds.delete(id);
+    this.detach(id);
+    this.pumpBacklog();
+    event.prevent = true;
+    return event;
   }
 
   /** 固定弹幕：不参与轨道调度，由本文件按车道摆位，`direction: none` 静止到期。 */
@@ -578,7 +677,10 @@ export class DanmakuRenderer {
    * 立即能进就投放；否则进入有界 FIFO，等单一调度器找到安全连续两轨。
    */
   private pushWide(comment: DanmakuComment, span: number): boolean {
-    if (this.pendingWide.size + this.scroll.manager.len().stash >= MAX_STASHED) {
+    if (
+      this.pendingWide.size + this.backlog.length + this.scroll.manager.len().stash >=
+      MAX_STASHED
+    ) {
       this.options.onDetach?.(comment.id);
       return false;
     }
@@ -586,7 +688,8 @@ export class DanmakuRenderer {
     const pending: PendingWide = {
       comment,
       reservation: null,
-      deadline: performance.now() + WIDE_MAX_WAIT_MS,
+      // 直播的等待上限与普通弹幕一致；启动预约的 deadline 是另一回事，仍用库侧上限。
+      deadline: performance.now() + (this.maxLatencyMs > 0 ? this.maxLatencyMs : WIDE_MAX_WAIT_MS),
     };
     this.pendingWide.set(comment.id, pending);
     if (!this.frozen) this.tryLaunchWide(pending, span);
@@ -775,12 +878,15 @@ export class DanmakuRenderer {
   }
 
   /**
-   * 只在「还有未起步的图片」或「轨道仍被锁」时轮询：图片完全进屏后锁会解除，
-   * 此后不再需要定期重查；解除锁本身就在下一次 tick 内完成，不会漏掉。
+   * 只在「还有未起步的图片」「轨道仍被锁」或「应用侧队列非空」时轮询：
+   * 图片完全进屏后锁会解除，队列排空后也不需要再检查；解除锁与过期本身都在下一次
+   * tick 内完成，不会漏掉。冻结时队列仍要轮询，因为超龄按墙钟计算。
    */
   private ensureWideScheduler(): void {
     if (this.destroyed) return;
-    if (this.pendingWide.size === 0 && this.scrollLocked.size === 0) return;
+    const idle =
+      this.pendingWide.size === 0 && this.scrollLocked.size === 0 && this.backlog.length === 0;
+    if (idle) return;
     if (this.wideTimer !== 0) return;
     this.wideTimer = window.setTimeout(() => this.runWideScheduler(), WIDE_RETRY_MS);
   }
@@ -804,6 +910,8 @@ export class DanmakuRenderer {
     if (this.destroyed) return;
     this.expireStartingWide();
     this.expirePendingWide();
+    // 队列自身处理冻结：冻结时只按墙钟过期，不向库投放。
+    this.pumpBacklog();
     if (!this.frozen) this.advancePendingWide();
     this.recomputeScrollLocks();
     this.ensureWideScheduler();
@@ -973,6 +1081,7 @@ export class DanmakuRenderer {
 
   /** 唯一结算点：每条受理过的弹幕只回调一次 `onDetach`。 */
   private detach(id: string): void {
+    this.queuedAt.delete(id);
     if (!this.live.delete(id)) return;
     this.options.onDetach?.(id);
   }
@@ -1008,6 +1117,8 @@ export class DanmakuRenderer {
     // 普通弹幕的入场速度已在 `push` 时记入 `ordinarySpeeds`，append 不改变图片的准入结论；
     // 只有图片自身（或一轨大表情扩为两轨）需要立即重算锁。
     if (this.isScrollWide(record)) this.recomputeScrollLocks();
+    // 库刚从 stash 取走一条，空出的位置立即用队列头部补上。
+    this.pumpBacklog();
     this.ensureWideScheduler();
     this.options.onAttach?.(comment, element);
   }
@@ -1038,6 +1149,8 @@ export class DanmakuRenderer {
       }
     }
     this.detach(comment.id);
+    // 销毁可能腾出了轨道或待投位，队列头部可以继续交给库。
+    this.pumpBacklog();
     this.ensureWideScheduler();
   }
 
@@ -1047,6 +1160,7 @@ export class DanmakuRenderer {
     this.stopWideScheduler();
     this.unlockScrollTracks();
     this.cancelPendingWide();
+    this.cancelBacklog();
     this.ordinarySpeeds.clear();
     for (const runtime of [this.scroll, this.fixed]) runtime.manager.clear();
     this.settleAll();
@@ -1137,6 +1251,9 @@ export class DanmakuRenderer {
       }
       record.lanes = lanes;
     }
+    // 轨道数变化后，队列容量与每轮可投放数都要按新几何重算。
+    this.trimBacklog();
+    this.pumpBacklog();
     this.recomputeScrollLocks();
     this.ensureWideScheduler();
   }

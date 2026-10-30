@@ -64,6 +64,7 @@ type FakeManager = {
   each(fn: (danmaku: TestDanmaku) => unknown): void;
   setRate(rate: number): void;
   len(): { stash: number };
+  push(comment: DanmakuComment): boolean;
   clear(): void;
   stopPlaying(): void;
   unmount(): void;
@@ -72,6 +73,8 @@ type FakeManager = {
   setSpeed(speed: number): void;
   setTrackHeight(height: number): void;
   pushes: Array<{ comment: DanmakuComment; options: unknown }>;
+  ordinaryPushes: DanmakuComment[];
+  stash: number;
   starting: TestDanmaku[];
 };
 
@@ -88,6 +91,10 @@ type TestRenderer = {
   ordinarySpeeds: Map<string, { speed: number }>;
   scrollLocked: Set<number>;
   live: Set<string>;
+  backlog: Array<{ comment: DanmakuComment; queuedAt: number }>;
+  queuedAt: Map<string, number>;
+  pumping: boolean;
+  maxLatencyMs: number;
   timeline: DanmakuComment[];
   timelineIds: Set<string>;
   cursor: number;
@@ -120,6 +127,19 @@ type TestRenderer = {
   launchWide(comment: DanmakuComment, reservation: Reservation): void;
   coveredScrollLanes(danmaku: TestDanmaku): number[];
   onDestroyed(danmaku: TestDanmaku): void;
+  push(comment: DanmakuComment): boolean;
+  pumpBacklog(): void;
+  trimBacklog(): void;
+  cancelBacklog(): void;
+  backlogCapacity(): number;
+  onWillRender(event: TestWillRenderEvent): TestWillRenderEvent;
+};
+
+type TestWillRenderEvent = {
+  type: "facile" | "flexible";
+  prevent: boolean;
+  danmaku: TestDanmaku;
+  trackIndex: number | null;
 };
 
 type FakeTimer = { callback: () => void; delay: number };
@@ -226,7 +246,12 @@ function makeManager(trackCount: number): FakeManager {
       for (const danmaku of Array.from(manager.starting)) fn(danmaku);
     },
     len() {
-      return { stash: 0 };
+      return { stash: manager.stash };
+    },
+    push(comment) {
+      manager.ordinaryPushes.push(comment);
+      manager.stash += 1;
+      return true;
     },
     clear() {
       for (const track of tracks) track.clear();
@@ -243,6 +268,8 @@ function makeManager(trackCount: number): FakeManager {
     },
     setTrackHeight() {},
     pushes: [],
+    ordinaryPushes: [],
+    stash: 0,
     starting: [],
   };
   return manager;
@@ -313,6 +340,10 @@ function makeRenderer(trackCount = 4): {
     ordinarySpeeds: new Map<string, { speed: number }>(),
     scrollLocked: new Set<number>(),
     live: new Set<string>(),
+    backlog: [],
+    queuedAt: new Map<string, number>(),
+    pumping: false,
+    maxLatencyMs: 0,
     timeline: [],
     timelineIds: new Set<string>(),
     cursor: 0,
@@ -898,4 +929,247 @@ test("缩小车道数时在途滚动大表情预约越界则销毁并只结算�
   renderer.syncLanes();
   expect(destroys.get("wide-high")).toBe(1);
   expect(detachIds).toEqual(["wide-high"]);
+});
+
+test("未设置 maxLatencyMs 时普通滚动弹幕直接交给库，行为与点播一致", () => {
+  const { renderer, detachIds } = makeRenderer(4);
+
+  expect(renderer.push(danmakuComment("ordinary-1", 1))).toBe(true);
+
+  expect(renderer.backlog).toHaveLength(0);
+  expect(renderer.scroll.manager.ordinaryPushes.map((comment) => comment.id)).toEqual([
+    "ordinary-1",
+  ]);
+  expect(renderer.scroll.manager.len().stash).toBe(1);
+  expect(renderer.live.has("ordinary-1")).toBe(true);
+  expect(renderer.ordinarySpeeds.get("ordinary-1")).toEqual({ speed: 0.1 });
+  expect(renderer.queuedAt.size).toBe(0);
+  expect(detachIds).toEqual([]);
+});
+
+test("应用侧队列在库 stash 达到轨道数时暂停，库取走后继续推送", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+
+  expect(renderer.push(danmakuComment("a", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("b", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("c", 1))).toBe(true);
+  expect(renderer.scroll.manager.len().stash).toBe(2);
+  expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["c"]);
+  // 入队时刻在交给库之后仍保留，供出库时的端到端过期判断。
+  expect(renderer.queuedAt.has("a")).toBe(true);
+  expect(renderer.queuedAt.has("c")).toBe(true);
+  expect(detachIds).toEqual([]);
+
+  // 库从 stash 取走一条后，队列头部补上。
+  renderer.scroll.manager.stash = 1;
+  renderer.pumpBacklog();
+
+  expect(renderer.backlog).toHaveLength(0);
+  expect(renderer.scroll.manager.len().stash).toBe(2);
+  expect(renderer.scroll.manager.ordinaryPushes.map((comment) => comment.id)).toEqual([
+    "a",
+    "b",
+    "c",
+  ]);
+  expect(renderer.ordinarySpeeds.has("c")).toBe(true);
+});
+
+test("队列容量为 max(4, 轨道数×2)，溢出时丢最旧且只结算一次", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  renderer.frozen = true;
+
+  for (let index = 0; index < 6; index += 1) {
+    expect(renderer.push(danmakuComment(`c${index}`, 1))).toBe(true);
+  }
+
+  expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["c2", "c3", "c4", "c5"]);
+  expect(detachIds).toEqual(["c0", "c1"]);
+  expect(renderer.live.has("c0")).toBe(false);
+  expect(renderer.live.has("c5")).toBe(true);
+});
+
+test("超龄弹幕按墙钟丢弃且只结算一次", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  renderer.frozen = true;
+  expect(renderer.push(danmakuComment("old", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("fresh", 1))).toBe(true);
+  renderer.backlog[0]!.queuedAt = performance.now() - 3_001;
+
+  renderer.pumpBacklog();
+  renderer.pumpBacklog();
+
+  expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["fresh"]);
+  expect(detachIds).toEqual(["old"]);
+  expect(renderer.live.has("old")).toBe(false);
+  expect(renderer.live.has("fresh")).toBe(true);
+});
+
+test("队列容量随轨道数变化，缩小后丢掉最旧的条目", () => {
+  const { renderer, detachIds } = makeRenderer(5);
+  renderer.maxLatencyMs = 3_000;
+  renderer.frozen = true;
+  for (let index = 0; index < 8; index += 1) {
+    expect(renderer.push(danmakuComment(`d${index}`, 1))).toBe(true);
+  }
+  expect(renderer.backlog).toHaveLength(8);
+  expect(renderer.backlogCapacity()).toBe(10);
+
+  renderer.scroll.manager.setTrackCount(2);
+  renderer.syncLanes();
+
+  expect(renderer.backlogCapacity()).toBe(4);
+  expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["d4", "d5", "d6", "d7"]);
+  expect(detachIds).toEqual(["d0", "d1", "d2", "d3"]);
+
+  renderer.scroll.manager.setTrackCount(5);
+  renderer.syncLanes();
+  expect(renderer.push(danmakuComment("d8", 1))).toBe(true);
+  expect(renderer.backlog).toHaveLength(5);
+});
+
+test("clear 与 destroy 清空应用侧队列并只结算一次", () => {
+  const cleared = makeRenderer(2);
+  cleared.renderer.maxLatencyMs = 3_000;
+  cleared.renderer.frozen = true;
+  cleared.renderer.push(danmakuComment("c1", 1));
+  cleared.renderer.push(danmakuComment("c2", 1));
+  cleared.renderer.clearActive();
+  cleared.renderer.clearActive();
+  expect(cleared.renderer.backlog).toHaveLength(0);
+  expect(cleared.renderer.queuedAt.size).toBe(0);
+  expect(cleared.detachIds).toEqual(["c1", "c2"]);
+
+  const destroyed = makeRenderer(2);
+  destroyed.renderer.maxLatencyMs = 3_000;
+  destroyed.renderer.frozen = true;
+  destroyed.renderer.push(danmakuComment("d1", 1));
+  destroyed.renderer.push(danmakuComment("d2", 1));
+  destroyed.renderer.destroy();
+  expect(destroyed.renderer.backlog).toHaveLength(0);
+  expect(destroyed.renderer.queuedAt.size).toBe(0);
+  expect(destroyed.detachIds).toEqual(["d1", "d2"]);
+});
+
+test("直播大表情的等待上限使用 maxLatencyMs", () => {
+  const { renderer } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  renderer.frozen = true;
+
+  const before = performance.now();
+  expect(renderer.push(wideComment("wide-1"))).toBe(true);
+  const pending = renderer.pendingWide.get("wide-1");
+  expect(pending).toBeDefined();
+  expect(pending!.deadline - before).toBeGreaterThanOrEqual(2_999);
+  expect(pending!.deadline - before).toBeLessThan(3_500);
+});
+
+function willRenderEvent(
+  danmaku: TestDanmaku,
+  type: "facile" | "flexible" = "facile",
+): TestWillRenderEvent {
+  return { type, prevent: false, danmaku, trackIndex: type === "facile" ? 0 : null };
+}
+
+test("出库时已超龄的普通滚动弹幕被 willRender 拦下并补位", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  expect(renderer.push(danmakuComment("expired", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("fresh", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("next", 1))).toBe(true);
+  expect(renderer.queuedAt.has("expired")).toBe(true);
+  expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["next"]);
+
+  // 库已从 stash 取出 expired，正在询问是否上屏。
+  renderer.scroll.manager.stash = 1;
+  renderer.queuedAt.set("expired", performance.now() - 3_001);
+  const event = willRenderEvent(makeDanmaku("expired", { type: "facile" }));
+
+  const result = renderer.onWillRender(event);
+
+  expect(result).toBe(event);
+  expect(result.prevent).toBe(true);
+  expect(detachIds).toEqual(["expired"]);
+  expect(renderer.ordinarySpeeds.has("expired")).toBe(false);
+  expect(renderer.queuedAt.has("expired")).toBe(false);
+  expect(renderer.backlog).toHaveLength(0);
+  expect(renderer.scroll.manager.ordinaryPushes.map((comment) => comment.id)).toEqual([
+    "expired",
+    "fresh",
+    "next",
+  ]);
+});
+
+test("未超龄的普通滚动弹幕正常放行", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  expect(renderer.push(danmakuComment("ordinary-1", 1))).toBe(true);
+  const event = willRenderEvent(makeDanmaku("ordinary-1", { type: "facile" }));
+
+  const result = renderer.onWillRender(event);
+
+  expect(result).toBe(event);
+  expect(result.prevent).toBe(false);
+  expect(detachIds).toEqual([]);
+  expect(renderer.ordinarySpeeds.has("ordinary-1")).toBe(true);
+  expect(renderer.queuedAt.has("ordinary-1")).toBe(true);
+});
+
+test("willRender 不处理固定弹幕", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  const wide = makeDanmaku("wide-1", { type: "flexible" });
+  renderer.live.add("wide-1");
+  renderer.queuedAt.set("wide-1", performance.now() - 3_001);
+
+  const result = renderer.onWillRender(willRenderEvent(wide, "flexible"));
+
+  expect(result.prevent).toBe(false);
+  expect(detachIds).toEqual([]);
+  expect(renderer.live.has("wide-1")).toBe(true);
+});
+
+test("未设置 maxLatencyMs 时 willRender 不干预点播", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  const danmaku = makeDanmaku("vod-1", { type: "facile" });
+  renderer.live.add("vod-1");
+  renderer.queuedAt.set("vod-1", performance.now() - 10_000);
+
+  const result = renderer.onWillRender(willRenderEvent(danmaku));
+
+  expect(result.prevent).toBe(false);
+  expect(detachIds).toEqual([]);
+  expect(renderer.live.has("vod-1")).toBe(true);
+});
+
+test("strict 重试再次出库时才超龄仍只结算一次", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  expect(renderer.push(danmakuComment("retry", 1))).toBe(true);
+  const danmaku = makeDanmaku("retry", { type: "facile" });
+
+  // 第一次出库未超龄：放行并 append；库随后因 strict 重试把同一实例 unshift 回 stash。
+  expect(renderer.onWillRender(willRenderEvent(danmaku)).prevent).toBe(false);
+  expect(detachIds).toEqual([]);
+
+  // 重试前 append 过一次，本文件的记录也要在拦下时回收。
+  renderer.records.set("retry", {
+    comment: danmaku.data,
+    danmaku,
+    element: {} as HTMLElement,
+    layer: "scroll",
+    lanes: [],
+    locked: false,
+  });
+  renderer.queuedAt.set("retry", performance.now() - 3_001);
+
+  expect(renderer.onWillRender(willRenderEvent(danmaku)).prevent).toBe(true);
+  expect(detachIds).toEqual(["retry"]);
+  expect(renderer.records.has("retry")).toBe(false);
+
+  // 已结算的条目 queuedAt 已清，不会再次 prevent 或重复 detach。
+  expect(renderer.onWillRender(willRenderEvent(danmaku)).prevent).toBe(false);
+  expect(detachIds).toEqual(["retry"]);
 });
