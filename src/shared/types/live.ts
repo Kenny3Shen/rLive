@@ -121,9 +121,9 @@ export type DanmakuContentSpan =
       type: "image";
       image_url: string;
       /**
-       * 大表情（Bilibili 装扮表情、Twitch 第三方表情等）：飘屏时占两条车道
-       * 并按车道数放大。普通内联表情为 `false` 或缺省——历史录制的伴生弹幕
-       * 文件没有该字段，按小表情处理。
+       * 大表情（Bilibili 装扮表情、Twitch 第三方表情等）的协议标记。飘屏渲染不再区分，
+       * 与普通内联表情同尺寸、只占一条轨道。普通内联表情为 `false` 或缺省——历史录制的
+       * 伴生弹幕文件没有该字段，按小表情处理。
        */
       large?: boolean;
     };

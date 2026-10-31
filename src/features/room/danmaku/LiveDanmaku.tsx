@@ -19,10 +19,8 @@ import {
   clampDanmuArea,
   danmakuCommentFromEvent,
   danmakuLayerAreaConfig,
-  danmakuLaneCount,
   danmuLaneHeight,
   danmakuRenderLayer,
-  isPinnedDanmakuEvent,
   updateDanmakuAggregation,
   updateDanmakuAppearance,
   type DanmakuBulletMeta,
@@ -239,7 +237,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
   const laneHeight = danmuLaneHeight(fontSize);
   const sizeReady = stageSize.width > 0 && stageSize.height > 0;
   const sizeReadyRef = useRef(sizeReady);
-  const stageHeightRef = useRef(stageSize.height);
   const areaRef = useRef(normalizedArea);
   const laneHeightRef = useRef(laneHeight);
   const configRef = useRef<RuntimeConfig>({
@@ -260,7 +257,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     areaRef.current = normalizedArea;
     laneHeightRef.current = laneHeight;
     sizeReadyRef.current = sizeReady;
-    stageHeightRef.current = stageSize.height;
     configRef.current = {
       fontSize,
       fontStroke,
@@ -286,7 +282,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     shieldMatcher,
     siteId,
     sizeReady,
-    stageSize.height,
     superChatEnabled,
   ]);
 
@@ -390,12 +385,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
         queueEvents(events);
         return;
       }
-      const scrollLaneCount = danmakuLaneCount(
-        stageHeightRef.current,
-        laneHeightRef.current,
-        areaRef.current,
-      );
-      const topLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeightRef.current, 1);
       const config = configRef.current;
       const supportsSuperChat = config.superChatEnabled && siteSupportsSuperChat(config.siteId);
       for (const event of events) {
@@ -431,7 +420,6 @@ export const LiveDanmaku = memo(function LiveDanmaku({
           fontSize: config.fontSize,
           fontStroke: config.fontStroke,
           opacity: config.opacity,
-          laneCount: isPinnedDanmakuEvent(event) ? topLaneCount : scrollLaneCount,
           aggregationKey: aggregation.key ?? undefined,
           aggregationCount: aggregation.count,
         });
@@ -616,14 +604,11 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     if (!renderer) return;
     renderer.setArea(danmakuLayerAreaConfig("scroll", normalizedArea));
     renderer.setLaneHeight(laneHeight);
-    const scrollLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeight, normalizedArea);
-    const topLaneCount = danmakuLaneCount(stageHeightRef.current, laneHeight, 1);
-    for (const { comment, layer } of recordsRef.current.values()) {
+    for (const { comment } of recordsRef.current.values()) {
       updateDanmakuAppearance(comment, {
         fontSize,
         fontStroke,
         opacity,
-        laneCount: layer === "top" ? topLaneCount : scrollLaneCount,
       });
     }
   }, [fontSize, fontStroke, laneHeight, normalizedArea, opacity]);

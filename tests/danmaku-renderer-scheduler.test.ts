@@ -1,24 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Danmaku } from "danmu";
-import {
-  DanmakuRenderer,
-  LanePool,
-  type LaneMotion,
-} from "../src/features/room/danmaku/danmakuRenderer";
+import { DanmakuRenderer, LanePool } from "../src/features/room/danmaku/danmakuRenderer";
 import type { DanmakuComment } from "../src/features/room/danmaku/danmakuTypes";
-
-type Reservation = {
-  layer: "scroll" | "fixed";
-  lanes: number[];
-  locked: boolean;
-  deadline?: number;
-};
-
-type PendingWide = {
-  comment: DanmakuComment;
-  reservation: Reservation | null;
-  deadline: number;
-};
 
 type TestDanmaku = Danmaku<DanmakuComment> & {
   data: DanmakuComment;
@@ -27,13 +10,10 @@ type TestDanmaku = Danmaku<DanmakuComment> & {
   moving: boolean;
   rate: number;
   position: { x: number; y: number };
-  setLeft(left: number): void;
-  setY(y: number): void;
-  _getMoveDistance(): number;
-  _getMovePercent(): number;
+  destroy(): Promise<void>;
+  setStyle(key: string, value: string): void;
   getWidth(): number;
   getHeight(): number;
-  _getSpeed(): number;
 };
 
 type TestRecord = {
@@ -41,25 +21,16 @@ type TestRecord = {
   danmaku: TestDanmaku;
   element: HTMLElement;
   layer: "scroll" | "fixed";
-  lanes: number[];
-  locked: boolean;
+  lane: number | null;
 };
 
-type FakeTrack = {
-  list: TestDanmaku[];
-  isLock: boolean;
-  each(fn: (danmaku: TestDanmaku) => unknown): void;
-  lock(): void;
-  unlock(): void;
-  clear(): void;
-};
+type Reservation = { lane: number };
 
 type FakeManager = {
   options: { speed: number; rate: number; gap: number };
   container: { width: number; height: number };
   readonly trackCount: number;
   setTrackCount(count: number): void;
-  getTrack(index: number): FakeTrack;
   pushFlexibleDanmaku(comment: DanmakuComment, options: unknown): boolean;
   each(fn: (danmaku: TestDanmaku) => unknown): void;
   setRate(rate: number): void;
@@ -78,68 +49,53 @@ type FakeManager = {
   starting: TestDanmaku[];
 };
 
+type TestWillRenderEvent = {
+  type: "facile" | "flexible";
+  prevent: boolean;
+  danmaku: TestDanmaku;
+  trackIndex: number | null;
+};
+
 type TestRenderer = {
   container: { dataset: Record<string, string> };
   options: { onDetach?: (id: string) => void };
-  scroll: { manager: FakeManager; lanes: LanePool };
-  fixed: { manager: FakeManager; lanes: LanePool };
-  media?: undefined;
-  observer?: undefined;
+  scroll: { manager: FakeManager };
+  fixed: { manager: FakeManager };
+  fixedLanes: LanePool;
   records: Map<string, TestRecord>;
   reservations: Map<string, Reservation>;
-  pendingWide: Map<string, PendingWide>;
-  ordinarySpeeds: Map<string, { speed: number }>;
-  scrollLocked: Set<number>;
-  live: Set<string>;
   backlog: Array<{ comment: DanmakuComment; queuedAt: number }>;
   queuedAt: Map<string, number>;
   pumping: boolean;
-  maxLatencyMs: number;
+  live: Set<string>;
   timeline: DanmakuComment[];
   timelineIds: Set<string>;
   cursor: number;
   speed: number;
   area: number;
   laneHeight: number;
-  lastMediaTime: number;
+  maxLatencyMs: number;
   frozen: boolean;
   frame: number;
-  wideTimer: number;
-  runWideScheduler: () => void;
-  onResize: () => void;
+  backlogTimer: number;
   renderQueued: boolean;
   destroyed: boolean;
-  expirePendingWide(): void;
-  expireStartingWide(): void;
-  advancePendingWide(): void;
-  recomputeScrollLocks(): void;
-  scrollOccupants(start: number, span: number, selfId: string): LaneMotion[];
-  tryLaunchWide(pending: PendingWide, span: number): void;
-  ordinaryEntrySpeed(): number;
-  ensureWideScheduler(): void;
-  stopWideScheduler(): void;
-  unlockScrollTracks(): void;
-  clearActive(): void;
-  clear(): void;
-  destroy(): void;
-  syncLanes(): void;
-  pushFixed(comment: DanmakuComment, span: number): boolean;
-  launchWide(comment: DanmakuComment, reservation: Reservation): void;
-  coveredScrollLanes(danmaku: TestDanmaku): number[];
-  onDestroyed(danmaku: TestDanmaku): void;
   push(comment: DanmakuComment): boolean;
+  pushFixed(comment: DanmakuComment): boolean;
   pumpBacklog(): void;
   trimBacklog(): void;
   cancelBacklog(): void;
   backlogCapacity(): number;
   onWillRender(event: TestWillRenderEvent): TestWillRenderEvent;
-};
-
-type TestWillRenderEvent = {
-  type: "facile" | "flexible";
-  prevent: boolean;
-  danmaku: TestDanmaku;
-  trackIndex: number | null;
+  onDestroyed(danmaku: TestDanmaku): void;
+  ensureBacklogTimer(): void;
+  stopBacklogTimer(): void;
+  runBacklogTimer(): void;
+  clearActive(): void;
+  clear(): void;
+  destroy(): void;
+  syncLanes(): void;
+  resize(): void;
 };
 
 type FakeTimer = { callback: () => void; delay: number };
@@ -172,71 +128,38 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, "window");
 });
 
-function danmakuComment(id: string, lanes: number): DanmakuComment {
+function danmakuComment(id: string, text = id): DanmakuComment {
   return {
     id,
-    text: id,
+    text,
     mode: "scroll",
-    lanes,
     render: () => {
       throw new Error("调度测试不创建 DOM");
     },
   };
 }
 
-function wideComment(id: string): DanmakuComment {
-  return danmakuComment(id, 2);
-}
-
-function fixedComment(id: string, mode: DanmakuComment["mode"] = "top", lanes = 1): DanmakuComment {
+function fixedComment(id: string, mode: DanmakuComment["mode"] = "top"): DanmakuComment {
   return {
     id,
     text: id,
     mode,
-    lanes,
     render: () => {
       throw new Error("车道测试不创建 DOM");
     },
   };
 }
 
-function makeTrack(): FakeTrack {
-  return {
-    list: [],
-    isLock: false,
-    each(fn) {
-      for (const danmaku of Array.from(this.list)) fn(danmaku);
-    },
-    lock() {
-      this.isLock = true;
-    },
-    unlock() {
-      this.isLock = false;
-    },
-    clear() {
-      this.list.length = 0;
-    },
-  };
-}
-
-function makeLanePool(): LanePool {
-  return new LanePool();
-}
-
 function makeManager(trackCount: number): FakeManager {
-  const tracks = Array.from({ length: trackCount }, makeTrack);
+  let count = trackCount;
   const manager: FakeManager = {
     options: { speed: 0.1, rate: 1, gap: 0 },
     container: { width: 1_000, height: 200 },
     get trackCount() {
-      return tracks.length;
+      return count;
     },
-    setTrackCount(count) {
-      while (tracks.length > count) tracks.pop();
-      while (tracks.length < count) tracks.push(makeTrack());
-    },
-    getTrack(index) {
-      return tracks[index]!;
+    setTrackCount(next) {
+      count = next;
     },
     pushFlexibleDanmaku(comment, options) {
       manager.pushes.push({ comment, options });
@@ -254,7 +177,7 @@ function makeManager(trackCount: number): FakeManager {
       return true;
     },
     clear() {
-      for (const track of tracks) track.clear();
+      manager.starting.length = 0;
     },
     stopPlaying() {},
     unmount() {},
@@ -279,13 +202,10 @@ function makeDanmaku(
   id: string,
   patch: {
     type?: "facile" | "flexible";
-    lanes?: number;
     left?: number;
     y?: number;
     width?: number;
     height?: number;
-    speed?: number;
-    rate?: number;
     moving?: boolean;
     paused?: boolean;
   } = {},
@@ -295,16 +215,17 @@ function makeDanmaku(
     y: patch.y ?? 0,
     width: patch.width ?? 200,
     height: patch.height ?? 40,
-    speed: patch.speed ?? 0.1,
   };
   const type = patch.type ?? "flexible";
+  const styleCalls: Array<[string, string]> = [];
   const danmaku = {
-    data: danmakuComment(id, patch.lanes ?? (type === "facile" ? 1 : 2)),
+    data: danmakuComment(id),
     type,
     paused: patch.paused ?? false,
     moving: patch.moving ?? true,
-    rate: patch.rate ?? 1,
+    rate: 1,
     position: { x: state.left, y: state.y },
+    destroy: async () => {},
     setLeft(left: number) {
       state.left = left;
       this.position.x = left;
@@ -313,11 +234,12 @@ function makeDanmaku(
       state.y = y;
       this.position.y = y;
     },
-    _getMoveDistance: () => (type === "facile" ? 1_000 - state.left : state.left),
-    _getMovePercent: () => state.left / 1_000,
+    setStyle(key: string, value: string) {
+      styleCalls.push([key, value]);
+    },
+    styleCalls,
     getWidth: () => state.width,
     getHeight: () => state.height,
-    _getSpeed: () => state.speed,
   };
   return danmaku as unknown as TestDanmaku;
 }
@@ -332,609 +254,84 @@ function makeRenderer(trackCount = 4): {
   Object.assign(renderer, {
     container: { dataset: {} },
     options: { onDetach: (id: string) => detachIds.push(id) },
-    scroll: { manager: makeManager(trackCount), lanes: makeLanePool() },
-    fixed: { manager: makeManager(trackCount), lanes: makeLanePool() },
+    scroll: { manager: makeManager(trackCount) },
+    fixed: { manager: makeManager(trackCount) },
+    fixedLanes: new LanePool(),
     records: new Map<string, TestRecord>(),
     reservations: new Map<string, Reservation>(),
-    pendingWide: new Map<string, PendingWide>(),
-    ordinarySpeeds: new Map<string, { speed: number }>(),
-    scrollLocked: new Set<number>(),
-    live: new Set<string>(),
     backlog: [],
     queuedAt: new Map<string, number>(),
     pumping: false,
-    maxLatencyMs: 0,
+    live: new Set<string>(),
     timeline: [],
     timelineIds: new Set<string>(),
     cursor: 0,
     speed: 100,
     area: 1,
     laneHeight: 20,
-    lastMediaTime: 0,
+    maxLatencyMs: 0,
     frozen: false,
     frame: 0,
-    wideTimer: 0,
+    backlogTimer: 0,
     renderQueued: true,
     destroyed: false,
   });
   return { renderer, detachIds };
 }
 
-function addRecord(renderer: TestRenderer, danmaku: TestDanmaku, lanes = [0, 1]): void {
+function addFixedRecord(renderer: TestRenderer, danmaku: TestDanmaku, lane: number): void {
   renderer.records.set(danmaku.data.id, {
     comment: danmaku.data,
     danmaku,
     element: {} as HTMLElement,
-    layer: "scroll",
-    lanes,
-    locked: false,
+    layer: "fixed",
+    lane,
   });
 }
 
-function addPendingWide(
-  renderer: TestRenderer,
-  id: string,
-  deadline = performance.now() + 5_000,
-): PendingWide {
-  const pending: PendingWide = {
-    comment: wideComment(id),
-    reservation: null,
-    deadline,
-  };
-  renderer.pendingWide.set(id, pending);
-  renderer.live.add(id);
-  return pending;
+function willRenderEvent(
+  danmaku: TestDanmaku,
+  type: "facile" | "flexible" = "facile",
+): TestWillRenderEvent {
+  return { type, prevent: false, danmaku, trackIndex: type === "facile" ? 0 : null };
 }
 
-function addOrdinary(renderer: TestRenderer, danmaku: TestDanmaku, lane = 0): void {
-  renderer.scroll.manager.getTrack(lane).list.push(danmaku);
-  renderer.records.set(danmaku.data.id, {
-    comment: danmaku.data,
-    danmaku,
-    element: {} as HTMLElement,
-    layer: "scroll",
-    lanes: [],
-    locked: false,
-  });
-}
+test("LanePool 每条固定弹幕只分配一条车道", () => {
+  const lanes = new LanePool();
+  lanes.reset(2);
+  expect(lanes.allocate()).toBe(0);
+  expect(lanes.allocate()).toBe(1);
+  expect(lanes.allocate()).toBeNull();
+  lanes.release(0);
+  expect(lanes.allocate()).toBe(0);
+  lanes.reset(0);
+  expect(lanes.allocate()).toBeNull();
+});
 
-test("单一调度器只注册一条 100ms 定时器并在停止时清理", () => {
+test("应用侧队列非空时只排一条 100ms 定时器并在清空后停止", () => {
   const { renderer } = makeRenderer();
-  addPendingWide(renderer, "wide-1");
 
-  renderer.ensureWideScheduler();
+  renderer.ensureBacklogTimer();
+  expect(timers.size).toBe(0);
+
+  renderer.live.add("a");
+  renderer.backlog.push({ comment: danmakuComment("a"), queuedAt: performance.now() });
+  renderer.ensureBacklogTimer();
   expect(timers.size).toBe(1);
   expect([...timers.values()][0]).toMatchObject({ delay: 100 });
-  const timerId = renderer.wideTimer;
-  expect(timerId).not.toBe(0);
-
-  renderer.ensureWideScheduler();
+  renderer.ensureBacklogTimer();
   expect(timers.size).toBe(1);
 
-  renderer.stopWideScheduler();
-  expect(renderer.wideTimer).toBe(0);
+  renderer.cancelBacklog();
+  renderer.stopBacklogTimer();
+  expect(renderer.backlogTimer).toBe(0);
   expect(timers.size).toBe(0);
 });
 
-test("真实 100ms 回调先回收到期项，再预约并重排下一次检查", () => {
-  const { renderer, detachIds } = makeRenderer(2);
-  const blocker = makeDanmaku("ordinary-1", {
-    type: "facile",
-    left: 900,
-    width: 200,
-    speed: 0.1,
-  });
-  addOrdinary(renderer, blocker);
-  addPendingWide(renderer, "expired", performance.now() - 1);
-  addPendingWide(renderer, "pending");
-  renderer.ensureWideScheduler();
-  const callback = timers.get(renderer.wideTimer)?.callback;
-  expect(callback).toBeFunction();
-  callback!();
-
-  expect(renderer.pendingWide.has("expired")).toBe(false);
-  expect(renderer.pendingWide.has("pending")).toBe(true);
-  expect(renderer.pendingWide.size).toBe(1);
-  expect(renderer.pendingWide.get("pending")?.reservation?.lanes).toEqual([0, 1]);
-  expect(detachIds).toEqual(["expired"]);
-  expect(renderer.scroll.manager.pushes).toHaveLength(0);
-  expect(renderer.scrollLocked).toEqual(new Set([0, 1]));
-  expect(renderer.wideTimer).not.toBe(0);
-  expect(timers.has(renderer.wideTimer)).toBe(true);
-});
-
-test("公开 setSpeed 更新普通弹幕速度并同步滚动锁", () => {
-  const { renderer } = makeRenderer();
-  const image = makeDanmaku("wide-1", { left: 500, width: 200, speed: 0.1 });
-  addRecord(renderer, image);
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set());
-
-  renderer.setSpeed(200);
-  expect(renderer.scroll.manager.options.speed).toBe(0.2);
-  expect(renderer.scrollLocked).toEqual(new Set([0, 1]));
-});
-
-test("图片实例倍速参与相对速度准入", () => {
-  const { renderer } = makeRenderer();
-  const image = makeDanmaku("wide-1", { left: 500, width: 200, speed: 0.1, rate: 0.5 });
-  addRecord(renderer, image);
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set([0, 1]));
-
-  image.rate = 1;
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set());
-});
-
-test("前图完全进屏后，新图片可在同一双轨安全进入", () => {
-  const { renderer } = makeRenderer();
-  const image = makeDanmaku("wide-1", { left: 800, width: 200, speed: 0.1 });
-  addRecord(renderer, image);
-  addPendingWide(renderer, "wide-2");
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set());
-  renderer.advancePendingWide();
-
-  expect(renderer.pendingWide.has("wide-2")).toBe(false);
-  expect(renderer.reservations.get("wide-2")?.lanes).toEqual([0, 1]);
-  expect(renderer.scroll.manager.pushes).toHaveLength(1);
-  expect(renderer.scroll.manager.pushes[0]?.comment.id).toBe("wide-2");
-});
-
-test("已有图片尾部完全进屏后解锁，快后车进入时继续锁两轨", () => {
-  const { renderer } = makeRenderer();
-  const image = makeDanmaku("wide-1", { left: 800, width: 200, speed: 0.1 });
-  addRecord(renderer, image);
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set());
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(false);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(false);
-
-  renderer.scroll.manager.options.speed = 0.2;
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set([0, 1]));
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(true);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(true);
-
-  image.setLeft(300);
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set());
-});
-
-test("单轨 facile 扩为双轨后按实际几何锁住相邻轨", () => {
-  const { renderer } = makeRenderer();
-  const expanded = makeDanmaku("expanded", {
-    type: "facile",
-    lanes: 2,
-    left: 900,
-    width: 200,
-    height: 40,
-    speed: 0.1,
-  });
-  addRecord(renderer, expanded, [0]);
-  renderer.scroll.manager.getTrack(0).list.push(expanded);
-
-  renderer.recomputeScrollLocks();
-
-  expect(renderer.records.get("expanded")?.lanes).toEqual([0, 1]);
-  expect(renderer.scrollLocked).toEqual(new Set([0, 1]));
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(true);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(true);
-});
-
-test("双轨 facile 扩轨后同原生轨与相邻轨都不能再进图", () => {
-  const { renderer } = makeRenderer(4);
-  const expanded = makeDanmaku("expanded", {
-    type: "facile",
-    lanes: 2,
-    left: 900,
-    width: 200,
-    height: 40,
-    speed: 0.1,
-  });
-  addRecord(renderer, expanded, [0]);
-  renderer.scroll.manager.getTrack(0).list.push(expanded);
-  renderer.recomputeScrollLocks();
-  addPendingWide(renderer, "wide-2");
-
-  renderer.advancePendingWide();
-
-  expect(renderer.pendingWide.has("wide-2")).toBe(false);
-  expect(renderer.reservations.get("wide-2")?.lanes).toEqual([2, 3]);
-  expect(renderer.scroll.manager.pushes).toHaveLength(1);
-});
-
-test("双轨中一条仍有普通弹幕时先预约但不上屏，清空后放行", () => {
-  const { renderer } = makeRenderer(2);
-  const blocker = makeDanmaku("ordinary-1", {
-    type: "facile",
-    left: 900,
-    width: 200,
-    speed: 0.1,
-  });
-  addOrdinary(renderer, blocker);
-  addPendingWide(renderer, "wide-1");
-
-  renderer.advancePendingWide();
-  expect(renderer.pendingWide.get("wide-1")?.reservation?.lanes).toEqual([0, 1]);
-  expect(renderer.scroll.manager.pushes).toHaveLength(0);
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set([0, 1]));
-
-  renderer.scroll.manager.getTrack(0).clear();
-  renderer.advancePendingWide();
-  expect(renderer.pendingWide.has("wide-1")).toBe(false);
-  expect(renderer.scroll.manager.pushes).toHaveLength(1);
-});
-
-test("两条连续轨道都有一轨阻塞时不会选择被占用的起点", () => {
-  const { renderer } = makeRenderer(3);
-  const blocker = makeDanmaku("ordinary-1", {
-    type: "facile",
-    left: 900,
-    width: 200,
-    speed: 0.1,
-  });
-  addOrdinary(renderer, blocker, 1);
-  addPendingWide(renderer, "wide-1");
-
-  renderer.advancePendingWide();
-  expect(renderer.pendingWide.get("wide-1")?.reservation?.lanes).toEqual([0, 1]);
-  expect(renderer.scroll.manager.pushes).toHaveLength(0);
-});
-
-test("已 launch 但尚未 append 的 reservation 仍锁住对应轨道", () => {
-  const { renderer } = makeRenderer();
-  renderer.reservations.set("wide-1", { layer: "scroll", lanes: [1, 2], locked: false });
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set([1, 2]));
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(true);
-  expect(renderer.scroll.manager.getTrack(2).isLock).toBe(true);
-});
-
-test("普通入库速度快照抬高图片准入速度上界", () => {
-  const { renderer } = makeRenderer();
-  renderer.ordinarySpeeds.set("slow", { speed: 0.1 });
-  renderer.ordinarySpeeds.set("fast", { speed: 0.5 });
-  expect(renderer.ordinaryEntrySpeed()).toBe(0.5);
-
-  // 已上屏图片作为前车；后车速度上界由 ordinarySpeeds 提供，而不是 manager 默认值。
-  const image = makeDanmaku("wide-1", { left: 500, width: 200, speed: 0.1 });
-  addRecord(renderer, image);
-  renderer.recomputeScrollLocks();
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(true);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(true);
-
-  // 快照从 0.5 降到 0.1 后，前车右缘 700px 已过同速门限，解除锁。
-  renderer.ordinarySpeeds.delete("fast");
-  renderer.recomputeScrollLocks();
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(false);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(false);
-});
-
-test("队首 pending 已预约时，后续图片不越过 FIFO 抢占其他双轨", () => {
-  const { renderer } = makeRenderer();
-  const first = addPendingWide(renderer, "wide-1");
-  first.reservation = { layer: "scroll", lanes: [0, 1], locked: false };
-  const second = addPendingWide(renderer, "wide-2");
-
-  renderer.tryLaunchWide(second, 2);
-  expect(second.reservation).toBeNull();
-  expect(renderer.scroll.manager.pushes).toHaveLength(0);
-
-  renderer.launchWide(first.comment, first.reservation);
-  renderer.advancePendingWide();
-  expect(renderer.pendingWide.has("wide-2")).toBe(false);
-  expect(renderer.reservations.get("wide-2")?.lanes).toEqual([2, 3]);
-});
-
-test("启动预约过期时销毁未起步图片并只结算一次", () => {
-  const { renderer, detachIds } = makeRenderer();
-  const starting = makeDanmaku("starting", { moving: false });
-  let destroys = 0;
-  starting.destroy = async () => {
-    destroys += 1;
-    renderer.onDestroyed(starting);
-  };
-  renderer.scroll.manager.starting.push(starting);
-  renderer.reservations.set("starting", {
-    layer: "scroll",
-    lanes: [0, 1],
-    locked: false,
-    deadline: performance.now() - 1,
-  });
-  renderer.live.add("starting");
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set([0, 1]));
-
-  renderer.expireStartingWide();
-
-  expect(destroys).toBe(1);
-  expect(detachIds).toEqual(["starting"]);
-  expect(renderer.reservations.has("starting")).toBe(false);
-  expect(renderer.scrollLocked).toEqual(new Set());
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(false);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(false);
-});
-
-test("启动预约对应的图片已 moving 时只移除预约，不销毁实例", () => {
-  const { renderer, detachIds } = makeRenderer();
-  const moving = makeDanmaku("moving", { moving: true, left: 800, width: 200, speed: 0.1 });
-  let destroys = 0;
-  moving.destroy = async () => {
-    destroys += 1;
-  };
-  addRecord(renderer, moving, [0, 1]);
-  renderer.reservations.set("moving", {
-    layer: "scroll",
-    lanes: [0, 1],
-    locked: false,
-    deadline: performance.now() - 1,
-  });
-  renderer.live.add("moving");
-
-  renderer.expireStartingWide();
-  expect(renderer.reservations.has("moving")).toBe(false);
-  expect(destroys).toBe(0);
-  expect(detachIds).toEqual([]);
-  expect(renderer.live.has("moving")).toBe(true);
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set());
-});
-
-test("冻结期间 deadline 到期仍只 detach 一次且不投放", () => {
-  const { renderer, detachIds } = makeRenderer();
-  renderer.frozen = true;
-  addPendingWide(renderer, "wide-1", performance.now() - 1);
-
-  renderer.expirePendingWide();
-  expect(renderer.pendingWide.has("wide-1")).toBe(false);
-  expect(renderer.live.has("wide-1")).toBe(false);
-  expect(detachIds).toEqual(["wide-1"]);
-  expect(renderer.scroll.manager.pushes).toHaveLength(0);
-
-  renderer.expirePendingWide();
-  expect(detachIds).toEqual(["wide-1"]);
-});
-
-test("clear 清理滚动锁与 pending 并只结算一次", () => {
-  const { renderer, detachIds } = makeRenderer();
-  renderer.scrollLocked.add(0);
-  renderer.scrollLocked.add(1);
-  renderer.scroll.manager.getTrack(0).lock();
-  renderer.scroll.manager.getTrack(1).lock();
-  addPendingWide(renderer, "wide-1");
-
-  renderer.clearActive();
-  expect(renderer.scrollLocked).toEqual(new Set());
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(false);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(false);
-  expect(renderer.pendingWide.size).toBe(0);
-  expect(detachIds).toEqual(["wide-1"]);
-});
-
-test("公开 clear 同样释放滚动锁并清空 pending", () => {
-  const { renderer, detachIds } = makeRenderer();
-  renderer.scrollLocked.add(0);
-  renderer.scrollLocked.add(1);
-  renderer.scroll.manager.getTrack(0).lock();
-  renderer.scroll.manager.getTrack(1).lock();
-  addPendingWide(renderer, "wide-1");
-
-  renderer.clear();
-  expect(renderer.scrollLocked).toEqual(new Set());
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(false);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(false);
-  expect(renderer.pendingWide.size).toBe(0);
-  expect(detachIds).toEqual(["wide-1"]);
-});
-
-test("destroy 清理滚动锁、定时器与 pending", () => {
-  const { renderer, detachIds } = makeRenderer();
-  renderer.scrollLocked.add(0);
-  renderer.scrollLocked.add(1);
-  renderer.scroll.manager.getTrack(0).lock();
-  renderer.scroll.manager.getTrack(1).lock();
-  addPendingWide(renderer, "wide-1");
-  renderer.ensureWideScheduler();
-
-  renderer.destroy();
-  expect(renderer.destroyed).toBe(true);
-  expect(renderer.scrollLocked).toEqual(new Set());
-  expect(renderer.scroll.manager.getTrack(0).isLock).toBe(false);
-  expect(renderer.scroll.manager.getTrack(1).isLock).toBe(false);
-  expect(renderer.wideTimer).toBe(0);
-  expect(timers.size).toBe(0);
-  expect(renderer.pendingWide.size).toBe(0);
-  expect(detachIds).toEqual(["wide-1"]);
-});
-
-test("没有待投图片且轨道已解锁时不再排队下一次检查", () => {
-  const { renderer } = makeRenderer();
-  const image = makeDanmaku("wide-1", { left: 800, width: 200, speed: 0.1 });
-  addRecord(renderer, image);
-
-  renderer.recomputeScrollLocks();
-  expect(renderer.scrollLocked).toEqual(new Set());
-  renderer.ensureWideScheduler();
-
-  expect(renderer.wideTimer).toBe(0);
-  expect(timers.size).toBe(0);
-});
-
-test("没有图片时重算轨道锁不读取在屏普通弹幕尺寸", () => {
-  const { renderer } = makeRenderer();
-  const ordinary = makeDanmaku("ordinary-1", { type: "facile" });
-  let widthReads = 0;
-  ordinary.getWidth = () => {
-    widthReads += 1;
-    return 200;
-  };
-  addOrdinary(renderer, ordinary);
-
-  renderer.recomputeScrollLocks();
-
-  expect(widthReads).toBe(0);
-  expect(renderer.scrollLocked).toEqual(new Set());
-});
-
-test("resize 按当前 y 与元素高度重新映射图片触及的轨道", () => {
-  const { renderer } = makeRenderer();
-  const image = makeDanmaku("wide-1", { y: 40, height: 40 });
-  expect(renderer.coveredScrollLanes(image)).toEqual([2, 3]);
-
-  addRecord(renderer, image, [0, 1]);
-  renderer.syncLanes();
-  expect(renderer.records.get("wide-1")?.lanes).toEqual([2, 3]);
-});
-
-test("resize 重建轨道时保留普通弹幕入库速度快照", () => {
-  const { renderer } = makeRenderer();
-  renderer.ordinarySpeeds.set("ordinary-1", { speed: 0.5 });
-
-  renderer.resize();
-
-  expect(renderer.ordinarySpeeds.get("ordinary-1")).toEqual({ speed: 0.5 });
-  expect(renderer.ordinaryEntrySpeed()).toBe(0.5);
-});
-
-test("固定弹幕 push 与 append 之间 resize 后不会把同一车道再分出去", () => {
-  const { renderer } = makeRenderer(4);
-  renderer.syncLanes();
-
-  expect(renderer.pushFixed(fixedComment("fixed-1"), 1)).toBe(true);
-  expect(renderer.reservations.get("fixed-1")?.lanes).toEqual([0]);
-
-  // 第一条尚未 append（不在 records 里），此时容器尺寸变化重建占用表。
-  renderer.syncLanes();
-
-  expect(renderer.pushFixed(fixedComment("fixed-2"), 1)).toBe(true);
-  expect(renderer.reservations.get("fixed-1")?.lanes).toEqual([0]);
-  expect(renderer.reservations.get("fixed-2")?.lanes).toEqual([1]);
-});
-
-test("缩小车道数时在途固定预约越界则撤销并只结算一次", () => {
-  const { renderer, detachIds } = makeRenderer(4);
-  renderer.syncLanes();
-  const destroys = new Map<string, number>();
-  for (let index = 1; index <= 4; index += 1) {
-    const id = `fixed-${index}`;
-    expect(renderer.pushFixed(fixedComment(id), 1)).toBe(true);
-    expect(renderer.reservations.get(id)?.lanes).toEqual([index - 1]);
-    const starting = makeDanmaku(id, { type: "flexible", moving: false });
-    starting.destroy = async () => {
-      destroys.set(id, (destroys.get(id) ?? 0) + 1);
-      renderer.onDestroyed(starting);
-    };
-    renderer.fixed.manager.starting.push(starting);
-  }
-
-  renderer.fixed.manager.setTrackCount(2);
-  renderer.syncLanes();
-
-  expect(renderer.reservations.get("fixed-1")?.lanes).toEqual([0]);
-  expect(renderer.reservations.get("fixed-2")?.lanes).toEqual([1]);
-  expect(renderer.reservations.has("fixed-3")).toBe(false);
-  expect(renderer.reservations.has("fixed-4")).toBe(false);
-  expect(destroys.get("fixed-1")).toBeUndefined();
-  expect(destroys.get("fixed-2")).toBeUndefined();
-  expect(destroys.get("fixed-3")).toBe(1);
-  expect(destroys.get("fixed-4")).toBe(1);
-  expect(renderer.live.has("fixed-3")).toBe(false);
-  expect(renderer.live.has("fixed-4")).toBe(false);
-  expect(detachIds.sort()).toEqual(["fixed-3", "fixed-4"]);
-});
-
-test("resize 重分配的固定预约在 append 时按新车道定位", () => {
-  const { renderer, detachIds } = makeRenderer(4);
-  renderer.syncLanes();
-
-  // 两条都还在等着 append：宽弹幕占三车道，后一条预约到第 3 车道。
-  expect(renderer.pushFixed(fixedComment("fixed-wide", "top", 3), 3)).toBe(true);
-  expect(renderer.pushFixed(fixedComment("fixed-narrow"), 1)).toBe(true);
-  expect(renderer.reservations.get("fixed-wide")?.lanes).toEqual([0, 1, 2]);
-  expect(renderer.reservations.get("fixed-narrow")?.lanes).toEqual([3]);
-  const wide = makeDanmaku("fixed-wide", { type: "flexible", moving: false });
-  wide.destroy = async () => renderer.onDestroyed(wide);
-  renderer.fixed.manager.starting.push(wide);
-
-  // 缩到两车道：宽预约放不下被撤销，窄预约回填到第 0 车道。
-  renderer.fixed.manager.setTrackCount(2);
-  renderer.syncLanes();
-  expect(renderer.reservations.get("fixed-narrow")?.lanes).toEqual([0]);
-  expect(detachIds).toEqual(["fixed-wide"]);
-
-  const pushed = renderer.fixed.manager.pushes.at(-1)!;
-  const options = pushed.options as {
-    position(danmaku: TestDanmaku, container: unknown): { x: number; y: number };
-  };
-  expect(options.position(makeDanmaku("fixed-narrow"), {})).toEqual({ x: 400, y: 0 });
-});
-
-test("滚动大表情 append 时按预约的当前车道定位", () => {
-  const { renderer } = makeRenderer(4);
-  const comment = wideComment("wide-1");
-  const reservation = { layer: "scroll" as const, lanes: [2, 3], locked: false };
-  renderer.live.add("wide-1");
-  renderer.launchWide(comment, reservation);
-
-  // 模拟 resize 或改字号后预约车道被改写：position 回调在 append 时才执行，必须读当前值。
-  reservation.lanes = [0, 1];
-
-  const pushed = renderer.scroll.manager.pushes.at(-1)!;
-  const options = pushed.options as {
-    position(danmaku: TestDanmaku, container: { width: number }): { x: number; y: number };
-  };
-  expect(options.position(makeDanmaku("wide-1"), { width: 1_000 })).toEqual({ x: 1_000, y: 0 });
-});
-
-test("缩小车道数时在途滚动大表情预约越界则销毁并只结算一次", () => {
-  const { renderer, detachIds } = makeRenderer(4);
-  const destroys = new Map<string, number>();
-  const launched: Array<[string, number[]]> = [
-    ["wide-low", [0, 1]],
-    ["wide-high", [2, 3]],
-  ];
-  for (const [id, lanes] of launched) {
-    renderer.live.add(id);
-    renderer.launchWide(wideComment(id), { layer: "scroll", lanes: [...lanes], locked: false });
-    expect(renderer.reservations.get(id)?.lanes).toEqual(lanes);
-    const starting = makeDanmaku(id, { type: "flexible", moving: false });
-    starting.destroy = async () => {
-      destroys.set(id, (destroys.get(id) ?? 0) + 1);
-      renderer.onDestroyed(starting);
-    };
-    renderer.scroll.manager.starting.push(starting);
-  }
-
-  renderer.scroll.manager.setTrackCount(2);
-  renderer.syncLanes();
-
-  // 新表仍放得下的预约保留原车道；越界的预约销毁实例并从 live 结算。
-  expect(renderer.reservations.get("wide-low")?.lanes).toEqual([0, 1]);
-  expect(renderer.reservations.has("wide-high")).toBe(false);
-  expect(destroys.get("wide-low")).toBeUndefined();
-  expect(destroys.get("wide-high")).toBe(1);
-  expect(detachIds).toEqual(["wide-high"]);
-
-  // 再同步一次不能重复销毁或重复结算。
-  renderer.syncLanes();
-  expect(destroys.get("wide-high")).toBe(1);
-  expect(detachIds).toEqual(["wide-high"]);
-});
-
-test("未设置 maxLatencyMs 时普通滚动弹幕直接交给库，行为与点播一致", () => {
+test("未设置 maxLatencyMs 时滚动弹幕直接交给库，行为与点播一致", () => {
   const { renderer, detachIds } = makeRenderer(4);
 
-  expect(renderer.push(danmakuComment("ordinary-1", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("ordinary-1"))).toBe(true);
 
   expect(renderer.backlog).toHaveLength(0);
   expect(renderer.scroll.manager.ordinaryPushes.map((comment) => comment.id)).toEqual([
@@ -942,7 +339,6 @@ test("未设置 maxLatencyMs 时普通滚动弹幕直接交给库，行为与点
   ]);
   expect(renderer.scroll.manager.len().stash).toBe(1);
   expect(renderer.live.has("ordinary-1")).toBe(true);
-  expect(renderer.ordinarySpeeds.get("ordinary-1")).toEqual({ speed: 0.1 });
   expect(renderer.queuedAt.size).toBe(0);
   expect(detachIds).toEqual([]);
 });
@@ -951,9 +347,9 @@ test("应用侧队列在库 stash 达到轨道数时暂停，库取走后继续�
   const { renderer, detachIds } = makeRenderer(2);
   renderer.maxLatencyMs = 3_000;
 
-  expect(renderer.push(danmakuComment("a", 1))).toBe(true);
-  expect(renderer.push(danmakuComment("b", 1))).toBe(true);
-  expect(renderer.push(danmakuComment("c", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("a"))).toBe(true);
+  expect(renderer.push(danmakuComment("b"))).toBe(true);
+  expect(renderer.push(danmakuComment("c"))).toBe(true);
   expect(renderer.scroll.manager.len().stash).toBe(2);
   expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["c"]);
   // 入队时刻在交给库之后仍保留，供出库时的端到端过期判断。
@@ -961,7 +357,6 @@ test("应用侧队列在库 stash 达到轨道数时暂停，库取走后继续�
   expect(renderer.queuedAt.has("c")).toBe(true);
   expect(detachIds).toEqual([]);
 
-  // 库从 stash 取走一条后，队列头部补上。
   renderer.scroll.manager.stash = 1;
   renderer.pumpBacklog();
 
@@ -972,7 +367,6 @@ test("应用侧队列在库 stash 达到轨道数时暂停，库取走后继续�
     "b",
     "c",
   ]);
-  expect(renderer.ordinarySpeeds.has("c")).toBe(true);
 });
 
 test("队列容量为 max(4, 轨道数×2)，溢出时丢最旧且只结算一次", () => {
@@ -981,7 +375,7 @@ test("队列容量为 max(4, 轨道数×2)，溢出时丢最旧且只结算一�
   renderer.frozen = true;
 
   for (let index = 0; index < 6; index += 1) {
-    expect(renderer.push(danmakuComment(`c${index}`, 1))).toBe(true);
+    expect(renderer.push(danmakuComment(`c${index}`))).toBe(true);
   }
 
   expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["c2", "c3", "c4", "c5"]);
@@ -994,8 +388,8 @@ test("超龄弹幕按墙钟丢弃且只结算一次", () => {
   const { renderer, detachIds } = makeRenderer(2);
   renderer.maxLatencyMs = 3_000;
   renderer.frozen = true;
-  expect(renderer.push(danmakuComment("old", 1))).toBe(true);
-  expect(renderer.push(danmakuComment("fresh", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("old"))).toBe(true);
+  expect(renderer.push(danmakuComment("fresh"))).toBe(true);
   renderer.backlog[0]!.queuedAt = performance.now() - 3_001;
 
   renderer.pumpBacklog();
@@ -1012,7 +406,7 @@ test("队列容量随轨道数变化，缩小后丢掉最旧的条目", () => {
   renderer.maxLatencyMs = 3_000;
   renderer.frozen = true;
   for (let index = 0; index < 8; index += 1) {
-    expect(renderer.push(danmakuComment(`d${index}`, 1))).toBe(true);
+    expect(renderer.push(danmakuComment(`d${index}`))).toBe(true);
   }
   expect(renderer.backlog).toHaveLength(8);
   expect(renderer.backlogCapacity()).toBe(10);
@@ -1026,16 +420,38 @@ test("队列容量随轨道数变化，缩小后丢掉最旧的条目", () => {
 
   renderer.scroll.manager.setTrackCount(5);
   renderer.syncLanes();
-  expect(renderer.push(danmakuComment("d8", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("d8"))).toBe(true);
   expect(renderer.backlog).toHaveLength(5);
+});
+
+test("带图的大表情滚动弹幕与普通弹幕走同一条 backlog", () => {
+  const { renderer, detachIds } = makeRenderer(2);
+  renderer.maxLatencyMs = 3_000;
+  renderer.frozen = true;
+  const emote = danmakuComment("emote", "[大表情]");
+
+  expect(renderer.push(emote)).toBe(true);
+  expect(renderer.push(danmakuComment("text"))).toBe(true);
+  expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["emote", "text"]);
+
+  renderer.frozen = false;
+  renderer.pumpBacklog();
+
+  expect(renderer.backlog).toHaveLength(0);
+  expect(renderer.scroll.manager.ordinaryPushes.map((comment) => comment.id)).toEqual([
+    "emote",
+    "text",
+  ]);
+  expect(renderer.scroll.manager.len().stash).toBe(2);
+  expect(detachIds).toEqual([]);
 });
 
 test("clear 与 destroy 清空应用侧队列并只结算一次", () => {
   const cleared = makeRenderer(2);
   cleared.renderer.maxLatencyMs = 3_000;
   cleared.renderer.frozen = true;
-  cleared.renderer.push(danmakuComment("c1", 1));
-  cleared.renderer.push(danmakuComment("c2", 1));
+  cleared.renderer.push(danmakuComment("c1"));
+  cleared.renderer.push(danmakuComment("c2"));
   cleared.renderer.clearActive();
   cleared.renderer.clearActive();
   expect(cleared.renderer.backlog).toHaveLength(0);
@@ -1045,40 +461,20 @@ test("clear 与 destroy 清空应用侧队列并只结算一次", () => {
   const destroyed = makeRenderer(2);
   destroyed.renderer.maxLatencyMs = 3_000;
   destroyed.renderer.frozen = true;
-  destroyed.renderer.push(danmakuComment("d1", 1));
-  destroyed.renderer.push(danmakuComment("d2", 1));
+  destroyed.renderer.push(danmakuComment("d1"));
+  destroyed.renderer.push(danmakuComment("d2"));
   destroyed.renderer.destroy();
   expect(destroyed.renderer.backlog).toHaveLength(0);
   expect(destroyed.renderer.queuedAt.size).toBe(0);
   expect(destroyed.detachIds).toEqual(["d1", "d2"]);
 });
 
-test("直播大表情的等待上限使用 maxLatencyMs", () => {
-  const { renderer } = makeRenderer(2);
-  renderer.maxLatencyMs = 3_000;
-  renderer.frozen = true;
-
-  const before = performance.now();
-  expect(renderer.push(wideComment("wide-1"))).toBe(true);
-  const pending = renderer.pendingWide.get("wide-1");
-  expect(pending).toBeDefined();
-  expect(pending!.deadline - before).toBeGreaterThanOrEqual(2_999);
-  expect(pending!.deadline - before).toBeLessThan(3_500);
-});
-
-function willRenderEvent(
-  danmaku: TestDanmaku,
-  type: "facile" | "flexible" = "facile",
-): TestWillRenderEvent {
-  return { type, prevent: false, danmaku, trackIndex: type === "facile" ? 0 : null };
-}
-
-test("出库时已超龄的普通滚动弹幕被 willRender 拦下并补位", () => {
+test("出库时已超龄的滚动弹幕被 willRender 拦下并补位", () => {
   const { renderer, detachIds } = makeRenderer(2);
   renderer.maxLatencyMs = 3_000;
-  expect(renderer.push(danmakuComment("expired", 1))).toBe(true);
-  expect(renderer.push(danmakuComment("fresh", 1))).toBe(true);
-  expect(renderer.push(danmakuComment("next", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("expired"))).toBe(true);
+  expect(renderer.push(danmakuComment("fresh"))).toBe(true);
+  expect(renderer.push(danmakuComment("next"))).toBe(true);
   expect(renderer.queuedAt.has("expired")).toBe(true);
   expect(renderer.backlog.map((item) => item.comment.id)).toEqual(["next"]);
 
@@ -1092,7 +488,6 @@ test("出库时已超龄的普通滚动弹幕被 willRender 拦下并补位", ()
   expect(result).toBe(event);
   expect(result.prevent).toBe(true);
   expect(detachIds).toEqual(["expired"]);
-  expect(renderer.ordinarySpeeds.has("expired")).toBe(false);
   expect(renderer.queuedAt.has("expired")).toBe(false);
   expect(renderer.backlog).toHaveLength(0);
   expect(renderer.scroll.manager.ordinaryPushes.map((comment) => comment.id)).toEqual([
@@ -1102,10 +497,10 @@ test("出库时已超龄的普通滚动弹幕被 willRender 拦下并补位", ()
   ]);
 });
 
-test("未超龄的普通滚动弹幕正常放行", () => {
+test("未超龄的滚动弹幕正常放行", () => {
   const { renderer, detachIds } = makeRenderer(2);
   renderer.maxLatencyMs = 3_000;
-  expect(renderer.push(danmakuComment("ordinary-1", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("ordinary-1"))).toBe(true);
   const event = willRenderEvent(makeDanmaku("ordinary-1", { type: "facile" }));
 
   const result = renderer.onWillRender(event);
@@ -1113,22 +508,21 @@ test("未超龄的普通滚动弹幕正常放行", () => {
   expect(result).toBe(event);
   expect(result.prevent).toBe(false);
   expect(detachIds).toEqual([]);
-  expect(renderer.ordinarySpeeds.has("ordinary-1")).toBe(true);
   expect(renderer.queuedAt.has("ordinary-1")).toBe(true);
 });
 
 test("willRender 不处理固定弹幕", () => {
   const { renderer, detachIds } = makeRenderer(2);
   renderer.maxLatencyMs = 3_000;
-  const wide = makeDanmaku("wide-1", { type: "flexible" });
-  renderer.live.add("wide-1");
-  renderer.queuedAt.set("wide-1", performance.now() - 3_001);
+  const fixed = makeDanmaku("fixed-1", { type: "flexible" });
+  renderer.live.add("fixed-1");
+  renderer.queuedAt.set("fixed-1", performance.now() - 3_001);
 
-  const result = renderer.onWillRender(willRenderEvent(wide, "flexible"));
+  const result = renderer.onWillRender(willRenderEvent(fixed, "flexible"));
 
   expect(result.prevent).toBe(false);
   expect(detachIds).toEqual([]);
-  expect(renderer.live.has("wide-1")).toBe(true);
+  expect(renderer.live.has("fixed-1")).toBe(true);
 });
 
 test("未设置 maxLatencyMs 时 willRender 不干预点播", () => {
@@ -1147,7 +541,7 @@ test("未设置 maxLatencyMs 时 willRender 不干预点播", () => {
 test("strict 重试再次出库时才超龄仍只结算一次", () => {
   const { renderer, detachIds } = makeRenderer(2);
   renderer.maxLatencyMs = 3_000;
-  expect(renderer.push(danmakuComment("retry", 1))).toBe(true);
+  expect(renderer.push(danmakuComment("retry"))).toBe(true);
   const danmaku = makeDanmaku("retry", { type: "facile" });
 
   // 第一次出库未超龄：放行并 append；库随后因 strict 重试把同一实例 unshift 回 stash。
@@ -1160,8 +554,7 @@ test("strict 重试再次出库时才超龄仍只结算一次", () => {
     danmaku,
     element: {} as HTMLElement,
     layer: "scroll",
-    lanes: [],
-    locked: false,
+    lane: null,
   });
   renderer.queuedAt.set("retry", performance.now() - 3_001);
 
@@ -1172,4 +565,68 @@ test("strict 重试再次出库时才超龄仍只结算一次", () => {
   // 已结算的条目 queuedAt 已清，不会再次 prevent 或重复 detach。
   expect(renderer.onWillRender(willRenderEvent(danmaku)).prevent).toBe(false);
   expect(detachIds).toEqual(["retry"]);
+});
+
+test("固定弹幕每条只占一条车道，push 与 append 之间 resize 不会重复分配", () => {
+  const { renderer } = makeRenderer(4);
+  renderer.syncLanes();
+
+  expect(renderer.pushFixed(fixedComment("fixed-1"))).toBe(true);
+  expect(renderer.reservations.get("fixed-1")?.lane).toBe(0);
+
+  // 第一条尚未 append（不在 records 里），此时容器尺寸变化重建占用表。
+  renderer.syncLanes();
+
+  expect(renderer.pushFixed(fixedComment("fixed-2"))).toBe(true);
+  expect(renderer.reservations.get("fixed-1")?.lane).toBe(0);
+  expect(renderer.reservations.get("fixed-2")?.lane).toBe(1);
+});
+
+test("缩小车道数时在途固定预约越界则撤销并只结算一次", () => {
+  const { renderer, detachIds } = makeRenderer(4);
+  renderer.syncLanes();
+  const destroys = new Map<string, number>();
+  for (let index = 1; index <= 4; index += 1) {
+    const id = `fixed-${index}`;
+    expect(renderer.pushFixed(fixedComment(id))).toBe(true);
+    expect(renderer.reservations.get(id)?.lane).toBe(index - 1);
+    const starting = makeDanmaku(id, { type: "flexible", moving: false });
+    starting.destroy = async () => {
+      destroys.set(id, (destroys.get(id) ?? 0) + 1);
+      renderer.onDestroyed(starting);
+    };
+    renderer.fixed.manager.starting.push(starting);
+  }
+
+  renderer.fixed.manager.setTrackCount(2);
+  renderer.syncLanes();
+
+  expect(renderer.reservations.get("fixed-1")?.lane).toBe(0);
+  expect(renderer.reservations.get("fixed-2")?.lane).toBe(1);
+  expect(renderer.reservations.has("fixed-3")).toBe(false);
+  expect(renderer.reservations.has("fixed-4")).toBe(false);
+  expect(destroys.get("fixed-1")).toBeUndefined();
+  expect(destroys.get("fixed-2")).toBeUndefined();
+  expect(destroys.get("fixed-3")).toBe(1);
+  expect(destroys.get("fixed-4")).toBe(1);
+  expect(renderer.live.has("fixed-3")).toBe(false);
+  expect(renderer.live.has("fixed-4")).toBe(false);
+  expect(detachIds.sort()).toEqual(["fixed-3", "fixed-4"]);
+});
+
+test("resize 后已上屏固定弹幕按新车道重新落位", () => {
+  const { renderer } = makeRenderer(2);
+  const first = makeDanmaku("fixed-1", { type: "flexible", moving: false });
+  const second = makeDanmaku("fixed-2", { type: "flexible", moving: false });
+  addFixedRecord(renderer, first, 0);
+  addFixedRecord(renderer, second, 1);
+  first.position.y = 999;
+  second.position.y = 999;
+
+  renderer.syncLanes();
+
+  expect(first.position.y).toBe(0);
+  expect(second.position.y).toBe(20);
+  expect(first.position.x).toBe(400);
+  expect(second.position.x).toBe(400);
 });

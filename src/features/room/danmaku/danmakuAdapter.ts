@@ -10,7 +10,6 @@ import {
 import { floatingDanmakuText } from "./filter";
 import { superChatDurationMs } from "../superChat";
 
-export const DANMAKU_IMAGE_TRACK_SPAN = 2;
 export const DANMAKU_DEFAULT_DURATION_MS = 15_000;
 export const DANMAKU_DEFAULT_SPEED = 100;
 export const DANMAKU_FONT_WEIGHT = 700;
@@ -22,7 +21,6 @@ export type DanmakuBulletMeta = {
   event: DanmakuEvent;
   baseText: string;
   spans?: readonly DanmakuContentSpan[];
-  trackSpan: number;
   aggregationKey?: string;
   aggregationCount: number;
   element?: HTMLElement;
@@ -40,14 +38,13 @@ export type DanmakuMappingOptions = {
   fontSize: number;
   fontStroke: number;
   opacity: number;
-  laneCount?: number;
   aggregationKey?: string;
   aggregationCount?: number;
 };
 
 export type DanmakuAppearanceOptions = Pick<
   DanmakuMappingOptions,
-  "fontSize" | "fontStroke" | "opacity" | "laneCount"
+  "fontSize" | "fontStroke" | "opacity"
 >;
 
 export type DanmakuRenderLayer = "scroll" | "top";
@@ -76,24 +73,6 @@ export function clampDanmuArea(value: number, fallback = 0.25): number {
 
 export function danmuLaneHeight(fontSize: number): number {
   return Math.max(16, Math.round(clampDanmuFontSize(fontSize) * 1.4));
-}
-
-export function danmakuTrackSpan(
-  spans: readonly DanmakuContentSpan[] | undefined,
-  laneCount?: number,
-): number {
-  const hasLargeEmote = spans?.some((span) => span.type === "image" && span.large === true);
-  if (!hasLargeEmote) return 1;
-  const lanes = Number.isFinite(laneCount)
-    ? Math.floor(laneCount as number)
-    : Number.POSITIVE_INFINITY;
-  return lanes >= DANMAKU_IMAGE_TRACK_SPAN ? DANMAKU_IMAGE_TRACK_SPAN : 1;
-}
-
-export function danmakuLaneCount(stageHeight: number, laneHeight: number, area: number): number {
-  const safeHeight = Number.isFinite(stageHeight) ? Math.max(0, stageHeight) : 0;
-  const safeLaneHeight = Math.max(1, Number.isFinite(laneHeight) ? Math.floor(laneHeight) : 16);
-  return Math.max(0, Math.floor(Math.floor(safeHeight * clampDanmuArea(area)) / safeLaneHeight));
 }
 
 export function danmakuAreaConfig(area: number): number {
@@ -154,12 +133,10 @@ function aggregateSuffix(count: number): string {
 export function danmakuStyleForEvent(
   event: DanmakuEvent,
   options: DanmakuAppearanceOptions,
-  trackSpan = 1,
 ): Record<string, string | number | undefined> {
   const isSuperChat = event.kind === "super_chat";
   const opacity = clampDanmuOpacity(options.opacity);
   const fontStroke = clampDanmuFontStroke(options.fontStroke);
-  const span = Math.max(1, Number.isFinite(trackSpan) ? Math.floor(trackSpan) : 1);
   const style: Record<string, string | number | undefined> = {
     boxSizing: "border-box",
     color: isSuperChat ? superChatAmountColor(event) : safeDanmuColor(event.color),
@@ -169,8 +146,7 @@ export function danmakuStyleForEvent(
     flexWrap: "nowrap",
     whiteSpace: "nowrap",
     width: "max-content",
-    height: `${span * danmuLaneHeight(options.fontSize)}px`,
-    "--rlive-emote-scale": String(span),
+    height: `${danmuLaneHeight(options.fontSize)}px`,
     maxWidth: "none",
     fontSize: `${clampDanmuFontSize(options.fontSize)}px`,
     fontWeight: DANMAKU_FONT_WEIGHT,
@@ -194,13 +170,11 @@ export function danmakuCommentFromEvent(
   const isSuperChat = event.kind === "super_chat";
   const isPinned = isPinnedDanmakuEvent(event);
   const spans = floatingRichSpans(event);
-  const trackSpan = danmakuTrackSpan(spans, options.laneCount);
   const meta: DanmakuBulletMeta = {
     id: options.id,
     event,
     baseText,
     spans,
-    trackSpan,
     aggregationKey: options.aggregationKey,
     aggregationCount,
   };
@@ -213,8 +187,7 @@ export function danmakuCommentFromEvent(
         ? superChatDurationMs(event.super_chat)
         : DANMAKU_DEFAULT_DURATION_MS
       : undefined,
-    lanes: trackSpan,
-    style: danmakuStyleForEvent(event, options, trackSpan),
+    style: danmakuStyleForEvent(event, options),
     __rliveMeta: meta,
     render: () => createDanmuBulletElement(comment),
   };
@@ -243,8 +216,7 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
     image.decoding = "async";
     image.referrerPolicy = BILIBILI_DANMAKU_IMAGE_REFERRER_POLICY;
     image.src = danmakuImageRequestUrl(imageUrl);
-    image.className =
-      span.large === true ? "rlive-danmu-image rlive-danmu-image-large" : "rlive-danmu-image";
+    image.className = "rlive-danmu-image";
     image.style.marginInline = "1px";
     image.style.objectFit = "contain";
     image.style.flex = "0 0 auto";
@@ -382,14 +354,9 @@ export function updateDanmakuAppearance(
   const meta = comment.__rliveMeta;
   const event = meta?.event;
   if (!event) return;
-  const trackSpan = danmakuTrackSpan(meta.spans, options.laneCount);
-  const trackSpanChanged = meta.trackSpan !== trackSpan;
-  meta.trackSpan = trackSpan;
-  comment.lanes = trackSpan;
-  const style = danmakuStyleForEvent(event, options, trackSpan);
+  const style = danmakuStyleForEvent(event, options);
   comment.style = style;
   const element = meta.element;
   if (!element) return;
   applyCommentStyle(element, style);
-  if (trackSpanChanged) element.style.setProperty("--rlive-emote-scale", String(trackSpan));
 }

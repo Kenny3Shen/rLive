@@ -7,8 +7,6 @@ export type DanmakuComment = {
   time?: number;
   /** 固定弹幕时长，单位毫秒；滚动弹幕由标准速度决定。 */
   duration?: number;
-  /** 占用车道数：大于 1 的滚动弹幕按大表情处理，占多条车道并放大。 */
-  lanes?: number;
   style?: Record<string, string | number | undefined>;
   /**
    * 构建弹幕的业务节点，由渲染器挂到库的包裹节点（`danmaku.node`）下。

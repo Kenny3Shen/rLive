@@ -1,8 +1,8 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import type { DanmakuEvent } from "../src/shared/types/live";
 import {
   DANMAKU_DEFAULT_DURATION_MS,
-  DANMAKU_IMAGE_TRACK_SPAN,
+  createDanmuBulletElement,
   danmakuCommentFromEvent,
   danmuLaneHeight,
   safeDanmuColor,
@@ -11,6 +11,12 @@ import {
 
 const chat: DanmakuEvent = { kind: "chat", user: "观众", content: "你好", color: null, ts: 1 };
 const options = { id: "bullet-1", fontSize: 18, fontStroke: 1.5, opacity: 0.8 };
+const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+
+afterEach(() => {
+  if (documentDescriptor) Object.defineProperty(globalThis, "document", documentDescriptor);
+  else Reflect.deleteProperty(globalThis, "document");
+});
 
 test.each([
   [{}, "scroll", undefined, "你好"],
@@ -26,50 +32,107 @@ test("空内容不投放", () => {
   expect(danmakuCommentFromEvent({ ...chat, content: "" }, options)).toBeNull();
 });
 
-test.each([
-  ["大表情", [{ type: "image", image_url: "//i0.hdslb.com/bfs/emote/large.png", large: true }], 2],
-  ["普通内联表情", [{ type: "image", image_url: "//i0.hdslb.com/bfs/emote/small.png" }], 1],
-] as const)("%s按标记决定占用的轨道数", (_label, spans, expectedLanes) => {
-  const comment = danmakuCommentFromEvent({ ...chat, spans }, options);
-  expect(comment?.lanes).toBe(expectedLanes);
-  expect(comment?.style?.height).toBe(`${expectedLanes * danmuLaneHeight(options.fontSize)}px`);
-  expect(comment?.style?.["--rlive-emote-scale"]).toBe(String(expectedLanes));
+test("大表情与普通表情同尺寸且只占一条轨道", () => {
+  const large = danmakuCommentFromEvent(
+    {
+      ...chat,
+      spans: [{ type: "image", image_url: "//i0.hdslb.com/bfs/emote/large.png", large: true }],
+    },
+    options,
+  );
+  const small = danmakuCommentFromEvent(
+    {
+      ...chat,
+      spans: [{ type: "image", image_url: "//i0.hdslb.com/bfs/emote/small.png" }],
+    },
+    options,
+  );
+
+  expect(large?.style?.height).toBe(`${danmuLaneHeight(options.fontSize)}px`);
+  expect(Object.keys(large?.style ?? {}).filter((key) => key.startsWith("--"))).toEqual([]);
+  expect(Object.keys(large ?? {}).sort()).toEqual([
+    "__rliveMeta",
+    "duration",
+    "id",
+    "mode",
+    "render",
+    "style",
+    "text",
+  ]);
+  expect(Object.keys(large?.__rliveMeta ?? {}).sort()).toEqual([
+    "aggregationCount",
+    "aggregationKey",
+    "baseText",
+    "event",
+    "id",
+    "spans",
+  ]);
+  expect(small?.style).toEqual(large?.style);
 });
 
-test("大表情只有一条可用车道时退回单轨并恢复原尺寸", () => {
+test("updateDanmakuAppearance 只更新字号相关样式，不改变车道或缩放变量", () => {
   const comment = danmakuCommentFromEvent(
     {
       ...chat,
       spans: [{ type: "image", image_url: "//i0.hdslb.com/bfs/emote/large.png", large: true }],
     },
-    { ...options, laneCount: 1 },
-  );
-  expect(DANMAKU_IMAGE_TRACK_SPAN).toBe(2);
-  expect(comment?.lanes).toBe(1);
-  expect(comment?.style?.height).toBe(`${danmuLaneHeight(options.fontSize)}px`);
-  expect(comment?.style?.["--rlive-emote-scale"]).toBe("1");
+    options,
+  )!;
+
+  updateDanmakuAppearance(comment, { ...options, fontSize: 24 });
+
+  expect(comment.style?.height).toBe(`${danmuLaneHeight(24)}px`);
+  expect(Object.keys(comment.style ?? {}).filter((key) => key.startsWith("--"))).toEqual([]);
+  expect(Object.keys(comment)).not.toContain("lanes");
 });
 
-test.each([
-  ["单轨扩为双轨", 1, 2],
-  ["双轨缩回单轨", 2, 1],
-] as const)("updateDanmakuAppearance 同步%s的 lanes 与样式", (_label, initialLanes, nextLanes) => {
+test("大表情图片与普通表情使用同一个类名", () => {
   const comment = danmakuCommentFromEvent(
     {
       ...chat,
       spans: [{ type: "image", image_url: "//i0.hdslb.com/bfs/emote/large.png", large: true }],
     },
-    { ...options, laneCount: initialLanes },
-  );
-  expect(comment?.lanes).toBe(initialLanes);
-  expect(comment?.__rliveMeta.trackSpan).toBe(initialLanes);
+    options,
+  )!;
+  const style = {
+    setProperty(): void {},
+  };
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      createElement(tag: string) {
+        return {
+          tagName: tag,
+          style,
+          dataset: {},
+          className: "",
+          children: [] as unknown[],
+          appendChild(child: unknown) {
+            this.children.push(child);
+            return child;
+          },
+          insertBefore(child: unknown) {
+            this.children.unshift(child);
+            return child;
+          },
+          setAttribute(): void {},
+          addEventListener(): void {},
+          replaceWith(): void {},
+        };
+      },
+      createTextNode(text: string) {
+        return { textContent: text };
+      },
+    },
+  });
 
-  updateDanmakuAppearance(comment!, { ...options, laneCount: nextLanes });
+  const root = createDanmuBulletElement(comment) as unknown as {
+    children: Array<{ children: Array<{ tagName: string; className: string }> }>;
+  };
+  const content = root.children[0]!;
+  const image = content.children.find((child) => child.tagName === "img");
 
-  expect(comment?.lanes).toBe(nextLanes);
-  expect(comment?.__rliveMeta.trackSpan).toBe(nextLanes);
-  expect(comment?.style?.height).toBe(`${nextLanes * danmuLaneHeight(options.fontSize)}px`);
-  expect(comment?.style?.["--rlive-emote-scale"]).toBe(String(nextLanes));
+  expect(image?.className).toBe("rlive-danmu-image");
 });
 
 test.each([
