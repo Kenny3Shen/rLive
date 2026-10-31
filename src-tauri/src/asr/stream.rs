@@ -136,7 +136,10 @@ impl CaptionStream {
                 let start = (self.next_frame - self.origin_frame) * FRAME_SAMPLES;
                 let probs = engine.score(&self.pcm[start..start + count * FRAME_SAMPLES])?;
                 if probs.len() != count {
-                    return Err(format!("VAD returned {} frames, expected {count}", probs.len()));
+                    return Err(format!(
+                        "VAD returned {} frames, expected {count}",
+                        probs.len()
+                    ));
                 }
                 probs
             } else {
@@ -304,7 +307,8 @@ impl CaptionStream {
             |utterance| utterance.start_frame,
         );
         if keep_from > self.origin_frame {
-            let drop_samples = ((keep_from - self.origin_frame) * FRAME_SAMPLES).min(self.pcm.len());
+            let drop_samples =
+                ((keep_from - self.origin_frame) * FRAME_SAMPLES).min(self.pcm.len());
             self.pcm.drain(..drop_samples);
             self.origin_frame = keep_from;
         }
@@ -350,7 +354,12 @@ fn is_cjk(character: char) -> bool {
 }
 
 fn collapse_spaces(text: &str) -> String {
-    let characters: Vec<char> = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    let characters: Vec<char> = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .collect();
     let mut output = String::with_capacity(text.len());
     for (index, character) in characters.iter().enumerate() {
         if *character == ' ' {
@@ -423,7 +432,11 @@ mod tests {
     }
 
     /// 以 0.2 s（约 6 帧，不对齐）的采集窗口喂入全部帧。
-    fn run(stream: &mut CaptionStream, engine: &mut ScriptedEngine, frames: usize) -> Vec<StreamOutput> {
+    fn run(
+        stream: &mut CaptionStream,
+        engine: &mut ScriptedEngine,
+        frames: usize,
+    ) -> Vec<StreamOutput> {
         let pcm = frame_pcm(0, frames);
         pcm.chunks(3_200)
             .map(|chunk| stream.push(engine, chunk).unwrap())
@@ -540,8 +553,17 @@ mod tests {
     #[test]
     fn strips_punctuation_without_gluing_english_words() {
         assert_eq!(postprocess(" 你好，世界。 ", true), "你好，世界。");
-        assert_eq!(postprocess("你好，世界。Hello, world!", false), "你好世界Hello world");
-        assert_eq!(postprocess("Don't stop — e-mail me.", false), "Don't stop e-mail me");
-        assert_eq!(postprocess("29岁的医生，在T恤衫里。", false), "29岁的医生在T恤衫里");
+        assert_eq!(
+            postprocess("你好，世界。Hello, world!", false),
+            "你好世界Hello world"
+        );
+        assert_eq!(
+            postprocess("Don't stop — e-mail me.", false),
+            "Don't stop e-mail me"
+        );
+        assert_eq!(
+            postprocess("29岁的医生，在T恤衫里。", false),
+            "29岁的医生在T恤衫里"
+        );
     }
 }

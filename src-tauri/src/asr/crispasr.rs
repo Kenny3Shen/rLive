@@ -137,10 +137,12 @@ fn open_library(path: &Path) -> Result<Library, String> {
 
 unsafe fn resolve(library: &Library) -> Result<Api, String> {
     unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T, String> {
-        unsafe { library.get::<T>(name) }.map(|symbol| *symbol).map_err(|error| {
-            let name = String::from_utf8_lossy(&name[..name.len().saturating_sub(1)]);
-            format!("运行库缺少 {name}：{error}")
-        })
+        unsafe { library.get::<T>(name) }
+            .map(|symbol| *symbol)
+            .map_err(|error| {
+                let name = String::from_utf8_lossy(&name[..name.len().saturating_sub(1)]);
+                format!("运行库缺少 {name}：{error}")
+            })
     }
     unsafe {
         Ok(Api {
