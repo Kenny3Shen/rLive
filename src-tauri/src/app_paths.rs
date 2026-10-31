@@ -286,7 +286,7 @@ fn publish_temporary_file(path: &Path, temporary: &Path, _backup: &Path) -> io::
 ))]
 fn publish_temporary_file(path: &Path, temporary: &Path, backup: &Path) -> io::Result<()> {
     let had_target = path.exists();
-    if had_target && let Err(error) = fs::rename(path, &backup) {
+    if had_target && let Err(error) = fs::rename(path, backup) {
         let _ = remove_file_if_present(temporary);
         return Err(error);
     }

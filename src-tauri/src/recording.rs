@@ -4185,11 +4185,13 @@ mod tests {
         for id in [ID, SECOND_ID] {
             assert!(found.contains_key(id));
             assert_eq!(
-                find_bundle_in_root(&[lib.root.clone()], id).unwrap().1,
+                find_bundle_in_root(std::slice::from_ref(&lib.root), id)
+                    .unwrap()
+                    .1,
                 lib.root.join(id)
             );
         }
-        assert!(find_bundle_in_root(&[lib.root.clone()], "bilibili_legacy").is_none());
+        assert!(find_bundle_in_root(std::slice::from_ref(&lib.root), "bilibili_legacy").is_none());
         assert_eq!(lib.list().unwrap().len(), 2);
         lib.delete(SECOND_ID).unwrap();
         assert_eq!(
@@ -4773,10 +4775,8 @@ mod tests {
             AssExportOptions::try_from_settings(&crate::models::settings::AppSettings::default())
                 .unwrap();
         let path = lib.export_danmaku_ass(ID, options.clone()).await.unwrap();
-        assert_eq!(
-            path,
-            crate::app_paths::path_to_string(&bundle.join("stream.ass"))
-        );
+        // id 形如 `房间/场次`，`root.join(id)` 在 Windows 上混用 `/` 与 `\`；按路径比较。
+        assert_eq!(Path::new(&path), bundle.join("stream.ass"));
         let script = std::fs::read_to_string(path).unwrap();
         for text in ["[Events]", "Dialogue: 0,0:00:01.20,", "你好"] {
             assert!(script.contains(text), "{text}");
@@ -4979,7 +4979,8 @@ mod tests {
                                 }
                                 Reply::Body(..) => unreachable!(),
                             }
-                            socket.read(&mut [0]).await?;
+                            // 等客户端发下一个请求或断开；读到多少字节无关紧要。
+                            let _ = socket.read(&mut [0]).await?;
                         }
                         None => {
                             socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
@@ -5030,7 +5031,8 @@ mod tests {
         assert!(!bundle.join(format!("{}.part", stored.media_file)).exists());
         let path = bundle.join(stored.media_file);
         assert!(path.is_file());
-        assert_eq!(stopped.file_path, crate::app_paths::path_to_string(&path));
+        // id 形如 `房间/场次`，`root.join(id)` 在 Windows 上混用 `/` 与 `\`；按路径比较。
+        assert_eq!(Path::new(&stopped.file_path), path);
         path
     }
 

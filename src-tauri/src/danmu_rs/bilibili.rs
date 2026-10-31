@@ -1649,12 +1649,15 @@ mod tests {
         assert!(socket.keepalive().unwrap(), "keepalive was not enabled");
         // 真正让 NAT 映射保持活跃的是空闲时间与探测间隔；
         // 只启用 keepalive 而沿用内核 2 小时默认值是不够的。
-        assert_eq!(socket.tcp_keepalive_time().unwrap(), TCP_KEEPALIVE_IDLE);
+        // Windows 不能读回这两个值（socket2 在 Windows 上不提供这些 getter）。
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(
-            socket.tcp_keepalive_interval().unwrap(),
-            TCP_KEEPALIVE_INTERVAL
-        );
+        {
+            assert_eq!(socket.tcp_keepalive_time().unwrap(), TCP_KEEPALIVE_IDLE);
+            assert_eq!(
+                socket.tcp_keepalive_interval().unwrap(),
+                TCP_KEEPALIVE_INTERVAL
+            );
+        }
     }
 
     #[tokio::test]
