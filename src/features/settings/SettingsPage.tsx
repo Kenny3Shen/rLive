@@ -1447,7 +1447,8 @@ function AsrModelField() {
   const estimatedDownloadBytes = model.status
     ? estimateAsrDownloadBytes(model.status, speakerEnabled)
     : 0;
-  const cudaExtraBytes = model.status?.cuda_runtime_extra_bytes ?? 0;
+  // 选了 CPU 时不会下载 CUDA 运行库。
+  const cudaExtraBytes = provider === "cpu" ? 0 : (model.status?.cuda_runtime_extra_bytes ?? 0);
   const speakerModelBytes = model.status?.speaker_model_size_bytes ?? 0;
   return (
     <>
@@ -1521,7 +1522,8 @@ function AsrModelField() {
             <FieldTitle>
               <span id="asr-provider-title">推理后端</span>
               <FieldTip>
-                自动优先使用 NVIDIA GPU（GTX 10 系列至 RTX 40 系列），不可用时回退 CPU。
+                自动优先使用 NVIDIA GPU（GTX 10 系列至 RTX 40 系列），不可用时回退 CPU；选 CPU
+                不下载 CUDA 运行库。已用 CPU 运行库启动时，改用 CUDA 需重启应用。
               </FieldTip>
             </FieldTitle>
           </FieldContent>

@@ -10,6 +10,7 @@
 //! 每条定稿语句都会经 TitaNet 声纹模型分类。
 
 mod crispasr;
+mod download;
 mod runtime;
 mod stream;
 
@@ -17,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, AppResult};
 
@@ -32,6 +32,13 @@ struct ModelFile {
     url: &'static str,
     size: u64,
     sha256: &'static str,
+}
+
+impl ModelFile {
+    /// 下载中的临时文件名，带摘要前缀：换了固定版本的同名文件不会续传旧数据。
+    fn partial_name(&self) -> String {
+        format!("{}.{}.part", self.file_name, &self.sha256[..8])
+    }
 }
 
 const ASR_MODEL: ModelFile = ModelFile {
@@ -133,8 +140,8 @@ pub struct AsrModelStatus {
     pub hotwords_count: u32,
     pub speaker_model_downloaded: bool,
     pub speaker_model_size_bytes: u64,
-    /// Windows 有可用 NVIDIA GPU 时，CUDA 运行库包比 CPU 包多出的下载体积；
-    /// 其余平台为 0。
+    /// Windows 尚未探测 GPU 时，若探测到可用 NVIDIA GPU 会多下载的 CUDA 运行库体积；
+    /// 已确定运行库包或其余平台为 0。
     pub cuda_runtime_extra_bytes: u64,
     pub threads: i32,
     /// 识别模型所使用的推理后端：`cpu` 或 `cuda`。
@@ -162,7 +169,7 @@ impl AsrModelStatus {
             hotwords_count: options.hotwords.len() as u32,
             speaker_model_downloaded: snapshot.speaker_downloaded,
             speaker_model_size_bytes: SPEAKER_MODEL.size,
-            cuda_runtime_extra_bytes: runtime::cuda_extra_bytes(),
+            cuda_runtime_extra_bytes: snapshot.cuda_extra_bytes,
             threads: asr_thread_count(),
             // 不在这里解析 provider：`effective_asr_provider` 在 Windows 上会加载
             // NVIDIA 驱动查询 GPU。那属于「真正启用」的代价，不能出现在应用启动路径上。
@@ -250,10 +257,7 @@ fn required_models(options: &AsrRuntimeOptions) -> Vec<&'static ModelFile> {
 }
 
 /// 运行库包加上当前配置需要的模型文件的总下载体积。
-fn configured_download_size(
-    options: &AsrRuntimeOptions,
-    package: Option<&RuntimePackage>,
-) -> u64 {
+fn configured_download_size(options: &AsrRuntimeOptions, package: Option<&RuntimePackage>) -> u64 {
     package.map_or(0, |package| package.size)
         + required_models(options)
             .into_iter()
@@ -268,6 +272,7 @@ struct AssetSnapshot {
     downloaded_bytes: u64,
     total_bytes: u64,
     speaker_downloaded: bool,
+    cuda_extra_bytes: u64,
 }
 
 fn asset_snapshot(
@@ -275,7 +280,7 @@ fn asset_snapshot(
     runtime_dir: &Path,
     options: &AsrRuntimeOptions,
 ) -> AssetSnapshot {
-    let package = runtime::known_package(runtime_dir);
+    let package = runtime::known_package(runtime_dir, prefers_gpu(&options.provider));
     let runtime_installed = package.is_some_and(|package| package.is_installed(runtime_dir));
     let mut complete = runtime_installed;
     let mut downloaded_bytes = if runtime_installed {
@@ -295,6 +300,7 @@ fn asset_snapshot(
         downloaded_bytes,
         total_bytes: configured_download_size(options, package),
         speaker_downloaded: assets.speaker_is_complete(),
+        cuda_extra_bytes: runtime::cuda_extra_bytes(runtime_dir, prefers_gpu(&options.provider)),
     }
 }
 
@@ -928,22 +934,24 @@ impl AsrManager {
 
         self.set_loading_status(generation, &options);
         let manager = self.clone();
-        let package = match tokio::task::spawn_blocking(move || manager.load_runtime()).await {
-            Ok(Ok(package)) => package,
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "ASR runtime load failed");
-                self.set_error_status_for_request(
-                    generation,
-                    &format!("字幕运行库加载失败：{}", error.message),
-                );
-                return;
-            }
-            Err(error) => {
-                tracing::warn!(%error, "ASR runtime load task failed");
-                self.set_error_status_for_request(generation, "字幕运行库加载任务失败，请重试");
-                return;
-            }
-        };
+        let prefer_gpu = prefers_gpu(&options.provider);
+        let package =
+            match tokio::task::spawn_blocking(move || manager.load_runtime(prefer_gpu)).await {
+                Ok(Ok(package)) => package,
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "ASR runtime load failed");
+                    self.set_error_status_for_request(
+                        generation,
+                        &format!("字幕运行库加载失败：{}", error.message),
+                    );
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "ASR runtime load task failed");
+                    self.set_error_status_for_request(generation, "字幕运行库加载任务失败，请重试");
+                    return;
+                }
+            };
 
         // 运行库包按硬件选定，CPU / CUDA 偏好只决定是否把模型放上 GPU。
         let use_gpu = runtime::package_has_gpu(package)
@@ -1018,10 +1026,14 @@ impl AsrManager {
             return Ok(false);
         }
         // Windows 首次调用会加载 NVIDIA 驱动探测 GPU，放到阻塞线程池。
-        let package = tokio::task::spawn_blocking(runtime::required_package)
-            .await
-            .map_err(|_| AppError::new("asr_runtime_probe", "字幕运行库检测失败"))?
-            .map_err(|reason| AppError::new("asr_unsupported", reason))?;
+        let runtime_dir = self.inner.runtime_dir.clone();
+        let prefer_gpu = prefers_gpu(&options.provider);
+        let package = tokio::task::spawn_blocking(move || {
+            runtime::required_package(&runtime_dir, prefer_gpu)
+        })
+        .await
+        .map_err(|_| AppError::new("asr_runtime_probe", "字幕运行库检测失败"))?
+        .map_err(|reason| AppError::new("asr_unsupported", reason))?;
         let runtime_dir = &self.inner.runtime_dir;
         let runtime_installed = package.is_installed(runtime_dir);
         let missing_models: Vec<_> = required_models(options)
@@ -1033,24 +1045,26 @@ impl AsrManager {
         }
 
         self.remove_legacy_assets().await;
+        remove_stale_model_partials(&self.inner.model_dir).await;
         let total_size = configured_download_size(options, Some(package));
         let missing_size = missing_models.iter().map(|model| model.size).sum::<u64>()
             + if runtime_installed { 0 } else { package.size };
         let mut progress = total_size.saturating_sub(missing_size);
+        let client = asr_download_client(route)?;
 
         if !runtime_installed {
             tokio::fs::create_dir_all(runtime_dir)
                 .await
                 .map_err(|_| AppError::new("asr_runtime_dir", "无法创建字幕运行库目录"))?;
-            let archive = runtime_dir.join(format!("{}.part", package.archive));
-            let source = DownloadSource {
+            let archive = runtime_dir.join(package.partial_name());
+            let source = download::Source {
                 label: "CrispASR 运行库",
                 url: &package.url(),
                 size: package.size,
                 sha256: package.sha256,
             };
             if !self
-                .download_file(route, generation, &source, &archive, progress, total_size)
+                .download_asset(&client, generation, &source, &archive, progress, total_size)
                 .await?
             {
                 return Ok(false);
@@ -1068,28 +1082,35 @@ impl AsrManager {
             })
             .await
             .map_err(|_| AppError::new("asr_runtime_install", "字幕运行库解压任务失败"));
-            let _ = remove_file_if_present(&archive).await;
+            // 归档已通过校验；解压失败多半是磁盘问题，重新下载也无济于事，同样删除。
+            let _ = download::remove_partial(&archive).await;
             installed??;
             progress += package.size;
             if !self.request_is_current(generation) {
                 return Ok(false);
             }
         }
+        // 换包（CPU ↔ CUDA）或升级后，旧包目录与未下完的旧归档不再需要。
+        let runtime_root = runtime_dir.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            runtime::remove_stale_entries(package, &runtime_root);
+        })
+        .await;
 
         tokio::fs::create_dir_all(&self.inner.model_dir)
             .await
             .map_err(|_| AppError::new("asr_model_dir", "无法创建模型目录"))?;
         for model in missing_models {
             let target = self.inner.assets.path(model);
-            let partial = target.with_file_name(format!("{}.part", model.file_name));
-            let source = DownloadSource {
+            let partial = self.inner.model_dir.join(model.partial_name());
+            let source = download::Source {
                 label: model.label,
                 url: model.url,
                 size: model.size,
                 sha256: model.sha256,
             };
             if !self
-                .download_file(route, generation, &source, &partial, progress, total_size)
+                .download_asset(&client, generation, &source, &partial, progress, total_size)
                 .await?
             {
                 return Ok(false);
@@ -1112,107 +1133,47 @@ impl AsrManager {
         Ok(self.request_is_current(generation))
     }
 
-    /// 下载到 `partial_path` 并校验大小与 SHA-256；未完成或失败时删除临时文件。
-    async fn download_file(
+    /// 可续传地下载一个资产并把进度写进状态；`Ok(false)` 表示请求已失效。
+    async fn download_asset(
         &self,
-        route: &crate::proxy::ProxyRoute,
+        client: &reqwest::Client,
         generation: u64,
-        source: &DownloadSource<'_>,
-        partial_path: &Path,
+        source: &download::Source<'_>,
+        partial: &Path,
         progress_offset: u64,
         total_size: u64,
     ) -> AppResult<bool> {
-        remove_file_if_present(partial_path).await?;
-        let result = self
-            .download_verified(route, generation, source, partial_path, progress_offset, total_size)
-            .await;
-        if !matches!(result, Ok(true))
-            && let Err(cleanup_error) = remove_file_if_present(partial_path).await
-        {
-            tracing::warn!(%cleanup_error, "failed to clean up ASR partial download");
-        }
-        result
-    }
-
-    async fn download_verified(
-        &self,
-        route: &crate::proxy::ProxyRoute,
-        generation: u64,
-        source: &DownloadSource<'_>,
-        partial_path: &Path,
-        progress_offset: u64,
-        total_size: u64,
-    ) -> AppResult<bool> {
-        if !self.request_is_current(generation) {
-            return Ok(false);
-        }
-
-        let client = asr_download_client(route)?;
-        let response = client
-            .get(source.url)
-            .send()
-            .await
-            .map_err(|_| AppError::new("asr_model_download", "模型下载请求失败"))?
-            .error_for_status()
-            .map_err(|_| AppError::new("asr_model_download", "模型下载服务返回错误"))?;
-        if response
-            .content_length()
-            .is_some_and(|length| length != source.size)
-        {
-            return Err(AppError::new("asr_model_size", "模型文件大小与预期不符"));
-        }
-
-        use futures_util::StreamExt;
-        use tokio::io::AsyncWriteExt;
-
-        let mut stream = response.bytes_stream();
-        let mut file = tokio::fs::File::create(partial_path)
-            .await
-            .map_err(|_| AppError::new("asr_model_write", "无法写入模型临时文件"))?;
-        let mut digest = Sha256::new();
-        let mut downloaded = 0_u64;
-        let mut last_progress = std::time::Instant::now() - std::time::Duration::from_secs(1);
-
-        while let Some(chunk) = stream.next().await {
-            if !self.request_is_current(generation) {
-                return Ok(false);
-            }
-            let chunk = chunk.map_err(|_| AppError::new("asr_model_download", "模型下载中断"))?;
-            downloaded = downloaded.saturating_add(chunk.len() as u64);
-            if downloaded > source.size {
-                return Err(AppError::new("asr_model_size", "模型文件大小超出预期"));
-            }
-            digest.update(&chunk);
-            file.write_all(&chunk)
-                .await
-                .map_err(|_| AppError::new("asr_model_write", "写入模型文件失败"))?;
-
-            if last_progress.elapsed() >= std::time::Duration::from_millis(250) {
-                last_progress = std::time::Instant::now();
+        let result = download::download(
+            client,
+            source,
+            partial,
+            &|| self.request_is_current(generation),
+            &mut |progress| {
                 self.update_status_for_request(generation, |status| {
                     status.state = AsrModelState::Downloading;
-                    status.downloaded_bytes = progress_offset.saturating_add(downloaded);
                     status.total_bytes = Some(total_size);
-                    status.message = Some(format!("正在下载 {}…", source.label));
+                    let (written, message) = match progress {
+                        download::Progress::Downloading(written) => {
+                            (written, format!("正在下载 {}…", source.label))
+                        }
+                        download::Progress::Retrying(written) => {
+                            (written, format!("网络中断，正在续传 {}…", source.label))
+                        }
+                        download::Progress::Verifying => (
+                            status.downloaded_bytes.saturating_sub(progress_offset),
+                            format!("正在校验已下载的 {}…", source.label),
+                        ),
+                    };
+                    status.downloaded_bytes = progress_offset.saturating_add(written);
+                    status.message = Some(message);
                 });
-            }
+            },
+        )
+        .await;
+        if let Err(error) = &result {
+            tracing::warn!(label = source.label, %error, "ASR asset download failed");
         }
-
-        file.flush()
-            .await
-            .map_err(|_| AppError::new("asr_model_write", "保存模型文件失败"))?;
-        drop(file);
-
-        if downloaded != source.size {
-            return Err(AppError::new("asr_model_size", "模型文件下载不完整"));
-        }
-        if hex::encode(digest.finalize()) != source.sha256 {
-            return Err(AppError::new(
-                "asr_model_hash",
-                format!("{}完整性校验失败", source.label),
-            ));
-        }
-        Ok(self.request_is_current(generation))
+        result
     }
 
     fn required_assets_complete(&self, options: &AsrRuntimeOptions) -> bool {
@@ -1256,14 +1217,10 @@ impl AsrManager {
     }
 
     /// 加载已安装的运行库，返回它所属的包。进程内只加载一次。
-    fn load_runtime(&self) -> AppResult<&'static RuntimePackage> {
-        let package = runtime::required_package()
+    fn load_runtime(&self, prefer_gpu: bool) -> AppResult<&'static RuntimePackage> {
+        let package = runtime::required_package(&self.inner.runtime_dir, prefer_gpu)
             .map_err(|reason| AppError::new("asr_unsupported", reason))?;
-        if !package.is_installed(&self.inner.runtime_dir) {
-            return Err(AppError::new("asr_runtime_load", "字幕运行库文件不完整"));
-        }
-        crispasr::load(&package.library_path(&self.inner.runtime_dir))
-            .map_err(|error| AppError::new("asr_runtime_load", error))?;
+        runtime::load(package, &self.inner.runtime_dir)?;
         Ok(package)
     }
 
@@ -1347,6 +1304,7 @@ impl AsrManager {
         status.message = asr_provider_fallback_message(&options.provider);
         let snapshot = self.asset_snapshot(options);
         status.speaker_model_downloaded = snapshot.speaker_downloaded;
+        status.cuda_runtime_extra_bytes = snapshot.cuda_extra_bytes;
         status.model_size_bytes = snapshot.total_bytes;
         status.total_bytes = Some(snapshot.total_bytes);
     }
@@ -1363,7 +1321,7 @@ impl AsrManager {
     fn set_idle_status(&self) {
         self.update_status(|status| {
             let options = AsrRuntimeOptions {
-                provider: ASR_PROVIDER_AUTO.to_owned(),
+                provider: status.provider.clone(),
                 vad_enabled: status.vad_enabled,
                 punctuation_enabled: status.punctuation_enabled,
                 speaker_enabled: status.speaker_enabled,
@@ -1376,6 +1334,7 @@ impl AsrManager {
                 AsrModelState::NotDownloaded
             };
             status.speaker_model_downloaded = snapshot.speaker_downloaded;
+            status.cuda_runtime_extra_bytes = snapshot.cuda_extra_bytes;
             status.model_size_bytes = snapshot.total_bytes;
             status.downloaded_bytes = snapshot.downloaded_bytes;
             status.total_bytes = Some(snapshot.total_bytes);
@@ -1517,11 +1476,23 @@ fn normalize_asr_provider(value: &str) -> &'static str {
     }
 }
 
+/// 偏好不是 CPU：Windows 上据此决定是否需要 CUDA 运行库包。
+fn prefers_gpu(preference: &str) -> bool {
+    normalize_asr_provider(preference) != ASR_PROVIDER_CPU
+}
+
+/// 进程内已加载不带 GPU 后端的包：要重启应用才能换成 CUDA 包。
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn loaded_cpu_only_package() -> bool {
+    runtime::loaded().is_some_and(|package| !runtime::package_has_gpu(package))
+}
+
 fn effective_asr_provider(preference: &str) -> &'static str {
     #[cfg(all(windows, target_arch = "x86_64"))]
     {
         match normalize_asr_provider(preference) {
             ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,
+            _ if loaded_cpu_only_package() => ASR_PROVIDER_CPU,
             _ if runtime::cuda::probe().is_some_and(runtime::cuda::GpuProbe::usable) => {
                 ASR_PROVIDER_CUDA
             }
@@ -1552,11 +1523,13 @@ fn asr_provider_fallback_message(preference: &str) -> Option<String> {
     #[cfg(all(windows, target_arch = "x86_64"))]
     {
         let normalized = normalize_asr_provider(preference);
-        if normalized != ASR_PROVIDER_CPU && effective_asr_provider(normalized) == ASR_PROVIDER_CPU
+        if normalized == ASR_PROVIDER_CPU || effective_asr_provider(normalized) != ASR_PROVIDER_CPU
         {
-            Some(runtime::cuda::fallback_message())
-        } else {
             None
+        } else if runtime::cuda::probe().is_some_and(runtime::cuda::GpuProbe::usable) {
+            Some("本次运行已加载 CPU 运行库，重启应用后改用 CUDA".to_owned())
+        } else {
+            Some(runtime::cuda::fallback_message())
         }
     }
     #[cfg(not(all(windows, target_arch = "x86_64")))]
@@ -1573,14 +1546,6 @@ fn asr_thread_count_for_available(available: usize) -> i32 {
 fn file_len(path: &Path) -> Option<u64> {
     let metadata = path.metadata().ok()?;
     metadata.is_file().then_some(metadata.len())
-}
-
-/// `download_file` 的下载目标。
-struct DownloadSource<'a> {
-    label: &'a str,
-    url: &'a str,
-    size: u64,
-    sha256: &'a str,
 }
 
 fn asr_download_client(route: &crate::proxy::ProxyRoute) -> AppResult<reqwest::Client> {
@@ -1600,11 +1565,23 @@ fn asr_download_client(route: &crate::proxy::ProxyRoute) -> AppResult<reqwest::C
     .map_err(|_| AppError::new("asr_http_client", "模型下载客户端初始化失败"))
 }
 
-async fn remove_file_if_present(path: &Path) -> AppResult<()> {
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(AppError::new("asr_model_write", "无法清理模型临时文件")),
+/// 删除不属于当前任何模型的 `.part`（固定版本更换后留下的半截文件）。
+async fn remove_stale_model_partials(model_dir: &Path) {
+    let keep: Vec<String> = [&ASR_MODEL, &VAD_MODEL, &SPEAKER_MODEL]
+        .iter()
+        .map(|model| model.partial_name())
+        .collect();
+    let Ok(mut entries) = tokio::fs::read_dir(model_dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".part")
+            && !keep.contains(&name)
+            && let Err(error) = tokio::fs::remove_file(entry.path()).await
+        {
+            tracing::warn!(path = %entry.path().display(), %error, "failed to remove stale ASR partial");
+        }
     }
 }
 
@@ -1740,9 +1717,9 @@ mod tests {
             "rlive-crispasr-e2e-{}",
             uuid::Uuid::new_v4().simple()
         ));
-        let package = super::runtime::required_package().unwrap();
+        let package = super::runtime::required_package(&runtime_root, false).unwrap();
         super::runtime::install(package, &env("RLIVE_CRISPASR_ARCHIVE"), &runtime_root).unwrap();
-        super::crispasr::load(&package.library_path(&runtime_root)).unwrap();
+        super::runtime::load(package, &runtime_root).unwrap();
 
         let options = AsrRuntimeOptions {
             speaker_enabled: true,
@@ -1778,7 +1755,11 @@ mod tests {
 
         assert!(partials > 0);
         assert!(segments.len() >= 5, "only {} segments", segments.len());
-        assert!(segments.iter().all(|segment| !segment.text.trim().is_empty()));
+        assert!(
+            segments
+                .iter()
+                .all(|segment| !segment.text.trim().is_empty())
+        );
         assert!(segments.iter().all(|segment| segment.speaker_id.is_some()));
     }
 

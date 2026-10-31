@@ -4,13 +4,15 @@
 //! 后只解出加载所需的文件：版本化的 `.so` / `.dylib` 直接改名为它的 soname /
 //! install name，不需要符号链接。最后写入版本标记并整体改名为正式目录。
 //!
-//! x86_64 的包都以 AVX2/FMA/F16C 编译。Windows 有 NVIDIA GPU（Compute Capability
-//! 6.x–9.x、驱动支持 CUDA 12）时改用自带 CUDA 12.6 运行库的包；它同样能以 CPU 运行，
-//! 因此推理后端在 CPU / CUDA 之间切换不需要换包或重启。
+//! x86_64 的包都以 AVX2/FMA/F16C 编译。Windows 推理后端不是 CPU、且有 NVIDIA GPU
+//! （Compute Capability 6.x–9.x、驱动支持 CUDA 12）时改用自带 CUDA 12.6 运行库的包；
+//! 它同样能以 CPU 运行，装过之后切到 CPU 不必换包。进程内只能加载一个包，已加载
+//! CPU 包时要重启应用才能改用 CUDA 包。
 
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::error::{AppError, AppResult};
 
@@ -43,6 +45,11 @@ impl RuntimePackage {
         format!("{RELEASE_BASE}{}", self.archive)
     }
 
+    /// 下载中的归档名。带包 id：升级后同名归档不会续传旧版本的数据。
+    pub fn partial_name(&self) -> String {
+        format!("{}-{}.part", self.id, self.archive)
+    }
+
     pub fn directory(&self, runtime_root: &Path) -> PathBuf {
         runtime_root.join(self.id)
     }
@@ -72,14 +79,35 @@ static PACKAGE: RuntimePackage = RuntimePackage {
     sha256: "b510d11b24dbc747d6c8e2bd90f3ee13e5225404a7f29c20fb85d8f720eac8a9",
     format: ArchiveFormat::TarGz,
     files: &[
-        ("libcrispasr-linux-x86_64/lib/libcrispasr.so.0.8.48", "libcrispasr.so.1"),
-        ("libcrispasr-linux-x86_64/lib/libggml.so.0.26.0", "libggml.so.0"),
-        ("libcrispasr-linux-x86_64/lib/libggml-base.so.0.26.0", "libggml-base.so.0"),
-        ("libcrispasr-linux-x86_64/lib/libggml-cpu.so.0.26.0", "libggml-cpu.so.0"),
+        (
+            "libcrispasr-linux-x86_64/lib/libcrispasr.so.0.8.48",
+            "libcrispasr.so.1",
+        ),
+        (
+            "libcrispasr-linux-x86_64/lib/libggml.so.0.26.0",
+            "libggml.so.0",
+        ),
+        (
+            "libcrispasr-linux-x86_64/lib/libggml-base.so.0.26.0",
+            "libggml-base.so.0",
+        ),
+        (
+            "libcrispasr-linux-x86_64/lib/libggml-cpu.so.0.26.0",
+            "libggml-cpu.so.0",
+        ),
         ("libcrispasr-linux-x86_64/lib/libgomp.so.1", "libgomp.so.1"),
-        ("libcrispasr-linux-x86_64/lib/libopenblas.so.0", "libopenblas.so.0"),
-        ("libcrispasr-linux-x86_64/lib/libgfortran.so.5", "libgfortran.so.5"),
-        ("libcrispasr-linux-x86_64/lib/libquadmath.so.0", "libquadmath.so.0"),
+        (
+            "libcrispasr-linux-x86_64/lib/libopenblas.so.0",
+            "libopenblas.so.0",
+        ),
+        (
+            "libcrispasr-linux-x86_64/lib/libgfortran.so.5",
+            "libgfortran.so.5",
+        ),
+        (
+            "libcrispasr-linux-x86_64/lib/libquadmath.so.0",
+            "libquadmath.so.0",
+        ),
     ],
     library: "libcrispasr.so.1",
 };
@@ -92,13 +120,31 @@ static PACKAGE: RuntimePackage = RuntimePackage {
     sha256: "97d44ec4fab6a1055a2e5c92e0b5a8da8e9b32adc28563cb40d18f591b541f63",
     format: ArchiveFormat::TarGz,
     files: &[
-        ("libcrispasr-linux-arm64/lib/libcrispasr.so.0.8.48", "libcrispasr.so.1"),
-        ("libcrispasr-linux-arm64/lib/libggml.so.0.26.0", "libggml.so.0"),
-        ("libcrispasr-linux-arm64/lib/libggml-base.so.0.26.0", "libggml-base.so.0"),
-        ("libcrispasr-linux-arm64/lib/libggml-cpu.so.0.26.0", "libggml-cpu.so.0"),
+        (
+            "libcrispasr-linux-arm64/lib/libcrispasr.so.0.8.48",
+            "libcrispasr.so.1",
+        ),
+        (
+            "libcrispasr-linux-arm64/lib/libggml.so.0.26.0",
+            "libggml.so.0",
+        ),
+        (
+            "libcrispasr-linux-arm64/lib/libggml-base.so.0.26.0",
+            "libggml-base.so.0",
+        ),
+        (
+            "libcrispasr-linux-arm64/lib/libggml-cpu.so.0.26.0",
+            "libggml-cpu.so.0",
+        ),
         ("libcrispasr-linux-arm64/lib/libgomp.so.1", "libgomp.so.1"),
-        ("libcrispasr-linux-arm64/lib/libopenblas.so.0", "libopenblas.so.0"),
-        ("libcrispasr-linux-arm64/lib/libgfortran.so.5", "libgfortran.so.5"),
+        (
+            "libcrispasr-linux-arm64/lib/libopenblas.so.0",
+            "libopenblas.so.0",
+        ),
+        (
+            "libcrispasr-linux-arm64/lib/libgfortran.so.5",
+            "libgfortran.so.5",
+        ),
     ],
     library: "libcrispasr.so.1",
 };
@@ -111,12 +157,30 @@ static PACKAGE: RuntimePackage = RuntimePackage {
     sha256: "4116c1484fae68a5cb1a29808e77fdf6b52f574e88af0df25c5ca5f793e33042",
     format: ArchiveFormat::TarGz,
     files: &[
-        ("libcrispasr-macos-arm64/lib/libcrispasr.0.8.48.dylib", "libcrispasr.1.dylib"),
-        ("libcrispasr-macos-arm64/lib/libggml.0.26.0.dylib", "libggml.0.dylib"),
-        ("libcrispasr-macos-arm64/lib/libggml-base.0.26.0.dylib", "libggml-base.0.dylib"),
-        ("libcrispasr-macos-arm64/lib/libggml-cpu.0.26.0.dylib", "libggml-cpu.0.dylib"),
-        ("libcrispasr-macos-arm64/lib/libggml-blas.0.26.0.dylib", "libggml-blas.0.dylib"),
-        ("libcrispasr-macos-arm64/lib/libggml-metal.0.26.0.dylib", "libggml-metal.0.dylib"),
+        (
+            "libcrispasr-macos-arm64/lib/libcrispasr.0.8.48.dylib",
+            "libcrispasr.1.dylib",
+        ),
+        (
+            "libcrispasr-macos-arm64/lib/libggml.0.26.0.dylib",
+            "libggml.0.dylib",
+        ),
+        (
+            "libcrispasr-macos-arm64/lib/libggml-base.0.26.0.dylib",
+            "libggml-base.0.dylib",
+        ),
+        (
+            "libcrispasr-macos-arm64/lib/libggml-cpu.0.26.0.dylib",
+            "libggml-cpu.0.dylib",
+        ),
+        (
+            "libcrispasr-macos-arm64/lib/libggml-blas.0.26.0.dylib",
+            "libggml-blas.0.dylib",
+        ),
+        (
+            "libcrispasr-macos-arm64/lib/libggml-metal.0.26.0.dylib",
+            "libggml-metal.0.dylib",
+        ),
     ],
     library: "libcrispasr.1.dylib",
 };
@@ -129,12 +193,24 @@ static PACKAGE: RuntimePackage = RuntimePackage {
     sha256: "a717cf95e0c217fa5ffbfd4ba6c363fabe7dbe883fa1e788f93f9af2b1e0f428",
     format: ArchiveFormat::TarGz,
     files: &[
-        ("libcrispasr-windows-x86_64/bin/crispasr.dll", "crispasr.dll"),
+        (
+            "libcrispasr-windows-x86_64/bin/crispasr.dll",
+            "crispasr.dll",
+        ),
         ("libcrispasr-windows-x86_64/bin/ggml.dll", "ggml.dll"),
-        ("libcrispasr-windows-x86_64/bin/ggml-base.dll", "ggml-base.dll"),
-        ("libcrispasr-windows-x86_64/bin/ggml-cpu.dll", "ggml-cpu.dll"),
+        (
+            "libcrispasr-windows-x86_64/bin/ggml-base.dll",
+            "ggml-base.dll",
+        ),
+        (
+            "libcrispasr-windows-x86_64/bin/ggml-cpu.dll",
+            "ggml-cpu.dll",
+        ),
         ("libcrispasr-windows-x86_64/LICENSE", "LICENSE"),
-        ("libcrispasr-windows-x86_64/THIRD_PARTY_NOTICES.txt", "THIRD_PARTY_NOTICES.txt"),
+        (
+            "libcrispasr-windows-x86_64/THIRD_PARTY_NOTICES.txt",
+            "THIRD_PARTY_NOTICES.txt",
+        ),
     ],
     library: "crispasr.dll",
 };
@@ -147,23 +223,50 @@ static CUDA_PACKAGE: RuntimePackage = RuntimePackage {
     sha256: "a035cbbedb776fc49ae4c29bfe9644bf4c4156b9207b6488c2fbc7c3e71b41f4",
     format: ArchiveFormat::Zip,
     files: &[
-        ("crispasr-windows-x86_64-cuda126/crispasr.dll", "crispasr.dll"),
+        (
+            "crispasr-windows-x86_64-cuda126/crispasr.dll",
+            "crispasr.dll",
+        ),
         ("crispasr-windows-x86_64-cuda126/ggml.dll", "ggml.dll"),
-        ("crispasr-windows-x86_64-cuda126/ggml-base.dll", "ggml-base.dll"),
-        ("crispasr-windows-x86_64-cuda126/ggml-cpu.dll", "ggml-cpu.dll"),
-        ("crispasr-windows-x86_64-cuda126/ggml-cuda.dll", "ggml-cuda.dll"),
-        ("crispasr-windows-x86_64-cuda126/cudart64_12.dll", "cudart64_12.dll"),
-        ("crispasr-windows-x86_64-cuda126/cublas64_12.dll", "cublas64_12.dll"),
-        ("crispasr-windows-x86_64-cuda126/cublasLt64_12.dll", "cublasLt64_12.dll"),
+        (
+            "crispasr-windows-x86_64-cuda126/ggml-base.dll",
+            "ggml-base.dll",
+        ),
+        (
+            "crispasr-windows-x86_64-cuda126/ggml-cpu.dll",
+            "ggml-cpu.dll",
+        ),
+        (
+            "crispasr-windows-x86_64-cuda126/ggml-cuda.dll",
+            "ggml-cuda.dll",
+        ),
+        (
+            "crispasr-windows-x86_64-cuda126/cudart64_12.dll",
+            "cudart64_12.dll",
+        ),
+        (
+            "crispasr-windows-x86_64-cuda126/cublas64_12.dll",
+            "cublas64_12.dll",
+        ),
+        (
+            "crispasr-windows-x86_64-cuda126/cublasLt64_12.dll",
+            "cublasLt64_12.dll",
+        ),
         ("crispasr-windows-x86_64-cuda126/LICENSE", "LICENSE"),
-        ("crispasr-windows-x86_64-cuda126/THIRD_PARTY_NOTICES.txt", "THIRD_PARTY_NOTICES.txt"),
+        (
+            "crispasr-windows-x86_64-cuda126/THIRD_PARTY_NOTICES.txt",
+            "THIRD_PARTY_NOTICES.txt",
+        ),
     ],
     library: "crispasr.dll",
 };
 
 fn platform_package() -> Option<&'static RuntimePackage> {
     #[cfg(any(
-        all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
         all(target_os = "macos", target_arch = "aarch64"),
         all(windows, target_arch = "x86_64"),
     ))]
@@ -171,7 +274,10 @@ fn platform_package() -> Option<&'static RuntimePackage> {
         Some(&PACKAGE)
     }
     #[cfg(not(any(
-        all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
         all(target_os = "macos", target_arch = "aarch64"),
         all(windows, target_arch = "x86_64"),
     )))]
@@ -197,53 +303,115 @@ pub fn unsupported_reason() -> Option<&'static str> {
     None
 }
 
-/// 启用功能时需要的运行库包。Windows 上首次调用会探测 NVIDIA GPU。
-pub fn required_package() -> Result<&'static RuntimePackage, &'static str> {
+/// 启用功能时需要的运行库包。`prefer_gpu` 为假（用户选了 CPU）时不探测 GPU，
+/// Windows 上也不下载 CUDA 包；为真时首次调用会探测 NVIDIA GPU。
+pub fn required_package(
+    runtime_root: &Path,
+    prefer_gpu: bool,
+) -> Result<&'static RuntimePackage, &'static str> {
     if let Some(reason) = unsupported_reason() {
         return Err(reason);
     }
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    if cuda::probe().is_some_and(cuda::GpuProbe::usable) {
-        return Ok(&CUDA_PACKAGE);
-    }
-    platform_package().ok_or("当前平台没有可用的 CrispASR 预编译运行库")
+    select_package(runtime_root, || {
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        {
+            prefer_gpu && cuda::probe().is_some_and(cuda::GpuProbe::usable)
+        }
+        #[cfg(not(all(windows, target_arch = "x86_64")))]
+        {
+            let _ = prefer_gpu;
+            false
+        }
+    })
+    .ok_or("当前平台没有可用的 CrispASR 预编译运行库")
 }
 
-/// 不触发 GPU 探测的包：已探测过就用探测结果，否则按已安装的包推断。
+/// 不触发 GPU 探测的包：已探测过就用探测结果，未探测时按 CPU 包估算。
 /// 只用于状态展示与体积估算。
-pub fn known_package(runtime_root: &Path) -> Option<&'static RuntimePackage> {
+pub fn known_package(runtime_root: &Path, prefer_gpu: bool) -> Option<&'static RuntimePackage> {
     if unsupported_reason().is_some() {
         return None;
     }
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    {
-        let use_cuda = match cuda::cached_probe() {
-            Some(probe) => probe.is_some_and(cuda::GpuProbe::usable),
-            None => CUDA_PACKAGE.is_installed(runtime_root),
-        };
-        if use_cuda {
-            return Some(&CUDA_PACKAGE);
+    select_package(runtime_root, || {
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        {
+            prefer_gpu
+                && cuda::cached_probe()
+                    .flatten()
+                    .is_some_and(cuda::GpuProbe::usable)
         }
+        #[cfg(not(all(windows, target_arch = "x86_64")))]
+        {
+            let _ = prefer_gpu;
+            false
+        }
+    })
+}
+
+/// 选包顺序：进程内已加载的包（换包要重启）→ 已安装的 CUDA 包（它也能以 CPU
+/// 运行，切到 CPU 不必再下载）→ 需要 GPU 时的 CUDA 包 → 平台默认包。
+fn select_package(
+    runtime_root: &Path,
+    wants_cuda: impl FnOnce() -> bool,
+) -> Option<&'static RuntimePackage> {
+    if let Some(package) = loaded() {
+        return Some(package);
     }
-    let _ = runtime_root;
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    if CUDA_PACKAGE.is_installed(runtime_root) || wants_cuda() {
+        return Some(&CUDA_PACKAGE);
+    }
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
+    let _ = (runtime_root, wants_cuda);
     platform_package()
 }
 
-/// Windows 上 CUDA 包比 CPU 包多出的下载体积；其余平台为 0。
-pub fn cuda_extra_bytes() -> u64 {
+static LOADED: OnceLock<&'static RuntimePackage> = OnceLock::new();
+
+/// 进程内已加载的运行库包。
+pub fn loaded() -> Option<&'static RuntimePackage> {
+    LOADED.get().copied()
+}
+
+/// 加载已安装的包；进程内只能加载一个包。
+pub fn load(package: &'static RuntimePackage, runtime_root: &Path) -> AppResult<()> {
+    if !package.is_installed(runtime_root) {
+        return Err(AppError::new("asr_runtime_load", "字幕运行库文件不完整"));
+    }
+    super::crispasr::load(&package.library_path(runtime_root))
+        .map_err(|error| AppError::new("asr_runtime_load", error))?;
+    let _ = LOADED.set(package);
+    Ok(())
+}
+
+/// 尚未探测 GPU 时，CUDA 包可能比 `known_package` 估算的 CPU 包多出的下载体积。
+/// 已经确定用哪个包（选了 CPU、已探测、已加载或已装 CUDA 包）或非 Windows 时为 0。
+pub fn cuda_extra_bytes(runtime_root: &Path, prefer_gpu: bool) -> u64 {
     #[cfg(all(windows, target_arch = "x86_64"))]
     {
-        CUDA_PACKAGE.size.saturating_sub(PACKAGE.size)
+        let undecided = prefer_gpu
+            && loaded().is_none()
+            && cuda::cached_probe().is_none()
+            && !CUDA_PACKAGE.is_installed(runtime_root);
+        if undecided {
+            CUDA_PACKAGE.size.saturating_sub(PACKAGE.size)
+        } else {
+            0
+        }
     }
     #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
+        let _ = (runtime_root, prefer_gpu);
         0
     }
 }
 
 /// 已加载运行库的包是否带 GPU 后端。
 pub fn package_has_gpu(package: &RuntimePackage) -> bool {
-    package.files.iter().any(|(_, name)| *name == "ggml-cuda.dll")
+    package
+        .files
+        .iter()
+        .any(|(_, name)| *name == "ggml-cuda.dll")
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
@@ -289,8 +457,11 @@ pub mod cuda {
 
         let driver = unsafe { Library::new("nvcuda.dll").ok()? };
         let cu_init = unsafe { driver.get::<CuInit>(b"cuInit\0").ok()? };
-        let cu_driver_get_version =
-            unsafe { driver.get::<CuDriverGetVersion>(b"cuDriverGetVersion\0").ok()? };
+        let cu_driver_get_version = unsafe {
+            driver
+                .get::<CuDriverGetVersion>(b"cuDriverGetVersion\0")
+                .ok()?
+        };
         let cu_device_get = unsafe { driver.get::<CuDeviceGet>(b"cuDeviceGet\0").ok()? };
         let cu_device_compute_capability = unsafe {
             driver
@@ -361,19 +532,50 @@ pub fn install(package: &RuntimePackage, archive: &Path, runtime_root: &Path) ->
     result
 }
 
+/// 删除 `runtime_root` 下除 `package` 安装目录和它的下载归档以外的所有条目：
+/// 换包或升级后的旧包、未下完的旧归档、中断的解压暂存目录。失败只记日志，
+/// Windows 上仍被进程占用的 DLL 会删不掉，下次再清。
+pub fn remove_stale_entries(package: &RuntimePackage, runtime_root: &Path) {
+    let keep = [package.id.to_owned(), package.partial_name()];
+    let Ok(entries) = std::fs::read_dir(runtime_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if keep.iter().any(|name| entry.file_name() == name.as_str()) {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match removed {
+            Ok(()) => tracing::info!(path = %path.display(), "removed stale ASR runtime entry"),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "failed to remove stale ASR runtime entry");
+            }
+        }
+    }
+}
+
 fn extract(package: &RuntimePackage, archive: &Path, destination: &Path) -> AppResult<()> {
     let file = File::open(archive).map_err(|_| install_error("无法读取运行库归档"))?;
     let mut found = vec![false; package.files.len()];
     match package.format {
         ArchiveFormat::TarGz => {
             let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(BufReader::new(file)));
-            let entries = tar.entries().map_err(|_| install_error("运行库归档格式无效"))?;
+            let entries = tar
+                .entries()
+                .map_err(|_| install_error("运行库归档格式无效"))?;
             for entry in entries {
                 let mut entry = entry.map_err(|_| install_error("运行库归档读取失败"))?;
                 if !entry.header().entry_type().is_file() {
                     continue;
                 }
-                let path = entry.path().map_err(|_| install_error("运行库归档路径无效"))?;
+                let path = entry
+                    .path()
+                    .map_err(|_| install_error("运行库归档路径无效"))?;
                 let Some(index) = file_index(package, &path.to_string_lossy()) else {
                     continue;
                 };
@@ -495,7 +697,10 @@ mod tests {
 
         let directory = TEST_PACKAGE.directory(&root);
         assert!(TEST_PACKAGE.is_installed(&root));
-        assert_eq!(std::fs::read(TEST_PACKAGE.library_path(&root)).unwrap(), b"lib");
+        assert_eq!(
+            std::fs::read(TEST_PACKAGE.library_path(&root)).unwrap(),
+            b"lib"
+        );
         let mut names: Vec<_> = std::fs::read_dir(&directory)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
@@ -536,6 +741,32 @@ mod tests {
 
         std::fs::write(directory.join("LICENSE"), b"").unwrap();
         assert!(!TEST_PACKAGE.is_installed(&root));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_entries_are_removed_but_the_current_package_and_download_stay() {
+        let root = temp_root();
+        std::fs::create_dir_all(TEST_PACKAGE.directory(&root)).unwrap();
+        std::fs::write(root.join(TEST_PACKAGE.partial_name()), b"part").unwrap();
+        std::fs::create_dir_all(root.join("crispasr-0.8.47-linux-x86_64")).unwrap();
+        std::fs::create_dir_all(root.join(".crispasr-0.8.47-linux-x86_64.extracting")).unwrap();
+        std::fs::write(
+            root.join("crispasr-0.8.47-linux-x86_64-pkg.tar.gz.part"),
+            b"old",
+        )
+        .unwrap();
+
+        remove_stale_entries(&TEST_PACKAGE, &root);
+
+        let mut left: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        let mut expected = vec![TEST_PACKAGE.id.to_owned(), TEST_PACKAGE.partial_name()];
+        expected.sort();
+        assert_eq!(left, expected);
         std::fs::remove_dir_all(root).unwrap();
     }
 
