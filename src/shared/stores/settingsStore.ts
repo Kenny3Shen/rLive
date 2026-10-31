@@ -352,8 +352,8 @@ export function recordingPreferencesFromAppSettings(
 }
 
 /**
- * 本地热词列表的容量上限，与单条热词的最大长度。sherpa-onnx 把热词当作解码时的
- * 加权候选，过长的条目不可能被一整句识别命中，反而拖慢每一帧解码。
+ * 本地热词列表的容量上限，与单条热词的最大长度。Qwen3-ASR 把热词拼进提示词，
+ * 列表越长每次解码的预填充开销越大，过长的条目也很难被整段命中。
  */
 export const ASR_HOTWORDS_MAX = 100;
 export const ASR_HOTWORD_MAX_LENGTH = 80;

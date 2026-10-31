@@ -12,7 +12,7 @@ pub fn asr_get_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
 /// 启动幂等的后台下载/加载操作。命令立即返回，
 /// 因此选择该设置绝不会阻塞 UI 线程。
 ///
-/// 它只保证**资产**就绪（必要时下载），不加载 ONNX 会话：
+/// 它只保证**资产**就绪（必要时下载），不加载识别会话：
 /// 会话留给用户真的打开字幕时的 `asr_load_session`。
 #[tauri::command]
 pub fn asr_enable(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {

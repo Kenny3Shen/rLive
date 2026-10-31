@@ -28,6 +28,8 @@ export type AsrModelStatus = {
   hotwords_count: number;
   speaker_model_downloaded: boolean;
   speaker_model_size_bytes: number;
+  /** Windows 有可用 NVIDIA GPU 时 CUDA 运行库比 CPU 版多出的下载体积；其余平台为 0。 */
+  cuda_runtime_extra_bytes: number;
   threads: number;
   /** 未解析时的占位值（`auto`），真正使用的后端在会话加载后才确定。 */
   provider: "cpu" | "cuda" | "auto";
@@ -68,6 +70,20 @@ export function formatAsrBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 }
 
+/**
+ * 首次启用还需下载的体积。以后端算出的总量为准，再按设置页当前的说话人开关
+ * 增减尚未下载的声纹模型（后端状态可能还停在上一次的配置）。
+ */
+export function estimateAsrDownloadBytes(status: AsrModelStatus, speakerEnabled: boolean): number {
+  let remaining = status.model_size_bytes - status.downloaded_bytes;
+  if (!status.speaker_model_downloaded && speakerEnabled !== status.speaker_enabled) {
+    remaining += speakerEnabled
+      ? status.speaker_model_size_bytes
+      : -status.speaker_model_size_bytes;
+  }
+  return Math.max(0, remaining);
+}
+
 export function describeAsrModelStatus(
   status: AsrModelStatus | null,
   options: { enabled: boolean; supported: boolean; queryError?: string | null },
@@ -92,6 +108,14 @@ export function describeAsrModelStatus(
     return {
       message: "正在检查本地模型…",
       busy: true,
+      error: false,
+      progress: null,
+    };
+  }
+  if (status.state === "unsupported") {
+    return {
+      message: status.message ?? "当前设备不支持本地语音字幕",
+      busy: false,
       error: false,
       progress: null,
     };
@@ -135,7 +159,7 @@ export function describeAsrModelStatus(
     }
     case "extracting":
       return {
-        message: status.message ?? "正在后台解压字幕模型…",
+        message: status.message ?? "正在后台解压字幕运行库…",
         busy: true,
         error: false,
         progress: progress ?? 0,
@@ -162,7 +186,7 @@ export function describeAsrModelStatus(
         status.hotwords_count > 0 ? `${status.hotwords_count} 个热词` : null,
       ].filter((value): value is string => value !== null);
       return {
-        message: `Zipformer 中英双语模型已就绪（${status.provider === "cuda" ? "NVIDIA CUDA" : "CPU"} / ${status.threads} 线程 + ${features.join(" + ")}）${status.message ? `；${status.message}` : ""}`,
+        message: `Qwen3-ASR 0.6B 模型已就绪（${status.provider === "cuda" ? "NVIDIA CUDA" : "CPU"} / ${status.threads} 线程 + ${features.join(" + ")}）${status.message ? `；${status.message}` : ""}`,
         busy: false,
         error: false,
         progress: 100,
@@ -173,13 +197,6 @@ export function describeAsrModelStatus(
         message: status.message ?? "模型准备失败，请重试",
         busy: false,
         error: true,
-        progress: null,
-      };
-    case "unsupported":
-      return {
-        message: status.message ?? "语音字幕当前仅支持 Tauri 桌面客户端",
-        busy: false,
-        error: false,
         progress: null,
       };
   }

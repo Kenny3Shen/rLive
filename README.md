@@ -42,7 +42,7 @@ rLive 是基于 Tauri 2、React 与 Rust 的跨平台直播客户端，整合 **
 - **实时弹幕**：列表与画面弹幕、B 站醒目留言（SC），支持屏蔽、礼物过滤与重复合并；部分平台登录后可发送。
 - **桌面多画面**：2 / 4 / 6 路布局，支持拖拽换位、独立音量与直播时钟同步。
 - **桌面录制与回放**：支持后台录制、按主播自动录制、按时长分割、崩溃恢复与 ASS 弹幕导出；仅重新封装，不转码，默认并发 4 路、最多 6 路。
-- **设备端语音字幕**：直播与 B 站视频可通过 sherpa-onnx 实时识别音频，无需上传音频；Windows 支持 CPU / CUDA，Linux 与 macOS 使用 CPU。
+- **设备端语音字幕**：直播与 B 站视频可通过 CrispASR 运行 Qwen3-ASR 0.6B 在本机识别音频，无需上传音频；运行库与模型在首次启用时下载，Windows 有 NVIDIA GPU 时可用 CUDA，Linux 与 Apple Silicon macOS 使用 CPU。
 
 ## 下载与安装
 
@@ -124,7 +124,7 @@ bun run build    # 前端生产构建
 - **播放**：平台媒体 CDN → `stream_proxy` → 本机地址 → 播放器；代理处理 HLS 清单改写与 B 站 DASH 音视频轨回环，IPTV 复用同一路径。
 - **录制**：平台 CDN → 进程内 FFmpeg → 本地录制目录，只重新封装，不依赖前端播放。
 - **弹幕**：Rust 协议适配器解析并批处理，通过 Tauri Events 推送至界面；直播与在线点播画面统一使用 `weizhenye/Danmaku` DOM 引擎，点播绑定媒体时间轴；录制任务复用消息写入弹幕轨。
-- **字幕**：播放器音频 → Web Audio 16 kHz PCM → 本机 sherpa-onnx；B 站 CC 字幕则经 Rust 获取并转为 WebVTT。
+- **字幕**：播放器音频 → Web Audio 16 kHz PCM → 本机 CrispASR（Silero VAD 分句 + Qwen3-ASR）；B 站 CC 字幕则经 Rust 获取并转为 WebVTT。
 - **存储**：设置、账号、关注与历史等保存在 `rlive.db`；录制媒体、`metadata.json` 与 `danmaku.jsonl` 存放在独立录制目录。
 
 模块职责、会话生命周期与完整数据流见[架构说明](docs/zh/架构说明.md)。

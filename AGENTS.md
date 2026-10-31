@@ -19,7 +19,7 @@
 
 ## 架构
 
-- 技术栈：Tauri 2、Rust、React 19、TypeScript 7、Vite 8、Tailwind CSS 4、shadcn-style/Base UI、Video.js、Sherpa-onnx
+- 技术栈：Tauri 2、Rust、React 19、TypeScript 7、Vite 8、Tailwind CSS 4、shadcn-style/Base UI、Video.js、CrispASR
 - `src/` 为前端，`src-tauri/` 为后端；`src/app/` 管路由与 Shell，`src/features/` 管业务，`src/components/ui/` 管通用 UI，`src/shared/` 管跨功能代码。
 - 后端命令、站点、弹幕、数据库、IPTV、ASR 分别位于 `src-tauri/src/commands/`、`sites/`、`danmu_rs/`、`db/`、`iptv/`、`asr.rs`。
 - 服务端/IPC 缓存用 TanStack Query；设置和轻量状态用 Zustand。

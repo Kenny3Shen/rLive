@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# 在 Cargo 暂存共享 Sherpa/ONNX 运行时之后再构建 Linux Tauri 包。
-# Tauri 会在编译前解析 bundle 资源，因此必须保持两段式流程，
-# 而不能静态声明 target/release/*.so*。
+# 构建 Linux Tauri 包。ASR 运行库由应用在首次启用字幕时下载，
+# 不参与构建，因此这里只需一次 tauri build。
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,52 +41,5 @@ if [[ "${#cargo_features[@]}" -gt 0 ]]; then
   )")
 fi
 
-if ! command -v jq >/dev/null; then
-  echo "Linux 打包需要 jq 用于生成运行库配置" >&2
-  exit 1
-fi
-
-# 先编译：vendored 的 sherpa-onnx-sys 构建脚本只有在 Cargo 链接完应用之后，
-# 才会把共享运行时复制到 target/release。
-bun run tauri -- build --ci --no-bundle ${feature_args[@]+"${feature_args[@]}"}
-
-release_dir="$repo_root/src-tauri/target/release"
-binary="$release_dir/rlive"
-test -x "$binary"
-for required in libsherpa-onnx-c-api.so libonnxruntime.so; do
-  if [[ ! -f "$release_dir/$required" ]]; then
-    echo "缺少 Sherpa ONNX Linux 运行库: $release_dir/$required" >&2
-    exit 1
-  fi
-done
-if [[ -e "$release_dir/libonnxruntime_providers_cuda.so" ]]; then
-  echo "Linux 构建不得包含 Sherpa ONNX CUDA provider" >&2
-  exit 1
-fi
-
-runtime_files="$(mktemp)"
-runtime_config="$(mktemp --suffix=.json)"
-cleanup() {
-  rm -f "$runtime_files" "$runtime_config"
-}
-trap cleanup EXIT
-
-# 通用的 bundle.resources 由 DEB、RPM 和 AppImage 共用。把每个绝对路径文件
-# 映射到空资源路径，可让 Tauri 将其放入产品专属的 Linux 资源目录
-# （`/usr/lib/rLive`）。
-find "$release_dir" -maxdepth 1 -type f -name '*.so*' -printf '%p\t%f\n' | sort | \
-  jq -Rn '
-    [inputs | split("\t") | { key: .[0], value: "" }] | from_entries
-  ' > "$runtime_files"
-if [[ "$(jq 'length' "$runtime_files")" -eq 0 ]]; then
-  echo "未找到可打包的 Linux 共享运行库" >&2
-  exit 1
-fi
-
-jq -n --slurpfile resources "$runtime_files" \
-  '{ bundle: { resources: $resources[0] } }' > "$runtime_config"
-
-# `tauri bundle` 需要与上面 `build` 相同的 features：它通过 Cargo 元数据
-# 定位已编译的二进制，features 不一致会让它到错误的位置去找。
-bun run tauri -- bundle --ci --bundles "$bundles" --config "$runtime_config" \
+bun run tauri -- build --ci --bundles "$bundles" \
   ${feature_args[@]+"${feature_args[@]}"}

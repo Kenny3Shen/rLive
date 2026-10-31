@@ -232,10 +232,10 @@ pub struct AppSettings {
     pub asr_enabled: bool,
     /// 本机 ASR 执行后端：`auto`、`cpu` 或 `cuda`。
     pub asr_provider: String,
-    /// 启用 Zipformer 基于静音的端点/VAD 规则。默认开启；
+    /// 启用 Silero VAD 分句。默认开启；
     /// 关闭后仅保留最大语句长度边界。
     pub asr_vad_enabled: bool,
-    /// 启用可选的 CT-Transformer 标点模型。默认开启。
+    /// 保留识别结果中的标点。默认开启；关闭后去掉标点。
     pub asr_punctuation_enabled: bool,
     /// 可选的端点级说话人区分。该设置仅存于本机，
     /// 因为启用它会下载并加载额外的说话人嵌入模型。

@@ -64,7 +64,12 @@ import { SiteLogo } from "@/shared/components/SiteLogo";
 import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
 import { HOME_ENTRY_IDS, type HomeEntryId } from "@/shared/navEntries";
 import { PagePan } from "@/shared/motion/PagePan";
-import { describeAsrModelStatus, useAsrModelStatus } from "@/features/asr/model";
+import {
+  describeAsrModelStatus,
+  estimateAsrDownloadBytes,
+  formatAsrBytes,
+  useAsrModelStatus,
+} from "@/features/asr/model";
 import {
   AsrCaptionFontSizeField,
   AsrChunkIntervalField,
@@ -308,7 +313,7 @@ export const settingsCategorySearchText: Record<SettingsCategory, string> = {
   appearance:
     "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式 控制栏",
   playback:
-    "播放 播放质量 清晰度 线路记忆 软切换 视频 点播 推荐 接口 App API Web API 预加载 下一分集 初始化段 音视频 分片 额外流量 相关视频 悬停 预览 卡片 封面 语音 字幕 asr zipformer 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
+    "播放 播放质量 清晰度 线路记忆 软切换 视频 点播 推荐 接口 App API Web API 预加载 下一分集 初始化段 音视频 分片 额外流量 相关视频 悬停 预览 卡片 封面 语音 字幕 asr qwen3 crispasr vad 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform: "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   recording:
@@ -1438,16 +1443,12 @@ function AsrModelField() {
 
   const invalid = presentation.error || actionError !== null;
   const busy = pending || (enabled && presentation.busy);
-  const estimatedModelSize = punctuationEnabled
-    ? speakerEnabled
-      ? "577"
-      : "550"
-    : speakerEnabled
-      ? "515"
-      : "488";
-  const estimatedDownloadSize = isWindowsDesktop()
-    ? String(Number(estimatedModelSize) + 212)
-    : estimatedModelSize;
+  const unsupported = model.status?.state === "unsupported";
+  const estimatedDownloadBytes = model.status
+    ? estimateAsrDownloadBytes(model.status, speakerEnabled)
+    : 0;
+  const cudaExtraBytes = model.status?.cuda_runtime_extra_bytes ?? 0;
+  const speakerModelBytes = model.status?.speaker_model_size_bytes ?? 0;
   return (
     <>
       <Field
@@ -1461,6 +1462,8 @@ function AsrModelField() {
             <FieldError role="status" aria-live="polite">
               {actionError ?? presentation.message}
             </FieldError>
+          ) : unsupported ? (
+            <FieldDescription role="status">{presentation.message}</FieldDescription>
           ) : (
             // 稳态文案（就绪/禁用摘要）保持隐藏；
             // 这里只显示模型下载之类的瞬态进度。
@@ -1491,7 +1494,7 @@ function AsrModelField() {
             aria-labelledby="asr-enabled-title"
             aria-invalid={invalid || undefined}
             checked={enabled}
-            disabled={!model.supported || model.isPending || pending}
+            disabled={!model.supported || unsupported || model.isPending || pending}
             onCheckedChange={(checked) => {
               if (checked && model.status?.state === "not_downloaded") {
                 setConfirmOpen(true);
@@ -1505,7 +1508,7 @@ function AsrModelField() {
 
       <SwitchField
         title="VAD（静音端点检测）"
-        tip="关闭后仅按最长 20 秒切分。"
+        tip="用 Silero VAD 按停顿分句；关闭后仅按最长 20 秒切分。"
         checked={vadEnabled}
         disabled={!model.supported || model.isPending || pending}
         fieldDisabled={!model.supported || pending}
@@ -1517,7 +1520,9 @@ function AsrModelField() {
           <FieldContent>
             <FieldTitle>
               <span id="asr-provider-title">推理后端</span>
-              <FieldTip>自动优先使用 CUDA，不可用时回退 CPU。</FieldTip>
+              <FieldTip>
+                自动优先使用 NVIDIA GPU（GTX 10 系列至 RTX 40 系列），不可用时回退 CPU。
+              </FieldTip>
             </FieldTitle>
           </FieldContent>
           <ToggleGroup
@@ -1543,7 +1548,7 @@ function AsrModelField() {
 
       <SwitchField
         title="自动标点"
-        tip="关闭后保留原始文本。"
+        tip="关闭后去掉识别结果里的标点。"
         checked={punctuationEnabled}
         disabled={!model.supported || model.isPending || pending}
         fieldDisabled={!model.supported || pending}
@@ -1552,7 +1557,11 @@ function AsrModelField() {
 
       <SwitchField
         title="说话人区分"
-        tip="首次启用需下载约 27 MB。"
+        tip={
+          speakerModelBytes > 0
+            ? `首次启用需下载约 ${formatAsrBytes(speakerModelBytes)} 声纹模型。`
+            : "首次启用需下载声纹模型。"
+        }
         checked={speakerEnabled}
         disabled={!model.supported || model.isPending || pending}
         fieldDisabled={!model.supported || pending}
@@ -1575,7 +1584,11 @@ function AsrModelField() {
             </AlertDialogMedia>
             <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
             <AlertDialogDescription>
-              将下载约 {estimatedDownloadSize} MB 的字幕运行库和模型，完成后自动启用并保留在本机。
+              将下载约 {formatAsrBytes(estimatedDownloadBytes)} 的 CrispASR 运行库和 Qwen3-ASR
+              模型，完成后自动启用并保留在本机。
+              {cudaExtraBytes > 0 &&
+                ` 检测到可用的 NVIDIA GPU 时改用 CUDA 运行库，需额外下载约 ${formatAsrBytes(cudaExtraBytes)}。`}
+              旧版字幕模型（如有）会被删除以释放空间。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

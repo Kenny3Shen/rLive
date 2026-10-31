@@ -34,7 +34,7 @@ bun run tauri -- android dev --target aarch64                # 开发运行
 
 Gradle flavor 恒为 `universal`：`--target aarch64` 通过 Gradle 属性把构建收窄到 `arm64-v8a`，但不改变 flavor 与输出路径（除非用 `--split-per-abi`）。APK 实际包含哪些 ABI 以 `unzip -Z1 <apk> | grep '^lib/'` 为准。
 
-移动端不提供语音字幕：Android target 在条件编译阶段排除 ASR module、commands 和 state，也不编译或打包 `sherpa-onnx`、ONNX Runtime 与模型解压依赖。
+移动端不提供语音字幕：Android target 在条件编译阶段排除 ASR module、commands 和 state，也不编译 CrispASR 加载器、运行库解压与校验依赖。
 
 不走 `bun run tauri` 而直接用 Cargo 交叉编译时，需手动复用 NDK 工具链：
 

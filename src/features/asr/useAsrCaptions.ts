@@ -8,6 +8,7 @@ import type {
 } from "@/shared/types/live";
 import {
   appendAsrCaptionLine,
+  appendPendingPcm,
   encodePcmBase64,
   formatAsrCaptionSegment,
   subscribeToVideoPcm,
@@ -249,9 +250,13 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       })
       .catch(() => undefined);
     void subscribeToVideoPcm(video, (pcm) => {
-      // 每完成一个窗口立即发布；当推理慢于播放时，
-      // 只保留最新一个尚未开始的窗口。
-      pendingJobRef.current = { pcm, epoch };
+      // 每完成一个窗口立即发布；推理慢于播放时把窗口接到尚未发送的音频之后，
+      // 识别器按连续时间轴分句，不能丢中间的窗口。
+      const pending = pendingJobRef.current;
+      pendingJobRef.current = {
+        pcm: appendPendingPcm(pending?.epoch === epoch ? pending.pcm : null, pcm),
+        epoch,
+      };
       void processPendingJobs();
     })
       .then((nextSubscription) => {

@@ -7,7 +7,6 @@
 # - bun 和/或 Node.js
 # - 与 MSVC 兼容的 LLVM/Clang + libclang（自动探测，或设置 LIBCLANG_PATH）
 # - 首次构建需要网络（下载已固定版本的共享 FFmpeg SDK）
-# - NVIDIA CUDA 12.6 + x86-64 cuDNN 9.x 运行时，以及兼容的 NVIDIA 驱动
 #
 # 用法（需要 PowerShell 7，脚本会拒绝在 Windows PowerShell 5.1 上运行）：
 # pwsh -File .\scripts\build-windows.ps1
@@ -105,10 +104,9 @@ if ($rustc) {
 
 Set-Location $ProjectRoot
 
-# 之前的 `tauri dev` 或手动启动可能仍映射着目标可执行文件
-# （以及它的 sherpa-onnx/ONNX Runtime DLL）。Windows 无法替换已加载的二进制，
-# 因此在 Cargo 暂存新的运行时文件之前，只结束由当前检出目录构建出的
-# rLive 实例；target 目录之外已安装的副本不受影响。
+# 之前的 `tauri dev` 或手动启动可能仍映射着目标可执行文件。
+# Windows 无法替换已加载的二进制，因此构建前只结束由当前检出目录
+# 构建出的 rLive 实例；target 目录之外已安装的副本不受影响。
 $projectTargetRoot = [IO.Path]::GetFullPath((Join-Path $ProjectRoot "src-tauri\target"))
 $projectProcesses = @(Get-Process -Name "rlive" -ErrorAction SilentlyContinue | Where-Object {
     try {
@@ -154,13 +152,6 @@ if (-not (Test-Path $ffmpegPrepare)) {
 & $ffmpegPrepare `
     -ProjectRoot $ProjectRoot `
     -StageDestination (Join-Path $ProjectRoot "src-tauri\target\release")
-
-$env:SHERPA_ONNX_GPU = if ($env:SHERPA_ONNX_GPU) { $env:SHERPA_ONNX_GPU } else { "1" }
-if ($env:SHERPA_ONNX_GPU -eq "0") {
-    Write-Host "ASR native backend: CPU-only override (SHERPA_ONNX_GPU=0)"
-} else {
-    Write-Host "ASR native backend: CUDA-capable shared runtime (provider auto-selects CUDA/CPU)"
-}
 
 # 优先使用 package.json 脚本提供的本地 CLI："tauri": "tauri"
 # （winget 版 bun 通常没有 bunx.exe，`bun x tauri` 也可能定位不到该二进制）

@@ -1,106 +1,95 @@
-//! 本地流式 ASR 模型生命周期与转写服务（sherpa-onnx）。
+//! 本地流式 ASR 模型生命周期与转写服务（CrispASR + Qwen3-ASR 0.6B）。
 //!
 //! 模型刻意不在应用启动时下载或加载。用户必须在设置中主动开启，
 //! `enable` 才会启动后台任务。音频由 Web 播放器以 16 kHz 单声道
 //! f32 PCM 提供。
 //!
-//! 这里通过 `OnlineRecognizer` 使用流式 zipformer transducer。一条长期存活的
-//! stream 跨 IPC 窗口累积状态，因此每个窗口都会返回当前语句不断演进的假设，
-//! 以及端点检测刚刚定稿的语句。不需要 Silero VAD：端点规则已经决定语句在哪里
-//! 结束。启用可选的说话人区分时，每条定稿语句都会用缓存的 PCM 经 CAMPPlus
-//! 说话人嵌入模型分类。
+//! CrispASR 运行库按平台在首次启用时下载（见 `runtime`），经 `libloading` 加载。
+//! Qwen3-ASR 是离线 encoder-decoder：`stream` 用 Silero VAD 分句，语句进行中只重解码
+//! 最近几秒作为在途假设，语句结束时解码整句定稿。启用可选的说话人区分时，
+//! 每条定稿语句都会经 TitaNet 声纹模型分类。
+
+mod crispasr;
+mod runtime;
+mod stream;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-#[cfg(windows)]
-use libloading::Library;
-#[cfg(windows)]
-use sha2::{Digest, Sha256};
-#[cfg(windows)]
-use std::sync::OnceLock;
-
 use serde::Serialize;
-use sherpa_onnx::{
-    OfflinePunctuation, OfflinePunctuationConfig, OnlineRecognizer, OnlineRecognizerConfig,
-    OnlineStream, SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig,
-};
+use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, AppResult};
 
-const MODEL_DIR_NAME: &str = "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20";
-const MODEL_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2";
-const MODEL_ARCHIVE_SIZE_BYTES: u64 = 511_274_346;
+use self::runtime::RuntimePackage;
+use self::stream::{CaptionEngine, CaptionStream, FRAME_SAMPLES, SAMPLE_RATE, StreamConfig};
 
-const PUNCTUATION_DIR_NAME: &str =
-    "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8";
-const PUNCTUATION_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2";
-const PUNCTUATION_ARCHIVE_SIZE_BYTES: u64 = 64_717_756;
+/// 一个需要下载的模型文件。地址钉在 Hugging Face 的固定 commit 上，
+/// 大小与 SHA-256 都在下载时校验。
+struct ModelFile {
+    label: &'static str,
+    file_name: &'static str,
+    url: &'static str,
+    size: u64,
+    sha256: &'static str,
+}
 
-const SPEAKER_MODEL_FILE: &str = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
-const SPEAKER_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx";
-const SPEAKER_MODEL_SIZE_BYTES: u64 = 28_281_164;
-const HOTWORDS_FILE: &str = "hotwords.txt";
-const HOTWORDS_SCORE: f32 = 2.0;
+const ASR_MODEL: ModelFile = ModelFile {
+    label: "Qwen3-ASR 识别模型",
+    file_name: "qwen3-asr-0.6b-q4_k.gguf",
+    url: "https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF/resolve/58bd3202f835f46b24b17142cb503b0860c737a5/qwen3-asr-0.6b-q4_k.gguf",
+    size: 631_026_336,
+    sha256: "f63771c02dfa486d9399d41ab6ab8cd2d8ca24e077cd32130ea1f67f4fd8dade",
+};
 
-#[cfg(windows)]
-const WINDOWS_RUNTIME_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2";
-#[cfg(windows)]
-const WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES: u64 = 310_807_279;
-#[cfg(windows)]
-const WINDOWS_RUNTIME_ARCHIVE_SHA256: &str =
-    "11b56076060c109e16d85eba3acfb03f6d0c4a738ecd2a99dd45eb689b2051a4";
-#[cfg(windows)]
-const WINDOWS_RUNTIME_ARCHIVE_ROOT: &str = "sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-win-x64-cuda";
-#[cfg(windows)]
-const WINDOWS_RUNTIME_DIR_NAME: &str = "asr-runtime";
-#[cfg(any(windows, test))]
-const WINDOWS_RUNTIME_DLLS: &[&str] = &[
-    "onnxruntime.dll",
-    "onnxruntime_providers_cuda.dll",
-    "onnxruntime_providers_shared.dll",
-    "sherpa-onnx-c-api.dll",
+const VAD_MODEL: ModelFile = ModelFile {
+    label: "Silero VAD 模型",
+    file_name: "ggml-silero-v6.2.0.bin",
+    url: "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin",
+    size: 885_098,
+    sha256: "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+};
+
+const SPEAKER_MODEL: ModelFile = ModelFile {
+    label: "TitaNet 说话人声纹模型",
+    file_name: "titanet-large.gguf",
+    url: "https://huggingface.co/cstr/titanet-large-GGUF/resolve/4f58dcc54b17ba738c2aec055f3afe6e46263a64/titanet-large.gguf",
+    size: 44_612_960,
+    sha256: "ad1a24f074a1a2cbc7492f7a131043713467fb31abd606cff2804bb649c53ada",
+};
+
+const RUNTIME_DIR_NAME: &str = "crispasr-runtime";
+
+/// 旧版 sherpa-onnx 留在 `models/asr` 下的资产，切换后不再使用。
+const LEGACY_MODEL_ENTRIES: &[&str] = &[
+    "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+    "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8",
+    "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+    "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx.part",
+    "streaming-zipformer.tar.bz2.part",
+    "punctuation-ct-transformer.tar.bz2.part",
+    "hotwords.txt",
+    "hotwords.txt.part",
 ];
-#[cfg(any(windows, test))]
-const WINDOWS_RUNTIME_VERSION_FILE: &str = ".rlive-runtime-version";
-#[cfg(any(windows, test))]
-const WINDOWS_RUNTIME_VERSION: &str = "sherpa-onnx-1.13.4-cuda-12.x-cudnn-9.x";
+/// 旧版 Windows sherpa-onnx CUDA 运行库目录，按版本标记确认后才删除。
+const LEGACY_RUNTIME_DIR_NAME: &str = "asr-runtime";
+const LEGACY_RUNTIME_MARKER_PREFIX: &str = "sherpa-onnx";
 
 const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
-#[cfg(any(windows, test))]
 const ASR_PROVIDER_CUDA: &str = "cuda";
-// Windows 版 v1.13.4 CUDA 12 压缩包内的 ONNX Runtime CUDA provider
-// 只接受下列架构。CUDA 12.6.3 的 nvcc 本身可以编译 sm_61，但官方预编译
-// provider 没有 Pascal 内核，不能据此放开 GTX 10 系列。
-#[cfg(windows)]
-const CUDA_SUPPORTED_COMPUTE_CAPABILITIES: &[(i32, i32)] =
-    &[(7, 0), (7, 5), (8, 0), (8, 6), (8, 9), (9, 0)];
 
-const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
-const DECODER_FILE: &str = "decoder-epoch-99-avg-1.onnx";
-const JOINER_FILE: &str = "joiner-epoch-99-avg-1.int8.onnx";
-const TOKENS_FILE: &str = "tokens.txt";
-const BPE_VOCAB_FILE: &str = "bpe.vocab";
-const PUNCTUATION_FILE: &str = "model.int8.onnx";
-
-const ASR_SAMPLE_RATE: i32 = 16_000;
 const ASR_THREAD_LIMIT: usize = 8;
+const SPEAKER_THREADS: i32 = 4;
 const SPEAKER_MATCH_THRESHOLD: f32 = 0.55;
 const SPEAKER_SWITCH_THRESHOLD: f32 = 0.68;
 const SPEAKER_NEW_CLUSTER_THRESHOLD: f32 = 0.35;
 const SPEAKER_MIN_UTTERANCE_SAMPLES: usize = 9_600;
+/// 声纹只取语句中段至多 4 s：TitaNet 在 CPU 上的耗时随音频长度增长，
+/// 4 s 已足够稳定区分说话人。
+const SPEAKER_MAX_WINDOW_SAMPLES: usize = 4 * SAMPLE_RATE;
 const MAX_SPEAKER_CLUSTERS: usize = 8;
 const SPEAKER_CENTROID_HISTORY: u32 = 8;
-
-// 端点规则。`OnlineRecognizerConfig::default()` 会把它们留在 0.0，
-// 这会完全关闭端点检测，因此必须显式设置。
-// rule1 在尾部静音且未解码出文本时触发，rule2 在有文本后的尾部静音时触发，
-// rule3 在语句达到最大长度时触发。
-const ENDPOINT_RULE1_MIN_TRAILING_SILENCE: f32 = 2.4;
-const ENDPOINT_RULE2_MIN_TRAILING_SILENCE: f32 = 0.8;
-const ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH: f32 = 20.0;
-const ENDPOINT_DISABLED_TRAILING_SILENCE: f32 = 3_600.0;
 
 const MAX_PCM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BASE64_PCM_BYTES: usize = MAX_PCM_BYTES.div_ceil(3) * 4;
@@ -127,6 +116,8 @@ pub enum AsrModelState {
     /// 模型已下载且功能仍启用，但会话因长时间空闲已释放。
     /// 下一次开启字幕时按需重新加载。
     Idle,
+    /// 当前平台或 CPU 没有可用的 CrispASR 运行库，原因写在 `message`。
+    Unsupported,
     Error,
 }
 
@@ -142,43 +133,48 @@ pub struct AsrModelStatus {
     pub hotwords_count: u32,
     pub speaker_model_downloaded: bool,
     pub speaker_model_size_bytes: u64,
+    /// Windows 有可用 NVIDIA GPU 时，CUDA 运行库包比 CPU 包多出的下载体积；
+    /// 其余平台为 0。
+    pub cuda_runtime_extra_bytes: u64,
     pub threads: i32,
-    /// 已加载的 ASR、标点和说话人模型所使用的 provider：`cpu` 或 `cuda`。
+    /// 识别模型所使用的推理后端：`cpu` 或 `cuda`。
     pub provider: String,
     pub message: Option<String>,
 }
 
 impl AsrModelStatus {
-    fn new(
-        state: AsrModelState,
-        options: &AsrRuntimeOptions,
-        speaker_model_downloaded: bool,
-    ) -> Self {
-        let model_size_bytes = configured_download_size(options);
+    fn new(options: &AsrRuntimeOptions, snapshot: AssetSnapshot) -> Self {
+        let unsupported = runtime::unsupported_reason();
         Self {
-            state,
-            downloaded_bytes: 0,
-            total_bytes: Some(model_size_bytes),
-            model_size_bytes,
+            state: if unsupported.is_some() {
+                AsrModelState::Unsupported
+            } else if snapshot.complete {
+                AsrModelState::Downloaded
+            } else {
+                AsrModelState::NotDownloaded
+            },
+            downloaded_bytes: snapshot.downloaded_bytes,
+            total_bytes: Some(snapshot.total_bytes),
+            model_size_bytes: snapshot.total_bytes,
             speaker_enabled: options.speaker_enabled,
             vad_enabled: options.vad_enabled,
             punctuation_enabled: options.punctuation_enabled,
             hotwords_count: options.hotwords.len() as u32,
-            speaker_model_downloaded,
-            speaker_model_size_bytes: SPEAKER_MODEL_SIZE_BYTES,
+            speaker_model_downloaded: snapshot.speaker_downloaded,
+            speaker_model_size_bytes: SPEAKER_MODEL.size,
+            cuda_runtime_extra_bytes: runtime::cuda_extra_bytes(),
             threads: asr_thread_count(),
             // 不在这里解析 provider：`effective_asr_provider` 在 Windows 上会加载
-            // NVIDIA 驱动并逐个试载 CUDA 运行库 DLL。那属于「真正启用」的代价，
-            // 不能出现在应用启动路径上。
+            // NVIDIA 驱动查询 GPU。那属于「真正启用」的代价，不能出现在应用启动路径上。
             provider: asr_provider_placeholder(&options.provider),
-            message: None,
+            message: unsupported.map(str::to_owned),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsrRuntimeOptions {
-    /// `auto` 在 Windows 上当暂存的运行时与 NVIDIA 驱动可加载时选择 CUDA；
+    /// `auto` 在 Windows 上检测到可用 NVIDIA GPU 时选择 CUDA；
     /// Linux 与 macOS 始终使用 CPU。
     pub provider: String,
     pub vad_enabled: bool,
@@ -207,101 +203,98 @@ pub struct AsrCaptionSegment {
     pub speaker_id: Option<u32>,
 }
 
-/// 一个窗口产生的流式输出：端点检测刚刚定稿的语句，
-/// 以及当前语句仍在演进的假设。
+/// 一个窗口产生的流式输出：刚刚定稿的语句，以及当前语句仍在演进的假设。
 #[derive(Debug, Clone, Serialize)]
 pub struct AsrTranscribeResult {
     pub segments: Vec<AsrCaptionSegment>,
     pub partial: Option<String>,
 }
 
-/// 识别器所需的全部资源路径。放在一起是为了让"是否就绪"成为一次检查，
-/// 而不是散落在文件各处的四次独立检查。
+/// `models/asr` 下的模型文件路径。
 #[derive(Clone)]
 struct ModelAssets {
     root: PathBuf,
-    encoder: PathBuf,
-    decoder: PathBuf,
-    joiner: PathBuf,
-    tokens: PathBuf,
-    bpe_vocab: PathBuf,
-    punctuation_root: PathBuf,
-    punctuation: PathBuf,
-    speaker: PathBuf,
-    hotwords: PathBuf,
 }
 
 impl ModelAssets {
     fn new(model_dir: &Path) -> Self {
-        let root = model_dir.join(MODEL_DIR_NAME);
-        let punctuation_root = model_dir.join(PUNCTUATION_DIR_NAME);
         Self {
-            encoder: root.join(ENCODER_FILE),
-            decoder: root.join(DECODER_FILE),
-            joiner: root.join(JOINER_FILE),
-            tokens: root.join(TOKENS_FILE),
-            bpe_vocab: root.join(BPE_VOCAB_FILE),
-            punctuation: punctuation_root.join(PUNCTUATION_FILE),
-            speaker: model_dir.join(SPEAKER_MODEL_FILE),
-            hotwords: model_dir.join(HOTWORDS_FILE),
-            punctuation_root,
-            root,
+            root: model_dir.to_path_buf(),
         }
     }
 
-    /// 每个识别器资源文件和 token 表都必须是非空文件。压缩包没有逐文件的
-    /// 清单，因此"存在且非空"是能以低成本做到的最强校验；
-    /// 图结构损坏会在加载时暴露。
-    fn is_complete(&self, punctuation_enabled: bool) -> bool {
-        self.recognizer_is_complete() && (!punctuation_enabled || self.punctuation_is_complete())
+    fn path(&self, model: &ModelFile) -> PathBuf {
+        self.root.join(model.file_name)
     }
 
-    fn recognizer_is_complete(&self) -> bool {
-        [
-            &self.encoder,
-            &self.decoder,
-            &self.joiner,
-            &self.tokens,
-            &self.bpe_vocab,
-        ]
-        .iter()
-        .all(|path| file_len(path) > Some(0))
-    }
-
-    fn punctuation_is_complete(&self) -> bool {
-        file_len(&self.punctuation) > Some(0)
+    /// 下载时已校验 SHA-256 并原子改名，这里只核对大小；损坏会在加载时暴露。
+    fn is_complete(&self, model: &ModelFile) -> bool {
+        file_len(&self.path(model)) == Some(model.size)
     }
 
     fn speaker_is_complete(&self) -> bool {
-        file_len(&self.speaker) == Some(SPEAKER_MODEL_SIZE_BYTES)
+        self.is_complete(&SPEAKER_MODEL)
     }
+}
 
-    fn required_assets_complete(&self, options: &AsrRuntimeOptions) -> bool {
-        self.is_complete(options.punctuation_enabled)
-            && (!options.speaker_enabled || self.speaker_is_complete())
+/// 当前配置需要的模型文件，按下载顺序排列。
+fn required_models(options: &AsrRuntimeOptions) -> Vec<&'static ModelFile> {
+    let mut models = vec![&ASR_MODEL];
+    if options.vad_enabled {
+        models.push(&VAD_MODEL);
     }
-
-    fn downloaded_bytes(&self, options: &AsrRuntimeOptions) -> u64 {
-        let recognizer = if self.recognizer_is_complete() {
-            MODEL_ARCHIVE_SIZE_BYTES
-        } else {
-            0
-        };
-        let punctuation = if options.punctuation_enabled && self.punctuation_is_complete() {
-            PUNCTUATION_ARCHIVE_SIZE_BYTES
-        } else {
-            0
-        };
-        let speaker = if options.speaker_enabled && self.speaker_is_complete() {
-            SPEAKER_MODEL_SIZE_BYTES
-        } else {
-            0
-        };
-        recognizer + punctuation + speaker
+    if options.speaker_enabled {
+        models.push(&SPEAKER_MODEL);
     }
+    models
+}
 
-    fn as_string(path: &Path) -> String {
-        path.to_string_lossy().into_owned()
+/// 运行库包加上当前配置需要的模型文件的总下载体积。
+fn configured_download_size(
+    options: &AsrRuntimeOptions,
+    package: Option<&RuntimePackage>,
+) -> u64 {
+    package.map_or(0, |package| package.size)
+        + required_models(options)
+            .into_iter()
+            .map(|model| model.size)
+            .sum::<u64>()
+}
+
+/// 不触发 GPU 探测的资产快照，用于状态展示。
+#[derive(Debug, Clone, Copy)]
+struct AssetSnapshot {
+    complete: bool,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    speaker_downloaded: bool,
+}
+
+fn asset_snapshot(
+    assets: &ModelAssets,
+    runtime_dir: &Path,
+    options: &AsrRuntimeOptions,
+) -> AssetSnapshot {
+    let package = runtime::known_package(runtime_dir);
+    let runtime_installed = package.is_some_and(|package| package.is_installed(runtime_dir));
+    let mut complete = runtime_installed;
+    let mut downloaded_bytes = if runtime_installed {
+        package.map_or(0, |package| package.size)
+    } else {
+        0
+    };
+    for model in required_models(options) {
+        if assets.is_complete(model) {
+            downloaded_bytes += model.size;
+        } else {
+            complete = false;
+        }
+    }
+    AssetSnapshot {
+        complete,
+        downloaded_bytes,
+        total_bytes: configured_download_size(options, package),
+        speaker_downloaded: assets.speaker_is_complete(),
     }
 }
 
@@ -380,22 +373,14 @@ impl SpeakerClusters {
 }
 
 struct NativeSpeakerSession {
-    extractor: SpeakerEmbeddingExtractor,
+    embedder: crispasr::SpeakerEmbedder,
     clusters: SpeakerClusters,
 }
 
 impl NativeSpeakerSession {
-    fn open(model: &Path, threads: i32, provider: &str) -> Result<Self, String> {
-        let config = SpeakerEmbeddingExtractorConfig {
-            model: Some(ModelAssets::as_string(model)),
-            num_threads: threads.clamp(1, 2),
-            debug: false,
-            provider: Some(provider.to_string()),
-        };
-        let extractor = SpeakerEmbeddingExtractor::create(&config)
-            .ok_or_else(|| "sherpa-onnx could not create the speaker model".to_string())?;
+    fn open(model: &Path) -> Result<Self, String> {
         Ok(Self {
-            extractor,
+            embedder: crispasr::SpeakerEmbedder::open(model, SPEAKER_THREADS)?,
             clusters: SpeakerClusters::default(),
         })
     }
@@ -404,13 +389,9 @@ impl NativeSpeakerSession {
         if pcm.len() < SPEAKER_MIN_UTTERANCE_SAMPLES {
             return self.clusters.last_assignment;
         }
-        let stream = self.extractor.create_stream()?;
-        stream.accept_waveform(ASR_SAMPLE_RATE, pcm);
-        stream.input_finished();
-        if !self.extractor.is_ready(&stream) {
-            return None;
-        }
-        let embedding = self.extractor.compute(&stream)?;
+        let window = pcm.len().min(SPEAKER_MAX_WINDOW_SAMPLES);
+        let start = (pcm.len() - window) / 2;
+        let embedding = self.embedder.embed(&pcm[start..start + window])?;
         self.clusters.classify(&embedding)
     }
 
@@ -419,196 +400,98 @@ impl NativeSpeakerSession {
     }
 }
 
-/// 持有识别器，以及那条跨 IPC 窗口携带解码器状态的长期 stream。
-///
-/// 流式 transducer 只有在持续喂入同一条 stream 时才会产出增量文本，
-/// 因此 stream 在加载时创建一次，仅在端点处或播放器切换源时重置。
-struct NativeAsrSession {
-    recognizer: OnlineRecognizer,
-    stream: OnlineStream,
-    provider: String,
-    punctuation: Option<OfflinePunctuation>,
+/// 调度器借用的原生能力：识别、VAD 与可选的声纹。
+struct NativeEngine {
+    asr: crispasr::Session,
+    vad: Option<crispasr::Vad>,
     speaker: Option<NativeSpeakerSession>,
-    /// 自上次重置以来累计接收的采样数，用于把字幕放到相对于
-    /// 当前 stream 起点的时间轴上。
-    accepted_samples: u64,
-    /// 当前语句开始时的采样位置。
-    utterance_start_samples: u64,
-    /// 自上个端点以来的 PCM。其长度受端点规则 3 约束，
-    /// 且只有在出现定稿句子后才会被消费。
-    utterance_pcm: Vec<f32>,
 }
 
-unsafe impl Send for NativeAsrSession {}
+impl CaptionEngine for NativeEngine {
+    fn score(&mut self, pcm: &[f32]) -> Result<Vec<f32>, String> {
+        match self.vad.as_mut() {
+            Some(vad) => vad.score(pcm),
+            None => Ok(vec![1.0; pcm.len() / FRAME_SAMPLES]),
+        }
+    }
+
+    fn transcribe(&mut self, pcm: &[f32]) -> Result<String, String> {
+        self.asr.transcribe(pcm)
+    }
+
+    fn classify_speaker(&mut self, pcm: &[f32]) -> Option<u32> {
+        self.speaker.as_mut()?.classify(pcm)
+    }
+}
+
+/// 常驻的识别会话：原生模型加上跨 IPC 窗口累积语句的调度器。
+struct NativeAsrSession {
+    engine: NativeEngine,
+    stream: CaptionStream,
+    provider: &'static str,
+}
 
 impl NativeAsrSession {
     fn open(
         assets: &ModelAssets,
         threads: i32,
+        use_gpu: bool,
         options: &AsrRuntimeOptions,
     ) -> Result<Self, String> {
-        let provider = effective_asr_provider(&options.provider);
-        let mut config = OnlineRecognizerConfig::default();
-        config.model_config.transducer.encoder = Some(ModelAssets::as_string(&assets.encoder));
-        config.model_config.transducer.decoder = Some(ModelAssets::as_string(&assets.decoder));
-        config.model_config.transducer.joiner = Some(ModelAssets::as_string(&assets.joiner));
-        config.model_config.tokens = Some(ModelAssets::as_string(&assets.tokens));
-        config.model_config.num_threads = threads;
-        config.model_config.debug = false;
-        config.model_config.provider = Some(provider.to_string());
-        // sherpa-onnx 仅在 modified beam search 下支持上下文热词。未配置本地领域词
-        // 时保持更省资源的 greedy 路径，配置了热词时使用较小的 beam。
-        config.decoding_method = Some(if options.hotwords.is_empty() {
-            "greedy_search".to_string()
-        } else {
-            config.max_active_paths = 4;
-            "modified_beam_search".to_string()
-        });
-        // 封装库本身默认关闭端点检测。C API 把规则值 0 视为"使用原生默认值"，
-        // 因此关闭 VAD 时使用一个刻意不可能达到的静音时长，同时保留规则 3。
-        config.enable_endpoint = true;
-        config.rule1_min_trailing_silence = if options.vad_enabled {
-            ENDPOINT_RULE1_MIN_TRAILING_SILENCE
-        } else {
-            ENDPOINT_DISABLED_TRAILING_SILENCE
-        };
-        config.rule2_min_trailing_silence = if options.vad_enabled {
-            ENDPOINT_RULE2_MIN_TRAILING_SILENCE
-        } else {
-            ENDPOINT_DISABLED_TRAILING_SILENCE
-        };
-        config.rule3_min_utterance_length = ENDPOINT_RULE3_MIN_UTTERANCE_LENGTH;
-        if !options.hotwords.is_empty() {
-            // 这个双语模型对中文使用 CJK 字符，对拉丁文本使用 SentencePiece BPE
-            // 片段。缺少 BPE 词表时，像 "ft" 这样的英文热词会被当成一个 CJK token，
-            // sherpa-onnx 会输出 OOV 警告。
-            config.model_config.modeling_unit = Some("cjkchar+bpe".to_string());
-            config.model_config.bpe_vocab = Some(ModelAssets::as_string(&assets.bpe_vocab));
-            config.hotwords_file = Some(ModelAssets::as_string(&assets.hotwords));
-            config.hotwords_score = HOTWORDS_SCORE;
+        let mut asr = crispasr::Session::open(&assets.path(&ASR_MODEL), threads, use_gpu)?;
+        let prompt = hotword_prompt(&options.hotwords);
+        if !prompt.is_empty() {
+            asr.set_hotwords(&prompt)?;
         }
-
-        let recognizer = OnlineRecognizer::create(&config)
-            .ok_or_else(|| "sherpa-onnx could not create the streaming recognizer".to_string())?;
-        let stream = recognizer.create_stream();
-
-        let punctuation = if options.punctuation_enabled {
-            let mut punctuation_config = OfflinePunctuationConfig::default();
-            punctuation_config.model.ct_transformer =
-                Some(ModelAssets::as_string(&assets.punctuation));
-            punctuation_config.model.num_threads = threads.clamp(1, 2);
-            punctuation_config.model.debug = false;
-            punctuation_config.model.provider = Some(provider.to_string());
-            Some(
-                OfflinePunctuation::create(&punctuation_config).ok_or_else(|| {
-                    "sherpa-onnx could not create the punctuation model".to_string()
-                })?,
-            )
+        let vad = if options.vad_enabled {
+            Some(crispasr::Vad::open(&assets.path(&VAD_MODEL))?)
         } else {
             None
         };
         let speaker = if options.speaker_enabled {
-            Some(NativeSpeakerSession::open(
-                &assets.speaker,
-                threads,
-                provider,
-            )?)
+            Some(NativeSpeakerSession::open(&assets.path(&SPEAKER_MODEL))?)
         } else {
             None
         };
-
         Ok(Self {
-            recognizer,
-            stream,
-            provider: provider.to_string(),
-            punctuation,
-            speaker,
-            accepted_samples: 0,
-            utterance_start_samples: 0,
-            utterance_pcm: Vec::new(),
+            engine: NativeEngine { asr, vad, speaker },
+            stream: CaptionStream::new(StreamConfig::for_device(
+                use_gpu,
+                options.vad_enabled,
+                options.punctuation_enabled,
+            )),
+            provider: if use_gpu {
+                ASR_PROVIDER_CUDA
+            } else {
+                ASR_PROVIDER_CPU
+            },
         })
     }
 
-    /// 丢弃解码器状态，使新的播放会话绝不会延续上一条 stream 的语句。
+    /// 丢弃缓冲的音频与 VAD 状态，使新的播放会话绝不会延续上一条 stream 的语句。
     fn reset_stream(&mut self) {
-        self.recognizer.reset(&self.stream);
-        self.accepted_samples = 0;
-        self.utterance_start_samples = 0;
-        self.utterance_pcm.clear();
-        if let Some(speaker) = self.speaker.as_mut() {
+        self.stream.reset();
+        if let Some(vad) = self.engine.vad.as_mut() {
+            vad.reset();
+        }
+        if let Some(speaker) = self.engine.speaker.as_mut() {
             speaker.reset();
         }
     }
 
-    /// 喂入一个窗口，并取出识别器能从中解码出的全部内容。
-    ///
-    /// 返回本窗口内被端点检测定稿的语句，以及当前的假设文本，
-    /// 后者由 UI 作为临时文本渲染。
+    /// 喂入一个窗口，返回其间定稿的语句与当前在途假设。
     fn transcribe(&mut self, pcm: &[f32]) -> Result<AsrTranscribeResult, String> {
-        if pcm.is_empty() {
-            return Ok(AsrTranscribeResult {
-                segments: Vec::new(),
-                partial: None,
-            });
-        }
-
-        self.stream.accept_waveform(ASR_SAMPLE_RATE, pcm);
-        self.accepted_samples = self.accepted_samples.saturating_add(pcm.len() as u64);
-        self.utterance_pcm.extend_from_slice(pcm);
-
-        let mut segments = Vec::new();
-        // 解码当前缓冲的全部内容。单个窗口可能跨越端点，
-        // 因此边界判断放在循环内部。
-        while self.recognizer.is_ready(&self.stream) {
-            self.recognizer.decode(&self.stream);
-
-            if self.recognizer.is_endpoint(&self.stream) {
-                let text = self.current_text();
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    let speaker_id = self
-                        .speaker
-                        .as_mut()
-                        .and_then(|speaker| speaker.classify(&self.utterance_pcm));
-                    segments.push(AsrCaptionSegment {
-                        text: self.add_punctuation(trimmed),
-                        start_ms: samples_to_millis(self.utterance_start_samples),
-                        end_ms: samples_to_millis(self.accepted_samples),
-                        speaker_id,
-                    });
-                }
-                self.recognizer.reset(&self.stream);
-                self.utterance_start_samples = self.accepted_samples;
-                self.utterance_pcm.clear();
+        match self.stream.push(&mut self.engine, pcm) {
+            Ok(output) => Ok(AsrTranscribeResult {
+                segments: output.segments,
+                partial: output.partial,
+            }),
+            Err(error) => {
+                // VAD 失败后增量状态与缓冲不再对齐，整体重来。
+                self.reset_stream();
+                Err(error)
             }
         }
-
-        let text = self.current_text();
-        let trimmed = text.trim();
-        // 实时假设不加标点：partial 每个采集窗口都会刷新，而标点模型是整个窗口里
-        // 最贵的一步，其输出下一窗口就被替换。标点只处理端点定稿的句子。
-        let partial = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        };
-
-        Ok(AsrTranscribeResult { segments, partial })
-    }
-
-    fn current_text(&self) -> String {
-        self.recognizer
-            .get_result(&self.stream)
-            .map(|result| result.text)
-            .unwrap_or_default()
-    }
-
-    fn add_punctuation(&self, text: &str) -> String {
-        self.punctuation
-            .as_ref()
-            .and_then(|punctuation| punctuation.add_punctuation(text))
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| text.to_owned())
     }
 }
 
@@ -619,7 +502,6 @@ pub struct AsrManager {
 
 struct AsrInner {
     model_dir: PathBuf,
-    #[cfg(windows)]
     runtime_dir: PathBuf,
     assets: ModelAssets,
     status: Mutex<AsrModelStatus>,
@@ -649,35 +531,16 @@ impl AsrManager {
     pub fn new(app_directory: &Path) -> Self {
         let model_dir = app_directory.join("models").join("asr");
         let assets = ModelAssets::new(&model_dir);
-        #[cfg(windows)]
-        let runtime_dir = app_directory.join(WINDOWS_RUNTIME_DIR_NAME);
-
-        let speaker_model_downloaded = assets.speaker_is_complete();
+        let runtime_dir = app_directory.join(RUNTIME_DIR_NAME);
         let default_options = AsrRuntimeOptions::default();
-        #[cfg(windows)]
-        let runtime_downloaded = windows_runtime_is_complete(&runtime_dir);
-        #[cfg(not(windows))]
-        let runtime_downloaded = true;
-        let mut status = AsrModelStatus::new(
-            if runtime_downloaded && assets.is_complete(default_options.punctuation_enabled) {
-                AsrModelState::Downloaded
-            } else {
-                AsrModelState::NotDownloaded
-            },
+        let status = AsrModelStatus::new(
             &default_options,
-            speaker_model_downloaded,
+            asset_snapshot(&assets, &runtime_dir, &default_options),
         );
-        status.downloaded_bytes = assets.downloaded_bytes(&default_options)
-            + if runtime_downloaded {
-                windows_runtime_download_size()
-            } else {
-                0
-            };
 
         Self {
             inner: Arc::new(AsrInner {
                 model_dir,
-                #[cfg(windows)]
                 runtime_dir,
                 assets,
                 status: Mutex::new(status),
@@ -703,27 +566,6 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))
     }
 
-    fn write_hotwords_file(&self, hotwords: &[String]) -> AppResult<()> {
-        std::fs::create_dir_all(&self.inner.model_dir)
-            .map_err(|_| AppError::new("asr_hotwords_dir", "无法创建热词配置目录"))?;
-        if hotwords.is_empty() {
-            let _ = std::fs::remove_file(&self.inner.assets.hotwords);
-            let _ = std::fs::remove_file(self.inner.assets.hotwords.with_extension("txt.part"));
-            return Ok(());
-        }
-
-        let partial = self.inner.assets.hotwords.with_extension("txt.part");
-        let content = hotwords.join("\n");
-        std::fs::write(&partial, format!("{content}\n"))
-            .map_err(|_| AppError::new("asr_hotwords_write", "无法保存本地热词配置"))?;
-        if std::fs::rename(&partial, &self.inner.assets.hotwords).is_err() {
-            let _ = std::fs::remove_file(&self.inner.assets.hotwords);
-            std::fs::rename(&partial, &self.inner.assets.hotwords)
-                .map_err(|_| AppError::new("asr_hotwords_write", "无法替换本地热词配置"))?;
-        }
-        Ok(())
-    }
-
     pub fn enable(
         &self,
         route: crate::proxy::ProxyRoute,
@@ -732,16 +574,25 @@ impl AsrManager {
         use std::sync::atomic::Ordering;
 
         normalize_hotwords(&mut options.hotwords);
+        if let Some(reason) = runtime::unsupported_reason() {
+            self.update_status(|status| {
+                status.state = AsrModelState::Unsupported;
+                status.message = Some(reason.to_owned());
+            });
+            return self.status();
+        }
+        // Windows 首次启用在这里探测 GPU，下面的完整性判断才按实际需要的运行库包计算。
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        let _ = runtime::cuda::probe();
 
         let _control = self
             .inner
             .control
             .lock()
             .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
-        self.write_hotwords_file(&options.hotwords)?;
         let was_requested = self.inner.requested.swap(true, Ordering::AcqRel);
         let model_exists = self.required_assets_complete(&options);
-        // 启用只保证资产就绪：ONNX 会话等用户真的打开字幕时再加载。
+        // 启用只保证资产就绪：识别会话等用户真的打开字幕时再加载。
         // 但用户已经在看字幕时（`load_requested`）必须保持旧行为：
         // 设置变更要重载会话而不是把它卸载成 `Idle`，否则改一次 VAD
         // 就会把正在看的字幕断掉。
@@ -787,7 +638,7 @@ impl AsrManager {
                 .wrapping_add(1);
             status.state = next_state;
             self.apply_runtime_options(&mut status, &options);
-            status.downloaded_bytes = self.downloaded_bytes(&options);
+            status.downloaded_bytes = self.asset_snapshot(&options).downloaded_bytes;
             status.threads = asr_thread_count();
             if let Ok(mut current) = self.inner.runtime_options.lock() {
                 *current = Some(options.clone());
@@ -988,7 +839,7 @@ impl AsrManager {
         if session.is_none() {
             return;
         }
-        // 在锁外销毁：释放 ONNX 会话可能需要几百毫秒，不能阻塞其他转写请求。
+        // 在锁外销毁：释放模型可能需要几百毫秒，不能阻塞其他转写请求。
         drop(session);
         // 需求也一并清掉：空闲释放之后再有设置变更不应该重新拉起会话。
         self.inner
@@ -1075,16 +926,28 @@ impl AsrManager {
             return;
         }
 
-        if let Err(error) = self.preload_runtime() {
-            tracing::warn!(%error, "ASR runtime load failed");
-            self.set_error_status_for_request(
-                generation,
-                "字幕运行库加载失败，请检查应用目录权限后重试",
-            );
-            return;
-        }
-
         self.set_loading_status(generation, &options);
+        let manager = self.clone();
+        let package = match tokio::task::spawn_blocking(move || manager.load_runtime()).await {
+            Ok(Ok(package)) => package,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "ASR runtime load failed");
+                self.set_error_status_for_request(
+                    generation,
+                    &format!("字幕运行库加载失败：{}", error.message),
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "ASR runtime load task failed");
+                self.set_error_status_for_request(generation, "字幕运行库加载任务失败，请重试");
+                return;
+            }
+        };
+
+        // 运行库包按硬件选定，CPU / CUDA 偏好只决定是否把模型放上 GPU。
+        let use_gpu = runtime::package_has_gpu(package)
+            && effective_asr_provider(&options.provider) == ASR_PROVIDER_CUDA;
         let assets = self.inner.assets.clone();
         let threads = asr_thread_count();
         let session_options = options.clone();
@@ -1098,7 +961,7 @@ impl AsrManager {
             let previous = guard.take();
             drop(guard);
             drop(previous);
-            NativeAsrSession::open(&assets, threads, &session_options)
+            NativeAsrSession::open(&assets, threads, use_gpu, &session_options)
         })
         .await;
 
@@ -1120,7 +983,7 @@ impl AsrManager {
             drop(session);
             return;
         }
-        let active_provider = session.provider.clone();
+        let active_provider = session.provider;
 
         let Ok(mut guard) = self.inner.session.lock() else {
             tracing::warn!("ASR session mutex poisoned while loading model");
@@ -1139,7 +1002,7 @@ impl AsrManager {
             status.state = AsrModelState::Ready;
             self.apply_runtime_options(status, &options);
             status.downloaded_bytes = status.model_size_bytes;
-            status.provider = active_provider.clone();
+            status.provider = active_provider.to_string();
         });
         self.touch_activity();
         self.start_idle_watchdog();
@@ -1154,126 +1017,91 @@ impl AsrManager {
         if !self.request_is_current(generation) {
             return Ok(false);
         }
-        if self.required_assets_complete(options) {
+        // Windows 首次调用会加载 NVIDIA 驱动探测 GPU，放到阻塞线程池。
+        let package = tokio::task::spawn_blocking(runtime::required_package)
+            .await
+            .map_err(|_| AppError::new("asr_runtime_probe", "字幕运行库检测失败"))?
+            .map_err(|reason| AppError::new("asr_unsupported", reason))?;
+        let runtime_dir = &self.inner.runtime_dir;
+        let runtime_installed = package.is_installed(runtime_dir);
+        let missing_models: Vec<_> = required_models(options)
+            .into_iter()
+            .filter(|model| !self.inner.assets.is_complete(model))
+            .collect();
+        if runtime_installed && missing_models.is_empty() {
             return Ok(true);
         }
 
-        let total_size = configured_download_size(options);
+        self.remove_legacy_assets().await;
+        let total_size = configured_download_size(options, Some(package));
+        let missing_size = missing_models.iter().map(|model| model.size).sum::<u64>()
+            + if runtime_installed { 0 } else { package.size };
+        let mut progress = total_size.saturating_sub(missing_size);
+
+        if !runtime_installed {
+            tokio::fs::create_dir_all(runtime_dir)
+                .await
+                .map_err(|_| AppError::new("asr_runtime_dir", "无法创建字幕运行库目录"))?;
+            let archive = runtime_dir.join(format!("{}.part", package.archive));
+            let source = DownloadSource {
+                label: "CrispASR 运行库",
+                url: &package.url(),
+                size: package.size,
+                sha256: package.sha256,
+            };
+            if !self
+                .download_file(route, generation, &source, &archive, progress, total_size)
+                .await?
+            {
+                return Ok(false);
+            }
+            self.update_status_for_request(generation, |status| {
+                status.state = AsrModelState::Extracting;
+                status.downloaded_bytes = progress + package.size;
+                status.total_bytes = Some(total_size);
+                status.message = Some("正在解压 CrispASR 运行库…".to_owned());
+            });
+            let runtime_root = runtime_dir.clone();
+            let archive_for_install = archive.clone();
+            let installed = tokio::task::spawn_blocking(move || {
+                runtime::install(package, &archive_for_install, &runtime_root)
+            })
+            .await
+            .map_err(|_| AppError::new("asr_runtime_install", "字幕运行库解压任务失败"));
+            let _ = remove_file_if_present(&archive).await;
+            installed??;
+            progress += package.size;
+            if !self.request_is_current(generation) {
+                return Ok(false);
+            }
+        }
 
         tokio::fs::create_dir_all(&self.inner.model_dir)
             .await
             .map_err(|_| AppError::new("asr_model_dir", "无法创建模型目录"))?;
-
-        if !self
-            .ensure_windows_runtime(route, generation, total_size)
-            .await?
-        {
-            return Ok(false);
-        }
-        let runtime_offset = windows_runtime_download_size();
-
-        if !self.inner.assets.recognizer_is_complete()
-            && !self
-                .download_and_extract_archive(
-                    route,
-                    generation,
-                    MODEL_ARCHIVE_URL,
-                    MODEL_ARCHIVE_SIZE_BYTES,
-                    runtime_offset,
-                    "streaming-zipformer.tar.bz2.part",
-                    &self.inner.assets.root,
-                    "Zipformer 识别模型",
-                    total_size,
-                )
+        for model in missing_models {
+            let target = self.inner.assets.path(model);
+            let partial = target.with_file_name(format!("{}.part", model.file_name));
+            let source = DownloadSource {
+                label: model.label,
+                url: model.url,
+                size: model.size,
+                sha256: model.sha256,
+            };
+            if !self
+                .download_file(route, generation, &source, &partial, progress, total_size)
                 .await?
-        {
-            return Ok(false);
-        }
-        if !self.inner.assets.recognizer_is_complete() {
-            return Err(AppError::new(
-                "asr_model_extract",
-                "Zipformer 模型解压结果不完整",
-            ));
-        }
-
-        if !self.request_is_current(generation) {
-            return Ok(false);
-        }
-
-        if options.punctuation_enabled
-            && !self.inner.assets.punctuation_is_complete()
-            && !self
-                .download_and_extract_archive(
-                    route,
-                    generation,
-                    PUNCTUATION_ARCHIVE_URL,
-                    PUNCTUATION_ARCHIVE_SIZE_BYTES,
-                    runtime_offset + MODEL_ARCHIVE_SIZE_BYTES,
-                    "punctuation-ct-transformer.tar.bz2.part",
-                    &self.inner.assets.punctuation_root,
-                    "中英标点模型",
-                    total_size,
-                )
-                .await?
-        {
-            return Ok(false);
-        }
-        if options.punctuation_enabled && !self.inner.assets.punctuation_is_complete() {
-            return Err(AppError::new("asr_model_extract", "标点模型解压结果不完整"));
-        }
-
-        if !self.inner.assets.is_complete(options.punctuation_enabled) {
-            return Err(AppError::new("asr_model_extract", "字幕模型解压结果不完整"));
-        }
-
-        if options.speaker_enabled && !self.inner.assets.speaker_is_complete() {
-            let partial_path = self
-                .inner
-                .model_dir
-                .join(format!("{SPEAKER_MODEL_FILE}.part"));
-            remove_file_if_present(&partial_path).await?;
-            remove_file_if_present(&self.inner.assets.speaker).await?;
-            let downloaded = self
-                .download_model_file(
-                    route,
-                    SPEAKER_MODEL_URL,
-                    &partial_path,
-                    SPEAKER_MODEL_SIZE_BYTES,
-                    runtime_offset
-                        + MODEL_ARCHIVE_SIZE_BYTES
-                        + if options.punctuation_enabled {
-                            PUNCTUATION_ARCHIVE_SIZE_BYTES
-                        } else {
-                            0
-                        },
-                    total_size,
-                    generation,
-                    "说话人声纹模型",
-                )
-                .await;
-            match downloaded {
-                Ok(true) => {}
-                Ok(false) => {
-                    let _ = remove_file_if_present(&partial_path).await;
-                    return Ok(false);
-                }
-                Err(error) => {
-                    if let Err(cleanup_error) = remove_file_if_present(&partial_path).await {
-                        tracing::warn!(%cleanup_error, "failed to clean up speaker model download");
-                    }
-                    return Err(error);
-                }
-            }
-            if !self.request_is_current(generation) {
-                let _ = remove_file_if_present(&partial_path).await;
+            {
                 return Ok(false);
             }
-            tokio::fs::rename(&partial_path, &self.inner.assets.speaker)
+            tokio::fs::rename(&partial, &target)
                 .await
-                .map_err(|_| AppError::new("asr_model_write", "说话人声纹模型文件替换失败"))?;
+                .map_err(|_| AppError::new("asr_model_write", "模型文件替换失败"))?;
+            progress += model.size;
+            let speaker_downloaded = self.inner.assets.speaker_is_complete();
             self.update_status_for_request(generation, |status| {
-                status.speaker_model_downloaded = true;
-                status.downloaded_bytes = total_size;
+                status.speaker_model_downloaded = speaker_downloaded;
+                status.downloaded_bytes = progress;
                 status.total_bytes = Some(total_size);
             });
         }
@@ -1281,81 +1109,39 @@ impl AsrManager {
         if !self.required_assets_complete(options) {
             return Err(AppError::new("asr_model_download", "字幕模型文件不完整"));
         }
-        Ok(true)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn download_and_extract_archive(
-        &self,
-        route: &crate::proxy::ProxyRoute,
-        generation: u64,
-        url: &str,
-        expected_size: u64,
-        progress_offset: u64,
-        archive_name: &str,
-        extracted_root: &Path,
-        label: &str,
-        total_size: u64,
-    ) -> AppResult<bool> {
-        let archive_path = self.inner.model_dir.join(archive_name);
-        remove_file_if_present(&archive_path).await?;
-        // 绝不把中断的解压残留文件与新压缩包的内容混在一起。
-        remove_dir_if_present(extracted_root).await?;
-
-        let result = self
-            .download_model_file(
-                route,
-                url,
-                &archive_path,
-                expected_size,
-                progress_offset,
-                total_size,
-                generation,
-                label,
-            )
-            .await;
-        match result {
-            Ok(true) => {}
-            Ok(false) => {
-                let _ = remove_file_if_present(&archive_path).await;
-                return Ok(false);
-            }
-            Err(error) => {
-                if let Err(cleanup_error) = remove_file_if_present(&archive_path).await {
-                    tracing::warn!(%cleanup_error, "failed to clean up ASR partial archive");
-                }
-                return Err(error);
-            }
-        }
-
-        self.update_status_for_request(generation, |status| {
-            status.state = AsrModelState::Extracting;
-            status.downloaded_bytes = progress_offset.saturating_add(expected_size);
-            status.total_bytes = Some(total_size);
-            status.message = Some(format!("正在解压{label}…"));
-        });
-
-        let model_dir = self.inner.model_dir.clone();
-        let archive = archive_path.clone();
-        let extracted = tokio::task::spawn_blocking(move || extract_tar_bz2(&archive, &model_dir))
-            .await
-            .map_err(|_| AppError::new("asr_model_extract", "模型解压任务失败"))?;
-        let _ = remove_file_if_present(&archive_path).await;
-        extracted?;
         Ok(self.request_is_current(generation))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn download_model_file(
+    /// 下载到 `partial_path` 并校验大小与 SHA-256；未完成或失败时删除临时文件。
+    async fn download_file(
         &self,
         route: &crate::proxy::ProxyRoute,
-        url: &str,
+        generation: u64,
+        source: &DownloadSource<'_>,
         partial_path: &Path,
-        expected_size: u64,
         progress_offset: u64,
         total_size: u64,
+    ) -> AppResult<bool> {
+        remove_file_if_present(partial_path).await?;
+        let result = self
+            .download_verified(route, generation, source, partial_path, progress_offset, total_size)
+            .await;
+        if !matches!(result, Ok(true))
+            && let Err(cleanup_error) = remove_file_if_present(partial_path).await
+        {
+            tracing::warn!(%cleanup_error, "failed to clean up ASR partial download");
+        }
+        result
+    }
+
+    async fn download_verified(
+        &self,
+        route: &crate::proxy::ProxyRoute,
         generation: u64,
-        label: &str,
+        source: &DownloadSource<'_>,
+        partial_path: &Path,
+        progress_offset: u64,
+        total_size: u64,
     ) -> AppResult<bool> {
         if !self.request_is_current(generation) {
             return Ok(false);
@@ -1363,7 +1149,7 @@ impl AsrManager {
 
         let client = asr_download_client(route)?;
         let response = client
-            .get(url)
+            .get(source.url)
             .send()
             .await
             .map_err(|_| AppError::new("asr_model_download", "模型下载请求失败"))?
@@ -1371,7 +1157,7 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_model_download", "模型下载服务返回错误"))?;
         if response
             .content_length()
-            .is_some_and(|length| length != expected_size)
+            .is_some_and(|length| length != source.size)
         {
             return Err(AppError::new("asr_model_size", "模型文件大小与预期不符"));
         }
@@ -1380,25 +1166,23 @@ impl AsrManager {
         use tokio::io::AsyncWriteExt;
 
         let mut stream = response.bytes_stream();
-        let mut file = tokio::fs::File::create(&partial_path)
+        let mut file = tokio::fs::File::create(partial_path)
             .await
             .map_err(|_| AppError::new("asr_model_write", "无法写入模型临时文件"))?;
+        let mut digest = Sha256::new();
         let mut downloaded = 0_u64;
         let mut last_progress = std::time::Instant::now() - std::time::Duration::from_secs(1);
 
         while let Some(chunk) = stream.next().await {
             if !self.request_is_current(generation) {
-                drop(file);
-                let _ = tokio::fs::remove_file(&partial_path).await;
                 return Ok(false);
             }
             let chunk = chunk.map_err(|_| AppError::new("asr_model_download", "模型下载中断"))?;
             downloaded = downloaded.saturating_add(chunk.len() as u64);
-            if downloaded > expected_size {
-                drop(file);
-                let _ = tokio::fs::remove_file(partial_path).await;
+            if downloaded > source.size {
                 return Err(AppError::new("asr_model_size", "模型文件大小超出预期"));
             }
+            digest.update(&chunk);
             file.write_all(&chunk)
                 .await
                 .map_err(|_| AppError::new("asr_model_write", "写入模型文件失败"))?;
@@ -1409,7 +1193,7 @@ impl AsrManager {
                     status.state = AsrModelState::Downloading;
                     status.downloaded_bytes = progress_offset.saturating_add(downloaded);
                     status.total_bytes = Some(total_size);
-                    status.message = Some(format!("正在下载{label}…"));
+                    status.message = Some(format!("正在下载 {}…", source.label));
                 });
             }
         }
@@ -1419,149 +1203,68 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_model_write", "保存模型文件失败"))?;
         drop(file);
 
-        if downloaded != expected_size {
+        if downloaded != source.size {
             return Err(AppError::new("asr_model_size", "模型文件下载不完整"));
         }
-        if !self.request_is_current(generation) {
-            let _ = tokio::fs::remove_file(&partial_path).await;
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    fn required_assets_complete(&self, options: &AsrRuntimeOptions) -> bool {
-        #[cfg(windows)]
-        if !windows_runtime_is_complete(&self.inner.runtime_dir) {
-            return false;
-        }
-        self.inner.assets.required_assets_complete(options)
-    }
-
-    fn downloaded_bytes(&self, options: &AsrRuntimeOptions) -> u64 {
-        let runtime = {
-            #[cfg(windows)]
-            {
-                if windows_runtime_is_complete(&self.inner.runtime_dir) {
-                    WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES
-                } else {
-                    0
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                0
-            }
-        };
-        runtime + self.inner.assets.downloaded_bytes(options)
-    }
-
-    #[cfg(windows)]
-    async fn ensure_windows_runtime(
-        &self,
-        route: &crate::proxy::ProxyRoute,
-        generation: u64,
-        total_size: u64,
-    ) -> AppResult<bool> {
-        if windows_runtime_is_complete(&self.inner.runtime_dir) {
-            return Ok(true);
-        }
-
-        let app_directory = self
-            .inner
-            .runtime_dir
-            .parent()
-            .ok_or_else(|| AppError::new("asr_runtime_dir", "应用目录不可用"))?;
-        tokio::fs::create_dir_all(app_directory)
-            .await
-            .map_err(|_| AppError::new("asr_runtime_dir", "无法创建字幕运行库目录"))?;
-        let archive = app_directory.join("asr-runtime.tar.bz2.part");
-        let staging = app_directory.join("asr-runtime.extracting");
-        remove_file_if_present(&archive).await?;
-        remove_dir_if_present(&staging).await?;
-        remove_dir_if_present(&self.inner.runtime_dir).await?;
-
-        let downloaded = self
-            .download_model_file(
-                route,
-                WINDOWS_RUNTIME_ARCHIVE_URL,
-                &archive,
-                WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES,
-                0,
-                total_size,
-                generation,
-                "Windows 字幕运行库",
-            )
-            .await?;
-        if !downloaded {
-            return Ok(false);
-        }
-
-        let archive_for_hash = archive.clone();
-        let digest = tokio::task::spawn_blocking(move || sha256_file(&archive_for_hash))
-            .await
-            .map_err(|_| AppError::new("asr_runtime_hash", "字幕运行库校验任务失败"))??;
-        if digest != WINDOWS_RUNTIME_ARCHIVE_SHA256 {
-            let _ = remove_file_if_present(&archive).await;
+        if hex::encode(digest.finalize()) != source.sha256 {
             return Err(AppError::new(
-                "asr_runtime_hash",
-                "字幕运行库完整性校验失败",
+                "asr_model_hash",
+                format!("{}完整性校验失败", source.label),
             ));
         }
-
-        self.update_status_for_request(generation, |status| {
-            status.state = AsrModelState::Extracting;
-            status.downloaded_bytes = WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES;
-            status.total_bytes = Some(total_size);
-            status.message = Some("正在解压 Windows 字幕运行库…".to_owned());
-        });
-        let archive_for_extract = archive.clone();
-        let staging_for_extract = staging.clone();
-        tokio::task::spawn_blocking(move || {
-            extract_tar_bz2(&archive_for_extract, &staging_for_extract)
-        })
-        .await
-        .map_err(|_| AppError::new("asr_runtime_extract", "字幕运行库解压任务失败"))??;
-        let _ = remove_file_if_present(&archive).await;
-
-        let extracted_lib = staging.join(WINDOWS_RUNTIME_ARCHIVE_ROOT).join("lib");
-        if !windows_runtime_files_present(&extracted_lib) {
-            let _ = remove_dir_if_present(&staging).await;
-            return Err(AppError::new(
-                "asr_runtime_extract",
-                "字幕运行库解压结果不完整",
-            ));
-        }
-        tokio::fs::write(
-            extracted_lib.join(WINDOWS_RUNTIME_VERSION_FILE),
-            WINDOWS_RUNTIME_VERSION,
-        )
-        .await
-        .map_err(|_| AppError::new("asr_runtime_write", "无法写入字幕运行库版本标记"))?;
-        tokio::fs::rename(&extracted_lib, &self.inner.runtime_dir)
-            .await
-            .map_err(|_| AppError::new("asr_runtime_write", "字幕运行库替换失败"))?;
-        let _ = remove_dir_if_present(&staging).await;
         Ok(self.request_is_current(generation))
     }
 
-    #[cfg(not(windows))]
-    async fn ensure_windows_runtime(
-        &self,
-        _route: &crate::proxy::ProxyRoute,
-        _generation: u64,
-        _total_size: u64,
-    ) -> AppResult<bool> {
-        Ok(true)
+    fn required_assets_complete(&self, options: &AsrRuntimeOptions) -> bool {
+        self.asset_snapshot(options).complete
     }
 
-    #[cfg(windows)]
-    fn preload_runtime(&self) -> AppResult<()> {
-        preload_windows_runtime(&self.inner.runtime_dir)
+    fn asset_snapshot(&self, options: &AsrRuntimeOptions) -> AssetSnapshot {
+        asset_snapshot(&self.inner.assets, &self.inner.runtime_dir, options)
     }
 
-    #[cfg(not(windows))]
-    fn preload_runtime(&self) -> AppResult<()> {
-        Ok(())
+    /// 删除旧版 sherpa-onnx 的模型与 Windows 运行库。失败只记日志，不阻断启用。
+    async fn remove_legacy_assets(&self) {
+        let mut targets: Vec<PathBuf> = LEGACY_MODEL_ENTRIES
+            .iter()
+            .map(|name| self.inner.model_dir.join(name))
+            .collect();
+        if let Some(app_directory) = self.inner.runtime_dir.parent() {
+            let legacy_runtime = app_directory.join(LEGACY_RUNTIME_DIR_NAME);
+            let marker = tokio::fs::read_to_string(legacy_runtime.join(".rlive-runtime-version"))
+                .await
+                .unwrap_or_default();
+            if marker.starts_with(LEGACY_RUNTIME_MARKER_PREFIX) {
+                targets.push(legacy_runtime);
+            }
+            targets.push(app_directory.join("asr-runtime.tar.bz2.part"));
+            targets.push(app_directory.join("asr-runtime.extracting"));
+        }
+        for target in targets {
+            let removed = match tokio::fs::metadata(&target).await {
+                Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(&target).await,
+                Ok(_) => tokio::fs::remove_file(&target).await,
+                Err(_) => continue,
+            };
+            match removed {
+                Ok(()) => tracing::info!(path = %target.display(), "removed legacy ASR asset"),
+                Err(error) => {
+                    tracing::warn!(path = %target.display(), %error, "failed to remove legacy ASR asset");
+                }
+            }
+        }
+    }
+
+    /// 加载已安装的运行库，返回它所属的包。进程内只加载一次。
+    fn load_runtime(&self) -> AppResult<&'static RuntimePackage> {
+        let package = runtime::required_package()
+            .map_err(|reason| AppError::new("asr_unsupported", reason))?;
+        if !package.is_installed(&self.inner.runtime_dir) {
+            return Err(AppError::new("asr_runtime_load", "字幕运行库文件不完整"));
+        }
+        crispasr::load(&package.library_path(&self.inner.runtime_dir))
+            .map_err(|error| AppError::new("asr_runtime_load", error))?;
+        Ok(package)
     }
 
     pub async fn transcribe_pcm(&self, pcm: Vec<f32>) -> AppResult<AsrTranscribeResult> {
@@ -1638,11 +1341,14 @@ impl AsrManager {
         status.vad_enabled = options.vad_enabled;
         status.punctuation_enabled = options.punctuation_enabled;
         status.hotwords_count = options.hotwords.len() as u32;
-        status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-        status.model_size_bytes = configured_download_size(options);
-        status.total_bytes = Some(status.model_size_bytes);
+        // 先解析 provider：Windows 上它会完成 GPU 探测，之后的快照才按实际需要的
+        // 运行库包计算体积。
         status.provider = effective_asr_provider(&options.provider).to_string();
         status.message = asr_provider_fallback_message(&options.provider);
+        let snapshot = self.asset_snapshot(options);
+        status.speaker_model_downloaded = snapshot.speaker_downloaded;
+        status.model_size_bytes = snapshot.total_bytes;
+        status.total_bytes = Some(snapshot.total_bytes);
     }
 
     fn set_loading_status(&self, generation: u64, options: &AsrRuntimeOptions) {
@@ -1663,17 +1369,16 @@ impl AsrManager {
                 speaker_enabled: status.speaker_enabled,
                 hotwords: Vec::new(),
             };
-            let model_exists = self.required_assets_complete(&options);
-            let total_size = configured_download_size(&options);
-            status.state = if model_exists {
+            let snapshot = self.asset_snapshot(&options);
+            status.state = if snapshot.complete {
                 AsrModelState::Downloaded
             } else {
                 AsrModelState::NotDownloaded
             };
-            status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.model_size_bytes = total_size;
-            status.downloaded_bytes = self.downloaded_bytes(&options);
-            status.total_bytes = Some(total_size);
+            status.speaker_model_downloaded = snapshot.speaker_downloaded;
+            status.model_size_bytes = snapshot.total_bytes;
+            status.downloaded_bytes = snapshot.downloaded_bytes;
+            status.total_bytes = Some(snapshot.total_bytes);
             // 关闭功能时不要为了写状态文案去探测 CUDA：用户刚刚选择不用它。
             status.provider = asr_provider_placeholder(&options.provider);
             status.message = None;
@@ -1742,38 +1447,6 @@ pub fn decode_base64_pcm(encoded: &str) -> AppResult<Vec<f32>> {
     Ok(pcm)
 }
 
-fn samples_to_millis(samples: u64) -> u64 {
-    samples.saturating_mul(1_000) / ASR_SAMPLE_RATE as u64
-}
-
-fn configured_model_size(options: &AsrRuntimeOptions) -> u64 {
-    MODEL_ARCHIVE_SIZE_BYTES
-        + if options.punctuation_enabled {
-            PUNCTUATION_ARCHIVE_SIZE_BYTES
-        } else {
-            0
-        }
-        + if options.speaker_enabled {
-            SPEAKER_MODEL_SIZE_BYTES
-        } else {
-            0
-        }
-}
-
-fn configured_download_size(options: &AsrRuntimeOptions) -> u64 {
-    windows_runtime_download_size().saturating_add(configured_model_size(options))
-}
-
-#[cfg(windows)]
-fn windows_runtime_download_size() -> u64 {
-    WINDOWS_RUNTIME_ARCHIVE_SIZE_BYTES
-}
-
-#[cfg(not(windows))]
-fn windows_runtime_download_size() -> u64 {
-    0
-}
-
 fn normalize_hotwords(hotwords: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     hotwords.retain_mut(|word| {
@@ -1789,6 +1462,22 @@ fn normalize_hotwords(hotwords: &mut Vec<String>) {
         seen.insert(word.to_lowercase())
     });
     hotwords.truncate(100);
+}
+
+/// Qwen3-ASR 把热词拼进提示词作为上下文。词条以逗号分隔，词条内部的逗号换成空格，
+/// 避免把一个词拆成两个。热词越多提示词越长，每次解码的预填充开销也越大。
+fn hotword_prompt(hotwords: &[String]) -> String {
+    hotwords
+        .iter()
+        .map(|word| {
+            word.replace([',', '，'], " ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn normalize_embedding(embedding: &[f32]) -> Option<Vec<f32>> {
@@ -1820,7 +1509,6 @@ fn asr_thread_count() -> i32 {
     asr_thread_count_for_available(available)
 }
 
-#[cfg(any(windows, test))]
 fn normalize_asr_provider(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,
@@ -1830,15 +1518,17 @@ fn normalize_asr_provider(value: &str) -> &'static str {
 }
 
 fn effective_asr_provider(preference: &str) -> &'static str {
-    #[cfg(windows)]
+    #[cfg(all(windows, target_arch = "x86_64"))]
     {
         match normalize_asr_provider(preference) {
             ASR_PROVIDER_CPU => ASR_PROVIDER_CPU,
-            ASR_PROVIDER_CUDA | ASR_PROVIDER_AUTO if cuda_runtime_available() => ASR_PROVIDER_CUDA,
+            _ if runtime::cuda::probe().is_some_and(runtime::cuda::GpuProbe::usable) => {
+                ASR_PROVIDER_CUDA
+            }
             _ => ASR_PROVIDER_CPU,
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
         let _ = preference;
         ASR_PROVIDER_CPU
@@ -1847,228 +1537,50 @@ fn effective_asr_provider(preference: &str) -> &'static str {
 
 /// 不触发 CUDA 探测的 provider 展示值。
 ///
-/// `effective_asr_provider` 在 Windows 上会加载 `nvcuda.dll`、查询 GPU 并逐个
-/// 试载 CUDA 运行库 DLL；那是「真正启用」才该付的代价。应用启动时的状态快照
-/// 只需要一个占位值，解析留给 `enable`。
+/// `effective_asr_provider` 在 Windows 上会加载 `nvcuda.dll` 查询 GPU；
+/// 那是「真正启用」才该付的代价。应用启动时的状态快照只需要一个占位值，
+/// 解析留给 `enable`。
 fn asr_provider_placeholder(preference: &str) -> String {
-    #[cfg(windows)]
-    {
+    if cfg!(all(windows, target_arch = "x86_64")) {
         normalize_asr_provider(preference).to_string()
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = preference;
+    } else {
         ASR_PROVIDER_CPU.to_string()
     }
 }
 
 fn asr_provider_fallback_message(preference: &str) -> Option<String> {
-    #[cfg(windows)]
+    #[cfg(all(windows, target_arch = "x86_64"))]
     {
         let normalized = normalize_asr_provider(preference);
         if normalized != ASR_PROVIDER_CPU && effective_asr_provider(normalized) == ASR_PROVIDER_CPU
         {
-            Some(cuda_provider_fallback_message())
+            Some(runtime::cuda::fallback_message())
         } else {
             None
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
         let _ = preference;
         None
     }
 }
 
-#[cfg(windows)]
-fn cuda_provider_fallback_message() -> String {
-    if let Some((major, minor)) = cuda_compute_capability()
-        && !cuda_compute_capability_supported(major, minor)
-    {
-        return format!(
-            "当前 NVIDIA GPU Compute Capability {major}.{minor}，官方 CUDA 12 运行库仅支持 7.0 / 7.5 / 8.0 / 8.6 / 8.9 / 9.0，已回退 CPU"
-        );
-    }
-    "CUDA 运行库或 NVIDIA 驱动不可用，已回退 CPU".to_string()
-}
-
-#[cfg(windows)]
-fn cuda_compute_capability_supported(major: i32, minor: i32) -> bool {
-    CUDA_SUPPORTED_COMPUTE_CAPABILITIES.contains(&(major, minor))
-}
-
-#[cfg(windows)]
-fn cuda_compute_capability() -> Option<(i32, i32)> {
-    static CAPABILITY: OnceLock<Option<(i32, i32)>> = OnceLock::new();
-
-    *CAPABILITY.get_or_init(|| {
-        type CuInit = unsafe extern "system" fn(u32) -> i32;
-        type CuDeviceGet = unsafe extern "system" fn(*mut i32, i32) -> i32;
-        type CuDeviceComputeCapability = unsafe extern "system" fn(*mut i32, *mut i32, i32) -> i32;
-
-        let driver_name = if cfg!(windows) {
-            "nvcuda.dll"
-        } else {
-            "libcuda.so.1"
-        };
-        let driver = unsafe { Library::new(driver_name).ok()? };
-        let cu_init = unsafe { driver.get::<CuInit>(b"cuInit\0").ok()? };
-        let cu_device_get = unsafe { driver.get::<CuDeviceGet>(b"cuDeviceGet\0").ok()? };
-        let cu_device_compute_capability = unsafe {
-            driver
-                .get::<CuDeviceComputeCapability>(b"cuDeviceComputeCapability\0")
-                .ok()?
-        };
-
-        if unsafe { cu_init(0) } != 0 {
-            return None;
-        }
-        let mut device = 0;
-        if unsafe { cu_device_get(&mut device, 0) } != 0 {
-            return None;
-        }
-        let mut major = 0;
-        let mut minor = 0;
-        if unsafe { cu_device_compute_capability(&mut major, &mut minor, device) } != 0 {
-            return None;
-        }
-        Some((major, minor))
-    })
-}
-
-#[cfg(windows)]
-fn cuda_runtime_available() -> bool {
-    if !cuda_compute_capability()
-        .is_some_and(|(major, minor)| cuda_compute_capability_supported(major, minor))
-    {
-        return false;
-    }
-
-    // 按需运行时被暂存到用户数据目录下，`AsrManager` 也正是从那里
-    // 下载并加载它。
-    let runtime_dir = crate::app_paths::application_data_root()
-        .map(|directory| directory.join(WINDOWS_RUNTIME_DIR_NAME));
-    let provider_is_staged = runtime_dir
-        .as_ref()
-        .is_some_and(|directory| windows_runtime_is_complete(directory));
-    if !provider_is_staged {
-        return false;
-    }
-
-    fn can_load(name: &str, runtime_dir: Option<&Path>) -> bool {
-        let mut candidates = Vec::new();
-        if let Some(directory) = runtime_dir {
-            candidates.push(directory.join(name));
-        }
-        if let Some(cuda_path) = std::env::var_os("CUDA_PATH") {
-            let cuda_path = PathBuf::from(cuda_path);
-            candidates.push(cuda_path.join("bin").join("x64").join(name));
-            candidates.push(cuda_path.join("bin").join(name));
-        }
-        candidates.push(PathBuf::from(name));
-
-        candidates
-            .into_iter()
-            .any(|candidate| unsafe { Library::new(candidate).is_ok() })
-    }
-
-    // CUDA provider 的 DLL 由 ONNX Runtime 初始化，无法单独用 LoadLibrary 探测。
-    // 这里校验已暂存的 provider 文件，以及可独立加载的驱动/运行时依赖。
-    [
-        "nvcuda.dll",
-        "cublasLt64_12.dll",
-        "cublas64_12.dll",
-        "cufft64_11.dll",
-        "cudart64_12.dll",
-        "cudnn64_9.dll",
-        "onnxruntime_providers_shared.dll",
-    ]
-    .into_iter()
-    .all(|name| can_load(name, runtime_dir.as_deref()))
-}
-
 fn asr_thread_count_for_available(available: usize) -> i32 {
     available.clamp(1, ASR_THREAD_LIMIT) as i32
-}
-
-fn extract_tar_bz2(archive: &Path, destination: &Path) -> AppResult<()> {
-    let file = std::fs::File::open(archive)
-        .map_err(|_| AppError::new("asr_model_extract", "无法打开模型压缩包"))?;
-    let decoder = bzip2::read::BzDecoder::new(std::io::BufReader::new(file));
-    let mut tar = tar::Archive::new(decoder);
-    tar.unpack(destination)
-        .map_err(|_| AppError::new("asr_model_extract", "模型解压失败"))
-}
-
-#[cfg(any(windows, test))]
-fn windows_runtime_files_present(directory: &Path) -> bool {
-    WINDOWS_RUNTIME_DLLS
-        .iter()
-        .all(|name| file_len(&directory.join(name)) > Some(0))
-}
-
-#[cfg(any(windows, test))]
-fn windows_runtime_is_complete(directory: &Path) -> bool {
-    windows_runtime_files_present(directory)
-        && std::fs::read_to_string(directory.join(WINDOWS_RUNTIME_VERSION_FILE))
-            .is_ok_and(|version| version == WINDOWS_RUNTIME_VERSION)
-}
-
-#[cfg(windows)]
-fn sha256_file(path: &Path) -> AppResult<String> {
-    use std::io::Read;
-
-    let mut file = std::fs::File::open(path)
-        .map_err(|_| AppError::new("asr_runtime_hash", "无法打开字幕运行库归档"))?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|_| AppError::new("asr_runtime_hash", "无法读取字幕运行库归档"))?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-    }
-    Ok(hex::encode(digest.finalize()))
-}
-
-#[cfg(windows)]
-fn preload_windows_runtime(directory: &Path) -> AppResult<()> {
-    use libloading::os::windows::{
-        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
-        Library as WindowsLibrary,
-    };
-
-    static LOADED: OnceLock<()> = OnceLock::new();
-    if LOADED.get().is_some() {
-        return Ok(());
-    }
-    if !windows_runtime_is_complete(directory) {
-        return Err(AppError::new("asr_runtime_load", "字幕运行库文件不完整"));
-    }
-    for name in ["onnxruntime.dll", "sherpa-onnx-c-api.dll"] {
-        let path = directory.join(name);
-        let library = unsafe {
-            WindowsLibrary::load_with_flags(
-                &path,
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
-            )
-        }
-        .map_err(|error| AppError::new("asr_runtime_load", format!("加载 {name} 失败：{error}")))?;
-        library.pin().map_err(|error| {
-            AppError::new("asr_runtime_load", format!("固定 {name} 失败：{error}"))
-        })?;
-        let _ = library.into_raw();
-    }
-    let _ = LOADED.set(());
-    Ok(())
 }
 
 fn file_len(path: &Path) -> Option<u64> {
     let metadata = path.metadata().ok()?;
     metadata.is_file().then_some(metadata.len())
+}
+
+/// `download_file` 的下载目标。
+struct DownloadSource<'a> {
+    label: &'a str,
+    url: &'a str,
+    size: u64,
+    sha256: &'a str,
 }
 
 fn asr_download_client(route: &crate::proxy::ProxyRoute) -> AppResult<reqwest::Client> {
@@ -2078,7 +1590,7 @@ fn asr_download_client(route: &crate::proxy::ProxyRoute) -> AppResult<reqwest::C
         reqwest::Client::builder()
             .use_native_tls()
             .connect_timeout(Duration::from_secs(15))
-            // Reqwest 默认没有总超时。在约 550 MiB 的模型传输过程中，
+            // Reqwest 默认没有总超时。在数百 MiB 的模型与运行库传输过程中，
             // 按读取设置的超时仍能捕捉到卡死的连接。
             .read_timeout(Duration::from_secs(60))
             .user_agent("rLive ASR model downloader"),
@@ -2096,58 +1608,16 @@ async fn remove_file_if_present(path: &Path) -> AppResult<()> {
     }
 }
 
-async fn remove_dir_if_present(path: &Path) -> AppResult<()> {
-    match tokio::fs::remove_dir_all(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(AppError::new("asr_model_write", "无法清理旧模型目录")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use super::cuda_compute_capability_supported;
+    #[cfg(target_os = "linux")]
+    use super::effective_asr_provider;
     use super::{
-        AsrRuntimeOptions, MODEL_ARCHIVE_SIZE_BYTES, PUNCTUATION_ARCHIVE_SIZE_BYTES,
-        SPEAKER_MODEL_SIZE_BYTES, SpeakerClusters, asr_thread_count_for_available,
-        configured_model_size, decode_base64_pcm, effective_asr_provider, normalize_asr_provider,
-        normalize_hotwords, samples_to_millis,
-    };
-    #[cfg(any(windows, test))]
-    use super::{
-        WINDOWS_RUNTIME_VERSION, WINDOWS_RUNTIME_VERSION_FILE, windows_runtime_is_complete,
+        ASR_MODEL, AsrRuntimeOptions, SPEAKER_MODEL, SpeakerClusters, VAD_MODEL,
+        asr_thread_count_for_available, configured_download_size, decode_base64_pcm,
+        hotword_prompt, normalize_asr_provider, normalize_hotwords,
     };
     use base64::Engine;
-
-    #[cfg(any(windows, test))]
-    #[test]
-    fn rejects_a_windows_runtime_without_the_current_version_marker() {
-        let directory =
-            std::env::temp_dir().join(format!("rlive-asr-runtime-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-
-        for name in super::WINDOWS_RUNTIME_DLLS {
-            std::fs::write(directory.join(name), b"test").unwrap();
-        }
-        assert!(!windows_runtime_is_complete(&directory));
-
-        std::fs::write(
-            directory.join(WINDOWS_RUNTIME_VERSION_FILE),
-            WINDOWS_RUNTIME_VERSION,
-        )
-        .unwrap();
-        assert!(windows_runtime_is_complete(&directory));
-
-        std::fs::write(
-            directory.join(WINDOWS_RUNTIME_VERSION_FILE),
-            "sherpa-onnx-1.13.4-win-x64-cuda",
-        )
-        .unwrap();
-        assert!(!windows_runtime_is_complete(&directory));
-        std::fs::remove_dir_all(&directory).unwrap();
-    }
 
     #[test]
     fn decodes_little_endian_pcm() {
@@ -2163,13 +1633,6 @@ mod tests {
         assert!(decode_base64_pcm("not base64!").is_err());
         let unaligned = base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3]);
         assert!(decode_base64_pcm(&unaligned).is_err());
-    }
-
-    #[test]
-    fn converts_sample_positions_to_milliseconds() {
-        assert_eq!(samples_to_millis(0), 0);
-        assert_eq!(samples_to_millis(16_000), 1_000);
-        assert_eq!(samples_to_millis(8_000), 500);
     }
 
     #[test]
@@ -2192,21 +1655,6 @@ mod tests {
     fn always_uses_cpu_provider_on_linux() {
         assert_eq!(effective_asr_provider("auto"), "cpu");
         assert_eq!(effective_asr_provider("cuda"), "cpu");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn accepts_only_architectures_embedded_in_the_prebuilt_cuda_runtime() {
-        assert!(!cuda_compute_capability_supported(6, 0));
-        assert!(!cuda_compute_capability_supported(6, 1));
-        assert!(!cuda_compute_capability_supported(5, 2));
-        assert!(cuda_compute_capability_supported(7, 0));
-        assert!(cuda_compute_capability_supported(7, 5));
-        assert!(cuda_compute_capability_supported(8, 0));
-        assert!(cuda_compute_capability_supported(8, 6));
-        assert!(cuda_compute_capability_supported(8, 9));
-        assert!(cuda_compute_capability_supported(9, 0));
-        assert!(!cuda_compute_capability_supported(10, 0));
     }
 
     #[test]
@@ -2251,28 +1699,87 @@ mod tests {
     }
 
     #[test]
-    fn includes_the_optional_speaker_model_in_download_size() {
+    fn download_size_follows_the_optional_models() {
         let default_options = AsrRuntimeOptions::default();
         assert_eq!(
-            configured_model_size(&default_options),
-            MODEL_ARCHIVE_SIZE_BYTES + PUNCTUATION_ARCHIVE_SIZE_BYTES
+            configured_download_size(&default_options, None),
+            ASR_MODEL.size + VAD_MODEL.size
         );
-        let punctuation_off = AsrRuntimeOptions {
-            punctuation_enabled: false,
+        let vad_off = AsrRuntimeOptions {
+            vad_enabled: false,
             ..default_options.clone()
         };
-        assert_eq!(
-            configured_model_size(&punctuation_off),
-            MODEL_ARCHIVE_SIZE_BYTES
-        );
+        assert_eq!(configured_download_size(&vad_off, None), ASR_MODEL.size);
         let speaker_on = AsrRuntimeOptions {
             speaker_enabled: true,
             ..default_options
         };
         assert_eq!(
-            configured_model_size(&speaker_on),
-            MODEL_ARCHIVE_SIZE_BYTES + PUNCTUATION_ARCHIVE_SIZE_BYTES + SPEAKER_MODEL_SIZE_BYTES
+            configured_download_size(&speaker_on, None),
+            ASR_MODEL.size + VAD_MODEL.size + SPEAKER_MODEL.size
         );
+    }
+
+    #[test]
+    fn joins_hotwords_without_splitting_an_entry() {
+        assert_eq!(hotword_prompt(&[]), "");
+        assert_eq!(
+            hotword_prompt(&["主播昵称".into(), "Faker, T1".into(), "一，二".into()]),
+            "主播昵称, Faker T1, 一 二"
+        );
+    }
+
+    /// 用真实运行库与模型跑完整链路：安装归档 → 加载 → VAD 分句 → 识别 → 声纹。
+    /// `RLIVE_CRISPASR_ARCHIVE` 指向本平台的运行库归档，`RLIVE_CRISPASR_MODELS`
+    /// 是含三个模型文件的目录，`RLIVE_CRISPASR_WAV` 是 16 kHz 单声道 s16 WAV。
+    #[test]
+    #[ignore = "需要真实 CrispASR 运行库与模型"]
+    fn crispasr_end_to_end() {
+        let env = |name: &str| std::path::PathBuf::from(std::env::var_os(name).expect(name));
+        let runtime_root = std::env::temp_dir().join(format!(
+            "rlive-crispasr-e2e-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let package = super::runtime::required_package().unwrap();
+        super::runtime::install(package, &env("RLIVE_CRISPASR_ARCHIVE"), &runtime_root).unwrap();
+        super::crispasr::load(&package.library_path(&runtime_root)).unwrap();
+
+        let options = AsrRuntimeOptions {
+            speaker_enabled: true,
+            hotwords: vec!["rLive".into()],
+            ..AsrRuntimeOptions::default()
+        };
+        let assets = super::ModelAssets::new(&env("RLIVE_CRISPASR_MODELS"));
+        let mut session = super::NativeAsrSession::open(&assets, 8, false, &options).unwrap();
+
+        let wav = std::fs::read(env("RLIVE_CRISPASR_WAV")).unwrap();
+        let data = wav.windows(4).position(|window| window == b"data").unwrap() + 8;
+        let (samples, _) = wav[data..].as_chunks::<2>();
+        let pcm: Vec<f32> = samples
+            .iter()
+            .map(|sample| i16::from_le_bytes(*sample) as f32 / 32_768.0)
+            .collect();
+
+        let mut segments = Vec::new();
+        let mut partials = 0;
+        for chunk in pcm.chunks(3_200) {
+            let result = session.transcribe(chunk).unwrap();
+            partials += usize::from(result.partial.is_some());
+            segments.extend(result.segments);
+        }
+        segments.extend(session.transcribe(&vec![0.0; 32_000]).unwrap().segments);
+        for segment in &segments {
+            println!(
+                "[{:>6}-{:>6}] S{:?} {}",
+                segment.start_ms, segment.end_ms, segment.speaker_id, segment.text
+            );
+        }
+        std::fs::remove_dir_all(&runtime_root).unwrap();
+
+        assert!(partials > 0);
+        assert!(segments.len() >= 5, "only {} segments", segments.len());
+        assert!(segments.iter().all(|segment| !segment.text.trim().is_empty()));
+        assert!(segments.iter().all(|segment| segment.speaker_id.is_some()));
     }
 
     #[test]

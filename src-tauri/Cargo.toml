@@ -66,22 +66,14 @@ brotli = "9"
 uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.15"
 
-# Keep the Rust wrapper, vendored FFI crate, verified runtime archives and
-# download checksums on the same Sherpa release; upgrade them as one unit.
-[target.'cfg(target_os = "macos")'.dependencies]
-sherpa-onnx = "=1.13.4"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# Linux always uses the CPU-only shared runtime; CUDA provider libraries are not
-# part of the desktop build.
-sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
-
 [target.'cfg(not(target_os = "android"))'.dependencies]
-# Local ASR is a desktop-only feature. Keep its model archive and data-path
-# dependencies out of the Android Rust graph as well as out of the UI.
+# Local ASR is a desktop-only feature. The CrispASR runtime is downloaded on
+# first enable and loaded with libloading, so nothing native is linked at build
+# time; keep its archive, checksum and loader dependencies out of Android.
 dirs = "7"
 tar = "0.4"
-bzip2 = "0.6"
+sha2 = "0.11"
+libloading = "0.9"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 # `ffmpeg-next` is an in-process binding to the platform's FFmpeg libraries.
@@ -97,12 +89,8 @@ ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["forma
 fs2 = "0.4"
 
 [target.'cfg(windows)'.dependencies]
-# Windows builds use the shared CUDA-capable runtime. The native build script
-# still permits SHERPA_ONNX_GPU=0 for a CPU-only build without changing Rust
-# code or the model/provider settings.
-sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
-sha2 = "0.11"
-libloading = "0.9"
+# The Windows CUDA 12.6 CrispASR runtime ships as a zip archive.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # Reading the "Internet Settings" proxy for the "跟随系统代理" mode. reqwest's own
 # system-proxy feature would pull the same crate in, but only through hyper-util,
 # which gives no way to reuse the value for FFmpeg recording and the danmaku
@@ -124,9 +112,6 @@ lto = true # 启用链接时优化。
 opt-level = 3 # 优先考虑小的二进制文件大小。如果您更喜欢性能，请使用 `3`。
 panic = "abort" # 通过禁用 panic 处理程序来提高性能。
 strip = true # 确保移除调试符号。
-
-[patch.crates-io]
-sherpa-onnx-sys = { path = "vendor/sherpa-onnx-sys" }
 
 [lints.rust]
 # MSVC 链接器每次都会往 stdout 打印「正在创建库 rlive_lib.dll.lib 和对象 ...」，

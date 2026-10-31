@@ -314,17 +314,17 @@ export type AppSettings = {
   dynamic_background_enabled: boolean;
   /** 下载并加载可选 ASR 模型的设备本地同意开关。 */
   asr_enabled: boolean;
-  /** 设备本地 Zipformer provider：auto、cpu 或 cuda（Windows CUDA 构建）。 */
+  /** 设备本地推理后端：auto、cpu 或 cuda（Windows NVIDIA GPU）。 */
   asr_provider: AsrProvider;
-  /** 启用基于静音的端点/VAD 规则；默认 true。 */
+  /** 启用 Silero VAD 分句；关闭时只按最长时长切分。默认 true。 */
   asr_vad_enabled: boolean;
-  /** 启用可选的本地 CT-Transformer 标点模型；默认 true。 */
+  /** 保留 Qwen3-ASR 输出的标点；关闭时去掉标点。默认 true。 */
   asr_punctuation_enabled: boolean;
   /** 设备本地的端点级匿名说话人区分。 */
   asr_speaker_diarization_enabled: boolean;
-  /** Zipformer 热词偏置使用的设备本地领域短语。 */
+  /** 作为 Qwen3-ASR 提示词上下文的设备本地领域短语。 */
   asr_hotwords: string[];
-  /** Zipformer PCM 分片间隔（秒）。 */
+  /** 本地语音字幕的 PCM 分片间隔（秒）。 */
   asr_window_seconds: number;
   /** 播放器字幕字号（CSS 像素）。 */
   asr_font_size: number;

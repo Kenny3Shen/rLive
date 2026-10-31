@@ -7,8 +7,6 @@ use std::ffi::OsString;
 use std::fs::OpenOptions;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::io::{self, ErrorKind, Write};
-#[cfg(windows)]
-use std::sync::LazyLock;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use uuid::Uuid;
@@ -321,20 +319,6 @@ fn strip_windows_verbatim_prefix(path: &str) -> String {
         return format!(r"\\{rest}");
     }
     path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
-}
-
-/// Windows 上的 CUDA 探测运行在 `AsrManager` 之外，
-/// 需要与按需 ASR 运行时暂存位置相同的根目录。
-#[cfg(windows)]
-static PROCESS_APP_DATA_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    system_data_root()
-        .and_then(|system_root| default_data_root(&system_root))
-        .ok()
-});
-
-#[cfg(windows)]
-pub fn application_data_root() -> Option<PathBuf> {
-    PROCESS_APP_DATA_ROOT.clone()
 }
 
 #[cfg(test)]

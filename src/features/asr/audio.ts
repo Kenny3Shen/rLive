@@ -76,6 +76,30 @@ export function downsamplePcm(
   return output;
 }
 
+/** 单次 `asr_transcribe` 最多携带的采样数，与 Rust 端 2 MiB 的 PCM 上限一致。 */
+export const ASR_MAX_PENDING_SAMPLES = (2 * 1024 * 1024) / Float32Array.BYTES_PER_ELEMENT;
+
+/**
+ * 把新窗口接到尚未发送的 PCM 之后。识别器按连续时间轴分句，推理慢于播放时
+ * 不能丢窗口；积压超过上限时只保留最新的尾部。
+ */
+export function appendPendingPcm(
+  pending: Float32Array | null,
+  next: Float32Array,
+  maxSamples = ASR_MAX_PENDING_SAMPLES,
+): Float32Array {
+  if (!pending || pending.length === 0) {
+    return next.length > maxSamples ? next.slice(next.length - maxSamples) : next;
+  }
+  const total = pending.length + next.length;
+  const keep = Math.min(total, maxSamples);
+  const output = new Float32Array(keep);
+  const fromPending = Math.max(0, keep - next.length);
+  output.set(pending.subarray(pending.length - fromPending), 0);
+  output.set(next.subarray(next.length - (keep - fromPending)), fromPending);
+  return output;
+}
+
 export function encodePcmBase64(samples: Float32Array): string {
   let bytes: Uint8Array;
   if (NATIVE_LITTLE_ENDIAN) {

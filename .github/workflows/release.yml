@@ -51,7 +51,6 @@ jobs:
       contents: read
     env:
       RELEASE_VERSION: ${{ needs.verify-version.outputs.version }}
-      SHERPA_ONNX_GPU: "1"
     steps:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,16 +65,6 @@ jobs:
         with:
           toolchain: 1.99.0
 
-      # rLive's Windows ASR runtime is built against CUDA 12.6 / cuDNN 9.
-      # Pin the toolkit instead of inheriting whichever CUDA version happens
-      # to be preinstalled on the runner, and verify the exact nvcc release
-      # before spending time on the native build. Neither cuDNN nor the CUDA
-      # runtime is a build input: sherpa-onnx links only its import library,
-      # and the application downloads its own provider archive on first use.
-      - name: Install and verify CUDA Toolkit 12.6.3
-        shell: pwsh
-        run: ./scripts/install-windows-cuda.ps1
-
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
@@ -89,26 +78,6 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $expectedCudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
-          if (-not $env:CUDA_PATH -or $env:CUDA_PATH.TrimEnd("\") -ne $expectedCudaRoot) {
-            throw "Expected CUDA_PATH=$expectedCudaRoot, got '$env:CUDA_PATH'."
-          }
-          if (-not $env:CUDA_PATH_V12_6 -or
-              $env:CUDA_PATH_V12_6.TrimEnd("\") -ne $expectedCudaRoot) {
-            throw "Expected CUDA_PATH_V12_6=$expectedCudaRoot, got '$env:CUDA_PATH_V12_6'."
-          }
-          $expectedNvcc = Join-Path $expectedCudaRoot "bin\nvcc.exe"
-          $nvccCommand = Get-Command nvcc -ErrorAction SilentlyContinue
-          if (-not $nvccCommand -or
-              [IO.Path]::GetFullPath($nvccCommand.Source) -ine
-              [IO.Path]::GetFullPath($expectedNvcc)) {
-            throw "nvcc does not resolve to $expectedNvcc."
-          }
-          $nvccVersion = (& nvcc -V | Out-String)
-          if ($LASTEXITCODE -ne 0 -or
-              $nvccVersion -notmatch "release 12\.6, V12\.6\.85") {
-            throw "Expected CUDA Toolkit 12.6.3 (nvcc V12.6.85):`n$nvccVersion"
-          }
           & ./scripts/prepare-windows-ffmpeg.ps1 `
             -ProjectRoot $PWD `
             -StageDestination "$PWD/src-tauri/target/release"
@@ -133,9 +102,6 @@ jobs:
           & $dumpbin /imports $binary | Out-File "$env:RUNNER_TEMP/rlive-imports.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $imports = Get-Content "$env:RUNNER_TEMP/rlive-imports.txt" -Raw
-          if ($imports -notmatch "Delay Load Import" -or $imports -notmatch "sherpa-onnx-c-api.dll") {
-            throw "sherpa-onnx-c-api.dll is not configured as a delay-loaded dependency."
-          }
           foreach ($library in @("avutil", "avcodec", "avformat")) {
             if ($imports -notmatch "$library-[0-9]+\.dll") {
               throw "Windows executable does not import the expected $library runtime DLL."
@@ -197,11 +163,10 @@ jobs:
           # all of them to the MSI, keeping only WebView2Loader.dll out of scope
           # of the resources config (upstream tauri-bundler carries a TODO about
           # exactly this). NSIS installs the resources allow list alone, so the
-          # two installers disagreed: the MSI shipped the ASR runtime, including
-          # a 354 MB onnxruntime_providers_cuda.dll, even though asr.rs
-          # downloads that runtime on demand into the user data directory and
-          # loads it only from there. Move the DLLs the installers must not
-          # carry out of the way for the duration of the bundle.
+          # two installers can disagree about stray DLLs. ASR runtime libraries
+          # are downloaded at first use and never belong beside the executable;
+          # move any DLL the installers must not carry out of the way for the
+          # duration of the bundle.
           $bundledDllPattern = '^((avutil|avcodec|avformat)-[0-9]+|WebView2Loader)\.dll$'
           $quarantineDirectory = Join-Path $env:RUNNER_TEMP "windows-unbundled-dlls"
           New-Item -ItemType Directory -Force $quarantineDirectory | Out-Null
@@ -243,14 +208,9 @@ jobs:
           Copy-Item $msi[0].FullName `
             "release-assets/windows/rLive_$($env:RELEASE_VERSION)_windows-x64.msi"
 
-          if (Get-ChildItem "release-assets/windows" -Recurse -Filter "*.dll" -File) {
-            throw "Windows release assets unexpectedly contain ASR runtime DLLs."
-          }
-
-          # That check only sees loose files next to the installers, which is how
-          # the MSI shipped the ASR runtime unnoticed for several releases. Read
-          # the MSI File table and the NSIS payload listing instead, so both
-          # installers are asserted on their actual contents.
+          # Loose files beside the installers cannot show what the installers
+          # actually embed. Read the MSI File table and the NSIS payload listing
+          # instead, so both installers are asserted on their actual contents.
           $expectedNames = @($runtimeFiles | ForEach-Object { $_.Name })
           $msiPath = (Resolve-Path `
             "release-assets/windows/rLive_$($env:RELEASE_VERSION)_windows-x64.msi").Path
@@ -395,7 +355,7 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build and verify Linux packages with ASR runtime
+      - name: Build and verify Linux packages
         shell: bash
         run: |
           set -euo pipefail
@@ -420,175 +380,39 @@ jobs:
 
           release_dir="$PWD/src-tauri/target/release"
 
-          # `libsherpa-onnx-cxx-api.so` is the sherpa C++ wrapper. Nothing in
-          # this build links it (it appears in no NEEDED entry) or dlopens it
-          # (`asr.rs` opens only the CUDA driver by name), so linuxdeploy never
-          # deploys it into `usr/lib` and it just sits in `usr/lib/rLive/` — a
-          # directory that is no longer on any search path, because linuxdeploy
-          # rewrites RUNPATH to `$ORIGIN/../lib` alone. Drop it and repack.
-          #
-          # Only this one file is worth removing. The two libraries that are
-          # deployed, `libonnxruntime.so` and `libsherpa-onnx-c-api.so`, also
-          # remain in `usr/lib/rLive/` as byte-identical copies, but squashfs
-          # deduplicates identical blocks, so both locations already share one
-          # copy of the data: deleting them shrank the image by 0.003 MB
-          # (measured). Removing this file alone accounts for the entire 0.07 MB
-          # the pruning saves, and leaving `rLive/` in place keeps every
-          # verify_runtime check on its original `exact` manifest footing.
-          appimage_appdir="$release_dir/bundle/appimage/rLive.AppDir"
-          appimage_unused_lib="$appimage_appdir/usr/lib/rLive/libsherpa-onnx-cxx-api.so"
-          if [[ -f "$appimage_unused_lib" ]]; then
-            # Guard the assumption rather than trusting it: if some future build
-            # does link the wrapper, leave it alone instead of shipping an
-            # AppImage that cannot resolve it.
-            appimage_needed="$(mktemp)"
-            while IFS= read -r elf; do
-              # `|| true`: `usr/bin` holds `xdg-open`, a shell script, and
-              # readelf exits 1 on anything that is not an ELF. Under
-              # `pipefail` that became the exit status of the whole loop and
-              # the ERR trap aborted the step.
-              readelf -d "$elf" 2>/dev/null \
-                | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p' || true
-            done < <(
-              find "$appimage_appdir/usr/bin" -maxdepth 1 -type f
-              find "$appimage_appdir/usr/lib" -maxdepth 1 -type f -name '*.so*'
-              find "$appimage_appdir/usr/lib/rLive" -maxdepth 1 -type f -name '*.so*'
-            ) | sort -u > "$appimage_needed"
-            test -s "$appimage_needed"
-
-            if grep -Fxq libsherpa-onnx-cxx-api.so "$appimage_needed"; then
-              echo "libsherpa-onnx-cxx-api.so 已被引用，保留并跳过重新打包"
-            else
-              rm -f "$appimage_unused_lib"
-              echo "已从 AppDir 删除未被引用的 libsherpa-onnx-cxx-api.so"
-              # mapfile with an explicit count, not a bare `find` substitution:
-              # two matches would otherwise concatenate into a two-line value and
-              # the rebuild would write to a path containing a newline.
-              mapfile -t appimage_stale_files < <(
-                find "$release_dir/bundle/appimage" -maxdepth 1 -type f \
-                  -name '*.AppImage' | sort
-              )
-              if [[ "${#appimage_stale_files[@]}" -ne 1 ]]; then
-                echo "::error::期望恰好一个 AppImage，实际 ${#appimage_stale_files[@]} 个" >&2
-                printf '  %s\n' "${appimage_stale_files[@]}" >&2
-                exit 1
-              fi
-              appimage_stale="${appimage_stale_files[0]}"
-              # tauri caches these under `dirs::cache_dir()/tauri` unless a local
-              # tools directory is configured (linuxdeploy.rs `tools_path`).
-              appimage_tools="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
-              # Call the appimage output plugin directly rather than re-running
-              # `linuxdeploy --plugin gtk --output appimage`. The gtk plugin is
-              # NOT idempotent: it creates symlinks for the GTK modules with a
-              # plain `ln -s` (no `-f`), so a second run hits "File exists" on
-              # the 27 links tauri's run already made, exits 1, and takes
-              # linuxdeploy down with it. Deployment is already complete and only
-              # an unreferenced file was removed, so all that is left to redo is
-              # packing the AppDir — which is exactly this plugin's job.
-              appimage_plugin="$appimage_tools/linuxdeploy-plugin-appimage.AppImage"
-              test -x "$appimage_plugin"
-              rm -f "$appimage_stale"
-              # The plugin reads the target filename from LDAI_OUTPUT/OUTPUT and
-              # takes the AppDir as its only argument. It does not pack anything
-              # itself — it shells out to `appimagetool`, which it looks for next
-              # to its own binary and then along PATH.
-              set +e
-              trap - ERR
-              APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
-                LDAI_OUTPUT="$appimage_stale" \
-                "$appimage_plugin" --appimage-extract-and-run \
-                --appdir "$appimage_appdir"
-              appimage_repack_status=$?
-              trap "$error_trap" ERR
-              set -e
-              if [[ "$appimage_repack_status" -ne 0 ]]; then
-                echo "::error::AppImage 重新打包失败 (退出码 $appimage_repack_status)" >&2
-                echo "AppDir: $appimage_appdir" >&2
-                echo "工具目录内容:" >&2
-                find "$appimage_tools" -maxdepth 1 -printf '  %f\n' >&2 || true
-                exit 1
-              fi
-              test -f "$appimage_stale"
+          # ASR runtime libraries are downloaded by the application on first use
+          # and loaded at runtime, so no build input or package may carry them.
+          # A single name scan covers the staging directory and each extracted
+          # package layout below, and would catch a future build input that
+          # starts staging them again.
+          check_no_asr_runtime() {
+            local root="$1"
+            local max_depth="${2:-}"
+            local depth_args=()
+            if [[ -n "$max_depth" ]]; then
+              depth_args=(-maxdepth "$max_depth")
             fi
-          else
-            echo "AppDir 中没有 libsherpa-onnx-cxx-api.so，跳过精简"
-          fi
-          runtime_manifest="$RUNNER_TEMP/rlive-linux-runtime.manifest"
-          find "$release_dir" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$runtime_manifest"
-          test -s "$runtime_manifest"
-          test -f "$release_dir/libsherpa-onnx-c-api.so"
-          test -f "$release_dir/libonnxruntime.so"
-          test ! -e "$release_dir/libonnxruntime_providers_cuda.so"
+            local found
+            found="$(find "$root" ${depth_args[@]+"${depth_args[@]}"} \
+              \( -type f -o -type l \) \
+              \( -iname '*crispasr*' -o -iname '*ggml*' -o -iname '*cublas*' \
+                 -o -iname '*cudart*' -o -iname '*onnxruntime*' -o -iname '*sherpa*' \) \
+              -printf '%p\n' | sort)"
+            if [[ -n "$found" ]]; then
+              echo "::error::$root 包含不应随包发布的 ASR 运行库:" >&2
+              sed 's/^/  /' <<< "$found" >&2
+              exit 1
+            fi
+          }
 
           # Every check names what it rejected: these run against four different
           # package layouts, and a bare `test` under `set -e` aborts the step
           # without saying which package or which condition failed.
-          verify_runtime() {
+          verify_binary() {
             local binary="$1"
-            local runtime_dir="$2"
-            local expected_rpath="$3"
-            # The AppImage's `usr/lib/rLive` keeps the staging manifest minus the
-            # unused C++ wrapper the pruning above removes, so that one name is
-            # excluded from the comparison rather than giving the AppImage its
-            # own manifest mode.
-            local drop_unused_wrapper="${4:-no}"
-            local actual_manifest expected_manifest
-            actual_manifest="$(mktemp)"
-            expected_manifest="$runtime_manifest"
-            echo "校验运行库布局: $runtime_dir"
-            if [[ ! -d "$runtime_dir" ]]; then
-              echo "::error::运行库目录不存在: $runtime_dir" >&2
-              find "$(dirname "$runtime_dir")" -maxdepth 2 >&2 || true
-              exit 1
-            fi
-            if [[ "$drop_unused_wrapper" == "yes" ]]; then
-              expected_manifest="$(mktemp)"
-              grep -Fxv libsherpa-onnx-cxx-api.so "$runtime_manifest" \
-                > "$expected_manifest"
-            fi
-            find "$runtime_dir" -maxdepth 1 -type f -name '*.so*' -printf '%f\n' | sort > "$actual_manifest"
-            if ! diff -u "$expected_manifest" "$actual_manifest"; then
-              echo "::error::$runtime_dir 的运行库清单与 release staging 不一致" >&2
-              exit 1
-            fi
+            echo "校验可执行文件: $binary"
             if [[ ! -x "$binary" ]]; then
               echo "::error::可执行文件缺失或不可执行: $binary" >&2
-              exit 1
-            fi
-            for required in libsherpa-onnx-c-api.so libonnxruntime.so; do
-              if [[ ! -f "$runtime_dir/$required" ]]; then
-                echo "::error::缺少 $required: $runtime_dir" >&2
-                exit 1
-              fi
-            done
-            if ! readelf -d "$binary" | grep -Fq '$ORIGIN'; then
-              echo "::error::$binary 的 RUNPATH 缺少 \$ORIGIN" >&2
-              readelf -d "$binary" >&2
-              exit 1
-            fi
-            # `expected_rpath` is a space-separated list of acceptable values, so
-            # AppImage can be checked too: linuxdeploy gathers the libraries it
-            # bundles into `usr/lib` and rewrites RUNPATH to its own layout,
-            # dropping the `$ORIGIN/../lib/rLive` that build.rs links in. The
-            # binding check that actually matters is the `ldd` pass below; this
-            # one only rejects a binary whose search path lost `$ORIGIN`
-            # entirely.
-            local rpath_matched=""
-            local candidate
-            for candidate in $expected_rpath; do
-              if readelf -d "$binary" | grep -Fq "$candidate"; then
-                rpath_matched="$candidate"
-                break
-              fi
-            done
-            if [[ -z "$rpath_matched" ]]; then
-              echo "::error::$binary 的 RUNPATH 不含以下任一候选: $expected_rpath" >&2
-              readelf -d "$binary" >&2
-              find "$runtime_dir" -maxdepth 1 -name '*.so*' -printf '  %f\n' >&2 || true
-              exit 1
-            fi
-            if readelf -d "$binary" | grep -Fq 'sherpa-onnx-prebuilt'; then
-              echo "ELF 不得保留构建缓存的 Sherpa RUNPATH: $binary" >&2
               exit 1
             fi
             if ldd "$binary" | grep -q 'not found'; then
@@ -596,13 +420,6 @@ jobs:
               ldd "$binary" >&2
               exit 1
             fi
-            for required in libsherpa-onnx-c-api.so libonnxruntime.so; do
-              if ! ldd "$binary" | grep -Fq "$required"; then
-                echo "::error::$binary 未链接 $required" >&2
-                ldd "$binary" >&2
-                exit 1
-              fi
-            done
             # FFmpeg is linked from the pinned static archives, so no `libav*`
             # or `libswresample` NEEDED entry may survive. Without this the
             # packages would silently depend on the build machine's `libav*.so`
@@ -642,14 +459,16 @@ jobs:
             fi
           }
 
-          verify_runtime "$release_dir/rlive" "$release_dir" '$ORIGIN/../lib/rLive'
+          check_no_asr_runtime "$release_dir" 1
+          verify_binary "$release_dir/rlive"
           smoke_start "$release_dir/rlive" "$RUNNER_TEMP/rlive-release-smoke"
 
           mapfile -t deb_files < <(find "$release_dir/bundle/deb" -maxdepth 1 -type f -name '*.deb' | sort)
           test "${#deb_files[@]}" -eq 1
           deb_dir="$RUNNER_TEMP/rlive-deb-contents"
           dpkg-deb --extract "${deb_files[0]}" "$deb_dir"
-          verify_runtime "$deb_dir/usr/bin/rlive" "$deb_dir/usr/lib/rLive" '$ORIGIN/../lib/rLive'
+          check_no_asr_runtime "$deb_dir"
+          verify_binary "$deb_dir/usr/bin/rlive"
           smoke_start "$deb_dir/usr/bin/rlive" "$RUNNER_TEMP/rlive-deb-smoke"
 
           mapfile -t rpm_files < <(find "$release_dir/bundle/rpm" -maxdepth 1 -type f -name '*.rpm' | sort)
@@ -716,7 +535,8 @@ jobs:
             extracted_with="bsdtar"
           fi
           echo "rpm 载荷已由 $extracted_with 解出"
-          verify_runtime "$rpm_dir/usr/bin/rlive" "$rpm_dir/usr/lib/rLive" '$ORIGIN/../lib/rLive'
+          check_no_asr_runtime "$rpm_dir"
+          verify_binary "$rpm_dir/usr/bin/rlive"
           smoke_start "$rpm_dir/usr/bin/rlive" "$RUNNER_TEMP/rlive-rpm-smoke"
 
           mapfile -t appimage_files < <(find "$release_dir/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' | sort)
@@ -725,24 +545,8 @@ jobs:
           appimage_dir="$RUNNER_TEMP/rlive-appimage-contents"
           mkdir -p "$appimage_dir"
           (cd "$appimage_dir" && "$appimage_file" --appimage-extract >/dev/null)
-          # linuxdeploy rewrites RUNPATH to the layout it deploys, so accept its
-          # `$ORIGIN/../lib` alongside the value build.rs links in. That value
-          # resolves because linuxdeploy copies the runtime it deploys up into
-          # `usr/lib` as well, so both `usr/lib` and `usr/lib/rLive` hold it.
-          # Keep the listing and the `ldd` check — if a future linuxdeploy stops
-          # copying them, the libraries stay in `rLive/` only, `$ORIGIN/../lib`
-          # no longer resolves, and the AppImage is genuinely broken rather than
-          # merely differently laid out. The trailing `yes` drops the unused C++
-          # wrapper from the expected manifest, since the pruning above removed
-          # it from this directory.
-          echo "AppImage 运行库布局:"
-          find "$appimage_dir/squashfs-root/usr/lib" -maxdepth 2 \
-            \( -name 'libsherpa*' -o -name 'libonnxruntime*' \) -printf '  %P\n' | sort
-          if [[ -e "$appimage_dir/squashfs-root/usr/lib/rLive/libsherpa-onnx-cxx-api.so" ]]; then
-            echo "::error::AppImage 仍包含未被引用的 libsherpa-onnx-cxx-api.so" >&2
-            exit 1
-          fi
-          verify_runtime "$appimage_dir/squashfs-root/usr/bin/rlive" "$appimage_dir/squashfs-root/usr/lib/rLive" '$ORIGIN/../lib/rLive $ORIGIN/../lib' yes
+          check_no_asr_runtime "$appimage_dir/squashfs-root"
+          verify_binary "$appimage_dir/squashfs-root/usr/bin/rlive"
           set +e
           trap - ERR
           APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a env \
@@ -853,10 +657,6 @@ jobs:
             echo "macOS binary links FFmpeg dynamically; expected static archives." >&2
             exit 1
           fi
-          if otool -L "$binary" | grep -Ei 'sherpa|onnxruntime'; then
-            echo "macOS binary unexpectedly links shared ASR runtime libraries." >&2
-            exit 1
-          fi
 
           dmg_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
           dmg_count="$(find "$dmg_dir" -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')"
@@ -868,11 +668,6 @@ jobs:
           hdiutil attach "$dmg_file" -readonly -nobrowse -mountpoint "$mount_point"
           app_binary="$mount_point/rLive.app/Contents/MacOS/rLive"
           test -x "$app_binary"
-          if otool -L "$app_binary" | grep -Ei 'sherpa|onnxruntime'; then
-            echo "macOS app unexpectedly links shared ASR runtime libraries." >&2
-            hdiutil detach "$mount_point" || true
-            exit 1
-          fi
           if otool -L "$app_binary" | grep -Ei 'libav(format|codec|util)|libswresample'; then
             echo "macOS app links FFmpeg dynamically; expected static archives." >&2
             hdiutil detach "$mount_point" || true
