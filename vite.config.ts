@@ -3,6 +3,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+import { mpegtsAudioGapFillPlugin } from "./scripts/mpegts-audio-gap-patch";
+
 const host = process.env.TAURI_DEV_HOST;
 
 function isDependency(id: string, packages: readonly string[]) {
@@ -12,7 +14,7 @@ function isDependency(id: string, packages: readonly string[]) {
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [mpegtsAudioGapFillPlugin(), react(), tailwindcss()],
   // 发布构建保留警告与错误，但不输出生成的 chunk 清单表。
   logLevel: command === "build" ? "warn" : "info",
   resolve: {
@@ -22,6 +24,11 @@ export default defineConfig(({ command }) => ({
   },
   // Vite 8 + Rolldown：为 Tauri 桌面端保持依赖预打包范围收敛。
   optimizeDeps: {
+    // mpegts.js 通过动态 import 引入，dev 下会进入依赖预打包；普通插件
+    // transform 不作用于预打包产物，因此同一补丁也要挂到依赖优化器上。
+    rolldownOptions: {
+      plugins: [mpegtsAudioGapFillPlugin()],
+    },
     include: [
       "react",
       "react-dom",

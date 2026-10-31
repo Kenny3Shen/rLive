@@ -8,19 +8,19 @@ import {
 import { streamProxyStartArgs } from "../src/features/room/player/streamProxyStart";
 
 describe("直播 mpegts 配置", () => {
-  // mpegts.js 默认开启 `fixAudioTimestampGap`，并按缺口帧数无上限地生成静音帧：
-  // 上游时间戳跳变时 `push.apply` 会以 RangeError 结束，再被网络层报成一次
-  // NetworkError。直播三处配置都必须显式关闭它。
-  test("FLV、MPEG-TS 与 IPTV 都关闭无上限的静音帧补齐", () => {
-    expect(liveFlvPlaybackOptions(false).mpegtsConfig?.fixAudioTimestampGap).toBe(false);
-    expect(liveFlvPlaybackOptions(true).mpegtsConfig?.fixAudioTimestampGap).toBe(false);
-    expect(liveFlvPlaybackOptions(true, true).mpegtsConfig?.fixAudioTimestampGap).toBe(false);
-    expect(liveMpegtsPlaybackOptions(false).mpegtsConfig?.fixAudioTimestampGap).toBe(false);
-    expect(liveMpegtsPlaybackOptions(true).mpegtsConfig?.fixAudioTimestampGap).toBe(false);
-    expect(iptvFlvPlaybackOptions().mpegtsConfig?.fixAudioTimestampGap).toBe(false);
+  // mpegts.js 的静音补帧会在卡顿/丢音频帧后修正时间戳缺口；关闭它会让缺口
+  // 被直接抹掉，后续音频整体前移，造成音画不同步。无上限补帧的栈溢出风险
+  // 由 scripts/mpegts-audio-gap-patch.ts 的构建期补丁加 10 秒上限解决。
+  test("FLV、MPEG-TS 与 IPTV 都开启带缺口上限的静音帧补齐", () => {
+    expect(liveFlvPlaybackOptions(false).mpegtsConfig?.fixAudioTimestampGap).toBe(true);
+    expect(liveFlvPlaybackOptions(true).mpegtsConfig?.fixAudioTimestampGap).toBe(true);
+    expect(liveFlvPlaybackOptions(true, true).mpegtsConfig?.fixAudioTimestampGap).toBe(true);
+    expect(liveMpegtsPlaybackOptions(false).mpegtsConfig?.fixAudioTimestampGap).toBe(true);
+    expect(liveMpegtsPlaybackOptions(true).mpegtsConfig?.fixAudioTimestampGap).toBe(true);
+    expect(iptvFlvPlaybackOptions().mpegtsConfig?.fixAudioTimestampGap).toBe(true);
   });
 
-  test("关闭补齐不影响既有缓冲与延迟策略", () => {
+  test("补齐开关不影响既有缓冲与延迟策略", () => {
     const desktop = liveFlvPlaybackOptions(false);
     expect(desktop.mediaDataSource).toEqual({
       type: "flv",
