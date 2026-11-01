@@ -215,8 +215,18 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     /* oxlint-enable react/set-state-in-effect */
     // 流式解码跨窗口保持状态，因此切换房间或媒体元素时必须清空它，
     // 否则下一条字幕会从上一条语句中间继续。
-    if (model.supported) void invokeCmd("asr_reset_stream").catch(() => {});
-  }, [clearCaptionTimer, model.supported, options.mediaKey, options.sessionKey, text]);
+    // 副画面也常驻此 hook；禁用 ASR 时不得用其媒体切换重置主画面的全局流。
+    if (options.featureEnabled && model.supported) {
+      void invokeCmd("asr_reset_stream").catch(() => {});
+    }
+  }, [
+    clearCaptionTimer,
+    model.supported,
+    options.featureEnabled,
+    options.mediaKey,
+    options.sessionKey,
+    text,
+  ]);
 
   useEffect(() => {
     if (

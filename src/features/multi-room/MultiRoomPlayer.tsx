@@ -191,11 +191,13 @@ function MainMultiRoomDanmaku({
 }
 
 function MainMultiRoomAsrProvider({
+  active,
   children,
   player,
   sessionKey,
   mediaAvailable,
 }: {
+  active: boolean;
   children: ReactNode;
   player: WebPlayerApi;
   sessionKey: string;
@@ -221,9 +223,9 @@ function MainMultiRoomAsrProvider({
     videoRef: player.videoRef,
     mediaKey: player.mediaKey,
     sessionKey,
-    featureEnabled: asrEnabled,
-    settingPending: asrPending,
-    mediaAvailable,
+    featureEnabled: asrEnabled && active,
+    settingPending: active && asrPending,
+    mediaAvailable: mediaAvailable && active,
     chunkSeconds: asrWindowSeconds,
     translationEnabled: asrTranslationEnabled,
     translationFrom: asrTranslationFrom,
@@ -955,15 +957,16 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
     </VideoJsContainer>
   );
 
-  return main ? (
+  // 主副切换只改 active，不得增删 provider：父链变化会重挂 video，
+  // 而 useWebPlayer 的 adapter 仍绑定旧节点，造成所有交换画面黑屏。
+  return (
     <MainMultiRoomAsrProvider
+      active={main}
       player={player}
       sessionKey={`multi-room:${room.key}`}
       mediaAvailable={showHost}
     >
       {stage}
     </MainMultiRoomAsrProvider>
-  ) : (
-    stage
   );
 }
