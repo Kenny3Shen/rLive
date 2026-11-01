@@ -42,6 +42,10 @@ export function normalizeMultiRoomFourLayout(layout: unknown): MultiRoomFourLayo
     : DEFAULT_MULTI_ROOM_FOUR_LAYOUT;
 }
 
+export function normalizeMultiRoomEnergySaving(enabled: unknown): boolean {
+  return enabled === true;
+}
+
 export function findMultiRoomEmptySlot(
   slots: readonly (MultiRoomEntry | null)[],
   layout: MultiRoomLayout,
@@ -172,6 +176,8 @@ type MultiRoomState = {
   slots: (MultiRoomEntry | null)[];
   layout: MultiRoomLayout;
   fourLayout: MultiRoomFourLayout;
+  /** 开启后副画面使用平台提供的最低视频画质。 */
+  energySaving: boolean;
   /** 跨网格的直播时钟对齐；参见 `liveSync.ts`。 */
   syncMode: LiveSyncMode;
   /** 逐房间的对齐偏移（秒），键结构与槽位一致。 */
@@ -184,6 +190,7 @@ type MultiRoomState = {
   updateMetadata: (key: string, detail: LiveRoomDetail) => void;
   setLayout: (layout: MultiRoomLayout) => boolean;
   setFourLayout: (layout: MultiRoomFourLayout) => void;
+  setEnergySaving: (enabled: boolean) => void;
   setSyncMode: (mode: LiveSyncMode) => void;
   setSyncOffset: (key: string, seconds: number) => void;
   /** 一次性替换多个偏移，例如来自一次性对齐操作。 */
@@ -211,12 +218,44 @@ const EMPTY_MULTI_ROOM_SLOTS = Array.from<MultiRoomEntry | null>({
   length: MULTI_ROOM_MAX_SLOTS,
 }).fill(null);
 
+export function partializeMultiRoomState(state: MultiRoomState) {
+  return {
+    slots: state.slots,
+    layout: state.layout,
+    fourLayout: state.fourLayout,
+    energySaving: state.energySaving,
+    syncMode: state.syncMode,
+    syncOffsets: state.syncOffsets,
+  };
+}
+
+export function mergeMultiRoomState(
+  persisted: unknown,
+  current: MultiRoomState,
+): MultiRoomState {
+  const persistedState = persisted as Partial<MultiRoomState>;
+  const requestedLayout = normalizeMultiRoomLayout(persistedState?.layout);
+  const fourLayout = normalizeMultiRoomFourLayout(persistedState?.fourLayout);
+  const slots = normalizeMultiRoomSlots(persistedState?.slots ?? []);
+  return {
+    ...current,
+    layout:
+      slots.filter(Boolean).length <= requestedLayout ? requestedLayout : DEFAULT_MULTI_ROOM_LAYOUT,
+    fourLayout,
+    slots,
+    energySaving: normalizeMultiRoomEnergySaving(persistedState?.energySaving),
+    syncMode: normalizeLiveSyncMode(persistedState?.syncMode),
+    syncOffsets: pruneMultiRoomSyncOffsets(persistedState?.syncOffsets ?? {}, slots),
+  };
+}
+
 export const useMultiRoomStore = create<MultiRoomState>()(
   persist(
     (set, get) => ({
       slots: [...EMPTY_MULTI_ROOM_SLOTS],
       layout: DEFAULT_MULTI_ROOM_LAYOUT,
       fourLayout: DEFAULT_MULTI_ROOM_FOUR_LAYOUT,
+      energySaving: false,
       syncMode: "off",
       syncOffsets: {},
       addRoom: (candidate) => {
@@ -291,6 +330,7 @@ export const useMultiRoomStore = create<MultiRoomState>()(
         return true;
       },
       setFourLayout: (layout) => set({ fourLayout: normalizeMultiRoomFourLayout(layout) }),
+      setEnergySaving: (enabled) => set({ energySaving: enabled }),
       setSyncMode: (mode) => set({ syncMode: normalizeLiveSyncMode(mode) }),
       setSyncOffset: (key, seconds) =>
         set({
@@ -308,30 +348,8 @@ export const useMultiRoomStore = create<MultiRoomState>()(
     }),
     {
       name: "rlive-multi-room-v2",
-      partialize: (state) => ({
-        slots: state.slots,
-        layout: state.layout,
-        fourLayout: state.fourLayout,
-        syncMode: state.syncMode,
-        syncOffsets: state.syncOffsets,
-      }),
-      merge: (persisted, current) => {
-        const persistedState = persisted as Partial<MultiRoomState>;
-        const requestedLayout = normalizeMultiRoomLayout(persistedState?.layout);
-        const fourLayout = normalizeMultiRoomFourLayout(persistedState?.fourLayout);
-        const slots = normalizeMultiRoomSlots(persistedState?.slots ?? []);
-        return {
-          ...current,
-          layout:
-            slots.filter(Boolean).length <= requestedLayout
-              ? requestedLayout
-              : DEFAULT_MULTI_ROOM_LAYOUT,
-          fourLayout,
-          slots,
-          syncMode: normalizeLiveSyncMode(persistedState?.syncMode),
-          syncOffsets: pruneMultiRoomSyncOffsets(persistedState?.syncOffsets ?? {}, slots),
-        };
-      },
+      partialize: partializeMultiRoomState,
+      merge: mergeMultiRoomState,
     },
   ),
 );

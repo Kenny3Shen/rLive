@@ -35,6 +35,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Empty,
   EmptyContent,
@@ -189,9 +191,11 @@ export function MultiRoomPage() {
   const slots = useMultiRoomStore((state) => state.slots);
   const layout = useMultiRoomStore((state) => state.layout);
   const fourLayout = useMultiRoomStore((state) => state.fourLayout);
+  const energySaving = useMultiRoomStore((state) => state.energySaving);
   const swapRooms = useMultiRoomStore((state) => state.swapRooms);
   const setLayout = useMultiRoomStore((state) => state.setLayout);
   const setFourLayout = useMultiRoomStore((state) => state.setFourLayout);
+  const setEnergySaving = useMultiRoomStore((state) => state.setEnergySaving);
   const clear = useMultiRoomStore((state) => state.clear);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
@@ -250,7 +254,7 @@ export function MultiRoomPage() {
   return (
     <MultiRoomLiveSyncProvider>
       <div data-multi-room-page className="flex h-full min-h-0 flex-col bg-background">
-        <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/80 bg-sidebar/90 px-3">
+        <header className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border/80 bg-sidebar/90 px-3 py-1.5">
           <Tooltip>
             <TooltipTrigger
               render={
@@ -330,6 +334,15 @@ export function MultiRoomPage() {
             </ToggleGroup>
           )}
           <div className="ml-auto flex items-center gap-1">
+            <Label className="mr-1 whitespace-nowrap">
+              <Switch
+                size="sm"
+                checked={energySaving}
+                onCheckedChange={setEnergySaving}
+                aria-label="节能模式"
+              />
+              节能模式
+            </Label>
             <MultiRoomSyncControl
               rooms={visibleRooms}
               mainKey={

@@ -43,8 +43,17 @@ export function usePlaybackController(opts: {
   detail: LiveRoomDetail | undefined;
   refreshDetail?: () => Promise<LiveRoomDetail | undefined>;
   enabled?: boolean;
+  /** 仅用于多画面节能，不影响用户保存的全局画质偏好。 */
+  preferLowestQuality?: boolean;
 }): PlaybackController {
-  const { siteId, roomId, detail, refreshDetail, enabled = true } = opts;
+  const {
+    siteId,
+    roomId,
+    detail,
+    refreshDetail,
+    enabled = true,
+    preferLowestQuality = false,
+  } = opts;
   const queryClient = useQueryClient();
   const qualityLevel = useSettingsStore((state) => state.qualityLevel) as QualityLevel;
 
@@ -119,9 +128,10 @@ export function usePlaybackController(opts: {
       detail,
       refreshDetail,
       qualityLevel,
+      preferLowestQuality,
       enabled,
     });
-  }, [detail, enabled, qualityLevel, refreshDetail, roomId, session, siteId]);
+  }, [detail, enabled, preferLowestQuality, qualityLevel, refreshDetail, roomId, session, siteId]);
 
   const mountedSessionRef = useRef<typeof session | null>(null);
   useEffect(() => {

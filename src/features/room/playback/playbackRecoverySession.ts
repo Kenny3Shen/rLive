@@ -10,7 +10,7 @@ import {
   resolvePlaybackLineIndex,
   type PlaybackLinePreference,
 } from "./linePreference";
-import { pickDefaultQualityIndex } from "./quality";
+import { lowestVideoQualityIndex, pickDefaultQualityIndex } from "./quality";
 import { canRenewPlaybackInPlace } from "./sourceIdentity";
 import { nextRankedLineIndex } from "./sourceSelection";
 import { errorText } from "@/shared/components/errorPresentation";
@@ -81,6 +81,8 @@ export type PlaybackRecoverySessionConfig = {
   detail: LiveRoomDetail | undefined;
   refreshDetail?: () => Promise<LiveRoomDetail | undefined>;
   qualityLevel: QualityLevel;
+  /** 强制使用最低视频档；关闭后恢复到进入该状态前的正常画质选择。 */
+  preferLowestQuality?: boolean;
   enabled: boolean;
 };
 
@@ -195,6 +197,15 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
   private playingStartedAt: number | null = null;
   private lastFailure: PlaybackFailureMarker | null = null;
   private metadataRenewalInFlight = false;
+  /** 策略切换打断元数据刷新时，用原刷新语义继续，避免升级为不必要的完整重建。 */
+  private metadataRefreshMode: "rebuild" | "renew" = "rebuild";
+  /**
+   * 节能模式之外应使用的画质名。节能只改变实际取流档位，
+   * 不能覆盖用户原先的选择；主副角色切换后据此恢复。
+   */
+  private normalQuality: string | null = null;
+  /** 正常画质的列表位置，仅在名称从新列表消失时作为原顺序 fallback。 */
+  private normalQualityIndex: number | null = null;
   /**
    * 当前清晰度是否由用户手动选定。默认档（按「画质偏好」挑出来的）在线路与续签
    * 预算都耗尽时会自动降一档；用户亲手选的档位则照旧报错，不替用户改选择。
@@ -218,7 +229,17 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
 
   updateConfig(config: PlaybackRecoverySessionConfig): void {
     if (this.disposed) return;
+    const previousConfig = this.config;
     this.config = config;
+    if (
+      this.started &&
+      previousConfig.enabled &&
+      config.enabled &&
+      Boolean(previousConfig.preferLowestQuality) !== Boolean(config.preferLowestQuality)
+    ) {
+      this.applyQualityPolicy(Boolean(config.preferLowestQuality));
+      return;
+    }
     this.startIfReady();
   }
 
@@ -228,10 +249,14 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
   }
 
   selectQuality(index: number): void {
+    // 节能副画面没有画质菜单；角色降级边界上迟到的菜单回调不能覆盖最低档约束。
+    if (this.config.preferLowestQuality) return;
     const qualityIndex = clampIndex(index, this.snapshot.qualities.length);
     const quality = this.snapshot.qualities[qualityIndex];
     const generation = this.beginUserIntent();
     this.qualityPinnedByUser = true;
+    this.normalQuality = quality?.quality ?? null;
+    this.normalQualityIndex = quality ? qualityIndex : null;
     this.publish({
       qualityIndex,
       lines: [],
@@ -245,6 +270,8 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
   }
 
   selectLine(index: number): void {
+    // 节能副画面没有线路菜单；角色降级边界上迟到的回调不能取消策略刷新。
+    if (this.config.preferLowestQuality) return;
     const generation = this.beginUserIntent();
     if (!this.isCurrent(generation)) return;
     const lineIndex = clampIndex(index, this.snapshot.lines.length);
@@ -256,6 +283,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
   refresh(): void {
     const generation = this.beginUserIntent();
     this.metadataRenewalInFlight = true;
+    this.metadataRefreshMode = "rebuild";
     this.publish({ loading: true, error: undefined, loadError: null });
     void this.refreshMetadata(generation, "播放地址刷新失败，请重试", "rebuild");
   }
@@ -322,6 +350,8 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     }
     this.started = true;
     this.qualityPinnedByUser = false;
+    this.normalQuality = null;
+    this.normalQualityIndex = null;
     const generation = this.invalidatePendingWork();
     this.resetRecoveryBudget();
     this.publish({ ...EMPTY_SNAPSHOT, loading: true });
@@ -339,7 +369,15 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
         this.publish({ qualities, loading: false, error: undefined });
         return;
       }
-      const qualityIndex = pickDefaultQualityIndex(qualities.length, this.config.qualityLevel);
+      const normalQualityIndex = pickDefaultQualityIndex(
+        qualities.length,
+        this.config.qualityLevel,
+      );
+      this.normalQuality = qualities[normalQualityIndex]?.quality ?? null;
+      this.normalQualityIndex = normalQualityIndex;
+      const qualityIndex = this.config.preferLowestQuality
+        ? (lowestVideoQualityIndex(qualities) ?? normalQualityIndex)
+        : normalQualityIndex;
       const quality = qualities[qualityIndex];
       this.publish({ qualities, qualityIndex, loading: true, error: undefined, loadError: null });
       await this.loadLines(generation, quality, true);
@@ -390,7 +428,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
       this.finishMetadataFailure(generation, new Error("缺少播放元数据"), fallbackMessage);
       return;
     }
-    const preferredQuality = this.snapshot.qualities[this.snapshot.qualityIndex]?.quality;
+    const preferredQuality = this.normalQuality ?? undefined;
     const preferredSourceId = this.snapshot.playUrl?.source_id;
     const activePlayUrl = this.snapshot.playUrl;
     const fallbackLineIndex = this.snapshot.lineIndex;
@@ -401,17 +439,22 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
       const qualities = await this.metadata.fetchQualities(input);
       if (!this.isCurrent(generation)) return;
       if (qualities.length === 0) throw new Error("平台未返回可用清晰度");
-      const qualityIndex = matchingQualityIndex(
+      const normalQualityIndex = matchingQualityIndex(
         qualities,
         preferredQuality,
-        this.snapshot.qualityIndex,
+        this.normalQualityIndex ?? this.snapshot.qualityIndex,
       );
+      const qualityIndex = this.config.preferLowestQuality
+        ? (lowestVideoQualityIndex(qualities) ?? normalQualityIndex)
+        : normalQualityIndex;
       const quality = qualities[qualityIndex];
       const linesInput: PlaybackRecoveryLinesInput = { ...input, quality };
       const lines = await this.metadata.fetchLines(linesInput);
       if (!this.isCurrent(generation)) return;
       if (lines.length === 0) throw new Error("平台未返回可用播放地址");
 
+      this.normalQuality = qualities[normalQualityIndex]?.quality ?? null;
+      this.normalQualityIndex = normalQualityIndex;
       const matchingLineIndex = preferredSourceId
         ? lines.findIndex((line) => line.source_id === preferredSourceId)
         : -1;
@@ -464,6 +507,7 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     const delayMs = Math.max(requestedDelay, (renewalAttempt - 1) * 1_000);
     const generation = this.invalidatePendingWork();
     this.metadataRenewalInFlight = true;
+    this.metadataRefreshMode = "renew";
     const renew = () => {
       this.failoverTimer = null;
       void this.refreshMetadata(generation, "播放地址更新失败，请点击刷新后重试", "renew");
@@ -544,6 +588,10 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     );
     if (fallbackQualityIndex == null) return false;
     const quality = this.snapshot.qualities[fallbackQualityIndex];
+    if (!this.config.preferLowestQuality) {
+      this.normalQuality = quality?.quality ?? this.normalQuality;
+      this.normalQualityIndex = fallbackQualityIndex;
+    }
     const generation = this.invalidatePendingWork();
     this.resetRecoveryBudget();
     this.metadataRenewalInFlight = false;
@@ -558,6 +606,56 @@ class PlaybackRecoverySessionImpl implements PlaybackRecoverySession {
     });
     if (quality) void this.loadLines(generation, quality, false);
     return true;
+  }
+
+  /** 主副画面角色或节能开关变化时，切换实际取流档位，但不改用户画质选择。 */
+  private applyQualityPolicy(preferLowestQuality: boolean): void {
+    const qualities = this.snapshot.qualities;
+    const metadataRefreshInFlight = this.metadataRenewalInFlight;
+    const metadataRefreshMode = this.metadataRefreshMode;
+    // 首次列表尚未返回时，loadInitialMetadata 会在结果处读取最新策略；
+    // 此时作废 generation 会让会话停在 loading，且没有新的工作接续。
+    if (qualities.length === 0 && !metadataRefreshInFlight) return;
+
+    if (metadataRefreshInFlight) {
+      // 旧列表与 snapshot 都可能对应策略切换前的提交，不能据此改写正常画质意图。
+      const generation = this.invalidatePendingWork();
+      this.resetRecoveryBudget();
+      this.metadataRenewalInFlight = true;
+      this.metadataRefreshMode = metadataRefreshMode;
+      this.publish({ loading: true, error: undefined, loadError: null });
+      const fallbackMessage =
+        metadataRefreshMode === "rebuild"
+          ? "播放地址刷新失败，请重试"
+          : "播放地址更新失败，请点击刷新后重试";
+      void this.refreshMetadata(generation, fallbackMessage, metadataRefreshMode);
+      return;
+    }
+    const normalQualityIndex = matchingQualityIndex(
+      qualities,
+      this.normalQuality ?? undefined,
+      this.normalQualityIndex ?? this.snapshot.qualityIndex,
+    );
+    this.normalQuality = qualities[normalQualityIndex]?.quality ?? this.normalQuality;
+    this.normalQualityIndex = normalQualityIndex;
+    const qualityIndex = preferLowestQuality
+      ? (lowestVideoQualityIndex(qualities) ?? normalQualityIndex)
+      : normalQualityIndex;
+    if (qualityIndex === this.snapshot.qualityIndex) return;
+
+    const generation = this.invalidatePendingWork();
+    this.resetRecoveryBudget();
+    const quality = qualities[qualityIndex];
+    this.publish({
+      qualityIndex,
+      lines: [],
+      lineIndex: 0,
+      playUrl: null,
+      loading: true,
+      error: undefined,
+      loadError: null,
+    });
+    if (quality) void this.loadLines(generation, quality, true);
   }
 
   /**

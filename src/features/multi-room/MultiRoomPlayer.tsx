@@ -393,6 +393,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
   const updateAudio = useMultiRoomStore((state) => state.updateAudio);
   const updateMetadata = useMultiRoomStore((state) => state.updateMetadata);
   const syncMode = useMultiRoomStore((state) => state.syncMode);
+  const energySaving = useMultiRoomStore((state) => state.energySaving);
   const [audioOnly, setAudioOnly] = useState(false);
   const [osdOn, setOsdOn] = useState(false);
   const controlsHideTimerRef = useRef<number | null>(null);
@@ -427,6 +428,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
     detail: detailQuery.data,
     refreshDetail,
     enabled: !!detailQuery.data,
+    preferLowestQuality: energySaving && !main,
   });
   const player = useWebPlayer({
     playUrl: playback.playUrl,

@@ -3,7 +3,9 @@ import { describe, expect, test } from "bun:test";
 import {
   createMultiRoomEntry,
   findMultiRoomEmptySlot,
+  mergeMultiRoomState,
   normalizeMultiRoomAudioRoles,
+  partializeMultiRoomState,
   swapMultiRoomMain,
   swapMultiRoomSlots,
   useMultiRoomStore,
@@ -68,6 +70,41 @@ describe("multi-room audio defaults", () => {
   });
 });
 describe("multi-room director layout", () => {
+  test("preserves energy saving while clearing rooms", () => {
+    useMultiRoomStore.setState({
+      energySaving: false,
+      slots: [room("main"), room("secondary")],
+    });
+    useMultiRoomStore.getState().setEnergySaving(true);
+    expect(useMultiRoomStore.getState().energySaving).toBe(true);
+
+    useMultiRoomStore.getState().clear();
+    expect(useMultiRoomStore.getState().slots).toEqual([null, null, null, null, null, null]);
+    expect(useMultiRoomStore.getState().energySaving).toBe(true);
+    useMultiRoomStore.getState().setEnergySaving(false);
+  });
+
+  test("serializes and normalizes energy saving through persist helpers", () => {
+    const state = useMultiRoomStore.getState();
+
+    state.setEnergySaving(true);
+    expect(partializeMultiRoomState(useMultiRoomStore.getState())).toMatchObject({
+      energySaving: true,
+    });
+
+    expect(mergeMultiRoomState(undefined, state).energySaving).toBe(false);
+    expect(mergeMultiRoomState({}, { ...state, energySaving: true }).energySaving).toBe(false);
+    expect(mergeMultiRoomState({ energySaving: "true" }, state).energySaving).toBe(false);
+    expect(mergeMultiRoomState({ energySaving: true }, state).energySaving).toBe(true);
+    const persisted = JSON.parse(
+      JSON.stringify(partializeMultiRoomState(useMultiRoomStore.getState())),
+    );
+    expect(mergeMultiRoomState(persisted, { ...state, energySaving: false }).energySaving).toBe(
+      true,
+    );
+    useMultiRoomStore.getState().setEnergySaving(false);
+  });
+
   test("enforces the selected layout capacity when adding rooms", () => {
     const slots = [room("main"), room("1"), room("2"), room("3"), null, null];
     expect(findMultiRoomEmptySlot(slots, 2)).toBe(-1);

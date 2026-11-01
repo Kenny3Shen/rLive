@@ -6,6 +6,7 @@ import {
   type PlaybackRecoveryMetadataAdapter,
   type PlaybackRecoverySession,
 } from "../src/features/room/playback/playbackRecoverySession";
+import { lowestVideoQualityIndex } from "../src/features/room/playback/quality";
 
 const detail: LiveRoomDetail = {
   site_id: "bilibili",
@@ -777,5 +778,578 @@ describe("默认清晰度在恢复预算耗尽后自动降档", () => {
     expect(session.getSnapshot().qualityIndex).toBe(0);
     expect(session.getSnapshot().loadError).toContain("403");
     session.dispose();
+  });
+});
+
+describe("多画面节能画质策略", () => {
+  const tiers: LivePlayQuality[] = [
+    { quality: "4K", data: 20_000 },
+    { quality: "1080p", data: 8_000 },
+    { quality: "720p", data: 3_000 },
+    { quality: "audio only", data: 128 },
+  ];
+
+  function energySession(preferLowestQuality = false) {
+    const requested: string[] = [];
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => tiers,
+      fetchLines: async ({ quality: tier }) => {
+        requested.push(tier.quality);
+        return [{ ...flvSource(`https://cdn.example/${tier.quality}.flv`), protocol: "hls" }];
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      preferLowestQuality,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(config, { metadata });
+    return { session, requested, config };
+  }
+
+  test("首次拉流直接选择最低视频档，关闭节能或升主后恢复默认画质", async () => {
+    const { session, requested, config } = energySession(true);
+    await flush();
+    await flush();
+
+    expect(session.getSnapshot().qualityIndex).toBe(2);
+    expect(session.getSnapshot().qualities[2]?.quality).toBe("720p");
+    expect(requested).toEqual(["720p"]);
+
+    session.updateConfig({ ...config, preferLowestQuality: false });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe("4K");
+    expect(requested).toEqual(["720p", "4K"]);
+    session.dispose();
+  });
+
+  test("节能状态下忽略过期画质菜单回调，关闭后恢复正常选择", async () => {
+    const { session, requested, config } = energySession(true);
+    await flush();
+    await flush();
+
+    session.selectQuality(0);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "720p",
+    );
+    expect(requested).toEqual(["720p"]);
+
+    session.updateConfig({ ...config, preferLowestQuality: false });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe("4K");
+    expect(requested).toEqual(["720p", "4K"]);
+    session.dispose();
+  });
+
+  function expandedQualitiesSession() {
+    let qualityFetches = 0;
+    const requested: string[] = [];
+    const initialQualities: LivePlayQuality[] = [tiers[0], tiers[2]];
+    const expandedQualities: LivePlayQuality[] = [
+      tiers[0],
+      tiers[2],
+      { quality: "360p", data: 900 },
+      tiers[3],
+    ];
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => {
+        qualityFetches += 1;
+        return qualityFetches === 1 ? initialQualities : expandedQualities;
+      },
+      fetchLines: async ({ quality: tier }) => {
+        requested.push(tier.quality);
+        return [{ ...flvSource(`https://cdn.example/${tier.quality}.flv`), protocol: "hls" }];
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      preferLowestQuality: true,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(config, { metadata });
+    return { session, requested };
+  }
+
+  test("手动刷新发现更低视频档时改用新列表的最低档", async () => {
+    const { session, requested } = expandedQualitiesSession();
+    await flush();
+    await flush();
+    expect(requested).toEqual(["720p"]);
+
+    session.refresh();
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "360p",
+    );
+    expect(requested).toEqual(["720p", "360p"]);
+    session.dispose();
+  });
+
+  test("自动续期发现更低视频档时改用新列表的最低档", async () => {
+    const { session, requested } = expandedQualitiesSession();
+    await flush();
+    await flush();
+    expect(requested).toEqual(["720p"]);
+
+    session.acceptTransportFact({ epoch: 1, generation: 1, kind: "eof", protocol: "flv" });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "360p",
+    );
+    expect(requested).toEqual(["720p", "360p"]);
+    session.dispose();
+  });
+
+  test("关闭节能恢复用户此前的手动画质，自动续期仍保持最低视频档", async () => {
+    const { session, requested, config } = energySession();
+    await flush();
+    await flush();
+
+    session.selectQuality(1);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "1080p",
+    );
+
+    session.updateConfig({ ...config, preferLowestQuality: true });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "720p",
+    );
+
+    session.acceptTransportFact({ epoch: 1, generation: 1, kind: "eof", protocol: "flv" });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "720p",
+    );
+
+    session.updateConfig({ ...config, preferLowestQuality: false });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "1080p",
+    );
+    expect(requested).toEqual(["4K", "1080p", "720p", "720p", "1080p"]);
+    session.dispose();
+  });
+
+  test("在途切换以最后一次节能状态为准，旧清晰度结果不会覆盖", async () => {
+    type ResolveLines = (lines: PlayUrl[]) => void;
+    const pending = new Map<string, ResolveLines[]>();
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => tiers,
+      fetchLines: ({ quality: tier }) =>
+        new Promise((resolve) => {
+          const resolvers = pending.get(tier.quality) ?? [];
+          resolvers.push(resolve);
+          pending.set(tier.quality, resolvers);
+        }),
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(config, { metadata });
+    await flush();
+    await flush();
+
+    session.updateConfig({ ...config, preferLowestQuality: true });
+    await flush();
+    session.updateConfig({ ...config, preferLowestQuality: false });
+    await flush();
+
+    const resolve = (tier: string, url: string) => {
+      pending.get(tier)?.shift()?.([{ ...flvSource(url), protocol: "hls" }]);
+    };
+    resolve("4K", "https://cdn.example/stale-4k.m3u8");
+    resolve("720p", "https://cdn.example/stale-720p.m3u8");
+    await flush();
+    await flush();
+    expect(session.getSnapshot().playUrl).toBeNull();
+
+    resolve("4K", "https://cdn.example/normal-4k.m3u8");
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualityIndex).toBe(0);
+    expect(session.getSnapshot().playUrl?.url).toBe("https://cdn.example/normal-4k.m3u8");
+    session.dispose();
+  });
+
+  test("同下标刷新在途时开启节能，会按新列表重启并提交最低档", async () => {
+    type ResolveLines = (lines: PlayUrl[]) => void;
+    const initialQualities: LivePlayQuality[] = [tiers[0], tiers[2]];
+    const expandedQualities: LivePlayQuality[] = [
+      tiers[0],
+      tiers[2],
+      { quality: "360p", data: 900 },
+      tiers[3],
+    ];
+    let qualityFetches = 0;
+    let holdRefresh720 = false;
+    const pending720: ResolveLines[] = [];
+    const requested: string[] = [];
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => {
+        qualityFetches += 1;
+        return qualityFetches === 1 ? initialQualities : expandedQualities;
+      },
+      fetchLines: ({ quality: tier }) => {
+        requested.push(tier.quality);
+        if (holdRefresh720 && tier.quality === "720p") {
+          return new Promise((resolve) => pending720.push(resolve));
+        }
+        return Promise.resolve([
+          { ...flvSource(`https://cdn.example/${tier.quality}.flv`), protocol: "hls" as const },
+        ]);
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(config, { metadata });
+    await flush();
+    await flush();
+    session.selectQuality(1);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "720p",
+    );
+
+    holdRefresh720 = true;
+    session.refresh();
+    await flush();
+    await flush();
+    expect(pending720).toHaveLength(1);
+
+    session.updateConfig({ ...config, preferLowestQuality: true });
+    await flush();
+    await flush();
+    expect(qualityFetches).toBe(3);
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "360p",
+    );
+    expect(session.getSnapshot().playUrl?.url).toBe("https://cdn.example/360p.flv");
+
+    pending720.shift()?.([{ ...flvSource("https://cdn.example/stale-720p.flv"), protocol: "hls" }]);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().playUrl?.url).toBe("https://cdn.example/360p.flv");
+    expect(requested).toEqual(["4K", "720p", "720p", "360p"]);
+    session.dispose();
+  });
+
+  test("刷新取流在途时关闭节能，重新刷新会恢复默认正常画质", async () => {
+    type ResolveLines = (lines: PlayUrl[]) => void;
+    let holdLines = false;
+    const pending720: ResolveLines[] = [];
+    const requested: string[] = [];
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => tiers,
+      fetchLines: ({ quality: tier }) => {
+        requested.push(tier.quality);
+        if (holdLines && tier.quality === "720p") {
+          return new Promise((resolve) => pending720.push(resolve));
+        }
+        return Promise.resolve([
+          { ...flvSource(`https://cdn.example/${tier.quality}.flv`), protocol: "hls" as const },
+        ]);
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      preferLowestQuality: true,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(config, { metadata });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "720p",
+    );
+
+    holdLines = true;
+    session.refresh();
+    await flush();
+    await flush();
+    expect(pending720).toHaveLength(1);
+
+    session.updateConfig({ ...config, preferLowestQuality: false });
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe("4K");
+    expect(requested).toEqual(["720p", "720p", "4K"]);
+
+    pending720.shift()?.([{ ...flvSource("https://cdn.example/stale-720p.flv"), protocol: "hls" }]);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe("4K");
+    session.dispose();
+  });
+
+  test("刷新在途连续双向切换仍恢复原手动画质并忽略旧结果", async () => {
+    type PendingLines = { quality: string; resolve: (lines: PlayUrl[]) => void };
+    let holdLines = false;
+    const pending: PendingLines[] = [];
+    const requested: string[] = [];
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => tiers,
+      fetchLines: ({ quality: tier }) => {
+        requested.push(tier.quality);
+        if (holdLines) {
+          return new Promise((resolve) => pending.push({ quality: tier.quality, resolve }));
+        }
+        return Promise.resolve([
+          { ...flvSource(`https://cdn.example/${tier.quality}.flv`), protocol: "hls" as const },
+        ]);
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const normalConfig = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      preferLowestQuality: false,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(normalConfig, { metadata });
+    await flush();
+    await flush();
+    session.selectQuality(1);
+    await flush();
+    await flush();
+    session.updateConfig({ ...normalConfig, preferLowestQuality: true });
+    await flush();
+    await flush();
+
+    holdLines = true;
+    session.refresh();
+    await flush();
+    await flush();
+    session.updateConfig({ ...normalConfig, preferLowestQuality: false });
+    await flush();
+    await flush();
+    session.updateConfig({ ...normalConfig, preferLowestQuality: true });
+    await flush();
+    await flush();
+    session.updateConfig({ ...normalConfig, preferLowestQuality: false });
+    await flush();
+    await flush();
+
+    expect(pending.map(({ quality }) => quality)).toEqual(["720p", "1080p", "720p", "1080p"]);
+    const final = pending.at(-1);
+    final?.resolve([{ ...flvSource("https://cdn.example/final-1080p.flv"), protocol: "hls" }]);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "1080p",
+    );
+    expect(session.getSnapshot().playUrl?.url).toBe("https://cdn.example/final-1080p.flv");
+
+    for (const stale of pending.slice(0, -1)) {
+      stale.resolve([
+        { ...flvSource(`https://cdn.example/stale-${stale.quality}.flv`), protocol: "hls" },
+      ]);
+    }
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "1080p",
+    );
+    expect(session.getSnapshot().playUrl?.url).toBe("https://cdn.example/final-1080p.flv");
+    expect(requested).toEqual(["4K", "1080p", "720p", "720p", "1080p", "720p", "1080p"]);
+    session.dispose();
+  });
+
+  test("单档取流在途切换节能不会作废唯一请求或停在加载态", async () => {
+    type ResolveLines = (lines: PlayUrl[]) => void;
+    const singleQuality: LivePlayQuality[] = [{ quality: "720p", data: 3_000 }];
+    let resolveLines: ResolveLines | null = null;
+    let linesFetched = 0;
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => singleQuality,
+      fetchLines: () => {
+        linesFetched += 1;
+        return new Promise((resolve) => {
+          resolveLines = resolve;
+        });
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(config, { metadata });
+    await flush();
+    await flush();
+    expect(resolveLines).not.toBeNull();
+
+    session.updateConfig({ ...config, preferLowestQuality: true });
+    await flush();
+    session.updateConfig({ ...config, preferLowestQuality: false });
+    await flush();
+    expect(linesFetched).toBe(1);
+    expect(session.getSnapshot().loading).toBe(true);
+
+    (resolveLines as unknown as ResolveLines)([
+      { ...flvSource("https://cdn.example/only-720p.flv"), protocol: "hls" },
+    ]);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().loading).toBe(false);
+    expect(session.getSnapshot().playUrl?.url).toBe("https://cdn.example/only-720p.flv");
+    expect(linesFetched).toBe(1);
+    session.dispose();
+  });
+
+  test("最低档手动选档在途同档切换与过期线路回调不会取消取流", async () => {
+    type ResolveLines = (lines: PlayUrl[]) => void;
+    let resolveLines: ResolveLines | null = null;
+    let linesFetched = 0;
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => tiers,
+      fetchLines: ({ quality: tier }) => {
+        linesFetched += 1;
+        if (tier.quality === "720p") {
+          return new Promise((resolve) => {
+            resolveLines = resolve;
+          });
+        }
+        return Promise.resolve([
+          { ...flvSource(`https://cdn.example/${tier.quality}.flv`), protocol: "hls" as const },
+        ]);
+      },
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const config = {
+      siteId: "twitch" as const,
+      roomId: "1000",
+      detail: { ...detail, site_id: "twitch" as const },
+      qualityLevel: "high" as const,
+      enabled: true,
+    };
+    const session = createPlaybackRecoverySession(config, { metadata });
+    await flush();
+    await flush();
+
+    session.selectQuality(2);
+    await flush();
+    await flush();
+    expect(resolveLines).not.toBeNull();
+    expect(linesFetched).toBe(2);
+
+    session.updateConfig({ ...config, preferLowestQuality: true });
+    await flush();
+    session.selectLine(0);
+    await flush();
+    session.updateConfig({ ...config, preferLowestQuality: false });
+    await flush();
+    expect(linesFetched).toBe(2);
+    expect(session.getSnapshot().loading).toBe(true);
+
+    (resolveLines as unknown as ResolveLines)([
+      { ...flvSource("https://cdn.example/manual-720p.flv"), protocol: "hls" },
+    ]);
+    await flush();
+    await flush();
+    expect(session.getSnapshot().loading).toBe(false);
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe(
+      "720p",
+    );
+    expect(session.getSnapshot().playUrl?.url).toBe("https://cdn.example/manual-720p.flv");
+    expect(linesFetched).toBe(2);
+    session.dispose();
+  });
+
+  test("普通刷新匹配不到原画质时保留原顺序位置作为 fallback", async () => {
+    const initialQualities: LivePlayQuality[] = [tiers[0], tiers[1], tiers[2]];
+    const renamedQualities: LivePlayQuality[] = [
+      { quality: "A", data: 20_000 },
+      { quality: "B", data: 8_000 },
+      { quality: "C", data: 3_000 },
+    ];
+    let qualityFetches = 0;
+    const metadata: PlaybackRecoveryMetadataAdapter = {
+      fetchQualities: async () => {
+        qualityFetches += 1;
+        return qualityFetches === 1 ? initialQualities : renamedQualities;
+      },
+      fetchLines: async ({ quality: tier }) => [
+        { ...flvSource(`https://cdn.example/${tier.quality}.flv`), protocol: "hls" },
+      ],
+      cacheQualities: () => {},
+      cacheLines: () => {},
+    };
+    const session = createPlaybackRecoverySession(
+      {
+        siteId: "twitch",
+        roomId: "1000",
+        detail: { ...detail, site_id: "twitch" },
+        qualityLevel: "high",
+        enabled: true,
+      },
+      { metadata },
+    );
+    await flush();
+    await flush();
+    session.selectQuality(1);
+    await flush();
+    await flush();
+
+    session.refresh();
+    await flush();
+    await flush();
+    expect(session.getSnapshot().qualities[session.getSnapshot().qualityIndex]?.quality).toBe("B");
+    session.dispose();
+  });
+
+  test("最低视频档 helper 处理空、单档与纯音频边界", () => {
+    expect(lowestVideoQualityIndex([])).toBeNull();
+    expect(lowestVideoQualityIndex([{ quality: "4K" }])).toBe(0);
+    expect(lowestVideoQualityIndex([{ quality: "4K" }, { quality: "audio only" }])).toBe(0);
+    expect(lowestVideoQualityIndex([{ quality: "audio only" }])).toBeNull();
   });
 });
