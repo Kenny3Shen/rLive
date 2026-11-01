@@ -37,6 +37,10 @@ const PREROLL_FRAMES: usize = 6;
 const TAIL_PAD_FRAMES: usize = 6;
 /// 少于约 0.25 s 语音的片段（咳嗽、按键声）直接丢弃。
 const MIN_VOICED_FRAMES: usize = 8;
+/// 滞回带（0.35–0.5）里的帧不会累加 `silence_run`，音乐或持续噪声可能让语句
+/// 一直挂到最长时长。连续这么久没有达到语音阈值的帧就强制收句。
+/// 3 秒远高于短句 0.8 秒的端点，不会把句内换气或安静片段切成两句。
+const STALL_SILENCE_FRAMES: usize = 94;
 /// 最长语句约 12 s。原先 20 s 会让一句话攒到 80–100 字，叠加层（最多 90 字）被裁。
 const MAX_UTTERANCE_FRAMES: usize = 375;
 /// 达到最长时长时，在最后约 3 s 内找概率最低的一帧切分，让硬切更可能落在真正的停顿上。
@@ -102,7 +106,10 @@ struct Utterance {
     /// 从 `start_frame` 起每帧的语音概率，用于在最长时长处找切分点。
     probs: Vec<f32>,
     voiced_frames: usize,
+    /// 连续低于退出阈值的帧数，用于正常端点。
     silence_run: usize,
+    /// 连续低于语音阈值的帧数（含滞回带），用于强制收句。
+    stall_run: usize,
     last_voiced_frame: usize,
     /// 上次在途解码时的帧位置。
     partial_frame: usize,
@@ -190,19 +197,28 @@ impl CaptionStream {
         self.next_frame += 1;
 
         let Some(utterance) = self.utterance.as_mut() else {
-            if prob >= SPEECH_THRESHOLD {
+            // 起音需要连续两帧达到语音阈值：音乐瞬态或按键声常有单帧尖峰，
+            // 直接开句只会占用缓冲，并可能触发一次无意义的解码。
+            let onset = prob >= SPEECH_THRESHOLD
+                && self
+                    .recent_probs
+                    .last()
+                    .is_some_and(|previous| *previous >= SPEECH_THRESHOLD);
+            if onset {
                 let start_frame = frame
                     .saturating_sub(PREROLL_FRAMES.min(self.recent_probs.len()))
                     .max(self.origin_frame);
                 let lead = frame - start_frame;
                 let mut probs = self.recent_probs[self.recent_probs.len() - lead..].to_vec();
                 probs.push(prob);
+                let voiced_frames = probs.iter().filter(|p| **p >= SPEECH_THRESHOLD).count();
                 self.recent_probs.clear();
                 self.utterance = Some(Utterance {
                     start_frame,
                     probs,
-                    voiced_frames: 1,
+                    voiced_frames,
                     silence_run: 0,
+                    stall_run: 0,
                     last_voiced_frame: frame,
                     partial_frame: frame,
                 });
@@ -219,9 +235,13 @@ impl CaptionStream {
         if prob >= SPEECH_THRESHOLD {
             utterance.voiced_frames += 1;
             utterance.silence_run = 0;
+            utterance.stall_run = 0;
             utterance.last_voiced_frame = frame;
-        } else if prob < SILENCE_THRESHOLD {
-            utterance.silence_run += 1;
+        } else {
+            utterance.stall_run += 1;
+            if prob < SILENCE_THRESHOLD {
+                utterance.silence_run += 1;
+            }
         }
 
         let utterance_frames = frame + 1 - utterance.start_frame;
@@ -231,6 +251,15 @@ impl CaptionStream {
         if utterance.silence_run >= endpoint_silence_frames(spoken_frames) {
             let end_frame = (utterance.last_voiced_frame + 1 + TAIL_PAD_FRAMES).min(frame + 1);
             let utterance = self.utterance.take().expect("utterance is active");
+            self.remember_preroll(&utterance);
+            segments.extend(self.finalize(engine, &utterance, end_frame));
+            return;
+        }
+
+        if utterance.stall_run >= STALL_SILENCE_FRAMES {
+            let end_frame = (utterance.last_voiced_frame + 1 + TAIL_PAD_FRAMES).min(frame + 1);
+            let utterance = self.utterance.take().expect("utterance is active");
+            self.remember_preroll(&utterance);
             segments.extend(self.finalize(engine, &utterance, end_frame));
             return;
         }
@@ -253,12 +282,22 @@ impl CaptionStream {
                     start_frame: cut_frame,
                     voiced_frames: voiced,
                     silence_run: 0,
+                    stall_run: 0,
                     last_voiced_frame: frame,
                     partial_frame: cut_frame,
                     probs: remaining,
                 });
             }
         }
+    }
+
+    /// 定稿后把句尾几帧的概率保留为下一句的前导。语句进行中 `recent_probs`
+    /// 是空的，紧接下一句起音时会丢失前导，首字可能被截掉。
+    fn remember_preroll(&mut self, utterance: &Utterance) {
+        let start = utterance.probs.len().saturating_sub(PREROLL_FRAMES);
+        self.recent_probs.clear();
+        self.recent_probs
+            .extend_from_slice(&utterance.probs[start..]);
     }
 
     fn finalize(
@@ -483,9 +522,9 @@ mod tests {
         let outputs = run(&mut stream, &mut engine, 80);
         let segments: Vec<_> = outputs.iter().flat_map(|output| &output.segments).collect();
         assert_eq!(segments.len(), 1);
-        // 前导 6 帧（从第 4 帧起），尾部补 6 帧（到第 56 帧止）。
-        assert_eq!(segments[0].text, "4-56");
-        assert_eq!(segments[0].start_ms, 128);
+        // 起音需要连续两帧，句首回拉 6 帧（从第 5 帧起）；尾部补 6 帧到第 56 帧。
+        assert_eq!(segments[0].text, "5-56");
+        assert_eq!(segments[0].start_ms, 160);
         assert_eq!(segments[0].end_ms, 1_792);
         assert_eq!(segments[0].speaker_id, Some(1));
         assert!(outputs.last().unwrap().partial.is_none());
@@ -561,6 +600,54 @@ mod tests {
         let segments: Vec<_> = outputs.iter().flat_map(|output| &output.segments).collect();
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "0-86");
+    }
+
+    #[test]
+    fn single_frame_spike_does_not_start_an_utterance() {
+        // 静音中夹一帧 0.6，再隔 10 帧才出现真正的连续语音。
+        // 单帧尖峰不应开句；真正的语句从连续两帧 0.9 起算，起点回拉到第 16 帧。
+        let mut probs = vec![0.0; 10];
+        probs.push(0.6);
+        probs.extend(vec![0.0; 10]);
+        probs.extend(vec![0.9; 20]);
+        probs.extend(vec![0.0; 30]);
+        let mut engine = ScriptedEngine::new(probs);
+        let mut stream = CaptionStream::new(config(true));
+        let outputs = run(&mut stream, &mut engine, 71);
+        let segments: Vec<_> = outputs.iter().flat_map(|output| &output.segments).collect();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "16-47");
+    }
+
+    #[test]
+    fn mid_band_stall_finalizes_without_waiting_for_max_length() {
+        // 20 帧语音后转成持续的 0.4（滞回带）：silence_run 不增长，
+        // 但连续 3 秒没有语音帧就必须强制收句，不能挂到 12 秒。
+        let mut probs = vec![0.9; 20];
+        probs.extend(vec![0.4; STALL_SILENCE_FRAMES + 10]);
+        let mut engine = ScriptedEngine::new(probs);
+        let mut stream = CaptionStream::new(config(true));
+        let outputs = run(&mut stream, &mut engine, 20 + STALL_SILENCE_FRAMES + 10);
+        let segments: Vec<_> = outputs.iter().flat_map(|output| &output.segments).collect();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "0-26");
+    }
+
+    #[test]
+    fn restores_preroll_when_speech_resumes_right_after_finalize() {
+        // 20 帧语音 + 25 帧静音（正好触发短句端点），下一帧马上又是语音。
+        // 定稿后应把句尾概率留作前导，第二句从第 40 帧起，而不是从起音帧 45 起。
+        let mut probs = vec![0.9; 20];
+        probs.extend(vec![0.1; 25]);
+        probs.extend(vec![0.9; 20]);
+        probs.extend(vec![0.0; 30]);
+        let mut engine = ScriptedEngine::new(probs);
+        let mut stream = CaptionStream::new(config(true));
+        let outputs = run(&mut stream, &mut engine, 95);
+        let segments: Vec<_> = outputs.iter().flat_map(|output| &output.segments).collect();
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text, "0-26");
+        assert_eq!(segments[1].text, "40-71");
     }
 
     #[test]

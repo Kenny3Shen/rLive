@@ -1509,7 +1509,7 @@ function AsrModelField() {
 
       <SwitchField
         title="VAD（静音端点检测）"
-        tip="用 Silero VAD 按停顿分句；关闭后仅按最长 20 秒切分。"
+        tip="用 Silero VAD 按停顿分句；关闭后仅按最长 12 秒切分。"
         checked={vadEnabled}
         disabled={!model.supported || model.isPending || pending}
         fieldDisabled={!model.supported || pending}
