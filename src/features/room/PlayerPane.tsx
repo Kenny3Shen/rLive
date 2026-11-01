@@ -1631,6 +1631,8 @@ function PlayerPaneContent({
                 asr={asr}
                 fontSize={asrFontSize}
                 translationTo={asrTranslationTo}
+                translationActive={asrTranslationEnabled}
+                videoAspectRatio={player.aspectRatio}
                 className="bottom-[calc(4.5rem+var(--player-chrome-inset))]"
                 onOpenWindow={
                   asrCaptionWindowAvailable

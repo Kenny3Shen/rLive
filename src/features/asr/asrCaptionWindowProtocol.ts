@@ -21,6 +21,8 @@ export const ASR_CAPTION_EVENT = {
   patch: "asr-captions://patch",
   /** 房间标题、开关、在途假设与错误提示。 */
   live: "asr-captions://live",
+  /** 字幕窗口请求清空历史；主窗口清空转录后回发一份空快照。 */
+  clear: "asr-captions://clear",
 } as const;
 
 export type AsrCaptionSnapshotPayload = {

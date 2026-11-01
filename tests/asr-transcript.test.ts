@@ -150,4 +150,27 @@ describe("独立字幕转录 store", () => {
       text: "第 199 句。",
     });
   });
+
+  test("清空历史后保留实时状态，下一句重新插入分隔条，迟到译文被丢弃", () => {
+    const store = createAsrTranscriptStore();
+    const line = store.appendLine({ text: "第一句。", sourceKey: "room-A", sourceTitle: "房间 A" });
+    store.updateLive({ captionsOn: true, partial: "在途" });
+    const changes: AsrTranscriptChange[] = [];
+    store.subscribe((change) => changes.push(change));
+
+    store.clear();
+    expect(store.getEntries()).toEqual([]);
+    expect(store.getLive()).toMatchObject({ captionsOn: true, partial: "在途" });
+    expect(changes).toEqual([{ kind: "clear" }]);
+
+    // 空记录再清空不重复通知。
+    store.clear();
+    expect(changes).toHaveLength(1);
+
+    store.patchTranslation(line.id, "First line.");
+    expect(changes).toHaveLength(1);
+
+    store.appendLine({ text: "第二句。", sourceKey: "room-A", sourceTitle: "房间 A" });
+    expect(store.getEntries().map((entry) => entry.kind)).toEqual(["divider", "line"]);
+  });
 });

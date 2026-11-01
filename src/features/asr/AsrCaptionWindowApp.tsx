@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Captions } from "lucide-react";
+import { ArrowDown, Captions, Trash2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { emit, listen } from "@tauri-apps/api/event";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Empty,
   EmptyDescription,
@@ -119,6 +119,7 @@ export default function AsrCaptionWindowApp() {
   const [version, setVersion] = useState(0);
   const [live, setLive] = useState<AsrTranscriptLive>(EMPTY_LIVE);
   const [following, setFollowing] = useState(true);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const followingRef = useRef(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followFrameRef = useRef<number | null>(null);
@@ -253,11 +254,14 @@ export default function AsrCaptionWindowApp() {
     if (count > 0) virtualizer.scrollToIndex(count - 1, { align: "end" });
   }, [virtualizer]);
 
-  const status = live.notice
-    ? { label: "识别异常", variant: "destructive" as const }
-    : live.captionsOn
-      ? { label: "字幕已开启", variant: "secondary" as const }
-      : { label: "字幕已关闭", variant: "outline" as const };
+  // 清空由主窗口执行（转录归它所有），列表随回发的空快照更新；
+  // 这里只恢复跟随态，让清空后的新字幕直接贴底显示。
+  const confirmClear = useCallback(() => {
+    setConfirmingClear(false);
+    followingRef.current = true;
+    setFollowing(true);
+    void emit(ASR_CAPTION_EVENT.clear).catch(() => undefined);
+  }, []);
 
   const entries = entriesRef.current;
   const virtualRows = virtualizer.getVirtualItems();
@@ -269,7 +273,15 @@ export default function AsrCaptionWindowApp() {
           <h1 className="min-w-0 truncate text-base font-semibold">
             {live.sourceTitle || "直播字幕"}
           </h1>
-          <Badge variant={status.variant}>{status.label}</Badge>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={entries.length === 0}
+            onClick={() => setConfirmingClear(true)}
+          >
+            <Trash2 data-icon="inline-start" aria-hidden />
+            清空
+          </Button>
         </div>
         {live.notice ? (
           <p className="mt-2 text-sm break-words text-destructive" role="status">
@@ -335,6 +347,17 @@ export default function AsrCaptionWindowApp() {
           回到最新
         </Button>
       ) : null}
+
+      <ConfirmDialog
+        open={confirmingClear}
+        onOpenChange={setConfirmingClear}
+        icon={<Trash2 />}
+        title="清空字幕记录？"
+        description="将删除本次运行保存的全部字幕与译文，正在进行的识别不受影响。清空后无法恢复。"
+        confirmText="清空"
+        actionIcon={<Trash2 data-icon="inline-start" aria-hidden />}
+        onConfirm={confirmClear}
+      />
 
       <footer className="shrink-0 border-t border-border bg-muted/40 px-4 py-2">
         {live.partial ? (

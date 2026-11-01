@@ -40,7 +40,9 @@ export type AsrTranscriptLive = {
 export type AsrTranscriptChange =
   | { kind: "append"; entry: AsrTranscriptEntry }
   | { kind: "patch"; id: string; translation: string }
-  | { kind: "live"; live: AsrTranscriptLive };
+  | { kind: "live"; live: AsrTranscriptLive }
+  /** 用户在独立窗口清空了历史；桥接改发一份空快照。 */
+  | { kind: "clear" };
 
 export type AsrTranscriptAppendInput = {
   text: string;
@@ -65,6 +67,11 @@ export type AsrTranscriptStore = {
   /** 按条目 id 回填译文；迟到译文也写入，不受叠加层过期时间限制。 */
   patchTranslation: (id: string, translation: string) => void;
   updateLive: (patch: Partial<AsrTranscriptLive>) => void;
+  /**
+   * 清空已保存的对话。实时状态（开关、在途假设）保留；下一条定稿重新带出房间分隔条。
+   * 清空前已发出的翻译请求迟到时找不到原行，直接丢弃。
+   */
+  clear: () => void;
   subscribe: (listener: (change: AsrTranscriptChange) => void) => () => void;
 };
 
@@ -154,6 +161,14 @@ export function createAsrTranscriptStore(): AsrTranscriptStore {
       if (!changed) return;
       live = next;
       emit({ kind: "live", live });
+    },
+
+    clear: () => {
+      if (entries.length === 0) return;
+      entries.length = 0;
+      indexById.clear();
+      lastSourceKey = null;
+      emit({ kind: "clear" });
     },
 
     subscribe: (listener) => {

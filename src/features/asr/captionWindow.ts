@@ -19,7 +19,7 @@ import {
  * 页面重载会再次收到 `ready` 并重新同步。
  */
 
-/** 主窗口只注册一次 ready 监听；多次建窗共用。 */
+/** 主窗口只注册一次 ready / clear 监听；多次建窗共用。 */
 let readyListenerPromise: Promise<void> | null = null;
 let stopForwarding: (() => void) | null = null;
 let opening: Promise<void> | null = null;
@@ -62,6 +62,10 @@ function startForwarding(): void {
         enqueueEmit(ASR_CAPTION_EVENT.live, payload);
         break;
       }
+      case "clear":
+        // 清空走快照路径：窗口侧整份替换列表并重建索引，不需要单独的协议分支。
+        sendSnapshot();
+        break;
     }
   });
 }
@@ -74,13 +78,21 @@ function stopForwardingToWindow(): void {
 /**
  * 在新窗口创建前完成注册，防止窗口加载快于监听导致首个 `ready` 丢失。
  * 注册失败时清空 promise，下一次点击可以重试。
+ *
+ * 字幕窗口不能调用应用命令，「清空」也只能以事件请求：转录归主窗口所有，
+ * 由这里清空后经转发回发空快照，窗口不自行清本地列表，两边始终一致。
  */
 function ensureReadyListener(): Promise<void> {
-  readyListenerPromise ??= listen(ASR_CAPTION_EVENT.ready, () => {
-    // 建窗、窗口重载与迟到的 ready 都走同一条恢复路径：先补全量，再转发增量。
-    sendSnapshot();
-    startForwarding();
-  })
+  readyListenerPromise ??= Promise.all([
+    listen(ASR_CAPTION_EVENT.ready, () => {
+      // 建窗、窗口重载与迟到的 ready 都走同一条恢复路径：先补全量，再转发增量。
+      sendSnapshot();
+      startForwarding();
+    }),
+    listen(ASR_CAPTION_EVENT.clear, () => {
+      asrTranscript.clear();
+    }),
+  ])
     .then(() => undefined)
     .catch((error: unknown) => {
       readyListenerPromise = null;
