@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -532,13 +533,29 @@ export function AsrSettingsBody({
           value={translationFrom}
           onValueChange={(value) => value && onTranslationFromChange?.(value)}
         >
-          <SelectTrigger id="player-caption-translation-from" size="sm" className="w-32 min-w-0">
+          <SelectTrigger
+            id="player-caption-translation-from"
+            size="sm"
+            glass
+            className="w-32 min-w-0"
+          >
             <SelectValue className="min-w-0 truncate" />
           </SelectTrigger>
-          <SelectContent container={portalContainer} side="top" align="end" glass>
+          <SelectContent
+            container={portalContainer}
+            side="top"
+            align="end"
+            glass
+            className={glassPanelClass({ overlay: true })}
+          >
             <SelectGroup>
               {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem key={language.value} value={language.value}>
+                <SelectItem
+                  key={language.value}
+                  value={language.value}
+                  glass
+                  className={glassOptionClass()}
+                >
                   {language.label}
                 </SelectItem>
               ))}
@@ -553,13 +570,29 @@ export function AsrSettingsBody({
           value={translationTo}
           onValueChange={(value) => value && onTranslationToChange?.(value)}
         >
-          <SelectTrigger id="player-caption-translation-to" size="sm" className="w-32 min-w-0">
+          <SelectTrigger
+            id="player-caption-translation-to"
+            size="sm"
+            glass
+            className="w-32 min-w-0"
+          >
             <SelectValue className="min-w-0 truncate" />
           </SelectTrigger>
-          <SelectContent container={portalContainer} side="top" align="end" glass>
+          <SelectContent
+            container={portalContainer}
+            side="top"
+            align="end"
+            glass
+            className={glassPanelClass({ overlay: true })}
+          >
             <SelectGroup>
               {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem key={language.value} value={language.value}>
+                <SelectItem
+                  key={language.value}
+                  value={language.value}
+                  glass
+                  className={glassOptionClass()}
+                >
                   {language.label}
                 </SelectItem>
               ))}
@@ -635,6 +668,10 @@ export function PlayerControls({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [asrOpen, setAsrOpen] = useState(false);
   const [volumeOpen, setVolumeOpen] = useState(false);
+  // 字幕菜单弹层元素。翻译语言的下拉必须 portal 进这里：字幕菜单在 top layer，
+  // 而 Base UI 的下拉默认去舞台/body，会被压在菜单之下，且点击会被 Video.js 当成
+  // 「点击空白」直接关掉整块菜单。
+  const asrPopupRef = useRef<HTMLDivElement | null>(null);
   // 音量按钮的弹层是 Video.js 的 `VolumePopover`，自带 `openOnHover`；这两个菜单用
   // `Menu.Root`，只能自己补同一套悬停时序。
   const setAsrMenuOpen = useCallback((open: boolean) => {
@@ -681,9 +718,11 @@ export function PlayerControls({
     </Menu.Root>
   );
 
-  const asrBody = (
+  // 下拉的 portal 目标随形态分叉：弹层形态进 top layer 的字幕菜单本身，
+  // 抽屉形态沿用调用方的舞台容器（Base UI 对话框能正确处理嵌套浮层）。
+  const renderAsrBody = (selectContainer: AsrSettingsBodyProps["portalContainer"]) => (
     <AsrSettingsBody
-      portalContainer={portalContainer}
+      portalContainer={selectContainer}
       translationEnabled={asrTranslationEnabled}
       translationFrom={asrTranslationFrom}
       translationTo={asrTranslationTo}
@@ -713,64 +752,65 @@ export function PlayerControls({
    */
   // 菜单只在 `onToggleAsr` 存在时渲染；这里先收窄，供两种形态共用同一份正文。
   const toggleAsr = onToggleAsr;
-  const asrMenuBody = toggleAsr && (
-    <Menu.Root
-      open={asrOpen}
-      closeOnEscape={false}
-      closeOnOutsideClick={false}
-      onOpenChange={(open) => {
-        if (!open) setAsrMenuOpen(false);
-      }}
-    >
-      <EmbeddedMenuContent>
-        <Button
-          variant="ghost"
-          className={cn(
-            "w-full justify-between max-md:h-10",
-            glassOptionClass(),
-            !asr.enabled && glassOptionSelectedClass(),
-          )}
-          aria-pressed={!asr.enabled}
-          onClick={() => {
-            if (asr.enabled) toggleAsr();
-            setAsrMenuOpen(false);
-          }}
-        >
-          <span className="truncate">关闭字幕</span>
-          {!asr.enabled && <Check data-icon="inline-end" aria-hidden />}
-        </Button>
-        <Button
-          variant="ghost"
-          className={cn(
-            "h-auto min-h-9 w-full justify-between py-1.5 max-md:min-h-10",
-            glassOptionClass(),
-            asr.enabled && glassOptionSelectedClass(),
-          )}
-          aria-pressed={asr.enabled}
-          aria-disabled={asrDisabled || undefined}
-          disabled={asrDisabled}
-          onClick={() => {
-            if (!asr.enabled) toggleAsr();
-            setAsrMenuOpen(false);
-          }}
-        >
-          <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
-            <span className="truncate">字幕（本地）</span>
-            {asrDisabled && (
-              <span className={cn("text-xs font-normal", glassMutedTextClass())}>{asrLabel}</span>
+  const renderAsrMenuBody = (selectContainer: AsrSettingsBodyProps["portalContainer"]) =>
+    toggleAsr && (
+      <Menu.Root
+        open={asrOpen}
+        closeOnEscape={false}
+        closeOnOutsideClick={false}
+        onOpenChange={(open) => {
+          if (!open) setAsrMenuOpen(false);
+        }}
+      >
+        <EmbeddedMenuContent>
+          <Button
+            variant="ghost"
+            className={cn(
+              "w-full justify-between max-md:h-10",
+              glassOptionClass(),
+              !asr.enabled && glassOptionSelectedClass(),
             )}
-          </span>
-          {asrBusy ? (
-            <SpinnerIcon className="size-4" data-icon="inline-end" aria-hidden />
-          ) : asr.enabled ? (
-            <Check data-icon="inline-end" aria-hidden />
-          ) : null}
-        </Button>
-        <Separator className={cn("my-1", glassSeparatorClass())} />
-        <div className="px-2 py-2">{asrBody}</div>
-      </EmbeddedMenuContent>
-    </Menu.Root>
-  );
+            aria-pressed={!asr.enabled}
+            onClick={() => {
+              if (asr.enabled) toggleAsr();
+              setAsrMenuOpen(false);
+            }}
+          >
+            <span className="truncate">关闭字幕</span>
+            {!asr.enabled && <Check data-icon="inline-end" aria-hidden />}
+          </Button>
+          <Button
+            variant="ghost"
+            className={cn(
+              "h-auto min-h-9 w-full justify-between py-1.5 max-md:min-h-10",
+              glassOptionClass(),
+              asr.enabled && glassOptionSelectedClass(),
+            )}
+            aria-pressed={asr.enabled}
+            aria-disabled={asrDisabled || undefined}
+            disabled={asrDisabled}
+            onClick={() => {
+              if (!asr.enabled) toggleAsr();
+              setAsrMenuOpen(false);
+            }}
+          >
+            <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
+              <span className="truncate">字幕（本地）</span>
+              {asrDisabled && (
+                <span className={cn("text-xs font-normal", glassMutedTextClass())}>{asrLabel}</span>
+              )}
+            </span>
+            {asrBusy ? (
+              <SpinnerIcon className="size-4" data-icon="inline-end" aria-hidden />
+            ) : asr.enabled ? (
+              <Check data-icon="inline-end" aria-hidden />
+            ) : null}
+          </Button>
+          <Separator className={cn("my-1", glassSeparatorClass())} />
+          <div className="px-2 py-2">{renderAsrBody(selectContainer)}</div>
+        </EmbeddedMenuContent>
+      </Menu.Root>
+    );
 
   // 容器宽度不足时按优先级让位：与原生控件同一套 media 容器断点，
   // 保证业务按钮行永远不会被 `overflow-hidden` 拦腰截断。
@@ -1071,7 +1111,7 @@ export function PlayerControls({
                     )}
                   >
                     <DrawerTitle className={glassTitleClass({ overlay: true })}>字幕</DrawerTitle>
-                    {asrMenuBody}
+                    {renderAsrMenuBody(portalContainer)}
                   </DrawerContent>
                 </Drawer>
               </>
@@ -1100,6 +1140,7 @@ export function PlayerControls({
                   {asrIcon}
                 </Menu.Trigger>
                 <Menu.Popup
+                  ref={asrPopupRef}
                   keepMounted={false}
                   /* 与播放设置菜单同构：重置 UA `[popover]` 外观，玻璃留在 Content 上。 */
                   className={cn(
@@ -1117,7 +1158,7 @@ export function PlayerControls({
                       "whitespace-nowrap [&_*]:whitespace-nowrap",
                     )}
                   >
-                    {asrMenuBody}
+                    {renderAsrMenuBody(asrPopupRef)}
                   </Menu.Content>
                 </Menu.Popup>
               </Menu.Root>

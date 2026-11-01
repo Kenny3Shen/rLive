@@ -16,8 +16,10 @@ export type GlassSurfaceContext = { overlay?: boolean };
 /**
  * 玻璃面板的材质类。
  *
- * `PopoverContent`/`DrawerContent`/`SelectContent` 上的 `glass` 属性只去掉不透明
- * 的 `bg-popover` 默认背景；材质本身来自这里，因此两者必须一起设置。
+ * `PopoverContent`/`DrawerContent`/`SelectContent` 上的 `glass` 属性会让出不透明的
+ * 默认外观（背景、描边、文字与阴影）；材质本身来自这里，因此两者必须一起设置。
+ * `SelectContent` 内的触发器、选项与滚动箭头同理传 `glass`，填充由本文件的
+ * `glassOptionClass` 提供。
  */
 export function glassSurfaceClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "glass-surface-overlay" : "glass-surface";

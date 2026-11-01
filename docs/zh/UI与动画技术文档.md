@@ -59,6 +59,7 @@
 - Card 只用于独立、重复或需要明确边界的内容；不嵌套 Card，不把整段页面当作悬浮 Card。Base UI 通过 `render` 组合自定义 trigger，不使用 Radix 的 `asChild`。
 - 全屏图层内的 Overlay 必须传 `container`（播放器传 `player.stageRef`），否则默认 portal 到 `<body>` 会被 top layer 压住；`notify` 视口由 `setToastPortalContainer()` 在全屏期间整体移入 stage，退出后还原。
 - Video.js 的 `Popover.Popup` / `Menu.Popup` 带 `popover` 属性，进入 top layer 后由 UA 样式表画上不透明的 `Canvas` 背景与 `border: solid`。这一层实心背景会把 `backdrop-filter` 的采样源顶掉，毛玻璃直接退化成实色矩形，因此弹层必须显式清掉它：材质画在弹层元素上的（tooltip、进度缩略图）用 `mediaPopupResetClass` + `mediaPopupSurfaceClass`；材质画在子元素上的（音量、播放设置、字幕三个控制栏弹层）弹层只挂 `mediaPopupResetClass` 与 `bg-transparent p-0`，`glass-surface-overlay` 留在子元素上 —— `mediaPopupMotionClass` 的指针桥接区占用了 `::before`，而玻璃填充也在 `::before`，两者不能共用一个元素。三类弹层共用 `src/components/videojs/lib/popup-surface.ts`，不要各自复制类串。
+- top layer 里再嵌一层普通 portal 的浮层会被整块压住：字幕菜单里的翻译语言下拉（Base UI `Select`）必须把 portal 目标指向 `Menu.Popup` 本身（`asrPopupRef`），而不是舞台或 `<body>`。放进弹层 DOM 还顺带满足 Video.js 的 outside-click / focus-out 判定，否则点击选项会先被当成「点击空白」把整块菜单卸掉。玻璃面板内的 `Select` 统一传 `glass`：容器、触发器、选项与滚动箭头都由它切到 `glass-surface-overlay` / `glassOptionClass` 的填充，避免不透明的 `bg-popover`、`bg-muted`、`bg-secondary` 在材质上凿洞。
 
 ### 3.2 主题与语义令牌
 
