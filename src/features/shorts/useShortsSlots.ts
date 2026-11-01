@@ -78,7 +78,7 @@ export function useShortsSlots(options: UseShortsSlotsOptions): ShortsSlotsState
   return useShortsMediaSlots({ ...options, source: BILIBILI_SHORTS_SOURCE });
 }
 
-export function useShortsMediaSlots<Item, Info extends object>({
+function useShortsMediaSlots<Item, Info extends object>({
   source,
   items,
   index,

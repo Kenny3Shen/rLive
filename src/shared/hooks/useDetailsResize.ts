@@ -967,7 +967,7 @@ export function useDetailsResize({
 }
 
 /** 写入统一的侧栏占比；初始布局与拖动共用这个入口。 */
-export function writeDetailsShare(container: HTMLElement | null, percent: number): void {
+function writeDetailsShare(container: HTMLElement | null, percent: number): void {
   if (!container) return;
   const value = detailsShareCssValue(roundDetailsShare(percent));
   setResizeStyle(container, detailsShareProperty, value);
@@ -977,7 +977,7 @@ export function writeDetailsShare(container: HTMLElement | null, percent: number
   syncResizeTargetState(container);
 }
 
-export function markDetailsResizing(container: HTMLElement | null, resizing: boolean): void {
+function markDetailsResizing(container: HTMLElement | null, resizing: boolean): void {
   if (!container) return;
   if (resizing) {
     if (container.dataset.vodDetailsResizing !== "true") {
@@ -988,7 +988,7 @@ export function markDetailsResizing(container: HTMLElement | null, resizing: boo
   }
 }
 
-export function markDetailsPrepared(container: HTMLElement | null, prepared: boolean): void {
+function markDetailsPrepared(container: HTMLElement | null, prepared: boolean): void {
   if (!container) return;
   if (prepared) {
     if (container.dataset.vodDetailsPrepared !== "true") {
@@ -999,11 +999,11 @@ export function markDetailsPrepared(container: HTMLElement | null, prepared: boo
   }
 }
 
-export function clearDetailsResizing(container: HTMLElement | null): void {
+function clearDetailsResizing(container: HTMLElement | null): void {
   markDetailsResizing(container, false);
 }
 
-export function clearDetailsLayout(container: HTMLElement | null): void {
+function clearDetailsLayout(container: HTMLElement | null): void {
   if (!container) return;
   delete container.dataset.vodDetailsShare;
   delete container.dataset.vodDetailsPrepared;

@@ -11,9 +11,9 @@ import {
 import type { VideoDanmakuItem } from "@/shared/types/video";
 
 /** VOD 分段、筛选与数据映射；播放调度由共享 Danmaku 渲染器的媒体绑定负责。 */
-export const VIDEO_DANMAKU_SEGMENT_MS = 360_000;
+const VIDEO_DANMAKU_SEGMENT_MS = 360_000;
 
-export function videoDanmakuSegmentIndex(positionMs: number): number {
+function videoDanmakuSegmentIndex(positionMs: number): number {
   const position = Number.isFinite(positionMs) ? Math.max(0, positionMs) : 0;
   return Math.floor(position / VIDEO_DANMAKU_SEGMENT_MS) + 1;
 }
@@ -25,14 +25,14 @@ export function videoDanmakuSegmentsFor(positionMs: number): number[] {
 }
 
 /** 维持现有三种展示形态，高级/代码等未支持模式仍按普通滚动降级。 */
-export function videoDanmakuMode(mode: number): DanmakuComment["mode"] {
+function videoDanmakuMode(mode: number): DanmakuComment["mode"] {
   if (mode === 4) return "bottom";
   if (mode === 5) return "top";
   return "scroll";
 }
 
 /** RGB 十进制转 #rrggbb，非法颜色回落白色。 */
-export function videoDanmakuColor(color: number): string {
+function videoDanmakuColor(color: number): string {
   if (!Number.isFinite(color)) return "#ffffff";
   const value = Math.trunc(color);
   if (value <= 0 || value > 0xffffff) return "#ffffff";
@@ -101,7 +101,7 @@ export function firstVideoDanmakuAtOrAfter(
 }
 
 /** 固定弹幕显示 15 秒媒体时间，暂停/缓冲期间不消耗时长。 */
-export const VIDEO_DANMAKU_FIXED_DURATION_MS = DANMAKU_DEFAULT_DURATION_MS;
+const VIDEO_DANMAKU_FIXED_DURATION_MS = DANMAKU_DEFAULT_DURATION_MS;
 
 export function videoDanmakuComment(
   entry: VideoDanmakuEntry,

@@ -23,7 +23,7 @@ export const LIVE_SYNC_TICK_MS = 1_000;
  * seek 需要一点时间稳定：mpegts.js 会重建缓冲，元素异步触发
  * `seeking`/`seeked`。在这个窗口内再次校正会读到过期位置并二次跳转。
  */
-export const LIVE_SYNC_SEEK_COOLDOWN_MS = 2_200;
+const LIVE_SYNC_SEEK_COOLDOWN_MS = 2_200;
 
 export type LiveSyncFeedStatus = {
   clockKind: LiveSyncClockKind;
@@ -82,7 +82,7 @@ export function liveSyncDanmakuDelayMs(status: LiveSyncFeedStatus | null): numbe
 }
 
 /** 以网格自己的措辞描述某条流挂钟的可信程度。 */
-export function liveSyncClockLabel(kind: LiveSyncClockKind): string {
+function liveSyncClockLabel(kind: LiveSyncClockKind): string {
   switch (kind) {
     case "program-date":
       return "精确时钟";

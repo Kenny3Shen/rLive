@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { idleRouteModuleLoadersForPlatform, type RouteModuleLoader } from "./routeModules";
 
-export const ROUTE_PRELOAD_AFTER_LOAD_DELAY_MS = 1_500;
+const ROUTE_PRELOAD_AFTER_LOAD_DELAY_MS = 1_500;
 const IDLE_FALLBACK_DELAY_MS = 250;
 
 export type RoutePreloadConnection = {
@@ -33,7 +33,7 @@ export function shouldSkipIdleRoutePreloading(
   );
 }
 
-export function startIdleRoutePreloading(
+function startIdleRoutePreloading(
   loaders: readonly RouteModuleLoader[],
   idleWindow: IdleCapableWindow = window,
   documentRef: PreloadDocument = document,

@@ -150,7 +150,7 @@ export async function loadVideoJsModules(kind: VideoJsPlaybackKind): Promise<Vid
   return {};
 }
 
-export const VIDEO_JS_PLAYBACK_SWITCH_TIMEOUT_MS = 12_000;
+const VIDEO_JS_PLAYBACK_SWITCH_TIMEOUT_MS = 12_000;
 
 /** 只管理传输所有权，不接管 React DOM、控制层或浏览器媒体状态。 */
 class VideoJsPlayer {

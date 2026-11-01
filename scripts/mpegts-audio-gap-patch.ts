@@ -90,7 +90,7 @@ export function mpegtsAudioGapPluginName(
 }
 
 /** 判断模块 id 是否指向 mpegts.js 的 dist 产物（Windows 路径也归一化）。 */
-export function isMpegtsDistModule(id: string): boolean {
+function isMpegtsDistModule(id: string): boolean {
   return id.replaceAll("\\", "/").includes(MPEGTS_DIST_MODULE_SUFFIX);
 }
 

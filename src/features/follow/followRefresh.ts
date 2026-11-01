@@ -54,7 +54,7 @@ export function summarizeRefresh(result: FollowRefreshResult): FollowRefreshOutc
  * 刷新。改为续用既有的节奏，让回访保持免费，
  * 同时直播状态的陈旧度仍不会超过一个周期。
  */
-export function followStatusRefreshDelay(
+function followStatusRefreshDelay(
   lastRefreshAt: number,
   now: number,
   intervalMs: number = FOLLOW_STATUS_REFRESH_INTERVAL_MS,

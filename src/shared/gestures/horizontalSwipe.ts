@@ -18,7 +18,7 @@ export const HORIZONTAL_SWIPE_MAX_DRAG_PX = 4096;
  * 提交的页面在收尾前起始位置占表面的比例。`1` 表示进入页从整整一屏宽之外
  * 开始，释放呈现为一次连续的贴边平移，而不是短促的追赶推挤。
  */
-export const HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO = 1;
+const HORIZONTAL_SWIPE_PAGE_ENTRY_RATIO = 1;
 const HORIZONTAL_SWIPE_MAX_DRAG_SURFACE_RATIO = 1;
 const HORIZONTAL_SWIPE_EDGE_RESISTANCE = 0.18;
 
@@ -29,25 +29,25 @@ const HORIZONTAL_SWIPE_EDGE_RESISTANCE = 0.18;
  * 而不是手指移动了多少像素。四分之一表面：此时相邻页已经绘制完成并在跟手，
  * 拖到这里已经读作要翻页。中点附近则不算 —— 刻意的三分之一屏拖拽会弹回。
  */
-export const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.1;
+const HORIZONTAL_SWIPE_COMMIT_PROGRESS = 0.1;
 /**
  * 释放速度阈值（px/ms），超过则无论进度如何都翻页。
  *
  * 约 0.32 px/ms 是利落但不夸张的一甩（约 320 px/s）。低于它视为位移拖拽，
  * 只按进度判断。
  */
-export const HORIZONTAL_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
+const HORIZONTAL_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
 /** 释放收尾时长的边界（ms）。 */
-export const HORIZONTAL_SWIPE_SETTLE_MIN_MS = 170;
-export const HORIZONTAL_SWIPE_SETTLE_MAX_MS = 400;
+const HORIZONTAL_SWIPE_SETTLE_MIN_MS = 170;
+const HORIZONTAL_SWIPE_SETTLE_MAX_MS = 400;
 /**
  * 收尾时长在其间推导的速度窗口（px/ms）。
  *
  * 收尾延续手指已经开始的运动，因此时长来自剩余距离除以释放速度。钳制速度避免
  * 近乎原地松手产生数秒的蠕动，也避免猛烈一甩在一帧内瞬间到位。
  */
-export const HORIZONTAL_SWIPE_SETTLE_MIN_SPEED = 0.7;
-export const HORIZONTAL_SWIPE_SETTLE_MAX_SPEED = 3;
+const HORIZONTAL_SWIPE_SETTLE_MIN_SPEED = 0.7;
+const HORIZONTAL_SWIPE_SETTLE_MAX_SPEED = 3;
 /**
  * 释放速度的采样窗口（ms）。
  *
@@ -93,7 +93,7 @@ export function horizontalSwipeVelocity(
  *
  * 翻页过渡正是对这个值插值：±1 时相邻页已完全取代当前页。
  */
-export function horizontalSwipeProgress(dragOffset: number, surfaceWidth: number): number {
+function horizontalSwipeProgress(dragOffset: number, surfaceWidth: number): number {
   if (!(surfaceWidth > 0)) return 0;
   return Math.max(-1, Math.min(1, dragOffset / surfaceWidth));
 }
@@ -108,7 +108,7 @@ export function horizontalSwipeProgress(dragOffset: number, surfaceWidth: number
  * 翻页；
  * - 否则按位置决定 —— 页面实际走过了多少表面。
  */
-export function horizontalSwipeShouldCommit(
+function horizontalSwipeShouldCommit(
   dragOffset: number,
   velocity: number,
   surfaceWidth: number,
@@ -124,7 +124,7 @@ export function horizontalSwipeShouldCommit(
 }
 
 /** 指针释放时条带落点的下标；null 保持原位。负偏移（手指左移）前进；正值后退。 */
-export function horizontalSwipeTargetIndex(
+function horizontalSwipeTargetIndex(
   currentIndex: number,
   length: number,
   dragOffset: number,

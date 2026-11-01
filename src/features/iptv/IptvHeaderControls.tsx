@@ -168,10 +168,7 @@ type IptvAvailabilitySelectProps = {
 };
 
 /** 桌面侧栏与移动端工具栏共享的可看性过滤器。 */
-export function IptvAvailabilitySelect({
-  className,
-  iconOnly = false,
-}: IptvAvailabilitySelectProps) {
+function IptvAvailabilitySelect({ className, iconOnly = false }: IptvAvailabilitySelectProps) {
   const { availabilityFilter, setAvailabilityFilter } = useIptvController();
   const label = availabilityFilterLabel(availabilityFilter);
 

@@ -8,7 +8,7 @@ export const MESSAGE_COMPOSER_SURFACE_CLASS = "min-w-0 shrink-0 px-2.5 py-2";
  * 读不出「现在发的是评论还是弹幕」。弹幕沿用侧栏底色（直播间侧栏同款），评论取
  * `muted`：亮暗两套主题里都与侧栏、输入框本身拉开一档。
  */
-export const COMMENT_COMPOSER_TONE_CLASS = "bg-muted/70";
+const COMMENT_COMPOSER_TONE_CLASS = "bg-muted/70";
 export const DANMAKU_COMPOSER_TONE_CLASS = "bg-sidebar/80";
 
 /**

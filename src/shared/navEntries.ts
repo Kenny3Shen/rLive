@@ -16,7 +16,7 @@ export type HomeEntryId = (typeof HOME_ENTRY_IDS)[number];
 
 const HOME_ENTRY_ID_SET = new Set<string>(HOME_ENTRY_IDS);
 
-export function isHomeEntryId(value: unknown): value is HomeEntryId {
+function isHomeEntryId(value: unknown): value is HomeEntryId {
   return typeof value === "string" && HOME_ENTRY_ID_SET.has(value);
 }
 

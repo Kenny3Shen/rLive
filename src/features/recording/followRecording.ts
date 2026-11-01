@@ -37,21 +37,21 @@ export type FollowRecordingTarget = Pick<FollowUser, "site_id" | "room_id">;
 
 export const FOLLOW_AUTO_RECORD_QUERY_KEY = ["follows", "auto-record"] as const;
 
-export function liveRecordingSourceKey(target: FollowRecordingTarget): string {
+function liveRecordingSourceKey(target: FollowRecordingTarget): string {
   return `live:${target.site_id}:${target.room_id.trim()}`;
 }
 
-export function followRecordingSessionKey(
+function followRecordingSessionKey(
   target: Pick<FollowUser, "site_id" | "room_id" | "live_started_at">,
 ): string {
   return `${target.site_id}\u0000${target.room_id.trim()}\u0000${target.live_started_at ?? "unknown"}`;
 }
 
-export function autoRecordableFollows(follows: readonly FollowUser[]): FollowUser[] {
+function autoRecordableFollows(follows: readonly FollowUser[]): FollowUser[] {
   return follows.filter((follow) => follow.auto_record && follow.live_status === true);
 }
 
-export function activeRecordingForLiveRoom(
+function activeRecordingForLiveRoom(
   items: readonly RecordingItem[] | undefined,
   target: FollowRecordingTarget,
 ): RecordingItem | null {
@@ -69,7 +69,7 @@ export function activeRecordingForLiveRoom(
   );
 }
 
-export function followRecordingContext(
+function followRecordingContext(
   target: FollowRecordingTarget,
   detail: LiveRoomDetail,
   source: PlayUrl,
@@ -87,7 +87,7 @@ export function followRecordingContext(
   };
 }
 
-export async function resolveFollowRecordingContext(
+async function resolveFollowRecordingContext(
   queryClient: QueryClient,
   target: FollowRecordingTarget,
   qualityLevel: QualityLevel,

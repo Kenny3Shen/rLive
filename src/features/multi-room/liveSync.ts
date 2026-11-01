@@ -29,26 +29,26 @@ export type LiveSyncClockKind =
 /** 任何用户偏移之前，该流落后于自身直播边缘的秒数。 */
 export const LIVE_SYNC_BASE_HOLD_SECONDS = 1.2;
 /** 校正允许瞄准的、距直播边缘的最小距离。 */
-export const LIVE_SYNC_EDGE_MARGIN_SECONDS = 0.6;
+const LIVE_SYNC_EDGE_MARGIN_SECONDS = 0.6;
 /** 校正允许瞄准的、距保留缓冲区起点的最小距离。 */
-export const LIVE_SYNC_BUFFER_MARGIN_SECONDS = 0.4;
+const LIVE_SYNC_BUFFER_MARGIN_SECONDS = 0.4;
 /** 用户偏移范围，单位秒。负值把该流提前到组之前。 */
 export const LIVE_SYNC_OFFSET_MIN_SECONDS = -5;
 export const LIVE_SYNC_OFFSET_MAX_SECONDS = 20;
 export const LIVE_SYNC_OFFSET_STEP_SECONDS = 0.5;
 /** `auto` 模式下共享目标延迟的取值范围。 */
-export const LIVE_SYNC_MIN_TARGET_LATENCY_SECONDS = 1;
-export const LIVE_SYNC_MAX_TARGET_LATENCY_SECONDS = 40;
+const LIVE_SYNC_MIN_TARGET_LATENCY_SECONDS = 1;
+const LIVE_SYNC_MAX_TARGET_LATENCY_SECONDS = 40;
 /** 低于此值的误差不予处理；同步在设计上就不是帧级精确。 */
-export const LIVE_SYNC_TOLERANCE_SECONDS = 0.35;
+const LIVE_SYNC_TOLERANCE_SECONDS = 0.35;
 /** 超过此值时直接跳转，而不是微调播放速率。 */
-export const LIVE_SYNC_SEEK_THRESHOLD_SECONDS = 1.5;
+const LIVE_SYNC_SEEK_THRESHOLD_SECONDS = 1.5;
 /** 静音的次要流在收敛期间应用的速率微调。 */
-export const LIVE_SYNC_RATE_TRIM = 0.03;
+const LIVE_SYNC_RATE_TRIM = 0.03;
 /** 每个 tick 共享目标向更小延迟靠近的最大速度。 */
-export const LIVE_SYNC_TARGET_RELEASE_SECONDS = 0.35;
+const LIVE_SYNC_TARGET_RELEASE_SECONDS = 0.35;
 /** 在最慢流可达位置之上保留的额外余量。 */
-export const LIVE_SYNC_TARGET_MARGIN_SECONDS = 0.3;
+const LIVE_SYNC_TARGET_MARGIN_SECONDS = 0.3;
 
 export type LiveSyncSample = {
   key: string;
@@ -108,13 +108,13 @@ export function normalizeLiveSyncOffset(value: unknown): number {
 }
 
 /** 该流当前显示帧对应的挂钟纪元（毫秒）。 */
-export function liveSyncEpochPositionMs(sample: LiveSyncSample): number | null {
+function liveSyncEpochPositionMs(sample: LiveSyncSample): number | null {
   if (sample.clockKind === "none" || sample.epochAtMediaZeroMs == null) return null;
   return sample.epochAtMediaZeroMs + sample.mediaTime * 1_000;
 }
 
 /** 按其时钟映射计算的、该流落后挂钟的秒数。 */
-export function liveSyncLatencySeconds(sample: LiveSyncSample, nowMs: number): number | null {
+function liveSyncLatencySeconds(sample: LiveSyncSample, nowMs: number): number | null {
   const position = liveSyncEpochPositionMs(sample);
   if (position == null) return null;
   return (nowMs - position) / 1_000;
@@ -142,7 +142,7 @@ function reachableLatencySeconds(sample: LiveSyncSample, nowMs: number): number 
  * 较慢的次要流仍能把整组拖回来：在保留缓冲区内延迟一条流总是可行，
  * 而越过直播边缘追赶则不然。
  */
-export function liveSyncTargetLatencySeconds(
+function liveSyncTargetLatencySeconds(
   samples: readonly LiveSyncSample[],
   nowMs: number,
   previousTargetSeconds: number | null,

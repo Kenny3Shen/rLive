@@ -26,7 +26,7 @@ export type CategorySelection = Readonly<{
  * 编码成 `?cat=` 的值。用 `siteId:parentId:categoryId` 而不是 JSON，
  * 是为了让 URL 保持可读、可手写、可分享。
  */
-export function encodeCategorySelection(selection: CategorySelection): string {
+function encodeCategorySelection(selection: CategorySelection): string {
   return `${selection.siteId}:${selection.parentId}:${selection.categoryId}`;
 }
 
@@ -80,7 +80,7 @@ export function categoryBrowsePath(selection: CategorySelection | null): string 
 }
 
 /** chips 条上直接可见的分区数量上限，超出的留给展开面板。 */
-export const CATEGORY_CHIP_LIMIT = 12;
+const CATEGORY_CHIP_LIMIT = 12;
 
 export type CategoryChip = Readonly<{
   /** 稳定 key，同时用于比较选中态。 */
@@ -102,7 +102,7 @@ export type CategoryChip = Readonly<{
  * 父分区的「全部X」聚合项。后端约定 id "0" 表示按 parent_id 聚合，
  * 因此这一项无需真实子分类 id 就能直接喂给 `site_get_category_rooms`。
  */
-export function allCategoryOf(parent: LiveCategory): LiveSubCategory {
+function allCategoryOf(parent: LiveCategory): LiveSubCategory {
   return {
     id: "0",
     name: `全部${parent.name}`,
@@ -273,7 +273,7 @@ function sameSelection(a: CategorySelection | null, b: CategorySelection | null)
  * 只是标题暂时显示通用文案。`fallbackName` 留给仍把分类名带在 URL 里的旧路由，
  * 它有更好的兜底文案可用。
  */
-export const CATEGORY_FALLBACK_NAME = "分区直播";
+const CATEGORY_FALLBACK_NAME = "分区直播";
 
 export function resolveSelectedCategory(
   categories: readonly LiveCategory[] | undefined,

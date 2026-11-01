@@ -16,7 +16,7 @@ export type ValidatedDanmakuBatch = {
  * Tauri 事件跨越原生边界，因此在任何房间 sink 迭代原始事件候选之前，
  * 先拒绝畸形信封。
  */
-export function batchEvents(payload: unknown): readonly unknown[] {
+function batchEvents(payload: unknown): readonly unknown[] {
   if (!payload || typeof payload !== "object") return [];
   const events = (payload as { events?: unknown }).events;
   return Array.isArray(events) ? events : [];
@@ -26,7 +26,7 @@ export function batchEvents(payload: unknown): readonly unknown[] {
  * 在房间边界处对原生批次校验一次。悬浮 DOM 层、聊天与 SC 叠加层随后可以消费
  * 同一批不可变事件对象，而不必每条消息都重复片段与字段检查。
  */
-export function validatedBatchEvents(payload: unknown): DanmakuEvent[] {
+function validatedBatchEvents(payload: unknown): DanmakuEvent[] {
   const valid: DanmakuEvent[] = [];
   for (const event of batchEvents(payload)) {
     if (isDanmakuEvent(event)) valid.push(event);

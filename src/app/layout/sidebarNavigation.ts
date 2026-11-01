@@ -33,7 +33,7 @@ export type SidebarNavItem = {
   footer?: boolean;
 };
 
-export const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
+const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
   // 分类浏览已合并进首页的 sticky 分类条，不再占一个导航目的地。
   { to: "/", label: "首页", icon: Home, end: true },
   { to: "/follow", label: "关注", icon: Heart },

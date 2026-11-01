@@ -17,7 +17,7 @@ import {
  * 坐标与真实的 `shorts-info-float` 完全一致（同一个底边、同一个让开进度条命中区的
  * 内边距、同一条渐变垫底），因此加载完成时那块渐变与文字不会跳位置。
  */
-export function ShortsInfoSkeleton() {
+function ShortsInfoSkeleton() {
   return (
     <div
       aria-hidden

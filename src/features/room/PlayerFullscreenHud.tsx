@@ -13,18 +13,13 @@ import {
   PlayerToolPanel,
   PlayerToolTile,
 } from "@/shared/components/player/PlayerHudMenu";
-import {
-  RoomIdentityLine,
-  roomIdentityOverflowDistance,
-} from "@/shared/components/player/RoomIdentityLine";
+import { RoomIdentityLine } from "@/shared/components/player/RoomIdentityLine";
 import type { SiteId } from "@/shared/types/live";
 import { cn } from "@/lib/utils";
 import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import { AutoDanmakuSendMenu, SleepTimerMenu } from "./RoomToolMenus";
 import { CastMenu } from "./CastMenu";
 import type { SleepTimerController } from "./useSleepTimer";
-
-export { roomIdentityOverflowDistance };
 
 /** HUD 溢出菜单中的房间级条目（复制链接、关注等）。 */
 export type PlayerHudRoomAction = {

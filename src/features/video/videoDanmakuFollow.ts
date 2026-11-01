@@ -54,7 +54,7 @@ export function videoDanmakuFollowScrollTop(metrics: {
  * 那不是用户操作。容差要盖住这点漂移，又要小于一次有意的滚动手势（滚轮一格约
  * 100px，触摸拖动通常几十 px 以上）。
  */
-export const VIDEO_DANMAKU_FOLLOW_DRIFT_PX = 32;
+const VIDEO_DANMAKU_FOLLOW_DRIFT_PX = 32;
 
 /**
  * 相对锚点的位移是否已构成一次用户滚动。
@@ -76,7 +76,7 @@ export function isVideoDanmakuUserScroll(
  * 只需要盖住按下时的手指抖动，因此远小于 `VIDEO_DANMAKU_FOLLOW_DRIFT_PX`：那条容差要
  * 容忍滚动锚定的漂移，这条只要区分「按住没动」和「开始拖」。
  */
-export const VIDEO_DANMAKU_DRAG_INTENT_PX = 8;
+const VIDEO_DANMAKU_DRAG_INTENT_PX = 8;
 
 /**
  * 这次触摸位移是不是一次纵向滚动意图。
@@ -100,7 +100,7 @@ export function isVideoDanmakuVerticalDrag(
  *
  * `positionMs` 由媒体 `timeupdate` 驱动，约 250ms 一跳，正常播放的步长远小于这个阈值。
  */
-export const VIDEO_DANMAKU_SEEK_THRESHOLD_MS = 1_500;
+const VIDEO_DANMAKU_SEEK_THRESHOLD_MS = 1_500;
 
 /**
  * 这次播放位置变化是不是一次 seek。

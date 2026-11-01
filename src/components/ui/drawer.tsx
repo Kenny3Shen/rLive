@@ -183,8 +183,6 @@ export {
   DrawerClose,
   DrawerContent,
   DrawerDescription,
-  DrawerOverlay,
-  DrawerPortal,
   DrawerScope,
   DrawerTitle,
   DrawerTrigger,

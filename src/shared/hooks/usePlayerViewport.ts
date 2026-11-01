@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { isMobileClient } from "@/shared/clientPlatform";
 
-export const COMPACT_LANDSCAPE_PLAYER_QUERY =
+const COMPACT_LANDSCAPE_PLAYER_QUERY =
   "(orientation: landscape) and (max-height: 540px) and (pointer: coarse)";
-export const COMPACT_PLAYER_QUERY = `(max-width: 767px), ${COMPACT_LANDSCAPE_PLAYER_QUERY}`;
-export const PORTRAIT_ORIENTATION_QUERY = "(orientation: portrait)";
+const COMPACT_PLAYER_QUERY = `(max-width: 767px), ${COMPACT_LANDSCAPE_PLAYER_QUERY}`;
+const PORTRAIT_ORIENTATION_QUERY = "(orientation: portrait)";
 /**
  * 详情侧栏列在舞台**下方**的宽度档（与播放页的 `lg:flex-row` 断点互斥）。
  *
@@ -12,7 +12,7 @@ export const PORTRAIT_ORIENTATION_QUERY = "(orientation: portrait)";
  * 取值与样式表里那条 `@media (width < 64rem)` 是同一档，两处必须一起改 ——
  * 否则会出现「手势被启用但拖不动」或「能拖动但手势没开」的错位。
  */
-export const STACKED_DETAILS_QUERY = "(width < 64rem)";
+const STACKED_DETAILS_QUERY = "(width < 64rem)";
 
 function matches(query: string): boolean {
   return typeof window !== "undefined" && window.matchMedia(query).matches;
@@ -43,7 +43,7 @@ function isLandscapeViewport(): boolean {
  * 在真正的 media query 监听器得到第一次稳定更新之前，
  * 先用移动端安全的答案播种播放器。
  */
-export function playerViewportFallbackMatches(
+function playerViewportFallbackMatches(
   query: string,
   mobileClient: boolean,
   landscape: boolean,

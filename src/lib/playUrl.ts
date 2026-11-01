@@ -38,7 +38,7 @@ export function playbackSourcePriority(source: PlaybackSourceLike): number {
   return Math.max(0, source.priority);
 }
 
-export function playbackProtocolLabel(protocol: PlaybackProtocol): string {
+function playbackProtocolLabel(protocol: PlaybackProtocol): string {
   switch (protocol) {
     case "hls":
       return "HLS";

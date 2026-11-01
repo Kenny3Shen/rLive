@@ -14,7 +14,7 @@ export const MASTER_CANVAS = 512;
 export const ADAPTIVE_CANVAS = 108;
 
 /** Android 自适应图标中标记允许占用的直径（dp），官方安全区 66dp。 */
-export const ADAPTIVE_MARK_DIAMETER = 60;
+const ADAPTIVE_MARK_DIAMETER = 60;
 
 /** 主画布圆角半径（22%），用于 Windows/Linux/旧版 Android 启动图标。 */
 export const MASTER_CORNER_RADIUS = Math.round(MASTER_CANVAS * 0.22);
@@ -27,7 +27,7 @@ const LIVE_DOT_RADIUS = 17;
 const DISC_RADIUS = RING_RADIUS - RING_STROKE / 2;
 
 /** 标记在自身坐标系中的最大半径，用于换算各画布的缩放比例。 */
-export const MARK_EXTENT = Math.max(RING_RADIUS + RING_STROKE / 2, RING_RADIUS + LIVE_DOT_RADIUS);
+const MARK_EXTENT = Math.max(RING_RADIUS + RING_STROKE / 2, RING_RADIUS + LIVE_DOT_RADIUS);
 
 /** 播放三角在描边圆角前的顶点（已按包围盒居中并右移 4 做视觉补偿）。 */
 const PLAY_POINTS: ReadonlyArray<readonly [number, number]> = [
@@ -69,7 +69,7 @@ export interface MarkTransform {
 }
 
 /** 满幅图标（桌面/iOS/旧版启动图标）的标记变换。 */
-export const MASTER_TRANSFORM: MarkTransform = {
+const MASTER_TRANSFORM: MarkTransform = {
   center: MASTER_CANVAS / 2,
   scale: 1,
 };
@@ -241,17 +241,6 @@ export function buildAdaptiveForegroundSvg(): string {
     `<svg xmlns="http://www.w3.org/2000/svg" width="${MASTER_CANVAS}" height="${MASTER_CANVAS}" viewBox="0 0 ${MASTER_CANVAS} ${MASTER_CANVAS}">`,
     `<defs>${markDefs(mark)}</defs>`,
     markShapes(mark),
-    `</svg>`,
-  ].join("");
-}
-
-/** Android 自适应背景：满幅渐变，与满幅图标背景一致。 */
-export function buildAdaptiveBackgroundSvg(): string {
-  const background: BackgroundOptions = { canvas: MASTER_CANVAS, prefix: "b", shape: "square" };
-  return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${MASTER_CANVAS}" height="${MASTER_CANVAS}" viewBox="0 0 ${MASTER_CANVAS} ${MASTER_CANVAS}">`,
-    `<defs>${backgroundDefs(background)}</defs>`,
-    backgroundShapes(background),
     `</svg>`,
   ].join("");
 }

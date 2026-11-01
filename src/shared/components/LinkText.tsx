@@ -25,7 +25,7 @@ function linkHref(link: string): string {
 }
 
 /** 正文按 URL 切片；无链接时返回单段正文，调用方保持零额外 DOM。 */
-export function linkifySegments(text: string): readonly TextLinkSegment[] {
+function linkifySegments(text: string): readonly TextLinkSegment[] {
   // split 带一个捕获组：奇数段是链接，偶数段是链接之间的正文。
   const pieces = text.split(LINK_SPLIT);
   if (pieces.length === 1) return [{ kind: "text", text }];

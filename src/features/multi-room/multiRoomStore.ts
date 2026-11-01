@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import type { LiveRoomDetail, LiveRoomItem, SiteId } from "@/shared/types/live";
 import { normalizeLiveSyncMode, normalizeLiveSyncOffset, type LiveSyncMode } from "./liveSync";
 
-export const MULTI_ROOM_MAX_SLOTS = 6;
+const MULTI_ROOM_MAX_SLOTS = 6;
 export const MULTI_ROOM_MAIN_SLOT = 0;
 export const MULTI_ROOM_LAYOUT_OPTIONS = [2, 4, 6] as const;
 export const MULTI_ROOM_FOUR_LAYOUT_OPTIONS = ["main-left", "equal"] as const;
@@ -30,19 +30,19 @@ export type MultiRoomEntry = {
 
 export type MultiRoomAddResult = "added" | "exists" | "full";
 
-export function normalizeMultiRoomLayout(layout: unknown): MultiRoomLayout {
+function normalizeMultiRoomLayout(layout: unknown): MultiRoomLayout {
   return MULTI_ROOM_LAYOUT_OPTIONS.includes(layout as MultiRoomLayout)
     ? (layout as MultiRoomLayout)
     : DEFAULT_MULTI_ROOM_LAYOUT;
 }
 
-export function normalizeMultiRoomFourLayout(layout: unknown): MultiRoomFourLayout {
+function normalizeMultiRoomFourLayout(layout: unknown): MultiRoomFourLayout {
   return MULTI_ROOM_FOUR_LAYOUT_OPTIONS.includes(layout as MultiRoomFourLayout)
     ? (layout as MultiRoomFourLayout)
     : DEFAULT_MULTI_ROOM_FOUR_LAYOUT;
 }
 
-export function normalizeMultiRoomEnergySaving(enabled: unknown): boolean {
+function normalizeMultiRoomEnergySaving(enabled: unknown): boolean {
   return enabled === true;
 }
 
@@ -90,7 +90,7 @@ export function normalizeMultiRoomAudioRoles(
   });
 }
 
-export function normalizeMultiRoomSlots(
+function normalizeMultiRoomSlots(
   slots: readonly (MultiRoomEntry | null)[],
 ): (MultiRoomEntry | null)[] {
   const occupied: MultiRoomEntry[] = [];
@@ -200,7 +200,7 @@ type MultiRoomState = {
 };
 
 /** 丢弃房间已离开网格的偏移，避免 map 无限增长。 */
-export function pruneMultiRoomSyncOffsets(
+function pruneMultiRoomSyncOffsets(
   offsets: Record<string, number>,
   slots: readonly (MultiRoomEntry | null)[],
 ): Record<string, number> {
@@ -229,10 +229,7 @@ export function partializeMultiRoomState(state: MultiRoomState) {
   };
 }
 
-export function mergeMultiRoomState(
-  persisted: unknown,
-  current: MultiRoomState,
-): MultiRoomState {
+export function mergeMultiRoomState(persisted: unknown, current: MultiRoomState): MultiRoomState {
   const persistedState = persisted as Partial<MultiRoomState>;
   const requestedLayout = normalizeMultiRoomLayout(persistedState?.layout);
   const fourLayout = normalizeMultiRoomFourLayout(persistedState?.fourLayout);

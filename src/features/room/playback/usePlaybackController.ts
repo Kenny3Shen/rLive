@@ -9,14 +9,6 @@ import {
   type PlaybackRecoveryMetadataAdapter,
 } from "./playbackRecoverySession";
 
-export {
-  isDuplicatePlaybackFailure,
-  matchingQualityIndex,
-  nextLowerVideoQualityIndex,
-  playbackWasStable,
-  playerRebuildRetryLimit,
-} from "./playbackRecoverySession";
-
 export type PlaybackController = {
   qualities: LivePlayQuality[];
   qualityIndex: number;

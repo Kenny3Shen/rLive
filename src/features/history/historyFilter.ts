@@ -139,7 +139,7 @@ export function historyDateWindow(
 }
 
 /** 对记录暴露给搜索的字段做不区分大小写的匹配。 */
-export function matchesHistoryKeyword(fields: readonly (string | undefined)[], keyword: string) {
+function matchesHistoryKeyword(fields: readonly (string | undefined)[], keyword: string) {
   const needle = keyword.trim().toLowerCase();
   if (!needle) return true;
   return fields.some((field) => !!field && field.toLowerCase().includes(needle));

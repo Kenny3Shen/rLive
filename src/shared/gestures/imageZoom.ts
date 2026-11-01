@@ -24,16 +24,16 @@ export const IMAGE_ZOOM_TAP_SLOP_PX = 10;
 /** 释放后的收尾时长（ms）：与按压释放同一档，读作「松手回位」而不是一段动画。 */
 export const IMAGE_ZOOM_SETTLE_MS = 220;
 /** 鼠标滚轮缩放的灵敏度（按归一化到像素的 delta 计）。一格约 `1.28` 倍。 */
-export const IMAGE_ZOOM_WHEEL_SENSITIVITY = 0.0025;
+const IMAGE_ZOOM_WHEEL_SENSITIVITY = 0.0025;
 /**
  * 触控板捏合的灵敏度。
  *
  * 浏览器把触控板捏合翻译成 `ctrl + wheel`：每个事件的 delta 只有个位数，而鼠标滚轮
  * 一格就是 `100`。因此捏合走大一档的灵敏度，两种输入的手感才落在同一量级。
  */
-export const IMAGE_ZOOM_WHEEL_PINCH_SENSITIVITY = 0.01;
+const IMAGE_ZOOM_WHEEL_PINCH_SENSITIVITY = 0.01;
 /** 键盘缩放的步进倍率。 */
-export const IMAGE_ZOOM_KEY_STEP = 1.25;
+const IMAGE_ZOOM_KEY_STEP = 1.25;
 /**
  * 一次滚轮/捏合序列结束后的等待时长（ms）。
  *
@@ -59,7 +59,7 @@ export type ImageZoomGeometry = {
   centerY: number;
 };
 
-export function clampImageZoomScale(scale: number): number {
+function clampImageZoomScale(scale: number): number {
   if (!Number.isFinite(scale)) return IMAGE_ZOOM_MIN_SCALE;
   return Math.min(IMAGE_ZOOM_MAX_SCALE, Math.max(IMAGE_ZOOM_MIN_SCALE, scale));
 }
@@ -70,10 +70,7 @@ export function clampImageZoomScale(scale: number): number {
  * 放大后图片比视口大时，图片边缘最多移动到与视口边缘重合 —— 再多就会把图拖出屏幕、
  * 露出空背景。小于视口的方向恒为 0：图片居中，平移没有意义。
  */
-export function imageZoomPanBounds(
-  scale: number,
-  geometry: ImageZoomGeometry,
-): { x: number; y: number } {
+function imageZoomPanBounds(scale: number, geometry: ImageZoomGeometry): { x: number; y: number } {
   return {
     x: Math.max(0, (geometry.width * scale - geometry.viewportWidth) / 2),
     y: Math.max(0, (geometry.height * scale - geometry.viewportHeight) / 2),
@@ -158,7 +155,9 @@ export function imageZoomWheelScale(
   pinch = false,
 ): number {
   const sensitivity = pinch ? IMAGE_ZOOM_WHEEL_PINCH_SENSITIVITY : IMAGE_ZOOM_WHEEL_SENSITIVITY;
-  return clampImageZoomScale(scale * Math.exp(-imageZoomWheelDelta(deltaY, deltaMode) * sensitivity));
+  return clampImageZoomScale(
+    scale * Math.exp(-imageZoomWheelDelta(deltaY, deltaMode) * sensitivity),
+  );
 }
 
 /** 键盘一次缩放的落点倍率；`direction` 为正放大。 */

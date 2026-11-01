@@ -53,7 +53,7 @@ export const DISMISSIBLE_POPUP_SELECTOR = DISMISSIBLE_POPUP_SLOTS.map(
  * 使一次 Back 既关弹窗又退出全屏；不冒泡时 document 上的监听器照旧命中
  * （目标自身的监听器不依赖冒泡），window 却只能在捕获阶段看到它。
  */
-export function dismissTopmostPopup(doc: Document): boolean {
+function dismissTopmostPopup(doc: Document): boolean {
   if (!doc.querySelector(DISMISSIBLE_POPUP_SELECTOR)) return false;
   doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: false }));
   return true;

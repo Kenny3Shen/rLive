@@ -43,9 +43,9 @@ export type AsrStatusPresentation = {
   progress: number | null;
 };
 
-export const ASR_MODEL_STATUS_QUERY_KEY = ["asr_model_status"] as const;
+const ASR_MODEL_STATUS_QUERY_KEY = ["asr_model_status"] as const;
 
-export function supportsLocalAsr(environment?: {
+function supportsLocalAsr(environment?: {
   tauriRuntime?: boolean;
   platform?: ClientPlatform;
 }): boolean {
@@ -54,7 +54,7 @@ export function supportsLocalAsr(environment?: {
   return tauriRuntime && platform === "desktop";
 }
 
-export function asrDownloadProgress(status: AsrModelStatus | null): number | null {
+function asrDownloadProgress(status: AsrModelStatus | null): number | null {
   if (!status || (status.state !== "downloading" && status.state !== "extracting")) {
     return null;
   }

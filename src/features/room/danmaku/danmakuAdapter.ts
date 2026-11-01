@@ -13,7 +13,7 @@ import { superChatDurationMs } from "../superChat";
 export const DANMAKU_DEFAULT_DURATION_MS = 15_000;
 export const DANMAKU_DEFAULT_SPEED = 100;
 export const DANMAKU_FONT_WEIGHT = 700;
-export const DANMAKU_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
+const DANMAKU_MAX_AGGREGATED_DISPLAY_COUNT = 9_999;
 const DANMAKU_COUNT_SLOT_WIDTH = "5.25ch";
 
 export type DanmakuBulletMeta = {
@@ -75,11 +75,11 @@ export function danmuLaneHeight(fontSize: number): number {
   return Math.max(16, Math.round(clampDanmuFontSize(fontSize) * 1.4));
 }
 
-export function danmakuAreaConfig(area: number): number {
+function danmakuAreaConfig(area: number): number {
   return clampDanmuArea(area);
 }
 
-export function isPinnedDanmakuEvent(event: DanmakuEvent): boolean {
+function isPinnedDanmakuEvent(event: DanmakuEvent): boolean {
   return event.kind === "super_chat" || event.is_self === true;
 }
 
@@ -130,7 +130,7 @@ function aggregateSuffix(count: number): string {
     : ` ×${safeCount}`;
 }
 
-export function danmakuStyleForEvent(
+function danmakuStyleForEvent(
   event: DanmakuEvent,
   options: DanmakuAppearanceOptions,
 ): Record<string, string | number | undefined> {
@@ -235,14 +235,14 @@ function appendRichSpans(parent: HTMLElement, spans: readonly DanmakuContentSpan
   }
 }
 
-export function danmuReservesLeadingCountSpacer(
+function danmuReservesLeadingCountSpacer(
   event: DanmakuEvent,
   aggregationKey: string | undefined,
 ): boolean {
   return Boolean(aggregationKey) && isPinnedDanmakuEvent(event);
 }
 
-export function cssPropertyName(name: string): string {
+function cssPropertyName(name: string): string {
   if (name.startsWith("--")) return name;
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }

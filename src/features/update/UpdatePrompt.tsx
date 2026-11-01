@@ -16,7 +16,7 @@ import { openExternalUrl } from "@/shared/externalUrl";
 
 const PROJECT_RELEASES_URL = "https://github.com/Kenny3Shen/rLive/releases";
 
-export function UpdatePrompt() {
+function UpdatePrompt() {
   const release = useUpdateStore((state) => state.release);
   const dialogOpen = useUpdateStore((state) => state.dialogOpen);
   const dismissDialog = useUpdateStore((state) => state.dismissDialog);

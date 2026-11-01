@@ -35,7 +35,7 @@ type NativeImmersiveInvoke = <T>(command: string, args?: Record<string, unknown>
  *
  * 保持为两个输入的纯函数，使两条分支无需 WebView 即可测试。
  */
-export function usesInPageFullscreen({
+function usesInPageFullscreen({
   tauriRuntime,
   platform,
 }: {

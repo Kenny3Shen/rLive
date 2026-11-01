@@ -49,7 +49,7 @@ export const DANMAKU_CARD_ESTIMATE_PX = 170;
  * 时间线按时间倒序，最新记录从顶部插入，因此顶部就是直播边缘。触摸滚动很难精确
  * 停在 0，留几像素容差，避免刚离开顶部就把新记录顶到视口外。
  */
-export const HISTORY_LIVE_EDGE_THRESHOLD_PX = 8;
+const HISTORY_LIVE_EDGE_THRESHOLD_PX = 8;
 
 /**
  * 一条时间线的滚动快照。
@@ -130,7 +130,7 @@ export function resolveHistoryScrollElement(node: HTMLElement): HTMLElement {
 }
 
 /** 该元素是否代表文档（窗口）滚动，而不是一个内部滚动容器。 */
-export function isDocumentScrollElement(element: HTMLElement): boolean {
+function isDocumentScrollElement(element: HTMLElement): boolean {
   const ownerDocument = element.ownerDocument;
   return element === ownerDocument.scrollingElement || element === ownerDocument.documentElement;
 }

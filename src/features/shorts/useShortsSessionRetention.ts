@@ -43,7 +43,7 @@ export function useShortsSessionRetention(
   return useShortsMediaSessionRetention(BILIBILI_SHORTS_SOURCE.stop, ttlMs);
 }
 
-export function useShortsMediaSessionRetention<Info>(
+function useShortsMediaSessionRetention<Info>(
   stopPlayInfo: (info: Info) => Promise<void>,
   ttlMs: number = SHORTS_SESSION_RETENTION_MS,
 ): ShortsSessionRetention<Info> {

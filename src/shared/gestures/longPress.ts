@@ -19,7 +19,7 @@ export const LONG_PRESS_TRIGGER_MS = 500;
 export const LONG_PRESS_SPEED_RATE = 3;
 
 /** 按住期间手指漂移超过该半径视为滑动或滚动，长按取消。 */
-export const LONG_PRESS_CANCEL_SLOP_PX = 10;
+const LONG_PRESS_CANCEL_SLOP_PX = 10;
 
 /**
  * 计时器触发后多长时间内到达的 contextmenu 仍视为同一次长按。
@@ -30,7 +30,7 @@ export const LONG_PRESS_CANCEL_SLOP_PX = 10;
  * 大概率是「手指落在退出中的遮罩上、系统长按重定向到下层卡片」的伪信号，
  * 必须忽略，否则抽屉刚被收起就会立即弹出。
  */
-export const LONG_PRESS_CONTEXTMENU_GRACE_MS = 300;
+const LONG_PRESS_CONTEXTMENU_GRACE_MS = 300;
 
 const LONG_PRESS_CANCEL_SLOP_SQ = LONG_PRESS_CANCEL_SLOP_PX ** 2;
 

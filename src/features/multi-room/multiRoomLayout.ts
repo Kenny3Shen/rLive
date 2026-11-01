@@ -5,7 +5,7 @@ import {
 } from "./multiRoomStore";
 
 /** 3x3 六屏导演网格的槽位布局。 */
-export const MULTI_ROOM_SLOT_CLASSES = [
+const MULTI_ROOM_SLOT_CLASSES = [
   "col-start-1 col-span-2 row-start-2 row-span-2",
   "col-start-1 row-start-1",
   "col-start-2 row-start-1",
@@ -14,14 +14,14 @@ export const MULTI_ROOM_SLOT_CLASSES = [
   "col-start-3 row-start-3",
 ] as const;
 
-export const MULTI_ROOM_FOUR_SLOT_CLASSES = [
+const MULTI_ROOM_FOUR_SLOT_CLASSES = [
   "col-start-1 col-span-2 row-start-1 row-span-3",
   "col-start-3 row-start-1",
   "col-start-3 row-start-2",
   "col-start-3 row-start-3",
 ] as const;
 
-export const MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES = [
+const MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES = [
   "col-start-1 row-start-1",
   "col-start-2 row-start-1",
   "col-start-1 row-start-2",
@@ -29,12 +29,9 @@ export const MULTI_ROOM_FOUR_EQUAL_SLOT_CLASSES = [
 ] as const;
 
 /** 两条流在同一行内平分宽度。 */
-export const MULTI_ROOM_TWO_SLOT_CLASSES = [
-  "col-start-1 row-start-1",
-  "col-start-2 row-start-1",
-] as const;
+const MULTI_ROOM_TWO_SLOT_CLASSES = ["col-start-1 row-start-1", "col-start-2 row-start-1"] as const;
 
-export const MULTI_ROOM_SLOT_LABELS = [
+const MULTI_ROOM_SLOT_LABELS = [
   "主画面",
   "上方左侧",
   "上方中间",
@@ -43,16 +40,11 @@ export const MULTI_ROOM_SLOT_LABELS = [
   "右侧下方",
 ] as const;
 
-export const MULTI_ROOM_FOUR_SLOT_LABELS = ["主画面", "右侧上方", "右侧中间", "右侧下方"] as const;
+const MULTI_ROOM_FOUR_SLOT_LABELS = ["主画面", "右侧上方", "右侧中间", "右侧下方"] as const;
 
-export const MULTI_ROOM_FOUR_EQUAL_SLOT_LABELS = [
-  "主画面",
-  "右上画面",
-  "左下画面",
-  "右下画面",
-] as const;
+const MULTI_ROOM_FOUR_EQUAL_SLOT_LABELS = ["主画面", "右上画面", "左下画面", "右下画面"] as const;
 
-export const MULTI_ROOM_TWO_SLOT_LABELS = ["主画面", "右侧画面"] as const;
+const MULTI_ROOM_TWO_SLOT_LABELS = ["主画面", "右侧画面"] as const;
 
 function multiRoomSlotPlacement(
   layout: MultiRoomLayout,

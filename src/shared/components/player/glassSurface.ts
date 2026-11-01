@@ -21,7 +21,7 @@ export type GlassSurfaceContext = { overlay?: boolean };
  * `SelectContent` 内的触发器、选项与滚动箭头同理传 `glass`，填充由本文件的
  * `glassOptionClass` 提供。
  */
-export function glassSurfaceClass({ overlay = false }: GlassSurfaceContext = {}): string {
+function glassSurfaceClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "glass-surface-overlay" : "glass-surface";
 }
 
@@ -29,7 +29,7 @@ export function glassSurfaceClass({ overlay = false }: GlassSurfaceContext = {})
  * 随视频之上材质附带的修饰：细边框、白色文字和更深的阴影。应用上下文中为空
  * —— 共享 popover/drawer token 相对 `--popover` 本来就正确。
  */
-export function glassSurfaceTrimClass({ overlay = false }: GlassSurfaceContext = {}): string {
+function glassSurfaceTrimClass({ overlay = false }: GlassSurfaceContext = {}): string {
   return overlay ? "border border-white/10 text-white shadow-xl" : "";
 }
 

@@ -1,8 +1,8 @@
 /** 针对手机触摸目标调校的下拉刷新阈值。 */
-export const PULL_TO_REFRESH_THRESHOLD_PX = 64;
+const PULL_TO_REFRESH_THRESHOLD_PX = 64;
 export const PULL_TO_REFRESH_MAX_PX = 96;
-export const PULL_TO_REFRESH_DIRECTION_RATIO = 1.2;
-export const PULL_TO_REFRESH_LOCK_DISTANCE_PX = 8;
+const PULL_TO_REFRESH_DIRECTION_RATIO = 1.2;
+const PULL_TO_REFRESH_LOCK_DISTANCE_PX = 8;
 
 /** 只有滚动容器已在顶部时才开始下拉。 */
 export function canStartPullToRefresh(scrollTop: number): boolean {

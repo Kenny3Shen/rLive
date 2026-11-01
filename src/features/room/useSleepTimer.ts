@@ -3,7 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { notify } from "@/components/ui/toast";
 
-export const DEFAULT_SLEEP_TIMER_MINUTES = 30;
+const DEFAULT_SLEEP_TIMER_MINUTES = 30;
 export const MIN_SLEEP_TIMER_MINUTES = 1;
 export const MAX_SLEEP_TIMER_MINUTES = 24 * 60;
 

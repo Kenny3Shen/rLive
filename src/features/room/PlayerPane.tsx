@@ -100,16 +100,16 @@ type PlayerMobileRoomAction = {
 };
 
 /** 把视觉页签顺序与触摸导航顺序保持在同一处。 */
-export const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
+const ROOM_SIDE_TABS: readonly RoomSideTab[] = ["chat", "follow", "settings"];
 
 // 对齐常见的移动端舞台交互：短按切换 chrome，紧随其后的第二次按击进入/退出全屏。
 // 单双击的时间判定已交给 Video.js 官方识别器（按下到抬手 250ms、双击窗口 200ms），
 // 这里只保留识别器不做的那一项：位移阈值。
-export const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
+const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
 
 /** 全屏桌面画面需要更大的目标；移动端保持紧凑胶囊，
  * 使三个操作不会遮住不成比例的视频区域。 */
-export function shouldUseLargeDanmakuActionMenu(
+function shouldUseLargeDanmakuActionMenu(
   fullscreen: boolean,
   mobileClient: boolean,
 ): boolean {
@@ -123,12 +123,12 @@ type PlayerStageTapState = {
 };
 
 /** 基本不动的触摸才是舞台点按，而不是拖拽手势的起手。 */
-export function isPlayerStageTapMovement(deltaX: number, deltaY: number): boolean {
+function isPlayerStageTapMovement(deltaX: number, deltaY: number): boolean {
   return Math.hypot(deltaX, deltaY) <= PLAYER_STAGE_TAP_MAX_DISTANCE_PX;
 }
 
 /** 方向键每次调节的音量百分点。 */
-export const PLAYER_VOLUME_KEY_STEP = 5;
+const PLAYER_VOLUME_KEY_STEP = 5;
 
 /**
  * 上/下方向键的下一个音量值。静音时按上键从 0 起步，
@@ -221,7 +221,7 @@ export function shouldShowRoomDanmakuPanel(
  *
  * 隐藏不等于卸载：挂载仍由 `shouldRetainRoomSidePanel` 控制，因此退出后弹幕队列与滚动位置都还在。
  */
-export function showRoomSidePanel(sidePanelOpen: boolean, webFullscreen: boolean): boolean {
+function showRoomSidePanel(sidePanelOpen: boolean, webFullscreen: boolean): boolean {
   return sidePanelOpen && !webFullscreen;
 }
 

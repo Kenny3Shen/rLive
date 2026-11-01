@@ -12,7 +12,7 @@
  */
 
 /** 轴向锁定前必须走过的距离（px），与边缘手势、长按容忍半径同一量级。 */
-export const VIDEO_SURFACE_GESTURE_LOCK_DISTANCE_PX = 12;
+const VIDEO_SURFACE_GESTURE_LOCK_DISTANCE_PX = 12;
 /** 主轴必须超过副轴的倍数，斜向拖动一律不认领。 */
 const VIDEO_SURFACE_GESTURE_DIRECTION_RATIO = 1.25;
 /**
@@ -22,7 +22,7 @@ const VIDEO_SURFACE_GESTURE_DIRECTION_RATIO = 1.25;
  * 一次手指抖动就是几分钟，细调完全失效。固定跨度让「每像素多少秒」在所有
  * 长度上保持一致，长视频的大跨度跳转仍然交给进度条。
  */
-export const VIDEO_SEEK_GESTURE_FULL_WIDTH_SECONDS = 120;
+const VIDEO_SEEK_GESTURE_FULL_WIDTH_SECONDS = 120;
 /** 画面宽度的下限（px）：小窗不至于把每像素的时间放大到无法控制。 */
 const VIDEO_SEEK_GESTURE_MIN_WIDTH_PX = 240;
 
@@ -65,7 +65,7 @@ export function videoSeekGestureIntent(
 }
 
 /** 本次拖动能覆盖的 seek 跨度（秒）：以自身长度为上限，避免整屏就跨完全片。 */
-export function videoSeekGestureSpanSeconds(duration: number): number {
+function videoSeekGestureSpanSeconds(duration: number): number {
   if (!Number.isFinite(duration) || duration <= 0) return 0;
   return Math.min(duration, VIDEO_SEEK_GESTURE_FULL_WIDTH_SECONDS);
 }

@@ -1,5 +1,5 @@
 /** 用户可见的文本单位，而不是 UTF-16 码元。 */
-export const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 20;
+const AUTO_DANMAKU_SEND_MAX_GRAPHEMES = 20;
 
 /** 仅限会话的自动发送间隔上下界，整秒计。 */
 export const AUTO_DANMAKU_SEND_MIN_INTERVAL_SECONDS = 10;
@@ -58,7 +58,7 @@ function hasControlCharacter(value: string): boolean {
  * 发送命令只接受单行。一致地处理所有用户输入的空白字符，
  * 包括粘贴的换行和制表符分隔的文本。
  */
-export function normalizeAutoDanmakuText(value: string): string {
+function normalizeAutoDanmakuText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
@@ -67,7 +67,7 @@ export function normalizeAutoDanmakuText(value: string): string {
  * 绝不会跨两条消息被拆开。若内嵌浏览器缺少它，则禁用自动发送，
  * 而不是静默回退到码点切分。
  */
-export function splitGraphemes(
+function splitGraphemes(
   value: string,
   Segmenter: typeof Intl.Segmenter | null = typeof Intl.Segmenter === "function"
     ? Intl.Segmenter
@@ -80,7 +80,7 @@ export function splitGraphemes(
 }
 
 /** JavaScript String.length 正是发送命令执行的同一套 UTF-16 度量。 */
-export function utf16Units(value: string): number {
+function utf16Units(value: string): number {
   return value.length;
 }
 

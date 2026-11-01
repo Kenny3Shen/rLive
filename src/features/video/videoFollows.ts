@@ -27,7 +27,7 @@ export function videoFollowIdentity(follow: Pick<VideoFollow, "site_id" | "mid">
   return `${follow.site_id}\u0000${follow.mid}`;
 }
 
-export function sortVideoFollows(follows: readonly VideoFollow[]): VideoFollow[] {
+function sortVideoFollows(follows: readonly VideoFollow[]): VideoFollow[] {
   return [...follows].sort(
     (left, right) =>
       left.name.localeCompare(right.name, "zh-CN", { numeric: true }) ||
@@ -35,7 +35,7 @@ export function sortVideoFollows(follows: readonly VideoFollow[]): VideoFollow[]
   );
 }
 
-export function sortVideoFollowGroups(groups: readonly VideoFollowGroup[]): VideoFollowGroup[] {
+function sortVideoFollowGroups(groups: readonly VideoFollowGroup[]): VideoFollowGroup[] {
   return [...groups].sort((left, right) =>
     left.name.localeCompare(right.name, "zh-CN", { numeric: true }),
   );
@@ -136,7 +136,7 @@ export function useRemoveVideoFollowMutation() {
   });
 }
 
-export function setVideoFollowGroupInList(
+function setVideoFollowGroupInList(
   current: VideoFollow[] | undefined,
   follow: Pick<VideoFollow, "site_id" | "mid">,
   groupId: string | null,

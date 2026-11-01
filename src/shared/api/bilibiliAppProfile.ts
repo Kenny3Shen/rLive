@@ -49,7 +49,7 @@ export function fetchBilibiliAppProfile(): Promise<BilibiliAppProfile> {
     : Promise.resolve(EMPTY_BILIBILI_APP_PROFILE);
 }
 
-export function errorCodeOf(error: unknown): string | null {
+function errorCodeOf(error: unknown): string | null {
   if (typeof error === "object" && error !== null && "code" in error) {
     return String((error as AppError).code);
   }

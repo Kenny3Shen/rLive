@@ -217,7 +217,7 @@ export function shortsMediaFrame(
  * 的落点，也不随视口高度变化（留白按比例分配，同一条视频在不同机型上落在同一相对
  * 位置）。
  */
-export const SHORTS_LANDSCAPE_FRAME_TOP_BIAS = 1 / 4;
+const SHORTS_LANDSCAPE_FRAME_TOP_BIAS = 1 / 4;
 
 /**
  * 画面框在画面区里的纵向落点（px，相对画面区顶边）。
@@ -263,7 +263,7 @@ export function shortsFrameTop(
  * 留一个像素的容差是因为 `clientWidth` 取整，「铺满」时画面框可能比画面区小不到
  * 1px。
  */
-export const SHORTS_CHROME_MIN_SIDE_INSET_PX = 48;
+const SHORTS_CHROME_MIN_SIDE_INSET_PX = 48;
 
 export function shortsChromeColumn(frameWidth: number, areaWidth: number): number {
   if (!(frameWidth > 0) || !(areaWidth > 0)) return 0;
@@ -334,7 +334,7 @@ export function shortsCommentDockHeight(availableHeight: number): number {
  * 代价比裁两侧大得多。10% 收下全部 19.5:9 与 20:9 主流机型，放过 16:9 与 21:9
  * 这两个极端。
  */
-export const SHORTS_FRAME_FILL_MAX_CROP = 0.1;
+const SHORTS_FRAME_FILL_MAX_CROP = 0.1;
 
 /**
  * 为了铺满画面区，需要裁掉源画面的比例（0~1）。
@@ -342,7 +342,7 @@ export const SHORTS_FRAME_FILL_MAX_CROP = 0.1;
  * 两个宽高比的相对差值，与哪个更大无关：画面区比源更「高」时裁的是宽，更「宽」时
  * 裁的是高，但要裁掉的**比例**在两种情况下是同一个式子。调用方因此不必分轴讨论。
  */
-export function shortsFrameCrop(areaAspect: number, sourceAspect: number): number {
+function shortsFrameCrop(areaAspect: number, sourceAspect: number): number {
   if (!(areaAspect > 0) || !(sourceAspect > 0)) return 0;
   return 1 - Math.min(areaAspect, sourceAspect) / Math.max(areaAspect, sourceAspect);
 }
@@ -439,7 +439,7 @@ export function shortsItemKey(item: Pick<VideoItem, "bvid" | "cid">): string {
 }
 
 /** 轴向锁定前必须走过的距离（px）。与画面表面其他手势同一口径，见 `videoSurfaceGesture`。 */
-export const SHORTS_SWIPE_LOCK_DISTANCE_PX = 12;
+const SHORTS_SWIPE_LOCK_DISTANCE_PX = 12;
 /** 主轴必须超过副轴的倍数，斜向拖动一律不认领。 */
 const SHORTS_SWIPE_DIRECTION_RATIO = 1.25;
 /**
@@ -448,14 +448,14 @@ const SHORTS_SWIPE_DIRECTION_RATIO = 1.25;
  * 比横向翻页（0.1）高一档：横滑翻页在页签之间来回是廉价的，而换片会拆掉当前
  * 播放会话、重新取流。误触的代价不对称，因此要求更明确的位移。
  */
-export const SHORTS_SWIPE_COMMIT_PROGRESS = 0.18;
+const SHORTS_SWIPE_COMMIT_PROGRESS = 0.18;
 /** 释放速度阈值（px/ms），超过则无论进度如何都换片。与横向翻页同值。 */
-export const SHORTS_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
+const SHORTS_SWIPE_FLING_VELOCITY_PX_PER_MS = 0.32;
 /** 首尾条目上的越界阻尼：让边界可见，又不暗示这条流可以环绕。 */
 const SHORTS_SWIPE_EDGE_RESISTANCE = 0.18;
 /** 释放收尾时长的边界（ms）。 */
-export const SHORTS_SWIPE_SETTLE_MIN_MS = 150;
-export const SHORTS_SWIPE_SETTLE_MAX_MS = 320;
+const SHORTS_SWIPE_SETTLE_MIN_MS = 150;
+const SHORTS_SWIPE_SETTLE_MAX_MS = 320;
 const SHORTS_SWIPE_SETTLE_MIN_SPEED = 0.7;
 const SHORTS_SWIPE_SETTLE_MAX_SPEED = 3;
 /** 释放速度的采样窗口（ms），约两个合成帧。 */
@@ -500,8 +500,8 @@ export function shortsSwipeIntent(deltaX: number, deltaY: number): "pending" | "
 export const SHORTS_SWIPE_SETTLE_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 /** 换片纵深：邻条后退的缩放比例与淡出比例（相对 1 的最大偏差）。 */
-export const SHORTS_DEPTH_SCALE = 0.08;
-export const SHORTS_DEPTH_FADE = 0.5;
+const SHORTS_DEPTH_SCALE = 0.08;
+const SHORTS_DEPTH_FADE = 0.5;
 
 /**
  * 一个面板相对视口中心的纵深。
@@ -562,7 +562,7 @@ export function shortsSwipeDragOffset(
 }
 
 /** 实时拖拽覆盖的带符号舞台比例。 */
-export function shortsSwipeProgress(dragOffset: number, stageHeight: number): number {
+function shortsSwipeProgress(dragOffset: number, stageHeight: number): number {
   if (!(stageHeight > 0)) return 0;
   return Math.max(-1, Math.min(1, dragOffset / stageHeight));
 }
@@ -687,7 +687,7 @@ export type ShortsSlotRole = "current" | "next" | "prev";
  * `prev` 变成 `current`、原来的 `current` 变成 `next`、原来的 `next` 被改派
  * 去预热新的下一条 —— 换片因此**不换手、不重建播放器**（见 `shortsNextSlots`）。
  */
-export function shortsSlotRole(index: number, slotId: ShortsSlotId): ShortsSlotRole {
+function shortsSlotRole(index: number, slotId: ShortsSlotId): ShortsSlotRole {
   const offset =
     (SHORTS_SLOT_IDS.indexOf(slotId) - (index % SHORTS_SLOT_COUNT) + SHORTS_SLOT_COUNT) %
     SHORTS_SLOT_COUNT;

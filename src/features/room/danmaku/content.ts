@@ -66,7 +66,7 @@ export function danmakuImageRequestUrl(imageUrl: string): string {
   return proxyImageUrl(imageUrl) ?? imageUrl;
 }
 
-export function isDanmakuContentSpan(value: unknown): value is DanmakuContentSpan {
+function isDanmakuContentSpan(value: unknown): value is DanmakuContentSpan {
   if (!value || typeof value !== "object") return false;
   const span = value as { type?: unknown; text?: unknown; image_url?: unknown; large?: unknown };
   if (span.type === "text") return typeof span.text === "string";

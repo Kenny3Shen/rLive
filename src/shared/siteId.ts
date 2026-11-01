@@ -22,7 +22,7 @@ export function isSiteId(value: unknown): value is SiteId {
   return typeof value === "string" && SITE_IDS.has(value as SiteId);
 }
 
-export function normalizeSiteId(value: unknown): SiteId {
+function normalizeSiteId(value: unknown): SiteId {
   return isSiteId(value) ? value : DEFAULT_SITE_ID;
 }
 

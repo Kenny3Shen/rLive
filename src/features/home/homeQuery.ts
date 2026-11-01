@@ -14,7 +14,7 @@ import { nextRecommendPage } from "./pagination";
  */
 export type RecommendQueryKey = readonly ["recommend", SiteId, number];
 
-export function recommendQueryKey(siteId: SiteId, appAuthRevision: number): RecommendQueryKey {
+function recommendQueryKey(siteId: SiteId, appAuthRevision: number): RecommendQueryKey {
   return ["recommend", siteId, siteId === "bilibili" ? appAuthRevision : 0];
 }
 

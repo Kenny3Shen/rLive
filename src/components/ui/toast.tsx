@@ -10,7 +10,7 @@ export type ToastType = "success" | "error" | "info";
  * 唯一的应用级管理器，使命令反馈对所有路由发起的变更可用，
  * 包括上下文菜单和经过 portal 的控件。
  */
-export const toast = ToastPrimitive.createToastManager();
+const toast = ToastPrimitive.createToastManager();
 
 type ToastPortalStore = {
   container: HTMLElement | null;

@@ -46,7 +46,7 @@ const LANGUAGE_CODES = new Set<string>(
   TRANSLATION_LANGUAGE_OPTIONS.map((language) => language.value),
 );
 
-export function isCaptionTranslationLanguage(value: unknown): value is CaptionTranslationLanguage {
+function isCaptionTranslationLanguage(value: unknown): value is CaptionTranslationLanguage {
   return typeof value === "string" && LANGUAGE_CODES.has(value);
 }
 

@@ -55,8 +55,8 @@ import type { IptvChannel } from "./types";
 
 export type IptvPlaybackStatus = "idle" | "connecting" | "ready" | "playing" | "error";
 
-export const IPTV_AUTO_RECONNECT_MAX_ATTEMPTS = 2;
-export const IPTV_AUTO_RECONNECT_DELAYS_MS = [1_000, 2_500] as const;
+const IPTV_AUTO_RECONNECT_MAX_ATTEMPTS = 2;
+const IPTV_AUTO_RECONNECT_DELAYS_MS = [1_000, 2_500] as const;
 const CONTROLS_HIDE_DELAY_MS = 2_000;
 export type IptvReconnectAction =
   | { type: "retry"; attempt: number; delayMs: number }

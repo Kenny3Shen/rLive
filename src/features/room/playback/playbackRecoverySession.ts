@@ -136,7 +136,7 @@ export function playbackWasStable(
   return startedAt != null && failedAt >= startedAt && failedAt - startedAt >= thresholdMs;
 }
 
-export function isDuplicatePlaybackFailure(
+function isDuplicatePlaybackFailure(
   previous: PlaybackFailureMarker | null,
   event: Pick<PlayerEvent, "epoch" | "generation">,
   lineIndex: number,
@@ -155,11 +155,11 @@ export function isDuplicatePlaybackFailure(
 }
 
 /** FLV 插件在报告失败前已在内部重试其网络请求。 */
-export function playerRebuildRetryLimit(siteId: SiteId | undefined): number {
+function playerRebuildRetryLimit(siteId: SiteId | undefined): number {
   return siteId === "douyu" || siteId === "huya" ? 1 : 2;
 }
 
-export function matchingQualityIndex(
+function matchingQualityIndex(
   qualities: Pick<LivePlayQuality, "quality">[],
   preferredQuality: string | undefined,
   fallbackIndex: number,
@@ -169,7 +169,7 @@ export function matchingQualityIndex(
 }
 
 /** 当前档之后的下一个视频清晰度（跳过 Twitch 的 audio only 档）；没有更低档时为 `null`。 */
-export function nextLowerVideoQualityIndex(
+function nextLowerVideoQualityIndex(
   qualities: Pick<LivePlayQuality, "quality">[],
   currentIndex: number,
 ): number | null {

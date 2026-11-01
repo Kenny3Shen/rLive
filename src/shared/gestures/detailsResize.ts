@@ -7,7 +7,7 @@ const DETAILS_SHARE_MIN_PERCENT = 20;
 const DETAILS_SHARE_HARD_MAX_PERCENT = 100;
 
 /** 舞台至少要保住的窗口比例：满宽 16:9。 */
-export const DETAILS_STAGE_ASPECT_RATIO = 16 / 9;
+const DETAILS_STAGE_ASPECT_RATIO = 16 / 9;
 
 const DETAILS_STAGE_DEFAULT_MAX_PERCENT = 70;
 
@@ -110,7 +110,10 @@ export function detailsResizeLayout(
     return null;
   }
   const initialPercent = detailsShareMinPercent(containerWidth, containerHeight, aspectRatio);
-  const maxPercent = Math.max(initialPercent, detailsShareMaxPercent(containerWidth, containerHeight));
+  const maxPercent = Math.max(
+    initialPercent,
+    detailsShareMaxPercent(containerWidth, containerHeight),
+  );
   if (initialPercent >= 100 || maxPercent - initialPercent < 0.01) return null;
   return { initialPercent, minPercent: initialPercent, maxPercent };
 }
@@ -122,9 +125,9 @@ export function detailsResizeLayout(
  * 调占比、横向拖动翻页，两者都在捕获阶段监听同一串指针事件，谁先越过锁定距离谁
  * 赢，另一个在本次手势里彻底放手。
  */
-export const DETAILS_RESIZE_LOCK_DISTANCE_PX = 10;
+const DETAILS_RESIZE_LOCK_DISTANCE_PX = 10;
 /** 纵向位移要压过横向位移的倍数，避免斜着划一下同时触发两个意图。 */
-export const DETAILS_RESIZE_DIRECTION_RATIO = 1.25;
+const DETAILS_RESIZE_DIRECTION_RATIO = 1.25;
 
 /**
  * 「这一步值得认领手势」的最小布局变化（px）。
@@ -135,7 +138,7 @@ export const DETAILS_RESIZE_DIRECTION_RATIO = 1.25;
  * `clientHeight` 的整数精度，边界处会留下约 `0.05%` 的测量偏差 —— 在上限处直接
  * 比较百分比会把这个偏差读成「还能再拖」，于是每次到达上限都恰好抢走原生滚动。
  */
-export const DETAILS_RESIZE_CLAIM_MIN_PX = 1;
+const DETAILS_RESIZE_CLAIM_MIN_PX = 1;
 
 /** 一步手势带来的布局变化是否值得认领（见 `DETAILS_RESIZE_CLAIM_MIN_PX`）。 */
 export function detailsResizeStepIsVisible(
@@ -156,13 +159,13 @@ export function detailsResizeStepIsVisible(
  */
 
 /** 只取最近这段时间内的位移估算速度（ms）。 */
-export const DETAILS_MOMENTUM_WINDOW_MS = 100;
+const DETAILS_MOMENTUM_WINDOW_MS = 100;
 
 /**
  * 速度采样的最小时间跨度（ms）：比这更短时，1px 的坐标取整会放大成极大速度。
  * 与 60Hz 的一帧同量级，因此逐帧采样的正常手势不会被误判。
  */
-export const DETAILS_MOMENTUM_MIN_SPAN_MS = 16;
+const DETAILS_MOMENTUM_MIN_SPAN_MS = 16;
 
 /** 启动惯性的最小速度（px/ms，约 300px/s）。低于此速度的松手就是「停下来」。 */
 export const DETAILS_MOMENTUM_MIN_VELOCITY = 0.3;
@@ -171,7 +174,7 @@ export const DETAILS_MOMENTUM_MIN_VELOCITY = 0.3;
 export const DETAILS_MOMENTUM_STOP_VELOCITY = 0.02;
 
 /** 指数衰减的时间常数（ms）：速度乘 `e^-1` 所需的时间。 */
-export const DETAILS_MOMENTUM_DECAY_MS = 325;
+const DETAILS_MOMENTUM_DECAY_MS = 325;
 
 /**
  * 单帧参与衰减的最大时长（ms）。
@@ -179,7 +182,7 @@ export const DETAILS_MOMENTUM_DECAY_MS = 325;
  * 后台页签恢复、长任务后的 `dt` 可上百毫秒；不夹住就会把整段惯性在一帧里走完，
  * 侧栏「唰」地弹到位。夹住只影响这一次的节奏，总位移仍由 `v₀·τ` 决定。
  */
-export const DETAILS_MOMENTUM_MAX_STEP_MS = 64;
+const DETAILS_MOMENTUM_MAX_STEP_MS = 64;
 
 /** 速度采样保留的条数（环形，只留最近几条）。 */
 export const DETAILS_MOMENTUM_SAMPLE_LIMIT = 5;
@@ -290,7 +293,7 @@ export function detailsResizeIntent(
  * —— 过冲的取值从来写不进 CSS 变量（写之前就被收回范围），只会让提交值比手指
  * 位置多退一截，读作卡顿。
  */
-export function detailsResizeSharePercent(
+function detailsResizeSharePercent(
   startPercent: number,
   deltaY: number,
   containerHeight: number,

@@ -27,7 +27,7 @@ export type CacheUsage = {
   media_path: string;
 };
 
-export const CACHE_USAGE_QUERY_KEY = ["image-cache-usage"] as const;
+const CACHE_USAGE_QUERY_KEY = ["image-cache-usage"] as const;
 
 function cacheErrorMessage(cause: unknown): string {
   return typeof cause === "object" && cause && "message" in cause

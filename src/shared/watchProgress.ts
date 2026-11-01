@@ -7,13 +7,13 @@
  */
 
 /** 低于此秒数不记进度：点开就退、误触与拖动预览不该污染历史。 */
-export const WATCH_PROGRESS_MIN_SECONDS = 3;
+const WATCH_PROGRESS_MIN_SECONDS = 3;
 
 /** 两次写盘之间的最小间隔。timeupdate 约 250ms 一次，不节流会写穿 SQLite。 */
-export const WATCH_PROGRESS_REPORT_INTERVAL_MS = 5_000;
+const WATCH_PROGRESS_REPORT_INTERVAL_MS = 5_000;
 
 /** 距结尾这个秒数以内视为看完：续播从头播，而不是卡在最后一帧反复触发 ended。 */
-export const WATCH_PROGRESS_FINISHED_TAIL_SECONDS = 5;
+const WATCH_PROGRESS_FINISHED_TAIL_SECONDS = 5;
 
 /**
  * 这个位置值不值得记住。

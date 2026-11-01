@@ -6,7 +6,7 @@ import { cn, normalizeImageUrl } from "@/lib/utils";
 import { categoryChipKey, categoryEntriesOf } from "./categorySelection";
 
 /** 每个父分区默认铺开的磁贴数，其余折叠在「显示全部」之后。 */
-export const INITIAL_CATEGORY_COUNT = 12;
+const INITIAL_CATEGORY_COUNT = 12;
 
 type CategoryTileProps = {
   category: LiveSubCategory;
@@ -14,7 +14,7 @@ type CategoryTileProps = {
   onClick: () => void;
 };
 
-export function CategoryTile({ category, selected, onClick }: CategoryTileProps) {
+function CategoryTile({ category, selected, onClick }: CategoryTileProps) {
   const iconSrc = normalizeImageUrl(category.pic);
 
   return (
@@ -61,7 +61,7 @@ type ExpandTileProps = {
   onClick: () => void;
 };
 
-export function ExpandTile({ expanded, controls, onClick }: ExpandTileProps) {
+function ExpandTile({ expanded, controls, onClick }: ExpandTileProps) {
   const Icon = expanded ? ChevronUp : ChevronDown;
   return (
     <button

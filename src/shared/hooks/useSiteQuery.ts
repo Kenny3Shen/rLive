@@ -18,7 +18,7 @@ export function PlatformScope({
 }
 
 /** 页面被保活时返回过渡捕获的平台。 */
-export function usePlatformScope(): PlatformScopeValue | null {
+function usePlatformScope(): PlatformScopeValue | null {
   return useContext(PlatformScopeContext);
 }
 

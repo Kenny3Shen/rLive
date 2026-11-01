@@ -75,7 +75,7 @@ export const CHIP_SKELETON_WIDTHS = ["w-12", "w-18", "w-14", "w-22", "w-14", "w-
 const ARROW_SCROLL_RATIO = 0.8;
 
 /** 选中 chip 的标记属性，`centerChip` 与两条 bar 的定位副作用都按它查询。 */
-export const CHIP_ACTIVE_ATTRIBUTE = "data-chip-active";
+const CHIP_ACTIVE_ATTRIBUTE = "data-chip-active";
 
 /**
  * 条带的滚动余量。
@@ -101,7 +101,7 @@ const NO_EDGES: StripEdges = { overflowing: false, start: false, end: false };
  * 直接写自己的 `scrollLeft` 没有这个副作用，纵向位置也完全不受影响。用 rect 差值算
  * 目标位置而不用 `offsetLeft`，免得依赖 `offsetParent` 恰好是哪一层。
  */
-export function centerChip(strip: HTMLElement, chip: HTMLElement) {
+function centerChip(strip: HTMLElement, chip: HTMLElement) {
   // 条带没溢出时没有横向滚动可做，`scrollLeft` 恒为 0。
   if (strip.scrollWidth <= strip.clientWidth) return;
   const stripBox = strip.getBoundingClientRect();

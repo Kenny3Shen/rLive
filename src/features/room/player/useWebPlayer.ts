@@ -72,8 +72,6 @@ function nextFrame(): Promise<void> {
   return new Promise((r) => requestAnimationFrame(() => r()));
 }
 
-export { requestPlayerAutoplay } from "./autoplay";
-
 /**
  * Video.js 适配器从 HTMLMediaElement 的原生 API 启动协议内核；HLS 的 hls.js
  * 实例仅作为 Video.js 的受控高级能力读取。
@@ -133,7 +131,7 @@ export function getFullscreenDocument(): FullscreenDocument | null {
  * 使多房间的次要流保留常规网格 chrome，
  * 而主流是铺满屏幕的那个表面。
  */
-export function playerOwnsFullscreen(fullscreenOwner: boolean | undefined): boolean {
+function playerOwnsFullscreen(fullscreenOwner: boolean | undefined): boolean {
   return fullscreenOwner !== false;
 }
 
@@ -211,7 +209,7 @@ function clampWebPlayerVolume(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-export function normalizeWebPlayerAudio(
+function normalizeWebPlayerAudio(
   initialVolume = 80,
   initialMuted = false,
 ): { volume: number; muted: boolean; previousVolume: number } {
@@ -253,9 +251,7 @@ export function applyWebPlayerAudio(
  * 健康会在流仍在加载时重置 Twitch 续期预算，
  * 并可能造成无限重载循环。
  */
-export function hasStartedPlayback(
-  video: Pick<HTMLMediaElement, "paused" | "readyState">,
-): boolean {
+function hasStartedPlayback(video: Pick<HTMLMediaElement, "paused" | "readyState">): boolean {
   return !video.paused && video.readyState >= 2;
 }
 
@@ -310,7 +306,7 @@ export function liveFlvPlaybackOptions(
  * 在 `syncHold` 下与直播边缘的距离由对齐负责，hls.js 既不能在该距离增大时强行
  * 前跳，也不能丢弃对齐要 seek 进去的后向缓冲。
  */
-export function liveHlsPlaybackOptions(syncHold = false): VideoJsHlsOptions {
+function liveHlsPlaybackOptions(syncHold = false): VideoJsHlsOptions {
   return {
     lowLatencyMode: false,
     backBufferLength: syncHold ? LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS : 30,
@@ -376,7 +372,7 @@ export function iptvFlvPlaybackOptions(): VideoJsMpegtsOptions {
   };
 }
 
-export const LIVE_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
+const LIVE_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
   retainSourceDuringGap: true,
   resetAudioOnSessionChange: true,
   softSwitch: "settings",
@@ -397,11 +393,11 @@ export const IPTV_MEDIA_LIFECYCLE_PROFILE: MediaLifecycleProfile = {
  * 偏移量。刻意设为有限：六条流各保留一分钟视频的内存代价
  * 远高于对齐本身的价值。
  */
-export const LIVE_SYNC_HOLD_MIN_BACKWARD_SECONDS = 30;
-export const LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS = 42;
+const LIVE_SYNC_HOLD_MIN_BACKWARD_SECONDS = 30;
+const LIVE_SYNC_HOLD_MAX_BACKWARD_SECONDS = 42;
 /** 同步校正可以在静音次要流上请求的速率范围。 */
-export const LIVE_SYNC_MIN_PLAYBACK_RATE = 0.9;
-export const LIVE_SYNC_MAX_PLAYBACK_RATE = 1.1;
+const LIVE_SYNC_MIN_PLAYBACK_RATE = 0.9;
+const LIVE_SYNC_MAX_PLAYBACK_RATE = 1.1;
 /**
  * 仍可视为"刚启动"的最长已缓冲跨度。
  *
@@ -409,9 +405,9 @@ export const LIVE_SYNC_MAX_PLAYBACK_RATE = 1.1;
  * 时才可知。软切换之后元素可能仍持有很长的保留缓冲，其起点不再标记替代流的
  * 起点，因此该流不携带估计时钟，而不是编造一个。
  */
-export const LIVE_SYNC_ANCHOR_FRESH_BUFFER_SECONDS = 20;
+const LIVE_SYNC_ANCHOR_FRESH_BUFFER_SECONDS = 20;
 
-export function shouldUsePlaybackSoftSwitch(
+function shouldUsePlaybackSoftSwitch(
   configured: boolean,
   playbackKind: VideoJsPlaybackKind | null,
 ): boolean {

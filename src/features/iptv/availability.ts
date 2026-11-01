@@ -66,7 +66,7 @@ export function availabilityStateFromResult(
 }
 
 /** 结果是否已陈旧。`checking` 与缺失都不算陈旧。 */
-export function isIptvAvailabilityStale(
+function isIptvAvailabilityStale(
   state: IptvAvailabilityState | undefined,
   now = Date.now(),
   staleMs = IPTV_AVAILABILITY_STALE_MS,

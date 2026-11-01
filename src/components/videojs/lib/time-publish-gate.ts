@@ -1,5 +1,5 @@
 /** 播放中 `currentTime` 发布到 Player store 的最小间隔（约 10Hz）。 */
-export const TIME_PUBLISH_INTERVAL_MS = 100;
+const TIME_PUBLISH_INTERVAL_MS = 100;
 
 /**
  * 节流「仅 currentTime」的高频写入。

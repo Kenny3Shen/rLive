@@ -96,7 +96,7 @@ export function audioOnlyControlPresentation(audioOnly: boolean) {
   } as const;
 }
 
-export function volumeControlPresentation(volume: number, muted = false) {
+function volumeControlPresentation(volume: number, muted = false) {
   const isMuted = muted || volume === 0;
   const roundedVolume = Math.round(volume);
   return {
@@ -106,14 +106,14 @@ export function volumeControlPresentation(volume: number, muted = false) {
   } as const;
 }
 
-export function asrControlPresentation(enabled: boolean, busy: boolean) {
+function asrControlPresentation(enabled: boolean, busy: boolean) {
   return {
     enabled,
     icon: busy ? "spinner" : enabled ? "captions" : "captions-off",
   } as const;
 }
 
-export function showSecondaryPlayerControls(compact: boolean, portrait: boolean): boolean {
+function showSecondaryPlayerControls(compact: boolean, portrait: boolean): boolean {
   return !(compact && portrait);
 }
 
@@ -121,7 +121,7 @@ export function showSecondaryPlayerControls(compact: boolean, portrait: boolean)
  * 只作用于绑定 Android 原生音量桥的业务音量控件（Web 路径用原生 VolumePopover）。
  * 移动端全屏已有边缘滑动调音量，控制条去掉这个按钮保持舞台简洁。
  */
-export function showPlayerVolumeControl(
+function showPlayerVolumeControl(
   compact: boolean,
   portrait: boolean,
   fullscreen: boolean,
@@ -130,7 +130,7 @@ export function showPlayerVolumeControl(
   return showSecondaryPlayerControls(compact, portrait);
 }
 
-export function showPlayerSidePanelControl(
+function showPlayerSidePanelControl(
   compact: boolean,
   portrait: boolean,
   fullscreen: boolean,
@@ -139,11 +139,11 @@ export function showPlayerSidePanelControl(
   return showSecondaryPlayerControls(compact, portrait);
 }
 
-export function showPlayerWebFullscreenControl(compact: boolean, fullscreen: boolean): boolean {
+function showPlayerWebFullscreenControl(compact: boolean, fullscreen: boolean): boolean {
   return !compact && !fullscreen;
 }
 
-export function playerControlsAvoidSystemGestureBar(
+function playerControlsAvoidSystemGestureBar(
   fullscreen: boolean,
   stackedBelowPlayer: boolean,
 ): boolean {

@@ -9,7 +9,7 @@ import type { VideoArchive } from "@/shared/types/video";
 
 export const VIDEO_HOME_PATH = "/video";
 export const VIDEO_PLAY_PATH = "/video/play";
-export const VIDEO_SEARCH_PATH = "/video/search";
+const VIDEO_SEARCH_PATH = "/video/search";
 
 /** 搜索页的关键词参数：住在 URL 里，Shell 头部的查询条与结果页因此无需共享状态。 */
 export const VIDEO_SEARCH_QUERY_PARAM = "q";
@@ -36,10 +36,10 @@ export function videoSearchPath(
   return query ? `${VIDEO_SEARCH_PATH}?${query}` : VIDEO_SEARCH_PATH;
 }
 /** 搜索页四个筛选位的 URL 参数名。默认值不进 URL，保持链接干净。 */
-export const VIDEO_SEARCH_ORDER_PARAM = "order";
-export const VIDEO_SEARCH_DURATION_PARAM = "duration";
-export const VIDEO_SEARCH_ZONE_PARAM = "zone";
-export const VIDEO_SEARCH_PUBTIME_PARAM = "pubtime";
+const VIDEO_SEARCH_ORDER_PARAM = "order";
+const VIDEO_SEARCH_DURATION_PARAM = "duration";
+const VIDEO_SEARCH_ZONE_PARAM = "zone";
+const VIDEO_SEARCH_PUBTIME_PARAM = "pubtime";
 /**
  * 搜索排序（上游 `search/type` 的 `order` 位）。空串是综合排序，也是默认；
  * B 站另有 `totalrank` 别名，这里用空串与后端的默认请求对齐。
@@ -126,7 +126,7 @@ export const VIDEO_TAB_LABELS: Record<VideoTab, string> = {
 export const VIDEO_TAB_PARAM = "tab";
 export const VIDEO_ZONE_PARAM = "zone";
 
-export function isVideoTab(value: unknown): value is VideoTab {
+function isVideoTab(value: unknown): value is VideoTab {
   return typeof value === "string" && (VIDEO_TABS as readonly string[]).includes(value);
 }
 

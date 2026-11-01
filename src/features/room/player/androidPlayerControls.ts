@@ -50,7 +50,7 @@ function nativeControlErrorText(error: unknown): string {
 }
 
 /** 钳制任意输入但不做量化，交给 Android 选择流级别。 */
-export function clampAndroidPlayerControl(value: number): number {
+function clampAndroidPlayerControl(value: number): number {
   return clampPercent(value);
 }
 

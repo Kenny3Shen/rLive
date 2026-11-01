@@ -29,7 +29,7 @@ const CARET_INPUT_TYPES = new Set(["text", "search", "url", "tel", "email", "pas
 /** CSS 侧的读取点：`:root[data-keyboard-nav]`。 */
 export const KEYBOARD_NAV_ATTRIBUTE = "data-keyboard-nav";
 
-export function isNavigationKey(key: string): boolean {
+function isNavigationKey(key: string): boolean {
   return NAVIGATION_KEYS.has(key);
 }
 
@@ -37,7 +37,7 @@ export function isNavigationKey(key: string): boolean {
  * 事件目标是不是带光标的文本框。`target` 收成 `unknown`：DOM 的 `EventTarget`
  * 没有 `tagName`，在这里做运行时收窄比给它编一个结构类型诚实。
  */
-export function isTextEntryTarget(target: unknown): boolean {
+function isTextEntryTarget(target: unknown): boolean {
   if (typeof target !== "object" || target === null) return false;
   const element = target as { tagName?: unknown; type?: unknown; isContentEditable?: unknown };
   if (element.isContentEditable === true) return true;
@@ -77,7 +77,7 @@ export interface KeyboardNavigationTarget {
   ): void;
 }
 
-export function setKeyboardNavigation(root: KeyboardNavigationRoot, active: boolean): void {
+function setKeyboardNavigation(root: KeyboardNavigationRoot, active: boolean): void {
   if (active) {
     root.setAttribute(KEYBOARD_NAV_ATTRIBUTE, "");
     return;

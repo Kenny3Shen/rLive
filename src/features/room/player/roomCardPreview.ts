@@ -64,21 +64,19 @@ export function isRoomCardPreviewPointer(pointerType?: string): boolean {
  * 预览刻意取最低画质:卡片只有几百像素宽,浏览页可能同时驻留上百张卡片,
  * 带宽与解码预算比清晰度重要。
  */
-export function pickRoomCardPreviewQuality(
-  qualities: readonly LivePlayQuality[],
-): LivePlayQuality | null {
+function pickRoomCardPreviewQuality(qualities: readonly LivePlayQuality[]): LivePlayQuality | null {
   if (qualities.length === 0) return null;
   return qualities[pickDefaultQualityIndex(qualities.length, "low")] ?? null;
 }
 
 /** 预览直接取适配器优先级最高的一条,失败就放弃。 */
-export function pickRoomCardPreviewSource(lines: readonly PlayUrl[]): PlayUrl | null {
+function pickRoomCardPreviewSource(lines: readonly PlayUrl[]): PlayUrl | null {
   const index = rankPlaybackSourceIndices(lines)[0];
   return index === undefined ? null : (lines[index] ?? null);
 }
 
 /** 预览缓冲窗口比房间播放器窄一个量级:只求快速出画并尽早丢弃已播片段。 */
-export function roomCardPreviewMpegtsOptions(type: "flv" | "mpegts"): VideoJsMpegtsOptions {
+function roomCardPreviewMpegtsOptions(type: "flv" | "mpegts"): VideoJsMpegtsOptions {
   return {
     mediaDataSource: { type, isLive: true, hasAudio: false, hasVideo: true },
     mpegtsConfig: {
@@ -96,7 +94,7 @@ export function roomCardPreviewMpegtsOptions(type: "flv" | "mpegts"): VideoJsMpe
 }
 
 /** `capLevelToPlayerSize` 让 hls.js 把渲染档钉在够铺满卡片的最低档上。 */
-export function roomCardPreviewHlsOptions(): VideoJsHlsOptions {
+function roomCardPreviewHlsOptions(): VideoJsHlsOptions {
   return {
     lowLatencyMode: false,
     backBufferLength: 6,

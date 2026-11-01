@@ -11,7 +11,7 @@ const FOCUS_RETURN_WINDOW_MS = 400;
  * 规避：菜单刚关闭的时间窗内触发器获得焦点、而指针又不在其上时，立即交还焦点。
  * 键盘导航的聚焦远离该窗口，不受影响。
  */
-export function useFocusReturnGuard(closedAt: { current: number }) {
+function useFocusReturnGuard(closedAt: { current: number }) {
   // `closedAt` 是稳定的 ref 容器；exhaustive-deps 对 ref.current 的警告不影响正确性。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   return useCallback(

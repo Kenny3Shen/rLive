@@ -5,7 +5,7 @@ export const FOLLOW_IPTV_GROUP_PARAM = "group";
 export const FOLLOW_IPTV_SOURCE_PARAM = "source";
 export const IPTV_FOLLOW_UNGROUPED_NAME = "未分组";
 export const IPTV_FOLLOW_UNGROUPED_ID = "__iptv_follow_ungrouped__";
-export const IPTV_M3U_UNCATEGORIZED_NAME = "未分类";
+const IPTV_M3U_UNCATEGORIZED_NAME = "未分类";
 
 export type IptvFollowGroup = IptvFavoriteGroup & {
   count: number;

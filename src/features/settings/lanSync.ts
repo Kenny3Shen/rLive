@@ -1,4 +1,4 @@
-export const LAN_SYNC_CODE_LENGTH = 6;
+const LAN_SYNC_CODE_LENGTH = 6;
 
 export type LanSyncSessionState = "waiting" | "completed" | "expired" | "locked" | "stopped";
 

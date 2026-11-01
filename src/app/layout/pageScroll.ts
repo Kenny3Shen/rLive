@@ -9,7 +9,7 @@
 type NavigationType = "POP" | "PUSH" | "REPLACE";
 
 /** 设置上限，避免长时间浏览无限累积历史条目。 */
-export const PAGE_SCROLL_MEMORY_LIMIT = 64;
+const PAGE_SCROLL_MEMORY_LIMIT = 64;
 
 /** 恢复流程等待列表达到完整高度所允许的帧数。 */
 export const PAGE_SCROLL_RESTORE_MAX_FRAMES = 20;

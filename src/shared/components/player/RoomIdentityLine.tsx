@@ -13,7 +13,7 @@ const OVERFLOW_PIXELS_PER_SECOND = 28;
 const MARQUEE_MIN_TRAVEL_SECONDS = 2.4;
 const MARQUEE_MAX_TRAVEL_SECONDS = 16;
 
-export function roomIdentityOverflowDistance(contentWidth: number, viewportWidth: number): number {
+function roomIdentityOverflowDistance(contentWidth: number, viewportWidth: number): number {
   if (!Number.isFinite(contentWidth) || !Number.isFinite(viewportWidth)) return 0;
   const overflow = contentWidth - viewportWidth;
   return overflow > OVERFLOW_TOLERANCE_PX ? Math.ceil(overflow) : 0;
@@ -26,7 +26,7 @@ export function roomIdentityOverflowDistance(contentWidth: number, viewportWidth
  * `delay`，往返之间的停顿对应 `repeatDelay`。因此一个周期 =
  * 2 ×（单程 + 停顿），单程时长按像素速度推导并锥制，曲线全程线性（匀速）。
  */
-export function roomIdentityMarqueeCycle(distance: number): {
+function roomIdentityMarqueeCycle(distance: number): {
   cycleMs: number;
   keyframes: Keyframe[];
 } {

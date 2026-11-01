@@ -10,7 +10,7 @@ type WakeLockHandle = {
  * 桌面浏览器与较旧 WebView 可能根本不暴露它。把能力检查隔离起来，
  * 宿主无法保持屏幕常亮时播放照常继续。
  */
-export function canUseScreenWakeLock(
+function canUseScreenWakeLock(
   navigatorRef: Pick<Navigator, "wakeLock"> | null | undefined,
 ): boolean {
   return typeof navigatorRef?.wakeLock?.request === "function";

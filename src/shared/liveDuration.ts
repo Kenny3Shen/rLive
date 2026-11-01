@@ -15,7 +15,7 @@ const MINUTE_MS = 60_000;
  * 需要具体时间戳的地方（例如拼开播时刻）也能直接拿到窄化后的 `number`，
  * 不必再补一次断言。
  */
-export function validLiveStartedAt(
+function validLiveStartedAt(
   liveStartedAt: number | null | undefined,
   now = Date.now(),
 ): number | null {

@@ -88,7 +88,7 @@ export type ShortsRetentionState<Info = VideoPlayInfo> = {
 export const SHORTS_RETENTION_EMPTY: ShortsRetentionState<never> = { parked: null };
 
 /** TTL 判定。 */
-export function shortsRetentionExpired(
+function shortsRetentionExpired(
   parkedAtMs: number,
   nowMs: number,
   ttlMs: number = SHORTS_SESSION_RETENTION_MS,

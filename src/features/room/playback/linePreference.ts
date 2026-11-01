@@ -2,7 +2,7 @@ import { browserStorage, type StorageLike } from "@/shared/browserStorage";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 
 const STORAGE_KEY = "rlive-playback-line-preferences";
-export const MAX_PLAYBACK_LINE_PREFERENCES = 100;
+const MAX_PLAYBACK_LINE_PREFERENCES = 100;
 
 export type PlaybackLinePreference = {
   roomKey: string;

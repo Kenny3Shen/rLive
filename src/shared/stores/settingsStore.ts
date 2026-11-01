@@ -32,8 +32,8 @@ import type { QualityLevel } from "../types/player";
 
 export type ThemeMode = "system" | "light" | "dark";
 
-export const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 20;
-export const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 16;
+const DANMAKU_FONT_SIZE_DESKTOP_DEFAULT = 20;
+const DANMAKU_FONT_SIZE_MOBILE_DEFAULT = 16;
 export const DANMAKU_OPACITY_DEFAULT = 0.8;
 export const DANMAKU_FONT_STROKE_MIN = 0;
 export const DANMAKU_FONT_STROKE_MAX = 1.5;
@@ -118,9 +118,9 @@ export const ROOM_CARD_PREVIEW_ENABLED_DEFAULT = true;
  * 默认关闭：它是纯装饰，且代价随视口面积走 —— 一张全屏封面在 `blur(40px)` 下
  * 每帧都要重采样，手机上是白付的 GPU 开销。想要的人自己开。
  */
-export const DYNAMIC_BACKGROUND_ENABLED_DEFAULT = false;
+const DYNAMIC_BACKGROUND_ENABLED_DEFAULT = false;
 
-export const RECORDING_INCLUDE_DANMAKU_DEFAULT = true;
+const RECORDING_INCLUDE_DANMAKU_DEFAULT = true;
 /**
  * 后台录制是无条件的，因此这是逐任务"离开页面后继续录制"开关的固定初始值，
  * 而不是存储的偏好。
@@ -128,19 +128,19 @@ export const RECORDING_INCLUDE_DANMAKU_DEFAULT = true;
 export const RECORDING_CONTINUE_AFTER_LEAVE_DEFAULT = true;
 export const RECORDING_AUTO_SPLIT_MINUTES_MIN = 0;
 export const RECORDING_AUTO_SPLIT_MINUTES_MAX = 24 * 60;
-export const RECORDING_AUTO_SPLIT_MINUTES_DEFAULT = 0;
+const RECORDING_AUTO_SPLIT_MINUTES_DEFAULT = 0;
 export const RECORDING_MAX_CONCURRENT_MIN = 1;
 export const RECORDING_MAX_CONCURRENT_MAX = 6;
-export const RECORDING_MAX_CONCURRENT_DEFAULT = 4;
+const RECORDING_MAX_CONCURRENT_DEFAULT = 4;
 export const FFMPEG_RW_TIMEOUT_SECONDS_MIN = 3;
 export const FFMPEG_RW_TIMEOUT_SECONDS_MAX = 60;
-export const FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT = 10;
+const FFMPEG_RW_TIMEOUT_SECONDS_DEFAULT = 10;
 export const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MIN = 1;
 export const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_MAX = 60;
-export const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT = 8;
+const FFMPEG_RECONNECT_DELAY_MAX_SECONDS_DEFAULT = 8;
 export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MIN = 0;
 export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_MAX = 20;
-export const FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT = 5;
+const FFMPEG_HLS_SEGMENT_RETRY_COUNT_DEFAULT = 5;
 export const RECORDING_ASS_RESOLUTION_WIDTH_MIN = 320;
 export const RECORDING_ASS_RESOLUTION_WIDTH_MAX = 7680;
 export const RECORDING_ASS_RESOLUTION_HEIGHT_MIN = 240;
@@ -322,7 +322,7 @@ export function parseRecordingMaxConcurrent(value: unknown): number {
   );
 }
 
-export function recordingPreferencesFromAppSettings(
+function recordingPreferencesFromAppSettings(
   settings: Pick<
     AppSettings,
     | "recording_include_danmaku"
@@ -970,9 +970,10 @@ export const useSettingsStore = create<SettingsState>()(
         set({ recordingAssSettings });
         void get().persistToBackend({ recording_ass: recordingAssSettings });
       },
-      bumpBilibiliAppAuthRevision: () => set((state) => ({
-        bilibiliAppAuthRevision: state.bilibiliAppAuthRevision + 1,
-      })),
+      bumpBilibiliAppAuthRevision: () =>
+        set((state) => ({
+          bilibiliAppAuthRevision: state.bilibiliAppAuthRevision + 1,
+        })),
       applyFromBackend: (settings) => {
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
@@ -999,9 +1000,7 @@ export const useSettingsStore = create<SettingsState>()(
           playbackSoftSwitchEnabled: settings.playback_soft_switch_enabled,
           videoRecommendApi: parseVideoRecommendApi(settings.video_recommend_api),
           videoNextEpisodePreload: settings.video_next_episode_preload === true,
-          videoBlockedUploaders: normalizeVideoBlockedUploaders(
-            settings.video_blocked_uploaders,
-          ),
+          videoBlockedUploaders: normalizeVideoBlockedUploaders(settings.video_blocked_uploaders),
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
           dynamicBackgroundEnabled: settings.dynamic_background_enabled,
           asrEnabled: settings.asr_enabled,

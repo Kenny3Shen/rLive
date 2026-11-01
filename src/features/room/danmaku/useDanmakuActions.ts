@@ -33,11 +33,11 @@ export function formatDanmakuClipboardText(content: string): string {
  * 异步 Clipboard API 在较旧 WebView、非安全源或权限被拒时可能不可用。
  * 回退到传统命令，同时尽可能保留用户的选区与焦点。
  */
-export async function copyDanmakuText(text: string): Promise<boolean> {
+async function copyDanmakuText(text: string): Promise<boolean> {
   return copyText(text);
 }
 
-export function danmakuActionStatusMessage(
+function danmakuActionStatusMessage(
   status: DanmakuActionStatus,
   target: "live" | "video" = "live",
 ): string | null {
@@ -63,7 +63,7 @@ export function danmakuActionStatusMessage(
   }
 }
 
-export function isDanmakuActionFailure(status: DanmakuActionStatus): boolean {
+function isDanmakuActionFailure(status: DanmakuActionStatus): boolean {
   return status === "copy-failed" || status === "favorite-failed" || status === "send-failed";
 }
 

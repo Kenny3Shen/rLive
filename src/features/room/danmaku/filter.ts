@@ -90,11 +90,6 @@ export function createShieldMatcher(
   return (event) => matchesShieldWords(event, words);
 }
 
-/** 列表与直播悬浮层共享的屏蔽词过滤器。 */
-export function isShielded(event: DanmakuEvent, shieldWords: readonly string[]): boolean {
-  return matchesShieldWords(event, normalizedShieldWords(shieldWords));
-}
-
 function normalizedBlockedUsers(blockedUsers: readonly string[]): Set<string> {
   const users = new Set<string>();
   for (const rawUser of blockedUsers) {
@@ -141,9 +136,9 @@ export function shouldShowValidatedInDanmakuPanel(
   );
 }
 
-export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MS = 10_000;
-export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MIN_MS = 1_000;
-export const DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS = 30_000;
+const DANMAKU_CONTENT_AGGREGATION_WINDOW_MS = 10_000;
+const DANMAKU_CONTENT_AGGREGATION_WINDOW_MIN_MS = 1_000;
+const DANMAKU_CONTENT_AGGREGATION_WINDOW_MAX_MS = 30_000;
 const MAX_CONTENT_AGGREGATION_KEYS = 512;
 
 export type DanmakuContentAggregation = {

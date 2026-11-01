@@ -1,10 +1,10 @@
 // 顶层静态 import 会把 vite 专属的 `?worker&url` 查询暴露给非 vite 运行时
 // （bun test 无法解析该模块），因此推迟到真正开始采集时再取。
 
-export const ASR_SAMPLE_RATE = 16_000;
-export const ASR_MIN_CHUNK_SECONDS = 0.2;
-export const ASR_MAX_CHUNK_SECONDS = 1;
-export const ASR_DEFAULT_CHUNK_SECONDS = 0.2;
+const ASR_SAMPLE_RATE = 16_000;
+const ASR_MIN_CHUNK_SECONDS = 0.2;
+const ASR_MAX_CHUNK_SECONDS = 1;
+const ASR_DEFAULT_CHUNK_SECONDS = 0.2;
 
 const NATIVE_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 let pcmCaptureWorkletUrlPromise: Promise<string> | null = null;
@@ -21,7 +21,7 @@ type PcmListener = (pcm: Float32Array) => void;
 
 export type AudioCaptureBackend = "audio-worklet" | "script-processor";
 
-export function selectAudioCaptureBackend(environment: {
+function selectAudioCaptureBackend(environment: {
   audioWorklet: boolean;
   audioWorkletNode: boolean;
 }): AudioCaptureBackend {
@@ -77,7 +77,7 @@ export function downsamplePcm(
 }
 
 /** 单次 `asr_transcribe` 最多携带的采样数，与 Rust 端 2 MiB 的 PCM 上限一致。 */
-export const ASR_MAX_PENDING_SAMPLES = (2 * 1024 * 1024) / Float32Array.BYTES_PER_ELEMENT;
+const ASR_MAX_PENDING_SAMPLES = (2 * 1024 * 1024) / Float32Array.BYTES_PER_ELEMENT;
 
 /**
  * 把新窗口接到尚未发送的 PCM 之后。识别器按连续时间轴分句，推理慢于播放时

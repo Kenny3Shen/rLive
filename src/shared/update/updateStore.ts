@@ -47,7 +47,7 @@ type ParsedVersion = {
 let inFlight: Promise<UpdateRelease | null> | null = null;
 let hasChecked = false;
 
-export function parseVersion(value: string): ParsedVersion | null {
+function parseVersion(value: string): ParsedVersion | null {
   const normalized = value.trim().replace(/^v/i, "");
   const match = normalized.match(
     /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
@@ -71,7 +71,7 @@ export function parseVersion(value: string): ParsedVersion | null {
   };
 }
 
-export function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
+function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
   for (const key of ["major", "minor", "patch"] as const) {
     if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
   }

@@ -13,11 +13,11 @@
  */
 
 /** 比后端有序代理 8 秒读取空闲释放更晚：抢在释放前重建，只会得到同样卡住的新会话。 */
-export const VOD_WAITING_RECOVERY_TIMEOUT_MS = 10_000;
+const VOD_WAITING_RECOVERY_TIMEOUT_MS = 10_000;
 /** 同一 videoKey 连续自动重建的预算：上游永久故障时不至于每 10 秒无限重试。 */
-export const VOD_WAITING_RECOVERY_MAX_AUTO_RETRIES = 2;
+const VOD_WAITING_RECOVERY_MAX_AUTO_RETRIES = 2;
 /** 稳定播放多久后把预算还回去：能稳定播说明上一轮故障是偶发而非连续。 */
-export const VOD_WAITING_RECOVERY_STABLE_MS = 30_000;
+const VOD_WAITING_RECOVERY_STABLE_MS = 30_000;
 
 export type VideoWaitingRecoveryClockAdapter = {
   now(): number;

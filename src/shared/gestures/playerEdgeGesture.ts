@@ -7,7 +7,7 @@
 
 // Android 经原生桥控制 Activity 亮度。其他移动客户端通过合成器阴影兜底
 // 实现同样的画面局部手势。
-export const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
+const PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX = 12;
 const PLAYER_EDGE_GESTURE_DIRECTION_RATIO = 1.25;
 const PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX = 160;
 // Bilibili 风格的调节让手指在整个画面高度上连续跟踪，
@@ -53,7 +53,7 @@ export function playerBrightnessShadeOpacity(value: number): number {
 }
 
 /** 刻意的纵向拖拽优先于斜向或横向手势。 */
-export function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boolean {
+function isVerticalPlayerEdgeGesture(deltaX: number, deltaY: number): boolean {
   const verticalDistance = Math.abs(deltaY);
   return (
     verticalDistance >= PLAYER_EDGE_GESTURE_MIN_DISTANCE_PX &&
@@ -84,7 +84,7 @@ export function playerEdgeGestureIntent(deltaX: number, deltaY: number): PlayerE
  * 映射到完整 0–100 调节的拖拽距离。使用整个舞台使小幅手指移动连续可控，
  * 而不是忽跳忽停。
  */
-export function playerEdgeGestureDragExtent(stageHeight: number): number {
+function playerEdgeGestureDragExtent(stageHeight: number): number {
   return (
     Math.max(PLAYER_EDGE_GESTURE_MIN_STAGE_HEIGHT_PX, stageHeight) *
     PLAYER_EDGE_GESTURE_DRAG_HEIGHT_RATIO

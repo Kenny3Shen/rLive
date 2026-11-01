@@ -162,7 +162,7 @@ type SettingsCategory =
   | "data"
   | "about";
 
-export const SETTINGS_SECTION_PARAM = "section";
+const SETTINGS_SECTION_PARAM = "section";
 const SETTINGS_OVERVIEW_NAVIGATION_STATE = "settingsOverviewNavigation";
 
 type AccountLoginMethod = "manual" | "qr";
@@ -308,7 +308,7 @@ const settingsCategories: {
 const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
 const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
 
-export const settingsCategorySearchText: Record<SettingsCategory, string> = {
+const settingsCategorySearchText: Record<SettingsCategory, string> = {
   home: "主页 首页 入口 导航 侧栏 侧边栏 底栏 视频 IPTV 显示 隐藏 home",
   appearance:
     "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式 控制栏",
@@ -613,7 +613,7 @@ function QrLogin({
   );
 }
 
-export function BilibiliAppAuthField() {
+function BilibiliAppAuthField() {
   const queryClient = useQueryClient();
   const bumpRevision = useSettingsStore((s) => s.bumpBilibiliAppAuthRevision);
   const [qrOpen, setQrOpen] = useState(false);
@@ -856,7 +856,7 @@ export function BilibiliAppAuthField() {
   );
 }
 
-export function AccountCard({
+function AccountCard({
   siteId,
   title,
   placeholder,
@@ -1886,7 +1886,7 @@ function settingsCategoryFromSearch(value: string | null): SettingsCategory | nu
     : null;
 }
 
-export function settingsPageMotion(
+function settingsPageMotion(
   section: string | null,
   mobileClient = false,
 ): {
@@ -1914,23 +1914,18 @@ const settingsCategoryGroups: {
   { label: "应用信息", values: ["about"] },
 ];
 
-export function settingsCategoryValuesForClient(mobileClient: boolean): SettingsCategory[] {
+function settingsCategoryValuesForClient(mobileClient: boolean): SettingsCategory[] {
   return settingsCategories
     .map((category) => category.value)
     .filter((value) => !mobileClient || value !== "recording");
 }
 
 /** 概览里对客户端可见的条目 key，顺序与 `settingsOverviewEntries` 一致。 */
-export function settingsOverviewKeysForClient(mobileClient: boolean): string[] {
+function settingsOverviewKeysForClient(mobileClient: boolean): string[] {
   const visibleCategories = settingsCategoryValuesForClient(mobileClient);
   return settingsOverviewEntries
     .filter((entry) => !entry.category || visibleCategories.includes(entry.category))
     .map((entry) => entry.key);
-}
-
-/** 分组条带里排到的 key。写错的 key 在概览里会静默消失，因此由测试比对这两侧。 */
-export function settingsOverviewGroupedKeys(): string[] {
-  return settingsCategoryGroups.flatMap((group) => group.values);
 }
 
 function SettingsOverviewButton({
