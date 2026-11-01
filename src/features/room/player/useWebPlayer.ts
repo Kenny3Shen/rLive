@@ -282,8 +282,9 @@ export function liveFlvPlaybackOptions(
       enableStashBuffer: true,
       stashInitialSize: 384,
       // 开启静音补帧修正时间戳缺口：关闭会抹掉缺口，卡顿后音频永久领先
-      // 视频。构建期补丁把可补缺口限制在 10 秒内，避免无上限补帧打爆
-      // `push.apply` 调用栈，见 scripts/mpegts-audio-gap-patch.ts。
+      // 视频。构建期补丁只保留视频时间轴确认的缺口：≤ 10 秒补静音帧，
+      // 更大缺口两轨一起留空，未确认的缺口仍压缩，见
+      // scripts/mpegts-audio-gap-patch.ts。
       fixAudioTimestampGap: true,
       liveBufferLatencyChasing: !syncHold,
       liveBufferLatencyMaxLatency: mobileClient ? 6 : 5,
@@ -337,8 +338,7 @@ export function liveMpegtsPlaybackOptions(syncHold = false): VideoJsMpegtsOption
       enableWorker: false,
       enableStashBuffer: true,
       stashInitialSize: 384,
-      // 同上：开启静音补帧，缺口上限由 scripts/mpegts-audio-gap-patch.ts
-      // 的构建期补丁保证。
+      // 缺口补帧规则见 liveFlvPlaybackOptions。
       fixAudioTimestampGap: true,
       liveBufferLatencyChasing: !syncHold,
       liveBufferLatencyMaxLatency: 3,
@@ -366,8 +366,7 @@ export function iptvFlvPlaybackOptions(): VideoJsMpegtsOptions {
       enableWorker: false,
       enableStashBuffer: true,
       stashInitialSize: 384,
-      // 同上：开启静音补帧，缺口上限由 scripts/mpegts-audio-gap-patch.ts
-      // 的构建期补丁保证。
+      // 缺口补帧规则同 liveMpegtsPlaybackOptions。
       fixAudioTimestampGap: true,
       liveBufferLatencyChasing: true,
       liveBufferLatencyMaxLatency: 3,
