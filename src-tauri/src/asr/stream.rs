@@ -5,7 +5,11 @@
 //!
 //! - Silero VAD 逐帧（32 ms）增量打分，带滞回地判定语句起止；
 //! - 语句进行中每隔 `partial_step` 只解码最近 `partial_window` 秒，作为在途假设；
-//! - 尾部静音达到 `ENDPOINT_SILENCE_FRAMES` 或语句达到最长时长时，解码**整句**作为定稿。
+//! - 尾部静音达到按已说出时长分档的端点（不足 5 s：0.8 s；5–10 s：0.5 s；
+//!   10 s 以上：0.3 s），或语句达到最长时长（约 12 s）时，解码**整句**作为定稿。
+//!
+//! 语句越长，直播快语速下的自然停顿越短；分档让长句在较小的停顿处就定稿，
+//! 避免一句话累积到 80–100 字后被叠加层裁掉。短句仍用 0.8 s，避免句内换气被切碎。
 //!
 //! 定稿始终覆盖整句音频，在途假设的窗口截断不会影响定稿文本。
 //! 关闭 VAD 时每帧都视为语音，只按最长时长切分。
@@ -19,18 +23,24 @@ pub const FRAME_SAMPLES: usize = 512;
 const SPEECH_THRESHOLD: f32 = 0.5;
 /// 滞回下限：语句进行中概率要跌破它才计为静音，介于两者之间保持原状态。
 const SILENCE_THRESHOLD: f32 = 0.35;
-/// 0.8 s 尾部静音定稿。
+/// 短句（不足 5 s）的端点：约 0.8 s 尾部静音定稿。
+/// 短句句内的换气通常远短于 0.8 s，保持宽松以免把一个短句切成几段。
 const ENDPOINT_SILENCE_FRAMES: usize = 25;
+/// 中等长度语句（5–10 s）的端点：约 0.5 s 尾部静音定稿。
+const MEDIUM_ENDPOINT_SILENCE_FRAMES: usize = 16;
+/// 长句（10 s 以上）的端点：约 0.3 s 尾部静音定稿。
+/// 此时语句已积压较多文字，直播快语速下的短停顿也应及时定稿。
+const LONG_ENDPOINT_SILENCE_FRAMES: usize = 10;
 /// 语句起点之前保留约 0.2 s，避免吞掉首字。
 const PREROLL_FRAMES: usize = 6;
 /// 定稿音频在最后一个语音帧之后再保留约 0.2 s。
 const TAIL_PAD_FRAMES: usize = 6;
 /// 少于约 0.25 s 语音的片段（咳嗽、按键声）直接丢弃。
 const MIN_VOICED_FRAMES: usize = 8;
-/// 最长语句约 20 s。
-const MAX_UTTERANCE_FRAMES: usize = 625;
-/// 达到最长时长时，在最后约 2 s 内找概率最低的一帧切分，尽量不切在字中间。
-const MAX_CUT_SEARCH_FRAMES: usize = 62;
+/// 最长语句约 12 s。原先 20 s 会让一句话攒到 80–100 字，叠加层（最多 90 字）被裁。
+const MAX_UTTERANCE_FRAMES: usize = 375;
+/// 达到最长时长时，在最后约 3 s 内找概率最低的一帧切分，让硬切更可能落在真正的停顿上。
+const MAX_CUT_SEARCH_FRAMES: usize = 94;
 /// 少于 0.3 s 的音频不送解码器。
 const MIN_DECODE_SAMPLES: usize = SAMPLE_RATE * 3 / 10;
 
@@ -69,6 +79,21 @@ impl StreamConfig {
 
 fn seconds_to_frames(seconds: f64) -> usize {
     (seconds * SAMPLE_RATE as f64 / FRAME_SAMPLES as f64).round() as usize
+}
+
+/// 按语句已说出的帧数（起点到最后一个语音帧）选端点所需尾部静音：语句越长，允许的停顿越短。
+///
+/// 帧长 32 ms，因此 25 / 16 / 10 帧分别约 0.8 / 0.51 / 0.32 s。
+/// 最短端点 10 帧仍大于 `TAIL_PAD_FRAMES`，定稿的 `end_frame`
+/// 不会因为 `.min(frame + 1)` 被压到最后一个语音帧之前。
+fn endpoint_silence_frames(utterance_frames: usize) -> usize {
+    if utterance_frames < seconds_to_frames(5.0) {
+        ENDPOINT_SILENCE_FRAMES
+    } else if utterance_frames < seconds_to_frames(10.0) {
+        MEDIUM_ENDPOINT_SILENCE_FRAMES
+    } else {
+        LONG_ENDPOINT_SILENCE_FRAMES
+    }
 }
 
 #[derive(Debug)]
@@ -199,14 +224,18 @@ impl CaptionStream {
             utterance.silence_run += 1;
         }
 
-        if utterance.silence_run >= ENDPOINT_SILENCE_FRAMES {
+        let utterance_frames = frame + 1 - utterance.start_frame;
+        // 分档按已说出的长度（到最后一个语音帧）计，不把正在等待的尾部静音算进去，
+        // 否则 4.8 s 的短句停顿 0.3 s 后就会跨过 5 s 档、提前改用 0.5 s 端点。
+        let spoken_frames = utterance.last_voiced_frame + 1 - utterance.start_frame;
+        if utterance.silence_run >= endpoint_silence_frames(spoken_frames) {
             let end_frame = (utterance.last_voiced_frame + 1 + TAIL_PAD_FRAMES).min(frame + 1);
             let utterance = self.utterance.take().expect("utterance is active");
             segments.extend(self.finalize(engine, &utterance, end_frame));
             return;
         }
 
-        if frame + 1 - utterance.start_frame >= MAX_UTTERANCE_FRAMES {
+        if utterance_frames >= MAX_UTTERANCE_FRAMES {
             // 在最后一段里找概率最低的帧切开；关闭 VAD 时概率全为 1，切在末尾。
             let len = utterance.probs.len();
             let search_from = len.saturating_sub(MAX_CUT_SEARCH_FRAMES);
@@ -267,7 +296,7 @@ impl CaptionStream {
 
     fn decode_partial(&mut self, engine: &mut impl CaptionEngine) -> Option<String> {
         let utterance = self.utterance.as_mut()?;
-        // 只在有新语音时刷新：尾部静音等端点的那 0.8 s 里重解码只会得到同样的文本。
+        // 只在有新语音时刷新：等待端点（最多 0.8 s）的尾部静音里重解码只会得到同样的文本。
         if utterance.voiced_frames < MIN_VOICED_FRAMES
             || utterance.last_voiced_frame < utterance.partial_frame
             || self.next_frame < utterance.partial_frame + self.config.partial_step_frames
@@ -460,6 +489,64 @@ mod tests {
         assert_eq!(segments[0].end_ms, 1_792);
         assert_eq!(segments[0].speaker_id, Some(1));
         assert!(outputs.last().unwrap().partial.is_none());
+    }
+
+    #[test]
+    fn endpoint_silence_shrinks_with_utterance_length() {
+        assert_eq!(endpoint_silence_frames(1), ENDPOINT_SILENCE_FRAMES);
+        assert_eq!(
+            endpoint_silence_frames(seconds_to_frames(5.0) - 1),
+            ENDPOINT_SILENCE_FRAMES
+        );
+        assert_eq!(
+            endpoint_silence_frames(seconds_to_frames(5.0)),
+            MEDIUM_ENDPOINT_SILENCE_FRAMES
+        );
+        assert_eq!(
+            endpoint_silence_frames(seconds_to_frames(10.0) - 1),
+            MEDIUM_ENDPOINT_SILENCE_FRAMES
+        );
+        assert_eq!(
+            endpoint_silence_frames(seconds_to_frames(10.0)),
+            LONG_ENDPOINT_SILENCE_FRAMES
+        );
+        assert_eq!(
+            endpoint_silence_frames(MAX_UTTERANCE_FRAMES),
+            LONG_ENDPOINT_SILENCE_FRAMES
+        );
+        // 最短端点必须大于尾部补帧，否则 end_frame 会被压到语音结束之前。
+        const { assert!(LONG_ENDPOINT_SILENCE_FRAMES > TAIL_PAD_FRAMES) };
+    }
+
+    #[test]
+    fn long_utterances_finalize_after_a_short_pause() {
+        // 340 帧（约 10.9 s）语音后只停 11 帧（约 0.35 s）就应定稿。
+        let mut probs = vec![0.9; 340];
+        probs.extend(vec![0.1; 11]);
+        let mut engine = ScriptedEngine::new(probs);
+        let mut stream = CaptionStream::new(config(true));
+        let outputs = run(&mut stream, &mut engine, 351);
+        let segments: Vec<_> = outputs.iter().flat_map(|output| &output.segments).collect();
+        assert_eq!(segments.len(), 1);
+        // 第 350 帧累计到 10 帧静音即定稿，尾部补 6 帧到第 346 帧。
+        assert_eq!(segments[0].text, "0-346");
+    }
+
+    #[test]
+    fn short_utterances_tolerate_a_short_mid_sentence_pause() {
+        // 50 帧语音 + 11 帧（约 0.35 s）停顿 + 50 帧语音 + 30 帧收尾静音。
+        // 此时语句不足 5 s，端点仍是 25 帧，句中停顿不能被切开。
+        let mut probs = vec![0.9; 50];
+        probs.extend(vec![0.1; 11]);
+        probs.extend(vec![0.9; 50]);
+        probs.extend(vec![0.1; 30]);
+        let mut engine = ScriptedEngine::new(probs);
+        let mut stream = CaptionStream::new(config(true));
+        let outputs = run(&mut stream, &mut engine, 141);
+        let segments: Vec<_> = outputs.iter().flat_map(|output| &output.segments).collect();
+        assert_eq!(segments.len(), 1);
+        // 最后一次语音在第 110 帧，第 25 帧静音（第 135 帧）定稿，尾部补 6 帧。
+        assert_eq!(segments[0].text, "0-117");
     }
 
     #[test]
