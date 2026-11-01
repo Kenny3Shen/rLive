@@ -14,8 +14,14 @@ type CaptionSegment = {
   speaker_id: number | null;
 };
 
+/**
+ * 带转录条目 id 的定稿语句。独立字幕窗口打开时，id 用于把迟到的译文回填到
+ * 对应行；其他宿主不提供转录，字段始终为空。
+ */
+type TranslationSegment = CaptionSegment & { transcriptId?: string };
+
 type TranslationJob = {
-  segments: CaptionSegment[];
+  segments: TranslationSegment[];
   from: CaptionTranslationSourceLanguage;
   to: CaptionTranslationLanguage;
   epoch: number;
@@ -34,8 +40,14 @@ export function useCaptionTranslation(options: {
   sessionKey: string;
   /** 译文与翻译提示写入叠加层的文本 store，宿主不随翻译批次重渲染。 */
   text: AsrCaptionTextStore;
+  /**
+   * 译文回填到独立字幕窗口的转录条目。即使叠加层已超过保留时间也调用，
+   * 让整场对话的译文保持完整。
+   */
+  onSegmentTranslated?: (transcriptId: string, translatedText: string) => void;
 }) {
   const text = options.text;
+  const onSegmentTranslated = options.onSegmentTranslated;
   const epochRef = useRef(0);
   const workerRunningRef = useRef(false);
   const pendingJobsRef = useRef<TranslationJob[]>([]);
@@ -77,17 +89,18 @@ export function useCaptionTranslation(options: {
           if (job.epoch !== epochRef.current) continue;
 
           const remainingMs = job.expiresAt - Date.now();
-          if (remainingMs <= 0) continue;
           for (const [index, segment] of job.segments.entries()) {
             const translated = translatedSegments[index];
             if (!translated) continue;
+            const formatted = formatAsrCaptionSegment({ ...segment, text: translated });
+            // 转录不设过期：翻译比叠加层慢时，字幕窗口仍应拿到这一行译文。
+            if (segment.transcriptId) onSegmentTranslated?.(segment.transcriptId, formatted);
+            if (remainingMs <= 0) continue;
             text.update((current) => ({
-              translatedCaption: appendAsrCaptionLine(
-                current.translatedCaption,
-                formatAsrCaptionSegment({ ...segment, text: translated }),
-              ),
+              translatedCaption: appendAsrCaptionLine(current.translatedCaption, formatted),
             }));
           }
+          if (remainingMs <= 0) continue;
           text.update({ translationNotice: null });
           clearCaptionTimer();
           captionTimerRef.current = window.setTimeout(() => {
@@ -108,10 +121,10 @@ export function useCaptionTranslation(options: {
       workerRunningRef.current = false;
       if (pendingJobsRef.current.length > 0) void processPendingJobs();
     }
-  }, [clearCaptionTimer, text]);
+  }, [clearCaptionTimer, onSegmentTranslated, text]);
 
   const enqueue = useCallback(
-    (segments: CaptionSegment[]) => {
+    (segments: TranslationSegment[]) => {
       if (
         !options.active ||
         !options.enabled ||

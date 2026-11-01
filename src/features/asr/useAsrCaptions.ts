@@ -15,6 +15,7 @@ import {
   type AudioCaptureSubscription,
 } from "./audio";
 import { createAsrCaptionTextStore, type AsrCaptionTextStore } from "./asrCaptionText";
+import { asrTranscript } from "./asrTranscript";
 import { describeAsrModelStatus, useAsrModelStatus, type AsrModelStatus } from "./model";
 import { useCaptionTranslation } from "./useCaptionTranslation";
 import { errorText } from "@/shared/components/errorPresentation";
@@ -53,6 +54,15 @@ export type AsrCaptionsOptions = {
   translationEnabled: boolean;
   translationFrom: CaptionTranslationSourceLanguage;
   translationTo: CaptionTranslationLanguage;
+  /**
+   * 提供时把定稿语句、译文与实时状态写入模块级转录，供独立字幕窗口显示。
+   * 不提供时完全不触碰转录，叠加层行为保持不变。
+   */
+  transcript?: {
+    /** 房间身份；换清晰度或线路不能改变它，否则会误插房间分隔条。 */
+    sourceKey: string;
+    sourceTitle: string;
+  };
 };
 
 /** 一条 ASR 管线对播放页的完整契约：叠加层内容 + 控件呈现 + 开关。 */
@@ -90,6 +100,17 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const chunkSetterRef = useRef<((seconds: number) => void) | null>(null);
   /** 用户已表达「要开字幕」，但会话还在加载；就绪后自动开启。 */
   const pendingEnableRef = useRef(false);
+  const transcriptEnabled = options.transcript !== undefined;
+  const transcriptSourceTitle = options.transcript?.sourceTitle;
+  // 标题可能在首屏后才返回；放进 ref，避免识别回调随标题变化重新创建、
+  // 进而重启音频采集。
+  const transcriptRef = useRef(options.transcript);
+  useEffect(() => {
+    transcriptRef.current = options.transcript;
+  });
+  const handleTranslatedSegment = useCallback((id: string, translatedText: string) => {
+    asrTranscript.patchTranslation(id, translatedText);
+  }, []);
   const translation = useCaptionTranslation({
     active: captionsOn,
     enabled: options.translationEnabled,
@@ -98,8 +119,32 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     mediaKey: options.mediaKey,
     sessionKey: options.sessionKey,
     text,
+    onSegmentTranslated: handleTranslatedSegment,
   });
   const enqueueTranslation = translation.enqueue;
+
+  // 房间标题、开关与错误提示属于低频状态，随识别钩子写入转录。
+  useEffect(() => {
+    if (!transcriptEnabled) return;
+    asrTranscript.updateLive({
+      sourceTitle: transcriptSourceTitle ?? null,
+      captionsOn,
+      notice,
+    });
+  }, [captionsOn, notice, transcriptEnabled, transcriptSourceTitle]);
+
+  // 会话切换与关闭字幕会清空在途假设；转录本身必须跨会话保留。
+  const clearTranscriptPartial = useCallback(() => {
+    if (transcriptEnabled) asrTranscript.updateLive({ partial: null });
+  }, [transcriptEnabled]);
+
+  // 离开直播间后没有 ASR 在运行：窗口状态要与实际一致，但已有转录保留。
+  useEffect(() => {
+    if (!transcriptEnabled) return;
+    return () => {
+      asrTranscript.updateLive({ captionsOn: false, partial: null, notice: null });
+    };
+  }, [transcriptEnabled]);
 
   const clearCaptionTimer = useCallback(() => {
     if (captionTimerRef.current !== null) {
@@ -124,10 +169,29 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
           setNotice(null);
 
           // 实时假设随每个窗口变化，包括语句被提交后回到空值。
-          text.update({ partial: response.partial?.trim() || null });
+          const partial = response.partial?.trim() || null;
+          text.update({ partial });
+          if (transcriptRef.current) asrTranscript.updateLive({ partial });
 
           if (response.segments.length === 0) continue;
-          enqueueTranslation(response.segments);
+          const transcript = transcriptRef.current;
+          if (transcript) {
+            // 定稿先进入转录并取得条目 id，翻译完成后按 id 回填。
+            enqueueTranslation(
+              response.segments.map((segment) => {
+                const formatted = formatAsrCaptionSegment(segment);
+                if (!formatted) return segment;
+                const line = asrTranscript.appendLine({
+                  text: formatted,
+                  sourceKey: transcript.sourceKey,
+                  sourceTitle: transcript.sourceTitle,
+                });
+                return { ...segment, transcriptId: line.id };
+              }),
+            );
+          } else {
+            enqueueTranslation(response.segments);
+          }
           text.update((current) => ({
             caption: response.segments.reduce(
               (committed, segment) =>
@@ -191,6 +255,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     if (!options.featureEnabled || !model.supported) {
       setCaptionsOn(false);
       text.update({ caption: null, partial: null });
+      clearTranscriptPartial();
       setNotice(null);
       setCaptureError(null);
       pendingJobRef.current = null;
@@ -199,13 +264,14 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
       clearCaptionTimer();
     }
     /* oxlint-enable react/set-state-in-effect */
-  }, [clearCaptionTimer, model.supported, options.featureEnabled, text]);
+  }, [clearCaptionTimer, clearTranscriptPartial, model.supported, options.featureEnabled, text]);
 
   // 切房间或换媒体元素时清空流式解码状态。外部会话编排：包含 asr_reset_stream
   // IPC 与 epoch 栅栏，状态写入与其同步发生。
   useEffect(() => {
     /* oxlint-disable react/set-state-in-effect */
     text.update({ caption: null, partial: null });
+    clearTranscriptPartial();
     setNotice(null);
     setCaptureError(null);
     pendingJobRef.current = null;
@@ -221,6 +287,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     }
   }, [
     clearCaptionTimer,
+    clearTranscriptPartial,
     model.supported,
     options.featureEnabled,
     options.mediaKey,
@@ -284,6 +351,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
         const message = errorText(error);
         setCaptureError(message);
         setNotice(`无法开启语音字幕：${message}`);
+        clearTranscriptPartial();
         setCaptionsOn(false);
       });
 
@@ -309,6 +377,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     options.mediaKey,
     options.sessionKey,
     options.videoRef,
+    clearTranscriptPartial,
     processPendingJobs,
   ]);
 
@@ -357,6 +426,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     setCaptureError(null);
     if (captionsOn) {
       text.update({ caption: null, partial: null });
+      clearTranscriptPartial();
       pendingJobRef.current = null;
       // 用户在会话加载期间又点了关闭：取消先前登记的开启意图。
       pendingEnableRef.current = false;
@@ -368,6 +438,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   }, [
     captionsOn,
     clearCaptionTimer,
+    clearTranscriptPartial,
     loadSession,
     localAsrClient,
     modelQueryError,

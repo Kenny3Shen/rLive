@@ -1070,10 +1070,12 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "rlive-settings-v2",
       // 持久化首屏需要的少量 v2 本地状态；后端加载后覆盖。
+      // `asrFontSize` 同时供独立字幕窗口读取：该窗口不能调用 settings_get。
       partialize: (s) => ({
         theme: s.theme,
         siteId: s.siteId,
         disabledSiteIds: s.disabledSiteIds,
+        asrFontSize: s.asrFontSize,
       }),
     },
   ),

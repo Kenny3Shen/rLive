@@ -15,7 +15,10 @@
     "core:window:allow-unmaximize",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
     "core:webview:default",
+    "core:webview:allow-create-webview-window",
     "opener:default",
     "dialog:allow-open",
     "dialog:allow-save"

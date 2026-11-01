@@ -22,6 +22,7 @@ import {
   VolumeX,
   type LucideIcon,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
 import { ANDROID_BACK_EVENT } from "@/app/androidBackNavigation";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
@@ -57,6 +58,7 @@ import type { AutoDanmakuSendController } from "./danmaku/useAutoDanmakuSend";
 import type { SleepTimerController } from "./useSleepTimer";
 import { useAsrCaptions } from "@/features/asr/useAsrCaptions";
 import { AsrCaptionOverlay } from "@/features/asr/AsrCaptionOverlay";
+import { openAsrCaptionWindow } from "@/features/asr/captionWindow";
 import { useWebPlayer } from "./player/useWebPlayer";
 import {
   useVideoJsPiP,
@@ -514,6 +516,8 @@ function PlayerPaneContent({
   const refreshDisabled = loading || !playUrl;
   const loadError = externalLoadError ?? player.loadError ?? player.fullscreenError;
   const danmakuSessionKey = `${roomSessionKey ?? "room"}:${playUrl?.url ?? "idle"}`;
+  // 独立字幕窗口只在桌面 Tauri 客户端可用；其他宿主不传 transcript，行为不变。
+  const asrCaptionWindowAvailable = getClientPlatform() === "desktop" && isTauri();
   const asr = useAsrCaptions({
     videoRef: playerVideoRef,
     mediaKey: player.mediaKey,
@@ -525,6 +529,14 @@ function PlayerPaneContent({
     translationEnabled: asrTranslationEnabled,
     translationFrom: asrTranslationFrom,
     translationTo: asrTranslationTo,
+    transcript: asrCaptionWindowAvailable
+      ? {
+          // 换清晰度或线路只改变 danmakuSessionKey，房间身份必须保持稳定，
+          // 否则转录会误插分隔条。
+          sourceKey: roomSessionKey ?? "room",
+          sourceTitle: roomTitle?.trim() || roomUserName?.trim() || "直播字幕",
+        }
+      : undefined,
   });
   const nativePlayerControlsActive = androidClient && androidPlayerControls.supported;
   const nativePlayerControlState = nativePlayerControlsActive ? androidPlayerControls.state : null;
@@ -1620,6 +1632,14 @@ function PlayerPaneContent({
                 fontSize={asrFontSize}
                 translationTo={asrTranslationTo}
                 className="bottom-[calc(4.5rem+var(--player-chrome-inset))]"
+                onOpenWindow={
+                  asrCaptionWindowAvailable
+                    ? () => {
+                        // 建窗失败不阻断播放；下一次点击会重试。
+                        void openAsrCaptionWindow().catch(() => undefined);
+                      }
+                    : undefined
+                }
               />
             )}
 
