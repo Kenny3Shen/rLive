@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::commands::video::{resolve_bilibili, video_stream_headers};
 use crate::error::{AppError, AppResult};
 use crate::local_http;
-use crate::models::video::{VideoPlayRequest, VideoSubtitle};
+use crate::models::video::{VideoDanmakuSegment, VideoPlayRequest, VideoSubtitle};
 use crate::sites::bilibili::BilibiliSite;
 use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
@@ -50,6 +50,7 @@ const AUDIO_PART: &str = "audio.m4s.part";
 const OUTPUT_PART: &str = "output.mp4.part";
 const SUBTITLE_FILE_PREFIX: &str = "subtitle-";
 const SUBTITLE_FILE_EXTENSION: &str = ".vtt";
+const DANMAKU_FILE: &str = "danmaku.json";
 const MAX_TITLE_CHARS: usize = 80;
 const VIDEO_FILE_EXTENSION: &str = ".mp4";
 const MAX_FILE_NAME_BYTES: usize = 255;
@@ -153,6 +154,8 @@ pub struct VideoDownloadPlaybackInfo {
     pub subtitles: Vec<VideoDownloadSubtitle>,
     /// 字幕未完整缓存时的可展示原因，不影响已下载媒体播放。
     pub subtitle_error: Option<String>,
+    pub danmaku_url: Option<String>,
+    pub danmaku_error: Option<String>,
 }
 
 /// 已完成下载可离线加载的字幕轨。
@@ -180,6 +183,19 @@ struct CachedSubtitleState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedDanmakuSegment {
+    segment_index: i64,
+    #[serde(flatten)]
+    segment: VideoDanmakuSegment,
+}
+
+#[derive(Default)]
+struct CachedDanmakuState {
+    cached: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredEntry {
     item: VideoDownloadItem,
     file_name: String,
@@ -195,6 +211,10 @@ struct StoredEntry {
     subtitles: Vec<CachedSubtitle>,
     #[serde(default)]
     subtitle_error: Option<String>,
+    #[serde(default)]
+    danmaku_cached: bool,
+    #[serde(default)]
+    danmaku_error: Option<String>,
 }
 
 struct InnerState {
@@ -474,6 +494,29 @@ impl VideoDownloadManager {
                 }
             }
         }
+        let stored = read_stored_entry(&self.root, &item.id);
+        let mut danmaku_error = stored
+            .as_ref()
+            .and_then(|entry| entry.danmaku_error.clone());
+        let danmaku_available = stored.is_some_and(|entry| entry.danmaku_cached);
+        let danmaku_file = self.root.join(&item.id).join(DANMAKU_FILE);
+        let danmaku_path = if danmaku_available {
+            match read_cached_danmaku(&self.root, &item.id) {
+                Some(_) => {
+                    validate_download_file(&self.root, &item.id, &danmaku_file, is_danmaku_file)
+                        .ok()
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        if danmaku_available && danmaku_path.is_none() {
+            danmaku_error = Some("弹幕缓存已丢失或损坏，重新下载可恢复".to_string());
+        }
+        if let Some(path) = danmaku_path.as_ref() {
+            files.push(path.clone());
+        }
         let urls = self.playback.urls(&item.id, &files).await?;
         let current = {
             let inner = self
@@ -509,7 +552,7 @@ impl VideoDownloadManager {
         let url = urls.next().expect("playback media URL");
         let subtitles = cached_subtitles
             .into_iter()
-            .zip(urls)
+            .map(|subtitle| (subtitle, urls.next().expect("playback subtitle URL")))
             .map(|(subtitle, url)| VideoDownloadSubtitle {
                 id: subtitle.id,
                 lan: subtitle.lan,
@@ -523,6 +566,8 @@ impl VideoDownloadManager {
             url,
             subtitles,
             subtitle_error,
+            danmaku_url: danmaku_path.and_then(|_| urls.next()),
+            danmaku_error,
         })
     }
 
@@ -944,7 +989,11 @@ fn write_entry(root: &Path, item: &VideoDownloadItem, file_name: &str) -> AppRes
             .as_ref()
             .map(|entry| entry.subtitles.clone())
             .unwrap_or_default(),
-        subtitle_error: existing.and_then(|entry| entry.subtitle_error),
+        subtitle_error: existing
+            .as_ref()
+            .and_then(|entry| entry.subtitle_error.clone()),
+        danmaku_cached: existing.as_ref().is_some_and(|entry| entry.danmaku_cached),
+        danmaku_error: existing.and_then(|entry| entry.danmaku_error),
     };
     write_stored_entry(root, &stored)
 }
@@ -1020,6 +1069,8 @@ fn persist_cached_subtitles(
         watch_duration: item.watch_duration,
         subtitles: Vec::new(),
         subtitle_error: None,
+        danmaku_cached: false,
+        danmaku_error: None,
     });
     stored.file_name = file_name.to_string();
     stored.subtitles = state.subtitles.clone();
@@ -1040,6 +1091,55 @@ fn persist_cached_subtitles_for_completion(
             downloaded_bytes,
             total_bytes,
         ))
+    })
+}
+
+fn persist_cached_danmaku(
+    manager: &VideoDownloadManager,
+    item: &VideoDownloadItem,
+    state: &CachedDanmakuState,
+) -> AppResult<()> {
+    let _guard = manager
+        .io_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut stored = read_stored_entry(&manager.root, &item.id)
+        .ok_or_else(|| AppError::new("video_download_metadata_error", "下载信息已丢失"))?;
+    stored.danmaku_cached = state.cached;
+    stored.danmaku_error = state.error.clone();
+    write_stored_entry(&manager.root, &stored)
+}
+
+fn read_cached_danmaku(root: &Path, id: &str) -> Option<Vec<CachedDanmakuSegment>> {
+    let path = validate_download_file(root, id, &root.join(id).join(DANMAKU_FILE), is_danmaku_file)
+        .ok()?;
+    let bytes = std::fs::read(path).ok()?;
+    let segments: Vec<CachedDanmakuSegment> = serde_json::from_slice(&bytes).ok()?;
+    let mut indices = HashSet::new();
+    if segments
+        .iter()
+        .any(|segment| segment.segment_index <= 0 || !indices.insert(segment.segment_index))
+    {
+        return None;
+    }
+    Some(segments)
+}
+
+fn write_cached_danmaku(dir: &Path, segments: &[CachedDanmakuSegment]) -> AppResult<()> {
+    let bytes = serde_json::to_vec(segments).map_err(|error| {
+        AppError::new(
+            "video_download_danmaku_error",
+            format!("序列化弹幕失败：{error}"),
+        )
+    })?;
+    crate::app_paths::write_recoverable_file(&dir.join(DANMAKU_FILE), &bytes, |bytes| {
+        serde_json::from_slice::<Vec<CachedDanmakuSegment>>(bytes).is_ok()
+    })
+    .map_err(|error| {
+        AppError::new(
+            "video_download_danmaku_error",
+            format!("保存弹幕失败：{error}"),
+        )
     })
 }
 
@@ -1434,6 +1534,15 @@ async fn download_item(
         let (downloaded, _) = partial_bytes(manager, item);
         return DownloadOutcome::paused(downloaded, total_bytes);
     };
+    let Some(danmaku_state) =
+        cache_download_danmaku(&manager.root, &item.id, duration, &cancel, |index| {
+            site.video_danmaku(item.cid, index)
+        })
+        .await
+    else {
+        let (downloaded, _) = partial_bytes(manager, item);
+        return DownloadOutcome::paused(downloaded, total_bytes);
+    };
     if *cancel.borrow() {
         let (downloaded, _) = partial_bytes(manager, item);
         return DownloadOutcome::paused(downloaded, total_bytes);
@@ -1455,6 +1564,13 @@ async fn download_item(
         total_bytes,
     ) {
         return *outcome;
+    }
+    if let Err(error) = persist_cached_danmaku(manager, item, &danmaku_state) {
+        return DownloadOutcome::failed(
+            format!("保存弹幕缓存信息失败：{}", error.message),
+            downloaded_before_merge,
+            total_bytes,
+        );
     }
     if manager
         .update_item_if_current(&item.id, item.request_generation, |stored| {
@@ -1489,6 +1605,76 @@ async fn download_item(
         file_path: Some(crate::app_paths::path_to_string(&final_path)),
         error: None,
     }
+}
+
+async fn cache_download_danmaku<F, Fut>(
+    root: &Path,
+    id: &str,
+    duration: f64,
+    cancel: &watch::Receiver<bool>,
+    fetch: F,
+) -> Option<CachedDanmakuState>
+where
+    F: Fn(i64) -> Fut,
+    Fut: Future<Output = AppResult<VideoDanmakuSegment>>,
+{
+    let dir = root.join(id);
+    let mut segments = read_cached_danmaku(root, id).unwrap_or_default();
+    // 按完整媒体时长遍历；空段仍是有效结果，不能据此提前结束。
+    let count = (finite_non_negative(duration) / 360.0).ceil().max(1.0) as i64;
+    segments.retain(|segment| segment.segment_index <= count);
+    let mut failed = 0;
+    let mut last_error = String::new();
+    for index in 1..=count {
+        if *cancel.borrow() {
+            return None;
+        }
+        if let Some(cached) = segments
+            .iter()
+            .find(|segment| segment.segment_index == index)
+        {
+            if !cached.segment.has_more {
+                break;
+            }
+            continue;
+        }
+        match await_with_cancel(fetch(index), cancel).await? {
+            Ok(segment) => {
+                let has_more = segment.has_more;
+                segments.push(CachedDanmakuSegment {
+                    segment_index: index,
+                    segment,
+                });
+                segments.sort_by_key(|segment| segment.segment_index);
+                // 每段独立提交完整快照，暂停或进程退出后复用成功段，只补失败段。
+                if let Err(error) = write_cached_danmaku(&dir, &segments) {
+                    return Some(CachedDanmakuState {
+                        cached: read_cached_danmaku(root, id).is_some(),
+                        error: Some(error.message),
+                    });
+                }
+                if !has_more {
+                    break;
+                }
+            }
+            Err(error) => {
+                failed += 1;
+                last_error = error.message;
+            }
+        }
+    }
+    let cached = read_cached_danmaku(root, id).is_some();
+    Some(CachedDanmakuState {
+        cached,
+        error: (failed > 0).then(|| {
+            let retained = if cached {
+                "；已缓存部分仍可播放"
+            } else {
+                ""
+            };
+            format!("{failed} 段弹幕缓存失败：{last_error}{retained}")
+        }),
+    })
 }
 
 async fn cache_download_subtitles(
@@ -2443,7 +2629,11 @@ fn is_mp4_file(path: &Path) -> bool {
 }
 
 fn is_served_file(path: &Path) -> bool {
-    is_mp4_file(path) || is_subtitle_file(path)
+    is_mp4_file(path) || is_subtitle_file(path) || is_danmaku_file(path)
+}
+
+fn is_danmaku_file(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(DANMAKU_FILE)
 }
 
 fn is_subtitle_file(path: &Path) -> bool {
@@ -3015,6 +3205,8 @@ mod tests {
             watch_duration: 0.0,
             subtitles: Vec::new(),
             subtitle_error: None,
+            danmaku_cached: false,
+            danmaku_error: None,
         })
         .unwrap();
         let mut legacy = value.as_object().unwrap().clone();
@@ -3023,6 +3215,8 @@ mod tests {
         legacy.remove("watch_duration");
         legacy.remove("subtitles");
         legacy.remove("subtitle_error");
+        legacy.remove("danmaku_cached");
+        legacy.remove("danmaku_error");
         let decoded: StoredEntry =
             serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
         assert!(!decoded.discard_partials);
@@ -3030,7 +3224,151 @@ mod tests {
         assert_eq!(decoded.watch_duration, 0.0);
         assert!(decoded.subtitles.is_empty());
         assert!(decoded.subtitle_error.is_none());
+        assert!(!decoded.danmaku_cached);
+        assert!(decoded.danmaku_error.is_none());
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn empty_danmaku(has_more: bool) -> VideoDanmakuSegment {
+        VideoDanmakuSegment {
+            has_more,
+            items: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn danmaku_cache_keeps_empty_segments_and_retries_only_failed_segments() {
+        let root = temp_root("danmaku-partial");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        let (_sender, cancel) = watch::channel(false);
+        let calls = Mutex::new(Vec::new());
+        let state = cache_download_danmaku(&root, &item.id, 1080.0, &cancel, |index| {
+            calls.lock().unwrap().push(index);
+            async move {
+                if index == 2 {
+                    Err(AppError::new("test", "请求失败"))
+                } else {
+                    Ok(empty_danmaku(true))
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.cached);
+        assert!(state.error.as_deref().unwrap().contains("1 段"));
+        assert_eq!(*calls.lock().unwrap(), vec![1, 2, 3]);
+        assert_eq!(read_cached_danmaku(&root, &item.id).unwrap().len(), 2);
+        calls.lock().unwrap().clear();
+        let state = cache_download_danmaku(&root, &item.id, 1080.0, &cancel, |index| {
+            calls.lock().unwrap().push(index);
+            async { Ok(empty_danmaku(true)) }
+        })
+        .await
+        .unwrap();
+        assert!(state.error.is_none());
+        assert_eq!(*calls.lock().unwrap(), vec![2]);
+        assert_eq!(read_cached_danmaku(&root, &item.id).unwrap().len(), 3);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn danmaku_cache_stops_at_end_and_cancellation_preserves_committed_segments() {
+        let root = temp_root("danmaku-cancel");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        let (sender, cancel) = watch::channel(false);
+        let calls = Mutex::new(Vec::new());
+        let result = cache_download_danmaku(&root, &item.id, 1080.0, &cancel, |index| {
+            let sender = &sender;
+            async move {
+                if index == 1 {
+                    return Ok(empty_danmaku(true));
+                }
+                sender.send(true).unwrap();
+                std::future::pending().await
+            }
+        })
+        .await;
+        assert!(result.is_none());
+        assert_eq!(read_cached_danmaku(&root, &item.id).unwrap().len(), 1);
+        sender.send(false).unwrap();
+        let cancel = sender.subscribe();
+        let state = cache_download_danmaku(&root, &item.id, 1800.0, &cancel, |index| {
+            calls.lock().unwrap().push(index);
+            async move { Ok(empty_danmaku(index < 2)) }
+        })
+        .await
+        .unwrap();
+        assert!(state.cached);
+        assert!(state.error.is_none());
+        assert_eq!(calls.lock().unwrap().last(), Some(&2));
+        assert_eq!(read_cached_danmaku(&root, &item.id).unwrap().len(), 2);
+        calls.lock().unwrap().clear();
+        cache_download_danmaku(&root, &item.id, 1800.0, &cancel, |index| {
+            calls.lock().unwrap().push(index);
+            async { Ok(empty_danmaku(true)) }
+        })
+        .await
+        .unwrap();
+        assert!(calls.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn danmaku_playback_grants_preserve_metadata_and_are_revoked_on_delete() {
+        let root = temp_root("danmaku-playback");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        complete_item(&manager, &item.id, b"mp4");
+        let legacy = manager.playback_info(&item.id).await.unwrap();
+        assert!(legacy.danmaku_url.is_none());
+        assert!(legacy.danmaku_error.is_none());
+        write_cached_danmaku(
+            &root.join(&item.id),
+            &[CachedDanmakuSegment {
+                segment_index: 1,
+                segment: empty_danmaku(true),
+            }],
+        )
+        .unwrap();
+        persist_cached_danmaku(
+            &manager,
+            &item,
+            &CachedDanmakuState {
+                cached: true,
+                error: Some("部分弹幕未缓存".to_string()),
+            },
+        )
+        .unwrap();
+        persist_cached_subtitles(&manager, &item, &CachedSubtitleState::default()).unwrap();
+        manager.report_watch_progress(&item.id, 4.0, 10.0).unwrap();
+        let info = manager.playback_info(&item.id).await.unwrap();
+        assert_eq!(info.danmaku_error.as_deref(), Some("部分弹幕未缓存"));
+        let url = info.danmaku_url.unwrap();
+        let (authority, path) = url
+            .strip_prefix("http://")
+            .unwrap()
+            .split_once('/')
+            .unwrap();
+        let (status, head, body) = http_request(authority, "GET", &format!("/{path}"), "").await;
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Type: application/json; charset=utf-8"));
+        assert_eq!(
+            serde_json::from_slice::<Vec<CachedDanmakuSegment>>(&body)
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::write(root.join(&item.id).join(DANMAKU_FILE), b"invalid json").unwrap();
+        let damaged = manager.playback_info(&item.id).await.unwrap();
+        assert!(damaged.danmaku_url.is_none());
+        assert!(damaged.danmaku_error.unwrap().contains("损坏"));
+        manager.remove(&item.id).await.unwrap();
+        let (status, _, _) = http_request(authority, "GET", &format!("/{path}"), "").await;
+        assert_eq!(status, 404);
+        assert!(!root.join(&item.id).exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

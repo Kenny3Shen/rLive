@@ -26,6 +26,8 @@ import { formatByteSize, normalizeVideoCoverUrl } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { formatVideoDuration } from "./videoHistory";
 import { LocalDownloadPlayer } from "./LocalDownloadPlayer";
+import { parseDownloadedDanmaku } from "./videoDownloadDanmaku";
+import type { VideoDanmakuEntry } from "./videoDanmaku";
 import {
   VIDEO_DOWNLOAD_PLAYBACK_QUERY_KEY,
   videoDownloadCanReveal,
@@ -38,6 +40,8 @@ import {
   shouldPopToVideoDownloadList,
   videoDownloadPlaybackReturnTarget,
 } from "./videoDownloadRoute";
+
+const EMPTY_DANMAKU: readonly VideoDanmakuEntry[] = [];
 
 function playbackErrorText(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) {
@@ -128,9 +132,11 @@ function PlaybackFrame({
 function DownloadDetails({
   item,
   subtitleError,
+  danmakuError,
 }: {
   item: VideoDownloadItem;
   subtitleError: string | null;
+  danmakuError: string | null;
 }) {
   const cover = normalizeVideoCoverUrl(item.cover);
 
@@ -178,6 +184,7 @@ function DownloadDetails({
         </section>
 
         {subtitleError && <ErrorState error={subtitleError} title="字幕缓存不完整" />}
+        {danmakuError && <ErrorState error={danmakuError} title="弹幕缓存不可用或不完整" />}
       </div>
     </aside>
   );
@@ -199,6 +206,22 @@ export function VideoDownloadPlaybackPage() {
     refetchOnWindowFocus: false,
     retry: false,
   });
+  const danmakuUrl = playback.data?.danmaku_url;
+  const danmaku = useQuery({
+    queryKey: [...VIDEO_DOWNLOAD_PLAYBACK_QUERY_KEY, downloadId, "danmaku", danmakuUrl],
+    enabled: Boolean(danmakuUrl),
+    queryFn: async ({ signal }) => {
+      if (!danmakuUrl) throw new Error("未缓存弹幕");
+      const response = await fetch(danmakuUrl, { signal });
+      if (!response.ok) throw new Error("本机弹幕缓存读取失败，重新下载可恢复");
+      return parseDownloadedDanmaku(await response.json());
+    },
+    staleTime: Infinity,
+    gcTime: 0,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 
   function goBack() {
     const historyIndex = (window.history.state as { idx?: unknown } | null)?.idx;
@@ -212,6 +235,10 @@ export function VideoDownloadPlaybackPage() {
   const item = playback.data?.item ?? null;
   const subtitles = playback.data?.subtitles ?? [];
   const subtitleError = playback.data?.subtitle_error || null;
+  const danmakuError =
+    [playback.data?.danmaku_error, danmaku.isError ? playbackErrorText(danmaku.error) : null]
+      .filter(Boolean)
+      .join("；") || null;
 
   if (!supported) {
     return (
@@ -301,11 +328,13 @@ export function VideoDownloadPlaybackPage() {
             url={playback.data.url}
             progress={playback.data.progress}
             subtitles={subtitles}
+            danmakuEntries={danmaku.data ?? EMPTY_DANMAKU}
+            danmakuAvailable={danmaku.isSuccess}
             onNavigateBack={goBack}
             fill
           />
         </section>
-        <DownloadDetails item={item} subtitleError={subtitleError} />
+        <DownloadDetails item={item} subtitleError={subtitleError} danmakuError={danmakuError} />
       </main>
       <DownloadFooter item={item} onBack={goBack} />
     </div>

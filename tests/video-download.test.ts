@@ -15,6 +15,7 @@ import {
   videoDownloadPlaybackPath,
   videoDownloadPlaybackReturnTarget,
 } from "../src/features/video/videoDownloadRoute";
+import { parseDownloadedDanmaku } from "../src/features/video/videoDownloadDanmaku";
 
 function downloadItem(
   id: string,
@@ -216,6 +217,20 @@ describe("本地下载播放字幕与排版", () => {
     );
   });
 
+  test("弹幕只加载授权的本机快照，复用时间轴渲染且不启用在线交互", () => {
+    expect(contractSource).toContain("danmaku_url: string | null;");
+    expect(contractSource).toContain("danmaku_error: string | null;");
+    expect(playbackSource).toContain("enabled: Boolean(danmakuUrl)");
+    expect(playbackSource).toContain("await fetch(danmakuUrl, { signal })");
+    expect(playbackSource).toContain("parseDownloadedDanmaku(await response.json())");
+    expect(playerSource).toContain("<VideoDanmakuLayer");
+    expect(playerSource).toContain("interactive={false}");
+    expect(playerSource).toContain("osdOn={danmakuVisible}");
+    expect(playerSource).toContain("onToggleOsd={");
+    expect(playbackSource).not.toContain("videoGetDanmaku");
+    expect(playerSource).not.toContain("videoGetDanmaku");
+  });
+
   test("播放页只保留底部操作栏，并为所有状态提供返回入口", () => {
     expect(playbackSource).not.toContain("PlaybackTopBar");
     expect(playbackSource).not.toContain("正在播放应用内下载缓存");
@@ -256,5 +271,45 @@ describe("本地下载播放字幕与排版", () => {
     expect(playerSource).toContain("<PlayerLoadingBackButton label={backLabel}");
     expect(playerSource).toContain("onBack={handlePlayerBack}");
     expect(playerSource).toContain("backLabel={backLabel}");
+  });
+});
+
+describe("下载弹幕快照", () => {
+  test("合并分段按媒体时间排序，保留空段并维持跨段唯一标识", () => {
+    const item = {
+      progress: 5000,
+      mode: 4,
+      fontsize: 25,
+      color: 0xff0000,
+      content: "弹幕",
+      weight: 1,
+      pool: 0,
+    };
+    const entries = parseDownloadedDanmaku([
+      { segment_index: 3, items: [{ ...item, progress: 720000 }] },
+      { segment_index: 2, items: [] },
+      { segment_index: 1, items: [item] },
+    ]);
+    expect(entries.map((entry) => entry.progressMs)).toEqual([5000, 720000]);
+    expect(entries.map((entry) => entry.id)).toEqual(["1:0", "3:0"]);
+    expect(entries[0]?.mode).toBe("bottom");
+    expect(entries[0]?.color).toBe("#ff0000");
+    expect(parseDownloadedDanmaku([])).toEqual([]);
+  });
+
+  test("损坏快照与重复段号明确报错，不进入渲染器", () => {
+    for (const value of [
+      null,
+      {},
+      [null],
+      [{ segment_index: 0, items: [] }],
+      [{ segment_index: 1, items: [null] }],
+      [
+        { segment_index: 1, items: [] },
+        { segment_index: 1, items: [] },
+      ],
+    ]) {
+      expect(() => parseDownloadedDanmaku(value)).toThrow();
+    }
   });
 });

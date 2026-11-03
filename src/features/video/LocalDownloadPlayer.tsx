@@ -69,6 +69,8 @@ import {
   type VideoDownloadItem,
   type VideoDownloadSubtitle,
 } from "./videoDownload";
+import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
+import type { VideoDanmakuEntry } from "./videoDanmaku";
 
 function finiteDuration(video: HTMLVideoElement): number {
   return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
@@ -245,6 +247,8 @@ type LocalDownloadPlayerProps = {
   url: string;
   progress: number;
   subtitles: VideoDownloadSubtitle[];
+  danmakuEntries: readonly VideoDanmakuEntry[];
+  danmakuAvailable: boolean;
   onNavigateBack: () => void;
   fill?: boolean;
 };
@@ -253,7 +257,7 @@ type LocalDownloadPlayerProps = {
  * 已完成下载的本地点播表面。
  *
  * 下载文件固定为 MP4，因此不使用录制回放的 FLV/TS/HLS 协议恢复逻辑，也不加载
- * 在线详情或弹幕。播放控件、全屏、手势与续播判定仍复用直播/录制播放器的公共实现。
+ * 在线详情。弹幕只读取本机快照；播放控件、全屏、手势与续播判定复用公共实现。
  */
 export function LocalDownloadPlayer(props: LocalDownloadPlayerProps) {
   return (
@@ -268,6 +272,8 @@ function LocalDownloadPlayerContent({
   url,
   progress,
   subtitles,
+  danmakuEntries,
+  danmakuAvailable,
   onNavigateBack,
   fill = false,
 }: LocalDownloadPlayerProps) {
@@ -296,6 +302,7 @@ function LocalDownloadPlayerContent({
   const [paused, setPaused] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const [captionsMenuOpen, setCaptionsMenuOpen] = useState(false);
+  const [danmakuVisible, setDanmakuVisible] = useState(true);
   const [playerRevision, setPlayerRevision] = useState(0);
   const compact = useCompactPlayerViewport();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
@@ -703,6 +710,10 @@ function LocalDownloadPlayerContent({
                 : undefined
             }
             fullscreen={fullscreen.fullscreen}
+            osdOn={danmakuVisible}
+            onToggleOsd={
+              danmakuAvailable ? () => setDanmakuVisible((visible) => !visible) : undefined
+            }
             nativeFullscreen={!fullscreen.nativeLayer}
             disabled={loading}
             refreshDisabled={loading}
@@ -756,6 +767,14 @@ function LocalDownloadPlayerContent({
             ))}
           </VideoJsVideo>
         </div>
+        {danmakuEntries.length > 0 && (
+          <VideoDanmakuLayer
+            videoRef={videoRef}
+            entries={danmakuEntries}
+            active={danmakuVisible}
+            interactive={false}
+          />
+        )}
         {(loading || waiting) && !error && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/20">
             <Spinner

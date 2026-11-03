@@ -186,6 +186,7 @@ fn content_type(path: &Path) -> &'static str {
         "m4s" => "video/iso.segment",
         "aac" => "audio/aac",
         "vtt" => "text/vtt; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
         "key" => "application/octet-stream",
         _ => "application/octet-stream",
     }
@@ -376,6 +377,7 @@ mod tests {
             ("video.mp4", "video/mp4"),
             ("track.m4s", "video/iso.segment"),
             ("subtitle-0.vtt", "text/vtt; charset=utf-8"),
+            ("danmaku.json", "application/json; charset=utf-8"),
             ("enc.key", "application/octet-stream"),
         ] {
             assert_eq!(content_type(Path::new(name)), expected, "{name}");

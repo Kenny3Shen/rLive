@@ -73,6 +73,9 @@ export type VideoDownloadPlaybackInfo = {
   subtitles: VideoDownloadSubtitle[];
   /** 字幕未完整缓存时的原因；不应影响媒体播放。 */
   subtitle_error: string | null;
+  /** 授权的本机弹幕快照地址；旧下载没有缓存时为 null。 */
+  danmaku_url: string | null;
+  danmaku_error: string | null;
 };
 
 export type VideoDownloadSubtitle = {
