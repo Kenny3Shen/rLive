@@ -15,6 +15,7 @@ import {
   isPullToRefreshArmed,
   isPullToRefreshGesture,
   pullToRefreshDistance,
+  pullToRefreshIndicatorOffset,
   PULL_TO_REFRESH_MAX_PX,
 } from "@/shared/gestures/pullToRefresh";
 import { isHorizontalSwipeIgnoredTarget } from "@/shared/gestures/horizontalSwipe";
@@ -24,7 +25,7 @@ type PullToRefreshProps = Omit<ComponentPropsWithoutRef<"div">, "onRefresh"> & {
   onRefresh: () => void | Promise<unknown>;
   /** 为 true 时禁用下拉跟踪（例如刷新请求在途期间）。 */
   disabled?: boolean;
-  /** 外部 pending 标志；与组件自身的 promise 状态合并。 */
+  /** 外部 pending 只标记忙碌，不主动展开下拉指示器。 */
   refreshing?: boolean;
   children: ReactNode;
 };
@@ -62,6 +63,7 @@ export function PullToRefresh({
   const pendingDraggingRef = useRef(false);
   const distanceFrameRef = useRef<number | null>(null);
   const [localRefreshing, setLocalRefreshing] = useState(false);
+  const localRefreshingRef = useRef(false);
   // 父组件常传 `false`；`??` 会忽略 localRefreshing。改用 OR。
   const refreshing = Boolean(refreshingProp) || localRefreshing;
   const disabledRef = useRef(disabled);
@@ -72,6 +74,7 @@ export function PullToRefresh({
   useLayoutEffect(() => {
     disabledRef.current = disabled;
     refreshingRef.current = refreshing;
+    localRefreshingRef.current = localRefreshing;
     refreshingPropRef.current = Boolean(refreshingProp);
     onRefreshRef.current = onRefresh;
   });
@@ -82,7 +85,11 @@ export function PullToRefresh({
     const refreshIcon = refreshIconRef.current;
     const content = contentRef.current;
     const isRefreshing = refreshingRef.current;
-    const indicatorOffset = isRefreshing ? Math.max(distance, 44) : distance;
+    const indicatorOffset = pullToRefreshIndicatorOffset(
+      distance,
+      isRefreshing,
+      localRefreshingRef.current,
+    );
     const transitionDuration = dragging ? "0ms" : "";
 
     if (indicator) {
@@ -145,6 +152,7 @@ export function PullToRefresh({
       return;
     }
     refreshingRef.current = true;
+    localRefreshingRef.current = true;
     setLocalRefreshing(true);
     updateDistance(PULL_TO_REFRESH_MAX_PX * 0.55);
     try {
@@ -154,6 +162,7 @@ export function PullToRefresh({
       // 且不泄漏未处理的 rejection。
     } finally {
       refreshingRef.current = refreshingPropRef.current;
+      localRefreshingRef.current = false;
       setLocalRefreshing(false);
       updateDistance(0);
       pullRef.current = null;
@@ -253,6 +262,7 @@ export function PullToRefresh({
     >
       <div
         ref={indicatorRef}
+        data-pull-to-refresh-indicator
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center opacity-0 transition-[opacity,transform] duration-150 ease-out motion-reduced:transition-none"
       >
@@ -274,6 +284,7 @@ export function PullToRefresh({
       </div>
       <div
         ref={contentRef}
+        data-pull-to-refresh-content
         className="flex min-h-full flex-col transition-transform duration-150 ease-out motion-reduced:transition-none"
       >
         {children}

@@ -32,6 +32,15 @@ export function isPullToRefreshArmed(distance: number): boolean {
   return distance >= PULL_TO_REFRESH_THRESHOLD_PX;
 }
 
+/** 自动取数只影响忙碌状态；只有用户下拉触发的刷新才保留指示器空间。 */
+export function pullToRefreshIndicatorOffset(
+  distance: number,
+  refreshing: boolean,
+  gestureRefreshing: boolean,
+): number {
+  return refreshing && gestureRefreshing ? Math.max(distance, 44) : distance;
+}
+
 /** 解析最近的纵向可滚动祖先，包括元素自身。 */
 export function findVerticalScrollParent(start: Element | null): HTMLElement | null {
   let node: Element | null = start;
