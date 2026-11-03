@@ -4,12 +4,10 @@ import { flushSync } from "react-dom";
 import { NavLink, useNavigate } from "react-router-dom";
 import { ArrowUpCircle, Moon, Sun } from "lucide-react";
 import { fadeTheme } from "@/app/theme";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
-import { activeRecordingCount, useActiveRecordings } from "@/features/recording/recording";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
 import { hasLongPressMovedBeyondSlop } from "@/shared/gestures/longPress";
@@ -48,13 +46,8 @@ function SidebarLink({
   icon: Icon,
   end,
   className,
-  badgeCount = 0,
-  badgeLabel,
   onIntent,
 }: SidebarNavItem & {
-  /** 大于零时以图标上的小计数徽标呈现。 */
-  badgeCount?: number;
-  badgeLabel?: string;
   onIntent?: () => void;
 }) {
   const navigate = useNavigate();
@@ -194,17 +187,6 @@ function SidebarLink({
                   isActive && "text-primary",
                 )}
               />
-              {badgeCount > 0 && (
-                <Badge
-                  variant="default"
-                  aria-label={badgeLabel}
-                  // 用实心填充而不是着色的 `destructive` 变体：这么小的计数必须在其覆盖的图标
-                  // 上保持可读，侧栏色的描边让它与图标脱开。
-                  className="pointer-events-none absolute -top-1.5 -right-2 h-4 min-w-4 justify-center rounded-full bg-destructive px-1 text-[10px] leading-none font-semibold tabular-nums text-white ring-2 ring-sidebar"
-                >
-                  {badgeCount > 99 ? "99+" : badgeCount}
-                </Badge>
-              )}
             </span>
           </span>
           <span
@@ -325,10 +307,6 @@ function AppearanceToggle() {
 export function Sidebar() {
   const queryClient = useQueryClient();
   const siteId = useSiteId();
-  // 侧栏角标只关心「有几个任务在跑」，不读完整录制库：
-  // 那会在启动时触发历史根扫描。
-  const recordings = useActiveRecordings();
-  const activeRecordings = activeRecordingCount(recordings.data);
   const preloadHome = useCallback(() => {
     prefetchHomeRecommendations(
       queryClient,
@@ -336,7 +314,7 @@ export function Sidebar() {
       useSettingsStore.getState().bilibiliAppAuthRevision,
     );
   }, [queryClient, siteId]);
-  // 桌面专属入口（多画面/录制）、更新入口与亮暗模式快捷切换都按客户端平台门控，
+  // 桌面专属入口（多画面）、更新入口与亮暗模式快捷切换都按客户端平台门控，
   // 而不是只靠视口断点：手机/平板横屏宽度普遍超过 md，
   // `max-md:hidden` 会让它们漏进移动端底栏。移动端的亮暗切换
   // 统一放在设置页外观分区。
@@ -348,18 +326,13 @@ export function Sidebar() {
   const mainNavItems = navItems.filter((item) => !item.footer);
   const footerNavItems = navItems.filter((item) => item.footer);
 
-  const renderNavItem = (item: SidebarNavItem) => {
-    const recordingBadge = item.to === "/recordings" ? activeRecordings : 0;
-    return (
-      <SidebarLink
-        key={item.to}
-        {...item}
-        badgeCount={recordingBadge}
-        badgeLabel={recordingBadge > 0 ? `${recordingBadge} 项录制进行中` : undefined}
-        onIntent={item.to === "/" ? preloadHome : undefined}
-      />
-    );
-  };
+  const renderNavItem = (item: SidebarNavItem) => (
+    <SidebarLink
+      key={item.to}
+      {...item}
+      onIntent={item.to === "/" ? preloadHome : undefined}
+    />
+  );
 
   return (
     <aside

@@ -7,7 +7,6 @@ import {
   PanelsTopLeft,
   Settings,
   Tv,
-  Videotape,
 } from "lucide-react";
 import { normalizeHiddenHomeEntryIds, type HomeEntryId } from "@/shared/navEntries";
 
@@ -47,13 +46,6 @@ const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
     to: "/multi-room",
     label: "多画面",
     icon: PanelsTopLeft,
-    className: "max-md:hidden",
-    desktopOnly: true,
-  },
-  {
-    to: "/recordings",
-    label: "录制",
-    icon: Videotape,
     className: "max-md:hidden",
     desktopOnly: true,
   },
@@ -97,7 +89,6 @@ const SIDEBAR_DESTINATIONS = [
   "/video",
   "/iptv",
   "/multi-room",
-  "/recordings",
   "/history",
   "/settings",
 ];

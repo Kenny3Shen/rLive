@@ -49,4 +49,12 @@ describe("sidebar visibility follows the home entry preference", () => {
       expect(sidebarNavItemsFor(mobileClient, []).map((item) => item.to)).not.toContain("/shorts");
     }
   });
+  test("no longer exposes a standalone recordings destination", () => {
+    // 录制库已并入直播页顶部页签；路由仍保留，但不再占侧栏 / 底栏导航。
+    for (const mobileClient of [true, false]) {
+      expect(sidebarNavItemsFor(mobileClient, []).map((item) => item.to)).not.toContain(
+        "/recordings",
+      );
+    }
+  });
 });

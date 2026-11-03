@@ -1,6 +1,4 @@
 import { CircleDot, HardDrive, Videotape } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { RECORDING_VIEWS, type RecordingView } from "./recordingRoute";
 
@@ -17,24 +15,32 @@ const VIEW_ICONS = {
 } as const;
 
 /**
- * 录制库作用域切换器，在 `/recordings` 上取代应用头部的平台条。它与历史切换器
- * 一样是 `tablist`：
- * 各作用域是同一个页面的不同视图。
+ * 录制库作用域切换器。
+ *
+ * `sidebar` 是桌面左侧筛选框里的纵向列表，与平台筛选、用户列表同一列；
+ * `toolbar` 只留给移动端没有左栏时的横向页签。各作用域是同一个页面的不同视图。
  */
 export function RecordingViewSwitcher({
   value,
   counts,
   onValueChange,
+  variant = "toolbar",
   className,
 }: {
   value: RecordingView;
   counts: Record<RecordingView, number>;
   onValueChange: (view: RecordingView) => void;
+  variant?: "sidebar" | "toolbar";
   className?: string;
 }) {
+  const sidebar = variant === "sidebar";
+
   return (
     <div
-      className={cn("flex h-full items-stretch gap-1 max-md:w-full", className)}
+      className={cn(
+        sidebar ? "flex flex-col gap-1" : "flex h-full items-stretch gap-1 max-md:w-full",
+        className,
+      )}
       role="tablist"
       aria-label="录制范围"
     >
@@ -52,9 +58,13 @@ export function RecordingViewSwitcher({
             title={VIEW_LABELS[view]}
             onClick={() => onValueChange(view)}
             className={cn(
-              "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-150 max-md:min-w-0 max-md:flex-1 max-md:justify-center max-md:px-2",
+              sidebar
+                ? "flex h-9 w-full items-center gap-2 rounded-lg px-2 text-sm font-medium transition-colors duration-150"
+                : "relative flex h-full items-center gap-2 px-4 text-sm font-medium transition-colors duration-150 max-md:min-w-0 max-md:flex-1 max-md:justify-center max-md:px-2",
               active
-                ? "text-foreground"
+                ? sidebar
+                  ? "bg-secondary text-foreground"
+                  : "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
             )}
           >
@@ -65,47 +75,18 @@ export function RecordingViewSwitcher({
               )}
               aria-hidden
             />
-            <span>{VIEW_LABELS[view]}</span>
+            <span className={cn(sidebar && "min-w-0 flex-1 truncate text-left")}>
+              {VIEW_LABELS[view]}
+            </span>
             {count > 0 && (
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{count}</span>
             )}
-            {active && (
+            {!sidebar && active && (
               <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
             )}
           </button>
         );
       })}
     </div>
-  );
-}
-
-/** 打开录制页拥有的存储位置对话框。 */
-export function RecordingStorageButton({
-  onRequestStorage,
-  className,
-}: {
-  onRequestStorage: () => void;
-  className?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            aria-label="录制保存位置"
-            aria-haspopup="dialog"
-            className={cn("shrink-0 max-md:h-9", className)}
-            onClick={onRequestStorage}
-          />
-        }
-      >
-        <HardDrive data-icon="inline-start" aria-hidden />
-        <span className="max-sm:hidden">保存位置</span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">录制保存位置</TooltipContent>
-    </Tooltip>
   );
 }

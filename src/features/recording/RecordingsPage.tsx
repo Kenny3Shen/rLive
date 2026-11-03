@@ -1,5 +1,4 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -11,7 +10,6 @@ import {
   FolderOpen,
   HardDrive,
   MessageSquareText,
-  RotateCcw,
   Videotape,
   Radio,
   Square,
@@ -32,14 +30,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -58,7 +48,7 @@ import {
 } from "@/shared/components/PlatformFilterSelect";
 import { Separator } from "@/components/ui/separator";
 import { LIVE_SITE_IDS } from "@/shared/siteId";
-import { useRecordingHeaderState } from "./recordingHeaderState";
+import { RecordingViewSwitcher } from "./RecordingHeaderControls";
 import {
   RECORDING_VIEW_PARAM,
   recordingPlaybackPath,
@@ -76,20 +66,17 @@ import {
   formatRecordingSize,
   RECORDINGS_QUERY_KEY,
   RECORDING_PLAYBACK_QUERY_KEY,
-  RECORDING_STORAGE_QUERY_KEY,
   RECORDING_WATCH_PROGRESS_QUERY_KEY,
   RECORDING_WATCH_PROGRESS_RESUME_KEY,
   recordingErrorMessage,
   recordingPlatformFromSearch,
   recordingSourceLabel,
   recordingStatusLabel,
-  recordingStorageInfo,
   recordingSupported,
   recordingUserGroupKey,
   recordingWatchProgressList,
   recordingsForPlatform,
   recordingsForView,
-  setRecordingStoragePath,
   stopRecording,
   useRecordings,
   type RecordingItem,
@@ -454,19 +441,25 @@ function RecordingUserTarget({
 function RecordingUserList({
   groups,
   selectedKey,
+  view,
+  viewCounts,
   platformFilter,
   onSelect,
+  onViewChange,
   onPlatformChange,
 }: {
   groups: readonly RecordingUserGroup[];
   selectedKey: string | null;
+  view: RecordingView;
+  viewCounts: Record<RecordingView, number>;
   platformFilter: PlatformFilter;
   onSelect: (key: string) => void;
+  onViewChange: (view: RecordingView) => void;
   onPlatformChange: (value: PlatformFilter) => void;
 }) {
   return (
     <nav
-      aria-label="录制用户"
+      aria-label="录制筛选"
       className="sticky top-3 hidden max-h-[calc(100dvh-7rem)] min-w-0 flex-col gap-1 border-r border-border pr-3 md:flex"
     >
       <PlatformFilterSelect
@@ -474,6 +467,16 @@ function RecordingUserList({
         sites={LIVE_SITE_IDS}
         compact={false}
         onValueChange={onPlatformChange}
+      />
+      <Separator className="my-1" />
+      <div className="mb-1 flex items-center justify-between gap-2 px-2">
+        <span className="text-xs font-medium text-muted-foreground">范围</span>
+      </div>
+      <RecordingViewSwitcher
+        value={view}
+        counts={viewCounts}
+        variant="sidebar"
+        onValueChange={onViewChange}
       />
       <Separator className="my-1" />
       <div className="mb-1 flex items-center justify-between gap-2 px-2">
@@ -492,6 +495,52 @@ function RecordingUserList({
         ))}
       </div>
     </nav>
+  );
+}
+
+function RecordingEmptyState({
+  view,
+  hasScopedItems,
+}: {
+  view: RecordingView;
+  hasScopedItems: boolean;
+}) {
+  if (hasScopedItems) {
+    return (
+      <Empty className="min-h-56 border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Videotape aria-hidden />
+          </EmptyMedia>
+          <EmptyTitle>当前平台暂无录播</EmptyTitle>
+          <EmptyDescription>请选择其他平台或查看全部平台。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  return (
+    <Empty className="min-h-64 border">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Videotape aria-hidden />
+        </EmptyMedia>
+        <EmptyTitle>
+          {view === "recording"
+            ? "当前没有录制中的任务"
+            : view === "recorded"
+              ? "还没有已保存的录制"
+              : "还没有本地录制"}
+        </EmptyTitle>
+        <EmptyDescription>
+          {view === "recording"
+            ? "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。开始后任务会持续在后台录制。"
+            : view === "recorded"
+              ? "停止录制后的任务会保存到这里，可直接回放、导出弹幕字幕或定位文件。"
+              : "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。"}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -553,15 +602,6 @@ export function RecordingsPage() {
   const recordings = useRecordings();
   const supported = recordingSupported();
   const [deleteTarget, setDeleteTarget] = useState<RecordingItem | null>(null);
-  const [storageOpen, setStorageOpen] = useState(false);
-  const storage = useQuery({
-    queryKey: RECORDING_STORAGE_QUERY_KEY,
-    enabled: supported,
-    queryFn: recordingStorageInfo,
-    staleTime: 5_000,
-    refetchInterval: storageOpen ? 5_000 : false,
-    refetchOnWindowFocus: true,
-  });
 
   /**
    * 全部录制的观看进度。单独一条查询而不是塞进 `recording_list`：录制列表在采集
@@ -619,18 +659,6 @@ export function RecordingsPage() {
     },
     [setSearchParams],
   );
-  const openStorage = useCallback(() => setStorageOpen(true), []);
-  useRecordingHeaderState(
-    useMemo(
-      () => ({
-        view,
-        counts: viewCounts,
-        onViewChange: selectView,
-        onRequestStorage: openStorage,
-      }),
-      [openStorage, selectView, view, viewCounts],
-    ),
-  );
 
   const stopMutation = useMutation({
     mutationFn: stopRecording,
@@ -674,30 +702,6 @@ export function RecordingsPage() {
     onSuccess: (path) => notify.success(`弹幕字幕已导出：${path}`),
     onError: (error) => notify.error("导出弹幕字幕失败", recordingErrorMessage(error)),
   });
-
-  const storageMutation = useMutation({
-    mutationFn: setRecordingStoragePath,
-    onSuccess: (info) => {
-      queryClient.setQueryData(RECORDING_STORAGE_QUERY_KEY, info);
-      void queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
-      notify.success(info.is_default ? "已恢复默认录制目录" : "录制保存位置已更新，已有录制已迁移");
-    },
-    onError: (error) => notify.error("无法更新录制保存位置", recordingErrorMessage(error)),
-  });
-
-  async function chooseStorageDirectory() {
-    try {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "选择录制保存位置",
-        defaultPath: storage.data?.path,
-      });
-      if (typeof selected === "string") storageMutation.mutate(selected);
-    } catch (error) {
-      notify.error("无法选择录制目录", recordingErrorMessage(error));
-    }
-  }
 
   function selectUser(key: string) {
     setSearchParams(
@@ -755,174 +759,71 @@ export function RecordingsPage() {
           onRetry={() => void recordings.refetch()}
         />
       ) : (
-        <>
-          {scopedItems.length > 0 ? (
-            <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
-              <RecordingUserList
-                groups={userGroups}
-                selectedKey={selectedGroup?.key ?? null}
-                platformFilter={platformFilter}
-                onSelect={selectUser}
-                onPlatformChange={selectPlatform}
-              />
+        <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
+          <RecordingUserList
+            groups={userGroups}
+            selectedKey={selectedGroup?.key ?? null}
+            view={view}
+            viewCounts={viewCounts}
+            platformFilter={platformFilter}
+            onSelect={selectUser}
+            onViewChange={selectView}
+            onPlatformChange={selectPlatform}
+          />
 
-              <section className="flex min-w-0 flex-col gap-3" aria-label="录播列表">
-                <PlatformFilterSelect
-                  value={platformFilter}
-                  sites={LIVE_SITE_IDS}
-                  compact={false}
-                  className="md:hidden"
-                  onValueChange={selectPlatform}
+          <section className="flex min-w-0 flex-col gap-3" aria-label="录播列表">
+            <RecordingViewSwitcher
+              value={view}
+              counts={viewCounts}
+              onValueChange={selectView}
+              className="h-10 w-full md:hidden"
+            />
+            <PlatformFilterSelect
+              value={platformFilter}
+              sites={LIVE_SITE_IDS}
+              compact={false}
+              className="md:hidden"
+              onValueChange={selectPlatform}
+            />
+            <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 md:hidden">
+              {userGroups.map((group) => (
+                <RecordingUserTarget
+                  key={group.key}
+                  group={group}
+                  selected={selectedGroup?.key === group.key}
+                  surface="mobile"
+                  onSelect={() => selectUser(group.key)}
                 />
-                <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 md:hidden">
-                  {userGroups.map((group) => (
-                    <RecordingUserTarget
-                      key={group.key}
-                      group={group}
-                      selected={selectedGroup?.key === group.key}
-                      surface="mobile"
-                      onSelect={() => selectUser(group.key)}
-                    />
-                  ))}
-                </div>
-                {selectedGroup ? (
-                  <ul className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
-                    {selectedGroup.items.map((item) => (
-                      <RecordingCard
-                        key={item.id}
-                        item={item}
-                        watched={watchProgressById.get(item.id) ?? null}
-                        stopping={stopMutation.isPending && stopMutation.variables === item.id}
-                        onOpen={openRecording}
-                        onStop={stopMutation.mutate}
-                        exportingAss={
-                          exportAssMutation.isPending && exportAssMutation.variables === item.id
-                        }
-                        onExportAss={exportAssMutation.mutate}
-                        revealing={
-                          revealMutation.isPending && revealMutation.variables === item.file_path
-                        }
-                        onReveal={revealMutation.mutate}
-                        onDelete={setDeleteTarget}
-                      />
-                    ))}
-                  </ul>
-                ) : (
-                  <Empty className="min-h-56 border">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <Videotape aria-hidden />
-                      </EmptyMedia>
-                      <EmptyTitle>当前平台暂无录播</EmptyTitle>
-                      <EmptyDescription>请选择其他平台或查看全部平台。</EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                )}
-              </section>
+              ))}
             </div>
-          ) : (
-            <Empty className="min-h-64 border">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <Videotape aria-hidden />
-                </EmptyMedia>
-                <EmptyTitle>
-                  {view === "recording"
-                    ? "当前没有录制中的任务"
-                    : view === "recorded"
-                      ? "还没有已保存的录制"
-                      : "还没有本地录制"}
-                </EmptyTitle>
-                <EmptyDescription>
-                  {view === "recording"
-                    ? "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。开始后任务会持续在后台录制。"
-                    : view === "recorded"
-                      ? "停止录制后的任务会保存到这里，可直接回放、导出弹幕字幕或定位文件。"
-                      : "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。"}
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          )}
-        </>
-      )}
-
-      <Dialog open={storageOpen} onOpenChange={setStorageOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>录制保存位置</DialogTitle>
-            <DialogDescription>新录制和已有录制都使用当前目录。</DialogDescription>
-          </DialogHeader>
-          <div className="flex min-w-0 items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2.5">
-            <HardDrive className="shrink-0 text-muted-foreground" aria-hidden />
-            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={storage.data?.path}>
-              {storage.isPending ? "正在读取录制目录…" : storage.data?.path || "录制目录不可用"}
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {storage.isPending
-              ? "正在读取当前目录"
-              : storage.isError
-                ? "当前目录读取失败，可重新选择保存位置"
-                : storage.data?.is_default
-                  ? "正在使用应用默认目录"
-                  : "正在使用自定义目录"}
-          </p>
-          {storage.data?.available_bytes != null && (
-            <p
-              role="status"
-              aria-live="polite"
-              className={cn(
-                "text-xs",
-                storage.data.available_bytes < storage.data.minimum_free_bytes
-                  ? "text-destructive"
-                  : "text-muted-foreground",
-              )}
-            >
-              剩余空间：{formatRecordingSize(storage.data.available_bytes)}
-              {storage.data.available_bytes < storage.data.minimum_free_bytes && "，不足以开始录制"}
-            </p>
-          )}
-          <DialogFooter className="flex-wrap">
-            {!storage.data?.is_default && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={storageMutation.isPending}
-                onClick={() => storageMutation.mutate(null)}
-              >
-                <RotateCcw data-icon="inline-start" aria-hidden />
-                恢复默认
-              </Button>
+            {selectedGroup ? (
+              <ul className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
+                {selectedGroup.items.map((item) => (
+                  <RecordingCard
+                    key={item.id}
+                    item={item}
+                    watched={watchProgressById.get(item.id) ?? null}
+                    stopping={stopMutation.isPending && stopMutation.variables === item.id}
+                    onOpen={openRecording}
+                    onStop={stopMutation.mutate}
+                    exportingAss={
+                      exportAssMutation.isPending && exportAssMutation.variables === item.id
+                    }
+                    onExportAss={exportAssMutation.mutate}
+                    revealing={
+                      revealMutation.isPending && revealMutation.variables === item.file_path
+                    }
+                    onReveal={revealMutation.mutate}
+                    onDelete={setDeleteTarget}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <RecordingEmptyState view={view} hasScopedItems={scopedItems.length > 0} />
             )}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={revealMutation.isPending || !storage.data?.path}
-              onClick={() => {
-                if (storage.data?.path) revealMutation.mutate(storage.data.path);
-              }}
-            >
-              {revealMutation.isPending && revealMutation.variables === storage.data?.path ? (
-                <Spinner data-icon="inline-start" aria-hidden />
-              ) : (
-                <FolderOpen data-icon="inline-start" aria-hidden />
-              )}
-              显示目录
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={storage.isPending || storageMutation.isPending}
-              onClick={() => void chooseStorageDirectory()}
-            >
-              <FolderOpen data-icon="inline-start" aria-hidden />
-              更改位置
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </section>
+        </div>
+      )}
 
       <ConfirmDialog
         open={Boolean(deleteTarget)}

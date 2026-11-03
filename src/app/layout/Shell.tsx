@@ -11,7 +11,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Search, Videotape } from "lucide-react";
 import {
   useLocation,
   useNavigate,
@@ -34,11 +34,10 @@ import { useHistoryHeaderSnapshot } from "@/features/history/historyHeaderState"
 import { FollowViewSwitcher } from "@/features/follow/FollowHeaderControls";
 import { useFollowHeaderSnapshot } from "@/features/follow/followHeaderState";
 import {
-  RecordingStorageButton,
-  RecordingViewSwitcher,
-} from "@/features/recording/RecordingHeaderControls";
-import { recordingSupported } from "@/features/recording/recording";
-import { useRecordingHeaderSnapshot } from "@/features/recording/recordingHeaderState";
+  activeRecordingCount,
+  recordingSupported,
+  useActiveRecordings,
+} from "@/features/recording/recording";
 import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
 import { VideoTabScope } from "@/features/video/videoTabScope";
 import { VideoSearchBar } from "@/features/video/VideoSearchBar";
@@ -205,7 +204,9 @@ export function Shell() {
   const mobileClient = isMobileClient();
   const historyHeader = useHistoryHeaderSnapshot();
   const followHeader = useFollowHeaderSnapshot();
-  const recordingHeader = useRecordingHeaderSnapshot();
+  // 录制入口从侧栏收进直播页顶部条带；角标只查活动任务，不扫描录制库。
+  const recordingQuery = useActiveRecordings();
+  const recordingBadge = activeRecordingCount(recordingQuery.data);
 
   // React Router 用递增的 `idx` 记录每条 pushState 历史。跨渲染比较它可以告诉
   // 页签切换用户在历史中向哪个方向移动，从而让新页面从相应的一侧滑入。
@@ -353,7 +354,7 @@ export function Shell() {
   // 每个表面一条有序条带，按字符串比较，
   // 使平台 id 与 IPTV 来源 id 共用同一个方向规则。
   //
-  // 视频页的条带是四个内容页签，**不能复用 `sitePlatforms`**：那些是直播平台，
+  // 视频页的条带是内容页签，**不能复用 `sitePlatforms`**：那些是直播平台，
   // 混进同一条轨道会让平移方向按「从 B 站到番剧」这种无意义的距离计算。
   const groupStrip: readonly string[] = isIptv
     ? iptvSourceOptions
@@ -872,12 +873,6 @@ export function Shell() {
                               value={historyHeader.view}
                               onValueChange={historyHeader.onViewChange}
                             />
-                          ) : isRecordings ? (
-                            <RecordingViewSwitcher
-                              value={recordingHeader.view}
-                              counts={recordingHeader.counts}
-                              onValueChange={recordingHeader.onViewChange}
-                            />
                           ) : isFollow ? (
                             <FollowViewSwitcher
                               value={followHeader.view}
@@ -925,11 +920,25 @@ export function Shell() {
                               {...bindSwipe(sitePlatformSwipe)}
                             >
                               <SiteSwitcher
-                                value={activeSiteId}
+                                value={isRecordings ? undefined : activeSiteId}
+                                hideSelection={isRecordings}
+                                extraTab={
+                                  !mobileClient && recordingSupported()
+                                    ? {
+                                        id: "recordings",
+                                        label: "录制",
+                                        icon: <Videotape className="size-4" aria-hidden />,
+                                        active: isRecordings,
+                                        badge: recordingBadge,
+                                        onClick: () => navigate("/recordings"),
+                                      }
+                                    : undefined
+                                }
                                 onValueIntent={preloadHomePlatform}
                                 onValueChange={(value) => {
                                   if (value === "all") return;
                                   sitePlatformSwipe.selectValue(value);
+                                  if (isRecordings) navigate("/");
                                 }}
                               />
                             </div>
@@ -946,8 +955,6 @@ export function Shell() {
                         pending={historyHeader.clearPending}
                         onRequestClear={historyHeader.onRequestClear}
                       />
-                    ) : isRecordings ? (
-                      <RecordingStorageButton onRequestStorage={recordingHeader.onRequestStorage} />
                     ) : isVideo ? (
                       <Button
                         variant="ghost"
@@ -959,7 +966,7 @@ export function Shell() {
                       >
                         <Search aria-hidden />
                       </Button>
-                    ) : isVideoSearch || isFollow || isIptv ? null : (
+                    ) : isVideoSearch || isFollow || isIptv || isRecordings ? null : (
                       <HeaderSearch />
                     )}
                   </div>
