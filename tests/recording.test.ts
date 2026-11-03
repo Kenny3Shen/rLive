@@ -224,6 +224,35 @@ function options(patch: Partial<RecordedDanmakuLayoutOptions> = {}): RecordedDan
   };
 }
 
+describe("录制库媒体卡片", () => {
+  test("录制卡复用下载卡布局，并保留观看进度和任务操作", () => {
+    const source = readSource("src/features/recording/RecordingsPage.tsx");
+    expect(source).toContain('kind="recording"');
+    expect(source).toContain("<LocalMediaArtwork");
+    expect(source).toContain("<LocalMediaCardProgress");
+    expect(source).toContain("<LocalMediaCardSkeleton");
+    expect(source).toContain("data-player-origin={playerOrigin}");
+    expect(source).toContain("data-page-scroll-anchor={playerOrigin}");
+    expect(source).toContain('label="打开文件位置"');
+    expect(source).toContain('label="导出 ASS 弹幕字幕"');
+    expect(source).toContain('label="删除录制"');
+    expect(source).toContain('item.status !== "recording"');
+    expect(source).not.toContain('label="播放"');
+    expect(source).not.toContain("grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))]");
+  });
+
+  test("窄屏加载骨架保留范围、平台和用户筛选的真实高度", () => {
+    const source = readSource("src/features/recording/RecordingsPage.tsx");
+    const skeleton = source.slice(
+      source.indexOf("function RecordingsSkeleton"),
+      source.indexOf("export function RecordingsPage"),
+    );
+    expect(skeleton).toContain('className="h-10 w-full rounded-lg md:hidden"');
+    expect(skeleton).toContain('className="h-11 w-full rounded-lg md:hidden"');
+    expect(skeleton).toContain("[@media(pointer:coarse)]:h-11");
+  });
+});
+
 describe("录制弹幕解析与排布", () => {
   test("画布取舞台布局尺寸，入场 transform 不缩窄离屏调度范围", () => {
     const source = readSource("src/features/recording/RecordedDanmakuCanvas.tsx");

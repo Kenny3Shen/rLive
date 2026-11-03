@@ -159,8 +159,10 @@ describe("下载卡媒体入口接线", () => {
     expect(source).toContain("const playerOrigin = `download:${item.id}`;");
     expect(source).toContain("data-player-origin={playerOrigin}");
     expect(source).toContain("data-page-scroll-anchor={playerOrigin}");
-    expect(source).toContain("onPointerDown={() => {\n            if (playbackPath)");
-    expect(source).toContain('playable && cn("motion-card"');
+    expect(source).toMatch(/onPointerDown=\{\(\) => \{\s+if \(playbackPath\)/);
+    expect(source).toContain("playbackTrigger={");
+    expect(source).toContain("<LocalMediaCard");
+    expect(source).toContain('kind="download"');
   });
 
   test("卡片与菜单共享状态到主入口的映射", () => {
@@ -168,6 +170,25 @@ describe("下载卡媒体入口接线", () => {
     expect(source).toContain('primaryAction === "pause"');
     expect(source).toContain('primaryAction === "resume"');
     expect(source).toContain('primaryAction === "retry"');
+    expect(source).not.toContain('label="播放"');
+  });
+
+  test("已完成列表不重复显示小标题，保留状态筛选和可访问分组", () => {
+    expect(source).not.toContain(
+      '<h2 className="text-sm font-semibold text-foreground">已完成</h2>',
+    );
+    expect(source).toContain('aria-label="已完成的下载"');
+    expect(source).toContain('completed: "已完成"');
+  });
+
+  test("下载进度只用于未完成任务，次要操作与骨架复用媒体卡规范", () => {
+    expect(source).toContain("progress={");
+    expect(source).toContain("!playable ? (");
+    expect(source).toContain("<LocalMediaCardProgress");
+    expect(source).toContain("<LocalMediaCardSkeleton");
+    expect(source).toContain('label="打开文件位置"');
+    expect(source).toContain('label="使用系统播放器"');
+    expect(source).toContain('label="删除下载"');
   });
 });
 

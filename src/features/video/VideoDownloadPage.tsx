@@ -7,6 +7,8 @@ import {
   Download,
   ExternalLink,
   FolderOpen,
+  HardDrive,
+  Tv,
   Pause,
   Play,
   RotateCcw,
@@ -25,7 +27,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Skeleton } from "@/components/ui/skeleton";
 import { notify } from "@/components/ui/toast";
 import { Spinner } from "@/components/ui/spinner";
 import { Separator } from "@/components/ui/separator";
@@ -41,7 +42,14 @@ import {
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { formatByteSize, normalizeVideoCoverUrl, cn } from "@/lib/utils";
 import { isMobileClient } from "@/shared/clientPlatform";
-import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
+import {
+  LocalMediaCard,
+  LocalMediaArtwork,
+  LocalMediaCardAction,
+  LocalMediaCardProgress,
+  LocalMediaCardStat,
+  LocalMediaCardSkeleton,
+} from "@/shared/components/LocalMediaCard";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import {
   VIDEO_DOWNLOADS_QUERY_KEY,
@@ -66,6 +74,7 @@ import {
   type VideoDownloadView,
 } from "./videoDownload";
 import { videoDownloadPlaybackEntryState, videoDownloadPlaybackPath } from "./videoDownloadRoute";
+import { formatVideoDuration } from "./videoHistory";
 
 const DOWNLOAD_VIEW_LABELS: Record<VideoDownloadView, string> = {
   all: "全部",
@@ -310,9 +319,9 @@ export function VideoDownloadPage({ active = true }: { active?: boolean }) {
         )}
 
         {scopedActive.length > 0 && (
-          <section className="flex flex-col gap-2" aria-label="未完成的下载">
+          <section className="flex flex-col gap-3" aria-label="未完成的下载">
             <h2 className="text-sm font-semibold text-foreground">下载任务</h2>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3">
               {scopedActive.map((item) => (
                 <DownloadRow
                   key={item.id}
@@ -329,9 +338,8 @@ export function VideoDownloadPage({ active = true }: { active?: boolean }) {
         )}
 
         {scopedCompleted.length > 0 && (
-          <section className="flex flex-col gap-2" aria-label="已完成的下载">
-            <h2 className="text-sm font-semibold text-foreground">已完成</h2>
-            <div className="flex flex-col gap-2">
+          <section className="flex flex-col gap-3" aria-label="已完成的下载">
+            <div className="flex flex-col gap-3">
               {scopedCompleted.map((item) => (
                 <DownloadRow
                   key={item.id}
@@ -422,148 +430,108 @@ function DownloadRow({
     action();
   }
 
-  const primaryActions = (
+  const cardActions = (
     <>
       {primaryAction === "pause" && (
-        <RowButton
-          icon={<Pause data-icon="inline-start" aria-hidden />}
-          label="暂停"
-          busy={pausing}
-          onClick={onPause}
-        />
+        <LocalMediaCardAction icon={Pause} label="暂停下载" busy={pausing} onClick={onPause} />
       )}
       {primaryAction === "resume" && (
-        <RowButton
-          icon={<Play data-icon="inline-start" aria-hidden />}
-          label="继续"
-          busy={resuming}
-          onClick={onResume}
-        />
+        <LocalMediaCardAction icon={Play} label="继续下载" busy={resuming} onClick={onResume} />
       )}
       {primaryAction === "retry" && (
-        <RowButton
-          icon={<RotateCcw data-icon="inline-start" aria-hidden />}
-          label="重试"
+        <LocalMediaCardAction
+          icon={RotateCcw}
+          label="重试下载"
           busy={resuming}
           onClick={onResume}
         />
       )}
-      {playable && (
-        <>
-          <RowButton
-            icon={<ExternalLink data-icon="inline-start" aria-hidden />}
-            label="系统播放器"
-            onClick={onOpenSystem}
-          />
-          {onReveal ? (
-            <RowButton
-              icon={<FolderOpen data-icon="inline-start" aria-hidden />}
-              label="文件夹"
-              onClick={onReveal}
-            />
-          ) : null}
-        </>
+      {playable && onOpenSystem && (
+        <LocalMediaCardAction icon={ExternalLink} label="使用系统播放器" onClick={onOpenSystem} />
       )}
-      <RowButton
-        icon={<Trash2 data-icon="inline-start" aria-hidden />}
-        label="删除"
+      {playable && onReveal && (
+        <LocalMediaCardAction icon={FolderOpen} label="打开文件位置" onClick={onReveal} />
+      )}
+      <LocalMediaCardAction
+        icon={Trash2}
+        label="删除下载"
+        variant="destructive"
         onClick={onDelete}
-        destructive
       />
     </>
   );
 
-  const cardClassName = cn(
-    "relative flex gap-3 rounded-xl p-3 transition-[background-color,box-shadow,opacity]",
-    CARD_SURFACE_CLASS,
-    CARD_SURFACE_HOVER_CLASS,
-    playable && cn("motion-card", "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"),
-  );
+  const cardClassName = "relative min-w-0";
   const cardBody = (
-    <>
-      {playable && (
-        <button
-          type="button"
-          data-motion-press
-          data-player-origin={playerOrigin}
-          data-page-scroll-anchor={playerOrigin}
-          className="absolute inset-0 z-0 rounded-xl outline-none"
-          aria-label={`播放下载：${item.title}`}
-          onPointerEnter={() => {
-            if (playbackPath) preloadRouteModule(playbackPath);
-          }}
-          onPointerDown={() => {
-            if (playbackPath) preloadRouteModule(playbackPath);
-          }}
-          onFocus={() => {
-            if (playbackPath) preloadRouteModule(playbackPath);
-          }}
-          onClick={openDownload}
-        />
-      )}
-
-      <div className="pointer-events-none relative z-10 aspect-video w-24 shrink-0 self-start overflow-hidden rounded-lg bg-muted sm:w-40">
-        {cover ? (
-          <img src={cover} alt="" loading="lazy" className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-            <Download className="size-5" aria-hidden />
-          </div>
-        )}
-      </div>
-      <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 flex-col gap-1.5">
-        <div className="flex min-w-0 items-start justify-between gap-2">
-          <h3 className="line-clamp-2 text-sm font-medium" title={item.title}>
-            {item.title}
-          </h3>
-          <Badge
-            variant={item.status === "failed" ? "destructive" : inFlight ? "default" : "secondary"}
-          >
-            {videoDownloadStatusLabel(item.status)}
-          </Badge>
-        </div>
-        <p className="truncate text-sm text-muted-foreground">
-          {[item.quality_label || "等待取流", item.author].filter(Boolean).join(" · ")}
-        </p>
-
-        {item.status === "failed" && item.error ? (
-          <p role="alert" className="text-sm text-destructive">
-            {item.error}
-          </p>
-        ) : (
-          <div className="flex items-center gap-2">
-            <div
-              className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(percent)}
-              aria-label={`${item.title} 下载进度`}
-            >
-              <div
-                className={cn(
-                  "h-full rounded-full bg-primary transition-[width] duration-300",
-                  inFlight && percent >= 100 && "animate-pulse",
-                )}
-                style={{ width: `${percent}%` }}
-              />
-            </div>
-            <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-              {item.total_bytes > 0
-                ? `${formatByteSize(item.downloaded_bytes)} / ${formatByteSize(item.total_bytes)}`
-                : formatByteSize(item.downloaded_bytes)}
-            </span>
-          </div>
-        )}
-
-        <div
-          className="pointer-events-auto flex flex-wrap items-center gap-1"
-          onPointerDown={(event) => event.stopPropagation()}
+    <LocalMediaCard
+      kind="download"
+      title={item.title}
+      subtitle={item.author.trim() || "Bilibili 视频"}
+      status={
+        <Badge
+          variant={item.status === "failed" ? "destructive" : inFlight ? "default" : "secondary"}
         >
-          {primaryActions}
-        </div>
-      </div>
-    </>
+          {videoDownloadStatusLabel(item.status)}
+        </Badge>
+      }
+      artwork={<LocalMediaArtwork sources={[cover]} icon={Download} />}
+      duration={item.duration > 0 ? formatVideoDuration(item.duration) : undefined}
+      playbackTrigger={
+        playable ? (
+          <button
+            type="button"
+            data-motion-press
+            data-player-origin={playerOrigin}
+            data-page-scroll-anchor={playerOrigin}
+            className="absolute inset-0 z-0 rounded-xl outline-none"
+            aria-label={`播放下载：${item.title}`}
+            onPointerEnter={() => {
+              if (playbackPath) preloadRouteModule(playbackPath);
+            }}
+            onPointerDown={() => {
+              if (playbackPath) preloadRouteModule(playbackPath);
+            }}
+            onFocus={() => {
+              if (playbackPath) preloadRouteModule(playbackPath);
+            }}
+            onClick={openDownload}
+          />
+        ) : undefined
+      }
+      metadata={
+        <>
+          <LocalMediaCardStat icon={Tv} label="下载画质">
+            {item.quality_label || "等待取流"}
+          </LocalMediaCardStat>
+          <LocalMediaCardStat icon={HardDrive} label={playable ? "文件大小" : "已下载 / 总大小"}>
+            {!playable && item.total_bytes > 0
+              ? `${formatByteSize(item.downloaded_bytes)} / ${formatByteSize(item.total_bytes)}`
+              : formatByteSize(item.downloaded_bytes)}
+          </LocalMediaCardStat>
+        </>
+      }
+      progress={
+        !playable ? (
+          <div className="flex min-w-0 flex-col gap-2">
+            <LocalMediaCardProgress
+              value={percent}
+              label={`${item.title} 下载进度`}
+              description={`${Math.round(percent)}%`}
+            />
+            {item.status === "failed" && item.error && (
+              <p
+                role="alert"
+                className="line-clamp-2 break-words text-sm text-destructive"
+                title={item.error}
+              >
+                {item.error}
+              </p>
+            )}
+          </div>
+        ) : undefined
+      }
+      actions={cardActions}
+    />
   );
 
   if (mobile) {
@@ -716,45 +684,11 @@ function DownloadRow({
   );
 }
 
-function RowButton({
-  icon,
-  label,
-  busy,
-  destructive,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  busy?: boolean;
-  destructive?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      disabled={busy}
-      className={cn(destructive && "text-destructive hover:text-destructive")}
-      onClick={onClick}
-    >
-      {busy ? <Spinner data-icon="inline-start" aria-hidden /> : icon}
-      {label}
-    </Button>
-  );
-}
-
 function DownloadSkeleton() {
   return (
-    <div className="flex flex-col gap-2" aria-hidden>
+    <div className="flex flex-col gap-3" aria-hidden>
       {Array.from({ length: 3 }).map((_, index) => (
-        <div key={index} className={cn("flex gap-3 rounded-xl p-3", CARD_SURFACE_CLASS)}>
-          <Skeleton className="aspect-video w-24 shrink-0 self-start rounded-lg sm:w-40" />
-          <div className="flex min-w-0 flex-1 flex-col gap-2 py-1">
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-3.5 w-1/3" />
-            <Skeleton className="h-1.5 w-full" />
-          </div>
-        </div>
+        <LocalMediaCardSkeleton key={index} />
       ))}
     </div>
   );

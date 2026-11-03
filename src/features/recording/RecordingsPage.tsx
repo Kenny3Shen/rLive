@@ -5,7 +5,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Captions,
   CircleDot,
-  Clock3,
   Eye,
   FolderOpen,
   HardDrive,
@@ -22,14 +21,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -37,10 +28,16 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, normalizeImageUrl } from "@/lib/utils";
+import {
+  LocalMediaCard,
+  LocalMediaArtwork,
+  LocalMediaCardAction,
+  LocalMediaCardProgress,
+  LocalMediaCardStat,
+  LocalMediaCardSkeleton,
+} from "@/shared/components/LocalMediaCard";
 import { ErrorState } from "@/shared/components/ErrorState";
 import {
   PlatformFilterSelect,
@@ -93,41 +90,6 @@ function recordingUserLabel(item: RecordingItem): string {
 
 function recordingUserAvatar(item: RecordingItem): string {
   return item.user_avatar?.trim() || item.cover;
-}
-
-/**
- * 单场录制的缩略图：优先用捕获时的房间封面，其次主播头像，最后平台标识。
- *
- * 封面才是卡片应当展示的内容 —— 那是这一场直播的画面。但录制存储的是开播时
- * 的 URL，多个平台会为每次采集生成新的封面地址，旧地址可能不再可解析。
- * 这里不是放弃封面，而是只在真正加载失败时逐级降级：封面、头像、再到底层的
- * 图标。缺少这一步时 WebView 会画出破图占位符。
- */
-function RecordingArtwork({ item }: { item: RecordingItem }) {
-  const cover = normalizeImageUrl(item.cover);
-  const avatar = normalizeImageUrl(item.user_avatar);
-  // 不同的 key 使切换来源时重新挂载 img 并重试加载。
-  const [failed, setFailed] = useState<string[]>([]);
-  const artwork = [cover, avatar].find((candidate) => candidate && !failed.includes(candidate));
-  const SourceIcon = item.source_kind === "iptv" ? Tv : Radio;
-
-  return (
-    <span className="relative flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground ring-1 ring-border-subtle">
-      <SourceIcon className="size-4" aria-hidden />
-      {artwork && (
-        <img
-          key={artwork}
-          src={artwork}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          onError={() => setFailed((current) => [...current, artwork])}
-          className="absolute inset-0 size-full object-cover"
-        />
-      )}
-    </span>
-  );
 }
 
 function RecordingStatusBadge({ status }: { status: RecordingStatus }) {
@@ -189,153 +151,96 @@ const RecordingCard = memo(function RecordingCard({
     ? "已看完"
     : `已看到 ${formatRecordingDuration(watchedSeconds * 1_000)}`;
 
+  const playerOrigin = `recording:${item.id}`;
   return (
-    <li className="min-w-0">
-      <Card
-        size="sm"
-        className="relative h-full gap-2 py-3 transition-[background-color,box-shadow,opacity] hover:bg-card-elevated hover:ring-foreground/20"
-      >
-        {playable && (
-          <button
-            type="button"
-            data-motion-press
-            className="absolute inset-0 z-0 rounded-xl outline-none"
-            aria-label={`打开录播：${item.title}`}
-            onPointerEnter={() => preloadRouteModule(playbackPath)}
-            onPointerDown={() => preloadRouteModule(playbackPath)}
-            onFocus={() => preloadRouteModule(playbackPath)}
-            onClick={() => onOpen(item)}
+    <li className="min-w-0" data-recording-id={item.id}>
+      <LocalMediaCard
+        kind="recording"
+        title={item.title}
+        subtitle={`${recordingSourceLabel(item)} · ${formatRecordingDate(item.started_at)}`}
+        status={<RecordingStatusBadge status={item.status} />}
+        artwork={
+          <LocalMediaArtwork
+            sources={[normalizeImageUrl(item.cover), normalizeImageUrl(item.user_avatar)]}
+            icon={item.source_kind === "iptv" ? Tv : Radio}
           />
-        )}
-
-        <CardHeader className="pointer-events-none relative z-10 items-center gap-x-2.5">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <RecordingArtwork item={item} />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <CardTitle className="truncate" title={item.title}>
-                {item.title}
-              </CardTitle>
-              <CardDescription className="truncate" title={formatRecordingDate(item.started_at)}>
-                {recordingSourceLabel(item)} · {formatRecordingDate(item.started_at)}
-              </CardDescription>
-            </div>
-          </div>
-
-          <CardAction className="pointer-events-auto relative z-10 flex items-center gap-0.5 self-center">
-            {item.status === "recording" && (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={stopping}
-                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      aria-label="停止并保存"
-                      onClick={() => onStop(item.id)}
-                    />
-                  }
-                >
-                  {stopping ? <Spinner aria-hidden /> : <Square aria-hidden />}
-                </TooltipTrigger>
-                <TooltipContent>{stopping ? "正在保存" : "停止并保存"}</TooltipContent>
-              </Tooltip>
+        }
+        duration={formatRecordingDuration(item.duration_ms)}
+        playbackTrigger={
+          playable ? (
+            <button
+              type="button"
+              data-motion-press
+              data-player-origin={playerOrigin}
+              data-page-scroll-anchor={playerOrigin}
+              className="absolute inset-0 z-0 rounded-xl outline-none"
+              aria-label={`打开录播：${item.title}`}
+              onPointerEnter={() => preloadRouteModule(playbackPath)}
+              onPointerDown={() => preloadRouteModule(playbackPath)}
+              onFocus={() => preloadRouteModule(playbackPath)}
+              onClick={() => onOpen(item)}
+            />
+          ) : undefined
+        }
+        metadata={
+          <>
+            <LocalMediaCardStat icon={HardDrive} label="文件大小">
+              {formatRecordingSize(item.size_bytes)}
+            </LocalMediaCardStat>
+            {item.include_danmaku && (
+              <LocalMediaCardStat icon={MessageSquareText} label="已录制弹幕">
+                {item.danmaku_count} 条弹幕
+              </LocalMediaCardStat>
+            )}
+            {watchedSeconds > 0 && (
+              <LocalMediaCardStat
+                icon={Eye}
+                label={`已看到 ${formatRecordingDuration(watchedSeconds * 1_000)} / ${formatRecordingDuration(item.duration_ms)}`}
+              >
+                {watchedLabel}
+              </LocalMediaCardStat>
+            )}
+          </>
+        }
+        progress={
+          watchedPercent > 0 ? (
+            <LocalMediaCardProgress value={watchedPercent} label={`${item.title} 观看进度`} />
+          ) : undefined
+        }
+        actions={
+          <>
+            {!playable && (
+              <LocalMediaCardAction
+                label={stopping ? "正在保存" : "停止并保存"}
+                icon={Square}
+                variant="destructive"
+                busy={stopping}
+                onClick={() => onStop(item.id)}
+              />
             )}
             {exportable && (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={exportingAss}
-                      className="text-muted-foreground"
-                      aria-label="导出 ASS 弹幕字幕"
-                      onClick={() => onExportAss(item.id)}
-                    />
-                  }
-                >
-                  {exportingAss ? <Spinner aria-hidden /> : <Captions aria-hidden />}
-                </TooltipTrigger>
-                <TooltipContent>
-                  {exportingAss ? "正在导出字幕" : "导出 ASS 弹幕字幕"}
-                </TooltipContent>
-              </Tooltip>
+              <LocalMediaCardAction
+                label="导出 ASS 弹幕字幕"
+                icon={Captions}
+                busy={exportingAss}
+                onClick={() => onExportAss(item.id)}
+              />
             )}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    disabled={revealing}
-                    className="text-muted-foreground"
-                    aria-label="在文件管理器中显示"
-                    onClick={() => onReveal(item.file_path)}
-                  />
-                }
-              >
-                {revealing ? <Spinner aria-hidden /> : <FolderOpen aria-hidden />}
-              </TooltipTrigger>
-              <TooltipContent>在文件管理器中显示</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    aria-label="删除录制"
-                    onClick={() => onDelete(item)}
-                  />
-                }
-              >
-                <Trash2 aria-hidden />
-              </TooltipTrigger>
-              <TooltipContent>删除录制</TooltipContent>
-            </Tooltip>
-          </CardAction>
-        </CardHeader>
-
-        <CardContent className="pointer-events-none relative z-10 flex min-h-5 min-w-0 flex-wrap items-center gap-1.5 overflow-hidden">
-          <RecordingStatusBadge status={item.status} />
-          <Badge variant="outline" title={`时长：${formatRecordingDuration(item.duration_ms)}`}>
-            <Clock3 aria-hidden />
-            {formatRecordingDuration(item.duration_ms)}
-          </Badge>
-          <Badge variant="outline" title={`大小：${formatRecordingSize(item.size_bytes)}`}>
-            <HardDrive aria-hidden />
-            {formatRecordingSize(item.size_bytes)}
-          </Badge>
-          {item.include_danmaku && (
-            <Badge variant="outline" title={`${item.danmaku_count} 条弹幕`}>
-              <MessageSquareText aria-hidden />
-              {item.danmaku_count}
-            </Badge>
-          )}
-          {watchedSeconds > 0 && (
-            <Badge
-              variant="outline"
-              title={`已看到 ${formatRecordingDuration(watchedSeconds * 1_000)} / ${formatRecordingDuration(item.duration_ms)}`}
-            >
-              <Eye aria-hidden />
-              {watchedLabel}
-            </Badge>
-          )}
-        </CardContent>
-        {watchedPercent > 0 && (
-          /* 观看进度压在卡片底边：一眼看出上次停在哪儿，不占徽章行的宽度。
-             留出左右内边距而不是铺满，避免与卡片圆角相切。 */
-          <span className="pointer-events-none absolute inset-x-3 bottom-1.5 z-10 h-0.5 overflow-hidden rounded-full bg-foreground/10">
-            <span className="block h-full bg-primary" style={{ width: `${watchedPercent}%` }} />
-          </span>
-        )}
-      </Card>
+            <LocalMediaCardAction
+              label="打开文件位置"
+              icon={FolderOpen}
+              busy={revealing}
+              onClick={() => onReveal(item.file_path)}
+            />
+            <LocalMediaCardAction
+              label="删除录制"
+              icon={Trash2}
+              variant="destructive"
+              onClick={() => onDelete(item)}
+            />
+          </>
+        }
+      />
     </li>
   );
 });
@@ -565,32 +470,19 @@ function RecordingsSkeleton() {
         </div>
       </div>
       <div className="flex min-w-0 flex-col gap-3">
-        <Skeleton className="h-8 w-full rounded-lg md:hidden" />
+        <Skeleton className="h-10 w-full rounded-lg md:hidden" />
+        <Skeleton className="h-11 w-full rounded-lg md:hidden" />
         <div className="-mx-1 flex gap-1 overflow-hidden px-1 pb-1 md:hidden">
           {Array.from({ length: 3 }).map((_, index) => (
-            <Skeleton key={index} className="h-8 w-24 shrink-0 rounded-lg" />
+            <Skeleton
+              key={index}
+              className="h-7 w-24 shrink-0 rounded-lg [@media(pointer:coarse)]:h-11"
+            />
           ))}
         </div>
-        <div className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <Card key={index} size="sm" className="gap-2">
-              <CardHeader className="items-center gap-x-2.5">
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <Skeleton className="size-10 shrink-0 rounded-lg" />
-                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                    <Skeleton className="h-3.5 w-3/5" />
-                    <Skeleton className="h-3 w-4/5" />
-                  </div>
-                </div>
-                <CardAction className="self-center">
-                  <Skeleton className="size-7 rounded-lg" />
-                </CardAction>
-              </CardHeader>
-              <CardContent className="flex min-h-5 items-center gap-1.5">
-                <Skeleton className="h-5 w-14 rounded-full" />
-                <Skeleton className="h-5 w-16 rounded-full" />
-              </CardContent>
-            </Card>
+        <div className="flex min-w-0 flex-col gap-3">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <LocalMediaCardSkeleton key={index} />
           ))}
         </div>
       </div>
@@ -805,7 +697,7 @@ export function RecordingsPage({ active = true }: { active?: boolean }) {
               ))}
             </div>
             {selectedGroup ? (
-              <ul className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))] gap-2.5">
+              <ul className="flex min-w-0 flex-col gap-3">
                 {selectedGroup.items.map((item) => (
                   <RecordingCard
                     key={item.id}
