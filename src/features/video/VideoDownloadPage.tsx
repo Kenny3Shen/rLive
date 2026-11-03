@@ -29,8 +29,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { notify } from "@/components/ui/toast";
 import { Spinner } from "@/components/ui/spinner";
 import { Separator } from "@/components/ui/separator";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { formatByteSize, normalizeVideoCoverUrl, cn } from "@/lib/utils";
-import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
+import { isMobileClient } from "@/shared/clientPlatform";
+import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
+import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import {
   VIDEO_DOWNLOADS_QUERY_KEY,
   VIDEO_DOWNLOAD_VIEW_PARAM,
@@ -44,6 +56,7 @@ import {
   videoDownloadOpenDirectory,
   videoDownloadPause,
   videoDownloadPercent,
+  videoDownloadPrimaryAction,
   videoDownloadResume,
   videoDownloadStatusLabel,
   videoDownloadSupported,
@@ -391,10 +404,105 @@ function DownloadRow({
   const cover = normalizeVideoCoverUrl(item.cover);
   const percent = videoDownloadPercent(item);
   const inFlight = item.status === "downloading" || item.status === "merging";
+  const primaryAction = videoDownloadPrimaryAction(item.status);
+  const playable = primaryAction === "play";
+  const mobile = isMobileClient();
+  const cardDrawer = useLongPressDrawer({ enabled: mobile });
+  const playbackPath = playable ? videoDownloadPlaybackPath(item.id) : null;
+  const playerOrigin = `download:${item.id}`;
+  const busy = Boolean(pausing || resuming);
 
-  return (
-    <article className={cn("flex gap-3 rounded-xl p-3", CARD_SURFACE_CLASS)}>
-      <div className="aspect-video w-24 shrink-0 self-start overflow-hidden rounded-lg bg-muted sm:w-40">
+  function openDownload() {
+    if (cardDrawer.consumeSyntheticClick()) return;
+    if (playable) onPlay?.();
+  }
+
+  function runFromDrawer(action: () => void) {
+    cardDrawer.setOpen(false);
+    action();
+  }
+
+  const primaryActions = (
+    <>
+      {primaryAction === "pause" && (
+        <RowButton
+          icon={<Pause data-icon="inline-start" aria-hidden />}
+          label="暂停"
+          busy={pausing}
+          onClick={onPause}
+        />
+      )}
+      {primaryAction === "resume" && (
+        <RowButton
+          icon={<Play data-icon="inline-start" aria-hidden />}
+          label="继续"
+          busy={resuming}
+          onClick={onResume}
+        />
+      )}
+      {primaryAction === "retry" && (
+        <RowButton
+          icon={<RotateCcw data-icon="inline-start" aria-hidden />}
+          label="重试"
+          busy={resuming}
+          onClick={onResume}
+        />
+      )}
+      {playable && (
+        <>
+          <RowButton
+            icon={<ExternalLink data-icon="inline-start" aria-hidden />}
+            label="系统播放器"
+            onClick={onOpenSystem}
+          />
+          {onReveal ? (
+            <RowButton
+              icon={<FolderOpen data-icon="inline-start" aria-hidden />}
+              label="文件夹"
+              onClick={onReveal}
+            />
+          ) : null}
+        </>
+      )}
+      <RowButton
+        icon={<Trash2 data-icon="inline-start" aria-hidden />}
+        label="删除"
+        onClick={onDelete}
+        destructive
+      />
+    </>
+  );
+
+  const cardClassName = cn(
+    "relative flex gap-3 rounded-xl p-3 transition-[background-color,box-shadow,opacity]",
+    CARD_SURFACE_CLASS,
+    CARD_SURFACE_HOVER_CLASS,
+    playable && cn("motion-card", "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"),
+  );
+  const cardBody = (
+    <>
+      {playable && (
+        <button
+          type="button"
+          data-motion-press
+          data-player-origin={playerOrigin}
+          data-page-scroll-anchor={playerOrigin}
+          className="absolute inset-0 z-0 rounded-xl outline-none"
+          aria-label={`播放下载：${item.title}`}
+          onPointerEnter={() => {
+            if (playbackPath) preloadRouteModule(playbackPath);
+          }}
+          onPointerDown={() => {
+            if (playbackPath) preloadRouteModule(playbackPath);
+          }}
+          onFocus={() => {
+            if (playbackPath) preloadRouteModule(playbackPath);
+          }}
+          onClick={openDownload}
+        />
+      )}
+
+      <div className="pointer-events-none relative z-10 aspect-video w-24 shrink-0 self-start overflow-hidden rounded-lg bg-muted sm:w-40">
         {cover ? (
           <img src={cover} alt="" loading="lazy" className="h-full w-full object-cover" />
         ) : (
@@ -403,7 +511,7 @@ function DownloadRow({
           </div>
         )}
       </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex min-w-0 items-start justify-between gap-2">
           <h3 className="line-clamp-2 text-sm font-medium" title={item.title}>
             {item.title}
@@ -448,43 +556,163 @@ function DownloadRow({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-1">
-          {item.status === "downloading" || item.status === "queued" ? (
-            <RowButton icon={<Pause aria-hidden />} label="暂停" busy={pausing} onClick={onPause} />
-          ) : null}
-          {item.status === "paused" ? (
-            <RowButton
-              icon={<Play aria-hidden />}
-              label="继续"
-              busy={resuming}
-              onClick={onResume}
-            />
-          ) : null}
-          {item.status === "failed" ? (
-            <RowButton
-              icon={<RotateCcw aria-hidden />}
-              label="重试"
-              busy={resuming}
-              onClick={onResume}
-            />
-          ) : null}
-          {item.status === "completed" ? (
-            <>
-              <RowButton icon={<Play aria-hidden />} label="播放" onClick={onPlay} />
-              <RowButton
-                icon={<ExternalLink aria-hidden />}
-                label="系统播放器"
-                onClick={onOpenSystem}
-              />
-              {onReveal ? (
-                <RowButton icon={<FolderOpen aria-hidden />} label="文件夹" onClick={onReveal} />
-              ) : null}
-            </>
-          ) : null}
-          <RowButton icon={<Trash2 aria-hidden />} label="删除" onClick={onDelete} destructive />
+        <div
+          className="pointer-events-auto flex flex-wrap items-center gap-1"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {primaryActions}
         </div>
       </div>
-    </article>
+    </>
+  );
+
+  if (mobile) {
+    return (
+      <>
+        <article
+          data-download-id={item.id}
+          className={cardClassName}
+          onPointerDown={cardDrawer.onPointerDown}
+          onPointerMove={cardDrawer.onPointerMove}
+          onPointerUp={cardDrawer.onPointerUp}
+          onPointerCancel={cardDrawer.onPointerCancel}
+          onContextMenu={cardDrawer.onContextMenu}
+        >
+          {cardBody}
+        </article>
+        <Drawer open={cardDrawer.open} onOpenChange={cardDrawer.setOpen}>
+          <DrawerContent>
+            <DrawerTitle className="truncate">{item.title}</DrawerTitle>
+            <div className="mt-2 flex flex-col gap-1">
+              {playable && onPlay && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="justify-start max-md:h-10"
+                  onClick={() => runFromDrawer(onPlay)}
+                >
+                  <Play data-icon="inline-start" aria-hidden />
+                  应用内播放
+                </Button>
+              )}
+              {primaryAction === "pause" && onPause && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="justify-start max-md:h-10"
+                  disabled={busy}
+                  onClick={() => runFromDrawer(onPause)}
+                >
+                  {pausing ? (
+                    <Spinner data-icon="inline-start" aria-hidden />
+                  ) : (
+                    <Pause data-icon="inline-start" aria-hidden />
+                  )}
+                  暂停下载
+                </Button>
+              )}
+              {(primaryAction === "resume" || primaryAction === "retry") && onResume && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="justify-start max-md:h-10"
+                  disabled={busy}
+                  onClick={() => runFromDrawer(onResume)}
+                >
+                  {resuming ? (
+                    <Spinner data-icon="inline-start" aria-hidden />
+                  ) : (
+                    <RotateCcw data-icon="inline-start" aria-hidden />
+                  )}
+                  {primaryAction === "retry" ? "重试下载" : "继续下载"}
+                </Button>
+              )}
+              {playable && onOpenSystem && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="justify-start max-md:h-10"
+                  onClick={() => runFromDrawer(onOpenSystem)}
+                >
+                  <ExternalLink data-icon="inline-start" aria-hidden />
+                  使用系统播放器
+                </Button>
+              )}
+              {playable && onReveal && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="justify-start max-md:h-10"
+                  onClick={() => runFromDrawer(onReveal)}
+                >
+                  <FolderOpen data-icon="inline-start" aria-hidden />
+                  打开文件位置
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                className="justify-start text-destructive hover:bg-destructive/10 hover:text-destructive max-md:h-10"
+                onClick={() => runFromDrawer(onDelete)}
+              >
+                <Trash2 data-icon="inline-start" aria-hidden />
+                删除下载
+              </Button>
+            </div>
+          </DrawerContent>
+        </Drawer>
+      </>
+    );
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={<article data-download-id={item.id} className={cardClassName} />}>
+        {cardBody}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-48">
+        <ContextMenuGroup>
+          <ContextMenuLabel>{item.title}</ContextMenuLabel>
+          {playable && onPlay && (
+            <ContextMenuItem onClick={onPlay}>
+              <Play aria-hidden />
+              应用内播放
+            </ContextMenuItem>
+          )}
+          {primaryAction === "pause" && onPause && (
+            <ContextMenuItem disabled={busy} onClick={onPause}>
+              <Pause aria-hidden />
+              暂停下载
+            </ContextMenuItem>
+          )}
+          {(primaryAction === "resume" || primaryAction === "retry") && onResume && (
+            <ContextMenuItem disabled={busy} onClick={onResume}>
+              <RotateCcw aria-hidden />
+              {primaryAction === "retry" ? "重试下载" : "继续下载"}
+            </ContextMenuItem>
+          )}
+          {playable && onOpenSystem && (
+            <ContextMenuItem onClick={onOpenSystem}>
+              <ExternalLink aria-hidden />
+              使用系统播放器
+            </ContextMenuItem>
+          )}
+          {playable && onReveal && (
+            <ContextMenuItem onClick={onReveal}>
+              <FolderOpen aria-hidden />
+              打开文件位置
+            </ContextMenuItem>
+          )}
+        </ContextMenuGroup>
+        <ContextMenuSeparator />
+        <ContextMenuGroup>
+          <ContextMenuItem variant="destructive" onClick={onDelete}>
+            <Trash2 aria-hidden />
+            删除下载
+          </ContextMenuItem>
+        </ContextMenuGroup>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

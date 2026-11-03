@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import {
   clampDanmuArea,
   clampDanmuFontSize,
@@ -14,7 +14,7 @@ import {
 import { prefersReducedMotion } from "@/shared/motion/preference";
 import { createSmoothMediaClock } from "@/shared/smoothMediaClock";
 import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
-import { filterRecordedDanmakuEntries, type RecordedDanmakuEntry } from "./recordedDanmaku";
+import type { RecordedDanmakuEntry } from "./recordedDanmaku";
 import {
   layoutRecordedDanmaku,
   visibleRecordedDanmaku,
@@ -39,6 +39,7 @@ const FONT_FAMILY = '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 
 type RecordedDanmakuCanvasProps = {
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 已按与直播一致的设置过滤后的条目；页面与侧栏共享同一份数据。 */
   entries: readonly RecordedDanmakuEntry[];
   active: boolean;
 };
@@ -55,21 +56,7 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
   const opacity = clampDanmuOpacity(useSettingsStore((state) => state.danmakuOpacity));
   const speed = parseDanmakuSpeed(useSettingsStore((state) => state.danmakuSpeed));
   const area = clampDanmuArea(useSettingsStore((state) => state.danmakuArea));
-  const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
-  const showSuperChat = useSettingsStore((state) => state.superChatEnabled);
-  const shieldWords = useSettingsStore((state) => state.danmakuShieldWords);
-  const blockedUsers = useSettingsStore((state) => state.danmakuBlockedUsers);
-  const visibleEntries = useMemo(
-    () =>
-      filterRecordedDanmakuEntries(entries, {
-        filterGifts,
-        showSuperChat,
-        shieldWords,
-        blockedUsers,
-      }),
-    [entries, filterGifts, shieldWords, blockedUsers, showSuperChat],
-  );
 
   useEffect(() => {
     const canvasElement = canvasRef.current;
@@ -179,7 +166,7 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
      */
     function buildLayout() {
       const context = canvas.getContext("2d");
-      if (!context || visibleEntries.length === 0 || cssWidth <= 1 || cssHeight <= 1) {
+      if (!context || entries.length === 0 || cssWidth <= 1 || cssHeight <= 1) {
         layout = null;
         return;
       }
@@ -190,7 +177,7 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       const maxLifetime = reducedMotion
         ? REDUCED_MOTION_LIFETIME_MS
         : scrollingLifetime(cssWidth + fontSize * 8);
-      layout = layoutRecordedDanmaku(visibleEntries, {
+      layout = layoutRecordedDanmaku(entries, {
         laneCount,
         stageWidth: cssWidth,
         padding: HORIZONTAL_PADDING,
@@ -250,9 +237,10 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     }
 
     function resize() {
-      const rectangle = stage.getBoundingClientRect();
-      const nextWidth = Math.max(1, rectangle.width);
-      const nextHeight = Math.max(1, rectangle.height);
+      // Canvas CSS 像素必须取布局尺寸；祖先 transform 不会触发 ResizeObserver，
+      // 用可视尺寸会让画布在入场缩放后永久变窄。
+      const nextWidth = Math.max(1, stage.clientWidth);
+      const nextHeight = Math.max(1, stage.clientHeight);
       const changed = nextWidth !== cssWidth || nextHeight !== cssHeight;
       cssWidth = nextWidth;
       cssHeight = nextHeight;
@@ -312,17 +300,7 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
       images.dispose();
       segmentCache.clear();
     };
-  }, [
-    active,
-    area,
-    fontSize,
-    fontStroke,
-    mergeWindowSeconds,
-    opacity,
-    speed,
-    videoRef,
-    visibleEntries,
-  ]);
+  }, [active, area, fontSize, fontStroke, mergeWindowSeconds, opacity, speed, videoRef, entries]);
 
   return (
     <canvas

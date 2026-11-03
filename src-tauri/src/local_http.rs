@@ -185,6 +185,7 @@ fn content_type(path: &Path) -> &'static str {
         "webm" => "video/webm",
         "m4s" => "video/iso.segment",
         "aac" => "audio/aac",
+        "vtt" => "text/vtt; charset=utf-8",
         "key" => "application/octet-stream",
         _ => "application/octet-stream",
     }
@@ -374,6 +375,7 @@ mod tests {
             ("segment.ts", "video/mp2t"),
             ("video.mp4", "video/mp4"),
             ("track.m4s", "video/iso.segment"),
+            ("subtitle-0.vtt", "text/vtt; charset=utf-8"),
             ("enc.key", "application/octet-stream"),
         ] {
             assert_eq!(content_type(Path::new(name)), expected, "{name}");

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   activeRecordingForContext,
   applyRecordingProgress,
@@ -25,8 +27,13 @@ import {
   visibleRecordedDanmaku,
   type RecordedDanmakuLayoutOptions,
 } from "../src/features/recording/recordedDanmakuLayout";
+import { recordedDanmakuListEntries } from "../src/features/recording/recordedDanmakuListMapping";
 import type { PlayUrl } from "../src/shared/types/live";
 import { deferred, settle } from "./helpers/async";
+
+function readSource(path: string): string {
+  return readFileSync(join(import.meta.dir, "..", path), "utf8");
+}
 
 const context: RecordingContext = {
   source: { url: "https://example.test/live.flv", headers: {} },
@@ -218,6 +225,76 @@ function options(patch: Partial<RecordedDanmakuLayoutOptions> = {}): RecordedDan
 }
 
 describe("录制弹幕解析与排布", () => {
+  test("画布取舞台布局尺寸，入场 transform 不缩窄离屏调度范围", () => {
+    const source = readSource("src/features/recording/RecordedDanmakuCanvas.tsx");
+    const resizeSource = source.slice(
+      source.indexOf("function resize()"),
+      source.indexOf("function scheduleFrame()"),
+    );
+    expect(resizeSource).toContain("Math.max(1, stage.clientWidth)");
+    expect(resizeSource).toContain("Math.max(1, stage.clientHeight)");
+    expect(resizeSource).not.toContain("stage.getBoundingClientRect()");
+    expect(source).toContain("padding: HORIZONTAL_PADDING");
+    expect(source).toContain("(cssWidth + width + HORIZONTAL_PADDING * 2) * bullet.progress");
+  });
+
+  test("回放页只有底部操作栏，画内 HUD 在窗口态可返回", () => {
+    const page = readSource("src/features/recording/RecordingPlaybackPage.tsx");
+    const player = readSource("src/features/recording/RecordingPlayer.tsx");
+    expect(page).not.toContain("PlaybackTopBar");
+    expect(page).toContain("<PlaybackFooter");
+    expect(page).toContain("返回录制库");
+    expect(page).toContain('value="danmaku"');
+    expect(page).toContain("<RecordedDanmakuList");
+    expect(player).toContain("fullscreen: true,");
+    expect(player).toContain("hasActions: true,");
+    expect(player).toContain("onBack={handlePlayerBack}");
+    expect(player).toContain("if (fullscreen.fullscreen) void fullscreen.exit();");
+    expect(player).toContain("else onNavigateBack();");
+  });
+
+  test("弹幕轨查询与解析由页面共享，播放器不重复请求", () => {
+    const page = readSource("src/features/recording/RecordingPlaybackPage.tsx");
+    const player = readSource("src/features/recording/RecordingPlayer.tsx");
+    const track = readSource("src/features/recording/useRecordedDanmakuTrack.ts");
+    expect(page).toContain("const danmakuTrack = useRecordedDanmakuTrack(item);");
+    expect(track).toContain("recordingDanmakuUrl");
+    expect(track).toContain("parseRecordedDanmakuSidecar");
+    expect(player).not.toContain("recordingDanmakuUrl");
+    expect(player).not.toContain("parseRecordedDanmakuSidecar");
+  });
+
+  test("录制列表映射保留发送者、录制内时间与图片表情", () => {
+    const [entry] = parseRecordedDanmakuSidecar(
+      JSON.stringify({
+        offset_ms: 12_345,
+        events: [
+          {
+            kind: "chat",
+            user: "观众甲",
+            content: "你好[表情]",
+            color: "#ffd76a",
+            spans: [
+              { type: "text", text: "你好" },
+              { type: "image", image_url: "https://i0.hdslb.com/bfs/emote/a.png" },
+            ],
+            ts: 1,
+          },
+        ],
+      }),
+    );
+    expect(recordedDanmakuListEntries([entry!])[0]).toMatchObject({
+      progressMs: 12_345,
+      user: "观众甲",
+      content: "你好[表情]",
+      color: "#ffd76a",
+      spans: [
+        { type: "text", text: "你好" },
+        { type: "image", image_url: "https://i0.hdslb.com/bfs/emote/a.png" },
+      ],
+    });
+  });
+
   test("忽略未完整写入的尾行，执行屏蔽设置，不读未来的合并计数", () => {
     const parsed = parseRecordedDanmakuSidecar(
       JSON.stringify({

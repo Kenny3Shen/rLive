@@ -1,7 +1,16 @@
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { ChevronLeft, CircleDot, MessageSquareText, Tv, Videotape } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  Captions,
+  ChevronLeft,
+  CircleDot,
+  FolderOpen,
+  MessageSquareText,
+  Tv,
+  Videotape,
+} from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -17,11 +26,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { notify } from "@/components/ui/toast";
 import { normalizeImageUrl } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { SiteLogo } from "@/shared/components/SiteLogo";
-import { RecordingPlayer } from "./RecordingPlayer";
+import { createPlaybackClock, type PlaybackClock } from "@/features/video/videoPlaybackClock";
+import { RecordingPlayer, type RecordingPlayerHandle } from "./RecordingPlayer";
+import { RecordedDanmakuList } from "./RecordedDanmakuList";
+import { useRecordedDanmakuTrack } from "./useRecordedDanmakuTrack";
 import {
   recordingIdFromPlaybackParams,
   recordingPlaybackReturnTarget,
@@ -38,39 +50,10 @@ import {
   recordingSourceLabel,
   recordingStatusLabel,
   recordingSupported,
+  exportRecordingDanmakuAss,
   useRecordings,
   type RecordingItem,
 } from "./recording";
-
-function PlaybackTopBar({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <header className="relative flex h-11 shrink-0 items-center justify-center border-b border-border/80 bg-sidebar/90 px-3">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="motion-back-button absolute left-3 z-10 rounded-lg hover:bg-muted/70 max-md:size-11 max-md:touch-manipulation"
-              aria-label="返回录制库"
-              onClick={onBack}
-            >
-              <ChevronLeft aria-hidden />
-            </Button>
-          }
-        />
-        <TooltipContent side="bottom">返回录制库</TooltipContent>
-      </Tooltip>
-      <p
-        className="absolute inset-x-16 truncate text-center text-sm font-semibold tracking-tight"
-        title={title}
-      >
-        {title}
-      </p>
-    </header>
-  );
-}
 
 function PlaybackPageState({ children }: { children: ReactNode }) {
   return (
@@ -89,9 +72,14 @@ function PlaybackDetailRow({ label, children }: { label: string; children: React
   );
 }
 
-function PlaybackSidebar({ item }: { item: RecordingItem }) {
-  // 「信息 / 设置」页签；换录制不保留页签状态（组件随 PlaybackLayout 重挂）。
-  const [sidebarTab, setSidebarTab] = useState<"info" | "settings">("info");
+type PlaybackDanmaku = ReturnType<typeof useRecordedDanmakuTrack> & {
+  clock: PlaybackClock;
+  onSeek: (positionMs: number) => void;
+};
+
+function PlaybackSidebar({ item, danmaku }: { item: RecordingItem; danmaku: PlaybackDanmaku }) {
+  // 「信息 / 弹幕 / 设置」页签；换录制不保留页签状态（组件随 PlaybackLayout 重挂）。
+  const [sidebarTab, setSidebarTab] = useState<"info" | "danmaku" | "settings">("info");
   const userName = item.user_name.trim() || recordingSourceLabel(item);
   const avatar = normalizeImageUrl(item.user_avatar?.trim() || item.cover);
 
@@ -99,7 +87,7 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
     <aside
       data-slot="recording-playback-sidebar"
       className="flex min-h-0 w-full flex-1 flex-col overflow-hidden border-t border-border/80 bg-sidebar md:w-[300px] md:flex-none md:border-t-0 md:border-l lg:w-[320px]"
-      aria-label="录制信息"
+      aria-label="录制回放侧栏"
     >
       <section
         className="shrink-0 border-b border-border px-2.5 py-2"
@@ -139,10 +127,11 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
         </div>
       </section>
 
-      {/* 页签固定在侧栏顶部：「信息」保留原录制详情，「设置」复用直播弹幕偏好面板。 */}
+      {/* 页签固定在侧栏顶部：「信息」保留原录制详情，「弹幕」查看整条录制轨，
+          「设置」复用直播弹幕偏好面板。 */}
       <Tabs
         value={sidebarTab}
-        onValueChange={(value) => setSidebarTab(value as "info" | "settings")}
+        onValueChange={(value) => setSidebarTab(value as "info" | "danmaku" | "settings")}
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
         <div className="flex h-11 shrink-0 items-center border-b border-border/80">
@@ -152,6 +141,9 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
           >
             <TabsTrigger value="info" className="px-3 text-sm">
               录制信息
+            </TabsTrigger>
+            <TabsTrigger value="danmaku" className="px-3 text-sm">
+              弹幕
             </TabsTrigger>
             <TabsTrigger value="settings" className="px-3 text-sm">
               设置
@@ -200,6 +192,19 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
             />
           )}
         </TabsContent>
+        <TabsContent value="danmaku" className="min-h-0 flex-1 overflow-hidden">
+          <RecordedDanmakuList
+            key={item.id}
+            entries={danmaku.entries}
+            clock={danmaku.clock}
+            included={danmaku.included}
+            loading={danmaku.loading}
+            error={danmaku.error}
+            active={sidebarTab === "danmaku"}
+            onRetry={danmaku.refetch}
+            onSeek={danmaku.onSeek}
+          />
+        </TabsContent>
         <TabsContent value="settings" className="min-h-0 flex-1 overflow-hidden">
           <DanmakuSettingsPanel className="h-full" showAsrCard={false} />
         </TabsContent>
@@ -208,7 +213,15 @@ function PlaybackSidebar({ item }: { item: RecordingItem }) {
   );
 }
 
-function PlaybackLayout({ item, children }: { item: RecordingItem; children: ReactNode }) {
+function PlaybackLayout({
+  item,
+  danmaku,
+  children,
+}: {
+  item: RecordingItem;
+  danmaku: PlaybackDanmaku;
+  children: ReactNode;
+}) {
   return (
     <main className="flex min-h-0 flex-1 flex-col bg-black md:flex-row">
       <section
@@ -217,8 +230,76 @@ function PlaybackLayout({ item, children }: { item: RecordingItem; children: Rea
       >
         {children}
       </section>
-      <PlaybackSidebar item={item} />
+      <PlaybackSidebar item={item} danmaku={danmaku} />
     </main>
+  );
+}
+
+function PlaybackFooter({
+  item,
+  onBack,
+  onReveal,
+  onExportAss,
+  revealing,
+  exportingAss,
+}: {
+  item: RecordingItem | null;
+  onBack: () => void;
+  onReveal: (path: string) => void;
+  onExportAss: (id: string) => void;
+  revealing: boolean;
+  exportingAss: boolean;
+}) {
+  const exportable = Boolean(
+    item && item.status !== "recording" && item.include_danmaku && item.danmaku_count > 0,
+  );
+
+  return (
+    <footer className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))]">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="max-md:h-10 max-md:touch-manipulation"
+        onClick={onBack}
+      >
+        <ChevronLeft data-icon="inline-start" aria-hidden />
+        返回录制库
+      </Button>
+      {item && (
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {exportable && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="max-md:h-10 max-md:touch-manipulation"
+              disabled={exportingAss}
+              onClick={() => onExportAss(item.id)}
+            >
+              {exportingAss ? (
+                <Spinner data-icon="inline-start" aria-hidden />
+              ) : (
+                <Captions data-icon="inline-start" aria-hidden />
+              )}
+              导出弹幕字幕
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="max-md:h-10 max-md:touch-manipulation"
+            disabled={revealing}
+            onClick={() => onReveal(item.file_path)}
+          >
+            {revealing ? (
+              <Spinner data-icon="inline-start" aria-hidden />
+            ) : (
+              <FolderOpen data-icon="inline-start" aria-hidden />
+            )}
+            打开文件位置
+          </Button>
+        </div>
+      )}
+    </footer>
   );
 }
 
@@ -244,6 +325,21 @@ export function RecordingPlaybackPage() {
     },
     staleTime: Number.POSITIVE_INFINITY,
   });
+  const danmakuTrack = useRecordedDanmakuTrack(item);
+  const [playbackClock] = useState(() => createPlaybackClock());
+  const playerControllerRef = useRef<RecordingPlayerHandle | null>(null);
+  const seekRecordedDanmaku = useCallback((positionMs: number) => {
+    playerControllerRef.current?.seek(positionMs / 1_000);
+  }, []);
+  const revealMutation = useMutation({
+    mutationFn: (path: string) => revealItemInDir(path),
+    onError: (error) => notify.error("无法打开文件位置", recordingErrorMessage(error)),
+  });
+  const exportAssMutation = useMutation({
+    mutationFn: exportRecordingDanmakuAss,
+    onSuccess: (path) => notify.success(`弹幕字幕已导出：${path}`),
+    onError: (error) => notify.error("导出弹幕字幕失败", recordingErrorMessage(error)),
+  });
 
   function goBack() {
     const historyIndex = (window.history.state as { idx?: unknown } | null)?.idx;
@@ -256,12 +352,20 @@ export function RecordingPlaybackPage() {
     });
   }
 
-  const title = item?.title || "录制回放";
+  const footer = (
+    <PlaybackFooter
+      item={item}
+      onBack={goBack}
+      onReveal={revealMutation.mutate}
+      onExportAss={exportAssMutation.mutate}
+      revealing={revealMutation.isPending}
+      exportingAss={exportAssMutation.isPending}
+    />
+  );
 
   if (!supported) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
-        <PlaybackTopBar title={title} onBack={goBack} />
         <PlaybackPageState>
           <Empty className="min-h-64 border">
             <EmptyHeader>
@@ -273,6 +377,7 @@ export function RecordingPlaybackPage() {
             </EmptyHeader>
           </Empty>
         </PlaybackPageState>
+        {footer}
       </div>
     );
   }
@@ -280,13 +385,13 @@ export function RecordingPlaybackPage() {
   if (recordings.isPending) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
-        <PlaybackTopBar title={title} onBack={goBack} />
         <PlaybackPageState>
           <div className="flex flex-col gap-3">
             <Skeleton className="aspect-video w-full rounded-xl" />
             <Skeleton className="h-4 w-2/3" />
           </div>
         </PlaybackPageState>
+        {footer}
       </div>
     );
   }
@@ -294,7 +399,6 @@ export function RecordingPlaybackPage() {
   if (recordings.isError) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
-        <PlaybackTopBar title={title} onBack={goBack} />
         <PlaybackPageState>
           <ErrorState
             error={recordings.error}
@@ -302,6 +406,7 @@ export function RecordingPlaybackPage() {
             onRetry={() => void recordings.refetch()}
           />
         </PlaybackPageState>
+        {footer}
       </div>
     );
   }
@@ -309,7 +414,6 @@ export function RecordingPlaybackPage() {
   if (!item) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
-        <PlaybackTopBar title={title} onBack={goBack} />
         <PlaybackPageState>
           <Empty className="min-h-64 border">
             <EmptyHeader>
@@ -321,6 +425,7 @@ export function RecordingPlaybackPage() {
             </EmptyHeader>
           </Empty>
         </PlaybackPageState>
+        {footer}
       </div>
     );
   }
@@ -328,7 +433,6 @@ export function RecordingPlaybackPage() {
   if (item.status === "recording") {
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
-        <PlaybackTopBar title={title} onBack={goBack} />
         <PlaybackPageState>
           <Empty className="min-h-64 border">
             <EmptyHeader>
@@ -340,14 +444,21 @@ export function RecordingPlaybackPage() {
             </EmptyHeader>
           </Empty>
         </PlaybackPageState>
+        {footer}
       </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <PlaybackTopBar title={title} onBack={goBack} />
-      <PlaybackLayout item={item}>
+      <PlaybackLayout
+        item={item}
+        danmaku={{
+          ...danmakuTrack,
+          clock: playbackClock,
+          onSeek: seekRecordedDanmaku,
+        }}
+      >
         {playback.isPending ? (
           <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
             <Spinner className="size-7 text-primary" aria-label="正在准备录制回放" />
@@ -363,9 +474,19 @@ export function RecordingPlaybackPage() {
             />
           </div>
         ) : playback.data ? (
-          <RecordingPlayer item={item} url={playback.data} fill />
+          <RecordingPlayer
+            item={item}
+            url={playback.data}
+            danmakuEntries={danmakuTrack.entries}
+            danmakuAvailable={danmakuTrack.available && !danmakuTrack.error}
+            playbackClock={playbackClock}
+            controllerRef={playerControllerRef}
+            onNavigateBack={goBack}
+            fill
+          />
         ) : null}
       </PlaybackLayout>
+      {footer}
     </div>
   );
 }

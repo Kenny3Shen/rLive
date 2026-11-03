@@ -1,5 +1,26 @@
 import type { VideoDownloadItem, VideoDownloadStatus } from "./videoDownload";
 
+export type VideoDownloadPrimaryAction = "play" | "pause" | "resume" | "retry" | null;
+
+/** 下载卡的主入口只由状态决定，列表与菜单共用这一份对应关系。 */
+export function videoDownloadPrimaryAction(
+  status: VideoDownloadStatus,
+): VideoDownloadPrimaryAction {
+  switch (status) {
+    case "queued":
+    case "downloading":
+      return "pause";
+    case "paused":
+      return "resume";
+    case "failed":
+      return "retry";
+    case "completed":
+      return "play";
+    default:
+      return null;
+  }
+}
+
 /**
  * 下载任务在页面上的分组语义：除已完成外都属于未完成。
  *

@@ -6,6 +6,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import type Mpegts from "mpegts.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -49,7 +50,6 @@ import {
 } from "@/shared/watchProgress";
 import {
   clampRecordingPlaybackTime,
-  recordingDanmakuUrl,
   recordingEndedPlaybackTime,
   recordingSeekReached,
   recordingWatchProgressFind,
@@ -59,10 +59,11 @@ import {
   type RecordingItem,
 } from "./recording";
 import { RecordedDanmakuCanvas } from "./RecordedDanmakuCanvas";
-import { parseRecordedDanmakuSidecar, type RecordedDanmakuEntry } from "./recordedDanmaku";
+import type { RecordedDanmakuEntry } from "./recordedDanmaku";
 import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { useRecordingPlayerFullscreen } from "./useRecordingPlayerFullscreen";
+import type { PlaybackClock } from "@/features/video/videoPlaybackClock";
 
 function recordingPlaybackKind(protocol: RecordingItem["protocol"]): VideoJsPlaybackKind {
   if (protocol === "hls") return "hls";
@@ -77,8 +78,6 @@ function finiteDuration(video: HTMLVideoElement): number {
 
 const RECORDING_SEEK_TIMEOUT_MS = 4_000;
 const RECORDING_SEEK_TOLERANCE_SECONDS = 1.5;
-/** 派生空轨的稳定身份，避免每帧新数组使弹幕画布失效。 */
-const EMPTY_DANMAKU: RecordedDanmakuEntry[] = [];
 const RECORDING_CONTROLS_HIDE_DELAY_MS = 2_000;
 const RECORDING_MPEGTS_CONFIG: Mpegts.Config = {
   enableWorker: false,
@@ -106,7 +105,16 @@ function isPlayerControlTarget(target: EventTarget | null): boolean {
 type RecordingPlayerProps = {
   item: RecordingItem;
   url: string;
+  danmakuEntries: readonly RecordedDanmakuEntry[];
+  danmakuAvailable: boolean;
+  playbackClock: PlaybackClock;
+  controllerRef: RefObject<RecordingPlayerHandle | null>;
+  onNavigateBack: () => void;
   fill?: boolean;
+};
+
+export type RecordingPlayerHandle = {
+  seek: (seconds: number) => void;
 };
 
 /**
@@ -146,7 +154,16 @@ export function RecordingPlayer(props: RecordingPlayerProps) {
   );
 }
 
-function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProps) {
+function RecordingPlayerContent({
+  item,
+  url,
+  danmakuEntries,
+  danmakuAvailable,
+  playbackClock,
+  controllerRef,
+  onNavigateBack,
+  fill = false,
+}: RecordingPlayerProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -187,13 +204,6 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
   const compact = useCompactPlayerViewport();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
   useScreenWakeLock(!paused && !loading && !error);
-
-  const danmakuUrlQuery = useQuery({
-    queryKey: ["recording-danmaku", item.id],
-    enabled: Boolean(item.include_danmaku),
-    queryFn: () => recordingDanmakuUrl(item.id),
-    staleTime: Number.POSITIVE_INFINITY,
-  });
 
   const queryClient = useQueryClient();
   /**
@@ -256,23 +266,6 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     setDanmakuVisible(true);
   }
 
-  const danmakuUrl = danmakuUrlQuery.data;
-  const danmakuEntriesQuery = useQuery({
-    queryKey: ["recording-danmaku-entries", item.id, danmakuUrl ?? ""],
-    enabled: Boolean(item.include_danmaku && danmakuUrl),
-    queryFn: async ({ signal }) => {
-      const response = await fetch(danmakuUrl!, { signal });
-      if (!response.ok) throw new Error("弹幕轨读取失败");
-      return parseRecordedDanmakuSidecar(await response.text());
-    },
-    gcTime: 0,
-    retry: false,
-  });
-  const danmakuEntries =
-    item.include_danmaku && danmakuUrl && !danmakuEntriesQuery.isError
-      ? (danmakuEntriesQuery.data ?? EMPTY_DANMAKU)
-      : EMPTY_DANMAKU;
-
   const clearSeekTimer = useCallback(() => {
     if (seekTimerRef.current !== null) {
       clearTimeout(seekTimerRef.current);
@@ -311,6 +304,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       seekTargetRef.current = target;
       clearSeekTimer();
       currentTimeRef.current = target;
+      playbackClock.set(target);
       setError(null);
       setWaiting(true);
 
@@ -345,7 +339,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         }
       }, RECORDING_SEEK_TIMEOUT_MS);
     },
-    [clearSeekTimer, duration, playbackKind, recordedDuration],
+    [clearSeekTimer, duration, playbackClock, playbackKind, recordedDuration],
   );
 
   const seekToRef = useRef(seekTo);
@@ -353,6 +347,14 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
   useLayoutEffect(() => {
     seekToRef.current = seekTo;
   });
+
+  useLayoutEffect(() => {
+    const handle: RecordingPlayerHandle = { seek: seekTo };
+    controllerRef.current = handle;
+    return () => {
+      if (controllerRef.current === handle) controllerRef.current = null;
+    };
+  }, [controllerRef, seekTo]);
 
   useEffect(() => {
     if (resumePending) return;
@@ -374,6 +376,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     setError(null);
     setPaused(true);
     currentTimeRef.current = 0;
+    playbackClock.set(0);
     setDuration(recordedDuration);
     endedRef.current = false;
     const kind = playbackKind;
@@ -385,6 +388,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       // 的时长。
       const nextDuration = recordedDuration > 0 ? recordedDuration : finiteDuration(media);
       currentTimeRef.current = clampRecordingPlaybackTime(actualTime, nextDuration);
+      playbackClock.set(actualTime);
       setDuration((previousDuration) =>
         endedRef.current && nextDuration <= 0 ? previousDuration : nextDuration,
       );
@@ -466,6 +470,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       reportWatchProgress(endDuration, true);
       setDuration(endDuration);
       currentTimeRef.current = endedTime;
+      playbackClock.set(endedTime);
       setPaused(true);
       if (seekTargetRef.current === null) setWaiting(false);
       else completeSeek();
@@ -490,7 +495,9 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
 
     video.volume = volumeRef.current / 100;
     video.muted = mutedRef.current;
-    const onMediaReady = () => { if (!cancelled) releaseMediaReady(); };
+    const onMediaReady = () => {
+      if (!cancelled) releaseMediaReady();
+    };
     video.addEventListener("loadeddata", onMediaReady);
     video.addEventListener("canplay", onMediaReady);
     video.addEventListener("playing", onMediaReady);
@@ -603,6 +610,7 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     item.id,
     playbackKind,
     playerRevision,
+    playbackClock,
     releaseMediaReady,
     recordedDuration,
     reportWatchProgress,
@@ -775,11 +783,18 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
     [fullscreen, revealControls, seekTo, toggleMute, togglePlayback],
   );
 
-  const showFullscreenHud = showPlayerFullscreenHud({
-    fullscreen: fullscreen.fullscreen,
+  const showPlayerHud = showPlayerFullscreenHud({
+    // 录制回放已删除流内顶栏，画面内 HUD 在窗口态和全屏态都承担导航与身份。
+    fullscreen: true,
     hasRoomIdentity: Boolean(item.title.trim() || item.user_name.trim()),
-    hasActions: false,
+    // 返回按钮本身也是动作，即使录制元数据缺少标题与主播名也必须可离开。
+    hasActions: true,
   });
+  const backLabel = fullscreen.fullscreen ? "退出全屏" : "返回录制库";
+  const handlePlayerBack = () => {
+    if (fullscreen.fullscreen) void fullscreen.exit();
+    else onNavigateBack();
+  };
 
   return (
     <VideoJsContainer
@@ -803,39 +818,41 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
       onKeyDown={handleStageKeyDown}
       tabIndex={0}
       controls={
-        controlsAvailable && <PlayerControls
-          chrome={{
-            ref: controlsRef,
-            "data-player-controls": true,
-            "data-visible": "true",
-            "aria-hidden": "false",
-            className:
-              "absolute inset-x-0 bottom-0 z-30 transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
-            onPointerEnter: holdControlsVisible,
-            onPointerLeave: scheduleControlsHide,
-            onFocusCapture: holdControlsVisible,
-            onBlurCapture: scheduleControlsHide,
-          }}
-          osdOn={danmakuVisible}
-          fullscreen={fullscreen.fullscreen}
-          nativeFullscreen={!fullscreen.nativeLayer}
-          disabled={loading}
-          refreshDisabled={loading}
-          loadError={fullscreen.error}
-          stackedBelowPlayer={fill ? compact : true}
-          compact={compact}
-          playbackSettingsTitle="倍数播放"
-          playbackSettingsLabel="倍数播放"
-          playbackSettings={<RecordingRateSettings />}
-          onOverlayInteractionChange={setOverlayInteractionOpen}
-          onRefresh={retryPlayback}
-          onToggleOsd={
-            item.include_danmaku && danmakuUrlQuery.data
-              ? () => setDanmakuVisible((visible) => !visible)
-              : undefined
-          }
-          onToggleFullscreen={fullscreen.nativeLayer ? () => void fullscreen.toggle() : undefined}
-        />
+        controlsAvailable && (
+          <PlayerControls
+            chrome={{
+              ref: controlsRef,
+              "data-player-controls": true,
+              "data-visible": "true",
+              "aria-hidden": "false",
+              className:
+                "absolute inset-x-0 bottom-0 z-30 transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+              onPointerEnter: holdControlsVisible,
+              onPointerLeave: scheduleControlsHide,
+              onFocusCapture: holdControlsVisible,
+              onBlurCapture: scheduleControlsHide,
+            }}
+            osdOn={danmakuVisible}
+            fullscreen={fullscreen.fullscreen}
+            nativeFullscreen={!fullscreen.nativeLayer}
+            disabled={loading}
+            refreshDisabled={loading}
+            loadError={fullscreen.error}
+            stackedBelowPlayer={fill ? compact : true}
+            compact={compact}
+            playbackSettingsTitle="倍数播放"
+            playbackSettingsLabel="倍数播放"
+            playbackSettings={<RecordingRateSettings />}
+            onOverlayInteractionChange={setOverlayInteractionOpen}
+            onRefresh={retryPlayback}
+            onToggleOsd={
+              item.include_danmaku && danmakuAvailable
+                ? () => setDanmakuVisible((visible) => !visible)
+                : undefined
+            }
+            onToggleFullscreen={fullscreen.nativeLayer ? () => void fullscreen.toggle() : undefined}
+          />
+        )
       }
     >
       <div data-player-video-surface className="relative min-h-0 flex-1 overflow-hidden bg-black">
@@ -867,8 +884,10 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
         )}
       </div>
 
-      {!controlsAvailable && fullscreen.fullscreen && <PlayerLoadingBackButton label="退出全屏" onClick={() => void fullscreen.exit()} />}
-      {controlsAvailable && showFullscreenHud && (
+      {!controlsAvailable && (
+        <PlayerLoadingBackButton label={backLabel} onClick={handlePlayerBack} />
+      )}
+      {controlsAvailable && showPlayerHud && (
         <div
           ref={hudRef}
           data-player-hud
@@ -881,7 +900,6 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
           onBlurCapture={scheduleControlsHide}
         >
           <PlayerFullscreenHud
-            onBack={() => void fullscreen.exit()}
             siteId={(item.site_id as SiteId | null) ?? undefined}
             roomId={item.room_id ?? undefined}
             roomTitle={item.title}
@@ -889,6 +907,8 @@ function RecordingPlayerContent({ item, url, fill = false }: RecordingPlayerProp
             compact={compact}
             portalContainer={stageRef}
             onExitFullscreen={fullscreen.exit}
+            onBack={handlePlayerBack}
+            backLabel={backLabel}
           />
         </div>
       )}

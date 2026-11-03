@@ -1,4 +1,5 @@
 import type { DanmakuComment } from "@/features/room/danmaku/danmakuTypes";
+import type { DanmakuContentSpan } from "@/shared/types/live";
 import {
   DANMAKU_DEFAULT_DURATION_MS,
   DANMAKU_FONT_WEIGHT,
@@ -48,6 +49,10 @@ export type VideoDanmakuEntry = {
   color: string;
   content: string;
   pool: number;
+  /** 发送者昵称；直播录制列表需要，平台 VOD 条目不提供。 */
+  user?: string;
+  /** 图片表情富片段；平台 VOD 条目不提供。 */
+  spans?: readonly DanmakuContentSpan[] | null;
 };
 
 export function videoDanmakuEntries(

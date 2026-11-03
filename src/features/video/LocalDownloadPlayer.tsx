@@ -5,18 +5,34 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
+import { Captions, CaptionsOff, Check } from "lucide-react";
+import { useCaptionsOptions } from "@videojs/react";
+import { Button } from "@/components/ui/button";
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
+import { Button as MediaButton } from "@/components/videojs/ui/button";
+import { ButtonTooltip } from "@/components/videojs/ui/button-tooltip";
+import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
+import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
 import {
   formatPlaybackRateLabel,
   PlayerControls,
   PlayerMenuRadioGroup,
   VOD_PLAYBACK_RATES,
 } from "@/shared/components/player/PlayerControls";
+import {
+  glassOptionClass,
+  glassOptionSelectedClass,
+  glassPanelClass,
+  glassTitleClass,
+} from "@/shared/components/player/glassSurface";
 import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
-import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
+import { useCompactPlayerViewport, usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import {
@@ -48,7 +64,11 @@ import {
 import { PlayerFullscreenHud, showPlayerFullscreenHud } from "@/features/room/PlayerFullscreenHud";
 import { applyWebPlayerAudio } from "@/features/room/player/useWebPlayer";
 import { useRecordingPlayerFullscreen } from "@/features/recording/useRecordingPlayerFullscreen";
-import { videoDownloadWatchProgressReport, type VideoDownloadItem } from "./videoDownload";
+import {
+  videoDownloadWatchProgressReport,
+  type VideoDownloadItem,
+  type VideoDownloadSubtitle,
+} from "./videoDownload";
 
 function finiteDuration(video: HTMLVideoElement): number {
   return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
@@ -86,10 +106,146 @@ function DownloadRateSettings() {
   );
 }
 
+function DownloadCaptions({
+  subtitles,
+  compact,
+  stageRef,
+  onOpenChange,
+}: {
+  subtitles: readonly VideoDownloadSubtitle[];
+  compact: boolean;
+  stageRef: RefObject<HTMLDivElement | null>;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const captions = useCaptionsOptions();
+  const portrait = usePortraitOrientation();
+  const [open, setOpen] = useState(false);
+  const hover = useHoverOpen(open, setOpen);
+  const available = subtitles.length > 0 && captions?.state.availability === "available";
+  const active = captions?.state.subtitlesShowing ?? false;
+  const menuOpen = available && open;
+
+  useEffect(() => {
+    onOpenChange(menuOpen);
+  }, [menuOpen, onOpenChange]);
+
+  useEffect(
+    () => () => {
+      onOpenChange(false);
+    },
+    [onOpenChange],
+  );
+
+  if (!available || !captions) {
+    return (
+      <ButtonTooltip label="当前下载没有缓存字幕" side="top">
+        <MediaButton
+          aria-label="字幕"
+          aria-disabled
+          disabled
+          className="r-live-media-extension-button"
+        >
+          <CaptionsOff className="size-6" aria-hidden />
+        </MediaButton>
+      </ButtonTooltip>
+    );
+  }
+
+  const trigger = (
+    <MediaButton
+      aria-label="字幕来源"
+      aria-pressed={active}
+      aria-expanded={compact ? menuOpen : undefined}
+      onClick={compact ? () => setOpen((current) => !current) : undefined}
+      className={cn(
+        "r-live-media-extension-button",
+        menuOpen && mediaPopupTriggerOpenClass,
+        active && glassOptionSelectedClass(),
+      )}
+    >
+      {active ? (
+        <Captions className="size-6" aria-hidden />
+      ) : (
+        <CaptionsOff className="size-6" aria-hidden />
+      )}
+    </MediaButton>
+  );
+  const body = captions.options.map((option) => {
+    const selected = option.value === captions.value;
+    const label = option.value === "off" ? "关闭字幕" : option.label;
+    return (
+      <Button
+        key={option.value}
+        variant="ghost"
+        className={cn(
+          "w-full justify-between max-md:h-10",
+          glassOptionClass(),
+          selected && glassOptionSelectedClass(),
+        )}
+        aria-pressed={selected}
+        onClick={() => {
+          captions.setValue(option.value);
+          setOpen(false);
+        }}
+      >
+        <span className="truncate">{label}</span>
+        {selected && <Check data-icon="inline-end" aria-hidden />}
+      </Button>
+    );
+  });
+
+  if (compact) {
+    return (
+      <>
+        {trigger}
+        <Drawer open={menuOpen} onOpenChange={setOpen}>
+          <DrawerContent
+            side={portrait ? "bottom" : "right"}
+            container={stageRef}
+            glass
+            className={cn(
+              "flex flex-col gap-0",
+              glassPanelClass({ overlay: true }),
+              "whitespace-nowrap [&_*]:whitespace-nowrap",
+            )}
+          >
+            <DrawerTitle className={glassTitleClass({ overlay: true })}>字幕</DrawerTitle>
+            {body}
+          </DrawerContent>
+        </Drawer>
+      </>
+    );
+  }
+
+  return (
+    <Popover open={menuOpen} onOpenChange={hover.onOpenChange}>
+      <PopoverTrigger {...hover.trigger} render={trigger} />
+      <PopoverContent
+        container={stageRef}
+        side="top"
+        align="end"
+        collisionBoundary={document.documentElement}
+        collisionPadding={{ top: 24, right: 12, bottom: 12, left: 12 }}
+        sticky
+        glass
+        className={cn(
+          "flex w-72 flex-col gap-0 overflow-y-auto p-1.5 whitespace-nowrap [&_*]:whitespace-nowrap",
+          glassPanelClass({ overlay: true }),
+        )}
+        {...hover.popup}
+      >
+        {body}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 type LocalDownloadPlayerProps = {
   item: VideoDownloadItem;
   url: string;
   progress: number;
+  subtitles: VideoDownloadSubtitle[];
+  onNavigateBack: () => void;
   fill?: boolean;
 };
 
@@ -111,6 +267,8 @@ function LocalDownloadPlayerContent({
   item,
   url,
   progress,
+  subtitles,
+  onNavigateBack,
   fill = false,
 }: LocalDownloadPlayerProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -137,6 +295,7 @@ function LocalDownloadPlayerContent({
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(true);
   const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
+  const [captionsMenuOpen, setCaptionsMenuOpen] = useState(false);
   const [playerRevision, setPlayerRevision] = useState(0);
   const compact = useCompactPlayerViewport();
   const fullscreen = useRecordingPlayerFullscreen(stageRef);
@@ -153,7 +312,13 @@ function LocalDownloadPlayerContent({
       hudRef,
       lockRef,
       fullscreenLocked: false,
-      keepVisible: paused || loading || waiting || error !== null || overlayInteractionOpen,
+      keepVisible:
+        paused ||
+        loading ||
+        waiting ||
+        error !== null ||
+        overlayInteractionOpen ||
+        captionsMenuOpen,
     });
   useScreenWakeLock(!paused && !loading && !error);
 
@@ -476,11 +641,18 @@ function LocalDownloadPlayerContent({
     shouldIgnore: (event) => isPlayerControlTarget(event.target),
   });
 
-  const showFullscreenHud = showPlayerFullscreenHud({
-    fullscreen: fullscreen.fullscreen,
+  const showPlayerHud = showPlayerFullscreenHud({
+    // 下载播放页没有流内顶栏，画面内 HUD 在普通窗口和全屏都承担导航。
+    fullscreen: true,
     hasRoomIdentity: Boolean(item.title.trim() || item.author.trim()),
-    hasActions: false,
+    // 返回按钮本身也是动作，即使下载元数据缺少标题与作者也必须可离开。
+    hasActions: true,
   });
+  const backLabel = fullscreen.fullscreen ? "退出全屏" : "返回下载列表";
+  const handlePlayerBack = () => {
+    if (fullscreen.fullscreen) void fullscreen.exit();
+    else onNavigateBack();
+  };
 
   return (
     <VideoJsContainer
@@ -541,6 +713,14 @@ function LocalDownloadPlayerContent({
             playbackSettingsTitle="倍数播放"
             playbackSettingsLabel="倍数播放"
             playbackSettings={<DownloadRateSettings />}
+            captionsSlot={
+              <DownloadCaptions
+                subtitles={subtitles}
+                compact={compact}
+                stageRef={stageRef}
+                onOpenChange={setCaptionsMenuOpen}
+              />
+            }
             onOverlayInteractionChange={setOverlayInteractionOpen}
             onRefresh={retryPlayback}
             onTogglePause={togglePlayback}
@@ -560,8 +740,21 @@ function LocalDownloadPlayerContent({
             playsInline
             preload="metadata"
             controls={false}
+            // 缓存 VTT 与媒体不在同一源；有字幕时让媒体与 track 共用 CORS 模式。
+            crossOrigin={subtitles.length > 0 ? "anonymous" : undefined}
             className="absolute inset-0 size-full bg-black object-contain"
-          />
+          >
+            {subtitles.map((subtitle) => (
+              <track
+                key={subtitle.id}
+                id={subtitle.id}
+                kind="subtitles"
+                src={subtitle.url}
+                srcLang={subtitle.lan}
+                label={subtitle.lan_doc}
+              />
+            ))}
+          </VideoJsVideo>
         </div>
         {(loading || waiting) && !error && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/20">
@@ -573,10 +766,10 @@ function LocalDownloadPlayerContent({
         )}
       </div>
 
-      {(loading || error) && fullscreen.fullscreen && (
-        <PlayerLoadingBackButton label="退出全屏" onClick={() => void fullscreen.exit()} />
+      {(loading || error) && (
+        <PlayerLoadingBackButton label={backLabel} onClick={handlePlayerBack} />
       )}
-      {!loading && !error && showFullscreenHud && (
+      {!loading && !error && showPlayerHud && (
         <div
           ref={hudRef}
           data-player-hud
@@ -589,8 +782,9 @@ function LocalDownloadPlayerContent({
           onBlurCapture={scheduleControlsHide}
         >
           <PlayerFullscreenHud
-            onBack={() => void fullscreen.exit()}
-            roomTitle={item.title}
+            onBack={handlePlayerBack}
+            backLabel={backLabel}
+            roomTitle={item.title.trim() || "本地下载"}
             roomUserName={item.author.trim() || "本地下载"}
             roomUserAvatar={item.cover}
             compact={compact}

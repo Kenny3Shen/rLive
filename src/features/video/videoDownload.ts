@@ -10,7 +10,11 @@ import {
   videoDownloadNeedsPolling,
 } from "./videoDownloadState";
 
-export { videoDownloadIsActive } from "./videoDownloadState";
+export {
+  videoDownloadIsActive,
+  videoDownloadPrimaryAction,
+  type VideoDownloadPrimaryAction,
+} from "./videoDownloadState";
 
 /**
  * B 站 VOD 下载的前端契约。
@@ -65,6 +69,18 @@ export type VideoDownloadPlaybackInfo = {
   url: string;
   /** 上次观看位置，秒。 */
   progress: number;
+  /** 下载时随媒体一起缓存、可在离线状态直接加载的字幕轨。 */
+  subtitles: VideoDownloadSubtitle[];
+  /** 字幕未完整缓存时的原因；不应影响媒体播放。 */
+  subtitle_error: string | null;
+};
+
+export type VideoDownloadSubtitle = {
+  id: string;
+  lan: string;
+  lan_doc: string;
+  /** 本机回放服务签发的 VTT 地址。 */
+  url: string;
 };
 
 export type VideoDownloadWatchProgressInput = {

@@ -9,6 +9,8 @@
 //! `MediaMuxer`，两条路径都不转码。
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::sync::OnceLock;
@@ -33,7 +35,8 @@ use uuid::Uuid;
 use crate::commands::video::{resolve_bilibili, video_stream_headers};
 use crate::error::{AppError, AppResult};
 use crate::local_http;
-use crate::models::video::VideoPlayRequest;
+use crate::models::video::{VideoPlayRequest, VideoSubtitle};
+use crate::sites::bilibili::BilibiliSite;
 use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
 use crate::stream_proxy::request_header;
@@ -45,6 +48,8 @@ const ENTRY_FILE: &str = "entry.json";
 const VIDEO_PART: &str = "video.m4s.part";
 const AUDIO_PART: &str = "audio.m4s.part";
 const OUTPUT_PART: &str = "output.mp4.part";
+const SUBTITLE_FILE_PREFIX: &str = "subtitle-";
+const SUBTITLE_FILE_EXTENSION: &str = ".vtt";
 const MAX_TITLE_CHARS: usize = 80;
 const VIDEO_FILE_EXTENSION: &str = ".mp4";
 const MAX_FILE_NAME_BYTES: usize = 255;
@@ -137,13 +142,41 @@ struct VideoDownloadProgressEvent {
     status: VideoDownloadStatus,
 }
 
-/// 应用内播放所需的信息。URL 只能由后端生成，并绑定到本次进程内的单文件授权。
+/// 应用内播放所需的信息。URL 只能由后端生成，并绑定到本次进程内的任务授权。
 #[derive(Debug, Clone, Serialize)]
 pub struct VideoDownloadPlaybackInfo {
     pub item: VideoDownloadItem,
     pub url: String,
     /// 上次离开时的播放位置，单位秒。
     pub progress: f64,
+    /// 下载时缓存的 B 站 CC 字幕，播放时不需要再访问上游。
+    pub subtitles: Vec<VideoDownloadSubtitle>,
+    /// 字幕未完整缓存时的可展示原因，不影响已下载媒体播放。
+    pub subtitle_error: Option<String>,
+}
+
+/// 已完成下载可离线加载的字幕轨。
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoDownloadSubtitle {
+    pub id: String,
+    pub lan: String,
+    pub lan_doc: String,
+    /// 本机回放服务签发的 VTT 地址。
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedSubtitle {
+    id: String,
+    lan: String,
+    lan_doc: String,
+    file_name: String,
+}
+
+#[derive(Default)]
+struct CachedSubtitleState {
+    subtitles: Vec<CachedSubtitle>,
+    subtitle_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +191,10 @@ struct StoredEntry {
     watch_progress: f64,
     #[serde(default)]
     watch_duration: f64,
+    #[serde(default)]
+    subtitles: Vec<CachedSubtitle>,
+    #[serde(default)]
+    subtitle_error: Option<String>,
 }
 
 struct InnerState {
@@ -198,14 +235,14 @@ impl DownloadPlaybackServer {
         }
     }
 
-    async fn url(&self, item_id: &str, file: &Path) -> AppResult<String> {
+    async fn urls(&self, item_id: &str, files: &[PathBuf]) -> AppResult<Vec<String>> {
         {
             let state = self
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(server) = state.as_ref() {
-                return server.register(item_id, file);
+                return server.register(item_id, files);
             }
         }
 
@@ -254,7 +291,7 @@ impl DownloadPlaybackServer {
         state
             .as_ref()
             .expect("download playback server installed")
-            .register(item_id, file)
+            .register(item_id, files)
     }
 
     fn revoke(&self, item_id: &str) {
@@ -284,27 +321,46 @@ impl DownloadPlaybackServer {
 }
 
 impl PlaybackServerInner {
-    fn register(&self, item_id: &str, file: &Path) -> AppResult<String> {
-        let grant = Uuid::new_v4().simple().to_string();
+    fn register(&self, item_id: &str, files: &[PathBuf]) -> AppResult<Vec<String>> {
         let mut grants = self
             .grants
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some((grant, _)) = grants
+        let current: HashMap<&Path, &str> = grants
             .iter()
-            .find(|(_grant, value)| value.item_id == item_id && value.file == file)
+            .filter(|(_grant, value)| value.item_id == item_id)
+            .map(|(grant, value)| (value.file.as_path(), grant.as_str()))
+            .collect();
+        if current.len() == files.len()
+            && files
+                .iter()
+                .all(|file| current.contains_key(file.as_path()))
         {
-            return Ok(format!("{}/{}/{}", self.base_url, self.token, grant));
+            return Ok(files
+                .iter()
+                .map(|file| {
+                    let grant = current
+                        .get(file.as_path())
+                        .expect("registered playback file");
+                    format!("{}/{}/{}", self.base_url, self.token, grant)
+                })
+                .collect());
         }
         grants.retain(|_grant, value| value.item_id != item_id);
-        grants.insert(
-            grant.clone(),
-            PlaybackGrant {
-                item_id: item_id.to_string(),
-                file: file.to_path_buf(),
-            },
-        );
-        Ok(format!("{}/{}/{}", self.base_url, self.token, grant))
+        Ok(files
+            .iter()
+            .map(|file| {
+                let grant = Uuid::new_v4().simple().to_string();
+                grants.insert(
+                    grant.clone(),
+                    PlaybackGrant {
+                        item_id: item_id.to_string(),
+                        file: file.to_path_buf(),
+                    },
+                );
+                format!("{}/{}/{}", self.base_url, self.token, grant)
+            })
+            .collect())
     }
 }
 
@@ -398,7 +454,27 @@ impl VideoDownloadManager {
             ));
         }
         let file = validate_playback_file(&self.root, &item.id, Path::new(&item.file_path))?;
-        let url = self.playback.url(&item.id, &file).await?;
+        let cached = load_cached_subtitles(&self.root, &item.id);
+        let mut files = vec![file.clone()];
+        let mut cached_subtitles = Vec::new();
+        let mut subtitle_error = cached.subtitle_error;
+        for subtitle in cached.subtitles {
+            let path = self.root.join(&item.id).join(&subtitle.file_name);
+            match validate_download_file(&self.root, &item.id, &path, is_subtitle_file) {
+                Ok(path) => {
+                    files.push(path);
+                    cached_subtitles.push(subtitle);
+                }
+                Err(_) => {
+                    let missing = "部分字幕缓存已丢失，重新下载可恢复";
+                    subtitle_error = Some(match subtitle_error.take() {
+                        Some(error) => format!("{error}；{missing}"),
+                        None => missing.to_string(),
+                    });
+                }
+            }
+        }
+        let urls = self.playback.urls(&item.id, &files).await?;
         let current = {
             let inner = self
                 .inner
@@ -429,10 +505,24 @@ impl VideoDownloadManager {
                 return Err(error);
             }
         };
+        let mut urls = urls.into_iter();
+        let url = urls.next().expect("playback media URL");
+        let subtitles = cached_subtitles
+            .into_iter()
+            .zip(urls)
+            .map(|(subtitle, url)| VideoDownloadSubtitle {
+                id: subtitle.id,
+                lan: subtitle.lan,
+                lan_doc: subtitle.lan_doc,
+                url,
+            })
+            .collect();
         Ok(VideoDownloadPlaybackInfo {
             progress: item.watch_progress,
             item,
             url,
+            subtitles,
+            subtitle_error,
         })
     }
 
@@ -843,14 +933,25 @@ fn submit_entry(
 }
 
 fn write_entry(root: &Path, item: &VideoDownloadItem, file_name: &str) -> AppResult<()> {
+    let existing = read_stored_entry(root, &item.id);
     let stored = StoredEntry {
         item: item.clone(),
         file_name: file_name.to_string(),
         discard_partials: item.discard_partials,
         watch_progress: item.watch_progress,
         watch_duration: item.watch_duration,
+        subtitles: existing
+            .as_ref()
+            .map(|entry| entry.subtitles.clone())
+            .unwrap_or_default(),
+        subtitle_error: existing.and_then(|entry| entry.subtitle_error),
     };
-    let bytes = serde_json::to_vec_pretty(&stored).map_err(|error| {
+    write_stored_entry(root, &stored)
+}
+
+fn write_stored_entry(root: &Path, stored: &StoredEntry) -> AppResult<()> {
+    let item = &stored.item;
+    let bytes = serde_json::to_vec_pretty(stored).map_err(|error| {
         AppError::new(
             "video_download_metadata_error",
             format!("序列化下载信息失败: {error}"),
@@ -871,6 +972,74 @@ fn write_entry(root: &Path, item: &VideoDownloadItem, file_name: &str) -> AppRes
             "video_download_metadata_error",
             format!("保存下载信息失败: {error}"),
         )
+    })
+}
+
+fn read_stored_entry(root: &Path, id: &str) -> Option<StoredEntry> {
+    read_stored_entry_from_dir(&root.join(id))
+}
+
+fn read_stored_entry_from_dir(dir: &Path) -> Option<StoredEntry> {
+    let bytes = std::fs::read(dir.join(ENTRY_FILE)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn load_cached_subtitles(root: &Path, id: &str) -> CachedSubtitleState {
+    read_cached_subtitles_from_dir(&root.join(id))
+}
+
+fn read_cached_subtitles_from_dir(dir: &Path) -> CachedSubtitleState {
+    read_stored_entry_from_dir(dir)
+        .map(|stored| CachedSubtitleState {
+            subtitles: stored.subtitles,
+            subtitle_error: stored.subtitle_error,
+        })
+        .unwrap_or_default()
+}
+
+fn persist_cached_subtitles(
+    manager: &VideoDownloadManager,
+    item: &VideoDownloadItem,
+    state: &CachedSubtitleState,
+) -> AppResult<()> {
+    let _guard = manager
+        .io_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let file_name = Path::new(&item.file_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| safe_file_name(name))
+        .ok_or_else(|| AppError::new("video_download_metadata_error", "下载文件名无效"))?;
+    let existing = read_stored_entry(&manager.root, &item.id);
+    let mut stored = existing.unwrap_or_else(|| StoredEntry {
+        item: item.clone(),
+        file_name: file_name.to_string(),
+        discard_partials: item.discard_partials,
+        watch_progress: item.watch_progress,
+        watch_duration: item.watch_duration,
+        subtitles: Vec::new(),
+        subtitle_error: None,
+    });
+    stored.file_name = file_name.to_string();
+    stored.subtitles = state.subtitles.clone();
+    stored.subtitle_error = state.subtitle_error.clone();
+    write_stored_entry(&manager.root, &stored)
+}
+
+fn persist_cached_subtitles_for_completion(
+    manager: &VideoDownloadManager,
+    item: &VideoDownloadItem,
+    state: &CachedSubtitleState,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+) -> Result<(), Box<DownloadOutcome>> {
+    persist_cached_subtitles(manager, item, state).map_err(|error| {
+        Box::new(DownloadOutcome::failed(
+            format!("保存字幕缓存信息失败：{}", error.message),
+            downloaded_bytes,
+            total_bytes,
+        ))
     })
 }
 
@@ -1260,6 +1429,15 @@ async fn download_item(
             }
         }
     }
+    let Some(subtitle_state) = cache_download_subtitles(&site, &request, &dir, &cancel).await
+    else {
+        let (downloaded, _) = partial_bytes(manager, item);
+        return DownloadOutcome::paused(downloaded, total_bytes);
+    };
+    if *cancel.borrow() {
+        let (downloaded, _) = partial_bytes(manager, item);
+        return DownloadOutcome::paused(downloaded, total_bytes);
+    }
 
     let file_name = Path::new(&item.file_path)
         .file_name()
@@ -1269,6 +1447,15 @@ async fn download_item(
     let final_path = dir.join(&file_name);
     let output_part = dir.join(OUTPUT_PART);
     let (downloaded_before_merge, _) = partial_bytes(manager, item);
+    if let Err(outcome) = persist_cached_subtitles_for_completion(
+        manager,
+        item,
+        &subtitle_state,
+        downloaded_before_merge,
+        total_bytes,
+    ) {
+        return *outcome;
+    }
     if manager
         .update_item_if_current(&item.id, item.request_generation, |stored| {
             stored.status = VideoDownloadStatus::Merging;
@@ -1302,6 +1489,296 @@ async fn download_item(
         file_path: Some(crate::app_paths::path_to_string(&final_path)),
         error: None,
     }
+}
+
+async fn cache_download_subtitles(
+    site: &BilibiliSite,
+    request: &VideoPlayRequest,
+    dir: &Path,
+    cancel: &watch::Receiver<bool>,
+) -> Option<CachedSubtitleState> {
+    let mut state = CachedSubtitleState::default();
+    let cached = read_cached_subtitles_from_dir(dir);
+    let meta = match await_with_cancel(site.video_player_meta(request), cancel).await? {
+        Ok(meta) => meta,
+        Err(error) => {
+            state.subtitles = cached
+                .subtitles
+                .into_iter()
+                .filter(|subtitle| cached_subtitle_file_is_valid(dir, subtitle))
+                .collect();
+            let retained = if state.subtitles.is_empty() {
+                ""
+            } else {
+                "；已沿用上次缓存"
+            };
+            state.subtitle_error = Some(format!("字幕信息获取失败：{}{retained}", error.message));
+            return Some(state);
+        }
+    };
+    if meta.subtitles.is_empty() {
+        prune_subtitle_files(dir, &HashSet::new()).await;
+        return Some(state);
+    }
+
+    let mut failures = Vec::new();
+    let mut fallbacks = Vec::new();
+    let mut assigned = HashSet::new();
+    let mut keep = HashSet::new();
+    for subtitle in &meta.subtitles {
+        let file_name = allocate_subtitle_file_name(&cached.subtitles, &assigned, &subtitle.lan);
+        assigned.insert(file_name.clone());
+        let id = subtitle_id_from_file_name(&file_name);
+        match cache_one_subtitle(site, subtitle, &dir.join(&file_name), cancel).await {
+            None => return None,
+            Some(Ok(())) => {
+                keep.insert(file_name.clone());
+                state.subtitles.push(CachedSubtitle {
+                    id,
+                    lan: subtitle.lan.clone(),
+                    lan_doc: subtitle.lan_doc.clone(),
+                    file_name,
+                });
+            }
+            Some(Err(error)) => {
+                if let Some(previous) =
+                    reusable_cached_subtitle(dir, &cached.subtitles, &file_name, &subtitle.lan)
+                {
+                    keep.insert(file_name.clone());
+                    state.subtitles.push(CachedSubtitle {
+                        id,
+                        lan: subtitle.lan.clone(),
+                        lan_doc: subtitle.lan_doc.clone(),
+                        file_name,
+                    });
+                    fallbacks.push(format!("{}（已沿用上次缓存）", previous.lan_doc));
+                } else {
+                    failures.push(format!("{}：{error}", subtitle.lan_doc));
+                }
+            }
+        }
+    }
+    if *cancel.borrow() {
+        return None;
+    }
+    prune_subtitle_files(dir, &keep).await;
+    state.subtitle_error = subtitle_cache_warning(&failures, &fallbacks);
+    Some(state)
+}
+
+async fn cache_one_subtitle(
+    site: &BilibiliSite,
+    subtitle: &VideoSubtitle,
+    path: &Path,
+    cancel: &watch::Receiver<bool>,
+) -> Option<Result<(), String>> {
+    let result = await_with_cancel(site.fetch_subtitle(&subtitle.url), cancel).await?;
+    let raw = match result {
+        Ok(raw) => raw,
+        Err(error) => return Some(Err(error.message)),
+    };
+    let vtt = match subtitle_json_to_vtt(&raw) {
+        Ok(vtt) => vtt,
+        Err(error) => return Some(Err(error)),
+    };
+    Some(write_subtitle_vtt(path, &vtt).await)
+}
+
+async fn await_with_cancel<T>(
+    future: impl Future<Output = T>,
+    cancel: &watch::Receiver<bool>,
+) -> Option<T> {
+    if *cancel.borrow() {
+        return None;
+    }
+    let mut cancellation = cancel.clone();
+    tokio::select! {
+        biased;
+        _ = cancellation.changed() => None,
+        output = future => Some(output),
+    }
+}
+
+async fn write_subtitle_vtt(path: &Path, vtt: &str) -> Result<(), String> {
+    if !vtt.starts_with("WEBVTT") {
+        return Err("字幕内容不是有效的 WebVTT".to_string());
+    }
+    let path = path.to_path_buf();
+    let bytes = vtt.as_bytes().to_vec();
+    tokio::task::spawn_blocking(move || {
+        crate::app_paths::write_recoverable_file(&path, &bytes, |bytes| {
+            bytes.starts_with(b"WEBVTT")
+        })
+    })
+    .await
+    .map_err(|error| format!("写入 VTT 后台任务失败：{error}"))?
+    .map_err(|error| format!("写入 VTT 失败：{error}"))
+}
+
+fn reusable_cached_subtitle<'a>(
+    dir: &Path,
+    cached: &'a [CachedSubtitle],
+    file_name: &str,
+    lan: &str,
+) -> Option<&'a CachedSubtitle> {
+    cached.iter().find(|subtitle| {
+        subtitle.file_name == file_name
+            && subtitle.lan == lan
+            && cached_subtitle_file_is_valid(dir, subtitle)
+    })
+}
+
+fn cached_subtitle_file_is_valid(dir: &Path, subtitle: &CachedSubtitle) -> bool {
+    if !safe_file_name(&subtitle.file_name) || !is_subtitle_file(Path::new(&subtitle.file_name)) {
+        return false;
+    }
+    let path = dir.join(&subtitle.file_name);
+    let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return false;
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0_u8; 6];
+    file.read_exact(&mut header).is_ok() && &header == b"WEBVTT"
+}
+
+fn subtitle_cache_warning(failures: &[String], fallbacks: &[String]) -> Option<String> {
+    match (failures.first(), fallbacks.first()) {
+        (None, None) => None,
+        (Some(first), None) => Some(if failures.len() == 1 {
+            format!("字幕缓存失败，{first}")
+        } else {
+            format!("字幕缓存不完整，{first}（共 {} 条失败）", failures.len())
+        }),
+        (None, Some(first)) => Some(if fallbacks.len() == 1 {
+            format!("字幕刷新失败，{first}")
+        } else {
+            format!("部分字幕刷新失败，{first}（共 {} 条）", fallbacks.len())
+        }),
+        (Some(first), Some(_)) => Some(format!(
+            "字幕缓存不完整，{first}（共 {} 条失败；{} 条沿用上次缓存）",
+            failures.len(),
+            fallbacks.len()
+        )),
+    }
+}
+
+async fn prune_subtitle_files(dir: &Path, keep: &HashSet<String>) {
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if is_subtitle_file(Path::new(name)) && !keep.contains(name) {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
+    }
+}
+
+fn subtitle_file_name(index: usize) -> String {
+    format!("{SUBTITLE_FILE_PREFIX}{index}{SUBTITLE_FILE_EXTENSION}")
+}
+
+fn allocate_subtitle_file_name(
+    cached: &[CachedSubtitle],
+    assigned: &HashSet<String>,
+    lan: &str,
+) -> String {
+    if let Some(file_name) = cached.iter().find_map(|subtitle| {
+        (subtitle.lan == lan
+            && !assigned.contains(&subtitle.file_name)
+            && safe_file_name(&subtitle.file_name)
+            && is_subtitle_file(Path::new(&subtitle.file_name)))
+        .then(|| subtitle.file_name.clone())
+    }) {
+        return file_name;
+    }
+
+    (0..)
+        .map(subtitle_file_name)
+        .find(|file_name| {
+            !assigned.contains(file_name)
+                && !cached
+                    .iter()
+                    .any(|subtitle| subtitle.file_name == *file_name)
+        })
+        .expect("subtitle file name space exhausted")
+}
+
+fn subtitle_id_from_file_name(file_name: &str) -> String {
+    Path::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file_name)
+        .to_string()
+}
+
+fn subtitle_json_to_vtt(raw: &str) -> Result<String, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(raw).map_err(|error| format!("字幕 JSON 无效：{error}"))?;
+    let body = root
+        .get("body")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "字幕 JSON 缺少 body".to_string())?;
+    let mut cues = Vec::new();
+    for line in body {
+        let (Some(from), Some(to), Some(content)) = (
+            line.get("from").and_then(serde_json::Value::as_f64),
+            line.get("to").and_then(serde_json::Value::as_f64),
+            line.get("content").and_then(serde_json::Value::as_str),
+        ) else {
+            continue;
+        };
+        if !from.is_finite() || !to.is_finite() || from < 0.0 || to <= from {
+            continue;
+        }
+        let from_ms = vtt_millis(from);
+        let to_ms = vtt_millis(to);
+        if to_ms <= from_ms {
+            continue;
+        }
+        let content = content
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\0', "");
+        let content = content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if content.is_empty() {
+            continue;
+        }
+        cues.push(format!(
+            "{} --> {}\n{content}",
+            vtt_timestamp(from_ms),
+            vtt_timestamp(to_ms)
+        ));
+    }
+    if cues.is_empty() {
+        return Err("字幕文件没有有效内容".to_string());
+    }
+    Ok(format!("WEBVTT\n\n{}\n", cues.join("\n\n")))
+}
+
+fn vtt_millis(seconds: f64) -> u64 {
+    (seconds.max(0.0) * 1_000.0).round() as u64
+}
+
+fn vtt_timestamp(total_millis: u64) -> String {
+    let hours = total_millis / 3_600_000;
+    let minutes = total_millis / 60_000 % 60;
+    let seconds = total_millis / 1_000 % 60;
+    let millis = total_millis % 1_000;
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
 }
 
 fn partial_bytes(manager: &VideoDownloadManager, item: &VideoDownloadItem) -> (u64, u64) {
@@ -1890,7 +2367,9 @@ async fn handle_playback_client(
         local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
-    let Ok(canonical_file) = validate_playback_file(root, &grant.item_id, &grant.file) else {
+    let Ok(canonical_file) =
+        validate_download_file(root, &grant.item_id, &grant.file, is_served_file)
+    else {
         local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
@@ -1904,6 +2383,15 @@ async fn handle_playback_client(
 }
 
 fn validate_playback_file(root: &Path, item_id: &str, file: &Path) -> AppResult<PathBuf> {
+    validate_download_file(root, item_id, file, is_mp4_file)
+}
+
+fn validate_download_file(
+    root: &Path,
+    item_id: &str,
+    file: &Path,
+    allowed: impl Fn(&Path) -> bool,
+) -> AppResult<PathBuf> {
     if !safe_id(item_id) {
         return Err(AppError::new(
             "video_download_missing",
@@ -1931,7 +2419,7 @@ fn validate_playback_file(root: &Path, item_id: &str, file: &Path) -> AppResult<
     }
     let metadata = std::fs::symlink_metadata(file)
         .map_err(|_| AppError::new("video_download_missing", "下载文件已被移动或删除"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || !is_mp4_file(file) {
+    if metadata.file_type().is_symlink() || !metadata.is_file() || !allowed(file) {
         return Err(AppError::new(
             "video_download_missing",
             "下载文件已被移动或删除",
@@ -1952,6 +2440,23 @@ fn is_mp4_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+}
+
+fn is_served_file(path: &Path) -> bool {
+    is_mp4_file(path) || is_subtitle_file(path)
+}
+
+fn is_subtitle_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(index) = name
+        .strip_prefix(SUBTITLE_FILE_PREFIX)
+        .and_then(|name| name.strip_suffix(SUBTITLE_FILE_EXTENSION))
+    else {
+        return false;
+    };
+    !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn finite_non_negative(value: f64) -> f64 {
@@ -2036,6 +2541,15 @@ mod tests {
             author: None,
             duration: Some(10.0),
             qn: Some(qn),
+        }
+    }
+
+    fn cached_subtitle(lan: &str, file_name: &str) -> CachedSubtitle {
+        CachedSubtitle {
+            id: subtitle_id_from_file_name(file_name),
+            lan: lan.to_string(),
+            lan_doc: lan.to_string(),
+            file_name: file_name.to_string(),
         }
     }
 
@@ -2499,18 +3013,323 @@ mod tests {
             discard_partials: true,
             watch_progress: 0.0,
             watch_duration: 0.0,
+            subtitles: Vec::new(),
+            subtitle_error: None,
         })
         .unwrap();
         let mut legacy = value.as_object().unwrap().clone();
         legacy.remove("discard_partials");
         legacy.remove("watch_progress");
         legacy.remove("watch_duration");
+        legacy.remove("subtitles");
+        legacy.remove("subtitle_error");
         let decoded: StoredEntry =
             serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
         assert!(!decoded.discard_partials);
         assert_eq!(decoded.watch_progress, 0.0);
         assert_eq!(decoded.watch_duration, 0.0);
+        assert!(decoded.subtitles.is_empty());
+        assert!(decoded.subtitle_error.is_none());
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn subtitle_json_is_converted_to_valid_vtt_and_drops_invalid_cues() {
+        let raw = serde_json::json!({
+            "body": [
+                { "from": 0.0, "to": 1.2345, "content": "第一行" },
+                { "from": 2.0, "to": 3.0, "content": "第一行\r\n第二行" },
+                { "from": 4.0, "to": 4.0, "content": "无效" },
+                { "from": 5.0, "to": 6.0, "content": "  " }
+            ]
+        })
+        .to_string();
+        let vtt = subtitle_json_to_vtt(&raw).unwrap();
+        assert!(vtt.starts_with("WEBVTT\n\n"));
+        assert!(vtt.contains("00:00:00.000 --> 00:00:01.235\n第一行"));
+        assert!(vtt.contains("00:00:02.000 --> 00:00:03.000\n第一行\n第二行"));
+        assert!(!vtt.contains("无效"));
+        assert!(subtitle_json_to_vtt("not json").is_err());
+        assert!(subtitle_json_to_vtt(r#"{"body":[]}"#).is_err());
+    }
+
+    #[test]
+    fn subtitle_file_names_are_narrowly_validated() {
+        assert!(is_subtitle_file(Path::new("subtitle-0.vtt")));
+        assert!(is_subtitle_file(Path::new("subtitle-123.vtt")));
+        assert!(!is_subtitle_file(Path::new("subtitle-.vtt")));
+        assert!(!is_subtitle_file(Path::new("subtitle-1.json")));
+        assert!(!is_subtitle_file(Path::new("subtitle-1.vtt/extra")));
+    }
+
+    #[test]
+    fn subtitle_file_names_follow_language_when_metadata_order_changes() {
+        let cached = vec![
+            cached_subtitle("zh-CN", "subtitle-0.vtt"),
+            cached_subtitle("en-US", "subtitle-1.vtt"),
+        ];
+        let mut assigned = HashSet::new();
+
+        let english = allocate_subtitle_file_name(&cached, &assigned, "en-US");
+        assigned.insert(english.clone());
+        let chinese = allocate_subtitle_file_name(&cached, &assigned, "zh-CN");
+        assigned.insert(chinese.clone());
+        let japanese = allocate_subtitle_file_name(&cached, &assigned, "ja-JP");
+
+        assert_eq!(english, "subtitle-1.vtt");
+        assert_eq!(chinese, "subtitle-0.vtt");
+        assert_eq!(japanese, "subtitle-2.vtt");
+        assert_eq!(subtitle_id_from_file_name(&english), "subtitle-1");
+        assert_eq!(subtitle_id_from_file_name(&chinese), "subtitle-0");
+    }
+
+    #[test]
+    fn duplicate_cached_languages_use_distinct_subtitle_files() {
+        let cached = vec![
+            cached_subtitle("zh-CN", "subtitle-0.vtt"),
+            cached_subtitle("zh-CN", "subtitle-1.vtt"),
+        ];
+        let mut assigned = HashSet::new();
+
+        let first = allocate_subtitle_file_name(&cached, &assigned, "zh-CN");
+        assigned.insert(first.clone());
+        let second = allocate_subtitle_file_name(&cached, &assigned, "zh-CN");
+        assigned.insert(second.clone());
+        let third = allocate_subtitle_file_name(&cached, &assigned, "zh-CN");
+
+        assert_eq!(first, "subtitle-0.vtt");
+        assert_eq!(second, "subtitle-1.vtt");
+        assert_eq!(third, "subtitle-2.vtt");
+    }
+
+    #[test]
+    fn unsafe_cached_subtitle_paths_are_never_reused_or_read() {
+        let root = temp_root("subtitle-unsafe");
+        let dir = root.join("task");
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = root.join("subtitle-0.vtt");
+        std::fs::write(&outside, b"WEBVTT\n\n00:00.000 --> 00:01.000\noutside\n").unwrap();
+
+        for file_name in [
+            "../subtitle-0.vtt".to_string(),
+            outside.to_string_lossy().into_owned(),
+            r"..\subtitle-0.vtt".to_string(),
+        ] {
+            let cached = cached_subtitle("zh-CN", &file_name);
+            let assigned = HashSet::new();
+            assert_eq!(
+                allocate_subtitle_file_name(std::slice::from_ref(&cached), &assigned, "zh-CN"),
+                "subtitle-0.vtt",
+                "{file_name}"
+            );
+            assert!(!cached_subtitle_file_is_valid(&dir, &cached), "{file_name}");
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interrupted_subtitle_refresh_cannot_rebind_old_language_file_name() {
+        let cached = vec![cached_subtitle("zh-CN", "subtitle-0.vtt")];
+        let mut assigned = HashSet::new();
+
+        // 上游顺序变化后先写英文；worker 此时暂停，旧索引仍只记录中文。
+        let english = allocate_subtitle_file_name(&cached, &assigned, "en-US");
+        assigned.insert(english.clone());
+        assert_eq!(english, "subtitle-1.vtt");
+
+        let chinese = allocate_subtitle_file_name(&cached, &assigned, "zh-CN");
+        assert_eq!(chinese, "subtitle-0.vtt");
+        assert_eq!(cached[0].lan, "zh-CN");
+        assert_eq!(cached[0].file_name, chinese);
+        assert_ne!(cached[0].file_name, english);
+        assert!(
+            cached.iter().all(|subtitle| subtitle.lan != "en-US"),
+            "暂停后未持久化的英文轨道不能出现在旧索引中"
+        );
+    }
+
+    #[test]
+    fn subtitle_refresh_can_reuse_a_matching_previous_vtt() {
+        let root = temp_root("subtitle-fallback");
+        std::fs::create_dir_all(&root).unwrap();
+        let cached = CachedSubtitle {
+            id: "subtitle-0".to_string(),
+            lan: "zh-CN".to_string(),
+            lan_doc: "中文".to_string(),
+            file_name: "subtitle-0.vtt".to_string(),
+        };
+        let path = root.join(&cached.file_name);
+        std::fs::write(&path, b"WEBVTT\n\n00:00.000 --> 00:01.000\nold\n").unwrap();
+
+        assert!(
+            reusable_cached_subtitle(
+                &root,
+                std::slice::from_ref(&cached),
+                "subtitle-0.vtt",
+                "zh-CN"
+            )
+            .is_some()
+        );
+        assert!(
+            reusable_cached_subtitle(
+                &root,
+                std::slice::from_ref(&cached),
+                "subtitle-1.vtt",
+                "zh-CN"
+            )
+            .is_none()
+        );
+        assert!(
+            reusable_cached_subtitle(
+                &root,
+                std::slice::from_ref(&cached),
+                "subtitle-0.vtt",
+                "en-US"
+            )
+            .is_none()
+        );
+
+        std::fs::write(&path, b"not a subtitle").unwrap();
+        assert!(
+            reusable_cached_subtitle(
+                &root,
+                std::slice::from_ref(&cached),
+                "subtitle-0.vtt",
+                "zh-CN"
+            )
+            .is_none()
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn subtitle_atomic_write_failure_keeps_the_previous_vtt() {
+        let root = temp_root("subtitle-atomic");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("subtitle-0.vtt");
+        let previous = b"WEBVTT\n\n00:00.000 --> 00:01.000\nold\n";
+        std::fs::write(&path, previous).unwrap();
+        // 同目录事务侧文件被目录占用时，发布步骤失败，但已成片 VTT 不应被截断。
+        std::fs::create_dir(path.with_extension("vtt.tmp")).unwrap();
+
+        let error = write_subtitle_vtt(&path, "WEBVTT\n\n00:01.000 --> 00:02.000\nnew\n")
+            .await
+            .unwrap_err();
+        assert!(error.contains("写入 VTT"));
+        assert_eq!(std::fs::read(&path).unwrap(), previous);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn subtitle_request_wait_stops_when_download_is_cancelled() {
+        let (cancel, receiver) = watch::channel(false);
+        let task = tokio::spawn(async move {
+            await_with_cancel(std::future::pending::<()>(), &receiver).await
+        });
+        cancel.send(true).unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("取消后字幕请求应立即返回")
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn subtitle_metadata_save_failure_maps_to_failed_download() {
+        let root = temp_root("subtitle-metadata-failure");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let mut item = manager.start(download_input(80)).unwrap();
+        item.file_path.clear();
+
+        let outcome = persist_cached_subtitles_for_completion(
+            &manager,
+            &item,
+            &CachedSubtitleState::default(),
+            7,
+            9,
+        )
+        .unwrap_err();
+        let outcome = *outcome;
+        assert_eq!(outcome.status, VideoDownloadStatus::Failed);
+        assert!(
+            outcome
+                .error
+                .is_some_and(|error| error.starts_with("保存字幕缓存信息失败"))
+        );
+        assert_ne!(outcome.status, VideoDownloadStatus::Completed);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn playback_info_serves_cached_vtt_from_the_media_origin() {
+        let root = temp_root("subtitle-playback");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        complete_item(&manager, &item.id, b"completed mp4");
+        let subtitle_path = root.join(&item.id).join("subtitle-0.vtt");
+        std::fs::write(
+            &subtitle_path,
+            b"WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n",
+        )
+        .unwrap();
+        persist_cached_subtitles(
+            &manager,
+            &item,
+            &CachedSubtitleState {
+                subtitles: vec![CachedSubtitle {
+                    id: "subtitle-0".to_string(),
+                    lan: "zh-CN".to_string(),
+                    lan_doc: "中文".to_string(),
+                    file_name: "subtitle-0.vtt".to_string(),
+                }],
+                subtitle_error: Some("另一条字幕失败".to_string()),
+            },
+        )
+        .unwrap();
+
+        let info = manager.playback_info(&item.id).await.unwrap();
+        assert_eq!(info.subtitles.len(), 1);
+        assert_eq!(info.subtitles[0].id, "subtitle-0");
+        assert_eq!(info.subtitles[0].lan, "zh-CN");
+        assert_eq!(info.subtitle_error.as_deref(), Some("另一条字幕失败"));
+        let media_origin = info.url.split('/').take(3).collect::<Vec<_>>().join("/");
+        assert!(info.subtitles[0].url.starts_with(&media_origin));
+
+        let media_without_scheme = info.url.strip_prefix("http://").unwrap();
+        let (media_authority, media_path) = media_without_scheme.split_once('/').unwrap();
+        let (status, _, _) =
+            http_request(media_authority, "GET", &format!("/{media_path}"), "").await;
+        assert_eq!(status, 200);
+
+        let without_scheme = info.subtitles[0].url.strip_prefix("http://").unwrap();
+        let (authority, path) = without_scheme.split_once('/').unwrap();
+        let (status, head, body) = http_request(authority, "GET", &format!("/{path}"), "").await;
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Type: text/vtt; charset=utf-8"));
+        assert!(body.starts_with(b"WEBVTT"));
+
+        manager.report_watch_progress(&item.id, 4.0, 10.0).unwrap();
+        let refreshed = manager.playback_info(&item.id).await.unwrap();
+        assert_eq!(refreshed.subtitles.len(), 1);
+        assert_eq!(refreshed.subtitles[0].url, info.subtitles[0].url);
+
+        std::fs::remove_file(subtitle_path).unwrap();
+        let missing = manager.playback_info(&item.id).await.unwrap();
+        assert!(missing.subtitles.is_empty());
+        assert!(
+            missing
+                .subtitle_error
+                .as_deref()
+                .is_some_and(|error| error.contains("字幕缓存已丢失"))
+        );
+
+        drop(manager);
         let _ = std::fs::remove_dir_all(root);
     }
 }

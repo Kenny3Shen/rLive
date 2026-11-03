@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn, formatOnline } from "@/lib/utils";
 import { formatRecordingDuration } from "@/features/recording/recording";
+import { DanmakuRichText } from "@/features/room/danmaku/emoji";
 import { firstVideoDanmakuAtOrAfter, type VideoDanmakuEntry } from "./videoDanmaku";
 import { usePlaybackClock, type PlaybackClock } from "./videoPlaybackClock";
 import {
@@ -44,6 +45,8 @@ export const VideoDanmakuList = memo(function VideoDanmakuList({
   loading,
   onSeek,
   active = true,
+  ariaLabel = "视频弹幕",
+  emptyText = "当前位置附近暂无弹幕",
 }: {
   /** 已加载并合并排序的全部弹幕条目（播放页的 danmakuEntries）。 */
   entries: readonly VideoDanmakuEntry[];
@@ -64,6 +67,10 @@ export const VideoDanmakuList = memo(function VideoDanmakuList({
    * 把条带的位置搅乱；跟随播放进度也没有意义，因为用户根本没在看这一页。
    */
   active?: boolean;
+  /** 列表区域的无障碍名称；录制回放传入自己的文案。 */
+  ariaLabel?: string;
+  /** 没有可显示条目时的说明。 */
+  emptyText?: string;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   // 虚拟器需要在视口挂载后重新取滚动元素，ref 同时存一份 state。
@@ -134,8 +141,11 @@ export const VideoDanmakuList = memo(function VideoDanmakuList({
     if (!viewport || !list || !item) return;
     const target = videoDanmakuFollowScrollTop({
       // 列表在滚动内容里的偏移用两个矩形之差加 scrollTop 换算，与嵌套层级无关。
-      rowTop: list.getBoundingClientRect().top - viewport.getBoundingClientRect().top +
-        viewport.scrollTop + item.start,
+      rowTop:
+        list.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top +
+        viewport.scrollTop +
+        item.start,
       rowHeight: item.size,
       viewportHeight: viewport.clientHeight,
       scrollHeight: viewport.scrollHeight,
@@ -220,7 +230,7 @@ export const VideoDanmakuList = memo(function VideoDanmakuList({
       <div
         ref={setViewportRef}
         data-slot="video-danmaku-list"
-        aria-label="视频弹幕"
+        aria-label={ariaLabel}
         // touch-pan-y：本视口位于侧栏横滑条带内，滚动容器必须让出横向，
         // 否则合成器会把横滑当作纵向滚动接走并 pointercancel（见 VideoSidebar 页签面板）。
         className="h-full overflow-y-auto overscroll-contain pb-2 touch-pan-y"
@@ -231,7 +241,7 @@ export const VideoDanmakuList = memo(function VideoDanmakuList({
           </div>
         )}
         {total === 0 && !loading && (
-          <p className="py-4 text-center text-xs text-muted-foreground">当前位置附近暂无弹幕</p>
+          <p className="py-4 text-center text-xs text-muted-foreground">{emptyText}</p>
         )}
         <ol
           ref={listRef}
@@ -314,16 +324,27 @@ const VideoDanmakuRow = memo(function VideoDanmakuRow({
         type="button"
         onClick={() => onSelect(entry.progressMs)}
         title="跳转到此弹幕的位置"
-        className="flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
+        className="flex w-full cursor-pointer items-start gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
       >
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+        <span className="shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
           {formatRecordingDuration(entry.progressMs)}
         </span>
-        <span
-          className="min-w-0 flex-1 truncate leading-relaxed"
-          style={entry.color ? { color: entry.color } : undefined}
-        >
-          {entry.content}
+        <span className="min-w-0 flex-1">
+          {entry.user && (
+            <span className="block truncate text-xs leading-4 text-muted-foreground">
+              {entry.user}
+            </span>
+          )}
+          <span
+            className={cn("block truncate leading-relaxed", entry.user && "mt-0.5")}
+            style={entry.color ? { color: entry.color } : undefined}
+          >
+            <DanmakuRichText
+              content={entry.content}
+              spans={entry.spans}
+              emojiClassName="max-h-[1.35em]"
+            />
+          </span>
         </span>
       </button>
     </li>

@@ -95,8 +95,8 @@ export type PlayerFullscreenHudProps = {
  * HUD 是否有东西可画。仅舞台接管顶栏还不够：没有解析出的标题、主播和菜单条目的房间
  * 会在画面顶部渲染一条空的遮罩带。
  *
- * `fullscreen` 指「舞台接管了页顶」（播放页不再另画顶栏）：直播与视频播放页已
- * 删除流内顶栏（恒传 true）；录制回放仍保留流内顶栏，只在全屏时传 true。
+ * `fullscreen` 指「舞台接管了页顶」（播放页不再另画顶栏）：直播、视频与录制
+ * 回放均已删除流内顶栏，因此恒传 true，由 HUD 自己承担返回动作。
  */
 export function showPlayerFullscreenHud({
   fullscreen,
