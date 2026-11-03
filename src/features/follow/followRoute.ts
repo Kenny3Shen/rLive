@@ -2,14 +2,29 @@ import { isSiteEnabled } from "@/shared/siteId";
 import type { SiteId } from "@/shared/types/live";
 
 export type FollowPlatformFilter = SiteId | "all";
-export type FollowView = "live" | "video" | "iptv";
+export type FollowView = "live" | "video" | "iptv" | "recordings" | "downloads";
 
 export const FOLLOW_PLATFORM_PARAM = "platform";
 export const FOLLOW_VIEW_PARAM = "view";
 
-export function followViewFromSearch(value: string | null): FollowView {
-  if (value === "video" || value === "iptv") return value;
-  return "live";
+/** 头部页签与横滑轨道共用同一顺序，避免手势方向和视觉顺序不一致。 */
+export const FOLLOW_VIEWS = ["live", "video", "iptv", "recordings", "downloads"] as const;
+
+export function followViewsFor(recordingAvailable: boolean): readonly FollowView[] {
+  return recordingAvailable ? FOLLOW_VIEWS : FOLLOW_VIEWS.filter((view) => view !== "recordings");
+}
+
+export function isFollowView(value: unknown): value is FollowView {
+  return typeof value === "string" && (FOLLOW_VIEWS as readonly string[]).includes(value);
+}
+
+/**
+ * 非法值回落直播，桌面专属录制在移动端也回落直播，避免深链接打开一个
+ * 本平台无法使用的空面板。
+ */
+export function followViewFromSearch(value: string | null, recordingAvailable = true): FollowView {
+  if (value === "recordings" && !recordingAvailable) return "live";
+  return isFollowView(value) ? value : "live";
 }
 
 export function withFollowView(searchParams: URLSearchParams, view: FollowView): URLSearchParams {

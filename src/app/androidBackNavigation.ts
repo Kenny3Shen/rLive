@@ -9,6 +9,7 @@ import {
   VIDEO_SEARCH_QUERY_PARAM,
   videoSearchPath,
 } from "@/features/video/videoRoute";
+import { VIDEO_DOWNLOAD_PLAYBACK_ROUTE_PREFIX } from "@/features/video/videoDownloadRoute";
 import { BILIBILI_SHORTS_PATH, LEGACY_DOUYIN_SHORTS_PATH } from "@/features/shorts/shortsFeed";
 
 /**
@@ -83,6 +84,9 @@ export function hasBrowserHistoryEntry(state: unknown): boolean {
  * 的 replace 一致。
  */
 export function androidBackFallbackPath(pathname: string): string {
+  if (pathname.startsWith(VIDEO_DOWNLOAD_PLAYBACK_ROUTE_PREFIX)) {
+    return "/follow?view=downloads";
+  }
   return pathname === BILIBILI_SHORTS_PATH || pathname === LEGACY_DOUYIN_SHORTS_PATH
     ? VIDEO_HOME_PATH
     : "/";

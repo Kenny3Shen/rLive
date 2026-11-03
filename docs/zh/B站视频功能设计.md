@@ -5,7 +5,7 @@
 ## 一、已锁定的产品决策
 
 - 入口：**新增侧栏「视频」目的地**，独立路由 `/video`。现有首页的直播平台条（B站/斗鱼/虎牙/抖音/Twitch）完全不动。
-- 头部整行 = 五个页签「推荐 / 热门 / 番剧 / 影视 / 下载」；前四个是内容页，其下一条**分区条**，再下是内容网格（与直播首页同一套等宽高卡片）；「下载」是独立的任务管理表面，不挂分区条，也不参与内容列表查询。
+- 头部整行 = 四个内容页签「推荐 / 热门 / 番剧 / 影视」，其下一条**分区条**，再下是内容网格（与直播首页同一套等宽高卡片）；下载任务统一在「关注 → 下载」管理，不占视频发现页页签，也不参与内容列表查询。
 - 番剧 / 影视点进去**要能播**（PGC playurl），与 UGC 是两套播放链路。
 - 画质走 **DASH**，使用 Video.js 官方 `@videojs/dash-video` 适配器（内部由 dash.js 读取 MPD）。
 - **搜索筛选一起做**（结构对齐 B 站 Web 端搜索页）：`/video/search` 结果页顶部——排序是一行可横滚的 chip（复用 `ChipStrip`，与分区条同套横滚/箭头/键盘逻辑），时长 / 分区 / 发布时间是三个独立下拉（`Select`，「当前值 ▾」形态，非默认高亮，首项即默认）。不收进单个「筛选」按钮、无重置按钮（各维度选回首项即默认）。筛选住在 URL（`?order/&duration/&zone/&pubtime=`，默认位不进 URL），换筛选替换历史（与首页换分区同取向）；头部查询条提交新关键词不带筛选参数，新搜索天然重置。分区表由后端 `video_search_zone_list` 提供（搜索 tid 与分区榜 rid 两套 ID，不能复用 `video_zone_list`）。**头部查询条的提交键与直播搜索页同款**：一枚内嵌在输入组右端的图标按钮（`InputGroupButton size="icon-xs"`，不写「搜索」二字），移动端头部因此只需容下返回键、输入框与一枚图标，输入框仍占八成以上宽度（按钮位于输入组内部，与输入框同高同中线，不越出输入组右缘）。
@@ -329,18 +329,24 @@ message DanmakuElem {
 
 参考 PiliPlus 的下载语义（视频 / 音频分轨、串行队列、Range 断点续传），但 rLive 多做一步：两条 DASH 轨下载完整后合并为 MP4，用户拿到的是可直接播放的单个文件，而不是需要另行处理的 m4s。使用说明与状态细节见[视频下载](视频下载.md)。
 
-**数据归属**：下载队列与文件不进 SQLite，与录制库同一取向。每个任务是一个自包含目录 `downloads/<id>/`，`entry.json` 保存 `VideoDownloadItem` 与最终文件名；临时文件是 `video.m4s.part`、`audio.m4s.part`、`output.mp4.part`，完成后改名为清洗过的 `<标题>.mp4`。任务 id 由稿件身份生成（UGC `{bvid}-{cid}`，PGC `ep-{ep_id}-{cid}`），同稿件换 P / 换集互不覆盖。启动时扫描 `downloads/` 重建队列：下载中 / 合并中改为暂停并写入可继续的提示，排队中自动入队，已完成但文件缺失标为失败。
+**数据归属**：下载队列与文件不进 SQLite，与录制库同一取向。每个任务是一个自包含目录 `downloads/<id>/`，`entry.json` 保存 `VideoDownloadItem`、最终文件名与本地观看进度，观看进度新字段带默认值以兼容旧记录；临时文件是 `video.m4s.part`、`audio.m4s.part`、`output.mp4.part`，完成后改名为清洗过的 `<标题>.mp4`。任务 id 由稿件身份生成（UGC `{bvid}-{cid}`，PGC `ep-{ep_id}-{cid}`），同稿件换 P / 换集互不覆盖。启动时扫描 `downloads/` 重建队列：下载中 / 合并中改为暂停并写入可继续的提示，排队中自动入队，已完成但文件缺失标为失败。
 
 **后端结构**：`video_download::VideoDownloadManager` 由 `AppState` 以 `Arc` 持有，内部是单 worker 串行队列。取流复用 `resolve_bilibili` 与 `BilibiliSite::video_play_selection`，拿到 `VideoTrack` 的 `base_url`、init 段与完整 `sidx` 分片表；HTTP 走 `recording_stream_client_for_route`（无总超时、45s 读超时）与 `video_stream_headers`，按 Range 从现有 `.part` 末尾续传。合并分平台：桌面端用 ffmpeg-next，打开两条 fMP4，直接映射视频 / 音频流，`format::output_as(..., "mp4")` 写头后**重新读取输出流 time_base**（写头前是 0/1，拿它算时间戳会让 `write_interleaved` 返回 `Invalid argument`），再按 DTS/PTS 归并两个输入的包并写 trailer；Android 没有链接 FFmpeg，`merge_download_tracks` 调 Kotlin 插件 `RliveVideoMuxPlugin`，用 `MediaExtractor` 读两条轨、`MediaMuxer` 写 MP4，同样只重封装。
 
-**Android 桥**：`commands/android_video_mux.rs` 把 `PluginHandle` 放进受管状态，通过 `run_mobile_plugin_async` 调用 Kotlin 的 `mux` / `openFile`。成片位于应用私有沙箱 `<dataDir>/rlive/downloads`，`file://` 不能直接交给外部播放器，`openFile` 用 `FileProvider` 换成 `content://` 并授予一次性读权限；`file_paths.xml` 相应声明 `<root-path path="rlive/">`（Tauri 的 Android `app_data_dir` 是 `Context.dataDir`，不在 `files/` 下）。
+**Android 桥**：`commands/android_video_mux.rs` 把 `PluginHandle` 放进受管状态，通过 `run_mobile_plugin_async` 调用 Kotlin 的 `mux` / `openFile`。成片位于应用私有沙箱 `<dataDir>/rlive/downloads`，`file://` 不能直接交给外部播放器，`openFile` 用 `FileProvider` 换成 `content://` 并授予一次性读权限；`file_paths.xml` 声明 `<files-path path="../rlive/downloads/">`，从 `Context.filesDir` 相邻位置只暴露下载目录。Tauri 的 Android `app_data_dir` 是 `Context.dataDir`，不能用映射设备根目录的 `root-path` 来表示它。
 
-**前端**：`/video?tab=download` 复用视频页的头部页签，但 `VideoPage` 在下载页签下提前返回 `VideoDownloadPage`，不启用列表与分区查询。播放页从 `playInfo.accept_quality` 构造画质选项，HUD「更多操作」与桌面底栏都能打开 `VideoDownloadDialog`；对话框在窗口全屏时通过 `DialogContent` 的 `container` 挂到舞台层，避免被全屏层遮住。队列状态由 Rust 事件 `video-download-changed` / `video-download-progress` 推入 TanStack Query 缓存，活动任务期间再以 2s 轮询兜底。`videoDownloadSupported()` 现在只判断是否运行在 Tauri，`videoDownloadCanReveal()` 仅桌面为真，控制「打开下载目录」与「文件夹」的显隐。
+**前端**：下载任务位于 `/follow?view=downloads`，由关注页渲染 `VideoDownloadPage`，与录制库及关注视图共享页头和左右筛选布局，不启用视频列表与分区查询。旧 `/video?tab=download` 深链重定向到关注页。播放页从 `playInfo.accept_quality` 构造画质选项，HUD「更多操作」与桌面底栏都能打开 `VideoDownloadDialog`；对话框在画面全屏时通过 `DialogContent` 的 `container` 挂到舞台层，避免被全屏层遮住。队列状态由 Rust 事件 `video-download-changed` / `video-download-progress` 推入 TanStack Query 缓存，活动任务期间再以 2s 轮询兜底。`videoDownloadSupported()` 现在只判断是否运行在 Tauri，`videoDownloadCanReveal()` 仅桌面为真，控制「打开下载目录」与「文件夹」的显隐。
 
-**平台边界**：两端共用队列与文件布局；Android 只能进入系统播放器，不能定位目录，也不能在应用内播放下载文件。暂停在数据块边界生效，合并阶段拒绝暂停；删除活动任务要等 worker 退出写入路径后再删目录，否则 Windows 会因文件占用留下半成品。
+**状态并发**：暂停、继续和重新发起任务推进内存请求代次；worker 的进度、元数据和收尾只允许写回当前代次，快速暂停后继续不会被旧 worker 的暂停结果覆盖。换画质的旧分片清理等旧 worker 退出后执行，`StoredEntry.discard_partials` 带默认值并持久化，兼容旧记录且跨重启仍能清理旧画质；该标志及请求代次不进入前端 IPC。
+
+**本地播放**：已完成任务从下载列表进入独立路由 `/video/download/play/:id`，不复用在线播放详情页，也不伪造录制条目。`video_download_playback_info` 返回条目、受控本地 URL 与观看位置，前端等待查询完成才创建 `LocalDownloadPlayer`；播放器用 Video.js 10 的原生 MP4 媒体组件，复用共享控制栏、倍速菜单、录制全屏 hook、Android 系统音量和观看进度判定。metadata 就绪后执行一次续播 seek，暂停、离开及结束时强制保存有效位置；本地进度通过 `video_download_watch_progress_report` 回写下载条目，不进入在线历史，也不向 B 站上报。
+
+**文件服务**：下载管理器在 loopback 临时端口提供带随机 token 的本地媒体地址，只从下载 id 查找已完成且存在的成片，规范化路径后校验不能越过任务目录。`local_http` 的共用文件服务处理 GET / HEAD、单段 Range、206 / 416 与 MP4 MIME；录制回放也复用该逻辑，Android 不依赖桌面 `recording` 模块。前端不提交任意文件路径，不使用 `file://`，播放不需要重新取在线 playurl。
+
+**平台边界**：两端共用队列、文件布局及应用内播放；Android 不提供定位目录。系统播放器入口仍保留，Android 外部播放才使用 `FileProvider`。MP4 不转码，解码能力取决于系统 WebView，应用内不加载离线弹幕、字幕或评论，不支持边下边播。暂停在数据块边界生效，合并阶段拒绝暂停；删除活动任务要等 worker 退出写入路径后再删目录，且删除期间禁止重新入队，否则 Windows 会因文件占用留下半成品。
 
 ## 九、待办与风险
 
 MPD 交付：`stream_proxy` 加**纯增量**文本模式（新增命令返回 `application/dash+xml`），video / audio / mpd 各用**独立 `session_id``（`start` 按 session 覆盖同名代理），离开播放页三个一起停，防连接泄漏。
 
-风险：风控 -352（靠 WBI + buvid3 + Referer + 真 UA 规避）；匿名最高 480P、1080P+ 需大会员；PGC 有版权与地区限制，需要可读的失败态；分区条不能直接复用 `CategoryBar`（它按 `LiveCategory` 类型），但应抽出 `CHIP_HEIGHT` / `CHIP_RADIUS` / `CHIP_TOUCH_TARGET` 与滚动/键盘逻辑共用；Shell 里视频页的 `groupStrip` 必须是五个页签（前四个内容页加「下载」任务页），不能复用 `sitePlatforms`。
+风险：风控 -352（靠 WBI + buvid3 + Referer + 真 UA 规避）；匿名最高 480P、1080P+ 需大会员；PGC 有版权与地区限制，需要可读的失败态；分区条不能直接复用 `CategoryBar`（它按 `LiveCategory` 类型），但应抽出 `CHIP_HEIGHT` / `CHIP_RADIUS` / `CHIP_TOUCH_TARGET` 与滚动/键盘逻辑共用；Shell 里视频页的 `groupStrip` 必须是四个内容页签，不能复用 `sitePlatforms`。

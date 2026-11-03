@@ -4,6 +4,13 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import { useEffect } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
+import {
+  applyVideoDownloadProgress,
+  mergeVideoDownload,
+  videoDownloadNeedsPolling,
+} from "./videoDownloadState";
+
+export { videoDownloadIsActive } from "./videoDownloadState";
 
 /**
  * B 站 VOD 下载的前端契约。
@@ -52,7 +59,41 @@ export type VideoDownloadInput = {
   qn?: number;
 };
 
+export type VideoDownloadPlaybackInfo = {
+  item: VideoDownloadItem;
+  /** Rust 本地文件服务生成的 loopback 地址；前端不得自行拼接路径。 */
+  url: string;
+  /** 上次观看位置，秒。 */
+  progress: number;
+};
+
+export type VideoDownloadWatchProgressInput = {
+  id: string;
+  progress: number;
+  duration: number;
+};
+
 export const VIDEO_DOWNLOADS_QUERY_KEY = ["video-downloads"] as const;
+export const VIDEO_DOWNLOAD_PLAYBACK_QUERY_KEY = ["video-download-playback"] as const;
+export const VIDEO_DOWNLOAD_VIEW_PARAM = "downloadView";
+
+export type VideoDownloadView = "all" | "active" | "completed";
+
+export const VIDEO_DOWNLOAD_VIEWS: readonly VideoDownloadView[] = ["all", "active", "completed"];
+
+export function videoDownloadViewFromSearch(value: string | null | undefined): VideoDownloadView {
+  return value === "active" || value === "completed" ? value : "all";
+}
+
+export function withVideoDownloadView(
+  current: URLSearchParams,
+  view: VideoDownloadView,
+): URLSearchParams {
+  const next = new URLSearchParams(current);
+  if (view === "all") next.delete(VIDEO_DOWNLOAD_VIEW_PARAM);
+  else next.set(VIDEO_DOWNLOAD_VIEW_PARAM, view);
+  return next;
+}
 const VIDEO_DOWNLOAD_CHANGED_EVENT = "video-download-changed";
 const VIDEO_DOWNLOAD_PROGRESS_EVENT = "video-download-progress";
 /** 有活动任务时的兜底轮询间隔；正常进度靠事件推送。 */
@@ -100,10 +141,6 @@ export function videoDownloadStatusLabel(status: VideoDownloadStatus): string {
   }
 }
 
-export function videoDownloadIsActive(status: VideoDownloadStatus): boolean {
-  return status !== "completed";
-}
-
 export function videoDownloadPercent(item: VideoDownloadItem): number {
   if (item.total_bytes <= 0) return 0;
   return Math.min(100, Math.max(0, (item.downloaded_bytes / item.total_bytes) * 100));
@@ -138,15 +175,24 @@ export function videoDownloadOpen(id: string): Promise<void> {
   return invokeCmd<void>("video_download_open", { id });
 }
 
+/** 每次进入播放页都重新取地址：本地服务的 token URL 在进程重启后失效。 */
+export function videoDownloadPlaybackInfo(id: string): Promise<VideoDownloadPlaybackInfo> {
+  return invokeCmd<VideoDownloadPlaybackInfo>("video_download_playback_info", { id });
+}
+
+export function videoDownloadWatchProgressReport(
+  input: VideoDownloadWatchProgressInput,
+): Promise<void> {
+  return invokeCmd<void>("video_download_watch_progress_report", input);
+}
+
 export function upsertVideoDownloadInCache(
   queryClient: QueryClient,
   item: VideoDownloadItem,
 ): void {
   queryClient.setQueryData<VideoDownloadItem[]>(VIDEO_DOWNLOADS_QUERY_KEY, (items) => {
     if (!items) return items;
-    const next = items.filter((entry) => entry.id !== item.id);
-    next.push(item);
-    return next;
+    return mergeVideoDownload(items, item);
   });
 }
 
@@ -154,8 +200,8 @@ export function upsertVideoDownloadInCache(
  * 下载列表 + 事件订阅。
  *
  * 事件只在页面挂载期间订阅；离开页签后任务继续在后台跑，回来时会重新取一次
- * 全量列表。活动任务同时保留低频轮询，事件丢失（窗口重建、监听注册竞态）
- * 时进度仍能收敛。
+ * 全量列表。会自行推进的任务同时保留低频轮询，事件丢失（窗口重建、监听
+ * 注册竞态）时进度仍能收敛；暂停和失败不会被无意义地轮询。
  */
 export function useVideoDownloads(enabled = true) {
   const queryClient = useQueryClient();
@@ -166,7 +212,7 @@ export function useVideoDownloads(enabled = true) {
     enabled: enabled && supported,
     staleTime: 0,
     refetchInterval: (query) =>
-      query.state.data?.some((item) => videoDownloadIsActive(item.status))
+      query.state.data?.some((item) => videoDownloadNeedsPolling(item.status))
         ? ACTIVE_POLL_INTERVAL_MS
         : false,
   });
@@ -190,23 +236,12 @@ export function useVideoDownloads(enabled = true) {
           return items?.filter((item) => item.id !== payload.id);
         }
         if (!items) return items;
-        const next = items.filter((item) => item.id !== payload.item!.id);
-        next.push(payload.item!);
-        return next;
+        return mergeVideoDownload(items, payload.item);
       });
     });
     register<VideoDownloadProgressEvent>(VIDEO_DOWNLOAD_PROGRESS_EVENT, (payload) => {
       queryClient.setQueryData<VideoDownloadItem[]>(VIDEO_DOWNLOADS_QUERY_KEY, (items) =>
-        items?.map((item) =>
-          item.id === payload.id
-            ? {
-                ...item,
-                downloaded_bytes: payload.downloaded_bytes,
-                total_bytes: payload.total_bytes,
-                status: payload.status,
-              }
-            : item,
-        ),
+        items ? applyVideoDownloadProgress(items, payload) : items,
       );
     });
 

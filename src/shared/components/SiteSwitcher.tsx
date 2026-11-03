@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { isSiteEnabled } from "@/shared/siteId";
@@ -43,17 +43,6 @@ type SiteSwitcherProps = {
   filterMode?: boolean;
   /** 在指针或键盘激活之前预加载目的地。 */
   onValueIntent?: (value: SiteSwitcherValue) => void;
-  /** 追加在平台页签之后的非平台入口（如直播页的「录制」）。 */
-  extraTab?: {
-    id: string;
-    label: string;
-    icon: ReactNode;
-    active: boolean;
-    badge?: number;
-    onClick: () => void;
-  };
-  /** 由外部入口选中时压掉平台页签的选中态。 */
-  hideSelection?: boolean;
   className?: string;
 };
 
@@ -63,8 +52,6 @@ export function SiteSwitcher({
   includeAll = false,
   filterMode = false,
   onValueIntent,
-  extraTab,
-  hideSelection = false,
   className,
 }: SiteSwitcherProps) {
   const siteId = useSettingsStore((s) => s.siteId);
@@ -106,7 +93,7 @@ export function SiteSwitcher({
       aria-label={filterMode ? "筛选直播平台" : "直播平台"}
     >
       {entries.map((site) => {
-        const active = !hideSelection && site.id === selectedValue;
+        const active = site.id === selectedValue;
         const accent = site.id === "all" ? undefined : (SITE_ACCENT[site.id] ?? "#6c8cff");
         const label = site.id === "all" ? site.name : (SITE_LABELS[site.id] ?? site.name);
 
@@ -164,34 +151,6 @@ export function SiteSwitcher({
           </button>
         );
       })}
-      {extraTab && (
-        <button
-          key={extraTab.id}
-          type="button"
-          role="tab"
-          data-motion-control
-          aria-selected={extraTab.active}
-          title={extraTab.label}
-          onClick={extraTab.onClick}
-          className={cn(
-            "relative flex h-full shrink-0 items-center gap-2 px-4 text-sm font-medium transition-colors duration-150 max-md:min-w-0 max-md:flex-1 max-md:justify-center max-md:px-2",
-            extraTab.active
-              ? "text-foreground"
-              : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
-          )}
-        >
-          <span className="flex size-5 shrink-0 items-center justify-center">{extraTab.icon}</span>
-          <span className="hidden sm:inline">{extraTab.label}</span>
-          {extraTab.badge ? (
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-              {extraTab.badge}
-            </span>
-          ) : null}
-          {extraTab.active && (
-            <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
-          )}
-        </button>
-      )}
     </div>
   );
 }

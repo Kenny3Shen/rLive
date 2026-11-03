@@ -1,8 +1,22 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, Download, FolderOpen, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
+import {
+  CheckCircle2,
+  CircleAlert,
+  Clock3,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  Pause,
+  Play,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { preloadRouteModule } from "@/app/routeModules";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Empty,
@@ -14,9 +28,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { notify } from "@/components/ui/toast";
 import { Spinner } from "@/components/ui/spinner";
+import { Separator } from "@/components/ui/separator";
 import { formatByteSize, normalizeVideoCoverUrl, cn } from "@/lib/utils";
+import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import {
   VIDEO_DOWNLOADS_QUERY_KEY,
+  VIDEO_DOWNLOAD_VIEW_PARAM,
+  VIDEO_DOWNLOAD_VIEWS,
   useVideoDownloads,
   upsertVideoDownloadInCache,
   videoDownloadCanReveal,
@@ -29,18 +47,82 @@ import {
   videoDownloadResume,
   videoDownloadStatusLabel,
   videoDownloadSupported,
+  videoDownloadViewFromSearch,
+  withVideoDownloadView,
   type VideoDownloadItem,
-  type VideoDownloadStatus,
+  type VideoDownloadView,
 } from "./videoDownload";
+import { videoDownloadPlaybackEntryState, videoDownloadPlaybackPath } from "./videoDownloadRoute";
 
-const STATUS_BADGE_CLASS: Record<VideoDownloadStatus, string> = {
-  queued: "bg-muted text-muted-foreground",
-  downloading: "bg-primary/12 text-primary",
-  paused: "bg-muted text-muted-foreground",
-  merging: "bg-primary/12 text-primary",
-  failed: "bg-destructive/12 text-destructive",
-  completed: "bg-success/12 text-success",
+const DOWNLOAD_VIEW_LABELS: Record<VideoDownloadView, string> = {
+  all: "全部",
+  active: "未完成",
+  completed: "已完成",
 };
+
+const DOWNLOAD_VIEW_ICONS = {
+  all: Download,
+  active: Clock3,
+  completed: CheckCircle2,
+} as const;
+
+function DownloadViewSwitcher({
+  value,
+  counts,
+  onValueChange,
+  variant = "toolbar",
+}: {
+  value: VideoDownloadView;
+  counts: Record<VideoDownloadView, number>;
+  onValueChange: (view: VideoDownloadView) => void;
+  variant?: "sidebar" | "toolbar";
+}) {
+  const sidebar = variant === "sidebar";
+  return (
+    <div
+      className={cn(
+        sidebar ? "flex flex-col gap-1" : "flex h-full items-stretch gap-1 max-md:w-full",
+      )}
+      role="tablist"
+      aria-label="下载范围"
+    >
+      {VIDEO_DOWNLOAD_VIEWS.map((view) => {
+        const active = view === value;
+        const Icon = DOWNLOAD_VIEW_ICONS[view];
+        return (
+          <button
+            key={view}
+            type="button"
+            role="tab"
+            data-motion-control
+            aria-selected={active}
+            onClick={() => onValueChange(view)}
+            className={cn(
+              "relative flex items-center gap-2 text-sm font-medium transition-colors duration-150",
+              sidebar ? "h-9 w-full rounded-lg px-2" : "h-full flex-1 justify-center px-2",
+              active
+                ? sidebar
+                  ? "bg-secondary text-foreground"
+                  : "text-foreground"
+                : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
+            )}
+          >
+            <Icon className="size-4 shrink-0" aria-hidden />
+            <span>{DOWNLOAD_VIEW_LABELS[view]}</span>
+            {counts[view] > 0 && (
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                {counts[view]}
+              </span>
+            )}
+            {!sidebar && active && (
+              <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function downloadErrorText(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) {
@@ -50,15 +132,18 @@ function downloadErrorText(error: unknown): string {
 }
 
 /**
- * 视频下载任务页（`/video?tab=download`）。
+ * 关注页的视频下载子视图。
  *
- * 这里只读连接状态：队列与文件都在 Rust 侧，页面靠事件与低频轮询同步。
- * 下载入口在播放页的 `⋮` 溢出菜单与桌面端底部栏。
+ * 队列与文件都在 Rust 侧，这里只读连接状态。左栏沿用录制库的范围与操作位置，
+ * 右侧列表按未完成 / 已完成分组。
  */
-export function VideoDownloadPage() {
+export function VideoDownloadPage({ active = true }: { active?: boolean }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const supported = videoDownloadSupported();
   const queryClient = useQueryClient();
-  const downloads = useVideoDownloads(supported);
+  const downloads = useVideoDownloads(active && supported);
   const [deleteTarget, setDeleteTarget] = useState<VideoDownloadItem | null>(null);
 
   const pauseMutation = useMutation({
@@ -100,8 +185,17 @@ export function VideoDownloadPage() {
   }
 
   const items = downloads.data ?? [];
-  const active = items.filter((item) => videoDownloadIsActive(item.status));
-  const completed = items.filter((item) => !videoDownloadIsActive(item.status));
+  const activeItems = items.filter((item) => videoDownloadIsActive(item.status));
+  const completedItems = items.filter((item) => !videoDownloadIsActive(item.status));
+  const view = videoDownloadViewFromSearch(searchParams.get(VIDEO_DOWNLOAD_VIEW_PARAM));
+  const viewCounts: Record<VideoDownloadView, number> = {
+    all: items.length,
+    active: activeItems.length,
+    completed: completedItems.length,
+  };
+  const scopedActive = view === "completed" ? [] : activeItems;
+  const scopedCompleted = view === "active" ? [] : completedItems;
+  const scopedCount = scopedActive.length + scopedCompleted.length;
 
   const canReveal = videoDownloadCanReveal();
   const openFolder = () => {
@@ -109,96 +203,147 @@ export function VideoDownloadPage() {
       notify.error("无法打开下载目录", downloadErrorText(error)),
     );
   };
+  const selectView = (nextView: VideoDownloadView) => {
+    setSearchParams((current) => withVideoDownloadView(current, nextView), { replace: true });
+  };
+  const playDownload = (item: VideoDownloadItem) => {
+    const path = videoDownloadPlaybackPath(item.id);
+    preloadRouteModule(path);
+    navigate(path, {
+      state: videoDownloadPlaybackEntryState(`${location.pathname}${location.search}`),
+    });
+  };
 
   return (
-    <div className="mx-auto flex w-full max-w-[960px] flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold">视频下载</h1>
+    <div className="grid min-w-0 items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)]">
+      <nav
+        aria-label="下载筛选"
+        className="sticky top-3 hidden min-w-0 flex-col gap-1 border-r border-border pr-3 md:flex"
+      >
+        <div className="mb-1 flex items-center justify-between gap-2 px-2">
+          <span className="text-sm font-medium text-muted-foreground">状态</span>
+          <span className="text-xs tabular-nums text-muted-foreground">{items.length}</span>
+        </div>
+        <DownloadViewSwitcher
+          value={view}
+          counts={viewCounts}
+          variant="sidebar"
+          onValueChange={selectView}
+        />
         {canReveal && (
-          <Button variant="secondary" onClick={openFolder}>
+          <>
+            <Separator className="my-1" />
+            <Button variant="ghost" className="w-full justify-start" onClick={openFolder}>
+              <FolderOpen data-icon="inline-start" aria-hidden />
+              打开下载目录
+            </Button>
+          </>
+        )}
+      </nav>
+
+      <section className="flex min-w-0 flex-col gap-3" aria-label="下载任务">
+        <div className="h-10 md:hidden">
+          <DownloadViewSwitcher
+            value={view}
+            counts={viewCounts}
+            onValueChange={selectView}
+            variant="toolbar"
+          />
+        </div>
+        {canReveal && (
+          <Button variant="secondary" className="self-start md:hidden" onClick={openFolder}>
             <FolderOpen data-icon="inline-start" aria-hidden />
             打开下载目录
           </Button>
         )}
-      </div>
 
-      {downloads.isLoading && <DownloadSkeleton />}
+        {downloads.isLoading && <DownloadSkeleton />}
 
-      {downloads.isError && (
-        <Empty className="min-h-56 py-10">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <CircleAlert aria-hidden />
-            </EmptyMedia>
-            <EmptyTitle>下载列表加载失败</EmptyTitle>
-            <EmptyDescription>{downloadErrorText(downloads.error)}</EmptyDescription>
-          </EmptyHeader>
-          <Button variant="secondary" onClick={() => void downloads.refetch()}>
-            重试
-          </Button>
-        </Empty>
-      )}
+        {downloads.isError && (
+          <Empty className="min-h-56 border py-10">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <CircleAlert aria-hidden />
+              </EmptyMedia>
+              <EmptyTitle>下载列表加载失败</EmptyTitle>
+              <EmptyDescription>{downloadErrorText(downloads.error)}</EmptyDescription>
+            </EmptyHeader>
+            <Button variant="secondary" onClick={() => void downloads.refetch()}>
+              重试
+            </Button>
+          </Empty>
+        )}
 
-      {!downloads.isLoading && !downloads.isError && items.length === 0 && (
-        <Empty className="min-h-64 py-12">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <Download aria-hidden />
-            </EmptyMedia>
-            <EmptyTitle>还没有下载任务</EmptyTitle>
-            <EmptyDescription>
-              在视频播放页打开「更多操作」，选择「下载」并挑一个画质即可加入队列。
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      )}
+        {!downloads.isLoading && !downloads.isError && scopedCount === 0 && (
+          <Empty className="min-h-64 border py-12">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Download aria-hidden />
+              </EmptyMedia>
+              <EmptyTitle>
+                {view === "active"
+                  ? "当前没有未完成的下载"
+                  : view === "completed"
+                    ? "还没有已完成的下载"
+                    : "还没有下载任务"}
+              </EmptyTitle>
+              <EmptyDescription>
+                {view === "completed"
+                  ? "下载完成后的文件会出现在这里，可直接播放或定位文件。"
+                  : "在视频播放页打开「更多操作」，选择「下载」并挑一个画质即可加入队列。"}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
 
-      {active.length > 0 && (
-        <section className="flex flex-col gap-2" aria-label="未完成的下载">
-          <h2 className="text-sm font-semibold text-foreground">下载任务</h2>
-          <div className="flex flex-col gap-2">
-            {active.map((item) => (
-              <DownloadRow
-                key={item.id}
-                item={item}
-                pausing={pauseMutation.isPending && pauseMutation.variables === item.id}
-                resuming={resumeMutation.isPending && resumeMutation.variables === item.id}
-                onPause={() => pauseMutation.mutate(item.id)}
-                onResume={() => resumeMutation.mutate(item.id)}
-                onDelete={() => setDeleteTarget(item)}
-              />
-            ))}
-          </div>
-        </section>
-      )}
+        {scopedActive.length > 0 && (
+          <section className="flex flex-col gap-2" aria-label="未完成的下载">
+            <h2 className="text-sm font-semibold text-foreground">下载任务</h2>
+            <div className="flex flex-col gap-2">
+              {scopedActive.map((item) => (
+                <DownloadRow
+                  key={item.id}
+                  item={item}
+                  pausing={pauseMutation.isPending && pauseMutation.variables === item.id}
+                  resuming={resumeMutation.isPending && resumeMutation.variables === item.id}
+                  onPause={() => pauseMutation.mutate(item.id)}
+                  onResume={() => resumeMutation.mutate(item.id)}
+                  onDelete={() => setDeleteTarget(item)}
+                />
+              ))}
+            </div>
+          </section>
+        )}
 
-      {completed.length > 0 && (
-        <section className="flex flex-col gap-2" aria-label="已完成的下载">
-          <h2 className="text-sm font-semibold text-foreground">已完成</h2>
-          <div className="flex flex-col gap-2">
-            {completed.map((item) => (
-              <DownloadRow
-                key={item.id}
-                item={item}
-                onDelete={() => setDeleteTarget(item)}
-                onPlay={() =>
-                  void videoDownloadOpen(item.id).catch((error: unknown) =>
-                    notify.error("无法打开下载文件", downloadErrorText(error)),
-                  )
-                }
-                onReveal={
-                  canReveal
-                    ? () =>
-                        void revealItemInDir(item.file_path).catch((error: unknown) =>
-                          notify.error("无法打开文件位置", downloadErrorText(error)),
-                        )
-                    : undefined
-                }
-              />
-            ))}
-          </div>
-        </section>
-      )}
+        {scopedCompleted.length > 0 && (
+          <section className="flex flex-col gap-2" aria-label="已完成的下载">
+            <h2 className="text-sm font-semibold text-foreground">已完成</h2>
+            <div className="flex flex-col gap-2">
+              {scopedCompleted.map((item) => (
+                <DownloadRow
+                  key={item.id}
+                  item={item}
+                  onDelete={() => setDeleteTarget(item)}
+                  onPlay={() => playDownload(item)}
+                  onOpenSystem={() =>
+                    void videoDownloadOpen(item.id).catch((error: unknown) =>
+                      notify.error("无法使用系统播放器打开", downloadErrorText(error)),
+                    )
+                  }
+                  onReveal={
+                    canReveal
+                      ? () =>
+                          void revealItemInDir(item.file_path).catch((error: unknown) =>
+                            notify.error("无法打开文件位置", downloadErrorText(error)),
+                          )
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          </section>
+        )}
+      </section>
 
       <ConfirmDialog
         open={deleteTarget !== null}
@@ -230,6 +375,7 @@ function DownloadRow({
   onResume,
   onDelete,
   onPlay,
+  onOpenSystem,
   onReveal,
 }: {
   item: VideoDownloadItem;
@@ -239,6 +385,7 @@ function DownloadRow({
   onResume?: () => void;
   onDelete: () => void;
   onPlay?: () => void;
+  onOpenSystem?: () => void;
   onReveal?: () => void;
 }) {
   const cover = normalizeVideoCoverUrl(item.cover);
@@ -246,8 +393,8 @@ function DownloadRow({
   const inFlight = item.status === "downloading" || item.status === "merging";
 
   return (
-    <article className="flex gap-3 rounded-xl border border-border/70 bg-card p-3">
-      <div className="aspect-video w-32 shrink-0 overflow-hidden rounded-lg bg-muted sm:w-40">
+    <article className={cn("flex gap-3 rounded-xl p-3", CARD_SURFACE_CLASS)}>
+      <div className="aspect-video w-24 shrink-0 self-start overflow-hidden rounded-lg bg-muted sm:w-40">
         {cover ? (
           <img src={cover} alt="" loading="lazy" className="h-full w-full object-cover" />
         ) : (
@@ -261,14 +408,11 @@ function DownloadRow({
           <h3 className="line-clamp-2 text-sm font-medium" title={item.title}>
             {item.title}
           </h3>
-          <span
-            className={cn(
-              "shrink-0 rounded-md px-1.5 py-0.5 text-xs font-medium",
-              STATUS_BADGE_CLASS[item.status],
-            )}
+          <Badge
+            variant={item.status === "failed" ? "destructive" : inFlight ? "default" : "secondary"}
           >
             {videoDownloadStatusLabel(item.status)}
-          </span>
+          </Badge>
         </div>
         <p className="truncate text-sm text-muted-foreground">
           {[item.quality_label || "等待取流", item.author].filter(Boolean).join(" · ")}
@@ -327,6 +471,11 @@ function DownloadRow({
           {item.status === "completed" ? (
             <>
               <RowButton icon={<Play aria-hidden />} label="播放" onClick={onPlay} />
+              <RowButton
+                icon={<ExternalLink aria-hidden />}
+                label="系统播放器"
+                onClick={onOpenSystem}
+              />
               {onReveal ? (
                 <RowButton icon={<FolderOpen aria-hidden />} label="文件夹" onClick={onReveal} />
               ) : null}
@@ -370,8 +519,8 @@ function DownloadSkeleton() {
   return (
     <div className="flex flex-col gap-2" aria-hidden>
       {Array.from({ length: 3 }).map((_, index) => (
-        <div key={index} className="flex gap-3 rounded-xl border border-border/70 bg-card p-3">
-          <Skeleton className="aspect-video w-32 shrink-0 rounded-lg sm:w-40" />
+        <div key={index} className={cn("flex gap-3 rounded-xl p-3", CARD_SURFACE_CLASS)}>
+          <Skeleton className="aspect-video w-24 shrink-0 self-start rounded-lg sm:w-40" />
           <div className="flex min-w-0 flex-1 flex-col gap-2 py-1">
             <Skeleton className="h-4 w-3/4" />
             <Skeleton className="h-3.5 w-1/3" />

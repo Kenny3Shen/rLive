@@ -63,6 +63,7 @@ describe("Android Back navigation", () => {
     // 旧的平台选择页只在 loader 里重定向，不再是返回落点。
     expect(androidBackFallbackPath("/shorts")).toBe("/");
     expect(androidBackFallbackPath("/video/play")).toBe("/");
+    expect(androidBackFallbackPath("/video/download/play/local-id")).toBe("/follow?view=downloads");
     for (const path of ["/shorts", "/shorts/bilibili", "/shorts/douyin"]) {
       expect(isAndroidHomeTabRoot(path, "")).toBe(false);
     }

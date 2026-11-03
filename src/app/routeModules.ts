@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import type { ClientPlatform } from "@/shared/clientPlatform";
 import { SHORTS_PATH } from "@/features/shorts/shortsFeed";
 import { VIDEO_HOME_PATH } from "@/features/video/videoRoute";
+import { legacyVideoDownloadRedirectTarget } from "./legacyFollowRoutes";
 import { legacyShortsRedirectTarget } from "./legacyShortsRoutes";
 
 export type LazyRouteModule = { default: ComponentType };
@@ -40,12 +41,6 @@ export const loadFollowPage = createCachedRouteLoader(() =>
 export const loadHistoryPage = createCachedRouteLoader(() =>
   import("../features/history/HistoryPage").then(({ HistoryPage }) => ({
     default: HistoryPage,
-  })),
-);
-
-export const loadRecordingsPage = createCachedRouteLoader(() =>
-  import("../features/recording/RecordingsPage").then(({ RecordingsPage }) => ({
-    default: RecordingsPage,
   })),
 );
 
@@ -97,6 +92,12 @@ export const loadVideoSearchPage = createCachedRouteLoader(() =>
   })),
 );
 
+export const loadVideoDownloadPlaybackPage = createCachedRouteLoader(() =>
+  import("../features/video/VideoDownloadPlaybackPage").then(({ VideoDownloadPlaybackPage }) => ({
+    default: VideoDownloadPlaybackPage,
+  })),
+);
+
 export const loadShortsPage = createCachedRouteLoader(() =>
   import("../features/shorts/ShortsPage").then(({ ShortsPage }) => ({ default: ShortsPage })),
 );
@@ -110,21 +111,18 @@ const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadVideoPage,
   loadVideoSearchPage,
   loadHistoryPage,
-  loadRecordingsPage,
   loadIptvPlayerPage,
   loadSettingsPage,
   loadMultiRoomPage,
   // 短视频与视频播放页同量级（同一套 Video.js DASH 内核），同样排在后面。
   loadShortsPage,
+  loadVideoDownloadPlaybackPage,
   loadVideoPlayerPage,
   loadRoomPage,
 ];
 
 const MOBILE_IDLE_ROUTE_MODULE_LOADERS = IDLE_ROUTE_MODULE_LOADERS.filter(
-  (loader) =>
-    loader !== loadCategoryBrowsePage &&
-    loader !== loadRecordingsPage &&
-    loader !== loadMultiRoomPage,
+  (loader) => loader !== loadCategoryBrowsePage && loader !== loadMultiRoomPage,
 );
 
 export function idleRouteModuleLoadersForPlatform(
@@ -151,13 +149,17 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   if (pathname === "/follow") return loadFollowPage;
   if (pathname === "/history") return loadHistoryPage;
   if (pathname.startsWith("/recordings/play/")) return loadRecordingPlaybackPage;
-  if (pathname === "/recordings") return loadRecordingsPage;
+  // `/recordings` 在路由 loader 中迁到关注页；预加载目标也换成关注模块。
+  if (pathname === "/recordings") return loadFollowPage;
   if (pathname === "/iptv/play") return loadIptvPlayerPage;
   if (pathname === "/iptv") return loadIptvPage;
   // 播放页在前：`/video` 是它的前缀，顺序颠倒会让播放页命中发现页的 loader。
   if (pathname === "/video/play") return loadVideoPlayerPage;
   if (pathname === "/video/search") return loadVideoSearchPage;
-  if (pathname === "/video") return loadVideoPage;
+  if (pathname.startsWith("/video/download/play/")) return loadVideoDownloadPlaybackPage;
+  if (pathname === "/video") {
+    return legacyVideoDownloadRedirectTarget(url.search) ? loadFollowPage : loadVideoPage;
+  }
   // 旧的 `/shorts` 入口只在 loader 里重定向：带有效 seed 时预加载 B 站推荐流，
   // 否则预加载视频发现页。`/shorts/douyin` 已下线，落点固定为视频发现页。
   if (pathname === SHORTS_PATH) {

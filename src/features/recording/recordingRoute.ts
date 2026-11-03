@@ -1,15 +1,14 @@
-export const RECORDING_VIEW_PARAM = "view";
+import { FOLLOW_VIEW_PARAM } from "@/features/follow/followRoute";
 
-/** 头部页签在其间翻页的三种录制库作用域。 */
+/** 关注页已经用 `view` 表示一级页签，录制范围改用独立参数。 */
+export const RECORDING_VIEW_PARAM = "recordingView";
+
+/** 录制库的三种范围。 */
 export type RecordingView = "all" | "recording" | "recorded";
 
 export const RECORDING_VIEWS: readonly RecordingView[] = ["all", "recording", "recorded"];
 
-/**
- * 活动作用域保存在地址栏而不是页面状态里：应用头部拥有页签而页面拥有列表，
- * search 参数是双方都能读取、又互不导入对方状态的唯一位置。
- * 这与 `/history` 共享其时间线切换器的方式一致。
- */
+/** 活动范围写入地址栏，供关注页和录制库共同读取。 */
 export function recordingViewFromSearch(value: string | null | undefined): RecordingView {
   return value === "recording" || value === "recorded" ? value : "all";
 }
@@ -19,6 +18,66 @@ export function withRecordingView(current: URLSearchParams, view: RecordingView)
   if (view === "all") next.delete(RECORDING_VIEW_PARAM);
   else next.set(RECORDING_VIEW_PARAM, view);
   return next;
+}
+
+export const RECORDING_LIBRARY_RETURN_SOURCE = "follow-recordings";
+
+export type RecordingLibraryReturnState = {
+  rliveNavigationSource: typeof RECORDING_LIBRARY_RETURN_SOURCE;
+  returnTo: string;
+};
+
+export function recordingLibraryReturnPath(searchParams: URLSearchParams): string {
+  const params = new URLSearchParams(searchParams);
+  params.set(FOLLOW_VIEW_PARAM, "recordings");
+  return `/follow?${params.toString()}`;
+}
+
+export function isRecordingLibraryReturnState(
+  state: unknown,
+): state is RecordingLibraryReturnState {
+  return (
+    typeof state === "object" &&
+    state !== null &&
+    "rliveNavigationSource" in state &&
+    state.rliveNavigationSource === RECORDING_LIBRARY_RETURN_SOURCE &&
+    "returnTo" in state &&
+    typeof state.returnTo === "string"
+  );
+}
+
+/**
+ * 无应用历史可退时，以来源 state 的 returnTo 为底，再用回放 URL 中的筛选覆盖。
+ * `user` 因此优先采用 URL，录制库尚未加载完成也不会丢掉当前用户。
+ */
+export function recordingPlaybackReturnTarget(search: string, state: unknown): string {
+  const sourceState = isRecordingLibraryReturnState(state) ? state : null;
+  let target: URL;
+  try {
+    target = new URL(sourceState?.returnTo ?? "/follow", "https://rlive.local");
+  } catch {
+    target = new URL("/follow", "https://rlive.local");
+  }
+  if (target.origin !== "https://rlive.local" || target.pathname !== "/follow") {
+    target = new URL("/follow", "https://rlive.local");
+  }
+
+  const playbackParams = new URLSearchParams(search);
+  target.searchParams.set(FOLLOW_VIEW_PARAM, "recordings");
+  for (const key of ["user", "platform", RECORDING_VIEW_PARAM]) {
+    const value = playbackParams.get(key);
+    if (value !== null) target.searchParams.set(key, value);
+  }
+  return `${target.pathname}${target.search}`;
+}
+
+export function shouldPopToRecordingLibrary(state: unknown, historyIndex: unknown): boolean {
+  return (
+    isRecordingLibraryReturnState(state) &&
+    typeof historyIndex === "number" &&
+    Number.isInteger(historyIndex) &&
+    historyIndex > 0
+  );
 }
 
 /**

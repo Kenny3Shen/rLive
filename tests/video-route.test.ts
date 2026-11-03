@@ -8,6 +8,7 @@ import {
   videoHomePath,
   videoPlayPath,
   videoSearchPath,
+  videoTabFromSearch,
   videoTabHasZoneStrip,
   videoZoneChips,
 } from "../src/features/video/videoRoute";
@@ -74,11 +75,12 @@ describe("VOD 路由解析", () => {
     ).toEqual(DEFAULT_VIDEO_SEARCH_FILTERS);
   });
 
-  test("下载页签是任务管理表面，不挂分区条", () => {
-    expect(VIDEO_TAB_LABELS.download).toBe("下载");
-    expect(videoHomePath("download")).toBe("/video?tab=download");
-    expect(videoTabHasZoneStrip("download")).toBe(false);
-    expect(videoZoneChips("download", [["动画", 1005]])).toEqual([]);
+  test("视频发现页只保留内容页签，旧下载页签回落推荐流", () => {
+    expect(VIDEO_TAB_LABELS).not.toHaveProperty("download");
+    expect(videoTabHasZoneStrip("recommend")).toBe(false);
+    expect(videoZoneChips("recommend", [["动画", 1005]])).toEqual([]);
+    expect(videoHomePath("recommend")).toBe("/video");
+    expect(videoTabFromSearch("download")).toBe("recommend");
   });
 });
 

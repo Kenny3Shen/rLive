@@ -22,16 +22,17 @@ import {
   loadIptvPage,
   loadIptvPlayerPage,
   loadMultiRoomPage,
-  loadRecordingsPage,
   loadRecordingPlaybackPage,
   loadRoomPage,
   loadSearchPage,
   loadSettingsPage,
   loadVideoPage,
+  loadVideoDownloadPlaybackPage,
   loadVideoPlayerPage,
   loadVideoSearchPage,
   loadShortsPage,
 } from "./routeModules";
+import { legacyRecordingsRedirect, legacyVideoDownloadRedirect } from "./legacyFollowRoutes";
 import { HomePage } from "../features/home/HomePage";
 import { BilibiliAppAuthStartupCheck } from "../features/settings/BilibiliAppAuthStartupCheck";
 import { useFollowAutoRecording } from "../features/recording/followRecording";
@@ -45,7 +46,6 @@ const CategoryBrowsePage = lazy(loadCategoryBrowsePage);
 const SearchPage = lazy(loadSearchPage);
 const FollowPage = lazy(loadFollowPage);
 const HistoryPage = lazy(loadHistoryPage);
-const RecordingsPage = lazy(loadRecordingsPage);
 const RecordingPlaybackPage = lazy(loadRecordingPlaybackPage);
 const SettingsPage = lazy(loadSettingsPage);
 const IptvPage = lazy(loadIptvPage);
@@ -53,6 +53,7 @@ const IptvPlayerPage = lazy(loadIptvPlayerPage);
 const MultiRoomPage = lazy(loadMultiRoomPage);
 const VideoPage = lazy(loadVideoPage);
 const VideoPlayerPage = lazy(loadVideoPlayerPage);
+const VideoDownloadPlaybackPage = lazy(loadVideoDownloadPlaybackPage);
 const VideoSearchPage = lazy(loadVideoSearchPage);
 const ShortsPage = lazy(loadShortsPage);
 const RoomPage = lazy(loadRoomPage);
@@ -97,7 +98,7 @@ const router = createBrowserRouter(
         <Route path="search" element={<SearchPage />} />
         <Route path="follow" element={<FollowPage />} />
         <Route path="history" element={<HistoryPage />} />
-        <Route path="recordings" element={<RecordingsPage />} />
+        <Route path="recordings" loader={legacyRecordingsRedirect} element={null} />
         {/* 录制 id 跨越两级路径（`platform_room/user_time`），
             因此路由为每级携带一个段。单个 `:recordingId`
             会收到半解码的参数，永远匹配不到库条目。 */}
@@ -107,8 +108,9 @@ const router = createBrowserRouter(
         {/* 播放页在前：React Router 不会把 `/video/play` 误匹配到 `/video`，
             但两条相邻声明让「发现页 vs 播放页」的关系一眼可读。 */}
         <Route path="video/play" element={<VideoPlayerPage />} />
+        <Route path="video/download/play/:id" element={<VideoDownloadPlaybackPage />} />
         <Route path="video/search" element={<VideoSearchPage />} />
-        <Route path="video" element={<VideoPage />} />
+        <Route path="video" loader={legacyVideoDownloadRedirect} element={<VideoPage />} />
         {/* 旧的短视频平台选择页已下线。入口只保留在播放页的「短视频」按钮与
             移动端自动分流里；旧深链在 loader 阶段 replace：有效 seed 转到 B 站
             推荐流并保留 query，其余回视频发现页。页面模块不会被求值。 */}

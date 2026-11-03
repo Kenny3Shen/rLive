@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DndContext,
   useDraggable,
@@ -90,6 +90,8 @@ import {
   FOLLOW_AUTO_RECORD_QUERY_KEY,
   useFollowRecordingController,
 } from "@/features/recording/followRecording";
+import { RECORDINGS_QUERY_KEY, recordingSupported } from "@/features/recording/recording";
+import { RecordingsPage } from "@/features/recording/RecordingsPage";
 import {
   iptvFavoritesForSource,
   useAllIptvFavorites,
@@ -144,6 +146,7 @@ import {
   FOLLOW_VIEW_PARAM,
   type FollowPlatformFilter,
   type FollowView,
+  followViewsFor,
   followPlatformFromSearch,
   followViewFromSearch,
   formatFollowLiveDuration,
@@ -156,6 +159,8 @@ import {
   withVideoFollowGroup,
 } from "./videoFollowGroups";
 import { useVideoFollowGroups, useVideoFollows } from "@/features/video/videoFollows";
+import { VIDEO_DOWNLOADS_QUERY_KEY } from "@/features/video/videoDownload";
+import { VideoDownloadPage } from "@/features/video/VideoDownloadPage";
 
 type LiveFilter = "all" | "live" | "offline";
 
@@ -164,6 +169,16 @@ const EMPTY_GROUPS: FollowGroup[] = [];
 const FOLLOW_DND_INSTRUCTIONS = {
   draggable: "按空格键选中主播，使用方向键移动，按空格键放入分组，按 Escape 取消。",
 };
+
+function followPanelStyle(index: number, viewCount: number, active: boolean): CSSProperties {
+  const viewportWidth = 100 / viewCount;
+  return {
+    width: `${viewportWidth}%`,
+    left: `${index * viewportWidth}%`,
+    position: active ? "relative" : "absolute",
+    top: active ? undefined : 0,
+  };
+}
 
 type GroupTargetProps = {
   groupId: string;
@@ -546,7 +561,9 @@ export function FollowPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const activeView = followViewFromSearch(searchParams.get(FOLLOW_VIEW_PARAM));
+  const recordingAvailable = recordingSupported();
+  const followViews = useMemo(() => followViewsFor(recordingAvailable), [recordingAvailable]);
+  const activeView = followViewFromSearch(searchParams.get(FOLLOW_VIEW_PARAM), recordingAvailable);
   const [liveFilter, setLiveFilter] = useState<LiveFilter>("all");
   const [selectedGroupId, setSelectedGroupId] = useState(ALL_FOLLOW_GROUP_ID);
   const [activeFollow, setActiveFollow] = useState<FollowUser | null>(null);
@@ -894,18 +911,34 @@ export function FollowPage() {
   }
 
   const loading = followsQuery.isLoading || groupsQuery.isLoading;
+  const recordingsFetching = useIsFetching({
+    queryKey: RECORDINGS_QUERY_KEY,
+    exact: true,
+  });
+  const downloadsFetching = useIsFetching({
+    queryKey: VIDEO_DOWNLOADS_QUERY_KEY,
+    exact: true,
+  });
   const activeLoading =
     activeView === "live"
       ? loading
       : activeView === "video"
         ? videoFollowsQuery.isLoading || videoFollowGroupsQuery.isLoading
-        : iptvFavoritesQuery.isLoading || iptvGroupsQuery.isLoading;
+        : activeView === "iptv"
+          ? iptvFavoritesQuery.isLoading || iptvGroupsQuery.isLoading
+          : activeView === "recordings"
+            ? recordingsFetching > 0
+            : downloadsFetching > 0;
   const activeRefreshing =
     activeView === "live"
       ? refreshMutation.isPending
       : activeView === "video"
         ? videoFollowsQuery.isFetching || videoFollowGroupsQuery.isFetching
-        : iptvFavoritesQuery.isFetching || iptvGroupsQuery.isFetching;
+        : activeView === "iptv"
+          ? iptvFavoritesQuery.isFetching || iptvGroupsQuery.isFetching
+          : activeView === "recordings"
+            ? recordingsFetching > 0
+            : downloadsFetching > 0;
 
   async function refreshActiveView() {
     if (activeView === "live") {
@@ -921,6 +954,14 @@ export function FollowPage() {
       if (groupsResult.isError) throw groupsResult.error;
       return;
     }
+    if (activeView === "recordings") {
+      await queryClient.invalidateQueries({ queryKey: RECORDINGS_QUERY_KEY });
+      return;
+    }
+    if (activeView === "downloads") {
+      await queryClient.invalidateQueries({ queryKey: VIDEO_DOWNLOADS_QUERY_KEY });
+      return;
+    }
     const [favoritesResult, groupsResult] = await Promise.all([
       iptvFavoritesQuery.refetch(),
       iptvGroupsQuery.refetch(),
@@ -932,13 +973,14 @@ export function FollowPage() {
   const handleViewChange = useCallback(
     (value: string | FollowView) => {
       const view = value as FollowView;
+      if (view === "recordings" && !recordingAvailable) return;
       setSearchParams((current) => withFollowView(current, view));
     },
-    [setSearchParams],
+    [recordingAvailable, setSearchParams],
   );
 
   const followTabSwipe = useHorizontalSwipe({
-    items: ["live", "iptv", "video"] as const,
+    items: followViews,
     value: activeView,
     onChange: handleViewChange,
     enabled: isMobileClient(),
@@ -1000,26 +1042,34 @@ export function FollowPage() {
             ? "刷新直播关注"
             : activeView === "video"
               ? "刷新视频关注"
-              : "刷新 IPTV 关注"
+              : activeView === "iptv"
+                ? "刷新 IPTV 关注"
+                : activeView === "recordings"
+                  ? "刷新录制库"
+                  : "刷新下载任务"
         }
       />
 
       <div>
         <Tabs value={activeView} onValueChange={handleViewChange} className="gap-4">
-          <div data-slot="horizontal-swipe-viewport" className="min-w-0 overflow-x-clip">
+          <div data-slot="horizontal-swipe-viewport" className="min-w-0 overflow-clip">
             <div
               ref={bindPage}
               data-slot="horizontal-swipe-track"
-              className="flex items-start"
-              style={{ width: "300%" }}
+              className="relative flex items-start"
+              style={{ width: `${followViews.length * 100}%` }}
             >
               <TabsContent
                 value="live"
                 keepMounted
                 hidden={false}
                 inert={activeView === "live" ? undefined : true}
-                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
-                style={{ width: "33.333333%" }}
+                className="mt-0 min-w-0 flex-none overflow-x-clip px-px"
+                style={followPanelStyle(
+                  followViews.indexOf("live"),
+                  followViews.length,
+                  activeView === "live",
+                )}
               >
                 <div data-follow-view-panel="live" className="flex flex-col gap-4">
                   {(followsQuery.isError || groupsQuery.isError) && (
@@ -1353,8 +1403,12 @@ export function FollowPage() {
                 keepMounted
                 hidden={false}
                 inert={activeView === "iptv" ? undefined : true}
-                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
-                style={{ width: "33.333333%" }}
+                className="mt-0 min-w-0 flex-none overflow-x-clip px-px"
+                style={followPanelStyle(
+                  followViews.indexOf("iptv"),
+                  followViews.length,
+                  activeView === "iptv",
+                )}
               >
                 <div data-follow-view-panel="iptv">
                   <IptvFollowView
@@ -1382,8 +1436,12 @@ export function FollowPage() {
                 keepMounted
                 hidden={false}
                 inert={activeView === "video" ? undefined : true}
-                className="mt-0 min-w-0 shrink-0 overflow-x-clip px-px"
-                style={{ width: "33.333333%" }}
+                className="mt-0 min-w-0 flex-none overflow-x-clip px-px"
+                style={followPanelStyle(
+                  followViews.indexOf("video"),
+                  followViews.length,
+                  activeView === "video",
+                )}
               >
                 <div data-follow-view-panel="video">
                   <VideoFollowView
@@ -1400,6 +1458,42 @@ export function FollowPage() {
                       setSearchParams((current) => withVideoFollowGroup(current, groupId))
                     }
                   />
+                </div>
+              </TabsContent>
+
+              {recordingAvailable && (
+                <TabsContent
+                  value="recordings"
+                  keepMounted
+                  hidden={false}
+                  inert={activeView === "recordings" ? undefined : true}
+                  className="mt-0 min-w-0 flex-none overflow-x-clip px-px"
+                  style={followPanelStyle(
+                    followViews.indexOf("recordings"),
+                    followViews.length,
+                    activeView === "recordings",
+                  )}
+                >
+                  <div data-follow-view-panel="recordings">
+                    <RecordingsPage active={activeView === "recordings"} />
+                  </div>
+                </TabsContent>
+              )}
+
+              <TabsContent
+                value="downloads"
+                keepMounted
+                hidden={false}
+                inert={activeView === "downloads" ? undefined : true}
+                className="mt-0 min-w-0 flex-none overflow-x-clip px-px"
+                style={followPanelStyle(
+                  followViews.indexOf("downloads"),
+                  followViews.length,
+                  activeView === "downloads",
+                )}
+              >
+                <div data-follow-view-panel="downloads">
+                  <VideoDownloadPage active={activeView === "downloads"} />
                 </div>
               </TabsContent>
             </div>

@@ -87,9 +87,9 @@ export function VideoDownloadDialog({
     onSuccess: (item) => {
       upsertVideoDownloadInCache(queryClient, item);
       if (item.status === "completed") {
-        notify.success("该视频已下载", "可在视频页的「下载」页签中查看。");
+        notify.success("该视频已下载", "可在关注页的「下载」页签中查看。");
       } else {
-        notify.success("已加入下载队列", "可在视频页的「下载」页签中查看进度。");
+        notify.success("已加入下载队列", "可在关注页的「下载」页签中查看进度。");
       }
       onOpenChange(false);
     },
@@ -118,7 +118,7 @@ export function VideoDownloadDialog({
         <DialogHeader>
           <DialogTitle>下载视频</DialogTitle>
           <DialogDescription>
-            选择画质后加入下载队列。下载完成后可在视频页的「下载」页签中找到文件。
+            选择画质后加入下载队列。下载完成后可在关注页的「下载」页签中找到文件。
           </DialogDescription>
         </DialogHeader>
 
@@ -155,7 +155,7 @@ export function VideoDownloadDialog({
                   "选择画质"}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent container={container}>
               <SelectGroup>
                 {target?.qualities.map((quality) => (
                   <SelectItem
@@ -179,10 +179,7 @@ export function VideoDownloadDialog({
 
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
-          <Button
-            disabled={selectedQn === null || startMutation.isPending}
-            onClick={start}
-          >
+          <Button disabled={selectedQn === null || startMutation.isPending} onClick={start}>
             {startMutation.isPending ? (
               <Spinner data-icon="inline-start" aria-hidden />
             ) : (

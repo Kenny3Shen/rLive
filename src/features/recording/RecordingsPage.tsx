@@ -50,10 +50,13 @@ import { Separator } from "@/components/ui/separator";
 import { LIVE_SITE_IDS } from "@/shared/siteId";
 import { RecordingViewSwitcher } from "./RecordingHeaderControls";
 import {
+  RECORDING_LIBRARY_RETURN_SOURCE,
   RECORDING_VIEW_PARAM,
+  recordingLibraryReturnPath,
   recordingPlaybackPath,
   recordingViewFromSearch,
   withRecordingView,
+  type RecordingLibraryReturnState,
   type RecordingView,
 } from "./recordingRoute";
 import { isWatchFinished, isWatchProgressWorthKeeping } from "@/shared/watchProgress";
@@ -470,7 +473,7 @@ function RecordingUserList({
       />
       <Separator className="my-1" />
       <div className="mb-1 flex items-center justify-between gap-2 px-2">
-        <span className="text-xs font-medium text-muted-foreground">范围</span>
+        <span className="text-sm font-medium text-muted-foreground">范围</span>
       </div>
       <RecordingViewSwitcher
         value={view}
@@ -480,7 +483,7 @@ function RecordingUserList({
       />
       <Separator className="my-1" />
       <div className="mb-1 flex items-center justify-between gap-2 px-2">
-        <span className="text-xs font-medium text-muted-foreground">用户</span>
+        <span className="text-sm font-medium text-muted-foreground">用户</span>
         <span className="text-xs tabular-nums text-muted-foreground">{groups.length}</span>
       </div>
       <div className="flex min-h-0 flex-col gap-1 overflow-y-auto py-0.5">
@@ -595,11 +598,11 @@ function RecordingsSkeleton() {
   );
 }
 
-export function RecordingsPage() {
+export function RecordingsPage({ active = true }: { active?: boolean }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const recordings = useRecordings();
+  const recordings = useRecordings(active);
   const supported = recordingSupported();
   const [deleteTarget, setDeleteTarget] = useState<RecordingItem | null>(null);
 
@@ -609,7 +612,7 @@ export function RecordingsPage() {
    */
   const watchProgress = useQuery({
     queryKey: RECORDING_WATCH_PROGRESS_QUERY_KEY,
-    enabled: supported,
+    enabled: supported && active,
     queryFn: recordingWatchProgressList,
     staleTime: 5_000,
     refetchOnWindowFocus: true,
@@ -729,9 +732,14 @@ export function RecordingsPage() {
     (item: RecordingItem) => {
       const params = new URLSearchParams({ user: recordingUserGroupKey(item) });
       if (platformFilter !== "all") params.set("platform", platformFilter);
-      navigate(`${recordingPlaybackPath(item.id)}?${params.toString()}`);
+      if (view !== "all") params.set(RECORDING_VIEW_PARAM, view);
+      const state: RecordingLibraryReturnState = {
+        rliveNavigationSource: RECORDING_LIBRARY_RETURN_SOURCE,
+        returnTo: recordingLibraryReturnPath(searchParams),
+      };
+      navigate(`${recordingPlaybackPath(item.id)}?${params.toString()}`, { state });
     },
-    [navigate, platformFilter],
+    [navigate, platformFilter, searchParams, view],
   );
 
   if (!supported) {

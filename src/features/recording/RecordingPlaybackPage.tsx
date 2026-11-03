@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { ChevronLeft, CircleDot, MessageSquareText, Tv, Videotape } from "lucide-react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,11 @@ import { normalizeImageUrl } from "@/lib/utils";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { SiteLogo } from "@/shared/components/SiteLogo";
 import { RecordingPlayer } from "./RecordingPlayer";
-import { recordingIdFromPlaybackParams } from "./recordingRoute";
+import {
+  recordingIdFromPlaybackParams,
+  recordingPlaybackReturnTarget,
+  shouldPopToRecordingLibrary,
+} from "./recordingRoute";
 import {
   formatRecordingDate,
   formatRecordingDuration,
@@ -34,7 +38,6 @@ import {
   recordingSourceLabel,
   recordingStatusLabel,
   recordingSupported,
-  recordingUserGroupKey,
   useRecordings,
   type RecordingItem,
 } from "./recording";
@@ -221,6 +224,7 @@ function PlaybackLayout({ item, children }: { item: RecordingItem; children: Rea
 
 export function RecordingPlaybackPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const { roomDir, sessionDir } = useParams<{
     roomDir: string;
@@ -242,12 +246,14 @@ export function RecordingPlaybackPage() {
   });
 
   function goBack() {
-    const params = new URLSearchParams();
-    if (item) params.set("user", recordingUserGroupKey(item));
-    const platform = searchParams.get("platform");
-    if (platform) params.set("platform", platform);
-    const query = params.toString();
-    navigate(query ? `/recordings?${query}` : "/recordings");
+    const historyIndex = (window.history.state as { idx?: unknown } | null)?.idx;
+    if (shouldPopToRecordingLibrary(location.state, historyIndex)) {
+      navigate(-1);
+      return;
+    }
+    navigate(recordingPlaybackReturnTarget(searchParams.toString(), location.state), {
+      replace: true,
+    });
   }
 
   const title = item?.title || "录制回放";

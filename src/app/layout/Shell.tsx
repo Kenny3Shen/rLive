@@ -11,7 +11,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { ArrowLeft, Search, Videotape } from "lucide-react";
+import { ArrowLeft, Search } from "lucide-react";
 import {
   useLocation,
   useNavigate,
@@ -33,11 +33,7 @@ import { HistoryClearButton, HistoryViewSwitcher } from "@/features/history/Hist
 import { useHistoryHeaderSnapshot } from "@/features/history/historyHeaderState";
 import { FollowViewSwitcher } from "@/features/follow/FollowHeaderControls";
 import { useFollowHeaderSnapshot } from "@/features/follow/followHeaderState";
-import {
-  activeRecordingCount,
-  recordingSupported,
-  useActiveRecordings,
-} from "@/features/recording/recording";
+import { recordingSupported } from "@/features/recording/recording";
 import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
 import { VideoTabScope } from "@/features/video/videoTabScope";
 import { VideoSearchBar } from "@/features/video/VideoSearchBar";
@@ -197,16 +193,10 @@ export function Shell() {
   const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
   const isFollow = pathname === "/follow";
   const isHistory = pathname === "/history";
-  // 录制仅限桌面端，因此移动端深链接保持普通头部加上页面自己的
-  // "仅支持桌面端"状态，而不是空白的作用域页签。
-  const isRecordings = pathname === "/recordings" && recordingSupported();
   const isSettings = pathname === "/settings";
   const mobileClient = isMobileClient();
   const historyHeader = useHistoryHeaderSnapshot();
   const followHeader = useFollowHeaderSnapshot();
-  // 录制入口从侧栏收进直播页顶部条带；角标只查活动任务，不扫描录制库。
-  const recordingQuery = useActiveRecordings();
-  const recordingBadge = activeRecordingCount(recordingQuery.data);
 
   // React Router 用递增的 `idx` 记录每条 pushState 历史。跨渲染比较它可以告诉
   // 页签切换用户在历史中向哪个方向移动，从而让新页面从相应的一侧滑入。
@@ -275,7 +265,10 @@ export function Shell() {
         : sitePlatforms[0]!,
     [selectedSiteId, sitePlatforms],
   );
-  const followView = followViewFromSearch(searchParams.get(FOLLOW_VIEW_PARAM));
+  const followView = followViewFromSearch(
+    searchParams.get(FOLLOW_VIEW_PARAM),
+    recordingSupported(),
+  );
   const isIptvFollow = isFollow && followView === "iptv";
   const hasIptvSourceShell = isIptv;
   const iptvFollowGroup = isIptvFollow ? searchParams.get(FOLLOW_IPTV_GROUP_PARAM) : null;
@@ -288,7 +281,7 @@ export function Shell() {
   // 发生在 IptvFollowView 内部而不是这一层。
   const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv || isVideo;
   // 视频搜索页的头部槽位是查询条，同样需要这条头部（移动端否则整条隐藏）。
-  const showTopNavigation = useGroupedPageContainer || isHistory || isRecordings || isVideoSearch;
+  const showTopNavigation = useGroupedPageContainer || isHistory || isVideoSearch;
   const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSource = useMemo(
     () => playlistSourceFromRoute(iptvSourceId, iptvCustomM3uUrl),
@@ -877,6 +870,7 @@ export function Shell() {
                             <FollowViewSwitcher
                               value={followHeader.view}
                               onValueChange={followHeader.onViewChange}
+                              recordingAvailable={recordingSupported()}
                             />
                           ) : hasIptvSourceShell ? (
                             <div
@@ -920,25 +914,11 @@ export function Shell() {
                               {...bindSwipe(sitePlatformSwipe)}
                             >
                               <SiteSwitcher
-                                value={isRecordings ? undefined : activeSiteId}
-                                hideSelection={isRecordings}
-                                extraTab={
-                                  !mobileClient && recordingSupported()
-                                    ? {
-                                        id: "recordings",
-                                        label: "录制",
-                                        icon: <Videotape className="size-4" aria-hidden />,
-                                        active: isRecordings,
-                                        badge: recordingBadge,
-                                        onClick: () => navigate("/recordings"),
-                                      }
-                                    : undefined
-                                }
+                                value={activeSiteId}
                                 onValueIntent={preloadHomePlatform}
                                 onValueChange={(value) => {
                                   if (value === "all") return;
                                   sitePlatformSwipe.selectValue(value);
-                                  if (isRecordings) navigate("/");
                                 }}
                               />
                             </div>
@@ -966,7 +946,7 @@ export function Shell() {
                       >
                         <Search aria-hidden />
                       </Button>
-                    ) : isVideoSearch || isFollow || isIptv || isRecordings ? null : (
+                    ) : isVideoSearch || isFollow || isIptv ? null : (
                       <HeaderSearch />
                     )}
                   </div>
