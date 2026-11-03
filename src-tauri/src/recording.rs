@@ -21,7 +21,7 @@ use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -3673,33 +3673,33 @@ async fn handle_playback_client(
     let path = target.split_once('?').map_or(target, |(path, _)| path);
     let mut components = path.trim_start_matches('/').split('/');
     if components.next() != Some(token) {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     }
     // 录制 id 是两级路径，因此在这里占据两个 URL 段。
     let Some(encoded_room) = components.next() else {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
     let Some(encoded_session) = components.next() else {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
     let (Ok(room), Ok(session)) = (
         percent_decode_str(encoded_room).decode_utf8(),
         percent_decode_str(encoded_session).decode_utf8(),
     ) else {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
     let id = format!("{room}/{session}");
     let id = id.as_str();
     if !is_safe_recording_id(id) {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     }
     let Some(relative) = decode_playback_relative_path(components) else {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
     let roots = storage
@@ -3708,7 +3708,7 @@ async fn handle_playback_client(
         .roots
         .clone();
     let Some((_root, bundle)) = find_bundle_in_root(&roots, id) else {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     };
     let file = bundle.join(&relative);
@@ -3716,15 +3716,15 @@ async fn handle_playback_client(
     let canonical_file = match std::fs::canonicalize(&file) {
         Ok(path) => path,
         Err(_) => {
-            write_simple_response(socket, 404, "Not Found", "").await?;
+            local_http::write_simple_response(socket, 404, "Not Found", "").await?;
             return Ok(());
         }
     };
     if !canonical_file.starts_with(&canonical_bundle) {
-        write_simple_response(socket, 404, "Not Found", "").await?;
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
         return Ok(());
     }
-    serve_file(
+    local_http::serve_file(
         socket,
         method == "HEAD",
         &file,
@@ -3764,167 +3764,13 @@ fn safe_relative_path(path: &Path) -> bool {
         })
 }
 
-async fn serve_file(
-    socket: &mut TcpStream,
-    head_only: bool,
-    path: &Path,
-    range: Option<&str>,
-) -> Result<(), String> {
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(|error| error.to_string())?;
-    if !metadata.is_file() {
-        return write_simple_response(socket, 404, "Not Found", "").await;
-    }
-    let total = metadata.len();
-    let (status, start, end) = match parse_range(range, total) {
-        Ok(value) => value,
-        Err(_) => {
-            let response = format!(
-                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
-            );
-            socket
-                .write_all(response.as_bytes())
-                .await
-                .map_err(|error| error.to_string())?;
-            return Ok(());
-        }
-    };
-    let length = if total == 0 {
-        0
-    } else {
-        end.saturating_sub(start).saturating_add(1)
-    };
-    let content_type = content_type(path);
-    let header = if status == 206 {
-        format!(
-            "HTTP/1.1 206 Partial Content\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\nContent-Range: bytes {start}-{end}/{total}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
-        )
-    } else {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
-        )
-    };
-    socket
-        .write_all(header.as_bytes())
-        .await
-        .map_err(|error| error.to_string())?;
-    if head_only || length == 0 {
-        return Ok(());
-    }
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .map_err(|error| error.to_string())?;
-    file.seek(std::io::SeekFrom::Start(start))
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut remaining = length;
-    let mut chunk = vec![0_u8; 64 * 1024];
-    while remaining > 0 {
-        let capacity = chunk.len().min(remaining as usize);
-        let read = file
-            .read(&mut chunk[..capacity])
-            .await
-            .map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        socket
-            .write_all(&chunk[..read])
-            .await
-            .map_err(|error| error.to_string())?;
-        remaining -= read as u64;
-    }
-    Ok(())
-}
-
-fn parse_range(value: Option<&str>, total: u64) -> Result<(u16, u64, u64), String> {
-    let Some(value) = value else {
-        return Ok((200, 0, total.saturating_sub(1)));
-    };
-    if total == 0 {
-        return Err("range not satisfiable".into());
-    }
-    let Some(value) = value.strip_prefix("bytes=") else {
-        return Ok((200, 0, total - 1));
-    };
-    if value.contains(',') {
-        return Err("multiple ranges are not supported".into());
-    }
-    let Some((start, end)) = value.split_once('-') else {
-        return Ok((200, 0, total - 1));
-    };
-    let start = start.trim();
-    let end = end.trim();
-    let (start, end) = if start.is_empty() {
-        let suffix = end
-            .parse::<u64>()
-            .map_err(|_| "invalid range".to_string())?;
-        if suffix == 0 {
-            return Err("range not satisfiable".into());
-        }
-        (total.saturating_sub(suffix.min(total)), total - 1)
-    } else {
-        let start = start
-            .parse::<u64>()
-            .map_err(|_| "invalid range".to_string())?;
-        let end = if end.is_empty() {
-            total - 1
-        } else {
-            end.parse::<u64>()
-                .map_err(|_| "invalid range".to_string())?
-                .min(total - 1)
-        };
-        (start, end)
-    };
-    if start >= total || start > end {
-        return Err("range not satisfiable".into());
-    }
-    Ok((206, start, end))
-}
-
-fn content_type(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "m3u8" => "application/vnd.apple.mpegurl",
-        "ts" => "video/mp2t",
-        "flv" => "video/x-flv",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "m4s" => "video/iso.segment",
-        "aac" => "audio/aac",
-        "key" => "application/octet-stream",
-        _ => "application/octet-stream",
-    }
-}
-
-async fn write_simple_response(
-    socket: &mut TcpStream,
-    status: u16,
-    reason: &str,
-    body: &str,
-) -> Result<(), String> {
-    let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    socket
-        .write_all(response.as_bytes())
-        .await
-        .map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::live::DanmakuKind;
     use std::ops::Deref;
     use std::sync::Barrier;
+    use tokio::io::AsyncReadExt;
     use tokio::sync::oneshot;
 
     const ID: &str = "bilibili_100/主播_20260820-192158";
@@ -4163,7 +4009,11 @@ mod tests {
             (Some("bytes=0-0"), 0, None),
             (Some("bytes=0-1,4-5"), 100, None),
         ] {
-            assert_eq!(parse_range(header, size).ok(), expected, "{header:?}");
+            assert_eq!(
+                local_http::parse_range(header, size).ok(),
+                expected,
+                "{header:?}"
+            );
         }
         for (available, low) in [
             (MINIMUM_FREE_SPACE_BYTES - 1, true),

@@ -9,7 +9,9 @@ use tauri::{AppHandle, State};
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-use crate::video_download::{VideoDownloadInput, VideoDownloadItem, VideoDownloadStatus};
+use crate::video_download::{
+    VideoDownloadInput, VideoDownloadItem, VideoDownloadPlaybackInfo, VideoDownloadStatus,
+};
 
 #[tauri::command]
 pub fn video_download_list(state: State<'_, AppState>) -> Vec<VideoDownloadItem> {
@@ -68,6 +70,26 @@ pub fn video_download_resume(
     id: String,
 ) -> AppResult<VideoDownloadItem> {
     state.video_download.resume(id.trim())
+}
+
+#[tauri::command]
+pub async fn video_download_playback_info(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<VideoDownloadPlaybackInfo> {
+    state.video_download.playback_info(id.trim()).await
+}
+
+#[tauri::command]
+pub fn video_download_watch_progress_report(
+    state: State<'_, AppState>,
+    id: String,
+    progress: f64,
+    duration: f64,
+) -> AppResult<()> {
+    state
+        .video_download
+        .report_watch_progress(id.trim(), progress, duration)
 }
 
 #[tauri::command(async)]

@@ -113,7 +113,8 @@ use commands::video::{
 };
 use commands::video_download::{
     video_download_delete, video_download_list, video_download_open, video_download_open_directory,
-    video_download_pause, video_download_resume, video_download_start,
+    video_download_pause, video_download_playback_info, video_download_resume,
+    video_download_start, video_download_watch_progress_report,
 };
 use commands::video_follow::{
     video_follow_group_list, video_follow_group_remove, video_follow_group_upsert,
@@ -475,6 +476,8 @@ pub fn run() {
             video_download_resume,
             video_download_delete,
             video_download_open,
+            video_download_playback_info,
+            video_download_watch_progress_report,
             video_get_cast_url,
             video_get_player_meta,
             video_get_storyboard,

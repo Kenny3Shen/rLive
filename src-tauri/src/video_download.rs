@@ -8,7 +8,7 @@
 //! 重封装为 MP4。桌面端用进程内 FFmpeg 流复制，Android 用原生
 //! `MediaMuxer`，两条路径都不转码。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::sync::OnceLock;
@@ -23,15 +23,20 @@ use ffmpeg::{Packet, Rational, Rescale, format, media};
 use ffmpeg_next as ffmpeg;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, watch};
+use uuid::Uuid;
 
 use crate::commands::video::{resolve_bilibili, video_stream_headers};
 use crate::error::{AppError, AppResult};
+use crate::local_http;
 use crate::models::video::VideoPlayRequest;
 use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
+use crate::stream_proxy::request_header;
 
 pub const VIDEO_DOWNLOAD_CHANGED_EVENT: &str = "video-download-changed";
 pub const VIDEO_DOWNLOAD_PROGRESS_EVENT: &str = "video-download-progress";
@@ -41,6 +46,9 @@ const VIDEO_PART: &str = "video.m4s.part";
 const AUDIO_PART: &str = "audio.m4s.part";
 const OUTPUT_PART: &str = "output.mp4.part";
 const MAX_TITLE_CHARS: usize = 80;
+const VIDEO_FILE_EXTENSION: &str = ".mp4";
+const MAX_FILE_NAME_BYTES: usize = 255;
+const MAX_FILE_STEM_BYTES: usize = MAX_FILE_NAME_BYTES - VIDEO_FILE_EXTENSION.len();
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 const TRACK_ATTEMPTS: u32 = 3;
 
@@ -86,6 +94,17 @@ pub struct VideoDownloadItem {
     /// 成片的绝对路径；未完成时也给出预期路径，前端据此展示位置。
     pub file_path: String,
     pub error: Option<String>,
+    /// 只用于区分同一队列条目上的多次用户请求，不跨 IPC 或重启传递。
+    #[serde(skip)]
+    request_generation: u64,
+    /// 切换画质后需要等旧 worker 离场再清理旧分片。
+    #[serde(skip)]
+    discard_partials: bool,
+    /// 观看进度以秒保存，和下载条目的原始 `duration` 分开。
+    #[serde(skip)]
+    watch_progress: f64,
+    #[serde(skip)]
+    watch_duration: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,10 +137,27 @@ struct VideoDownloadProgressEvent {
     status: VideoDownloadStatus,
 }
 
+/// 应用内播放所需的信息。URL 只能由后端生成，并绑定到本次进程内的单文件授权。
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoDownloadPlaybackInfo {
+    pub item: VideoDownloadItem,
+    pub url: String,
+    /// 上次离开时的播放位置，单位秒。
+    pub progress: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredEntry {
     item: VideoDownloadItem,
     file_name: String,
+    /// 换画质时旧 worker 可能尚未退出；即使随后进程退出，重启后也必须
+    /// 从空分片开始，不能把旧 representation 的字节接到新分片表后面。
+    #[serde(default)]
+    discard_partials: bool,
+    #[serde(default)]
+    watch_progress: f64,
+    #[serde(default)]
+    watch_duration: f64,
 }
 
 struct InnerState {
@@ -131,11 +167,157 @@ struct InnerState {
     cancel: Option<watch::Sender<bool>>,
     /// 当前活动 worker 结束（含取消）时通知；删除活动条目要等它停止写文件。
     active_done: Option<Arc<Notify>>,
+    /// 正在删除的条目；在文件和内存记录都清完之前禁止 start/resume 复活它。
+    deleting: HashSet<String>,
+}
+
+#[derive(Clone)]
+struct PlaybackGrant {
+    item_id: String,
+    file: PathBuf,
+}
+
+struct PlaybackServerInner {
+    token: String,
+    base_url: String,
+    grants: Arc<Mutex<HashMap<String, PlaybackGrant>>>,
+    shutdown: watch::Sender<bool>,
+    task: JoinHandle<()>,
+}
+
+struct DownloadPlaybackServer {
+    root: PathBuf,
+    state: Mutex<Option<PlaybackServerInner>>,
+}
+
+impl DownloadPlaybackServer {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            state: Mutex::new(None),
+        }
+    }
+
+    async fn url(&self, item_id: &str, file: &Path) -> AppResult<String> {
+        {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(server) = state.as_ref() {
+                return server.register(item_id, file);
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|error| {
+            AppError::new(
+                "video_download_playback_server_error",
+                format!("启动下载回放服务失败: {error}"),
+            )
+        })?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| {
+                AppError::new(
+                    "video_download_playback_server_error",
+                    format!("读取下载回放端口失败: {error}"),
+                )
+            })?
+            .port();
+        let token = Uuid::new_v4().simple().to_string();
+        let base_url = format!("http://127.0.0.1:{port}");
+        let grants = Arc::new(Mutex::new(HashMap::new()));
+        let (shutdown, receiver) = watch::channel(false);
+        let root = self.root.clone();
+        let task_token = token.clone();
+        let task_grants = grants.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            run_playback_server(listener, root, task_grants, task_token, receiver).await;
+        });
+
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.is_none() {
+            *state = Some(PlaybackServerInner {
+                token,
+                base_url,
+                grants,
+                shutdown,
+                task,
+            });
+        } else {
+            let _ = shutdown.send(true);
+            task.abort();
+        }
+        state
+            .as_ref()
+            .expect("download playback server installed")
+            .register(item_id, file)
+    }
+
+    fn revoke(&self, item_id: &str) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(server) = state.as_ref() {
+            server
+                .grants
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .retain(|_grant, value| value.item_id != item_id);
+        }
+    }
+
+    fn stop(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(server) = state.take() {
+            let _ = server.shutdown.send(true);
+            server.task.abort();
+        }
+    }
+}
+
+impl PlaybackServerInner {
+    fn register(&self, item_id: &str, file: &Path) -> AppResult<String> {
+        let grant = Uuid::new_v4().simple().to_string();
+        let mut grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((grant, _)) = grants
+            .iter()
+            .find(|(_grant, value)| value.item_id == item_id && value.file == file)
+        {
+            return Ok(format!("{}/{}/{}", self.base_url, self.token, grant));
+        }
+        grants.retain(|_grant, value| value.item_id != item_id);
+        grants.insert(
+            grant.clone(),
+            PlaybackGrant {
+                item_id: item_id.to_string(),
+                file: file.to_path_buf(),
+            },
+        );
+        Ok(format!("{}/{}/{}", self.base_url, self.token, grant))
+    }
+}
+
+impl Drop for DownloadPlaybackServer {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 /// 下载管理器。由 `AppState` 以 `Arc` 持有，后台 worker 需要跨任务存活。
 pub struct VideoDownloadManager {
     root: PathBuf,
+    playback: DownloadPlaybackServer,
     app: Mutex<Option<AppHandle>>,
     inner: Mutex<InnerState>,
     /// 元数据文件写入串行化，避免 worker 与命令同时替换同一份 `entry.json`。
@@ -151,8 +333,10 @@ impl VideoDownloadManager {
             )
         })?;
         let items = load_items(&root);
+        let playback_root = root.clone();
         Ok(Self {
             root,
+            playback: DownloadPlaybackServer::new(playback_root),
             app: Mutex::new(None),
             inner: Mutex::new(InnerState {
                 items,
@@ -160,6 +344,7 @@ impl VideoDownloadManager {
                 active_id: None,
                 cancel: None,
                 active_done: None,
+                deleting: HashSet::new(),
             }),
             io_lock: Mutex::new(()),
         })
@@ -203,6 +388,106 @@ impl VideoDownloadManager {
             .ok_or_else(not_found)
     }
 
+    /// 为已完成下载生成应用内播放信息。前端只消费这里返回的 URL，不能传入路径。
+    pub async fn playback_info(&self, id: &str) -> AppResult<VideoDownloadPlaybackInfo> {
+        let item = self.get(id)?;
+        if item.status != VideoDownloadStatus::Completed {
+            return Err(AppError::new(
+                "video_download_not_completed",
+                "下载尚未完成，暂时无法播放",
+            ));
+        }
+        let file = validate_playback_file(&self.root, &item.id, Path::new(&item.file_path))?;
+        let url = self.playback.url(&item.id, &file).await?;
+        let current = {
+            let inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.deleting.contains(&item.id) {
+                Err(deleting_error())
+            } else if let Some(current) = inner.items.iter().find(|entry| entry.id == item.id) {
+                if current.status != VideoDownloadStatus::Completed {
+                    Err(AppError::new(
+                        "video_download_not_completed",
+                        "下载尚未完成，暂时无法播放",
+                    ))
+                } else {
+                    validate_playback_file(&self.root, &current.id, Path::new(&current.file_path))
+                        .map(|_| current.clone())
+                }
+            } else {
+                Err(not_found())
+            }
+        };
+        let item = match current {
+            Ok(item) => item,
+            Err(error) => {
+                // 启动本地服务期间条目可能已被删除；撤掉本次刚注册的授权，
+                // 防止同一 id 重新下载后旧 URL 又意外生效。
+                self.playback.revoke(&item.id);
+                return Err(error);
+            }
+        };
+        Ok(VideoDownloadPlaybackInfo {
+            progress: item.watch_progress,
+            item,
+            url,
+        })
+    }
+
+    /// 保存应用内播放进度。`duration` 来自实际媒体读数，单独保存，不回写下载
+    /// 条目的 `duration`。
+    pub fn report_watch_progress(&self, id: &str, progress: f64, duration: f64) -> AppResult<()> {
+        if !progress.is_finite() || progress < 0.0 || !duration.is_finite() || duration < 0.0 {
+            return Err(AppError::new(
+                "video_download_invalid_request",
+                "播放进度或时长无效",
+            ));
+        }
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner.deleting.contains(id) {
+            return Err(deleting_error());
+        }
+        let item = inner
+            .items
+            .iter_mut()
+            .find(|item| item.id == id)
+            .ok_or_else(not_found)?;
+        if item.status != VideoDownloadStatus::Completed {
+            return Err(AppError::new(
+                "video_download_not_completed",
+                "下载尚未完成，无法保存播放进度",
+            ));
+        }
+        validate_playback_file(&self.root, &item.id, Path::new(&item.file_path))?;
+
+        let effective_duration = if duration > 0.0 {
+            duration
+        } else if item.watch_duration > 0.0 {
+            item.watch_duration
+        } else {
+            item.duration
+        };
+        let next_progress = if effective_duration > 0.0 {
+            progress.min(effective_duration)
+        } else {
+            progress
+        };
+        let mut updated = item.clone();
+        updated.watch_progress = next_progress;
+        if duration > 0.0 {
+            updated.watch_duration = duration;
+        }
+        persist_item(self, &updated)?;
+        item.watch_progress = updated.watch_progress;
+        item.watch_duration = updated.watch_duration;
+        Ok(())
+    }
+
     pub fn start(self: &Arc<Self>, input: VideoDownloadInput) -> AppResult<VideoDownloadItem> {
         let cid = input.cid;
         if cid <= 0 {
@@ -228,7 +513,7 @@ impl VideoDownloadManager {
         }
         let id = item_id(bvid.as_deref(), ep_id.as_deref(), cid)?;
         let dir = self.root.join(&id);
-        let file_name = format!("{}.mp4", safe_file_stem(title, &id));
+        let file_name = safe_video_file_name(title, &id);
         let now = unix_seconds();
         let qn = input.qn.unwrap_or(0).max(0);
         let submit = {
@@ -236,7 +521,11 @@ impl VideoDownloadManager {
                 .inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some(index) = inner.items.iter().position(|item| item.id == id) {
+            if inner.deleting.contains(&id) {
+                return Err(deleting_error());
+            }
+            let submit = if let Some(index) = inner.items.iter().position(|item| item.id == id) {
+                let active = inner.active_id.as_deref() == Some(id.as_str());
                 let existing = &mut inner.items[index];
                 // 已完成/进行中的同一内容不重复入队：重复点击只会让用户以为
                 // 自己多下了一份，实际共用同一目录。
@@ -247,12 +536,24 @@ impl VideoDownloadManager {
                 }
                 // 重试允许换画质；旧分片属于另一条 profile，混在一起会得到
                 // 无法解复用的文件，宁可从头下。
-                if existing.qn != qn && qn > 0 {
-                    let _ = std::fs::remove_file(dir.join(VIDEO_PART));
-                    let _ = std::fs::remove_file(dir.join(AUDIO_PART));
+                if existing.qn != qn {
+                    if active {
+                        // 暂停命令会先返回；旧 worker 此时可能还握着文件句柄。
+                        // 把清理推迟到下一代 worker 启动后，避免 Windows 上删
+                        // 不掉文件又把旧画质字节拼进新分片。
+                        existing.discard_partials = true;
+                    } else {
+                        remove_partial_tracks(&dir).map_err(|error| {
+                            AppError::new(
+                                "video_download_dir_error",
+                                format!("清理旧画质分片失败: {error}"),
+                            )
+                        })?;
+                    }
                     existing.downloaded_bytes = 0;
                     existing.total_bytes = 0;
                 }
+                existing.request_generation = next_request_generation(existing.request_generation);
                 existing.qn = qn;
                 existing.title = title.to_string();
                 existing.cover = input.cover.unwrap_or_default();
@@ -283,6 +584,10 @@ impl VideoDownloadManager {
                     completed_at: None,
                     file_path: crate::app_paths::path_to_string(&dir.join(&file_name)),
                     error: None,
+                    request_generation: 1,
+                    discard_partials: false,
+                    watch_progress: 0.0,
+                    watch_duration: 0.0,
                 };
                 std::fs::create_dir_all(&dir).map_err(|error| {
                     AppError::new(
@@ -293,9 +598,10 @@ impl VideoDownloadManager {
                 submit_entry(self, &item, &file_name)?;
                 inner.items.push(item.clone());
                 item
-            }
+            };
+            self.emit_changed(Some(&submit));
+            submit
         };
-        self.emit_changed(Some(&submit));
         if let Some(app) = self.app_handle() {
             spawn_worker(self.clone(), app);
         }
@@ -308,6 +614,9 @@ impl VideoDownloadManager {
                 .inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.deleting.contains(id) {
+                return Err(deleting_error());
+            }
             let Some(index) = inner.items.iter().position(|item| item.id == id) else {
                 return Err(not_found());
             };
@@ -322,22 +631,25 @@ impl VideoDownloadManager {
                     // worker 会在下一个数据块边界停下并写回 paused；
                     // 这里先标状态让按钮立即响应，两处写入的是同一件事。
                     inner.items[index].status = VideoDownloadStatus::Paused;
+                    inner.items[index].request_generation =
+                        next_request_generation(inner.items[index].request_generation);
                     if inner.active_id.as_deref() == Some(id)
                         && let Some(cancel) = &inner.cancel
                     {
                         let _ = cancel.send(true);
                     }
-                    Some(inner.items[index].clone())
+                    let item = inner.items[index].clone();
+                    // 与 start/worker 保持一致：状态、磁盘记录和事件在同一
+                    // 把锁内发布，避免迟到的旧快照覆盖更新的 generation。
+                    let _ = persist_item(self, &item);
+                    self.emit_changed(Some(&item));
+                    Some(item)
                 }
                 VideoDownloadStatus::Paused
                 | VideoDownloadStatus::Completed
                 | VideoDownloadStatus::Failed => return Ok(inner.items[index].clone()),
             }
         };
-        if let Some(item) = &changed {
-            let _ = persist_item(self, item);
-            self.emit_changed(Some(item));
-        }
         changed.ok_or_else(not_found)
     }
 
@@ -347,6 +659,9 @@ impl VideoDownloadManager {
                 .inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.deleting.contains(id) {
+                return Err(deleting_error());
+            }
             let Some(item) = inner.items.iter_mut().find(|item| item.id == id) else {
                 return Err(not_found());
             };
@@ -354,13 +669,15 @@ impl VideoDownloadManager {
                 VideoDownloadStatus::Failed | VideoDownloadStatus::Paused => {
                     item.status = VideoDownloadStatus::Queued;
                     item.error = None;
-                    item.clone()
+                    item.request_generation = next_request_generation(item.request_generation);
+                    let resumed = item.clone();
+                    persist_item(self, &resumed)?;
+                    self.emit_changed(Some(&resumed));
+                    resumed
                 }
                 _ => return Ok(item.clone()),
             }
         };
-        persist_item(self, &resumed)?;
-        self.emit_changed(Some(&resumed));
         if let Some(app) = self.app_handle() {
             spawn_worker(self.clone(), app);
         }
@@ -368,14 +685,19 @@ impl VideoDownloadManager {
     }
 
     pub async fn remove(&self, id: &str) -> AppResult<()> {
+        self.playback.revoke(id);
         let done = {
             let mut inner = self
                 .inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.deleting.contains(id) {
+                return Err(deleting_error());
+            }
             let Some(index) = inner.items.iter().position(|item| item.id == id) else {
                 return Err(not_found());
             };
+            inner.deleting.insert(id.to_string());
             if inner.active_id.as_deref() == Some(id) {
                 if let Some(cancel) = &inner.cancel {
                     let _ = cancel.send(true);
@@ -399,9 +721,17 @@ impl VideoDownloadManager {
             }
         }
         let dir = self.root.join(id);
-        if let Err(error) = std::fs::remove_dir_all(&dir)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
+        let remove_result = match std::fs::remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        };
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .deleting
+            .remove(id);
+        if let Err(error) = remove_result {
             return Err(AppError::new(
                 "video_download_delete_error",
                 format!("删除下载失败: {error}"),
@@ -441,8 +771,14 @@ impl VideoDownloadManager {
         );
     }
 
-    fn report_progress(&self, id: &str, downloaded_bytes: u64, total_bytes: u64) {
-        let status = {
+    fn report_progress(
+        &self,
+        id: &str,
+        request_generation: u64,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+    ) {
+        {
             let mut inner = self
                 .inner
                 .lock()
@@ -450,25 +786,29 @@ impl VideoDownloadManager {
             let Some(item) = inner.items.iter_mut().find(|item| item.id == id) else {
                 return;
             };
+            if item.request_generation != request_generation {
+                return;
+            }
             item.downloaded_bytes = downloaded_bytes;
             item.total_bytes = total_bytes;
-            item.status
-        };
-        let Some(app) = self.app_handle() else { return };
-        let _ = app.emit(
-            VIDEO_DOWNLOAD_PROGRESS_EVENT,
-            VideoDownloadProgressEvent {
-                id: id.to_string(),
-                downloaded_bytes,
-                total_bytes,
-                status,
-            },
-        );
+            let status = item.status;
+            let Some(app) = self.app_handle() else { return };
+            let _ = app.emit(
+                VIDEO_DOWNLOAD_PROGRESS_EVENT,
+                VideoDownloadProgressEvent {
+                    id: id.to_string(),
+                    downloaded_bytes,
+                    total_bytes,
+                    status,
+                },
+            );
+        }
     }
 
-    fn update_item(
+    fn update_item_if_current(
         &self,
         id: &str,
+        request_generation: u64,
         apply: impl FnOnce(&mut VideoDownloadItem),
     ) -> Option<VideoDownloadItem> {
         let updated = {
@@ -477,11 +817,15 @@ impl VideoDownloadManager {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let item = inner.items.iter_mut().find(|item| item.id == id)?;
+            if item.request_generation != request_generation {
+                return None;
+            }
             apply(item);
-            item.clone()
+            let updated = item.clone();
+            let _ = persist_item(self, &updated);
+            self.emit_changed(Some(&updated));
+            updated
         };
-        let _ = persist_item(self, &updated);
-        self.emit_changed(Some(&updated));
         Some(updated)
     }
 }
@@ -502,6 +846,9 @@ fn write_entry(root: &Path, item: &VideoDownloadItem, file_name: &str) -> AppRes
     let stored = StoredEntry {
         item: item.clone(),
         file_name: file_name.to_string(),
+        discard_partials: item.discard_partials,
+        watch_progress: item.watch_progress,
+        watch_duration: item.watch_duration,
     };
     let bytes = serde_json::to_vec_pretty(&stored).map_err(|error| {
         AppError::new(
@@ -567,6 +914,14 @@ fn load_items(root: &Path) -> Vec<VideoDownloadItem> {
         let item = &mut stored.item;
         item.id = id.to_string();
         item.file_path = crate::app_paths::path_to_string(&path.join(&stored.file_name));
+        item.discard_partials = stored.discard_partials;
+        item.watch_progress = finite_non_negative(stored.watch_progress);
+        item.watch_duration = finite_non_negative(stored.watch_duration);
+        if item.watch_progress != stored.watch_progress
+            || item.watch_duration != stored.watch_duration
+        {
+            changed = true;
+        }
         match item.status {
             VideoDownloadStatus::Downloading | VideoDownloadStatus::Merging => {
                 item.status = VideoDownloadStatus::Paused;
@@ -622,11 +977,9 @@ fn spawn_worker(manager: Arc<VideoDownloadManager>, app: AppHandle) {
         if inner.worker_running {
             return;
         }
-        let Some(index) = inner
-            .items
-            .iter()
-            .position(|item| item.status == VideoDownloadStatus::Queued)
-        else {
+        let Some(index) = inner.items.iter().position(|item| {
+            item.status == VideoDownloadStatus::Queued && !inner.deleting.contains(&item.id)
+        }) else {
             return;
         };
         inner.worker_running = true;
@@ -638,11 +991,13 @@ fn spawn_worker(manager: Arc<VideoDownloadManager>, app: AppHandle) {
         inner.items[index].error = None;
         let item = inner.items[index].clone();
         inner.active_id = Some(item.id.clone());
+        // 状态与磁盘记录必须在同一把 inner 锁下发布，否则紧随其后的暂停
+        // 可能先持久化 paused，又被这里迟到的 downloading 覆盖。
+        let _ = persist_item(&manager, &item);
+        manager.emit_changed(Some(&item));
         (item, cancel_rx, done)
     };
     let (item, cancel_rx, done) = queue;
-    let _ = persist_item(&manager, &item);
-    manager.emit_changed(Some(&item));
     let handle = tauri::async_runtime::spawn(async move {
         run_worker(manager, app, item, cancel_rx, done).await;
     });
@@ -663,47 +1018,62 @@ async fn run_worker(
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.worker_running = false;
-        inner.active_id = None;
-        inner.cancel = None;
-        inner.active_done = None;
-        if let Some(stored) = inner.items.iter_mut().find(|entry| entry.id == item.id) {
-            stored.status = outcome.status;
-            stored.downloaded_bytes = outcome.downloaded_bytes;
-            stored.total_bytes = outcome.total_bytes;
-            stored.qn = outcome.qn.unwrap_or(stored.qn);
-            if let Some(label) = outcome.quality_label {
-                stored.quality_label = label;
-            }
-            if let Some(duration) = outcome.duration.filter(|duration| *duration > 0.0) {
-                stored.duration = duration;
-            }
-            if let Some(path) = outcome.file_path {
-                stored.file_path = path;
-            }
-            stored.error = outcome.error;
-            if outcome.status == VideoDownloadStatus::Completed {
-                stored.completed_at = Some(unix_seconds());
-            }
+        let updated = finish_worker_state(&mut inner, &item, outcome);
+        if let Some(current) = &updated {
+            // 与状态一起持久化并在锁内发布，保证暂停/重试不会被旧终态事件
+            // 或旧 entry.json 覆盖。
+            let _ = persist_item(&manager, current);
+            manager.emit_changed(Some(current));
         }
-    }
-    if let Some(updated) = manager
-        .inner
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .items
-        .iter()
-        .find(|entry| entry.id == item.id)
-        .cloned()
-    {
-        let _ = persist_item(&manager, &updated);
-        manager.emit_changed(Some(&updated));
     }
     // 删活动条目的一方在等这个信号；必须在启动下一个任务前唤醒，
     // 否则下一次 `spawn_worker` 会换掉 `active_done`。
     done.notify_one();
     // 队列里还有条目就继续；暂停/失败不会阻塞后面的条目。
     spawn_worker(manager, app);
+}
+
+/// 收尾当前 worker。若用户已暂停、重试或删除该条目，代次会变化；此时只允许
+/// 暂停态刷新字节数，绝不能把旧 worker 的 paused/completed 写回新请求。
+fn finish_worker_state(
+    inner: &mut InnerState,
+    item: &VideoDownloadItem,
+    outcome: DownloadOutcome,
+) -> Option<VideoDownloadItem> {
+    inner.worker_running = false;
+    inner.active_id = None;
+    inner.cancel = None;
+    inner.active_done = None;
+    let deleting = inner.deleting.contains(&item.id);
+    let stored = inner.items.iter_mut().find(|entry| entry.id == item.id)?;
+    if stored.request_generation == item.request_generation && !deleting {
+        apply_download_outcome(stored, outcome);
+    } else if stored.status == VideoDownloadStatus::Paused {
+        // 纯暂停没有新 queued 请求，仍把最后一个数据块的进度带回来。
+        stored.downloaded_bytes = outcome.downloaded_bytes;
+        stored.total_bytes = outcome.total_bytes;
+    }
+    Some(stored.clone())
+}
+
+fn apply_download_outcome(stored: &mut VideoDownloadItem, outcome: DownloadOutcome) {
+    stored.status = outcome.status;
+    stored.downloaded_bytes = outcome.downloaded_bytes;
+    stored.total_bytes = outcome.total_bytes;
+    stored.qn = outcome.qn.unwrap_or(stored.qn);
+    if let Some(label) = outcome.quality_label {
+        stored.quality_label = label;
+    }
+    if let Some(duration) = outcome.duration.filter(|duration| *duration > 0.0) {
+        stored.duration = duration;
+    }
+    if let Some(path) = outcome.file_path {
+        stored.file_path = path;
+    }
+    stored.error = outcome.error;
+    if outcome.status == VideoDownloadStatus::Completed {
+        stored.completed_at = Some(unix_seconds());
+    }
 }
 
 struct DownloadOutcome {
@@ -756,6 +1126,28 @@ async fn download_item(
     item: &VideoDownloadItem,
     cancel: watch::Receiver<bool>,
 ) -> DownloadOutcome {
+    let dir = manager.root.join(&item.id);
+    if item.discard_partials {
+        // 上一代 worker 已经退出后才会走到这里，因此此刻清理不会撞上
+        // Windows 的文件占用。
+        if let Err(error) = remove_partial_tracks(&dir) {
+            return DownloadOutcome::failed(
+                format!("清理旧画质分片失败: {error}"),
+                0,
+                item.total_bytes,
+            );
+        }
+        if manager
+            .update_item_if_current(&item.id, item.request_generation, |stored| {
+                stored.discard_partials = false;
+                stored.downloaded_bytes = 0;
+                stored.total_bytes = 0;
+            })
+            .is_none()
+        {
+            return DownloadOutcome::paused(0, item.total_bytes);
+        }
+    }
     let (downloaded, total) = partial_bytes(manager, item);
     if *cancel.borrow() {
         return DownloadOutcome::paused(downloaded, total);
@@ -795,27 +1187,32 @@ async fn download_item(
             .map(track_total)
             .unwrap_or_default();
     let (downloaded_now, _) = partial_bytes(manager, item);
-    manager.update_item(&item.id, |stored| {
-        stored.qn = selection.quality;
-        stored.quality_label = selection.quality_label.clone();
-        if duration > 0.0 {
-            stored.duration = duration;
-        }
-        stored.total_bytes = total_bytes;
-        stored.downloaded_bytes = downloaded_now;
-    });
+    if manager
+        .update_item_if_current(&item.id, item.request_generation, |stored| {
+            stored.qn = selection.quality;
+            stored.quality_label = selection.quality_label.clone();
+            if duration > 0.0 {
+                stored.duration = duration;
+            }
+            stored.total_bytes = total_bytes;
+            stored.downloaded_bytes = downloaded_now;
+        })
+        .is_none()
+    {
+        return DownloadOutcome::paused(downloaded_now, total_bytes);
+    }
     let client = match crate::http_client::recording_stream_client_for_route(&route) {
         Ok(client) => client,
         Err(error) => return DownloadOutcome::failed(error.message, downloaded_now, total_bytes),
     };
     let headers = video_stream_headers();
-    let dir = manager.root.join(&item.id);
     let video_part = dir.join(VIDEO_PART);
     let audio_part = dir.join(AUDIO_PART);
 
     match download_track(&TrackDownload {
         manager,
         item_id: &item.id,
+        request_generation: item.request_generation,
         client: &client,
         headers: &headers,
         track: &selection.video,
@@ -841,6 +1238,7 @@ async fn download_item(
         match download_track(&TrackDownload {
             manager,
             item_id: &item.id,
+            request_generation: item.request_generation,
             client: &client,
             headers: &headers,
             track: audio,
@@ -867,12 +1265,18 @@ async fn download_item(
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_string)
-        .unwrap_or_else(|| format!("{}.mp4", safe_file_stem(&item.title, &item.id)));
+        .unwrap_or_else(|| safe_video_file_name(&item.title, &item.id));
     let final_path = dir.join(&file_name);
     let output_part = dir.join(OUTPUT_PART);
-    manager.update_item(&item.id, |stored| {
-        stored.status = VideoDownloadStatus::Merging;
-    });
+    let (downloaded_before_merge, _) = partial_bytes(manager, item);
+    if manager
+        .update_item_if_current(&item.id, item.request_generation, |stored| {
+            stored.status = VideoDownloadStatus::Merging;
+        })
+        .is_none()
+    {
+        return DownloadOutcome::paused(downloaded_before_merge, total_bytes);
+    }
     let audio = selection.audio.as_ref().map(|_| audio_part.as_path());
     if let Err(error) = merge_download_tracks(app, &video_part, audio, &output_part).await {
         let (downloaded, _) = partial_bytes(manager, item);
@@ -920,6 +1324,7 @@ fn track_total(track: &VideoTrack) -> u64 {
 struct TrackDownload<'a> {
     manager: &'a Arc<VideoDownloadManager>,
     item_id: &'a str,
+    request_generation: u64,
     client: &'a reqwest::Client,
     headers: &'a HashMap<String, String>,
     track: &'a VideoTrack,
@@ -952,6 +1357,7 @@ async fn download_track(task: &TrackDownload<'_>) -> Result<u64, TrackError> {
 async fn download_track_once(task: &TrackDownload<'_>) -> Result<u64, TrackError> {
     let manager = task.manager;
     let item_id = task.item_id;
+    let request_generation = task.request_generation;
     let client = task.client;
     let headers = task.headers;
     let track = task.track;
@@ -1040,7 +1446,12 @@ async fn download_track_once(task: &TrackDownload<'_>) -> Result<u64, TrackError
             )));
         }
         if last_emit.elapsed() >= PROGRESS_INTERVAL {
-            manager.report_progress(item_id, base_bytes.saturating_add(current), total_bytes);
+            manager.report_progress(
+                item_id,
+                request_generation,
+                base_bytes.saturating_add(current),
+                total_bytes,
+            );
             last_emit = Instant::now();
         }
     }
@@ -1056,7 +1467,12 @@ async fn download_track_once(task: &TrackDownload<'_>) -> Result<u64, TrackError
             .retryable(),
         ));
     }
-    manager.report_progress(item_id, base_bytes.saturating_add(current), total_bytes);
+    manager.report_progress(
+        item_id,
+        request_generation,
+        base_bytes.saturating_add(current),
+        total_bytes,
+    );
     Ok(current)
 }
 
@@ -1276,6 +1692,10 @@ fn unix_seconds() -> i64 {
         .unwrap_or_default()
 }
 
+fn next_request_generation(current: u64) -> u64 {
+    current.wrapping_add(1).max(1)
+}
+
 fn normalize_id(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
@@ -1319,9 +1739,26 @@ fn safe_file_stem(title: &str, fallback_id: &str) -> String {
     if stem.is_empty() {
         stem = fallback_id.to_string();
     }
-    // Windows 保留设备名。加下划线前缀即可避开，不影响可读性。
-    if matches!(
-        stem.to_ascii_uppercase().as_str(),
+    // Windows 的保留名按第一个点前的基名判定，`CON.txt` 同样非法。
+    if windows_reserved_device_name(&stem) {
+        stem.insert(0, '_');
+    }
+    truncate_utf8_bytes(&stem, MAX_FILE_STEM_BYTES)
+        .trim_end_matches([' ', '.'])
+        .to_string()
+}
+
+fn safe_video_file_name(title: &str, fallback_id: &str) -> String {
+    format!(
+        "{}{VIDEO_FILE_EXTENSION}",
+        safe_file_stem(title, fallback_id)
+    )
+}
+
+fn windows_reserved_device_name(stem: &str) -> bool {
+    let base = stem.split('.').next().unwrap_or(stem).trim_end();
+    matches!(
+        base.to_ascii_uppercase().as_str(),
         "CON"
             | "PRN"
             | "AUX"
@@ -1344,26 +1781,323 @@ fn safe_file_stem(title: &str, fallback_id: &str) -> String {
             | "LPT7"
             | "LPT8"
             | "LPT9"
-    ) {
-        stem.insert(0, '_');
+    )
+}
+
+fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
     }
-    stem
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 fn safe_file_name(value: &str) -> bool {
     !value.is_empty()
+        && value.len() <= MAX_FILE_NAME_BYTES
         && !value.contains('/')
         && !value.contains('\\')
         && !value.chars().any(char::is_control)
+}
+
+fn remove_partial_tracks(dir: &Path) -> std::io::Result<()> {
+    for path in [
+        dir.join(VIDEO_PART),
+        dir.join(AUDIO_PART),
+        dir.join(OUTPUT_PART),
+    ] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+async fn run_playback_server(
+    listener: TcpListener,
+    root: PathBuf,
+    grants: Arc<Mutex<HashMap<String, PlaybackGrant>>>,
+    token: String,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_ok() && *shutdown.borrow() {
+                    break;
+                }
+            }
+            accepted = listener.accept() => match accepted {
+                Ok((mut socket, _)) => {
+                    let root = root.clone();
+                    let grants = grants.clone();
+                    let token = token.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = handle_playback_client(&mut socket, &root, &grants, &token).await;
+                    });
+                }
+                Err(_) => break,
+            },
+        }
+    }
+}
+
+async fn handle_playback_client(
+    socket: &mut TcpStream,
+    root: &Path,
+    grants: &Arc<Mutex<HashMap<String, PlaybackGrant>>>,
+    token: &str,
+) -> Result<(), String> {
+    let head = local_http::read_request_head(socket, local_http::MAX_REQUEST_HEAD_BYTES)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(head) = head.filter(|head| !head.is_empty()) else {
+        return Ok(());
+    };
+    let head = String::from_utf8_lossy(&head);
+    let (method, target) = local_http::request_line(&head);
+    if local_http::answer_method_preflight(socket, method)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(());
+    }
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    let mut components = path.trim_start_matches('/').split('/');
+    if components.next() != Some(token) {
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
+        return Ok(());
+    }
+    let Some(grant) = components.next() else {
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
+        return Ok(());
+    };
+    if components.next().is_some() {
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
+        return Ok(());
+    }
+    let Some(grant) = grants
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(grant)
+        .cloned()
+    else {
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
+        return Ok(());
+    };
+    let Ok(canonical_file) = validate_playback_file(root, &grant.item_id, &grant.file) else {
+        local_http::write_simple_response(socket, 404, "Not Found", "").await?;
+        return Ok(());
+    };
+    local_http::serve_file(
+        socket,
+        method == "HEAD",
+        &canonical_file,
+        request_header(&head, "range"),
+    )
+    .await
+}
+
+fn validate_playback_file(root: &Path, item_id: &str, file: &Path) -> AppResult<PathBuf> {
+    if !safe_id(item_id) {
+        return Err(AppError::new(
+            "video_download_missing",
+            "下载文件已被移动或删除",
+        ));
+    }
+    let task_dir = root.join(item_id);
+    let task_metadata = std::fs::symlink_metadata(&task_dir)
+        .map_err(|_| AppError::new("video_download_missing", "下载文件已被移动或删除"))?;
+    if task_metadata.file_type().is_symlink() || !task_metadata.is_dir() {
+        return Err(AppError::new(
+            "video_download_missing",
+            "下载文件已被移动或删除",
+        ));
+    }
+    let canonical_root = std::fs::canonicalize(root)
+        .map_err(|_| AppError::new("video_download_missing", "下载文件已被移动或删除"))?;
+    let canonical_dir = std::fs::canonicalize(&task_dir)
+        .map_err(|_| AppError::new("video_download_missing", "下载文件已被移动或删除"))?;
+    if canonical_dir.parent() != Some(canonical_root.as_path()) {
+        return Err(AppError::new(
+            "video_download_missing",
+            "下载文件已被移动或删除",
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(file)
+        .map_err(|_| AppError::new("video_download_missing", "下载文件已被移动或删除"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || !is_mp4_file(file) {
+        return Err(AppError::new(
+            "video_download_missing",
+            "下载文件已被移动或删除",
+        ));
+    }
+    let canonical_file = std::fs::canonicalize(file)
+        .map_err(|_| AppError::new("video_download_missing", "下载文件已被移动或删除"))?;
+    if canonical_file.parent() != Some(canonical_dir.as_path()) {
+        return Err(AppError::new(
+            "video_download_missing",
+            "下载文件已被移动或删除",
+        ));
+    }
+    Ok(canonical_file)
+}
+
+fn is_mp4_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+}
+
+fn finite_non_negative(value: f64) -> f64 {
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        0.0
+    }
 }
 
 fn not_found() -> AppError {
     AppError::new("video_download_not_found", "下载任务不存在")
 }
 
+fn deleting_error() -> AppError {
+    AppError::new("video_download_busy", "正在删除下载任务，请稍候")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{item_id, safe_file_name, safe_file_stem, safe_id};
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn test_item(status: VideoDownloadStatus, request_generation: u64) -> VideoDownloadItem {
+        VideoDownloadItem {
+            id: "BV1test-42".to_string(),
+            bvid: Some("BV1test".to_string()),
+            cid: 42,
+            ep_id: None,
+            title: "测试视频".to_string(),
+            cover: String::new(),
+            author: String::new(),
+            duration: 10.0,
+            qn: 64,
+            quality_label: "720P".to_string(),
+            status,
+            downloaded_bytes: 100,
+            total_bytes: 200,
+            created_at: 1,
+            completed_at: None,
+            file_path: "/tmp/测试视频.mp4".to_string(),
+            error: None,
+            request_generation,
+            discard_partials: false,
+            watch_progress: 0.0,
+            watch_duration: 0.0,
+        }
+    }
+
+    fn completed_outcome(file_path: &str) -> DownloadOutcome {
+        DownloadOutcome {
+            status: VideoDownloadStatus::Completed,
+            downloaded_bytes: 200,
+            total_bytes: 200,
+            qn: Some(80),
+            quality_label: Some("1080P".to_string()),
+            duration: Some(10.0),
+            file_path: Some(file_path.to_string()),
+            error: None,
+        }
+    }
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        std::env::temp_dir().join(format!(
+            "rlive-video-download-{label}-{}-{nonce}",
+            Uuid::new_v4().simple()
+        ))
+    }
+
+    fn download_input(qn: i64) -> VideoDownloadInput {
+        VideoDownloadInput {
+            bvid: Some("BV1test".to_string()),
+            cid: 42,
+            ep_id: None,
+            title: "测试视频".to_string(),
+            cover: None,
+            author: None,
+            duration: Some(10.0),
+            qn: Some(qn),
+        }
+    }
+
+    fn persisted_item(root: &Path, id: &str) -> VideoDownloadItem {
+        load_items(root)
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("命令返回前应已写入 entry.json")
+    }
+
+    fn complete_item(
+        manager: &VideoDownloadManager,
+        id: &str,
+        contents: &[u8],
+    ) -> VideoDownloadItem {
+        let mut inner = manager
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let item = inner
+            .items
+            .iter_mut()
+            .find(|item| item.id == id)
+            .expect("测试条目应存在");
+        std::fs::write(&item.file_path, contents).unwrap();
+        item.status = VideoDownloadStatus::Completed;
+        item.downloaded_bytes = contents.len() as u64;
+        item.total_bytes = contents.len() as u64;
+        item.completed_at = Some(2);
+        let updated = item.clone();
+        persist_item(manager, &updated).unwrap();
+        updated
+    }
+
+    async fn http_request(
+        authority: &str,
+        method: &str,
+        path: &str,
+        headers: &str,
+    ) -> (u16, String, Vec<u8>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut socket = TcpStream::connect(authority).await.unwrap();
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {authority}\r\n{headers}Connection: close\r\n\r\n"
+        );
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).await.unwrap();
+        let split = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("响应应包含请求头结束标记");
+        let head = String::from_utf8(response[..split].to_vec()).unwrap();
+        let status = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|status| status.parse().ok())
+            .unwrap();
+        (status, head, response[split + 4..].to_vec())
+    }
 
     #[test]
     fn ids_are_stable_and_safe() {
@@ -1387,10 +2121,396 @@ mod tests {
         assert_eq!(safe_file_stem("   ", "fallback"), "fallback");
         assert_eq!(safe_file_stem("....", "fallback"), "fallback");
         assert_eq!(safe_file_stem("CON", "fallback"), "_CON");
+        assert_eq!(safe_file_stem("CON.txt", "fallback"), "_CON.txt");
+        assert_eq!(safe_file_stem("com1.final", "fallback"), "_com1.final");
+        assert_eq!(safe_video_file_name("CON.txt", "fallback"), "_CON.txt.mp4");
         let long = "长".repeat(200);
         assert_eq!(safe_file_stem(&long, "fallback").chars().count(), 80);
+        let emoji = "😀".repeat(64);
+        let file_name = safe_video_file_name(&emoji, "fallback");
+        assert!(file_name.len() <= MAX_FILE_NAME_BYTES);
+        assert!(file_name.ends_with(VIDEO_FILE_EXTENSION));
         assert!(safe_file_name("正常 标题.mp4"));
         assert!(!safe_file_name("../escape.mp4"));
         assert!(!safe_file_name("a\\b.mp4"));
+    }
+
+    #[test]
+    fn stale_worker_cannot_overwrite_newer_queued_request() {
+        let stale = test_item(VideoDownloadStatus::Downloading, 1);
+        let mut current = test_item(VideoDownloadStatus::Queued, 2);
+        current.qn = 64;
+        current.file_path = "new.mp4".to_string();
+        let mut inner = InnerState {
+            items: vec![current.clone()],
+            worker_running: true,
+            active_id: Some(current.id.clone()),
+            cancel: None,
+            active_done: None,
+            deleting: HashSet::new(),
+        };
+
+        let finished =
+            finish_worker_state(&mut inner, &stale, completed_outcome("old.mp4")).unwrap();
+
+        assert_eq!(finished.status, VideoDownloadStatus::Queued);
+        assert_eq!(finished.request_generation, 2);
+        assert_eq!(finished.qn, 64);
+        assert_eq!(finished.file_path, "new.mp4");
+        assert!(!inner.worker_running);
+        assert!(inner.active_id.is_none());
+    }
+
+    #[test]
+    fn current_worker_still_applies_completion() {
+        let current = test_item(VideoDownloadStatus::Downloading, 7);
+        let mut inner = InnerState {
+            items: vec![current.clone()],
+            worker_running: true,
+            active_id: Some(current.id.clone()),
+            cancel: None,
+            active_done: None,
+            deleting: HashSet::new(),
+        };
+
+        let finished =
+            finish_worker_state(&mut inner, &current, completed_outcome("new.mp4")).unwrap();
+
+        assert_eq!(finished.status, VideoDownloadStatus::Completed);
+        assert_eq!(finished.qn, 80);
+        assert_eq!(finished.file_path, "new.mp4");
+        assert_eq!(finished.error, None);
+    }
+
+    #[test]
+    fn stale_worker_progress_and_metadata_updates_are_ignored() {
+        let root = temp_root("generation");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        {
+            let mut inner = manager
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            inner.items[0].request_generation = 2;
+            inner.items[0].status = VideoDownloadStatus::Queued;
+            inner.items[0].downloaded_bytes = 0;
+            inner.items[0].total_bytes = 0;
+        }
+
+        let updated = manager.update_item_if_current(&item.id, 1, |stored| stored.qn = 16);
+        assert!(updated.is_none());
+        manager.report_progress(&item.id, 1, 99, 100);
+
+        let unchanged = manager
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .items[0]
+            .clone();
+        assert_eq!(unchanged.qn, 80);
+        assert_eq!(unchanged.downloaded_bytes, 0);
+        assert_eq!(unchanged.total_bytes, 0);
+        let persisted = persisted_item(&root, &item.id);
+        assert_eq!(persisted.status, VideoDownloadStatus::Queued);
+        assert_eq!(persisted.qn, 80);
+
+        drop(manager);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pause_then_quality_change_defers_partial_cleanup_and_blocks_delete_races() {
+        let root = temp_root("state");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        assert_eq!(item.request_generation, 1);
+
+        {
+            let mut inner = manager
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            inner.worker_running = true;
+            inner.active_id = Some(item.id.clone());
+            inner.items[0].status = VideoDownloadStatus::Downloading;
+        }
+        let part = root.join(&item.id).join(VIDEO_PART);
+        std::fs::write(&part, b"old profile").unwrap();
+
+        let paused = manager.pause(&item.id).unwrap();
+        assert_eq!(paused.status, VideoDownloadStatus::Paused);
+        assert_eq!(paused.request_generation, 2);
+        let persisted_paused = persisted_item(&root, &item.id);
+        assert_eq!(persisted_paused.status, VideoDownloadStatus::Paused);
+        assert!(!persisted_paused.discard_partials);
+        let resumed = manager.resume(&item.id).unwrap();
+        assert_eq!(resumed.status, VideoDownloadStatus::Queued);
+        assert_eq!(
+            persisted_item(&root, &item.id).status,
+            VideoDownloadStatus::Queued
+        );
+        let paused_again = manager.pause(&item.id).unwrap();
+        assert_eq!(paused_again.status, VideoDownloadStatus::Paused);
+        assert_eq!(paused_again.request_generation, 4);
+        let queued = manager.start(download_input(64)).unwrap();
+        assert_eq!(queued.status, VideoDownloadStatus::Queued);
+        assert_eq!(queued.request_generation, 5);
+        let persisted_queued = persisted_item(&root, &item.id);
+        assert_eq!(persisted_queued.status, VideoDownloadStatus::Queued);
+        assert_eq!(persisted_queued.qn, 64);
+        assert!(persisted_queued.discard_partials);
+        assert!(part.is_file(), "旧 worker 仍持有文件时不得立即删除分片");
+        assert!(
+            manager
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .items[0]
+                .discard_partials
+        );
+
+        manager
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .deleting
+            .insert(item.id.clone());
+        let error = manager.start(download_input(80)).unwrap_err();
+        assert_eq!(error.code, "video_download_busy");
+        let error = manager.resume(&item.id).unwrap_err();
+        assert_eq!(error.code, "video_download_busy");
+
+        drop(manager);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transient_request_fields_stay_out_of_persisted_shape() {
+        let mut item = test_item(VideoDownloadStatus::Queued, 9);
+        item.discard_partials = true;
+        let value = serde_json::to_value(&item).unwrap();
+        assert!(value.get("request_generation").is_none());
+        assert!(value.get("discard_partials").is_none());
+        assert!(value.get("watch_progress").is_none());
+        assert!(value.get("watch_duration").is_none());
+        let decoded: VideoDownloadItem = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.request_generation, 0);
+        assert!(!decoded.discard_partials);
+        assert_eq!(decoded.watch_progress, 0.0);
+        assert_eq!(decoded.watch_duration, 0.0);
+    }
+
+    #[test]
+    fn watch_progress_is_clamped_and_survives_restart() {
+        let root = temp_root("watch-progress");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        complete_item(&manager, &item.id, b"completed mp4");
+
+        manager
+            .report_watch_progress(&item.id, 120.0, 100.0)
+            .unwrap();
+        let updated = manager.get(&item.id).unwrap();
+        assert_eq!(updated.watch_progress, 100.0);
+        assert_eq!(updated.watch_duration, 100.0);
+        assert_eq!(updated.duration, 10.0, "不应覆盖下载条目的媒体时长");
+        assert_eq!(
+            manager
+                .report_watch_progress(&item.id, -1.0, 100.0)
+                .unwrap_err()
+                .code,
+            "video_download_invalid_request"
+        );
+        manager
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .deleting
+            .insert(item.id.clone());
+        assert_eq!(
+            manager
+                .report_watch_progress(&item.id, 50.0, 100.0)
+                .unwrap_err()
+                .code,
+            "video_download_busy"
+        );
+
+        drop(manager);
+        let reloaded = VideoDownloadManager::new(root.clone()).unwrap();
+        let persisted = reloaded.get(&item.id).unwrap();
+        assert_eq!(persisted.watch_progress, 100.0);
+        assert_eq!(persisted.watch_duration, 100.0);
+
+        drop(reloaded);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn playback_info_rejects_unfinished_and_missing_files() {
+        let root = temp_root("playback-info");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        assert_eq!(
+            manager.playback_info(&item.id).await.unwrap_err().code,
+            "video_download_not_completed"
+        );
+
+        complete_item(&manager, &item.id, b"completed mp4");
+        let info = manager.playback_info(&item.id).await.unwrap();
+        assert!(info.url.starts_with("http://127.0.0.1:"));
+        assert_eq!(info.progress, 0.0);
+        assert_eq!(info.item.id, item.id);
+        let repeated = manager.playback_info(&item.id).await.unwrap();
+        assert_eq!(repeated.url, info.url, "并发/重复取信息应复用有效 grant");
+
+        let other_dir = root.join("BV1other-42");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        let other_file = other_dir.join("other.mp4");
+        std::fs::write(&other_file, b"other task").unwrap();
+        {
+            let mut inner = manager
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let current = inner
+                .items
+                .iter_mut()
+                .find(|entry| entry.id == item.id)
+                .unwrap();
+            current.file_path = crate::app_paths::path_to_string(&other_file);
+        }
+        assert_eq!(
+            manager.playback_info(&item.id).await.unwrap_err().code,
+            "video_download_missing"
+        );
+
+        std::fs::remove_file(&info.item.file_path).unwrap();
+        assert_eq!(
+            manager.playback_info(&item.id).await.unwrap_err().code,
+            "video_download_missing"
+        );
+
+        drop(manager);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn playback_server_enforces_token_grants_and_http_ranges() {
+        let root = temp_root("playback-http");
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        complete_item(&manager, &item.id, b"0123456789");
+        let info = manager.playback_info(&item.id).await.unwrap();
+        let without_scheme = info.url.strip_prefix("http://").unwrap();
+        let (authority, path) = without_scheme.split_once('/').unwrap();
+        let path = format!("/{path}");
+
+        let (status, head, body) = http_request(authority, "HEAD", &path, "").await;
+        assert_eq!(status, 200);
+        assert!(head.contains("Content-Type: video/mp4"));
+        assert!(head.contains("Content-Length: 10"));
+        assert!(body.is_empty());
+
+        let (status, head, body) =
+            http_request(authority, "GET", &path, "Range: bytes=2-5\r\n").await;
+        assert_eq!(status, 206);
+        assert!(head.contains("Content-Range: bytes 2-5/10"));
+        assert_eq!(body, b"2345");
+
+        let (status, _, _) = http_request(authority, "GET", &path, "Range: bytes=20-\r\n").await;
+        assert_eq!(status, 416);
+
+        let granted = path.rsplit('/').next().unwrap();
+        let (status, _, _) =
+            http_request(authority, "GET", &format!("/wrong-token/{granted}"), "").await;
+        assert_eq!(status, 404);
+        let (status, _, _) = http_request(authority, "GET", &format!("{path}/extra"), "").await;
+        assert_eq!(status, 404);
+
+        drop(manager);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn playback_server_rejects_symlink_escape_after_registration() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("playback-symlink");
+        let outside = temp_root("playback-outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let outside_file = outside.join("outside.mp4");
+        std::fs::write(&outside_file, b"outside").unwrap();
+
+        let manager = Arc::new(VideoDownloadManager::new(root.clone()).unwrap());
+        let item = manager.start(download_input(80)).unwrap();
+        let completed = complete_item(&manager, &item.id, b"inside");
+        let info = manager.playback_info(&item.id).await.unwrap();
+        std::fs::remove_file(&completed.file_path).unwrap();
+        symlink(&outside_file, &completed.file_path).unwrap();
+
+        let without_scheme = info.url.strip_prefix("http://").unwrap();
+        let (authority, path) = without_scheme.split_once('/').unwrap();
+        let (status, _, _) = http_request(authority, "GET", &format!("/{path}"), "").await;
+        assert_eq!(status, 404);
+
+        drop(manager);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn playback_validation_rejects_task_directory_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("playback-dir-symlink");
+        let outside = temp_root("playback-dir-outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let file = outside.join("outside.mp4");
+        std::fs::write(&file, b"outside").unwrap();
+        let item_id = "BV1test-42";
+        symlink(&outside, root.join(item_id)).unwrap();
+
+        let error = validate_playback_file(&root, item_id, &root.join(item_id).join("outside.mp4"))
+            .unwrap_err();
+        assert_eq!(error.code, "video_download_missing");
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn pending_partial_cleanup_survives_restart() {
+        let root = temp_root("discard");
+        let mut item = test_item(VideoDownloadStatus::Paused, 3);
+        item.discard_partials = true;
+        write_entry(&root, &item, "测试视频.mp4").unwrap();
+
+        let loaded = load_items(&root);
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].discard_partials);
+
+        let value = serde_json::to_value(StoredEntry {
+            item: item.clone(),
+            file_name: "测试视频.mp4".to_string(),
+            discard_partials: true,
+            watch_progress: 0.0,
+            watch_duration: 0.0,
+        })
+        .unwrap();
+        let mut legacy = value.as_object().unwrap().clone();
+        legacy.remove("discard_partials");
+        legacy.remove("watch_progress");
+        legacy.remove("watch_duration");
+        let decoded: StoredEntry =
+            serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
+        assert!(!decoded.discard_partials);
+        assert_eq!(decoded.watch_progress, 0.0);
+        assert_eq!(decoded.watch_duration, 0.0);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

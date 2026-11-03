@@ -2,7 +2,8 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
   <external-path name="my_images" path="." />
   <cache-path name="my_cache_images" path="." />
-  <!-- 视频下载成片位于应用数据根目录下的 rlive/downloads/（Tauri 的 app_data_dir
-       返回 Context.dataDir，而不是 files/ 子目录），外部播放器经 FileProvider 读取。 -->
-  <root-path name="rlive_data" path="rlive/" />
+  <!-- Tauri 的 app_data_dir 返回 Context.dataDir；下载根目录是其下的
+       <dataDir>/rlive/downloads。Context.filesDir 通常是 <dataDir>/files，
+       因此从 files/ 向上一级即可只暴露下载目录，而不是整个应用沙箱。 -->
+  <files-path name="rlive_downloads" path="../rlive/downloads/" />
 </paths>

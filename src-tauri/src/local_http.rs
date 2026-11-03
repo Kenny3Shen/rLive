@@ -2,9 +2,13 @@
 //!
 //! 流代理、图片代理、录制回放、DLNA 中继与局域网同步各自只处理一次请求就关闭连接
 //! （`Connection: close`），因此只需要读请求头、按方法分流、按需改写 HLS 清单；
-//! 响应头的字段集合因服务而异，留在各自模块。
+//! 响应头的字段集合因服务而异，留在各自模块。本地媒体文件响应统一放在这里，
+//! 让录制回放与下载回放共用同一套 Range、HEAD 和 MIME 语义。
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::path::Path;
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 /// 请求头上限：这些服务只接收短 URL 与少数请求头，超出即视为异常连接。
 pub(crate) const MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
@@ -43,6 +47,163 @@ fn head_complete(buffer: &[u8]) -> bool {
 pub(crate) fn request_line(head: &str) -> (&str, &str) {
     let mut parts = head.lines().next().unwrap_or("").split_whitespace();
     (parts.next().unwrap_or(""), parts.next().unwrap_or(""))
+}
+
+/// 提供单个本地媒体文件。调用方必须先完成鉴权与路径约束，`path` 应是已确认
+/// 位于允许根目录内的文件。
+pub(crate) async fn serve_file(
+    socket: &mut TcpStream,
+    head_only: bool,
+    path: &Path,
+    range: Option<&str>,
+) -> Result<(), String> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return write_simple_response(socket, 404, "Not Found", "").await;
+    }
+    let total = metadata.len();
+    let (status, start, end) = match parse_range(range, total) {
+        Ok(value) => value,
+        Err(_) => {
+            let response = format!(
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+    };
+    let length = if total == 0 {
+        0
+    } else {
+        end.saturating_sub(start).saturating_add(1)
+    };
+    let content_type = content_type(path);
+    let header = if status == 206 {
+        format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\nContent-Range: bytes {start}-{end}/{total}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+        )
+    } else {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+        )
+    };
+    socket
+        .write_all(header.as_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    if head_only || length == 0 {
+        return Ok(());
+    }
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| error.to_string())?;
+    file.seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut remaining = length;
+    let mut chunk = vec![0_u8; 64 * 1024];
+    while remaining > 0 {
+        let capacity = chunk.len().min(remaining as usize);
+        let read = file
+            .read(&mut chunk[..capacity])
+            .await
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        socket
+            .write_all(&chunk[..read])
+            .await
+            .map_err(|error| error.to_string())?;
+        remaining -= read as u64;
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_range(value: Option<&str>, total: u64) -> Result<(u16, u64, u64), String> {
+    let Some(value) = value else {
+        return Ok((200, 0, total.saturating_sub(1)));
+    };
+    if total == 0 {
+        return Err("range not satisfiable".into());
+    }
+    let Some(value) = value.strip_prefix("bytes=") else {
+        return Ok((200, 0, total - 1));
+    };
+    if value.contains(',') {
+        return Err("multiple ranges are not supported".into());
+    }
+    let Some((start, end)) = value.split_once('-') else {
+        return Ok((200, 0, total - 1));
+    };
+    let start = start.trim();
+    let end = end.trim();
+    let (start, end) = if start.is_empty() {
+        let suffix = end
+            .parse::<u64>()
+            .map_err(|_| "invalid range".to_string())?;
+        if suffix == 0 {
+            return Err("range not satisfiable".into());
+        }
+        (total.saturating_sub(suffix.min(total)), total - 1)
+    } else {
+        let start = start
+            .parse::<u64>()
+            .map_err(|_| "invalid range".to_string())?;
+        let end = if end.is_empty() {
+            total - 1
+        } else {
+            end.parse::<u64>()
+                .map_err(|_| "invalid range".to_string())?
+                .min(total - 1)
+        };
+        (start, end)
+    };
+    if start >= total || start > end {
+        return Err("range not satisfiable".into());
+    }
+    Ok((206, start, end))
+}
+
+fn content_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "m3u8" => "application/vnd.apple.mpegurl",
+        "ts" => "video/mp2t",
+        "flv" => "video/x-flv",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "m4s" => "video/iso.segment",
+        "aac" => "audio/aac",
+        "key" => "application/octet-stream",
+        _ => "application/octet-stream",
+    }
+}
+
+pub(crate) async fn write_simple_response(
+    socket: &mut TcpStream,
+    status: u16,
+    reason: &str,
+    body: &str,
+) -> Result<(), String> {
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    socket
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// 只读服务的方法前置：OPTIONS 回 CORS 预检（204），非 GET/HEAD 回 405。
@@ -190,5 +351,32 @@ mod tests {
             "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"L(k.bin)\"\n  L(seg.ts) \n\n#EXT-X-ENDLIST\n"
         );
         assert_eq!(rewrite_hls_uris("a.ts", |_| None), "a.ts");
+    }
+
+    #[test]
+    fn range_boundaries_cover_head_suffix_and_unsatisfiable_requests() {
+        for (header, size, expected) in [
+            (Some("bytes=10-20"), 100, Some((206, 10, 20))),
+            (Some("bytes=90-"), 100, Some((206, 90, 99))),
+            (Some("bytes=-10"), 100, Some((206, 90, 99))),
+            (None, 0, Some((200, 0, 0))),
+            (Some("bytes=0-0"), 0, None),
+            (Some("bytes=0-1,4-5"), 100, None),
+        ] {
+            assert_eq!(parse_range(header, size).ok(), expected, "{header:?}");
+        }
+    }
+
+    #[test]
+    fn media_content_types_keep_hls_and_encryption_key_mappings() {
+        for (name, expected) in [
+            ("index.m3u8", "application/vnd.apple.mpegurl"),
+            ("segment.ts", "video/mp2t"),
+            ("video.mp4", "video/mp4"),
+            ("track.m4s", "video/iso.segment"),
+            ("enc.key", "application/octet-stream"),
+        ] {
+            assert_eq!(content_type(Path::new(name)), expected, "{name}");
+        }
     }
 }
