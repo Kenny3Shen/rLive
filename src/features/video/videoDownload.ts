@@ -1,9 +1,10 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform } from "@/shared/clientPlatform";
+import { createSharedEventSubscription } from "@/shared/sharedEventSubscription";
 import {
   applyVideoDownloadProgress,
   mergeVideoDownload,
@@ -11,7 +12,9 @@ import {
 } from "./videoDownloadState";
 
 export {
+  videoDownloadInProgressCount,
   videoDownloadIsActive,
+  videoDownloadIsInProgress,
   videoDownloadPrimaryAction,
   type VideoDownloadPrimaryAction,
 } from "./videoDownloadState";
@@ -130,6 +133,21 @@ type VideoDownloadProgressEvent = {
   status: VideoDownloadStatus;
 };
 
+type VideoDownloadEvent =
+  | { kind: "changed"; payload: VideoDownloadChangedEvent }
+  | { kind: "progress"; payload: VideoDownloadProgressEvent };
+
+/** 每次条目变更递增；首次列表读取期间有变更时需要再读一次权威快照。 */
+const videoDownloadChangedRevisions = new WeakMap<QueryClient, number>();
+
+function videoDownloadChangedRevision(queryClient: QueryClient): number {
+  return videoDownloadChangedRevisions.get(queryClient) ?? 0;
+}
+
+function markVideoDownloadChanged(queryClient: QueryClient): void {
+  videoDownloadChangedRevisions.set(queryClient, videoDownloadChangedRevision(queryClient) + 1);
+}
+
 /**
  * 下载依赖原生宿主的文件系统与媒体合并能力：桌面端用 FFmpeg，Android 用
  * `MediaMuxer`。浏览器预览没有 Tauri IPC，不提供下载。
@@ -215,20 +233,88 @@ export function upsertVideoDownloadInCache(
   });
 }
 
+const subscribeToVideoDownloadChanges = createSharedEventSubscription<
+  QueryClient,
+  VideoDownloadEvent
+>(
+  async (onEvent) => {
+    const unlistenChanged = await listen<VideoDownloadChangedEvent>(
+      VIDEO_DOWNLOAD_CHANGED_EVENT,
+      (event) => onEvent({ kind: "changed", payload: event.payload }),
+    );
+    try {
+      const unlistenProgress = await listen<VideoDownloadProgressEvent>(
+        VIDEO_DOWNLOAD_PROGRESS_EVENT,
+        (event) => onEvent({ kind: "progress", payload: event.payload }),
+      );
+      return () => {
+        unlistenProgress();
+        unlistenChanged();
+      };
+    } catch (error) {
+      unlistenChanged();
+      throw error;
+    }
+  },
+  (queryClient, event) => {
+    if (event.kind === "progress") {
+      queryClient.setQueryData<VideoDownloadItem[]>(VIDEO_DOWNLOADS_QUERY_KEY, (items) =>
+        items ? applyVideoDownloadProgress(items, event.payload) : items,
+      );
+      return;
+    }
+
+    const change = event.payload;
+    markVideoDownloadChanged(queryClient);
+    queryClient.setQueryData<VideoDownloadItem[]>(VIDEO_DOWNLOADS_QUERY_KEY, (items) => {
+      if (!change.item) {
+        return items?.filter((item) => item.id !== change.id);
+      }
+      if (!items) return items;
+      return mergeVideoDownload(items, change.item);
+    });
+  },
+);
+
+async function videoDownloadListAfterSubscription(queryClient: QueryClient) {
+  let release: (() => void) | null = null;
+  try {
+    release = await subscribeToVideoDownloadChanges.whenReady(queryClient);
+  } catch {
+    // 监听不可用时保留正常列表读取；若返回活动任务，既有轮询仍会继续收敛。
+    return videoDownloadList();
+  }
+  try {
+    // 监听已覆盖后续事件；读取期间发生变更时，当前快照可能早于事件，重读收敛。
+    while (true) {
+      const revision = videoDownloadChangedRevision(queryClient);
+      const items = await videoDownloadList();
+      if (videoDownloadChangedRevision(queryClient) === revision) return items;
+    }
+  } finally {
+    release();
+  }
+}
+
 /**
  * 下载列表 + 事件订阅。
  *
- * 事件只在页面挂载期间订阅；离开页签后任务继续在后台跑，回来时会重新取一次
- * 全量列表。会自行推进的任务同时保留低频轮询，事件丢失（窗口重建、监听
- * 注册竞态）时进度仍能收敛；暂停和失败不会被无意义地轮询。
+ * 页面与常驻外壳会同时读取同一份下载列表，原生事件按 QueryClient 共享一份
+ * 监听，避免重复接收与写入缓存。读取权威列表前先等监听注册完成，避免初始
+ * 查询与异步注册的竞态；监听不可用时降级为普通列表查询。会自行推进的任务
+ * 同时保留低频轮询，暂停和失败不轮询。
  */
-export function useVideoDownloads(enabled = true) {
+export function useVideoDownloads<TData = VideoDownloadItem[]>(
+  enabled = true,
+  select?: (items: VideoDownloadItem[]) => TData,
+) {
   const queryClient = useQueryClient();
   const supported = videoDownloadSupported();
-  const query = useQuery({
+  const query = useQuery<VideoDownloadItem[], Error, TData, typeof VIDEO_DOWNLOADS_QUERY_KEY>({
     queryKey: VIDEO_DOWNLOADS_QUERY_KEY,
-    queryFn: videoDownloadList,
+    queryFn: () => videoDownloadListAfterSubscription(queryClient),
     enabled: enabled && supported,
+    select,
     staleTime: 0,
     refetchInterval: (query) =>
       query.state.data?.some((item) => videoDownloadNeedsPolling(item.status))
@@ -238,36 +324,7 @@ export function useVideoDownloads(enabled = true) {
 
   useEffect(() => {
     if (!enabled || !supported) return;
-    let disposed = false;
-    const unlisten: UnlistenFn[] = [];
-    const register = <T>(event: string, handler: (payload: T) => void) => {
-      void listen<T>(event, (received) => handler(received.payload))
-        .then((stop) => {
-          if (disposed) stop();
-          else unlisten.push(stop);
-        })
-        .catch(() => undefined);
-    };
-
-    register<VideoDownloadChangedEvent>(VIDEO_DOWNLOAD_CHANGED_EVENT, (payload) => {
-      queryClient.setQueryData<VideoDownloadItem[]>(VIDEO_DOWNLOADS_QUERY_KEY, (items) => {
-        if (!payload.item) {
-          return items?.filter((item) => item.id !== payload.id);
-        }
-        if (!items) return items;
-        return mergeVideoDownload(items, payload.item);
-      });
-    });
-    register<VideoDownloadProgressEvent>(VIDEO_DOWNLOAD_PROGRESS_EVENT, (payload) => {
-      queryClient.setQueryData<VideoDownloadItem[]>(VIDEO_DOWNLOADS_QUERY_KEY, (items) =>
-        items ? applyVideoDownloadProgress(items, payload) : items,
-      );
-    });
-
-    return () => {
-      disposed = true;
-      for (const stop of unlisten) stop();
-    };
+    return subscribeToVideoDownloadChanges(queryClient);
   }, [enabled, queryClient, supported]);
 
   return query;

@@ -31,13 +31,26 @@ export function videoDownloadIsActive(status: VideoDownloadStatus): boolean {
   return status !== "completed";
 }
 
+/** 只有无需用户操作、会自行推进的任务才算“正在进行”。 */
+export function videoDownloadIsInProgress(status: VideoDownloadStatus): boolean {
+  return status === "queued" || status === "downloading" || status === "merging";
+}
+
+export function videoDownloadInProgressCount(
+  items: readonly Pick<VideoDownloadItem, "status">[] | undefined,
+): number {
+  return (
+    items?.reduce((count, item) => count + (videoDownloadIsInProgress(item.status) ? 1 : 0), 0) ?? 0
+  );
+}
+
 /**
  * 只有无需用户操作就会继续推进的状态才需要兜底轮询。
  *
  * 暂停和失败不会自行恢复，持续轮询只会产生无意义的 IPC。
  */
 export function videoDownloadNeedsPolling(status: VideoDownloadStatus): boolean {
-  return status === "queued" || status === "downloading" || status === "merging";
+  return videoDownloadIsInProgress(status);
 }
 
 /**

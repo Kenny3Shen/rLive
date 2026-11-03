@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { QueryClient, QueryObserver } from "@tanstack/query-core";
 import {
+  ACTIVE_RECORDINGS_QUERY_KEY,
+  activeRecordingCount,
   activeRecordingForContext,
   applyRecordingProgress,
   createSharedRecordingChangeSubscription,
@@ -10,6 +13,7 @@ import {
   type RecordingContext,
   type RecordingItem,
 } from "../src/features/recording/recording";
+import { createSharedEventSubscription } from "../src/shared/sharedEventSubscription";
 import {
   recordingIdFromPlaybackParams,
   recordingPlaybackPath,
@@ -138,9 +142,86 @@ describe("录制订阅所有权", () => {
     offAgain();
     expect(cleanups).toBe(2);
   });
+
+  test("whenReady 等到共享监听注册成功，注册失败会释放临时订阅", async () => {
+    let shouldFail = true;
+    let cleanups = 0;
+    const subscribe = createSharedEventSubscription<string, void>(
+      async () => {
+        if (shouldFail) throw new Error("listen failed");
+        return () => {
+          cleanups += 1;
+        };
+      },
+      () => undefined,
+    );
+
+    expect(await subscribe.whenReady("query").catch((error: Error) => error.message)).toBe(
+      "listen failed",
+    );
+    shouldFail = false;
+    const release = await subscribe.whenReady("query");
+    release();
+    expect(cleanups).toBe(1);
+  });
 });
 
 describe("录制状态与播放边界", () => {
+  test("进行中徽标只统计 recording，结束、中断与失败后清零", () => {
+    expect(
+      activeRecordingCount([
+        recording({ id: "one" }),
+        recording({ id: "two" }),
+        recording({ id: "completed", status: "completed" }),
+        recording({ id: "interrupted", status: "interrupted" }),
+        recording({ id: "failed", status: "failed" }),
+      ]),
+    ).toBe(2);
+    expect(activeRecordingCount([])).toBe(0);
+    expect(activeRecordingCount(undefined)).toBe(0);
+  });
+
+  test("QueryObserver select 忽略录制进度变化，只在活动数量变化时通知", async () => {
+    const client = new QueryClient();
+    const first = recording({ duration_ms: 1_000, size_bytes: 1_024, danmaku_count: 3 });
+    const second = recording({ id: "recording-2", duration_ms: 2_000 });
+    const completed = recording({ id: "completed", status: "completed" });
+    const initial = [first, second, completed];
+    client.setQueryData(ACTIVE_RECORDINGS_QUERY_KEY, initial);
+    const notifications: number[] = [];
+    const observer = new QueryObserver(client, {
+      queryKey: ACTIVE_RECORDINGS_QUERY_KEY,
+      queryFn: async () => initial,
+      select: activeRecordingCount,
+      notifyOnChangeProps: ["data"],
+    });
+    const unsubscribe = observer.subscribe((result) => {
+      notifications.push(result.data ?? -1);
+    });
+
+    expect(observer.getCurrentResult().data).toBe(2);
+    client.setQueryData(ACTIVE_RECORDINGS_QUERY_KEY, [
+      { ...first, duration_ms: 8_000, size_bytes: 4_096, danmaku_count: 9 },
+      second,
+      completed,
+    ]);
+    await settle();
+    expect(observer.getCurrentResult().data).toBe(2);
+    expect(notifications).toEqual([]);
+
+    client.setQueryData(ACTIVE_RECORDINGS_QUERY_KEY, [
+      { ...first, status: "completed" },
+      second,
+      completed,
+    ]);
+    await settle();
+    expect(observer.getCurrentResult().data).toBe(1);
+    expect(notifications).toEqual([1]);
+
+    unsubscribe();
+    client.clear();
+  });
+
   test("进度只更新活动录制且不倒退，结束后的迟到事件不覆盖结果", () => {
     const active = recording({ duration_ms: 2_000, size_bytes: 1_024, danmaku_count: 3 });
     const completed = recording({ id: "completed", status: "completed" });

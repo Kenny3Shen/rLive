@@ -1,11 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import type { VideoDownloadItem, VideoDownloadStatus } from "../src/features/video/videoDownload";
+import { QueryClient, QueryObserver } from "@tanstack/query-core";
+import {
+  VIDEO_DOWNLOADS_QUERY_KEY,
+  type VideoDownloadItem,
+  type VideoDownloadStatus,
+} from "../src/features/video/videoDownload";
 import {
   applyVideoDownloadProgress,
   mergeVideoDownload,
   sortVideoDownloads,
+  videoDownloadInProgressCount,
   videoDownloadIsActive,
+  videoDownloadIsInProgress,
   videoDownloadNeedsPolling,
   videoDownloadPrimaryAction,
 } from "../src/features/video/videoDownloadState";
@@ -18,6 +25,7 @@ import {
 import { parseDownloadedDanmaku } from "../src/features/video/videoDownloadDanmaku";
 import { videoCardDownloadInput } from "../src/features/video/videoCardDownload";
 import type { VideoArchive } from "../src/shared/types/video";
+import { settle } from "./helpers/async";
 
 function downloadItem(
   id: string,
@@ -181,6 +189,81 @@ describe("视频下载状态", () => {
     for (const status of ["paused", "completed", "failed"] as const) {
       expect(videoDownloadNeedsPolling(status)).toBe(false);
     }
+  });
+
+  test("进行中徽标只统计排队、下载和合并，暂停、失败与完成后清零", () => {
+    expect(
+      (["queued", "downloading", "paused", "merging", "completed", "failed"] as const).map(
+        (status) => [status, videoDownloadIsInProgress(status)],
+      ),
+    ).toEqual([
+      ["queued", true],
+      ["downloading", true],
+      ["paused", false],
+      ["merging", true],
+      ["completed", false],
+      ["failed", false],
+    ]);
+
+    const items = [
+      downloadItem("queued", "queued", 1),
+      downloadItem("downloading", "downloading", 2),
+      downloadItem("merging", "merging", 3),
+      downloadItem("paused", "paused", 4),
+      downloadItem("failed", "failed", 5),
+      downloadItem("completed", "completed", 6),
+    ];
+    expect(videoDownloadInProgressCount(items)).toBe(3);
+    expect(
+      videoDownloadInProgressCount(items.map((item) => ({ ...item, status: "completed" }))),
+    ).toBe(0);
+    expect(videoDownloadInProgressCount([])).toBe(0);
+    expect(videoDownloadInProgressCount(undefined)).toBe(0);
+  });
+
+  test("QueryObserver select 只在进行中计数变化时通知数据消费者", async () => {
+    const client = new QueryClient();
+    const initial = [
+      downloadItem("queued", "queued", 1),
+      downloadItem("downloading", "downloading", 2),
+      downloadItem("paused", "paused", 3),
+    ];
+    client.setQueryData(VIDEO_DOWNLOADS_QUERY_KEY, initial);
+    const notifications: number[] = [];
+    const observer = new QueryObserver(client, {
+      queryKey: VIDEO_DOWNLOADS_QUERY_KEY,
+      queryFn: async () => initial,
+      select: videoDownloadInProgressCount,
+      notifyOnChangeProps: ["data"],
+    });
+    const unsubscribe = observer.subscribe((result) => {
+      notifications.push(result.data ?? -1);
+    });
+
+    expect(observer.getCurrentResult().data).toBe(2);
+    client.setQueryData(
+      VIDEO_DOWNLOADS_QUERY_KEY,
+      initial.map((item) => ({
+        ...item,
+        duration: item.duration + 30,
+        downloaded_bytes: item.downloaded_bytes + 1_024,
+        total_bytes: item.total_bytes + 2_048,
+      })),
+    );
+    await settle();
+    expect(observer.getCurrentResult().data).toBe(2);
+    expect(notifications).toEqual([]);
+
+    client.setQueryData(
+      VIDEO_DOWNLOADS_QUERY_KEY,
+      initial.map((item) => (item.id === "queued" ? { ...item, status: "completed" } : item)),
+    );
+    await settle();
+    expect(observer.getCurrentResult().data).toBe(1);
+    expect(notifications).toEqual([1]);
+
+    unsubscribe();
+    client.clear();
   });
 
   test("下载卡主入口始终由任务状态唯一决定", () => {

@@ -8,6 +8,7 @@ import { isSiteId } from "@/shared/siteId";
 import type { PlayUrl, PlaybackProtocol, SiteId } from "@/shared/types/live";
 import { notify } from "@/components/ui/toast";
 import { formatByteSize, SITE_LABELS } from "@/lib/utils";
+import { createSharedEventSubscription } from "@/shared/sharedEventSubscription";
 import type { RecordingView } from "./recordingRoute";
 
 export type RecordingStatus = "recording" | "completed" | "interrupted" | "failed";
@@ -330,81 +331,7 @@ export function createSharedRecordingChangeSubscription<T>(
   registerNative: NativeRecordingChangeRegistration,
   notifySubscriber: (subscriber: T, progress?: RecordingProgress) => void,
 ): (subscriber: T) => () => void {
-  const subscriberCounts = new Map<T, number>();
-  let nativeUnlisten: (() => void) | null = null;
-  let listenerPromise: Promise<void> | null = null;
-  let listenerGeneration = 0;
-
-  function unlistenSafely(unlisten: (() => void) | null) {
-    if (!unlisten) return;
-    try {
-      unlisten();
-    } catch {
-      // 即使原生监听器清理失败，轮询仍保持可用。
-    }
-  }
-
-  function ensureNativeListener() {
-    if (nativeUnlisten || listenerPromise || subscriberCounts.size === 0) return;
-    const generation = ++listenerGeneration;
-    listenerPromise = Promise.resolve()
-      .then(() =>
-        registerNative((progress) => {
-          if (generation !== listenerGeneration) return;
-          for (const subscriber of subscriberCounts.keys()) {
-            try {
-              notifySubscriber(subscriber, progress);
-            } catch {
-              // 一个查询客户端不得阻止其他客户端刷新。
-            }
-          }
-        }),
-      )
-      .then(
-        (cleanup) => {
-          listenerPromise = null;
-          if (subscriberCounts.size === 0 || generation !== listenerGeneration) {
-            unlistenSafely(cleanup);
-            ensureNativeListener();
-            return;
-          }
-          nativeUnlisten = cleanup;
-        },
-        () => {
-          listenerPromise = null;
-          // 过期注册尚未完成时发生的重挂载需要一次全新尝试。
-          // 否则活动录制轮询仍是兜底。
-          if (subscriberCounts.size > 0 && generation !== listenerGeneration) {
-            ensureNativeListener();
-          }
-        },
-      );
-  }
-
-  function stopNativeListenerIfUnused() {
-    if (subscriberCounts.size > 0) return;
-    listenerGeneration += 1;
-    const cleanup = nativeUnlisten;
-    nativeUnlisten = null;
-    unlistenSafely(cleanup);
-  }
-
-  return (subscriber: T) => {
-    subscriberCounts.set(subscriber, (subscriberCounts.get(subscriber) ?? 0) + 1);
-    ensureNativeListener();
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      const count = subscriberCounts.get(subscriber) ?? 0;
-      if (count <= 1) {
-        subscriberCounts.delete(subscriber);
-      } else {
-        subscriberCounts.set(subscriber, count - 1);
-      }
-      stopNativeListenerIfUnused();
-    };
-  };
+  return createSharedEventSubscription(registerNative, notifySubscriber);
 }
 
 const subscribeToRecordingChanges = createSharedRecordingChangeSubscription<QueryClient>(
@@ -485,7 +412,10 @@ export function setRecordingItemCaches(
  * 不触碰库索引的 `recording_active_list`；事件订阅与完整查询共用，
  * 任务开始/结束时两侧都会刷新。
  */
-export function useActiveRecordings(enabled = true) {
+export function useActiveRecordings<TData = RecordingItem[]>(
+  enabled = true,
+  select?: (items: RecordingItem[]) => TData,
+) {
   const supported = recordingSupported();
   const active = supported && enabled;
   const queryClient = useQueryClient();
@@ -493,10 +423,11 @@ export function useActiveRecordings(enabled = true) {
     if (!active) return;
     return subscribeToRecordingChanges(queryClient);
   }, [active, queryClient]);
-  return useQuery({
+  return useQuery<RecordingItem[], Error, TData, typeof ACTIVE_RECORDINGS_QUERY_KEY>({
     queryKey: ACTIVE_RECORDINGS_QUERY_KEY,
     enabled: active,
     queryFn: () => invokeCmd<RecordingItem[]>("recording_active_list"),
+    select,
     staleTime: 500,
     refetchInterval: (query) =>
       query.state.data?.some((item) => item.status === "recording") ? 15_000 : false,

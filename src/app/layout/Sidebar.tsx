@@ -7,6 +7,12 @@ import { fadeTheme } from "@/app/theme";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { preloadRouteModule } from "@/app/routeModules";
+import { TaskCountBadge } from "@/features/follow/TaskCountBadge";
+import {
+  followTaskCountLabel,
+  followTaskTotal,
+  type FollowTaskCounts,
+} from "@/features/follow/followTaskCounts";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { EASE_OUT, prefersReducedMotion } from "@/shared/motion/tokens";
@@ -47,8 +53,12 @@ function SidebarLink({
   end,
   className,
   onIntent,
+  badgeCount = 0,
+  badgeLabel,
 }: SidebarNavItem & {
   onIntent?: () => void;
+  badgeCount?: number;
+  badgeLabel?: string | null;
 }) {
   const navigate = useNavigate();
   /**
@@ -140,6 +150,7 @@ function SidebarLink({
       to={to}
       end={end}
       state={SIDEBAR_NAVIGATION_STATE}
+      aria-label={badgeLabel ? `${label}，${badgeLabel}` : undefined}
       onPointerEnter={preloadDestination}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
@@ -187,6 +198,11 @@ function SidebarLink({
                   isActive && "text-primary",
                 )}
               />
+              <TaskCountBadge
+                count={badgeCount}
+                variant="default"
+                className="pointer-events-none absolute -right-3.5 -top-3"
+              />
             </span>
           </span>
           <span
@@ -204,7 +220,14 @@ function SidebarLink({
     <Tooltip>
       <TooltipTrigger render={link} />
       <TooltipContent side="right" className="max-md:hidden touch-wide:hidden">
-        {label}
+        {badgeLabel ? (
+          <span className="flex flex-col gap-0.5">
+            <span>{label}</span>
+            <span>{badgeLabel}</span>
+          </span>
+        ) : (
+          label
+        )}
       </TooltipContent>
     </Tooltip>
   );
@@ -304,7 +327,7 @@ function AppearanceToggle() {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ taskCounts }: { taskCounts: FollowTaskCounts }) {
   const queryClient = useQueryClient();
   const siteId = useSiteId();
   const preloadHome = useCallback(() => {
@@ -325,12 +348,16 @@ export function Sidebar() {
   // 移动端底栏里该分组退化为 display:contents，条目回到行内流。
   const mainNavItems = navItems.filter((item) => !item.footer);
   const footerNavItems = navItems.filter((item) => item.footer);
+  const followTaskCount = followTaskTotal(taskCounts);
+  const followTaskLabel = followTaskCountLabel(taskCounts);
 
   const renderNavItem = (item: SidebarNavItem) => (
     <SidebarLink
       key={item.to}
       {...item}
       onIntent={item.to === "/" ? preloadHome : undefined}
+      badgeCount={item.to === "/follow" ? followTaskCount : 0}
+      badgeLabel={item.to === "/follow" ? followTaskLabel : null}
     />
   );
 

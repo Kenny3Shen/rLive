@@ -1,8 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   legacyRecordingsRedirectTarget,
   legacyVideoDownloadRedirectTarget,
 } from "../src/app/legacyFollowRoutes";
+import { FollowViewSwitcher } from "../src/features/follow/FollowHeaderControls";
+import { TaskCountBadge } from "../src/features/follow/TaskCountBadge";
+import {
+  followTaskCountLabel,
+  followTaskTotal,
+  formatTaskBadgeCount,
+} from "../src/features/follow/followTaskCounts";
 import {
   followViewFromSearch,
   followViewsFor,
@@ -21,6 +31,60 @@ import {
 } from "../src/features/recording/recordingRoute";
 
 describe("关注页媒体资源", () => {
+  test("关注任务计数合并录制与下载，并输出完整无障碍描述", () => {
+    const both = { recordings: 2, downloads: 3 };
+    expect(followTaskTotal(both)).toBe(5);
+    expect(followTaskCountLabel(both)).toBe("2 项录制、3 项下载正在进行");
+    expect(followTaskCountLabel({ recordings: 1, downloads: 0 })).toBe("1 项录制正在进行");
+    expect(followTaskCountLabel({ recordings: 0, downloads: 1 })).toBe("1 项下载正在进行");
+    expect(followTaskCountLabel({ recordings: 0, downloads: 0 })).toBeNull();
+    expect(formatTaskBadgeCount(9)).toBe("9");
+    expect(formatTaskBadgeCount(99)).toBe("99");
+    expect(formatTaskBadgeCount(100)).toBe("99+");
+  });
+
+  test("任务徽标服务端渲染显示真实分类数量并把可见数字封顶为 99+", () => {
+    const html = renderToStaticMarkup(
+      createElement(FollowViewSwitcher, {
+        value: "recordings",
+        onValueChange: () => undefined,
+        recordingAvailable: true,
+        taskCounts: { recordings: 2, downloads: 100 },
+      }),
+    );
+
+    expect(html).toContain('aria-label="录制，2 项任务正在进行"');
+    expect(html).toContain('aria-label="下载，100 项任务正在进行"');
+    expect(html.match(/data-slot="task-count-badge"/g)).toHaveLength(2);
+    expect(html).toContain(">2</span>");
+    expect(html).toContain(">99+</span>");
+    expect(html).not.toContain(">100</span>");
+  });
+
+  test("没有进行中任务时不渲染任务徽标", () => {
+    const html = renderToStaticMarkup(
+      createElement(FollowViewSwitcher, {
+        value: "downloads",
+        onValueChange: () => undefined,
+        recordingAvailable: true,
+        taskCounts: { recordings: 0, downloads: 0 },
+      }),
+    );
+    expect(html).not.toContain('data-slot="task-count-badge"');
+    expect(renderToStaticMarkup(createElement(TaskCountBadge, { count: 0 }))).toBe("");
+  });
+
+  test("主导航与页签消费同一份常驻任务计数", () => {
+    const shell = readFileSync(new URL("../src/app/layout/Shell.tsx", import.meta.url), "utf8");
+    const sidebar = readFileSync(new URL("../src/app/layout/Sidebar.tsx", import.meta.url), "utf8");
+
+    expect(shell).toContain("const followTaskCounts = useFollowTaskCounts();");
+    expect(shell).toContain("<Sidebar taskCounts={followTaskCounts} />");
+    expect(shell).toContain("taskCounts={followTaskCounts}");
+    expect(sidebar).toContain("<TaskCountBadge");
+    expect(sidebar).toContain('item.to === "/follow" ? followTaskCount : 0');
+  });
+
   test("桌面展示五类关注内容，移动端隐藏录制", () => {
     expect(followViewsFor(true)).toEqual(["live", "video", "iptv", "recordings", "downloads"]);
     expect(followViewsFor(false)).toEqual(["live", "video", "iptv", "downloads"]);

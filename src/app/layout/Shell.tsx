@@ -33,6 +33,7 @@ import { HistoryClearButton, HistoryViewSwitcher } from "@/features/history/Hist
 import { useHistoryHeaderSnapshot } from "@/features/history/historyHeaderState";
 import { FollowViewSwitcher } from "@/features/follow/FollowHeaderControls";
 import { useFollowHeaderSnapshot } from "@/features/follow/followHeaderState";
+import { useFollowTaskCounts } from "@/features/follow/followTaskCounts";
 import { recordingSupported } from "@/features/recording/recording";
 import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
 import { VideoTabScope } from "@/features/video/videoTabScope";
@@ -197,6 +198,7 @@ export function Shell() {
   const mobileClient = isMobileClient();
   const historyHeader = useHistoryHeaderSnapshot();
   const followHeader = useFollowHeaderSnapshot();
+  const followTaskCounts = useFollowTaskCounts();
 
   // React Router 用递增的 `idx` 记录每条 pushState 历史。跨渲染比较它可以告诉
   // 页签切换用户在历史中向哪个方向移动，从而让新页面从相应的一侧滑入。
@@ -795,7 +797,7 @@ export function Shell() {
         className="flex-1 overflow-hidden"
       >
         <div className="flex min-h-0 min-w-0 flex-1">
-          {!isImmersivePlayer && <Sidebar />}
+          {!isImmersivePlayer && <Sidebar taskCounts={followTaskCounts} />}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <IptvControllerProvider source={iptvSource} active={isIptv}>
               {!isImmersivePlayer && !isSettings && (
@@ -871,6 +873,7 @@ export function Shell() {
                               value={followHeader.view}
                               onValueChange={followHeader.onViewChange}
                               recordingAvailable={recordingSupported()}
+                              taskCounts={followTaskCounts}
                             />
                           ) : hasIptvSourceShell ? (
                             <div
