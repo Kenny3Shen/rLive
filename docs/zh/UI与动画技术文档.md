@@ -139,6 +139,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - 上一页快照只在 `useLayoutEffect` 中更新为 React 已提交的 subtree，不在 render 阶段改写快照 ref（React 19 可能放弃或重放并发 render，ref 写入不会回滚，会漏掉退出层）。`PageZoom` 同一约束。
 - **快照必须连路由上下文一起冻结**（`FrozenRouter.tsx` 的 `RouterScope`）：上下文不是元素的一部分，路由一变，离场页里的 `useLocation` / `useSearchParams` / `useParams` 就会带着**新**页面的取值重渲染。失效现象是「退出动画里旧页面塌成错误态」—— VOD 播放页返回视频页时整个播放器变成「缺少有效参数」的错误卡，房间页退回发现页时离场层里的直播间直接消失。
 - **两侧子节点必须是同一种包裹元素**：`PagePan` / `PageZoom` 靠 key 让 React 把上一帧的层原样搬进离场位，子节点类型一变就退化成卸载重建 —— 媒体元素、播放器实例与页面状态全部从头再来。`RouterScope` 因此同时包在进入层与离场层上，而不是只包离场层。
+- **`RefreshFab` 的 portal 必须由离场层显式关闭**：它渲染到 `document.body`，离场层的 `inert` / `aria-hidden` 管不到。`PagePan` / `PageZoom` 的进入层与离场层使用完全相同的 `RefreshFabVisibilityProvider` → `RouterScope` 结构，只在 `visible` 值上区分；离场层传 `false`，且 provider 中祖先的 `false` 优先于嵌套活动面板的 `true`。只给其中一侧加 provider 会让 React 把整棵页面当成不同类型而重挂载。
 - 快速连续或反向导航时，在取消旧动画前记录仍连接的节点的当前 transform，由下一段沿用；全新目标页接在离场页当前坐标旁边，不瞬移回起点或拉出额外空白。只在中断时读取合成位置，不逐帧运行 JS。离场层同时使用 `inert` 与 `aria-hidden`，不能接收键盘聚焦。
 - 动画完成后先用 `commitStyles()` 固定旧页离屏最终位置，再同步卸载旧 subtree；不能先 cancel Animation 再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
 - 直接侧栏导航时 `RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移。

@@ -24,8 +24,10 @@ export function RefreshFabVisibilityProvider({
   visible: boolean;
   children: ReactNode;
 }) {
+  const ancestorVisible = useContext(RefreshFabVisibilityContext);
   return (
-    <RefreshFabVisibilityContext.Provider value={visible}>
+    // 父级隐藏边界优先，防止隐藏离场层被嵌套的活动面板重新打开 portal。
+    <RefreshFabVisibilityContext.Provider value={ancestorVisible && visible}>
       {children}
     </RefreshFabVisibilityContext.Provider>
   );

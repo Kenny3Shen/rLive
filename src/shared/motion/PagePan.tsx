@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
+import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
 import { FrozenRouter, RouterScope, useFrozenRouter } from "./FrozenRouter";
 import { motionProfile, PAGE_PAN_PERCENT, prefersReducedMotion } from "./tokens";
 
@@ -207,7 +208,9 @@ export function PagePan({
             contentClassName,
           )}
         >
-          <RouterScope value={outgoing.router}>{outgoing.node}</RouterScope>
+          <RefreshFabVisibilityProvider visible={false}>
+            <RouterScope value={outgoing.router}>{outgoing.node}</RouterScope>
+          </RefreshFabVisibilityProvider>
         </div>
       )}
       <div
@@ -217,7 +220,9 @@ export function PagePan({
       >
         {/* 两侧必须是同一种包裹元素，React 才会把上一帧的层原样搬进离场位；
             详见 `RouterScope`。 */}
-        <RouterScope value={router}>{children}</RouterScope>
+        <RefreshFabVisibilityProvider visible={true}>
+          <RouterScope value={router}>{children}</RouterScope>
+        </RefreshFabVisibilityProvider>
       </div>
     </div>
   );

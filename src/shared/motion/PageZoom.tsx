@@ -9,6 +9,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
+import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
 import { RouterScope, useFrozenRouter, type FrozenRouter } from "./FrozenRouter";
 import { clearMotionStyles } from "./tween";
 import { motionProfile, prefersReducedMotion } from "./tokens";
@@ -304,7 +305,9 @@ export function PageZoom({
             outgoing.enabled && "z-10",
           )}
         >
-          <RouterScope value={outgoing.router}>{outgoing.node}</RouterScope>
+          <RefreshFabVisibilityProvider visible={false}>
+            <RouterScope value={outgoing.router}>{outgoing.node}</RouterScope>
+          </RefreshFabVisibilityProvider>
         </div>
       )}
       <div
@@ -320,7 +323,9 @@ export function PageZoom({
       >
         {/* 两侧必须是同一种包裹元素，React 才会把上一帧的层原样搬进离场位；
             详见 `RouterScope`。 */}
-        <RouterScope value={router}>{children}</RouterScope>
+        <RefreshFabVisibilityProvider visible={true}>
+          <RouterScope value={router}>{children}</RouterScope>
+        </RefreshFabVisibilityProvider>
       </div>
     </div>
   );
