@@ -16,6 +16,8 @@ import {
   videoDownloadPlaybackReturnTarget,
 } from "../src/features/video/videoDownloadRoute";
 import { parseDownloadedDanmaku } from "../src/features/video/videoDownloadDanmaku";
+import { videoCardDownloadInput } from "../src/features/video/videoCardDownload";
+import type { VideoArchive } from "../src/shared/types/video";
 
 function downloadItem(
   id: string,
@@ -42,6 +44,127 @@ function downloadItem(
     error: status === "failed" ? "网络中断" : null,
   };
 }
+
+function archive(overrides: Partial<VideoArchive> = {}): VideoArchive {
+  return {
+    bvid: "BV1test",
+    aid: "1",
+    cid: 11,
+    title: "稿件标题",
+    cover: "archive-cover",
+    desc: "",
+    tags: [],
+    author: "稿件作者",
+    author_face: null,
+    author_mid: "42",
+    author_fans: 0,
+    author_videos: 0,
+    view: 0,
+    danmaku: 0,
+    pubdate: 0,
+    reply: 0,
+    pages: [],
+    ugc_season: null,
+    ...overrides,
+  };
+}
+
+describe("视频卡片下载入参", () => {
+  test("已有 cid 时直接使用卡片信息，不依赖稿件详情", () => {
+    expect(
+      videoCardDownloadInput({
+        bvid: "BV1card",
+        cid: 22,
+        title: "卡片标题",
+        cover: "card-cover",
+        author: "卡片作者",
+        duration: 90,
+      }),
+    ).toEqual({
+      bvid: "BV1card",
+      cid: 22,
+      ep_id: null,
+      title: "卡片标题",
+      cover: "card-cover",
+      author: "卡片作者",
+      duration: 90,
+    });
+  });
+
+  test("缺少 cid 时选稿件详情的首个分 P，并使用该 P 的时长", () => {
+    expect(
+      videoCardDownloadInput(
+        {
+          bvid: "BV1card",
+          cid: null,
+          title: "列表标题",
+          cover: "card-cover",
+          author: "列表作者",
+          duration: 999,
+        },
+        archive({
+          pages: [
+            { page: 1, cid: 31, part: "第一集", duration: 120 },
+            { page: 2, cid: 32, part: "第二集", duration: 180 },
+          ],
+        }),
+      ),
+    ).toMatchObject({ cid: 31, title: "稿件标题", duration: 120 });
+  });
+
+  test("传入 archive 时仍保留显式 cid，不被首个分 P 覆盖", () => {
+    expect(
+      videoCardDownloadInput(
+        {
+          bvid: "BV1card",
+          cid: 32,
+          title: "列表标题",
+          cover: "card-cover",
+          author: "列表作者",
+          duration: 180,
+        },
+        archive({
+          pages: [
+            { page: 1, cid: 31, part: "第一集", duration: 120 },
+            { page: 2, cid: 32, part: "第二集", duration: 180 },
+          ],
+        }),
+      ),
+    ).toMatchObject({ cid: 32, duration: 180 });
+  });
+
+  test("单 P 稿件的 pages 为空时回退详情首 P cid", () => {
+    expect(
+      videoCardDownloadInput(
+        {
+          bvid: "BV1single",
+          cid: null,
+          title: "单 P",
+          cover: "",
+          author: "",
+          duration: 75,
+        },
+        archive({ cid: 44 }),
+      ),
+    ).toMatchObject({ cid: 44, duration: 75 });
+  });
+
+  test("详情也没有有效 cid 时明确失败", () => {
+    expect(() =>
+      videoCardDownloadInput(
+        {
+          bvid: "BV1bad",
+          cid: null,
+          title: "",
+          cover: "",
+          author: "",
+          duration: 0,
+        },
+        archive({ cid: 0 }),
+      ),
+    ).toThrow("无法确定这条视频的可下载分 P");
+  });
+});
 
 describe("视频下载状态", () => {
   test("分组保留后端语义：仅已完成离开未完成任务", () => {

@@ -1,7 +1,8 @@
 import { memo } from "react";
 import type { ComponentProps, RefObject } from "react";
 import { useNavigate } from "react-router-dom";
-import { CalendarDays, MessageSquareText, Play, UserRoundX } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { CalendarDays, Download, MessageSquareText, Play, UserRoundX } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { Spinner } from "@/components/ui/spinner";
@@ -11,6 +12,7 @@ import {
   ContextMenuGroup,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
@@ -23,6 +25,13 @@ import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/component
 import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
+import { videoGetArchive } from "./videoApi";
+import {
+  upsertVideoDownloadInCache,
+  videoDownloadStart,
+  videoDownloadSupported,
+} from "./videoDownload";
+import { videoCardDownloadErrorText, videoCardDownloadInput } from "./videoCardDownload";
 import {
   usePlaylistStore,
   type PlaylistItem,
@@ -40,7 +49,7 @@ import { videoPlayPath } from "./videoRoute";
  * 一个并列的组件而不是给 `RoomCard` 加分支 —— 那个组件还挂着关注、多画面、长按抽屉
  * 等一整套直播专属动作，VOD 一个都用不上。
  *
- * 唯一的次级动作是「屏蔽 UP 主」：桌面端走右键菜单，触摸端走长按底部抽屉
+ * 次级动作是「下载」与「屏蔽 UP 主」：桌面端走右键菜单，触摸端走长按底部抽屉
  * （与直播卡同一套 `useLongPressDrawer` 接线）。屏蔽按 UID 精确匹配，因此条目
  * 没有 UID 时（老缓存、上游未下发）不提供这个入口 —— 点了没反应比没有入口更糟。
  */
@@ -176,7 +185,38 @@ export const VideoCard = memo(function VideoCard({
   // 因此不给这个入口 —— 点了没反应比没有入口更糟。
   const uploaderMid = item.author_mid?.trim() ?? "";
   const mobile = isMobileClient();
-  const cardDrawer = useLongPressDrawer({ enabled: mobile && uploaderMid !== "" });
+  const canDownload = playable && videoDownloadSupported();
+  const cardDrawer = useLongPressDrawer({
+    enabled: mobile && (uploaderMid !== "" || canDownload),
+  });
+  const queryClient = useQueryClient();
+  const downloadMutation = useMutation({
+    mutationFn: async () => {
+      if (!item.bvid) throw new Error("这条视频缺少 BV 号，无法下载。");
+      preview.stop();
+
+      // 已有 cid 时不必再取详情，也避免额外请求打断列表浏览。
+      const archive =
+        item.cid && item.cid > 0
+          ? undefined
+          : await queryClient.fetchQuery({
+              queryKey: ["video_archive", item.bvid],
+              queryFn: () => videoGetArchive(item.bvid),
+              staleTime: 5 * 60_000,
+              retry: false,
+            });
+      return videoDownloadStart(videoCardDownloadInput(item, archive));
+    },
+    onSuccess: (download) => {
+      upsertVideoDownloadInCache(queryClient, download);
+      if (download.status === "completed") {
+        notify.success("该视频已下载", "可在关注页的「下载」页签中查看。");
+      } else {
+        notify.success("已加入下载队列", "可在关注页的「下载」页签中查看进度。");
+      }
+    },
+    onError: (error) => notify.error("加入下载队列失败", videoCardDownloadErrorText(error)),
+  });
 
   function blockUploader() {
     // 与弹幕列表的「屏蔽」同一语义：立刻生效、写进设置里的名单，
@@ -332,8 +372,8 @@ export const VideoCard = memo(function VideoCard({
     </>
   );
 
-  if (uploaderMid === "") {
-    // 没有 UID 的条目（老缓存 / 上游未下发）只有「打开」这一种动作，
+  if (uploaderMid === "" && !canDownload) {
+    // 没有 UID 且当前宿主不支持下载时只有「打开」这一种动作，
     // 不挂右键菜单与长按抽屉，免得弹出只有一条无操作菜单的浮层。
     return (
       <button
@@ -368,18 +408,39 @@ export const VideoCard = memo(function VideoCard({
         <Drawer open={cardDrawer.open} onOpenChange={cardDrawer.setOpen}>
           <DrawerContent>
             <DrawerTitle className="truncate">{item.title}</DrawerTitle>
-            <Button
-              type="button"
-              variant="ghost"
-              className="mt-2 w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive max-md:h-10"
-              onClick={() => {
-                cardDrawer.setOpen(false);
-                blockUploader();
-              }}
-            >
-              <UserRoundX aria-hidden />
-              屏蔽 {item.author || "此 UP 主"}
-            </Button>
+            {canDownload && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="mt-2 w-full justify-start max-md:h-10"
+                disabled={downloadMutation.isPending}
+                onClick={() => {
+                  cardDrawer.setOpen(false);
+                  downloadMutation.mutate();
+                }}
+              >
+                {downloadMutation.isPending ? (
+                  <Spinner data-icon="inline-start" aria-hidden />
+                ) : (
+                  <Download data-icon="inline-start" aria-hidden />
+                )}
+                {downloadMutation.isPending ? "正在加入下载队列" : "下载"}
+              </Button>
+            )}
+            {uploaderMid !== "" && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="mt-2 w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive max-md:h-10"
+                onClick={() => {
+                  cardDrawer.setOpen(false);
+                  blockUploader();
+                }}
+              >
+                <UserRoundX aria-hidden />
+                屏蔽 {item.author || "此 UP 主"}
+              </Button>
+            )}
           </DrawerContent>
         </Drawer>
       </>
@@ -401,14 +462,28 @@ export const VideoCard = memo(function VideoCard({
         {cardBody}
       </ContextMenuTrigger>
 
-      <ContextMenuContent className="min-w-44">
+      <ContextMenuContent className="min-w-48">
         <ContextMenuGroup>
           <ContextMenuLabel>{item.title}</ContextMenuLabel>
-          <ContextMenuItem onClick={blockUploader} className="text-destructive">
-            <UserRoundX aria-hidden />
-            屏蔽 UP 主 {item.author || ""}
-          </ContextMenuItem>
+          {canDownload && (
+            <ContextMenuItem
+              disabled={downloadMutation.isPending}
+              onClick={() => downloadMutation.mutate()}
+            >
+              {downloadMutation.isPending ? <Spinner aria-hidden /> : <Download aria-hidden />}
+              {downloadMutation.isPending ? "正在加入下载队列" : "下载"}
+            </ContextMenuItem>
+          )}
         </ContextMenuGroup>
+        {canDownload && uploaderMid !== "" && <ContextMenuSeparator />}
+        {uploaderMid !== "" && (
+          <ContextMenuGroup>
+            <ContextMenuItem onClick={blockUploader} className="text-destructive">
+              <UserRoundX aria-hidden />
+              屏蔽 UP 主 {item.author || ""}
+            </ContextMenuItem>
+          </ContextMenuGroup>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -312,7 +312,7 @@ export function VideoDownloadPage({ active = true }: { active?: boolean }) {
               <EmptyDescription>
                 {view === "completed"
                   ? "下载完成后的文件会出现在这里，可直接播放或定位文件。"
-                  : "在视频播放页打开「更多操作」，选择「下载」并挑一个画质即可加入队列。"}
+                  : "在视频卡片的右键或长按菜单里选择「下载」，或在播放页「更多操作」中选择画质加入队列。"}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
