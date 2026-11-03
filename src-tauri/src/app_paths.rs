@@ -1,11 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::ffi::OsString;
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::fs::OpenOptions;
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use std::io::{self, ErrorKind, Write};
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -145,7 +142,6 @@ fn prepare_data_root(path: &Path) -> AppResult<PathBuf> {
     Ok(root)
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn recoverable_sidecars(path: &Path) -> io::Result<(PathBuf, PathBuf)> {
     let file_name = path
         .file_name()
@@ -160,7 +156,6 @@ fn recoverable_sidecars(path: &Path) -> io::Result<(PathBuf, PathBuf)> {
     ))
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn read_optional_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -169,7 +164,6 @@ fn read_optional_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn remove_file_if_present(path: &Path) -> io::Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => Ok(true),
@@ -178,10 +172,7 @@ fn remove_file_if_present(path: &Path) -> io::Result<bool> {
     }
 }
 
-#[cfg(all(
-    unix,
-    any(target_os = "windows", target_os = "linux", target_os = "macos")
-))]
+#[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
     let parent = path
         .parent()
@@ -189,17 +180,13 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
     fs::File::open(parent)?.sync_all()
 }
 
-#[cfg(all(
-    not(unix),
-    any(target_os = "windows", target_os = "linux", target_os = "macos")
-))]
+#[cfg(not(unix))]
 fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
 /// 完成或回滚被中断的同目录替换。有效的目标文件表示替换已提交；
 /// 否则有效的备份文件优先于未提交的临时文件。
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn recover_recoverable_file(
     path: &Path,
     validate: impl Fn(&[u8]) -> bool,
@@ -244,7 +231,6 @@ pub(crate) fn recover_recoverable_file(
 
 /// 以原子替换的方式发布已落盘的临时文件（Unix），
 /// 在 Windows 无法直接改名覆盖目标时使用可恢复的备份事务。
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn write_recoverable_file(
     path: &Path,
     bytes: &[u8],
@@ -268,10 +254,7 @@ pub(crate) fn write_recoverable_file(
     publish_temporary_file(path, &temporary, &backup)
 }
 
-#[cfg(all(
-    unix,
-    any(target_os = "windows", target_os = "linux", target_os = "macos")
-))]
+#[cfg(unix)]
 fn publish_temporary_file(path: &Path, temporary: &Path, _backup: &Path) -> io::Result<()> {
     if let Err(error) = fs::rename(temporary, path) {
         let _ = remove_file_if_present(temporary);
@@ -280,10 +263,7 @@ fn publish_temporary_file(path: &Path, temporary: &Path, _backup: &Path) -> io::
     sync_parent_directory(path)
 }
 
-#[cfg(all(
-    not(unix),
-    any(target_os = "windows", target_os = "linux", target_os = "macos")
-))]
+#[cfg(not(unix))]
 fn publish_temporary_file(path: &Path, temporary: &Path, backup: &Path) -> io::Result<()> {
     let had_target = path.exists();
     if had_target && let Err(error) = fs::rename(path, backup) {

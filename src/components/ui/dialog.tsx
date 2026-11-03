@@ -39,9 +39,16 @@ function DialogPopup({ className, ...props }: DialogPrimitive.Popup.Props) {
   );
 }
 
-function DialogContent({ className, ...props }: DialogPrimitive.Popup.Props) {
+function DialogContent({
+  className,
+  container,
+  ...props
+}: DialogPrimitive.Popup.Props & {
+  /** 全屏元素内部使用的 portal 目标；缺省挂到 `<body>`。 */
+  container?: DialogPrimitive.Portal.Props["container"];
+}) {
   return (
-    <DialogPortal>
+    <DialogPortal container={container}>
       <DialogOverlay />
       <DialogPrimitive.Popup
         data-slot="dialog-content"

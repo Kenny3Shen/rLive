@@ -2,11 +2,11 @@ import { cn } from "@/lib/utils";
 import { VIDEO_TABS, VIDEO_TAB_LABELS, type VideoTab } from "./videoRoute";
 
 /**
- * 视频页头部的四个内容页签。
+ * 视频页头部的内容页签。
  *
  * 画法对齐 `SiteSwitcher`（同高、同 `role="tablist"`、同底部指示条），因为它顶的正是
  * 头部那条平台 bar 的位置。但**刻意不是** `SiteSwitcher`：那个组件的条目是直播平台，
- * 与这四个内容页签混进同一条轨道会让 Shell 的页面平移把两种语义当成同一个条带。
+ * 与这些内容页签混进同一条轨道会让 Shell 的页面平移把两种语义当成同一个条带。
  */
 export function VideoTabSwitcher({
   value,

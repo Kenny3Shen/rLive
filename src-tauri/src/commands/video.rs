@@ -112,7 +112,7 @@ fn first_segment_ranges(track: &VideoTrack) -> Vec<(u64, u64)> {
 /// 与 `site.rs::resolve_site` 取的是同一份快照，因此登录态天然复用；
 /// 但那个函数返回 `Box<dyn LiveSite>`，拿不到 VOD 的 inherent 方法，
 /// 所以这里返回具体类型。
-fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
+pub(crate) fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
     let (cookie, route) = {
         let conn = state.conn()?;
         (
@@ -264,7 +264,7 @@ pub async fn video_get_season(
 }
 
 /// 媒体流向上游携带的请求头：部分 CDN 主机缺 Referer 直接 403。
-fn video_stream_headers() -> HashMap<String, String> {
+pub(crate) fn video_stream_headers() -> HashMap<String, String> {
     HashMap::from([
         (
             "user-agent".to_string(),

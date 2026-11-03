@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -34,6 +34,9 @@ pub struct AppState {
     pub stream_proxy: StreamProxy,
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub recording: RecordingManager,
+    /// VOD 下载队列。桌面端与 Android 共用同一套队列；合并分别走 FFmpeg 与原生
+    /// `MediaMuxer`。
+    pub video_download: Arc<crate::video_download::VideoDownloadManager>,
     pub dlna: DlnaManager,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
@@ -108,6 +111,9 @@ impl AppState {
         let app_directory = &directories.root;
         let path = create_db_path(app_directory.to_path_buf())?;
         let conn = Db::open(&path)?;
+        let video_download = Arc::new(crate::video_download::VideoDownloadManager::new(
+            app_directory.join("downloads"),
+        )?);
         Ok(Self {
             directories: directories.clone(),
             db: Mutex::new(conn),
@@ -132,6 +138,7 @@ impl AppState {
             stream_proxy: StreamProxy::new(),
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             recording: RecordingManager::new(app_directory)?,
+            video_download,
             dlna: DlnaManager::new(),
             image_proxy: ImageProxy::new(directories.cache.join("images")),
             media_cache: MediaCache::new(directories.cache.join("media")),

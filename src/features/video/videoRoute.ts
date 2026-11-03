@@ -111,8 +111,8 @@ export function parseVideoSearchFilters(params: URLSearchParams): VideoSearchFil
   };
 }
 
-/** 头部整行的四个内容页签。顺序即移动端横滑与 `PagePan` 的方向顺序。 */
-export const VIDEO_TABS = ["recommend", "popular", "anime", "cinema"] as const;
+/** 头部整行的内容页签。顺序即移动端横滑与 `PagePan` 的方向顺序。 */
+export const VIDEO_TABS = ["recommend", "popular", "anime", "cinema", "download"] as const;
 
 export type VideoTab = (typeof VIDEO_TABS)[number];
 
@@ -121,7 +121,13 @@ export const VIDEO_TAB_LABELS: Record<VideoTab, string> = {
   popular: "热门",
   anime: "番剧",
   cinema: "影视",
+  download: "下载",
 };
+
+/** 「下载」是任务管理表面，不是内容流：没有分区条、不请求列表接口。 */
+export function videoTabIsDownload(tab: VideoTab): boolean {
+  return tab === "download";
+}
 
 export const VIDEO_TAB_PARAM = "tab";
 export const VIDEO_ZONE_PARAM = "zone";
@@ -178,7 +184,7 @@ const CINEMA_ZONE_CHIPS: readonly VideoZoneChip[] = [
  * 番剧 / 影视挂 season_type 筛选。
  */
 export function videoTabHasZoneStrip(tab: VideoTab): boolean {
-  return tab !== "recommend";
+  return tab === "popular" || tab === "anime" || tab === "cinema";
 }
 
 /** 该页签的分区条是否为 PGC 的 season_type 筛选（而不是 UGC 的 rid）。 */

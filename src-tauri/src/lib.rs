@@ -24,6 +24,7 @@ mod settings;
 mod sites;
 mod state;
 mod stream_proxy;
+mod video_download;
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -51,6 +52,8 @@ use commands::android_player_controls::{
 #[cfg(target_os = "android")]
 use commands::android_system_bars::AndroidSystemBars;
 use commands::android_system_bars::android_system_bars_set_appearance;
+#[cfg(target_os = "android")]
+use commands::android_video_mux::AndroidVideoMux;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use commands::app_lifecycle::{app_confirm_exit, recording_active_count};
 #[cfg(not(target_os = "android"))]
@@ -107,6 +110,10 @@ use commands::video::{
     video_get_storyboard, video_get_subtitle, video_get_uploader_story, video_get_zone,
     video_preload_next, video_search, video_search_zone_list, video_stop_play,
     video_uploader_videos, video_zone_list,
+};
+use commands::video_download::{
+    video_download_delete, video_download_list, video_download_open, video_download_open_directory,
+    video_download_pause, video_download_resume, video_download_start,
 };
 use commands::video_follow::{
     video_follow_group_list, video_follow_group_remove, video_follow_group_upsert,
@@ -185,6 +192,21 @@ fn android_system_bars_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             let handle =
                 api.register_android_plugin("com.shenss.rlive", "RliveSystemBarsPlugin")?;
             app.manage(AndroidSystemBars(handle));
+            Ok(())
+        })
+        .build()
+}
+
+/**
+ * Android 原生视频合并/打开桥。桌面端由 FFmpeg 处理，Android 没有链接
+ * FFmpeg，改用 Kotlin `MediaMuxer` 与 `FileProvider`。
+ */
+#[cfg(target_os = "android")]
+fn android_video_mux_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("video-mux")
+        .setup(|app, api| {
+            let handle = api.register_android_plugin("com.shenss.rlive", "RliveVideoMuxPlugin")?;
+            app.manage(AndroidVideoMux(handle));
             Ok(())
         })
         .build()
@@ -322,7 +344,8 @@ pub fn run() {
     let builder = builder
         .plugin(android_player_controls_plugin())
         .plugin(android_back_navigation_plugin())
-        .plugin(android_system_bars_plugin());
+        .plugin(android_system_bars_plugin())
+        .plugin(android_video_mux_plugin());
 
     builder
         .setup(|app| {
@@ -346,7 +369,11 @@ pub fn run() {
             let state = AppState::init(&directories)?;
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             state.recording.attach_app_handle(app.handle().clone());
+            let video_download = state.video_download.clone();
             app.manage(state);
+            // 下载 worker 通过 `AppHandle::state` 读取登录态与代理设置，
+            // 因此必须在 `manage` 之后才允许它启动。
+            video_download.attach(app.handle().clone());
 
             Ok(())
         })
@@ -441,6 +468,13 @@ pub fn run() {
             video_get_season,
             video_get_play_info,
             video_preload_next,
+            video_download_list,
+            video_download_open_directory,
+            video_download_start,
+            video_download_pause,
+            video_download_resume,
+            video_download_delete,
+            video_download_open,
             video_get_cast_url,
             video_get_player_meta,
             video_get_storyboard,

@@ -19,6 +19,7 @@ import {
   Cast,
   Check,
   ChevronLeft,
+  Download,
   ExternalLink,
   FastForward,
   Home,
@@ -187,6 +188,8 @@ import {
   glassTitleClass,
 } from "@/shared/components/player/glassSurface";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
+import { VideoDownloadDialog, type VideoDownloadTarget } from "./VideoDownloadDialog";
+import { videoDownloadSupported } from "./videoDownload";
 import type { SidebarTab } from "./VideoSidebar";
 import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
 import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
@@ -393,6 +396,8 @@ function VideoPlayerPageContent() {
   const [qualityQn, setQualityQn] = useState<number | null>(null);
   /** 仅音频（听视频）：跳过视频轨代理省流，切换时记录续播点后重建播放器。 */
   const [audioOnly, setAudioOnly] = useState(false);
+  /** 下载确认框；桌面端从 HUD 溢出菜单与底部操作栏进入。 */
+  const [downloadOpen, setDownloadOpen] = useState(false);
 
   useEffect(() => {
     // 播放器模块与取流 IPC 同时准备，所有画幅共用已有 import 缓存。
@@ -2566,6 +2571,31 @@ function VideoPlayerPageContent() {
 
   const title = params?.title || "视频播放";
 
+  // 下载目标：PGC 分集的标题/封面不在 archive 里，优先取当前分集。
+  const downloadEpisode = epId
+    ? (seasonQuery.data?.episodes.find((episode) => episode.ep_id === epId) ?? null)
+    : null;
+  const downloadTitle =
+    downloadEpisode?.long_title || downloadEpisode?.title || archiveQuery.data?.title || title;
+  const downloadTarget: VideoDownloadTarget | null =
+    videoDownloadSupported() && params && cid > 0
+      ? {
+          bvid: params.bvid,
+          cid,
+          epId: params.epId,
+          title: downloadTitle,
+          cover: downloadEpisode?.cover || archiveQuery.data?.cover || "",
+          author: archiveQuery.data?.author ?? (params.epId ? "哔哩哔哩" : ""),
+          duration: playInfo?.duration || downloadEpisode?.duration || 0,
+          qualities: playInfo?.accept_quality ?? [],
+          defaultQn: playInfo?.quality ?? null,
+        }
+      : null;
+  // 取流信息未就绪时不提供下载入口：画质列表来自同一次 playurl。
+  const downloadAvailable =
+    downloadTarget !== null &&
+    downloadTarget.qualities.some((quality) => quality.available);
+
   /**
    * HUD 的「返回主页」入口。桌面与移动端都常驻在返回箭头旁：这一页没有流内
    * 顶栏，而返回箭头只回上一层（全屏时先退全屏、否则回上一页），想直接回视频
@@ -3458,6 +3488,18 @@ function VideoPlayerPageContent() {
                               openOriginalUrl();
                             }}
                           />
+                          {videoDownloadSupported() && (
+                            <PlayerToolTile
+                              icon={Download}
+                              label="下载"
+                              disabled={!downloadAvailable}
+                              onClick={() => {
+                                setHudMenuOpen(false);
+                                setOverlayInteractionOpen(false);
+                                setDownloadOpen(true);
+                              }}
+                            />
+                          )}
                         </div>
                         {castOpen && (
                           <PlayerToolPanel>
@@ -3548,6 +3590,17 @@ function VideoPlayerPageContent() {
           HUD 的 `⋮` 溢出菜单里另有镜像；窗口全屏时从布局卸载。 */}
       {!webFullscreen && !mobileClient && (
         <footer className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
+          {videoDownloadSupported() && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!downloadAvailable}
+              onClick={() => setDownloadOpen(true)}
+            >
+              <Download data-icon="inline-start" aria-hidden />
+              下载
+            </Button>
+          )}
           <Button variant="ghost" size="sm" disabled={!originalUrl} onClick={copyOriginalUrl}>
             <Link2 data-icon="inline-start" />
             复制链接
@@ -3558,6 +3611,14 @@ function VideoPlayerPageContent() {
           </Button>
         </footer>
       )}
+      <VideoDownloadDialog
+        open={downloadOpen}
+        onOpenChange={setDownloadOpen}
+        target={downloadTarget}
+        // 画面全屏时舞台处于浏览器 top layer，弹层必须挂进舞台才不会被盖住；
+        // 窗口全屏仍走默认宿主。
+        container={fullscreen.fullscreen ? stageRef : undefined}
+      />
     </div>
   );
 }

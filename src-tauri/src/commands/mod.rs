@@ -2,6 +2,8 @@ pub mod account;
 pub mod android_navigation;
 pub mod android_player_controls;
 pub mod android_system_bars;
+#[cfg(target_os = "android")]
+pub mod android_video_mux;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod app_lifecycle;
 #[cfg(not(target_os = "android"))]
@@ -25,5 +27,6 @@ pub mod settings;
 pub mod site;
 pub mod stream_proxy;
 pub mod video;
+pub mod video_download;
 pub mod video_follow;
 pub mod video_history;

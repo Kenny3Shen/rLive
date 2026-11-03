@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_VIDEO_SEARCH_FILTERS,
+  VIDEO_TAB_LABELS,
   parseVideoPlayParams,
   parseVideoSearchFilters,
   resolveVideoZoneKey,
+  videoHomePath,
   videoPlayPath,
   videoSearchPath,
+  videoTabHasZoneStrip,
   videoZoneChips,
 } from "../src/features/video/videoRoute";
 import {
@@ -69,6 +72,13 @@ describe("VOD 路由解析", () => {
     expect(
       parseVideoSearchFilters(new URLSearchParams("order=hack&duration=9&zone=-3&pubtime=month")),
     ).toEqual(DEFAULT_VIDEO_SEARCH_FILTERS);
+  });
+
+  test("下载页签是任务管理表面，不挂分区条", () => {
+    expect(VIDEO_TAB_LABELS.download).toBe("下载");
+    expect(videoHomePath("download")).toBe("/video?tab=download");
+    expect(videoTabHasZoneStrip("download")).toBe(false);
+    expect(videoZoneChips("download", [["动画", 1005]])).toEqual([]);
   });
 });
 

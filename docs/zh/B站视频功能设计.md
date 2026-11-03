@@ -5,7 +5,7 @@
 ## 一、已锁定的产品决策
 
 - 入口：**新增侧栏「视频」目的地**，独立路由 `/video`。现有首页的直播平台条（B站/斗鱼/虎牙/抖音/Twitch）完全不动。
-- 头部整行 = 四个内容页签「推荐 / 热门 / 番剧 / 影视」；其下一条**分区条**；再下是内容网格（与直播首页同一套等宽高卡片）。
+- 头部整行 = 五个页签「推荐 / 热门 / 番剧 / 影视 / 下载」；前四个是内容页，其下一条**分区条**，再下是内容网格（与直播首页同一套等宽高卡片）；「下载」是独立的任务管理表面，不挂分区条，也不参与内容列表查询。
 - 番剧 / 影视点进去**要能播**（PGC playurl），与 UGC 是两套播放链路。
 - 画质走 **DASH**，使用 Video.js 官方 `@videojs/dash-video` 适配器（内部由 dash.js 读取 MPD）。
 - **搜索筛选一起做**（结构对齐 B 站 Web 端搜索页）：`/video/search` 结果页顶部——排序是一行可横滚的 chip（复用 `ChipStrip`，与分区条同套横滚/箭头/键盘逻辑），时长 / 分区 / 发布时间是三个独立下拉（`Select`，「当前值 ▾」形态，非默认高亮，首项即默认）。不收进单个「筛选」按钮、无重置按钮（各维度选回首项即默认）。筛选住在 URL（`?order/&duration/&zone/&pubtime=`，默认位不进 URL），换筛选替换历史（与首页换分区同取向）；头部查询条提交新关键词不带筛选参数，新搜索天然重置。分区表由后端 `video_search_zone_list` 提供（搜索 tid 与分区榜 rid 两套 ID，不能复用 `video_zone_list`）。**头部查询条的提交键与直播搜索页同款**：一枚内嵌在输入组右端的图标按钮（`InputGroupButton size="icon-xs"`，不写「搜索」二字），移动端头部因此只需容下返回键、输入框与一枚图标，输入框仍占八成以上宽度（按钮位于输入组内部，与输入框同高同中线，不越出输入组右缘）。
@@ -78,7 +78,7 @@ season_type：番剧 1、电影 2、纪录片 3、国创 4、剧集 5、综艺 7
 - **APP 推荐不展示发布日期（2026-10）**：主 feed 实测不下发 `pubdate`，早期版本在去重、截取后对缺日期的条目调用 `GET https://api.bilibili.com/x/v3/fav/resource/infos` 批量补齐（只接收 `type=2` 的正整数 `pubtime`、按 `id` 关联、最多等 2 秒），但该接口实测会被风控连续返回 HTTP 412，即便加了进程级缓存与 5 分钟/30 秒冷却仍会反复失败。日期只是首页卡片上的一行相对时间，因此整条补齐链路已移除：不再请求该接口、不缓存日期，APP 推荐条目保持 `pubdate = 0`。只有 APP 推荐流的 `VideoGrid` 传 `showPubdate={false}`，卡片不渲染日期；**热门、分区榜、Web 推荐、搜索、相关视频与 UP 主投稿抽屉等上游自带日期的列表照常显示**（`showPubdate` 由 `tab === "recommend" && videoRecommendApi === "app"` 决定）。没有更换身份、出口或补签名去绕过上游限制。
 - **屏蔽 UP 主（2026-10）**：名单按 `author_mid`（UID）匹配，不按昵称 —— 改名不失效、同名不误伤；**缺失 `author_mid` 的条目永不被过滤、也不提供屏蔽入口**（宁可少屏蔽不可错屏蔽）。过滤是渲染前的纯函数（`filterBlockedUploaders`，名单为空时原样返回同一数组引用，零成本），不改分页游标、上游请求次数与 `has_more`；`VideoCard` 桌面右键 / 触摸长按弹出菜单调用 `blockVideoUploader(mid)` 并 `notify.success`。覆盖推荐、热门、分区、搜索、相关视频、UP 投稿抽屉与短视频流；**播放页自身不被屏蔽**（点链接直进仍可看，屏蔽只作用于列表），`UploaderDrawer` 也不过滤（用户已主动进入该作者主页）。名单上限 500、单条 20 字符，存入 `AppSettings.video_blocked_uploaders`（随配置导出/导入与局域网同步，与屏蔽词同一合并策略）。短视频流在**合并器入流时**过滤而不是渲染前，否则被屏蔽条目会占着下标使补货窗口永远凑不满。回归：`tests/video-uploader-block.test.ts`（归一化/上限/缺失 UID 不过滤/合并器过滤与补货阈值）；实机另查桌面右键、触摸长按与无 mid 时无入口。
 - **UP 主关注（2026-10）**：播放页 UP 信息卡头像 / 名称行右侧提供与直播关注同款的爱心按钮。未关注时先选择独立的「视频关注」分组（可当场新建），已关注时二次确认后取消；操作进行中按钮禁用。关注记录以 `site_id + mid` 唯一标识，只保存 B 站稿件快照中的名称与头像，**不修改 B 站账号关注**，也不参与直播开播探测、自动录制或后台投稿轮询。关注页新增「视频关注」页签，卡片点击复用 `UploaderDrawer` 查看投稿；桌面右键、触摸长按可移动分组或取消关注。视频关注分组独立于直播标签与 IPTV 分组，删除分组时其中 UP 主移至未分组。数据存入独立表并随配置导入导出、局域网同步合并；导入时先落分组再落关注，与本地同名的分组复用本地 id（不覆盖本地名称），包内 UP 主随之挂到该分组，未知分组归入未分组。
-- VOD 发现页四个页签与搜索结果使用与直播首页同一套等宽高卡片网格（`CARD_GRID_CLASS`，见 `src/shared/components/cardGrid.ts`）：响应式 2–6 列、`gap-x-3 gap-y-4`，粗指针在 `80rem` 以上封到 5 列。封面固定 16:9，卡片高度由内容决定但同排等高，行与行之间不会出现瀑布流的错位空隙。分页哨兵跟在整张网格之后，沿用 `useInfiniteScroll` 的默认 240px 预取余量（各列等高后哨兵就在网格底边，不再需要按最短列提前一整屏）。
+- VOD 发现页的四个内容页签与搜索结果使用与直播首页同一套等宽高卡片网格（`CARD_GRID_CLASS`，见 `src/shared/components/cardGrid.ts`）：响应式 2–6 列、`gap-x-3 gap-y-4`，粗指针在 `80rem` 以上封到 5 列。封面固定 16:9，卡片高度由内容决定但同排等高，行与行之间不会出现瀑布流的错位空隙。分页哨兵跟在整张网格之后，沿用 `useInfiniteScroll` 的默认 240px 预取余量（各列等高后哨兵就在网格底边，不再需要按最短列提前一整屏）。
 - VOD 列表与 UP 投稿抽屉的 `VideoCard` 封面一律 16:9（`aspect-video`，与直播 `RoomCard` 同比例）：等宽网格里同排卡片必须等高，封面若跟随源画幅，横竖混排时标题行基线对不齐。竖屏稿件在列表里按 16:9 居中裁切，完整画幅留给播放页与竖屏流。**相关视频**在相关视频列表里仍固定 16:9 缩略图（行式卡），源内容不被过滤。**UP 主投稿抽屉打开时定位当前播放的稿件**（`UploaderDrawer` 的 `currentBvid`）：命中就把它滚到列表中央并加一圈主色描边（`outline-2 -outline-offset-2`，描边画在内侧 —— 向外扩会被滚动容器横向裁掉两端），未命中且还有下一页就接着翻，上限 `AUTO_LOCATE_MAX_PAGE = 5` 页（深翻会触发上游风控，宁可没定位到也不把开抽屉变成十几条请求）；翻到头或到上限即停手，用户一滚/一按（`onWheel` / `onPointerDown`）也放弃，不把人从正在看的地方拽走。定位只做一次（`locateDoneRef` 收口，翻页落地重跑 effect 不会再发请求）；换排序＝换一份列表，回到顶部且不再为它自动翻页。抽屉标题行的**排序切换按钮视觉高度收到 `size="sm"` 的 28px**（与 24px 的标题文字、16px 的关闭图标同一条中线），粗指针下 `min-h-0` 撤掉 button 基料的 44px 下限，把 44px 触摸目标挪进透明 `::after`（纵向各外扩 8px，横向不外扩 —— 右边是关闭键，横向铺开会抢它的命中区）。实机需核对按钮与标题、关闭图标的几何中线，视觉框上方 6px 仍属于排序按钮的触摸目标，自动翻页后居中高亮，换排序只重取一页。
 - 实机验证分页补位、追加不移位与底部哨兵，并核对 16:9 封面裁切、列数与网格等高。
 - 推荐页签的列表 query key 带推荐源（`video_list/recommend/…/app|web`）与 App 授权状态（`appPersonalization`/`appAuthRevision`），切换设置或换授权后旧缓存不被当作新鲜数据复用；story 的 `shorts_story` 由 `bilibiliAppQueryInvalidation` 在授权变更时取消并重置。Cookie 变更只失效 `video_list` 的推荐页签（`cookieQueryInvalidation`），热门/番剧/影视不随之重取；App 授权变更也不触碰 Web 推荐缓存。
@@ -325,8 +325,22 @@ message DanmakuElem {
 - **快照恢复**:滚动位置与实测高度存在 `historyVirtual.ts` 的模块级 Map 里(键为 `location.key` + 视图名:前者对每条历史记录稳定,后者把三条时间线分开,切视图不会把观看历史的偏移套到弹幕历史上),写入即 LRU 淘汰、上限 32 条。离开或切视图前 `takeSnapshot()` 拍下实测高度与偏移,重挂载时喂回 `initialMeasurementsCache` / `initialOffset`,恢复因此不必先按估高铺一遍再校正;偏移用持续跟踪的值而不是此刻的 `scrollTop`——面板高度收为 0 之后浏览器会把滚动位置钳到 0,那时再读就丢了用户真实位置。Shell 的 `pageScroll.ts` 仍是 `scrollTop` 的权威(POP 恢复),虚拟列表只在切视图时补位。
 - **查询上限对齐保留上限**:`history`/`video_history` 的列表查询上限直接取修剪触发器的常量(2,000 / 500),不再另设更小的 200 条。窗口化后行数不再是渲染成本,而更小的查询上限会让全局时间线丢掉库里明明还留着的记录——尤其是被 B 站活跃使用挤出前 200 条的虎牙/斗鱼记录。
 
-## 八、待办与风险
+## 八、视频下载（桌面与 Android）
+
+参考 PiliPlus 的下载语义（视频 / 音频分轨、串行队列、Range 断点续传），但 rLive 多做一步：两条 DASH 轨下载完整后合并为 MP4，用户拿到的是可直接播放的单个文件，而不是需要另行处理的 m4s。使用说明与状态细节见[视频下载](视频下载.md)。
+
+**数据归属**：下载队列与文件不进 SQLite，与录制库同一取向。每个任务是一个自包含目录 `downloads/<id>/`，`entry.json` 保存 `VideoDownloadItem` 与最终文件名；临时文件是 `video.m4s.part`、`audio.m4s.part`、`output.mp4.part`，完成后改名为清洗过的 `<标题>.mp4`。任务 id 由稿件身份生成（UGC `{bvid}-{cid}`，PGC `ep-{ep_id}-{cid}`），同稿件换 P / 换集互不覆盖。启动时扫描 `downloads/` 重建队列：下载中 / 合并中改为暂停并写入可继续的提示，排队中自动入队，已完成但文件缺失标为失败。
+
+**后端结构**：`video_download::VideoDownloadManager` 由 `AppState` 以 `Arc` 持有，内部是单 worker 串行队列。取流复用 `resolve_bilibili` 与 `BilibiliSite::video_play_selection`，拿到 `VideoTrack` 的 `base_url`、init 段与完整 `sidx` 分片表；HTTP 走 `recording_stream_client_for_route`（无总超时、45s 读超时）与 `video_stream_headers`，按 Range 从现有 `.part` 末尾续传。合并分平台：桌面端用 ffmpeg-next，打开两条 fMP4，直接映射视频 / 音频流，`format::output_as(..., "mp4")` 写头后**重新读取输出流 time_base**（写头前是 0/1，拿它算时间戳会让 `write_interleaved` 返回 `Invalid argument`），再按 DTS/PTS 归并两个输入的包并写 trailer；Android 没有链接 FFmpeg，`merge_download_tracks` 调 Kotlin 插件 `RliveVideoMuxPlugin`，用 `MediaExtractor` 读两条轨、`MediaMuxer` 写 MP4，同样只重封装。
+
+**Android 桥**：`commands/android_video_mux.rs` 把 `PluginHandle` 放进受管状态，通过 `run_mobile_plugin_async` 调用 Kotlin 的 `mux` / `openFile`。成片位于应用私有沙箱 `<dataDir>/rlive/downloads`，`file://` 不能直接交给外部播放器，`openFile` 用 `FileProvider` 换成 `content://` 并授予一次性读权限；`file_paths.xml` 相应声明 `<root-path path="rlive/">`（Tauri 的 Android `app_data_dir` 是 `Context.dataDir`，不在 `files/` 下）。
+
+**前端**：`/video?tab=download` 复用视频页的头部页签，但 `VideoPage` 在下载页签下提前返回 `VideoDownloadPage`，不启用列表与分区查询。播放页从 `playInfo.accept_quality` 构造画质选项，HUD「更多操作」与桌面底栏都能打开 `VideoDownloadDialog`；对话框在窗口全屏时通过 `DialogContent` 的 `container` 挂到舞台层，避免被全屏层遮住。队列状态由 Rust 事件 `video-download-changed` / `video-download-progress` 推入 TanStack Query 缓存，活动任务期间再以 2s 轮询兜底。`videoDownloadSupported()` 现在只判断是否运行在 Tauri，`videoDownloadCanReveal()` 仅桌面为真，控制「打开下载目录」与「文件夹」的显隐。
+
+**平台边界**：两端共用队列与文件布局；Android 只能进入系统播放器，不能定位目录，也不能在应用内播放下载文件。暂停在数据块边界生效，合并阶段拒绝暂停；删除活动任务要等 worker 退出写入路径后再删目录，否则 Windows 会因文件占用留下半成品。
+
+## 九、待办与风险
 
 MPD 交付：`stream_proxy` 加**纯增量**文本模式（新增命令返回 `application/dash+xml`），video / audio / mpd 各用**独立 `session_id``（`start` 按 session 覆盖同名代理），离开播放页三个一起停，防连接泄漏。
 
-风险：风控 -352（靠 WBI + buvid3 + Referer + 真 UA 规避）；匿名最高 480P、1080P+ 需大会员；PGC 有版权与地区限制，需要可读的失败态；分区条不能直接复用 `CategoryBar`（它按 `LiveCategory` 类型），但应抽出 `CHIP_HEIGHT` / `CHIP_RADIUS` / `CHIP_TOUCH_TARGET` 与滚动/键盘逻辑共用；Shell 里视频页的 `groupStrip` 必须是四个内容页签，不能复用 `sitePlatforms`。
+风险：风控 -352（靠 WBI + buvid3 + Referer + 真 UA 规避）；匿名最高 480P、1080P+ 需大会员；PGC 有版权与地区限制，需要可读的失败态；分区条不能直接复用 `CategoryBar`（它按 `LiveCategory` 类型），但应抽出 `CHIP_HEIGHT` / `CHIP_RADIUS` / `CHIP_TOUCH_TARGET` 与滚动/键盘逻辑共用；Shell 里视频页的 `groupStrip` 必须是五个页签（前四个内容页加「下载」任务页），不能复用 `sitePlatforms`。

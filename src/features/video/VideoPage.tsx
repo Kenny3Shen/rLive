@@ -35,6 +35,7 @@ import {
 } from "./videoApi";
 import { PgcCard, VideoGrid } from "./VideoCard";
 import { VideoZoneBar } from "./VideoZoneBar";
+import { VideoDownloadPage } from "./VideoDownloadPage";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import {
@@ -46,6 +47,7 @@ import {
   resolveVideoZoneKey,
   videoTabFromSearch,
   videoTabHasZoneStrip,
+  videoTabIsDownload,
   videoTabUsesPgc,
   videoZoneChips,
 } from "./videoRoute";
@@ -99,7 +101,7 @@ function GridSkeleton() {
 /**
  * `/video` 发现页。
  *
- * 四个内容页签住在 Shell 的头部槽位（见 `VideoTabSwitcher`），这一页只负责页签之下
+ * 内容页签住在 Shell 的头部槽位（见 `VideoTabSwitcher`），这一页只负责页签之下
  * 的两层：分区条与内容网格。页签与分区都走查询参数而不是路径段，于是换页签沿用
  * Shell 已有的页面平移，不必为四个表面各开一条路由。
  *
@@ -122,7 +124,7 @@ export function VideoPage() {
   const zonesQuery = useQuery({
     queryKey: ["video_zone_list"],
     queryFn: videoZoneList,
-    enabled: tab === "popular",
+    enabled: tab === "popular" && !videoTabIsDownload(tab),
     ...BROWSING_LIST_QUERY_OPTIONS,
   });
   const ugcZones = zonesQuery.data ?? EMPTY_ZONES;
@@ -143,8 +145,10 @@ export function VideoPage() {
   const listQuery = useInfiniteQuery({
     queryKey: listQueryKey,
     initialPageParam: 1,
+    enabled: !videoTabIsDownload(tab),
     queryFn: async ({ pageParam }): Promise<VideoFeedPage> => {
       const page = pageParam as number;
+      if (videoTabIsDownload(tab)) return { kind: "ugc", has_more: false, items: [] };
       if (tab === "recommend") return { kind: "ugc", ...(await videoGetRecommend(page)) };
       if (tab === "popular") {
         // 「全部」走可翻页的全站热门榜；具体分区走分区榜，后端的 has_more 恒为 false。
@@ -162,11 +166,13 @@ export function VideoPage() {
     // APP 推荐没有真实页号。无新增条目的批次停止补货，避免去重后长度不变而空转。
     // 热门/PGC 仍以各自上游的 has_more 为准，不按本地剩余条数猜结束。
     getNextPageParam: (lastPage, allPages) =>
-      tab === "recommend"
-        ? nextRecommendPage(allPages.filter((page) => page.kind === "ugc"))
-        : lastPage.has_more
-          ? allPages.length + 1
-          : undefined,
+      videoTabIsDownload(tab)
+        ? undefined
+        : tab === "recommend"
+          ? nextRecommendPage(allPages.filter((page) => page.kind === "ugc"))
+          : lastPage.has_more
+            ? allPages.length + 1
+            : undefined,
     ...BROWSING_LIST_QUERY_OPTIONS,
     placeholderData: keepPreviousData,
   });
@@ -207,7 +213,7 @@ export function VideoPage() {
   // 因为 `resetQueries` 把查询抹成初始态后重取首页，那是 `isLoading` 而不是 `isRefetching`。
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const refreshing = manualRefreshing || (listQuery.isRefetching && !listQuery.isFetchingNextPage);
-  const title = `${VIDEO_TAB_LABELS[tab]}视频`;
+  const title = videoTabIsDownload(tab) ? "视频下载" : `${VIDEO_TAB_LABELS[tab]}视频`;
   const queryClient = useQueryClient();
 
   const refresh = () => {
@@ -229,6 +235,9 @@ export function VideoPage() {
     // replace：换分区不该在返回栈里堆一层，与首页换分区的取向一致。
     setSearchParams(next, { replace: true });
   };
+
+  // 下载页签是任务管理表面，不参与列表查询与分区条。
+  if (videoTabIsDownload(tab)) return <VideoDownloadPage />;
 
   return (
     <PullToRefresh onRefresh={refresh} refreshing={refreshing} className="mx-auto max-w-[1600px]">

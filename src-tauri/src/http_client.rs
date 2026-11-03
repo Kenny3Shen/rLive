@@ -136,7 +136,6 @@ pub fn client_for_route(route: &ProxyRoute) -> AppResult<Client> {
 /// 因此该客户端刻意不设总超时。自动内容解码同样关闭：
 /// 媒体字节必须按 CDN 发送的原样写入，
 /// 即使 CDN 错误地附加了 Content-Encoding 头。
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub fn recording_stream_client_for_route(route: &ProxyRoute) -> AppResult<Client> {
     with_route(
         Client::builder()
