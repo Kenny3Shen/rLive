@@ -104,14 +104,23 @@ windows-registry = "0.6"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [profile.dev]
-incremental = true # 以较小的步骤编译您的二进制文件。
+opt-level = 1 # 启用基础优化，避免未优化产物占用大量空间。
+debug = 0 # 不生成调试信息。
+incremental = false # 不保留增量编译缓存。
+
+[profile.test]
+# 继承 dev 的基础优化，显式关闭调试信息和增量缓存。
+debug = 0
+incremental = false
 
 [profile.release]
-codegen-units = 1 # 允许 LLVM 执行更好的优化。
+codegen-units = 1 # 减少并行代码生成带来的优化损失。
 lto = true # 启用链接时优化。
-opt-level = 3 # 优先考虑小的二进制文件大小。如果您更喜欢性能，请使用 `3`。
-panic = "abort" # 通过禁用 panic 处理程序来提高性能。
-strip = true # 确保移除调试符号。
+opt-level = 3 # 优先运行性能。
+panic = "abort" # 不生成 unwind 处理代码。
+strip = true # 移除调试符号和符号表。
+debug = 0 # 不生成调试信息。
+incremental = false # 不保留增量编译缓存。
 
 [lints.rust]
 # MSVC 链接器每次都会往 stdout 打印「正在创建库 rlive_lib.dll.lib 和对象 ...」，

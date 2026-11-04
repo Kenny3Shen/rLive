@@ -1,0 +1,189 @@
+{
+  "date": "2026-11-04",
+  "platform": "x86_64-pc-windows-msvc",
+  "source_commit": "14ea8afc19633a30e43666444432bf49f123adb2",
+  "source_tree_sha256": "828d5d7c823a35f5de446c5c1540d7608d7ca7d01f1909255d95b62d5bffa91f",
+  "config_sha256": {
+    "Cargo.lock": "ADBD7DCD755BA2F2169833355D001AC77027E05FC61A6323A2E1A19AF5AE1F27",
+    "Cargo.toml": "A73436CE6F8B766AAED67C81485D067453FBCC799B42B9563D046384F9E995EA",
+    "build.rs": "DF90C5F68F17A99C620EE2BD41E2D9B09DC5BB761CFC4ECEE28A3876913595EF",
+    "cargo-config": "3B3026406AE3D88F3620BF85D125228938B1CA7D005B8A3A834B0C1A65FBF55B",
+    "rust-toolchain.toml": "C94E6A4221361CFCBEDE6EE19558384F65EB6882C96D03497EB975076478DFE4"
+  },
+  "measurement": "逻辑字节逐文件求和；实际分配字节按 volume serial + file index 去重，并取 FILE_STANDARD_INFO.AllocationSize。baseline 为 build 后快照；optimized 的 build 后快照通过非破坏排除测试唯一目录 debug/build/rlive/dc9025a027530f11 重建。",
+  "reconstruction": {
+    "optimized_before_test_is_reconstructed": true,
+    "excluded_test_only_directory": "debug\\build\\rlive\\dc9025a027530f11",
+    "excluded_test_only_tree": {
+      "file_count": 8,
+      "unique_file_count": 8,
+      "hardlink_count": 0,
+      "logical_bytes": 35407594,
+      "allocated_bytes": 35414080
+    },
+    "method": "optimized-target 当前总量减去 Cargo test 唯一 crate hash 目录；未删除或移动任何文件。"
+  },
+  "environment": {
+    "powershell": "7.6.9",
+    "compiler": "用于 x64 的 Microsoft (R) C/C++ 优化编译器 19.44.35228 版",
+    "ffmpeg_dir": "D:\\dev\\FFmpeg",
+    "libclang_path": "D:\\dev\\LLVM-22.1.8\\bin",
+    "jobs": 2,
+    "target_cpu_rustflag": "-C target-cpu=x86-64-v2（从 src-tauri 启动，并显式设置 RUSTFLAGS）",
+    "allocation_calibration": {
+      "logical_bytes": 170,
+      "allocated_bytes": 176,
+      "hard_link_count": 1
+    },
+    "nightly_install_note": "官方 dist 下载恢复后 rustup 仍缺 cargo/rust-std；停止该单一安装进程后，使用 RsProxy 镜像重新安装同一 nightly-2026-11-04 minimal。安装耗时不计入构建耗时。",
+    "nightly_components": {
+      "installed": [
+        "cargo-x86_64-pc-windows-msvc",
+        "clippy-x86_64-pc-windows-msvc",
+        "rust-std-x86_64-pc-windows-msvc",
+        "rustc-x86_64-pc-windows-msvc",
+        "rustfmt-x86_64-pc-windows-msvc"
+      ],
+      "rustfmt": "rustfmt 1.12.0-nightly (708c94ef09 2026-11-03)",
+      "clippy": "clippy 0.1.101 (708c94ef09 2026-11-03)",
+      "install_note": "构建与测试计时期间只安装 minimal；全部测量结束后通过 RsProxy 补齐 rustfmt 与 clippy，仅验证组件完整性，未再次构建。"
+    }
+  },
+  "baseline": {
+    "toolchain": "stable",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)\nbinary: rustc\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea\ncommit-date: 2026-08-18\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.0\nLLVM version: 22.1.8",
+    "profile": {
+      "opt_level": 0,
+      "debug": 2,
+      "incremental": true
+    },
+    "build": {
+      "command": "rustup run stable cargo build --locked --bin rlive --target-dir <baseline-target> -j 2",
+      "exit_code": 0,
+      "elapsed_seconds": 307.0,
+      "timing_source": "cargo 构建日志的 Finished 行（整秒）",
+      "log": "baseline-build.log"
+    },
+    "target": {
+      "file_count": 4104,
+      "unique_file_count": 3994,
+      "hardlink_count": 110,
+      "logical_bytes": 7032296494,
+      "allocated_bytes": 6427462920
+    },
+    "exe_bytes": 39634432,
+    "pdb_bytes": 261074944,
+    "exe_pdb_bytes": 300709376,
+    "incremental": {
+      "file_count": 285,
+      "unique_file_count": 285,
+      "hardlink_count": 0,
+      "logical_bytes": 1119110582,
+      "allocated_bytes": 1119732144
+    },
+    "deps": {
+      "file_count": 1225,
+      "unique_file_count": 1225,
+      "hardlink_count": 0,
+      "logical_bytes": 4946664820,
+      "allocated_bytes": 4949192096
+    },
+    "build_dir": {
+      "file_count": 705,
+      "unique_file_count": 597,
+      "hardlink_count": 108,
+      "logical_bytes": 665386613,
+      "allocated_bytes": 357498512
+    }
+  },
+  "optimized": {
+    "toolchain": "nightly-2026-11-04",
+    "rustc": "rustc 1.101.0-nightly (708c94ef0 2026-11-03)\nbinary: rustc\ncommit-hash: 708c94ef093ecc42fb8851e17d8383d999727abc\ncommit-date: 2026-11-03\nhost: x86_64-pc-windows-msvc\nrelease: 1.101.0-nightly\nLLVM version: 23.1.5",
+    "profile": {
+      "opt_level": 1,
+      "debug": 0,
+      "incremental": false
+    },
+    "build": {
+      "command": "rustup run nightly-2026-11-04 cargo build --locked --bin rlive --target-dir <optimized-target> -j 2",
+      "exit_code": 0,
+      "elapsed_seconds": 433.0,
+      "timing_source": "cargo 构建日志的 Finished 行（整秒）",
+      "log": "optimized-build.log"
+    },
+    "target": {
+      "file_count": 4586,
+      "unique_file_count": 4582,
+      "hardlink_count": 4,
+      "logical_bytes": 1612075276,
+      "allocated_bytes": 1574620520
+    },
+    "exe_bytes": 26347520,
+    "pdb_bytes": 11726848,
+    "exe_pdb_bytes": 38074368,
+    "incremental": {
+      "file_count": 0,
+      "unique_file_count": 0,
+      "hardlink_count": 0,
+      "logical_bytes": 0,
+      "allocated_bytes": 0
+    },
+    "deps": {
+      "file_count": 0,
+      "unique_file_count": 0,
+      "hardlink_count": 0,
+      "logical_bytes": 0,
+      "allocated_bytes": 0
+    },
+    "build_dir": {
+      "file_count": 4578,
+      "unique_file_count": 4576,
+      "hardlink_count": 2,
+      "logical_bytes": 1573992908,
+      "allocated_bytes": 1574608048
+    },
+    "target_after_test": {
+      "file_count": 4594,
+      "unique_file_count": 4590,
+      "hardlink_count": 4,
+      "logical_bytes": 1647482870,
+      "allocated_bytes": 1610034600
+    }
+  },
+  "comparison": {
+    "target_logical_reduction_percent": 77.0761,
+    "target_allocated_reduction_percent": 75.5017,
+    "exe_reduction_percent": 33.5237,
+    "pdb_reduction_percent": 95.5082,
+    "exe_pdb_reduction_percent": 87.3385,
+    "build_time_change_percent": 41.0423,
+    "incremental_reduction_percent": 100.0
+  },
+  "tests": {
+    "command": "rustup run nightly-2026-11-04 cargo test --locked --lib --target-dir <optimized-target> -j 2",
+    "exit_code": 101,
+    "elapsed_seconds": 17.01,
+    "summary": "FAILED. 832 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 17.01s",
+    "failure": "account::bilibili_app::tests::expired_credentials_and_invalid_paths_fail_without_network：期望 bilibili_app_auth_required，实际 bilibili_app_auth_unavailable。",
+    "failure_analysis": "该测试的 validate() 不按本地过期状态提前拦截，而会访问 B 站服务；失败属于外部网络依赖导致的非确定性结果。精确重跑和随后全量重跑通过，只能说明首次失败未复现，不能证明它与 nightly 或 profile 无关。",
+    "targeted_rerun": {
+      "filter": "account::bilibili_app::tests::expired_credentials_and_invalid_paths_fail_without_network",
+      "exit_code": 0,
+      "summary": "1 passed; 0 failed; 833 filtered out; finished in 0.31s"
+    },
+    "log": "optimized-test.log",
+    "full_rerun": {
+      "exit_code": 0,
+      "summary": "833 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 17.07s",
+      "elapsed_seconds": 17.07,
+      "log": "optimized-test-rerun.log",
+      "note": "首次全量失败项为真实网络请求偶发失败；未修改源码，使用同一测试产物重跑全量通过。"
+    }
+  },
+  "known_limitations": [
+    "Windows 首次全量库测试有 1 项外部网络依赖导致的非确定性失败；同一测试产物精确重跑和随后全量重跑均通过，未修改源码，但不能据此证明失败与 nightly 或 profile 无关。",
+    "optimized build 后快照由非破坏排除唯一 test crate hash 目录重建，不是当时内存中的原始快照；baseline 快照未经重建。",
+    "构建耗时来自 cargo 日志的整秒 Finished 行，不是原始 Stopwatch 小数。",
+    "未构建 release、Tauri 安装包，未启动 GUI；未验证 Windows 安装版。"
+  ]
+}

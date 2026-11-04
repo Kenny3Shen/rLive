@@ -1,6 +1,5 @@
-# Keep local Windows/WSL development on the installed stable channel. Release
-# workflows pin their exact compiler version independently for reproducibility.
+# 本地与 CI 固定同日 nightly，避免编译器随时间变化。
 [toolchain]
-channel = "stable"
+channel = "nightly-2026-11-04"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

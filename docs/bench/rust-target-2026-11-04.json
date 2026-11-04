@@ -1,0 +1,317 @@
+{
+  "date": "2026-11-04",
+  "platform": "x86_64-unknown-linux-gnu (WSL)",
+  "source_commit": "14ea8afc19633a30e43666444432bf49f123adb2",
+  "baseline_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)\nbinary: rustc\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea\ncommit-date: 2026-08-18\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.0\nLLVM version: 22.1.8",
+  "measurement": "目录使用 du -B1 -s 统计实际磁盘占用；二进制使用 stat 统计文件字节数；构建命令均在 src-tauri 执行，保持 target-cpu=x86-64-v2。",
+  "historical_target": {
+    "total_bytes": 187163463680,
+    "directories": {
+      "debug/incremental": 75691425792,
+      "debug/deps": 59461058560,
+      "debug/build": 19292131328,
+      "aarch64-linux-android": 6992867328,
+      "x86_64-linux-android": 22079070208,
+      "rust-analyzer": 2282233856
+    }
+  },
+  "cache_cleanup": {
+    "removed_directories": [
+      {
+        "path": "debug/deps",
+        "allocated_bytes": 59461058560
+      },
+      {
+        "path": "debug/build",
+        "allocated_bytes": 19292131328
+      },
+      {
+        "path": "debug/incremental",
+        "allocated_bytes": 75691425792
+      },
+      {
+        "path": "debug/.fingerprint",
+        "allocated_bytes": 178446336
+      },
+      {
+        "path": "aarch64-linux-android/debug/deps",
+        "allocated_bytes": 3377668096
+      },
+      {
+        "path": "aarch64-linux-android/debug/build",
+        "allocated_bytes": 348413952
+      },
+      {
+        "path": "aarch64-linux-android/debug/incremental",
+        "allocated_bytes": 3280740352
+      },
+      {
+        "path": "aarch64-linux-android/debug/.fingerprint",
+        "allocated_bytes": 18608128
+      },
+      {
+        "path": "x86_64-linux-android/debug/deps",
+        "allocated_bytes": 4262916096
+      },
+      {
+        "path": "x86_64-linux-android/debug/build",
+        "allocated_bytes": 361340928
+      },
+      {
+        "path": "x86_64-linux-android/debug/incremental",
+        "allocated_bytes": 17438109696
+      },
+      {
+        "path": "x86_64-linux-android/debug/.fingerprint",
+        "allocated_bytes": 16678912
+      },
+      {
+        "path": "rust-analyzer/debug/deps",
+        "allocated_bytes": 1349320704
+      },
+      {
+        "path": "rust-analyzer/debug/build",
+        "allocated_bytes": 909918208
+      },
+      {
+        "path": "rust-analyzer/debug/incremental",
+        "allocated_bytes": 11530240
+      },
+      {
+        "path": "rust-analyzer/debug/.fingerprint",
+        "allocated_bytes": 11444224
+      }
+    ],
+    "preserved_runtime_data": {
+      "debug/cache": {
+        "allocated_bytes": 51986432
+      },
+      "debug/logs": {
+        "allocated_bytes": 4096
+      },
+      "debug/recordings": {
+        "allocated_bytes": 4096
+      },
+      "debug/bundle": {
+        "allocated_bytes": 594726912
+      },
+      "debug/rlive.db": {
+        "size_bytes": 151552,
+        "sha256": "495045f5122eef6a3508edc797e47fd0fb3e8137347f2382127ba01016689b57"
+      },
+      "debug/rlive.db-wal": {
+        "size_bytes": 12392,
+        "sha256": "83025e63b3430b30bcef68b9787568a3aaaee044a5b1d160c3284e56ef704db8"
+      },
+      "debug/rlive.db-shm": {
+        "size_bytes": 32768,
+        "sha256": "960318693a8b006f68a0c371af6a00875cabd56eb2e06f4e9ba9d843ccb91260"
+      },
+      "doc": {
+        "allocated_bytes": 9666560
+      }
+    },
+    "target_bytes_after_cleanup_excluding_baseline": 656703488,
+    "net_freed_bytes_before_rebuild": 186506760192,
+    "removed_stale_android_artifacts": [
+      {
+        "path": "aarch64-linux-android/debug/librlive_lib.a",
+        "size_bytes": 746753432
+      },
+      {
+        "path": "aarch64-linux-android/debug/librlive_lib.rlib",
+        "size_bytes": 325548820
+      },
+      {
+        "path": "aarch64-linux-android/debug/librlive_lib.so",
+        "size_bytes": 280562816
+      },
+      {
+        "path": "aarch64-linux-android/debug/librlive_lib.d",
+        "size_bytes": 47704
+      },
+      {
+        "path": "x86_64-linux-android/debug/librlive_lib.a",
+        "size_bytes": 766694514
+      },
+      {
+        "path": "x86_64-linux-android/debug/librlive_lib.rlib",
+        "size_bytes": 320314430
+      },
+      {
+        "path": "x86_64-linux-android/debug/librlive_lib.so",
+        "size_bytes": 289607232
+      },
+      {
+        "path": "x86_64-linux-android/debug/librlive_lib.d",
+        "size_bytes": 6718
+      }
+    ],
+    "removed_stale_linux_artifacts": [
+      {
+        "path": "debug/librlive_lib.a",
+        "size_bytes": 1151656434
+      },
+      {
+        "path": "debug/librlive_lib.rlib",
+        "size_bytes": 458633702
+      },
+      {
+        "path": "debug/librlive_lib.so",
+        "size_bytes": 334828544
+      },
+      {
+        "path": "debug/librlive_lib.d",
+        "size_bytes": 6874
+      },
+      {
+        "path": "debug/rlive",
+        "size_bytes": 411006600
+      },
+      {
+        "path": "debug/rlive.d",
+        "size_bytes": 6910
+      },
+      {
+        "path": "debug/bilibili_app_isolated_tests",
+        "size_bytes": 64412008,
+        "allocated_bytes": 64299008
+      }
+    ],
+    "preserved_data_verified": {
+      "debug/cache": true,
+      "debug/logs": true,
+      "debug/recordings": true,
+      "debug/bundle": true,
+      "debug/rlive.db": true,
+      "debug/rlive.db-wal": true,
+      "debug/rlive.db-shm": true,
+      "doc": true
+    },
+    "baseline_measurement_artifacts_removed": true,
+    "preserved_data_verified_after_tests": {
+      "debug/cache": true,
+      "debug/logs": true,
+      "debug/recordings": true,
+      "debug/bundle": true,
+      "debug/rlive.db": true,
+      "debug/rlive.db-wal": true,
+      "debug/rlive.db-shm": true,
+      "doc": true
+    }
+  },
+  "clean_baseline": {
+    "command": "CARGO_PROFILE_DEV_OPT_LEVEL=0 CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_DEV_INCREMENTAL=true cargo +stable build --locked --bin rlive --target-dir target/size-baseline -j 2",
+    "profile": {
+      "opt_level": 0,
+      "debug": 2,
+      "incremental": true
+    },
+    "target_bytes": 5946335232,
+    "directories": {
+      "deps": 4506349568,
+      "build": 673742848,
+      "incremental": 754044928,
+      ".fingerprint": 12169216
+    },
+    "artifacts": {
+      "rlive": {
+        "size_bytes": 421414952
+      }
+    },
+    "elapsed_seconds": 228.01,
+    "max_rss_kib": 2187280,
+    "exit_code": 0,
+    "debug_artifact_bytes": 5946322944
+  },
+  "artifact_measurement_excludes": [
+    "cache",
+    "logs",
+    "recordings",
+    "bundle",
+    "rlive.db",
+    "rlive.db-wal",
+    "rlive.db-shm",
+    ".recording-manager.lock"
+  ],
+  "hardware": {
+    "logical_cpus": 12,
+    "memory_total_kib": 16378668
+  },
+  "optimized_rustc": "rustc 1.101.0-nightly (708c94ef0 2026-11-03)\nbinary: rustc\ncommit-hash: 708c94ef093ecc42fb8851e17d8383d999727abc\ncommit-date: 2026-11-03\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.5",
+  "clean_optimized": {
+    "command": "cargo build --locked --bin rlive -j 2",
+    "profile": {
+      "opt_level": 1,
+      "debug": 0,
+      "incremental": false
+    },
+    "debug_artifact_bytes": 1402908672,
+    "artifact_du_command": "du -B1 -s --exclude=cache --exclude=logs --exclude=recordings --exclude=bundle --exclude=rlive.db --exclude=rlive.db-wal --exclude=rlive.db-shm --exclude=.recording-manager.lock target/debug",
+    "directories": {
+      "deps": 0,
+      "build": 1402888192,
+      "incremental": 4096,
+      ".fingerprint": 0
+    },
+    "artifacts": {
+      "rlive": {
+        "size_bytes": 36766872
+      }
+    },
+    "elapsed_seconds": 348.5,
+    "max_rss_kib": 1979712,
+    "exit_code": 0,
+    "binary_has_dwarf_debug_info": false
+  },
+  "clean_comparison": {
+    "debug_artifact_reduction_percent": 76.40712276793555,
+    "binary_reduction_percent": 91.27537553532272,
+    "build_time_change_percent": 52.84417350116224
+  },
+  "installed_nightly_targets": [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "i686-linux-android",
+    "x86_64-linux-android",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu"
+  ],
+  "known_limitations": [
+    "实测仅覆盖 Linux/WSL 的 dev 构建和 Rust 库测试，未测 Windows、macOS、Android 或 release 产物。",
+    "干净构建各测一次，体积和时间差异属于工具链与 profile 的组合效果，不能单独归因于 nightly。",
+    "nightly 对已有 fetch_update 调用发出弃用警告；本次未修改业务源码。",
+    "关闭调试信息和增量编译会影响 Rust 源级调试及改动后的重编译速度。"
+  ],
+  "rust_library_tests": {
+    "command": "cargo test --locked --lib -j 2",
+    "exit_code": 0,
+    "passed": 838,
+    "failed": 0,
+    "ignored": 1,
+    "test_execution_seconds": 18.43,
+    "warnings": [
+      {
+        "path": "src-tauri/src/asr.rs",
+        "line": 795,
+        "message": "fetch_update 已重命名为 try_update"
+      },
+      {
+        "path": "src-tauri/src/recording.rs",
+        "line": 5054,
+        "message": "测试代码中的 fetch_update 已重命名为 try_update"
+      }
+    ]
+  },
+  "final_target": {
+    "measurement_point": "旧编译缓存与独立 stable 基线已删除；nightly dev 构建及库测试完成；保留运行数据、历史 bundle 和文档。",
+    "total_bytes": 2272800768,
+    "net_reduction_bytes": 184890662912,
+    "reduction_percent": 98.78566001968959
+  },
+  "checks": {
+    "configuration_and_workflow_versions_consistent": true,
+    "optimized_binary_has_no_dwarf_debug_info": true,
+    "stable_baseline_removed": true
+  }
+}

@@ -19,7 +19,7 @@
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [开发指南](zh/开发指南.md) | 环境要求、启动、检查命令、应用图标生成、Windows/WSL 构建、FFmpeg 与 Android 调试 |
+| [开发指南](zh/开发指南.md) | nightly 工具链、编译缓存、启动与检查命令、应用图标生成、Windows/WSL 构建、FFmpeg 与 Android 调试 |
 | [架构说明](zh/架构说明.md) | 前后端分层、五条核心数据路径、会话边界、存储与模块地图 |
 | [B 站视频功能设计](zh/B站视频功能设计.md) | 视频页、UGC / PGC 播放、来源队列与选集、连播、DASH 合成、VOD 弹幕、视频下载与 UP 主关注 |
 | [播放器技术文档](zh/播放器技术文档.md) | 播放分层、结构化播放源、代理生命周期、多画面、故障转移与代理遥测 |
@@ -49,6 +49,8 @@
 
 | 文件 | 来源 |
 | ---- | ---- |
+| [rust-target-2026-11-04.json](bench/rust-target-2026-11-04.json) | Rust stable / nightly 干净构建体积、构建耗时、测试结果、最终目标目录与历史缓存清理（[开发指南](zh/开发指南.md)） |
+| [rust-target-windows-2026-11-04.json](bench/rust-target-windows-2026-11-04.json) | Windows MSVC 下 Rust stable / nightly 干净构建的逻辑与实际分配体积、EXE / PDB、构建耗时和库测试（[开发指南](zh/开发指南.md)） |
 | [danmu-migration-desktop-2026-10-15.json](bench/danmu-migration-desktop-2026-10-15.json) · [danmu-migration-android-2026-10-15.json](bench/danmu-migration-android-2026-10-15.json) | 弹幕引擎迁移到 `danmu` 的桌面与真机对照（[弹幕性能实测](zh/弹幕性能实测.md)） |
 | [danmaku-android-device-2026-10-15.json](bench/danmaku-android-device-2026-10-15.json) | Android 真机 7 组运行（同上，上一轮） |
 | [danmaku-panel-pinned-fix-2026-10-13.json](bench/danmaku-panel-pinned-fix-2026-10-13.json) · [danmaku-android-rerun-2026-10-13.json](bench/danmaku-android-rerun-2026-10-13.json) | 钉底跟随修复的同包对照与模拟器重测 |

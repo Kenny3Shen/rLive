@@ -87,7 +87,7 @@ rLive 是基于 Tauri 2、React 与 Rust 的跨平台直播客户端，整合 **
 
 ## 从源码运行
 
-先准备 **Rust、Bun 与 [Tauri 2 前置环境](https://v2.tauri.app/start/prerequisites/)**。桌面构建还需要 clang / libclang 和 FFmpeg 开发库、链接库及运行库；Windows 侧脚本使用 **PowerShell 7（`pwsh`）**。具体安装与环境变量见[开发指南](docs/zh/开发指南.md)。
+先准备 **rustup、Bun 与 [Tauri 2 前置环境](https://v2.tauri.app/start/prerequisites/)**。仓库通过 `rust-toolchain.toml` 固定 Rust `nightly-2026-11-04`，首次在仓库内运行 Cargo / Tauri 时由 rustup 自动安装缺失工具链。桌面构建还需要 clang / libclang 和 FFmpeg 开发库、链接库及运行库；Windows 侧脚本使用 **PowerShell 7（`pwsh`）**。具体安装与环境变量见[开发指南](docs/zh/开发指南.md)。
 
 ```bash
 git clone https://github.com/Kenny3Shen/rLive.git

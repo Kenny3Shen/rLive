@@ -7,18 +7,22 @@
 
 | 项               | 版本                                                                  |
 | ---------------- | --------------------------------------------------------------------- |
-| Android platform | `android-36`（compileSdk / targetSdk 36，minSdk 24）                |
-| Build Tools      | `36.0.0`                                                            |
-| NDK              | `29.0.14206865`（r29 稳定版）                                       |
-| Rust target      | `aarch64-linux-android`（真机）、`x86_64-linux-android`（模拟器） |
+| Android platform | `android-36`（compileSdk / targetSdk 36，minSdk 24）                   |
+| Build Tools      | `36.0.0`                                                              |
+| NDK              | `29.0.14206865`（r29 稳定版）                                         |
+| Rust toolchain   | `nightly-2026-11-04`（由根目录 `rust-toolchain.toml` 固定）           |
+| Rust target      | `aarch64-linux-android`（真机）、`x86_64-linux-android`（模拟器）     |
 | 其他             | Tauri 2、Bun、JDK 17                                                  |
 
 ```bash
 export ANDROID_HOME="$HOME/Android/Sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
 sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
-rustup target add aarch64-linux-android x86_64-linux-android
+rustup target add --toolchain nightly-2026-11-04 \
+  aarch64-linux-android x86_64-linux-android
 ```
+
+Android target 安装在各 Rust 工具链之下。切换 `rust-toolchain.toml` 后，必须在新的 nightly 上重新执行上面的 `rustup target add`，否则交叉编译会报标准库 target 缺失。
 
 Android 交叉编译必须用 NDK clang。通过仓库的 `bun run tauri` 入口构建时，`scripts/tauri.ts` 会自动探测 `ANDROID_NDK_HOME`（或 `ANDROID_HOME` 下最新 NDK），并为 bindgen、cc-rs 和 Cargo linker 注入同一套工具链。Tauri 的 Android 构建不经过 `cargo-ndk`，不要把主机 `clang` 或桌面 MSVC 工具链带进来。
 
