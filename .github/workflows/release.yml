@@ -786,6 +786,13 @@ jobs:
             printf 'Unexpected APK native libraries:\n%s\n' "${apk_native_libs[*]}" >&2
             exit 1
           fi
+
+          # 断言打进最终 APK 的 arm64 DSO 已静态解析 outline atomic helper。
+          # 检查的是最终交付 ELF 的动态符号，不是发布资产校验和。
+          native_lib_dir="$(mktemp -d "$RUNNER_TEMP/rlive-android-native.XXXXXX")"
+          unzip -q "$apk_path" 'lib/arm64-v8a/librlive_lib.so' -d "$native_lib_dir"
+          bash scripts/verify-android-native-symbols.sh \
+            "$native_lib_dir/lib/arm64-v8a/librlive_lib.so"
           apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           "$apksigner" verify --verbose --print-certs "$apk_path"
 

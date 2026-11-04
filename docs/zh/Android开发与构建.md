@@ -43,6 +43,8 @@ Gradle flavor 恒为 `universal`：`--target aarch64` 通过 Gradle 属性把构
 不走 `bun run tauri` 而直接用 Cargo 交叉编译时，需手动复用 NDK 工具链：
 
 ```bash
+: "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME first}"
+export ANDROID_NDK_HOME
 NDK="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
 export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$NDK/sysroot --target=aarch64-linux-android24"
 export CC_aarch64_linux_android="$NDK/bin/aarch64-linux-android24-clang"
@@ -50,6 +52,14 @@ export AR_aarch64_linux_android="$NDK/bin/llvm-ar"
 export RANLIB_aarch64_linux_android="$NDK/bin/llvm-ranlib"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/bin/aarch64-linux-android24-clang"
 ```
+
+`CC` 与 `LINKER` 的 `android24` 后缀对应 minSdk 24；裸 Cargo 没有 Tauri 入口自动注入，二者及 `BINDGEN_EXTRA_CLANG_ARGS` 必须同时显式设置，且要与 `ANDROID_NDK_HOME` 指向同一个 NDK。仅设置 Rust target 或使用主机编译器，会让 C 依赖与 Rust 产物使用不一致的 Android API / clang 工具链。
+
+### arm64 compiler-rt 与 outline atomic helper
+
+正式 arm64 `librlive_lib.so` 曾以 `BIND_NOW` 启动，但动态符号表里留下 8 个强未定义（UND）的 `__aarch64_ldadd*` / `__aarch64_ldset*` outline atomic helper；系统库不提供这些符号，加载器在启动时即失败。对应定义位于 NDK clang 的 compiler-rt / builtins 静态 archive。`build.rs` 只对 Android `aarch64` 动态定位该 NDK archive 并静态链接所需定义，保留当前 nightly 与 ARMv8 目标设置；x86_64 产物没有这些符号，不能据此否定 arm64 问题。
+
+这些 helper 可由 C 依赖或工具链生成的代码引用；已确认 Rust 标准库本身没有引用它们，因此不能把根因简单归为 nightly 或 std，也不能归因于前端与 `MediaMuxer`。发布工作流还会在最终 APK 上检查 `librlive_lib.so`，要求不存在以 `__aarch64_` 开头的强 UND 符号；裸 Cargo 构建也必须自行完成同等符号检查，不能只确认编译退出码为 0。
 
 ## 调试
 
