@@ -15,3 +15,34 @@ export function canNavigateBackInApp(historyState: unknown): boolean {
     historyState.idx > 0
   );
 }
+
+/**
+ * 读取与当前已提交 Router location 对齐的历史索引。
+ *
+ * 浏览器 POP 会先改写 `history.state`，React Router 随后才提交新的 location。
+ * 两次提交之间不能把新索引用于旧页面，否则同路径播放页会被误判为换片并重播
+ * 入场动画。`state.key` 与 `entryKey` 不匹配时沿用调用方已经提交的索引。
+ *
+ * React Router 对初始记录使用 `"default"`，且初始 history state 可能尚未写入 key。
+ */
+export function readAppHistoryIndex(
+  historyState: unknown,
+  entryKey: string,
+  fallback = 0,
+): number {
+  if (!historyState || typeof historyState !== "object" || Array.isArray(historyState)) {
+    return fallback;
+  }
+
+  const state = historyState as { key?: unknown; idx?: unknown };
+  const rawKey = state.key;
+  if (rawKey !== undefined && rawKey !== null && typeof rawKey !== "string") return fallback;
+
+  const stateKey = typeof rawKey === "string" && rawKey.length > 0 ? rawKey : "default";
+  if (stateKey !== entryKey) return fallback;
+  if (typeof state.idx !== "number" || !Number.isInteger(state.idx) || state.idx < 0) {
+    return fallback;
+  }
+
+  return state.idx;
+}

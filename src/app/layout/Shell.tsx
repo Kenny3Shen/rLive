@@ -49,7 +49,7 @@ import {
   videoTabFromSearch,
 } from "@/features/video/videoRoute";
 import { CATEGORY_BROWSE_PATH } from "@/features/category/categorySelection";
-import { canNavigateBackInApp } from "@/shared/appHistory";
+import { canNavigateBackInApp, readAppHistoryIndex } from "@/shared/appHistory";
 import { SiteSwitcher } from "@/shared/components/SiteSwitcher";
 import { HeaderSearch } from "@/shared/components/HeaderSearch";
 import { RefreshFabVisibilityProvider } from "@/shared/components/RefreshFab";
@@ -202,20 +202,25 @@ export function Shell() {
 
   // React Router 用递增的 `idx` 记录每条 pushState 历史。跨渲染比较它可以告诉
   // 页签切换用户在历史中向哪个方向移动，从而让新页面从相应的一侧滑入。
+  // 浏览器 POP 会先改写 history state，再提交 Router location；只有两者 key
+  // 对齐时索引才属于当前页面，否则旧播放页会提前重播入场动画。
+  const browserHistoryState =
+    typeof window !== "undefined" ? (window.history.state as unknown) : null;
   // 用渲染期状态调整维护这份导航记忆：被丢弃的并发渲染不会推进它，
   // 比渲染期写 ref 更安全。
-  const historyIndex =
-    typeof window !== "undefined"
-      ? ((window.history.state as { idx?: number } | null)?.idx ?? 0)
-      : 0;
-  const [navMemory, setNavMemory] = useState({
+  const [navMemory, setNavMemory] = useState(() => ({
     prevPath: pathname,
-    prevHistoryIndex: historyIndex,
+    prevHistoryIndex: readAppHistoryIndex(browserHistoryState, location.key),
     directSidebarPath: null as string | null,
     sidebarDirection: 1 as 1 | -1,
     playerDirection: 1 as 1 | -1,
     tabNavigation: null as { pathname: string; direction: "forward" | "backward" } | null,
-  });
+  }));
+  const historyIndex = readAppHistoryIndex(
+    browserHistoryState,
+    location.key,
+    navMemory.prevHistoryIndex,
+  );
 
   if (pathname !== navMemory.prevPath || historyIndex !== navMemory.prevHistoryIndex) {
     const pathChanged = pathname !== navMemory.prevPath;
