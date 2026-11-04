@@ -31,6 +31,14 @@ import { notify } from "@/components/ui/toast";
 import { Spinner } from "@/components/ui/spinner";
 import { Separator } from "@/components/ui/separator";
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuGroup,
@@ -88,6 +96,17 @@ const DOWNLOAD_VIEW_ICONS = {
   completed: CheckCircle2,
 } as const;
 
+function DownloadViewLabel({ view, count }: { view: VideoDownloadView; count: number }) {
+  const Icon = DOWNLOAD_VIEW_ICONS[view];
+  return (
+    <>
+      <Icon data-icon="inline-start" aria-hidden />
+      <span className="flex-1">{DOWNLOAD_VIEW_LABELS[view]}</span>
+      <span className="shrink-0 text-sm tabular-nums text-muted-foreground">{count}</span>
+    </>
+  );
+}
+
 function DownloadViewSwitcher({
   value,
   counts,
@@ -99,18 +118,43 @@ function DownloadViewSwitcher({
   onValueChange: (view: VideoDownloadView) => void;
   variant?: "sidebar" | "toolbar";
 }) {
-  const sidebar = variant === "sidebar";
+  // 窄窗口改用与关注 / IPTV 平台筛选一致的 Select：圆角边框背景、44px 触摸高度、
+  // 可见文字与箭头，选项带计数。桌面左栏保留原有按钮式范围切换。
+  if (variant === "toolbar") {
+    return (
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          const view = next as VideoDownloadView | null;
+          if (view && VIDEO_DOWNLOAD_VIEWS.includes(view)) onValueChange(view);
+        }}
+      >
+        <SelectTrigger
+          size="sm"
+          aria-label="下载范围"
+          className="w-full border border-input bg-background max-md:h-11!"
+        >
+          <SelectValue>
+            <DownloadViewLabel view={value} count={counts[value]} />
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent align="start" className="min-w-44">
+          <SelectGroup>
+            {VIDEO_DOWNLOAD_VIEWS.map((view) => (
+              <SelectItem key={view} value={view} aria-label={DOWNLOAD_VIEW_LABELS[view]}>
+                <DownloadViewLabel view={view} count={counts[view]} />
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    );
+  }
+
   return (
-    <div
-      className={cn(
-        sidebar ? "flex flex-col gap-1" : "flex h-full items-stretch gap-1 max-md:w-full",
-      )}
-      role="tablist"
-      aria-label="下载范围"
-    >
+    <div className="flex flex-col gap-1" role="tablist" aria-label="下载范围">
       {VIDEO_DOWNLOAD_VIEWS.map((view) => {
         const active = view === value;
-        const Icon = DOWNLOAD_VIEW_ICONS[view];
         return (
           <button
             key={view}
@@ -120,25 +164,13 @@ function DownloadViewSwitcher({
             aria-selected={active}
             onClick={() => onValueChange(view)}
             className={cn(
-              "relative flex items-center gap-2 text-sm font-medium transition-colors duration-150",
-              sidebar ? "h-9 w-full rounded-lg px-2" : "h-full flex-1 justify-center px-2",
+              "flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm font-medium transition-colors duration-150 [&_svg]:size-4 [&_svg]:shrink-0",
               active
-                ? sidebar
-                  ? "bg-secondary text-foreground"
-                  : "text-foreground"
+                ? "bg-secondary text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
             )}
           >
-            <Icon className="size-4 shrink-0" aria-hidden />
-            <span>{DOWNLOAD_VIEW_LABELS[view]}</span>
-            {counts[view] > 0 && (
-              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                {counts[view]}
-              </span>
-            )}
-            {!sidebar && active && (
-              <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
-            )}
+            <DownloadViewLabel view={view} count={counts[view]} />
           </button>
         );
       })}
@@ -264,7 +296,7 @@ export function VideoDownloadPage({ active = true }: { active?: boolean }) {
       </nav>
 
       <section className="flex min-w-0 flex-col gap-3" aria-label="下载任务">
-        <div className="h-10 md:hidden">
+        <div className="h-11 md:hidden">
           <DownloadViewSwitcher
             value={view}
             counts={viewCounts}

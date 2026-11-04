@@ -388,6 +388,28 @@ describe("下载卡媒体入口接线", () => {
     expect(source).toContain('completed: "已完成"');
   });
 
+  test("移动端状态筛选复用 Select：圆角边框背景、44px 高度、可见文字与箭头", () => {
+    expect(source).toContain("<SelectTrigger");
+    expect(source).toContain('aria-label="下载范围"');
+    expect(source).toContain("max-md:h-11!");
+    expect(source).toContain("w-full border border-input bg-background");
+    expect(source).toContain("<SelectValue>");
+    expect(source).toContain("counts[value]");
+    // 选项必须包在 SelectGroup 内，且三项都带计数。
+    expect(source).toContain("<SelectGroup>");
+    expect(source).toContain("<SelectItem");
+    expect(source).toContain("counts[view]");
+    expect(source).toContain("VIDEO_DOWNLOAD_VIEWS.map");
+    // 桌面左栏保留原生按钮，SVG 固定 16px 且文字左对齐。
+    expect(source).toContain('role="tablist"');
+    expect(source).toContain("[&_svg]:size-4");
+    expect(source).toContain("text-left");
+    // URL 契约与滚动行为不变。
+    expect(source).toContain("withVideoDownloadView(current, nextView)");
+    expect(source).toContain("{ replace: true }");
+    expect(source).toContain('<div className="h-11 md:hidden">');
+  });
+
   test("下载进度只用于未完成任务，次要操作与骨架复用媒体卡规范", () => {
     expect(source).toContain("progress={");
     expect(source).toContain("!playable ? (");

@@ -320,6 +320,11 @@ describe("录制库媒体卡片", () => {
     expect(source).toContain('item.status !== "recording"');
     expect(source).not.toContain('label="播放"');
     expect(source).not.toContain("grid-cols-[repeat(auto-fill,minmax(min(100%,17rem),1fr))]");
+    // 录制与下载共用同一套紧凑媒体卡：跨列元信息行、标题响应字号不被单独复制。
+    const card = readSource("src/shared/components/LocalMediaCard.tsx");
+    expect(card).toContain("grid-cols-[5rem_minmax(0,1fr)_auto]");
+    expect(card).toContain("@min-[36rem]/local-media-card:col-span-1");
+    expect(source).not.toContain('size="sm"');
   });
 
   test("窄屏加载骨架保留范围、平台和用户筛选的真实高度", () => {
