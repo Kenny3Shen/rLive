@@ -6,18 +6,16 @@
 # `--enable-*` 选项，包括 `--enable-gpl` 和 `--enable-version3`，使四个运行时
 # DLL 达到 116 MB —— 超过安装后应用体积的 88%，其中仅 avcodec 就超过 93 MB ——
 # 并把产品置于 GPLv3 合规审计之下。rLive 自身从不解码或编码：录制只解复用
-# FLV/HLS/MPEG-TS 并重新封装为 FLV 或 MPEG-TS
-# （`src-tauri/src/recording_ffmpeg.rs`），绝大部分编解码能力都不可达。
+# FLV/HLS/MPEG-TS 并重新封装为 FLV 或 MPEG-TS，视频下载读取 MOV/fMP4
+# 并合并为 MP4，两条路径都不转码，绝大部分编解码能力都不可达。
 # 改用与 `prepare-macos-ffmpeg.sh`、`prepare-linux-ffmpeg.sh` 相同的组件白名单
 # 构建后，DLL 大幅缩小，三个桌面平台行为一致，
 # 且构建结果只是普通的 `LGPL version 2.1 or later`。
 #
-# 白名单仍必须包含解析器和音频解码器：它们不参与转码，只是
-# `avformat_find_stream_info` 探出封装器必需参数的唯一途径。缺少解析器时
-# 视频轨没有画面尺寸，缺少音频解码器时音频轨没有采样率，
-# `avformat_write_header` 会以 `EINVAL` 拒绝，用户看到
-# 「写入容器头失败: Invalid argument」。详细机理见 prepare-linux-ffmpeg.sh 顶部注释。
-#
+# 视频 parser 负责补尺寸，但 HLS 主流不透传子流 parser 的尺寸，需保留
+# H.264/HEVC 探测解码器；AAC parser 不提供 HE-AAC 可信采样率，两个 AAC
+# 解码器也仅用于探测，MP3/AC-3 的采样率由对应 parser 填充。
+# 缺少任一参数都会让 `avformat_write_header` 以 `EINVAL` 拒绝录制。
 # 需要 PowerShell 7；脚本会拒绝在 Windows PowerShell 5.1 上运行。
 
 #Requires -Version 7.0
@@ -41,51 +39,34 @@ $FfmpegDownloadUrl = "https://ffmpeg.org/releases/$FfmpegArchiveName"
 # 三个桌面平台构建同一个上游发布版本。
 $FfmpegArchiveSha256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
 
-# 在 `configure` 运行后，于生成的 config_components.h 中断言这些项。
-# `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
-# 后端会静默地把 `--enable-protocol=https` 变成 `CONFIG_HTTPS_PROTOCOL 0`，
-# 而这种缺失只会在运行时暴露，表现为用户机器上 HTTPS 录制失败。
-# HTTPPROXY_PROTOCOL 同理：HTTPS 录制经代理隧道时（设置里配了 HTTP 代理），
-# libavformat 的 tls 协议会把连接交给 `httpproxy://` 协议建立 CONNECT 隧道，
-# 缺了它录制只会得到一句 "Protocol not found"。
+# configure 对缺失依赖只发警告；下面在 config_components.h 中逐项断言，
+# 防止 HTTPS/代理录制、尺寸与采样率探测或 MP4 合并在运行时才失败。
 $RequiredComponents = @(
     "HTTPS_PROTOCOL", "TLS_PROTOCOL", "HTTP_PROTOCOL", "FILE_PROTOCOL",
     "CRYPTO_PROTOCOL", "HTTPPROXY_PROTOCOL", "FLV_DEMUXER", "LIVE_FLV_DEMUXER",
-    "HLS_DEMUXER", "MPEGTS_DEMUXER", "MOV_DEMUXER", "FLV_MUXER", "MPEGTS_MUXER",
-    "H264_PARSER", "HEVC_PARSER", "AAC_PARSER", "AAC_LATM_PARSER", "AC3_PARSER",
-    "AAC_DECODER", "AAC_LATM_DECODER", "AC3_DECODER", "EAC3_DECODER", "MP3_DECODER"
+    "HLS_DEMUXER", "MPEGTS_DEMUXER", "MOV_DEMUXER", "FLV_MUXER", "MPEGTS_MUXER", "MP4_MUXER",
+    "H264_PARSER", "HEVC_PARSER", "AV1_PARSER", "MPEGAUDIO_PARSER",
+    "AAC_PARSER", "AAC_LATM_PARSER", "AC3_PARSER",
+    "H264_DECODER", "HEVC_DECODER", "AAC_DECODER", "AAC_LATM_DECODER", "EXTRACT_EXTRADATA_BSF"
 )
 
-# `--disable-autodetect` 把 feature 集合固定为这里列出的内容，而不是取决于
-# 机器上恰好安装了什么，这正是产物可复现的原因。它同时会关掉 schannel，
-# 因此显式重新启用 TLS：直连 HTTPS 录制需要它。schannel 是 Windows 原生后端，
-# 只链接 secur32/ncrypt/crypt32，因此与 OpenSSL 或 GnuTLS 不同，
-# 不会给审计引入任何第三方代码。
-#
-# 禁用 swresample 是因为没有任何路径会用到它：Gyan 完整构建的 avcodec
-# 为音频重采样导入了它，但录制只重封装、不重采样，导入关系只剩
-# avformat -> avcodec -> avutil，而 `ffmpeg-sys-next` 只链接
-# avcodec 和 avformat。下面启用的音频解码器都不依赖 swresample；
-# `opus_decoder` 是唯一 `deps="swresample"` 的一项，因此三个平台
-# 都不启用它，避免 configure 静默丢弃后只在运行时暴露。
-#
-# zlib 被刻意关闭，这与 macOS 和 Linux 不同 —— 那两个平台系统已自带。
-# 启用它意味着要再固定并审计一个依赖，却只服务两条实时重封装不可能走到的
-# 路径：QuickTime 的 `cmov`（压缩 moov）和 matroska 的 zlib 压缩轨道。
-# 它在 configure 中是 `suggest` 而非 `deps`，所以没有它所有必需组件仍能启用。
-#
-# 这个列表也会写进随 DLL 一起分发的 SDK README.txt，
-# 因此声明不会与实际构建产生偏差。
+# `--disable-autodetect` 固定 feature 集合；只恢复 HTTPS 录制所需的原生
+# schannel。录制/下载只产出三个 av* 库：不编译 swresample，不链接 zlib，
+# 请求使用 `Accept-Encoding: identity`，B 站 fMP4 也没有压缩 moov。
+# `--enable-w32threads` 避免 MinGW 构建隐式依赖 libwinpthread-1.dll；
+# configure 找不到该线程模型会失败，构建脚本还会断言 config.h。
+# 这个列表也会写进随 DLL 分发的 SDK README.txt。
 $ConfigureOptions = @(
     "--enable-shared --disable-static",
-    "--disable-autodetect --enable-schannel",
+    "--disable-autodetect --enable-schannel --disable-pthreads --enable-w32threads",
     "--disable-programs --disable-doc --disable-debug",
     "--disable-avdevice --disable-avfilter --disable-swscale --disable-swresample",
     "--disable-everything",
-    "--enable-demuxer=flv,live_flv,hls,mpegts,mov,matroska",
-    "--enable-muxer=flv,mpegts",
-    "--enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio,av1,vp9,vvc,opus,flac",
-    "--enable-decoder=aac,aac_latm,ac3,eac3,mp3,mp2,flac,vorbis",
+    "--enable-demuxer=flv,live_flv,hls,mpegts,mov",
+    "--enable-muxer=flv,mpegts,mp4",
+    "--enable-parser=h264,hevc,av1,aac,aac_latm,ac3,mpegaudio",
+    "--enable-decoder=h264,hevc,aac,aac_latm",
+    "--enable-bsf=extract_extradata",
     "--enable-protocol=file,http,https,tls,tcp,crypto,httpproxy"
 )
 
@@ -187,10 +168,7 @@ function Assert-FfmpegSdk([string]$SdkRoot) {
 function Get-FfmpegRuntimeFiles([string]$SdkRoot) {
     $binDirectory = Join-Path $SdkRoot "bin"
     $runtimeFiles = @()
-    # 只有这三个。Gyan 完整构建的 avcodec 为其音频重采样路径导入了
-    # swresample，那个 DLL 也必须一起分发；关闭编解码器后没有任何引用，
-    # `ffmpeg-sys-next` 只链接 avcodec 和 avformat，
-    # 这里的导入关系是 avformat -> avcodec -> avutil。
+    # 只有这三个；`ffmpeg-sys-next` 只链接 avformat、avcodec、avutil。
     foreach ($library in @("avutil", "avcodec", "avformat")) {
         $matches = @(Get-ChildItem $binDirectory -Filter "$library-*.dll" -File -ErrorAction SilentlyContinue)
         if ($matches.Count -ne 1) {
@@ -413,9 +391,19 @@ $configureArguments
 
 for component in $componentList; do
   if ! grep -qx "#define CONFIG_`${component} 1" config_components.h; then
-    echo "FFmpeg configure did not enable CONFIG_`${component}; recording would break" >&2
+    echo "FFmpeg configure did not enable CONFIG_`${component}; recording or downloads would break" >&2
     grep -E "^#define CONFIG_`${component} " config_components.h >&2 || true
     grep -iE "WARNING: Disabled" ffbuild/config.log >&2 || true
+    exit 1
+  fi
+done
+
+# MinGW 的 pthreads 会让 avutil 导入 libwinpthread-1.dll；干净机器上没有
+# 该 DLL，因此断言 configure 实际选择 Win32 原生线程。
+for entry in "HAVE_W32THREADS 1" "HAVE_PTHREADS 0"; do
+  if ! grep -qx "#define `$entry" config.h; then
+    echo "FFmpeg must use native Win32 threads: #define `$entry is missing" >&2
+    grep -E "^#define HAVE_(W32THREADS|PTHREADS) " config.h >&2 || true
     exit 1
   fi
 done
@@ -462,7 +450,7 @@ FFmpeg $FfmpegVersion - built from the official source release for rLive by
 scripts/prepare-windows-ffmpeg.ps1.
 
 Licensed under the LGPL version 2.1 or later; --enable-gpl is not used. Only the
-demuxers, muxers and protocols rLive's recording needs are enabled, and the
+demuxers, muxers and protocols rLive's recording and downloads need are enabled, and the
 Windows-native schannel backend provides TLS. Source: $FfmpegDownloadUrl
 (SHA-256 $FfmpegArchiveSha256).
 
@@ -490,9 +478,8 @@ also recorded in the rLive project at https://github.com/Kenny3Shen/rLive.
 
 function Get-ManagedFfmpegSdk {
     $cacheDirectory = Join-Path $env:LOCALAPPDATA "rLive\build"
-    # 目录名携带的是组件集合而不仅是版本号：由本脚本早期版本缓存下来的
-    # full_build-shared SDK，不得被当作精简版 SDK 的命中结果。
-    $sdkRoot = Join-Path $cacheDirectory "ffmpeg-$FfmpegVersion-rlive-shared"
+    # 目录名携带组件集合：旧版 full/MP4 SDK 不得被当作精简版命中结果。
+    $sdkRoot = Join-Path $cacheDirectory "ffmpeg-$FfmpegVersion-rlive-shared-minimal-probe"
     New-Item -ItemType Directory -Force -Path $cacheDirectory | Out-Null
 
     if (Test-Path $sdkRoot) {

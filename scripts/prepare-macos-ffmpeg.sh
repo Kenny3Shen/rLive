@@ -7,34 +7,22 @@
 # （无需复制 `Frameworks` dylib，也无需重写 install name），
 # 产物可复现，并把许可审计范围限定在 FFmpeg 自身。
 #
-# 只启用 `recording_ffmpeg.rs` 实际用到的能力：它解复用 FLV/HLS/MPEG-TS
-# 并重新封装为 FLV 或 MPEG-TS，自身从不解码或编码。比特流过滤器确实由
-# `configure` 的 `*_muxer_select` 自动拉入，但解析器和解码器都不是：除
-# `ac3_parser` 之外，没有任何启用的封装/解封装器会 select `h264_parser`。
-#
-# 解析器和音频解码器缺一个，录制就会在写头时以 `EINVAL` 失败，
-# 用户看到的就是「写入容器头失败: Invalid argument」。两者补的是不同的参数：
-#
-# - 解析器补画面尺寸。裸流容器（FLV/MPEG-TS）不在容器层声明尺寸，
-#   `avformat_find_stream_info` 只能靠解析器从 H.264 SPS 读出 `width`/`height`。
-#   缺失时 `codecpar` 保持 0，而 flv 封装器没有 `AVFMT_NODIMENSIONS`，
-#   `avformat_write_header` 直接拒绝（libavformat/mux.c 的 init_muxer）。
-# - 音频解码器补采样率。`aac_parser` 刻意不设 `sample_rate`：
-#   为兼容 HE-AAC，ADTS 头里的采样率和声道数都不可信
-#   （libavcodec/aac_ac3_parser.c 中的注释），所以该值只能由解码器给出。
-#   而 init_muxer 对音频轨要求 `sample_rate > 0`，且没有类似
-#   `AVFMT_NODIMENSIONS` 的豁免 —— flv 和 mpegts 都会以 `EINVAL` 拒绝。
-#   同时 `avformat_find_stream_info` 的 has_codec_parameters 也要求采样率，
-#   缺失会让它一直探测到上限，HLS 录制表现为长时间卡在开流阶段。
-#
-# 解码器只启用音频：视频尺寸由解析器解决，无需解码视频。刻意不含 opus —— 它是
-# 三个平台里唯一 `deps="swresample"` 的音频解码器，而 Windows 构建关闭了
-# swresample，启用只会被 configure 静默丢掉，反而让三个平台的组件集出现偏差。
-#
-# 构建结果为 LGPL：刻意不传 `--enable-gpl`，也不启用任何外部编解码库。
+# 只启用录制与视频下载所需能力：FLV/HLS/MPEG-TS 解复用后重封装为
+# FLV/MPEG-TS，B 站 DASH 的本地 MOV/fMP4 轨合并为 MP4，均不转码。
+# 封装/解封装依赖的 BSF 由 configure 自动选中；视频 parser 供
+# `avformat_find_stream_info` 从 H.264/HEVC/AV1 序列头补出画面尺寸，
+# HLS 主流不透传子流 parser 的尺寸，需 H.264/HEVC 解码器参与探测；
+# AAC parser 不提供 HE-AAC 可信采样率，两个 AAC 解码器同样仅用于探测。
+# extract_extradata 从帧中提取封装所需序列头，不转码。
+# FLV/MP3 与 AC-3 的采样率由 mpegaudio/ac3 parser 填充。
+# 不需要播放器解码、Matroska、zlib 或 swresample；录制请求明确使用
+# `Accept-Encoding: identity`，B 站 fMP4 也没有压缩 moov。
+# 构建结果为 LGPL：不传 `--enable-gpl`，也不启用外部编解码库。
 set -euo pipefail
 
 FFMPEG_VERSION="9.0.2"
+# 组件白名单变化时递增，避免复用缺少新能力的同版本 SDK。
+FFMPEG_CONFIG_VERSION="4-minimal"
 FFMPEG_ARCHIVE="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_URL="https://ffmpeg.org/releases/${FFMPEG_ARCHIVE}"
 # 校验官方 tarball 的分离签名后计算得出，签名对应 FFmpeg 发布签名密钥
@@ -98,6 +86,7 @@ if [[ -z "$prefix" ]]; then
 fi
 mkdir -p "$prefix"
 prefix="$(cd "$prefix" && pwd)"
+config_stamp="$prefix/.rlive-config-version"
 
 emit_environment() {
   echo "FFMPEG_PREFIX=$prefix"
@@ -114,7 +103,7 @@ emit_environment() {
 }
 
 verify_prefix() {
-  for required in libavformat.a libavcodec.a libavutil.a libswresample.a; do
+  for required in libavformat.a libavcodec.a libavutil.a; do
     if [[ ! -f "$prefix/lib/$required" ]]; then
       echo "静态 FFmpeg 缺少 $required: $prefix/lib" >&2
       exit 1
@@ -133,8 +122,9 @@ verify_prefix() {
   fi
 }
 
-# 完整的 prefix 会被原样复用，因此缓存命中时可跳过整个构建。
-if [[ -f "$prefix/lib/libavformat.a" && -f "$prefix/lib/pkgconfig/libavformat.pc" ]]; then
+# 旧 SDK 即使文件齐全，也可能包含不同组件集；仅复用相同配置的缓存。
+if [[ -f "$prefix/lib/libavformat.a" && -f "$prefix/lib/pkgconfig/libavformat.pc" \
+  && "$(cat "$config_stamp" 2>/dev/null || true)" == "$FFMPEG_CONFIG_VERSION" ]]; then
   echo "复用已构建的静态 FFmpeg: $prefix"
   verify_prefix
   emit_environment
@@ -185,10 +175,8 @@ test -f "$source_dir/configure"
 echo "编译静态 FFmpeg ${FFMPEG_VERSION} ($configure_arch) -> $prefix"
 (
   cd "$source_dir"
-  # `--disable-autodetect` 把 feature 集合固定为这里列出的内容，而不是取决于
-  # 运行器上恰好安装了什么，这正是产物可复现的原因。它同时会关掉 zlib 和
-  # Secure Transport，而这两者都是必需的 —— mov/matroska 探测需要 zlib，
-  # 直连 HTTPS 录制需要 TLS —— 所以都显式重新启用。
+  # `--disable-autodetect` 固定 feature 集合；只显式恢复 HTTPS 录制所需的
+  # macOS 原生 Secure Transport。
   ./configure \
     --prefix="$prefix" \
     --arch="$configure_arch" \
@@ -197,7 +185,6 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} ($configure_arch) -> $prefix"
     --enable-static \
     --enable-pic \
     --disable-autodetect \
-    --enable-zlib \
     --enable-securetransport \
     --disable-programs \
     --disable-doc \
@@ -205,30 +192,28 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} ($configure_arch) -> $prefix"
     --disable-avdevice \
     --disable-avfilter \
     --disable-swscale \
+    --disable-swresample \
     --disable-everything \
-    --enable-demuxer=flv,live_flv,hls,mpegts,mov,matroska \
-    --enable-muxer=flv,mpegts \
-    --enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio,av1,vp9,vvc,opus,flac \
-    --enable-decoder=aac,aac_latm,ac3,eac3,mp3,mp2,flac,vorbis \
+    --enable-demuxer=flv,live_flv,hls,mpegts,mov \
+    --enable-muxer=flv,mpegts,mp4 \
+    --enable-parser=h264,hevc,av1,aac,aac_latm,ac3,mpegaudio \
+    --enable-decoder=h264,hevc,aac,aac_latm \
+    --enable-bsf=extract_extradata \
     --enable-protocol=file,http,https,tls,tcp,crypto,httpproxy \
     --pkg-config-flags=--static
 
-  # `configure` 会把依赖未满足的组件降级为警告并仍以 0 退出 —— 找不到 TLS
-  # 后端会把 `--enable-protocol=https` 变成 `CONFIG_HTTPS_PROTOCOL 0`，
-  # 而这种缺失只会在运行时暴露，表现为用户 Mac 上 HTTPS 录制失败。
-  # httpproxy 同理：HTTPS 录制经代理隧道时（设置里配了 HTTP 代理），
-  # libavformat 的 tls 协议会把连接交给 `httpproxy://` 协议建立 CONNECT 隧道，
-  # 缺了它录制只会得到一句 "Protocol not found"。
-  # 因此断言生成的头文件，而不是相信退出码。
+  # configure 对缺失依赖只发警告，因此断言生成头文件，防止运行时才暴露
+  # HTTPS/代理录制、FLV 尺寸探测、AAC 采样率探测或 MP4 合并能力缺失。
   for component in \
     HTTPS_PROTOCOL TLS_PROTOCOL HTTP_PROTOCOL FILE_PROTOCOL CRYPTO_PROTOCOL \
     HTTPPROXY_PROTOCOL \
     FLV_DEMUXER LIVE_FLV_DEMUXER HLS_DEMUXER MPEGTS_DEMUXER MOV_DEMUXER \
-    FLV_MUXER MPEGTS_MUXER \
-    H264_PARSER HEVC_PARSER AAC_PARSER AAC_LATM_PARSER AC3_PARSER \
-    AAC_DECODER AAC_LATM_DECODER AC3_DECODER EAC3_DECODER MP3_DECODER; do
+    FLV_MUXER MPEGTS_MUXER MP4_MUXER \
+    H264_PARSER HEVC_PARSER AV1_PARSER MPEGAUDIO_PARSER \
+    AAC_PARSER AAC_LATM_PARSER AC3_PARSER \
+    H264_DECODER HEVC_DECODER AAC_DECODER AAC_LATM_DECODER EXTRACT_EXTRADATA_BSF; do
     if ! grep -qx "#define CONFIG_${component} 1" config_components.h; then
-      echo "FFmpeg configure 未启用 CONFIG_${component}，录制功能会缺失" >&2
+      echo "FFmpeg configure 未启用 CONFIG_${component}，录制或下载功能会缺失" >&2
       grep -E "^#define CONFIG_${component} " config_components.h >&2 || true
       grep -iE "WARNING: Disabled" ffbuild/config.log >&2 || true
       exit 1
@@ -240,4 +225,5 @@ echo "编译静态 FFmpeg ${FFMPEG_VERSION} ($configure_arch) -> $prefix"
 )
 
 verify_prefix
+printf '%s\n' "$FFMPEG_CONFIG_VERSION" > "$config_stamp"
 emit_environment

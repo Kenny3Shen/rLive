@@ -2243,6 +2243,7 @@ fn initialize_ffmpeg() -> Result<(), String> {
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn merge_tracks(video: &Path, audio: &Path, output: &Path) -> Result<(), String> {
     initialize_ffmpeg()?;
+    ensure_mp4_muxer()?;
     let _ = std::fs::remove_file(output);
     let mut video_input =
         format::input(video).map_err(|error| format!("打开视频轨失败: {error}"))?;
@@ -2336,6 +2337,18 @@ fn merge_tracks(video: &Path, audio: &Path, output: &Path) -> Result<(), String>
     output_context
         .write_trailer()
         .map_err(|error| format!("写入 MP4 容器尾失败: {error}"))?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+fn ensure_mp4_muxer() -> Result<(), String> {
+    // 缺少封装器时 output_as 只返回 EINVAL，容易被误判为文件路径有误。
+    let muxer = unsafe {
+        ffmpeg::ffi::av_guess_format(c"mp4".as_ptr(), std::ptr::null(), std::ptr::null())
+    };
+    if muxer.is_null() {
+        return Err("当前 FFmpeg 不支持 MP4 合并，请更新 FFmpeg 或重新安装应用后重试".to_string());
+    }
     Ok(())
 }
 
@@ -2670,6 +2683,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+    fn desktop_ffmpeg_provides_mp4_muxer() {
+        initialize_ffmpeg().unwrap();
+        ensure_mp4_muxer().unwrap();
+    }
 
     fn test_item(status: VideoDownloadStatus, request_generation: u64) -> VideoDownloadItem {
         VideoDownloadItem {

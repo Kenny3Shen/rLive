@@ -132,6 +132,12 @@ jobs:
             if ($unexpected.Count -gt 0) {
               throw "Staged $stagedDll DLL imports unbundled FFmpeg libraries: $($unexpected -join ', ')"
             }
+            $mingwRuntime = [regex]::Matches(
+              $dllImports, '(?i)\b(libwinpthread|libgcc_s|libstdc\+\+)[^\s]*\.dll'
+            ) | ForEach-Object { $_.Value } | Sort-Object -Unique
+            if ($mingwRuntime) {
+              throw "Staged $stagedDll DLL imports unbundled MinGW runtimes: $($mingwRuntime -join ', ')"
+            }
           }
 
       - name: Bundle Windows installers (NSIS setup and MSI)
