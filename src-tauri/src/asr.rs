@@ -792,7 +792,7 @@ impl AsrManager {
 
     /// 注销一个播放器。计数饱和到 0，重复的注销不会把后续启动变成负数。
     pub fn streaming_stopped(&self) {
-        let _ = self.inner.streaming_count.fetch_update(
+        let _ = self.inner.streaming_count.try_update(
             std::sync::atomic::Ordering::AcqRel,
             std::sync::atomic::Ordering::Acquire,
             |count| Some(count.saturating_sub(1)),

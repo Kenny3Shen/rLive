@@ -5051,7 +5051,7 @@ mod tests {
             if path.ends_with(".m3u8") {
                 let sequence = if self.master {
                     self.sequence[variant]
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                             Some((value + 1).min(self.segments.len() as u64 - 3))
                         })
                         .unwrap()
