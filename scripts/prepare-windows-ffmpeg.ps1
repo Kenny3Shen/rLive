@@ -2,15 +2,9 @@
 # 该 SDK 由固定版本的官方源码构建，只包含 rLive 实际用到的组件，
 # 因此头文件、导入库和 DLL 天然保持一致。
 #
-# Windows 过去下载 Gyan 的 `full_build-shared` 压缩包。那个构建开启了 103 个
-# `--enable-*` 选项，包括 `--enable-gpl` 和 `--enable-version3`，使四个运行时
-# DLL 达到 116 MB —— 超过安装后应用体积的 88%，其中仅 avcodec 就超过 93 MB ——
-# 并把产品置于 GPLv3 合规审计之下。rLive 自身从不解码或编码：录制只解复用
-# FLV/HLS/MPEG-TS 并重新封装为 FLV 或 MPEG-TS，视频下载读取 MOV/fMP4
-# 并合并为 MP4，两条路径都不转码，绝大部分编解码能力都不可达。
-# 改用与 `prepare-macos-ffmpeg.sh`、`prepare-linux-ffmpeg.sh` 相同的组件白名单
-# 构建后，DLL 大幅缩小，三个桌面平台行为一致，
-# 且构建结果只是普通的 `LGPL version 2.1 or later`。
+# 与 macOS/Linux 使用同一组件白名单：录制和下载仅重封装，不转码，
+# 只保留参数探测所需解码器。替代过去的 Gyan full_build-shared，
+# 不启用 GPL/version3，FFmpeg 许可证保持 LGPL v2.1+。
 #
 # 视频 parser 负责补尺寸，但 HLS 主流不透传子流 parser 的尺寸，需保留
 # H.264/HEVC 探测解码器；AAC parser 不提供 HE-AAC 可信采样率，两个 AAC
@@ -53,12 +47,13 @@ $RequiredComponents = @(
 # `--disable-autodetect` 固定 feature 集合；只恢复 HTTPS 录制所需的原生
 # schannel。录制/下载只产出三个 av* 库：不编译 swresample，不链接 zlib，
 # 请求使用 `Accept-Encoding: identity`，B 站 fMP4 也没有压缩 moov。
-# `--enable-w32threads` 避免 MinGW 构建隐式依赖 libwinpthread-1.dll；
-# configure 找不到该线程模型会失败，构建脚本还会断言 config.h。
+# 使用 w32threads，但 MinGW 的 clock_gettime/nanosleep 仍来自 winpthreads；
+# 静态链接该支持库与 libgcc，保留单调时钟且无需额外运行时 DLL。
 # 这个列表也会写进随 DLL 分发的 SDK README.txt。
 $ConfigureOptions = @(
     "--enable-shared --disable-static",
     "--disable-autodetect --enable-schannel --disable-pthreads --enable-w32threads",
+    "--extra-ldflags='-static-libgcc' --extra-libs='-Wl,-Bstatic -lwinpthread -Wl,-Bdynamic'",
     "--disable-programs --disable-doc --disable-debug",
     "--disable-avdevice --disable-avfilter --disable-swscale --disable-swresample",
     "--disable-everything",
@@ -398,8 +393,7 @@ for component in $componentList; do
   fi
 done
 
-# MinGW 的 pthreads 会让 avutil 导入 libwinpthread-1.dll；干净机器上没有
-# 该 DLL，因此断言 configure 实际选择 Win32 原生线程。
+# 线程使用 Win32 原生实现；时间函数的 MinGW 支持另行静态链接。
 for entry in "HAVE_W32THREADS 1" "HAVE_PTHREADS 0"; do
   if ! grep -qx "#define `$entry" config.h; then
     echo "FFmpeg must use native Win32 threads: #define `$entry is missing" >&2
@@ -422,6 +416,24 @@ echo "FFmpeg license: LGPL version 2.1 or later"
 
 make -j"`$(nproc)"
 make install
+
+# 在编译 Rust 之前拦截缺失依赖；发布工作流还会检查最终暂存的 DLL。
+for library in avutil avcodec avformat; do
+  files=("$stagePosix/bin/`$library-"*.dll)
+  if [ "`${#files[@]}" -ne 1 ] || [ ! -f "`${files[0]}" ]; then
+    echo "Expected one `$library runtime DLL" >&2
+    exit 1
+  fi
+  imports="`$(objdump -p "`${files[0]}" | sed -n 's/.*DLL Name: //p')"
+  unexpected="`$(printf '%s\n' "`$imports" | grep -iE '^(libwinpthread|libgcc_s|libstdc\+\+)|^(av|sw)[a-z]+-[0-9]+\.dll`$' | grep -ivE '^(avutil|avcodec|avformat)-[0-9]+\.dll`$' || true)"
+  if [ -n "`$unexpected" ]; then
+    echo "`$library imports unbundled runtimes: `$unexpected" >&2
+    exit 1
+  fi
+done
+
+# 静态支持库的版权声明随 SDK README 分发，不增加安装包文件白名单。
+cp /mingw64/share/licenses/winpthreads/COPYING "$buildPosix/winpthreads-COPYING"
 "@
         Invoke-Msys2Bash $Msys2Root $build "Could not build the FFmpeg SDK"
 
@@ -460,7 +472,12 @@ $($ConfigureOptions -join "`n")
 These libraries are linked dynamically, so they can be replaced with your own
 build of the same FFmpeg 9.0.2 ABI. The exact source and the options above are
 also recorded in the rLive project at https://github.com/Kenny3Shen/rLive.
+
+MinGW winpthreads support for clock_gettime/nanosleep is linked statically.
+Its copyright and license notices follow:
 "@ | Set-Content (Join-Path $stageRoot "README.txt") -Encoding ascii
+        Get-Content (Join-Path $buildDirectory "winpthreads-COPYING") -Raw |
+            Add-Content (Join-Path $stageRoot "README.txt") -Encoding ascii
 
         Assert-FfmpegSdk $stageRoot
         if (Test-Path $SdkRoot) {
@@ -479,7 +496,7 @@ also recorded in the rLive project at https://github.com/Kenny3Shen/rLive.
 function Get-ManagedFfmpegSdk {
     $cacheDirectory = Join-Path $env:LOCALAPPDATA "rLive\build"
     # 目录名携带组件集合：旧版 full/MP4 SDK 不得被当作精简版命中结果。
-    $sdkRoot = Join-Path $cacheDirectory "ffmpeg-$FfmpegVersion-rlive-shared-minimal-probe"
+    $sdkRoot = Join-Path $cacheDirectory "ffmpeg-$FfmpegVersion-rlive-shared-minimal-probe-static-runtime"
     New-Item -ItemType Directory -Force -Path $cacheDirectory | Out-Null
 
     if (Test-Path $sdkRoot) {
