@@ -22,8 +22,15 @@ const DEFAULT_CODEC: &str = "avc1";
 /// 的备用地址里通常有可用的 upos 镜像；抓 sidx 时逐个尝试，选第一个能服务的。
 pub(super) fn stream_candidates(rep: &Value) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
+    let is_media_candidate = |url: &str| {
+        reqwest::Url::parse(url)
+            .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+    };
     for key in ["base_url", "baseUrl"] {
-        if let Some(url) = rep.get(key).map(as_str).filter(|url| !url.is_empty())
+        if let Some(url) = rep
+            .get(key)
+            .map(as_str)
+            .filter(|url| is_media_candidate(url))
             && !candidates.contains(&url)
         {
             candidates.push(url);
@@ -31,7 +38,11 @@ pub(super) fn stream_candidates(rep: &Value) -> Vec<String> {
     }
     for key in ["backup_url", "backupBaseUrl"] {
         if let Some(list) = rep.get(key).and_then(Value::as_array) {
-            for url in list.iter().map(as_str).filter(|url| !url.is_empty()) {
+            for url in list
+                .iter()
+                .map(as_str)
+                .filter(|url| is_media_candidate(url))
+            {
                 if !candidates.contains(&url) {
                     candidates.push(url);
                 }
@@ -185,6 +196,8 @@ pub fn parse_sidx(bytes: &[u8], index_range_end: u64) -> AppResult<Sidx> {
 pub struct VideoTrack {
     /// 上游媒体地址（交给 stream_proxy 做上游）。
     pub base_url: String,
+    /// 与 `base_url` 内容相同的备用地址，按上游给出的顺序排列且不含 `base_url`。
+    pub backup_urls: Vec<String>,
     /// init 段字节区间的结束字节（起始恒为 0）。
     pub init_end: u64,
     /// init 段的原始字节。
@@ -578,6 +591,7 @@ mod tests {
     fn track_fixture() -> VideoTrack {
         VideoTrack {
             base_url: "https://upos.example.com/media.m4s".into(),
+            backup_urls: Vec::new(),
             init_end: 937,
             // init 段字节本身与 MPD 合成无关，占位即可。
             init_bytes: vec![0_u8; 938],
@@ -853,7 +867,7 @@ mod tests {
     fn stream_candidates_prefers_base_then_dedupes_backups() {
         let rep = serde_json::json!({
             "base_url": "https://mcdn.example.com/a.m4s",
-            "backup_url": ["https://upos.example.com/a.m4s", "", "https://mcdn.example.com/a.m4s"],
+            "backup_url": ["https://upos.example.com/a.m4s", "", "https://mcdn.example.com/a.m4s", "javascript:alert(1)"],
             "backupBaseUrl": ["https://upos-2.example.com/a.m4s"]
         });
         let candidates = stream_candidates(&rep);

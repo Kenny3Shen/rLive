@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { navigateToVideoHome } from "../src/features/video/videoHomeNavigation";
+import {
+  navigateBackFromVideo,
+  navigateToVideoHome,
+} from "../src/features/video/videoHomeNavigation";
 import { deferred } from "./helpers/async";
 
 describe("VOD 返回主页", () => {
@@ -62,5 +65,62 @@ describe("VOD 返回主页", () => {
       navigateHome: () => navigations++,
     });
     expect(navigations).toBe(0);
+  });
+});
+
+describe("VOD 第一层返回", () => {
+  function navigateWith(
+    state: unknown,
+    entryKey = "video-a",
+    requestedEntryKey: string | null = null,
+  ) {
+    const calls: string[] = [];
+    navigateBackFromVideo({
+      entryKey,
+      requestedEntryKey,
+      historyState: state,
+      navigateBack: () => calls.push("back"),
+      navigateHome: () => calls.push("home"),
+    });
+    return calls;
+  }
+
+  test("有应用内历史且条目对齐时只回退一层", () => {
+    expect(navigateWith({ key: "video-a", idx: 2 })).toEqual(["back"]);
+  });
+
+  test("直入播放页没有更早应用内历史时回视频发现页", () => {
+    expect(navigateWith({ key: "video-a", idx: 0 })).toEqual(["home"]);
+    expect(navigateWith(null, "default")).toEqual(["home"]);
+  });
+
+  test("POP 改写历史但 Router 未提交时，冻结的旧播放页不再重复返回", () => {
+    expect(navigateWith({ key: "video-home", idx: 1 })).toEqual([]);
+  });
+
+  test("异常或错位的索引不会触发返回", () => {
+    expect(navigateWith({ key: "video-a", idx: "2" })).toEqual(["home"]);
+    expect(navigateWith({ key: "video-a", idx: -1 })).toEqual(["home"]);
+  });
+
+  test("同一历史条目的快速连点只提交一次返回", () => {
+    const calls: string[] = [];
+    let requested: string | null = null;
+    const click = () =>
+      navigateBackFromVideo({
+        entryKey: "video-a",
+        requestedEntryKey: requested,
+        historyState: { key: "video-a", idx: 2 },
+        markRequested: () => {
+          requested = "video-a";
+        },
+        navigateBack: () => calls.push("back"),
+        navigateHome: () => calls.push("home"),
+      });
+    click();
+    click();
+    expect(calls).toEqual(["back"]);
+    expect(requested).toBe("video-a");
+    expect(navigateWith({ key: "video-b", idx: 2 }, "video-b", "video-a")).toEqual(["back"]);
   });
 });

@@ -4,6 +4,7 @@
 //! 独有表面，不经过跨站点的 `LiveSite` trait。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tauri::State;
 
@@ -18,7 +19,9 @@ use crate::models::video::{
 use crate::sites::bilibili::BilibiliSite;
 use crate::sites::bilibili::video::VideoTrack;
 use crate::state::AppState;
-use crate::stream_proxy::{PrefetchedInitialization, StreamProxy, StreamProxyStartOptions};
+use crate::stream_proxy::{
+    PrefetchedInitialization, StreamProxy, StreamProxyStartOptions, VodBackupUrls,
+};
 
 /// 播放代理的创建事务；部分失败或 future 被取消时只回滚本次实例。
 /// ID 必须由调用方新建，不能使用会被其他播放者复用的内容键。
@@ -534,6 +537,12 @@ pub async fn video_get_play_info(
             bytes: audio.init_bytes.as_slice().into(),
             content_type: "audio/mp4",
         });
+    let video_backup_urls =
+        (!audio_only).then(|| VodBackupUrls(Arc::from(selection.video.backup_urls.as_slice())));
+    let audio_backup_urls = selection
+        .audio
+        .as_ref()
+        .map(|audio| VodBackupUrls(Arc::from(audio.backup_urls.as_slice())));
 
     // 仅音频模式（听视频）不起视频轨代理，也不合成 MPD：音轨 fMP4 是完整
     // 文件，代理转发 Range，前端把 audio_url 直接交给媒体元素播放。
@@ -558,6 +567,7 @@ pub async fn video_get_play_info(
                     media_cache: audio_cache.clone(),
                     media_cache_store: media_cache_store.clone(),
                     initialization: audio_initialization,
+                    vod_backup_urls: None,
                     ..Default::default()
                 },
             )
@@ -576,6 +586,7 @@ pub async fn video_get_play_info(
                     bytes: selection.video.init_bytes.as_slice().into(),
                     content_type: "video/mp4",
                 }),
+                vod_backup_urls: video_backup_urls,
                 ..Default::default()
             },
         );
@@ -594,6 +605,7 @@ pub async fn video_get_play_info(
                         media_cache: audio_cache.clone(),
                         media_cache_store: media_cache_store.clone(),
                         initialization: audio_initialization,
+                        vod_backup_urls: audio_backup_urls,
                         ..Default::default()
                     },
                 )
@@ -1010,6 +1022,7 @@ mod tests {
         }
         VideoTrack {
             base_url: "https://upos.example.com/media.m4s".into(),
+            backup_urls: Vec::new(),
             init_end: 99,
             init_bytes: vec![0_u8; 100],
             sidx: Sidx {

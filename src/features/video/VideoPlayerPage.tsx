@@ -88,7 +88,6 @@ import {
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import { copyText } from "@/shared/clipboard";
 import { openExternalUrl } from "@/shared/externalUrl";
-import { canNavigateBackInApp } from "@/shared/appHistory";
 import {
   DEFAULT_PLAYER_VOLUME,
   readPlayerVolume,
@@ -211,7 +210,7 @@ import {
   videoPlayPath,
 } from "./videoRoute";
 import { shortsPath } from "@/features/shorts/shortsFeed";
-import { navigateToVideoHome } from "./videoHomeNavigation";
+import { navigateBackFromVideo, navigateToVideoHome } from "./videoHomeNavigation";
 import {
   dedupeVideoItems,
   nextSelectionItem,
@@ -293,6 +292,7 @@ function VideoPlayerPageContent() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const backRequestedEntryKeyRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
@@ -1447,9 +1447,15 @@ function VideoPlayerPageContent() {
       userPausedRef.current = false;
       endedSequence += 1;
       setPaused(false);
-      setWaiting(false);
-      setLoading(false);
-      waitingRecovery.notifyResumed();
+      if (media.readyState >= 2) {
+        setWaiting(false);
+        setLoading(false);
+        waitingRecovery.notifyResumed(media.readyState);
+      } else if (!media.ended) {
+        setWaiting(true);
+        setLoading(true);
+        waitingRecovery.notifyWaiting();
+      }
     }
     function onPause() {
       if (cancelled) return;
@@ -1478,14 +1484,18 @@ function VideoPlayerPageContent() {
     function onReady() {
       if (cancelled) return;
       establishPosition();
-      setLoading(false);
-      setWaiting(false);
       syncTime();
       syncDuration();
       syncAspectRatio();
-      // canplay/loadedmetadata 说明数据重新流动：即使引擎没补发 playing，
-      // 也别让上一轮 waiting 的判定计时继续空转。
-      waitingRecovery.notifyResumed();
+      if (media.readyState >= 2) {
+        setLoading(false);
+        setWaiting(false);
+        waitingRecovery.notifyResumed(media.readyState);
+      } else if (!media.paused && !media.ended) {
+        setLoading(true);
+        setWaiting(true);
+        waitingRecovery.notifyWaiting();
+      }
       // 加载态时间轴不可操作；元数据就绪后一次性应用待续播位置。
       if (pendingInitialResume) {
         const initialResume = pendingInitialResume;
@@ -1516,7 +1526,7 @@ function VideoPlayerPageContent() {
       // 缓冲恢复的权威信号：waiting 判定计时必须在这里解除。play 事件只在
       // 暂停→播放转换时触发，覆盖不了卡顿恢复；漏掉 playing 会让正常播放
       // 中的视频被看门狗误重建、耗尽预算后弹出错误面板。
-      waitingRecovery.notifyResumed();
+      waitingRecovery.notifyResumed(media.readyState);
     }
     function onWaiting() {
       if (cancelled) return;
@@ -1532,10 +1542,14 @@ function VideoPlayerPageContent() {
     function onSeeked() {
       if (cancelled || media.seeking) return;
       establishPosition();
-      setWaiting(false);
       setKeyboardSeeking(false);
-      // seek 的短暂 waiting 到此解除：判定计时取消，稳定播放重新起算。
-      waitingRecovery.notifyResumed();
+      if (media.readyState >= 2) {
+        setWaiting(false);
+        waitingRecovery.notifyResumed(media.readyState);
+      } else if (!media.paused && !media.ended) {
+        setWaiting(true);
+        waitingRecovery.notifyWaiting();
+      }
       // 跳到片尾附近时，末片可能这一跳就已进缓冲。
       syncTailBuffered();
     }
@@ -1650,6 +1664,9 @@ function VideoPlayerPageContent() {
       establishPosition();
       releaseStartup();
       releaseTransport();
+      setLoading(false);
+      setWaiting(false);
+      waitingRecovery.notifyResumed(media.readyState);
     };
     media.addEventListener("loadeddata", onLoadedData);
     media.addEventListener("timeupdate", syncTime);
@@ -1700,6 +1717,11 @@ function VideoPlayerPageContent() {
           // 换一轮代理。
           if (videoJsPlaybackErrorSeverity(cause) === "recoverable") {
             setRecoverableError(videoJsRecoverableErrorMessage(cause));
+            if (!media.paused && !media.ended && media.readyState < 2) {
+              setLoading(true);
+              setWaiting(true);
+              waitingRecovery.notifyWaiting();
+            }
             return;
           }
           setPlaybackError(videoJsPlayerErrorMessage(cause, "视频播放失败"));
@@ -2410,12 +2432,17 @@ function VideoPlayerPageContent() {
   }, [cid]);
 
   const goBack = useCallback(() => {
-    if (canNavigateBackInApp(window.history.state)) {
-      navigate(-1);
-      return;
-    }
-    navigate(VIDEO_HOME_PATH, { replace: true });
-  }, [navigate]);
+    navigateBackFromVideo({
+      entryKey: location.key,
+      requestedEntryKey: backRequestedEntryKeyRef.current,
+      historyState: window.history.state,
+      markRequested: () => {
+        backRequestedEntryKeyRef.current = location.key;
+      },
+      navigateBack: () => navigate(-1),
+      navigateHome: () => navigate(VIDEO_HOME_PATH, { replace: true }),
+    });
+  }, [location.key, navigate]);
 
   const handleReturnHome = useCallback(() => {
     setOverlayInteractionOpen(false);
@@ -2593,8 +2620,7 @@ function VideoPlayerPageContent() {
       : null;
   // 取流信息未就绪时不提供下载入口：画质列表来自同一次 playurl。
   const downloadAvailable =
-    downloadTarget !== null &&
-    downloadTarget.qualities.some((quality) => quality.available);
+    downloadTarget !== null && downloadTarget.qualities.some((quality) => quality.available);
 
   /**
    * HUD 的「返回主页」入口。桌面与移动端都常驻在返回箭头旁：这一页没有流内

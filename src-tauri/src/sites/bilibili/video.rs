@@ -2144,6 +2144,12 @@ impl BilibiliSite {
             let sidx = parse_sidx(&sidx_bytes, index_end)?;
             return Ok(VideoTrack {
                 base_url: candidate.clone(),
+                backup_urls: candidates
+                    .iter()
+                    .skip_while(|url| *url != candidate)
+                    .skip(1)
+                    .cloned()
+                    .collect(),
                 init_end,
                 init_bytes,
                 sidx,

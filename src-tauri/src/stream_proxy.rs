@@ -48,6 +48,18 @@ const SEGMENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_secs(4);
 #[cfg(test)]
 const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_millis(300);
+/// VOD 媒体分片等待上游响应头的单次上限，以及整轮换源的等待预算。
+///
+/// 基线里首个分片反复出现响应头已到、正文却 20 秒无字节；这里只处理响应头
+/// 之前的连接、HTTP 与死等。响应头选定后，正文仍交给原有块间停顿与续传路径。
+#[cfg(not(test))]
+const VOD_SEGMENT_HEADER_TIMEOUT: Duration = Duration::from_secs(4);
+#[cfg(test)]
+const VOD_SEGMENT_HEADER_TIMEOUT: Duration = Duration::from_millis(300);
+#[cfg(not(test))]
+const VOD_SEGMENT_RECOVERY_BUDGET: Duration = Duration::from_secs(8);
+#[cfg(test)]
+const VOD_SEGMENT_RECOVERY_BUDGET: Duration = Duration::from_secs(2);
 /// 单个分片最多续传几次；仍失败就断开下游，交给 dash.js 自己的重试。
 const SEGMENT_RESUME_ATTEMPTS: u32 = 2;
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
@@ -85,6 +97,13 @@ pub struct PrefetchedInitialization {
     pub content_type: &'static str,
 }
 
+/// VOD 分片的同源备用 CDN 地址（不含主地址）。
+///
+/// 来自 playurl 同一 representation 的 `backup_url` / `backupBaseUrl`。仅在该
+/// 会话的 Range 分片请求等待响应头失败时依次换源，直播与其它代理不启用。
+#[derive(Clone)]
+pub struct VodBackupUrls(pub Arc<[String]>);
+
 /// [`StreamProxy::start`] 的可选行为。
 ///
 /// 这条路径原本有六个位置参数，其中三个是「这一路流是什么形态」的开关。捆成
@@ -107,6 +126,8 @@ pub struct StreamProxyStartOptions<'a> {
     pub media_cache_store: Option<SharedMediaCache>,
     /// 与磁盘缓存开关无关，仅精确覆盖整个初始化段的 Range 可命中。
     pub initialization: Option<PrefetchedInitialization>,
+    /// 仅供 VOD 媒体轨代理使用的同源备用地址。
+    pub vod_backup_urls: Option<VodBackupUrls>,
 }
 
 impl Default for StreamProxyStartOptions<'_> {
@@ -121,6 +142,7 @@ impl Default for StreamProxyStartOptions<'_> {
             media_cache: None,
             media_cache_store: None,
             initialization: None,
+            vod_backup_urls: None,
         }
     }
 }
@@ -437,6 +459,7 @@ struct ProxyLoopContext {
     media_cache: Option<Arc<MediaCacheSpec>>,
     media_cache_store: Option<SharedMediaCache>,
     initialization: Option<PrefetchedInitialization>,
+    vod_backup_urls: Option<VodBackupUrls>,
 }
 
 /// [`StreamProxy::start_text`] 固定应答的内容与类型。
@@ -1037,6 +1060,7 @@ impl StreamProxy {
             media_cache,
             media_cache_store,
             initialization,
+            vod_backup_urls,
         } = options;
         let (generation, listener, port) = self.bind_session_listener(&session_id).await?;
         // 播放器可能为一场播放发出多个本机请求（直播清单轮询、VOD 并发
@@ -1084,6 +1108,7 @@ impl StreamProxy {
                 media_cache,
                 media_cache_store,
                 initialization,
+                vod_backup_urls,
             };
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
             let task = tauri::async_runtime::spawn(async move {
@@ -2124,6 +2149,7 @@ mod tests {
             media_cache: None,
             media_cache_store: None,
             initialization: None,
+            vod_backup_urls: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let local_address = listener.local_addr().unwrap();
@@ -2963,6 +2989,63 @@ async fn wait_for_proxy_shutdown(shutdown: &mut watch::Receiver<bool>) {
     }
 }
 
+/// 在写下游响应头之前，为 VOD 分片挑出第一个可用的同源 CDN 应答。
+///
+/// 候选必须回 206 且 `Content-Range` 与请求的闭区间一致；连接失败、HTTP 失败、
+/// 忽略 Range 的全量 200、区间错配或响应头等待超时都换下一个候选。最多尝试主
+/// 地址加 `SEGMENT_RESUME_ATTEMPTS` 个备用地址，整体等待不超过 8 秒。返回成功
+/// 候选的原始 URL，响应头一旦选定，正文仍按该 URL 续传，不跨节点拼接。
+async fn send_vod_range_request(
+    primary: &str,
+    backups: &[String],
+    range: (u64, u64),
+    build: impl Fn(String) -> reqwest::RequestBuilder,
+    telemetry: &ProxyTelemetryCounters,
+) -> Result<(reqwest::Response, String), String> {
+    let deadline = Instant::now() + VOD_SEGMENT_RECOVERY_BUDGET;
+    let mut last_error = "no upstream candidates".to_string();
+    for (index, url) in std::iter::once(primary)
+        .chain(backups.iter().map(String::as_str))
+        .take(SEGMENT_RESUME_ATTEMPTS as usize + 1)
+        .enumerate()
+    {
+        if index > 0 {
+            telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+            telemetry.upstream_resumes.fetch_add(1, Ordering::Relaxed);
+        }
+        let wait = deadline
+            .saturating_duration_since(Instant::now())
+            .min(VOD_SEGMENT_HEADER_TIMEOUT);
+        if wait.is_zero() {
+            return Err("VOD segment recovery budget exhausted".into());
+        }
+        match tokio::time::timeout(wait, build(url.to_string()).send()).await {
+            Ok(Ok(response))
+                if response.status().as_u16() == 206
+                    && content_range_matches(
+                        response
+                            .headers()
+                            .get(reqwest::header::CONTENT_RANGE)
+                            .and_then(|value| value.to_str().ok()),
+                        range.0,
+                        range.1,
+                    ) =>
+            {
+                return Ok((response, url.to_string()));
+            }
+            Ok(Ok(response)) => {
+                last_error = format!(
+                    "upstream status {} with unusable range",
+                    response.status().as_u16()
+                )
+            }
+            Ok(Err(_)) => last_error = "upstream request failed".into(),
+            Err(_) => last_error = "upstream headers timed out".into(),
+        }
+    }
+    Err(last_error)
+}
+
 async fn handle_client(
     socket: &mut tokio::net::TcpStream,
     context: ProxyLoopContext,
@@ -2981,6 +3064,7 @@ async fn handle_client(
         media_cache,
         media_cache_store,
         initialization,
+        vod_backup_urls,
     } = context;
 
     // 读取请求头（只需要方法/路径与少数请求头；GET 不使用 body）。
@@ -3125,7 +3209,17 @@ async fn handle_client(
     };
 
     // 分片续传沿用原始入口：重新解析可能把请求调度到另一个边缘节点。
-    let resume_target = requested_range
+    let vod_backups = vod_backup_urls
+        .as_ref()
+        .filter(|_| {
+            is_primary_request
+                && !force_hls
+                && method == "GET"
+                && requested_range.is_some()
+                && request_header(&head, "if-range").is_none()
+        })
+        .filter(|backups| !backups.0.is_empty());
+    let mut resume_target = requested_range
         .filter(|_| method == "GET" && !force_hls)
         .map(|range| (target.clone(), range));
 
@@ -3134,21 +3228,46 @@ async fn handle_client(
     let send = async {
         match pinned_manifest.as_deref() {
             Some(pinned) => match build_request(pinned.to_string()).send().await {
-                Ok(response) if response.status().is_success() => Ok(response),
+                Ok(response) if response.status().is_success() => Ok(response) as Result<_, String>,
                 _failed_pin => {
                     // 钉扎地址已失效（签名过期或后端下线）：回退原始入口重新解析。
                     telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
-                    build_request(target).send().await
+                    build_request(target)
+                        .send()
+                        .await
+                        .map_err(|error| error.to_string())
                 }
             },
-            None => match (build_request(target).send().await, resume_target.as_ref()) {
-                // 分片请求在发送阶段失败（连接被重置、池化的半死连接）时立即重试
-                // 一次；dash.js 自己的重试要等到它判定超时，用户已经看到卡顿。
-                (Err(_), Some((retry_target, _))) => {
-                    telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
-                    build_request(retry_target.clone()).send().await
+            None => match vod_backups {
+                Some(backups) => {
+                    let outcome = send_vod_range_request(
+                        &target,
+                        &backups.0,
+                        requested_range.expect("VOD Range checked above"),
+                        build_request,
+                        &telemetry,
+                    )
+                    .await;
+                    if let Ok((_, selected)) = &outcome
+                        && let Some(resume) = resume_target.as_mut()
+                    {
+                        resume.0 = selected.clone();
+                    }
+                    outcome.map(|(response, _)| response)
                 }
-                (result, _) => result,
+                None => match (build_request(target).send().await, resume_target.as_ref()) {
+                    // 分片请求在发送阶段失败（连接被重置、池化的半死连接）时立即重试
+                    // 一次；dash.js 自己的重试要等到它判定超时，用户已经看到卡顿。
+                    (Err(error), Some((retry_target, _))) => {
+                        telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+                        build_request(retry_target.clone())
+                            .send()
+                            .await
+                            .map_err(|retry| retry.to_string())
+                            .or(Err(error.to_string()))
+                    }
+                    (result, _) => result.map_err(|error| error.to_string()),
+                },
             },
         }
     };

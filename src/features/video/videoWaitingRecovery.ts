@@ -1,19 +1,19 @@
 /**
  * 点播 waiting 自动恢复决策器。
  *
- * B 站点播走三条代理会话取流，上游 Range 长期无字节时媒体元素会停在
- * waiting，而后端有序代理 8 秒读取空闲就释放请求——会话就此变哑，等是等
- * 不回来的。前端必须比后端释放更晚（默认 10 秒）才判定「这一轮会话已
- * 死」，然后走既有的重试链（记录续播点 → 递增 playerRevision → 重拉
- * play-info 与三代理会话）换新会话。
+ * 媒体分片迟迟不到时，首片尚未有数据的会话默认在 25 秒后复用既有的取流与
+ * 代理重建链；已经有过媒体数据的会话按 10 秒处理缓冲卡顿。`loadedmetadata`
+ * 只说明清单和轨道信息就绪，不能证明媒体分片已到达。
  *
  * 判定与计时装在独立模块、时钟走适配器：超时窗口、自动重试预算、稳定
  * 播放重置这些决策要能离屏单测，不依赖真实定时器。页面只负责把媒体
  * 事件喂进来、把决策结果接回同一条重建链路。
  */
 
-/** 比后端有序代理 8 秒读取空闲释放更晚：抢在释放前重建，只会得到同样卡住的新会话。 */
+/** 已有媒体数据后的缓冲等待窗口：给后端续传／恢复等待与引擎内部重试留出时间。 */
 const VOD_WAITING_RECOVERY_TIMEOUT_MS = 10_000;
+/** 首片尚无数据时，给引擎单次请求超时与一次恢复留出时间。 */
+const VOD_WAITING_RECOVERY_STARTUP_TIMEOUT_MS = 25_000;
 /** 同一 videoKey 连续自动重建的预算：上游永久故障时不至于每 10 秒无限重试。 */
 const VOD_WAITING_RECOVERY_MAX_AUTO_RETRIES = 2;
 /** 稳定播放多久后把预算还回去：能稳定播说明上一轮故障是偶发而非连续。 */
@@ -39,6 +39,7 @@ export type VideoWaitingRecoveryOptions = {
   /** 时钟适配器：默认真实定时器，单测注入假时钟。 */
   clock?: VideoWaitingRecoveryClockAdapter;
   timeoutMs?: number;
+  startupTimeoutMs?: number;
   maxAutoRetries?: number;
   stableMs?: number;
 };
@@ -48,10 +49,10 @@ export type VideoWaitingRecovery = {
   beginSession(videoKey: string): void;
   /** 播放器会话拆除（重建/换集/离开路由）：waiting 计时随之作废。 */
   endSession(): void;
-  /** 媒体 waiting 事件：起超时判定计时（已挂起或已耗尽时忽略）。 */
+  /** 媒体 waiting 事件：按当前阶段起超时判定计时（已挂起或已耗尽时忽略）。 */
   notifyWaiting(): void;
-  /** waiting 解除（play/seeked）：取消计时，稳定播放从现在重新起算。 */
-  notifyResumed(): void;
+  /** 媒体数据已就绪：标记本会话、取消计时，稳定播放从现在重新起算。 */
+  notifyResumed(readyState: number): void;
   /** 用户暂停：waiting 计时作废，暂停不该被自动重试拉起。 */
   notifyPaused(): void;
   /** 播完：waiting 计时作废。 */
@@ -70,6 +71,7 @@ export function createVideoWaitingRecovery(
     onExhausted,
     clock = DEFAULT_CLOCK,
     timeoutMs = VOD_WAITING_RECOVERY_TIMEOUT_MS,
+    startupTimeoutMs = VOD_WAITING_RECOVERY_STARTUP_TIMEOUT_MS,
     maxAutoRetries = VOD_WAITING_RECOVERY_MAX_AUTO_RETRIES,
     stableMs = VOD_WAITING_RECOVERY_STABLE_MS,
   } = options;
@@ -82,7 +84,8 @@ export function createVideoWaitingRecovery(
   let autoRetries = 0;
   let exhausted = false;
   let timerHandle: unknown = null;
-  /** 上次 waiting 解除（恢复播放/seek 完成）的时刻；null = 本会话还没证明能播。 */
+  let mediaDataReady = false;
+  /** 上次媒体数据恢复的时刻；null = 本会话还没证明能播。 */
   let resumedAt: number | null = null;
 
   function cancelTimer() {
@@ -97,6 +100,7 @@ export function createVideoWaitingRecovery(
       activeSession = sessionEpoch;
       // 上一会话挂起的 waiting 计时不许带进新会话。
       cancelTimer();
+      mediaDataReady = false;
       if (key !== videoKey) {
         videoKey = key;
         autoRetries = 0;
@@ -115,25 +119,30 @@ export function createVideoWaitingRecovery(
     notifyWaiting() {
       if (activeSession === null || exhausted || timerHandle !== null) return;
       const session = activeSession;
-      const handle = clock.setTimer(() => {
-        // 只清自己的句柄：可能已有更新一轮的计时挂在上面（过期回调迟到）。
-        if (timerHandle === handle) timerHandle = null;
-        // 计时属于已被替换/拆除的会话：作废，不对新会话动手。
-        if (session !== activeSession) return;
-        // 自上次恢复播放起稳定够久：这轮故障不是上一轮的延续，预算还回去。
-        if (resumedAt !== null && clock.now() - resumedAt >= stableMs) autoRetries = 0;
-        if (autoRetries >= maxAutoRetries) {
-          exhausted = true;
-          onExhausted();
-          return;
-        }
-        autoRetries += 1;
-        onAutoRetry();
-      }, timeoutMs);
+      const handle = clock.setTimer(
+        () => {
+          // 只清自己的句柄：可能已有更新一轮的计时挂在上面（过期回调迟到）。
+          if (timerHandle === handle) timerHandle = null;
+          // 计时属于已被替换/拆除的会话：作废，不对新会话动手。
+          if (session !== activeSession) return;
+          // 自上次恢复播放起稳定够久：这轮故障不是上一轮的延续，预算还回去。
+          if (resumedAt !== null && clock.now() - resumedAt >= stableMs) autoRetries = 0;
+          if (autoRetries >= maxAutoRetries) {
+            exhausted = true;
+            onExhausted();
+            return;
+          }
+          autoRetries += 1;
+          onAutoRetry();
+        },
+        mediaDataReady ? timeoutMs : startupTimeoutMs,
+      );
       timerHandle = handle;
     },
-    notifyResumed() {
+    notifyResumed(readyState) {
+      if (readyState < 2) return;
       cancelTimer();
+      mediaDataReady = true;
       resumedAt = clock.now();
       // 视频自己缓过来也算恢复：之后再卡重新判定（重建次数仍受预算约束）。
       exhausted = false;

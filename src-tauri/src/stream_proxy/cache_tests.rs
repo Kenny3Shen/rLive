@@ -12,7 +12,7 @@ use tokio::time::timeout;
 
 use super::{
     HlsResources, ManifestPin, PrefetchedInitialization, ProxyLoopContext, ProxyTelemetryCounters,
-    StreamProxy, StreamProxyStartOptions, handle_client, request_header,
+    StreamProxy, StreamProxyStartOptions, VodBackupUrls, handle_client, request_header,
 };
 use crate::media_cache::{MediaCache, MediaCacheSpec};
 
@@ -154,6 +154,7 @@ impl Fixture {
             media_cache: Some(spec),
             media_cache_store: Some(store.clone()),
             initialization: None,
+            vod_backup_urls: None,
         };
         Self {
             context,
@@ -575,6 +576,86 @@ fn resumed_rest() -> Vec<u8> {
         "Content-Length: 500",
         &complete_body()[300..],
     )
+}
+
+#[tokio::test]
+async fn vod_backup_selection_keeps_body_resume_on_the_selected_candidate() {
+    let fixture = Fixture::new(complete_response()).await;
+    let healthy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let healthy_address = healthy.local_addr().unwrap();
+    let requests = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+    let server_requests = requests.clone();
+    let mut replies = VecDeque::from([truncated_first_part(), resumed_rest(), complete_response()]);
+    let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = healthy.accept().await {
+            let request = read_request_head(&mut stream).await;
+            server_requests
+                .lock()
+                .unwrap()
+                .push((request, "backup".to_string()));
+            let _ = stream
+                .write_all(&replies.pop_front().unwrap_or_else(complete_response))
+                .await;
+        }
+    });
+    let unhealthy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unhealthy_address = unhealthy.local_addr().unwrap();
+    let primary_requests = requests.clone();
+    let bad_primary = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = unhealthy.accept().await {
+            let request = read_request_head(&mut stream).await;
+            primary_requests
+                .lock()
+                .unwrap()
+                .push((request, "primary".to_string()));
+            let _ = stream
+                .write_all(&response(
+                    200,
+                    "bytes 0-799/1600",
+                    "Content-Length: 800",
+                    &complete_body(),
+                ))
+                .await;
+        }
+    });
+    let mut context = fixture.context.clone();
+    context.url = format!("http://{unhealthy_address}/primary.m4s").into();
+    context.vod_backup_urls = Some(VodBackupUrls(Arc::from([format!(
+        "http://{healthy_address}/backup.m4s"
+    )])));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (mut socket, _) = listener.accept().await.unwrap();
+    let handler = tokio::spawn(async move { handle_client(&mut socket, context).await });
+    client.write_all(RANGE_REQUEST).await.unwrap();
+    let mut bytes = Vec::new();
+    timeout(WAIT, client.read_to_end(&mut bytes))
+        .await
+        .expect("备用节点续传应答未完成")
+        .unwrap();
+    timeout(WAIT, handler)
+        .await
+        .expect("代理处理器未结束")
+        .unwrap()
+        .unwrap();
+    assert_eq!(body(&bytes), complete_body());
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].1, "primary");
+    assert_eq!(requests[1].1, "backup");
+    assert_eq!(requests[2].1, "backup");
+    assert_eq!(request_header(&requests[1].0, "range"), Some("bytes=0-799"));
+    assert_eq!(
+        request_header(&requests[2].0, "range"),
+        Some("bytes=300-799"),
+        "正文续传应仍落在已选中的备用节点"
+    );
+    assert_eq!(fixture.upstream_requests(), 3);
+    assert_eq!(fixture.upstream_resumes(), 2);
+    server.abort();
+    bad_primary.abort();
 }
 
 #[tokio::test]
