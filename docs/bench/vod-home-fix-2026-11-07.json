@@ -1,0 +1,1400 @@
+{
+  "date": "2026-11-07",
+  "topic": "VOD 首片截断与自动恢复修复验收",
+  "baseline": {
+    "commit": "831d8b99",
+    "version": "9.3.2",
+    "change_state": "基于该提交的未提交修复"
+  },
+  "environment": {
+    "platform": "Windows Debug 主窗口",
+    "webview": "WebView2 157.0.4341.42",
+    "frontend": "Vite dev / React dev",
+    "proxy_mode": "auto",
+    "media_cache": false,
+    "note": "重启诊断实例时 WebView2 从第四轮的 156 自动更新到 157；本轮诊断版和修复版均为 157"
+  },
+  "method": {
+    "transfer": "真实 video_get_play_info IPC + 页面 fetch 真实 /live Range，每次 finally video_stop_play",
+    "playback": "通过现有 UI 搜索 BVID 后点击真实卡片，记录媒体事件、requestVideoFrameCallback、IPC 与 CDP 网络",
+    "privacy": "不保存 signed URL、Cookie、token、原始验证器、代理session id或CDP请求id",
+    "clock": "播放样本 media.at / frame.at 从探针安装起点计时，clickAt 为真实卡片click事件；firstPlayableFrameMs 减去clickAt，要求requestVideoFrameCallback时readyState>=2。rawFrames另保留readyState=1时的早期画面通知，不把它当可播放就绪。CDP totalMs 从单次请求起点计时，响应头事件可能晚于loadingFinished，完整请求耗时不以headersMs推算。",
+    "transfer_content_range": "页面fetch无法读取未由CORS暴露的Content-Range，null表示不可见；播放器CDP网络另记录该头，Rust回归验证匹配规则。",
+    "cleanup": "两个传输诊断均finally停止代理；媒体与CDP探针清理，经关注卡片恢复开始时直播间，原设置/历史/缓存保留，CLI会话detach",
+    "initial_preview": "首页正常样本的两次初始取流包含预览与播放页，预览代理已停止，32秒窗口只有一次loadstart，不计为自动重建"
+  },
+  "diagnostic_only": [
+    {
+      "sample": "epic-initial",
+      "bvid": "BV1cmxs6BEcP",
+      "cid": 43230302160,
+      "range": "bytes=1105-2319028",
+      "observedAt": "2026-11-07T11:02:58.759Z",
+      "playInfoMs": 8609.200000047684,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "bytes": 523183,
+      "status": 206,
+      "contentLength": "2317924",
+      "headersMs": 73.09999990463257,
+      "error": "network error",
+      "totalMs": 224.39999985694885,
+      "telemetry": {
+        "started_at_ms": 1794049387367,
+        "upstream_requests": 2,
+        "upstream_failures": 1,
+        "upstream_resumes": 1,
+        "bytes_forwarded": 523183,
+        "first_response_ms": 69,
+        "latest_response_ms": 69,
+        "first_media_at_ms": 1794049387441,
+        "last_resume_diagnostic": {
+          "initial_host": "upos-lcdn-cqgl01.solseed.cn",
+          "resumed_host": "upos-lcdn-cqgl01.solseed.cn",
+          "initial_range_start": 1105,
+          "initial_range_end": 2319028,
+          "resume_range_start": 524288,
+          "resume_range_end": 2319028,
+          "upstream_status": 206,
+          "content_range_start": 524288,
+          "content_range_end": 2319028,
+          "content_range_total": 20074165,
+          "initial_etag_present": true,
+          "initial_last_modified_present": true,
+          "resumed_etag_present": true,
+          "resumed_last_modified_present": true,
+          "etag_mismatch": true,
+          "last_modified_mismatch": true,
+          "failure_kind": "validator_mismatch"
+        }
+      }
+    },
+    {
+      "sample": "epic-complete-remainder",
+      "bvid": "BV1cmxs6BEcP",
+      "cid": 43230302160,
+      "range": "bytes=524288-2319028",
+      "observedAt": "2026-11-07T11:05:43.883Z",
+      "playInfoMs": 2148.0999999046326,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "bytes": 1794741,
+      "status": 206,
+      "contentLength": "1794741",
+      "headersMs": 127.5,
+      "totalMs": 380.40000009536743,
+      "telemetry": {
+        "started_at_ms": 1794049546030,
+        "upstream_requests": 1,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded": 1794741,
+        "first_response_ms": 124,
+        "latest_response_ms": 124,
+        "first_media_at_ms": 1794049546158,
+        "last_resume_diagnostic": null
+      }
+    },
+    {
+      "sample": "ai-initial-1",
+      "bvid": "BV1Dsxf6nEAF",
+      "cid": 43338760480,
+      "range": "bytes=1724-678510",
+      "observedAt": "2026-11-07T11:02:30.449Z",
+      "playInfoMs": 1507.5999999046326,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "bytes": 676787,
+      "status": 206,
+      "contentLength": "676787",
+      "headersMs": 264.2000000476837,
+      "totalMs": 495.7000000476837,
+      "telemetry": {
+        "started_at_ms": 1794049351953,
+        "upstream_requests": 1,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded": 676787,
+        "first_response_ms": 258,
+        "latest_response_ms": 258,
+        "first_media_at_ms": 1794049352219,
+        "last_resume_diagnostic": null
+      }
+    },
+    {
+      "sample": "ai-initial-2",
+      "bvid": "BV1Dsxf6nEAF",
+      "cid": 43338760480,
+      "range": "bytes=1724-678510",
+      "observedAt": "2026-11-07T11:03:42.245Z",
+      "playInfoMs": 4215.299999952316,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "bytes": 676787,
+      "status": 206,
+      "contentLength": "676787",
+      "headersMs": 139.40000009536743,
+      "totalMs": 368.80000019073486,
+      "telemetry": {
+        "started_at_ms": 1794049426459,
+        "upstream_requests": 1,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded": 676787,
+        "first_response_ms": 136,
+        "latest_response_ms": 136,
+        "first_media_at_ms": 1794049426599,
+        "last_resume_diagnostic": null
+      }
+    }
+  ],
+  "diagnostic_interpretation": "诊断版仍出现首段短正文，续传206与区间匹配但ETag和Last-Modified均变化；AI两次自行成功是节点波动，不是修复收益",
+  "fixed_transfer": [
+    {
+      "bvid": "BV1cmxs6BEcP",
+      "cid": 43230302160,
+      "range": "bytes=1105-2319028",
+      "observedAt": "2026-11-07T11:58:14.757Z",
+      "playInfoMs": 348,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "bytes": 2317924,
+      "status": 206,
+      "contentLength": "2317924",
+      "contentRange": null,
+      "headersMs": 658.0999999046326,
+      "totalMs": 676.4000000953674,
+      "telemetry": {
+        "started_at_ms": 1794052695104,
+        "upstream_requests": 2,
+        "upstream_failures": 0,
+        "upstream_resumes": 1,
+        "bytes_forwarded": 2317924,
+        "first_response_ms": 76,
+        "latest_response_ms": 269,
+        "first_media_at_ms": 1794052695762,
+        "last_resume_diagnostic": null
+      },
+      "sample": "epic"
+    },
+    {
+      "bvid": "BV1Dsxf6nEAF",
+      "cid": 43338760480,
+      "range": "bytes=1724-678510",
+      "observedAt": "2026-11-07T11:58:52.294Z",
+      "playInfoMs": 948.3999998569489,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "bytes": 676787,
+      "status": 206,
+      "contentLength": "676787",
+      "contentRange": null,
+      "headersMs": 519.2999999523163,
+      "totalMs": 532.5,
+      "telemetry": {
+        "started_at_ms": 1794052733241,
+        "upstream_requests": 1,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded": 676787,
+        "first_response_ms": 282,
+        "latest_response_ms": 282,
+        "first_media_at_ms": 1794052733760,
+        "last_resume_diagnostic": null
+      },
+      "sample": "ai"
+    }
+  ],
+  "fixed_playback": [
+    {
+      "observedMs": 32054.5,
+      "clickAt": 22.799999952316284,
+      "bvid": "BV1cmxs6BEcP",
+      "path": "/video/play",
+      "media": [
+        {
+          "event": "waiting",
+          "at": 2177,
+          "t": 0,
+          "ready": 0,
+          "paused": false,
+          "width": 0,
+          "height": 0,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadstart",
+          "at": 2210.5999999046326,
+          "t": 0,
+          "ready": 0,
+          "paused": false,
+          "width": 0,
+          "height": 0,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadedmetadata",
+          "at": 2263,
+          "t": 0,
+          "ready": 1,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadeddata",
+          "at": 3812.899999856949,
+          "t": 0,
+          "ready": 4,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "canplay",
+          "at": 4114.199999809265,
+          "t": 0.243822,
+          "ready": 4,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "playing",
+          "at": 4141.699999809265,
+          "t": 0.271375,
+          "ready": 4,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        }
+      ],
+      "frames": [
+        {
+          "at": 4160.599999904633,
+          "mediaTime": 0.3,
+          "width": 1920,
+          "height": 1080,
+          "ready": 4
+        }
+      ],
+      "rawFrames": [
+        {
+          "at": 2893.399999856949,
+          "mediaTime": 0,
+          "width": 1920,
+          "height": 1080,
+          "ready": 1
+        }
+      ],
+      "state": {
+        "t": 28.184112,
+        "ready": 4,
+        "paused": false,
+        "width": 1920,
+        "height": 1080,
+        "seeking": false,
+        "error": null,
+        "buffer": [
+          [
+            0,
+            51.310375
+          ]
+        ]
+      },
+      "ipc": [
+        {
+          "bvid": "BV1cmxs6BEcP",
+          "cid": 43230302160,
+          "qn": 80,
+          "codecs": "avc1.640032",
+          "durationMs": 1836.1370000056922
+        }
+      ],
+      "telemetry": [
+        {
+          "started_at_ms": 1794053199337,
+          "upstream_requests": 12,
+          "upstream_failures": 0,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 20073060,
+          "first_response_ms": 73,
+          "latest_response_ms": 15,
+          "first_media_at_ms": 1794053200153,
+          "last_resume_diagnostic": null
+        }
+      ],
+      "network": [
+        {
+          "range": null,
+          "method": "GET",
+          "bytes": 3237,
+          "status": 200,
+          "contentRange": null,
+          "contentLength": "3237",
+          "headersMs": 46.09300009906292,
+          "totalMs": 4.381000064313412,
+          "completed": true
+        },
+        {
+          "range": "bytes=0-932",
+          "method": "GET",
+          "bytes": 933,
+          "status": 206,
+          "contentRange": "bytes 0-932/*",
+          "contentLength": "933",
+          "headersMs": 6.221000105142593,
+          "totalMs": 3.621000098064542,
+          "completed": true
+        },
+        {
+          "range": "bytes=0-836",
+          "method": "GET",
+          "bytes": 837,
+          "status": 206,
+          "contentRange": "bytes 0-836/*",
+          "contentLength": "837",
+          "headersMs": 7.204000139608979,
+          "totalMs": 4.891999997198582,
+          "completed": true
+        },
+        {
+          "range": "bytes=1105-2319028",
+          "method": "GET",
+          "bytes": 2317924,
+          "status": 206,
+          "contentRange": "bytes 1105-2319028/20074165",
+          "contentLength": "2317924",
+          "headersMs": 612.072000047192,
+          "totalMs": 625.569999916479,
+          "completed": true
+        },
+        {
+          "range": "bytes=1009-94590",
+          "method": "GET",
+          "bytes": 93582,
+          "status": 206,
+          "contentRange": "bytes 1009-94590/957692",
+          "contentLength": "93582",
+          "headersMs": 1573.6749998759478,
+          "totalMs": 1572.7840000763535,
+          "completed": true
+        },
+        {
+          "range": "bytes=2319029-4026850",
+          "method": "GET",
+          "bytes": 1707822,
+          "status": 206,
+          "contentRange": "bytes 2319029-4026850/20074165",
+          "contentLength": "1707822",
+          "headersMs": 393.93400005064905,
+          "totalMs": 417.4939999356866,
+          "completed": true
+        },
+        {
+          "range": "bytes=4026851-5994461",
+          "method": "GET",
+          "bytes": 1967611,
+          "status": 206,
+          "contentRange": "bytes 4026851-5994461/20074165",
+          "contentLength": "1967611",
+          "headersMs": 343.59699999913573,
+          "totalMs": 374.0779999643564,
+          "completed": true
+        },
+        {
+          "range": "bytes=5994462-7901916",
+          "method": "GET",
+          "bytes": 1907455,
+          "status": 206,
+          "contentRange": "bytes 5994462-7901916/20074165",
+          "contentLength": "1907455",
+          "headersMs": 460.0740000605583,
+          "totalMs": 356.8939999677241,
+          "completed": true
+        },
+        {
+          "range": "bytes=94591-190533",
+          "method": "GET",
+          "bytes": 95943,
+          "status": 206,
+          "contentRange": "bytes 94591-190533/957692",
+          "contentLength": "95943",
+          "headersMs": 1000.6719999946654,
+          "totalMs": 1013.5939999017864,
+          "completed": true
+        },
+        {
+          "range": "bytes=7901917-10641180",
+          "method": "GET",
+          "bytes": 2739264,
+          "status": 206,
+          "contentRange": "bytes 7901917-10641180/20074165",
+          "contentLength": "2739264",
+          "headersMs": 430.2540000062436,
+          "totalMs": 452.1419999655336,
+          "completed": true
+        },
+        {
+          "range": "bytes=190534-286301",
+          "method": "GET",
+          "bytes": 95768,
+          "status": 206,
+          "contentRange": "bytes 190534-286301/957692",
+          "contentLength": "95768",
+          "headersMs": 1034.4029997941107,
+          "totalMs": 1033.1579998601228,
+          "completed": true
+        },
+        {
+          "range": "bytes=10641181-12703718",
+          "method": "GET",
+          "bytes": 2062538,
+          "status": 206,
+          "contentRange": "bytes 10641181-12703718/20074165",
+          "contentLength": "2062538",
+          "headersMs": 343.74399995431304,
+          "totalMs": 374.74199989810586,
+          "completed": true
+        },
+        {
+          "range": "bytes=286302-381142",
+          "method": "GET",
+          "bytes": 94841,
+          "status": 206,
+          "contentRange": "bytes 286302-381142/957692",
+          "contentLength": "94841",
+          "headersMs": 843.7469999771565,
+          "totalMs": 867.0399999246001,
+          "completed": true
+        },
+        {
+          "range": "bytes=381143-475612",
+          "method": "GET",
+          "bytes": 94470,
+          "status": 206,
+          "contentRange": "bytes 381143-475612/957692",
+          "contentLength": "94470",
+          "headersMs": 867.9790000896901,
+          "totalMs": 865.9600000828505,
+          "completed": true
+        },
+        {
+          "range": "bytes=475613-569247",
+          "method": "GET",
+          "bytes": 93635,
+          "status": 206,
+          "contentRange": "bytes 475613-569247/957692",
+          "contentLength": "93635",
+          "headersMs": 764.4919999875128,
+          "totalMs": 763.4570000227541,
+          "completed": true
+        },
+        {
+          "range": "bytes=569248-661506",
+          "method": "GET",
+          "bytes": 92259,
+          "status": 206,
+          "contentRange": "bytes 569248-661506/957692",
+          "contentLength": "92259",
+          "headersMs": 845.2759999781847,
+          "totalMs": 835.9550000168383,
+          "completed": true
+        },
+        {
+          "range": "bytes=12703719-14209396",
+          "method": "GET",
+          "bytes": 1505678,
+          "status": 206,
+          "contentRange": "bytes 12703719-14209396/20074165",
+          "contentLength": "1505678",
+          "headersMs": 268.07600003667176,
+          "totalMs": 298.7480000592768,
+          "completed": true
+        },
+        {
+          "range": "bytes=661507-754949",
+          "method": "GET",
+          "bytes": 93443,
+          "status": 206,
+          "contentRange": "bytes 661507-754949/957692",
+          "contentLength": "93443",
+          "headersMs": 904.2279999703169,
+          "totalMs": 903.2020000740886,
+          "completed": true
+        },
+        {
+          "range": "bytes=14209397-16333573",
+          "method": "GET",
+          "bytes": 2124177,
+          "status": 206,
+          "contentRange": "bytes 14209397-16333573/20074165",
+          "contentLength": "2124177",
+          "headersMs": 397.88899989798665,
+          "totalMs": 416.56299983151257,
+          "completed": true
+        },
+        {
+          "range": "bytes=754950-848038",
+          "method": "GET",
+          "bytes": 93089,
+          "status": 206,
+          "contentRange": "bytes 754950-848038/957692",
+          "contentLength": "93089",
+          "headersMs": 851.4519999735057,
+          "totalMs": 864.8310001008213,
+          "completed": true
+        },
+        {
+          "range": "bytes=16333574-17399822",
+          "method": "GET",
+          "bytes": 1066249,
+          "status": 206,
+          "contentRange": "bytes 16333574-17399822/20074165",
+          "contentLength": "1066249",
+          "headersMs": 209.11199995316565,
+          "totalMs": 234.88999996334314,
+          "completed": true
+        },
+        {
+          "range": "bytes=848039-938379",
+          "method": "GET",
+          "bytes": 90341,
+          "status": 206,
+          "contentRange": "bytes 848039-938379/957692",
+          "contentLength": "90341",
+          "headersMs": 937.7939999103546,
+          "totalMs": 936.8420001119375,
+          "completed": true
+        },
+        {
+          "range": "bytes=17399823-19676259",
+          "method": "GET",
+          "bytes": 2276437,
+          "status": 206,
+          "contentRange": "bytes 17399823-19676259/20074165",
+          "contentLength": "2276437",
+          "headersMs": 439.7419998422265,
+          "totalMs": 475.96499999053776,
+          "completed": true
+        },
+        {
+          "range": "bytes=938380-957691",
+          "method": "GET",
+          "bytes": 19312,
+          "status": 206,
+          "contentRange": "bytes 938380-957691/957692",
+          "contentLength": "19312",
+          "headersMs": 1075.7809998467565,
+          "totalMs": 1074.6700000017881,
+          "completed": true
+        },
+        {
+          "range": "bytes=19676260-20074164",
+          "method": "GET",
+          "bytes": 397905,
+          "status": 206,
+          "contentRange": "bytes 19676260-20074164/20074165",
+          "contentLength": "397905",
+          "headersMs": 103.06099988520145,
+          "totalMs": 128.61000001430511,
+          "completed": true
+        }
+      ],
+      "sample": "epic",
+      "entry": "现有搜索入口输入BVID后点击真实卡片",
+      "firstPlayableFrameMs": 4137.799999952316,
+      "firstRawFrameMs": 2870.5999999046326,
+      "playerLoadstartCount": 1
+    },
+    {
+      "observedMs": 32067.099999904633,
+      "clickAt": 22.899999856948853,
+      "bvid": "BV1Dsxf6nEAF",
+      "path": "/video/play",
+      "media": [
+        {
+          "event": "waiting",
+          "at": 2321.7000000476837,
+          "t": 0,
+          "ready": 0,
+          "paused": false,
+          "width": 0,
+          "height": 0,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadstart",
+          "at": 2339.7000000476837,
+          "t": 0,
+          "ready": 0,
+          "paused": false,
+          "width": 0,
+          "height": 0,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadedmetadata",
+          "at": 2379.2000000476837,
+          "t": 0,
+          "ready": 1,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadeddata",
+          "at": 6478.5,
+          "t": 0,
+          "ready": 4,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "canplay",
+          "at": 6986.200000047684,
+          "t": 0.443476,
+          "ready": 4,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "playing",
+          "at": 7014.599999904633,
+          "t": 0.471929,
+          "ready": 4,
+          "paused": false,
+          "width": 1920,
+          "height": 1080,
+          "seeking": false,
+          "error": null
+        }
+      ],
+      "frames": [
+        {
+          "at": 7031.099999904633,
+          "mediaTime": 0.5,
+          "width": 1920,
+          "height": 1080,
+          "ready": 4
+        }
+      ],
+      "rawFrames": [
+        {
+          "at": 2786.5999999046326,
+          "mediaTime": 0,
+          "width": 1920,
+          "height": 1080,
+          "ready": 1
+        }
+      ],
+      "state": {
+        "t": 25.524421,
+        "ready": 4,
+        "paused": false,
+        "width": 1920,
+        "height": 1080,
+        "seeking": false,
+        "error": null,
+        "buffer": [
+          [
+            0,
+            40.124058
+          ]
+        ]
+      },
+      "ipc": [
+        {
+          "bvid": "BV1Dsxf6nEAF",
+          "cid": 43338760480,
+          "qn": 80,
+          "codecs": "avc1.640032",
+          "durationMs": 1803.2170000951737
+        }
+      ],
+      "telemetry": [
+        {
+          "started_at_ms": 1794053437086,
+          "upstream_requests": 12,
+          "upstream_failures": 0,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 3850213,
+          "first_response_ms": 184,
+          "latest_response_ms": 35,
+          "first_media_at_ms": 1794053437614,
+          "last_resume_diagnostic": null
+        }
+      ],
+      "network": [
+        {
+          "range": null,
+          "method": "GET",
+          "bytes": 14268,
+          "status": 200,
+          "contentRange": null,
+          "contentLength": "14268",
+          "headersMs": 37.50799992121756,
+          "totalMs": 4.20599989593029,
+          "completed": true
+        },
+        {
+          "range": "bytes=0-915",
+          "method": "GET",
+          "bytes": 916,
+          "status": 206,
+          "contentRange": "bytes 0-915/*",
+          "contentLength": "916",
+          "headersMs": 5.856999894604087,
+          "totalMs": 3.2919999212026596,
+          "completed": true
+        },
+        {
+          "range": "bytes=0-836",
+          "method": "GET",
+          "bytes": 837,
+          "status": 206,
+          "contentRange": "bytes 0-836/*",
+          "contentLength": "837",
+          "headersMs": 6.319999927654862,
+          "totalMs": 4.449999891221523,
+          "completed": true
+        },
+        {
+          "range": "bytes=1724-678510",
+          "method": "GET",
+          "bytes": 676787,
+          "status": 206,
+          "contentRange": "bytes 1724-678510/23645794",
+          "contentLength": "676787",
+          "headersMs": 406.67699999175966,
+          "totalMs": 408.5729999933392,
+          "completed": true
+        },
+        {
+          "range": "bytes=1633-58985",
+          "method": "GET",
+          "bytes": 57353,
+          "status": 206,
+          "contentRange": "bytes 1633-58985/3528443",
+          "contentLength": "57353",
+          "headersMs": 4121.683000121266,
+          "totalMs": 4122.982000000775,
+          "completed": true
+        },
+        {
+          "range": "bytes=678511-1280234",
+          "method": "GET",
+          "bytes": 601724,
+          "status": 206,
+          "contentRange": "bytes 678511-1280234/23645794",
+          "contentLength": "601724",
+          "headersMs": 183.74800006859004,
+          "totalMs": 185.62699994072318,
+          "completed": true
+        },
+        {
+          "range": "bytes=1280235-1432701",
+          "method": "GET",
+          "bytes": 152467,
+          "status": 206,
+          "contentRange": "bytes 1280235-1432701/23645794",
+          "contentLength": "152467",
+          "headersMs": 21.18999999947846,
+          "totalMs": 34.7609999589622,
+          "completed": true
+        },
+        {
+          "range": "bytes=1432702-1847772",
+          "method": "GET",
+          "bytes": 415071,
+          "status": 206,
+          "contentRange": "bytes 1432702-1847772/23645794",
+          "contentLength": "415071",
+          "headersMs": 124.066999880597,
+          "totalMs": 136.07500004582107,
+          "completed": true
+        },
+        {
+          "range": "bytes=1847773-2129347",
+          "method": "GET",
+          "bytes": 281575,
+          "status": 206,
+          "contentRange": "bytes 1847773-2129347/23645794",
+          "contentLength": "281575",
+          "headersMs": 136.56599982641637,
+          "totalMs": 137.4809998087585,
+          "completed": true
+        },
+        {
+          "range": "bytes=58986-115916",
+          "method": "GET",
+          "bytes": 56931,
+          "status": 206,
+          "contentRange": "bytes 58986-115916/3528443",
+          "contentLength": "56931",
+          "headersMs": 4186.688999878243,
+          "totalMs": 4187.917999923229,
+          "completed": true
+        },
+        {
+          "range": "bytes=2129348-2277338",
+          "method": "GET",
+          "bytes": 147991,
+          "status": 206,
+          "contentRange": "bytes 2129348-2277338/23645794",
+          "contentLength": "147991",
+          "headersMs": 69.58099990151823,
+          "totalMs": 67.85700004547834,
+          "completed": true
+        },
+        {
+          "range": "bytes=115917-172380",
+          "method": "GET",
+          "bytes": 56464,
+          "status": 206,
+          "contentRange": "bytes 115917-172380/3528443",
+          "contentLength": "56464",
+          "headersMs": 2067.536999937147,
+          "totalMs": 2066.1760000512004,
+          "completed": true
+        },
+        {
+          "range": "bytes=2277339-2542136",
+          "method": "GET",
+          "bytes": 264798,
+          "status": 206,
+          "contentRange": "bytes 2277339-2542136/23645794",
+          "contentLength": "264798",
+          "headersMs": 75.69999992847443,
+          "totalMs": 90.53599997423589,
+          "completed": true
+        },
+        {
+          "range": "bytes=172381-227965",
+          "method": "GET",
+          "bytes": 55585,
+          "status": 206,
+          "contentRange": "bytes 172381-227965/3528443",
+          "contentLength": "55585",
+          "headersMs": 3018.578000133857,
+          "totalMs": 3011.675000190735,
+          "completed": true
+        },
+        {
+          "range": "bytes=227966-288299",
+          "method": "GET",
+          "bytes": 60334,
+          "status": 206,
+          "contentRange": "bytes 227966-288299/3528443",
+          "contentLength": "60334",
+          "headersMs": 2046.3320000562817,
+          "totalMs": 2044.3720000330359,
+          "completed": true
+        },
+        {
+          "range": "bytes=2542137-3037629",
+          "method": "GET",
+          "bytes": 495493,
+          "status": 206,
+          "contentRange": "bytes 2542137-3037629/23645794",
+          "contentLength": "495493",
+          "headersMs": 126.90100003965199,
+          "totalMs": 128.48099996335804,
+          "completed": true
+        },
+        {
+          "range": "bytes=288300-341440",
+          "method": "GET",
+          "bytes": 53141,
+          "status": 206,
+          "contentRange": "bytes 288300-341440/3528443",
+          "contentLength": "53141",
+          "headersMs": 2827.7080000843853,
+          "totalMs": 2826.6490001697093,
+          "completed": true
+        },
+        {
+          "range": "bytes=341441-398556",
+          "method": "GET",
+          "bytes": 57116,
+          "status": 206,
+          "contentRange": "bytes 341441-398556/3528443",
+          "contentLength": "57116",
+          "headersMs": 2923.5409998800606,
+          "totalMs": 2920.113999862224,
+          "completed": true
+        },
+        {
+          "range": "bytes=3037630-3343123",
+          "method": "GET",
+          "bytes": 305494,
+          "status": 206,
+          "contentRange": "bytes 3037630-3343123/23645794",
+          "contentLength": "305494",
+          "headersMs": 104.84599997289479,
+          "totalMs": 115.34400004893541,
+          "completed": true
+        },
+        {
+          "range": "bytes=398557-453909",
+          "method": "GET",
+          "bytes": 55353,
+          "status": 206,
+          "contentRange": "bytes 398557-453909/3528443",
+          "contentLength": "55353",
+          "headersMs": 3967.836999800056,
+          "totalMs": 3966.3869999349117,
+          "completed": true
+        },
+        {
+          "range": "bytes=3343124-3698382",
+          "method": "GET",
+          "bytes": 355259,
+          "status": 206,
+          "contentRange": "bytes 3343124-3698382/23645794",
+          "contentLength": "355259",
+          "headersMs": 229.6480000950396,
+          "totalMs": 250.2620001323521,
+          "completed": true
+        },
+        {
+          "range": "bytes=453910-507221",
+          "method": "GET",
+          "bytes": 0
+        },
+        {
+          "range": "bytes=3698383-3851936",
+          "method": "GET",
+          "bytes": 153554,
+          "status": 206,
+          "contentRange": "bytes 3698383-3851936/23645794",
+          "contentLength": "153554",
+          "headersMs": 67.7620000205934,
+          "totalMs": 67.08900001831353,
+          "completed": true
+        }
+      ],
+      "sample": "ai",
+      "entry": "现有搜索入口输入BVID后点击真实卡片",
+      "firstPlayableFrameMs": 7008.200000047684,
+      "firstRawFrameMs": 2763.7000000476837,
+      "playerLoadstartCount": 1
+    },
+    {
+      "observedMs": 32096.900000095367,
+      "clickAt": 39,
+      "bvid": "BV1A3na6mEjg",
+      "path": "/video/play",
+      "media": [
+        {
+          "event": "waiting",
+          "at": 776.0999999046326,
+          "t": 0,
+          "ready": 0,
+          "paused": false,
+          "width": 0,
+          "height": 0,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadstart",
+          "at": 805,
+          "t": 0,
+          "ready": 0,
+          "paused": false,
+          "width": 0,
+          "height": 0,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadedmetadata",
+          "at": 848.2999999523163,
+          "t": 0,
+          "ready": 1,
+          "paused": false,
+          "width": 1080,
+          "height": 1920,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "loadeddata",
+          "at": 1014,
+          "t": 0,
+          "ready": 4,
+          "paused": false,
+          "width": 1080,
+          "height": 1920,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "canplay",
+          "at": 1199.2999999523163,
+          "t": 0.118336,
+          "ready": 4,
+          "paused": false,
+          "width": 1080,
+          "height": 1920,
+          "seeking": false,
+          "error": null
+        },
+        {
+          "event": "playing",
+          "at": 1225.2000000476837,
+          "t": 0.1442,
+          "ready": 4,
+          "paused": false,
+          "width": 1080,
+          "height": 1920,
+          "seeking": false,
+          "error": null
+        }
+      ],
+      "frames": [
+        {
+          "at": 1246.0999999046326,
+          "mediaTime": 0.166687,
+          "width": 1080,
+          "height": 1920,
+          "ready": 4
+        }
+      ],
+      "rawFrames": [
+        {
+          "at": 1011.2000000476837,
+          "mediaTime": 0,
+          "width": 1080,
+          "height": 1920,
+          "ready": 1
+        }
+      ],
+      "state": {
+        "t": 31.015975,
+        "ready": 4,
+        "paused": false,
+        "width": 1080,
+        "height": 1920,
+        "seeking": false,
+        "error": null,
+        "buffer": [
+          [
+            0,
+            38.033312
+          ]
+        ]
+      },
+      "ipc": [
+        {
+          "bvid": "BV1A3na6mEjg",
+          "cid": 42995224103,
+          "qn": 80,
+          "codecs": "avc1.640032",
+          "durationMs": 363.3419999387115
+        },
+        {
+          "bvid": "BV1A3na6mEjg",
+          "cid": 42995224103,
+          "qn": 80,
+          "codecs": "avc1.640032",
+          "durationMs": 328.0239999294281
+        }
+      ],
+      "telemetry": [
+        null,
+        {
+          "started_at_ms": 1794053595915,
+          "upstream_requests": 8,
+          "upstream_failures": 0,
+          "upstream_resumes": 0,
+          "bytes_forwarded": 5277237,
+          "first_response_ms": 75,
+          "latest_response_ms": 16,
+          "first_media_at_ms": 1794053596177,
+          "last_resume_diagnostic": null
+        }
+      ],
+      "network": [
+        {
+          "range": null,
+          "method": "GET",
+          "bytes": 2607,
+          "status": 200,
+          "contentRange": null,
+          "contentLength": "2607",
+          "headersMs": 21.386000094935298,
+          "totalMs": 4.081000108271837,
+          "completed": true
+        },
+        {
+          "range": "bytes=0-915",
+          "method": "GET",
+          "bytes": 916,
+          "status": 206,
+          "contentRange": "bytes 0-915/*",
+          "contentLength": "916",
+          "headersMs": 6.308000069111586,
+          "totalMs": 3.1220000237226486,
+          "completed": true
+        },
+        {
+          "range": "bytes=0-848",
+          "method": "GET",
+          "bytes": 849,
+          "status": 206,
+          "contentRange": "bytes 0-848/*",
+          "contentLength": "849",
+          "headersMs": 7.573000155389309,
+          "totalMs": 4.57400013692677,
+          "completed": true
+        },
+        {
+          "range": "bytes=1052-737088",
+          "method": "GET",
+          "bytes": 736037,
+          "status": 206,
+          "contentRange": "bytes 1052-737088/5278289",
+          "contentLength": "736037",
+          "headersMs": 139.39299993216991,
+          "totalMs": 148.65699992515147,
+          "completed": true
+        },
+        {
+          "range": "bytes=985-122468",
+          "method": "GET",
+          "bytes": 121484,
+          "status": 206,
+          "contentRange": "bytes 985-122468/1006511",
+          "contentLength": "121484",
+          "headersMs": 120.9830001462251,
+          "totalMs": 119.74700004793704,
+          "completed": true
+        },
+        {
+          "range": "bytes=122469-254842",
+          "method": "GET",
+          "bytes": 132374,
+          "status": 206,
+          "contentRange": "bytes 122469-254842/1006511",
+          "contentLength": "132374",
+          "headersMs": 36.27300006337464,
+          "totalMs": 35.06699996069074,
+          "completed": true
+        },
+        {
+          "range": "bytes=737089-1477264",
+          "method": "GET",
+          "bytes": 740176,
+          "status": 206,
+          "contentRange": "bytes 737089-1477264/5278289",
+          "contentLength": "740176",
+          "headersMs": 243.48699999973178,
+          "totalMs": 118.9190000295639,
+          "completed": true
+        },
+        {
+          "range": "bytes=1477265-2042681",
+          "method": "GET",
+          "bytes": 565417,
+          "status": 206,
+          "contentRange": "bytes 1477265-2042681/5278289",
+          "contentLength": "565417",
+          "headersMs": 149.56800010986626,
+          "totalMs": 141.73900010064244,
+          "completed": true
+        },
+        {
+          "range": "bytes=254843-385391",
+          "method": "GET",
+          "bytes": 130549,
+          "status": 206,
+          "contentRange": "bytes 254843-385391/1006511",
+          "contentLength": "130549",
+          "headersMs": 72.44600006379187,
+          "totalMs": 61.04500009678304,
+          "completed": true
+        },
+        {
+          "range": "bytes=2042682-2696703",
+          "method": "GET",
+          "bytes": 654022,
+          "status": 206,
+          "contentRange": "bytes 2042682-2696703/5278289",
+          "contentLength": "654022",
+          "headersMs": 132.42300017736852,
+          "totalMs": 134.92700015194714,
+          "completed": true
+        },
+        {
+          "range": "bytes=2696704-3333267",
+          "method": "GET",
+          "bytes": 636564,
+          "status": 206,
+          "contentRange": "bytes 2696704-3333267/5278289",
+          "contentLength": "636564",
+          "headersMs": 117.3310000449419,
+          "totalMs": 118.36299998685718,
+          "completed": true
+        },
+        {
+          "range": "bytes=3333268-3997386",
+          "method": "GET",
+          "bytes": 664119,
+          "status": 206,
+          "contentRange": "bytes 3333268-3997386/5278289",
+          "contentLength": "664119",
+          "headersMs": 70.43499988503754,
+          "totalMs": 92.44399983435869,
+          "completed": true
+        },
+        {
+          "range": "bytes=385392-525124",
+          "method": "GET",
+          "bytes": 139733,
+          "status": 206,
+          "contentRange": "bytes 385392-525124/1006511",
+          "contentLength": "139733",
+          "headersMs": 41.03299998678267,
+          "totalMs": 40.14499997720122,
+          "completed": true
+        },
+        {
+          "range": "bytes=525125-656151",
+          "method": "GET",
+          "bytes": 131027,
+          "status": 206,
+          "contentRange": "bytes 525125-656151/1006511",
+          "contentLength": "131027",
+          "headersMs": 31.235999893397093,
+          "totalMs": 31.02899994701147,
+          "completed": true
+        },
+        {
+          "range": "bytes=656152-797161",
+          "method": "GET",
+          "bytes": 141010,
+          "status": 206,
+          "contentRange": "bytes 656152-797161/1006511",
+          "contentLength": "141010",
+          "headersMs": 23.744000121951103,
+          "totalMs": 22.540000034496188,
+          "completed": true
+        },
+        {
+          "range": "bytes=797162-934491",
+          "method": "GET",
+          "bytes": 137330,
+          "status": 206,
+          "contentRange": "bytes 797162-934491/1006511",
+          "contentLength": "137330",
+          "headersMs": 22.44100021198392,
+          "totalMs": 46.172000002115965,
+          "completed": true
+        },
+        {
+          "range": "bytes=3997387-4829142",
+          "method": "GET",
+          "bytes": 831756,
+          "status": 206,
+          "contentRange": "bytes 3997387-4829142/5278289",
+          "contentLength": "831756",
+          "headersMs": 134.84800001606345,
+          "totalMs": 154.16600019671023,
+          "completed": true
+        },
+        {
+          "range": "bytes=934492-1006510",
+          "method": "GET",
+          "bytes": 72019,
+          "status": 206,
+          "contentRange": "bytes 934492-1006510/1006511",
+          "contentLength": "72019",
+          "headersMs": 41.59200005233288,
+          "totalMs": 40.96700018271804,
+          "completed": true
+        },
+        {
+          "range": "bytes=4829143-5278288",
+          "method": "GET",
+          "bytes": 449146,
+          "status": 206,
+          "contentRange": "bytes 4829143-5278288/5278289",
+          "contentLength": "449146",
+          "headersMs": 89.72500008530915,
+          "totalMs": 90.35299997776747,
+          "completed": true
+        }
+      ],
+      "sample": "home-normal",
+      "entry": "当前推荐首页真实卡片",
+      "firstPlayableFrameMs": 1207.0999999046326,
+      "firstRawFrameMs": 972.2000000476837,
+      "playerLoadstartCount": 1
+    }
+  ],
+  "limitations": [
+    "仅 Windows Debug 和当前网络；未测 Android / release",
+    "代理额度不足、超大 Range、If-Range 或无备用地址仍走原流式路径",
+    "自动恢复竞态使用所有权与Query微任务回归验证，不伪造实机媒体故障",
+    "AI有效播放样本的首音轨Range等待约4.12s，仍有回源等待；视频首片截断修复不保证所有起播都快"
+  ],
+  "checks": {
+    "frontend_focused": {
+      "passed": 34,
+      "failed": 0,
+      "paths": [
+        "tests/video-playback-lifecycle.test.ts",
+        "tests/video-waiting-recovery.test.ts",
+        "tests/shorts-playback-requests.test.ts"
+      ]
+    },
+    "rust_stream_proxy": {
+      "passed": 71,
+      "failed": 0
+    },
+    "rust_video_commands": {
+      "passed": 8,
+      "failed": 0
+    },
+    "bun_run_check": "通过",
+    "cargo_check_lib": "通过",
+    "rust_format": "通过",
+    "frontend_format": "通过",
+    "diff_check": "通过"
+  },
+  "excluded_probes": [
+    "vod-fix-after-play-epic-early / late：第一版探针未能替换只读Tauri invoke，起点与点击间有长间隔，未按可播放数据区分readyState=1早期画面，且观察跨过自动下一条；保留本地原始文件，不计入有效播放样本或定量修复收益"
+  ],
+  "cleanup": {
+    "restoredPath": "/room/bilibili/24359271",
+    "probeCleared": true,
+    "settings": {
+      "proxy_mode": "auto",
+      "proxy_set": true,
+      "recommend_api": "app",
+      "media_cache": false
+    }
+  }
+}

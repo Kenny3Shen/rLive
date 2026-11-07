@@ -105,7 +105,7 @@ impl CacheWriteBudget {
     }
 
     /// 试着预留 `bytes`。不阻塞；额度不足返回 `None`。
-    fn try_reserve(self: &Arc<Self>, bytes: u64) -> Option<CacheWriteReservation> {
+    pub fn try_reserve(self: &Arc<Self>, bytes: u64) -> Option<CacheWriteReservation> {
         if bytes > self.max_bytes {
             return None;
         }
@@ -234,6 +234,11 @@ impl MediaCache {
     /// 试着为一个待缓存分片预留在途字节。不足则本次只转发不缓存。
     pub fn try_reserve(&self, bytes: u64) -> Option<CacheWriteReservation> {
         self.budget.try_reserve(bytes)
+    }
+
+    /// 与磁盘缓存共用同一份进程内有界预算。
+    pub fn budget(&self) -> &Arc<CacheWriteBudget> {
+        &self.budget
     }
 
     /// 当前在途的（字节，笔数）。

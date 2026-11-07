@@ -157,12 +157,15 @@ import { videoSeekGestureIntent, videoSeekGestureTarget } from "./videoSurfaceGe
 import { isVideoTailBuffered } from "./videoTailBuffer";
 import { createVideoWaitingRecovery, type VideoWaitingRecovery } from "./videoWaitingRecovery";
 import {
+  hasPlayableAutoRecoveryData,
   resumeSnapshotFor,
   shouldCaptureResume,
   VideoPlaybackHistory,
   VideoPlaybackSessions,
   videoPlaybackForKey,
   videoPlaybackSnapshot,
+  videoPlaybackSourceUrl,
+  type VideoPlaybackResult,
   type VideoResumeSnapshot,
 } from "./videoPlaybackLifecycle";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
@@ -461,17 +464,43 @@ function VideoPlayerPageContent() {
   // 用户在起播完成前按过暂停。自动起播的静音重试必须尊重它，
   // 否则卡加载时点暂停会被重试重新拉起，按钮状态与实际播放相反。
   const userPausedRef = useRef(false);
+  /** 等待看门狗发起的本次取流是否仍是当前设置下的自动恢复轮次。 */
+  const autoRecoveryActiveRef = useRef<(() => boolean) | null>(null);
+  const autoRecoverySettleRef = useRef<() => void>(() => {});
+  const playInfoResultRef = useRef<VideoPlaybackResult | undefined>(undefined);
+  const playUrlRef = useRef<string | undefined>(undefined);
+  const playerSettingsRef = useRef({ playerRevision, qualityQn, audioOnly, videoKey: "" });
+
+  /** 只结算令牌所属的那一轮自动恢复：迟到旧请求不会清掉下一轮令牌。 */
+  const clearAutoRecoveryAttempt = useCallback((attempt: () => boolean) => {
+    if (autoRecoveryActiveRef.current === attempt) autoRecoveryActiveRef.current = null;
+  }, []);
 
   /**
    * 进入下一轮播放会话。它不读取媒体 ref，既供 waiting 控制器的惰性初始化
    * 安全持有，也作为手动重试完成现场快照后的统一重建入口。
    */
-  const advancePlaybackSession = useCallback(() => {
-    setPlaybackError(null);
-    setWaiting(false);
-    setLoading(true);
-    setPlayerRevision((revision) => revision + 1);
-  }, []);
+  const advancePlaybackSession = useCallback(
+    (auto = false) => {
+      const settings = playerSettingsRef.current;
+      const isCurrent = () =>
+        autoRecoveryActiveRef.current === isCurrent &&
+        playerSettingsRef.current.playerRevision === settings.playerRevision + 1 &&
+        playerSettingsRef.current.qualityQn === settings.qualityQn &&
+        playerSettingsRef.current.audioOnly === settings.audioOnly &&
+        playerSettingsRef.current.videoKey === settings.videoKey;
+      autoRecoveryActiveRef.current = auto ? isCurrent : null;
+      if (auto) {
+        // 仅结算这一轮自己的令牌；旧请求迟到时不能清掉后续自动恢复的令牌。
+        autoRecoverySettleRef.current = () => clearAutoRecoveryAttempt(isCurrent);
+      }
+      setPlaybackError(null);
+      setWaiting(false);
+      setLoading(true);
+      setPlayerRevision((revision) => revision + 1);
+    },
+    [clearAutoRecoveryAttempt],
+  );
 
   /** 手动重建前记录当前位置；自动恢复已在 waiting 事件发生时记录现场。 */
   const rebuildPlaybackSession = useCallback(() => {
@@ -484,7 +513,10 @@ function VideoPlayerPageContent() {
   // 链路。惰性 state 初始化只创建一次控制器；控制器本身不参与渲染。
   const [waitingRecovery] = useState<VideoWaitingRecovery>(() =>
     createVideoWaitingRecovery({
-      onAutoRetry: () => advancePlaybackSession(),
+      onAutoRetry: () => {
+        // waiting 事件已保存可续播现场；这里只登记本轮自动恢复。
+        advancePlaybackSession(true);
+      },
       onExhausted: () => {
         // 自动预算耗尽：改走可见错误面板，把重试交还给用户（retryPlayback 会
         // 清预算，手动重试不受影响）。
@@ -500,6 +532,7 @@ function VideoPlayerPageContent() {
    * 重置，再走与自动恢复同一条重建链路。
    */
   const retryPlayback = useCallback(() => {
+    autoRecoveryActiveRef.current = null;
     waitingRecovery.notifyManualRetry();
     rebuildPlaybackSession();
   }, [rebuildPlaybackSession, waitingRecovery]);
@@ -1006,18 +1039,48 @@ function VideoPlayerPageContent() {
       playerRevision,
     ],
     enabled: params !== null && cid > 0,
-    queryFn: ({ signal }) =>
-      playbackSessions.acquire(videoKey, signal, () =>
-        videoGetPlayInfo({
-          bvid: params?.bvid ?? null,
-          cid,
-          ep_id: params?.epId ?? null,
-          qn: qualityQn,
-          audio_only: audioOnly,
-          // 与下一分集预热使用同一缓存键空间；仅音频模式不读写分片缓存。
-          media_cache: videoNextEpisodePreload && !audioOnly,
-        }),
-      ),
+    queryFn: ({ signal }) => {
+      // 本轮令牌和结算函数必须在发起取流时捕获：旧请求迟到时不能读到新令牌。
+      const attempt = autoRecoveryActiveRef.current;
+      const settle = autoRecoverySettleRef.current;
+      return playbackSessions.acquire(
+        videoKey,
+        signal,
+        () =>
+          videoGetPlayInfo({
+            bvid: params?.bvid ?? null,
+            cid,
+            ep_id: params?.epId ?? null,
+            qn: qualityQn,
+            audio_only: audioOnly,
+            // 与下一分集预热使用同一缓存键空间；仅音频模式不读写分片缓存。
+            media_cache: videoNextEpisodePreload && !audioOnly,
+          }),
+        {
+          autoRecoveryCheck: (held) => {
+            const media = videoRef.current;
+            const stillHeldSource =
+              held.key === videoKey &&
+              playInfoResultRef.current === held &&
+              held === playbackSessions.heldResult() &&
+              playUrlRef.current === videoPlaybackSourceUrl(held);
+            const validAutoAttempt =
+              autoRecoveryActiveRef.current === attempt &&
+              !!attempt?.() &&
+              !!media &&
+              hasPlayableAutoRecoveryData(media);
+            if (!validAutoAttempt || !stillHeldSource) return { keepHeld: false };
+            // 新结果还没提交：旧播放器已恢复时撤销这次重建，失败请求也只
+            // 沿用仍活着的旧会话。query 状态由 media 事件负责复位。
+            setWaiting(false);
+            setLoading(false);
+            setPlaybackError(null);
+            return { keepHeld: true };
+          },
+          onSettled: settle,
+        },
+      );
+    },
     // 换画质/重试期间保留旧数据：旧播放器继续播到新信息就位，而不是先黑屏等请求。
     placeholderData: keepPreviousData,
     staleTime: Infinity,
@@ -1032,6 +1095,15 @@ function VideoPlayerPageContent() {
   // 结果返回，A→B 失败→重试时即使 query 再给 A 的 placeholder，也绝不播放 A。
   const switchingItem = Boolean(playInfoQuery.data && playInfoQuery.data.key !== videoKey);
   const playInfo: VideoPlayInfo | undefined = videoPlaybackForKey(playInfoQuery.data, videoKey);
+  /** 自动恢复提交前核对当前 query 结果与媒体源，不能靠渲染闭包读旧值。 */
+  useLayoutEffect(() => {
+    playerSettingsRef.current = { playerRevision, qualityQn, audioOnly, videoKey };
+    playInfoResultRef.current = playInfoQuery.data;
+    // keepPreviousData 的占位渲染仍属于本轮取流，令牌留到结果终态结算。
+    if (autoRecoveryActiveRef.current && !autoRecoveryActiveRef.current()) {
+      autoRecoveryActiveRef.current = null;
+    }
+  }, [audioOnly, playerRevision, playInfoQuery.data, qualityQn, videoKey]);
   // 保留取流键与本地续播的必要依赖；侧栏、字幕、缩略图和弹幕让首帧先走。
   // 失败时也显示侧栏，不能把切集/查看详情等恢复入口一起锁住。
   const secondaryReady =
@@ -1065,6 +1137,7 @@ function VideoPlayerPageContent() {
   const changeQuality = useCallback(
     (qn: number) => {
       if (qn === qualityQn) return;
+      autoRecoveryActiveRef.current = null;
       captureResumeRef.current?.();
       setQualityQn(qn);
     },
@@ -1073,6 +1146,7 @@ function VideoPlayerPageContent() {
 
   /** 仅音频（听视频）：与切画质同一重建链路（记录续播点 → 重取播放信息）。 */
   const toggleAudioOnly = useCallback(() => {
+    autoRecoveryActiveRef.current = null;
     captureResumeRef.current?.();
     const nextAudioOnly = !audioOnly;
     if (nextAudioOnly && pictureInPicture?.isPictureInPicture) {
@@ -1289,6 +1363,9 @@ function VideoPlayerPageContent() {
   );
   const playKind: VideoJsPlaybackKind = playInfo?.audio_only ? "native" : "dash";
   // Video.js 的 dash.js 适配器原生处理带 SegmentList 的 MPD，不再维护私有分片时间轴补丁。
+  useLayoutEffect(() => {
+    playUrlRef.current = playUrl;
+  }, [playUrl]);
 
   /**
    * 下一分集预加载。
@@ -1943,12 +2020,12 @@ function VideoPlayerPageContent() {
   }, [storyboardVttUrl, playUrl]);
 
   // 语音字幕（本地 ASR）：与直播间、IPTV 共用同一条管线。点播的媒体元素跨会话
-  // 复用（不按 key 重建），因此 mediaKey 取播放器换代计数、sessionKey 取稿件
-  // 身份 + 取流地址 —— 换集、换画质与切「仅音频」都会重建取流，识别状态必须
-  // 随之清空，否则下一段字幕会从上一段语句中间续写。
+  // 复用，mediaKey 保持固定；sessionKey 用稿件身份 + 取流地址区分真实换代。
+  // 换集、换画质与切「仅音频」都会重建取流并清空识别状态；被撤销的自动恢复
+  // 沿用同一个地址，不会让下一段字幕从上一段语句中间续写。
   const asr = useAsrCaptions({
     videoRef,
-    mediaKey: playerRevision,
+    mediaKey: 0,
     sessionKey: `vod:${videoKey}:${playUrl ?? "idle"}`,
     featureEnabled: asrEnabled,
     settingPending: asrPending,

@@ -566,6 +566,7 @@ pub async fn video_get_play_info(
                     route: &route,
                     media_cache: audio_cache.clone(),
                     media_cache_store: media_cache_store.clone(),
+                    media_cache_budget: Some(state.media_cache.budget().clone()),
                     initialization: audio_initialization,
                     vod_backup_urls: None,
                     ..Default::default()
@@ -582,6 +583,7 @@ pub async fn video_get_play_info(
                 route: &route,
                 media_cache: video_cache.clone(),
                 media_cache_store: media_cache_store.clone(),
+                media_cache_budget: Some(state.media_cache.budget().clone()),
                 initialization: Some(PrefetchedInitialization {
                     bytes: selection.video.init_bytes.as_slice().into(),
                     content_type: "video/mp4",
@@ -604,6 +606,7 @@ pub async fn video_get_play_info(
                         route: &route,
                         media_cache: audio_cache.clone(),
                         media_cache_store: media_cache_store.clone(),
+                        media_cache_budget: Some(state.media_cache.budget().clone()),
                         initialization: audio_initialization,
                         vod_backup_urls: audio_backup_urls,
                         ..Default::default()

@@ -39,4 +39,38 @@ export type StreamProxyTelemetry = {
    * 因此是可在多条流之间比较的估计值，而不是精确采集时刻。
    */
   first_media_at_ms: number | null;
+  /** 最近一次分片续传失败的协议诊断；成功续传不产生该记录。 */
+  last_resume_diagnostic: StreamProxyResumeDiagnostic | null;
+};
+
+/** 续传失败类别；枚举值与 Rust `StreamProxyResumeFailure` 一致。 */
+export type StreamProxyResumeFailure =
+  | "request_failed"
+  | "status_mismatch"
+  | "content_range_mismatch"
+  | "validator_mismatch"
+  | "attempts_exhausted";
+
+/**
+ * 仅含数值、布尔与不含路径/query 的主机名；不含 URL、请求头或验证器原文。
+ * `initial_host` 和 `resumed_host` 分别是首答与续答的最终上游主机名。
+ */
+export type StreamProxyResumeDiagnostic = {
+  initial_host: string | null;
+  resumed_host: string | null;
+  initial_range_start: number;
+  initial_range_end: number;
+  resume_range_start: number;
+  resume_range_end: number;
+  upstream_status: number | null;
+  content_range_start: number | null;
+  content_range_end: number | null;
+  content_range_total: number | null;
+  initial_etag_present: boolean;
+  initial_last_modified_present: boolean;
+  resumed_etag_present: boolean;
+  resumed_last_modified_present: boolean;
+  etag_mismatch: boolean;
+  last_modified_mismatch: boolean;
+  failure_kind: StreamProxyResumeFailure;
 };

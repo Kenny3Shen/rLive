@@ -1,0 +1,515 @@
+{
+  "date": "2026-11-07",
+  "topic": "VOD 推荐首页部分视频加载缓慢或失败调查",
+  "baseline": {
+    "started_at": "50d99fe4",
+    "ended_at": "831d8b99",
+    "version": "9.3.2",
+    "note": "实测开始于 50d99fe4、结束于 831d8b99；期间仅合入播放器 HUD / IPTV 标题样式提交，VideoPlayerPage.tsx 有 7 行 HUD 样式变化，核心取流与续传逻辑未变"
+  },
+  "environment": {
+    "platform": "Windows Debug 主窗口",
+    "webview": "WebView2 / Edge 156.0.4314.58",
+    "frontend": "Vite dev / React dev",
+    "capture": "Windows 主窗口 CDP，媒体事件、requestVideoFrameCallback、IPC 与 /live 请求",
+    "recommend_api": "app",
+    "default_proxy_mode": "auto",
+    "default_proxy_set": true,
+    "media_cache": false
+  },
+  "method": {
+    "sampling": "首页样本在真实推荐首页逐张点击卡片，保留应用原有画质与代理配置，不使用伪造媒体或 JS 夹具",
+    "probe_rounds": "AI 稿件 auto1 → off1 → auto2 → off2，Epic 稿件 off → auto；固定稿件、cid 与 qn=80，每轮 finally 恢复原设置，诊断代理以 video_stop_play 停止。六轮是页面 fetch 对真实 Rust /live 代理发出的后端传输诊断，不是播放器首帧采样",
+    "cleanup": "临时 media listener、CDP 监听/会话与 page helpers 均已清理；settings_get 确认原 proxy_mode=auto 与系统代理恢复；所有诊断代理已 video_stop_play；Windows 主窗口经原导航回到调试前的 IPTV/CCTV6 页面并 detach。正常观看记录照常写入历史，未清除用户历史或缓存",
+    "clock": "首页样本的 media.at / frame.at 从点击卡片前设置的采样起点计时；network 各项耗时以各自请求起点计时；playInfoMs、headersMs、totalMs 为单次请求耗时；home sample 的 telemetry 是采样时最后一个活跃代理会话的快照，不是整页所有会话累计",
+    "privacy": "不收录 session id、CDP 请求 id、页面 URL、实际媒体 URL、视频标题 query、签名与凭据；只保留 bvid、cid、画质和协议数值"
+  },
+  "limitations": [
+    "仅调查，未修改生产代码，未实施或验证修复",
+    "仅 Windows Debug / WebView2 / 当前网络与代理环境；未测 release、Android 与其他 WebView",
+    "诊断未采集应用内部续传请求的上游响应头，不能判定续传被拒绝具体由 status、Content-Range 或验证器字段导致",
+    "00-partial 是仅有媒体事件的早期探针，没有 CDP 网络与 IPC 记录，不能坐实首帧迟到重建的完整因果",
+    "02 是从 007 相关列表误入的视频，仅作相关链路对照，不计入推荐首页样本",
+    "b01、b02、03 是采样错误或空结果，已排除"
+  ],
+  "observations": [
+    {
+      "sample": "00-partial",
+      "scope": "推荐首页首张卡片早期媒体探针",
+      "media": {
+        "loadedmetadataMs": 3295.6,
+        "loadeddataMs": 28434.5,
+        "playingMs": 28561.6,
+        "firstFrameMs": 28557.7,
+        "firstFrameMediaTimeSeconds": 0.069687,
+        "playerLoadstartAgainMs": 30320.5,
+        "resumePositionSeconds": 1.780182,
+        "stateAtEnd": "readyState=1，t=1.780182，paused=false"
+      },
+      "ipcCaptured": false,
+      "networkCaptured": false,
+      "interpretation": "约 28.56 秒出现首帧、约 30.3 秒播放器重新 load；媒体观察与 25 秒恢复计时后的重建时序吻合，但本样本不能证明具体 IPC 因果"
+    }
+  ],
+  "recommend_home_samples": [
+    {
+      "sample": "01",
+      "bvid": "BV1JD4Y6aEET",
+      "cid": 43367006895,
+      "label": "首页 007 宣传视频",
+      "outcome": "success",
+      "observedMs": 3388.9,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "playInfoMs": [427.2, 409.8],
+      "firstVideoRange": "bytes=1081-878337",
+      "firstVideo": {
+        "status": 206,
+        "contentRange": "bytes 1081-878337/7895955",
+        "contentLength": 877257,
+        "receivedBytes": 877257,
+        "headersMs": 290.7,
+        "totalMs": 974.1,
+        "error": null
+      },
+      "firstFrameMs": 1854.6,
+      "loadeddataMs": 1657.7,
+      "stateAtEnd": "readyState=4，t=1.669971，buffer=0–15 s",
+      "videoTelemetry": {
+        "upstream_requests": 4,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded": 3145114,
+        "first_response_ms": 286,
+        "latest_response_ms": 137
+      }
+    },
+    {
+      "sample": "b00",
+      "bvid": "BV12f4w6REdE",
+      "cid": 43260579590,
+      "label": "首页 TheShy 对局",
+      "outcome": "success",
+      "observedMs": 3499.3,
+      "quality": 80,
+      "codecs": "avc1.640033",
+      "playInfoMs": [579.2, 585.6],
+      "firstVideoRange": "bytes=2979-916596",
+      "firstVideo": {
+        "status": 206,
+        "contentRange": "bytes 2979-916596/369731775",
+        "contentLength": 913618,
+        "receivedBytes": 913618,
+        "headersMs": 424.5,
+        "totalMs": 579.8,
+        "error": null
+      },
+      "firstFrameMs": 1949.1,
+      "loadeddataMs": 1687.6,
+      "stateAtEnd": "readyState=4，t=1.749711，buffer=0–20 s",
+      "videoTelemetry": {
+        "upstream_requests": 5,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded": 6374789,
+        "first_response_ms": 420,
+        "latest_response_ms": 257
+      }
+    },
+    {
+      "sample": "c02",
+      "bvid": "BV1Hz4b6HEJL",
+      "cid": 43351474419,
+      "label": "首页百度 AI 日报",
+      "outcome": "success",
+      "observedMs": 2903.9,
+      "quality": 80,
+      "codecs": "avc1.640033",
+      "playInfoMs": [302.9, 321.9],
+      "firstVideoRange": "bytes=1635-631593",
+      "firstVideo": {
+        "status": 206,
+        "contentRange": "bytes 1635-631593/11418784",
+        "contentLength": 629959,
+        "receivedBytes": 629959,
+        "headersMs": 124.2,
+        "totalMs": 240.7,
+        "error": null
+      },
+      "firstFrameMs": 1364.5,
+      "loadeddataMs": 1010.8,
+      "stateAtEnd": "readyState=4，t=1.840046，buffer=0–30 s",
+      "videoTelemetry": {
+        "upstream_requests": 6,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded": 1680504,
+        "first_response_ms": 120,
+        "latest_response_ms": 28
+      }
+    },
+    {
+      "sample": "c03",
+      "bvid": "BV1Dsxf6nEAF",
+      "cid": 43338760480,
+      "label": "首页 AI 圈变天",
+      "outcome": "failed",
+      "observedMs": 33734.9,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "playInfoMs": [349.8, 1317.2],
+      "firstVideoRange": "bytes=1724-678510",
+      "firstVideo": {
+        "status": 206,
+        "contentRange": "bytes 1724-678510/23645794",
+        "contentLength": 676787,
+        "receivedBytes": 522564,
+        "headersMs": 84.2,
+        "totalMs": 235.3,
+        "error": "net::ERR_CONTENT_LENGTH_MISMATCH"
+      },
+      "absoluteEndByte": 524287,
+      "retries": {
+        "clientRequests": 8,
+        "clientRequestsWithTruncation": 8,
+        "clientRequestsWithLengthMismatch": 8,
+        "proxyResumes": 4,
+        "proxyFailures": 4,
+        "playInfoCalls": 2,
+        "playInfoAgainMs": 25392.5
+      },
+      "audio": {
+        "firstRange": "bytes=1633-58985",
+        "contentLength": 57353,
+        "receivedBytes": 57353,
+        "upstream_failures": 0
+      },
+      "media": {
+        "loadedmetadataMs": 580.1,
+        "firstFrameMs": null,
+        "reloadLoadstartMs": 26980.6,
+        "stateAtEnd": "readyState=1，t=0，buffer=空"
+      },
+      "visibleMessage": "部分分片加载失败，播放器正在自动重试。若画面长时间不动，可点重试。",
+      "videoTelemetryScope": "第二次 playInfo 建立的第二个代理会话",
+      "videoTelemetry": {
+        "upstream_requests": 8,
+        "upstream_failures": 4,
+        "upstream_resumes": 4,
+        "bytes_forwarded": 2090256,
+        "first_response_ms": 133,
+        "latest_response_ms": 109
+      }
+    },
+    {
+      "sample": "c04",
+      "bvid": "BV1cmxs6BEcP",
+      "cid": 43230302160,
+      "label": "首页 Epic 免费送",
+      "outcome": "failed",
+      "observedMs": 33710.9,
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "playInfoMs": [2214.6, 2166.2, 327.2],
+      "firstVideoRange": "bytes=1105-2319028",
+      "firstVideo": {
+        "status": 206,
+        "contentRange": "bytes 1105-2319028/20074165",
+        "contentLength": 2317924,
+        "receivedBytes": 523183,
+        "headersMs": 82.9,
+        "totalMs": 211.7,
+        "error": "net::ERR_CONTENT_LENGTH_MISMATCH"
+      },
+      "absoluteEndByte": 524287,
+      "retries": {
+        "clientRequests": 7,
+        "clientRequestsWithLengthMismatch": 6,
+        "clientRequestsWithPartialBodyAtCaptureEnd": 1,
+        "proxyResumes": 2,
+        "proxyFailures": 2,
+        "playInfoCalls": 3,
+        "playInfoAgainMs": 27281.1
+      },
+      "audio": {
+        "firstRange": "bytes=1009-94590",
+        "contentLength": 93582,
+        "receivedBytes": 93582,
+        "totalMs": [14009.5, 319.6],
+        "upstream_failures": 0
+      },
+      "media": {
+        "loadedmetadataMs": 2535.5,
+        "firstFrameMs": null,
+        "reloadLoadstartMs": 27923.9,
+        "stateAtEnd": "readyState=1，t=0，buffer=空"
+      },
+      "videoTelemetryScope": "第三次 playInfo 建立的第三个代理会话",
+      "videoTelemetry": {
+        "upstream_requests": 5,
+        "upstream_failures": 2,
+        "upstream_resumes": 2,
+        "bytes_forwarded": 1421917,
+        "first_response_ms": 72,
+        "latest_response_ms": 92
+      }
+    }
+  ],
+  "related_list_comparison": [
+    {
+      "sample": "02",
+      "scope": "从 007 相关列表误入，不计入首页样本",
+      "bvid": "BV1ob7S67E7j",
+      "cid": 38953419141,
+      "outcome": "slow_success",
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "playInfoMs": 404.3,
+      "firstVideoRange": "bytes=1069-455166",
+      "firstVideo": {
+        "status": 206,
+        "contentRange": "bytes 1069-455166/4058065",
+        "contentLength": 454098,
+        "receivedBytes": 454098,
+        "headersMs": 4085.4,
+        "totalMs": 4125.3,
+        "error": null
+      },
+      "firstFrameMs": 4903.8,
+      "loadeddataMs": 4765.2,
+      "stateAtEnd": "readyState=4，t=1.594436，buffer=0–5 s",
+      "videoTelemetry": {
+        "upstream_requests": 3,
+        "upstream_failures": 0,
+        "upstream_resumes": 1,
+        "bytes_forwarded": 454098,
+        "first_response_ms": 4081,
+        "latest_response_ms": 4081
+      }
+    }
+  ],
+  "proxy_mode_diagnostics": {
+    "common": {
+      "quality": 80,
+      "codecs": "avc1.640032",
+      "truncatedAbsoluteEndByte": 524287,
+      "postBoundaryDiagnosticRange": "bytes=524288-678510",
+      "postBoundaryDiagnosticContentLength": 154223,
+      "notes": [
+        "每轮独立申请 playInfo 并启动新代理；页面 fetch 向真实 Rust /live 代理请求与首页失败样本相同的首片 Range，随后单独发出跨过 512 KiB 边界的固定小 Range，且不带 If-Range。这些是真实后端传输诊断，不作播放器首帧采样",
+        "bytes=524288-678510 对 AI 稿件恰好是首段全部剩余字节；对 Epic 稿件只是主动选取的小 Range，并非 bytes=1105-2319028 的全部剩余区间",
+        "每轮 finally 恢复原代理设置，诊断新代理由 video_stop_play 停止",
+        "telemetry 的转发字节包含首段前缀与跨边界诊断小 Range，不能用它推断播放器已经补齐同一首片",
+        "应用内部自动续传已由 upstream_resumes=1 表明发出，但其响应正文没有继续转发到同一首片；采样未记录该续传请求的上游响应头，具体拒绝字段需上游响应日志"
+      ]
+    },
+    "targets": {
+      "AI": {
+        "bvid": "BV1Dsxf6nEAF",
+        "cid": 43338760480,
+        "range": "bytes=1724-678510",
+        "contentLength": 676787,
+        "truncatedReceivedBytes": 522564,
+        "sumForwardedBytes": 676787
+      },
+      "Epic": {
+        "bvid": "BV1cmxs6BEcP",
+        "cid": 43230302160,
+        "range": "bytes=1105-2319028",
+        "contentLength": 2317924,
+        "truncatedReceivedBytes": 523183,
+        "sumForwardedBytes": 677406
+      }
+    },
+    "rounds": [
+      {
+        "round": "auto1",
+        "target": "AI",
+        "mode": "auto",
+        "route": "自动代理（Loopback HTTP 代理）",
+        "playInfoMs": 662.3,
+        "initial": {
+          "status": 206,
+          "receivedBytes": 522564,
+          "headersMs": 97.9,
+          "totalMs": 256.7,
+          "error": "network error"
+        },
+        "remaining": {
+          "status": 206,
+          "receivedBytes": 154223,
+          "headersMs": 94.5,
+          "totalMs": 126.3,
+          "error": null
+        },
+        "telemetry": {
+          "upstream_requests": 3,
+          "upstream_failures": 1,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 676787,
+          "first_response_ms": 90,
+          "latest_response_ms": 89
+        },
+        "restored": true
+      },
+      {
+        "round": "off1",
+        "target": "AI",
+        "mode": "off",
+        "route": "直连（不使用代理）",
+        "playInfoMs": 400.1,
+        "initial": {
+          "status": 206,
+          "receivedBytes": 522564,
+          "headersMs": 114.7,
+          "totalMs": 300.9,
+          "error": "network error"
+        },
+        "remaining": {
+          "status": 206,
+          "receivedBytes": 154223,
+          "headersMs": 65.5,
+          "totalMs": 106.6,
+          "error": null
+        },
+        "telemetry": {
+          "upstream_requests": 3,
+          "upstream_failures": 1,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 676787,
+          "first_response_ms": 111,
+          "latest_response_ms": 63
+        },
+        "restored": true
+      },
+      {
+        "round": "auto2",
+        "target": "AI",
+        "mode": "auto",
+        "route": "自动代理（Loopback HTTP 代理）",
+        "playInfoMs": 1284.3,
+        "initial": {
+          "status": 206,
+          "receivedBytes": 522564,
+          "headersMs": 76.8,
+          "totalMs": 232.4,
+          "error": "network error"
+        },
+        "remaining": {
+          "status": 206,
+          "receivedBytes": 154223,
+          "headersMs": 111.1,
+          "totalMs": 144.6,
+          "error": null
+        },
+        "telemetry": {
+          "upstream_requests": 3,
+          "upstream_failures": 1,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 676787,
+          "first_response_ms": 68,
+          "latest_response_ms": 108
+        },
+        "restored": true
+      },
+      {
+        "round": "off2",
+        "target": "AI",
+        "mode": "off",
+        "route": "直连（不使用代理）",
+        "playInfoMs": 372.6,
+        "initial": {
+          "status": 206,
+          "receivedBytes": 522564,
+          "headersMs": 75.1,
+          "totalMs": 228.9,
+          "error": "network error"
+        },
+        "remaining": {
+          "status": 206,
+          "receivedBytes": 154223,
+          "headersMs": 73.2,
+          "totalMs": 117.7,
+          "error": null
+        },
+        "telemetry": {
+          "upstream_requests": 3,
+          "upstream_failures": 1,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 676787,
+          "first_response_ms": 71,
+          "latest_response_ms": 70
+        },
+        "restored": true
+      },
+      {
+        "round": "epic-off",
+        "target": "Epic",
+        "mode": "off",
+        "route": "直连（不使用代理）",
+        "playInfoMs": 1809.3,
+        "initial": {
+          "status": 206,
+          "receivedBytes": 523183,
+          "headersMs": 75.8,
+          "totalMs": 247,
+          "error": "network error"
+        },
+        "remaining": {
+          "status": 206,
+          "receivedBytes": 154223,
+          "headersMs": 82.7,
+          "totalMs": 132.3,
+          "error": null
+        },
+        "telemetry": {
+          "upstream_requests": 3,
+          "upstream_failures": 1,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 677406,
+          "first_response_ms": 72,
+          "latest_response_ms": 78
+        },
+        "restored": true
+      },
+      {
+        "round": "epic-auto",
+        "target": "Epic",
+        "mode": "auto",
+        "route": "自动代理（Loopback HTTP 代理）",
+        "playInfoMs": 1526.2,
+        "initial": {
+          "status": 206,
+          "receivedBytes": 523183,
+          "headersMs": 96.9,
+          "totalMs": 242.3,
+          "error": "network error"
+        },
+        "remaining": {
+          "status": 206,
+          "receivedBytes": 154223,
+          "headersMs": 46.6,
+          "totalMs": 60.9,
+          "error": null
+        },
+        "telemetry": {
+          "upstream_requests": 3,
+          "upstream_failures": 1,
+          "upstream_resumes": 1,
+          "bytes_forwarded": 677406,
+          "first_response_ms": 93,
+          "latest_response_ms": 44
+        },
+        "restored": true
+      }
+    ]
+  },
+  "conclusions": [
+    "推荐首页 5 个有效样本中 3 个成功、2 个在 33.7 秒观察窗口内始终无首帧；另有 1 个相关列表样本首个视频 Range 响应头等待 4.09 秒，首帧 4.90 秒，属于慢速成功",
+    "c03 与 c04 两个不同稿件的首段正文都在绝对字节 524287（即文件前 512 KiB）处结束，且响应头仍声明完整 Content-Range 与 Content-Length，浏览器报 ERR_CONTENT_LENGTH_MISMATCH",
+    "六轮 auto/off 诊断中两个不同稿件、同一 qn=80 的首段分别固定截断到 522564 B 与 523183 B；两稿件单独请求跨边界的小 Range bytes=524288-678510 均返回完整 154223 B。切换代理出口不能解决本次复现的截断",
+    "遥测显示每个诊断首片请求只伴随一次应用内部续传，该续传已发出但没有继续转发响应正文，随后 handler 记一次失败；具体拒绝字段需上游响应日志。自动重建会重新申请 playInfo、建立新代理并重取同一首片，在本次样本中没有补齐前一响应的剩余字节",
+    "首帧迟到随后重建有媒体事件观察，静态代码也与 25 秒恢复计时相符；早期样本缺少网络与 IPC，不能据此坐实完整 IPC 因果",
+    "卡片预览泄漏、上游正常 EOF 但未满请求 Range 时缺少最终长度断言、续传验证器比较都只是静态代码风险；有 Content-Length 却未读满时 reqwest 通常已返回读取错误，本轮未对这些路径做实机对照，不作为当前已证根因"
+  ]
+}

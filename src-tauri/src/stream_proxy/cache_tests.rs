@@ -12,7 +12,8 @@ use tokio::time::timeout;
 
 use super::{
     HlsResources, ManifestPin, PrefetchedInitialization, ProxyLoopContext, ProxyTelemetryCounters,
-    StreamProxy, StreamProxyStartOptions, VodBackupUrls, handle_client, request_header,
+    StreamProxy, StreamProxyResumeFailure, StreamProxyStartOptions, VodBackupUrls, handle_client,
+    request_header,
 };
 use crate::media_cache::{MediaCache, MediaCacheSpec};
 
@@ -52,6 +53,34 @@ fn complete_response() -> Vec<u8> {
         "Content-Length: 800",
         &complete_body(),
     )
+}
+
+/// 用合法 HTTP chunked 分帧传输指定 body，随后以 `0\r\n\r\n` 给出干净 EOF。
+fn chunked_body(payload: &[u8]) -> Vec<u8> {
+    let mut framed = Vec::new();
+    for chunk in payload.chunks(100) {
+        framed.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+        framed.extend_from_slice(chunk);
+        framed.extend_from_slice(b"\r\n");
+    }
+    framed.extend_from_slice(b"0\r\n\r\n");
+    framed
+}
+
+fn assert_bad_gateway_without_media(bytes: &[u8], result: &Result<(), String>) {
+    assert!(result.is_err(), "无完整候选必须明确失败");
+    let text = String::from_utf8_lossy(bytes);
+    assert!(text.starts_with("HTTP/1.1 502 Bad Gateway"), "{text}");
+    assert!(
+        text.to_ascii_lowercase()
+            .contains("content-type: text/plain"),
+        "{text}"
+    );
+    assert_eq!(
+        body(bytes),
+        b"VOD segment verification failed",
+        "502 只交付安全文本，不交付短 206 或媒体前缀"
+    );
 }
 
 async fn read_request_head(stream: &mut TcpStream) -> String {
@@ -153,6 +182,7 @@ impl Fixture {
             telemetry: Arc::new(ProxyTelemetryCounters::new()),
             media_cache: Some(spec),
             media_cache_store: Some(store.clone()),
+            media_cache_budget: Some(store.budget().clone()),
             initialization: None,
             vod_backup_urls: None,
         };
@@ -202,6 +232,10 @@ impl Fixture {
             .telemetry
             .upstream_resumes
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn last_resume_diagnostic(&self) -> Option<super::StreamProxyResumeDiagnostic> {
+        self.context.telemetry.snapshot().last_resume_diagnostic
     }
 
     /// 每次请求都等待真实 handle_client 结束，避免以“客户端收完”代替正常 EOF。
@@ -620,6 +654,7 @@ async fn vod_backup_selection_keeps_body_resume_on_the_selected_candidate() {
     });
     let mut context = fixture.context.clone();
     context.url = format!("http://{unhealthy_address}/primary.m4s").into();
+    context.media_cache_budget = None;
     context.vod_backup_urls = Some(VodBackupUrls(Arc::from([format!(
         "http://{healthy_address}/backup.m4s"
     )])));
@@ -673,6 +708,11 @@ async fn segment_resumes_from_forwarded_offset_after_truncation_or_stall() {
             "续传必须从已转发的位置开始"
         );
         assert_eq!(fixture.upstream_resumes(), 1);
+        assert_eq!(
+            fixture.last_resume_diagnostic(),
+            None,
+            "成功续传不记录验证器或 hostname 诊断"
+        );
         // 拼接出的完整分片与一次读完的分片等价，可以落盘。
         fixture.wait_for_complete_cache().await;
     }
@@ -695,6 +735,19 @@ async fn segment_resume_is_abandoned_when_upstream_ignores_resume_range() {
     assert!(result.is_err(), "续传被拒必须走读取失败路径");
     assert_eq!(body(&bytes), &complete_body()[..300], "不得拼接全量响应");
     assert_eq!(fixture.upstream_resumes(), 1, "区间不符时不再重试");
+    let diagnostic = fixture.last_resume_diagnostic().expect("记录续传失败诊断");
+    assert_eq!(diagnostic.initial_range_start, 0);
+    assert_eq!(diagnostic.initial_range_end, 799);
+    assert_eq!(diagnostic.resume_range_start, 300);
+    assert_eq!(diagnostic.resume_range_end, 799);
+    assert_eq!(diagnostic.upstream_status, Some(200));
+    assert_eq!(diagnostic.content_range_start, Some(0));
+    assert_eq!(diagnostic.content_range_end, Some(799));
+    assert_eq!(
+        diagnostic.failure_kind,
+        StreamProxyResumeFailure::StatusMismatch
+    );
+    assert!(diagnostic.initial_host.is_some());
     fixture.assert_not_cached().await;
 }
 
@@ -780,6 +833,18 @@ async fn segment_resume_is_rejected_when_validator_changes() {
         "不得拼接不同版本的内容"
     );
     assert_eq!(fixture.upstream_resumes(), 1, "验证器不符时不再重试");
+    let diagnostic = fixture.last_resume_diagnostic().expect("记录续传失败诊断");
+    assert_eq!(diagnostic.upstream_status, Some(206));
+    assert_eq!(diagnostic.content_range_start, Some(300));
+    assert_eq!(diagnostic.content_range_end, Some(799));
+    assert!(diagnostic.initial_etag_present);
+    assert!(diagnostic.resumed_etag_present);
+    assert!(diagnostic.etag_mismatch);
+    assert!(!diagnostic.last_modified_mismatch);
+    assert_eq!(
+        diagnostic.failure_kind,
+        StreamProxyResumeFailure::ValidatorMismatch
+    );
     fixture.assert_not_cached().await;
 }
 
@@ -814,6 +879,15 @@ async fn segment_resume_is_rejected_when_if_range_falls_back_to_full_body() {
         fixture.requested_if_ranges(),
         [None, Some("\"v1\"".to_owned())],
         "续传请求必须带上首段的强 ETag"
+    );
+    let diagnostic = fixture.last_resume_diagnostic().expect("记录续传失败诊断");
+    assert_eq!(diagnostic.upstream_status, Some(200));
+    assert!(diagnostic.initial_etag_present);
+    assert!(diagnostic.resumed_etag_present);
+    assert!(!diagnostic.etag_mismatch, "验证器相同也不能拼接 200 全量");
+    assert_eq!(
+        diagnostic.failure_kind,
+        StreamProxyResumeFailure::StatusMismatch
     );
     fixture.assert_not_cached().await;
 }
@@ -971,6 +1045,256 @@ async fn media_cache_discards_prefix_when_client_disconnects_between_chunks() {
     .expect("客户端离开后代理未及时结束");
 }
 
+/// 构造两个独立本地上游：主节点和备用节点各自按顺序消费一份回复。
+async fn two_node_fixture(
+    primary_replies: Vec<Vec<u8>>,
+    backup_replies: Vec<Vec<u8>>,
+) -> (
+    Fixture,
+    JoinHandle<()>,
+    JoinHandle<()>,
+    Arc<Mutex<Vec<String>>>,
+) {
+    let mut fixture = Fixture::new(complete_response()).await;
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut nodes = Vec::new();
+    for replies in [primary_replies, backup_replies] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut replies = VecDeque::from(replies);
+        let requests = requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let request = read_request_head(&mut stream).await;
+                requests.lock().unwrap().push(request);
+                let _ = stream
+                    .write_all(&replies.pop_front().unwrap_or_else(complete_response))
+                    .await;
+            }
+        });
+        nodes.push((address, server));
+    }
+    fixture.context.url = format!("http://{}/primary.m4s", nodes[0].0).into();
+    fixture.context.vod_backup_urls = Some(VodBackupUrls(Arc::from([
+        format!("http://{}/backup.m4s", nodes[1].0),
+        format!("http://{}/backup.m4s", nodes[1].0),
+    ])));
+    let (_, backup_server) = nodes.remove(1);
+    let (_, primary_server) = nodes.remove(0);
+    (fixture, primary_server, backup_server, requests)
+}
+
+#[tokio::test]
+async fn verified_vod_segment_replaces_truncated_primary_with_one_complete_backup_range() {
+    let bad_prefix = vec![0xEE; 300];
+    let (fixture, primary, backup, requests) = two_node_fixture(
+        vec![response_with_validators(
+            206,
+            "bytes 0-799/1600",
+            "ETag: \"v1\"\r\nLast-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\n",
+            "Content-Length: 800",
+            &bad_prefix,
+        )],
+        vec![
+            response_with_validators(
+                206,
+                "bytes 0-799/1600",
+                "ETag: \"v2\"\r\nLast-Modified: Thu, 22 Oct 2015 07:28:00 GMT\r\n",
+                "Content-Length: 800",
+                &complete_body(),
+            ),
+            response(206, "bytes 0-799/1600", "Content-Length: 800", &bad_prefix),
+        ],
+    )
+    .await;
+    let (bytes, result) = fixture.fetch().await;
+    result.unwrap();
+    assert_eq!(
+        body(&bytes),
+        complete_body(),
+        "下游字节必须严格等于备用节点整片，不含主节点的 0xEE 前缀"
+    );
+    assert!(
+        String::from_utf8_lossy(&bytes).contains("Content-Range: bytes 0-799/1600"),
+        "保留上游已验证的合法总长"
+    );
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2, "坏节点后只向备用节点重取整 Range 一次");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request_header(request, "range") == Some("bytes=0-799")),
+        "两次候选都请求完整闭区间"
+    );
+    assert_eq!(fixture.upstream_requests(), 2);
+    assert_eq!(fixture.upstream_resumes(), 1);
+    assert_eq!(fixture.last_resume_diagnostic(), None, "整片回退不拼接前缀");
+    fixture.wait_for_complete_cache().await;
+    primary.abort();
+    backup.abort();
+}
+
+#[tokio::test]
+async fn verified_vod_segment_exhaustion_returns_bad_gateway_without_stream_fallback() {
+    let short_body = vec![0xEE; 300];
+    for (second, expected_requests) in [
+        (
+            response(206, "bytes 0-799/1600", "Content-Length: 800", &short_body),
+            3,
+        ),
+        (
+            response(
+                200,
+                "bytes 0-799/1600",
+                "Content-Length: 800",
+                &complete_body(),
+            ),
+            3,
+        ),
+        (
+            response(
+                206,
+                "bytes 0-799/1600",
+                "Content-Length: 801",
+                &complete_body(),
+            ),
+            3,
+        ),
+    ] {
+        let (mut fixture, primary, backup, requests) = two_node_fixture(
+            vec![response(
+                206,
+                "bytes 0-799/1600",
+                "Content-Length: 800",
+                &short_body,
+            )],
+            vec![second.clone(), second],
+        )
+        .await;
+        fixture.context.media_cache = None;
+        fixture.context.media_cache_store = None;
+        let (bytes, result) = fixture.fetch().await;
+        assert_bad_gateway_without_media(&bytes, &result);
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            expected_requests,
+            "只按候选上限尝试，不另起一轮原流式预算"
+        );
+        assert_eq!(fixture.upstream_requests(), expected_requests as u64);
+        assert_eq!(fixture.store.in_flight(), (0, 0), "失败后必须释放额度");
+        primary.abort();
+        backup.abort();
+    }
+}
+
+#[tokio::test]
+async fn verified_vod_segment_quota_shortage_falls_back_to_stream_and_releases_budget() {
+    let (mut fixture, primary, backup, _requests) =
+        two_node_fixture(vec![complete_response()], vec![complete_response()]).await;
+    fixture.store = MediaCache::with_write_budget(
+        fixture.root.clone(),
+        crate::media_cache::CacheWriteBudget::new(64, 1),
+    );
+    fixture.context.media_cache_store = Some(fixture.store.clone());
+    fixture.context.media_cache_budget = Some(fixture.store.budget().clone());
+    let (bytes, result) = fixture.fetch().await;
+    result.unwrap();
+    assert_eq!(body(&bytes), complete_body());
+    assert_eq!(fixture.upstream_requests(), 1, "额度不足只走原流式路径");
+    timeout(WAIT, async {
+        while fixture.store.in_flight() != (0, 0) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("原流式路径也必须归还缓存额度");
+    primary.abort();
+    backup.abort();
+}
+
+#[tokio::test]
+async fn verified_vod_segment_rejects_oversize_and_clean_eof_before_range_completion() {
+    let mut oversize = complete_body();
+    oversize.push(42);
+    for bad in [
+        response(
+            206,
+            "bytes 0-799/1600",
+            "Transfer-Encoding: chunked",
+            &chunked_body(&oversize),
+        ),
+        response(
+            206,
+            "bytes 0-799/1600",
+            "Transfer-Encoding: chunked",
+            &chunked_body(&complete_body()[..300]),
+        ),
+    ] {
+        let (mut fixture, primary, backup, requests) =
+            two_node_fixture(vec![bad.clone()], vec![bad.clone(), bad]).await;
+        fixture.context.media_cache = None;
+        fixture.context.media_cache_store = None;
+        let (bytes, result) = fixture.fetch().await;
+        assert_bad_gateway_without_media(&bytes, &result);
+        assert_eq!(requests.lock().unwrap().len(), 3);
+        assert_eq!(fixture.upstream_requests(), 3);
+        assert_eq!(fixture.store.in_flight(), (0, 0));
+        primary.abort();
+        backup.abort();
+    }
+}
+
+#[tokio::test]
+async fn verified_vod_segment_global_budget_stops_before_another_candidate() {
+    let mut fixture = Fixture::new(complete_response()).await;
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let primary_address = primary.local_addr().unwrap();
+    let primary_requests = requests.clone();
+    let stalled_primary = tokio::spawn(async move {
+        let (mut stream, _) = primary.accept().await.unwrap();
+        let request = read_request_head(&mut stream).await;
+        primary_requests.lock().unwrap().push(request);
+        let _ = stream
+            .write_all(&response(
+                206,
+                "bytes 0-799/1600",
+                "Content-Length: 800",
+                &[0xEE; 300],
+            ))
+            .await;
+        // 响应头之后保持连接打开，直到整轮 20 秒预算（测试配置为 2 秒）耗尽。
+        tokio::time::sleep(WAIT).await;
+    });
+    let backups = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backup_address = backups.local_addr().unwrap();
+    let backup_requests = requests.clone();
+    let idle_backup = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = backups.accept().await {
+            let request = read_request_head(&mut stream).await;
+            backup_requests.lock().unwrap().push(request);
+            let _ = stream.write_all(&complete_response()).await;
+        }
+    });
+    fixture.context.url = format!("http://{primary_address}/primary.m4s").into();
+    fixture.context.vod_backup_urls = Some(VodBackupUrls(Arc::from([format!(
+        "http://{backup_address}/backup.m4s"
+    )])));
+    fixture.context.media_cache = None;
+    fixture.context.media_cache_store = None;
+    let (bytes, result) = fixture.fetch().await;
+    assert_bad_gateway_without_media(&bytes, &result);
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "整轮总预算耗尽后不得再向备用节点发请求"
+    );
+    assert_eq!(fixture.upstream_requests(), 1);
+    assert_eq!(fixture.store.in_flight(), (0, 0), "超时后必须释放额度");
+    stalled_primary.abort();
+    idle_backup.abort();
+}
+
 #[tokio::test]
 async fn public_proxy_caches_exact_segments_but_budget_exhaustion_never_blocks_delivery() {
     for budget in [64, 4096] {
@@ -988,6 +1312,7 @@ async fn public_proxy_caches_exact_segments_but_budget_exhaustion_never_blocks_d
                 StreamProxyStartOptions {
                     media_cache: fixture.context.media_cache.clone(),
                     media_cache_store: Some(fixture.store.clone()),
+                    media_cache_budget: Some(fixture.store.budget().clone()),
                     ..Default::default()
                 },
             )

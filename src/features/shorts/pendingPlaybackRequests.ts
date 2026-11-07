@@ -41,13 +41,23 @@ export class PendingPlaybackRequests<T extends object> {
     }
   }
 
-  claim(value: T): void {
+  /** 成功接管一个仍由请求池持有的结果；被取消或清理过时返回 false。 */
+  claim(value: T): boolean {
     for (const ticket of this.pending) {
       if (ticket.value !== value) continue;
       ticket.detach();
       this.pending.delete(ticket);
-      return;
+      return true;
     }
+    return false;
+  }
+
+  /** 结果是否仍由请求池持有：abort/clear 可能已释放它但尚未通知 query。 */
+  owns(value: T): boolean {
+    for (const ticket of this.pending) {
+      if (ticket.value === value) return true;
+    }
+    return false;
   }
 
   /** 幂等；旧请求迟到后仍释放，但允许 StrictMode 重新建立新请求。 */

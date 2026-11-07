@@ -65,6 +65,8 @@
 | [danmaku-p0-2026-10-12.json](bench/danmaku-p0-2026-10-12.json) · [danmaku-p1-2026-10-13.json](bench/danmaku-p1-2026-10-13.json) · [danmaku-p2-2026-10-13.json](bench/danmaku-p2-2026-10-13.json) | 弹幕优化 P0 / P1 / P2 归档 |
 | [danmaku-android-120hz-2026-10-12.json](bench/danmaku-android-120hz-2026-10-12.json) · [vod-danmaku-android-2026-10-12.json](bench/vod-danmaku-android-2026-10-12.json) | 120Hz 显示节奏与 VOD 弹幕对照 |
 | [vod-optimization-2026-09-24.json](bench/vod-optimization-2026-09-24.json) | VOD 首屏与续播阶段数据（[VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md)） |
+| [vod-home-investigation-2026-11-07.json](bench/vod-home-investigation-2026-11-07.json) | VOD 推荐首页成功/失败样本、512 KiB 正文截断及 `auto/off` 代理交错对照（[VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md)） |
+| [vod-home-fix-2026-11-07.json](bench/vod-home-fix-2026-11-07.json) | VOD 续传验证器拒绝证据、完整分片回退与自动恢复修复验收（同上） |
 
 架构图有两套，用途不同：`assets/architecture.svg` 是项目首页展示用的分层总览；
 运行架构的详细图由本机工具生成在 `diagrams/`，该目录不入库。

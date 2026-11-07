@@ -125,6 +125,326 @@ describe("VOD query/session 所有权", () => {
     expect(stopped).toEqual(["A", "B"]);
   });
 
+  test("迟到首帧恢复时自动取流交还原 held，新代理只停一次", async () => {
+    const { owner, stopped } = sessions();
+    const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    owner.retain(held);
+    const fresh = deferred<VideoPlayInfo>();
+    let settledCount = 0;
+    let checkedHeld: VideoPlaybackResult | null = null;
+    const pending = owner.acquire("A:1", new AbortController().signal, () => fresh.promise, {
+      autoRecoveryCheck: (current) => {
+        checkedHeld = current;
+        return { keepHeld: true };
+      },
+      onSettled: () => {
+        settledCount += 1;
+      },
+    });
+    fresh.resolve(info("B"));
+    expect(await pending).toBe(held);
+    expect(checkedHeld).toBe(held);
+    expect(settledCount).toBe(1);
+    expect(stopped).toEqual(["B"]);
+    // query 的 layout 提交重复调用也不能把旧会话误标为 retired。
+    owner.retain(held);
+    owner.releasePrevious();
+    expect(stopped).toEqual(["B"]);
+    owner.clear();
+    expect(stopped.toSorted()).toEqual(["A", "B"]);
+  });
+
+  test("手动轮次、换集及无 held 时不撤销自动恢复式取流", async () => {
+    const { owner, stopped } = sessions();
+    const first = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    expect(videoPlaybackForKey(first, "A:1")?.mpd_url).toContain("A.mpd");
+    owner.clear();
+    expect(stopped).toEqual(["A"]);
+    // 首屏和换集没有可保留的旧会话，新结果必须正常提交。
+    const fresh = await owner.acquire("B:2", new AbortController().signal, async () => info("B"), {
+      autoRecoveryCheck: () => ({ keepHeld: true }),
+    });
+    expect(videoPlaybackForKey(fresh, "B:2")?.mpd_url).toContain("B.mpd");
+    owner.retain(fresh);
+    // 手动轮次不传检查器：即使旧媒体已恢复也提交新结果。
+    const manual = await owner.acquire("B:2", new AbortController().signal, async () => info("C"));
+    expect(manual).not.toBe(fresh);
+    owner.retain(manual);
+    owner.releasePrevious();
+    expect(stopped).toEqual(["A", "B"]);
+    owner.clear();
+    expect(stopped).toEqual(["A", "B", "C"]);
+  });
+
+  test("自动恢复请求失败但旧媒体已恢复时沿用原会话", async () => {
+    const { owner, stopped } = sessions();
+    const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    owner.retain(held);
+    const result = await owner.acquire(
+      "A:1",
+      new AbortController().signal,
+      async () => {
+        throw new Error("取流失败");
+      },
+      { autoRecoveryCheck: () => ({ keepHeld: true }) },
+    );
+    expect(result).toBe(held);
+    expect(stopped).toEqual([]);
+    owner.clear();
+    expect(stopped).toEqual(["A"]);
+  });
+
+  test("QueryObserver 取消自动恢复请求后不提交 held，也不重复停代理", async () => {
+    const { owner, stopped } = sessions();
+    const client = new QueryClient();
+    const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    owner.retain(held);
+    const fresh = deferred<VideoPlayInfo>();
+    const observer = new QueryObserver(client, {
+      queryKey: ["video_play_info", "auto-recovery"],
+      queryFn: ({ signal }) =>
+        owner.acquire("A:1", signal, () => fresh.promise, {
+          autoRecoveryCheck: () => ({ keepHeld: true }),
+        }),
+      gcTime: 0,
+      retry: false,
+      structuralSharing: false,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    const cancelled = client.cancelQueries({
+      queryKey: ["video_play_info", "auto-recovery"],
+      exact: true,
+    });
+    fresh.resolve(info("B"));
+    await cancelled;
+    await tick();
+    // 取消之后 query 保持原来的 held；被取消的结果不得再以 success 顶掉它。
+    expect(observer.getCurrentResult().data).toBeUndefined();
+    unsubscribe();
+    expect(stopped).toEqual(["B"]);
+    owner.retain(held);
+    owner.releasePrevious();
+    owner.clear();
+    expect(stopped).toEqual(["B", "A"]);
+    client.clear();
+  });
+
+  test("结果落地后、撤销判定前的 clear 不能把已释放结果提交给播放器", async () => {
+    const { owner, stopped } = sessions();
+    const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    owner.retain(held);
+    let resolveFresh!: (value: VideoPlayInfo) => void;
+    const checked: VideoPlaybackResult[] = [];
+    const pending = owner.acquire(
+      "A:1",
+      new AbortController().signal,
+      () => new Promise<VideoPlayInfo>((resolve) => (resolveFresh = resolve)),
+      {
+        autoRecoveryCheck: (current) => {
+          checked.push(current);
+          return { keepHeld: true };
+        },
+      },
+    );
+    const outcome = pending.then(
+      (result) => ({ kind: "resolved" as const, result }),
+      (error) => ({ kind: "rejected" as const, name: (error as Error).name }),
+    );
+    resolveFresh(info("B"));
+    // PendingPlaybackRequests 的 acquire 已落地，但外层 then 尚未运行。
+    owner.clear();
+    expect(await outcome).toEqual({ kind: "rejected", name: "AbortError" });
+    expect(checked).toEqual([]);
+    expect(stopped.toSorted()).toEqual(["A", "B"]);
+  });
+
+  test("迟到的取流错误在 clear 后不能把已释放的 held 当作成功结果", async () => {
+    const { owner, stopped } = sessions();
+    const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    owner.retain(held);
+    const error = deferred<VideoPlayInfo>();
+    const checked: VideoPlaybackResult[] = [];
+    const pending = owner.acquire("A:1", new AbortController().signal, () => error.promise, {
+      autoRecoveryCheck: (current) => {
+        checked.push(current);
+        return { keepHeld: true };
+      },
+    });
+    const outcome = pending.then(
+      (result) => ({ kind: "resolved" as const, result }),
+      (reason: unknown) => ({ kind: "rejected" as const, reason }),
+    );
+    error.reject(new Error("取流失败"));
+    // 旧请求的错误还在 Promise 链上，页面卸载已释放本轮所有权。
+    owner.clear();
+    expect(await outcome).toMatchObject({ kind: "rejected", reason: { name: "AbortError" } });
+    expect(checked).toEqual([]);
+    expect(stopped).toEqual(["A"]);
+  });
+
+  test("迟到的取流错误在新一轮 acquire 后不能沿用旧 held", async () => {
+    const { owner, stopped } = sessions();
+    const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    owner.retain(held);
+    const error = deferred<VideoPlayInfo>();
+    const checked: VideoPlaybackResult[] = [];
+    const pending = owner.acquire("A:1", new AbortController().signal, () => error.promise, {
+      autoRecoveryCheck: (current) => {
+        checked.push(current);
+        return { keepHeld: true };
+      },
+    });
+    const outcome = pending.then(
+      (result) => ({ kind: "resolved" as const, result }),
+      (reason: unknown) => ({ kind: "rejected" as const, reason }),
+    );
+    error.reject(new Error("取流失败"));
+    const replacement = await owner.acquire("A:1", new AbortController().signal, async () =>
+      info("B"),
+    );
+    expect(await outcome).toMatchObject({ kind: "rejected", reason: { name: "AbortError" } });
+    expect(checked).toEqual([]);
+    expect(replacement.info.session_ids.mpd).toBe("B");
+    expect(stopped).toEqual([]);
+    owner.retain(replacement);
+    owner.clear();
+    expect(stopped.toSorted()).toEqual(["A", "B"]);
+  });
+
+  test("撤销回调清掉 held 或释放新结果时不返回断流会话", async () => {
+    for (const action of ["clear", "retain"] as const) {
+      const { owner, stopped } = sessions();
+      const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+      owner.retain(held);
+      const pending = owner.acquire("A:1", new AbortController().signal, async () => info("B"), {
+        autoRecoveryCheck: () => {
+          if (action === "clear") {
+            owner.clear();
+          } else {
+            owner.retain({ key: "A:1", info: info("C") });
+          }
+          return { keepHeld: true };
+        },
+      });
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      // clear 立即停掉新结果与旧 held；retain 把旧 held 留待播放器 cleanup。
+      if (action === "clear") {
+        expect(stopped).toEqual(["B", "A"]);
+        owner.releasePrevious();
+        expect(stopped).toEqual(["B", "A"]);
+      } else {
+        expect(stopped).toEqual([]);
+        owner.releasePrevious();
+        expect(stopped).toEqual(["A"]);
+      }
+      owner.clear();
+    }
+  });
+
+  test("成功、真实失败和被替代的取消都在取流终态结算本轮自动恢复令牌", async () => {
+    const { owner, stopped } = sessions();
+    const held = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));
+    owner.retain(held);
+    const first = () => true;
+    const second = () => true;
+    let settledCount = 0;
+    // 模拟发起自动恢复时登记本轮令牌。
+    let token: (() => boolean) | null = first;
+    const settleFirst = () => {
+      if (token === first) token = null;
+      settledCount += 1;
+    };
+    const success = await owner.acquire(
+      "A:1",
+      new AbortController().signal,
+      async () => info("B"),
+      { onSettled: settleFirst },
+    );
+    expect(success.info.session_ids.mpd).toBe("B");
+    expect(token).toBeNull();
+    owner.retain(success);
+    // 真实失败必须清掉自己这轮的令牌，不依赖 placeholder 渲染或撤销回调。
+    token = first;
+    const failure = owner.acquire(
+      "A:1",
+      new AbortController().signal,
+      async () => {
+        throw new Error("取流失败");
+      },
+      { onSettled: settleFirst },
+    );
+    await expect(failure).rejects.toThrow("取流失败");
+    expect(token).toBeNull();
+    // 下一轮令牌已登记，旧轮次迟到的错误不能把它清掉。
+    token = second;
+    const error = deferred<VideoPlayInfo>();
+    const stale = owner.acquire("A:1", new AbortController().signal, () => error.promise, {
+      onSettled: settleFirst,
+    });
+    const staleOutcome = stale.catch((reason: unknown) => reason);
+    const fresh = deferred<VideoPlayInfo>();
+    const current = owner.acquire("A:1", new AbortController().signal, () => fresh.promise);
+    error.reject(new Error("旧请求迟到"));
+    expect(await staleOutcome).toMatchObject({ name: "AbortError" });
+    expect(token).toBe(second);
+    fresh.resolve(info("D"));
+    expect((await current).info.session_ids.mpd).toBe("D");
+    expect(settledCount).toBe(3);
+    owner.clear();
+    expect(stopped.toSorted()).toEqual(["A", "B", "D"]);
+  });
+
+  test("第一轮请求迟到不会通过运行时读取的结算器清掉第二轮令牌", async () => {
+    const { owner, stopped } = sessions();
+    let token: (() => boolean) | null = null;
+    let settle: () => void = () => {};
+    const beginAutoRecovery = () => {
+      const attempt = () => true;
+      token = attempt;
+      settle = () => {
+        if (token === attempt) token = null;
+      };
+    };
+    const captureAttempt = () => {
+      const attempt = token;
+      const onSettled = settle;
+      return {
+        autoRecoveryCheck: () => {
+          return { keepHeld: Boolean(attempt?.()) };
+        },
+        onSettled,
+      };
+    };
+
+    beginAutoRecovery();
+    const first = deferred<VideoPlayInfo>();
+    const stale = owner.acquire(
+      "A:1",
+      new AbortController().signal,
+      () => first.promise,
+      captureAttempt(),
+    );
+    const staleOutcome = stale.catch((reason: unknown) => reason);
+    const second = token;
+    beginAutoRecovery();
+    const third = token;
+    const fresh = deferred<VideoPlayInfo>();
+    const current = owner.acquire(
+      "A:1",
+      new AbortController().signal,
+      () => fresh.promise,
+      captureAttempt(),
+    );
+    first.resolve(info("B"));
+    expect(await staleOutcome).toMatchObject({ name: "AbortError" });
+    expect(token).toBe(third);
+    expect(token).not.toBe(second);
+    fresh.resolve(info("C"));
+    expect((await current).info.session_ids.mpd).toBe("C");
+    owner.clear();
+    expect(stopped).toEqual(["B", "C"]);
+  });
+
   test("A→error/undefined→B 不丢旧会话，卸载同时释放未提交结果", async () => {
     const { owner, stopped } = sessions();
     const a = await owner.acquire("A:1", new AbortController().signal, async () => info("A"));

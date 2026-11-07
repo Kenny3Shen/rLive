@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use reqwest::{Client, Url};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::async_runtime::JoinHandle;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
@@ -51,7 +51,8 @@ const SEGMENT_STALL_TIMEOUT: Duration = Duration::from_millis(300);
 /// VOD 媒体分片等待上游响应头的单次上限，以及整轮换源的等待预算。
 ///
 /// 基线里首个分片反复出现响应头已到、正文却 20 秒无字节；这里只处理响应头
-/// 之前的连接、HTTP 与死等。响应头选定后，正文仍交给原有块间停顿与续传路径。
+/// 之前的连接、HTTP 与死等。响应头选定后，正文仍交给原有块间停顿与续传路径；
+/// 整片验证另有从首请求起的整轮总预算，见下方常量。
 #[cfg(not(test))]
 const VOD_SEGMENT_HEADER_TIMEOUT: Duration = Duration::from_secs(4);
 #[cfg(test)]
@@ -60,6 +61,15 @@ const VOD_SEGMENT_HEADER_TIMEOUT: Duration = Duration::from_millis(300);
 const VOD_SEGMENT_RECOVERY_BUDGET: Duration = Duration::from_secs(8);
 #[cfg(test)]
 const VOD_SEGMENT_RECOVERY_BUDGET: Duration = Duration::from_secs(2);
+/// 整片验证从首个候选请求到完整正文收齐的整轮总预算，与 dash.js 的 20 秒
+/// 请求超时对齐；另设累计 8 秒响应头等待上限（单次 4 秒，不含正文等待），
+/// 以及逐块 15 秒停顿上限。慢正文不消耗响应头预算，但仍受整轮总预算约束，
+/// 因此不会在播放器已经放弃后继续拉备用节点或占用内存额度。
+#[cfg(not(test))]
+const VERIFIED_SEGMENT_BODY_BUDGET: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const VERIFIED_SEGMENT_BODY_BUDGET: Duration = Duration::from_secs(2);
+const VERIFIED_SEGMENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// 单个分片最多续传几次；仍失败就断开下游，交给 dash.js 自己的重试。
 const SEGMENT_RESUME_ATTEMPTS: u32 = 2;
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
@@ -97,10 +107,10 @@ pub struct PrefetchedInitialization {
     pub content_type: &'static str,
 }
 
-/// VOD 分片的同源备用 CDN 地址（不含主地址）。
+/// VOD 分片来自同一 representation 的合法备用 CDN 地址（不含主地址），可能跨 origin。
 ///
-/// 来自 playurl 同一 representation 的 `backup_url` / `backupBaseUrl`。仅在该
-/// 会话的 Range 分片请求等待响应头失败时依次换源，直播与其它代理不启用。
+/// 来自 playurl 同一 representation 的 `backup_url` / `backupBaseUrl`。供该会话的
+/// Range 分片换源与整片校验使用，直播与其它代理不启用。
 #[derive(Clone)]
 pub struct VodBackupUrls(pub Arc<[String]>);
 
@@ -124,9 +134,11 @@ pub struct StreamProxyStartOptions<'a> {
     pub media_cache: Option<Arc<MediaCacheSpec>>,
     /// 缓存存储；与 `media_cache` 成对给出。
     pub media_cache_store: Option<SharedMediaCache>,
+    /// 整片校验用的共享内存额度；与磁盘缓存开关无关，复用同一有界预算类型。
+    pub media_cache_budget: Option<Arc<crate::media_cache::CacheWriteBudget>>,
     /// 与磁盘缓存开关无关，仅精确覆盖整个初始化段的 Range 可命中。
     pub initialization: Option<PrefetchedInitialization>,
-    /// 仅供 VOD 媒体轨代理使用的同源备用地址。
+    /// 仅供 VOD 媒体轨代理使用的同 representation 合法备用地址。
     pub vod_backup_urls: Option<VodBackupUrls>,
 }
 
@@ -141,6 +153,7 @@ impl Default for StreamProxyStartOptions<'_> {
             douyu_flv_recovery: None,
             media_cache: None,
             media_cache_store: None,
+            media_cache_budget: None,
             initialization: None,
             vod_backup_urls: None,
         }
@@ -175,6 +188,42 @@ struct ProxyInner {
     telemetry: Arc<ProxyTelemetryCounters>,
 }
 
+/// 最近一次 VOD 分片续传尝试的协议诊断。
+///
+/// 诊断契约只保存数值、布尔、失败类别和不带路径/query 的主机名；不保存
+/// signed URL、请求头、Cookie、token 或验证器原文。`Content-Range` 只保留
+/// 解析后的闭区间与总长，避免把上游自由文本透传到 IPC。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamProxyResumeDiagnostic {
+    pub initial_host: Option<String>,
+    pub resumed_host: Option<String>,
+    pub initial_range_start: u64,
+    pub initial_range_end: u64,
+    pub resume_range_start: u64,
+    pub resume_range_end: u64,
+    pub upstream_status: Option<u16>,
+    pub content_range_start: Option<u64>,
+    pub content_range_end: Option<u64>,
+    pub content_range_total: Option<u64>,
+    pub initial_etag_present: bool,
+    pub initial_last_modified_present: bool,
+    pub resumed_etag_present: bool,
+    pub resumed_last_modified_present: bool,
+    pub etag_mismatch: bool,
+    pub last_modified_mismatch: bool,
+    pub failure_kind: StreamProxyResumeFailure,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamProxyResumeFailure {
+    RequestFailed,
+    StatusMismatch,
+    ContentRangeMismatch,
+    ValidatorMismatch,
+    AttemptsExhausted,
+}
+
 #[derive(Debug)]
 struct ProxyTelemetryCounters {
     started_at_ms: u64,
@@ -193,6 +242,7 @@ struct ProxyTelemetryCounters {
     /// CDN 自身的边缘突发也包含在估计里，
     /// 因此它只在多条流之间可比，绝不是精确的采集瞬间。
     first_media_at_ms: AtomicU64,
+    last_resume_diagnostic: Mutex<Option<StreamProxyResumeDiagnostic>>,
 }
 
 impl ProxyTelemetryCounters {
@@ -206,7 +256,15 @@ impl ProxyTelemetryCounters {
             first_response_ms: AtomicU64::new(0),
             latest_response_ms: AtomicU64::new(0),
             first_media_at_ms: AtomicU64::new(0),
+            last_resume_diagnostic: Mutex::new(None),
         }
+    }
+
+    fn record_resume_diagnostic(&self, diagnostic: StreamProxyResumeDiagnostic) {
+        *self
+            .last_resume_diagnostic
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(diagnostic);
     }
 
     /// 锁存第一个媒体字节的纪元；后续分片沿用第一个的取值。
@@ -253,6 +311,11 @@ impl ProxyTelemetryCounters {
             first_response_ms: optional(self.first_response_ms.load(Ordering::Relaxed)),
             latest_response_ms: optional(self.latest_response_ms.load(Ordering::Relaxed)),
             first_media_at_ms: optional(self.first_media_at_ms.load(Ordering::Relaxed)),
+            last_resume_diagnostic: self
+                .last_resume_diagnostic
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
         }
     }
 }
@@ -267,6 +330,7 @@ pub struct StreamProxyTelemetry {
     pub first_response_ms: Option<u64>,
     pub latest_response_ms: Option<u64>,
     pub first_media_at_ms: Option<u64>,
+    pub last_resume_diagnostic: Option<StreamProxyResumeDiagnostic>,
 }
 
 fn unix_timestamp_ms() -> u64 {
@@ -275,6 +339,32 @@ fn unix_timestamp_ms() -> u64 {
         .unwrap_or_default()
         .as_millis()
         .min(u64::MAX as u128) as u64
+}
+
+fn response_host(url: &Url) -> Option<String> {
+    url.host_str().map(|host| host.to_ascii_lowercase())
+}
+
+/// 把 `Content-Range: bytes start-end/total` 解析成遥测允许的数值。
+///
+/// `*` 或畸形总长记成 `None`，只表达“无法解析”，不保存原始响应头文本。
+fn content_range_numbers(value: Option<&str>) -> (Option<u64>, Option<u64>, Option<u64>) {
+    let Some(value) = value else {
+        return (None, None, None);
+    };
+    let Some(rest) = value.trim().strip_prefix("bytes") else {
+        return (None, None, None);
+    };
+    let rest = rest.trim_start().trim_start_matches('=').trim_start();
+    let Some((range, total)) = rest.split_once('/') else {
+        return (None, None, None);
+    };
+    let bounds = parse_range_bounds(range);
+    (
+        bounds.map(|(start, _)| start),
+        bounds.map(|(_, end)| end),
+        total.trim().parse::<u64>().ok(),
+    )
 }
 
 /// 代理把 HLS 清单改写到这个本机监听器上。只有清单中出现的 URL 才会被
@@ -458,6 +548,7 @@ struct ProxyLoopContext {
     /// 给出时才非空：直播流与清单代理一律不走缓存。
     media_cache: Option<Arc<MediaCacheSpec>>,
     media_cache_store: Option<SharedMediaCache>,
+    media_cache_budget: Option<Arc<crate::media_cache::CacheWriteBudget>>,
     initialization: Option<PrefetchedInitialization>,
     vod_backup_urls: Option<VodBackupUrls>,
 }
@@ -1059,6 +1150,7 @@ impl StreamProxy {
             douyu_flv_recovery,
             media_cache,
             media_cache_store,
+            media_cache_budget,
             initialization,
             vod_backup_urls,
         } = options;
@@ -1107,6 +1199,7 @@ impl StreamProxy {
                 telemetry: telemetry.clone(),
                 media_cache,
                 media_cache_store,
+                media_cache_budget,
                 initialization,
                 vod_backup_urls,
             };
@@ -2148,6 +2241,7 @@ mod tests {
             telemetry: Arc::new(ProxyTelemetryCounters::new()),
             media_cache: None,
             media_cache_store: None,
+            media_cache_budget: None,
             initialization: None,
             vod_backup_urls: None,
         };
@@ -2989,7 +3083,7 @@ async fn wait_for_proxy_shutdown(shutdown: &mut watch::Receiver<bool>) {
     }
 }
 
-/// 在写下游响应头之前，为 VOD 分片挑出第一个可用的同源 CDN 应答。
+/// 在写下游响应头之前，为 VOD 分片挑出第一个可用的 CDN 应答。
 ///
 /// 候选必须回 206 且 `Content-Range` 与请求的闭区间一致；连接失败、HTTP 失败、
 /// 忽略 Range 的全量 200、区间错配或响应头等待超时都换下一个候选。最多尝试主
@@ -3046,6 +3140,174 @@ async fn send_vod_range_request(
     Err(last_error)
 }
 
+/// 一次完整、可交付的 VOD 分片响应。
+struct VerifiedVodSegment {
+    status: u16,
+    reason: &'static str,
+    content_type: String,
+    content_length: Option<String>,
+    content_range: Option<String>,
+    bytes: Vec<u8>,
+    _reservation: crate::media_cache::CacheWriteReservation,
+}
+
+enum VerifiedVodOutcome {
+    /// 不满足整片验证条件或拿不到额度：沿用原流式路径。
+    Fallback,
+    /// 整个候选集都已尝试且没有一份完整分片：明确失败，不重试同一批坏节点。
+    Exhausted(String),
+    Verified(VerifiedVodSegment),
+}
+
+/// 在写下游响应头之前完整拉取一个 VOD Range，并验证状态、长度和正文 EOF。
+///
+/// 只用于有同 representation 合法备用地址、闭区间长度不超过 `MAX_SEGMENT_BYTES`、
+/// 且能拿到共享有界内存额度的分片。候选必须回 206、Content-Range 与请求一致、
+/// Content-Length 若存在也须一致、逐块读取到显式 EOF，且总字节数精确；截断或
+/// 读取失败时丢弃整个候选，换下一个备用地址重新请求完整 Range，绝不跨节点或跨
+/// 版本拼接前缀。额度不足或调用方不支持时返回 `Fallback`。
+async fn fetch_verified_vod_segment(
+    primary: &str,
+    backups: &[String],
+    range: (u64, u64),
+    budget: &Arc<crate::media_cache::CacheWriteBudget>,
+    build: impl Fn(String) -> reqwest::RequestBuilder,
+    telemetry: &ProxyTelemetryCounters,
+) -> VerifiedVodOutcome {
+    let (start, end) = range;
+    let Some(expected_bytes) = end.checked_sub(start).and_then(|span| span.checked_add(1)) else {
+        return VerifiedVodOutcome::Fallback;
+    };
+    if expected_bytes > MAX_SEGMENT_BYTES || expected_bytes > usize::MAX as u64 {
+        return VerifiedVodOutcome::Fallback;
+    }
+    let Some(reservation) = budget.try_reserve(expected_bytes) else {
+        return VerifiedVodOutcome::Fallback;
+    };
+    // 只累计每个候选从 send() 到响应头到达的耗时；正文下载时间不消耗这 8 秒，
+    // 否则慢主节点会令备用节点连一次请求都发不出去。整轮 20 秒从首请求起算，
+    // 响应头和正文都受它约束，换候选不会重开这份总预算。
+    let mut header_wait_used = Duration::ZERO;
+    let started = Instant::now();
+    let global_deadline = started + VERIFIED_SEGMENT_BODY_BUDGET;
+    let mut last_error = "no verified VOD segment candidate".to_string();
+    for (index, url) in std::iter::once(primary)
+        .chain(backups.iter().map(String::as_str))
+        .take(SEGMENT_RESUME_ATTEMPTS as usize + 1)
+        .enumerate()
+    {
+        if header_wait_used >= VOD_SEGMENT_RECOVERY_BUDGET {
+            last_error = "VOD segment header recovery budget exhausted".into();
+            break;
+        }
+        let wait = VOD_SEGMENT_RECOVERY_BUDGET
+            .saturating_sub(header_wait_used)
+            .min(VOD_SEGMENT_HEADER_TIMEOUT)
+            .min(global_deadline.saturating_duration_since(Instant::now()));
+        if wait.is_zero() {
+            last_error = "VOD segment total budget exhausted".into();
+            break;
+        }
+        telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+        if index > 0 {
+            telemetry.upstream_resumes.fetch_add(1, Ordering::Relaxed);
+        }
+        let header_started = Instant::now();
+        let response = match tokio::time::timeout(wait, build(url.to_string()).send()).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => {
+                header_wait_used += header_started.elapsed();
+                last_error = "upstream request failed".into();
+                continue;
+            }
+            Err(_) => {
+                header_wait_used += header_started.elapsed();
+                last_error = "upstream headers timed out".into();
+                continue;
+            }
+        };
+        let header_elapsed = header_started.elapsed();
+        header_wait_used += header_elapsed;
+        telemetry.record_response(header_elapsed);
+        let upstream_content_range = response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        if response.status().as_u16() != 206
+            || !content_range_matches(upstream_content_range.as_deref(), start, end)
+        {
+            last_error = "upstream status or Content-Range mismatch".into();
+            continue;
+        }
+        let declared_length = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        if declared_length.is_some_and(|length| length != expected_bytes) {
+            last_error = "upstream Content-Length does not match Range".into();
+            continue;
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        // 整片长度已受额度约束；正文始终使用整轮截止时刻，不因换源重新计时。
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::with_capacity(expected_bytes as usize);
+        let mut body_error = None;
+        loop {
+            let remaining = global_deadline
+                .saturating_duration_since(Instant::now())
+                .min(VERIFIED_SEGMENT_READ_TIMEOUT);
+            if remaining.is_zero() {
+                body_error = Some("VOD segment total budget exhausted");
+                break;
+            }
+            match tokio::time::timeout(remaining, stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    if bytes.len().saturating_add(chunk.len()) > expected_bytes as usize {
+                        body_error = Some("upstream body exceeded Range");
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                Ok(Some(Err(_))) => {
+                    body_error = Some("upstream body read failed");
+                    break;
+                }
+                Ok(None) => {
+                    // reqwest 的干净 EOF：必须已收满闭区间，短一字节也不能交付。
+                    if bytes.len() as u64 != expected_bytes {
+                        body_error = Some("upstream body ended before Range was complete");
+                    }
+                    break;
+                }
+                Err(_) => {
+                    body_error = Some("upstream body chunk stalled");
+                    break;
+                }
+            }
+        }
+        if body_error.is_none() && bytes.len() as u64 == expected_bytes {
+            return VerifiedVodOutcome::Verified(VerifiedVodSegment {
+                status: 206,
+                reason: "Partial Content",
+                content_type,
+                content_length: Some(expected_bytes.to_string()),
+                content_range: upstream_content_range,
+                bytes,
+                _reservation: reservation,
+            });
+        }
+        last_error = body_error.unwrap_or("upstream body incomplete").to_owned();
+    }
+    VerifiedVodOutcome::Exhausted(last_error)
+}
+
 async fn handle_client(
     socket: &mut tokio::net::TcpStream,
     context: ProxyLoopContext,
@@ -3063,6 +3325,7 @@ async fn handle_client(
         telemetry,
         media_cache,
         media_cache_store,
+        media_cache_budget,
         initialization,
         vod_backup_urls,
     } = context;
@@ -3219,64 +3482,133 @@ async fn handle_client(
                 && request_header(&head, "if-range").is_none()
         })
         .filter(|backups| !backups.0.is_empty());
+    let verified_outcome = match (vod_backups, requested_range, media_cache_budget.as_ref()) {
+        (Some(backups), Some(range), Some(budget)) => {
+            fetch_verified_vod_segment(
+                &target,
+                &backups.0,
+                range,
+                budget,
+                build_request,
+                &telemetry,
+            )
+            .await
+        }
+        _ => VerifiedVodOutcome::Fallback,
+    };
+    if let VerifiedVodOutcome::Exhausted(error) = verified_outcome {
+        write_text_response(
+            socket,
+            502,
+            "Bad Gateway",
+            "VOD segment verification failed",
+        )
+        .await?;
+        return Err(format!("VOD segment verification exhausted: {error}"));
+    }
+    if let VerifiedVodOutcome::Verified(verified) = verified_outcome {
+        let cache_target = match (
+            media_cache.as_deref(),
+            media_cache_store.as_ref(),
+            requested_range,
+        ) {
+            (Some(spec), Some(store), Some((start, end))) => spec
+                .key_for_range(start, end)
+                .map(|key| (key, store.clone())),
+            _ => None,
+        };
+        // 验证过的整片不进入流式路径：正文在写头前已完成长度校验，Content-Length
+        // 由本机按已验证闭区间生成，Content-Range 保留候选的合法区间与总长；
+        // 不会出现跨节点或跨版本拼接前缀。
+        write_media_headers(
+            socket,
+            verified.status,
+            verified.reason,
+            &verified.content_type,
+            verified.content_length.as_deref(),
+            verified.content_range.as_deref(),
+            "no-store",
+        )
+        .await?;
+        telemetry.record_bytes(verified.bytes.len());
+        telemetry.record_media_start();
+        if socket.write_all(&verified.bytes).await.is_err() {
+            return Ok(());
+        }
+        let _ = socket.flush().await;
+        if let Some((key, store)) = cache_target {
+            let bytes = verified.bytes;
+            // reservation 随缓冲一起移入后台任务，额度和内存生命周期保持一致。
+            let _reservation = verified._reservation;
+            tauri::async_runtime::spawn(async move {
+                store.put(&key, &bytes).await;
+                drop(bytes);
+                drop(_reservation);
+            });
+        }
+        return Ok(());
+    }
     let mut resume_target = requested_range
         .filter(|_| method == "GET" && !force_hls)
         .map(|range| (target.clone(), range));
-
-    telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
-    let request_started = Instant::now();
-    let send = async {
-        match pinned_manifest.as_deref() {
-            Some(pinned) => match build_request(pinned.to_string()).send().await {
-                Ok(response) if response.status().is_success() => Ok(response) as Result<_, String>,
-                _failed_pin => {
-                    // 钉扎地址已失效（签名过期或后端下线）：回退原始入口重新解析。
-                    telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
-                    build_request(target)
-                        .send()
-                        .await
-                        .map_err(|error| error.to_string())
-                }
-            },
-            None => match vod_backups {
-                Some(backups) => {
-                    let outcome = send_vod_range_request(
-                        &target,
-                        &backups.0,
-                        requested_range.expect("VOD Range checked above"),
-                        build_request,
-                        &telemetry,
-                    )
-                    .await;
-                    if let Ok((_, selected)) = &outcome
-                        && let Some(resume) = resume_target.as_mut()
-                    {
-                        resume.0 = selected.clone();
+    let (upstream, request_started) = {
+        telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+        let request_started = Instant::now();
+        let send = async {
+            match pinned_manifest.as_deref() {
+                Some(pinned) => match build_request(pinned.to_string()).send().await {
+                    Ok(response) if response.status().is_success() => {
+                        Ok(response) as Result<_, String>
                     }
-                    outcome.map(|(response, _)| response)
-                }
-                None => match (build_request(target).send().await, resume_target.as_ref()) {
-                    // 分片请求在发送阶段失败（连接被重置、池化的半死连接）时立即重试
-                    // 一次；dash.js 自己的重试要等到它判定超时，用户已经看到卡顿。
-                    (Err(error), Some((retry_target, _))) => {
+                    _failed_pin => {
+                        // 钉扎地址已失效（签名过期或后端下线）：回退原始入口重新解析。
                         telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
-                        build_request(retry_target.clone())
+                        build_request(target)
                             .send()
                             .await
-                            .map_err(|retry| retry.to_string())
-                            .or(Err(error.to_string()))
+                            .map_err(|error| error.to_string())
                     }
-                    (result, _) => result.map_err(|error| error.to_string()),
                 },
-            },
-        }
-    };
-    let upstream = match send.await {
-        Ok(upstream) => upstream,
-        Err(e) => {
-            // 必须给下游一个完整响应：直接断开在 WebView 里是 ERR_EMPTY_RESPONSE。
-            write_text_response(socket, 502, "Bad Gateway", "upstream request failed").await?;
-            return Err(format!("upstream: {e}"));
+                None => match vod_backups {
+                    Some(backups) => {
+                        let outcome = send_vod_range_request(
+                            &target,
+                            &backups.0,
+                            requested_range.expect("VOD Range checked above"),
+                            build_request,
+                            &telemetry,
+                        )
+                        .await;
+                        if let Ok((_, selected)) = &outcome
+                            && let Some(resume) = resume_target.as_mut()
+                        {
+                            resume.0 = selected.clone();
+                        }
+                        outcome.map(|(response, _)| response)
+                    }
+                    None => match (build_request(target).send().await, resume_target.as_ref()) {
+                        // 分片请求在发送阶段失败（连接被重置、池化的半死连接）时立即重试
+                        // 一次；dash.js 自己的重试要等到它判定超时，用户已经看到卡顿。
+                        (Err(error), Some((retry_target, _))) => {
+                            telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
+                            build_request(retry_target.clone())
+                                .send()
+                                .await
+                                .map_err(|retry| retry.to_string())
+                                .or(Err(error.to_string()))
+                        }
+                        (result, _) => result.map_err(|error| error.to_string()),
+                    },
+                },
+            }
+        };
+        match send.await {
+            Ok(upstream) => (upstream, request_started),
+            Err(e) => {
+                // 必须给下游一个完整响应：直接断开在 WebView 里是 ERR_EMPTY_RESPONSE。
+                write_text_response(socket, 502, "Bad Gateway", "upstream request failed").await?;
+                return Err(format!("upstream: {e}"));
+            }
         }
     };
     telemetry.record_response(request_started.elapsed());
@@ -3322,6 +3654,7 @@ async fn handle_client(
     } else {
         None
     };
+    let initial_host = response_host(&upstream_url);
 
     if method == "HEAD" {
         write_media_headers(
@@ -3594,44 +3927,117 @@ async fn handle_client(
                     telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
                     telemetry.upstream_resumes.fetch_add(1, Ordering::Relaxed);
                     let range = format!("bytes={resume_start}-{end}");
-                    let Ok(response) = build_request_with_range(
+                    let send_result = build_request_with_range(
                         resume_url.clone(),
                         Some(&range),
                         resume_validator.as_deref(),
                     )
                     .send()
-                    .await
-                    else {
-                        continue;
+                    .await;
+                    let response = match send_result {
+                        Ok(response) => response,
+                        Err(_) => {
+                            telemetry.record_resume_diagnostic(StreamProxyResumeDiagnostic {
+                                initial_host: initial_host.clone(),
+                                resumed_host: Url::parse(resume_url)
+                                    .ok()
+                                    .as_ref()
+                                    .and_then(response_host),
+                                initial_range_start: *start,
+                                initial_range_end: *end,
+                                resume_range_start: resume_start,
+                                resume_range_end: *end,
+                                upstream_status: None,
+                                content_range_start: None,
+                                content_range_end: None,
+                                content_range_total: None,
+                                initial_etag_present: etag.is_some(),
+                                initial_last_modified_present: last_modified.is_some(),
+                                resumed_etag_present: false,
+                                resumed_last_modified_present: false,
+                                etag_mismatch: false,
+                                last_modified_mismatch: false,
+                                failure_kind: StreamProxyResumeFailure::RequestFailed,
+                            });
+                            continue;
+                        }
                     };
+                    let resumed_host = response_host(response.url());
                     let resumed_range = response
                         .headers()
                         .get(reqwest::header::CONTENT_RANGE)
                         .and_then(|value| value.to_str().ok());
+                    let (content_range_start, content_range_end, content_range_total) =
+                        content_range_numbers(resumed_range);
+                    let resumed_etag = response
+                        .headers()
+                        .get(reqwest::header::ETAG)
+                        .and_then(|value| value.to_str().ok());
+                    let resumed_last_modified = response
+                        .headers()
+                        .get(reqwest::header::LAST_MODIFIED)
+                        .and_then(|value| value.to_str().ok());
+                    let etag_mismatch = resumed_etag.is_some() && resumed_etag != etag.as_deref();
+                    let last_modified_mismatch = resumed_last_modified.is_some()
+                        && resumed_last_modified != last_modified.as_deref();
+                    let response_status = response.status().as_u16();
+                    let status_mismatch = response_status != 206;
+                    let range_mismatch = !content_range_matches(resumed_range, resume_start, *end);
+                    let validator_changed = etag_mismatch || last_modified_mismatch;
                     // 首段带验证器时，续传响应的 ETag/Last-Modified 必须一致：
                     // If-Range 被忽略或服务器仍回 206 但内容已换，都不能拼接。
-                    let validator_changed = [
-                        (reqwest::header::ETAG, etag.as_deref()),
-                        (reqwest::header::LAST_MODIFIED, last_modified.as_deref()),
-                    ]
-                    .iter()
-                    .any(|(name, first)| {
-                        let resumed = response
-                            .headers()
-                            .get(name)
-                            .and_then(|value| value.to_str().ok());
-                        resumed.is_some() && resumed != *first
-                    });
-                    if response.status().as_u16() != 206
-                        || !content_range_matches(resumed_range, resume_start, *end)
-                        || validator_changed
-                    {
+                    if status_mismatch || range_mismatch || validator_changed {
+                        let failure_kind = if status_mismatch {
+                            StreamProxyResumeFailure::StatusMismatch
+                        } else if range_mismatch {
+                            StreamProxyResumeFailure::ContentRangeMismatch
+                        } else {
+                            StreamProxyResumeFailure::ValidatorMismatch
+                        };
+                        telemetry.record_resume_diagnostic(StreamProxyResumeDiagnostic {
+                            initial_host: initial_host.clone(),
+                            resumed_host,
+                            initial_range_start: *start,
+                            initial_range_end: *end,
+                            resume_range_start: resume_start,
+                            resume_range_end: *end,
+                            upstream_status: Some(response_status),
+                            content_range_start,
+                            content_range_end,
+                            content_range_total,
+                            initial_etag_present: etag.is_some(),
+                            initial_last_modified_present: last_modified.is_some(),
+                            resumed_etag_present: resumed_etag.is_some(),
+                            resumed_last_modified_present: resumed_last_modified.is_some(),
+                            etag_mismatch,
+                            last_modified_mismatch,
+                            failure_kind,
+                        });
                         // 上游不按续传区间或同一版本回应：再试也不会变，放弃。
                         return Err(format!("{error}; resume rejected"));
                     }
                     resumed = Some(response);
                 }
                 let Some(response) = resumed else {
+                    telemetry.record_resume_diagnostic(StreamProxyResumeDiagnostic {
+                        initial_host: initial_host.clone(),
+                        resumed_host: Url::parse(resume_url).ok().as_ref().and_then(response_host),
+                        initial_range_start: *start,
+                        initial_range_end: *end,
+                        resume_range_start: resume_start,
+                        resume_range_end: *end,
+                        upstream_status: None,
+                        content_range_start: None,
+                        content_range_end: None,
+                        content_range_total: None,
+                        initial_etag_present: etag.is_some(),
+                        initial_last_modified_present: last_modified.is_some(),
+                        resumed_etag_present: false,
+                        resumed_last_modified_present: false,
+                        etag_mismatch: false,
+                        last_modified_mismatch: false,
+                        failure_kind: StreamProxyResumeFailure::AttemptsExhausted,
+                    });
                     return Err(format!("{error}; resume failed"));
                 };
                 stream = response.bytes_stream();
