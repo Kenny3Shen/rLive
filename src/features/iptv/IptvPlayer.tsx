@@ -13,8 +13,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { AlertCircle, ChevronLeft, Radio, Tv } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { AlertCircle, ChevronLeft, Tv } from "lucide-react";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getClientPlatform } from "@/shared/clientPlatform";
@@ -28,7 +27,7 @@ import { PlayerAudioOnlyButton } from "@/shared/components/player/PlayerAudioOnl
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
-  PLAYER_HUD_TITLE_SIZE_CLASS,
+  PLAYER_HUD_TITLE_CLASS,
   PlayerControls,
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport, usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
@@ -709,21 +708,9 @@ function IptvPlayerContent({
                   />
                 </MediaButton>
               )}
-              <div className="flex h-media-control min-w-0 flex-1 items-center gap-2">
-                <Badge
-                  variant="destructive"
-                  className="shrink-0 gap-1.5 bg-destructive text-destructive-foreground"
-                >
-                  <Radio data-icon="inline-start" aria-hidden />
-                  直播
-                </Badge>
+              <div className="flex h-media-control min-w-0 flex-1 items-center px-1">
                 <span
-                  className={cn(
-                    // 与直播/视频页同一画法：标题直接用白字 + 阴影抛在 scrim 上，
-                    // 不再包一层黑色背景盒。
-                    "min-w-0 flex-1 truncate font-semibold leading-none text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]",
-                    PLAYER_HUD_TITLE_SIZE_CLASS,
-                  )}
+                  className={cn("min-w-0 flex-1 truncate leading-none", PLAYER_HUD_TITLE_CLASS)}
                   title={channel.name}
                 >
                   {channel.name}

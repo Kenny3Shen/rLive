@@ -242,15 +242,13 @@ export const PLAYER_HUD_BUTTON_CLASS = `r-live-media-extension-button shrink-0 $
 export const PLAYER_HUD_ICON_CLASS = "size-6";
 
 /**
- * 画面之上 HUD 标题（房间名、视频名、频道名）的统一字号：直播、多画面、视频与
- * IPTV 四处顶部 HUD 共用 16px，比应用顶栏标题大一档 —— 画面上的标题要在明暗画面、
- * 远距离和移动端小屏上都一眼可读。之前四处各写一套（`text-base` / `text-sm` /
- * `text-xs`），同一位置的标题在四个页面之间大小对不上。
- *
- * 只管字号：字重、配色、底色与投影仍归各调用点，它们的画法本来就不同（IPTV 频道名
- * 带胶囊底色，直播标题靠投影）。
+ * 画面之上 HUD 标题（房间名、视频名、频道名）的统一画法：直播、多画面、视频与
+ * IPTV 四处顶部 HUD 共用 16px 白字、半粗与投影，比应用顶栏标题大一档 —— 画面上的
+ * 标题要在明暗画面、远距离和移动端小屏上都一眼可读。之前四处各写一套字号和投影，
+ * 同一位置的标题在四个页面之间对不上。截断、伸缩与行高属于各行的布局，由调用点补。
  */
-export const PLAYER_HUD_TITLE_SIZE_CLASS = "text-base";
+export const PLAYER_HUD_TITLE_CLASS =
+  "text-base font-semibold text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]";
 
 function ExtensionButton({
   label,

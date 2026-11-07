@@ -50,7 +50,7 @@ import {
   AsrSettingsBody,
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
-  PLAYER_HUD_TITLE_SIZE_CLASS,
+  PLAYER_HUD_TITLE_CLASS,
   PlayerControls,
   VOD_PLAYBACK_RATES,
   formatPlaybackRateLabel,
@@ -3452,10 +3452,7 @@ function VideoPlayerPageContent() {
                       )}
                       <div className="flex h-media-control min-w-0 flex-1 items-center px-1">
                         <p
-                          className={cn(
-                            "truncate font-semibold leading-none text-white [text-shadow:0_1px_3px_rgb(0_0_0_/_0.75)]",
-                            PLAYER_HUD_TITLE_SIZE_CLASS,
-                          )}
+                          className={cn("truncate leading-none", PLAYER_HUD_TITLE_CLASS)}
                           title={title}
                         >
                           {title}
