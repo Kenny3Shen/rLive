@@ -410,14 +410,16 @@ describe("下载卡媒体入口接线", () => {
     expect(source).toContain('<div className="h-11 md:hidden">');
   });
 
-  test("下载进度只用于未完成任务，次要操作与骨架复用媒体卡规范", () => {
+  test("下载进度只用于未完成任务，次要操作保留在卡片菜单中", () => {
     expect(source).toContain("progress={");
     expect(source).toContain("!playable ? (");
     expect(source).toContain("<LocalMediaCardProgress");
     expect(source).toContain("<LocalMediaCardSkeleton");
-    expect(source).toContain('label="打开文件位置"');
-    expect(source).toContain('label="使用系统播放器"');
     expect(source).toContain('label="删除下载"');
+    expect(source).toContain("打开文件位置");
+    expect(source).toContain("使用系统播放器");
+    expect(source).toContain("<ContextMenu>");
+    expect(source).toContain("<Drawer");
   });
 });
 

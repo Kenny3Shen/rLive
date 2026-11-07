@@ -463,34 +463,7 @@ function DownloadRow({
   }
 
   const cardActions = (
-    <>
-      {primaryAction === "pause" && (
-        <LocalMediaCardAction icon={Pause} label="暂停下载" busy={pausing} onClick={onPause} />
-      )}
-      {primaryAction === "resume" && (
-        <LocalMediaCardAction icon={Play} label="继续下载" busy={resuming} onClick={onResume} />
-      )}
-      {primaryAction === "retry" && (
-        <LocalMediaCardAction
-          icon={RotateCcw}
-          label="重试下载"
-          busy={resuming}
-          onClick={onResume}
-        />
-      )}
-      {playable && onOpenSystem && (
-        <LocalMediaCardAction icon={ExternalLink} label="使用系统播放器" onClick={onOpenSystem} />
-      )}
-      {playable && onReveal && (
-        <LocalMediaCardAction icon={FolderOpen} label="打开文件位置" onClick={onReveal} />
-      )}
-      <LocalMediaCardAction
-        icon={Trash2}
-        label="删除下载"
-        variant="destructive"
-        onClick={onDelete}
-      />
-    </>
+    <LocalMediaCardAction icon={Trash2} label="删除下载" variant="destructive" onClick={onDelete} />
   );
 
   const cardClassName = "relative min-w-0";
@@ -553,7 +526,7 @@ function DownloadRow({
             {item.status === "failed" && item.error && (
               <p
                 role="alert"
-                className="line-clamp-2 break-words text-sm text-destructive"
+                className="line-clamp-2 break-words text-[11px] text-destructive"
                 title={item.error}
               >
                 {item.error}

@@ -9,6 +9,7 @@ import {
   FolderOpen,
   HardDrive,
   MessageSquareText,
+  Play,
   Videotape,
   Radio,
   Square,
@@ -21,6 +22,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -28,6 +38,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
 import { cn, normalizeImageUrl } from "@/lib/utils";
 import {
@@ -153,95 +164,118 @@ const RecordingCard = memo(function RecordingCard({
 
   const playerOrigin = `recording:${item.id}`;
   return (
-    <li className="min-w-0" data-recording-id={item.id}>
-      <LocalMediaCard
-        kind="recording"
-        title={item.title}
-        subtitle={`${recordingSourceLabel(item)} · ${formatRecordingDate(item.started_at)}`}
-        status={<RecordingStatusBadge status={item.status} />}
-        artwork={
-          <LocalMediaArtwork
-            sources={[normalizeImageUrl(item.cover), normalizeImageUrl(item.user_avatar)]}
-            icon={item.source_kind === "iptv" ? Tv : Radio}
-          />
-        }
-        duration={formatRecordingDuration(item.duration_ms)}
-        playbackTrigger={
-          playable ? (
-            <button
-              type="button"
-              data-motion-press
-              data-player-origin={playerOrigin}
-              data-page-scroll-anchor={playerOrigin}
-              className="absolute inset-0 z-0 rounded-xl outline-none"
-              aria-label={`打开录播：${item.title}`}
-              onPointerEnter={() => preloadRouteModule(playbackPath)}
-              onPointerDown={() => preloadRouteModule(playbackPath)}
-              onFocus={() => preloadRouteModule(playbackPath)}
-              onClick={() => onOpen(item)}
+    <ContextMenu>
+      <ContextMenuTrigger render={<li className="min-w-0" data-recording-id={item.id} />}>
+        <LocalMediaCard
+          kind="recording"
+          title={item.title}
+          subtitle={`${recordingSourceLabel(item)} · ${formatRecordingDate(item.started_at)}`}
+          status={<RecordingStatusBadge status={item.status} />}
+          artwork={
+            <LocalMediaArtwork
+              sources={[normalizeImageUrl(item.cover), normalizeImageUrl(item.user_avatar)]}
+              icon={item.source_kind === "iptv" ? Tv : Radio}
             />
-          ) : undefined
-        }
-        metadata={
-          <>
-            <LocalMediaCardStat icon={HardDrive} label="文件大小">
-              {formatRecordingSize(item.size_bytes)}
-            </LocalMediaCardStat>
-            {item.include_danmaku && (
-              <LocalMediaCardStat icon={MessageSquareText} label="已录制弹幕">
-                {item.danmaku_count} 条弹幕
-              </LocalMediaCardStat>
-            )}
-            {watchedSeconds > 0 && (
-              <LocalMediaCardStat
-                icon={Eye}
-                label={`已看到 ${formatRecordingDuration(watchedSeconds * 1_000)} / ${formatRecordingDuration(item.duration_ms)}`}
-              >
-                {watchedLabel}
-              </LocalMediaCardStat>
-            )}
-          </>
-        }
-        progress={
-          watchedPercent > 0 ? (
-            <LocalMediaCardProgress value={watchedPercent} label={`${item.title} 观看进度`} />
-          ) : undefined
-        }
-        actions={
-          <>
-            {!playable && (
-              <LocalMediaCardAction
-                label={stopping ? "正在保存" : "停止并保存"}
-                icon={Square}
-                variant="destructive"
-                busy={stopping}
-                onClick={() => onStop(item.id)}
+          }
+          duration={formatRecordingDuration(item.duration_ms)}
+          playbackTrigger={
+            playable ? (
+              <button
+                type="button"
+                data-motion-press
+                data-player-origin={playerOrigin}
+                data-page-scroll-anchor={playerOrigin}
+                className="absolute inset-0 z-0 rounded-xl outline-none"
+                aria-label={`打开录播：${item.title}`}
+                onPointerEnter={() => preloadRouteModule(playbackPath)}
+                onPointerDown={() => preloadRouteModule(playbackPath)}
+                onFocus={() => preloadRouteModule(playbackPath)}
+                onClick={() => onOpen(item)}
               />
-            )}
-            {exportable && (
-              <LocalMediaCardAction
-                label="导出 ASS 弹幕字幕"
-                icon={Captions}
-                busy={exportingAss}
-                onClick={() => onExportAss(item.id)}
-              />
-            )}
-            <LocalMediaCardAction
-              label="打开文件位置"
-              icon={FolderOpen}
-              busy={revealing}
-              onClick={() => onReveal(item.file_path)}
-            />
+            ) : undefined
+          }
+          metadata={
+            <>
+              <LocalMediaCardStat icon={HardDrive} label="文件大小">
+                {formatRecordingSize(item.size_bytes)}
+              </LocalMediaCardStat>
+              {item.include_danmaku && (
+                <LocalMediaCardStat icon={MessageSquareText} label="已录制弹幕">
+                  {item.danmaku_count} 条弹幕
+                </LocalMediaCardStat>
+              )}
+              {watchedSeconds > 0 && (
+                <LocalMediaCardStat
+                  icon={Eye}
+                  label={`已看到 ${formatRecordingDuration(watchedSeconds * 1_000)} / ${formatRecordingDuration(item.duration_ms)}`}
+                >
+                  {watchedLabel}
+                </LocalMediaCardStat>
+              )}
+            </>
+          }
+          progress={
+            watchedPercent > 0 ? (
+              <LocalMediaCardProgress value={watchedPercent} label={`${item.title} 观看进度`} />
+            ) : undefined
+          }
+          actions={
             <LocalMediaCardAction
               label="删除录制"
               icon={Trash2}
               variant="destructive"
               onClick={() => onDelete(item)}
             />
-          </>
-        }
-      />
-    </li>
+          }
+        />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-48">
+        <ContextMenuGroup>
+          <ContextMenuLabel className="truncate">{item.title}</ContextMenuLabel>
+          {playable && (
+            <ContextMenuItem onClick={() => onOpen(item)}>
+              <Play data-icon="inline-start" aria-hidden />
+              打开录播
+            </ContextMenuItem>
+          )}
+          {!playable && (
+            <ContextMenuItem disabled={stopping} onClick={() => onStop(item.id)}>
+              {stopping ? (
+                <Spinner data-icon="inline-start" aria-hidden />
+              ) : (
+                <Square data-icon="inline-start" aria-hidden />
+              )}
+              {stopping ? "正在保存" : "停止并保存"}
+            </ContextMenuItem>
+          )}
+          {exportable && (
+            <ContextMenuItem disabled={exportingAss} onClick={() => onExportAss(item.id)}>
+              {exportingAss ? (
+                <Spinner data-icon="inline-start" aria-hidden />
+              ) : (
+                <Captions data-icon="inline-start" aria-hidden />
+              )}
+              导出 ASS 弹幕字幕
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem disabled={revealing} onClick={() => onReveal(item.file_path)}>
+            {revealing ? (
+              <Spinner data-icon="inline-start" aria-hidden />
+            ) : (
+              <FolderOpen data-icon="inline-start" aria-hidden />
+            )}
+            打开文件位置
+          </ContextMenuItem>
+        </ContextMenuGroup>
+        <ContextMenuSeparator />
+        <ContextMenuGroup>
+          <ContextMenuItem variant="destructive" onClick={() => onDelete(item)}>
+            <Trash2 data-icon="inline-start" aria-hidden />
+            删除录制
+          </ContextMenuItem>
+        </ContextMenuGroup>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 });
 
@@ -444,7 +478,7 @@ function RecordingEmptyState({
           {view === "recording"
             ? "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。开始后任务会持续在后台录制。"
             : view === "recorded"
-              ? "停止录制后的任务会保存到这里，可直接回放、导出弹幕字幕或定位文件。"
+              ? "停止录制后的任务会保存到这里，可回放；右键卡片可导出弹幕字幕、定位文件或停止录制中的任务。"
               : "进入直播间或 IPTV 播放页，点击顶部标题栏右侧的录制按钮即可开始。"}
         </EmptyDescription>
       </EmptyHeader>
