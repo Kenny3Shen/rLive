@@ -67,10 +67,12 @@ const CLEAR_LABELS: Record<HistoryView, string> = {
 export function HistoryViewSwitcher({
   value,
   onValueChange,
+  iconOnly = false,
   className,
 }: {
   value: HistoryView;
   onValueChange: (view: HistoryView) => void;
+  iconOnly?: boolean;
   className?: string;
 }) {
   return (
@@ -100,7 +102,9 @@ export function HistoryViewSwitcher({
             )}
           >
             <Icon className="size-4 shrink-0" aria-hidden />
-            <span className="whitespace-nowrap max-md:hidden">{VIEW_LABELS[view]}</span>
+            <span className={cn("whitespace-nowrap max-md:hidden", iconOnly && "hidden")}>
+              {VIEW_LABELS[view]}
+            </span>
             {active && (
               <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
             )}

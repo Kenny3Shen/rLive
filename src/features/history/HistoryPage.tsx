@@ -5,10 +5,10 @@ import {
   CirclePlay,
   Clock3,
   Hash,
-  Home,
   MessageSquareText,
   MonitorPlay,
   Radio,
+  RadioTower,
   SearchX,
   Trash2,
   UserRound,
@@ -865,8 +865,8 @@ export function HistoryPage() {
                       </EmptyHeader>
                       <EmptyContent>
                         <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-                          <Home data-icon="inline-start" aria-hidden />
-                          去首页看看
+                          <RadioTower data-icon="inline-start" aria-hidden />
+                          去直播看看
                         </Button>
                       </EmptyContent>
                     </Empty>

@@ -1,5 +1,13 @@
+import { Clapperboard, Flame, Sparkles, WandSparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { VIDEO_TABS, VIDEO_TAB_LABELS, type VideoTab } from "./videoRoute";
+
+const TAB_ICONS = {
+  recommend: Sparkles,
+  popular: Flame,
+  anime: WandSparkles,
+  cinema: Clapperboard,
+} as const;
 
 /**
  * 视频页头部的内容页签。
@@ -11,10 +19,12 @@ import { VIDEO_TABS, VIDEO_TAB_LABELS, type VideoTab } from "./videoRoute";
 export function VideoTabSwitcher({
   value,
   onValueChange,
+  iconOnly = false,
   className,
 }: {
   value: VideoTab;
   onValueChange: (tab: VideoTab) => void;
+  iconOnly?: boolean;
   className?: string;
 }) {
   return (
@@ -25,6 +35,7 @@ export function VideoTabSwitcher({
     >
       {VIDEO_TABS.map((tab) => {
         const active = tab === value;
+        const Icon = TAB_ICONS[tab];
         return (
           <button
             key={tab}
@@ -32,6 +43,7 @@ export function VideoTabSwitcher({
             role="tab"
             data-motion-control
             aria-selected={active}
+            aria-label={VIDEO_TAB_LABELS[tab]}
             title={VIDEO_TAB_LABELS[tab]}
             onClick={() => onValueChange(tab)}
             className={cn(
@@ -41,7 +53,13 @@ export function VideoTabSwitcher({
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
             )}
           >
-            {VIDEO_TAB_LABELS[tab]}
+            <Icon
+              className={cn("hidden size-5 shrink-0 max-md:block", iconOnly && "md:block")}
+              aria-hidden
+            />
+            <span className={cn("max-md:hidden", iconOnly && "hidden")}>
+              {VIDEO_TAB_LABELS[tab]}
+            </span>
             {active && (
               <span
                 className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary"

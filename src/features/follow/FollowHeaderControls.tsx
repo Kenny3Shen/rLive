@@ -27,12 +27,14 @@ export function FollowViewSwitcher({
   onValueChange,
   recordingAvailable,
   taskCounts,
+  iconOnly = false,
   className,
 }: {
   value: FollowView;
   onValueChange: (view: FollowView) => void;
   recordingAvailable: boolean;
   taskCounts: FollowTaskCounts;
+  iconOnly?: boolean;
   className?: string;
 }) {
   const views = followViewsFor(recordingAvailable);
@@ -76,19 +78,31 @@ export function FollowViewSwitcher({
             role="tab"
             data-motion-control
             aria-selected={active}
-            aria-label={taskLabel ? `${VIEW_LABELS[view]}，${taskLabel}` : undefined}
+            aria-label={taskLabel ? `${VIEW_LABELS[view]}，${taskLabel}` : VIEW_LABELS[view]}
             title={taskLabel ? `${VIEW_LABELS[view]}，${taskLabel}` : VIEW_LABELS[view]}
             onClick={() => onValueChange(view)}
             className={cn(
-              "relative flex h-full shrink-0 items-center gap-2 px-4 text-sm font-medium whitespace-nowrap transition-colors duration-150 max-md:justify-center max-md:gap-1.5 max-md:px-3",
+              "relative flex h-full shrink-0 items-center gap-2 px-4 text-sm font-medium whitespace-nowrap transition-colors duration-150 max-md:min-w-0 max-md:flex-1 max-md:justify-center max-md:px-2",
               active
                 ? "text-foreground"
                 : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
             )}
           >
             <Icon className="size-4 shrink-0" aria-hidden />
-            <span>{VIEW_LABELS[view]}</span>
-            <TaskCountBadge count={taskCount} />
+            <span className={cn("max-md:hidden", iconOnly && "hidden")}>{VIEW_LABELS[view]}</span>
+            <TaskCountBadge
+              count={taskCount}
+              className={cn("max-md:hidden", iconOnly && "hidden")}
+            />
+            {taskCount > 0 && (
+              <span
+                className={cn(
+                  "absolute top-2 right-2 hidden size-1.5 rounded-full bg-primary max-md:block",
+                  iconOnly && "md:block",
+                )}
+                aria-hidden
+              />
+            )}
             {active && (
               <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
             )}

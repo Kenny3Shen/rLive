@@ -900,11 +900,13 @@ export function Shell() {
                         <div className="pointer-events-auto h-full max-md:w-full max-md:min-w-0">
                           {isHistory ? (
                             <HistoryViewSwitcher
+                              iconOnly={mobileClient}
                               value={historyHeader.view}
                               onValueChange={historyHeader.onViewChange}
                             />
                           ) : isFollow ? (
                             <FollowViewSwitcher
+                              iconOnly={mobileClient}
                               value={followHeader.view}
                               onValueChange={followHeader.onViewChange}
                               recordingAvailable={recordingSupported()}
@@ -921,6 +923,7 @@ export function Shell() {
                               {...bindSwipe(iptvSourceSwipe)}
                             >
                               <IptvSourceSwitcher
+                                iconOnly={mobileClient}
                                 sources={iptvSources}
                                 value={iptvSource.id}
                                 onValueChange={handleIptvSourceChange}
@@ -937,6 +940,7 @@ export function Shell() {
                               {...bindSwipe(videoTabSwipe)}
                             >
                               <VideoTabSwitcher
+                                iconOnly={mobileClient}
                                 value={videoTab}
                                 onValueChange={videoTabSwipe.selectValue}
                                 className="h-full w-auto max-w-full max-md:w-full"
@@ -952,6 +956,7 @@ export function Shell() {
                               {...bindSwipe(sitePlatformSwipe)}
                             >
                               <SiteSwitcher
+                                iconOnly={mobileClient}
                                 value={activeSiteId}
                                 onValueIntent={preloadHomePlatform}
                                 onValueChange={(value) => {

@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Activity, ListFilter, Search, X } from "lucide-react";
+import {
+  Activity,
+  Globe,
+  Languages,
+  ListFilter,
+  ListVideo,
+  MapPin,
+  Search,
+  Tv,
+  X,
+} from "lucide-react";
 import {
   InputGroup,
   InputGroupAddon,
@@ -27,8 +37,17 @@ type IptvSourceSwitcherProps = {
   sources: readonly PlaylistSource[];
   value: string;
   onValueChange: (value: string) => void;
+  iconOnly?: boolean;
   className?: string;
 };
+
+const SOURCE_ICONS = {
+  chinese: Languages,
+  mainland: MapPin,
+  "east-asia": Globe,
+  general: Tv,
+  custom: ListVideo,
+} as const;
 
 /**
  * 与直播平台共用同一应用栏槽位的来源页签。该条带在所有视口下都是 tablist ——
@@ -38,6 +57,7 @@ export function IptvSourceSwitcher({
   sources,
   value,
   onValueChange,
+  iconOnly = false,
   className,
 }: IptvSourceSwitcherProps) {
   return (
@@ -53,6 +73,7 @@ export function IptvSourceSwitcher({
         {sources.map((source) => {
           const active = source.id === value;
           const label = source.id === "custom" ? "自定义源" : source.label;
+          const Icon = SOURCE_ICONS[source.id as keyof typeof SOURCE_ICONS] ?? Tv;
           return (
             <button
               key={source.id}
@@ -60,7 +81,8 @@ export function IptvSourceSwitcher({
               role="tab"
               data-motion-control
               aria-selected={active}
-              title={source.label}
+              aria-label={label}
+              title={label}
               onClick={() => onValueChange(source.id)}
               className={cn(
                 "relative flex h-full items-center px-3 text-sm font-medium transition-colors duration-150",
@@ -70,7 +92,11 @@ export function IptvSourceSwitcher({
                   : "text-muted-foreground hover:bg-muted/45 hover:text-foreground",
               )}
             >
-              <span className="truncate">{label}</span>
+              <Icon
+                className={cn("hidden size-5 shrink-0 max-md:block", iconOnly && "md:block")}
+                aria-hidden
+              />
+              <span className={cn("truncate max-md:hidden", iconOnly && "hidden")}>{label}</span>
               {active && (
                 <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
               )}

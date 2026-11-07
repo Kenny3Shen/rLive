@@ -309,7 +309,7 @@ const PROJECT_HOMEPAGE_URL = "https://github.com/Kenny3Shen/rLive";
 const PROFILE_FILE_FILTERS = [{ name: "rLive 配置档案", extensions: ["json"] }];
 
 const settingsCategorySearchText: Record<SettingsCategory, string> = {
-  home: "主页 首页 入口 导航 侧栏 侧边栏 底栏 视频 IPTV 显示 隐藏 home",
+  home: "主页 首页 直播 入口 导航 侧栏 侧边栏 底栏 视频 IPTV 显示 隐藏 home",
   appearance:
     "外观 配置 主题 深色 暗色 浅色 亮色 亮暗 明暗 模式 跟随系统 系统 切换 深色模式 浅色模式 亮暗模式 控制栏",
   playback:

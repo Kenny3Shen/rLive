@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock3, Heart, Home, Radio, RefreshCw } from "lucide-react";
+import { Clock3, Heart, Radio, RadioTower, RefreshCw } from "lucide-react";
 import { invokeCmd } from "@/shared/api/tauri";
 import type { FollowUser } from "@/shared/types/live";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -177,8 +177,8 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
               </EmptyHeader>
               <EmptyContent>
                 <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-                  <Home data-icon="inline-start" aria-hidden />
-                  去首页看看
+                  <RadioTower data-icon="inline-start" aria-hidden />
+                  去直播看看
                 </Button>
               </EmptyContent>
             </Empty>

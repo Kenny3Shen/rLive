@@ -17,9 +17,9 @@ import {
   Folder,
   FolderCog,
   FolderInput,
-  Home,
   Inbox,
   Layers3,
+  RadioTower,
   RefreshCw,
   Star,
   Trash2,
@@ -1284,8 +1284,8 @@ export function FollowPage() {
                               </EmptyHeader>
                               <EmptyContent>
                                 <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-                                  <Home data-icon="inline-start" aria-hidden />
-                                  去首页看看
+                                  <RadioTower data-icon="inline-start" aria-hidden />
+                                  去直播看看
                                 </Button>
                               </EmptyContent>
                             </Empty>

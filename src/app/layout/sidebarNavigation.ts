@@ -3,8 +3,8 @@ import {
   Clapperboard,
   Heart,
   History,
-  Home,
   PanelsTopLeft,
+  RadioTower,
   Settings,
   Tv,
 } from "lucide-react";
@@ -33,11 +33,11 @@ export type SidebarNavItem = {
 };
 
 const SIDEBAR_NAV_ITEMS: SidebarNavItem[] = [
-  // 分类浏览已合并进首页的 sticky 分类条，不再占一个导航目的地。
-  { to: "/", label: "首页", icon: Home, end: true },
+  // 分类浏览已合并进直播页的 sticky 分类条，不再占一个导航目的地。
+  { to: "/", label: "直播", icon: RadioTower, end: true },
   { to: "/follow", label: "关注", icon: Heart },
   // B 站视频（VOD）。它不是直播平台中的一个，因此是自己的目的地而不是
-  // 首页平台条上的一项 —— 首页那条条带完全不动。
+  // 直播平台条上的一项 —— 直播那条条带完全不动。
   { to: "/video", label: "视频", icon: Clapperboard, homeEntry: "video" },
   // 短视频不再占一个导航目的地：它从播放页的「短视频」按钮或移动端竖画幅
   // 自动入口进入 `/shorts/bilibili`。旧路径 `/shorts` 只作为深链兼容入口。

@@ -113,7 +113,7 @@ export function CategoryBrowsePage() {
                 <LayoutGrid aria-hidden />
               </EmptyMedia>
               <EmptyTitle>这个平台暂时没有分区</EmptyTitle>
-              <EmptyDescription>回首页看推荐，或稍后再来刷新。</EmptyDescription>
+              <EmptyDescription>回直播页看推荐，或稍后再来刷新。</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button variant="outline" size="sm" onClick={() => navigate("/", { replace: true })}>

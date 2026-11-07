@@ -43,6 +43,8 @@ type SiteSwitcherProps = {
   filterMode?: boolean;
   /** 在指针或键盘激活之前预加载目的地。 */
   onValueIntent?: (value: SiteSwitcherValue) => void;
+  /** 移动客户端在横屏和平板宽度下也只显示平台图标。 */
+  iconOnly?: boolean;
   className?: string;
 };
 
@@ -52,6 +54,7 @@ export function SiteSwitcher({
   includeAll = false,
   filterMode = false,
   onValueIntent,
+  iconOnly = false,
   className,
 }: SiteSwitcherProps) {
   const siteId = useSettingsStore((s) => s.siteId);
@@ -104,6 +107,7 @@ export function SiteSwitcher({
             role="tab"
             data-motion-control
             aria-selected={active}
+            aria-label={label}
             title={label}
             onPointerEnter={() => onValueIntent?.(site.id)}
             onPointerDown={(event) => {
@@ -136,11 +140,11 @@ export function SiteSwitcher({
             )}
           >
             {site.id === "all" ? (
-              <LayoutGrid className="size-5 shrink-0" />
+              <LayoutGrid className="size-5 shrink-0" aria-hidden />
             ) : (
               <SiteLogo siteId={site.id} />
             )}
-            <span className="hidden sm:inline">{label}</span>
+            <span className={cn("hidden md:inline", iconOnly && "md:hidden")}>{label}</span>
             {active && (
               <span
                 key={`${site.id}-indicator`}
