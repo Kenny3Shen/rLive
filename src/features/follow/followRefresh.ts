@@ -1,13 +1,27 @@
-import { useEffect } from "react";
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { hashKey, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { invokeCmd } from "@/shared/api/tauri";
-import type { FollowRefreshResult, FollowRefreshTarget, FollowUser } from "@/shared/types/live";
+import type {
+  FollowRefreshResult,
+  FollowRefreshTarget,
+  FollowUser,
+  LiveRoomDetail,
+} from "@/shared/types/live";
 
 export const FOLLOW_LIST_QUERY_KEY = ["follows"] as const;
 const FOLLOW_REFRESH_QUERY_KEY = ["follows", "refresh"] as const;
 export const FOLLOW_STATUS_REFRESH_INTERVAL_MS = 60_000;
+const FOLLOW_LIST_QUERY_HASH = hashKey(FOLLOW_LIST_QUERY_KEY);
+const EMPTY_FOLLOWS: readonly FollowUser[] = [];
 
 let lastFollowRefreshAt = 0;
+
+/** 缓存尚未建立时返回稳定的空列表，不把单条提交结果误认为完整关注表。 */
+export function resolveCachedFollows(
+  follows: readonly FollowUser[] | undefined,
+): readonly FollowUser[] {
+  return follows ?? EMPTY_FOLLOWS;
+}
 
 /** 关注键：与后端 `follow_key` 一致，用于按条标记“本轮已确认”。 */
 export function followKey(siteId: string, roomId: string): string {
@@ -67,6 +81,118 @@ function followStatusRefreshDelay(
 /** 把一轮结果写入共享列表缓存。 */
 export function applyRefreshResult(queryClient: QueryClient, outcome: FollowRefreshOutcome): void {
   queryClient.setQueryData(FOLLOW_LIST_QUERY_KEY, outcome.follows);
+}
+
+/** 订阅 TanStack Query 缓存中已有的关注列表，不创建 observer，也不主动发起 IPC。 */
+export function useCachedFollows(queryClient: QueryClient): readonly FollowUser[] {
+  const getSnapshot = useCallback(
+    () => resolveCachedFollows(queryClient.getQueryData<FollowUser[]>(FOLLOW_LIST_QUERY_KEY)),
+    [queryClient],
+  );
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => subscribeToFollowListCache(queryClient, onStoreChange),
+    [queryClient],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/** 只把关注列表缓存的数据/状态变更通知给订阅者。 */
+export function subscribeToFollowListCache(
+  queryClient: QueryClient,
+  onStoreChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (
+      event.query.queryHash === FOLLOW_LIST_QUERY_HASH &&
+      (event.type === "updated" || event.type === "added" || event.type === "removed")
+    ) {
+      onStoreChange();
+    }
+  });
+}
+
+export function fetchCachedFollows(queryClient: QueryClient): Promise<FollowUser[]> {
+  return queryClient.fetchQuery({
+    queryKey: FOLLOW_LIST_QUERY_KEY,
+    queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
+    staleTime: 15_000,
+  });
+}
+
+export function prefetchRoomDetail(
+  queryClient: QueryClient,
+  siteId: string,
+  roomId: string,
+): Promise<LiveRoomDetail> {
+  return queryClient.fetchQuery<LiveRoomDetail>({
+    queryKey: ["room_detail", siteId, roomId],
+    queryFn: () => invokeCmd<LiveRoomDetail>("site_get_room_detail", { siteId, roomId }),
+    staleTime: 60_000,
+  });
+}
+
+export function userFromRoomDetail(
+  detail: {
+    site_id: FollowUser["site_id"];
+    room_id: string;
+    user_name: string;
+    user_avatar: string;
+    status: boolean;
+    live_started_at?: number | null;
+  },
+  tagIds: string[],
+): FollowUser {
+  return {
+    site_id: detail.site_id,
+    room_id: detail.room_id,
+    user_name: detail.user_name,
+    face: detail.user_avatar,
+    tag_ids: tagIds,
+    auto_record: false,
+    live_status: detail.status,
+    live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
+    updated_at: Date.now(),
+  };
+}
+
+/** 按身份合并已提交的记录，保留既有顺序和其它字段；缓存缺省时不伪造全表。 */
+export function mergeFollowList(
+  current: FollowUser[] | undefined,
+  action: "followed" | "unfollowed",
+  subject: Pick<FollowUser, "site_id" | "room_id">,
+  user?: FollowUser,
+): FollowUser[] | undefined {
+  if (!current) return current;
+  const index = current.findIndex(
+    (follow) => follow.site_id === subject.site_id && follow.room_id === subject.room_id,
+  );
+  if (action === "unfollowed") {
+    return index < 0 ? current : current.filter((_, position) => position !== index);
+  }
+  if (!user) return current;
+  // 后端 upsert 会覆盖整条记录，但缓存可能还保留自动录制等用户设置：
+  // 沿用已有字段，让后台刷新给出权威结果，避免本次操作误清元数据。
+  const merged =
+    index >= 0 ? { ...current[index], ...user, auto_record: current[index]!.auto_record } : user;
+  if (index >= 0) {
+    return current.map((follow, position) => (position === index ? merged : follow));
+  }
+  return [merged, ...current];
+}
+
+/** 写入本次真正提交的用户数据；后台刷新只负责与后端状态对齐，不挡成功反馈。 */
+export function reconcileFollowList(
+  queryClient: QueryClient,
+  action: "followed" | "unfollowed",
+  subject: Pick<FollowUser, "site_id" | "room_id">,
+  user?: FollowUser,
+): void {
+  queryClient.setQueryData<FollowUser[]>(FOLLOW_LIST_QUERY_KEY, (current) =>
+    mergeFollowList(current, action, subject, user),
+  );
+  void queryClient
+    .invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY, refetchType: "active" })
+    .catch(() => undefined);
 }
 
 /**

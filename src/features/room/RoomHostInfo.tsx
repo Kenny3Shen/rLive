@@ -3,6 +3,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SiteLogo } from "@/shared/components/SiteLogo";
+import { Spinner } from "@/components/ui/spinner";
 import type { LiveRoomDetail } from "@/shared/types/live";
 import { cn, formatOnline, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 
@@ -94,7 +95,11 @@ export function RoomHostInfo({
                     aria-label={isFollowed ? "取消关注" : "关注"}
                     aria-pressed={isFollowed}
                   >
-                    <Heart className={cn(isFollowed && "fill-current")} />
+                    {followBusy ? (
+                      <Spinner aria-hidden />
+                    ) : (
+                      <Heart className={cn(isFollowed && "fill-current")} />
+                    )}
                   </Button>
                 }
               />

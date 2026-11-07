@@ -1,6 +1,6 @@
-import { memo, useState, type ComponentProps } from "react";
+import { memo, useCallback, useRef, useState, type ComponentProps } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Copy,
@@ -15,8 +15,14 @@ import {
 import { invokeCmd } from "@/shared/api/tauri";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { copyText } from "@/shared/clipboard";
-import type { FollowUser, LiveRoomDetail, LiveRoomItem } from "@/shared/types/live";
-import { FOLLOW_LIST_QUERY_KEY } from "@/features/follow/followRefresh";
+import type { FollowUser, LiveRoomDetail, LiveRoomItem, SiteId } from "@/shared/types/live";
+import {
+  fetchCachedFollows,
+  prefetchRoomDetail,
+  reconcileFollowList,
+  userFromRoomDetail,
+  useCachedFollows,
+} from "@/features/follow/followRefresh";
 import { FollowGroupPickerDialog } from "@/features/follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup } from "@/features/follow/followGroups";
 import { useRoomCardPreview } from "@/features/room/player/useRoomCardPreview";
@@ -44,12 +50,29 @@ type RoomCardProps = {
   room: LiveRoomItem;
 };
 
+type FollowActionResult =
+  | { action: "choose-group"; user: FollowUser }
+  | { action: "followed"; user: FollowUser }
+  | { action: "unfollowed" };
+
+function isSameFollow(
+  user: Pick<FollowUser, "site_id" | "room_id">,
+  siteId: SiteId,
+  roomId: string,
+): boolean {
+  return user.site_id === siteId && user.room_id === roomId;
+}
+
 export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
   const normalizedCover = normalizeCoverUrl(room.cover);
   const [pendingFollowUser, setPendingFollowUser] = useState<FollowUser | null>(null);
+  const [followBusy, setFollowBusy] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const followBusyRef = useRef(false);
+  const pendingUserRef = useRef<FollowUser | null>(null);
   // 移动端长按卡片改为弹出底部操作抽屉（与直播页清晰度/更多操作抽屉同构），
   // 桌面端继续使用右键菜单。
   const mobile = isMobileClient();
@@ -61,43 +84,41 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     onPointerEnter: onPreviewPointerEnter,
     stop: stopPreview,
   } = useRoomCardPreview({ siteId: room.site_id, roomId: room.room_id });
-  const followsQuery = useQuery({
-    queryKey: FOLLOW_LIST_QUERY_KEY,
-    queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
-    staleTime: 15_000,
-  });
+  const follows = useCachedFollows(queryClient);
   const isFollowed = Boolean(
-    followsQuery.data?.some(
-      (follow) => follow.site_id === room.site_id && follow.room_id === room.room_id,
-    ),
+    follows.some((follow) => isSameFollow(follow, room.site_id, room.room_id)),
+  );
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const prefetchFollowData = useCallback(() => {
+    void prefetchRoomDetail(queryClient, room.site_id, room.room_id).catch(() => undefined);
+    void fetchCachedFollows(queryClient).catch(() => undefined);
+  }, [queryClient, room.room_id, room.site_id]);
+
+  const openCardActions = useCallback(
+    (open: boolean) => {
+      if (mobile) cardDrawer.setOpen(open);
+      else setMenuOpen(open);
+      if (open) prefetchFollowData();
+    },
+    [cardDrawer, mobile, prefetchFollowData],
   );
 
-  async function getRoomDetail(): Promise<LiveRoomDetail> {
-    return queryClient.fetchQuery({
-      queryKey: ["room_detail", room.site_id, room.room_id],
-      queryFn: () =>
-        invokeCmd<LiveRoomDetail>("site_get_room_detail", {
-          siteId: room.site_id,
-          roomId: room.room_id,
-        }),
-      staleTime: 60_000,
-    });
+  function getRoomDetail(): Promise<LiveRoomDetail> {
+    return prefetchRoomDetail(queryClient, room.site_id, room.room_id);
   }
 
-  const followMutation = useMutation({
-    mutationFn: async (groupId: string | null) => {
+  function runFollow(groupId: string | null): Promise<FollowActionResult> {
+    if (followBusyRef.current) return Promise.reject(new Error("follow_in_progress"));
+    followBusyRef.current = true;
+    setFollowBusy(true);
+    return (async () => {
       const [detail, follows] = await Promise.all([
         getRoomDetail(),
-        followsQuery.data
-          ? Promise.resolve(followsQuery.data)
-          : queryClient.fetchQuery({
-              queryKey: FOLLOW_LIST_QUERY_KEY,
-              queryFn: () => invokeCmd<FollowUser[]>("follow_list"),
-              staleTime: 15_000,
-            }),
+        fetchCachedFollows(queryClient),
       ]);
-      const existing = follows.find(
-        (follow) => follow.site_id === detail.site_id && follow.room_id === detail.room_id,
+      const existing = follows.find((follow) =>
+        isSameFollow(follow, detail.site_id, detail.room_id),
       );
 
       if (existing) {
@@ -107,44 +128,95 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
             roomId: detail.room_id,
             tagIds: tagIdsForFollowGroup(groupId),
           });
-          return { action: "followed" as const };
+          const user = { ...existing, tag_ids: tagIdsForFollowGroup(groupId) };
+          reconcileFollowList(queryClient, "followed", user, user);
+          return { action: "followed" as const, user };
         }
         await invokeCmd("follow_remove", {
           siteId: detail.site_id,
           roomId: detail.room_id,
         });
+        reconcileFollowList(queryClient, "unfollowed", existing);
         return { action: "unfollowed" as const };
       }
 
-      const user: FollowUser = {
-        site_id: detail.site_id,
-        room_id: detail.room_id,
-        user_name: detail.user_name,
-        face: detail.user_avatar,
-        tag_ids: groupId == null ? [] : tagIdsForFollowGroup(groupId),
-        auto_record: false,
-        live_status: detail.status,
-        live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
-        updated_at: Date.now(),
-      };
-      if (groupId == null) return { action: "choose-group" as const, user };
+      const user = userFromRoomDetail(detail, groupId == null ? [] : tagIdsForFollowGroup(groupId));
+      if (groupId == null) {
+        pendingUserRef.current = user;
+        setPendingFollowUser(user);
+        setPickerOpen(true);
+        openCardActions(false);
+        return { action: "choose-group" as const, user };
+      }
 
       await invokeCmd("follow_add", { user });
-      return { action: "followed" as const };
-    },
-    onSuccess: (result) => {
-      if (result.action === "choose-group") {
-        setPendingFollowUser(result.user);
-        return;
+      reconcileFollowList(queryClient, "followed", user, user);
+      return { action: "followed" as const, user };
+    })().finally(() => {
+      followBusyRef.current = false;
+      setFollowBusy(false);
+    });
+  }
+
+  async function startFollow(groupId: string | null) {
+    try {
+      const result = await runFollow(groupId);
+      if (result.action === "followed") {
+        pendingUserRef.current = null;
+        setPickerOpen(false);
+        notify.success("已关注主播");
+      } else if (result.action === "unfollowed") {
+        notify.success("已取消关注");
       }
-      void queryClient.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
-      if (result.action === "followed") setPendingFollowUser(null);
-      notify.success(result.action === "followed" ? "已关注主播" : "已取消关注");
-    },
-    onError: () => {
+      openCardActions(false);
+      return result;
+    } catch {
       notify.error("关注操作失败", "请检查网络后重试。");
-    },
-  });
+      openCardActions(false);
+      return null;
+    }
+  }
+
+  /** 分组弹层确认时复用首次点击已经取得的房间详情，只提交一次写入。 */
+  async function confirmFollowGroup(groupId: string) {
+    const user = pendingUserRef.current;
+    if (!user || followBusyRef.current) return;
+    const selectedUser: FollowUser = {
+      ...user,
+      tag_ids: tagIdsForFollowGroup(groupId),
+    };
+    followBusyRef.current = true;
+    setFollowBusy(true);
+    try {
+      await invokeCmd("follow_add", { user: selectedUser });
+      reconcileFollowList(queryClient, "followed", selectedUser, selectedUser);
+      pendingUserRef.current = null;
+      setPickerOpen(false);
+      notify.success("已关注主播");
+    } catch {
+      notify.error("关注操作失败", "请检查网络后重试。");
+    } finally {
+      followBusyRef.current = false;
+      setFollowBusy(false);
+    }
+  }
+
+  const picker =
+    pendingFollowUser != null ? (
+      <FollowGroupPickerDialog
+        open={pickerOpen}
+        subjectName={pendingFollowUser.user_name}
+        pending={followBusy}
+        onOpenChange={setPickerOpen}
+        onOpenChangeComplete={(open) => {
+          if (!open) {
+            pendingUserRef.current = null;
+            setPendingFollowUser(null);
+          }
+        }}
+        onConfirm={(groupId) => confirmFollowGroup(groupId)}
+      />
+    ) : null;
 
   function openRoom() {
     // 长按弹出操作抽屉后，松手合成的点按属于菜单手势的一部分，不进入房间。
@@ -302,7 +374,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         </button>
 
         {/* 长按弹出的底部操作抽屉，磁贴画法对齐全屏 HUD 的「更多房间操作」。 */}
-        <Drawer open={cardDrawer.open} onOpenChange={cardDrawer.setOpen}>
+        <Drawer open={cardDrawer.open} onOpenChange={openCardActions}>
           <DrawerContent>
             <DrawerTitle className="truncate">
               {room.title || room.user_name || "直播间"}
@@ -312,7 +384,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
                 icon={Copy}
                 label="复制链接"
                 onClick={() => {
-                  cardDrawer.setOpen(false);
+                  openCardActions(false);
                   void copyRoomLink();
                 }}
               />
@@ -320,25 +392,25 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
                 icon={Hash}
                 label="复制房间号"
                 onClick={() => {
-                  cardDrawer.setOpen(false);
+                  openCardActions(false);
                   void copyRoomId();
                 }}
               />
               <RoomCardActionTile
-                icon={isFollowed ? StarOff : Star}
+                icon={followBusy ? undefined : isFollowed ? StarOff : Star}
                 label={isFollowed ? "取消关注" : "关注主播"}
-                disabled={followMutation.isPending || followsQuery.isLoading}
+                busy={followBusy}
+                disabled={followBusy}
                 onClick={() => {
-                  // 先收抽屉，为可能弹出的分组选择对话框让路。
-                  cardDrawer.setOpen(false);
-                  followMutation.mutate(null);
+                  // 保持抽屉可见直到提交结束或让位给分组选择对话框。
+                  void startFollow(null);
                 }}
               />
               <RoomCardActionTile
                 icon={ExternalLink}
                 label="浏览器打开"
                 onClick={() => {
-                  cardDrawer.setOpen(false);
+                  openCardActions(false);
                   void openInBrowser();
                 }}
               />
@@ -346,21 +418,13 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
           </DrawerContent>
         </Drawer>
 
-        <FollowGroupPickerDialog
-          open={pendingFollowUser != null}
-          subjectName={pendingFollowUser?.user_name ?? room.user_name}
-          pending={followMutation.isPending && followMutation.variables != null}
-          onOpenChange={(open) => {
-            if (!open) setPendingFollowUser(null);
-          }}
-          onConfirm={(groupId) => followMutation.mutateAsync(groupId).then(() => undefined)}
-        />
+        {picker}
       </>
     );
   }
 
   return (
-    <ContextMenu>
+    <ContextMenu open={menuOpen} onOpenChange={openCardActions}>
       <ContextMenuTrigger
         render={
           <button
@@ -395,11 +459,18 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         <ContextMenuSeparator />
         <ContextMenuGroup>
           <ContextMenuItem
-            disabled={followMutation.isPending || followsQuery.isLoading}
-            onClick={() => followMutation.mutate(null)}
+            disabled={followBusy}
+            closeOnClick={false}
+            onClick={() => void startFollow(null)}
           >
-            {isFollowed ? <StarOff aria-hidden /> : <Star aria-hidden />}
-            {isFollowed ? "取消关注" : "关注主播"}
+            {followBusy ? (
+              <Spinner aria-hidden />
+            ) : isFollowed ? (
+              <StarOff aria-hidden />
+            ) : (
+              <Star aria-hidden />
+            )}
+            {followBusy ? "正在处理…" : isFollowed ? "取消关注" : "关注主播"}
           </ContextMenuItem>
           <ContextMenuItem onClick={() => void openInBrowser()}>
             <ExternalLink aria-hidden />
@@ -408,15 +479,7 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
         </ContextMenuGroup>
       </ContextMenuContent>
 
-      <FollowGroupPickerDialog
-        open={pendingFollowUser != null}
-        subjectName={pendingFollowUser?.user_name ?? room.user_name}
-        pending={followMutation.isPending && followMutation.variables != null}
-        onOpenChange={(open) => {
-          if (!open) setPendingFollowUser(null);
-        }}
-        onConfirm={(groupId) => followMutation.mutateAsync(groupId).then(() => undefined)}
-      />
+      {picker}
     </ContextMenu>
   );
 });
@@ -425,11 +488,13 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
 function RoomCardActionTile({
   icon: Icon,
   label,
+  busy,
   disabled,
   onClick,
 }: {
-  icon: LucideIcon;
+  icon?: LucideIcon;
   label: string;
+  busy?: boolean;
   disabled?: boolean;
   onClick: () => void;
 }) {
@@ -441,8 +506,12 @@ function RoomCardActionTile({
       className="h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3"
       onClick={onClick}
     >
-      <Icon className="size-5" aria-hidden />
-      <span className="max-w-full truncate">{label}</span>
+      {busy ? (
+        <Spinner className="size-5" aria-hidden />
+      ) : (
+        Icon && <Icon className="size-5" aria-hidden />
+      )}
+      <span className="max-w-full truncate">{busy ? "正在处理…" : label}</span>
     </Button>
   );
 }

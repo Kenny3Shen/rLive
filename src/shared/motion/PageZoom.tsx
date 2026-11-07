@@ -316,8 +316,9 @@ export function PageZoom({
         className={cn(
           "relative flex h-full min-h-0 min-w-0 flex-1",
           // 播放页盖住静止的来源列表，返回时则在列表上方缩走。
+          // 离场层自身 inert 且不接收指针，目标列表因此能在动画期间继续点按；
+          // 保留 z-10 使缩回的播放器仍盖在列表上方，不改变视觉或动画时长。
           outgoing && "bg-background",
-          outgoing?.enabled && "pointer-events-none",
           outgoing && !outgoing.enabled && "z-10",
         )}
       >

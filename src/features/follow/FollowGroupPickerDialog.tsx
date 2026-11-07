@@ -40,6 +40,7 @@ type FollowGroupPickerDialogProps = {
   subjectName: string;
   pending?: boolean;
   onOpenChange: (open: boolean) => void;
+  onOpenChangeComplete?: (open: boolean) => void;
   onConfirm: (groupId: string) => void | Promise<void>;
 };
 
@@ -48,6 +49,7 @@ export function FollowGroupPickerDialog({
   subjectName,
   pending = false,
   onOpenChange,
+  onOpenChangeComplete,
   onConfirm,
 }: FollowGroupPickerDialogProps) {
   const queryClient = useQueryClient();
@@ -100,7 +102,11 @@ export function FollowGroupPickerDialog({
   const groups = groupsQuery.data ?? [];
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}
+      onOpenChangeComplete={onOpenChangeComplete}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>关注 {subjectName}</DialogTitle>
@@ -178,7 +184,7 @@ export function FollowGroupPickerDialog({
           <Button
             type="button"
             disabled={busy || groupsQuery.isLoading}
-            onClick={() => void onConfirm(selectedGroupId)}
+            onClick={() => void Promise.resolve(onConfirm(selectedGroupId)).catch(() => undefined)}
           >
             {pending ? (
               <Spinner data-icon="inline-start" aria-hidden />

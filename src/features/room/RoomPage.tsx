@@ -30,7 +30,11 @@ import { notify } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DrawerScope } from "@/components/ui/drawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { FOLLOW_LIST_QUERY_KEY } from "../follow/followRefresh";
+import {
+  FOLLOW_LIST_QUERY_KEY,
+  reconcileFollowList,
+  userFromRoomDetail,
+} from "../follow/followRefresh";
 import { FollowGroupPickerDialog } from "../follow/FollowGroupPickerDialog";
 import { tagIdsForFollowGroup, UNGROUPED_FOLLOW_GROUP_ID } from "../follow/followGroups";
 import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
@@ -156,9 +160,12 @@ function RoomPageContent() {
   });
 
   const isFollowed = useMemo(() => {
-    if (!siteId || !roomId || !followQuery.data) return false;
-    return followQuery.data.some((f) => f.site_id === siteId && f.room_id === roomId);
-  }, [followQuery.data, siteId, roomId]);
+    if (!siteId || !roomId || !detailQuery.data || !followQuery.data) return false;
+    return followQuery.data.some(
+      (f) =>
+        f.site_id === siteId && (f.room_id === roomId || f.room_id === detailQuery.data?.room_id),
+    );
+  }, [detailQuery.data, followQuery.data, siteId, roomId]);
 
   const detail = detailQuery.data;
   const activeQuality = playback.qualities[playback.qualityIndex];
@@ -204,30 +211,29 @@ function RoomPageContent() {
 
   async function toggleFollow(groupId = UNGROUPED_FOLLOW_GROUP_ID): Promise<boolean> {
     const detail = detailQuery.data;
-    if (!detail || !siteId || !roomId) return false;
+    if (!detail || !siteId || !roomId || followBusy) return false;
+    const followed = followQuery.data?.find(
+      (follow) =>
+        follow.site_id === detail.site_id &&
+        (follow.room_id === roomId || follow.room_id === detail.room_id),
+    );
     setFollowBusy(true);
     try {
-      if (isFollowed) {
-        await invokeCmd("follow_remove", { siteId, roomId });
+      if (followed) {
+        await invokeCmd("follow_remove", {
+          siteId: followed.site_id,
+          roomId: followed.room_id,
+        });
+        reconcileFollowList(qc, "unfollowed", followed);
       } else {
-        const user: FollowUser = {
-          site_id: detail.site_id,
-          room_id: detail.room_id,
-          user_name: detail.user_name,
-          face: detail.user_avatar,
-          tag_ids: tagIdsForFollowGroup(groupId),
-          auto_record: false,
-          live_status: detail.status,
-          live_started_at: detail.status ? (detail.live_started_at ?? null) : null,
-          updated_at: Date.now(),
-        };
+        const user = userFromRoomDetail(detail, tagIdsForFollowGroup(groupId));
         await invokeCmd("follow_add", { user });
+        reconcileFollowList(qc, "followed", user, user);
       }
-      await qc.invalidateQueries({ queryKey: FOLLOW_LIST_QUERY_KEY });
-      notify.success(isFollowed ? "已取消关注" : "已关注主播");
+      notify.success(followed ? "已取消关注" : "已关注主播");
       return true;
     } catch {
-      notify.error(isFollowed ? "取消关注失败" : "关注失败", "请检查网络后重试。");
+      notify.error(followed ? "取消关注失败" : "关注失败", "请检查网络后重试。");
       return false;
     } finally {
       setFollowBusy(false);
@@ -479,8 +485,9 @@ function RoomPageContent() {
         actionIcon={<UserRoundX data-icon="inline-start" aria-hidden />}
         confirmText="取消关注"
         onConfirm={() => {
-          setConfirmUnfollowOpen(false);
-          void toggleFollow();
+          void toggleFollow().then((done) => {
+            if (done) setConfirmUnfollowOpen(false);
+          });
         }}
       />
 
