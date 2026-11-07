@@ -65,12 +65,15 @@ export function PagePan({
   }>({ renderedKey: panKey, outgoing: null, direction, axis });
 
   if (transition.renderedKey !== panKey) {
+    // 快速往返可能让已提交快照已经属于新 key：同 key 的进出层会同时渲染，
+    // React 因此给出 duplicate key，并把两个节点绑到错误的 ref 上。
+    // 只有确实来自上一页的快照才允许作为离场层保留。
     setTransition({
       renderedKey: panKey,
       // 渲染期状态调整是 React 官方模式；committedRef 只在提交后的 layout effect
       // 里推进（见下），被丢弃的并发渲染不会污染它。规则无法表达这一刻意设计。
       // oxlint-disable-next-line react/refs
-      outgoing: enabled ? committedRef.current : null,
+      outgoing: enabled && committedRef.current.key !== panKey ? committedRef.current : null,
       direction,
       axis,
     });
@@ -78,7 +81,10 @@ export function PagePan({
     setTransition({ ...transition, outgoing: null });
   }
 
-  const outgoing = transition.renderedKey === panKey && enabled ? transition.outgoing : null;
+  const outgoing =
+    transition.renderedKey === panKey && enabled && transition.outgoing?.key !== panKey
+      ? transition.outgoing
+      : null;
 
   useLayoutEffect(() => {
     // 被放弃的并发渲染不得推进页面快照。下一次过渡总是从 React 真正提交的内容
@@ -89,6 +95,8 @@ export function PagePan({
   useLayoutEffect(() => {
     if (!enabled || !outgoing) {
       interruptedTransforms.current = new WeakMap();
+      // 无离场层时归位复用的进入节点；中断或快速往返可能留下上一轮的位移。
+      incomingRef.current?.style.removeProperty("transform");
       return;
     }
     const incoming = incomingRef.current;
@@ -162,6 +170,9 @@ export function PagePan({
           // 较旧 WebView 可能缺少 commitStyles()；下方同步移除仍保证 cancel 与卸载之间
           // 没有排定的帧。
         }
+        // commitStyles 会写进 React 复用的 DOM 节点。清掉完成动画留下的行内
+        // transform，避免后续无离场层时旧位移仍把首页卡片推到屏幕外。
+        incoming.style.removeProperty("transform");
         flushSync(() => {
           setTransition((current) =>
             current.outgoing === outgoing ? { ...current, outgoing: null } : current,

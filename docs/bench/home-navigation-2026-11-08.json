@@ -1,0 +1,1172 @@
+{
+  "date": "2026-11-08",
+  "topic": "从其他页面切换至斗鱼、抖音首页的点击延迟调查与修复",
+  "environment": {
+    "client": "Windows Tauri dev 主窗口",
+    "webview": "WebView2 Edg/157.0.4341.42",
+    "viewport": [
+      1280,
+      720
+    ],
+    "devicePixelRatio": 1,
+    "motion": "完整动效",
+    "react": "开发构建"
+  },
+  "method": {
+    "action": "选定平台后进入设置页，再通过真实鼠标点击侧栏首页；每个平台连续测量三次",
+    "cache": "before/after 为分阶段挂载修复的同缓存对照。后续回归与最终复测中真实列表变化：B站108、抖音53、Twitch70，斗鱼40、虎牙120；final_verification 单独记录，不把它当作卡片数量完全一致的样本。",
+    "clock": "从捕获阶段的真实 click 事件开始计时，单位 ms",
+    "selected": "第一次 requestAnimationFrame 观察到首页链接 aria-current=page",
+    "content": "第一次 requestAnimationFrame 观察到活动平台的真实 RoomCard 节点",
+    "interactive": "首次目标卡片中心 elementFromPoint 命中卡片或其子节点",
+    "longtasks": "PerformanceObserver longtask；未达到 50ms 的分段渲染仍可能累计延迟首次提交",
+    "nativeViewport": "采样前清除 CDP 视口覆盖，innerWidth/innerHeight 与 Tauri inner_size 均为 1280×720",
+    "window": "click 后观察约 1s，未创建额外 CDP 标签页或模拟平台数据"
+  },
+  "before": [
+    {
+      "site": "bilibili",
+      "round": 0,
+      "clickAfterPointer": 0.7,
+      "selected": 58.4,
+      "firstFrame": 1.1,
+      "content": 187.1,
+      "interactive": 187.1,
+      "maxFrameGap": 71.1,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": true,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": false,
+          "rooms": 40
+        }
+      ]
+    },
+    {
+      "site": "bilibili",
+      "round": 1,
+      "clickAfterPointer": 0.7,
+      "selected": 51.1,
+      "firstFrame": 1,
+      "content": 183.2,
+      "interactive": 183.2,
+      "maxFrameGap": 59.7,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": true,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": false,
+          "rooms": 40
+        }
+      ]
+    },
+    {
+      "site": "bilibili",
+      "round": 2,
+      "clickAfterPointer": 0.4,
+      "selected": 45.7,
+      "firstFrame": 0.9,
+      "content": 157.9,
+      "interactive": 157.9,
+      "maxFrameGap": 31.4,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": true,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": false,
+          "rooms": 40
+        }
+      ]
+    },
+    {
+      "site": "douyu",
+      "round": 0,
+      "clickAfterPointer": 0.5,
+      "selected": 185.3,
+      "firstFrame": 1.2,
+      "content": 378.5,
+      "interactive": 378.5,
+      "maxFrameGap": 73.3,
+      "longtasks": [
+        {
+          "start": 190,
+          "duration": 68
+        }
+      ],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": false,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": true,
+          "rooms": 40
+        },
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        }
+      ]
+    },
+    {
+      "site": "douyu",
+      "round": 1,
+      "clickAfterPointer": 0.7,
+      "selected": 186.8,
+      "firstFrame": 1.2,
+      "content": 386.8,
+      "interactive": 386.8,
+      "maxFrameGap": 72,
+      "longtasks": [
+        {
+          "start": 192.3,
+          "duration": 66
+        }
+      ],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": false,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": true,
+          "rooms": 40
+        },
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        }
+      ]
+    },
+    {
+      "site": "douyu",
+      "round": 2,
+      "clickAfterPointer": 0.8,
+      "selected": 182,
+      "firstFrame": 1,
+      "content": 374.4,
+      "interactive": 374.4,
+      "maxFrameGap": 69.7,
+      "longtasks": [
+        {
+          "start": 186.7,
+          "duration": 64
+        }
+      ],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": false,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": true,
+          "rooms": 40
+        },
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        }
+      ]
+    },
+    {
+      "site": "douyin",
+      "round": 0,
+      "clickAfterPointer": 1.2,
+      "selected": 579.6,
+      "firstFrame": 2.3,
+      "content": 720.6,
+      "interactive": 720.6,
+      "maxFrameGap": 86.8,
+      "longtasks": [
+        {
+          "start": 588.7,
+          "duration": 77
+        }
+      ],
+      "panels": [
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        },
+        {
+          "site": "douyin",
+          "active": true,
+          "rooms": 27
+        },
+        {
+          "site": "twitch",
+          "active": false,
+          "rooms": 68
+        }
+      ]
+    },
+    {
+      "site": "douyin",
+      "round": 1,
+      "clickAfterPointer": 0.8,
+      "selected": 200.3,
+      "firstFrame": 1.1,
+      "content": 336,
+      "interactive": 336,
+      "maxFrameGap": 72.4,
+      "longtasks": [
+        {
+          "start": 205.3,
+          "duration": 67
+        }
+      ],
+      "panels": [
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        },
+        {
+          "site": "douyin",
+          "active": true,
+          "rooms": 27
+        },
+        {
+          "site": "twitch",
+          "active": false,
+          "rooms": 68
+        }
+      ]
+    },
+    {
+      "site": "douyin",
+      "round": 2,
+      "clickAfterPointer": 0.7,
+      "selected": 160.5,
+      "firstFrame": 1.6,
+      "content": 316.8,
+      "interactive": 316.8,
+      "maxFrameGap": 64.4,
+      "longtasks": [
+        {
+          "start": 165.4,
+          "duration": 58
+        }
+      ],
+      "panels": [
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        },
+        {
+          "site": "douyin",
+          "active": true,
+          "rooms": 27
+        },
+        {
+          "site": "twitch",
+          "active": false,
+          "rooms": 68
+        }
+      ]
+    }
+  ],
+  "after": [
+    {
+      "site": "bilibili",
+      "round": 0,
+      "clickAfterPointer": 0.8,
+      "selected": 19.4,
+      "firstFrame": 1.1,
+      "content": 109.6,
+      "interactive": 109.6,
+      "maxFrameGap": 43.9,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": true,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": false,
+          "rooms": 40
+        }
+      ]
+    },
+    {
+      "site": "bilibili",
+      "round": 1,
+      "clickAfterPointer": 0.8,
+      "selected": 19.6,
+      "firstFrame": 1.1,
+      "content": 99.4,
+      "interactive": 99.4,
+      "maxFrameGap": 38.8,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": true,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": false,
+          "rooms": 40
+        }
+      ]
+    },
+    {
+      "site": "bilibili",
+      "round": 2,
+      "clickAfterPointer": 0.4,
+      "selected": 28.9,
+      "firstFrame": 1,
+      "content": 109.1,
+      "interactive": 109.1,
+      "maxFrameGap": 39.5,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": true,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": false,
+          "rooms": 40
+        }
+      ]
+    },
+    {
+      "site": "douyu",
+      "round": 0,
+      "clickAfterPointer": 0.6,
+      "selected": 19.9,
+      "firstFrame": 1.1,
+      "content": 56.3,
+      "interactive": 97.9,
+      "maxFrameGap": 40.2,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": false,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": true,
+          "rooms": 40
+        },
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        }
+      ]
+    },
+    {
+      "site": "douyu",
+      "round": 1,
+      "clickAfterPointer": 0.4,
+      "selected": 21.5,
+      "firstFrame": 1,
+      "content": 66.2,
+      "interactive": 100,
+      "maxFrameGap": 36.9,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": false,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": true,
+          "rooms": 40
+        },
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        }
+      ]
+    },
+    {
+      "site": "douyu",
+      "round": 2,
+      "clickAfterPointer": 0.5,
+      "selected": 20.8,
+      "firstFrame": 1,
+      "content": 70,
+      "interactive": 104.4,
+      "maxFrameGap": 34.4,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "bilibili",
+          "active": false,
+          "rooms": 109
+        },
+        {
+          "site": "douyu",
+          "active": true,
+          "rooms": 40
+        },
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        }
+      ]
+    },
+    {
+      "site": "douyin",
+      "round": 0,
+      "clickAfterPointer": 1.2,
+      "selected": 19.4,
+      "firstFrame": 1.1,
+      "content": 63.4,
+      "interactive": 100.9,
+      "maxFrameGap": 47.6,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        },
+        {
+          "site": "douyin",
+          "active": true,
+          "rooms": 27
+        },
+        {
+          "site": "twitch",
+          "active": false,
+          "rooms": 68
+        }
+      ]
+    },
+    {
+      "site": "douyin",
+      "round": 1,
+      "clickAfterPointer": 0.5,
+      "selected": 27.1,
+      "firstFrame": 1.4,
+      "content": 100.3,
+      "interactive": 128.9,
+      "maxFrameGap": 37.5,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        },
+        {
+          "site": "douyin",
+          "active": true,
+          "rooms": 27
+        },
+        {
+          "site": "twitch",
+          "active": false,
+          "rooms": 68
+        }
+      ]
+    },
+    {
+      "site": "douyin",
+      "round": 2,
+      "clickAfterPointer": 0.6,
+      "selected": 28.3,
+      "firstFrame": 2,
+      "content": 85.6,
+      "interactive": 122.4,
+      "maxFrameGap": 37.7,
+      "longtasks": [],
+      "panels": [
+        {
+          "site": "huya",
+          "active": false,
+          "rooms": 120
+        },
+        {
+          "site": "douyin",
+          "active": true,
+          "rooms": 27
+        },
+        {
+          "site": "twitch",
+          "active": false,
+          "rooms": 68
+        }
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "site": "bilibili",
+      "samples_per_version": 3,
+      "same_room_counts": true,
+      "before_median": {
+        "selected": 51.1,
+        "content": 183.2,
+        "interactive": 183.2,
+        "maxFrameGap": 59.7
+      },
+      "after_median": {
+        "selected": 19.6,
+        "content": 109.1,
+        "interactive": 109.1,
+        "maxFrameGap": 39.5
+      }
+    },
+    {
+      "site": "douyu",
+      "samples_per_version": 3,
+      "same_room_counts": true,
+      "before_median": {
+        "selected": 185.3,
+        "content": 378.5,
+        "interactive": 378.5,
+        "maxFrameGap": 72
+      },
+      "after_median": {
+        "selected": 20.8,
+        "content": 66.2,
+        "interactive": 100,
+        "maxFrameGap": 36.9
+      }
+    },
+    {
+      "site": "douyin",
+      "samples_per_version": 3,
+      "same_room_counts": true,
+      "before_median": {
+        "selected": 200.3,
+        "content": 336,
+        "interactive": 336,
+        "maxFrameGap": 72.4
+      },
+      "after_median": {
+        "selected": 27.1,
+        "content": 85.6,
+        "interactive": 122.4,
+        "maxFrameGap": 37.7
+      }
+    }
+  ],
+  "finding": "桌面侧栏进入首页时，只延后活动面板使邻居平台的大网格阻塞首次导航提交；所有初始面板延后且优先提交活动平台后，首页选中反馈和目标卡片出现均改善。",
+  "implementation": "RouteOutlet 通过 waitForReady/onReady 按活动面板的提交释放邻居挂载；Shell 以 location.key 校验就绪回调，保留已挂载面板的内容和状态。",
+  "limitations": [
+    "数据来自开发构建的三次暖缓存导航，不代表生产构建或首次联网加载时间。",
+    "后台邻居仍须完整挂载；同缓存 after 和 final_verification 各九个样本的观察窗口均未记录到 >=50ms 的 longtask，不保证任意列表规模均无长任务。",
+    "本次未进行 Android 触摸或手势验证。"
+  ],
+  "final_verification": {
+    "results": [
+      {
+        "site": "bilibili",
+        "round": 0,
+        "clickAfterPointer": 0.7,
+        "selected": 44.7,
+        "firstFrame": 1.2,
+        "content": 314.6,
+        "interactive": 314.6,
+        "maxFrameGap": 40.7,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "rooms": 108
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "rooms": 40
+          }
+        ]
+      },
+      {
+        "site": "bilibili",
+        "round": 1,
+        "clickAfterPointer": 0.6,
+        "selected": 37.2,
+        "firstFrame": 1.1,
+        "content": 226.5,
+        "interactive": 226.5,
+        "maxFrameGap": 41.2,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "rooms": 108
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "rooms": 40
+          }
+        ]
+      },
+      {
+        "site": "bilibili",
+        "round": 2,
+        "clickAfterPointer": 0.7,
+        "selected": 16.9,
+        "firstFrame": 1.1,
+        "content": 91.9,
+        "interactive": 91.9,
+        "maxFrameGap": 34.9,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "rooms": 108
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "rooms": 40
+          }
+        ]
+      },
+      {
+        "site": "douyu",
+        "round": 0,
+        "clickAfterPointer": 0.8,
+        "selected": 32.6,
+        "firstFrame": 1.2,
+        "content": 131.9,
+        "interactive": 131.9,
+        "maxFrameGap": 40.2,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "rooms": 108
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "rooms": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "rooms": 120
+          }
+        ]
+      },
+      {
+        "site": "douyu",
+        "round": 1,
+        "clickAfterPointer": 0.8,
+        "selected": 17,
+        "firstFrame": 1,
+        "content": 47.5,
+        "interactive": 92.6,
+        "maxFrameGap": 32.2,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "rooms": 108
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "rooms": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "rooms": 120
+          }
+        ]
+      },
+      {
+        "site": "douyu",
+        "round": 2,
+        "clickAfterPointer": 0.4,
+        "selected": 19.8,
+        "firstFrame": 1,
+        "content": 55.3,
+        "interactive": 95.5,
+        "maxFrameGap": 39.2,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "rooms": 108
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "rooms": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "rooms": 120
+          }
+        ]
+      },
+      {
+        "site": "douyin",
+        "round": 0,
+        "clickAfterPointer": 0.7,
+        "selected": 22.2,
+        "firstFrame": 2,
+        "content": 79.4,
+        "interactive": 122.3,
+        "maxFrameGap": 30.1,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "huya",
+            "active": false,
+            "rooms": 120
+          },
+          {
+            "site": "douyin",
+            "active": true,
+            "rooms": 53
+          },
+          {
+            "site": "twitch",
+            "active": false,
+            "rooms": 70
+          }
+        ]
+      },
+      {
+        "site": "douyin",
+        "round": 1,
+        "clickAfterPointer": 0.7,
+        "selected": 19.6,
+        "firstFrame": 1,
+        "content": 63,
+        "interactive": 100.4,
+        "maxFrameGap": 43,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "huya",
+            "active": false,
+            "rooms": 120
+          },
+          {
+            "site": "douyin",
+            "active": true,
+            "rooms": 53
+          },
+          {
+            "site": "twitch",
+            "active": false,
+            "rooms": 70
+          }
+        ]
+      },
+      {
+        "site": "douyin",
+        "round": 2,
+        "clickAfterPointer": 0.5,
+        "selected": 13.6,
+        "firstFrame": 0.9,
+        "content": 71.9,
+        "interactive": 97.8,
+        "maxFrameGap": 35.7,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "huya",
+            "active": false,
+            "rooms": 120
+          },
+          {
+            "site": "douyin",
+            "active": true,
+            "rooms": 53
+          },
+          {
+            "site": "twitch",
+            "active": false,
+            "rooms": 70
+          }
+        ]
+      }
+    ],
+    "errors": [],
+    "median": [
+      {
+        "site": "bilibili",
+        "selected": 37.2,
+        "content": 226.5,
+        "interactive": 226.5,
+        "maxFrameGap": 40.7
+      },
+      {
+        "site": "douyu",
+        "selected": 19.8,
+        "content": 55.3,
+        "interactive": 95.5,
+        "maxFrameGap": 39.2
+      },
+      {
+        "site": "douyin",
+        "selected": 19.6,
+        "content": 71.9,
+        "interactive": 100.4,
+        "maxFrameGap": 35.7
+      }
+    ]
+  },
+  "regression": {
+    "passed": true,
+    "cases": [
+      {
+        "case": "douyu: /follow → 首页",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "bilibili",
+              "active": false,
+              "inert": true,
+              "rooms": 108
+            },
+            {
+              "site": "douyu",
+              "active": true,
+              "inert": false,
+              "rooms": 40
+            },
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            }
+          ]
+        }
+      },
+      {
+        "case": "douyu: /history → 首页",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "bilibili",
+              "active": false,
+              "inert": true,
+              "rooms": 108
+            },
+            {
+              "site": "douyu",
+              "active": true,
+              "inert": false,
+              "rooms": 40
+            },
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            }
+          ]
+        }
+      },
+      {
+        "case": "douyu: /category → 首页",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "bilibili",
+              "active": false,
+              "inert": true,
+              "rooms": 108
+            },
+            {
+              "site": "douyu",
+              "active": true,
+              "inert": false,
+              "rooms": 40
+            },
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            }
+          ]
+        }
+      },
+      {
+        "case": "douyu: 首页尚在挂载时切出并再次返回",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "bilibili",
+              "active": false,
+              "inert": true,
+              "rooms": 108
+            },
+            {
+              "site": "douyu",
+              "active": true,
+              "inert": false,
+              "rooms": 40
+            },
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            }
+          ]
+        }
+      },
+      {
+        "case": "douyin: /follow → 首页",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            },
+            {
+              "site": "douyin",
+              "active": true,
+              "inert": false,
+              "rooms": 53
+            },
+            {
+              "site": "twitch",
+              "active": false,
+              "inert": true,
+              "rooms": 70
+            }
+          ]
+        }
+      },
+      {
+        "case": "douyin: /history → 首页",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            },
+            {
+              "site": "douyin",
+              "active": true,
+              "inert": false,
+              "rooms": 53
+            },
+            {
+              "site": "twitch",
+              "active": false,
+              "inert": true,
+              "rooms": 70
+            }
+          ]
+        }
+      },
+      {
+        "case": "douyin: /category → 首页",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            },
+            {
+              "site": "douyin",
+              "active": true,
+              "inert": false,
+              "rooms": 53
+            },
+            {
+              "site": "twitch",
+              "active": false,
+              "inert": true,
+              "rooms": 70
+            }
+          ]
+        }
+      },
+      {
+        "case": "douyin: 首页尚在挂载时切出并再次返回",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            },
+            {
+              "site": "douyin",
+              "active": true,
+              "inert": false,
+              "rooms": 53
+            },
+            {
+              "site": "twitch",
+              "active": false,
+              "inert": true,
+              "rooms": 70
+            }
+          ]
+        }
+      },
+      {
+        "case": "连续斗鱼 → 抖音 → 斗鱼",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "bilibili",
+              "active": false,
+              "inert": true,
+              "rooms": 108
+            },
+            {
+              "site": "douyu",
+              "active": true,
+              "inert": false,
+              "rooms": 40
+            },
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            },
+            {
+              "site": "douyin",
+              "active": false,
+              "inert": true,
+              "rooms": 53
+            },
+            {
+              "site": "twitch",
+              "active": false,
+              "inert": true,
+              "rooms": 70
+            }
+          ]
+        }
+      },
+      {
+        "case": "首页卡片进入直播间并通过首页按钮返回",
+        "state": {
+          "path": "/",
+          "panels": [
+            {
+              "site": "bilibili",
+              "active": false,
+              "inert": true,
+              "rooms": 108
+            },
+            {
+              "site": "douyu",
+              "active": true,
+              "inert": false,
+              "rooms": 40
+            },
+            {
+              "site": "huya",
+              "active": false,
+              "inert": true,
+              "rooms": 120
+            },
+            {
+              "site": "douyin",
+              "active": false,
+              "inert": true,
+              "rooms": 53
+            },
+            {
+              "site": "twitch",
+              "active": false,
+              "inert": true,
+              "rooms": 70
+            }
+          ]
+        }
+      }
+    ],
+    "assertions": [
+      "活动平台匹配选中项，且首张真实 RoomCard 中心可被 elementFromPoint 命中",
+      "活动平台可接收输入，其余平台 inert",
+      "当前路由所有保留平台最终都挂载真实卡片",
+      "真实点击首页卡片进入直播间并返回首页"
+    ]
+  },
+  "motion_fix": {
+    "finding": "快速返回使 PagePan 复用节点上的旧行内退场位移残留；同时观察到进出层使用相同路由 key 的 React 错误及平台轨道错位。",
+    "evidence": {
+      "stale_incoming_transform": "matrix(1, 0, 0, 1, 0, -628)",
+      "stale_incoming_animations": 0,
+      "duplicate_keys": [
+        "/settings",
+        "/"
+      ]
+    },
+    "implementation": "同 key 快照不作为离场层，完成转场及无离场层时清除进入节点的旧行内 transform。"
+  },
+  "validation": {
+    "check": "bun run check 通过，零告警",
+    "unit": "导航与路由模块相关现有单测 13 通过",
+    "browser": "10 项真实主窗口回归通过；最终 9 次性能复测无新增 console error 或 pageerror",
+    "sync": "bash scripts/sync-to-windows.sh 通过"
+  }
+}

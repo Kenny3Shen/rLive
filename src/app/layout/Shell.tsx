@@ -141,20 +141,25 @@ function bindSwipe({
 
 function RouteOutlet({
   defer,
+  waitForReady = false,
+  onReady,
   outlet,
   platform,
   immersive = false,
 }: {
   defer: boolean;
+  /** 等调用方确认活动表面已提交后才挂载（defer 仍控制首帧占位）。 */
+  waitForReady?: boolean;
+  onReady?: () => void;
   outlet: ReactNode;
   platform: PlatformScopeValue;
   /** 沉浸播放页：加载占位换成播放器舞台，而不是锚在顶部的一条加载条。 */
   immersive?: boolean;
 }) {
-  const [ready, setReady] = useState(!defer);
+  const [ready, setReady] = useState(!defer && !waitForReady);
 
   useEffect(() => {
-    if (!defer) return;
+    if (ready || !defer || waitForReady) return;
 
     // 让合成器在 React 挂载新路由之前就开始页面平移。
     // 目标页包含大列表时，过渡渲染可能发生让步。
@@ -162,7 +167,12 @@ function RouteOutlet({
       startTransition(() => setReady(true));
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [defer]);
+  }, [defer, ready, waitForReady]);
+
+  // 活动面板的内容已提交。邻居的挂载由调用方据此释放。
+  useEffect(() => {
+    if (ready) onReady?.();
+  }, [onReady, ready]);
 
   // 沉浸播放页的加载占位保持纯黑，不模拟顶部或底部控制栏。
   // 避免首次进入在顶部闪出一条应用外壳画法的加载条再被播放器顶掉。
@@ -660,6 +670,22 @@ export function Shell() {
     </div>
   );
   const activeLivePanelIndex = platformStrip.indexOf(platformForMotion);
+  // 桌面侧栏直达首页时先提交活动平台的内容，再释放相邻平台的网格。
+  // key 跟随每条历史记录：离场页迟到的就绪回调不能替新页面放行邻居。
+  const [liveRouteReady, setLiveRouteReady] = useState(() => ({
+    key: location.key,
+    ready: false,
+  }));
+  if (liveRouteReady.key !== location.key) {
+    setLiveRouteReady({ key: location.key, ready: false });
+  }
+  const handleLiveRouteReady = useCallback(() => {
+    setLiveRouteReady((current) =>
+      current.key === location.key && !current.ready
+        ? { key: current.key, ready: true }
+        : current,
+    );
+  }, [location.key]);
   const [retainedLivePanels, setRetainedLivePanels] = useState<{
     pathname: string;
     panels: readonly PlatformScopeValue[];
@@ -756,7 +782,11 @@ export function Shell() {
             >
               <RefreshFabVisibilityProvider visible={active}>
                 <RouteOutlet
-                  defer={active && deferRouteOutlet}
+                  // 先让活动平台的内容完成提交；相邻网格随后再挂载，
+                  // 避免多个 HomePage 在同一次过渡里争抢主线程。
+                  defer={deferRouteOutlet}
+                  waitForReady={!active && deferRouteOutlet && !liveRouteReady.ready}
+                  onReady={active && deferRouteOutlet ? handleLiveRouteReady : undefined}
                   outlet={outlet}
                   platform={platform}
                 />
