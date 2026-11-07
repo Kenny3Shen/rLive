@@ -19,6 +19,10 @@ import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getClientPlatform } from "@/shared/clientPlatform";
 import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
+import {
+  PLAYER_HUD_SURFACE_POSITION_CLASS,
+  PLAYER_HUD_SURFACE_TOP_CLASS,
+} from "@/shared/components/player/playerBackGeometry";
 import { AudioOnlyIndicator } from "@/shared/components/player/AudioOnlyIndicator";
 import { PlayerAudioOnlyButton } from "@/shared/components/player/PlayerAudioOnlyButton";
 import {
@@ -683,7 +687,9 @@ function IptvPlayerContent({
           >
             <div
               className={cn(
-                "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent pr-[max(0.375rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.1875rem,var(--player-safe-area-top,0px))] text-white",
+                "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent text-white",
+                PLAYER_HUD_SURFACE_POSITION_CLASS,
+                PLAYER_HUD_SURFACE_TOP_CLASS,
                 compactViewport ? "pb-1.5" : "pb-3",
               )}
             >

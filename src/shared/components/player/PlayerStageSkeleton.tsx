@@ -1,6 +1,8 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { isMobileClient } from "@/shared/clientPlatform";
+import { PLAYER_BACK_ONLY_SURFACE_CLASS } from "./playerBackGeometry";
 
 /**
  * 沉浸播放页共用的加载占位：画面保持纯黑，不模拟顶部或底部控制栏。
@@ -47,7 +49,7 @@ export function PlayerStageSkeleton({
     <div
       data-slot="player-stage-skeleton"
       className={cn(
-        // 与真实 HUD 共用 0.9rem 缩放，避免返回按钮在加载完成时改变尺寸。
+        // 与真实舞台共用 0.9rem 缩放，避免返回按钮在加载完成时改变尺寸。
         "media-skin relative flex h-full min-h-0 flex-col overflow-hidden bg-black [--media-scale-unit:0.9rem]",
         className,
       )}
@@ -56,7 +58,10 @@ export function PlayerStageSkeleton({
         {label}
       </span>
       {back && (
-        <div className="absolute left-3 top-[max(0.625rem,var(--player-safe-area-top,0px))] z-30 text-white">
+        <div
+          data-density={isMobileClient() ? "dense" : undefined}
+          className={PLAYER_BACK_ONLY_SURFACE_CLASS}
+        >
           {back}
         </div>
       )}
