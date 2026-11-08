@@ -142,7 +142,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - **`RefreshFab` 的 portal 必须由离场层显式关闭**：它渲染到 `document.body`，离场层的 `inert` / `aria-hidden` 管不到。`PagePan` / `PageZoom` 的进入层与离场层使用完全相同的 `RefreshFabVisibilityProvider` → `RouterScope` 结构，只在 `visible` 值上区分；离场层传 `false`，且 provider 中祖先的 `false` 优先于嵌套活动面板的 `true`。只给其中一侧加 provider 会让 React 把整棵页面当成不同类型而重挂载。
 - 快速连续或反向导航时，在取消旧动画前记录仍连接的节点的当前 transform，由下一段沿用；全新目标页接在离场页当前坐标旁边，不瞬移回起点或拉出额外空白。只在中断时读取合成位置，不逐帧运行 JS。离场层同时使用 `inert` 与 `aria-hidden`，不能接收键盘聚焦。
 - 动画完成后先用 `commitStyles()` 固定旧页离屏最终位置，再同步卸载旧 subtree；不能先 cancel Animation 再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
-- 直接侧栏导航时 `RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移。
+- 直接侧栏导航时 `RouteOutlet` 通过 `defer` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移；邻居由 `waitForReady` 等待活动页提交，不另设重复的首帧调度开关。
 - 从沉浸播放页退出或普通页面跨路径 POP 时，`throttledRouteOutlet.ts` 按 `pathname + location.key + immersive` 记住本次导航：首帧只提交轻量外壳与活动面板，横滑轨道上的邻居等活动页 `onReady` 后补齐。分类、搜索、历史等页面返回时也先启动平移，再挂载目标列表。同路径平台/页签切换保留既有轨道。快速往返、连续切页或 REPLACE 不会把旧导航的邻居带到新页面。
 
 **底栏点击不能只依赖 `click`**：底栏固定在滚动容器之外，用户点它时内容的惯性滚动常常还在跑，而 Chromium 的 scroll gesture 会吃掉「用来停住滚动」的第一次点按 —— `pointerdown` / `pointerup` 照常派发，`click` 被吞掉，于是表现为「点一下没反应，得再点一次」。`SidebarLink` 因此在 `pointerup` 上自行判定并导航（触摸、位移在 `LONG_PRESS_CANCEL_SLOP_PX` 内、时长低于 `SIDEBAR_TAP_MAX_DURATION_MS`、且指针未被祖先捕获），随后用 `SIDEBAR_TAP_CLICK_SUPPRESSION_MS` 的窗口把兼容 `click` 压掉，保证同一次点按只导航一次。自行导航必须带上 `SIDEBAR_NAVIGATION_STATE`，否则 Shell 认不出这是底栏直达、会退回普通换页。鼠标与键盘仍走 `NavLink` 自己的路径。
@@ -317,7 +317,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 
 - 避免用动画修改 `width`、`height`、`top`、`left`、margin、padding 等触发布局的属性。先完成 DOM 读取再批量写入，不在一个 pointermove 中交替读布局和写 style。
 - `will-change` 只在动画运行时设置，结束、取消与卸载都必须清除。同一 target 开始新补间前先由 `tween()` 自动取消（或手动 `killTweensOf()`）。
-- 相同列表效果用一条编排好的序列，不为每项创建独立 delay；动画目标数量必须有界。长列表优先只动画首屏或有界数量，无限滚动追加内容默认直接出现，并继续用 `.room-card` 的 `content-visibility: auto`。
+- 相同列表效果用一条编排好的序列，不为每项创建独立 delay；动画目标数量必须有界。长列表优先只动画首屏或有界数量，无限滚动追加内容默认直接出现，并继续用 `.room-card` 的 `content-visibility: auto`。该属性只减少屏外布局与绘制，不省去 React 挂载；直播卡片的菜单、关注订阅和分组状态因此按右键、键盘菜单或长按操作挂载，卡片按钮节点保持稳定。
 - 连续手势输入不进 React state（只承担刷新、选中项等离散状态）。下拉刷新位移与 VOD 侧栏占比经 RAF 合并，横向滑动位移直接在 pointermove 中写 transform。占比这类高频布局变量应由不继承的 `@property` 在容器本地消费，避免逐帧使整个播放器与侧栏子树重算样式。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，纵向滚动留给 `app-page`。Android 宿主不请求固定显示模式或刷新率偏好，动画全部按时间基准推进，不设固定帧率 ticker。
 - 不把「组件出现」默认等同于「需要动画」：高频列表刷新、轮询状态、弹幕新增和播放器帧更新通常应直接更新。

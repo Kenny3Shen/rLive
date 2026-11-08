@@ -33,10 +33,20 @@ function ContextMenu({
   );
 
   React.useEffect(() => {
+    // 按需挂载的受控菜单可能首帧就已打开，不会先收到 onOpenChange(true)。
+    // 注册这类实例，继续保证同一时刻只保留一个上下文菜单。
+    if (props.open ?? props.defaultOpen ?? false) {
+      for (const other of openContextMenus) {
+        if (other === entry) continue;
+        openContextMenus.delete(other);
+        other.close();
+      }
+      openContextMenus.add(entry);
+    }
     return () => {
       openContextMenus.delete(entry);
     };
-  }, [entry]);
+  }, [entry, props.open, props.defaultOpen]);
 
   return (
     <ContextMenuPrimitive.Root
@@ -76,9 +86,13 @@ function ContextMenuContent({
   alignOffset = 4,
   side = "right",
   sideOffset = 0,
+  anchor,
   ...props
 }: ContextMenuPrimitive.Popup.Props &
-  Pick<ContextMenuPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
+  Pick<
+    ContextMenuPrimitive.Positioner.Props,
+    "align" | "alignOffset" | "side" | "sideOffset" | "anchor"
+  >) {
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Positioner
@@ -87,6 +101,7 @@ function ContextMenuContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        anchor={anchor}
         // 上下文菜单锚定在指针处的固定虚拟矩形，而不是触发元素，
         // 因此不存在值得跟随的锚点移动。开启跟踪反而有害：
         // Floating UI 的 `layoutShift` 监视器只要发现锚点矩形与其捕获值不同就会重建

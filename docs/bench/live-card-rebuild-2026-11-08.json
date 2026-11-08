@@ -1,0 +1,651 @@
+{
+  "size": [
+    1920,
+    1032
+  ],
+  "react": "dev",
+  "site": "bilibili",
+  "date": "2026-11-08",
+  "method": "Windows 主窗口暖缓存，从捕获阶段真实 click 到首次 rAF 卡片存在及中心命中；无 CPU 采样；普通首页样本 interactive 探针只检查首次卡片帧，第三次未命中，仅用于 content 对照；直播返回每帧持续检查命中。",
+  "before": {
+    "home": [
+      {
+        "selected": 20,
+        "content": 140.20000004768372,
+        "interactive": 140.20000004768372,
+        "maxFrameGap": 45.299999952316284,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "selected": 18.799999952316284,
+        "content": 108.40000009536743,
+        "interactive": 108.40000009536743,
+        "maxFrameGap": 47.39999985694885,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "selected": 17.199999809265137,
+        "content": 92.29999995231628,
+        "interactive": null,
+        "maxFrameGap": 40.700000047683716,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      }
+    ],
+    "room": [
+      {
+        "commit": 56.40000009536743,
+        "content": 268.30000019073486,
+        "interactive": 268.30000019073486,
+        "maxFrameGap": 54.90000009536743,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "commit": 56,
+        "content": 237.5,
+        "interactive": 237.5,
+        "maxFrameGap": 56,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "commit": 51.299999952316284,
+        "content": 220.5,
+        "interactive": 220.5,
+        "maxFrameGap": 51.299999952316284,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      }
+    ],
+    "douyuHome": [
+      {
+        "selected": 22.899999856948853,
+        "content": 71.20000004768372,
+        "interactive": 108.20000004768372,
+        "maxFrameGap": 40.5,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "cards": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "cards": 120
+          }
+        ]
+      },
+      {
+        "selected": 19.299999952316284,
+        "content": 55.89999985694885,
+        "interactive": 112.89999985694885,
+        "maxFrameGap": 38.299999952316284,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "cards": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "cards": 120
+          }
+        ]
+      },
+      {
+        "selected": 22.59999990463257,
+        "content": 68.70000004768372,
+        "interactive": 114.5,
+        "maxFrameGap": 35.700000047683716,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "cards": 104
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "cards": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "cards": 120
+          }
+        ]
+      }
+    ]
+  },
+  "fieldNotes": {
+    "commit": "首次 requestAnimationFrame 观察到 location.pathname 已返回 /，不是 React Profiler 的提交时长。",
+    "content": "首次 requestAnimationFrame 发现活动面板内首张真实 RoomCard。",
+    "interactive": "首张卡片中心 elementFromPoint 命中按钮或其子节点；包含动画位移等待。",
+    "maxFrameGap": "点击后 1.5–1.6 秒采样窗口内最大 rAF 间隔。",
+    "longtasks": "PerformanceObserver longtask，未观察到长任务不代表没有累计渲染开销。"
+  },
+  "after": {
+    "douyuHome": [
+      {
+        "selected": 25.09999990463257,
+        "content": 56.39999985694885,
+        "interactive": 118.39999985694885,
+        "maxFrameGap": 34,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "cards": 103
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "cards": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "cards": 120
+          }
+        ]
+      },
+      {
+        "selected": 23.5,
+        "content": 48.60000014305115,
+        "interactive": 107,
+        "maxFrameGap": 21.899999856948853,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "cards": 103
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "cards": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "cards": 120
+          }
+        ]
+      },
+      {
+        "selected": 25,
+        "content": 67.10000014305115,
+        "interactive": 112,
+        "maxFrameGap": 28.399999856948853,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": false,
+            "cards": 103
+          },
+          {
+            "site": "douyu",
+            "active": true,
+            "cards": 40
+          },
+          {
+            "site": "huya",
+            "active": false,
+            "cards": 120
+          }
+        ]
+      }
+    ],
+    "room": [
+      {
+        "commit": 43.40000009536743,
+        "content": 118.79999995231628,
+        "interactive": 118.79999995231628,
+        "maxFrameGap": 40.5,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 105
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "commit": 55.90000009536743,
+        "content": 204.90000009536743,
+        "interactive": 204.90000009536743,
+        "maxFrameGap": 55.90000009536743,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 105
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "commit": 50.700000047683716,
+        "content": 219.29999995231628,
+        "interactive": 219.29999995231628,
+        "maxFrameGap": 50.700000047683716,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 105
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      }
+    ],
+    "home": [
+      {
+        "selected": 51,
+        "content": 131.09999990463257,
+        "interactive": 186.39999985694885,
+        "maxFrameGap": 55.299999952316284,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "selected": 40.200000047683716,
+        "content": 101.59999990463257,
+        "interactive": 141.39999985694885,
+        "maxFrameGap": 27.90000009536743,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "selected": 44.30000019073486,
+        "content": 101.10000014305115,
+        "interactive": 149.20000004768372,
+        "maxFrameGap": 31,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      }
+    ]
+  },
+  "intermediate": {
+    "bilibiliHomeAfterShellHmr": [
+      {
+        "selected": 33.700000047683716,
+        "content": 107.89999985694885,
+        "interactive": 151.29999995231628,
+        "maxFrameGap": 43.40000009536743,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 103
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "selected": 46.09999990463257,
+        "content": 107.5,
+        "interactive": 148.69999980926514,
+        "maxFrameGap": 30.299999952316284,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 103
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      },
+      {
+        "selected": 54.89999985694885,
+        "content": 112.89999985694885,
+        "interactive": 153.29999995231628,
+        "maxFrameGap": 29.90000009536743,
+        "longtasks": [],
+        "panels": [
+          {
+            "site": "bilibili",
+            "active": true,
+            "cards": 103
+          },
+          {
+            "site": "douyu",
+            "active": false,
+            "cards": 40
+          }
+        ]
+      }
+    ],
+    "note": "Shell热更新后出现createRoot重复挂载错误，此组只保留调查证据，不作为最终验收对照。"
+  },
+  "control": {
+    "oldCard": [
+      {
+        "selected": 24.5,
+        "content": 185.09999990463257,
+        "interactive": 185.09999990463257,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 147
+      },
+      {
+        "selected": 42.799999952316284,
+        "content": 416.09999990463257,
+        "interactive": 416.09999990463257,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 147
+      },
+      {
+        "selected": 22.699999809265137,
+        "content": 140.5,
+        "interactive": 140.5,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 147
+      }
+    ],
+    "newCard": [
+      {
+        "selected": 45.09999990463257,
+        "content": 99.79999995231628,
+        "interactive": 141.89999985694885,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 0
+      },
+      {
+        "selected": 39.40000009536743,
+        "content": 89.90000009536743,
+        "interactive": 124.29999995231628,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 0
+      },
+      {
+        "selected": 39.09999990463257,
+        "content": 87.89999985694885,
+        "interactive": 123.09999990463257,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 0
+      }
+    ],
+    "excludedNewHmr": [
+      {
+        "selected": 29.200000047683716,
+        "content": 161.70000004768372,
+        "interactive": 161.70000004768372,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 147
+      },
+      {
+        "selected": 42.700000047683716,
+        "content": 317.09999990463257,
+        "interactive": 317.09999990463257,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 0
+      },
+      {
+        "selected": 40,
+        "content": 86.59999990463257,
+        "interactive": 134.20000004768372,
+        "counts": [
+          {
+            "site": "bilibili",
+            "cards": 107
+          },
+          {
+            "site": "douyu",
+            "cards": 40
+          }
+        ],
+        "triggers": 0
+      }
+    ],
+    "note": "旧版和新版只切换 RoomCard，Shell及菜单基础组件保持最终实现，缓存跨热更新保留，B站107、斗鱼40一致。新版首次切换时旧触发器仍有147个，该组剔除；确认旧触发器为0后重新采样。统计窗口为900ms，每次真实点击后等待1000ms。",
+    "medians": {
+      "oldCard": {
+        "selected": 24.5,
+        "content": 185.1,
+        "interactive": 185.1
+      },
+      "newCard": {
+        "selected": 39.4,
+        "content": 89.9,
+        "interactive": 124.3
+      }
+    }
+  },
+  "validation": {
+    "check": "bun run check 通过",
+    "unit": "24 项现有关注、路由退出与来源几何回归通过",
+    "browser": [
+      "首次右键打开菜单、Escape 关闭并恢复卡片焦点",
+      "Shift+F10 打开菜单、首次关注分组弹层取消并恢复焦点",
+      "人为延迟真实 site_get_room_detail 响应 900ms，关注请求在途关闭菜单后仍正常出现分组选择，Tab 焦点保留在弹层内；探针已恢复",
+      "确认关注后菜单显示取消关注，取消后恢复关注主播；测试新增关注已撤销",
+      "菜单打开前后卡片按钮 DOM 身份不变，ArrowDown 可聚焦菜单项",
+      "从全部分类页通过 POP 返回首页，活动平台仍为 bilibili",
+      "首页滚动到 850px，从可视卡片进入直播间并返回；锚点相对偏移均为 72px，scrollTop 恢复为 850px"
+    ],
+    "limitations": [
+      "Android 真机长按与系统返回尚未验证",
+      "生产构建尚未验收",
+      "开发构建耗时波动，列表数随平台推荐变化；不把初次联网等待计为卡片重建收益"
+    ],
+    "sync": "bash scripts/sync-to-windows.sh 成功，最终实现与文档同步到 D:\\dev\\rLive"
+  }
+}

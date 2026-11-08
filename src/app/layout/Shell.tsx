@@ -147,7 +147,6 @@ function bindSwipe({
 function RouteOutlet({
   defer,
   waitForReady = false,
-  deferFirstFrame = false,
   onReady,
   outlet,
   platform,
@@ -156,16 +155,14 @@ function RouteOutlet({
   defer: boolean;
   /** 等调用方确认活动表面已提交后才挂载（defer 仍控制首帧占位）。 */
   waitForReady?: boolean;
-  /** 首帧只放轻量占位，下一帧再提交内容（退出播放器时用）。 */
-  deferFirstFrame?: boolean;
   onReady?: () => void;
   outlet: ReactNode;
   platform: PlatformScopeValue;
   /** 沉浸播放页：加载占位换成播放器舞台，而不是锚在顶部的一条加载条。 */
   immersive?: boolean;
 }) {
-  const gate = `${defer ? 1 : 0}${waitForReady ? 1 : 0}${deferFirstFrame ? 1 : 0}`;
-  const initialReady = !defer && !waitForReady && !deferFirstFrame;
+  const gate = `${defer ? 1 : 0}${waitForReady ? 1 : 0}`;
+  const initialReady = !defer && !waitForReady;
   // gate 变化时渲染期直接重置，不另跑一次 effect 提交；活动页就绪后邻居
   // 因此能在下一次提交里取消占位。
   const [readyState, setReadyState] = useState(() => ({ gate, ready: initialReady }));
@@ -179,8 +176,8 @@ function RouteOutlet({
   // 活动列表延迟到下一帧提交，让退出动画先在合成器启动；只提交一份
   // 内容，侧栏平移与播放页退出共用这条轻量路径。
   useEffect(() => {
-    if (ready || (!defer && !waitForReady && !deferFirstFrame)) return;
-    if ((defer && !waitForReady) || deferFirstFrame) {
+    if (ready || (!defer && !waitForReady)) return;
+    if (defer && !waitForReady) {
       const frame = window.requestAnimationFrame(() => {
         const commit = () =>
           setReadyState((current) =>
@@ -192,7 +189,7 @@ function RouteOutlet({
       return () => window.cancelAnimationFrame(frame);
     }
     return;
-  }, [defer, deferFirstFrame, gate, ready, waitForReady]);
+  }, [defer, gate, ready, waitForReady]);
 
   // 活动面板的内容已提交。邻居的挂载由调用方据此释放；被动效果在活动列表
   // 画出来之后才安排下一次渲染，不会把四个列表挤进退出动画的第一帧。
@@ -694,7 +691,6 @@ export function Shell() {
     <RouteOutlet
       key={deferRouteOutlet ? pathname : "immediate-route"}
       defer={deferRouteOutlet}
-      deferFirstFrame={throttledNavigation && !mobileClient}
       onReady={throttledNavigation ? handleThrottledOutletReady : undefined}
       outlet={outlet}
       platform={platformForMotion}
@@ -812,7 +808,6 @@ export function Shell() {
                   <RouteOutlet
                     defer={active ? deferRouteOutlet : throttledNavigation}
                     waitForReady={!active && !videoNeighborsReady}
-                    deferFirstFrame={active && throttledNavigation && !mobileClient}
                     onReady={active && throttledNavigation ? handleThrottledOutletReady : undefined}
                     outlet={outlet}
                     platform={platformForMotion}
@@ -869,7 +864,6 @@ export function Shell() {
                       ? handleLiveAndThrottledOutletReady
                       : undefined
                   }
-                  deferFirstFrame={active && throttledNavigation && !mobileClient}
                   outlet={outlet}
                   platform={platform}
                 />

@@ -1,82 +1,34 @@
-import { memo, useCallback, useRef, useState, type ComponentProps } from "react";
+import { memo, useRef, useState, type ComponentProps } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import {
-  Copy,
-  ExternalLink,
-  Flame,
-  Hash,
-  PanelsTopLeft,
-  Star,
-  StarOff,
-  type LucideIcon,
-} from "lucide-react";
-import { invokeCmd } from "@/shared/api/tauri";
+import { Flame } from "lucide-react";
 import { isMobileClient } from "@/shared/clientPlatform";
-import { copyText } from "@/shared/clipboard";
-import type { FollowUser, LiveRoomDetail, LiveRoomItem, SiteId } from "@/shared/types/live";
-import {
-  fetchCachedFollows,
-  prefetchRoomDetail,
-  reconcileFollowList,
-  userFromRoomDetail,
-  useCachedFollows,
-} from "@/features/follow/followRefresh";
-import { FollowGroupPickerDialog } from "@/features/follow/FollowGroupPickerDialog";
-import { tagIdsForFollowGroup } from "@/features/follow/followGroups";
+import type { LiveRoomItem } from "@/shared/types/live";
 import { useRoomCardPreview } from "@/features/room/player/useRoomCardPreview";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuGroup,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { Button } from "@/components/ui/button";
-import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { notify } from "@/components/ui/toast";
 import { Spinner } from "@/components/ui/spinner";
 import { preloadRouteModule } from "@/app/routeModules";
-import { useMultiRoomStore } from "@/features/multi-room/multiRoomStore";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
 import { formatOnline, normalizeCoverUrl, cn } from "@/lib/utils";
 import { roomCardLabels } from "./roomCardLabels";
+import { RoomCardActions, type RoomCardMenuPoint } from "./RoomCardActions";
 
-type RoomCardProps = {
-  room: LiveRoomItem;
-};
-
-type FollowActionResult =
-  | { action: "choose-group"; user: FollowUser }
-  | { action: "followed"; user: FollowUser }
-  | { action: "unfollowed" };
-
-function isSameFollow(
-  user: Pick<FollowUser, "site_id" | "room_id">,
-  siteId: SiteId,
-  roomId: string,
-): boolean {
-  return user.site_id === siteId && user.room_id === roomId;
-}
+type RoomCardProps = { room: LiveRoomItem };
 
 export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
   const normalizedCover = normalizeCoverUrl(room.cover);
-  const [pendingFollowUser, setPendingFollowUser] = useState<FollowUser | null>(null);
-  const [followBusy, setFollowBusy] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const followBusyRef = useRef(false);
-  const pendingUserRef = useRef<FollowUser | null>(null);
-  // 移动端长按卡片改为弹出底部操作抽屉（与直播页清晰度/更多操作抽屉同构），
-  // 桌面端继续使用右键菜单。
   const mobile = isMobileClient();
+  const cardRef = useRef<HTMLButtonElement | null>(null);
   const cardDrawer = useLongPressDrawer({ enabled: mobile });
+  const [menuSession, setMenuSession] = useState<{
+    open: boolean;
+    point: RoomCardMenuPoint | null;
+  } | null>(null);
+  // 长按 hook 提交打开状态时记住会话，抽屉关闭后仍保留到退出动画和关注流程结束。
+  if (mobile && cardDrawer.open && menuSession === null)
+    setMenuSession({ open: true, point: null });
+  const actionsOpen = mobile ? cardDrawer.open : (menuSession?.open ?? false);
   const { offline, primaryText, secondaryText, showOnline } = roomCardLabels(room);
   const {
     mountRef: previewMountRef,
@@ -84,192 +36,20 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     onPointerEnter: onPreviewPointerEnter,
     stop: stopPreview,
   } = useRoomCardPreview({ siteId: room.site_id, roomId: room.room_id });
-  const follows = useCachedFollows(queryClient);
-  const isFollowed = Boolean(
-    follows.some((follow) => isSameFollow(follow, room.site_id, room.room_id)),
-  );
-  const [menuOpen, setMenuOpen] = useState(false);
 
-  const prefetchFollowData = useCallback(() => {
-    void prefetchRoomDetail(queryClient, room.site_id, room.room_id).catch(() => undefined);
-    void fetchCachedFollows(queryClient).catch(() => undefined);
-  }, [queryClient, room.room_id, room.site_id]);
-
-  const openCardActions = useCallback(
-    (open: boolean) => {
-      if (mobile) cardDrawer.setOpen(open);
-      else setMenuOpen(open);
-      if (open) prefetchFollowData();
-    },
-    [cardDrawer, mobile, prefetchFollowData],
-  );
-
-  function getRoomDetail(): Promise<LiveRoomDetail> {
-    return prefetchRoomDetail(queryClient, room.site_id, room.room_id);
-  }
-
-  function runFollow(groupId: string | null): Promise<FollowActionResult> {
-    if (followBusyRef.current) return Promise.reject(new Error("follow_in_progress"));
-    followBusyRef.current = true;
-    setFollowBusy(true);
-    return (async () => {
-      const [detail, follows] = await Promise.all([
-        getRoomDetail(),
-        fetchCachedFollows(queryClient),
-      ]);
-      const existing = follows.find((follow) =>
-        isSameFollow(follow, detail.site_id, detail.room_id),
-      );
-
-      if (existing) {
-        if (groupId != null) {
-          await invokeCmd("follow_set_tags", {
-            siteId: detail.site_id,
-            roomId: detail.room_id,
-            tagIds: tagIdsForFollowGroup(groupId),
-          });
-          const user = { ...existing, tag_ids: tagIdsForFollowGroup(groupId) };
-          reconcileFollowList(queryClient, "followed", user, user);
-          return { action: "followed" as const, user };
-        }
-        await invokeCmd("follow_remove", {
-          siteId: detail.site_id,
-          roomId: detail.room_id,
-        });
-        reconcileFollowList(queryClient, "unfollowed", existing);
-        return { action: "unfollowed" as const };
-      }
-
-      const user = userFromRoomDetail(detail, groupId == null ? [] : tagIdsForFollowGroup(groupId));
-      if (groupId == null) {
-        pendingUserRef.current = user;
-        setPendingFollowUser(user);
-        setPickerOpen(true);
-        openCardActions(false);
-        return { action: "choose-group" as const, user };
-      }
-
-      await invokeCmd("follow_add", { user });
-      reconcileFollowList(queryClient, "followed", user, user);
-      return { action: "followed" as const, user };
-    })().finally(() => {
-      followBusyRef.current = false;
-      setFollowBusy(false);
+  function openMenu(point: RoomCardMenuPoint | null) {
+    stopPreview();
+    const rect = cardRef.current?.getBoundingClientRect();
+    setMenuSession({
+      open: true,
+      point: point ?? (rect ? { x: rect.left, y: rect.bottom } : { x: 0, y: 0 }),
     });
   }
 
-  async function startFollow(groupId: string | null) {
-    try {
-      const result = await runFollow(groupId);
-      if (result.action === "followed") {
-        pendingUserRef.current = null;
-        setPickerOpen(false);
-        notify.success("已关注主播");
-      } else if (result.action === "unfollowed") {
-        notify.success("已取消关注");
-      }
-      openCardActions(false);
-      return result;
-    } catch {
-      notify.error("关注操作失败", "请检查网络后重试。");
-      openCardActions(false);
-      return null;
-    }
-  }
-
-  /** 分组弹层确认时复用首次点击已经取得的房间详情，只提交一次写入。 */
-  async function confirmFollowGroup(groupId: string) {
-    const user = pendingUserRef.current;
-    if (!user || followBusyRef.current) return;
-    const selectedUser: FollowUser = {
-      ...user,
-      tag_ids: tagIdsForFollowGroup(groupId),
-    };
-    followBusyRef.current = true;
-    setFollowBusy(true);
-    try {
-      await invokeCmd("follow_add", { user: selectedUser });
-      reconcileFollowList(queryClient, "followed", selectedUser, selectedUser);
-      pendingUserRef.current = null;
-      setPickerOpen(false);
-      notify.success("已关注主播");
-    } catch {
-      notify.error("关注操作失败", "请检查网络后重试。");
-    } finally {
-      followBusyRef.current = false;
-      setFollowBusy(false);
-    }
-  }
-
-  const picker =
-    pendingFollowUser != null ? (
-      <FollowGroupPickerDialog
-        open={pickerOpen}
-        subjectName={pendingFollowUser.user_name}
-        pending={followBusy}
-        onOpenChange={setPickerOpen}
-        onOpenChangeComplete={(open) => {
-          if (!open) {
-            pendingUserRef.current = null;
-            setPendingFollowUser(null);
-          }
-        }}
-        onConfirm={(groupId) => confirmFollowGroup(groupId)}
-      />
-    ) : null;
-
   function openRoom() {
-    // 长按弹出操作抽屉后，松手合成的点按属于菜单手势的一部分，不进入房间。
     if (cardDrawer.consumeSyntheticClick()) return;
-    // 导航会卸载卡片,但先停预览可以避免与房间播放器抢同一条本机代理会话。
     stopPreview();
     navigate(roomPath);
-  }
-
-  async function copyRoomId() {
-    if (await copyText(room.room_id)) {
-      notify.success("已复制房间号");
-    } else {
-      notify.error("复制房间号失败", "请手动选择并复制。");
-    }
-  }
-
-  async function copyRoomLink() {
-    try {
-      const detail = await getRoomDetail();
-      if (await copyText(detail.url)) {
-        notify.success("已复制房间链接");
-      } else {
-        notify.error("复制房间链接失败", "请手动选择并复制。");
-      }
-    } catch {
-      notify.error("获取房间链接失败", "请稍后重试。");
-    }
-  }
-
-  async function openInBrowser() {
-    try {
-      const detail = await getRoomDetail();
-      try {
-        await openUrl(detail.url);
-      } catch {
-        const opened = window.open(detail.url, "_blank", "noopener,noreferrer");
-        if (!opened) throw new Error("browser_open_failed");
-      }
-      notify.success("已在浏览器中打开");
-    } catch {
-      notify.error("无法在浏览器中打开", "请稍后重试。");
-    }
-  }
-
-  function addToMultiRoom() {
-    const result = useMultiRoomStore.getState().addRoom(room);
-    if (result === "added") notify.success("已加入多画面");
-    else if (result === "exists") notify.info("该直播间已在多画面中");
-    else {
-      const { layout } = useMultiRoomStore.getState();
-      notify.error("多画面已满", `当前布局最多同时添加 ${layout} 个直播间。`);
-    }
   }
 
   const cardBody = (
@@ -331,7 +111,10 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
   );
 
   const cardButtonProps: ComponentProps<"button"> = {
+    ref: cardRef,
     type: "button",
+    "aria-haspopup": mobile ? "dialog" : "menu",
+    "aria-expanded": actionsOpen,
     onClick: openRoom,
     onPointerEnter: (event) => {
       preloadRouteModule(roomPath);
@@ -346,7 +129,22 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
     onPointerMove: cardDrawer.onPointerMove,
     onPointerUp: cardDrawer.onPointerUp,
     onPointerCancel: cardDrawer.onPointerCancel,
-    onContextMenu: cardDrawer.onContextMenu,
+    onContextMenu: (event) => {
+      if (mobile) {
+        cardDrawer.onContextMenu(event);
+        return;
+      }
+      event.preventDefault();
+      openMenu(
+        event.clientX === 0 && event.clientY === 0 ? null : { x: event.clientX, y: event.clientY },
+      );
+    },
+    onKeyDown: (event) => {
+      if (mobile || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")))
+        return;
+      event.preventDefault();
+      openMenu(null);
+    },
     onFocus: () => preloadRouteModule(roomPath),
     className: cn(
       // 卡片自带底色与细描边：网格里相邻卡片之间只有 12px 间隙，纯透明卡片的
@@ -355,163 +153,38 @@ export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
       // 底色从封面自然向下延伸，而不是给封面套一层内边距：封面满幅占住卡片顶部，
       // 卡片的圆角与描边正好落在封面边缘上，读作封面自己的边界继续包住下面的文字。
       // 封面不参与内边距，因此这里不能加 padding —— 文字区自己带内边距。
-      "room-card group flex w-full flex-col overflow-hidden rounded-xl text-left",
+      "room-card group select-none flex w-full flex-col overflow-hidden rounded-xl text-left",
       CARD_SURFACE_CLASS,
       CARD_SURFACE_HOVER_CLASS,
     ),
   };
 
-  if (mobile) {
-    return (
-      <>
-        <button
-          {...cardButtonProps}
-          data-motion-press
-          data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
-          data-player-origin={`${room.site_id}:${room.room_id}`}
-        >
-          {cardBody}
-        </button>
-
-        {/* 长按弹出的底部操作抽屉，磁贴画法对齐全屏 HUD 的「更多房间操作」。 */}
-        <Drawer open={cardDrawer.open} onOpenChange={openCardActions}>
-          <DrawerContent>
-            <DrawerTitle className="truncate">
-              {room.title || room.user_name || "直播间"}
-            </DrawerTitle>
-            <div className="mt-2 grid grid-cols-4 gap-1.5 max-md:gap-2">
-              <RoomCardActionTile
-                icon={Copy}
-                label="复制链接"
-                onClick={() => {
-                  openCardActions(false);
-                  void copyRoomLink();
-                }}
-              />
-              <RoomCardActionTile
-                icon={Hash}
-                label="复制房间号"
-                onClick={() => {
-                  openCardActions(false);
-                  void copyRoomId();
-                }}
-              />
-              <RoomCardActionTile
-                icon={followBusy ? undefined : isFollowed ? StarOff : Star}
-                label={isFollowed ? "取消关注" : "关注主播"}
-                busy={followBusy}
-                disabled={followBusy}
-                onClick={() => {
-                  // 保持抽屉可见直到提交结束或让位给分组选择对话框。
-                  void startFollow(null);
-                }}
-              />
-              <RoomCardActionTile
-                icon={ExternalLink}
-                label="浏览器打开"
-                onClick={() => {
-                  openCardActions(false);
-                  void openInBrowser();
-                }}
-              />
-            </div>
-          </DrawerContent>
-        </Drawer>
-
-        {picker}
-      </>
-    );
-  }
-
   return (
-    <ContextMenu open={menuOpen} onOpenChange={openCardActions}>
-      <ContextMenuTrigger
-        render={
-          <button
-            {...cardButtonProps}
-            data-motion-press
-            data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
-            data-player-origin={`${room.site_id}:${room.room_id}`}
-          />
-        }
+    <>
+      <button
+        {...cardButtonProps}
+        data-motion-press
+        data-page-scroll-anchor={`${room.site_id}:${room.room_id}`}
+        data-player-origin={`${room.site_id}:${room.room_id}`}
       >
         {cardBody}
-      </ContextMenuTrigger>
-
-      <ContextMenuContent className="min-w-48">
-        <ContextMenuGroup>
-          <ContextMenuLabel>{room.title || room.user_name || "直播间"}</ContextMenuLabel>
-          <ContextMenuItem onClick={() => void copyRoomLink()}>
-            <Copy aria-hidden />
-            复制房间链接
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => void copyRoomId()}>
-            <Hash aria-hidden />
-            复制房间号
-          </ContextMenuItem>
-          {/* 多视图仅限桌面（见 MultiRoomPage）；移动端长按走底部操作抽屉，
-              抽屉刻意不提供该项，避免把房间加进客户端打不开的表面。 */}
-          <ContextMenuItem onClick={addToMultiRoom}>
-            <PanelsTopLeft aria-hidden />
-            加入多画面
-          </ContextMenuItem>
-        </ContextMenuGroup>
-        <ContextMenuSeparator />
-        <ContextMenuGroup>
-          <ContextMenuItem
-            disabled={followBusy}
-            closeOnClick={false}
-            onClick={() => void startFollow(null)}
-          >
-            {followBusy ? (
-              <Spinner aria-hidden />
-            ) : isFollowed ? (
-              <StarOff aria-hidden />
-            ) : (
-              <Star aria-hidden />
-            )}
-            {followBusy ? "正在处理…" : isFollowed ? "取消关注" : "关注主播"}
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => void openInBrowser()}>
-            <ExternalLink aria-hidden />
-            在浏览器中打开
-          </ContextMenuItem>
-        </ContextMenuGroup>
-      </ContextMenuContent>
-
-      {picker}
-    </ContextMenu>
+      </button>
+      {(menuSession !== null || cardDrawer.open) && (
+        <RoomCardActions
+          room={room}
+          mobile={mobile}
+          open={actionsOpen}
+          point={menuSession?.point ?? null}
+          cardRef={cardRef}
+          onOpenChange={(open) => {
+            if (mobile) cardDrawer.setOpen(open);
+            else setMenuSession((current) => (current ? { ...current, open } : null));
+          }}
+          onFinished={() => {
+            if (!actionsOpen) setMenuSession(null);
+          }}
+        />
+      )}
+    </>
   );
 });
-
-/** 移动端长按操作抽屉里的动作磁贴，画法对齐全屏 HUD 的房间操作磁贴。 */
-function RoomCardActionTile({
-  icon: Icon,
-  label,
-  busy,
-  disabled,
-  onClick,
-}: {
-  icon?: LucideIcon;
-  label: string;
-  busy?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      disabled={disabled}
-      className="h-auto min-w-0 flex-col gap-1.5 py-2.5 text-xs font-normal touch-manipulation max-md:py-3"
-      onClick={onClick}
-    >
-      {busy ? (
-        <Spinner className="size-5" aria-hidden />
-      ) : (
-        Icon && <Icon className="size-5" aria-hidden />
-      )}
-      <span className="max-w-full truncate">{busy ? "正在处理…" : label}</span>
-    </Button>
-  );
-}
