@@ -1,5 +1,6 @@
 import { timeFeature } from "@videojs/core/dom";
 import { createTimePublishGate, isCurrentTimeOnlyPatch } from "./time-publish-gate";
+import { quietPlayerStoreSet } from "./player-time-quiet";
 
 type TimeAttach = NonNullable<(typeof timeFeature)["attach"]>;
 
@@ -15,7 +16,7 @@ export const throttledTimeFeature: typeof timeFeature = {
   ...timeFeature,
   attach(context: Parameters<TimeAttach>[0]) {
     const gate = createTimePublishGate();
-    const set: typeof context.set = (patch) => {
+    const publish: typeof context.set = (patch) => {
       const now = performance.now();
       if (isCurrentTimeOnlyPatch(patch)) {
         if (!gate.shouldPublish(now)) return;
@@ -24,7 +25,12 @@ export const throttledTimeFeature: typeof timeFeature = {
       }
       context.set(patch);
     };
-    return timeFeature.attach?.({ ...context, set });
+    // 离场时先拦下所有写入，再交给播放节流。事件、媒体与 Player store 的
+    // 绑定全部保留，恢复后下一帧会带着真实播放位置继续发布。
+    return timeFeature.attach?.({
+      ...context,
+      set: quietPlayerStoreSet(context.target.media, publish),
+    });
   },
 };
 

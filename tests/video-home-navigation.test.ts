@@ -89,6 +89,17 @@ describe("VOD 第一层返回", () => {
     expect(navigateWith({ key: "video-a", idx: 2 })).toEqual(["back"]);
   });
 
+  test("返回时退回历史条目，保留上一层的路由状态", () => {
+    const calls: unknown[] = [];
+    navigateBackFromVideo({
+      entryKey: "video-a",
+      historyState: { key: "video-a", idx: 2, usr: { feed: "recommend" } },
+      navigateBack: () => calls.push("back"),
+      navigateHome: () => calls.push("home"),
+    });
+    expect(calls).toEqual(["back"]);
+  });
+
   test("直入播放页没有更早应用内历史时回视频发现页", () => {
     expect(navigateWith({ key: "video-a", idx: 0 })).toEqual(["home"]);
     expect(navigateWith(null, "default")).toEqual(["home"]);

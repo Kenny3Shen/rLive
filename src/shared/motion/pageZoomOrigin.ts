@@ -58,8 +58,8 @@ export function readZoomOrigin(
   return id && rect ? { id, page, rect } : null;
 }
 
-/** 返回时优先测量恢复后的卡片；卡片未加载或已离屏时使用进入时的归一化窗口。 */
-export function resolveZoomOrigin(
+/** 只测量当前 DOM 中的来源卡片；列表尚未提交时返回 null。 */
+export function findZoomOriginCardRect(
   origin: PageZoomOrigin | null,
   page: string,
   incoming: HTMLElement,
@@ -69,5 +69,18 @@ export function resolveZoomOrigin(
   const card = Array.from(incoming.querySelectorAll<HTMLElement>("[data-player-origin]")).find(
     (element) => element.dataset.playerOrigin === origin.id,
   );
-  return (card && readZoomOrigin(card, scope, page)?.rect) || origin.rect;
+  return card ? (readZoomOrigin(card, scope, page)?.rect ?? null) : null;
+}
+
+/** 返回时优先测量恢复后的卡片；卡片未加载或已离屏时使用进入时的归一化窗口。 */
+export function resolveZoomOrigin(
+  origin: PageZoomOrigin | null,
+  page: string,
+  incoming: HTMLElement,
+  scope: HTMLElement,
+): ZoomRect | null {
+  return (
+    findZoomOriginCardRect(origin, page, incoming, scope) ??
+    (origin?.page === page ? origin.rect : null)
+  );
 }

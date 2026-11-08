@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeZoomRect, zoomRectTransform } from "../src/shared/motion/pageZoomOrigin";
+import { pageZoomExitTarget } from "../src/shared/motion/pageZoomExitTarget";
 
 const scope = { left: 20, top: 32, width: 1000, height: 800 };
 
@@ -33,5 +34,55 @@ describe("播放页来源窗口几何", () => {
     ])
       expect(normalizeZoomRect(rect, scope)).toBeNull();
     expect(normalizeZoomRect(scope, { ...scope, height: 0 })).toBeNull();
+  });
+});
+
+describe("播放页缩回终点", () => {
+  const originRect = { left: 0.1, top: 0.2, width: 0.2, height: 0.2 };
+
+  test("列表尚未挂载时用同一页面的来源窗口启动，随后寻找真实卡片", () => {
+    expect(
+      pageZoomExitTarget({
+        originPage: "/video?tab=recommend",
+        destinationPage: "/video?tab=recommend",
+        originRect,
+        cardRect: null,
+        fallbackScale: 0.96,
+      }),
+    ).toEqual({ transform: zoomRectTransform(originRect), resolveLater: true });
+  });
+
+  test("跨页面或无来源时保留中心缩放，不等待列表", () => {
+    expect(
+      pageZoomExitTarget({
+        originPage: "/video?tab=popular",
+        destinationPage: "/video?tab=recommend",
+        originRect,
+        cardRect: null,
+        fallbackScale: 0.96,
+      }),
+    ).toEqual({ transform: "scale(0.96)", resolveLater: false });
+    expect(
+      pageZoomExitTarget({
+        originPage: null,
+        destinationPage: "/video",
+        originRect: null,
+        cardRect: null,
+        fallbackScale: 0.96,
+      }),
+    ).toEqual({ transform: "scale(0.96)", resolveLater: false });
+  });
+
+  test("真实卡片优先于记忆窗口且无需后续解析", () => {
+    const cardRect = { left: 0.4, top: 0.3, width: 0.25, height: 0.25 };
+    expect(
+      pageZoomExitTarget({
+        originPage: "/video",
+        destinationPage: "/video",
+        originRect,
+        cardRect,
+        fallbackScale: 0.96,
+      }).transform,
+    ).toBe(zoomRectTransform(cardRect));
   });
 });

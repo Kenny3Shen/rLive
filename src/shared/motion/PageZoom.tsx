@@ -14,11 +14,12 @@ import { RouterScope, useFrozenRouter, type FrozenRouter } from "./FrozenRouter"
 import { clearMotionStyles } from "./tween";
 import { motionProfile, prefersReducedMotion } from "./tokens";
 import {
+  findZoomOriginCardRect,
   readZoomOrigin,
-  resolveZoomOrigin,
   zoomRectTransform,
   type PageZoomOrigin,
 } from "./pageZoomOrigin";
+import { pageZoomExitTarget } from "./pageZoomExitTarget";
 
 /** 深链接和同路径换片没有可收回的来源窗口，保留轻量纵深反馈。 */
 const ROOM_ZOOM_START_SCALE = 0.96;
@@ -231,19 +232,51 @@ export function PageZoom({
       // 避免缩回目标自身也在移动。离场仍保留原播放器及其旧路由参数。
       nextFrame(() => {
         const destination = committedRef.current.router.location.location;
-        const rect = resolveZoomOrigin(
-          outgoing.origin,
-          `${destination.pathname}${destination.search}${destination.hash}`,
-          incoming,
-          scope,
-        );
-        const target = rect ? zoomRectTransform(rect) : `scale(${ROOM_ZOOM_START_SCALE})`;
-        animate(leaving, [
+        const page = `${destination.pathname}${destination.search}${destination.hash}`;
+        // 首帧目标列表可能尚在分阶段挂载，先用进入时记下的归一化窗口启动
+        // WAAPI；列表提交后若找到了真实卡片，只更新终态，动画不会倒回起点。
+        const cardRect = findZoomOriginCardRect(outgoing.origin, page, incoming, scope);
+        const exitTarget = pageZoomExitTarget({
+          originPage: outgoing.origin?.page ?? null,
+          destinationPage: page,
+          originRect: outgoing.origin?.rect ?? null,
+          cardRect,
+          fallbackScale: ROOM_ZOOM_START_SCALE,
+        });
+        const exitKeyframes: Keyframe[] = [
           { opacity: 1, transform: "scale(1)" },
           { opacity: 0.9, offset: 0.75 },
-          { opacity: 0, transform: target },
-        ]);
+          { opacity: 0, transform: exitTarget.transform },
+        ];
+        animate(leaving, exitKeyframes);
+        const exitAnimation = animations.at(-1)?.animation ?? null;
         finish();
+        if (!exitTarget.resolveLater) return;
+        // 最多在退出动画时长内查询几帧：卡片出现时逐渐把终点换成真实坐标；
+        // 离场层卸载后不再读取 DOM，快速导航也不会留下观察器。
+        const resolveUntil = performance.now() + duration * 1000;
+        const refreshTarget = () => {
+          if (disposed || settled || !exitAnimation || performance.now() >= resolveUntil) return;
+          const current = findZoomOriginCardRect(outgoing.origin, page, incoming, scope);
+          if (current) {
+            // animate 已把中断时的现场写入首帧；更新终点时保留它，避免快速
+            // 反向导航的动画突然跳回 scale(1)。解析期限按时间计算，适配高刷新率。
+            const keyframes = exitKeyframes.map((keyframe) => ({ ...keyframe }));
+            keyframes[keyframes.length - 1] = {
+              ...keyframes[keyframes.length - 1],
+              transform: zoomRectTransform(current),
+            };
+            try {
+              const effect = exitAnimation.effect;
+              if (effect instanceof KeyframeEffect) effect.setKeyframes(keyframes);
+            } catch {
+              // 旧 WebView 可能不暴露 KeyframeEffect；继续用记忆窗口收尾。
+            }
+            return;
+          }
+          frame = window.requestAnimationFrame(refreshTarget);
+        };
+        nextFrame(refreshTarget);
       });
     } else {
       // 只有从普通页展开才使用卡片来源；同路径换片仍复用唯一媒体节点。

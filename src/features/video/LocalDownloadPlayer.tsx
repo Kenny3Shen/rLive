@@ -70,6 +70,8 @@ import {
   type VideoDownloadSubtitle,
 } from "./videoDownload";
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
+import { usePlayerRouteExitQuiet } from "@/shared/hooks/usePlayerRouteExitQuiet";
+import type { QuietableDanmakuRenderer } from "@/shared/player/playerExitQuiet";
 import type { VideoDanmakuEntry } from "./videoDanmaku";
 
 function finiteDuration(video: HTMLVideoElement): number {
@@ -282,6 +284,8 @@ function LocalDownloadPlayerContent({
   const hudRef = useRef<HTMLDivElement | null>(null);
   const lockRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const danmakuRendererRef = useRef<QuietableDanmakuRenderer | null>(null);
+  usePlayerRouteExitQuiet({ videoRef, danmakuRendererRef });
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const [initialProgress] = useState(progress);
   const [initialDuration] = useState(Math.max(0, item.duration));
@@ -769,6 +773,7 @@ function LocalDownloadPlayerContent({
         </div>
         {danmakuEntries.length > 0 && (
           <VideoDanmakuLayer
+            rendererRef={danmakuRendererRef}
             videoRef={videoRef}
             entries={danmakuEntries}
             active={danmakuVisible}

@@ -20,6 +20,7 @@ import {
 } from "@/shared/components/player/PlayerControls";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
+import { usePlayerRouteExitQuiet } from "@/shared/hooks/usePlayerRouteExitQuiet";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
 import {
   DEFAULT_PLAYER_VOLUME,
@@ -167,6 +168,7 @@ function RecordingPlayerContent({
   const stageRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  usePlayerRouteExitQuiet({ videoRef, clock: playbackClock });
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const [initialAudio] = useState(readPlayerVolume);
   const volumeRef = useRef(initialAudio.volume);

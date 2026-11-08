@@ -11,17 +11,31 @@ export type PlaybackClock = {
   get: () => number;
   set: (seconds: number) => void;
   subscribe: (listener: () => void) => () => void;
+  /** 离场过渡期间挂起订阅通知；读数仍由媒体时间跟进。 */
+  setQuiet: (quiet: boolean, notifyOnResume?: boolean) => void;
 };
 
 export function createPlaybackClock(initial = 0): PlaybackClock {
   let seconds = initial;
+  let quiet = false;
+  let quietStart = initial;
   const listeners = new Set<() => void>();
   return {
     get: () => seconds,
     set: (next) => {
       if (Object.is(next, seconds)) return;
       seconds = next;
+      if (quiet) return;
       for (const listener of listeners) listener();
+    },
+    setQuiet: (next, notifyOnResume = true) => {
+      if (next === quiet) return;
+      quiet = next;
+      if (next) {
+        quietStart = seconds;
+      } else if (notifyOnResume && !Object.is(quietStart, seconds)) {
+        for (const listener of listeners) listener();
+      }
     },
     subscribe: (listener) => {
       listeners.add(listener);

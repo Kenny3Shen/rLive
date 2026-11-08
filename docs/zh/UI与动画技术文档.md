@@ -143,6 +143,7 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 - 快速连续或反向导航时，在取消旧动画前记录仍连接的节点的当前 transform，由下一段沿用；全新目标页接在离场页当前坐标旁边，不瞬移回起点或拉出额外空白。只在中断时读取合成位置，不逐帧运行 JS。离场层同时使用 `inert` 与 `aria-hidden`，不能接收键盘聚焦。
 - 动画完成后先用 `commitStyles()` 固定旧页离屏最终位置，再同步卸载旧 subtree；不能先 cancel Animation 再把卸载放进低优先级更新，否则 Android 合成器可能短暂恢复旧页原位。
 - 直接侧栏导航时 `RouteOutlet` 延迟一个 `requestAnimationFrame` 再以 `startTransition()` 挂载目标 route，让 compositor 先启动平移。
+- 从沉浸播放页退出或普通页面跨路径 POP 时，`throttledRouteOutlet.ts` 按 `pathname + location.key + immersive` 记住本次导航：首帧只提交轻量外壳与活动面板，横滑轨道上的邻居等活动页 `onReady` 后补齐。分类、搜索、历史等页面返回时也先启动平移，再挂载目标列表。同路径平台/页签切换保留既有轨道。快速往返、连续切页或 REPLACE 不会把旧导航的邻居带到新页面。
 
 **底栏点击不能只依赖 `click`**：底栏固定在滚动容器之外，用户点它时内容的惯性滚动常常还在跑，而 Chromium 的 scroll gesture 会吃掉「用来停住滚动」的第一次点按 —— `pointerdown` / `pointerup` 照常派发，`click` 被吞掉，于是表现为「点一下没反应，得再点一次」。`SidebarLink` 因此在 `pointerup` 上自行判定并导航（触摸、位移在 `LONG_PRESS_CANCEL_SLOP_PX` 内、时长低于 `SIDEBAR_TAP_MAX_DURATION_MS`、且指针未被祖先捕获），随后用 `SIDEBAR_TAP_CLICK_SUPPRESSION_MS` 的窗口把兼容 `click` 压掉，保证同一次点按只导航一次。自行导航必须带上 `SIDEBAR_NAVIGATION_STATE`，否则 Shell 认不出这是底栏直达、会退回普通换页。鼠标与键盘仍走 `NavLink` 自己的路径。
 
@@ -155,7 +156,9 @@ feature 页面用 `min-h-full` 或内容自然高度，不再创建抢占滚轮�
 沉浸式播放页由 `PageZoom` 覆盖。从可定位的播放卡片进入时，播放 subtree 从该卡片在 `PageZoom` 视口中的归一化矩形展开，来源列表保留在下方且滚动位置不重置；返回时列表先按路由滚动记忆恢复，活跃播放器再缩回匹配的卡片。来源卡片暂不可用时用进入时记忆的归一化窗口，深链接或无来源入口沿用中心轻缩放。`data-player-origin` 是稳定的卡片身份；不要将列表索引、播放时间等易变数据作为来源身份。
 
 - 入场：`translate + scale` 从来源矩形到全视口，使用 WAAPI transform/opacity，不改变布局尺寸；播放层位于来源列表之上。空间动画遵循 `prefers-reduced-motion`，全屏期间不变换舞台祖先，结束后清除合成样式。
-- 退出：旧播放 subtree 连同冻结路由上下文留在离场层；目标列表恢复后按卡片身份读取当前位置，若卡片未挂载则退回进入时窗口。播放器反向缩放并淡出，目标列表保持静止；退出动画结束后先隐藏离场层、释放合成层，再卸载播放器。离场层用 `inert` / `aria-hidden` / `pointer-events-none` 隔离旧播放器，目标列表在动画期间保持可交互，不把整段缩放变成输入锁。
+- 退出：旧播放 subtree 连同冻结路由上下文留在离场层；先用进入时记忆的归一化窗口启动反向 WAAPI，目标列表恢复后再用 `KeyframeEffect.setKeyframes()` 把终点更新为按卡片身份测得的当前位置，不重启动画，并保留快速反向导航接管的现场首帧。卡片解析仅持续到退出动画结束，期限按时间计算，不依赖刷新率或固定帧数。来源卡片始终不可用时沿用记忆窗口，深链接或无来源入口沿用中心轻缩放。播放器反向缩放并淡出，目标列表保持静止；退出动画结束后先隐藏离场层、释放合成层，再卸载播放器。离场层用 `inert` / `aria-hidden` / `pointer-events-none` 隔离旧播放器，目标列表在动画期间保持可交互，不把整段缩放变成输入锁。
+- VOD 离场期间，`videoExitQuiet.ts` 在导航回调里暂停 Video.js time feature 的 Player store 写入、业务播放时钟通知与弹幕 rAF/投放调度；媒体元素、MSE、已解码画面、在途弹幕动画和 Player store 绑定都保留。这样旧播放器的同步外部 store 更新不会打断并发导航，离场画面也不会闪出暂停或缓冲状态。多个离场实例各自静默；守卫拒绝、快速返回或浏览器 POP 后重入当前页会恢复时间发布，并补发最新播放位置。同路径 POP 复用组件时也在新条目提交后恢复；页面真正卸载时直接释放，不补发通知或重启调度。
+- 离场静默的共用实现位于 `src/shared/player/playerExitQuiet.ts`。直播、IPTV、多画面、本地下载与录制回放通过 `usePlayerRouteExitQuiet` 订阅 Router 的状态发布，在新位置进入并发 React 提交前挂起媒体时间发布；覆盖页内返回、侧栏导航、POP 与 REPLACE。被守卫拦截的导航仍停在原位置，不触发静默；快速前进重入时恢复，卸载时退订并清理原媒体标记。录制回放同时静默业务时钟，弹幕画布在离场期间保留最后一帧。本地下载同时静默复用的 VOD 弹幕渲染器。短视频舞台只带 playback/metadata feature，不包含逐帧 time feature，未因这次调查扩展其状态层。
 - VOD 同路径层级（`/video/play?bvid=A → B → C`）：`zoomKey` 保持 pathname，另外用 `motionKey` 跟随浏览器历史 `idx`，动画身份与播放器挂载身份分离。PUSH / POP 前进仍从来源卡片或轻缩放展开，POP 返回沿当前帧反向接管；REPLACE 补齐参数不重播。`idx` 只有在其 `history.state.key` 与已提交的 `location.key` 对齐后才属于当前页面；POP 期间未对齐时沿用上一索引，避免旧播放页提前重播入场。全屏期间同路径换片也跳过缩放。验证需覆盖三层往返、REPLACE、快速返回、媒体节点复用、来源矩形、滚动恢复、缺失卡片、键盘入口及减少动态效果。
 - 快速反向导航从当前合成 transform/opacity 接管，不跳回预设起点；离场层使用 `inert` 与 `aria-hidden`，动画取消、结束与卸载均清理 `will-change` 和 WAAPI。
 
@@ -318,6 +321,7 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 - 连续手势输入不进 React state（只承担刷新、选中项等离散状态）。下拉刷新位移与 VOD 侧栏占比经 RAF 合并，横向滑动位移直接在 pointermove 中写 transform。占比这类高频布局变量应由不继承的 `@property` 在容器本地消费，避免逐帧使整个播放器与侧栏子树重算样式。
 - 动画 wrapper 不得扩大滚动区域；外层负责 clipping，纵向滚动留给 `app-page`。Android 宿主不请求固定显示模式或刷新率偏好，动画全部按时间基准推进，不设固定帧率 ticker。
 - 不把「组件出现」默认等同于「需要动画」：高频列表刷新、轮询状态、弹幕新增和播放器帧更新通常应直接更新。
+- React Router 的导航提交是低优先级并发更新；离场播放器若有逐帧 `useSyncExternalStore` 写入，会不断打断目标页的首次提交，连退出动画都要等目标页挂载后才启动。VOD 离场因此在导航入口同步静默时间发布，并让目标页分阶段提交；返回主页用 `flushSync` 立即提交，普通返回保留 `navigate(-1)` 的历史 POP 语义，不用同步 REPLACE 替代浏览器后退。
 
 播放页（与播放器、DanmakuRenderer 共享主线程预算）：
 
@@ -362,9 +366,12 @@ Exit 动画：React 在节点离开 element tree 时立即卸载，不能对已�
 | --- | --- |
 | `src/styles.css` | 主题 tokens、全局响应式规则、View Transition 与 CSS 动画 |
 | `src/app/layout/Shell.tsx` | 页面滚动、路由来源识别与动画编排 |
+| `src/app/layout/throttledRouteOutlet.ts` | 退出沉浸页面时的分阶段路由提交与导航记忆 |
 | `src/app/theme.ts`、`src/app/androidSystemBars.ts` | 主题应用、系统亮暗监听、全局淡化与 Android 系统栏图标同步 |
 | `src/shared/motion/tween.ts`、`tokens.ts`、`preference.ts` | 补间助手、共享 easing / duration 与系统减少动效检测 |
 | `src/shared/motion/PagePan.tsx`、`PageZoom.tsx` | 整页平移与 outgoing subtree 生命周期、沉浸式播放页 Zoom |
+| `src/shared/motion/pageZoomExitTarget.ts` | 退出目标的选择与列表卡片延迟解析策略 |
+| `src/shared/player/playerExitQuiet.ts`、`src/shared/hooks/usePlayerRouteExitQuiet.ts` | 播放页在 Router 状态发布时静默时间通知与回放调度 |
 | `src/shared/motion/FrozenRouter.tsx` | 离场子树的 `LocationContext` / `RouteContext` 冻结（两个宿主共用，见 4.3） |
 | `src/shared/gestures/horizontalSwipe.ts`、`longPress.ts` | swipe 与长按的阈值常量和纯判定逻辑 |
 | `src/shared/gestures/detailsResize.ts`、`src/shared/hooks/useDetailsResize.ts` | VOD 侧栏内容滑动自适应占比的阈值/换算、松手惯性（`detailsResizeVelocity` / `detailsMomentumStep`）与手势接线 |

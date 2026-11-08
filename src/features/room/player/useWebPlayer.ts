@@ -13,6 +13,7 @@ import {
   toggleNativePlayerFullscreen,
 } from "@/shared/nativePlayerFullscreen";
 import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
+import { usePlayerRouteExitQuiet } from "@/shared/hooks/usePlayerRouteExitQuiet";
 import { useFullscreenInsetFreeze } from "@/shared/hooks/useFullscreenInsetFreeze";
 import { runningOnAndroidTauri, setAndroidImmersive } from "./androidImmersive";
 import { videoAspectRatio, retainMeasuredAspectRatio } from "./androidOrientation";
@@ -495,6 +496,7 @@ export function useMediaLifecycle(opts: MediaLifecycleOptions): WebPlayerApi {
   const clientPlatform = getClientPlatform();
   const mobileClient = clientPlatform !== "desktop";
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  usePlayerRouteExitQuiet({ videoRef });
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);

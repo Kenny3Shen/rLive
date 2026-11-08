@@ -75,6 +75,11 @@ import type { SiteId } from "@/shared/types/live";
 import { Sidebar } from "./Sidebar";
 import { AppTitleBar } from "./AppTitleBar";
 import { isImmersivePlayerPath } from "./immersiveRoutes";
+import {
+  createThrottledRouteOutletState,
+  nextThrottledRouteOutletState,
+  sameThrottledRouteOutletRoute,
+} from "./throttledRouteOutlet";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn } from "@/lib/utils";
 import {
@@ -142,6 +147,7 @@ function bindSwipe({
 function RouteOutlet({
   defer,
   waitForReady = false,
+  deferFirstFrame = false,
   onReady,
   outlet,
   platform,
@@ -150,28 +156,49 @@ function RouteOutlet({
   defer: boolean;
   /** 等调用方确认活动表面已提交后才挂载（defer 仍控制首帧占位）。 */
   waitForReady?: boolean;
+  /** 首帧只放轻量占位，下一帧再提交内容（退出播放器时用）。 */
+  deferFirstFrame?: boolean;
   onReady?: () => void;
   outlet: ReactNode;
   platform: PlatformScopeValue;
   /** 沉浸播放页：加载占位换成播放器舞台，而不是锚在顶部的一条加载条。 */
   immersive?: boolean;
 }) {
-  const [ready, setReady] = useState(!defer && !waitForReady);
+  const gate = `${defer ? 1 : 0}${waitForReady ? 1 : 0}${deferFirstFrame ? 1 : 0}`;
+  const initialReady = !defer && !waitForReady && !deferFirstFrame;
+  // gate 变化时渲染期直接重置，不另跑一次 effect 提交；活动页就绪后邻居
+  // 因此能在下一次提交里取消占位。
+  const [readyState, setReadyState] = useState(() => ({ gate, ready: initialReady }));
+  if (readyState.gate !== gate) {
+    // 渲染期状态调整是 React 官方模式。
+    // oxlint-disable-next-line react/refs
+    setReadyState({ gate, ready: initialReady });
+  }
+  const ready = readyState.gate === gate ? readyState.ready : initialReady;
 
+  // 活动列表延迟到下一帧提交，让退出动画先在合成器启动；只提交一份
+  // 内容，侧栏平移与播放页退出共用这条轻量路径。
   useEffect(() => {
-    if (ready || !defer || waitForReady) return;
+    if (ready || (!defer && !waitForReady && !deferFirstFrame)) return;
+    if ((defer && !waitForReady) || deferFirstFrame) {
+      const frame = window.requestAnimationFrame(() => {
+        const commit = () =>
+          setReadyState((current) =>
+            current.gate === gate ? { ...current, ready: true } : current,
+          );
+        // 只提交一份活动列表，保持既有平移/退出动画的提交优先级。
+        startTransition(commit);
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    return;
+  }, [defer, deferFirstFrame, gate, ready, waitForReady]);
 
-    // 让合成器在 React 挂载新路由之前就开始页面平移。
-    // 目标页包含大列表时，过渡渲染可能发生让步。
-    const frame = window.requestAnimationFrame(() => {
-      startTransition(() => setReady(true));
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [defer, ready, waitForReady]);
-
-  // 活动面板的内容已提交。邻居的挂载由调用方据此释放。
+  // 活动面板的内容已提交。邻居的挂载由调用方据此释放；被动效果在活动列表
+  // 画出来之后才安排下一次渲染，不会把四个列表挤进退出动画的第一帧。
   useEffect(() => {
-    if (ready) onReady?.();
+    if (!ready || !onReady) return;
+    onReady();
   }, [onReady, ready]);
 
   // 沉浸播放页的加载占位保持纯黑，不模拟顶部或底部控制栏。
@@ -266,6 +293,36 @@ export function Shell() {
   const isDirectSidebarNavigation = navMemory.directSidebarPath === pathname;
   const isTabNavigation = navMemory.tabNavigation?.pathname === pathname;
   const tabDirection = isTabNavigation ? (navMemory.tabNavigation?.direction ?? null) : null;
+
+  // 退出播放页或跨路径 POP 时先提交轻量外壳，邻居等活动页就绪后再放行。导航记忆
+  // 与已提交路由绑定，快速往返或迟到回调不会把旧页面的邻居挂载到新页面。
+  const throttledRoute = useMemo(
+    () => ({
+      pathname,
+      entryKey: location.key,
+      immersive: isImmersivePlayer,
+      historyTraversal: navigationType === "POP",
+    }),
+    [isImmersivePlayer, location.key, pathname, navigationType],
+  );
+  const [throttledOutlet, setThrottledOutlet] = useState(() =>
+    createThrottledRouteOutletState(throttledRoute),
+  );
+  if (!sameThrottledRouteOutletRoute(throttledOutlet.memory, throttledRoute)) {
+    // 渲染期状态调整是 React 官方模式；被丢弃的并发渲染不会推进导航记忆。
+    // oxlint-disable-next-line react/refs
+    setThrottledOutlet(nextThrottledRouteOutletState(throttledOutlet, throttledRoute));
+  }
+  const throttledNavigation =
+    throttledOutlet.memory.throttled &&
+    sameThrottledRouteOutletRoute(throttledOutlet.memory, throttledRoute);
+  const handleThrottledOutletReady = useCallback(() => {
+    setThrottledOutlet((current) =>
+      sameThrottledRouteOutletRoute(current.memory, throttledRoute) && !current.activeReady
+        ? { ...current, activeReady: true }
+        : current,
+    );
+  }, [throttledRoute]);
 
   const selectedSiteId = useSettingsStore((state) => state.siteId);
   const setSiteId = useSettingsStore((state) => state.setSiteId);
@@ -632,11 +689,13 @@ export function Shell() {
 
   // 移动端底部导航原子式换页。保留离场的 ReactNode 曾让它最后选中的平台在退出
   // 层移除时多显示一个合成帧。桌面端保留方向性页面平移。
-  const deferRouteOutlet = isDirectSidebarNavigation && !mobileClient;
+  const deferRouteOutlet = (isDirectSidebarNavigation || throttledNavigation) && !mobileClient;
   const routeOutlet = (
     <RouteOutlet
       key={deferRouteOutlet ? pathname : "immediate-route"}
       defer={deferRouteOutlet}
+      deferFirstFrame={throttledNavigation && !mobileClient}
+      onReady={throttledNavigation ? handleThrottledOutletReady : undefined}
       outlet={outlet}
       platform={platformForMotion}
       immersive={isImmersivePlayer}
@@ -681,11 +740,20 @@ export function Shell() {
   }
   const handleLiveRouteReady = useCallback(() => {
     setLiveRouteReady((current) =>
-      current.key === location.key && !current.ready
-        ? { key: current.key, ready: true }
-        : current,
+      current.key === location.key && !current.ready ? { key: current.key, ready: true } : current,
     );
   }, [location.key]);
+  // 直播表面与视频表面各有一份邻居放行状态；退出播放页后的首个活动面板
+  // 必须同时通知两者，否则这份「尚未就绪」会随后续普通导航继续传播。
+  const handleLiveAndThrottledOutletReady = useCallback(() => {
+    if (isDirectSidebarNavigation) handleLiveRouteReady();
+    if (throttledNavigation) handleThrottledOutletReady();
+  }, [
+    handleLiveRouteReady,
+    handleThrottledOutletReady,
+    isDirectSidebarNavigation,
+    throttledNavigation,
+  ]);
   const [retainedLivePanels, setRetainedLivePanels] = useState<{
     pathname: string;
     panels: readonly PlatformScopeValue[];
@@ -708,7 +776,10 @@ export function Shell() {
   const activeVideoPanelIndex = VIDEO_TABS.indexOf(videoTab);
   // 只有四个内容面板，全部常挂载比切换时增删邻居更稳定：WebView2 无需在
   // transform 动画中途销毁整页卡片纹理，快速连续点击也始终有真实目的页可滑入。
+  // 退出沉浸播放器或跨路径 POP 时例外：首帧只提交活动面板，其余三个等 onReady 后补齐，
+  // 避免四份已缓存列表与旧播放器争抢这次低优先级导航提交。
   const videoSwipePanels = VIDEO_TABS;
+  const videoNeighborsReady = !throttledNavigation || throttledOutlet.activeReady;
 
   const videoSwipePage = (
     <div data-slot="app-swipe-viewport" className="relative h-full min-h-0 min-w-0 overflow-hidden">
@@ -739,7 +810,10 @@ export function Shell() {
               <VideoTabScope value={tab}>
                 <RefreshFabVisibilityProvider visible={active}>
                   <RouteOutlet
-                    defer={active && deferRouteOutlet}
+                    defer={active ? deferRouteOutlet : throttledNavigation}
+                    waitForReady={!active && !videoNeighborsReady}
+                    deferFirstFrame={active && throttledNavigation && !mobileClient}
+                    onReady={active && throttledNavigation ? handleThrottledOutletReady : undefined}
                     outlet={outlet}
                     platform={platformForMotion}
                   />
@@ -784,9 +858,18 @@ export function Shell() {
                 <RouteOutlet
                   // 先让活动平台的内容完成提交；相邻网格随后再挂载，
                   // 避免多个 HomePage 在同一次过渡里争抢主线程。
-                  defer={deferRouteOutlet}
-                  waitForReady={!active && deferRouteOutlet && !liveRouteReady.ready}
-                  onReady={active && deferRouteOutlet ? handleLiveRouteReady : undefined}
+                  defer={isDirectSidebarNavigation || throttledNavigation}
+                  waitForReady={
+                    !active &&
+                    ((isDirectSidebarNavigation && !liveRouteReady.ready) ||
+                      (throttledNavigation && !throttledOutlet.activeReady))
+                  }
+                  onReady={
+                    active && (isDirectSidebarNavigation || throttledNavigation)
+                      ? handleLiveAndThrottledOutletReady
+                      : undefined
+                  }
+                  deferFirstFrame={active && throttledNavigation && !mobileClient}
                   outlet={outlet}
                   platform={platform}
                 />

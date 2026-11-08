@@ -12,6 +12,7 @@ type VideoBackNavigation = {
   requestedEntryKey?: string | null;
   historyState: unknown;
   markRequested?: () => void;
+  /** 退回浏览器历史中的上一层。 */
   navigateBack: () => void;
   navigateHome: () => void;
 };

@@ -13,6 +13,7 @@ import {
 } from "@/features/room/danmaku/content";
 import { prefersReducedMotion } from "@/shared/motion/preference";
 import { createSmoothMediaClock } from "@/shared/smoothMediaClock";
+import { isVideoPlayerTimeQuiet } from "@/components/videojs/lib/player-time-quiet";
 import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
 import type { RecordedDanmakuEntry } from "./recordedDanmaku";
 import {
@@ -199,6 +200,9 @@ export function RecordedDanmakuCanvas({ videoRef, entries, active }: RecordedDan
     }
 
     function draw(frameMs?: number) {
+      // 离场保留最后一帧画布，避免大量弹幕逐帧绘制与目标列表争抢主线程。
+      // 时钟回调继续保持轻量运行，快速重入解除静默后可立即恢复绘制。
+      if (isVideoPlayerTimeQuiet(video)) return;
       const context = canvas.getContext("2d");
       if (!context) return;
       context.clearRect(0, 0, cssWidth, cssHeight);

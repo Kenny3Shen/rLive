@@ -94,6 +94,7 @@ type TestRenderer = {
   clearActive(): void;
   clear(): void;
   destroy(): void;
+  setQuiet(quiet: boolean): void;
   syncLanes(): void;
   resize(): void;
 };
@@ -271,6 +272,7 @@ function makeRenderer(trackCount = 4): {
     laneHeight: 20,
     maxLatencyMs: 0,
     frozen: false,
+    quiet: false,
     frame: 0,
     backlogTimer: 0,
     renderQueued: true,
@@ -341,6 +343,31 @@ test("未设置 maxLatencyMs 时滚动弹幕直接交给库，行为与点播一
   expect(renderer.live.has("ordinary-1")).toBe(true);
   expect(renderer.queuedAt.size).toBe(0);
   expect(detachIds).toEqual([]);
+});
+
+test("离场静默停掉 rAF 与投放，恢复后不改写在途弹幕", () => {
+  const { renderer } = makeRenderer(4);
+  renderer.frame = 123;
+  const cancelFrame = globalThis.cancelAnimationFrame;
+  globalThis.cancelAnimationFrame = () => {};
+  renderer.scroll.manager.startPlaying = () => {
+    renderer.scroll.manager.stash += 100;
+  };
+  renderer.fixed.manager.startPlaying = () => {
+    renderer.fixed.manager.stash += 100;
+  };
+  try {
+    renderer.setQuiet(true);
+    expect(renderer.frame).toBe(0);
+    expect(renderer.push(danmakuComment("while-leaving"))).toBe(false);
+    expect(renderer.scroll.manager.ordinaryPushes).toEqual([]);
+    renderer.setQuiet(false);
+    expect(renderer.scroll.manager.stash).toBe(100);
+    expect(renderer.fixed.manager.stash).toBe(100);
+    expect(renderer.push(danmakuComment("after-return"))).toBe(true);
+  } finally {
+    globalThis.cancelAnimationFrame = cancelFrame;
+  }
 });
 
 test("应用侧队列在库 stash 达到轨道数时暂停，库取走后继续推送", () => {

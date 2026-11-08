@@ -162,6 +162,8 @@ export class DanmakuRenderer {
   private readonly maxLatencyMs: number;
   private lastMediaTime = 0;
   private frozen = false;
+  /** 离场导航：停掉本引擎的 rAF 与投放，但保留媒体和已上屏弹幕。 */
+  private quiet = false;
   private frame = 0;
   private backlogTimer = 0;
   private renderQueued = false;
@@ -346,6 +348,31 @@ export class DanmakuRenderer {
     delete this.container.dataset.danmakuRenderer;
   }
 
+  /**
+   * 页面开始离场时静默调度。不 clear、不 pause 媒体：已经上屏的 CSS 过渡由
+   * 合成器继续推进，旧播放页的活画面与弹幕画面都保留；只停掉主线程的 rAF
+   * 投放循环，避免它与目标列表的并发渲染争抢每一帧。
+   */
+  setQuiet(quiet: boolean): void {
+    if (this.destroyed || this.quiet === quiet) return;
+    this.quiet = quiet;
+    if (quiet) {
+      this.stopClock();
+      this.stopBacklogTimer();
+      // 两层 manager 自身各有一个 200/500ms 渲染定时器，离场时也要停下。
+      this.scroll.manager.stopPlaying();
+      this.fixed.manager.stopPlaying();
+      return;
+    }
+    this.scroll.manager.startPlaying();
+    this.fixed.manager.startPlaying();
+    if (this.media && !this.media.paused && !this.media.ended && !this.frozen) {
+      this.lastMediaTime = this.now();
+      this.startClock();
+    }
+    this.ensureBacklogTimer();
+  }
+
   private readonly onResize = () => this.resize();
 
   private createLayer(layer: Layer): LayerRuntime {
@@ -405,7 +432,7 @@ export class DanmakuRenderer {
    * 按轨道数与陈旧度决定何时交给库；点播与固定弹幕直接交给库。
    */
   private push(comment: DanmakuComment): boolean {
-    if (this.live.has(comment.id)) return false;
+    if (this.quiet || this.live.has(comment.id)) return false;
     if (comment.mode !== "scroll") return this.pushFixed(comment);
     if (this.maxLatencyMs > 0) return this.enqueueBacklog(comment);
     if (!this.scroll.manager.push(comment)) {
@@ -463,7 +490,7 @@ export class DanmakuRenderer {
    * 消费 `trackCount` 条，stash 再多也只是把陈旧弹幕泡得更久，因此只保持约一轮。
    */
   private pumpBacklog(): void {
-    if (!(this.maxLatencyMs > 0) || this.destroyed || this.pumping) return;
+    if (!(this.maxLatencyMs > 0) || this.destroyed || this.quiet || this.pumping) return;
     this.expireBacklog();
     if (this.frozen) return;
     const manager = this.scroll.manager;
@@ -696,7 +723,7 @@ export class DanmakuRenderer {
   }
 
   private ensureBacklogTimer(): void {
-    if (this.destroyed || this.backlog.length === 0) return;
+    if (this.destroyed || this.quiet || this.backlog.length === 0) return;
     if (this.backlogTimer !== 0) return;
     this.backlogTimer = window.setTimeout(() => this.runBacklogTimer(), BACKLOG_RETRY_MS);
   }
@@ -792,7 +819,7 @@ export class DanmakuRenderer {
   };
 
   private startClock(): void {
-    if (this.frame !== 0 || this.destroyed || !this.media) return;
+    if (this.frame !== 0 || this.destroyed || this.quiet || !this.media) return;
     this.frame = requestAnimationFrame(this.tick);
   }
 

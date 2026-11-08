@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import type { DanmakuRenderer } from "@/features/room/danmaku/danmakuRenderer";
+import { isVideoPlayerTimeQuiet } from "@/components/videojs/lib/player-time-quiet";
 import type { DanmakuComment } from "@/features/room/danmaku/danmakuTypes";
 import {
   clampDanmuArea,
@@ -50,6 +51,8 @@ type VideoDanmakuLayerProps = {
   tapMaxDistance?: number;
   /** 竖屏舞台的额外字号缩放，同步作用于字体、行高和轨道占用。 */
   fontSizeScale?: number;
+  /** 由播放页给出的共享 ref，供返回离场时静默弹幕调度。 */
+  rendererRef?: { current: { setQuiet: (quiet: boolean) => void } | null };
 };
 
 export function VideoDanmakuLayer({
@@ -63,6 +66,7 @@ export function VideoDanmakuLayer({
   large = false,
   tapMaxDistance,
   fontSizeScale = 1,
+  rendererRef,
 }: VideoDanmakuLayerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -250,10 +254,14 @@ export function VideoDanmakuLayer({
           },
         });
         instanceRef.current = renderer;
+        if (rendererRef) rendererRef.current = renderer;
+        // 异步加载可晚于返回请求完成；新实例也遵守媒体已有的离场静默。
+        if (isVideoPlayerTimeQuiet(media)) renderer.setQuiet(true);
         syncComments(renderer);
       })
       .catch((error: unknown) => {
         renderer?.destroy();
+        if (rendererRef && rendererRef.current === renderer) rendererRef.current = null;
         if (instanceRef.current === renderer) instanceRef.current = null;
         records.clear();
         // 弹幕初始化失败不影响视频播放，但保留诊断信息。
@@ -263,10 +271,11 @@ export function VideoDanmakuLayer({
       disposed = true;
       releaseSelection(true);
       instanceRef.current = null;
+      if (rendererRef && rendererRef.current === renderer) rendererRef.current = null;
       renderer?.destroy();
       records.clear();
     };
-  }, [cid, videoRef, releaseSelection, syncComments]);
+  }, [cid, videoRef, releaseSelection, rendererRef, syncComments]);
 
   // 仅更新原生时间轴；到来的新分段、屏蔽词和设置变化均不重建实例或清除在途弹幕。
   useEffect(() => {

@@ -169,6 +169,12 @@ import {
   type VideoResumeSnapshot,
 } from "./videoPlaybackLifecycle";
 import { isWatchProgressWorthKeeping, shouldReportWatchProgress } from "@/shared/watchProgress";
+import {
+  disposeVideoExitQuiet,
+  quietVideoPlayerForExit,
+  releaseVideoExitQuiet,
+  type QuietableDanmakuRenderer,
+} from "./videoExitQuiet";
 import { chaptersToVtt } from "./chaptersVtt";
 import { activeChapterIndex, playableChapters } from "./videoChapters";
 import { createPlaybackClock, usePlaybackClock } from "./videoPlaybackClock";
@@ -301,6 +307,7 @@ function VideoPlayerPageContent() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const backRequestedEntryKeyRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const danmakuRendererRef = useRef<QuietableDanmakuRenderer | null>(null);
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const lockRef = useRef<HTMLDivElement | null>(null);
@@ -377,6 +384,46 @@ function VideoPlayerPageContent() {
   const [volume, setVolume] = useState(initialAudio.volume);
   // 进度不进页面 state：timeupdate 约 4Hz，整页重渲染会挤占主线程让飘动弹幕丢帧。
   const [playbackClock] = useState(() => createPlaybackClock());
+  const exitQuiet = useMemo(
+    () => ({ clock: playbackClock, videoRef, danmakuRendererRef }),
+    [playbackClock],
+  );
+  const exitQuietFrameRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (exitQuietFrameRef.current !== null) cancelAnimationFrame(exitQuietFrameRef.current);
+      disposeVideoExitQuiet(exitQuiet);
+    },
+    [exitQuiet],
+  );
+  /**
+   * 返回请求在导航回调里同步静默旧播放页的时间发布。FrozenRouter 会保留这个
+   * 页面与活跃媒体到退场动画结束；若等待 React 卸载再停，导航提交已经被
+   * `useSyncExternalStore` 的同步更新打断。历史条目仍是当前页时恢复，避免
+   * 被守卫拒绝的点击或快速返回重入后留下静默播放器。
+   */
+  const quietForExit = useCallback(() => {
+    quietVideoPlayerForExit(exitQuiet);
+    if (exitQuietFrameRef.current !== null) cancelAnimationFrame(exitQuietFrameRef.current);
+    exitQuietFrameRef.current = requestAnimationFrame(() => {
+      exitQuietFrameRef.current = null;
+      if ((window.history.state?.key ?? "default") === location.key) {
+        releaseVideoExitQuiet(exitQuiet);
+      }
+    });
+  }, [exitQuiet, location.key]);
+  // 浏览器/系统 Back 也复用恢复判定；守卫拒绝或快速重入时不会遗留静默状态。
+  useEffect(() => {
+    window.addEventListener("popstate", quietForExit);
+    return () => window.removeEventListener("popstate", quietForExit);
+  }, [quietForExit]);
+  // 同路径 POP 会复用播放组件，必须在新条目提交时恢复。冻结的旧离场层
+  // 仍持有旧 location.key，因此不会提前恢复它的高频通知。
+  useLayoutEffect(() => {
+    if ((window.history.state?.key ?? "default") === location.key) {
+      releaseVideoExitQuiet(exitQuiet);
+    }
+  }, [exitQuiet, location.key]);
   const [duration, setDuration] = useState(0);
   const [frameSize, setFrameSize] = useState<{
     key: string;
@@ -2520,10 +2567,16 @@ function VideoPlayerPageContent() {
       markRequested: () => {
         backRequestedEntryKeyRef.current = location.key;
       },
-      navigateBack: () => navigate(-1),
-      navigateHome: () => navigate(VIDEO_HOME_PATH, { replace: true }),
+      navigateBack: () => {
+        quietForExit();
+        navigate(-1);
+      },
+      navigateHome: () => {
+        quietForExit();
+        navigate(VIDEO_HOME_PATH, { replace: true, flushSync: true });
+      },
     });
-  }, [location.key, navigate]);
+  }, [location.key, navigate, quietForExit]);
 
   const handleReturnHome = useCallback(() => {
     setOverlayInteractionOpen(false);
@@ -2531,9 +2584,12 @@ function VideoPlayerPageContent() {
       fullscreen: fullscreen.fullscreen,
       exitFullscreen: fullscreenExit,
       isCurrentEntry: () => (window.history.state?.key ?? "default") === location.key,
-      navigateHome: () => navigate(VIDEO_HOME_PATH),
+      navigateHome: () => {
+        quietForExit();
+        navigate(VIDEO_HOME_PATH, { flushSync: true });
+      },
     });
-  }, [fullscreen.fullscreen, fullscreenExit, location.key, navigate]);
+  }, [fullscreen.fullscreen, fullscreenExit, location.key, navigate, quietForExit]);
 
   // 当前分 P 序号：多 P 稿件按 cid 从详情对出（链接缺 cid 时详情已补齐首 P），
   // 单 P 或详情未到时为 1，不影响地址正确性（P1 省略 ?p=）。
@@ -3364,6 +3420,7 @@ function VideoPlayerPageContent() {
                   {danmakuEntries.length > 0 && (
                     <VideoDanmakuLayer
                       videoRef={videoRef}
+                      rendererRef={danmakuRendererRef}
                       entries={danmakuEntries}
                       active={danmakuVisible}
                       interactive={!fullscreenLocked && !switchingItem}
