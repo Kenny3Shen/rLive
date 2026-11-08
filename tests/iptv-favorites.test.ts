@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   iptvFavoritesQueryKey,
   iptvFavoritesForSource,
-  mergeFavoriteChannels,
   resolveIptvChannel,
   setFavoriteGroupInList,
   sortIptvFavoriteGroups,
@@ -32,27 +31,6 @@ function favorite(url: string, name: string, updatedAt: number): IptvFavorite {
 }
 
 describe("IPTV favorites", () => {
-  test("uses the current playlist metadata for followed channels", () => {
-    const url = "https://media.example.test/news.m3u8";
-    const current = channel(url, "CCTV 新闻（新版）");
-    const result = mergeFavoriteChannels([current], [favorite(url, "CCTV 新闻（旧快照）", 20)]);
-
-    expect(result).toEqual([current]);
-  });
-
-  test("keeps stored snapshots when a followed channel leaves the playlist", () => {
-    const currentUrl = "https://media.example.test/current.m3u8";
-    const removedUrl = "https://media.example.test/removed.m3u8";
-    const removed = favorite(removedUrl, "已移除频道", 20);
-
-    expect(
-      mergeFavoriteChannels(
-        [channel(currentUrl, "当前频道")],
-        [removed, favorite(currentUrl, "当前频道旧快照", 10)],
-      ),
-    ).toEqual([removed, channel(currentUrl, "当前频道")]);
-  });
-
   test("scopes query caches by playlist source", () => {
     expect(iptvFavoritesQueryKey("chinese")).toEqual(["iptv_favorites", "chinese"]);
     expect(iptvFavoritesQueryKey("custom")).toEqual(["iptv_favorites", "custom"]);

@@ -71,16 +71,3 @@ export function findZoomOriginCardRect(
   );
   return card ? (readZoomOrigin(card, scope, page)?.rect ?? null) : null;
 }
-
-/** 返回时优先测量恢复后的卡片；卡片未加载或已离屏时使用进入时的归一化窗口。 */
-export function resolveZoomOrigin(
-  origin: PageZoomOrigin | null,
-  page: string,
-  incoming: HTMLElement,
-  scope: HTMLElement,
-): ZoomRect | null {
-  return (
-    findZoomOriginCardRect(origin, page, incoming, scope) ??
-    (origin?.page === page ? origin.rect : null)
-  );
-}

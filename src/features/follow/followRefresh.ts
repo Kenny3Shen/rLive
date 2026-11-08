@@ -23,40 +23,24 @@ export function resolveCachedFollows(
   return follows ?? EMPTY_FOLLOWS;
 }
 
-/** 关注键：与后端 `follow_key` 一致，用于按条标记“本轮已确认”。 */
-export function followKey(siteId: string, roomId: string): string {
-  return `${siteId}:${roomId}`;
-}
-
 /**
- * 把本轮摘要整理成 UI 需要的形状。
- *
- * 关键是区分三类条目：
- *
- * - 本轮已确认（在 `refreshed_keys` 里）：状态可信；
- * - 本轮失败（在 `failures` 里）：状态未知，可定向重试；
- * - 本轮未参与（定向重试时的其余条目）：保持上一轮结论，不冒充本轮结果。
+ * 把本轮摘要整理成 UI 需要的形状：列表保留所有条目，失败项单独交给定向重试。
  */
 export type FollowRefreshOutcome = {
   follows: FollowUser[];
-  /** 本轮成功确认的房间键。 */
-  confirmed: Set<string>;
   /** 本轮失败项，可原样交给定向重试。 */
   failures: FollowRefreshTarget[];
-  checkedAt: number;
   total: number;
 };
 
 export function summarizeRefresh(result: FollowRefreshResult): FollowRefreshOutcome {
   return {
     follows: result.follows,
-    confirmed: new Set(result.summary.refreshed_keys),
     failures: result.summary.failures.map((failure) => ({
       siteId: failure.site_id,
       roomId: failure.room_id,
       userName: failure.user_name,
     })),
-    checkedAt: result.summary.checked_at,
     total: result.summary.total,
   };
 }
@@ -224,7 +208,7 @@ export async function retryFailedFollows(
   targets: FollowRefreshTarget[],
 ): Promise<FollowRefreshOutcome> {
   if (targets.length === 0) {
-    return { follows: [], confirmed: new Set(), failures: [], checkedAt: Date.now(), total: 0 };
+    return { follows: [], failures: [], total: 0 };
   }
   const result = await invokeCmd<FollowRefreshResult>("follow_refresh_selected", {
     targets: targets.map((target) => ({ site_id: target.siteId, room_id: target.roomId })),

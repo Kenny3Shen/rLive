@@ -35,14 +35,6 @@ export function sortIptvFavoriteGroups(groups: readonly IptvFavoriteGroup[]): Ip
   );
 }
 
-export function mergeFavoriteChannels(
-  channels: readonly IptvChannel[],
-  favorites: readonly IptvFavorite[],
-): IptvChannel[] {
-  const currentChannels = new Map(channels.map((channel) => [channel.url, channel]));
-  return favorites.map((favorite) => currentChannels.get(favorite.url) ?? favorite);
-}
-
 export function resolveIptvChannel(
   channelUrl: string | null,
   channels: readonly IptvChannel[] | undefined,

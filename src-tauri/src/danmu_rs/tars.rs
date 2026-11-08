@@ -1,7 +1,5 @@
 //! 最小化 TARS 二进制编解码器（仅虎牙 WS 加入／推送解码所用的子集）。
 
-#![allow(dead_code)]
-
 /// TARS 类型标签（枚举序号）。
 pub mod ty {
     pub const BYTE: u8 = 0;
@@ -27,7 +25,10 @@ pub struct Head {
 }
 
 #[derive(Debug)]
-pub struct TarsError(pub String);
+pub struct TarsError(
+    #[expect(dead_code, reason = "由 Debug 输出解码失败原因")]
+    pub String,
+);
 
 type Result<T> = std::result::Result<T, TarsError>;
 
@@ -410,6 +411,7 @@ impl<'a> TarsReader<'a> {
 
     /// 读取向量长度，并让读取器停在其第一个元素处。对于需要在继续读取后续
     /// 结构体字段之前跳过或校验空可选向量的调用方，这已经足够。
+    #[cfg(test)]
     pub fn read_list_len(&mut self, tag: u8, required: bool) -> Result<usize> {
         if !self.skip_to_tag(tag)? {
             if required {
@@ -478,8 +480,8 @@ pub fn encode_wup_v3(
     envelope.write_string(servant, 5);
     envelope.write_string(function, 6);
     envelope.write_bytes(&field_map, 7);
-    envelope.write_i64(0, 8); // 9 一个日志文件的尾部，对应 `commands::diagnostics::LogFileContent`。
-    envelope.write_map_string_string(9, &[]); // 1 "关于"面板的日志查看器。 Windows 发布版没有控制台，`rlive.log` 是用户反馈失败时唯一能引用的记录。 该日志在设计上只记录失败 —— `init_logging` 绝不写 Cookie 值、token 或聊天文本 —— 因此在这里展示它不会暴露凭据。
+    envelope.write_i64(0, 8); // iTimeout
+    envelope.write_map_string_string(9, &[]); // context
     envelope.write_map_string_string(10, &[]); // status
     let envelope = envelope.into_bytes();
 

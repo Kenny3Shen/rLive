@@ -15,8 +15,8 @@ mod uploader_story;
 pub use comment_like::like_comment;
 pub use comment_send::{normalize_reply, send_comment};
 pub use danmaku::{danmaku_segment_index, decode_danmaku_segment};
-// 保留既有类型路径；命令层测试通过这里构造分片表。
-#[allow(unused_imports)]
+// 命令层测试构造分片表时使用；生产代码直接从 dash 导入。
+#[cfg(test)]
 pub use dash::{Sidx, SidxSegment};
 pub use dash::{VideoPlaySelection, VideoTrack, build_mpd, parse_sidx};
 use dash::{segment_base_ranges, select_streams, split_init_and_sidx, stream_candidates};

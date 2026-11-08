@@ -1,11 +1,10 @@
 // F-02：关注刷新的部分成功摘要与失败项重试。
 //
-// 验收要求：10 个关注中 3 个超时，仍显示 7 个有效结果、3 个待确认及重试入口；
-// 只重试那 3 个；失败不能把可用列表变成错误页，也不能把旧状态当成新确认。
+// 验收要求：10 个关注中 3 个超时，仍保留全部 10 条列表，并单独给出 3 个失败项；
+// 失败不能把可用列表变成错误页，没有失败项时不发起重试。
 import { describe, expect, test } from "bun:test";
 import {
   applyRefreshResult,
-  followKey,
   retryFailedFollows,
   summarizeRefresh,
   type FollowRefreshOutcome,
@@ -45,7 +44,7 @@ describe("关注刷新摘要", () => {
       summary: {
         total: 10,
         refreshed: 7,
-        refreshed_keys: follows.slice(0, 7).map((user) => followKey(user.site_id, user.room_id)),
+        refreshed_keys: follows.slice(0, 7).map((user) => `${user.site_id}:${user.room_id}`),
         failures: follows.slice(7).map((user) => ({
           site_id: user.site_id,
           room_id: user.room_id,
@@ -59,7 +58,6 @@ describe("关注刷新摘要", () => {
 
     // 10 条全部保留（失败项显示上一轮结论），而不是被截成 7 条。
     expect(outcome.follows).toHaveLength(10);
-    expect(outcome.confirmed.size).toBe(7);
     expect(outcome.failures).toHaveLength(3);
   });
 });
@@ -80,9 +78,7 @@ describe("写回缓存", () => {
     const follows = [follow("1", true), follow("2", false)];
     const outcome: FollowRefreshOutcome = {
       follows,
-      confirmed: new Set([followKey("bilibili", "1")]),
       failures: [],
-      checkedAt: 1,
       total: 2,
     };
     applyRefreshResult(queryClient, outcome);

@@ -11,7 +11,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   BILIBILI_APP_AUTH_REQUIRED,
-  BILIBILI_APP_AUTH_UNAVAILABLE,
   isBilibiliAppAuthRequired,
 } from "../src/shared/api/bilibiliAppProfile";
 describe("APP 授权失效的错误码判定", () => {
@@ -23,7 +22,7 @@ describe("APP 授权失效的错误码判定", () => {
     ).toBe(true);
     expect(
       isBilibiliAppAuthRequired({
-        code: BILIBILI_APP_AUTH_UNAVAILABLE,
+        code: "bilibili_app_auth_unavailable",
       }),
     ).toBe(false);
   });

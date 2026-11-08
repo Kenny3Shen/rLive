@@ -37,9 +37,6 @@ export const EMPTY_BILIBILI_APP_PROFILE: BilibiliAppProfile = {
 /** 凭据已被服务端明确拒绝，必须重新扫码；重试不会成功。 */
 export const BILIBILI_APP_AUTH_REQUIRED = "bilibili_app_auth_required";
 
-/** 无法确认（网络、风控、服务故障）；凭据可能仍然有效，重试有意义。 */
-export const BILIBILI_APP_AUTH_UNAVAILABLE = "bilibili_app_auth_unavailable";
-
 /** 设置页账号分区：重新扫码与查看状态的唯一入口。 */
 export const BILIBILI_APP_AUTH_SETTINGS_PATH = "/settings?section=account";
 
@@ -59,7 +56,7 @@ function errorCodeOf(error: unknown): string | null {
 /**
  * 是否为「需要重新授权」的失败。
  *
- * 只认这一个码：`unavailable` 不能算进来，否则网络抖动会把用户骗去重新扫码，
+ * 只认确定失效的错误码：网络抖动等可重试失败不能把用户骗去重新扫码，
  * 而凭据其实还是好的。
  */
 export function isBilibiliAppAuthRequired(error: unknown): boolean {
