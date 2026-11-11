@@ -1052,7 +1052,8 @@ export function FollowPage() {
 
       <div>
         <Tabs value={activeView} onValueChange={handleViewChange} className="gap-4">
-          <div data-slot="horizontal-swipe-viewport" className="min-w-0 overflow-clip">
+          {/* 纵向预留卡片描边与阴影空间，负外边距保持原有布局位置。 */}
+          <div data-slot="horizontal-swipe-viewport" className="-my-3 min-w-0 overflow-clip py-3">
             <div
               ref={bindPage}
               data-slot="horizontal-swipe-track"
