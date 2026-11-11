@@ -232,7 +232,7 @@ export function SearchPage() {
       {rooms.length > 0 && (
         <>
           <p className="text-sm text-muted-foreground">
-            当前 {rooms.length} 项 · 按{scopeLabel}
+            当前 {rooms.length} 项，按{scopeLabel}
           </p>
           <ul className={CARD_GRID_CLASS}>
             {rooms.map((room) => {

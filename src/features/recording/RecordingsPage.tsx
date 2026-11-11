@@ -169,7 +169,7 @@ const RecordingCard = memo(function RecordingCard({
         <LocalMediaCard
           kind="recording"
           title={item.title}
-          subtitle={`${recordingSourceLabel(item)} · ${formatRecordingDate(item.started_at)}`}
+          subtitle={`${recordingSourceLabel(item)}，${formatRecordingDate(item.started_at)}`}
           status={<RecordingStatusBadge status={item.status} />}
           artwork={
             <LocalMediaArtwork

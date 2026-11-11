@@ -225,14 +225,13 @@ export const FollowPanel = memo(function FollowPanel({ className }: { className?
                           className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
                           title={
                             liveDuration
-                              ? `${platformName} · 开播时长：${liveDuration}`
+                              ? `${platformName}，开播时长：${liveDuration}`
                               : platformName
                           }
                         >
                           <span className="shrink-0">{platformName}</span>
                           {liveDuration && (
                             <>
-                              <span aria-hidden>·</span>
                               <Clock3 data-icon="inline-start" aria-hidden />
                               <span className="truncate">{liveDuration}</span>
                             </>

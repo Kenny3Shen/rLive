@@ -380,7 +380,7 @@ function FollowCard({
               {user.user_name}
             </CardTitle>
             <CardDescription className="truncate">
-              {SITE_LABELS[user.site_id] ?? user.site_id} · 房间 {user.room_id}
+              {SITE_LABELS[user.site_id] ?? user.site_id}，房间 {user.room_id}
             </CardDescription>
           </div>
         </div>

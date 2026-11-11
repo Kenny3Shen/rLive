@@ -97,9 +97,9 @@ export async function probeIptvAvailability(
     const availableCount = results.filter((result) => result.available).length;
     const omittedCount =
       new Set(channels.map((channel) => iptvCheckIdentity(channel))).size - checks.length;
-    const limitMessage = omittedCount > 0 ? ` · 已检测前 ${limit} 个` : "";
+    const limitMessage = omittedCount > 0 ? `（已检测前 ${limit} 个）` : "";
     // 只说「网络可达」，不说「可播」：探测不拉取清单引用的分片。
-    const detail = `${availableCount} 个网络可达 · ${results.length - availableCount} 个不可用`;
+    const detail = `${availableCount} 个网络可达，${results.length - availableCount} 个不可用`;
     toast.success("频道可用性检测完成", `${detail}${limitMessage}`);
   }
   return results;

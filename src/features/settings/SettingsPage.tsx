@@ -700,7 +700,7 @@ function BilibiliAppAuthField() {
               <span className="min-w-0 truncate text-sm text-muted-foreground">
                 UID {profile.mid}
                 {profile.expires_at
-                  ? ` · 到期 ${new Date(profile.expires_at * 1_000).toLocaleDateString("zh-CN")}`
+                  ? `（到期日期：${new Date(profile.expires_at * 1_000).toLocaleDateString("zh-CN")}）`
                   : ""}
               </span>
             )}

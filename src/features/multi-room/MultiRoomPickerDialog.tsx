@@ -269,7 +269,7 @@ export function MultiRoomPickerDialog({
                             {candidate.title || candidate.user_name || "直播间"}
                           </CardTitle>
                           <CardDescription className="truncate">
-                            {SITE_LABELS[candidate.site_id] ?? candidate.site_id} · 房间{" "}
+                            {SITE_LABELS[candidate.site_id] ?? candidate.site_id}，房间{" "}
                             {candidate.room_id}
                           </CardDescription>
                         </div>

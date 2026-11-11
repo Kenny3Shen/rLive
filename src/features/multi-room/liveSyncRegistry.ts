@@ -102,7 +102,7 @@ export function liveSyncFeedStatusText(status: LiveSyncFeedStatus | null): strin
     parts.push(`偏差 ${sign}${status.errorSeconds.toFixed(1)}s`);
   }
   if (status.limited) parts.push("缓冲不足，已就近对齐");
-  return parts.join(" · ");
+  return parts.join("，");
 }
 
 export type MultiRoomLiveSyncRegistry = {

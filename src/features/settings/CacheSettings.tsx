@@ -68,7 +68,7 @@ export function ImageCacheField() {
   function usageSummary(): string | null {
     const data = usage.data;
     if (!data) return null;
-    return `图片 ${data.image_files} 个文件 / ${formatByteSize(data.image_bytes)} · 短视频分片 ${data.media_files} 个文件 / ${formatByteSize(data.media_bytes)}`;
+    return `图片 ${data.image_files} 个文件（${formatByteSize(data.image_bytes)}），短视频分片 ${data.media_files} 个文件（${formatByteSize(data.media_bytes)}）`;
   }
 
   async function clearImageCache() {

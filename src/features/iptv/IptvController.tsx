@@ -175,7 +175,7 @@ export function IptvControllerProvider({
         notify.error("频道源更新失败", errorText(result.error));
         return;
       }
-      notify.success("频道源已更新", `${source.label} · ${result.data?.length ?? 0} 个频道`);
+      notify.success("频道源已更新", `${source.label}（${result.data?.length ?? 0} 个频道）`);
     } catch (error) {
       notify.error("频道源更新失败", errorText(error));
     }

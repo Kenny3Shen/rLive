@@ -189,7 +189,7 @@ function VideoFollowCard({
             <CardTitle className="truncate" title={follow.name}>
               {follow.name || "未知 UP 主"}
             </CardTitle>
-            <CardDescription className="truncate">Bilibili · UID {follow.mid}</CardDescription>
+            <CardDescription className="truncate">Bilibili（UID {follow.mid}）</CardDescription>
           </div>
         </div>
 

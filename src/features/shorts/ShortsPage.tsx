@@ -882,7 +882,7 @@ export function ShortsPage() {
                       <p className="text-xs text-white/70">
                         {formatOnline(current.view)} 次播放
                         {playback.duration > 0 || current.duration > 0
-                          ? ` · ${formatVideoDuration(playback.duration || current.duration)}`
+                          ? `，时长 ${formatVideoDuration(playback.duration || current.duration)}`
                           : ""}
                       </p>
                     </div>
@@ -1282,8 +1282,8 @@ function ShortsDetailBody({ item, open }: { item: VideoItemForDetail; open: bool
       <div className="flex flex-col gap-1.5">
         <h3 className="text-sm leading-relaxed font-medium">{item.title}</h3>
         <p className="text-xs text-muted-foreground">
-          {formatOnline(item.view)} 次播放 · {formatOnline(item.danmaku)} 条弹幕
-          {item.pubdate > 0 ? ` · ${formatRelativeTime(item.pubdate)}` : ""}
+          {formatOnline(item.view)} 次播放，{formatOnline(item.danmaku)} 条弹幕
+          {item.pubdate > 0 ? `，${formatRelativeTime(item.pubdate)}发布` : ""}
         </p>
       </div>
 
@@ -1306,7 +1306,7 @@ function ShortsDetailBody({ item, open }: { item: VideoItemForDetail; open: bool
           <p className="truncate text-sm">{item.author || "未知 UP 主"}</p>
           {archive && (archive.author_fans > 0 || archive.author_videos > 0) && (
             <p className="text-xs text-muted-foreground">
-              {formatOnline(archive.author_fans)} 粉丝 · {formatOnline(archive.author_videos)} 投稿
+              {formatOnline(archive.author_fans)} 粉丝，{formatOnline(archive.author_videos)} 投稿
             </p>
           )}
         </div>

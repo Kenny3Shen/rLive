@@ -415,7 +415,7 @@ function SelectionSection({
  * 当前剧集信息来自 season 接口，不请求或伪造 PGC 相关视频流。
  *
  * 三级字号区分层级：剧名 `text-base` 加粗、当前集标题 `text-sm`、简介 `text-xs`
- * 弱化色。标题只用 `long_title`，集号已在分集卡里，「1 · 」前缀只是重复。
+ * 弱化色。标题只用 `long_title`，集号已在分集卡里，标题前再加集号只是重复。
  * 简介收起时截三行；只有确实被截断（或已展开）才给「展开简介」开关，
  * 短简介不出现一个点了也没变化的按钮。
  */
@@ -534,7 +534,7 @@ function EpisodesPanel({
             key={episode.ep_id}
             current={episode.ep_id === epId}
             rowRef={episode.ep_id === epId ? currentRowRef : undefined}
-            label={episode.title || "·"}
+            label={episode.title || String(index + 1)}
             title={episode.long_title || episode.title}
             duration={episode.duration}
             onNavigate={() => {

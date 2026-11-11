@@ -40,7 +40,7 @@ export function IptvChannelSidebar({
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-2 md:p-3">
       <div className="flex shrink-0 items-baseline justify-between gap-2 px-1">
         <span className="text-xs font-medium text-muted-foreground" title={sourceLabel}>
-          频道列表 · {sourceLabel}
+          频道列表（{sourceLabel}）
         </span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {filtered.length}

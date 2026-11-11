@@ -179,7 +179,7 @@ impl ProxyRoute {
                         .unwrap_or_else(|| "直连".to_owned())
                 };
                 format!(
-                    "自动代理 · HTTP：{} · HTTPS：{}",
+                    "自动代理（HTTP：{}，HTTPS：{}）",
                     endpoint(&system.http),
                     endpoint(&system.https)
                 )

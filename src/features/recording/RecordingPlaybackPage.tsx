@@ -116,10 +116,7 @@ function PlaybackSidebar({ item, danmaku }: { item: RecordingItem; danmaku: Play
                 )}
                 <span className="truncate">{recordingSourceLabel(item)}</span>
                 {item.room_id && (
-                  <>
-                    <span aria-hidden>·</span>
-                    <span className="truncate tabular-nums">{item.room_id}</span>
-                  </>
+                  <span className="truncate tabular-nums">房间 {item.room_id}</span>
                 )}
               </div>
             </div>
