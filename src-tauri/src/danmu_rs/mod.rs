@@ -1,5 +1,6 @@
 pub mod bilibili;
 pub mod douyin;
+pub mod douyin_send;
 pub mod douyin_sign;
 pub mod douyu;
 pub mod huya;
@@ -8,8 +9,8 @@ pub mod reconnect;
 pub mod tars;
 pub mod twitch;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -17,7 +18,7 @@ use serde::Serialize;
 use tauri::Manager;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::account::percent_decode_cookie_value;
@@ -33,6 +34,12 @@ const DANMAKU_BATCH_INTERVAL: Duration = Duration::from_millis(50);
 const DANMAKU_FINAL_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ACCOUNT_ID_CHARS: usize = 128;
 const MAX_ACCOUNT_NAME_CHARS: usize = 128;
+/// HTTP 写入确认与随后到达的 WSS 消息共用的有界消息 ID 缓存。
+/// 只保存消息 ID，不进入 `DanmakuEvent` 或 Tauri IPC 契约。
+const DANMAKU_MESSAGE_ID_CACHE_LIMIT: usize = 512;
+/// HTTP 确认晚于连接安装时，等待当前 generation 的弹幕批次最多这么久。
+/// 只有连接仍在初始化中才会走这段等待；已安装 sender 时立即返回。
+const DANMAKU_CONFIRMATION_INSTALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 某个活动站点连接的、由 Cookie 派生的身份。
 ///
@@ -144,6 +151,29 @@ fn normalize_user_name(value: &str) -> Option<String> {
 pub struct DanmakuEventSender {
     sender: mpsc::Sender<DanmakuEvent>,
     identity: SelfDanmakuIdentity,
+    /// 与同一个房间的 WSS 循环共享；`None` 表示没有消息 ID 可去重。
+    message_ids: Option<Arc<Mutex<MessageIdCache>>>,
+}
+
+#[derive(Default)]
+struct MessageIdCache {
+    seen: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl MessageIdCache {
+    /// 只记住可用的消息 ID。超出上限时淘汰最早一条，使长时间观看的内存恒定。
+    fn remember(&mut self, id: &str) {
+        if id.is_empty() || !self.seen.insert(id.to_owned()) {
+            return;
+        }
+        self.order.push_back(id.to_owned());
+        if self.order.len() > DANMAKU_MESSAGE_ID_CACHE_LIMIT
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.seen.remove(&oldest);
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -154,14 +184,62 @@ struct DanmakuBatch<'a> {
 
 impl DanmakuEventSender {
     fn new(sender: mpsc::Sender<DanmakuEvent>, identity: SelfDanmakuIdentity) -> Self {
-        Self { sender, identity }
+        Self {
+            sender,
+            identity,
+            message_ids: None,
+        }
     }
 
-    fn send(&self, mut event: DanmakuEvent) {
+    /// 只给需要同时处理 HTTP 确认与 WSS 回显的抖音连接安装共享 ID 缓存。
+    fn with_message_ids(mut self, message_ids: Arc<Mutex<MessageIdCache>>) -> Self {
+        self.message_ids = Some(message_ids);
+        self
+    }
+
+    fn send(&self, event: DanmakuEvent) {
+        self.send_with_id(None, event, false);
+    }
+
+    /// 平台 HTTP 响应已经确认过的一条自发聊天消息。这个事件不是本地草稿的
+    /// 乐观渲染：`content`、`user` 和 `msg_id` 都取自上游成功响应。
+    fn send_confirmed(&self, message_id: &str, event: DanmakuEvent) {
+        self.send_with_id(Some(message_id), event, true);
+    }
+
+    /// `try_send` 和消息 ID 缓存必须在同一把锁内完成：否则 HTTP 确认与 WSS
+    /// 并发时，两边都会先查到「未见过」再各自入队。队列满时不能缓存 ID，
+    /// 让随后到达的相同 WSS 消息仍有机会显示。
+    pub(crate) fn send_with_id(
+        &self,
+        message_id: Option<&str>,
+        mut event: DanmakuEvent,
+        confirmed: bool,
+    ) {
         self.identity.mark(&mut event);
+        if confirmed {
+            event.is_self = true;
+        }
+        let Some(cache) = message_id.and_then(|_| self.message_ids.as_ref()) else {
+            let _ = self.sender.try_send(event);
+            return;
+        };
+        let Ok(mut cache) = cache.lock() else {
+            return;
+        };
+        if let Some(id) = message_id
+            && cache.seen.contains(id)
+        {
+            return;
+        }
         // 接收绝不能等待 webview。当异常突发填满有界队列时，
         // 保持实时连接健康比留住每条已经过时的聊天消息更重要。
-        let _ = self.sender.try_send(event);
+        if self.sender.try_send(event).is_err() {
+            return;
+        }
+        if let Some(id) = message_id {
+            cache.remember(id);
+        }
     }
 }
 
@@ -170,12 +248,19 @@ impl DanmakuEventSender {
 /// `source_key` 接收事件。
 pub struct DanmakuManager {
     inner: Mutex<DanmakuConnectionState>,
+    sender_installed: watch::Sender<u64>,
+    /// watch 只在有订阅者时广播；这个常驻接收者让连接安装的变更
+    /// 对随后才订阅的 HTTP 确认等待保持可见。
+    _sender_installed_subscriber: watch::Receiver<u64>,
 }
 
 #[derive(Default)]
 struct DanmakuTasks {
     connection_handle: Option<JoinHandle<()>>,
     batch_handle: Option<JoinHandle<()>>,
+    /// 当前活动批次的注入口。HTTP 写入确认在 await 之后仍需重新检查
+    /// generation 与房间，不能持有跨 await 的旧 sender。
+    event_sender: Option<DanmakuEventSender>,
     // 只有桌面端的 flush 路径会回读这个 sender，但所有平台都必须让它存活：
     // 丢弃它会关闭控制通道，从而让 `dispatch_batches` 观察到 `None`
     // 并立即停止投递弹幕。
@@ -244,6 +329,7 @@ struct DanmakuConnectionState {
 
 impl Default for DanmakuManager {
     fn default() -> Self {
+        let (sender_installed, _receiver) = watch::channel(0);
         Self {
             inner: Mutex::new(DanmakuConnectionState {
                 generation: 0,
@@ -251,13 +337,84 @@ impl Default for DanmakuManager {
                 active_tasks: DanmakuTasks::default(),
                 background_tasks: HashMap::new(),
             }),
+            _sender_installed_subscriber: _receiver,
+            sender_installed,
         }
     }
+}
+
+/// 一次抖音 HTTP 写入开始时捕获的活动房间围栏。它不持有 sender，
+/// 因此 await 期间重进或切房后，延迟的成功响应不能向新房间注入旧消息。
+#[derive(Clone)]
+pub(crate) struct DanmakuSendGuard {
+    generation: u64,
+    source_key: String,
 }
 
 impl DanmakuManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn send_guard_for_source(&self, source_key: &str) -> Option<DanmakuSendGuard> {
+        self.inner.lock().ok().and_then(|state| {
+            (state.active_source_key.as_deref() == Some(source_key)).then(|| DanmakuSendGuard {
+                generation: state.generation,
+                source_key: source_key.to_owned(),
+            })
+        })
+    }
+
+    /// 当前活动任务是否仍由这个 HTTP 写入发起时的 generation 与房间占据。
+    fn active_source_matches(&self, guard: &DanmakuSendGuard) -> bool {
+        self.inner.lock().ok().is_some_and(|state| {
+            state.generation == guard.generation
+                && state.active_source_key.as_deref() == Some(guard.source_key.as_str())
+        })
+    }
+
+    fn active_event_sender(&self, guard: &DanmakuSendGuard) -> Option<DanmakuEventSender> {
+        self.inner.lock().ok().and_then(|state| {
+            (state.generation == guard.generation
+                && state.active_source_key.as_deref() == Some(guard.source_key.as_str()))
+            .then(|| state.active_tasks.event_sender.clone())
+            .flatten()
+        })
+    }
+
+    /// 把平台成功响应中的消息送入当前房间的既有 `danmaku-batch` 链。
+    /// `msg_id` 去重与 WSS 共用 sender 内的有界缓存，不另开 IPC 或前端路径。
+    pub(crate) async fn emit_douyin_send_confirmation(
+        &self,
+        guard: DanmakuSendGuard,
+        chat: crate::danmu_rs::douyin_send::ConfirmedChat,
+    ) {
+        let (message_id, event) = chat.into_parts();
+        // 先订阅再检查，避免连接恰好在两者之间安装而错过唤醒。
+        let mut installed = self.sender_installed.subscribe();
+        if let Some(sender) = self.active_event_sender(&guard) {
+            sender.send_confirmed(&message_id, event);
+            return;
+        }
+        if !self.active_source_matches(&guard) {
+            return;
+        }
+        // 连接初始化、重进同房间或切房都会唤醒；每次醒来只接受仍与写入时
+        // 相同的 generation 与房间，最多等一个连接安装周期。
+        let deadline = time::Instant::now() + DANMAKU_CONFIRMATION_INSTALL_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(time::Instant::now());
+            if remaining.is_zero() || time::timeout(remaining, installed.changed()).await.is_err() {
+                return;
+            }
+            if let Some(sender) = self.active_event_sender(&guard) {
+                sender.send_confirmed(&message_id, event);
+                return;
+            }
+            if !self.active_source_matches(&guard) {
+                return;
+            }
+        }
     }
 
     fn abort_active_tasks(state: &mut DanmakuConnectionState) {
@@ -296,25 +453,92 @@ impl DanmakuManager {
         source_key: String,
         preserve_active: bool,
     ) -> bool {
-        let Ok(mut state) = self.inner.lock() else {
-            return false;
+        let accepted = {
+            let Ok(mut state) = self.inner.lock() else {
+                return false;
+            };
+            if generation < state.generation {
+                return false;
+            }
+            if preserve_active {
+                Self::move_active_to_background(&mut state);
+            } else {
+                Self::clear_active(&mut state);
+            }
+            state.generation = generation;
+            // 重新进入某房间会替换它保留的连接，
+            // 而不是把重复的 websocket 批次投递给同一个伴生任务。
+            if let Some(previous) = state.background_tasks.remove(&source_key) {
+                previous.tasks.abort();
+            }
+            state.active_source_key = Some(source_key);
+            true
         };
-        if generation < state.generation {
-            return false;
+        self.notify_sender_state();
+        accepted
+    }
+
+    /// 唤醒正在等待当前 generation 安装 sender 的 HTTP 确认。
+    /// generation、活动房间或任务发生任何变化时都要通知一次。
+    fn notify_sender_state(&self) {
+        // 保存的订阅者让每次变更都广播版本号；等待方订阅后还须读取当前值，
+        // 否则会错过订阅之前已经发生的安装。
+        let _ = self
+            .sender_installed
+            .send_modify(|version| *version = version.wrapping_add(1));
+    }
+
+    fn notify_if_generation_changed(&self, changed: bool) -> bool {
+        if changed {
+            self.notify_sender_state();
         }
-        if preserve_active {
-            Self::move_active_to_background(&mut state);
-        } else {
+        changed
+    }
+
+    pub fn disconnect_for_generation(&self, generation: u64) -> bool {
+        let changed = {
+            let Ok(mut state) = self.inner.lock() else {
+                return false;
+            };
+            if generation < state.generation {
+                return false;
+            }
+            state.generation = generation;
             Self::clear_active(&mut state);
-        }
-        state.generation = generation;
-        // 重新进入某房间会替换它保留的连接，
-        // 而不是把重复的 websocket 批次投递给同一个伴生任务。
-        if let Some(previous) = state.background_tasks.remove(&source_key) {
-            previous.tasks.abort();
-        }
-        state.active_source_key = Some(source_key);
-        true
+            true
+        };
+        self.notify_if_generation_changed(changed)
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
+    pub fn detach_for_generation(&self, generation: u64) -> bool {
+        let changed = {
+            let Ok(mut state) = self.inner.lock() else {
+                return false;
+            };
+            if generation < state.generation {
+                return false;
+            }
+            let detached = Self::move_active_to_background(&mut state).is_some();
+            state.generation = generation;
+            detached
+        };
+        self.notify_if_generation_changed(changed)
+    }
+
+    pub fn disconnect(&self) {
+        let changed = {
+            let Ok(mut state) = self.inner.lock() else {
+                return;
+            };
+            state.generation = state.generation.saturating_add(1);
+            Self::clear_active(&mut state);
+            for (_, connection) in state.background_tasks.drain() {
+                connection.tasks.abort();
+            }
+            true
+        };
+        let _ = self.notify_if_generation_changed(changed);
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -355,35 +579,6 @@ impl DanmakuManager {
                         .any(|connection| connection.generation == generation)
             })
             .unwrap_or(false)
-    }
-
-    /// 分离当前页面但不停止其 websocket。这些任务会继续以录制源为键保留，
-    /// 直到该录制结束。
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
-    pub fn detach_for_generation(&self, generation: u64) -> bool {
-        let Ok(mut state) = self.inner.lock() else {
-            return false;
-        };
-        if generation < state.generation {
-            return false;
-        }
-        let detached = Self::move_active_to_background(&mut state).is_some();
-        state.generation = generation;
-        detached
-    }
-
-    /// 只停止 generation 小于或等于给定值的请求；因此较旧的前端清理
-    /// 无法终止更新房间的连接。
-    pub fn disconnect_for_generation(&self, generation: u64) -> bool {
-        let Ok(mut state) = self.inner.lock() else {
-            return false;
-        };
-        if generation < state.generation {
-            return false;
-        }
-        state.generation = generation;
-        Self::clear_active(&mut state);
-        true
     }
 
     /// 只停止被保留的连接。当前已打开的同一房间持有活动连接，
@@ -438,16 +633,6 @@ impl DanmakuManager {
         flushed
     }
 
-    pub fn disconnect(&self) {
-        if let Ok(mut state) = self.inner.lock() {
-            state.generation = state.generation.saturating_add(1);
-            Self::clear_active(&mut state);
-            for (_, connection) in state.background_tasks.drain() {
-                connection.tasks.abort();
-            }
-        }
-    }
-
     /// 只有请求仍然是最新时才安装任务。若在其元数据加载期间已被另一个房间取代，
     /// 则返回 false 并中止该任务。
     fn set_tasks_if_current(
@@ -456,6 +641,7 @@ impl DanmakuManager {
         connection_task: JoinHandle<()>,
         batch_task: JoinHandle<()>,
         batch_control: mpsc::UnboundedSender<DanmakuBatchControl>,
+        event_sender: DanmakuEventSender,
     ) -> bool {
         let Ok(mut state) = self.inner.lock() else {
             connection_task.abort();
@@ -466,10 +652,12 @@ impl DanmakuManager {
             connection_handle: Some(connection_task),
             batch_handle: Some(batch_task),
             batch_control: Some(batch_control),
+            event_sender: Some(event_sender),
         };
         if state.generation == generation && state.active_source_key.is_some() {
             Self::abort_active_tasks(&mut state);
             state.active_tasks = tasks;
+            self.notify_sender_state();
             return true;
         }
         if let Some(connection) = state
@@ -501,7 +689,7 @@ fn spawn_loop<F, Fut>(
     app: AppHandle,
     manager: &DanmakuManager,
     generation: u64,
-    site: &'static str,
+    site: SiteId,
     source_key: String,
     identity: SelfDanmakuIdentity,
     notice: Option<String>,
@@ -524,6 +712,13 @@ fn spawn_loop<F, Fut>(
     // 仍可能发出过期房间的第一个事件。
     let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
     let sender = DanmakuEventSender::new(event_tx, identity);
+    // 抖音的 HTTP 写入确认与 WSS 回显共享有界 msg_id 缓存；其他站点保持原路径。
+    let sender = if site == SiteId::Douyin {
+        sender.with_message_ids(Arc::new(Mutex::new(MessageIdCache::default())))
+    } else {
+        sender
+    };
+    let installed_sender = sender.clone();
     let error_sender = sender.clone();
     let connection_task = tauri::async_runtime::spawn(async move {
         if start_rx.await.is_err() {
@@ -535,11 +730,17 @@ fn spawn_loop<F, Fut>(
             emit_system(&sender, content);
         }
         if let Err(e) = fut(sender).await {
-            tracing::warn!("{site} danmaku ended: {e}");
+            tracing::warn!(site = site.as_str(), "danmaku ended: {e}");
             emit_system(&error_sender, format!("弹幕连接断开: {e}"));
         }
     });
-    if manager.set_tasks_if_current(generation, connection_task, batch_task, batch_control_tx) {
+    if manager.set_tasks_if_current(
+        generation,
+        connection_task,
+        batch_task,
+        batch_control_tx,
+        installed_sender,
+    ) {
         let _ = start_tx.send(());
     }
 }
@@ -673,7 +874,7 @@ pub async fn connect(
                 app.clone(),
                 manager,
                 generation,
-                "bilibili",
+                SiteId::Bilibili,
                 source_key.clone(),
                 identity,
                 notice,
@@ -691,7 +892,7 @@ pub async fn connect(
                 app.clone(),
                 manager,
                 generation,
-                "douyu",
+                SiteId::Douyu,
                 source_key.clone(),
                 identity,
                 notice,
@@ -706,7 +907,7 @@ pub async fn connect(
                 app.clone(),
                 manager,
                 generation,
-                "huya",
+                SiteId::Huya,
                 source_key.clone(),
                 identity,
                 notice,
@@ -721,7 +922,7 @@ pub async fn connect(
                 app.clone(),
                 manager,
                 generation,
-                "twitch",
+                SiteId::Twitch,
                 source_key.clone(),
                 identity,
                 notice,
@@ -741,7 +942,7 @@ pub async fn connect(
                 app.clone(),
                 manager,
                 generation,
-                "douyin",
+                SiteId::Douyin,
                 source_key,
                 identity,
                 notice,
@@ -863,9 +1064,13 @@ impl<'a> ProtoReader<'a> {
 }
 
 #[cfg(test)]
+mod send_confirmation_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
-        DanmakuBatch, DanmakuBatchControl, DanmakuManager, DanmakuTasks, SelfDanmakuIdentity,
+        DanmakuBatch, DanmakuBatchControl, DanmakuEventSender, DanmakuManager, DanmakuTasks,
+        SelfDanmakuIdentity,
     };
     use crate::models::live::{DanmakuEvent, DanmakuKind};
     use std::sync::Arc;
@@ -921,7 +1126,13 @@ mod tests {
         let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
         let batch = tauri::async_runtime::spawn(std::future::pending::<()>());
         let (control, _receiver) = mpsc::unbounded_channel();
-        assert!(manager.set_tasks_if_current(100, connection, batch, control));
+        assert!(manager.set_tasks_if_current(
+            100,
+            connection,
+            batch,
+            control,
+            DanmakuEventSender::new(mpsc::channel(1).0, SelfDanmakuIdentity::default())
+        ));
         assert!(manager.detach_for_generation(101));
         assert!(manager.begin_connect(102, "live:huya:200".into(), false));
         assert!(
@@ -942,7 +1153,13 @@ mod tests {
         let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
         let batch = tauri::async_runtime::spawn(std::future::pending::<()>());
         let (control, _receiver) = mpsc::unbounded_channel();
-        assert!(manager.set_tasks_if_current(102, connection, batch, control));
+        assert!(manager.set_tasks_if_current(
+            102,
+            connection,
+            batch,
+            control,
+            DanmakuEventSender::new(mpsc::channel(1).0, SelfDanmakuIdentity::default())
+        ));
         assert!(manager.begin_connect(103, "live:douyu:300".into(), true));
         assert!(
             manager
@@ -974,7 +1191,13 @@ mod tests {
         let connection = tauri::async_runtime::spawn(std::future::pending::<()>());
         let batch = tauri::async_runtime::spawn(std::future::pending::<()>());
         let (control, _receiver) = mpsc::unbounded_channel();
-        assert!(manager.set_tasks_if_current(200, connection, batch, control));
+        assert!(manager.set_tasks_if_current(
+            200,
+            connection,
+            batch,
+            control,
+            DanmakuEventSender::new(mpsc::channel(1).0, SelfDanmakuIdentity::default())
+        ));
         assert!(
             manager
                 .inner
@@ -1008,6 +1231,7 @@ mod tests {
             connection_handle: Some(connection),
             batch_handle: Some(batch),
             batch_control: Some(control),
+            event_sender: None,
         };
 
         tasks.stop_and_flush().await;

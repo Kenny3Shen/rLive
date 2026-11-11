@@ -7,6 +7,7 @@ use crate::db::{danmaku_send_history, history};
 use crate::error::{AppError, AppResult};
 use crate::models::live::SiteId;
 use crate::sites;
+use crate::sites::traits::LiveSite;
 use crate::state::{AppState, DanmakuSendLimiter};
 
 /// 手动发送单条弹幕前的本地预检结果。提供 Cookie 即授权用户主动发送，
@@ -55,6 +56,28 @@ fn validate_huya_send_room(room_id: &str) -> AppResult<String> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     {
         return Err(AppError::new("huya_send_invalid_room", "虎牙直播间号无效").with_site("huya"));
+    }
+    Ok(room_id.to_owned())
+}
+
+/// 抖音发送框使用公开 Web 房间号或直播间 URL；内部房间号由之后的房间解析取得。
+fn normalize_douyin_send_room(room_id: &str) -> AppResult<String> {
+    let room_id = room_id.trim();
+    let room_id = room_id
+        .strip_prefix("https://live.douyin.com/")
+        .or_else(|| room_id.strip_prefix("http://live.douyin.com/"))
+        .unwrap_or(room_id)
+        .split(['?', '#', '/'])
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if room_id.is_empty()
+        || room_id.len() > 32
+        || !room_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(
+            AppError::new("douyin_send_invalid_room", "抖音直播间号无效").with_site("douyin"),
+        );
     }
     Ok(room_id.to_owned())
 }
@@ -311,6 +334,10 @@ fn read_send_status(conn: &rusqlite::Connection, site_id: &SiteId) -> AppResult<
             danmu_rs::huya::has_send_credentials(&cookie),
             "请先在设置中保存含 yyuid 或 udb_uid，且含 udb_n 或 udb_cred 的完整虎牙 Cookie",
         ),
+        SiteId::Douyin => (
+            danmu_rs::douyin_send::has_send_credentials(&cookie),
+            "请先在设置中扫码登录，或保存含 sessionid 或 sessionid_ss 的完整抖音 Cookie",
+        ),
         _ => {
             return Err(AppError::new(
                 "danmaku_send_unsupported",
@@ -359,6 +386,116 @@ pub async fn bilibili_danmaku_send(
         room_title.as_deref(),
         room_user_name.as_deref(),
     );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn douyin_danmaku_send_status(state: State<'_, AppState>) -> AppResult<DanmakuSendStatus> {
+    let conn = state.conn()?;
+    read_send_status(&conn, &SiteId::Douyin)
+}
+
+#[tauri::command]
+pub async fn douyin_danmaku_send(
+    state: State<'_, AppState>,
+    room_id: String,
+    message: String,
+    room_title: Option<String>,
+    room_user_name: Option<String>,
+) -> AppResult<()> {
+    let (cookie, route) = {
+        let conn = state.conn()?;
+        let settings = crate::settings::get(&conn)?;
+        (
+            account::get_cookie(&conn, &SiteId::Douyin)?.unwrap_or_default(),
+            settings.proxy_route(),
+        )
+    };
+    if !danmu_rs::douyin_send::has_send_credentials(&cookie) {
+        tracing::warn!(
+            room_id = %room_id.trim(),
+            stage = "preflight",
+            "douyin send rejected because the required Cookie fields are absent"
+        );
+        return Err(AppError::new(
+            "douyin_send_cookie_missing",
+            "请先在设置中扫码登录，或保存含 sessionid 或 sessionid_ss 的完整抖音 Cookie",
+        )
+        .with_site("douyin"));
+    }
+    // 网络请求前先做完确定性的本地校验，并占用本次房间冷却。
+    // 公开房间号允许直播间 URL，规范化后再进入 SSR 解析。
+    let public_room_id = normalize_douyin_send_room(&room_id)?;
+    // 用与 `danmaku_connect` 相同的房间键捕获写入开始时的连接围栏；
+    // 没有活动连接仍允许发送，只是无法把服务器确认投递到本机弹幕流。
+    let source_key = format!("live:{}:{}", SiteId::Douyin.as_str(), public_room_id);
+    let send_guard = state.danmaku.send_guard_for_source(&source_key);
+    let message = danmu_rs::douyin_send::normalize_outgoing_message(&message)?;
+    state
+        .douyin_send_limiter
+        .reserve(&public_room_id)
+        .inspect_err(|error| {
+            tracing::warn!(
+                room_id = %public_room_id,
+                stage = "preflight",
+                error_code = %error.code,
+                "douyin send rejected by local validation"
+            );
+        })?;
+    // 抖音写入使用 SSR 解析出的内部 room_id，短公开 web_rid 不能代替它。
+    // 站点实例同时持有本次网页会话产生的临时 Cookie；两者必须属于同一次请求链。
+    // GET 写入只发一次，禁止站点层的风控重试导致重复弹幕。
+    let site = crate::sites::douyin::DouyinSite::with_write_route(Some(cookie.clone()), &route)?;
+    let detail = site.get_room_detail(&public_room_id).await?;
+    let actual_room_id = detail
+        .raw
+        .get("room_id")
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value.trim().to_string()),
+            serde_json::Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::new(
+                "douyin_send_room_unavailable",
+                "无法获取抖音直播间信息，请刷新房间后重试",
+            )
+            .with_site("douyin")
+            .retryable()
+        })?;
+    if actual_room_id.len() > 32 || !actual_room_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(AppError::new(
+            "douyin_send_invalid_room",
+            "抖音直播间内部房间号无效，请刷新后重试",
+        )
+        .with_site("douyin"));
+    }
+    let confirmed = site.send_chat(&actual_room_id, &detail, &message).await?;
+    record_successful_danmaku_send(
+        state.inner(),
+        SiteId::Douyin,
+        &message,
+        &public_room_id,
+        if detail.title.trim().is_empty() {
+            room_title.as_deref()
+        } else {
+            Some(&detail.title)
+        },
+        if detail.user_name.trim().is_empty() {
+            room_user_name.as_deref()
+        } else {
+            Some(&detail.user_name)
+        },
+    );
+    // 平台成功响应的消息 ID、昵称与正文进入既有 danmaku-batch 链。
+    // WSS 回显随后到达时，共享 msg_id 缓存会去掉重复的一条。
+    if let (Some(guard), Some(chat)) = (send_guard, confirmed) {
+        state
+            .danmaku
+            .emit_douyin_send_confirmation(guard, chat)
+            .await;
+    }
     Ok(())
 }
 
@@ -485,8 +622,8 @@ pub async fn huya_danmaku_send(
 #[cfg(test)]
 mod tests {
     use super::{
-        read_send_status, strip_bilibili_danmaku_cookie, validate_and_reserve_huya_send,
-        validate_and_reserve_send,
+        normalize_douyin_send_room, read_send_status, strip_bilibili_danmaku_cookie,
+        validate_and_reserve_huya_send, validate_and_reserve_send,
     };
     use crate::danmu_rs;
     use crate::state::DanmakuSendLimiter;
@@ -515,6 +652,7 @@ mod tests {
             );
             for (site, cookie) in [
                 (SiteId::Bilibili, "SESSDATA=abc; bili_jct=csrf"),
+                (SiteId::Douyin, "sessionid=abc; ttwid=anonymous"),
                 (
                     SiteId::Douyu,
                     "acf_username=viewer; acf_uid=42; acf_stk=session; acf_ltkid=login; acf_devid=device; acf_dmjwt_token=token; acf_biz=1",
@@ -533,7 +671,25 @@ mod tests {
                 assert!(!read_send_status(&conn, &site).unwrap().available);
             }
         }
-        assert!(read_send_status(&conn, &SiteId::Douyin).is_err());
+        assert!(!read_send_status(&conn, &SiteId::Douyin).unwrap().available);
+    }
+
+    #[test]
+    fn douyin_public_room_accepts_live_url_and_rejects_ambiguous_ids() {
+        assert_eq!(
+            normalize_douyin_send_room("67876457927").unwrap(),
+            "67876457927"
+        );
+        assert_eq!(
+            normalize_douyin_send_room("https://live.douyin.com/67876457927?x=1").unwrap(),
+            "67876457927"
+        );
+        for value in ["", "room/1", "https://live.douyin.com/", "67876457927;drop"] {
+            assert_eq!(
+                normalize_douyin_send_room(value).unwrap_err().code,
+                "douyin_send_invalid_room"
+            );
+        }
     }
 
     #[test]

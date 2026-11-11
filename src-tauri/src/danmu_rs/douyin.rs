@@ -25,7 +25,7 @@ use tokio_tungstenite::{
 use crate::danmu_rs::douyin_sign;
 use crate::danmu_rs::proxy::open_websocket_transport;
 use crate::danmu_rs::reconnect::{Decision, DisconnectReason, ReconnectPolicy};
-use crate::danmu_rs::{DanmakuEventSender, emit_event, emit_system};
+use crate::danmu_rs::{DanmakuEventSender, emit_system};
 use crate::danmu_rs::{ProtoReader, ProtoValue};
 use crate::error::{AppError, AppResult};
 use crate::models::live::{DanmakuEvent, DanmakuKind};
@@ -401,9 +401,9 @@ async fn run_connection_once(
                     match decode_push_frame(&bytes)
                         .and_then(|decoded| {
                             let payload = maybe_gunzip(decoded.payload)?;
-                            let ack = decode_response(&payload, &mut |event| {
+                            let ack = decode_response(&payload, &mut |message_id, event| {
                                 msg_count += 1;
-                                emit_event(events, event);
+                                events.send_with_id(message_id.as_deref(), event, false);
                             })?;
                             Ok((decoded, ack))
                         }) {
@@ -500,14 +500,21 @@ fn maybe_gunzip(payload: &[u8]) -> AppResult<Vec<u8>> {
     Ok(out)
 }
 
-fn decode_response(payload: &[u8], emit: &mut impl FnMut(DanmakuEvent)) -> AppResult<ResponseAck> {
+/// 解析一帧 Response，并把每条消息及其平台消息 ID 交给共享去重入口。
+/// 外层 Message 的 `msg_id` 是权威值；旧节点只在 Common 中携带该字段时，
+/// 才用 Common 兜底。ID 为 0 或缺失时不去重，但消息仍按原样投递。
+fn decode_response(
+    payload: &[u8],
+    emit: &mut impl FnMut(Option<String>, DanmakuEvent),
+) -> AppResult<ResponseAck> {
     let mut reader = ProtoReader::new(payload);
     let mut ack = ResponseAck::default();
     while let Some((field, value)) = reader.next_field().map_err(proto_error)? {
         match (field, value) {
             (1, ProtoValue::Bytes(message)) => {
-                if let Some(event) = decode_message(message)? {
-                    emit(event);
+                let (message_id, event) = decode_message(message)?;
+                if let Some(event) = event {
+                    emit(message_id, event);
                 }
             }
             (5, ProtoValue::Bytes(value)) => ack.internal_ext = bounded_text(value, 4_096),
@@ -518,19 +525,21 @@ fn decode_response(payload: &[u8], emit: &mut impl FnMut(DanmakuEvent)) -> AppRe
     Ok(ack)
 }
 
-fn decode_message(bytes: &[u8]) -> AppResult<Option<DanmakuEvent>> {
+fn decode_message(bytes: &[u8]) -> AppResult<(Option<String>, Option<DanmakuEvent>)> {
     let mut reader = ProtoReader::new(bytes);
     let mut method = String::new();
     let mut payload = None;
+    let mut message_id = 0u64;
     while let Some((field, value)) = reader.next_field().map_err(proto_error)? {
         match (field, value) {
             (1, ProtoValue::Bytes(value)) => method = bounded_text(value, 96),
             (2, ProtoValue::Bytes(value)) => payload = Some(value),
+            (3, ProtoValue::Varint(value)) => message_id = value,
             _ => {}
         }
     }
     let Some(payload) = payload else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let event = match method.as_str() {
         "WebcastChatMessage" => decode_chat(payload),
@@ -541,7 +550,31 @@ fn decode_message(bytes: &[u8]) -> AppResult<Option<DanmakuEvent>> {
         "WebcastSocialMessage" => decode_social(payload),
         _ => Ok(None),
     }?;
-    Ok(event)
+    if message_id == 0 && event.is_some() {
+        message_id = common_message_id(payload);
+    }
+    let message_id = (message_id != 0).then(|| message_id.to_string());
+    Ok((message_id, event))
+}
+
+/// 旧版推送可能把消息 ID 放在各类消息共有的 Common field 2 中。
+fn common_message_id(payload: &[u8]) -> u64 {
+    let mut reader = ProtoReader::new(payload);
+    // 消息 ID 只是去重辅助信息；Common 或主体字段的未知编码不应让整帧内容
+    // 被丢弃。读不动时按「没有 ID」处理，内容仍由原有解码器负责。
+    while let Some((field, value)) = reader.next_field().ok().flatten() {
+        if let (1, ProtoValue::Bytes(common)) = (field, value) {
+            let mut common = ProtoReader::new(common);
+            while let Some((field, value)) = common.next_field().ok().flatten() {
+                if let (2, ProtoValue::Varint(value)) = (field, value)
+                    && value != 0
+                {
+                    return value;
+                }
+            }
+        }
+    }
+    0
 }
 
 fn decode_chat(bytes: &[u8]) -> AppResult<Option<DanmakuEvent>> {
@@ -830,13 +863,36 @@ mod tests {
         out
     }
 
-    #[test]
-    fn decodes_gzipped_chat_and_ack_metadata() {
+    fn chat_message(method: &[u8], content: &[u8]) -> Vec<u8> {
         let user = field_bytes(3, "小明".as_bytes());
         let mut chat = field_bytes(2, &user);
-        chat.extend(field_bytes(3, "你好，直播间！".as_bytes()));
-        let mut message = field_bytes(1, b"WebcastChatMessage");
+        chat.extend(field_bytes(3, content));
+        let mut message = field_bytes(1, method);
         message.extend(field_bytes(2, &chat));
+        message
+    }
+
+    fn chat_with_common(content: &[u8], message_id: u64) -> Vec<u8> {
+        let mut common = field_uint(1, 1);
+        common.extend(field_uint(2, message_id));
+        let mut chat = field_bytes(1, &common);
+        chat.extend(field_bytes(2, &field_bytes(3, "小明".as_bytes())));
+        chat.extend(field_bytes(3, content));
+        chat
+    }
+
+    fn collect_events(payload: &[u8]) -> Vec<(Option<String>, DanmakuEvent)> {
+        let mut events = Vec::new();
+        decode_response(payload, &mut |message_id, event| {
+            events.push((message_id, event));
+        })
+        .unwrap();
+        events
+    }
+
+    #[test]
+    fn decodes_gzipped_chat_and_ack_metadata() {
+        let message = chat_message(b"WebcastChatMessage", "你好，直播间！".as_bytes());
         let mut response = field_bytes(1, &message);
         response.extend(field_bytes(5, b"cursor=abc"));
         response.extend(field_uint(9, 1));
@@ -851,10 +907,16 @@ mod tests {
         assert_eq!(decoded.log_id, 42);
         let payload = maybe_gunzip(decoded.payload).unwrap();
         let mut events = Vec::new();
-        let ack = decode_response(&payload, &mut |event| events.push(event)).unwrap();
+        let mut message_ids = Vec::new();
+        let ack = decode_response(&payload, &mut |message_id, event| {
+            message_ids.push(message_id);
+            events.push(event);
+        })
+        .unwrap();
         assert!(ack.need_ack);
         assert_eq!(ack.internal_ext, "cursor=abc");
         assert_eq!(events.len(), 1);
+        assert_eq!(message_ids, vec![None]);
         assert_eq!(events[0].user, "小明");
         assert_eq!(events[0].content, "你好，直播间！");
 
@@ -879,13 +941,12 @@ mod tests {
 
         let mut response = field_bytes(1, &gift_message);
         response.extend(field_bytes(1, &member_message));
-        let mut events = Vec::new();
-        decode_response(&response, &mut |event| events.push(event)).unwrap();
+        let events = collect_events(&response);
 
         assert_eq!(events.len(), 2);
-        assert!(matches!(events[0].kind, DanmakuKind::Gift));
-        assert_eq!(events[0].content, "赠送 小心心 × 3");
-        assert!(matches!(events[1].kind, DanmakuKind::Enter));
+        assert!(matches!(events[0].1.kind, DanmakuKind::Gift));
+        assert_eq!(events[0].1.content, "赠送 小心心 × 3");
+        assert!(matches!(events[1].1.kind, DanmakuKind::Enter));
     }
 
     #[test]
@@ -896,16 +957,12 @@ mod tests {
         let mut like_message = field_bytes(1, b"WebcastLikeMessage");
         like_message.extend(field_bytes(2, &like_body));
 
-        let mut events = Vec::new();
-        decode_response(&field_bytes(1, &like_message), &mut |event| {
-            events.push(event)
-        })
-        .unwrap();
+        let events = collect_events(&field_bytes(1, &like_message));
 
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0].kind, DanmakuKind::Gift));
-        assert_eq!(events[0].user, "观众");
-        assert_eq!(events[0].content, "点赞 × 33");
+        assert!(matches!(events[0].1.kind, DanmakuKind::Gift));
+        assert_eq!(events[0].1.user, "观众");
+        assert_eq!(events[0].1.content, "点赞 × 33");
     }
 
     #[test]
@@ -923,17 +980,49 @@ mod tests {
 
         let mut response = field_bytes(1, &follow_message);
         response.extend(field_bytes(1, &share_message));
-        let mut events = Vec::new();
-        decode_response(&response, &mut |event| events.push(event)).unwrap();
+        let events = collect_events(&response);
 
         assert_eq!(events.len(), 2);
         assert!(
             events
                 .iter()
-                .all(|event| matches!(event.kind, DanmakuKind::Social))
+                .all(|(_, event)| matches!(event.kind, DanmakuKind::Social))
         );
-        assert_eq!(events[0].content, "阿森纳 关注了主播");
-        assert_eq!(events[1].content, "阿森纳 分享了直播间");
+        assert_eq!(events[0].1.content, "阿森纳 关注了主播");
+        assert_eq!(events[1].1.content, "阿森纳 分享了直播间");
+    }
+
+    #[test]
+    fn extracts_message_id_for_http_write_deduplication() {
+        // 官网 HTTP 成功响应给的是 msg_id_str 字符串；WSS 外层 field3 也是
+        // 同一条消息的十进制 ID。Common field2 只作为旧帧的兜底来源。
+        let chat = chat_with_common("你好".as_bytes(), 987654321);
+        let mut message = field_bytes(1, b"WebcastChatMessage");
+        message.extend(field_bytes(2, &chat));
+        message.extend(field_uint(3, 7706880368884470826));
+        let mut response = field_bytes(1, &message);
+
+        let chat = chat_with_common("兜底".as_bytes(), 123456789);
+        let mut fallback = field_bytes(1, b"WebcastChatMessage");
+        fallback.extend(field_bytes(2, &chat));
+        fallback.extend(field_uint(3, 0));
+        response.extend(field_bytes(1, &fallback));
+
+        let no_id = chat_message(b"WebcastChatMessage", "无编号".as_bytes());
+        response.extend(field_bytes(1, &no_id));
+
+        let events = collect_events(&response);
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0].0.as_deref(),
+            Some("7706880368884470826"),
+            "外层 msg_id 优先于 Common"
+        );
+        assert_eq!(events[1].0.as_deref(), Some("123456789"));
+        assert_eq!(events[2].0, None);
+        assert_eq!(events[0].1.content, "你好");
+        assert_eq!(events[1].1.content, "兜底");
+        assert_eq!(events[2].1.content, "无编号");
     }
 
     #[test]

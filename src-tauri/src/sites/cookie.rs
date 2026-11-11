@@ -1,13 +1,13 @@
 //! 抖音与斗鱼共用的 Cookie 字符串处理；发送 URL 的作用域仍由各站点判断。
 
-pub(super) fn normalize_cookie(value: &str) -> String {
+pub(crate) fn normalize_cookie(value: &str) -> String {
     merge_cookie_values(
         "",
         value.trim().strip_prefix("Cookie:").unwrap_or(value).trim(),
     )
 }
 
-pub(super) fn cookie_pairs(value: &str) -> Vec<(String, String)> {
+pub(crate) fn cookie_pairs(value: &str) -> Vec<(String, String)> {
     value
         .split(';')
         .filter_map(|part| {

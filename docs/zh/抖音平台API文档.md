@@ -1,7 +1,7 @@
 # 抖音平台 API 文档
 
 面向要修改抖音适配器的开发者，说明网页数据、列表验签、播放和实时弹幕的接入边界。
-当前状态：浏览、搜索、房间与播放、扫码/Cookie 登录、实时弹幕接收已支持；不提供弹幕发送。
+当前状态：浏览、搜索、房间与播放、扫码/Cookie 登录、实时弹幕接收与普通文本弹幕发送已支持。
 短视频推荐已于 2026-10-21 下线，原因与调查边界见「抖音短视频已下线」。
 
 ## 能力总览
@@ -14,7 +14,7 @@
 | 账号 | 已支持 | 桌面端在独立的抖音官方窗口扫码登录，移动端手动保存 Cookie；账号设置验证登录态并显示昵称；匿名浏览会建立短时网页会话。 |
 | 实时弹幕接收 | 已支持 | 本地计算短时 MSSDK 签名，直连官方 WSS，接收聊天、礼物、点赞、进场等事件。 |
 | 短视频推荐 | 已下线 | 2026-10-21 移除 `/shorts/douyin` 入口、推荐与取流实现；旧链接退回 `/video`，不再请求上游。见下文「抖音短视频已下线」。 |
-| 弹幕发送 | 未支持 | 仅接收实时弹幕，不提供手动或会话级自动发送。 |
+| 弹幕发送 | 已支持 | 完整登录 Cookie 可发送单条普通文本；手动发送、+1 和会话级自动发送复用同一组命令。平台成功响应含完整消息对象时，按其中的正文、昵称与消息 ID 进入现有弹幕显示链路。 |
 
 ## rLive 接入接口
 
@@ -26,6 +26,7 @@
 - 分区标识：分类树保存为 `id,type`（例如 `1010032,1`），请求时拆成 `partition` 与 `partition_type`；两者都必须为数字，避免向已验签的查询串注入额外参数。分类页「全部 X」条目 id 为 `0`，不是真实分区，会回退到父分区。
 - 翻页终止：该接口不下发 `has_more`，只有在「返回满页」且「上游 `offset` 确实前进」时才认为还有下一页，避免无限滚动反复拉取同一批房间。
 - 性能：匿名 `ttwid` 引导结果在进程内缓存（30 分钟 TTL），站点实例按命令创建时直接复用，避免每个列表请求重新下载约 1 MB 的直播首页；缓存只保存首页响应新增的匿名 Cookie，绝不缓存账号 Cookie，且已保存的登录值始终优先于缓存值。
+- 普通弹幕发送：`douyin_danmaku_send_status` / `douyin_danmaku_send` 是手动发送、+1 和会话级自动发送共用的写入接口。前者只做本地凭据检查；后者解析 SSR 取得内部 `room_id`，使用禁止重定向的一次性写入客户端提交 `GET https://live.douyin.com/webcast/room/chat/`。官网 Web 客户端把公共浏览器参数、内部 `room_id`、`content`、`type=0` 与一次性 `msToken` 放在 query 中，由本地 `a_bogus` 对最终字面 query 签名；请求没有 body，也不需要 WSS 的 `signature` / `user_unique_id`。这条 GET 是写入，不参与读取接口命中 `ArgusSecurityPlugin` 时的自动重发，避免重复弹幕。
 
 ## 抖音短视频已下线
 
@@ -196,7 +197,21 @@ B 站竖屏流的播放能力仍以既有记录为准，本轮**没有**通过�
 
 ## 账号与弹幕边界
 
-`danmaku_connect` 仅负责接收房间消息。rLive 不提供抖音弹幕发送命令，播放器中也不会显示手动发送框、「+1」或会话级自动发送控制；保存的抖音 Cookie 仍可用于搜索、房间解析和实时弹幕接收。
+`danmaku_connect` 负责接收房间消息。保存含 `sessionid` 或 `sessionid_ss` 的完整 Cookie 后，`douyin_danmaku_send_status` 允许播放器显示手动发送框、「+1」和会话级自动发送控制；发送仍要求有效的上游登录态。普通文本限单行、不超过 50 个 UTF-16 码元，按房间 3 秒冷却；每次提交只向官网发送一次。只有 HTTP 成功且响应 JSON 中的 `status_code=0` 才记录发送历史，非 JSON、空正文、传输失败或未知业务码均视为未确认，应用不会自动重试写入。
+
+成功响应的 `data` 同时提供 `content`、`user.nickname` 和 `msg_id_str`（或以数值 `msg_id` 兜底）时，Rust 把这三项作为一条平台确认消息，以 `is_self=true` 送入当前房间既有的 `danmaku-batch` 事件链，复用弹幕列表与飘屏；正文和昵称均取自服务器，不拿本地输入草稿或账号探针昵称补造，也不让前端从 command 返回值合成弹幕。HTTP 确认与房间 WebSocket 推送共用有界消息 ID 缓存，同一 `msg_id` 无论先到哪条路径都只入队一次；相同正文、不同 ID 仍按两条消息保留。只有写入发起时的连接代次和 `live:douyin:{公开房间号}` 来源仍与当前活动连接严格一致时才会注入，切房或同房重新进入后的迟到回包不会串进新连接。
+
+HTTP 成功但 `data` 缺任一必需字段时，仍按提交成功记入发送历史，只是不显示确认消息，之后继续按房间 WebSocket 的真实回显处理；失败结果也保留草稿。这些行为都不对写入自动重试。显示服务器确认消息仅说明接口返回了这条消息，不等于已独立验证其他观众公开可见；公开可见性仍须在直播间或另一账号中确认。
+
+### 发送实机记录（2026-11-11）
+
+在 Windows 主窗口 `/room/douyin/67876457927`，以重新登录且账号探针为 `valid` 的会话，从播放器 HUD 输入框提交一次用户指定的普通中文文本。发送命令要求 HTTP 成功且响应 JSON 的 `status_code=0` 才返回成功，因此这次「发送请求已提交」表明平台接口已接受该提交；上游响应原始字段没有取得，不作额外推断。提交后草稿清空，`danmaku_send_history_list` 返回一条记录：`site_id=douyin`、原文 `content`、公开 `room_id=67876457927`、真实房间标题 `玩机器CSGO正在直播`、主播名 `玩机器CSGO`。这证明凭据校验、签名 GET、严格成功判定、历史元数据及 UI 成功路径在真实 WebView 中可用。
+
+同房间注册原生消息监听器后观察 124 秒，原生 `danmaku-batch` 累计 864 条事件，未发现与提交内容完全一致的回显，`document.body.innerText` 也未出现原文，草稿保持清空。以上是接入服务器确认消息之前的观察，构成本次根因排查的基线；当时 rLive 只记录发送历史并等待 WebSocket，公开可见性和本机回显均尚未确认，也未重复发送同一文本。此前的首次提交遇到 `status_code=20003`，账号探针随后也变为 `expired`，界面显示登录失效并保留草稿、历史为空且无本地回显，验证了会话过期时的失败路径。
+
+随后使用同一份 Cookie 在抖音官网网页版完成一次指定原文的发送核对：写入返回 HTTP 200、`status_code=0`，`data` 含原文、`user.nickname=Kenny3S` 和字符串消息 ID；`data` 另有 `id`、`msg_id`、`fullscreen_text_color`、`show_identity`、`content_self_see_status`、`extra` 等字段。官网 Web 客户端的成功分支已确证为 `status_code===SUCCESS` 后调用 `queuePush(ft(data))`，`ft` 把服务器 `msg_id_str`、`content`、`user` 包成 `is_mock:true, method:"WebcastChatMessage"` 的聊天消息并进入 IM 分发链；分支不按 `content_self_see_status` 决定是否插入。用户也在官网看到了该条回显。因此 rLive 改成消费同一份服务器确认消息；官网回显并不单独证明其他观众公开可见。
+
+修复后在 Windows dev 主窗口的 `/room/douyin/67876457927`，以 `valid`、昵称为 `Kenny3S` 的账号从真实 HUD 输入框只提交一次用户指定原文。约 2 秒后，原生 `danmaku-batch` 收到一条 `chat` 事件：正文、昵称与原文一致，`is_self=true`，连接 epoch 与当前房间一致；弹幕列表显示「Kenny3S：原文」并带自己的消息边框，飘屏 DOM 也出现一条原文，二者各自最多匹配一次，证明服务器确认消息已进入既有列表和飘屏渲染链。发送草稿清空、界面提示「发送请求已提交。」，发送历史新增一条含房间号、真实标题和主播名的记录。此后持续观察约 87 秒，来自 `Kenny3S` 的该原文事件仍只有这一条；临时原生监听器和 DOM 观察器已清理。截图 `.playwright-cli/douyin-confirmed-echo.png` 可核对列表里的自己消息样式，飘屏则以上述 DOM 链观察为据。本机显示服务器确认消息不构成其他账号公共可见性的证明。
 
 ## 已知限制
 
@@ -206,12 +221,14 @@ B 站竖屏流的播放能力仍以既有记录为准，本轮**没有**通过�
 - 抖音 Web 请求可能按请求出口做风控：被拒的出口返回 `403`（正文为 `Blocked by ArgusSecurityPlugin`，其中可能是 `Uifid Not Found` 或 `Signature Not Found`）。统一入口 `get_text` 命中这一特征时会保留当前应用代理路由原样重试一次，不自动绕过代理改走直连；仍被拒则提示用户更换代理或网络，提示文案为「抖音风控拒绝了当前网络出口的请求（HTTP 403），重试也未通过」。普通 4xx/5xx 不触发回退。抖音短视频已下线，不能再据此认为换出口即可继续观看。
 - 列表验签依赖抖音网页端的算法与参数约定，上游调整后可能需要同步更新。
 - Cookie、短时签名 URL、短时 WSS URL 和上游原始响应不写入日志、前端缓存或配置导出；`a_bogus` 与 `msToken` 均为短时请求参数，不写入数据库或配置导出。
+- 如果同一消息的 WSS 推送先于 HTTP 确认到达，而抖音 Cookie 又不含可读昵称，消息 ID 去重会保留先到的普通事件，其 `is_self` 可能为 `false`。这只影响自己的消息样式，不影响消息显示或去重。
 
 ## 代码位置
 
 - 站点与直播业务：`src-tauri/src/sites/douyin/mod.rs`
 - 直播请求、匿名会话、Cookie 作用域及签名 query 编码：`src-tauri/src/sites/douyin/api.rs`
 - 列表验签：`src-tauri/src/sites/douyin/a_bogus.rs`
+- 聊天写入：`src-tauri/src/sites/douyin/send.rs`、凭据与文本边界 `src-tauri/src/danmu_rs/douyin_send.rs`
 - 官网登录窗口与临时会话：`src-tauri/src/account/douyin_qr.rs`
 - Cookie 验证：`src-tauri/src/account/douyin_profile.rs`，由 `src-tauri/src/commands/account.rs` 接入账号摘要
 - 弹幕连接与帧解析：`src-tauri/src/danmu_rs/douyin.rs`

@@ -94,7 +94,7 @@ impl DouyinSite {
         Ok(())
     }
 
-    fn remember_response_cookies(&self, headers: &HeaderMap) -> AppResult<()> {
+    pub(super) fn remember_response_cookies(&self, headers: &HeaderMap) -> AppResult<()> {
         let mut received = Vec::new();
         for header in headers.get_all(SET_COOKIE) {
             let Ok(header) = header.to_str() else {
@@ -350,13 +350,50 @@ impl DouyinSite {
         // 在这里再加参数会使签名失效。
         self.get_json(&signed, &[], referer).await
     }
+
+    /// 一次性提交带浏览器签名的写入 GET。
+    ///
+    /// 与列表读取刻意分开：`get_text` 命中风控时会原样再发一次，原样重发聊天
+    /// 却可能产生两条弹幕。`a_bogus` 覆盖的 params 必须与唯一一次实际发送的
+    /// 字面 query 完全一致，禁止再交给 HTTP 客户端追加或改写参数。
+    pub(super) async fn send_signed_chat_once(
+        &self,
+        url: &str,
+        params: &[(String, String)],
+        referer: &str,
+    ) -> AppResult<RawResponse> {
+        let query = encode_query(params);
+        let signature = a_bogus::generate_a_bogus(&query, DEFAULT_USER_AGENT);
+        let signed = format!("{url}?{query}&a_bogus={}", url_encode(&signature));
+        Self::send_text(
+            &self.client,
+            &signed,
+            &[],
+            referer,
+            true,
+            &self.cookie()?,
+            is_douyin_cookie_url(&signed),
+        )
+        .await
+    }
+
+    /// 提交一条普通文本弹幕。具体上游字段在一次请求链内由
+    /// [`super::send`] 构造，凭据与临时网页会话始终留在本模块。
+    pub async fn send_chat(
+        &self,
+        room_id: &str,
+        detail: &crate::models::live::LiveRoomDetail,
+        message: &str,
+    ) -> AppResult<Option<crate::danmu_rs::douyin_send::ConfirmedChat>> {
+        super::send::send_chat(self, room_id, detail, message).await
+    }
 }
 
 /// 一次 HTTP 响应原样保留状态、响应头与正文。
-struct RawResponse {
-    status: StatusCode,
-    headers: HeaderMap,
-    text: String,
+pub(super) struct RawResponse {
+    pub(super) status: StatusCode,
+    pub(super) headers: HeaderMap,
+    pub(super) text: String,
 }
 
 /// 抖音边缘节点拒绝被风控的出口时使用的正文标记；只用于决定是否原路由重试，
@@ -812,6 +849,44 @@ mod tests {
         assert_eq!(error.message, "HTTP 500 Internal Server Error");
         assert_eq!(failing.join(), 1);
         assert_eq!(fallback.join(), 0, "非 Argus 失败不应触发回退通道");
+    }
+
+    /// 聊天写入是 GET：即使响应带 Argus 风控特征，也绝不能走读取接口的
+    /// 原样重试通道，否则同一条消息可能被发两次。
+    #[tokio::test]
+    async fn signed_chat_write_is_never_retried() {
+        let main = FixtureProxy::start(Duration::from_secs(3), |request| {
+            assert!(request.starts_with("GET "));
+            assert!(request.contains("a_bogus="));
+            (
+                "403 Forbidden",
+                "text/plain",
+                "Blocked by ArgusSecurityPlugin Uifid Not Found".to_string(),
+            )
+        });
+        let fallback = FixtureProxy::start(Duration::from_millis(300), |_| {
+            (
+                "200 OK",
+                "application/json",
+                r#"{"status_code":0}"#.to_string(),
+            )
+        });
+        let site = DouyinSite::with_fallback_client(
+            main.client(),
+            fallback.client(),
+            "sessionid=fixture".into(),
+        );
+        let response = site
+            .send_signed_chat_once(
+                "http://live.douyin.com/webcast/room/chat/",
+                &[("content".into(), "中文？".into())],
+                "https://live.douyin.com/",
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
+        assert_eq!(main.join(), 1, "聊天写入只允许请求一次");
+        assert_eq!(fallback.join(), 0, "风控失败不得重发聊天写入");
     }
 
     /// 本地 HTTP 代理固定件：按绝对形式请求决定响应，并记录被访问次数。

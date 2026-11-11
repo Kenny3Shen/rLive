@@ -29,6 +29,7 @@ pub struct AppState {
     pub asr: AsrManager,
     pub danmaku: DanmakuManager,
     pub bilibili_send_limiter: DanmakuSendLimiter,
+    pub douyin_send_limiter: DanmakuSendLimiter,
     pub douyu_send_limiter: DanmakuSendLimiter,
     pub huya_send_limiter: DanmakuSendLimiter,
     pub stream_proxy: StreamProxy,
@@ -125,6 +126,11 @@ impl AppState {
                 "B站",
                 crate::danmu_rs::bilibili::normalize_outgoing_message,
             ),
+            douyin_send_limiter: DanmakuSendLimiter::new(
+                "douyin",
+                "抖音",
+                crate::danmu_rs::douyin_send::normalize_outgoing_message,
+            ),
             douyu_send_limiter: DanmakuSendLimiter::new(
                 "douyu",
                 "斗鱼",
@@ -172,6 +178,11 @@ mod tests {
                 "B站",
                 danmu_rs::bilibili::normalize_outgoing_message
                     as fn(&str) -> crate::error::AppResult<String>,
+            ),
+            (
+                "douyin",
+                "抖音",
+                danmu_rs::douyin_send::normalize_outgoing_message,
             ),
             ("douyu", "斗鱼", danmu_rs::douyu::normalize_outgoing_message),
             ("huya", "虎牙", danmu_rs::huya::normalize_outgoing_message),

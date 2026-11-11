@@ -9,6 +9,7 @@
 
 mod a_bogus;
 mod api;
+mod send;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -74,6 +75,18 @@ impl Default for DouyinSite {
 impl DouyinSite {
     pub fn new(client: Client, cookie: String) -> Self {
         Self::with_fallback_client(client.clone(), client, cookie)
+    }
+
+    /// 按应用当前的代理路由构建一次性的抖音写入会话。
+    /// 写入客户端禁止跟随重定向，也禁止因风控响应再发同一条消息。
+    pub fn with_write_route(
+        cookie: Option<String>,
+        route: &crate::proxy::ProxyRoute,
+    ) -> AppResult<Self> {
+        Ok(Self::new(
+            http_client::build_no_redirect_client(route)?,
+            cookie.unwrap_or_default(),
+        ))
     }
 
     /// 生产代码只用 [`DouyinSite::new`]；这个入口供测试注入回退通道。

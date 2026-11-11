@@ -1,6 +1,6 @@
 import type { SiteId } from "@/shared/types/live";
 
-export type DanmakuSendSiteId = "bilibili" | "douyu" | "huya";
+export type DanmakuSendSiteId = "bilibili" | "douyu" | "huya" | "douyin";
 
 export type DanmakuSendStatus = {
   cookie_ready: boolean;
@@ -39,6 +39,12 @@ const SEND_CONFIGS: Record<DanmakuSendSiteId, DanmakuSendConfig> = {
     siteLabel: "虎牙",
     maxLength: 30,
   },
+  douyin: {
+    statusCommand: "douyin_danmaku_send_status",
+    sendCommand: "douyin_danmaku_send",
+    siteLabel: "抖音",
+    maxLength: 50,
+  },
 };
 
 export function getDanmakuSendConfig(siteId?: SiteId): DanmakuSendConfig | null {
@@ -46,7 +52,12 @@ export function getDanmakuSendConfig(siteId?: SiteId): DanmakuSendConfig | null 
 }
 
 export function isDanmakuSendSite(siteId?: SiteId): siteId is DanmakuSendSiteId {
-  return siteId === "bilibili" || siteId === "douyu" || siteId === "huya";
+  return (
+    siteId === "bilibili" ||
+    siteId === "douyu" ||
+    siteId === "huya" ||
+    siteId === "douyin"
+  );
 }
 
 /** VOD 弹幕发送：oid 是视频 cid，历史与冷却按稿件 aid 记。 */

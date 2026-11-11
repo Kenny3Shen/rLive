@@ -64,7 +64,8 @@ use commands::asr::{
 use commands::cache::{cache_clear, cache_usage};
 use commands::danmaku::{
     bilibili_danmaku_send, bilibili_danmaku_send_status, danmaku_connect, danmaku_disconnect,
-    douyu_danmaku_send, douyu_danmaku_send_status, huya_danmaku_send, huya_danmaku_send_status,
+    douyin_danmaku_send, douyin_danmaku_send_status, douyu_danmaku_send, douyu_danmaku_send_status,
+    huya_danmaku_send, huya_danmaku_send_status,
 };
 use commands::danmaku_favorite::{
     danmaku_favorite_add, danmaku_favorite_list, danmaku_favorite_remove,
@@ -514,6 +515,8 @@ pub fn run() {
             danmaku_disconnect,
             bilibili_danmaku_send_status,
             bilibili_danmaku_send,
+            douyin_danmaku_send_status,
+            douyin_danmaku_send,
             douyu_danmaku_send_status,
             douyu_danmaku_send,
             huya_danmaku_send_status,
