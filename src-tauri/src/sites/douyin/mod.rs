@@ -51,6 +51,9 @@ const LIST_PAGE_SIZE: u32 = 15;
 /// 两个并发批次让去重后的产出翻倍，
 /// 而不增加额外等待时间。
 const RECOMMEND_FEED_BATCHES: usize = 2;
+/// 公开 Web 房间号的最大长度。超过这个长度的是回源接口使用的内部房间 id，
+/// 不能当作 `live.douyin.com/{web_rid}` 页面去查。
+const MAX_WEB_RID_LENGTH: usize = 16;
 
 /// 抖音站点实例只持有临时的、只读的请求状态。初始 cookie 来自账号存储；
 /// `ttwid`、`msToken` 等响应 cookie 留在内存中，绝不写回磁盘。
@@ -211,6 +214,11 @@ impl DouyinSite {
     /// 官方回源接口无需重放登录 Cookie 即可提供线路元数据。
     async fn get_ssr_room_detail_or_reflow(&self, web_rid: &str) -> AppResult<LiveRoomDetail> {
         let ssr_detail = self.get_room_detail_from_html(web_rid).await?;
+        // SSR 意外给了另一个公开房间号时，不能用它的内部 id 继续回源，
+        // 否则会把别的主播包装成用户请求的精确房号。
+        if !matches_requested_web_rid(&ssr_detail.room_id, web_rid) {
+            return Err(Self::parse_err("抖音房间页返回了不匹配的房间号"));
+        }
         if !ssr_detail.status || has_playable_stream(&ssr_detail) {
             return Ok(ssr_detail);
         }
@@ -256,6 +264,51 @@ impl DouyinSite {
             .get_json(RECOMMEND_FEED_URL, &params, &format!("{LIVE_ROOT}hot_live"))
             .await?;
         parse_recommend_feed(&value)
+    }
+
+    /// 抖音直播频道的关键词搜索；首屏调用者可能再合并一条精确房号结果。
+    async fn text_search_rooms(&self, keyword: &str, page: u32) -> AppResult<RoomListPage> {
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Ok(RoomListPage::empty());
+        }
+        let page = page.max(1);
+        let params = vec![
+            ("device_platform".into(), "webapp".into()),
+            ("aid".into(), "6383".into()),
+            ("channel".into(), "channel_pc_web".into()),
+            ("search_channel".into(), "aweme_live".into()),
+            ("keyword".into(), keyword.to_string()),
+            ("search_source".into(), "switch_tab".into()),
+            ("query_correct_type".into(), "1".into()),
+            ("is_filter_search".into(), "0".into()),
+            ("offset".into(), ((page - 1) * 10).to_string()),
+            ("count".into(), "10".into()),
+            ("pc_client_type".into(), "1".into()),
+            ("version_code".into(), "170400".into()),
+            ("version_name".into(), "17.4.0".into()),
+            ("cookie_enabled".into(), "true".into()),
+            ("screen_width".into(), "1980".into()),
+            ("screen_height".into(), "1080".into()),
+            ("browser_language".into(), "zh-CN".into()),
+            ("browser_platform".into(), "Win32".into()),
+            ("browser_name".into(), "Edge".into()),
+            ("browser_version".into(), "125.0.0.0".into()),
+            ("browser_online".into(), "true".into()),
+            ("engine_name".into(), "Blink".into()),
+            ("engine_version".into(), "125.0.0.0".into()),
+            ("os_name".into(), "Windows".into()),
+            ("os_version".into(), "10".into()),
+            ("platform".into(), "PC".into()),
+        ];
+        let result = self
+            .get_json(
+                LIVE_SEARCH_URL,
+                &params,
+                &format!("https://www.douyin.com/search/{keyword}?type=live"),
+            )
+            .await?;
+        parse_search_rooms(&result)
     }
 }
 
@@ -330,49 +383,29 @@ impl LiveSite for DouyinSite {
         }
         self.ensure_web_session().await?;
         let page = page.max(1);
-        let params = vec![
-            ("device_platform".into(), "webapp".into()),
-            ("aid".into(), "6383".into()),
-            ("channel".into(), "channel_pc_web".into()),
-            ("search_channel".into(), "aweme_live".into()),
-            ("keyword".into(), keyword.to_string()),
-            ("search_source".into(), "switch_tab".into()),
-            ("query_correct_type".into(), "1".into()),
-            ("is_filter_search".into(), "0".into()),
-            ("offset".into(), ((page - 1) * 10).to_string()),
-            ("count".into(), "10".into()),
-            ("pc_client_type".into(), "1".into()),
-            ("version_code".into(), "170400".into()),
-            ("version_name".into(), "17.4.0".into()),
-            ("cookie_enabled".into(), "true".into()),
-            ("screen_width".into(), "1980".into()),
-            ("screen_height".into(), "1080".into()),
-            ("browser_language".into(), "zh-CN".into()),
-            ("browser_platform".into(), "Win32".into()),
-            ("browser_name".into(), "Edge".into()),
-            ("browser_version".into(), "125.0.0.0".into()),
-            ("browser_online".into(), "true".into()),
-            ("engine_name".into(), "Blink".into()),
-            ("engine_version".into(), "125.0.0.0".into()),
-            ("os_name".into(), "Windows".into()),
-            ("os_version".into(), "10".into()),
-            ("platform".into(), "PC".into()),
-        ];
-        let result = self
-            .get_json(
-                LIVE_SEARCH_URL,
-                &params,
-                &format!("https://www.douyin.com/search/{keyword}?type=live"),
-            )
-            .await?;
-        parse_search_rooms(&result)
+        let Some(web_rid) = search_exact_web_rid(keyword, page) else {
+            return self.text_search_rooms(keyword, page).await;
+        };
+
+        // 「全部」调用关键词接口，而「房间号」直接调用 get_room_detail。
+        // 抖音关键词接口可能漏掉精确房号；首屏并行复用同一条房间详情链，
+        // 让两个搜索范围给出一致的精确结果，同时保留其他关键词命中。
+        let (text_result, exact_result) = futures_util::future::join(
+            self.text_search_rooms(keyword, page),
+            LiveSite::get_room_detail(self, &web_rid),
+        )
+        .await;
+        let exact = exact_result
+            .ok()
+            .and_then(|detail| exact_room_item(detail, &web_rid));
+        combine_search_results(text_result, exact)
     }
 
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus> {
         let room_id = normalize_room_id(room_id)?;
         // 公开 Web 房间号较短，而回源返回的内部 id 更长。公开路径保持在 SSR 页面上，
         // 使刷新关注绝不需要为了知道开播状态而去构建播放元数据。
-        if room_id.len() <= 16 {
+        if room_id.len() <= MAX_WEB_RID_LENGTH {
             self.get_ssr_room_live_status(&room_id).await
         } else {
             self.get_reflow_room_live_status(&room_id).await
@@ -381,7 +414,7 @@ impl LiveSite for DouyinSite {
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
         let room_id = normalize_room_id(room_id)?;
-        if room_id.len() <= 16 {
+        if room_id.len() <= MAX_WEB_RID_LENGTH {
             self.get_ssr_room_detail_or_reflow(&room_id).await
         } else {
             self.get_reflow_room_detail(&room_id).await
@@ -461,6 +494,105 @@ fn normalize_room_id(room_id: &str) -> AppResult<String> {
         .unwrap_or_default()
         .trim();
     Ok(numeric_id(room_id, "房间号")?.to_string())
+}
+
+/// 只有首屏的短数字公开房间号或 `live.douyin.com/{room_id}` 才启用精确查询。
+/// 任意主播名、标题，以及超过公开 id 范围的内部房间号仍走关键词搜索，
+/// 避免为每位用户输入都额外请求一次直播间网页。
+fn search_exact_web_rid(keyword: &str, page: u32) -> Option<String> {
+    if page > 1 {
+        return None;
+    }
+    let value = keyword.trim();
+    let candidate = if let Some(rest) = value
+        .strip_prefix("https://live.douyin.com/")
+        .or_else(|| value.strip_prefix("http://live.douyin.com/"))
+    {
+        // 只接受直接指向房间号的链接；附带 query 或 fragment 时，
+        // 路径仍必须恰好是一段数字。其他路径不参与精确查询。
+        let path = rest.split(['?', '#']).next().unwrap_or_default();
+        if path.contains('/') || path.is_empty() {
+            return None;
+        }
+        path
+    } else {
+        if value.contains(['?', '#', '/', ':']) {
+            return None;
+        }
+        value
+    }
+    .trim();
+    (candidate.len() <= MAX_WEB_RID_LENGTH
+        && !candidate.is_empty()
+        && candidate.bytes().any(|byte| byte != b'0')
+        && candidate.bytes().all(|byte| byte.is_ascii_digit()))
+    .then(|| candidate.to_owned())
+}
+
+/// 房间详情回源时可能只带请求的内部房间 id，而不是短公开 id；这两种
+/// 都属于同一条请求链。显式返回另一个短公开 id 则必须拒绝。
+fn matches_requested_web_rid(reported_id: &str, requested_web_rid: &str) -> bool {
+    let reported_id = reported_id.trim();
+    reported_id.is_empty()
+        || reported_id == requested_web_rid
+        || (reported_id.len() > MAX_WEB_RID_LENGTH
+            && reported_id.len() <= 32
+            && reported_id.bytes().all(|byte| byte.is_ascii_digit())
+            && reported_id.bytes().any(|byte| byte != b'0'))
+}
+
+/// 房间详情确认后转成搜索卡片。上游没有主播名或标题的退化数据不能
+/// 冒充一次命中；显式给出另一个短公开 room_id 时也不能错配到输入房号。
+fn exact_room_item(detail: LiveRoomDetail, requested_web_rid: &str) -> Option<LiveRoomItem> {
+    if !matches_requested_web_rid(&detail.room_id, requested_web_rid) {
+        return None;
+    }
+    if detail.user_name.trim().is_empty() && detail.title.trim().is_empty() {
+        return None;
+    }
+    Some(LiveRoomItem {
+        site_id: SiteId::Douyin,
+        room_id: requested_web_rid.to_owned(),
+        title: detail.title,
+        cover: detail.cover,
+        user_name: detail.user_name,
+        online: detail.online,
+        live_status: Some(detail.status),
+    })
+}
+
+/// 精确房号命中排在最前，同 room_id 的关键词结果不再重复出现。
+fn combine_search_results(
+    text_result: AppResult<RoomListPage>,
+    exact: Option<LiveRoomItem>,
+) -> AppResult<RoomListPage> {
+    match text_result {
+        Ok(page) => {
+            let Some(exact) = exact else {
+                return Ok(page);
+            };
+            let mut items = Vec::with_capacity(page.items.len() + 1);
+            items.push(exact.clone());
+            items.extend(
+                page.items
+                    .into_iter()
+                    .filter(|item| item.room_id != exact.room_id),
+            );
+            Ok(RoomListPage {
+                has_more: page.has_more,
+                items,
+            })
+        }
+        // 词搜需要登录 Cookie，且风控/上游失败很常见；能精确确认房间时，
+        // 不能把这条已核实的结果错报成「没有匹配结果」或搜索失败。
+        Err(text_error) => match exact {
+            Some(item) => Ok(RoomListPage {
+                has_more: false,
+                items: vec![item],
+            }),
+            None => Err(text_error),
+        },
+    }
 }
 
 /// 把存储的分类 id 拆分为抖音的 `partition` 与 `partition_type`。
@@ -1795,5 +1927,161 @@ mod tests {
         let html = r#"<script>roomInfo\":{\"room\":{\"id_str\":\"7666175273884879635\",\"status\":2,\"title\":\"SSR 直播\",\"owner\":{\"web_rid\":\"522864404974\",\"nickname\":\"主播\"},\"stream_url\":{}},\"anchor\":{\"nickname\":\"主播\"}}</script>"#;
         let detail = parse_room_detail_html(html, "522864404974").expect("SSR fallback detail");
         assert_eq!(detail.title, "SSR 直播");
+    }
+
+    /// 搜索首页的房号与「房间号」筛选共用同一条详情链；主播名、内部长 id
+    /// 和链接错误域/路径都只走原关键词搜索，翻页也不会再次注入精确结果。
+    #[test]
+    fn exact_search_only_accepts_public_web_rids_on_the_first_page() {
+        assert_eq!(
+            search_exact_web_rid("67876457927", 1).as_deref(),
+            Some("67876457927")
+        );
+        assert_eq!(
+            search_exact_web_rid("  https://live.douyin.com/67876457927?x=1  ", 1).as_deref(),
+            Some("67876457927")
+        );
+        assert_eq!(
+            search_exact_web_rid("http://live.douyin.com/67876457927#live", 1).as_deref(),
+            Some("67876457927")
+        );
+        assert_eq!(search_exact_web_rid("67876457927", 2), None);
+        for keyword in [
+            "0",
+            "00",
+            "000",
+            "玩机器CSGO",
+            "7666175273884879635",
+            "6787645792a",
+            "https://live.douyin.com.example/67876457927",
+            "https://live.douyin.com/67876457927/other",
+            "https://www.douyin.com/67876457927",
+            "67876457927?x=1",
+            "67876457927/other",
+        ] {
+            assert_eq!(search_exact_web_rid(keyword, 1), None, "{keyword}");
+        }
+    }
+
+    fn test_detail(room_id: &str, title: &str, user_name: &str, status: bool) -> LiveRoomDetail {
+        LiveRoomDetail {
+            site_id: SiteId::Douyin,
+            room_id: room_id.to_owned(),
+            title: title.to_owned(),
+            cover: String::new(),
+            user_name: user_name.to_owned(),
+            user_avatar: String::new(),
+            online: 26_000,
+            status,
+            live_started_at: None,
+            notice: String::new(),
+            url: String::new(),
+            raw: Value::Null,
+        }
+    }
+
+    fn test_item(room_id: &str, title: &str) -> LiveRoomItem {
+        LiveRoomItem {
+            site_id: SiteId::Douyin,
+            room_id: room_id.to_owned(),
+            title: title.to_owned(),
+            cover: String::new(),
+            user_name: "主播".into(),
+            online: 1,
+            live_status: None,
+        }
+    }
+
+    #[test]
+    fn exact_detail_keeps_the_requested_public_room_id_and_real_status() {
+        // 回源结果只带内部 id 时仍属于这一条公开房号的详情请求。
+        let detail = test_detail(
+            "7666175273884879635",
+            "玩机器CSGO正在直播",
+            "玩机器CSGO",
+            true,
+        );
+        let exact = exact_room_item(detail, "67876457927").expect("精确房间");
+        assert_eq!(exact.room_id, "67876457927");
+        assert_eq!(exact.title, "玩机器CSGO正在直播");
+        assert_eq!(exact.user_name, "玩机器CSGO");
+        assert_eq!(exact.live_status, Some(true));
+
+        let offline = test_detail("67876457927", "主播名", "", false);
+        assert_eq!(
+            exact_room_item(offline, "67876457927").and_then(|item| item.live_status),
+            Some(false)
+        );
+
+        // 另一个公开房号、以及缺少主播名和标题的退化负载都不能冒充命中。
+        assert!(
+            exact_room_item(
+                test_detail("123456", "其它房间", "主播", true),
+                "67876457927"
+            )
+            .is_none()
+        );
+        assert!(
+            exact_room_item(test_detail("67876457927", "", "", false), "67876457927").is_none()
+        );
+        for invalid_id in ["invalid_internal_room_id", "0000000000000000000"] {
+            assert!(
+                exact_room_item(
+                    test_detail(invalid_id, "其它房间", "主播", true),
+                    "67876457927"
+                )
+                .is_none(),
+                "{invalid_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_search_result_precedes_and_deduplicates_text_hits() {
+        let exact = exact_room_item(
+            test_detail("67876457927", "玩机器CSGO正在直播", "玩机器CSGO", true),
+            "67876457927",
+        );
+        let page = RoomListPage {
+            has_more: true,
+            items: vec![
+                test_item("67876457927", "关键词里的重复房间"),
+                test_item("11111", "另一个房间"),
+            ],
+        };
+        let combined = combine_search_results(Ok(page), exact).expect("合并后的搜索结果");
+        assert_eq!(
+            combined
+                .items
+                .iter()
+                .map(|item| item.room_id.as_str())
+                .collect::<Vec<_>>(),
+            ["67876457927", "11111"]
+        );
+        assert_eq!(combined.items[0].title, "玩机器CSGO正在直播");
+        assert!(combined.has_more);
+    }
+
+    #[test]
+    fn exact_search_result_survives_a_failed_keyword_search() {
+        let exact = exact_room_item(
+            test_detail("67876457927", "玩机器CSGO正在直播", "玩机器CSGO", true),
+            "67876457927",
+        );
+        let combined = combine_search_results(Err(DouyinSite::login_required()), exact.clone())
+            .expect("已确认的精确房间不能被词搜失败吞掉");
+        assert_eq!(combined.items.len(), 1);
+        assert_eq!(combined.items[0].room_id, exact.unwrap().room_id);
+        assert!(!combined.has_more);
+
+        let error = combine_search_results(Err(DouyinSite::login_required()), None).unwrap_err();
+        assert_eq!(error.code, "douyin_login_required");
+    }
+
+    #[test]
+    fn empty_keyword_search_is_preserved_without_an_exact_room() {
+        let page = combine_search_results(Ok(RoomListPage::empty()), None).expect("空词搜结果");
+        assert!(page.items.is_empty());
+        assert!(!page.has_more);
     }
 }
