@@ -257,18 +257,40 @@ function MainMultiRoomStageOverlays({
   showHost,
   audioOnly,
   playerRunning,
+  portalContainer,
+  videoAspectRatio,
 }: {
   showHost: boolean;
   audioOnly: boolean;
   playerRunning: boolean;
+  portalContainer?: HTMLElement | RefObject<HTMLElement | null> | null;
+  videoAspectRatio?: number | null;
 }) {
-  const { asr, asrFontSize, asrTranslationTo } = useMainMultiRoomAsr();
+  const {
+    asr,
+    asrFontSize,
+    asrTranslationEnabled,
+    asrTranslationFrom,
+    asrTranslationTo,
+    setAsrTranslationFrom,
+    setAsrTranslationTo,
+  } = useMainMultiRoomAsr();
 
   return (
     <>
       {showHost && audioOnly && playerRunning && <AudioOnlyIndicator />}
       {showHost && !audioOnly && (
-        <AsrCaptionOverlay asr={asr} fontSize={asrFontSize} translationTo={asrTranslationTo} />
+        <AsrCaptionOverlay
+          asr={asr}
+          fontSize={asrFontSize}
+          translationFrom={asrTranslationFrom}
+          translationTo={asrTranslationTo}
+          translationActive={asrTranslationEnabled}
+          onTranslationFromChange={setAsrTranslationFrom}
+          onTranslationToChange={setAsrTranslationTo}
+          portalContainer={portalContainer}
+          videoAspectRatio={videoAspectRatio}
+        />
       )}
     </>
   );
@@ -292,12 +314,8 @@ function MainMultiRoomControls({
     asr,
     asrSpeakerDiarizationEnabled,
     asrTranslationEnabled,
-    asrTranslationFrom,
-    asrTranslationTo,
     setAsrSpeakerDiarizationEnabled,
     setAsrTranslationEnabled,
-    setAsrTranslationFrom,
-    setAsrTranslationTo,
   } = useMainMultiRoomAsr();
   const showHost = !loading && error == null && !!playback.playUrl;
   const loadError = playback.loadError ?? player.loadError ?? player.fullscreenError;
@@ -311,8 +329,6 @@ function MainMultiRoomControls({
       asrDisabled={asr.controlDisabled}
       asrBusy={asr.controlBusy}
       asrTranslationEnabled={asrTranslationEnabled}
-      asrTranslationFrom={asrTranslationFrom}
-      asrTranslationTo={asrTranslationTo}
       asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
       qualities={playback.qualities}
       qualityIndex={playback.qualityIndex}
@@ -342,8 +358,6 @@ function MainMultiRoomControls({
       onToggleOsd={onToggleOsd}
       onToggleAsr={asr.toggle}
       onAsrTranslationEnabledChange={setAsrTranslationEnabled}
-      onAsrTranslationFromChange={setAsrTranslationFrom}
-      onAsrTranslationToChange={setAsrTranslationTo}
       onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
       onQualityChange={playback.onQualityChange}
       onLineChange={playback.onLineChange}
@@ -952,6 +966,8 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
           showHost={showHost}
           audioOnly={audioOnly}
           playerRunning={player.running}
+          portalContainer={playerStageRef}
+          videoAspectRatio={player.aspectRatio}
         />
       )}
     </VideoJsContainer>

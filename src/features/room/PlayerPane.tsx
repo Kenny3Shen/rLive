@@ -1504,8 +1504,6 @@ function PlayerPaneContent({
               asrDisabled={asr.controlDisabled}
               asrBusy={asr.controlBusy}
               asrTranslationEnabled={asrTranslationEnabled}
-              asrTranslationFrom={asrTranslationFrom}
-              asrTranslationTo={asrTranslationTo}
               asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
               qualities={qualities}
               qualityIndex={qualityIndex}
@@ -1552,8 +1550,6 @@ function PlayerPaneContent({
               onToggleOsd={handleToggleOsd}
               onToggleAsr={asr.toggle}
               onAsrTranslationEnabledChange={setAsrTranslationEnabled}
-              onAsrTranslationFromChange={setAsrTranslationFrom}
-              onAsrTranslationToChange={setAsrTranslationTo}
               onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
               onQualityChange={onQualityChange ?? (() => {})}
               onLineChange={onLineChange ?? (() => {})}
@@ -1630,8 +1626,12 @@ function PlayerPaneContent({
               <AsrCaptionOverlay
                 asr={asr}
                 fontSize={asrFontSize}
+                translationFrom={asrTranslationFrom}
                 translationTo={asrTranslationTo}
                 translationActive={asrTranslationEnabled}
+                onTranslationFromChange={setAsrTranslationFrom}
+                onTranslationToChange={setAsrTranslationTo}
+                portalContainer={playerStageRef}
                 videoAspectRatio={player.aspectRatio}
                 className="bottom-[calc(4.5rem+var(--player-chrome-inset))]"
                 onOpenWindow={

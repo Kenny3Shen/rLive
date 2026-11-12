@@ -2998,14 +2998,9 @@ function VideoPlayerPageContent() {
           <Separator className={cn("my-1", glassSeparatorClass())} />
           <div className="px-2 py-2">
             <AsrSettingsBody
-              portalContainer={stageRef}
               translationEnabled={asrTranslationEnabled}
-              translationFrom={asrTranslationFrom}
-              translationTo={asrTranslationTo}
               speakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
               onTranslationEnabledChange={setAsrTranslationEnabled}
-              onTranslationFromChange={setAsrTranslationFrom}
-              onTranslationToChange={setAsrTranslationTo}
               onSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
             />
           </div>
@@ -3521,7 +3516,13 @@ function VideoPlayerPageContent() {
                 <AsrCaptionOverlay
                   asr={asr}
                   fontSize={asrFontSize}
+                  translationFrom={asrTranslationFrom}
                   translationTo={asrTranslationTo}
+                  translationActive={asrTranslationEnabled}
+                  onTranslationFromChange={setAsrTranslationFrom}
+                  onTranslationToChange={setAsrTranslationTo}
+                  portalContainer={stageRef}
+                  videoAspectRatio={frameAspectRatio}
                   vodResizeAnchor
                 />
 

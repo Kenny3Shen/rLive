@@ -592,8 +592,6 @@ function IptvPlayerContent({
             asrDisabled={asr.controlDisabled}
             asrBusy={asr.controlBusy}
             asrTranslationEnabled={asrTranslationEnabled}
-            asrTranslationFrom={asrTranslationFrom}
-            asrTranslationTo={asrTranslationTo}
             asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
             pictureInPictureDisabled={status !== "playing" || fullscreen || audioOnly}
             disabled={!channel || !player.mediaAvailable || status === "error"}
@@ -608,8 +606,6 @@ function IptvPlayerContent({
             onToggleWebFullscreen={() => onWebFullscreenChange?.(!webFullscreen)}
             onToggleAsr={asr.toggle}
             onAsrTranslationEnabledChange={setAsrTranslationEnabled}
-            onAsrTranslationFromChange={setAsrTranslationFrom}
-            onAsrTranslationToChange={setAsrTranslationTo}
             onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
             onToggleFullscreen={() => void toggleFullscreen()}
           />
@@ -652,7 +648,17 @@ function IptvPlayerContent({
         )}
 
         {channel && !audioOnly && (
-          <AsrCaptionOverlay asr={asr} fontSize={asrFontSize} translationTo={asrTranslationTo} />
+          <AsrCaptionOverlay
+            asr={asr}
+            fontSize={asrFontSize}
+            translationFrom={asrTranslationFrom}
+            translationTo={asrTranslationTo}
+            translationActive={asrTranslationEnabled}
+            onTranslationFromChange={setAsrTranslationFrom}
+            onTranslationToChange={setAsrTranslationTo}
+            portalContainer={playerStageRef}
+            videoAspectRatio={player.aspectRatio}
+          />
         )}
 
         {error && (

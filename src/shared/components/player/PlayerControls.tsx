@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -26,14 +25,6 @@ import { Menu, Time, useMenuContext } from "@videojs/react";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { SpinnerIcon } from "@videojs/react/icons";
@@ -61,15 +52,7 @@ import { cn } from "@/lib/utils";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { lineName } from "@/lib/playUrl";
 import { usePortraitOrientation } from "@/shared/hooks/usePlayerViewport";
-import {
-  TRANSLATION_LANGUAGE_OPTIONS,
-  TRANSLATION_SOURCE_LANGUAGE_OPTIONS,
-} from "@/shared/translation/languages";
-import type {
-  CaptionTranslationLanguage,
-  CaptionTranslationSourceLanguage,
-  PlayUrl,
-} from "@/shared/types/live";
+import type { PlayUrl } from "@/shared/types/live";
 import {
   glassMutedTextClass,
   glassOptionClass,
@@ -171,8 +154,6 @@ export type PlayerControlsProps = {
   asrDisabled?: boolean;
   asrBusy?: boolean;
   asrTranslationEnabled?: boolean;
-  asrTranslationFrom?: CaptionTranslationSourceLanguage;
-  asrTranslationTo?: CaptionTranslationLanguage;
   asrSpeakerDiarizationEnabled?: boolean;
   qualities?: { quality: string; disabled?: boolean; hint?: string }[];
   qualityIndex?: number;
@@ -218,8 +199,6 @@ export type PlayerControlsProps = {
   onToggleOsd?: () => void;
   onToggleAsr?: () => void;
   onAsrTranslationEnabledChange?: (enabled: boolean) => void;
-  onAsrTranslationFromChange?: (from: CaptionTranslationSourceLanguage) => void;
-  onAsrTranslationToChange?: (to: CaptionTranslationLanguage) => void;
   onAsrSpeakerDiarizationEnabledChange?: (enabled: boolean) => void | Promise<void>;
   onQualityChange?: (index: number) => void;
   onLineChange?: (index: number) => void;
@@ -479,27 +458,17 @@ function SettingsBody({
 }
 
 export type AsrSettingsBodyProps = {
-  portalContainer?: HTMLElement | React.RefObject<HTMLElement | null> | null;
   translationEnabled: boolean;
-  translationFrom: CaptionTranslationSourceLanguage;
-  translationTo: CaptionTranslationLanguage;
   speakerDiarizationEnabled: boolean;
   onTranslationEnabledChange?: (enabled: boolean) => void;
-  onTranslationFromChange?: (from: CaptionTranslationSourceLanguage) => void;
-  onTranslationToChange?: (to: CaptionTranslationLanguage) => void;
   onSpeakerDiarizationEnabledChange?: (enabled: boolean) => void | Promise<void>;
 };
 
 /** 直播、多画面、IPTV 与 VOD「字幕（本地）」下方共用的识别设置。 */
 export function AsrSettingsBody({
-  portalContainer,
   translationEnabled,
-  translationFrom,
-  translationTo,
   speakerDiarizationEnabled,
   onTranslationEnabledChange,
-  onTranslationFromChange,
-  onTranslationToChange,
   onSpeakerDiarizationEnabledChange,
 }: AsrSettingsBodyProps) {
   return (
@@ -524,80 +493,6 @@ export function AsrSettingsBody({
           onCheckedChange={onTranslationEnabledChange}
         />
       </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation-from">原文语言</FieldLabel>
-        <Select
-          items={TRANSLATION_SOURCE_LANGUAGE_OPTIONS}
-          value={translationFrom}
-          onValueChange={(value) => value && onTranslationFromChange?.(value)}
-        >
-          <SelectTrigger
-            id="player-caption-translation-from"
-            size="sm"
-            glass
-            className="w-32 min-w-0"
-          >
-            <SelectValue className="min-w-0 truncate" />
-          </SelectTrigger>
-          <SelectContent
-            container={portalContainer}
-            side="top"
-            align="end"
-            glass
-            className={glassPanelClass({ overlay: true })}
-          >
-            <SelectGroup>
-              {TRANSLATION_SOURCE_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem
-                  key={language.value}
-                  value={language.value}
-                  glass
-                  className={glassOptionClass()}
-                >
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="player-caption-translation-to">译文语言</FieldLabel>
-        <Select
-          items={TRANSLATION_LANGUAGE_OPTIONS}
-          value={translationTo}
-          onValueChange={(value) => value && onTranslationToChange?.(value)}
-        >
-          <SelectTrigger
-            id="player-caption-translation-to"
-            size="sm"
-            glass
-            className="w-32 min-w-0"
-          >
-            <SelectValue className="min-w-0 truncate" />
-          </SelectTrigger>
-          <SelectContent
-            container={portalContainer}
-            side="top"
-            align="end"
-            glass
-            className={glassPanelClass({ overlay: true })}
-          >
-            <SelectGroup>
-              {TRANSLATION_LANGUAGE_OPTIONS.map((language) => (
-                <SelectItem
-                  key={language.value}
-                  value={language.value}
-                  glass
-                  className={glassOptionClass()}
-                >
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </Field>
     </FieldGroup>
   );
 }
@@ -615,8 +510,6 @@ export function PlayerControls({
   asrDisabled = false,
   asrBusy = false,
   asrTranslationEnabled = false,
-  asrTranslationFrom = "auto",
-  asrTranslationTo = "zh-CN",
   asrSpeakerDiarizationEnabled = false,
   qualities = [],
   qualityIndex = 0,
@@ -649,8 +542,6 @@ export function PlayerControls({
   onToggleOsd,
   onToggleAsr,
   onAsrTranslationEnabledChange,
-  onAsrTranslationFromChange,
-  onAsrTranslationToChange,
   onAsrSpeakerDiarizationEnabledChange,
   onQualityChange,
   onLineChange,
@@ -666,10 +557,6 @@ export function PlayerControls({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [asrOpen, setAsrOpen] = useState(false);
   const [volumeOpen, setVolumeOpen] = useState(false);
-  // 字幕菜单弹层元素。翻译语言的下拉必须 portal 进这里：字幕菜单在 top layer，
-  // 而 Base UI 的下拉默认去舞台/body，会被压在菜单之下，且点击会被 Video.js 当成
-  // 「点击空白」直接关掉整块菜单。
-  const asrPopupRef = useRef<HTMLDivElement | null>(null);
   // 音量按钮的弹层是 Video.js 的 `VolumePopover`，自带 `openOnHover`；这两个菜单用
   // `Menu.Root`，只能自己补同一套悬停时序。
   const setAsrMenuOpen = useCallback((open: boolean) => {
@@ -716,18 +603,11 @@ export function PlayerControls({
     </Menu.Root>
   );
 
-  // 下拉的 portal 目标随形态分叉：弹层形态进 top layer 的字幕菜单本身，
-  // 抽屉形态沿用调用方的舞台容器（Base UI 对话框能正确处理嵌套浮层）。
-  const renderAsrBody = (selectContainer: AsrSettingsBodyProps["portalContainer"]) => (
+  const renderAsrBody = () => (
     <AsrSettingsBody
-      portalContainer={selectContainer}
       translationEnabled={asrTranslationEnabled}
-      translationFrom={asrTranslationFrom}
-      translationTo={asrTranslationTo}
       speakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
       onTranslationEnabledChange={onAsrTranslationEnabledChange}
-      onTranslationFromChange={onAsrTranslationFromChange}
-      onTranslationToChange={onAsrTranslationToChange}
       onSpeakerDiarizationEnabledChange={onAsrSpeakerDiarizationEnabledChange}
     />
   );
@@ -750,7 +630,7 @@ export function PlayerControls({
    */
   // 菜单只在 `onToggleAsr` 存在时渲染；这里先收窄，供两种形态共用同一份正文。
   const toggleAsr = onToggleAsr;
-  const renderAsrMenuBody = (selectContainer: AsrSettingsBodyProps["portalContainer"]) =>
+  const renderAsrMenuBody = () =>
     toggleAsr && (
       <Menu.Root
         open={asrOpen}
@@ -805,7 +685,7 @@ export function PlayerControls({
             ) : null}
           </Button>
           <Separator className={cn("my-1", glassSeparatorClass())} />
-          <div className="px-2 py-2">{renderAsrBody(selectContainer)}</div>
+          <div className="px-2 py-2">{renderAsrBody()}</div>
         </EmbeddedMenuContent>
       </Menu.Root>
     );
@@ -1109,7 +989,7 @@ export function PlayerControls({
                     )}
                   >
                     <DrawerTitle className={glassTitleClass({ overlay: true })}>字幕</DrawerTitle>
-                    {renderAsrMenuBody(portalContainer)}
+                    {renderAsrMenuBody()}
                   </DrawerContent>
                 </Drawer>
               </>
@@ -1138,7 +1018,6 @@ export function PlayerControls({
                   {asrIcon}
                 </Menu.Trigger>
                 <Menu.Popup
-                  ref={asrPopupRef}
                   keepMounted={false}
                   /* 与播放设置菜单同构：重置 UA `[popover]` 外观，玻璃留在 Content 上。 */
                   className={cn(
@@ -1156,7 +1035,7 @@ export function PlayerControls({
                       "whitespace-nowrap [&_*]:whitespace-nowrap",
                     )}
                   >
-                    {renderAsrMenuBody(asrPopupRef)}
+                    {renderAsrMenuBody()}
                   </Menu.Content>
                 </Menu.Popup>
               </Menu.Root>
