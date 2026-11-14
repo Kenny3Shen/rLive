@@ -263,6 +263,58 @@ export type VideoShortsEntry = {
   videoKey: string;
 };
 
+/**
+ * 列表卡片下发的画幅先验。
+ *
+ * 自动入口若只等播放器 `loadedmetadata`，移动端会先挂载完整的常规播放页，再
+ * `replace` 到短视频，用户能看到一次普通界面闪现。APP 推荐等列表条目自带
+ * `dimension`，随 navigation state 带到播放页后可在取流结果缺少轨尺寸时仍
+ * 提前判定画幅。
+ *
+ * 链接仍只含 `seed`/播放参数；先验只对当前历史条目有效，不写进可分享 URL。
+ */
+export type VideoFrameHint = {
+  /** 这条先验所属的内容键（`bvid:cid`）。 */
+  videoKey: string;
+  /** 显示宽高比（宽 / 高），已按 `dimension.rotate` 归一。 */
+  frameAspectRatio: number;
+};
+
+export function videoFrameHintNavigationState(
+  hint: VideoFrameHint,
+  previousState?: unknown,
+): { videoFrameHint: VideoFrameHint } {
+  const previous =
+    previousState && typeof previousState === "object" && !Array.isArray(previousState)
+      ? previousState
+      : {};
+  return { ...previous, videoFrameHint: hint };
+}
+
+/**
+ * 取当前内容键对应的画幅先验；形状不符、键不匹配或比例非法时返回 null。
+ *
+ * 只接受有限正数。横屏先验也会返回（调用方据此跳过竖屏等待态），是否进入短
+ * 视频仍由 `shouldAutoEnterVideoShorts` 连同详情与实测画幅判断。
+ */
+export function videoFrameHintFromState(state: unknown, videoKey: string): number | null {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const raw = (state as { videoFrameHint?: unknown }).videoFrameHint;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const hint = raw as Partial<Record<keyof VideoFrameHint, unknown>>;
+  const ratio = hint.frameAspectRatio;
+  if (
+    typeof hint.videoKey !== "string" ||
+    hint.videoKey !== videoKey ||
+    typeof ratio !== "number" ||
+    !Number.isFinite(ratio) ||
+    ratio <= 0
+  ) {
+    return null;
+  }
+  return ratio;
+}
+
 export function videoShortsEntryNavigationState(
   entry: VideoShortsEntry,
   previousState?: unknown,

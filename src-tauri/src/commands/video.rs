@@ -647,6 +647,16 @@ pub async fn video_get_play_info(
         accept_quality: selection.accept_quality,
         session_ids,
         audio_only,
+        dimension: selection
+            .video
+            .width
+            .zip(selection.video.height)
+            .filter(|(width, height)| *width > 0 && *height > 0)
+            .map(|(width, height)| crate::models::video::VideoDimension {
+                width,
+                height,
+                rotate: 0,
+            }),
     })
 }
 

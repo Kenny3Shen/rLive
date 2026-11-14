@@ -218,11 +218,14 @@ import {
   shouldAutoEnterVideoShorts,
   videoDetailsIntentForKey,
   videoDetailsNavigationState,
+  videoFrameHintFromState,
   videoOriginalUrl,
   videoShortsEntryNavigationState,
   videoPlayPath,
 } from "./videoRoute";
 import { shortsPath } from "@/features/shorts/shortsFeed";
+import { ShortsStageSkeleton } from "@/features/shorts/ShortsStageSkeleton";
+import { videoDimensionAspect } from "@/shared/videoDimension";
 import { navigateBackFromVideo, navigateToVideoHome } from "./videoHomeNavigation";
 import {
   dedupeVideoItems,
@@ -769,6 +772,14 @@ function VideoPlayerPageContent() {
     videoKeyRef.current = videoKey;
   }, [videoKey]);
   const frameAspectRatio = frameSize?.key === videoKey ? frameSize.ratio : null;
+  /**
+   * 列表卡片带来的画幅先验。
+   *
+   * 只用于在媒体元数据到达前决定是否进入竖屏等待态；最终分流仍由
+   * `shouldAutoEnterVideoShorts` 核对详情、分 P 与画幅。没有先验的入口
+   * （搜索、历史等）保持原有行为。
+   */
+  const frameHintAspectRatio = videoFrameHintFromState(location.state, videoKey);
   const detailsResizeEnabled =
     mobileClient &&
     stackedDetails &&
@@ -1145,6 +1156,13 @@ function VideoPlayerPageContent() {
   // 结果返回，A→B 失败→重试时即使 query 再给 A 的 placeholder，也绝不播放 A。
   const switchingItem = Boolean(playInfoQuery.data && playInfoQuery.data.key !== videoKey);
   const playInfo: VideoPlayInfo | undefined = videoPlaybackForKey(playInfoQuery.data, videoKey);
+  /**
+   * 实际选中视频轨的宽高比。
+   *
+   * 它比列表先验更可靠，又比媒体元素的 `loadedmetadata` 更早：取流结果一到就能
+   * 判定竖画幅，不必等 `<video>` 挂载并解码首帧。
+   */
+  const streamAspectRatio = videoDimensionAspect(playInfo?.dimension);
   /** 自动恢复提交前核对当前 query 结果与媒体源，不能靠渲染闭包读旧值。 */
   useLayoutEffect(() => {
     playerSettingsRef.current = { playerRevision, qualityQn, audioOnly, videoKey };
@@ -2686,6 +2704,18 @@ function VideoPlayerPageContent() {
     ],
   );
 
+  /**
+   * 自动分流用的画幅：实测优先，其次取流结果里的实际视频轨，最后才是列表先验。
+   * 取流结果已经足够早，能在常规播放器挂载前完成判定；只有取流已落定但上游
+   * 没给轨尺寸时才退回列表先验，避免用列表元数据推翻实际流。
+   */
+  const autoEntryAspectRatio =
+    frameAspectRatio ??
+    streamAspectRatio ??
+    (playInfoQuery.isPending ? null : frameHintAspectRatio);
+  const blockedUploader = Boolean(
+    archiveQuery.data && blockedUploaders?.has(archiveQuery.data.author_mid?.trim() ?? ""),
+  );
   const autoEnterShorts = shouldAutoEnterVideoShorts({
     mobileClient,
     bvid,
@@ -2693,15 +2723,13 @@ function VideoPlayerPageContent() {
     epId,
     seasonId: params?.seasonId ?? null,
     archive: archiveQuery.data,
-    frameAspectRatio,
+    frameAspectRatio: autoEntryAspectRatio,
     audioOnly,
     videoKey,
     navigationState: location.state,
     // 显式打开被屏蔽 UP 的视频（屏蔽名单只影响推荐，不拦路）时留在详情：
     // 自动分流等于把这条内容又推了一次，正好违背用户屏蔽的意图。
-    blockedUploader: Boolean(
-      archiveQuery.data && blockedUploaders?.has(archiveQuery.data.author_mid?.trim() ?? ""),
-    ),
+    blockedUploader,
   });
   useEffect(() => {
     if (autoShortsKeyRef.current === videoKey) return;
@@ -2735,6 +2763,37 @@ function VideoPlayerPageContent() {
     setOverlayInteractionOpen(false);
     await enterShorts(false);
   }, [enterShorts, videoKey]);
+
+  /**
+   * 自动分流确认期间只画竖屏加载态。
+   *
+   * 取流结果能在媒体元数据之前判定画幅；在它与稿件详情落定前，常规播放页只会
+   * 先画出一个还没定形的播放器，随后再跳到短视频。这里保持黑场与返回入口，等
+   * `autoEnterShorts` 成立后直接 `replace`，不再挂载常规播放器。
+   *
+   * 覆盖所有移动端单 P UGC 入口，而不只依赖列表画幅先验：横画幅只是一次短暂的
+   * 加载等待，竖画幅则不会闪现普通界面。详情落定后若是多 P、被屏蔽或取流失败，
+   * 条件随之消失，页面回到正常播放/错误界面，不会卡在黑场。
+   */
+  const shortsEntryPending =
+    mobileClient &&
+    !audioOnly &&
+    !params?.epId &&
+    !params?.seasonId &&
+    !videoDetailsIntentForKey(location.state, videoKey) &&
+    !blockedUploader &&
+    (archiveQuery.isPending ||
+      (archiveQuery.data?.pages.length === 0 &&
+        (autoEnterShorts || (cid > 0 && !playInfo && !playInfoQuery.isError))));
+
+  if (shortsEntryPending) {
+    return (
+      <div className="relative h-full min-h-0 bg-black">
+        <PlayerLoadingBackButton label="返回视频列表" onClick={goBack} />
+        <ShortsStageSkeleton label="正在进入短视频…" />
+      </div>
+    );
+  }
 
   const title = params?.title || "视频播放";
 

@@ -216,6 +216,14 @@ export type VideoPlayInfo = {
   session_ids: VideoSessionIds;
   /** 仅音频模式（听视频）：不合成 MPD，`audio_url` 交给原生媒体元素播；`mpd_url`、`video_url` 为空。 */
   audio_only: boolean;
+  /**
+   * 实际选中视频轨的显示尺寸，来自 playurl 的 `dash.video[]`。
+   *
+   * 比 `<video>` 的首帧元数据更早可用，移动端自动分流据此在挂载常规播放器前
+   * 判定竖画幅。上游未给尺寸时为 `null`；仅音频模式也可能带出视频轨尺寸，
+   * 自动入口本身会排除该模式。旧缓存可能缺省。
+   */
+  dimension?: VideoDimension | null;
 };
 
 /** play-info 请求参数，镜像 Rust `VideoPlayRequest`。 */

@@ -191,6 +191,12 @@ pub struct VideoPlayInfo {
     /// 仅音频模式（听视频）：不走 DASH——音轨 fMP4 是完整文件，前端把
     /// `audio_url`（代理转发 Range）直接交给媒体元素播放，`video_url` 为空串。
     pub audio_only: bool,
+    /// 实际选中视频轨的显示尺寸。
+    ///
+    /// 来自 playurl 的 `dash.video[]`，比媒体元素的首帧元数据更早可用；移动端
+    /// 因此能在挂载常规播放器前判定竖画幅并自动接续短视频。上游未给尺寸时为
+    /// `None`；仅音频模式也可能带出视频轨尺寸，自动入口本身会排除该模式。
+    pub dimension: Option<VideoDimension>,
 }
 
 /// DLNA 投屏源：html5 playurl 返回的 MP4 直链（电视经中继可直连）。

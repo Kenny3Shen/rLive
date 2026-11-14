@@ -20,6 +20,7 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { notify } from "@/components/ui/toast";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { videoDimensionAspect } from "@/shared/videoDimension";
 import { formatOnline, cn } from "@/lib/utils";
 import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import {
@@ -45,7 +46,7 @@ import {
   type PlaylistUploader,
 } from "./playlistStore";
 import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
-import { videoPlayPath } from "./videoRoute";
+import { videoFrameHintNavigationState, videoPlayPath } from "./videoRoute";
 
 /**
  * 视频卡片。
@@ -97,6 +98,14 @@ export const VideoCard = memo(function VideoCard({
   const playPath = playable
     ? videoPlayPath({ bvid: item.bvid, cid: item.cid ?? null, title: item.title, aid: item.aid })
     : null;
+  const frameAspectRatio = videoDimensionAspect(item.dimension);
+  const frameHint =
+    playPath && item.cid && item.cid > 0 && frameAspectRatio !== null
+      ? videoFrameHintNavigationState({
+          videoKey: `${item.bvid}:${item.cid}`,
+          frameAspectRatio,
+        })
+      : undefined;
   const preview = useVideoCardPreview({ bvid: item.bvid, cid: item.cid });
   const playListId = `${item.bvid}_${item.cid ?? 0}`;
   // 屏蔽 UP 主按 UID 精确匹配，条目缺失 UID 时这项操作无处可落（昵称不能当身份），
@@ -154,7 +163,7 @@ export const VideoCard = memo(function VideoCard({
         .setPlaylist([...playlist], playListId, playlistKind, playlistUploader);
     }
     onNavigate?.();
-    navigate(playPath);
+    navigate(playPath, frameHint ? { state: frameHint } : undefined);
   }
 
   // 三个分支（无 UID / 触摸端 / 桌面端）共用同一套属性，避免三份漂移。

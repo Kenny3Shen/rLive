@@ -6,6 +6,8 @@ import {
   shouldAutoEnterVideoShorts,
   videoDetailsIntentForKey,
   videoDetailsNavigationState,
+  videoFrameHintFromState,
+  videoFrameHintNavigationState,
   videoPlayPath,
   videoShortsEntryFromState,
   videoShortsEntryNavigationState,
@@ -179,6 +181,37 @@ describe("按内容键绑定的详情意图", () => {
     } finally {
       router.dispose();
     }
+  });
+});
+
+describe("列表画幅先验", () => {
+  test("按内容键保留其他 route state，并只返回当前内容的先验", () => {
+    const state = videoFrameHintNavigationState(
+      { videoKey, frameAspectRatio: 9 / 16 },
+      { source: "feed" },
+    );
+    expect(state).toEqual({
+      source: "feed",
+      videoFrameHint: { videoKey, frameAspectRatio: 9 / 16 },
+    });
+    expect(videoFrameHintFromState(state, videoKey)).toBeCloseTo(9 / 16);
+    expect(videoFrameHintFromState(state, `${bvid}:43`)).toBeNull();
+  });
+
+  test.each([
+    undefined,
+    null,
+    {},
+    { videoFrameHint: null },
+    { videoFrameHint: [] },
+    { videoFrameHint: { videoKey, frameAspectRatio: 0 } },
+    { videoFrameHint: { videoKey, frameAspectRatio: -1 } },
+    { videoFrameHint: { videoKey, frameAspectRatio: NaN } },
+    { videoFrameHint: { videoKey, frameAspectRatio: Infinity } },
+    { videoFrameHint: { videoKey: "", frameAspectRatio: 9 / 16 } },
+    { videoFrameHint: { videoKey, frameAspectRatio: "0.5" } },
+  ])("形状不合法时视为没有先验：%s", (state) => {
+    expect(videoFrameHintFromState(state, videoKey)).toBeNull();
   });
 });
 
