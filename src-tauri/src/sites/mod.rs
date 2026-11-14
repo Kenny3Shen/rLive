@@ -1,3 +1,4 @@
+pub mod acfun;
 pub mod bilibili;
 pub(crate) mod cookie;
 pub mod douyin;

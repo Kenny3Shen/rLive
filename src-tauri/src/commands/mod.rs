@@ -1,4 +1,5 @@
 pub mod account;
+pub mod acfun;
 pub mod android_navigation;
 pub mod android_player_controls;
 pub mod android_system_bars;

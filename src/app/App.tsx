@@ -30,6 +30,9 @@ import {
   loadVideoDownloadPlaybackPage,
   loadVideoPlayerPage,
   loadVideoSearchPage,
+  loadAcfunArticlePage,
+  loadAcfunSearchPage,
+  loadAcfunVideoPage,
   loadShortsPage,
 } from "./routeModules";
 import { legacyRecordingsRedirect, legacyVideoDownloadRedirect } from "./legacyFollowRoutes";
@@ -55,6 +58,9 @@ const VideoPage = lazy(loadVideoPage);
 const VideoPlayerPage = lazy(loadVideoPlayerPage);
 const VideoDownloadPlaybackPage = lazy(loadVideoDownloadPlaybackPage);
 const VideoSearchPage = lazy(loadVideoSearchPage);
+const AcfunVideoPage = lazy(loadAcfunVideoPage);
+const AcfunArticlePage = lazy(loadAcfunArticlePage);
+const AcfunSearchPage = lazy(loadAcfunSearchPage);
 const ShortsPage = lazy(loadShortsPage);
 const RoomPage = lazy(loadRoomPage);
 
@@ -108,6 +114,9 @@ const router = createBrowserRouter(
         {/* 播放页在前：React Router 不会把 `/video/play` 误匹配到 `/video`，
             但两条相邻声明让「发现页 vs 播放页」的关系一眼可读。 */}
         <Route path="video/play" element={<VideoPlayerPage />} />
+        <Route path="video/acfun/play" element={<AcfunVideoPage />} />
+        <Route path="video/acfun/article/:articleId" element={<AcfunArticlePage />} />
+        <Route path="video/acfun/search" element={<AcfunSearchPage />} />
         <Route path="video/download/play/:id" element={<VideoDownloadPlaybackPage />} />
         <Route path="video/search" element={<VideoSearchPage />} />
         <Route path="video" loader={legacyVideoDownloadRedirect} element={<VideoPage />} />

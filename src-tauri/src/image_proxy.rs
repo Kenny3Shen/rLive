@@ -1,6 +1,6 @@
 //! 本机 HTTP 代理，为 WebView 的图片加载附加 CDN 所需的 Referer / UA 请求头。
 //!
-//! Bilibili / 斗鱼 / 虎牙 / 抖音的图片 CDN 会拒绝缺少平台 Referer 的请求，
+//! 平台图片 CDN 可能拒绝缺少平台 Referer 的请求，
 //! 而 WebView 无法为 `<img>` 标签附加它。前端把远程图片 URL 经这个回环服务器
 //! 转发，由其带上相应请求头，并以显式 `Content-Length` 返回完整 body
 //! （Windows WebView 对小图片的分块响应处理有误）。
@@ -39,6 +39,10 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
     "jtvnw.net",
     "twitch.tv",
     "7tv.app",
+    "acfun.cn",
+    "aixifan.com",
+    "yximgs.com",
+    "kwimgs.com",
 ];
 
 const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -181,6 +185,12 @@ fn referer_for(host: &str) -> Option<&'static str> {
         || host.ends_with("byteimg.com")
     {
         Some("https://www.douyin.com/")
+    } else if host.ends_with("acfun.cn")
+        || host.ends_with("aixifan.com")
+        || host.ends_with("yximgs.com")
+        || host.ends_with("kwimgs.com")
+    {
+        Some("https://www.acfun.cn/")
     } else {
         None
     }
@@ -503,6 +513,14 @@ mod tests {
             ALLOWED_IMAGE_HOSTS
         ));
         assert!(host_is_allowed("static-cdn.jtvnw.net", ALLOWED_IMAGE_HOSTS));
+        assert!(host_is_allowed("imgs.aixifan.com", ALLOWED_IMAGE_HOSTS));
+        assert!(host_is_allowed(
+            "tx-free-imgs.acfun.cn",
+            ALLOWED_IMAGE_HOSTS
+        ));
+        assert!(host_is_allowed("p4.a.yximgs.com", ALLOWED_IMAGE_HOSTS));
+        assert!(host_is_allowed("hw2.a.kwimgs.com", ALLOWED_IMAGE_HOSTS));
+        assert!(!host_is_allowed("acfun.cn.evil.com", ALLOWED_IMAGE_HOSTS));
         assert!(!host_is_allowed("example.com", ALLOWED_IMAGE_HOSTS));
         assert!(!host_is_allowed("evil-hdslb.com", ALLOWED_IMAGE_HOSTS));
         assert!(!host_is_allowed(
@@ -526,6 +544,14 @@ mod tests {
             Some("https://live.bilibili.com/")
         );
         assert_eq!(referer_for("static-cdn.jtvnw.net"), None);
+        for host in [
+            "imgs.aixifan.com",
+            "tx-free-imgs.acfun.cn",
+            "p4.a.yximgs.com",
+            "hw2.a.kwimgs.com",
+        ] {
+            assert_eq!(referer_for(host), Some("https://www.acfun.cn/"));
+        }
     }
 
     #[test]

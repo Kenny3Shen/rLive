@@ -92,6 +92,24 @@ export const loadVideoSearchPage = createCachedRouteLoader(() =>
   })),
 );
 
+export const loadAcfunVideoPage = createCachedRouteLoader(() =>
+  import("../features/acfun/AcfunVideoPage").then(({ AcfunVideoPage }) => ({
+    default: AcfunVideoPage,
+  })),
+);
+
+export const loadAcfunArticlePage = createCachedRouteLoader(() =>
+  import("../features/acfun/AcfunArticlePage").then(({ AcfunArticlePage }) => ({
+    default: AcfunArticlePage,
+  })),
+);
+
+export const loadAcfunSearchPage = createCachedRouteLoader(() =>
+  import("../features/acfun/AcfunSearch").then(({ AcfunSearchPage }) => ({
+    default: AcfunSearchPage,
+  })),
+);
+
 export const loadVideoDownloadPlaybackPage = createCachedRouteLoader(() =>
   import("../features/video/VideoDownloadPlaybackPage").then(({ VideoDownloadPlaybackPage }) => ({
     default: VideoDownloadPlaybackPage,
@@ -110,6 +128,7 @@ const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadFollowPage,
   loadVideoPage,
   loadVideoSearchPage,
+  loadAcfunSearchPage,
   loadHistoryPage,
   loadIptvPlayerPage,
   loadSettingsPage,
@@ -118,6 +137,8 @@ const IDLE_ROUTE_MODULE_LOADERS: readonly RouteModuleLoader[] = [
   loadShortsPage,
   loadVideoDownloadPlaybackPage,
   loadVideoPlayerPage,
+  loadAcfunArticlePage,
+  loadAcfunVideoPage,
   loadRoomPage,
 ];
 
@@ -156,6 +177,9 @@ export function routeModuleLoaderForPath(target: string): RouteModuleLoader | nu
   // 播放页在前：`/video` 是它的前缀，顺序颠倒会让播放页命中发现页的 loader。
   if (pathname === "/video/play") return loadVideoPlayerPage;
   if (pathname === "/video/search") return loadVideoSearchPage;
+  if (pathname === "/video/acfun/play") return loadAcfunVideoPage;
+  if (pathname === "/video/acfun/search") return loadAcfunSearchPage;
+  if (pathname.startsWith("/video/acfun/article/")) return loadAcfunArticlePage;
   if (pathname.startsWith("/video/download/play/")) return loadVideoDownloadPlaybackPage;
   if (pathname === "/video") {
     return legacyVideoDownloadRedirectTarget(url.search) ? loadFollowPage : loadVideoPage;

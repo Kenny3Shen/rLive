@@ -14,6 +14,7 @@ export const LIVE_SITE_IDS = [
   "huya",
   "douyin",
   "twitch",
+  "acfun",
 ] as const satisfies readonly SiteId[];
 
 const SITE_IDS = new Set<SiteId>(LIVE_SITE_IDS);

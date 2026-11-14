@@ -19,6 +19,10 @@ const PROXIED_HOST_SUFFIXES = [
   "jtvnw.net",
   "twitch.tv",
   "7tv.app",
+  "acfun.cn",
+  "aixifan.com",
+  "yximgs.com",
+  "kwimgs.com",
 ];
 
 let proxyBase: string | null = null;

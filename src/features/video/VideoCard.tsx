@@ -1,8 +1,8 @@
 import { memo } from "react";
-import type { ComponentProps, RefObject } from "react";
+import type { ComponentProps } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Download, MessageSquareText, Play, UserRoundX } from "lucide-react";
+import { Download, MessageSquareText, Play, UserRoundX } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { Spinner } from "@/components/ui/spinner";
@@ -20,9 +20,15 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { notify } from "@/components/ui/toast";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
-import { formatOnline, normalizeVideoCoverUrl, cn } from "@/lib/utils";
-import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
+import { formatOnline, cn } from "@/lib/utils";
 import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
+import {
+  MEDIA_CARD_BADGE_CLASS,
+  MEDIA_CARD_CLASS,
+  MediaCardCover,
+  MediaCardMetrics,
+  MediaCardText,
+} from "@/shared/components/MediaCard";
 import type { PgcItem, VideoItem } from "@/shared/types/video";
 import { useVideoCardPreview } from "./videoCardPreview";
 import { videoGetArchive } from "./videoApi";
@@ -53,94 +59,6 @@ import { videoPlayPath } from "./videoRoute";
  * （与直播卡同一套 `useLongPressDrawer` 接线）。屏蔽按 UID 精确匹配，因此条目
  * 没有 UID 时（老缓存、上游未下发）不提供这个入口 —— 点了没反应比没有入口更糟。
  */
-
-// 卡片自带底色与细描边（表面定义见 `shared/components/cardSurface.ts`，与直播
-// `RoomCard`、关注页卡片共用）：网格里相邻卡片只隔 12px，透明卡片的边界完全
-// 由封面撑出，标题与下一张封面之间读不出归属。
-//
-// 底色从封面自然向下延伸：封面满幅占住卡片顶部，卡片的圆角与描边正好落在封面边缘，
-// 于是读作封面自己的边界继续包住下面的文字，而不是把封面又套进一层内边距。因此
-// 外壳不带 padding，圆角/描边/投影整体上移到外壳 —— 原先挂在封面上的那一圈若留着，
-// 会在卡片边界内侧再画一道，读成两层边框。
-// 行式卡片是例外：文本块高于 16:9 缩略图且垂直居中，缩略图无法满幅，仍走内边距画法。
-const CARD_CLASS = cn(
-  "group flex w-full flex-col overflow-hidden rounded-xl text-left",
-  CARD_SURFACE_CLASS,
-  CARD_SURFACE_HOVER_CLASS,
-);
-const COVER_CLASS = "relative aspect-video w-full overflow-hidden bg-muted";
-const COVER_IMAGE_CLASS =
-  "absolute inset-0 h-full w-full object-cover transition-transform duration-200 ease-[var(--motion-ease-out)] motion-reduced:transition-none";
-// 封面角标分两类，视觉上不能混：
-//
-// - `COVER_METRIC_CLASS`（播放/弹幕/时长）：事实数字，**无底色**，靠 `text-shadow-cover`
-//   投影把白字从任意封面上拉出来（见 styles.css）。曾经用 `bg-black/65` 药丸：底排
-//   三个角标各自一块黑块，读起来比封面本身还重，在深色封面上又几乎看不出边界。
-// - `BADGE_CLASS`（推荐理由）：平台给的运营标签，需要读作「一块标签」而不是一个数字，
-//   保留药丸底色与圆角。
-const COVER_METRIC_CLASS =
-  "inline-flex items-center gap-1.5 text-[11px] font-medium text-white tabular-nums text-shadow-cover";
-const BADGE_CLASS =
-  "absolute inline-flex items-center gap-0.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm";
-
-/**
- * 卡片封面，固定 16:9。
- *
- * 与直播 `RoomCard` 同一比例：VOD 网格现在也是等宽等高卡片（与直播首页同一套
- * 列数与间距，见 `shared/components/cardGrid.ts`），封面若跟随源画幅，横竖混排
- * 时同一行卡片高度参差、标题行基线对不齐。竖屏稿件因此在这里被裁成 16:9 ——
- * 列表只需要认出这条内容，完整画幅留给播放页与竖屏流。
- *
- * `overlay` 里放角标，它们自己带绝对定位，因此堆在渐变之上。
- * `previewMount` / `previewLoading` 由 UGC 卡片传入（悬停预览，见
- * `videoCardPreview.ts`）；PGC 卡片不悬停预览（列表没有取流键，season 解析
- * 在播放页，悬停阶段无从取流），不传。
- */
-function CoverImage({
-  cover,
-  overlay,
-  previewMount,
-  previewLoading,
-  className,
-}: {
-  cover: string;
-  overlay?: React.ReactNode;
-  previewMount?: RefObject<HTMLDivElement | null>;
-  previewLoading?: boolean;
-  className?: string;
-}) {
-  const normalized = normalizeVideoCoverUrl(cover);
-  return (
-    <div data-slot="video-card-cover" className={cn(COVER_CLASS, className)}>
-      {normalized ? (
-        <img
-          src={normalized}
-          alt=""
-          loading="lazy"
-          decoding="sync"
-          className={COVER_IMAGE_CLASS}
-          referrerPolicy="no-referrer"
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-          暂无封面
-        </div>
-      )}
-      {/* 预览盖在封面之上、渐变与角标之下（与直播卡同序）；挂载点不接收
-          指针事件，悬停与点击始终落在卡片按钮上。 */}
-      {previewMount && (
-        <div ref={previewMount} aria-hidden className="pointer-events-none absolute inset-0" />
-      )}
-      {previewLoading && (
-        <span className="pointer-events-none absolute left-2 top-2 inline-flex rounded-md bg-black/65 p-1 text-white backdrop-blur-sm">
-          <Spinner className="size-3" />
-        </span>
-      )}
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent opacity-80" />
-      {overlay}
-    </div>
-  );
-}
 
 export const VideoCard = memo(function VideoCard({
   item,
@@ -255,7 +173,7 @@ export const VideoCard = memo(function VideoCard({
     disabled: !playable,
     "aria-label": `${item.title}，UP 主 ${item.author}，时长 ${formatVideoDuration(item.duration)}`,
     className: cn(
-      CARD_CLASS,
+      MEDIA_CARD_CLASS,
       // row 下缩略图与文本块垂直居中：侧栏里三行文本高于 16:9 封面，
       // 顶对齐会在封面下方留一段空白。缩略图因此不满幅，用内边距把它收进卡片。
       orientation === "row" && "flex-row items-center gap-2.5 p-1.5",
@@ -265,7 +183,7 @@ export const VideoCard = memo(function VideoCard({
 
   const cardBody = (
     <>
-      <CoverImage
+      <MediaCardCover
         cover={item.cover}
         // 封面按列宽取比例而不是固定 w-40:侧栏只有 300px,固定宽度会把文本列
         // 挤到 90 px 出头，标题每行只剩几个字。行式缩略图不贴卡片边，自带圆角与描边。
@@ -281,72 +199,39 @@ export const VideoCard = memo(function VideoCard({
             {item.rcmd_reason && (
               <span
                 data-mobile-static-backdrop
-                className={cn(BADGE_CLASS, "left-2 top-2 max-w-[70%] truncate")}
+                className={cn(MEDIA_CARD_BADGE_CLASS, "left-2 top-2 max-w-[70%] truncate")}
               >
                 {item.rcmd_reason}
               </span>
             )}
             {orientation === "grid" ? (
-              // 播放/弹幕搬到封面左下、与右下时长同一排：卡片少一行文字，
-              // 统计也贴着封面读。行式卡的缩略图只有 2/5 列宽，放不下这一排，
-              // 统计仍留在文本块第三行（见下方）。
-              //
-              // 播放与弹幕之间不用竖线：三个角标都无底色，竖线会成为这一排里最重的
-              // 一道黑，反而把两个数字拆成两件事；用固定间距分组更轻、也更好读。
-              //
-              // 窄卡（xl 六列约 184px）遇上两个六位数统计会超宽：统计可收缩，
-              // 两个数字各自 ellipsis，时长固定不缩 —— 宁肯截尾也不把时长挤出封面。
-              <div className="absolute inset-x-2 bottom-2 flex items-center justify-between gap-2">
-                <span className={cn(COVER_METRIC_CLASS, "min-w-0 gap-2")}>
-                  <span className="inline-flex min-w-0 items-center gap-0.5">
-                    <Play className="size-3 shrink-0" aria-hidden />
-                    <span className="min-w-0 truncate">{formatOnline(item.view)}</span>
-                  </span>
-                  <span className="inline-flex min-w-0 items-center gap-0.5">
-                    <MessageSquareText className="size-3 shrink-0" aria-hidden />
-                    <span className="min-w-0 truncate">{formatOnline(item.danmaku)}</span>
-                  </span>
-                </span>
-                <span className={cn(COVER_METRIC_CLASS, "shrink-0")}>
-                  {formatVideoDuration(item.duration)}
-                </span>
-              </div>
+              <MediaCardMetrics
+                stats={
+                  <>
+                    <span className="inline-flex min-w-0 items-center gap-0.5">
+                      <Play className="size-3 shrink-0" aria-hidden />
+                      <span className="min-w-0 truncate">{formatOnline(item.view)}</span>
+                    </span>
+                    <span className="inline-flex min-w-0 items-center gap-0.5">
+                      <MessageSquareText className="size-3 shrink-0" aria-hidden />
+                      <span className="min-w-0 truncate">{formatOnline(item.danmaku)}</span>
+                    </span>
+                  </>
+                }
+                duration={formatVideoDuration(item.duration)}
+              />
             ) : (
-              <span className={cn(COVER_METRIC_CLASS, "absolute bottom-2 right-2 shrink-0")}>
-                {formatVideoDuration(item.duration)}
-              </span>
+              <MediaCardMetrics duration={formatVideoDuration(item.duration)} />
             )}
           </>
         }
       />
-      <div
-        className={cn(
-          "flex min-w-0 flex-1 flex-col gap-0.5",
-          orientation === "row" ? "py-0.5 pr-0.5" : "px-2 pt-2 pb-2.5",
-        )}
+      <MediaCardText
+        title={item.title}
+        date={showPubdate && item.pubdate > 0 ? formatRelativeTime(item.pubdate) : null}
+        author={showAuthor ? item.author : null}
+        className={orientation === "row" ? "py-0.5 pr-0.5" : undefined}
       >
-        {/* 标题固定两行；第二行发布日期（竖线接 UP 主，投稿抽屉隐藏）。播放与弹幕
-            只在行式卡留在这里：网格卡已把它们搬到封面左下、与时长同一排。 */}
-        <p className="line-clamp-2 min-h-[2lh] text-[13px] font-medium leading-snug text-foreground">
-          {item.title}
-        </p>
-        <p className="flex min-h-4 min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/85">
-          {showPubdate && item.pubdate > 0 && (
-            <>
-              {/* 日期不参与压缩：长 UP 主名会把可压缩的日期挤成「3 …」。 */}
-              <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap">
-                <CalendarDays className="size-3" aria-hidden />
-                {formatRelativeTime(item.pubdate)}
-              </span>
-              {showAuthor && (
-                <span aria-hidden className="shrink-0 text-border">
-                  |
-                </span>
-              )}
-            </>
-          )}
-          {showAuthor && <span className="min-w-0 truncate">{item.author}</span>}
-        </p>
         {orientation === "row" && (
           <p className="flex min-h-4 items-center gap-1.5 text-[11px] text-muted-foreground/85">
             <span className="inline-flex items-center gap-0.5">
@@ -368,7 +253,7 @@ export const VideoCard = memo(function VideoCard({
             </span>
           </p>
         )}
-      </div>
+      </MediaCardText>
     </>
   );
 
@@ -510,26 +395,22 @@ export const PgcCard = memo(function PgcCard({ item }: { item: PgcItem }) {
       onPointerEnter={() => preloadRouteModule(playPath)}
       onFocus={() => preloadRouteModule(playPath)}
       onClick={() => navigate(playPath)}
-      className={CARD_CLASS}
+      className={MEDIA_CARD_CLASS}
     >
-      <CoverImage
+      <MediaCardCover
         cover={item.cover}
         overlay={
           item.badge ? (
-            <span data-mobile-static-backdrop className={cn(BADGE_CLASS, "left-2 top-2")}>
+            <span
+              data-mobile-static-backdrop
+              className={cn(MEDIA_CARD_BADGE_CLASS, "left-2 top-2")}
+            >
               {item.badge}
             </span>
           ) : null
         }
       />
-      <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2 pb-2.5">
-        {/* 标题固定两行（与 UGC 卡片同一档）：等宽网格里同排卡片必须等高，
-            短标题不占位会让这一行比其他行矮一截。 */}
-        <p className="line-clamp-2 min-h-[2lh] text-[13px] font-medium leading-snug text-foreground">
-          {item.title}
-        </p>
-        <p className="min-h-4 truncate text-xs text-muted-foreground">{item.index_show ?? ""}</p>
-      </div>
+      <MediaCardText title={item.title} author={item.index_show ?? null} />
     </button>
   );
 });

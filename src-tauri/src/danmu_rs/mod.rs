@@ -57,6 +57,7 @@ impl SelfDanmakuIdentity {
             // Bilibili 的浏览器 Cookie 有稳定的账号 mid，
             // 但通常不包含显示名。
             SiteId::Bilibili => (&["DedeUserID"], &["DedeUserName"]),
+            SiteId::Acfun => (&[], &[]),
             // 斗鱼的扫码／浏览器 Cookie 同时携带账号 uid 与显示名，
             // 因此当中继省略 uid 时名称仍然有用。
             SiteId::Douyu => (&["acf_uid", "uid"], &["acf_username"]),
@@ -885,6 +886,9 @@ pub async fn connect(
             );
             Ok(())
         }
+        SiteId::Acfun => Err(
+            AppError::new("danmaku_unsupported", "AcFun 弹幕将在后续版本接入").with_site("acfun"),
+        ),
         SiteId::Douyu => {
             let args = douyu::args_from_raw(room_id, detail_raw)?;
             let route = route.clone();

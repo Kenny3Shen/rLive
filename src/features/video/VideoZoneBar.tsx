@@ -31,11 +31,13 @@ export function VideoZoneBar({
   selectedKey,
   loading,
   onSelect,
+  ariaLabel = "视频分区",
 }: {
   chips: readonly VideoZoneChip[];
   selectedKey: string | null;
   loading: boolean;
   onSelect: (key: string) => void;
+  ariaLabel?: string;
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const contentKey = chips.map((chip) => chip.key).join("|");
@@ -62,7 +64,7 @@ export function VideoZoneBar({
           <div
             ref={stripRef}
             role="tablist"
-            aria-label="视频分区"
+            aria-label={ariaLabel}
             aria-orientation="horizontal"
             onKeyDown={(event) => handleStripArrowKeys(stripRef.current, event)}
             // 横向留给这条 strip，纵向仍归页面；同时声明成横滑手势的自有表面，

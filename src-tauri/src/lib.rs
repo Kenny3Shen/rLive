@@ -39,6 +39,12 @@ use commands::account::{
     account_get_cookie, account_get_profile, account_qr_login_cancel, account_qr_login_poll,
     account_qr_login_start, account_set_cookie,
 };
+use commands::acfun::{
+    acfun_article_get_channels, acfun_article_get_detail, acfun_article_get_feed,
+    acfun_article_search, acfun_video_get_detail, acfun_video_get_play_info,
+    acfun_video_get_recommend, acfun_video_get_section, acfun_video_get_sections,
+    acfun_video_search, acfun_video_stop_play,
+};
 #[cfg(target_os = "android")]
 use commands::android_navigation::AndroidNavigation;
 use commands::android_navigation::android_move_task_to_back;
@@ -444,6 +450,17 @@ pub fn run() {
             site_get_room_detail,
             site_get_play_qualities,
             site_get_play_urls,
+            acfun_video_get_sections,
+            acfun_video_get_recommend,
+            acfun_video_get_section,
+            acfun_video_search,
+            acfun_video_get_detail,
+            acfun_video_get_play_info,
+            acfun_video_stop_play,
+            acfun_article_get_channels,
+            acfun_article_get_feed,
+            acfun_article_search,
+            acfun_article_get_detail,
             history_list,
             history_add,
             history_clear,

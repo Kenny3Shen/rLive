@@ -114,6 +114,24 @@ export function SiteLogo({ siteId, className }: SiteLogoProps) {
           <path d="M18 15v11m8-11v11" stroke="white" strokeWidth="4" />
         </svg>
       );
+    case "acfun":
+      return (
+        <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">
+          <rect x="4" y="4" width="40" height="40" rx="13" fill="#FF5D00" />
+          <path
+            d="M14 33 21.8 15h4.4L34 33h-6l-1.4-4h-5.2L20 33h-6Zm8.7-9h2.6L24 20l-1.3 4Z"
+            fill="white"
+          />
+          <path
+            d="M11 11c4 2 7.5 2.5 13 2.5S33 13 37 11"
+            fill="none"
+            stroke="white"
+            strokeLinecap="round"
+            strokeWidth="2.5"
+            opacity=".72"
+          />
+        </svg>
+      );
     default:
       return (
         <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">

@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -21,10 +21,8 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Skeleton } from "@/components/ui/skeleton";
 import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
-import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
-import { cn } from "@/lib/utils";
+import { MediaCardSkeletonGrid } from "@/shared/components/MediaCard";
 import type { PgcItem, PgcListPage, VideoListPage, VideoZone } from "@/shared/types/video";
 import {
   videoGetPgcIndex,
@@ -53,6 +51,18 @@ import { useVideoTabScope } from "./videoTabScope";
 import { nextRecommendPage } from "./videoFeed";
 import { filterBlockedUploaders } from "./videoUploaderBlock";
 import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
+import {
+  acfunViewFromSearch,
+  ACFUN_VIEW_PARAM,
+  isAcfunSource,
+  VIDEO_SOURCE_PARAM,
+} from "@/features/acfun/acfunRoute";
+
+const AcfunBrowsePage = lazy(() =>
+  import("@/features/acfun/AcfunBrowsePage").then((module) => ({
+    default: module.AcfunBrowsePage,
+  })),
+);
 
 /** 分区列表未就绪时的稳定空值，避免每次渲染换一个数组引用。 */
 const EMPTY_ZONES: readonly VideoZone[] = [];
@@ -76,26 +86,6 @@ const PgcGrid = memo(function PgcGrid({ items }: { items: readonly PgcItem[] }) 
   );
 });
 
-function GridSkeleton() {
-  return (
-    <div className={CARD_GRID_CLASS} aria-hidden>
-      {Array.from({ length: 12 }).map((_, index) => (
-        // 骨架屏复制 VideoCard 的卡片表面：封面满幅顶到卡片边缘，文字区自带内边距。
-        <div
-          key={index}
-          className={cn("flex flex-col overflow-hidden rounded-xl", CARD_SURFACE_CLASS)}
-        >
-          <Skeleton className="aspect-video w-full rounded-none" />
-          <div className="flex flex-col gap-2 px-2 pt-2 pb-2.5">
-            <Skeleton className="h-3.5 w-4/5" />
-            <Skeleton className="h-3 w-1/2" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /**
  * `/video` 发现页。
  *
@@ -107,6 +97,24 @@ function GridSkeleton() {
  * 的直入解析层），不再弹分集选择。
  */
 export function VideoPage() {
+  const [searchParams] = useSearchParams();
+  if (isAcfunSource(searchParams.get(VIDEO_SOURCE_PARAM))) {
+    return (
+      <Suspense
+        fallback={
+          <div className="flex min-h-40 items-center justify-center" role="status">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" aria-label="正在加载" />
+          </div>
+        }
+      >
+        <AcfunBrowsePage view={acfunViewFromSearch(searchParams.get(ACFUN_VIEW_PARAM))} />
+      </Suspense>
+    );
+  }
+  return <BilibiliVideoPage />;
+}
+
+function BilibiliVideoPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const scope = useVideoTabScope();
   const tab = scope?.tab ?? videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
@@ -251,7 +259,7 @@ export function VideoPage() {
           />
         )}
 
-        {listQuery.isLoading && <GridSkeleton />}
+        {listQuery.isLoading && <MediaCardSkeletonGrid />}
 
         {listQuery.isError && itemCount === 0 && (
           <ErrorState

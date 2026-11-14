@@ -55,6 +55,12 @@ import { videoSelectionCount } from "./videoSelectionCount";
 import { VideoCard } from "./VideoCard";
 import { videoGetArchive, videoGetOnlineTotal, videoGetRelated, videoGetSeason } from "./videoApi";
 import { formatDateTime, formatVideoDuration } from "./videoHistory";
+import {
+  VIDEO_DETAILS_INFO_CARD_CLASS,
+  VIDEO_DETAILS_SIDEBAR_CARD_CLASS,
+  VIDEO_DETAILS_SIDEBAR_STACK_CLASS,
+  VIDEO_DETAILS_SELECTION_TRIGGER_CLASS,
+} from "@/shared/components/videoDetailsSidebar";
 import { videoPlayPath, videoSearchPath } from "./videoRoute";
 import {
   dedupeVideoItems,
@@ -92,7 +98,7 @@ import {
  * 与页签栏的距离因此和其他缝宽一致。
  */
 function SidebarCardStack({ children }: { children: ReactNode }) {
-  return <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-4">{children}</div>;
+  return <div className={VIDEO_DETAILS_SIDEBAR_STACK_CLASS}>{children}</div>;
 }
 
 /**
@@ -141,7 +147,7 @@ function UpCardSkeleton() {
       // 与真卡一致：不自行带内外边距（间距由 `SidebarCardStack` 给）、不带下分割线。
       className="shrink-0"
     >
-      <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
+      <div className={VIDEO_DETAILS_INFO_CARD_CLASS}>
         <div className="flex min-w-0 items-start gap-2.5 pr-16">
           {/* 头像按 `Avatar size="lg"` 的实际渲染尺寸（40px）：真卡的 `size-11`
               与 `data-[size=lg]:size-10` 同时存在时后者胜出，因此量到的是 40。 */}
@@ -376,10 +382,7 @@ function SelectionSection({
       render={
         <section
           data-slot="video-selection-card"
-          className={cn(
-            "shrink-0 overflow-hidden rounded-xl border border-border-subtle bg-card/75 shadow-sm",
-            className,
-          )}
+          className={cn("shrink-0 overflow-hidden", VIDEO_DETAILS_SIDEBAR_CARD_CLASS, className)}
         />
       }
       aria-label={title ? `${label}：${title}` : label}
@@ -387,11 +390,7 @@ function SelectionSection({
       <h3>
         <CollapsibleTrigger
           render={
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-auto w-full min-w-0 justify-start gap-2 rounded-none bg-clip-border px-3 py-2"
-            />
+            <Button variant="ghost" size="sm" className={VIDEO_DETAILS_SELECTION_TRIGGER_CLASS} />
           }
         >
           <ChevronDown
@@ -1071,7 +1070,7 @@ export function VideoSidebar({
             render={<section className="shrink-0" />}
             aria-label={`UP 主信息：${archive.author}`}
           >
-            <div className="overflow-hidden rounded-xl border border-border-subtle bg-card/75 px-2.5 py-2 shadow-sm">
+            <div className={VIDEO_DETAILS_INFO_CARD_CLASS}>
               {/* 右侧 pr-12 是关注按钮位，只留在头像+名称行， */}
               {/* 不影响下方标题行与统计行的可用宽度。 */}
               <div className="relative flex min-w-0 items-start gap-2.5 pr-12">

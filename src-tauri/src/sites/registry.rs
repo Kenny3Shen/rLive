@@ -1,6 +1,7 @@
 use crate::error::AppResult;
 use crate::http_client;
 use crate::models::live::SiteId;
+use crate::sites::acfun::AcfunSite;
 use crate::sites::bilibili::BilibiliSite;
 use crate::sites::douyin::DouyinSite;
 use crate::sites::douyu::DouyuSite;
@@ -20,6 +21,10 @@ pub fn all_meta() -> Vec<SiteMeta> {
         SiteMeta {
             id: SiteId::Bilibili,
             name: "Bilibili",
+        },
+        SiteMeta {
+            id: SiteId::Acfun,
+            name: "AcFun",
         },
         SiteMeta {
             id: SiteId::Huya,
@@ -62,6 +67,7 @@ fn site_with_client(
             let cookie = cookie.unwrap_or_default();
             Ok(Box::new(BilibiliSite::new(client, cookie)))
         }
+        SiteId::Acfun => Ok(Box::new(AcfunSite::new(client))),
         SiteId::Huya => Ok(Box::new(HuyaSite::new(client, cookie.unwrap_or_default()))),
         SiteId::Douyu => Ok(Box::new(DouyuSite::new_with_cookie(
             client,
@@ -80,8 +86,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_has_five_sites() {
-        assert_eq!(all_meta().len(), 5);
+    fn registry_has_six_sites() {
+        assert_eq!(all_meta().len(), 6);
     }
 
     #[test]

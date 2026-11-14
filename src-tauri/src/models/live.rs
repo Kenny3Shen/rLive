@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum SiteId {
     Bilibili,
+    Acfun,
     Huya,
     Douyu,
     Douyin,
@@ -15,6 +16,7 @@ impl SiteId {
     pub fn as_str(&self) -> &'static str {
         match self {
             SiteId::Bilibili => "bilibili",
+            SiteId::Acfun => "acfun",
             SiteId::Huya => "huya",
             SiteId::Douyu => "douyu",
             SiteId::Douyin => "douyin",
@@ -25,6 +27,7 @@ impl SiteId {
     pub fn from_str_loose(s: &str) -> Option<SiteId> {
         match s {
             "bilibili" => Some(SiteId::Bilibili),
+            "acfun" => Some(SiteId::Acfun),
             "huya" => Some(SiteId::Huya),
             "douyu" => Some(SiteId::Douyu),
             "douyin" => Some(SiteId::Douyin),
@@ -425,6 +428,8 @@ mod tests {
     fn site_id_serializes_snake() {
         let s = serde_json::to_string(&SiteId::Bilibili).unwrap();
         assert_eq!(s, "\"bilibili\"");
+        let s = serde_json::to_string(&SiteId::Acfun).unwrap();
+        assert_eq!(s, "\"acfun\"");
     }
 
     #[test]

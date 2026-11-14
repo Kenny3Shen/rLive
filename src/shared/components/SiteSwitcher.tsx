@@ -15,9 +15,17 @@ const FALLBACK_SITES: SiteInfo[] = [
   { id: "huya", name: "Huya" },
   { id: "douyin", name: "Douyin" },
   { id: "twitch", name: "Twitch" },
+  { id: "acfun", name: "AcFun" },
 ];
 
-const PLATFORM_ORDER: readonly SiteId[] = ["bilibili", "douyu", "huya", "douyin", "twitch"];
+const PLATFORM_ORDER: readonly SiteId[] = [
+  "bilibili",
+  "douyu",
+  "huya",
+  "douyin",
+  "twitch",
+  "acfun",
+];
 
 const platformOrderIndex = new Map<SiteId, number>(
   PLATFORM_ORDER.map((siteId, index) => [siteId, index]),

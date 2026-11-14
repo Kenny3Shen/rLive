@@ -44,7 +44,7 @@ import {
   type MultiRoomCandidate,
 } from "./multiRoomStore";
 
-const SITE_OPTIONS: readonly SiteId[] = ["bilibili", "huya", "douyu", "douyin", "twitch"];
+const SITE_OPTIONS: readonly SiteId[] = ["bilibili", "huya", "douyu", "douyin", "twitch", "acfun"];
 
 type PickerCandidate = MultiRoomCandidate & {
   source: "follow" | "history";

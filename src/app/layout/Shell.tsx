@@ -38,6 +38,22 @@ import { recordingSupported } from "@/features/recording/recording";
 import { VideoTabSwitcher } from "@/features/video/VideoTabSwitcher";
 import { VideoTabScope } from "@/features/video/videoTabScope";
 import { VideoSearchBar } from "@/features/video/VideoSearchBar";
+import { AcfunContentSwitcher } from "@/features/acfun/AcfunContentSwitcher";
+import { AcfunSearchBar } from "@/features/acfun/AcfunSearchBar";
+import { AcfunSourceSwitcher } from "@/features/acfun/AcfunSourceSwitcher";
+import {
+  ACFUN_ARTICLE_PATH,
+  ACFUN_SEARCH_PATH,
+  ACFUN_VIEW_LABELS,
+  ACFUN_VIEWS,
+  ACFUN_VIEW_PARAM,
+  acfunArticleBackNavigation,
+  acfunHomePath,
+  acfunSearchPath,
+  acfunViewFromSearch,
+  isAcfunSource,
+  VIDEO_SOURCE_PARAM,
+} from "@/features/acfun/acfunRoute";
 import {
   VIDEO_HOME_PATH,
   VIDEO_PLAY_PATH,
@@ -101,6 +117,9 @@ import {
   shouldRestorePageScroll,
 } from "./pageScroll";
 import { prefetchHomeRecommendations } from "@/features/home/homeQuery";
+
+/** AcFun 由自身视频/文章页签切换内容，不需要 B 站的四面板横滑轨道。 */
+const ACFUN_VIDEO_SWIPE_PANELS = [VIDEO_TABS[0]] as const;
 
 function RouteLoadingFallback() {
   return (
@@ -223,6 +242,10 @@ export function Shell() {
   const isIptv = pathname === "/iptv";
   const isVideo = pathname === "/video";
   const isVideoSearch = pathname === "/video/search";
+  const isAcfunVideoHome = isVideo && isAcfunSource(searchParams.get(VIDEO_SOURCE_PARAM));
+  const isAcfunSearch = pathname === ACFUN_SEARCH_PATH;
+  const isAcfunArticle = pathname.startsWith(`${ACFUN_ARTICLE_PATH}/`);
+  const acfunView = acfunViewFromSearch(searchParams.get(ACFUN_VIEW_PARAM));
   const isImmersivePlayer = isImmersivePlayerPath(pathname);
   const isSearch = pathname === "/search";
   const isCategoryBrowse = pathname === CATEGORY_BROWSE_PATH;
@@ -350,9 +373,11 @@ export function Shell() {
   // 两个关注视图共用同一个内容容器，切换 直播/IPTV 页签时不会重新挂载
   // FollowPage、丢失其过渡状态。IPTV 关注分组的动画
   // 发生在 IptvFollowView 内部而不是这一层。
-  const useGroupedPageContainer = showSiteSwitcher || isFollow || isIptv || isVideo;
-  // 视频搜索页的头部槽位是查询条，同样需要这条头部（移动端否则整条隐藏）。
-  const showTopNavigation = useGroupedPageContainer || isHistory || isVideoSearch;
+  const useGroupedPageContainer =
+    showSiteSwitcher || isFollow || isIptv || isVideo || isAcfunSearch || isAcfunArticle;
+  // 文章阅读页只保留阅读区返回入口，不挂载 Shell 的统一头部。
+  const showTopNavigation =
+    (useGroupedPageContainer && !isAcfunArticle) || isHistory || isVideoSearch;
   const iptvSourceId = isIptv || isIptvFollow ? searchParams.get(FOLLOW_IPTV_SOURCE_PARAM) : null;
   const iptvSource = useMemo(
     () => playlistSourceFromRoute(iptvSourceId, iptvCustomM3uUrl),
@@ -371,6 +396,23 @@ export function Shell() {
     disabledSiteIds,
   );
   const videoTab = videoTabFromSearch(searchParams.get(VIDEO_TAB_PARAM));
+  const videoSource = isAcfunVideoHome ? "acfun" : "bilibili";
+  const [videoPanelGate, setVideoPanelGate] = useState<{
+    source: typeof videoSource;
+    ready: boolean;
+  }>({ source: videoSource, ready: true });
+  if (videoPanelGate.source !== videoSource) {
+    // 两个方向的来源切换都先提交真实目标页占位；内容就绪后再释放完整面板。
+    setVideoPanelGate({ source: videoSource, ready: false });
+  }
+  const videoPanelContentGated = videoPanelGate.source !== videoSource || !videoPanelGate.ready;
+  const videoPanelNeighborsGated = videoSource === "bilibili" && videoPanelContentGated;
+  const videoSwipePanels =
+    videoSource === "acfun"
+      ? ACFUN_VIDEO_SWIPE_PANELS
+      : videoPanelNeighborsGated
+        ? [videoTab]
+        : VIDEO_TABS;
   const [videoMotionValue, setVideoMotionValue] = useState(videoTab);
   // 离开视频路由时退场轨道仍可见，不能用其他路由的缺省 tab 把它归零。
   if (isVideo && videoMotionValue !== videoTab) setVideoMotionValue(videoTab);
@@ -383,6 +425,21 @@ export function Shell() {
     },
     [navigate],
   );
+  const handleAcfunViewChange = useCallback(
+    (nextView: (typeof ACFUN_VIEWS)[number]) => {
+      navigate(acfunHomePath(nextView));
+    },
+    [navigate],
+  );
+  const handleVideoPanelContentReady = useCallback(() => {
+    setVideoPanelGate((current) =>
+      current.source === videoSource && !current.ready ? { ...current, ready: true } : current,
+    );
+  }, [videoSource]);
+  const handleVideoPanelReady = useCallback(() => {
+    if (throttledNavigation) handleThrottledOutletReady();
+    handleVideoPanelContentReady();
+  }, [handleThrottledOutletReady, handleVideoPanelContentReady, throttledNavigation]);
   const platformForMotion = isFollow ? followPlatform : activeSiteId;
   // 页面平移所跨越的分组。直播路由在平台之间移动；
   // IPTV 在播放列表来源之间移动。两者是同一种手势、同一个头部槽位，
@@ -390,7 +447,9 @@ export function Shell() {
   const groupForMotion: string = isIptv
     ? iptvSource.id
     : isVideo
-      ? videoTab
+      ? isAcfunVideoHome
+        ? acfunView
+        : videoTab
       : String(platformForMotion);
   const [groupMemory, setGroupMemory] = useState({
     pathname,
@@ -423,7 +482,9 @@ export function Shell() {
   const groupStrip: readonly string[] = isIptv
     ? iptvSourceOptions
     : isVideo
-      ? VIDEO_TABS
+      ? isAcfunVideoHome
+        ? ACFUN_VIEWS
+        : VIDEO_TABS
       : isFollow
         ? ["all", ...sitePlatforms]
         : platformStrip.map(String);
@@ -491,7 +552,18 @@ export function Shell() {
     }
     goBackOr(VIDEO_HOME_PATH);
   }, [goBackOr, navigate, searchParams]);
-
+  const goBackFromAcfunSearch = useCallback(() => {
+    if (searchParams.get("q")?.trim()) {
+      navigate(acfunSearchPath(acfunView), { replace: true });
+      return;
+    }
+    goBackOr(acfunHomePath(acfunView));
+  }, [acfunView, goBackOr, navigate, searchParams]);
+  const goBackFromAcfunArticle = useCallback(() => {
+    const action = acfunArticleBackNavigation(window.history.state);
+    if (action.kind === "back") navigate(-1);
+    else navigate(action.path, { replace: true });
+  }, [navigate]);
   // 首页/分类/搜索用横向内容滑动切换平台。关注和历史拥有自己嵌套的页签条，
   // Shell 不与这些路由争夺横向手势。
   const platformSwipeEnabled = showSiteSwitcher && mobileClient && !isHistory;
@@ -514,10 +586,10 @@ export function Shell() {
   // 移动端横滑换内容页签。items 用与 `groupStrip` 同一份顺序，
   // 滑动方向因此与 `PagePan` 的平移方向一致。
   const videoTabSwipe = useHorizontalSwipe({
-    items: VIDEO_TABS,
-    value: videoMotionValue,
+    items: videoSwipePanels,
+    value: isAcfunVideoHome ? videoSwipePanels[0] : videoMotionValue,
     onChange: handleVideoTabChange,
-    enabled: isVideo && mobileClient,
+    enabled: isVideo && mobileClient && !isAcfunVideoHome,
     layout: "track",
     animateAcrossItems: true,
   });
@@ -769,12 +841,11 @@ export function Shell() {
     setRetainedLivePanels({ pathname, panels: liveSwipePanels });
   }
 
-  const activeVideoPanelIndex = VIDEO_TABS.indexOf(videoTab);
-  // 只有四个内容面板，全部常挂载比切换时增删邻居更稳定：WebView2 无需在
-  // transform 动画中途销毁整页卡片纹理，快速连续点击也始终有真实目的页可滑入。
-  // 退出沉浸播放器或跨路径 POP 时例外：首帧只提交活动面板，其余三个等 onReady 后补齐，
-  // 避免四份已缓存列表与旧播放器争抢这次低优先级导航提交。
-  const videoSwipePanels = VIDEO_TABS;
+  // B 站四个内容面板全部常挂载，切换时无需在 transform 动画中途销毁页面纹理。
+  // AcFun 的 VideoPage 分支不使用 VideoTabScope，若沿用四面板会在同一来源下
+  // 渲染四份相同内容，来源切换时把查询观察器、卡片 DOM 和 effect 一并放大四倍。
+  const activeVideoPanelIndex =
+    videoSource === "acfun" || videoPanelNeighborsGated ? 0 : VIDEO_TABS.indexOf(videoTab);
   const videoNeighborsReady = !throttledNavigation || throttledOutlet.activeReady;
 
   const videoSwipePage = (
@@ -785,8 +856,7 @@ export function Shell() {
         data-swipe-kind="video"
         className="relative h-full min-h-0 min-w-0"
       >
-        {videoSwipePanels.map((tab) => {
-          const panelIndex = VIDEO_TABS.indexOf(tab);
+        {videoSwipePanels.map((tab, panelIndex) => {
           const panelOffset = panelIndex * 100;
           const active = panelIndex === activeVideoPanelIndex;
           return (
@@ -806,9 +876,17 @@ export function Shell() {
               <VideoTabScope value={tab}>
                 <RefreshFabVisibilityProvider visible={active}>
                   <RouteOutlet
-                    defer={active ? deferRouteOutlet : throttledNavigation}
+                    // 来源切换先提交 URL、头部和当前页占位，
+                    // 首帧不重建完整列表；内容就绪后再释放 B 站邻居面板。
+                    defer={
+                      active ? deferRouteOutlet || videoPanelContentGated : throttledNavigation
+                    }
                     waitForReady={!active && !videoNeighborsReady}
-                    onReady={active && throttledNavigation ? handleThrottledOutletReady : undefined}
+                    onReady={
+                      active && (throttledNavigation || videoPanelContentGated)
+                        ? handleVideoPanelReady
+                        : undefined
+                    }
                     outlet={outlet}
                     platform={platformForMotion}
                   />
@@ -874,10 +952,48 @@ export function Shell() {
       </div>
     </div>
   );
+  const videoContentNavigation = (
+    <div
+      data-slot="video-content-navigation"
+      className={cn(
+        "flex h-11 shrink-0 items-stretch justify-center bg-background px-4 shadow-[inset_0_-1px_0_var(--color-border-subtle)] md:pointer-fine:h-10 md:px-5",
+      )}
+    >
+      {isAcfunVideoHome ? (
+        <AcfunContentSwitcher
+          iconOnly={mobileClient}
+          value={acfunView}
+          onValueChange={handleAcfunViewChange}
+          className="h-full w-auto max-w-full max-md:w-full"
+        />
+      ) : (
+        <div
+          data-horizontal-swipe-surface
+          // 内容条已移入主区域，仍要单独把手势交给合成器：外层主区域会跳过
+          // 落在嵌套滑动表面上的事件，避免同一次拖动被两层处理器重复接管。
+          className="h-full min-w-0 touch-pan-y"
+          {...bindSwipe(videoTabSwipe)}
+        >
+          <VideoTabSwitcher
+            iconOnly={mobileClient}
+            value={videoTab}
+            onValueChange={videoTabSwipe.selectValue}
+            className="h-full w-auto max-w-full max-md:w-full"
+          />
+        </div>
+      )}
+    </div>
+  );
+  const videoPage = (
+    <div className="flex h-full min-h-0 flex-col">
+      {videoContentNavigation}
+      <div className="min-h-0 flex-1">{videoSwipePage}</div>
+    </div>
+  );
   const regularPage = showSiteSwitcher ? (
     liveSwipePage
   ) : isVideo ? (
-    videoSwipePage
+    videoPage
   ) : useGroupedPageContainer ? (
     groupPage
   ) : (
@@ -912,7 +1028,7 @@ export function Shell() {
           {!isImmersivePlayer && <Sidebar taskCounts={followTaskCounts} />}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <IptvControllerProvider source={iptvSource} active={isIptv}>
-              {!isImmersivePlayer && !isSettings && (
+              {!isImmersivePlayer && !isSettings && !isAcfunArticle && (
                 <header
                   data-slot="app-header"
                   data-mobile-empty={showTopNavigation ? undefined : "true"}
@@ -934,11 +1050,12 @@ export function Shell() {
                   {(isSearch ||
                     isCategoryBrowse ||
                     isVideoSearch ||
+                    isAcfunSearch ||
                     (isHistory && mobileClient)) && (
                     <div
                       className={cn(
                         "relative z-10 flex shrink-0 items-center",
-                        !isHistory && !isVideoSearch && "max-md:hidden",
+                        !isHistory && !isVideoSearch && !isAcfunSearch && "max-md:hidden",
                       )}
                     >
                       <Button
@@ -953,26 +1070,37 @@ export function Shell() {
                             ? goBackFromHistory
                             : isVideoSearch
                               ? goBackToVideo
-                              : goBackToDiscovery
+                              : isAcfunSearch
+                                ? goBackFromAcfunSearch
+                                : goBackToDiscovery
                         }
                       >
                         <ArrowLeft aria-hidden />
                       </Button>
                     </div>
                   )}
-                  {isVideoSearch ? (
+                  {isVideo && (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex h-full items-center justify-center">
+                      <div className="pointer-events-auto h-full">
+                        <AcfunSourceSwitcher
+                          source={isAcfunVideoHome ? "acfun" : "bilibili"}
+                          className="h-full"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {isVideoSearch || isAcfunSearch ? (
                     // 查询条住在头部：搜索是这一页的本体动作，结果网格在下方滚动。
                     // 桌面端居中限宽，移动端在返回钮之后铺满剩余宽度。
                     <div className="relative z-10 flex h-full min-w-0 flex-1 items-center justify-start md:justify-center">
-                      <VideoSearchBar className="h-full w-full max-w-2xl" />
-                    </div>
-                  ) : (
-                    <div
-                      className={cn(
-                        "pointer-events-none absolute inset-0 flex h-full items-center justify-center",
-                        "max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden",
+                      {isVideoSearch ? (
+                        <VideoSearchBar className="h-full w-full max-w-2xl" />
+                      ) : (
+                        <AcfunSearchBar view={acfunView} className="h-full w-full max-w-2xl" />
                       )}
-                    >
+                    </div>
+                  ) : !isVideo ? (
+                    <div className="pointer-events-none absolute inset-0 flex h-full items-center justify-center max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden">
                       {showTopNavigation && (
                         <div className="pointer-events-auto h-full max-md:w-full max-md:min-w-0">
                           {isHistory ? (
@@ -1007,22 +1135,6 @@ export function Shell() {
                                 className="h-full w-auto max-w-full max-md:w-full"
                               />
                             </div>
-                          ) : isVideo ? (
-                            <div
-                              data-horizontal-swipe-surface
-                              // 同 IPTV 来源条：表面必须声明 `touch-pan-y`，
-                              // 否则合成器接走横向拖动，
-                              // 平板（与手机）上页签条本身怎么滑都不切页。
-                              className="h-full min-w-0 touch-pan-y"
-                              {...bindSwipe(videoTabSwipe)}
-                            >
-                              <VideoTabSwitcher
-                                iconOnly={mobileClient}
-                                value={videoTab}
-                                onValueChange={videoTabSwipe.selectValue}
-                                className="h-full w-auto max-w-full max-md:w-full"
-                              />
-                            </div>
                           ) : (
                             <div
                               data-horizontal-swipe-surface
@@ -1046,8 +1158,8 @@ export function Shell() {
                         </div>
                       )}
                     </div>
-                  )}
-                  <div className="relative z-10 ml-auto flex min-w-0 items-center gap-1.5">
+                  ) : null}
+                  <div className="relative z-10 ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
                     {isHistory ? (
                       <HistoryClearButton
                         view={historyHeader.view}
@@ -1060,13 +1172,25 @@ export function Shell() {
                         variant="ghost"
                         size="icon"
                         className="max-md:size-9"
-                        aria-label="搜索视频"
-                        title="搜索视频"
-                        onClick={() => navigate(videoSearchPath())}
+                        aria-label={
+                          isAcfunVideoHome
+                            ? `搜索 AcFun ${ACFUN_VIEW_LABELS[acfunView]}`
+                            : "搜索视频"
+                        }
+                        title={
+                          isAcfunVideoHome
+                            ? `搜索 AcFun ${ACFUN_VIEW_LABELS[acfunView]}`
+                            : "搜索视频"
+                        }
+                        onClick={() =>
+                          navigate(
+                            isAcfunVideoHome ? acfunSearchPath(acfunView) : videoSearchPath(),
+                          )
+                        }
                       >
                         <Search aria-hidden />
                       </Button>
-                    ) : isVideoSearch || isFollow || isIptv ? null : (
+                    ) : isVideoSearch || isAcfunSearch || isFollow || isIptv ? null : (
                       <HeaderSearch />
                     )}
                   </div>
@@ -1091,6 +1215,24 @@ export function Shell() {
                 onPointerCancelCapture={contentSwipeOnPointerCancelCapture}
                 onClickCapture={contentSwipeOnClickCapture}
               >
+                {isAcfunArticle && (
+                  <div
+                    data-slot="acfun-article-back"
+                    className="pointer-events-none absolute top-3 left-[max(1rem,env(safe-area-inset-left))] z-20 md:left-[max(1.25rem,env(safe-area-inset-left))]"
+                  >
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="pointer-events-auto size-11 bg-background/85 shadow-sm backdrop-blur-sm"
+                      aria-label="返回文章"
+                      title="返回文章"
+                      onClick={goBackFromAcfunArticle}
+                    >
+                      <ArrowLeft aria-hidden />
+                    </Button>
+                  </div>
+                )}
                 {isImmersivePlayer ? (
                   // PageZoom 进入后会清除它的合成提示。稳定下来的播放器因此没有
                   // 可能干扰其全屏包含块的已变换祖先。
