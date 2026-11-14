@@ -485,6 +485,8 @@ type SettingsState = {
   asrWindowSeconds: number;
   asrFontSize: number;
   asrTranslationEnabled: boolean;
+  /** 只显示译文；这是播放器内的展示偏好，不改变需要翻译的识别文本。 */
+  asrTranslationOnly: boolean;
   asrTranslationFrom: CaptionTranslationSourceLanguage;
   asrTranslationTo: CaptionTranslationLanguage;
   /** 设备本地 ASR 选择同步到 Rust 后端期间为 true。 */
@@ -532,7 +534,9 @@ type SettingsState = {
   setAsrSpeakerDiarizationEnabled: (enabled: boolean) => Promise<void>;
   setAsrHotwords: (hotwords: string[]) => Promise<void>;
   setAsrWindowSeconds: (seconds: number) => Promise<void>;
+  setAsrFontSize: (fontSize: number) => void;
   setAsrTranslationEnabled: (enabled: boolean) => void;
+  setAsrTranslationOnly: (enabled: boolean) => void;
   setAsrTranslationFrom: (from: CaptionTranslationSourceLanguage) => void;
   setAsrTranslationTo: (to: CaptionTranslationLanguage) => void;
   markDanmakuCookieChanged: () => void;
@@ -783,6 +787,7 @@ export const useSettingsStore = create<SettingsState>()(
       asrWindowSeconds: ASR_WINDOW_SECONDS_DEFAULT,
       asrFontSize: ASR_FONT_SIZE_DEFAULT,
       asrTranslationEnabled: false,
+      asrTranslationOnly: false,
       asrTranslationFrom: "auto",
       asrTranslationTo: "zh-CN",
       asrPending: false,
@@ -899,6 +904,14 @@ export const useSettingsStore = create<SettingsState>()(
           await get().persistToBackend({ asr_window_seconds: previous });
           throw error;
         }
+      },
+      setAsrFontSize: (fontSize) => {
+        const asrFontSize = parseAsrFontSize(fontSize);
+        set({ asrFontSize });
+        void get().persistToBackend({ asr_font_size: asrFontSize });
+      },
+      setAsrTranslationOnly: (enabled) => {
+        set({ asrTranslationOnly: enabled });
       },
       setAsrTranslationFrom: (from) => {
         const normalized = normalizeCaptionTranslationFrom(from);
@@ -1075,6 +1088,7 @@ export const useSettingsStore = create<SettingsState>()(
         siteId: s.siteId,
         disabledSiteIds: s.disabledSiteIds,
         asrFontSize: s.asrFontSize,
+        asrTranslationOnly: s.asrTranslationOnly,
       }),
     },
   ),

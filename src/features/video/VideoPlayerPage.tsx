@@ -487,12 +487,15 @@ function VideoPlayerPageContent() {
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
   const asrFontSize = useSettingsStore((state) => state.asrFontSize);
+  const asrTranslationOnly = useSettingsStore((state) => state.asrTranslationOnly);
   const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
   const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
   const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
   const asrSpeakerDiarizationEnabled = useSettingsStore(
     (state) => state.asrSpeakerDiarizationEnabled,
   );
+  const setAsrFontSize = useSettingsStore((state) => state.setAsrFontSize);
+  const setAsrTranslationOnly = useSettingsStore((state) => state.setAsrTranslationOnly);
   const setAsrTranslationEnabled = useSettingsStore((state) => state.setAsrTranslationEnabled);
   const setAsrTranslationFrom = useSettingsStore((state) => state.setAsrTranslationFrom);
   const setAsrTranslationTo = useSettingsStore((state) => state.setAsrTranslationTo);
@@ -3516,11 +3519,16 @@ function VideoPlayerPageContent() {
                 <AsrCaptionOverlay
                   asr={asr}
                   fontSize={asrFontSize}
+                  translationOnly={asrTranslationOnly}
                   translationFrom={asrTranslationFrom}
                   translationTo={asrTranslationTo}
                   translationActive={asrTranslationEnabled}
+                  onFontSizeChange={setAsrFontSize}
+                  onTranslationOnlyChange={setAsrTranslationOnly}
                   onTranslationFromChange={setAsrTranslationFrom}
                   onTranslationToChange={setAsrTranslationTo}
+                  onTranslationActiveChange={setAsrTranslationEnabled}
+                  onClose={selectNoCaptions}
                   portalContainer={stageRef}
                   videoAspectRatio={frameAspectRatio}
                   vodResizeAnchor

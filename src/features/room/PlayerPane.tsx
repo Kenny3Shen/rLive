@@ -429,12 +429,15 @@ function PlayerPaneContent({
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
   const asrFontSize = useSettingsStore((state) => state.asrFontSize);
+  const asrTranslationOnly = useSettingsStore((state) => state.asrTranslationOnly);
   const asrSpeakerDiarizationEnabled = useSettingsStore(
     (state) => state.asrSpeakerDiarizationEnabled,
   );
   const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
   const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
   const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
+  const setAsrFontSize = useSettingsStore((state) => state.setAsrFontSize);
+  const setAsrTranslationOnly = useSettingsStore((state) => state.setAsrTranslationOnly);
   const setAsrTranslationEnabled = useSettingsStore((state) => state.setAsrTranslationEnabled);
   const setAsrTranslationFrom = useSettingsStore((state) => state.setAsrTranslationFrom);
   const setAsrTranslationTo = useSettingsStore((state) => state.setAsrTranslationTo);
@@ -1626,11 +1629,16 @@ function PlayerPaneContent({
               <AsrCaptionOverlay
                 asr={asr}
                 fontSize={asrFontSize}
+                translationOnly={asrTranslationOnly}
                 translationFrom={asrTranslationFrom}
                 translationTo={asrTranslationTo}
                 translationActive={asrTranslationEnabled}
+                onFontSizeChange={setAsrFontSize}
+                onTranslationOnlyChange={setAsrTranslationOnly}
                 onTranslationFromChange={setAsrTranslationFrom}
                 onTranslationToChange={setAsrTranslationTo}
+                onTranslationActiveChange={setAsrTranslationEnabled}
+                onClose={asr.toggle}
                 portalContainer={playerStageRef}
                 videoAspectRatio={player.aspectRatio}
                 className="bottom-[calc(4.5rem+var(--player-chrome-inset))]"

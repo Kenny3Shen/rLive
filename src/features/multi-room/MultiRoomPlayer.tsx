@@ -124,12 +124,15 @@ type MainMultiRoomControlsProps = {
 type MainMultiRoomAsrContextValue = {
   asr: AsrCaptions;
   asrFontSize: number;
+  asrTranslationOnly: boolean;
   asrPending: boolean;
   asrSpeakerDiarizationEnabled: boolean;
   asrTranslationEnabled: boolean;
   asrTranslationFrom: CaptionTranslationSourceLanguage;
   asrTranslationTo: CaptionTranslationLanguage;
+  setAsrFontSize: (fontSize: number) => void;
   setAsrSpeakerDiarizationEnabled: (enabled: boolean) => void | Promise<void>;
+  setAsrTranslationOnly: (enabled: boolean) => void;
   setAsrTranslationEnabled: (enabled: boolean) => void;
   setAsrTranslationFrom: (from: CaptionTranslationSourceLanguage) => void;
   setAsrTranslationTo: (to: CaptionTranslationLanguage) => void;
@@ -207,12 +210,15 @@ function MainMultiRoomAsrProvider({
   const asrPending = useSettingsStore((state) => state.asrPending);
   const asrWindowSeconds = useSettingsStore((state) => state.asrWindowSeconds);
   const asrFontSize = useSettingsStore((state) => state.asrFontSize);
+  const asrTranslationOnly = useSettingsStore((state) => state.asrTranslationOnly);
   const asrSpeakerDiarizationEnabled = useSettingsStore(
     (state) => state.asrSpeakerDiarizationEnabled,
   );
   const asrTranslationEnabled = useSettingsStore((state) => state.asrTranslationEnabled);
   const asrTranslationFrom = useSettingsStore((state) => state.asrTranslationFrom);
   const asrTranslationTo = useSettingsStore((state) => state.asrTranslationTo);
+  const setAsrFontSize = useSettingsStore((state) => state.setAsrFontSize);
+  const setAsrTranslationOnly = useSettingsStore((state) => state.setAsrTranslationOnly);
   const setAsrTranslationEnabled = useSettingsStore((state) => state.setAsrTranslationEnabled);
   const setAsrTranslationFrom = useSettingsStore((state) => state.setAsrTranslationFrom);
   const setAsrTranslationTo = useSettingsStore((state) => state.setAsrTranslationTo);
@@ -237,12 +243,15 @@ function MainMultiRoomAsrProvider({
       value={{
         asr,
         asrFontSize,
+        asrTranslationOnly,
         asrPending,
         asrSpeakerDiarizationEnabled,
         asrTranslationEnabled,
         asrTranslationFrom,
         asrTranslationTo,
+        setAsrFontSize,
         setAsrSpeakerDiarizationEnabled,
+        setAsrTranslationOnly,
         setAsrTranslationEnabled,
         setAsrTranslationFrom,
         setAsrTranslationTo,
@@ -269,9 +278,13 @@ function MainMultiRoomStageOverlays({
   const {
     asr,
     asrFontSize,
+    asrTranslationOnly,
     asrTranslationEnabled,
     asrTranslationFrom,
     asrTranslationTo,
+    setAsrFontSize,
+    setAsrTranslationEnabled,
+    setAsrTranslationOnly,
     setAsrTranslationFrom,
     setAsrTranslationTo,
   } = useMainMultiRoomAsr();
@@ -283,11 +296,16 @@ function MainMultiRoomStageOverlays({
         <AsrCaptionOverlay
           asr={asr}
           fontSize={asrFontSize}
+          translationOnly={asrTranslationOnly}
           translationFrom={asrTranslationFrom}
           translationTo={asrTranslationTo}
           translationActive={asrTranslationEnabled}
+          onFontSizeChange={setAsrFontSize}
+          onTranslationOnlyChange={setAsrTranslationOnly}
           onTranslationFromChange={setAsrTranslationFrom}
           onTranslationToChange={setAsrTranslationTo}
+          onTranslationActiveChange={setAsrTranslationEnabled}
+          onClose={asr.toggle}
           portalContainer={portalContainer}
           videoAspectRatio={videoAspectRatio}
         />

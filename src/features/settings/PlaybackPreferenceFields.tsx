@@ -447,6 +447,7 @@ export function AsrCaptionFontSizeField({
   layout: PlaybackSettingsFieldLayout;
 }) {
   const fontSize = useSettingsStore((state) => state.asrFontSize);
+  const setAsrFontSize = useSettingsStore((state) => state.setAsrFontSize);
 
   return (
     <PreferenceSliderField
@@ -458,11 +459,7 @@ export function AsrCaptionFontSizeField({
       displayValue={`${fontSize}px`}
       layout={layout}
       onPreview={(value) => useSettingsStore.setState({ asrFontSize: Math.round(value) })}
-      onCommit={(value) => {
-        const next = Math.min(ASR_FONT_SIZE_MAX, Math.max(ASR_FONT_SIZE_MIN, Math.round(value)));
-        useSettingsStore.setState({ asrFontSize: next });
-        persist({ asr_font_size: next });
-      }}
+      onCommit={setAsrFontSize}
     />
   );
 }
