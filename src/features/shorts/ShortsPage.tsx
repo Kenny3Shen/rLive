@@ -19,7 +19,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { DanmakuComposer } from "@/features/room/BilibiliDanmakuComposer";
 import { CommentsPanel } from "@/features/video/CommentsPanel";
 import { videoGetArchive, videoGetPlayerMeta } from "@/features/video/videoApi";
-import { formatRelativeTime, formatVideoDuration } from "@/features/video/videoHistory";
+import { formatRelativeTime } from "@/features/video/videoHistory";
 import {
   VIDEO_HOME_PATH,
   videoDetailsNavigationState,
@@ -881,9 +881,6 @@ export function ShortsPage() {
                       </button>
                       <p className="text-xs text-white/70">
                         {formatOnline(current.view)} 次播放
-                        {playback.duration > 0 || current.duration > 0
-                          ? `，时长 ${formatVideoDuration(playback.duration || current.duration)}`
-                          : ""}
                       </p>
                     </div>
                     {/* 章节：与播放页竖屏一致，贴在进度条上方左侧；没有章节时不占位。
