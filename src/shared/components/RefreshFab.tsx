@@ -17,6 +17,11 @@ type RefreshFabProps = {
 
 const RefreshFabVisibilityContext = createContext(true);
 
+/** 当前子树是否位于可见的活动页面；祖先离场边界优先。 */
+export function useRefreshFabVisibility(): boolean {
+  return useContext(RefreshFabVisibilityContext);
+}
+
 export function RefreshFabVisibilityProvider({
   visible,
   children,
@@ -36,8 +41,8 @@ export function RefreshFabVisibilityProvider({
 /**
  * 列表页的桌面手动刷新控件。
  *
- * 列表查询刻意在首次访问后绝不自行重新抓取，
- * 因此桌面客户端用这个按钮、移动客户端用下拉刷新。
+ * 多数列表查询在首次访问后只按显式动作重新抓取，因此桌面客户端用这个按钮、
+ * 移动客户端用下拉刷新；VOD 推荐的过期后台更新复用同一刷新状态与入口。
  *
  * 它渲染进 `document.body`：Shell 的页面包装层因入场动画持有合成 transform,
  * 否则会成为 fixed 子元素的包含块，使按钮随内容滚走。
@@ -48,7 +53,7 @@ export function RefreshFab({
   label = "刷新",
   className,
 }: RefreshFabProps) {
-  const visible = useContext(RefreshFabVisibilityContext);
+  const visible = useRefreshFabVisibility();
   if (!visible || isMobileClient()) return null;
 
   return createPortal(

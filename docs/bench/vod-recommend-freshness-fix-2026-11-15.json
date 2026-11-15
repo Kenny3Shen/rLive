@@ -1,0 +1,378 @@
+{
+  "date": "2026-11-15",
+  "source_baseline": "a3a1efa1，未提交的本轮前端修复",
+  "environment": {
+    "platform": "Windows Debug 主窗口",
+    "webview2": "157.0.4341.46",
+    "normal_viewport_css": [
+      1920,
+      1032
+    ],
+    "isolated_homepage_viewport_css": [
+      1024,
+      480
+    ],
+    "device_pixel_ratio": 1,
+    "recommend_api": "app"
+  },
+  "method_notes": [
+    "使用主窗口现有 CDP WebSocket 和真实鼠标点击，没有新建标签页。正常场景及关闭故障拦截后的重试使用真实 Tauri IPC / APP API。",
+    "过期通过修改已有真实首页的 fetchedAt 为 21 分钟前模拟，没有等待 20 分钟或伪造视频条目。",
+    "焦点场景合成 window focus 事件，未实测系统最小化/恢复和 Android 生命周期；后台文档过滤由聚焦测试覆盖。",
+    "活动失效场景只对当前推荐 Query 标记 invalidate、refetchType=none，不更改 Cookie 或 TV 授权。",
+    "故障阶段通过 CDP Fetch 拦截推荐 IPC 并返回 Tauri error 响应，属于 UI 故障注入，不是上游网络失败实测。未修改账号、代理和媒体。",
+    "推荐请求只计 POST，忽略 OPTIONS。冷启动完整导航在 Debug 会话记录了两次 page=1 POST，不用于首页刷新次数结论。",
+    "失败恢复的首页重试次数以成功快照的 now 为界；该快照之后恢复大视口又触发一次正常 page=2 补货，单列 after_validation_refill。",
+    "首轮正常路径通过后补齐刷新失败时暂停补货的保护；该保护随后完成聚焦检查和主窗口故障/真实重试验收。"
+  ],
+  "normal_paths": {
+    "passed": true,
+    "samples": [
+      {
+        "action": "initial",
+        "state": {
+          "now": 1794715036499,
+          "updatedAt": 1794715036455,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715036455
+          ]
+        }
+      },
+      {
+        "action": "warm_return",
+        "state": {
+          "now": 1794715037723,
+          "updatedAt": 1794715036455,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715036455
+          ]
+        }
+      },
+      {
+        "action": "hidden_expired_focus",
+        "state": {
+          "now": 1794715039041,
+          "updatedAt": 1794715036455,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": null,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794713778336
+          ]
+        },
+        "simulated_first_page_fetched_at": 1794713778336
+      },
+      {
+        "action": "expired_return",
+        "state": {
+          "now": 1794715045715,
+          "updatedAt": 1794715045663,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715045663
+          ]
+        }
+      },
+      {
+        "action": "active_query_invalidation",
+        "state": {
+          "now": 1794715049965,
+          "updatedAt": 1794715049870,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715049870
+          ]
+        }
+      },
+      {
+        "action": "active_expired_before_focus",
+        "state": {
+          "now": 1794715050668,
+          "updatedAt": 1794715049870,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794713789966
+          ]
+        },
+        "simulated_first_page_fetched_at": 1794713789966
+      },
+      {
+        "action": "active_expired_focus",
+        "state": {
+          "now": 1794715054934,
+          "updatedAt": 1794715054862,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715054862
+          ]
+        }
+      },
+      {
+        "action": "manual_refresh",
+        "state": {
+          "now": 1794715064358,
+          "updatedAt": 1794715064311,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715064311
+          ]
+        },
+        "busy": {
+          "now": 1794715054952,
+          "updatedAt": 1794715054862,
+          "staleTime": 1200000,
+          "fetchStatus": "fetching",
+          "fetchDirection": null,
+          "refreshButtonDisabled": true,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715054862
+          ]
+        }
+      },
+      {
+        "action": "large_viewport_refill",
+        "state": {
+          "now": 1794715068502,
+          "updatedAt": 1794715068426,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": "forward",
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20,
+            20
+          ],
+          "page_fetched_at": [
+            1794715064311,
+            1794715068426
+          ]
+        },
+        "busy": {
+          "now": 1794715064547,
+          "updatedAt": 1794715064311,
+          "staleTime": 1200000,
+          "fetchStatus": "fetching",
+          "fetchDirection": "forward",
+          "refreshButtonDisabled": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715064311
+          ]
+        }
+      }
+    ],
+    "recommend_post_requests": [
+      {
+        "phase": "setup",
+        "at_ms": 1794715032237,
+        "page": 1
+      },
+      {
+        "phase": "setup",
+        "at_ms": 1794715032237,
+        "page": 1
+      },
+      {
+        "phase": "expired_return",
+        "at_ms": 1794715039655,
+        "page": 1
+      },
+      {
+        "phase": "active_query_invalidation",
+        "at_ms": 1794715045868,
+        "page": 1
+      },
+      {
+        "phase": "active_expired_focus",
+        "at_ms": 1794715050671,
+        "page": 1
+      },
+      {
+        "phase": "manual_refresh",
+        "at_ms": 1794715054948,
+        "page": 1
+      },
+      {
+        "phase": "large_viewport_refill",
+        "at_ms": 1794715064548,
+        "page": 2
+      }
+    ]
+  },
+  "failure_recovery": {
+    "passed": true,
+    "samples": [
+      {
+        "action": "initial",
+        "state": {
+          "now": 1794715396322,
+          "updatedAt": 1794715396193,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "queryStatus": "success",
+          "errorTitle": null,
+          "loadMorePresent": true,
+          "retryPresent": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715396193
+          ]
+        }
+      },
+      {
+        "action": "first_page_failure",
+        "state": {
+          "now": 1794715396502,
+          "updatedAt": 1794715396193,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "queryStatus": "error",
+          "errorTitle": "推荐视频更新失败",
+          "loadMorePresent": false,
+          "retryPresent": true,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715396193
+          ]
+        }
+      },
+      {
+        "action": "failed_large_viewport",
+        "state": {
+          "now": 1794715398042,
+          "updatedAt": 1794715396193,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "queryStatus": "error",
+          "errorTitle": "推荐视频更新失败",
+          "loadMorePresent": false,
+          "retryPresent": true,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715396193
+          ]
+        }
+      },
+      {
+        "action": "real_api_retry",
+        "state": {
+          "now": 1794715403472,
+          "updatedAt": 1794715403411,
+          "staleTime": 1200000,
+          "fetchStatus": "idle",
+          "fetchDirection": null,
+          "refreshButtonDisabled": false,
+          "queryStatus": "success",
+          "errorTitle": null,
+          "loadMorePresent": true,
+          "retryPresent": false,
+          "page_counts": [
+            20
+          ],
+          "page_fetched_at": [
+            1794715403411
+          ]
+        }
+      }
+    ],
+    "injected_failure_pages": [
+      1
+    ],
+    "real_api_retry_pages_during_validation": [
+      1
+    ],
+    "after_validation_refill": [
+      {
+        "phase": "real_api_retry",
+        "at_ms": 1794715403519,
+        "page": 2,
+        "injected": false
+      }
+    ]
+  },
+  "final_restoration": {
+    "returned_to_original_player": true,
+    "original_paused": false,
+    "paused": false,
+    "media_current_time": 492.368845
+  },
+  "checks": {
+    "frontend_check": "bun run check 通过",
+    "focused_test_command": "bun test tests/video-recommendations-query.test.ts tests/video-feed.test.ts tests/refresh-fab-visibility.test.tsx tests/video-settings.test.ts",
+    "tests_passed": 20,
+    "tests_failed": 0,
+    "expect_calls": 75,
+    "rust": "本轮无 Rust 改动，没有重复运行 Rust 测试"
+  },
+  "limitations": [
+    "20 分钟为本地策略，不是已验证的上游 data.config 契约。",
+    "更新缓存不保证上游推荐只包含新发布视频。",
+    "APP 操作参数、idx/track_id 和观看/曝光反馈协议仍待验证。",
+    "未做 Android 真机和官方 APP 同账号、同设备、同出口对照。"
+  ]
+}

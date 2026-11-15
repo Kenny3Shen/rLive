@@ -1,0 +1,1515 @@
+{
+  "date": "2026-11-15",
+  "environment": {
+    "source_commit": "a3a1efa1",
+    "version": "9.4.0",
+    "windows_browser": "Edg/157.0.4341.46",
+    "viewport_css": {
+      "width": 1920,
+      "height": 1032,
+      "devicePixelRatio": 1
+    },
+    "recommend_api": "app",
+    "windows_proxy_mode": "auto",
+    "production_code_changed": false
+  },
+  "method_notes": [
+    "Windows 主窗口真实 CDP 点击和 Query 状态读取；playwright-cli 因 shared_worker 断言失败，使用同一主窗口页面 WebSocket。",
+    "直接 API 参数对照使用同一 TV 令牌及同一新设备号，设备号与 Windows 进程的设备号未对齐。",
+    "直接 API 沿用 WSL 环境代理，未证明与 Windows auto 出口等价。",
+    "web_cookie_no_access_key 组保留 Web Cookie，不能当成严格匿名实验。",
+    "推荐 network event 数包括 OPTIONS 预检，不等于 IPC 次数；详细样本仅 POST 计 IPC。",
+    "日期通过现有 WBI 签名 view 接口诊断核对，未恢复生产首页日期补齐。",
+    "age_days 按核对时刻计算并四舍五入到两位，不按 idx 推算发布时间。"
+  ],
+  "authorization_check": {
+    "oauth_info_code": 0,
+    "expires_in_seconds": 11345358,
+    "saved_cookie_has_buvid3": false
+  },
+  "no_buvid_control": {
+    "http": 200,
+    "code": 0,
+    "ugc_count": 10,
+    "track_prefix": "gateway_fb_*"
+  },
+  "parameter_profiles": {
+    "baseline": {
+      "build": "8130300",
+      "mobi_app": "android",
+      "platform": "android",
+      "device": "phone",
+      "style": "2",
+      "column": "4"
+    },
+    "refresh_delta": {
+      "pull": "true",
+      "flush": "8",
+      "idx": "0",
+      "recsys_mode": "0"
+    },
+    "more_delta": {
+      "pull": "false",
+      "flush": "0",
+      "idx": "上一刷新批末尾真实 idx",
+      "recsys_mode": "0"
+    }
+  },
+  "api_batches": [
+    {
+      "label": "baseline-0",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1953,
+      "count": 7,
+      "ids": [
+        "117612428265252",
+        "117613132777182",
+        "117580467538944",
+        "117478395090455",
+        "117607445303682",
+        "117507872724950",
+        "117514533079440"
+      ],
+      "idx": [
+        1794712889,
+        1794712888,
+        1794712886,
+        1794712885,
+        1794712884,
+        1794712882,
+        1794712881
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 7
+      }
+    },
+    {
+      "label": "refresh-0",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1727,
+      "count": 5,
+      "ids": [
+        "117611840935374",
+        "117613887751804",
+        "117522401597359",
+        "117604190526320",
+        "117596540110419"
+      ],
+      "idx": [
+        1794712889,
+        1794712888,
+        1794712885,
+        1794712884,
+        1794712883
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 5
+      }
+    },
+    {
+      "label": "more-0",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1624,
+      "count": 6,
+      "ids": [
+        "117608502336939",
+        "117614055523374",
+        "117607898290890",
+        "117601019629894",
+        "117597395819068",
+        "117490793517234"
+      ],
+      "idx": [
+        1794712882,
+        1794712880,
+        1794712878,
+        1794712876,
+        1794712875,
+        1794712874
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 6
+      }
+    },
+    {
+      "label": "baseline-1",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1886,
+      "count": 6,
+      "ids": [
+        "117597496478575",
+        "117598284942748",
+        "117586876439248",
+        "117609156577102",
+        "117592933012830",
+        "117608653458070"
+      ],
+      "idx": [
+        1794712894,
+        1794712892,
+        1794712890,
+        1794712888,
+        1794712887,
+        1794712886
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 6
+      }
+    },
+    {
+      "label": "refresh-1",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1656,
+      "count": 8,
+      "ids": [
+        "117584561182640",
+        "117583973975662",
+        "117614038818188",
+        "117593704762756",
+        "117615515148285",
+        "117609508897993",
+        "117510741559681",
+        "117482589328884"
+      ],
+      "idx": [
+        1794712896,
+        1794712895,
+        1794712893,
+        1794712892,
+        1794712891,
+        1794712890,
+        1794712889,
+        1794712888
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 8
+      }
+    },
+    {
+      "label": "more-1",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1710,
+      "count": 7,
+      "ids": [
+        "117608837881830",
+        "117573622499063",
+        "117584158530497",
+        "117606556107539",
+        "117598419162831",
+        "117601271290721",
+        "117607646633817"
+      ],
+      "idx": [
+        1794712882,
+        1794712881,
+        1794712879,
+        1794712878,
+        1794712877,
+        1794712876,
+        1794712875
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 7
+      }
+    },
+    {
+      "label": "baseline-2",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1682,
+      "count": 8,
+      "ids": [
+        "117613048896314",
+        "117613233445760",
+        "117584208860542",
+        "117608133168228",
+        "117606472286838",
+        "117603351796367",
+        "117607394968544",
+        "117600986075328"
+      ],
+      "idx": [
+        1794712899,
+        1794712898,
+        1794712896,
+        1794712895,
+        1794712894,
+        1794712893,
+        1794712892,
+        1794712891
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 8
+      }
+    },
+    {
+      "label": "refresh-2",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 2269,
+      "count": 7,
+      "ids": [
+        "117510825317827",
+        "117613921307352",
+        "117462473383655",
+        "117595013383803",
+        "117598352179273",
+        "117614726618887",
+        "117557130431232"
+      ],
+      "idx": [
+        1794712901,
+        1794712900,
+        1794712899,
+        1794712898,
+        1794712896,
+        1794712895,
+        1794712894
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 7
+      }
+    },
+    {
+      "label": "more-2",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1724,
+      "count": 8,
+      "ids": [
+        "117595701250009",
+        "117610465199505",
+        "117615414544241",
+        "117512872134257",
+        "117553774988660",
+        "117609123087195",
+        "117605230779008",
+        "117614676280973"
+      ],
+      "idx": [
+        1794712887,
+        1794712886,
+        1794712884,
+        1794712883,
+        1794712882,
+        1794712881,
+        1794712880,
+        1794712879
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 8
+      }
+    },
+    {
+      "label": "web_cookie_no_access_key-0",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1414,
+      "count": 11,
+      "ids": [
+        "117608418443892",
+        "117608384824812",
+        "117602345162225",
+        "117512486262753",
+        "117552164506540",
+        "117472338385671",
+        "117602059816264",
+        "117487991527344",
+        "117495608384473",
+        "117535085169100",
+        "117592547198971"
+      ],
+      "idx": [
+        1794712907,
+        1794712906,
+        1794712905,
+        1794712904,
+        1794712903,
+        1794712902,
+        1794712901,
+        1794712900,
+        1794712899,
+        1794712898,
+        1794712897
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 11
+      }
+    },
+    {
+      "label": "web_cookie_no_access_key-1",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 1550,
+      "count": 9,
+      "ids": [
+        "117609760557732",
+        "117548943150417",
+        "117614642860292",
+        "117465476498433",
+        "117546544007728",
+        "117563421954084",
+        "117467338839337",
+        "117565233829248",
+        "117570803930431"
+      ],
+      "idx": [
+        1794712906,
+        1794712905,
+        1794712904,
+        1794712903,
+        1794712902,
+        1794712901,
+        1794712900,
+        1794712899,
+        1794712898
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 9
+      }
+    },
+    {
+      "label": "web_cookie_no_access_key-2",
+      "http": 200,
+      "code": 0,
+      "elapsed_ms": 2150,
+      "count": 9,
+      "ids": [
+        "117497051222401",
+        "117608217123709",
+        "117608988805691",
+        "117494601942559",
+        "117601875269850",
+        "117603100067488",
+        "117615263487392",
+        "117510540169506",
+        "117569025476187"
+      ],
+      "idx": [
+        1794712908,
+        1794712907,
+        1794712906,
+        1794712905,
+        1794712904,
+        1794712903,
+        1794712902,
+        1794712901,
+        1794712900
+      ],
+      "pubdate_present": 0,
+      "data_keys": [
+        "config",
+        "interest_choose",
+        "items"
+      ],
+      "config": {
+        "auto_refresh_time": 1200,
+        "auto_refresh_time_by_appear": 1800,
+        "auto_refresh_time_by_active": 1800,
+        "auto_refresh_time_by_behavior": 5,
+        "auto_refresh_by_behavior": 1
+      },
+      "track_prefixes": {
+        "all_0.router-*": 9
+      }
+    }
+  ],
+  "age_summary": [
+    {
+      "group": "baseline",
+      "count": 21,
+      "unique": 21,
+      "date_count": 21,
+      "median_age_days": 2.64,
+      "older_than_7_days": 3,
+      "max_age_days": 23.81
+    },
+    {
+      "group": "refresh",
+      "count": 20,
+      "unique": 20,
+      "date_count": 20,
+      "median_age_days": 3.82,
+      "older_than_7_days": 6,
+      "max_age_days": 27.52
+    },
+    {
+      "group": "windows_first_refresh_page_1",
+      "count": 20,
+      "date_count": 20,
+      "median_age_days": 3.78,
+      "older_than_7_days": 3,
+      "max_age_days": 21.79
+    }
+  ],
+  "view_date_samples": [
+    {
+      "aid": "117612428265252",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794623330,
+      "age_days": 1.04
+    },
+    {
+      "aid": "117613132777182",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794634221,
+      "age_days": 0.91
+    },
+    {
+      "aid": "117580467538944",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794135905,
+      "age_days": 6.68
+    },
+    {
+      "aid": "117478395090455",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792656000,
+      "age_days": 23.81
+    },
+    {
+      "aid": "117607445303682",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794560700,
+      "age_days": 1.76
+    },
+    {
+      "aid": "117507872724950",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793028095,
+      "age_days": 19.5
+    },
+    {
+      "aid": "117514533079440",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793145600,
+      "age_days": 18.14
+    },
+    {
+      "aid": "117611840935374",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794614563,
+      "age_days": 1.14
+    },
+    {
+      "aid": "117613887751804",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794650440,
+      "age_days": 0.72
+    },
+    {
+      "aid": "117522401597359",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793255653,
+      "age_days": 16.87
+    },
+    {
+      "aid": "117604190526320",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794578400,
+      "age_days": 1.56
+    },
+    {
+      "aid": "117596540110419",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794454200,
+      "age_days": 2.99
+    },
+    {
+      "aid": "117608418443892",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794564419,
+      "age_days": 1.72
+    },
+    {
+      "aid": "117608384824812",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794564000,
+      "age_days": 1.72
+    },
+    {
+      "aid": "117602345162225",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794535200,
+      "age_days": 2.06
+    },
+    {
+      "aid": "117512486262753",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793098878,
+      "age_days": 18.68
+    },
+    {
+      "aid": "117552164506540",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793704057,
+      "age_days": 11.68
+    },
+    {
+      "aid": "117472338385671",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792490429,
+      "age_days": 25.72
+    },
+    {
+      "aid": "117602059816264",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794477900,
+      "age_days": 2.72
+    },
+    {
+      "aid": "117487991527344",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792747800,
+      "age_days": 22.74
+    },
+    {
+      "aid": "117495608384473",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792841310,
+      "age_days": 21.66
+    },
+    {
+      "aid": "117535085169100",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793443804,
+      "age_days": 14.69
+    },
+    {
+      "aid": "117592547198971",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794320146,
+      "age_days": 4.55
+    },
+    {
+      "aid": "117597496478575",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794395713,
+      "age_days": 3.67
+    },
+    {
+      "aid": "117598284942748",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794445500,
+      "age_days": 3.1
+    },
+    {
+      "aid": "117586876439248",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794233734,
+      "age_days": 5.55
+    },
+    {
+      "aid": "117609156577102",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794574723,
+      "age_days": 1.6
+    },
+    {
+      "aid": "117592933012830",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794325868,
+      "age_days": 4.48
+    },
+    {
+      "aid": "117608653458070",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794566610,
+      "age_days": 1.69
+    },
+    {
+      "aid": "117584561182640",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794198242,
+      "age_days": 5.96
+    },
+    {
+      "aid": "117583973975662",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794189193,
+      "age_days": 6.06
+    },
+    {
+      "aid": "117614038818188",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794648098,
+      "age_days": 0.75
+    },
+    {
+      "aid": "117593704762756",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794337937,
+      "age_days": 4.34
+    },
+    {
+      "aid": "117615515148285",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794670785,
+      "age_days": 0.49
+    },
+    {
+      "aid": "117609508897993",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794578989,
+      "age_days": 1.55
+    },
+    {
+      "aid": "117510741559681",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793071770,
+      "age_days": 19.0
+    },
+    {
+      "aid": "117482589328884",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792642700,
+      "age_days": 23.96
+    },
+    {
+      "aid": "117613048896314",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794633864,
+      "age_days": 0.92
+    },
+    {
+      "aid": "117613233445760",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794635665,
+      "age_days": 0.9
+    },
+    {
+      "aid": "117584208860542",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794192835,
+      "age_days": 6.02
+    },
+    {
+      "aid": "117608133168228",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794557818,
+      "age_days": 1.8
+    },
+    {
+      "aid": "117606472286838",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794532641,
+      "age_days": 2.09
+    },
+    {
+      "aid": "117603351796367",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794485347,
+      "age_days": 2.64
+    },
+    {
+      "aid": "117607394968544",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794576600,
+      "age_days": 1.58
+    },
+    {
+      "aid": "117600986075328",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794449030,
+      "age_days": 3.06
+    },
+    {
+      "aid": "117510825317827",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793149080,
+      "age_days": 18.1
+    },
+    {
+      "aid": "117613921307352",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794646389,
+      "age_days": 0.77
+    },
+    {
+      "aid": "117462473383655",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792335548,
+      "age_days": 27.52
+    },
+    {
+      "aid": "117595013383803",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794357648,
+      "age_days": 4.11
+    },
+    {
+      "aid": "117598352179273",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794408539,
+      "age_days": 3.52
+    },
+    {
+      "aid": "117614726618887",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794658393,
+      "age_days": 0.63
+    },
+    {
+      "aid": "117557130431232",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793779473,
+      "age_days": 10.81
+    },
+    {
+      "bvid": "BV1c8H56vE9D",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792923432,
+      "age_days": 20.71
+    },
+    {
+      "bvid": "BV1KeWY6aENK",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794529333,
+      "age_days": 2.13
+    },
+    {
+      "bvid": "BV1WTWz65E6e",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794576153,
+      "age_days": 1.59
+    },
+    {
+      "bvid": "BV1qTWd6EE2Z",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794480448,
+      "age_days": 2.69
+    },
+    {
+      "bvid": "BV1mvWx6mEV5",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794204803,
+      "age_days": 5.88
+    },
+    {
+      "bvid": "BV1kgW86nEmw",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794268800,
+      "age_days": 5.14
+    },
+    {
+      "bvid": "BV1cZsV6ME68",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794659600,
+      "age_days": 0.62
+    },
+    {
+      "bvid": "BV1FRs36aEoL",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794646956,
+      "age_days": 0.77
+    },
+    {
+      "bvid": "BV1MCWr6tEsC",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794626700,
+      "age_days": 1.0
+    },
+    {
+      "bvid": "BV1sp4i67EeA",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794196800,
+      "age_days": 5.98
+    },
+    {
+      "bvid": "BV1cbW46rE8V",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794195880,
+      "age_days": 5.99
+    },
+    {
+      "bvid": "BV1MTWR68EUb",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794487344,
+      "age_days": 2.61
+    },
+    {
+      "bvid": "BV1nEWr6yELb",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794614531,
+      "age_days": 1.14
+    },
+    {
+      "bvid": "BV1VhWT6BER3",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794292794,
+      "age_days": 4.87
+    },
+    {
+      "bvid": "BV1NgWn68ELX",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794132402,
+      "age_days": 6.72
+    },
+    {
+      "bvid": "BV1adW668EAD",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794619400,
+      "age_days": 1.09
+    },
+    {
+      "bvid": "BV1uxWy6qELv",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794652200,
+      "age_days": 0.71
+    },
+    {
+      "bvid": "BV1Q8HP69EEB",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1792830631,
+      "age_days": 21.79
+    },
+    {
+      "bvid": "BV1WUW86sEUy",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1794229735,
+      "age_days": 5.6
+    },
+    {
+      "bvid": "BV1kBnd67EKa",
+      "http": 200,
+      "code": 0,
+      "pubdate": 1793007547,
+      "age_days": 19.74
+    }
+  ],
+  "windows_ui_samples": [
+    {
+      "action": "initial",
+      "state": {
+        "url": "http://localhost:1420/video",
+        "now": 1794712997645,
+        "updatedAt": 1794710598565,
+        "staleForever": true,
+        "fetchStatus": "idle",
+        "pages": [
+          {
+            "ids": [
+              "BV1fPWg6XEFY",
+              "BV1KJW46mEoa",
+              "BV1b2WC6PExC",
+              "BV1aUWi6UENG",
+              "BV1CYs56VEDM",
+              "BV1MkWX6ZEsr",
+              "BV1mKn368ETr",
+              "BV1gisV6pEYe",
+              "BV1rjW86jEbX",
+              "BV1yeWk6pEMa",
+              "BV1arnV65Ewb",
+              "BV1YpxB6wEAL",
+              "BV1zisG6YEre",
+              "BV12pWQ6QETV",
+              "BV1a4s36DERi",
+              "BV1xGWC64EHU",
+              "BV1KeWY6aENK",
+              "BV1usWY6BE6z",
+              "BV1WTWz65E6e"
+            ],
+            "count": 19
+          },
+          {
+            "ids": [
+              "BV1UGWi6VEbR",
+              "BV1yeWk6pEMa",
+              "BV1Tcn86mEnN",
+              "BV1kBnd67EKa",
+              "BV1d5W26QEY5",
+              "BV129We6qEkL",
+              "BV169s36AEGq",
+              "BV1kxWi6eE8b",
+              "BV1VHWv6EEmC",
+              "BV1YpxB6wEAL",
+              "BV1JxW16xEmk",
+              "BV1a4s36DERi",
+              "BV1SqsV6QE5s",
+              "BV1Hinc6FEQF",
+              "BV1x2WT6tEA9",
+              "BV1pdsL67Ebs",
+              "BV1b2WC6PEUi",
+              "BV1yLxv6gEto",
+              "BV179WW6oExW",
+              "BV1usWY6BE6z"
+            ],
+            "count": 20
+          }
+        ],
+        "age_minutes": 39.98
+      },
+      "recommend_network_events_including_options": 0
+    },
+    {
+      "action": "leave",
+      "state": {
+        "url": "http://localhost:1420/settings",
+        "now": 1794712998667,
+        "updatedAt": 1794710598565,
+        "staleForever": true,
+        "fetchStatus": "idle",
+        "pages": [
+          {
+            "ids": [
+              "BV1fPWg6XEFY",
+              "BV1KJW46mEoa",
+              "BV1b2WC6PExC",
+              "BV1aUWi6UENG",
+              "BV1CYs56VEDM",
+              "BV1MkWX6ZEsr",
+              "BV1mKn368ETr",
+              "BV1gisV6pEYe",
+              "BV1rjW86jEbX",
+              "BV1yeWk6pEMa",
+              "BV1arnV65Ewb",
+              "BV1YpxB6wEAL",
+              "BV1zisG6YEre",
+              "BV12pWQ6QETV",
+              "BV1a4s36DERi",
+              "BV1xGWC64EHU",
+              "BV1KeWY6aENK",
+              "BV1usWY6BE6z",
+              "BV1WTWz65E6e"
+            ],
+            "count": 19
+          },
+          {
+            "ids": [
+              "BV1UGWi6VEbR",
+              "BV1yeWk6pEMa",
+              "BV1Tcn86mEnN",
+              "BV1kBnd67EKa",
+              "BV1d5W26QEY5",
+              "BV129We6qEkL",
+              "BV169s36AEGq",
+              "BV1kxWi6eE8b",
+              "BV1VHWv6EEmC",
+              "BV1YpxB6wEAL",
+              "BV1JxW16xEmk",
+              "BV1a4s36DERi",
+              "BV1SqsV6QE5s",
+              "BV1Hinc6FEQF",
+              "BV1x2WT6tEA9",
+              "BV1pdsL67Ebs",
+              "BV1b2WC6PEUi",
+              "BV1yLxv6gEto",
+              "BV179WW6oExW",
+              "BV1usWY6BE6z"
+            ],
+            "count": 20
+          }
+        ],
+        "age_minutes": 40.0
+      },
+      "recommend_network_events_including_options": 0
+    },
+    {
+      "action": "return",
+      "state": {
+        "url": "http://localhost:1420/video",
+        "now": 1794712999687,
+        "updatedAt": 1794710598565,
+        "staleForever": true,
+        "fetchStatus": "idle",
+        "pages": [
+          {
+            "ids": [
+              "BV1fPWg6XEFY",
+              "BV1KJW46mEoa",
+              "BV1b2WC6PExC",
+              "BV1aUWi6UENG",
+              "BV1CYs56VEDM",
+              "BV1MkWX6ZEsr",
+              "BV1mKn368ETr",
+              "BV1gisV6pEYe",
+              "BV1rjW86jEbX",
+              "BV1yeWk6pEMa",
+              "BV1arnV65Ewb",
+              "BV1YpxB6wEAL",
+              "BV1zisG6YEre",
+              "BV12pWQ6QETV",
+              "BV1a4s36DERi",
+              "BV1xGWC64EHU",
+              "BV1KeWY6aENK",
+              "BV1usWY6BE6z",
+              "BV1WTWz65E6e"
+            ],
+            "count": 19
+          },
+          {
+            "ids": [
+              "BV1UGWi6VEbR",
+              "BV1yeWk6pEMa",
+              "BV1Tcn86mEnN",
+              "BV1kBnd67EKa",
+              "BV1d5W26QEY5",
+              "BV129We6qEkL",
+              "BV169s36AEGq",
+              "BV1kxWi6eE8b",
+              "BV1VHWv6EEmC",
+              "BV1YpxB6wEAL",
+              "BV1JxW16xEmk",
+              "BV1a4s36DERi",
+              "BV1SqsV6QE5s",
+              "BV1Hinc6FEQF",
+              "BV1x2WT6tEA9",
+              "BV1pdsL67Ebs",
+              "BV1b2WC6PEUi",
+              "BV1yLxv6gEto",
+              "BV179WW6oExW",
+              "BV1usWY6BE6z"
+            ],
+            "count": 20
+          }
+        ],
+        "age_minutes": 40.02
+      },
+      "recommend_network_events_including_options": 0
+    },
+    {
+      "action": "refresh-0",
+      "state": {
+        "url": "http://localhost:1420/video",
+        "now": 1794713003970,
+        "updatedAt": 1794713003899,
+        "staleForever": true,
+        "fetchStatus": "idle",
+        "pages": [
+          {
+            "ids": [
+              "BV1c8H56vE9D",
+              "BV1KeWY6aENK",
+              "BV1WTWz65E6e",
+              "BV1qTWd6EE2Z",
+              "BV1mvWx6mEV5",
+              "BV1kgW86nEmw",
+              "BV1cZsV6ME68",
+              "BV1FRs36aEoL",
+              "BV1MCWr6tEsC",
+              "BV1sp4i67EeA",
+              "BV1cbW46rE8V",
+              "BV1MTWR68EUb",
+              "BV1nEWr6yELb",
+              "BV1VhWT6BER3",
+              "BV1NgWn68ELX",
+              "BV1adW668EAD",
+              "BV1uxWy6qELv",
+              "BV1Q8HP69EEB",
+              "BV1WUW86sEUy",
+              "BV1kBnd67EKa"
+            ],
+            "count": 20
+          }
+        ],
+        "age_minutes": 0.0
+      },
+      "elapsed_ms": 4284,
+      "recommend_network_events_including_options": 2
+    },
+    {
+      "action": "refresh-1",
+      "state": {
+        "url": "http://localhost:1420/video",
+        "now": 1794713012367,
+        "updatedAt": 1794713012265,
+        "staleForever": true,
+        "fetchStatus": "idle",
+        "pages": [
+          {
+            "ids": [
+              "BV1ZnsV6YE4s",
+              "BV1TLWi6GEv1",
+              "BV1x2WT6tEA9",
+              "BV1pdsL67Ebs",
+              "BV12ss56UEqc",
+              "BV1JisG6eETh",
+              "BV1hisV6pEoL",
+              "BV13esV69ENt",
+              "BV1sxWQ6SEvJ",
+              "BV1WUW86sEDo",
+              "BV1LXWY6JEA5",
+              "BV1JU4g6eEbA",
+              "BV18oW76hEfk",
+              "BV1HJno6EEkg",
+              "BV1uCWC6KEXA",
+              "BV1kZWX62ENY",
+              "BV1Hinc6FEQF",
+              "BV1dJ4v68EkR",
+              "BV1BVWq6aEsH",
+              "BV1nHW36cEEs"
+            ],
+            "count": 20
+          },
+          {
+            "ids": [
+              "BV1guWi6jEDd",
+              "BV1Zos36FEUG",
+              "BV1hWWY6uExR",
+              "BV1oW4q6vEpq",
+              "BV1u2We6VEsp",
+              "BV1HhWL66EFM",
+              "BV1CGxg6NEHf",
+              "BV14WHT6xEXg",
+              "BV17Zs368EeU",
+              "BV1kkWW6NEDW",
+              "BV1EaWi6hErC",
+              "BV1yPWq6BE8w",
+              "BV1A1s36BEkK",
+              "BV1zisG6YE7b",
+              "BV1RaWX6eEhh",
+              "BV1adWM6gEF2",
+              "BV1ZnsV6YE4s",
+              "BV1Hinc6FEQF",
+              "BV1ngWq6eEc2",
+              "BV17fWx6wErL"
+            ],
+            "count": 20
+          }
+        ],
+        "age_minutes": 0.0
+      },
+      "elapsed_ms": 8398,
+      "recommend_network_events_including_options": 6
+    },
+    {
+      "action": "refresh-2",
+      "state": {
+        "url": "http://localhost:1420/video",
+        "now": 1794713021431,
+        "updatedAt": 1794713021345,
+        "staleForever": true,
+        "fetchStatus": "idle",
+        "pages": [
+          {
+            "ids": [
+              "BV1p3Wr6JEzy",
+              "BV1VFWs6XELT",
+              "BV1Ei4w66EN3",
+              "BV1b6Wr68ESF",
+              "BV1uYs362EDy",
+              "BV1UxWd6KE6F",
+              "BV1uis36yEtU",
+              "BV1UEs56XE9L",
+              "BV16inH6SEvM",
+              "BV1tsWQ6nEPu",
+              "BV1toWi6VExV",
+              "BV1mNsf63EWe",
+              "BV1Ta4J6TE6v",
+              "BV1UdxT6MEyo",
+              "BV1npWC6SEBq",
+              "BV1PLHM6DEt7",
+              "BV1YSsG69ETc",
+              "BV1GwWo6rEkF",
+              "BV1xNsV6CEvM",
+              "BV1VYWT6TEb4"
+            ],
+            "count": 20
+          },
+          {
+            "ids": [
+              "BV1U4Wd6vEWj",
+              "BV1GrW367Erb",
+              "BV1iqxj6GEzh",
+              "BV1qaWe6QENn",
+              "BV1V5Wh6qE4m",
+              "BV1PUWz6jEfX",
+              "BV1zisG6YEre",
+              "BV1zHWa6DEv3",
+              "BV1VDny6zEka",
+              "BV1EL4x6GEXR",
+              "BV1sEWs66E8i",
+              "BV1ssxE6FEWv",
+              "BV1W3Wu6FEXz",
+              "BV1wtWi6PE2V",
+              "BV12ss56UEqc",
+              "BV1Q6ni6VE2B",
+              "BV1khW662Efd",
+              "BV1gyWC6vEey",
+              "BV1PLHM6DEt7",
+              "BV1pdsL67Ebs"
+            ],
+            "count": 20
+          }
+        ],
+        "age_minutes": 0.0
+      },
+      "elapsed_ms": 9063,
+      "recommend_network_events_including_options": 9
+    }
+  ],
+  "windows_detailed_refresh": {
+    "elapsed_ms": 9160,
+    "requests": [
+      {
+        "at": 1794713097.3809738,
+        "endpoint": "http://ipc.localhost/video_get_recommend",
+        "method": "OPTIONS",
+        "page": null,
+        "pageSize": null
+      },
+      {
+        "at": 1794713097.5450025,
+        "endpoint": "http://ipc.localhost/video_get_recommend",
+        "method": "POST",
+        "page": 1,
+        "pageSize": null
+      },
+      {
+        "at": 1794713102.414705,
+        "endpoint": "http://ipc.localhost/video_get_recommend",
+        "method": "POST",
+        "page": 2,
+        "pageSize": null
+      },
+      {
+        "at": 1794713102.4147484,
+        "endpoint": "http://ipc.localhost/video_get_recommend",
+        "method": "OPTIONS",
+        "page": null,
+        "pageSize": null
+      }
+    ],
+    "post_ipc_count": 2,
+    "post_pages": [
+      1,
+      2
+    ],
+    "return_same_updatedAt": true
+  },
+  "validation": {
+    "rust_focused_tests": {
+      "command": "cargo test --lib sites::bilibili::video::app_feed::",
+      "passed": 16,
+      "failed": 0
+    },
+    "frontend_focused_tests": {
+      "passed": 4,
+      "failed": 0,
+      "files": [
+        "tests/video-feed.test.ts",
+        "tests/bilibili-app-expiry.test.ts"
+      ]
+    }
+  }
+}

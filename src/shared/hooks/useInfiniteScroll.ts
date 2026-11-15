@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, type RefObject } from "react";
 import { findVerticalScrollParent } from "@/shared/gestures/pullToRefresh";
 
 type UseInfiniteScrollOptions = {
+  /** 暂停自动和手动补货；已有请求不在这里取消。 */
+  enabled?: boolean;
   hasNextPage: boolean | undefined;
   isFetchingNextPage: boolean;
   isFetchNextPageError: boolean;
@@ -19,6 +21,7 @@ const LOAD_MORE_ROOT_MARGIN = "0px 0px 240px 0px";
  * 失败的请求只由用户显式操作重试。
  */
 export function useInfiniteScroll({
+  enabled = true,
   hasNextPage,
   isFetchingNextPage,
   isFetchNextPageError,
@@ -31,6 +34,7 @@ export function useInfiniteScroll({
   const loadMore = useCallback(
     (retry = false) => {
       if (
+        !enabled ||
         loadMoreInFlightRef.current ||
         !hasNextPage ||
         isFetchingNextPage ||
@@ -44,13 +48,14 @@ export function useInfiniteScroll({
         loadMoreInFlightRef.current = false;
       });
     },
-    [fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError],
+    [enabled, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError],
   );
 
   useEffect(() => {
     const target = loadMoreRef.current;
     if (
       !target ||
+      !enabled ||
       !hasNextPage ||
       isFetchingNextPage ||
       isFetchNextPageError ||
@@ -74,6 +79,7 @@ export function useInfiniteScroll({
     observer.observe(target);
     return () => observer.disconnect();
   }, [
+    enabled,
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,

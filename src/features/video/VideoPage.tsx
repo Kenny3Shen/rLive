@@ -1,5 +1,6 @@
-import { lazy, memo, Suspense, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type InfiniteData,
   keepPreviousData,
   useInfiniteQuery,
   useQuery,
@@ -11,7 +12,10 @@ import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { BilibiliAppAuthAction } from "@/shared/components/BilibiliAppAuthAction";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
-import { RefreshFab } from "@/shared/components/RefreshFab";
+import {
+  RefreshFab,
+  useRefreshFabVisibility,
+} from "@/shared/components/RefreshFab";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,11 +27,11 @@ import {
 } from "@/components/ui/empty";
 import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import { MediaCardSkeletonGrid } from "@/shared/components/MediaCard";
+import { findVerticalScrollParent } from "@/shared/gestures/pullToRefresh";
 import type { PgcItem, PgcListPage, VideoListPage, VideoZone } from "@/shared/types/video";
 import {
   videoGetPgcIndex,
   videoGetPopular,
-  videoGetRecommend,
   videoGetZone,
   videoZoneList,
 } from "./videoApi";
@@ -48,6 +52,15 @@ import {
   videoZoneChips,
 } from "./videoRoute";
 import { useVideoTabScope } from "./videoTabScope";
+import {
+  type RecommendationFeedData,
+  type RecommendationFeedPage,
+  isVideoRecommendationInvalidationEvent,
+  refreshRecommendationFirstPage,
+  shouldRefreshRecommendationOnActivation,
+  videoRecommendationQueryKey,
+  videoRecommendationQueryOptions,
+} from "./videoRecommendationsQuery";
 import { nextRecommendPage } from "./videoFeed";
 import { filterBlockedUploaders } from "./videoUploaderBlock";
 import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
@@ -74,7 +87,8 @@ const EMPTY_ZONES: readonly VideoZone[] = [];
  * 而不是在渲染处按页签断言：切页签那一帧缓存里可能还是上一个页签的数据，
  * 按页签强转会在那一帧把 PGC 条目当成 UGC 读。
  */
-type VideoFeedPage = ({ kind: "ugc" } & VideoListPage) | ({ kind: "pgc" } & PgcListPage);
+type BrowseFeedPage = ({ kind: "ugc" } & VideoListPage) | ({ kind: "pgc" } & PgcListPage);
+type VideoFeedPage = BrowseFeedPage | RecommendationFeedPage;
 
 const PgcGrid = memo(function PgcGrid({ items }: { items: readonly PgcItem[] }) {
   return (
@@ -122,6 +136,9 @@ function BilibiliVideoPage() {
   const videoRecommendApi = useSettingsStore((state) => state.videoRecommendApi);
   // 本机是否有 TV 授权由后端决定；这里只用授权变更计数隔离新旧账号的推荐缓存。
   const appAuthRevision = useSettingsStore((state) => state.bilibiliAppAuthRevision);
+  const pageVisible = useRefreshFabVisibility();
+  const queryClient = useQueryClient();
+  const recommendationHeadingRef = useRef<HTMLHeadingElement>(null);
   // 屏蔽名单在渲染前摘掉条目：列表布局随之变化，但补货由上游 `has_more` 决定，
   // 不会因为「本地少了 N 条」就空转翻页。
   const blockedUploaders = useVideoBlockedUploaders();
@@ -141,19 +158,31 @@ function BilibiliVideoPage() {
     chips,
   );
 
-  const listQueryKey = [
+  const recommendationOptions = videoRecommendationQueryOptions(
+    videoRecommendApi,
+    appAuthRevision,
+  );
+  const browseListQueryKey = [
     "video_list",
     tab,
     zoneKey ?? "",
-    tab === "recommend" ? videoRecommendApi : "web",
-    tab === "recommend" && videoRecommendApi === "app" ? appAuthRevision : 0,
+    "web",
+    0,
   ] as const;
-  const listQuery = useInfiniteQuery({
-    queryKey: listQueryKey,
+  const listQuery = useInfiniteQuery<
+    VideoFeedPage,
+    Error,
+    InfiniteData<VideoFeedPage, number>,
+    readonly unknown[],
+    number
+  >({
+    queryKey: tab === "recommend" ? recommendationOptions.queryKey : browseListQueryKey,
     initialPageParam: 1,
-    queryFn: async ({ pageParam }): Promise<VideoFeedPage> => {
-      const page = pageParam as number;
-      if (tab === "recommend") return { kind: "ugc", ...(await videoGetRecommend(page)) };
+    queryFn: async ({ pageParam, signal }): Promise<VideoFeedPage> => {
+      const page = pageParam;
+      if (tab === "recommend") {
+        return recommendationOptions.queryFn({ pageParam: page, signal });
+      }
       if (tab === "popular") {
         // 「全部」走可翻页的全站热门榜；具体分区走分区榜，后端的 has_more 恒为 false。
         if (!zoneKey || zoneKey === VIDEO_POPULAR_ALL_ZONE_KEY) {
@@ -167,18 +196,26 @@ function BilibiliVideoPage() {
       const indexType = tab === "cinema" ? 102 : null;
       return { kind: "pgc", ...(await videoGetPgcIndex(seasonType, indexType, page)) };
     },
-    // APP 推荐没有真实页号。无新增条目的批次停止补货，避免去重后长度不变而空转。
-    // 热门/PGC 仍以各自上游的 has_more 为准，不按本地剩余条数猜结束。
-    getNextPageParam: (lastPage, allPages) =>
-      tab === "recommend"
-        ? nextRecommendPage(allPages.filter((page) => page.kind === "ugc"))
-        : lastPage.has_more
-          ? allPages.length + 1
-          : undefined,
+    getNextPageParam: (lastPage, allPages) => {
+      if (tab === "recommend") {
+        return nextRecommendPage(allPages as RecommendationFeedPage[]);
+      }
+      // 热门/PGC 以各自上游的 has_more 为准，不按本地剩余条数猜结束。
+      return lastPage.has_more ? allPages.length + 1 : undefined;
+    },
     ...BROWSING_LIST_QUERY_OPTIONS,
+    ...(tab === "recommend"
+      ? {
+          staleTime: recommendationOptions.staleTime,
+          gcTime: recommendationOptions.gcTime,
+          refetchOnMount: recommendationOptions.refetchOnMount,
+          refetchOnWindowFocus: recommendationOptions.refetchOnWindowFocus,
+          refetchOnReconnect: recommendationOptions.refetchOnReconnect,
+        }
+      : {}),
     placeholderData: keepPreviousData,
   });
-  const pages = listQuery.data?.pages;
+  const pages = listQuery.data?.pages as readonly VideoFeedPage[] | undefined;
   // 按 payload 自带的 `kind` 分派，理由见 `VideoFeedPage`。
   const feedKind = pages?.[0]?.kind ?? (videoTabUsesPgc(tab) ? "pgc" : "ugc");
   // 屏蔽 UP 主是**渲染前**的纯过滤：分页游标、上游请求次数与 `has_more` 都不变，
@@ -204,30 +241,126 @@ function BilibiliVideoPage() {
 
   const { fetchNextPage, isFetchingNextPage, isFetchNextPageError } = listQuery;
   const hasNextPage = listQuery.isPlaceholderData ? false : listQuery.hasNextPage;
+  const recommendationRefreshFailed =
+    tab === "recommend" &&
+    listQuery.isRefetchError &&
+    !listQuery.isFetchNextPageError;
+  const [automaticRefreshing, setAutomaticRefreshing] = useState(false);
+  const [activationRevision, setActivationRevision] = useState(0);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const recommendationRefreshing = automaticRefreshing || manualRefreshing;
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    enabled:
+      tab !== "recommend" ||
+      (pageVisible &&
+        !recommendationRefreshing &&
+        !listQuery.isRefetching &&
+        !recommendationRefreshFailed),
   });
 
-  // 刷新是一个手动动作，用独立 state 表达它的进行中状态：不能复用 `isRefetching`，
-  // 因为 `resetQueries` 把查询抹成初始态后重取首页，那是 `isLoading` 而不是 `isRefetching`。
-  const [manualRefreshing, setManualRefreshing] = useState(false);
-  const refreshing = manualRefreshing || (listQuery.isRefetching && !listQuery.isFetchingNextPage);
+  // 相邻视频页签常驻但不可见。只有活动推荐页收到窗口恢复或当前 key 失效时，
+  // 才推进激活检查；普通补货、成功和过期计时不会触发自动刷新。
+  useEffect(() => {
+    if (!pageVisible || tab !== "recommend") return;
+    const checkFreshness = () => {
+      if (document.visibilityState === "visible") {
+        setActivationRevision((revision) => revision + 1);
+      }
+    };
+    window.addEventListener("focus", checkFreshness);
+    document.addEventListener("visibilitychange", checkFreshness);
+    const unsubscribeInvalidation = queryClient.getQueryCache().subscribe((event) => {
+      if (
+        document.visibilityState === "visible" &&
+        isVideoRecommendationInvalidationEvent(
+          event,
+          videoRecommendApi,
+          appAuthRevision,
+        )
+      ) {
+        setActivationRevision((revision) => revision + 1);
+      }
+    });
+    return () => {
+      window.removeEventListener("focus", checkFreshness);
+      document.removeEventListener("visibilitychange", checkFreshness);
+      unsubscribeInvalidation();
+    };
+  }, [appAuthRevision, pageVisible, queryClient, tab, videoRecommendApi]);
+
+  useEffect(() => {
+    const recommendationQueryKey = videoRecommendationQueryKey(
+      videoRecommendApi,
+      appAuthRevision,
+    );
+    const recommendationState =
+      queryClient.getQueryState<RecommendationFeedData>(recommendationQueryKey);
+    if (
+      tab !== "recommend" ||
+      !shouldRefreshRecommendationOnActivation({
+        enabled: tab === "recommend",
+        pageVisible,
+        documentVisible: document.visibilityState === "visible",
+        data: recommendationState?.data,
+        dataUpdatedAt: recommendationState?.dataUpdatedAt ?? 0,
+        invalidated: recommendationState?.isInvalidated ?? false,
+      })
+    ) {
+      return;
+    }
+    // 刷新是 effect 驱动的外部网络操作；本地状态只用来让刷新控件与补货暂停。
+    // oxlint-disable-next-line react/set-state-in-effect
+    setAutomaticRefreshing(true);
+    void refreshRecommendationFirstPage(queryClient, videoRecommendApi, appAuthRevision)
+      .then(() => {
+        window.requestAnimationFrame(() => {
+          findVerticalScrollParent(recommendationHeadingRef.current)?.scrollTo({ top: 0 });
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        setAutomaticRefreshing(false);
+      });
+  }, [
+    activationRevision,
+    appAuthRevision,
+    pageVisible,
+    queryClient,
+    tab,
+    videoRecommendApi,
+  ]);
+
+  const refreshing =
+    tab === "recommend"
+      ? recommendationRefreshing
+      : manualRefreshing || (listQuery.isRefetching && !listQuery.isFetchingNextPage);
   const title = `${VIDEO_TAB_LABELS[tab]}视频`;
-  const queryClient = useQueryClient();
 
   const refresh = () => {
     // 分区表失败后条带是空的；一次下拉理应把它一起救回来。
     if (zonesQuery.isError) void zonesQuery.refetch();
+    if (tab === "recommend") {
+      setManualRefreshing(true);
+      return refreshRecommendationFirstPage(queryClient, videoRecommendApi, appAuthRevision)
+        .then(() => {
+          window.requestAnimationFrame(() => {
+            findVerticalScrollParent(recommendationHeadingRef.current)?.scrollTo({ top: 0 });
+          });
+        })
+        .catch(() => undefined)
+        .finally(() => setManualRefreshing(false));
+    }
     // infinite query 的 `refetch()` 会把已加载的每一页按顺序**串行重取**（实测翻到
     // 第 5 页后刷新 = 5 次串行 IPC 往返，约 8.7s）。而“刷新”的语义是把信息流从
     // 头重拉，旧的尾页本就该丢掉。`resetQueries` 把查询重置到 `initialPageParam` 并
     // 只重取首页，把刷新成本从 O(已加载页数) 降回 O(1)。
     setManualRefreshing(true);
-    void queryClient
-      .resetQueries({ queryKey: listQueryKey })
+    return queryClient
+      .resetQueries({ queryKey: browseListQueryKey })
       .finally(() => setManualRefreshing(false));
   };
 
@@ -246,7 +379,9 @@ function BilibiliVideoPage() {
         label={`刷新${title}`}
       />
       <div className="flex flex-col gap-4">
-        <h1 className="sr-only">{title}</h1>
+        <h1 ref={recommendationHeadingRef} className="sr-only">
+          {title}
+        </h1>
 
         {/* 推荐没有分区条：它就是一条个性化信息流，没有分区概念。其余三个页签都有：
             热门挂 UGC 分区（首项「全部」= 全站热门榜），番剧/影视挂 season_type 筛选。 */}
@@ -265,7 +400,16 @@ function BilibiliVideoPage() {
           <ErrorState
             error={listQuery.error}
             title={`${title}加载失败`}
-            onRetry={() => void listQuery.refetch()}
+            onRetry={() => void (tab === "recommend" ? refresh() : listQuery.refetch())}
+            action={<BilibiliAppAuthAction error={listQuery.error} />}
+          />
+        )}
+
+        {recommendationRefreshFailed && itemCount > 0 && (
+          <ErrorState
+            error={listQuery.error}
+            title="推荐视频更新失败"
+            onRetry={() => void refresh()}
             action={<BilibiliAppAuthAction error={listQuery.error} />}
           />
         )}
@@ -294,7 +438,7 @@ function BilibiliVideoPage() {
             />
           ))}
 
-        {hasNextPage && (
+        {hasNextPage && !recommendationRefreshFailed && (
           <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">
             {isFetchingNextPage && (
               <span

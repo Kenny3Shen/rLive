@@ -23,10 +23,14 @@ const COOKIE_DEPENDENT_QUERY_SCOPES = new Set([
  */
 const COOKIE_DEPENDENT_VIDEO_LIST_TABS = new Set(["recommend"]);
 
+export function isVideoRecommendationQuery(queryKey: QueryKey): boolean {
+  return queryKey[0] === "video_list" && COOKIE_DEPENDENT_VIDEO_LIST_TABS.has(String(queryKey[1]));
+}
+
 export function isCookieDependentSiteQuery(queryKey: QueryKey, siteId: SiteId): boolean {
   const [scope, querySiteId] = queryKey;
   if (scope === "video_list" && siteId === "bilibili") {
-    return COOKIE_DEPENDENT_VIDEO_LIST_TABS.has(String(queryKey[1]));
+    return isVideoRecommendationQuery(queryKey);
   }
   return (
     typeof scope === "string" && querySiteId === siteId && COOKIE_DEPENDENT_QUERY_SCOPES.has(scope)
@@ -34,15 +38,25 @@ export function isCookieDependentSiteQuery(queryKey: QueryKey, siteId: SiteId): 
 }
 
 /**
- * 账号 Cookie 变化后刷新浏览器与播放元数据。`invalidateQueries` 立即把非活动
- * 条目标记为过期并重新抓取活动条目，
- * 同时绝不把 Cookie 值放进查询缓存。
+ * 账号 Cookie 变化后刷新浏览器与播放元数据。普通查询会立即把非活动条目标记为
+ * 过期并重新抓取活动条目；VOD 推荐只标记失效，由活动推荐页从首页刷新，避免
+ * infinite query 按已加载页数重取。Cookie 值绝不进入查询缓存。
  */
 export function invalidateCookieDependentSiteQueries(
   queryClient: QueryClient,
   siteId: SiteId,
 ): Promise<void> {
-  return queryClient.invalidateQueries({
-    predicate: (query) => isCookieDependentSiteQuery(query.queryKey, siteId),
-  });
+  const affected = (queryKey: QueryKey) => isCookieDependentSiteQuery(queryKey, siteId);
+  return Promise.all([
+    // 推荐必须保留旧列表、先去取首页；默认无限查询失效会按已加载页数串行重取。
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        affected(query.queryKey) && isVideoRecommendationQuery(query.queryKey),
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        affected(query.queryKey) && !isVideoRecommendationQuery(query.queryKey),
+    }),
+  ]).then(() => undefined);
 }

@@ -46,6 +46,7 @@
 | 文档 | 内容 |
 | ---- | ---- |
 | [哔哩哔哩](zh/哔哩哔哩平台API文档.md) | 接口、签名、弹幕协议与发送边界 |
+| [B 站 VOD 推荐实时性调查](zh/B站VOD推荐实时性调查.md) | APP 推荐缓存与发布日期调查、20 分钟首页刷新修复及 Windows 验收 |
 | [斗鱼](zh/斗鱼平台API文档.md) | betard / h5room、纯 Rust 签名链、弹幕收发与结果语义 |
 | [虎牙](zh/虎牙平台API文档.md) | 移动端页解析、anticode、FLV 与发送条件 |
 | [抖音](zh/抖音平台API文档.md) | 直播 feed 与分区列表、`a_bogus` 验签、本地签名实时弹幕；短视频推荐下线依据 |
@@ -70,6 +71,8 @@
 | [vod-optimization-2026-09-24.json](bench/vod-optimization-2026-09-24.json) | VOD 首屏与续播阶段数据（[VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md)） |
 | [vod-home-investigation-2026-11-07.json](bench/vod-home-investigation-2026-11-07.json) | VOD 推荐首页成功/失败样本、512 KiB 正文截断及 `auto/off` 代理交错对照（[VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md)） |
 | [vod-home-fix-2026-11-07.json](bench/vod-home-fix-2026-11-07.json) | VOD 续传验证器拒绝证据、完整分片回退与自动恢复修复验收（同上） |
+| [vod-recommend-freshness-2026-11-15.json](bench/vod-recommend-freshness-2026-11-15.json) | APP 推荐返回不更新、真实发布时间与刷新参数对照（[调查报告](zh/B站VOD推荐实时性调查.md)） |
+| [vod-recommend-freshness-fix-2026-11-15.json](bench/vod-recommend-freshness-fix-2026-11-15.json) | 推荐缓存过期与首页刷新、失效通知、补货状态及失败重试验收（同上） |
 
 架构图有两套，用途不同：`assets/architecture.svg` 是项目首页展示用的分层总览；
 运行架构的详细图由本机工具生成在 `diagrams/`，该目录不入库。
