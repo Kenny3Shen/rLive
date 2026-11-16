@@ -5,7 +5,7 @@ import { quietPlayerStoreSet } from "./player-time-quiet";
 type TimeAttach = NonNullable<(typeof timeFeature)["attach"]>;
 
 /**
- * 原生 `timeFeature` 的包装：state、`seek` 与事件同步完全沿用 @videojs/core 10.1.0，
+ * 原生 `timeFeature` 的包装：state、`seek` 与事件同步完全沿用 @videojs/core 10.4.0，
  * 只把播放中逐帧的 `set({ currentTime })` 节流到约 10Hz。
  *
  * 进度条和时间文本是 store 时间的唯一消费方；弹幕、ASR、续播上报都直接读
