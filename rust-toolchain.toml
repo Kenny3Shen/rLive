@@ -1,5 +1,5 @@
 # 本地与 CI 固定同日 nightly，避免编译器随时间变化。
 [toolchain]
-channel = "nightly-2026-11-04"
+channel = "nightly-2026-11-16"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

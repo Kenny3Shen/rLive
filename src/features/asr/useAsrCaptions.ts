@@ -153,68 +153,71 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     }
   }, []);
 
-  const processPendingJobs = useCallback(async () => {
-    if (workerRunningRef.current) return;
-    workerRunningRef.current = true;
-    try {
-      while (pendingJobRef.current) {
-        const job = pendingJobRef.current;
-        pendingJobRef.current = null;
-        try {
-          const response = await invokeCmd<AsrTranscribeResponse>("asr_transcribe", {
-            pcmBase64: encodePcmBase64(job.pcm),
-          });
-          if (job.epoch !== epochRef.current) continue;
-          // 同值写入由 React 跳过，成功窗口不会因此重渲染宿主。
-          setNotice(null);
+  const processPendingJobs = useCallback(
+    async function processPendingJobs() {
+      if (workerRunningRef.current) return;
+      workerRunningRef.current = true;
+      try {
+        while (pendingJobRef.current) {
+          const job = pendingJobRef.current;
+          pendingJobRef.current = null;
+          try {
+            const response = await invokeCmd<AsrTranscribeResponse>("asr_transcribe", {
+              pcmBase64: encodePcmBase64(job.pcm),
+            });
+            if (job.epoch !== epochRef.current) continue;
+            // 同值写入由 React 跳过，成功窗口不会因此重渲染宿主。
+            setNotice(null);
 
-          // 实时假设随每个窗口变化，包括语句被提交后回到空值。
-          const partial = response.partial?.trim() || null;
-          text.update({ partial });
-          if (transcriptRef.current) asrTranscript.updateLive({ partial });
+            // 实时假设随每个窗口变化，包括语句被提交后回到空值。
+            const partial = response.partial?.trim() || null;
+            text.update({ partial });
+            if (transcriptRef.current) asrTranscript.updateLive({ partial });
 
-          if (response.segments.length === 0) continue;
-          const transcript = transcriptRef.current;
-          if (transcript) {
-            // 定稿先进入转录并取得条目 id，翻译完成后按 id 回填。
-            enqueueTranslation(
-              response.segments.map((segment) => {
-                const formatted = formatAsrCaptionSegment(segment);
-                if (!formatted) return segment;
-                const line = asrTranscript.appendLine({
-                  text: formatted,
-                  sourceKey: transcript.sourceKey,
-                  sourceTitle: transcript.sourceTitle,
-                });
-                return { ...segment, transcriptId: line.id };
-              }),
-            );
-          } else {
-            enqueueTranslation(response.segments);
+            if (response.segments.length === 0) continue;
+            const transcript = transcriptRef.current;
+            if (transcript) {
+              // 定稿先进入转录并取得条目 id，翻译完成后按 id 回填。
+              enqueueTranslation(
+                response.segments.map((segment) => {
+                  const formatted = formatAsrCaptionSegment(segment);
+                  if (!formatted) return segment;
+                  const line = asrTranscript.appendLine({
+                    text: formatted,
+                    sourceKey: transcript.sourceKey,
+                    sourceTitle: transcript.sourceTitle,
+                  });
+                  return { ...segment, transcriptId: line.id };
+                }),
+              );
+            } else {
+              enqueueTranslation(response.segments);
+            }
+            text.update((current) => ({
+              caption: response.segments.reduce(
+                (committed, segment) =>
+                  appendAsrCaptionLine(committed || null, formatAsrCaptionSegment(segment)),
+                current.caption ?? "",
+              ),
+            }));
+            // 只有已提交行会过期；部分文本由下一个窗口取代，而不是超时清除。
+            clearCaptionTimer();
+            captionTimerRef.current = window.setTimeout(() => {
+              text.update({ caption: null });
+              captionTimerRef.current = null;
+            }, CAPTION_RETENTION_MS);
+          } catch (error) {
+            if (job.epoch !== epochRef.current) continue;
+            setNotice(`语音识别失败：${errorText(error)}`);
           }
-          text.update((current) => ({
-            caption: response.segments.reduce(
-              (committed, segment) =>
-                appendAsrCaptionLine(committed || null, formatAsrCaptionSegment(segment)),
-              current.caption ?? "",
-            ),
-          }));
-          // 只有已提交行会过期；部分文本由下一个窗口取代，而不是超时清除。
-          clearCaptionTimer();
-          captionTimerRef.current = window.setTimeout(() => {
-            text.update({ caption: null });
-            captionTimerRef.current = null;
-          }, CAPTION_RETENTION_MS);
-        } catch (error) {
-          if (job.epoch !== epochRef.current) continue;
-          setNotice(`语音识别失败：${errorText(error)}`);
         }
+      } finally {
+        workerRunningRef.current = false;
+        if (pendingJobRef.current) void processPendingJobs();
       }
-    } finally {
-      workerRunningRef.current = false;
-      if (pendingJobRef.current) void processPendingJobs();
-    }
-  }, [clearCaptionTimer, enqueueTranslation, text]);
+    },
+    [clearCaptionTimer, enqueueTranslation, text],
+  );
 
   // 会话加载完成后兑现用户已经表达过的「开字幕」意图。
   // 只在这里消费一次：用户如果又点了一下关闭，pendingEnableRef 会先被清掉。

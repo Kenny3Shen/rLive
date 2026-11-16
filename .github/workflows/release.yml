@@ -25,7 +25,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
 
       - name: Check tag and package versions
         id: version
@@ -58,12 +58,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
-          toolchain: nightly-2026-11-04
+          toolchain: nightly-2026-11-16
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
@@ -324,12 +324,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
-          toolchain: nightly-2026-11-04
+          toolchain: nightly-2026-11-16
 
       - name: Install Linux build dependencies
         run: |
@@ -618,12 +618,12 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
-          toolchain: nightly-2026-11-04
+          toolchain: nightly-2026-11-16
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
@@ -714,10 +714,10 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
 
       - name: Set up Java
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: "17"
@@ -737,12 +737,12 @@ jobs:
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;29.0.14206865"
 
       - name: Set up Rust Android target
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
-          toolchain: nightly-2026-11-04
+          toolchain: nightly-2026-11-16
           targets: aarch64-linux-android
 
       - name: Install frontend dependencies
@@ -799,7 +799,7 @@ jobs:
           unzip -q "$apk_path" 'lib/arm64-v8a/librlive_lib.so' -d "$native_lib_dir"
           bash scripts/verify-android-native-symbols.sh \
             "$native_lib_dir/lib/arm64-v8a/librlive_lib.so"
-          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          apksigner="$ANDROID_HOME/build-tools/37.0.0/apksigner"
           "$apksigner" verify --verbose --print-certs "$apk_path"
 
           if [[ -n "$ANDROID_CERT_SHA256" ]]; then
@@ -867,7 +867,7 @@ jobs:
           cat release-assets/SHA256SUMS.txt
 
       - name: Create draft release and attach assets
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           draft: true
           generate_release_notes: true

@@ -63,14 +63,12 @@ open class RustPlugin : Plugin<Project> {
                     val targetName = targetPair.value
                     val targetArch = archList[targetPair.index]
                     val targetArchCapitalized = targetArch.replaceFirstChar { it.uppercase() }
-                    val targetBuildTask = project.tasks.maybeCreate(
+                    val targetBuildTask = project.tasks.register(
                         "rustBuild$targetArchCapitalized$profileCapitalized",
                         BuildTask::class.java
-                    ).apply {
+                    ) {
                         group = TASK_GROUP
                         description = "Build dynamic library in $profile mode for $targetArch"
-                        // Configure inputs at configuration time so the task action never
-                        // touches Task.project (deprecated at execution time / Gradle 10).
                         rootDirRel.set(config.rootDirRel)
                         target.set(targetName)
                         release.set(profile == "release")

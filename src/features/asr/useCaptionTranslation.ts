@@ -72,56 +72,59 @@ export function useCaptionTranslation(options: {
     [clearCaptionTimer, text],
   );
 
-  const processPendingJobs = useCallback(async () => {
-    if (workerRunningRef.current) return;
-    workerRunningRef.current = true;
-    try {
-      while (pendingJobsRef.current.length > 0) {
-        const job = pendingJobsRef.current.shift();
-        if (!job || job.epoch !== epochRef.current) continue;
+  const processPendingJobs = useCallback(
+    async function processPendingJobs() {
+      if (workerRunningRef.current) return;
+      workerRunningRef.current = true;
+      try {
+        while (pendingJobsRef.current.length > 0) {
+          const job = pendingJobsRef.current.shift();
+          if (!job || job.epoch !== epochRef.current) continue;
 
-        try {
-          const translatedSegments = await captionTranslationClient.translateBatch(
-            job.segments.map((segment) => segment.text),
-            job.from,
-            job.to,
-          );
-          if (job.epoch !== epochRef.current) continue;
+          try {
+            const translatedSegments = await captionTranslationClient.translateBatch(
+              job.segments.map((segment) => segment.text),
+              job.from,
+              job.to,
+            );
+            if (job.epoch !== epochRef.current) continue;
 
-          const remainingMs = job.expiresAt - Date.now();
-          for (const [index, segment] of job.segments.entries()) {
-            const translated = translatedSegments[index];
-            if (!translated) continue;
-            const formatted = formatAsrCaptionSegment({ ...segment, text: translated });
-            // 转录不设过期：翻译比叠加层慢时，字幕窗口仍应拿到这一行译文。
-            if (segment.transcriptId) onSegmentTranslated?.(segment.transcriptId, formatted);
+            const remainingMs = job.expiresAt - Date.now();
+            for (const [index, segment] of job.segments.entries()) {
+              const translated = translatedSegments[index];
+              if (!translated) continue;
+              const formatted = formatAsrCaptionSegment({ ...segment, text: translated });
+              // 转录不设过期：翻译比叠加层慢时，字幕窗口仍应拿到这一行译文。
+              if (segment.transcriptId) onSegmentTranslated?.(segment.transcriptId, formatted);
+              if (remainingMs <= 0) continue;
+              text.update((current) => ({
+                translatedCaption: appendAsrCaptionLine(current.translatedCaption, formatted),
+              }));
+            }
             if (remainingMs <= 0) continue;
-            text.update((current) => ({
-              translatedCaption: appendAsrCaptionLine(current.translatedCaption, formatted),
-            }));
-          }
-          if (remainingMs <= 0) continue;
-          text.update({ translationNotice: null });
-          clearCaptionTimer();
-          captionTimerRef.current = window.setTimeout(() => {
-            text.update({ translatedCaption: null });
-            captionTimerRef.current = null;
-          }, remainingMs);
-        } catch (error) {
-          if (job.epoch !== epochRef.current) continue;
-          const failure = describeCaptionTranslationFailure(error);
-          text.update({ translationNotice: failure.message });
-          if (failure.kind === "rate_limited") {
-            rateLimitedRef.current = true;
-            pendingJobsRef.current = [];
+            text.update({ translationNotice: null });
+            clearCaptionTimer();
+            captionTimerRef.current = window.setTimeout(() => {
+              text.update({ translatedCaption: null });
+              captionTimerRef.current = null;
+            }, remainingMs);
+          } catch (error) {
+            if (job.epoch !== epochRef.current) continue;
+            const failure = describeCaptionTranslationFailure(error);
+            text.update({ translationNotice: failure.message });
+            if (failure.kind === "rate_limited") {
+              rateLimitedRef.current = true;
+              pendingJobsRef.current = [];
+            }
           }
         }
+      } finally {
+        workerRunningRef.current = false;
+        if (pendingJobsRef.current.length > 0) void processPendingJobs();
       }
-    } finally {
-      workerRunningRef.current = false;
-      if (pendingJobsRef.current.length > 0) void processPendingJobs();
-    }
-  }, [clearCaptionTimer, onSegmentTranslated, text]);
+    },
+    [clearCaptionTimer, onSegmentTranslated, text],
+  );
 
   const enqueue = useCallback(
     (segments: TranslationSegment[]) => {

@@ -7,22 +7,36 @@
 
 | 项               | 版本                                                                  |
 | ---------------- | --------------------------------------------------------------------- |
-| Android platform | `android-36`（compileSdk / targetSdk 36，minSdk 24）                   |
-| Build Tools      | `36.0.0`                                                              |
+| Android platform | `android-37.0`（compileSdk / targetSdk 37，minSdk 24）                 |
+| Build Tools      | `37.0.0`                                                              |
 | NDK              | `29.0.14206865`（r29 稳定版）                                         |
-| Rust toolchain   | `nightly-2026-11-04`（由根目录 `rust-toolchain.toml` 固定）           |
+| Android Gradle   | AGP `9.3.1`、Gradle wrapper `9.6.1`、Kotlin `2.2.10`                 |
+| Rust toolchain   | `nightly-2026-11-16`（由根目录 `rust-toolchain.toml` 固定）           |
 | Rust target      | `aarch64-linux-android`（真机）、`x86_64-linux-android`（模拟器）     |
 | 其他             | Tauri 2、Bun、JDK 17                                                  |
+
+Android 工程遵循 Tauri CLI `2.12.5` 官方模板验证的 AGP `9.3.1`、Gradle `9.6.1` 与 Kotlin `2.2.10` 组合，不单独盲升 AGP 或 Gradle。Tauri 2 仍通过旧版 Kotlin/DSL 集成点接入 Android 模块，因此 `gradle.properties` 中的 `android.builtInKotlin=false`、`android.newDsl=false` 等兼容开关必须保留，待迁移 Tauri 3 再重新评估。
 
 ```bash
 export ANDROID_HOME="$HOME/Android/Sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
-sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.14206865"
-rustup target add --toolchain nightly-2026-11-04 \
+sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;29.0.14206865"
+rustup target add --toolchain nightly-2026-11-16 \
   aarch64-linux-android x86_64-linux-android
 ```
 
 Android target 安装在各 Rust 工具链之下。切换 `rust-toolchain.toml` 后，必须在新的 nightly 上重新执行上面的 `rustup target add`，否则交叉编译会报标准库 target 缺失。
+
+Gradle 配置缓存已开启；修改 Android 构建脚本后，在已生成的 `src-tauri/gen/android` 工程中至少执行：
+
+```bash
+bun run tauri -- android init --ci --skip-targets-install  # 仅在工程尚未生成时需要
+cd src-tauri/gen/android
+ANDROID_HOME="$HOME/Android/Sdk" ./gradlew \
+  :app:compileUniversalDebugKotlin --configuration-cache
+```
+
+该任务只验证 Gradle 配置、Tauri Android 模块和 Kotlin 编译，不依赖 `rustBuild*` 或 JNI merge，也不需要额外 `-x`；完整 APK 仍须使用下文 `bun run tauri -- android build`，不能把这项检查当作原生库或安装包构建结果。
 
 Android 交叉编译必须用 NDK clang。通过仓库的 `bun run tauri` 入口构建时，`scripts/tauri.ts` 会自动探测 `ANDROID_NDK_HOME`（或 `ANDROID_HOME` 下最新 NDK），并为 bindgen、cc-rs 和 Cargo linker 注入同一套工具链。Tauri 的 Android 构建不经过 `cargo-ndk`，不要把主机 `clang` 或桌面 MSVC 工具链带进来。
 
@@ -222,8 +236,8 @@ APK=$(find src-tauri/gen/android/app/build/outputs/apk -name 'app-*-release*.apk
 adb install -r "$APK"
 
 unzip -Z1 "$APK" | awk '/^lib\// { print }'
-"$ANDROID_HOME/build-tools/36.0.0/zipalign" -P 16 -c -v 4 "$APK"
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+"$ANDROID_HOME/build-tools/37.0.0/zipalign" -P 16 -c -v 4 "$APK"
+"$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose "$APK"
 ```
 
 `app-*-release.apk` 可直接安装；`*.aab` 是商店格式，不能 `adb install`。本地未配置 release keystore（`src-tauri/gen/android/app/keystore.properties`）时生成的是 unsigned APK，必须先签名。当前 arm64 APK/AAB 只应包含 `librlive_lib.so`（`jniLibs/` 是生成目录，旧本地构建可能遗留被 Git 忽略的 `.so`）。
