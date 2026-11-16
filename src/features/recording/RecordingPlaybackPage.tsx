@@ -23,7 +23,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
+import { PlaybackSettingsPanel } from "@/features/room/PlaybackSettingsPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { notify } from "@/components/ui/toast";
@@ -203,7 +203,7 @@ function PlaybackSidebar({ item, danmaku }: { item: RecordingItem; danmaku: Play
           />
         </TabsContent>
         <TabsContent value="settings" className="min-h-0 flex-1 overflow-hidden">
-          <DanmakuSettingsPanel className="h-full" showAsrCard={false} />
+          <PlaybackSettingsPanel className="h-full" idPrefix="recording" />
         </TabsContent>
       </Tabs>
     </aside>

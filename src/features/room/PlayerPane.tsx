@@ -28,7 +28,7 @@ import { getClientPlatform } from "@/shared/clientPlatform";
 import type { PlayUrl, SiteId } from "@/shared/types/live";
 import { readPlayerVolume, rememberPlayerVolume } from "@/shared/playerVolume";
 import { DanmakuPanel } from "./DanmakuPanel";
-import { DanmakuSettingsPanel } from "./DanmakuSettingsPanel";
+import { PlaybackSettingsPanel } from "./PlaybackSettingsPanel";
 import { FollowPanel } from "./FollowPanel";
 import { DanmakuComposer } from "./BilibiliDanmakuComposer";
 import {
@@ -1887,7 +1887,7 @@ function PlayerPaneContent({
                   style={{ width: `${100 / ROOM_SIDE_TABS.length}%` }}
                 >
                   {(secondaryReady || activeSideTab === "settings") && (
-                    <DanmakuSettingsPanel className="h-full" siteId={siteId} />
+                    <PlaybackSettingsPanel className="h-full" idPrefix="room" />
                   )}
                 </div>
               </div>

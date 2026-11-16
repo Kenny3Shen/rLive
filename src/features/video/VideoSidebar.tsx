@@ -75,7 +75,7 @@ import {
 import { filterBlockedUploaders } from "./videoUploaderBlock";
 import { useVideoBlockedUploaders } from "./useVideoBlockedUploaders";
 import { videoSelectionDefaultOpen } from "./videoSelectionDefaults";
-import { DanmakuSettingsPanel } from "@/features/room/DanmakuSettingsPanel";
+import { PlaybackSettingsPanel } from "@/features/room/PlaybackSettingsPanel";
 import { UploaderDrawer } from "./UploaderDrawer";
 import { VideoFollowGroupPickerDialog } from "./VideoFollowGroupPickerDialog";
 import {
@@ -1022,9 +1022,8 @@ export function VideoSidebar({
       );
     }
     if (value === "settings") {
-      // 与直播侧栏「设置」页签同源的面板；VOD 不渲染语音字幕卡
-      //（本地字幕设置项直接显示在播放器字幕菜单中）。
-      return <DanmakuSettingsPanel className="h-full" showAsrCard={false} />;
+      // 与设置页“播放与弹幕”及直播侧栏共用同一组设置分区。
+      return <PlaybackSettingsPanel className="h-full" idPrefix="video" />;
     }
     if (isPgc) {
       if (seasonQuery.isPending)

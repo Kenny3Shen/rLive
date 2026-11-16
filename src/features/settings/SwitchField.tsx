@@ -2,6 +2,7 @@ import { useId, type ReactNode } from "react";
 
 import { Field, FieldContent, FieldTitle } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 
 import { FieldTip } from "./FieldTip";
 
@@ -20,6 +21,8 @@ type SwitchFieldProps = {
   className?: string;
   /** 透传给 Field 的 className。 */
   fieldClassName?: string;
+  /** 设置页默认横排；窄容器里需要换行时传 responsive。 */
+  orientation?: "horizontal" | "responsive";
 };
 
 /** 设置页的开关行：标题 + 说明 + 横排开关，id 与 aria-labelledby 自动配对。 */
@@ -32,27 +35,35 @@ function SwitchField({
   fieldDisabled,
   className,
   fieldClassName,
+  orientation = "horizontal",
 }: SwitchFieldProps) {
   const labelId = useId();
   return (
     <Field
-      orientation="horizontal"
+      orientation={orientation}
       data-disabled={fieldDisabled || undefined}
       className={fieldClassName}
     >
-      <FieldContent>
+      <FieldContent className="min-w-0">
         <FieldTitle>
           <span id={labelId}>{title}</span>
           {tip && <FieldTip>{tip}</FieldTip>}
         </FieldTitle>
       </FieldContent>
-      <Switch
-        aria-labelledby={labelId}
-        className={className}
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={onCheckedChange}
-      />
+      <div
+        className={cn(
+          "flex shrink-0 items-center justify-end",
+          orientation === "responsive" && "w-full @md/field-group:w-auto",
+        )}
+      >
+        <Switch
+          aria-labelledby={labelId}
+          className={className}
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onCheckedChange}
+        />
+      </div>
     </Field>
   );
 }

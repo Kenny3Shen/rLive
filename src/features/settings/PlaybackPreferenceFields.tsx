@@ -39,13 +39,12 @@ import {
 } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import { FieldTip } from "@/features/settings/FieldTip";
+import { useSettingsFieldOrientation } from "@/features/settings/SettingsSection";
 import { SwitchField } from "@/features/settings/SwitchField";
 import { Slider } from "@/components/ui/slider";
 import { notify } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { isMobileClient } from "@/shared/clientPlatform";
-
-export type PlaybackSettingsFieldLayout = "page" | "panel";
 
 const ASR_FONT_SIZE_MIN = 12;
 const ASR_FONT_SIZE_MAX = 48;
@@ -71,15 +70,10 @@ type PreferenceSliderFieldProps = {
   max: number;
   step?: number;
   displayValue: string;
-  layout: PlaybackSettingsFieldLayout;
   disabled?: boolean;
   onPreview: (value: number) => void;
   onCommit: (value: number) => void;
 };
-
-function fieldSurfaceClass(layout: PlaybackSettingsFieldLayout): string | undefined {
-  return layout === "panel" ? "gap-2 rounded-lg bg-muted/35 p-3" : undefined;
-}
 
 function PreferenceSliderField({
   id,
@@ -90,30 +84,27 @@ function PreferenceSliderField({
   max,
   step = 1,
   displayValue,
-  layout,
   disabled = false,
   onPreview,
   onCommit,
 }: PreferenceSliderFieldProps) {
   const labelId = `${id}-label`;
+  const orientation = useSettingsFieldOrientation();
 
   return (
-    <Field
-      orientation="horizontal"
-      data-disabled={disabled || undefined}
-      className={fieldSurfaceClass(layout)}
-    >
-      <FieldContent className={layout === "panel" ? "min-w-0 flex-none" : undefined}>
+    <Field orientation={orientation} data-disabled={disabled || undefined}>
+      <FieldContent className="min-w-0">
         <FieldTitle>
           <span id={labelId}>{title}</span>
           {description && <FieldTip>{description}</FieldTip>}
         </FieldTitle>
       </FieldContent>
-      {/* 窄屏上与标题共享一行；宽屏布局下上限 13rem。 */}
       <div
         className={cn(
-          "flex items-center gap-3",
-          layout === "page" ? "min-w-32 max-w-52 flex-1" : "min-w-0 flex-1",
+          "flex min-w-0 items-center gap-3",
+          orientation === "horizontal"
+            ? "min-w-32 flex-[0_1_50%]"
+            : "w-full @md/field-group:min-w-32 @md/field-group:max-w-52 @md/field-group:flex-1",
         )}
       >
         <Slider
@@ -151,7 +142,6 @@ type SettingsEntryListProps = {
   noun: string;
   hint?: string;
   entries: readonly string[];
-  layout: PlaybackSettingsFieldLayout;
   addPlaceholder: string;
   emptyText: string;
   /** 屏蔽词忽略大小写去重；屏蔽用户与匹配器一样大小写敏感。 */
@@ -175,7 +165,6 @@ function SettingsEntryList({
   noun,
   hint,
   entries,
-  layout,
   addPlaceholder,
   emptyText,
   caseInsensitive = false,
@@ -185,6 +174,7 @@ function SettingsEntryList({
   onCommit,
 }: SettingsEntryListProps) {
   const [draft, setDraft] = useState("");
+  const orientation = useSettingsFieldOrientation();
   // 按值而不是下标记录正在编辑的行：列表可能被弹幕面板的屏蔽操作并发改写，
   // 下标会指向别的条目，值不存在时编辑态自然失效。
   const [editing, setEditing] = useState<string | null>(null);
@@ -266,15 +256,11 @@ function SettingsEntryList({
   }
 
   return (
-    <Field
-      orientation="horizontal"
-      data-disabled={disabled || undefined}
-      className={fieldSurfaceClass(layout)}
-    >
+    <Field orientation={orientation} data-disabled={disabled || undefined}>
       <FieldContent className="min-w-0">
         <FieldTitle>
           <span id={labelId}>{label}</span>
-          {hint && layout === "page" && <FieldTip>{hint}</FieldTip>}
+          {hint && <FieldTip>{hint}</FieldTip>}
           {entries.length > 0 && (
             <Badge variant="secondary" className="tabular-nums">
               {maxEntries === undefined ? entries.length : `${entries.length} / ${maxEntries}`}
@@ -439,13 +425,7 @@ function SettingsEntryList({
   );
 }
 
-export function AsrCaptionFontSizeField({
-  idPrefix,
-  layout,
-}: {
-  idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
-}) {
+export function AsrCaptionFontSizeField({ idPrefix }: { idPrefix: string }) {
   const fontSize = useSettingsStore((state) => state.asrFontSize);
   const setAsrFontSize = useSettingsStore((state) => state.setAsrFontSize);
 
@@ -457,7 +437,6 @@ export function AsrCaptionFontSizeField({
       min={ASR_FONT_SIZE_MIN}
       max={ASR_FONT_SIZE_MAX}
       displayValue={`${fontSize}px`}
-      layout={layout}
       onPreview={(value) => useSettingsStore.setState({ asrFontSize: Math.round(value) })}
       onCommit={setAsrFontSize}
     />
@@ -466,11 +445,9 @@ export function AsrCaptionFontSizeField({
 
 export function AsrChunkIntervalField({
   idPrefix,
-  layout,
   disabled = false,
 }: {
   idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
   disabled?: boolean;
 }) {
   const chunkSeconds = useSettingsStore((state) => state.asrWindowSeconds);
@@ -488,13 +465,12 @@ export function AsrChunkIntervalField({
     <PreferenceSliderField
       id={`${idPrefix}-asr-chunk-interval`}
       title="更新间隔"
-      description={layout === "page" ? "越短，刷新越快。" : undefined}
+      description="越短，刷新越快。"
       value={draft}
       min={ASR_CHUNK_SECONDS_MIN}
       max={ASR_CHUNK_SECONDS_MAX}
       step={0.1}
       displayValue={`${Number.isInteger(draft) ? draft : draft.toFixed(1)}s`}
-      layout={layout}
       disabled={disabled}
       onPreview={setDraft}
       onCommit={(value) => {
@@ -507,11 +483,9 @@ export function AsrChunkIntervalField({
 
 export function AsrHotwordsField({
   idPrefix,
-  layout,
   disabled = false,
 }: {
   idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
   disabled?: boolean;
 }) {
   const hotwords = useSettingsStore((state) => state.asrHotwords);
@@ -524,7 +498,6 @@ export function AsrHotwordsField({
       noun="热词"
       hint="识别时优先匹配这些词，适合主播名、游戏名和黑话。"
       entries={hotwords}
-      layout={layout}
       addPlaceholder="输入热词，回车添加"
       emptyText="还没有热词。"
       caseInsensitive
@@ -542,39 +515,26 @@ export function AsrHotwordsField({
   );
 }
 
-export function DanmakuTrackSettingsFields({
-  idPrefix,
-  layout,
-}: {
-  idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
-}) {
+export function DanmakuTrackSettingsFields({ idPrefix }: { idPrefix: string }) {
   const area = useSettingsStore((state) => state.danmakuArea);
 
   return (
     <PreferenceSliderField
       id={`${idPrefix}-danmaku-area`}
       title="显示区域"
-      description={layout === "page" ? "限制滚动弹幕占用的播放器高度。" : undefined}
+      description="限制滚动弹幕占用的播放器高度。"
       value={Math.round(area * 100)}
       min={10}
       max={100}
       step={5}
       displayValue={`${Math.round(area * 100)}%`}
-      layout={layout}
       onPreview={(value) => useSettingsStore.setState({ danmakuArea: value / 100 })}
       onCommit={(value) => persist({ danmaku_area: value / 100 })}
     />
   );
 }
 
-export function DanmakuAppearanceSettingsFields({
-  idPrefix,
-  layout,
-}: {
-  idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
-}) {
+export function DanmakuAppearanceSettingsFields({ idPrefix }: { idPrefix: string }) {
   const opacity = useSettingsStore((state) => state.danmakuOpacity);
   const fontSize = useSettingsStore((state) => state.danmakuFontSize);
   const fontStroke = useSettingsStore((state) => state.danmakuFontStroke);
@@ -589,7 +549,6 @@ export function DanmakuAppearanceSettingsFields({
         min={0}
         max={100}
         displayValue={`${Math.round(opacity * 100)}%`}
-        layout={layout}
         onPreview={(value) => useSettingsStore.setState({ danmakuOpacity: value / 100 })}
         onCommit={(value) => persist({ danmaku_opacity: value / 100 })}
       />
@@ -600,22 +559,18 @@ export function DanmakuAppearanceSettingsFields({
         min={12}
         max={36}
         displayValue={`${fontSize}px`}
-        layout={layout}
         onPreview={(value) => useSettingsStore.setState({ danmakuFontSize: value })}
         onCommit={(value) => persist({ danmaku_font_size: value })}
       />
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-font-stroke`}
         title="字体描边"
-        description={
-          layout === "page" ? "调整播放器弹幕的文字轮廓宽度，设为 0 可关闭。" : undefined
-        }
+        description="调整播放器弹幕的文字轮廓宽度，设为 0 可关闭。"
         value={fontStroke}
         min={DANMAKU_FONT_STROKE_MIN}
         max={DANMAKU_FONT_STROKE_MAX}
         step={DANMAKU_FONT_STROKE_STEP}
         displayValue={fontStroke === 0 ? "关闭" : `${fontStroke.toFixed(1)}px`}
-        layout={layout}
         onPreview={(value) =>
           useSettingsStore.setState({ danmakuFontStroke: parseDanmakuFontStroke(value) })
         }
@@ -628,13 +583,12 @@ export function DanmakuAppearanceSettingsFields({
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-speed`}
         title="滚动速度"
-        description={layout === "page" ? "调整普通滚动弹幕的速度，1.0× 为默认值。" : undefined}
+        description="调整普通滚动弹幕的速度，1.0× 为默认值。"
         value={speed}
         min={DANMAKU_SPEED_MIN}
         max={DANMAKU_SPEED_MAX}
         step={10}
         displayValue={`${(speed / DANMAKU_SPEED_DEFAULT).toFixed(1)}×`}
-        layout={layout}
         onPreview={(value) => useSettingsStore.setState({ danmakuSpeed: parseDanmakuSpeed(value) })}
         onCommit={(value) => {
           const next = parseDanmakuSpeed(value);
@@ -672,13 +626,7 @@ export function resetDanmakuAppearanceSettings() {
  * 与长按抽屉（那里直接拿到 `author_mid`）；这里主要承担「看看屏蔽了谁」与
  * 「把某一条撤回来」。
  */
-export function VideoBlockedUploaderField({
-  idPrefix,
-  layout,
-}: {
-  idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
-}) {
+export function VideoBlockedUploaderField({ idPrefix }: { idPrefix: string }) {
   const blockedUploaders = useSettingsStore((state) => state.videoBlockedUploaders);
 
   return (
@@ -688,7 +636,6 @@ export function VideoBlockedUploaderField({
       noun="UID"
       hint="按 UP 主 UID 屏蔽，可在视频卡片上右键或长按直接添加；只过滤浏览列表与竖屏流，不影响播放。"
       entries={blockedUploaders}
-      layout={layout}
       addPlaceholder="输入 UP 主 UID，回车添加"
       emptyText="还没有屏蔽的 UP 主。"
       maxEntries={VIDEO_BLOCKED_UPLOADERS_MAX}
@@ -703,13 +650,12 @@ export function VideoBlockedUploaderField({
 
 export function DanmakuFilterSettingsFields({
   idPrefix,
-  layout,
   showSuperChat = false,
 }: {
   idPrefix: string;
-  layout: PlaybackSettingsFieldLayout;
   showSuperChat?: boolean;
 }) {
+  const orientation = useSettingsFieldOrientation();
   const filterGifts = useSettingsStore((state) => state.danmakuFilterGifts);
   const mergeWindowSeconds = useSettingsStore((state) => state.danmakuMergeWindowSeconds);
   const superChatEnabled = useSettingsStore((state) => state.superChatEnabled);
@@ -722,12 +668,11 @@ export function DanmakuFilterSettingsFields({
       <PreferenceSliderField
         id={`${idPrefix}-danmaku-merge-window`}
         title="合并窗口"
-        description={layout === "page" ? "相同弹幕在此时间内合并计数，0 秒表示关闭。" : undefined}
+        description="相同弹幕在此时间内合并计数，0 秒表示关闭。"
         value={mergeWindowSeconds}
         min={DANMAKU_MERGE_WINDOW_SECONDS_MIN}
         max={DANMAKU_MERGE_WINDOW_SECONDS_MAX}
         displayValue={`${mergeWindowSeconds} 秒`}
-        layout={layout}
         onPreview={(value) =>
           useSettingsStore.setState({
             danmakuMergeWindowSeconds: parseDanmakuMergeWindowSeconds(value),
@@ -741,8 +686,8 @@ export function DanmakuFilterSettingsFields({
       />
       <SwitchField
         title="隐藏礼物信息"
-        tip={layout === "page" ? "隐藏弹幕列表和叠加层中的礼物消息。" : undefined}
-        fieldClassName={fieldSurfaceClass(layout)}
+        tip="隐藏弹幕列表和叠加层中的礼物消息。"
+        orientation={orientation}
         checked={filterGifts}
         onCheckedChange={(checked) => {
           useSettingsStore.setState({ danmakuFilterGifts: checked });
@@ -752,8 +697,8 @@ export function DanmakuFilterSettingsFields({
       {showSuperChat && (
         <SwitchField
           title="显示醒目留言"
-          tip={layout === "page" ? "显示支持平台的固定醒目留言。" : undefined}
-          fieldClassName={fieldSurfaceClass(layout)}
+          tip="显示支持平台的固定醒目留言。"
+          orientation={orientation}
           checked={superChatEnabled}
           onCheckedChange={setSuperChatEnabled}
         />
@@ -764,7 +709,6 @@ export function DanmakuFilterSettingsFields({
         noun="屏蔽词"
         hint="命中的聊天、礼物与醒目留言都不再显示，只影响新到达的消息。"
         entries={shieldWords}
-        layout={layout}
         addPlaceholder="输入要屏蔽的词，回车添加"
         emptyText="还没有屏蔽词。"
         caseInsensitive
@@ -779,7 +723,6 @@ export function DanmakuFilterSettingsFields({
         noun="昵称"
         hint="按昵称精确匹配，区分大小写；也可在弹幕列表中点击消息直接屏蔽。"
         entries={blockedUsers}
-        layout={layout}
         addPlaceholder="输入要屏蔽的昵称，回车添加"
         emptyText="还没有屏蔽用户。"
         maxEntries={DANMAKU_BLOCKED_USERS_MAX}
