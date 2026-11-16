@@ -8,6 +8,9 @@
 /coverage/
 /.vite/
 /src-tauri/target/
+/target/
+**/target/
+__pycache__/
 *.tsbuildinfo
 
 # Local environment and machine-specific configuration
