@@ -49,8 +49,11 @@ export function normalizeImageUrl(value: string | null | undefined): string | un
  * 要么来自内容每几分钟轮换的稳定 URL（Twitch `previews-ttv`）。缓存前者会用永不
  * 再读的条目填满预算；缓存后者则显示冻结的预览。
  */
-export function normalizeCoverUrl(value: string | null | undefined): string | undefined {
-  return normalizeRemoteImage(value, { cache: false });
+export function normalizeCoverUrl(
+  value: string | null | undefined,
+  coverRevision?: string,
+): string | undefined {
+  return normalizeRemoteImage(value, { cache: false, coverRevision });
 }
 
 /**

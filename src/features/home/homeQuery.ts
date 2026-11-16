@@ -3,6 +3,7 @@ import { invokeCmd } from "@/shared/api/tauri";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import type { SiteId, RoomListPage } from "@/shared/types/live";
 import { nextRecommendPage } from "./pagination";
+import { roomCoverSnapshot } from "@/shared/api/roomCoverSnapshot";
 
 /**
  * 首页推荐的查询键。
@@ -25,7 +26,7 @@ export function homeRecommendationsQueryOptions(siteId: SiteId, appAuthRevision 
       invokeCmd<RoomListPage>("site_get_recommend", {
         siteId,
         page: pageParam,
-      }),
+      }).then(roomCoverSnapshot),
     initialPageParam: 1,
     getNextPageParam: nextRecommendPage,
     ...BROWSING_LIST_QUERY_OPTIONS,

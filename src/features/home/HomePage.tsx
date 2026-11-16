@@ -46,22 +46,24 @@ import {
   parseCategorySelection,
   resolveSelectedCategory,
 } from "@/features/category/categorySelection";
-import {
-  homeRecommendationsQueryOptions,
-  trimRotatingRecommendPages,
-} from "./homeQuery";
+import { homeRecommendationsQueryOptions, trimRotatingRecommendPages } from "./homeQuery";
 import { mergeRoomPages } from "./pagination";
+import { roomCoverVersions } from "@/shared/api/roomCoverSnapshot";
 
 type RoomGridProps = {
   rooms: readonly LiveRoomItem[];
+  coverVersions: ReadonlyMap<string, string>;
 };
 
-const RoomGrid = memo(function RoomGrid({ rooms }: RoomGridProps) {
+const RoomGrid = memo(function RoomGrid({ rooms, coverVersions }: RoomGridProps) {
   return (
     <div className={CARD_GRID_CLASS}>
       {rooms.map((room) => (
         <div key={`${room.site_id}:${room.room_id}`}>
-          <RoomCard room={room} />
+          <RoomCard
+            room={room}
+            coverRevision={coverVersions.get(`${room.site_id}:${room.room_id}`)}
+          />
         </div>
       ))}
     </div>
@@ -138,6 +140,7 @@ export function HomePage() {
   const query = selection ? categoryRoomsQuery : recommendQuery;
   const pages = query.data?.pages;
   const rooms = useMemo(() => mergeRoomPages(pages), [pages]);
+  const coverVersions = useMemo(() => roomCoverVersions(pages), [pages]);
   const hasNextPage = query.isPlaceholderData ? false : query.hasNextPage;
 
   const { fetchNextPage, isFetchingNextPage, isFetchNextPageError } = query;
@@ -250,10 +253,7 @@ export function HomePage() {
               // 数据到达时不会整屏改一次几何。
               <div
                 key={i}
-                className={cn(
-                  "flex flex-col overflow-hidden rounded-xl",
-                  CARD_SURFACE_CLASS,
-                )}
+                className={cn("flex flex-col overflow-hidden rounded-xl", CARD_SURFACE_CLASS)}
               >
                 <Skeleton className="aspect-video w-full rounded-none" />
                 <div className="flex flex-col gap-2 px-2 pt-2 pb-2.5">
@@ -304,7 +304,7 @@ export function HomePage() {
             </Empty>
           ))}
 
-        {rooms.length > 0 && <RoomGrid rooms={rooms} />}
+        {rooms.length > 0 && <RoomGrid rooms={rooms} coverVersions={coverVersions} />}
 
         {hasNextPage && (
           <div ref={loadMoreRef} className="flex min-h-11 items-center justify-center pt-3 pb-2">

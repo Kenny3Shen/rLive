@@ -54,6 +54,8 @@ const CACHED_IMAGE_MAX_AGE: u32 = 24 * 60 * 60;
 /// 抓取，又足够短，使 URL 稳定的预览图（Twitch `previews-ttv`）
 /// 在浏览时仍能刷新。
 const COVER_MAX_AGE: u32 = 120;
+/// 有查询快照版本的封面只在主动刷新时换键，返回列表无需再次抓取。
+const SNAPSHOT_COVER_MAX_AGE: u32 = 24 * 60 * 60;
 
 pub struct ImageProxy {
     state: Mutex<Option<ImageProxyInner>>,
@@ -296,6 +298,10 @@ async fn handle_image_request(
     // 直播房间封面选择不进入磁盘缓存：其 URL 要么携带采集时间戳
     // （每次刷新都是新键，且不会再被读取），要么在画面轮换时保持不变。
     let use_cache = !query.split('&').any(|pair| pair == "nocache=1");
+    let cover_snapshot = query.split('&').any(|pair| {
+        pair.strip_prefix("revision=")
+            .is_some_and(|revision| !revision.is_empty())
+    });
 
     let upstream_url = match parse_image_url(raw_url) {
         Some(url) => url,
@@ -403,6 +409,8 @@ async fn handle_image_request(
     // 小图片快速到达时，Windows WebView 可能截断分块响应。
     let max_age = if use_cache {
         CACHED_IMAGE_MAX_AGE
+    } else if cover_snapshot {
+        SNAPSHOT_COVER_MAX_AGE
     } else {
         COVER_MAX_AGE
     };
@@ -497,8 +505,8 @@ async fn write_response_bytes(
 #[cfg(test)]
 mod tests {
     use super::{
-        ALLOWED_IMAGE_HOSTS, ImageProxy, host_is_allowed, parse_image_url, percent_decode,
-        referer_for,
+        ALLOWED_IMAGE_HOSTS, COVER_MAX_AGE, ImageProxy, SNAPSHOT_COVER_MAX_AGE, host_is_allowed,
+        parse_image_url, percent_decode, referer_for,
     };
 
     #[test]
@@ -705,7 +713,8 @@ mod tests {
     }
 
     /// 直播房间封面传入 `nocache=1`：body 仍必须经代理转发（Referer 才是关键），
-    /// 但绝不进入磁盘缓存，WebView 也只能短暂持有它。
+    /// 但绝不进入磁盘缓存。旧请求只能短暂持有；带列表快照版本时，唯一 URL 可让
+    /// WebView 在返回列表时复用，同时主动刷新仍会生成新键。
     #[tokio::test]
     async fn nocache_requests_are_proxied_without_touching_the_disk_cache() {
         use std::io::{Read, Write};
@@ -715,7 +724,7 @@ mod tests {
         let upstream = StdTcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
         let server = std::thread::spawn(move || {
-            for _ in 0..2 {
+            for _ in 0..3 {
                 let (mut stream, _) = upstream.accept().unwrap();
                 let mut request = [0_u8; 2048];
                 let _ = stream.read(&mut request).unwrap();
@@ -752,15 +761,22 @@ mod tests {
             })
             .collect::<String>();
         let path = format!("/img?nocache=1&url={encoded}");
+        let revision_path = format!("/img?nocache=1&revision=snapshot-1&url={encoded}");
 
-        for _ in 0..2 {
+        for (request_path, max_age) in [
+            (path.as_str(), COVER_MAX_AGE),
+            (path.as_str(), COVER_MAX_AGE),
+            (revision_path.as_str(), SNAPSHOT_COVER_MAX_AGE),
+        ] {
             let mut local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
                 .await
                 .unwrap();
             local
                 .write_all(
-                    format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                        .as_bytes(),
+                    format!(
+                        "GET {request_path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
                 )
                 .await
                 .unwrap();
@@ -775,13 +791,13 @@ mod tests {
             let text = String::from_utf8_lossy(&response);
             assert!(text.contains("200 OK"), "{text}");
             assert!(
-                text.contains("Cache-Control: private, max-age=120"),
+                text.contains(&format!("Cache-Control: private, max-age={max_age}")),
                 "{text}"
             );
             assert!(response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nlive-cover"));
         }
 
-        // 两个请求都到达了（两次额度的）上游，因此没有一个来自磁盘，
+        // 三个请求都到达了（三次额度的）上游，因此没有一个来自磁盘，
         // 也没有写入任何缓存。
         server.join().unwrap();
         assert_eq!(proxy.cache_usage().await.files, 0);

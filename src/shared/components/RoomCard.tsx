@@ -12,12 +12,12 @@ import { formatOnline, normalizeCoverUrl, cn } from "@/lib/utils";
 import { roomCardLabels } from "./roomCardLabels";
 import { RoomCardActions, type RoomCardMenuPoint } from "./RoomCardActions";
 
-type RoomCardProps = { room: LiveRoomItem };
+type RoomCardProps = { room: LiveRoomItem; coverRevision?: string };
 
-export const RoomCard = memo(function RoomCard({ room }: RoomCardProps) {
+export const RoomCard = memo(function RoomCard({ room, coverRevision }: RoomCardProps) {
   const navigate = useNavigate();
   const roomPath = `/room/${room.site_id}/${encodeURIComponent(room.room_id)}`;
-  const normalizedCover = normalizeCoverUrl(room.cover);
+  const normalizedCover = normalizeCoverUrl(room.cover, coverRevision);
   const mobile = isMobileClient();
   const cardRef = useRef<HTMLButtonElement | null>(null);
   const cardDrawer = useLongPressDrawer({ enabled: mobile });

@@ -2,6 +2,7 @@ import type { QueryFunctionContext } from "@tanstack/react-query";
 import { invokeCmd } from "@/shared/api/tauri";
 import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import type { LiveSubCategory, RoomListPage, SiteId } from "@/shared/types/live";
+import { roomCoverSnapshot } from "@/shared/api/roomCoverSnapshot";
 
 type CategoryRoomsQueryKey = readonly ["category_rooms", SiteId, string, string];
 
@@ -23,7 +24,7 @@ export function categoryRoomsQueryOptions(siteId: SiteId, category: LiveSubCateg
         siteId,
         category,
         page: pageParam,
-      }),
+      }).then(roomCoverSnapshot),
     initialPageParam: 1,
     getNextPageParam: (last: RoomListPage, _pages: unknown, lastPageParam: number) =>
       last.has_more ? lastPageParam + 1 : undefined,

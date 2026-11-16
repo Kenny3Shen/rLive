@@ -56,6 +56,8 @@ export function preloadImageProxy(): Promise<string | null> {
 }
 
 export type ProxyImageOptions = {
+  /** 浏览列表查询快照的版本，只作为本机 HTTP 缓存键，不传给 CDN。 */
+  coverRevision?: string;
   /**
    * 让抓取的内容进入后端磁盘缓存。直播房间封面关闭此项：平台为每次采集生成新
    * URL（虎牙把秒级时间戳写进文件名，斗鱼的 `asrpic` 同理），
@@ -84,5 +86,9 @@ export function proxyImageUrl(url: string, options?: ProxyImageOptions): string 
 /** 单张被代理图片的请求目标；`nocache=1` 选择退出磁盘缓存。 */
 export function buildProxyTarget(base: string, href: string, options?: ProxyImageOptions): string {
   const flags = options?.cache === false ? "nocache=1&" : "";
-  return `${base}/img?${flags}url=${encodeURIComponent(href)}`;
+  const revision =
+    options?.cache === false && options.coverRevision
+      ? `revision=${encodeURIComponent(options.coverRevision)}&`
+      : "";
+  return `${base}/img?${flags}${revision}url=${encodeURIComponent(href)}`;
 }
