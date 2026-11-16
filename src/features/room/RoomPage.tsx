@@ -391,7 +391,10 @@ function RoomPageContent() {
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div
+      data-window-fullscreen={webFullscreen ? "true" : undefined}
+      className="flex h-full min-h-0 flex-col bg-background"
+    >
       {/* 所有端都不再渲染流内顶栏：房间身份、返回与工具由 PlayerPane 的画面内
           HUD 承担（与底部控制栏同一套空闲显隐），顶部空间由 Shell 预留给状态栏。 */}
 

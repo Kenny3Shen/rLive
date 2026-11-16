@@ -835,7 +835,8 @@ body {
   /* 单值时长：遮罩按同一时长退场，与内容动画同拍。
      透明度用 ease-out 先走，缩放与位移用 ease-exit 收尾。 */
   transition-duration: var(--motion-dialog-exit-duration);
-  transition-timing-function: var(--motion-ease-exit), var(--motion-ease-exit), var(--motion-ease-out);
+  transition-timing-function:
+    var(--motion-ease-exit), var(--motion-ease-exit), var(--motion-ease-out);
 }
 
 .motion-drawer {
@@ -1007,14 +1008,14 @@ body {
    一眼可辨，标签只换颜色。切换时胶囊从中心横向展开（仅 transform/opacity，合成器
    完成），减少动效时直接切换。宽度不超过所在格，320px 窄屏也不会挤出格子。 */
 @media (width < 48rem) {
-  .app-shell [data-slot="app-sidebar-indicator"] {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar-indicator"] {
     width: min(3.5rem, 100%);
     height: 2rem;
     align-items: center;
     justify-content: center;
   }
 
-  .app-shell [data-slot="app-sidebar-indicator"]::before {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar-indicator"]::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -1028,28 +1029,35 @@ body {
       transform 240ms var(--motion-ease-out);
   }
 
-  .app-shell [data-slot="app-sidebar-link"] {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar-link"] {
     isolation: isolate;
   }
 
-  .app-shell [data-slot="app-sidebar-link"][aria-current="page"] [data-slot="app-sidebar-indicator"]::before {
+  .app-shell[data-mobile-client="true"]
+    [data-slot="app-sidebar-link"][aria-current="page"]
+    [data-slot="app-sidebar-indicator"]::before {
     opacity: 1;
     transform: scaleX(1);
   }
 
   /* 按下未选中项时给出同形的浅色反馈，触摸上没有悬停态可依赖。 */
-  .app-shell [data-slot="app-sidebar-link"]:not([aria-current="page"]):active
+  .app-shell[data-mobile-client="true"]
+    [data-slot="app-sidebar-link"]:not([aria-current="page"]):active
     [data-slot="app-sidebar-indicator"]::before {
     background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
     opacity: 1;
     transform: scaleX(1);
   }
 
-  .app-shell [data-slot="app-sidebar-link"][aria-current="page"] [data-slot="app-sidebar-label"] {
+  .app-shell[data-mobile-client="true"]
+    [data-slot="app-sidebar-link"][aria-current="page"]
+    [data-slot="app-sidebar-label"] {
     font-weight: 600;
   }
 
-  [data-motion="reduced"] .app-shell [data-slot="app-sidebar-indicator"]::before {
+  [data-motion="reduced"]
+    .app-shell[data-mobile-client="true"]
+    [data-slot="app-sidebar-indicator"]::before {
     transition: none;
   }
 }
@@ -1057,7 +1065,7 @@ body {
 /* 较矮的横屏手机首先是观看表面。保持底部导航可达但紧凑：图标保留 44px 目标，
    标签与多余的外壳内边距不再吃掉五分之一的视口。 */
 @media (max-height: 540px) and (orientation: landscape) and (pointer: coarse) {
-  .app-shell [data-slot="app-sidebar"] {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar"] {
     position: fixed;
     right: 0;
     bottom: 0;
@@ -1074,7 +1082,7 @@ body {
     padding-bottom: calc(0.125rem + var(--app-safe-area-bottom));
   }
 
-  .app-shell [data-slot="app-sidebar-nav"] {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar-nav"] {
     min-width: 0;
     flex-direction: row;
     justify-content: flex-start;
@@ -1085,11 +1093,11 @@ body {
   /* 底部分组（亮暗切换/历史/设置）在紧凑底栏里退化为行内流：
      这类手机横屏宽度普遍超过 md 断点，Tailwind 的 max-md:contents
      够不到这里，必须在这里显式拆开分组容器。 */
-  .app-shell [data-slot="app-sidebar-footer"] {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar-footer"] {
     display: contents;
   }
 
-  .app-shell [data-slot="app-sidebar-link"] {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar-link"] {
     height: auto;
     min-width: 0;
     min-height: 2.75rem;
@@ -1104,7 +1112,7 @@ body {
     padding-bottom: 0.125rem;
   }
 
-  .app-shell [data-slot="app-sidebar-label"] {
+  .app-shell[data-mobile-client="true"] [data-slot="app-sidebar-label"] {
     display: none;
   }
 
@@ -1279,6 +1287,14 @@ html[data-platform="android"] .app-shell {
    一条状态栏高度的空白。保留该变量并置 0，供消费方的 `max()` 表达式取用。 */
 [data-player-stage] {
   --player-safe-area-top: 0px;
+}
+
+/* 导航属于应用外壳，播放页转场不卸载它；全屏期间同步让出布局空间。 */
+.app-shell[data-native-fullscreen="true"] [data-slot="app-sidebar"],
+.app-shell:has([data-window-fullscreen="true"]) [data-slot="app-sidebar"],
+.app-shell:has([data-player-stage][data-fullscreen="true"]) [data-slot="app-sidebar"],
+.app-shell:has(:fullscreen) [data-slot="app-sidebar"] {
+  display: none;
 }
 
 html[data-platform="android"]
@@ -1456,9 +1472,7 @@ html.overlay-window #root {
 
    粗指针下 Input / InputGroup 自带 `min-h-11`（44px，全局触摸下限），必须一起
    覆盖，否则输入框仍会把整行撑高、比按钮高出近三分之一。 */
-[data-slot="player-extension-controls"]
-  [data-slot="player-center-slot"]
-  [data-slot="input-group"] {
+[data-slot="player-extension-controls"] [data-slot="player-center-slot"] [data-slot="input-group"] {
   height: var(--media-control-size) !important;
   min-height: var(--media-control-size) !important;
 }

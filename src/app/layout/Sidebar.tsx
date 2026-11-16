@@ -53,10 +53,12 @@ function SidebarLink({
   end,
   className,
   onIntent,
+  mobileClient,
   badgeCount = 0,
   badgeLabel,
 }: SidebarNavItem & {
   onIntent?: () => void;
+  mobileClient: boolean;
   badgeCount?: number;
   badgeLabel?: string | null;
 }) {
@@ -174,17 +176,25 @@ function SidebarLink({
       className={({ isActive }) =>
         cn(
           "group relative flex h-10 w-10 items-center justify-center rounded-xl",
-          // 平板（≥md 的粗指针）沿用竖排 rail，但按移动端待遇呈现：
-          // 48px 命中区加图标下方的文字标签 —— 悬停 tooltip 在触摸上不存在，
-          // 无标签的纯图标 rail 在平板上无法自解释。
-          "touch-wide:h-auto touch-wide:min-h-12 touch-wide:w-auto touch-wide:min-w-12 touch-wide:flex-col touch-wide:gap-0.5 touch-wide:rounded-lg touch-wide:px-1.5 touch-wide:py-1",
-          "max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-0.5",
+          mobileClient
+            ? cn(
+                // 平板（≥md 的粗指针）沿用竖排 rail，但按移动端待遇呈现：
+                // 48px 命中区加图标下方的文字标签 —— 悬停 tooltip 在触摸上不存在，
+                // 无标签的纯图标 rail 在平板上无法自解释。
+                "touch-wide:h-auto touch-wide:min-h-12 touch-wide:w-auto touch-wide:min-w-12 touch-wide:flex-col touch-wide:gap-0.5 touch-wide:rounded-lg touch-wide:px-1.5 touch-wide:py-1",
+                "max-md:h-auto max-md:min-h-12 max-md:w-auto max-md:min-w-0 max-md:flex-1 max-md:flex-col max-md:gap-0.5 max-md:rounded-lg max-md:px-1 max-md:py-0.5",
+              )
+            : undefined,
           className,
           // 移动端底栏不给整格铺底：选中态由图标背后的胶囊指示器表达（见 styles.css
           // 的 `app-sidebar-indicator`），整格只换文字颜色。桌面竖栏沿用整格高亮。
-          isActive
-            ? "text-primary md:bg-primary/12 md:shadow-sm md:shadow-primary/10 md:ring-1 md:ring-primary/15"
-            : "text-muted-foreground hover:text-foreground md:hover:bg-muted/70",
+          mobileClient
+            ? isActive
+              ? "text-primary md:bg-primary/12 md:shadow-sm md:shadow-primary/10 md:ring-1 md:ring-primary/15"
+              : "text-muted-foreground hover:text-foreground md:hover:bg-muted/70"
+            : isActive
+              ? "bg-primary/12 text-primary shadow-sm shadow-primary/10 ring-1 ring-primary/15"
+              : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
         )
       }
     >
@@ -207,7 +217,11 @@ function SidebarLink({
           </span>
           <span
             data-slot="app-sidebar-label"
-            className="sr-only max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[11px] max-md:leading-3.5 max-md:font-medium touch-wide:not-sr-only touch-wide:block touch-wide:max-w-full touch-wide:truncate touch-wide:text-[10px] touch-wide:leading-3 touch-wide:font-medium"
+            className={cn(
+              "sr-only",
+              mobileClient &&
+                "max-md:not-sr-only max-md:block max-md:max-w-full max-md:truncate max-md:text-[11px] max-md:leading-3.5 max-md:font-medium touch-wide:not-sr-only touch-wide:block touch-wide:max-w-full touch-wide:truncate touch-wide:text-[10px] touch-wide:leading-3 touch-wide:font-medium",
+            )}
           >
             {label}
           </span>
@@ -219,7 +233,10 @@ function SidebarLink({
   return (
     <Tooltip>
       <TooltipTrigger render={link} />
-      <TooltipContent side="right" className="max-md:hidden touch-wide:hidden">
+      <TooltipContent
+        side="right"
+        className={cn(mobileClient && "max-md:hidden touch-wide:hidden")}
+      >
         {badgeLabel ? (
           <span className="flex flex-col gap-0.5">
             <span>{label}</span>
@@ -355,6 +372,7 @@ export function Sidebar({ taskCounts }: { taskCounts: FollowTaskCounts }) {
     <SidebarLink
       key={item.to}
       {...item}
+      mobileClient={mobileClient}
       onIntent={item.to === "/" ? preloadHome : undefined}
       badgeCount={item.to === "/follow" ? followTaskCount : 0}
       badgeLabel={item.to === "/follow" ? followTaskLabel : null}
@@ -364,23 +382,31 @@ export function Sidebar({ taskCounts }: { taskCounts: FollowTaskCounts }) {
   return (
     <aside
       data-slot="app-sidebar"
-      className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar/95 py-3 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-20 max-md:h-[calc(4.25rem+var(--app-safe-area-bottom))] max-md:w-auto max-md:flex-row max-md:border-t max-md:border-r-0 max-md:px-2 max-md:py-2 max-md:pb-[calc(0.5rem+var(--app-safe-area-bottom))]"
+      className={cn(
+        "flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border-subtle bg-sidebar/95 py-3",
+        mobileClient &&
+          "max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-20 max-md:h-[calc(4.25rem+var(--app-safe-area-bottom))] max-md:w-auto max-md:flex-row max-md:border-t max-md:border-r-0 max-md:px-2 max-md:py-2 max-md:pb-[calc(0.5rem+var(--app-safe-area-bottom))]",
+      )}
     >
       <nav
         data-slot="app-sidebar-nav"
-        className="flex w-full flex-1 flex-col items-center gap-2 max-md:min-w-0 max-md:flex-row max-md:justify-start max-md:gap-0 max-md:overflow-hidden"
+        className={cn(
+          "flex w-full flex-1 flex-col items-center gap-2",
+          mobileClient &&
+            "max-md:min-w-0 max-md:flex-row max-md:justify-start max-md:gap-0 max-md:overflow-hidden",
+        )}
         aria-label="主导航"
       >
         {mainNavItems.map(renderNavItem)}
         <div
           data-slot="app-sidebar-footer"
-          className="mt-auto flex flex-col items-center gap-2 max-md:contents"
+          className={cn(
+            "mt-auto flex flex-col items-center gap-2",
+            mobileClient && "max-md:contents",
+          )}
         >
           {!mobileClient && (
-            <div
-              data-slot="app-sidebar-preferences"
-              className="flex flex-col items-center gap-2 max-md:hidden"
-            >
+            <div data-slot="app-sidebar-preferences" className="flex flex-col items-center gap-2">
               <UpdateButton />
               <AppearanceToggle />
             </div>

@@ -404,7 +404,10 @@ export function IptvPlayerPage() {
       <RecordingLeaveGuard context={recordingContext} />
       {/* 宽屏：播放器占满主列，频道侧栏固定宽度；窄屏：侧栏列在播放器下方。
           网页全屏时卸载侧栏并解除居中约束，舞台撑满整个应用窗口。 */}
-      <main className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row">
+      <main
+        data-window-fullscreen={webFullscreen ? "true" : undefined}
+        className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row"
+      >
         <div
           className={cn(
             // 竖屏按播放器自身画幅占位，剩余高度留给频道列表，不再把画面居中在半屏里。

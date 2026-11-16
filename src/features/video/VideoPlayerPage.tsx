@@ -3242,7 +3242,10 @@ function VideoPlayerPageContent() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div
+      data-window-fullscreen={webFullscreen ? "true" : undefined}
+      className="flex h-full min-h-0 flex-col bg-background"
+    >
       {/* 与直播页同构：外层普通 div 持画幅比，Container 只负责铺满。
           画幅比不能和 h-full 挂在同一元素上 —— 显式高度优先级高于
           aspect-ratio，画幅比会被静默丢掉（这正是原先的黑边根因）。

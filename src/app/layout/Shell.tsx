@@ -20,6 +20,8 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { watchDesktopFullscreen } from "@/features/room/player/desktopFullscreenWatcher";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { IptvSourceSwitcher } from "@/features/iptv/IptvHeaderControls";
@@ -253,6 +255,15 @@ export function Shell() {
   const isHistory = pathname === "/history";
   const isSettings = pathname === "/settings";
   const mobileClient = isMobileClient();
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
+  useEffect(() => {
+    if (mobileClient) return;
+    return watchDesktopFullscreen({
+      getWindow: getCurrentWindow,
+      restoreMaximized: async () => {},
+      setMode: (mode) => setNativeFullscreen(mode === "fullscreen"),
+    });
+  }, [mobileClient]);
   const historyHeader = useHistoryHeaderSnapshot();
   const followHeader = useFollowHeaderSnapshot();
   const followTaskCounts = useFollowTaskCounts();
@@ -1010,250 +1021,256 @@ export function Shell() {
   const routePanEnabled = !mobileClient && (isDirectSidebarNavigation || isTabNavigation);
 
   return (
-    <div className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]">
+    <div
+      data-native-fullscreen={nativeFullscreen ? "true" : undefined}
+      data-mobile-client={mobileClient ? "true" : undefined}
+      className="app-shell flex h-full min-h-0 flex-col bg-background max-md:pt-[env(safe-area-inset-top)]"
+    >
       <AppTitleBar />
-      <PageZoom
-        // 两个沉浸播放器各自缩放，且都以自己的 pathname 为 key，
-        // 使房间与 IPTV 播放器绝不会被合并成同一页 ——
-        // 需要避免的是那个共享 key，而不是缩放本身。
-        zoomKey={isImmersivePlayer ? pathname : "standard-shell"}
-        // 仅动画跟随 VOD 历史层级，DOM key 仍按路径稳定。REPLACE（如补齐 cid）
-        // 不改变 idx，不重播动画；PUSH/POP 每一层都触发，同时避免双播放器/重挂载。
-        motionKey={pathname === VIDEO_PLAY_PATH ? String(historyIndex) : undefined}
-        direction={pathname === VIDEO_PLAY_PATH ? navMemory.playerDirection : 1}
-        enabled={isImmersivePlayer}
-        className="flex-1 overflow-hidden"
-      >
-        <div className="flex min-h-0 min-w-0 flex-1">
-          {!isImmersivePlayer && <Sidebar taskCounts={followTaskCounts} />}
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <IptvControllerProvider source={iptvSource} active={isIptv}>
-              {!isImmersivePlayer && !isSettings && !isAcfunArticle && (
-                <header
-                  data-slot="app-header"
-                  data-mobile-empty={showTopNavigation ? undefined : "true"}
-                  className={cn(
-                    // 横向内边距跟随内容容器（`p-4 md:p-5`），不另取一档：头部右端的搜索入口与
-                    // 分类条右端的「全部分类」是上下相邻的两个 44px 图标按钮，内边距差一档
-                    // 就会让它们的竖直中线错开那一档的宽度。两处入口在粗指针下还共用同一档
-                    // `-mr-3.5` 光学右移（图标右缘对齐内容卡片右缘，见各自组件），
-                    // 偏移量不同样会让这对图标错开。
-                    "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 md:px-5",
-                    !showTopNavigation && "max-md:hidden",
-                  )}
-                >
-                  {/* 搜索与「全部分类」都是从别处 push 出来的取向表面，侧栏里没有对应
+      <div className="flex min-h-0 min-w-0 flex-1">
+        {(!isImmersivePlayer || !mobileClient) && <Sidebar taskCounts={followTaskCounts} />}
+        <PageZoom
+          // 两个沉浸播放器各自缩放，且都以自己的 pathname 为 key，
+          // 使房间与 IPTV 播放器绝不会被合并成同一页 ——
+          // 需要避免的是那个共享 key，而不是缩放本身。
+          zoomKey={isImmersivePlayer ? pathname : "standard-shell"}
+          // 仅动画跟随 VOD 历史层级，DOM key 仍按路径稳定。REPLACE（如补齐 cid）
+          // 不改变 idx，不重播动画；PUSH/POP 每一层都触发，同时避免双播放器/重挂载。
+          motionKey={pathname === VIDEO_PLAY_PATH ? String(historyIndex) : undefined}
+          direction={pathname === VIDEO_PLAY_PATH ? navMemory.playerDirection : 1}
+          enabled={isImmersivePlayer}
+          className="flex-1 overflow-hidden"
+        >
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <IptvControllerProvider source={iptvSource} active={isIptv}>
+                {!isImmersivePlayer && !isSettings && !isAcfunArticle && (
+                  <header
+                    data-slot="app-header"
+                    data-mobile-empty={showTopNavigation ? undefined : "true"}
+                    className={cn(
+                      // 横向内边距跟随内容容器（`p-4 md:p-5`），不另取一档：头部右端的搜索入口与
+                      // 分类条右端的「全部分类」是上下相邻的两个 44px 图标按钮，内边距差一档
+                      // 就会让它们的竖直中线错开那一档的宽度。两处入口在粗指针下还共用同一档
+                      // `-mr-3.5` 光学右移（图标右缘对齐内容卡片右缘，见各自组件），
+                      // 偏移量不同样会让这对图标错开。
+                      "relative flex h-14 shrink-0 items-center border-b border-border-subtle px-4 max-md:h-12 max-md:gap-2 md:px-5",
+                      !showTopNavigation && "max-md:hidden",
+                    )}
+                  >
+                    {/* 搜索与「全部分类」都是从别处 push 出来的取向表面，侧栏里没有对应
                       条目可点回去，所以头部给一个显式返回口。移动端的历史页同理 ——
                       它的入口收进了设置，底栏里没有历史目的地；桌面端侧栏仍有历史，
                       因此那里不需要这个按钮。视频搜索页的查询条占据了头部，返回
                       口也一并给它（移动端头部不再隐藏）。 */}
-                  {(isSearch ||
-                    isCategoryBrowse ||
-                    isVideoSearch ||
-                    isAcfunSearch ||
-                    (isHistory && mobileClient)) && (
-                    <div
-                      className={cn(
-                        "relative z-10 flex shrink-0 items-center",
-                        !isHistory && !isVideoSearch && !isAcfunSearch && "max-md:hidden",
+                    {(isSearch ||
+                      isCategoryBrowse ||
+                      isVideoSearch ||
+                      isAcfunSearch ||
+                      (isHistory && mobileClient)) && (
+                      <div
+                        className={cn(
+                          "relative z-10 flex shrink-0 items-center",
+                          !isHistory && !isVideoSearch && !isAcfunSearch && "max-md:hidden",
+                        )}
+                      >
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="max-md:size-9"
+                          aria-label="返回上一页"
+                          title="返回上一页"
+                          onClick={
+                            isHistory
+                              ? goBackFromHistory
+                              : isVideoSearch
+                                ? goBackToVideo
+                                : isAcfunSearch
+                                  ? goBackFromAcfunSearch
+                                  : goBackToDiscovery
+                          }
+                        >
+                          <ArrowLeft aria-hidden />
+                        </Button>
+                      </div>
+                    )}
+                    {isVideo && (
+                      <div className="pointer-events-none absolute inset-0 z-10 flex h-full items-center justify-center">
+                        <div className="pointer-events-auto h-full">
+                          <AcfunSourceSwitcher
+                            source={isAcfunVideoHome ? "acfun" : "bilibili"}
+                            className="h-full"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {isVideoSearch || isAcfunSearch ? (
+                      // 查询条住在头部：搜索是这一页的本体动作，结果网格在下方滚动。
+                      // 桌面端居中限宽，移动端在返回钮之后铺满剩余宽度。
+                      <div className="relative z-10 flex h-full min-w-0 flex-1 items-center justify-start md:justify-center">
+                        {isVideoSearch ? (
+                          <VideoSearchBar className="h-full w-full max-w-2xl" />
+                        ) : (
+                          <AcfunSearchBar view={acfunView} className="h-full w-full max-w-2xl" />
+                        )}
+                      </div>
+                    ) : !isVideo ? (
+                      <div className="pointer-events-none absolute inset-0 flex h-full items-center justify-center max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden">
+                        {showTopNavigation && (
+                          <div className="pointer-events-auto h-full max-md:w-full max-md:min-w-0">
+                            {isHistory ? (
+                              <HistoryViewSwitcher
+                                iconOnly={mobileClient}
+                                value={historyHeader.view}
+                                onValueChange={historyHeader.onViewChange}
+                              />
+                            ) : isFollow ? (
+                              <FollowViewSwitcher
+                                iconOnly={mobileClient}
+                                value={followHeader.view}
+                                onValueChange={followHeader.onViewChange}
+                                recordingAvailable={recordingSupported()}
+                                taskCounts={followTaskCounts}
+                              />
+                            ) : hasIptvSourceShell ? (
+                              <div
+                                data-horizontal-swipe-surface
+                                // `touch-pan-y` 是本 hook 的契约（见 `useHorizontalSwipe` 文档）：
+                                // 表面为 `auto` 时合成器会把横向拖动当成滚动接走，
+                                // 第一次 `pointermove` 之后即派发 `pointercancel`，
+                                // 手势永远攒不到锁定阈值 —— 表现为「页签条上怎么滑都不切来源」。
+                                className="h-full min-w-0 touch-pan-y"
+                                {...bindSwipe(iptvSourceSwipe)}
+                              >
+                                <IptvSourceSwitcher
+                                  iconOnly={mobileClient}
+                                  sources={iptvSources}
+                                  value={iptvSource.id}
+                                  onValueChange={handleIptvSourceChange}
+                                  className="h-full w-auto max-w-full max-md:w-full"
+                                />
+                              </div>
+                            ) : (
+                              <div
+                                data-horizontal-swipe-surface
+                                // 首页/分类/搜索的平台条也是页面切换器，与视频页签条同一处理：
+                                // 只在内容区可滑、条带本身把手势交给合成器，
+                                // 用户按直觉在页签上横滑时会看到「滑不动」。
+                                className="h-full min-w-0 touch-pan-y"
+                                {...bindSwipe(sitePlatformSwipe)}
+                              >
+                                <SiteSwitcher
+                                  iconOnly={mobileClient}
+                                  value={activeSiteId}
+                                  onValueIntent={preloadHomePlatform}
+                                  onValueChange={(value) => {
+                                    if (value === "all") return;
+                                    sitePlatformSwipe.selectValue(value);
+                                  }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                    <div className="relative z-10 ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+                      {isHistory ? (
+                        <HistoryClearButton
+                          view={historyHeader.view}
+                          canClear={historyHeader.canClear}
+                          pending={historyHeader.clearPending}
+                          onRequestClear={historyHeader.onRequestClear}
+                        />
+                      ) : isVideo ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="max-md:size-9"
+                          aria-label={
+                            isAcfunVideoHome
+                              ? `搜索 AcFun ${ACFUN_VIEW_LABELS[acfunView]}`
+                              : "搜索视频"
+                          }
+                          title={
+                            isAcfunVideoHome
+                              ? `搜索 AcFun ${ACFUN_VIEW_LABELS[acfunView]}`
+                              : "搜索视频"
+                          }
+                          onClick={() =>
+                            navigate(
+                              isAcfunVideoHome ? acfunSearchPath(acfunView) : videoSearchPath(),
+                            )
+                          }
+                        >
+                          <Search aria-hidden />
+                        </Button>
+                      ) : isVideoSearch || isAcfunSearch || isFollow || isIptv ? null : (
+                        <HeaderSearch />
                       )}
+                    </div>
+                  </header>
+                )}
+                <main
+                  data-slot="app-content"
+                  data-immersive={isImmersivePlayer ? "true" : undefined}
+                  className={cn(
+                    "relative min-h-0 min-w-0 flex-1",
+                    // 滚动容器位于下方带动画的页面包装层上，而不是这里。transform 会参与其容器
+                    // 的可滚动溢出计算，因此对 `overflow-auto` 元素的子元素做动画，
+                    // 会在每次过渡期间闪出滚动条。在这一层裁剪、下一层滚动，
+                    // 让移动过程对布局不可见。`relative` 为 popLayout 提供离场页面的定位上下文，
+                    // 使其无法挤动进入的页面。
+                    isImmersivePlayer ? "overflow-hidden p-0" : "overflow-hidden",
+                  )}
+                  data-horizontal-swipe-surface
+                  onPointerDownCapture={contentSwipeOnPointerDownCapture}
+                  onPointerMoveCapture={contentSwipeOnPointerMoveCapture}
+                  onPointerUpCapture={contentSwipeOnPointerUpCapture}
+                  onPointerCancelCapture={contentSwipeOnPointerCancelCapture}
+                  onClickCapture={contentSwipeOnClickCapture}
+                >
+                  {isAcfunArticle && (
+                    <div
+                      data-slot="acfun-article-back"
+                      className="pointer-events-none absolute top-3 left-[max(1rem,env(safe-area-inset-left))] z-20 md:left-[max(1.25rem,env(safe-area-inset-left))]"
                     >
                       <Button
                         type="button"
-                        variant="ghost"
+                        variant="outline"
                         size="icon"
-                        className="max-md:size-9"
-                        aria-label="返回上一页"
-                        title="返回上一页"
-                        onClick={
-                          isHistory
-                            ? goBackFromHistory
-                            : isVideoSearch
-                              ? goBackToVideo
-                              : isAcfunSearch
-                                ? goBackFromAcfunSearch
-                                : goBackToDiscovery
-                        }
+                        className="pointer-events-auto size-11 bg-background/85 shadow-sm backdrop-blur-sm"
+                        aria-label="返回文章"
+                        title="返回文章"
+                        onClick={goBackFromAcfunArticle}
                       >
                         <ArrowLeft aria-hidden />
                       </Button>
                     </div>
                   )}
-                  {isVideo && (
-                    <div className="pointer-events-none absolute inset-0 z-10 flex h-full items-center justify-center">
-                      <div className="pointer-events-auto h-full">
-                        <AcfunSourceSwitcher
-                          source={isAcfunVideoHome ? "acfun" : "bilibili"}
-                          className="h-full"
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {isVideoSearch || isAcfunSearch ? (
-                    // 查询条住在头部：搜索是这一页的本体动作，结果网格在下方滚动。
-                    // 桌面端居中限宽，移动端在返回钮之后铺满剩余宽度。
-                    <div className="relative z-10 flex h-full min-w-0 flex-1 items-center justify-start md:justify-center">
-                      {isVideoSearch ? (
-                        <VideoSearchBar className="h-full w-full max-w-2xl" />
-                      ) : (
-                        <AcfunSearchBar view={acfunView} className="h-full w-full max-w-2xl" />
-                      )}
-                    </div>
-                  ) : !isVideo ? (
-                    <div className="pointer-events-none absolute inset-0 flex h-full items-center justify-center max-md:relative max-md:inset-auto max-md:min-w-0 max-md:flex-1 max-md:justify-start max-md:overflow-hidden">
-                      {showTopNavigation && (
-                        <div className="pointer-events-auto h-full max-md:w-full max-md:min-w-0">
-                          {isHistory ? (
-                            <HistoryViewSwitcher
-                              iconOnly={mobileClient}
-                              value={historyHeader.view}
-                              onValueChange={historyHeader.onViewChange}
-                            />
-                          ) : isFollow ? (
-                            <FollowViewSwitcher
-                              iconOnly={mobileClient}
-                              value={followHeader.view}
-                              onValueChange={followHeader.onViewChange}
-                              recordingAvailable={recordingSupported()}
-                              taskCounts={followTaskCounts}
-                            />
-                          ) : hasIptvSourceShell ? (
-                            <div
-                              data-horizontal-swipe-surface
-                              // `touch-pan-y` 是本 hook 的契约（见 `useHorizontalSwipe` 文档）：
-                              // 表面为 `auto` 时合成器会把横向拖动当成滚动接走，
-                              // 第一次 `pointermove` 之后即派发 `pointercancel`，
-                              // 手势永远攒不到锁定阈值 —— 表现为「页签条上怎么滑都不切来源」。
-                              className="h-full min-w-0 touch-pan-y"
-                              {...bindSwipe(iptvSourceSwipe)}
-                            >
-                              <IptvSourceSwitcher
-                                iconOnly={mobileClient}
-                                sources={iptvSources}
-                                value={iptvSource.id}
-                                onValueChange={handleIptvSourceChange}
-                                className="h-full w-auto max-w-full max-md:w-full"
-                              />
-                            </div>
-                          ) : (
-                            <div
-                              data-horizontal-swipe-surface
-                              // 首页/分类/搜索的平台条也是页面切换器，与视频页签条同一处理：
-                              // 只在内容区可滑、条带本身把手势交给合成器，
-                              // 用户按直觉在页签上横滑时会看到「滑不动」。
-                              className="h-full min-w-0 touch-pan-y"
-                              {...bindSwipe(sitePlatformSwipe)}
-                            >
-                              <SiteSwitcher
-                                iconOnly={mobileClient}
-                                value={activeSiteId}
-                                onValueIntent={preloadHomePlatform}
-                                onValueChange={(value) => {
-                                  if (value === "all") return;
-                                  sitePlatformSwipe.selectValue(value);
-                                }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
-                  <div className="relative z-10 ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-                    {isHistory ? (
-                      <HistoryClearButton
-                        view={historyHeader.view}
-                        canClear={historyHeader.canClear}
-                        pending={historyHeader.clearPending}
-                        onRequestClear={historyHeader.onRequestClear}
-                      />
-                    ) : isVideo ? (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="max-md:size-9"
-                        aria-label={
-                          isAcfunVideoHome
-                            ? `搜索 AcFun ${ACFUN_VIEW_LABELS[acfunView]}`
-                            : "搜索视频"
-                        }
-                        title={
-                          isAcfunVideoHome
-                            ? `搜索 AcFun ${ACFUN_VIEW_LABELS[acfunView]}`
-                            : "搜索视频"
-                        }
-                        onClick={() =>
-                          navigate(
-                            isAcfunVideoHome ? acfunSearchPath(acfunView) : videoSearchPath(),
-                          )
-                        }
-                      >
-                        <Search aria-hidden />
-                      </Button>
-                    ) : isVideoSearch || isAcfunSearch || isFollow || isIptv ? null : (
-                      <HeaderSearch />
-                    )}
-                  </div>
-                </header>
-              )}
-              <main
-                data-slot="app-content"
-                data-immersive={isImmersivePlayer ? "true" : undefined}
-                className={cn(
-                  "relative min-h-0 min-w-0 flex-1",
-                  // 滚动容器位于下方带动画的页面包装层上，而不是这里。transform 会参与其容器
-                  // 的可滚动溢出计算，因此对 `overflow-auto` 元素的子元素做动画，
-                  // 会在每次过渡期间闪出滚动条。在这一层裁剪、下一层滚动，
-                  // 让移动过程对布局不可见。`relative` 为 popLayout 提供离场页面的定位上下文，
-                  // 使其无法挤动进入的页面。
-                  isImmersivePlayer ? "overflow-hidden p-0" : "overflow-hidden",
-                )}
-                data-horizontal-swipe-surface
-                onPointerDownCapture={contentSwipeOnPointerDownCapture}
-                onPointerMoveCapture={contentSwipeOnPointerMoveCapture}
-                onPointerUpCapture={contentSwipeOnPointerUpCapture}
-                onPointerCancelCapture={contentSwipeOnPointerCancelCapture}
-                onClickCapture={contentSwipeOnClickCapture}
-              >
-                {isAcfunArticle && (
-                  <div
-                    data-slot="acfun-article-back"
-                    className="pointer-events-none absolute top-3 left-[max(1rem,env(safe-area-inset-left))] z-20 md:left-[max(1.25rem,env(safe-area-inset-left))]"
-                  >
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="pointer-events-auto size-11 bg-background/85 shadow-sm backdrop-blur-sm"
-                      aria-label="返回文章"
-                      title="返回文章"
-                      onClick={goBackFromAcfunArticle}
+                  {isImmersivePlayer ? (
+                    // PageZoom 进入后会清除它的合成提示。稳定下来的播放器因此没有
+                    // 可能干扰其全屏包含块的已变换祖先。
+                    <div className="relative h-full min-h-0 overflow-hidden">{routeOutlet}</div>
+                  ) : (
+                    <PagePan
+                      panKey={pageMotionKey}
+                      direction={routePanDirection}
+                      axis={routePanAxis}
+                      enabled={routePanEnabled}
+                      className="h-full min-h-0"
+                      contentClassName="h-full min-h-0"
                     >
-                      <ArrowLeft aria-hidden />
-                    </Button>
-                  </div>
-                )}
-                {isImmersivePlayer ? (
-                  // PageZoom 进入后会清除它的合成提示。稳定下来的播放器因此没有
-                  // 可能干扰其全屏包含块的已变换祖先。
-                  <div className="relative h-full min-h-0 overflow-hidden">{routeOutlet}</div>
-                ) : (
-                  <PagePan
-                    panKey={pageMotionKey}
-                    direction={routePanDirection}
-                    axis={routePanAxis}
-                    enabled={routePanEnabled}
-                    className="h-full min-h-0"
-                    contentClassName="h-full min-h-0"
-                  >
-                    {regularPage}
-                  </PagePan>
-                )}
-              </main>
-            </IptvControllerProvider>
+                      {regularPage}
+                    </PagePan>
+                  )}
+                </main>
+              </IptvControllerProvider>
+            </div>
           </div>
-        </div>
-      </PageZoom>
+        </PageZoom>
+      </div>
     </div>
   );
 }
