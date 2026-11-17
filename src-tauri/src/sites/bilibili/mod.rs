@@ -13,12 +13,14 @@ pub use api::{
 };
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
 use crate::error::{AppError, AppResult};
@@ -43,6 +45,51 @@ struct Session {
     img_key: String,
     sub_key: String,
 }
+
+/// WBI 密钥是公开、与账号无关的签名材料，但上游会定期轮换。
+///
+/// 该状态挂在进程上而不是 [`BilibiliSite`] 实例上：IPC 每次命令都会新建站点，
+/// 实例级缓存会让详情、清晰度和播放地址连续各请求一次 `nav`；当前实机 `nav`
+/// 经代理约需 2.1 秒。仅缓存成功解析出的非空密钥，失败不缓存。
+#[derive(Clone, PartialEq, Eq)]
+struct WbiCacheScope {
+    route: crate::proxy::ProxyRoute,
+    /// 只保存凭据摘要，不把 Cookie 原文放进静态缓存。
+    cookie_digest: [u8; 32],
+}
+
+impl WbiCacheScope {
+    fn new(cookie: &str, route: &crate::proxy::ProxyRoute) -> Self {
+        Self {
+            route: route.clone(),
+            cookie_digest: Sha256::digest(cookie.as_bytes()).into(),
+        }
+    }
+}
+
+struct CachedWbiKeys {
+    scope: WbiCacheScope,
+    img_key: String,
+    sub_key: String,
+    fetched_at: Instant,
+}
+
+impl CachedWbiKeys {
+    fn resolve(&self, scope: &WbiCacheScope, now: Instant) -> Option<(String, String)> {
+        if &self.scope != scope
+            || now.saturating_duration_since(self.fetched_at) >= WBI_KEYS_TTL
+            || self.img_key.is_empty()
+            || self.sub_key.is_empty()
+        {
+            return None;
+        }
+        Some((self.img_key.clone(), self.sub_key.clone()))
+    }
+}
+
+const WBI_KEYS_TTL: Duration = Duration::from_secs(30 * 60);
+static WBI_KEYS_CHECK_GATE: AsyncMutex<()> = AsyncMutex::const_new(());
+static WBI_KEYS: Mutex<Option<CachedWbiKeys>> = Mutex::new(None);
 
 /// 进程级设备指纹槽（`buvid3` / `buvid4`）。
 ///
@@ -83,6 +130,95 @@ fn reset_device_buvids() {
     }
 }
 
+#[cfg(test)]
+fn reset_wbi_keys() {
+    if let Ok(mut slot) = WBI_KEYS.lock() {
+        *slot = None;
+    }
+}
+
+fn session_wbi_keys(session: &Mutex<Session>) -> AppResult<Option<(String, String)>> {
+    let session = session.lock().map_err(|_| {
+        AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
+    })?;
+    if session.img_key.is_empty() || session.sub_key.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((session.img_key.clone(), session.sub_key.clone())))
+}
+
+fn store_session_wbi_keys(session: &Mutex<Session>, keys: &(String, String)) -> AppResult<()> {
+    let mut session = session.lock().map_err(|_| {
+        AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
+    })?;
+    session.img_key = keys.0.clone();
+    session.sub_key = keys.1.clone();
+    Ok(())
+}
+
+fn cached_wbi_keys(scope: &WbiCacheScope) -> Option<(String, String)> {
+    let cache = WBI_KEYS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .as_ref()
+        .and_then(|cached| cached.resolve(scope, Instant::now()))
+}
+
+fn store_wbi_keys(scope: WbiCacheScope, keys: &(String, String)) {
+    if keys.0.is_empty() || keys.1.is_empty() {
+        return;
+    }
+    let mut cache = WBI_KEYS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *cache = Some(CachedWbiKeys {
+        scope,
+        img_key: keys.0.clone(),
+        sub_key: keys.1.clone(),
+        fetched_at: Instant::now(),
+    });
+}
+
+/// 先命中实例缓存，再以进程级单飞获取 WBI 密钥。
+///
+/// `load` future 在取得单飞锁并重新检查两层缓存后才轮询；后续并发站点即使各自
+/// 创建了请求 future，也不会真正触达 `nav`。
+async fn ensure_wbi_keys_with<F>(
+    session: &Mutex<Session>,
+    scope: &WbiCacheScope,
+    load: F,
+) -> AppResult<(String, String)>
+where
+    F: Future<Output = AppResult<String>>,
+{
+    if let Some(keys) = session_wbi_keys(session)? {
+        return Ok(keys);
+    }
+
+    let _guard = WBI_KEYS_CHECK_GATE.lock().await;
+    if let Some(keys) = session_wbi_keys(session)? {
+        return Ok(keys);
+    }
+    if let Some(keys) = cached_wbi_keys(scope) {
+        store_session_wbi_keys(session, &keys)?;
+        return Ok(keys);
+    }
+
+    let text = load.await?;
+    let keys = parse_wbi_keys(&text)?;
+    // 两项都解析成功才写入进程缓存；失败、限流和空字段不会污染后续请求。
+    store_wbi_keys(
+        WbiCacheScope {
+            route: scope.route.clone(),
+            cookie_digest: scope.cookie_digest,
+        },
+        &keys,
+    );
+    store_session_wbi_keys(session, &keys)?;
+    Ok(keys)
+}
+
 pub struct BilibiliSite {
     client: Client,
     /// 只由 App 推荐／story 命令显式注入，不改变 Web Cookie 或其他请求。
@@ -93,6 +229,7 @@ pub struct BilibiliSite {
     /// 与是否带 Web Cookie 无关）。
     live_auth: Option<crate::account::bilibili_app::AppAuth>,
     cookie: String,
+    wbi_cache_scope: WbiCacheScope,
     session: Mutex<Session>,
     /// 指纹接口失败时也缓存空结果，避免同一次房间加载并发发起重复请求。
     buvids: OnceCell<(String, String)>,
@@ -276,12 +413,23 @@ fn danmaku_data_with_token(text: &str) -> Option<Value> {
 }
 
 impl BilibiliSite {
+    #[cfg(test)]
     pub fn new(client: Client, cookie: String) -> Self {
+        Self::new_with_route(client, cookie, &crate::proxy::ProxyRoute::Direct)
+    }
+
+    pub fn new_with_route(
+        client: Client,
+        cookie: String,
+        route: &crate::proxy::ProxyRoute,
+    ) -> Self {
+        let cookie = normalize_cookie_header(&cookie);
         Self {
             client,
             app_auth: None,
             live_auth: None,
-            cookie: normalize_cookie_header(&cookie),
+            wbi_cache_scope: WbiCacheScope::new(&cookie, route),
+            cookie,
             session: Mutex::new(Session::default()),
             buvids: OnceCell::const_new(),
             play_gate: AsyncMutex::new(None),
@@ -513,25 +661,12 @@ impl BilibiliSite {
     }
 
     async fn ensure_wbi_keys(&self) -> AppResult<(String, String)> {
-        {
-            let s = self.session.lock().map_err(|_| {
-                AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
-            })?;
-            if !s.img_key.is_empty() && !s.sub_key.is_empty() {
-                return Ok((s.img_key.clone(), s.sub_key.clone()));
-            }
-        }
         // 登出状态下 nav 常返回 code != 0，但仍携带 wbi_img。
-        let text = self
-            .get_json_raw("https://api.bilibili.com/x/web-interface/nav", &[])
-            .await?;
-        let (img, sub) = parse_wbi_keys(&text)?;
-        let mut s = self.session.lock().map_err(|_| {
-            AppError::new("bilibili_lock", "session mutex poisoned").with_site("bilibili")
-        })?;
-        s.img_key = img.clone();
-        s.sub_key = sub.clone();
-        Ok((img, sub))
+        ensure_wbi_keys_with(&self.session, &self.wbi_cache_scope, async {
+            self.get_json_raw("https://api.bilibili.com/x/web-interface/nav", &[])
+                .await
+        })
+        .await
     }
 
     /// 不要求 API `code == 0` 的 HTTP GET（用于 nav / WBI 密钥）。
@@ -1037,6 +1172,13 @@ impl LiveSite for BilibiliSite {
 mod live_tests {
     use super::*;
 
+    /// WBI 密钥缓存是进程级静态量；所有触碰它的用例必须串行并显式复位。
+    static WBI_KEYS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn lock_wbi_keys() -> tokio::sync::MutexGuard<'static, ()> {
+        WBI_KEYS_TEST_LOCK.lock().await
+    }
+
     /// 进程级设备槽（`DEVICE_BUVIDS`）是全局静态量，并行测试会互相覆盖。
     /// 所有触碰它的用例都必须先取得这把锁。用 tokio 的 async 感知锁：
     /// 用例体是 async 的，持有 `std::sync` 锁跨 await 会被 clippy 拦下。
@@ -1104,6 +1246,137 @@ mod live_tests {
         .expect_err("失效凭据应直接失败");
         assert_eq!(error.code, "bilibili_app_auth_required");
         assert_eq!(calls.get(), 1, "失效结论不该被重试拖慢");
+    }
+
+    #[tokio::test]
+    async fn process_wbi_keys_are_single_flight_and_shared_across_site_instances() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const NAV: &str = r#"{
+            "code": -101,
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/img-key.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/sub-key.png"
+                }
+            }
+        }"#;
+
+        let _guard = lock_wbi_keys().await;
+        reset_wbi_keys();
+        let loads = AtomicUsize::new(0);
+        let first_session = Mutex::new(Session::default());
+        let second_session = Mutex::new(Session::default());
+        let scope = WbiCacheScope::new("test-cookie", &crate::proxy::ProxyRoute::Direct);
+
+        let first = ensure_wbi_keys_with(&first_session, &scope, async {
+            loads.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            Ok(NAV.to_string())
+        });
+        let second = ensure_wbi_keys_with(&second_session, &scope, async {
+            loads.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            Ok(NAV.to_string())
+        });
+        let (first, second) = tokio::join!(first, second);
+        let expected = ("img-key".to_string(), "sub-key".to_string());
+        assert_eq!(first.unwrap(), expected);
+        assert_eq!(second.unwrap(), expected);
+        assert_eq!(loads.load(Ordering::SeqCst), 1, "并发站点只能请求一次 nav");
+
+        let third_session = Mutex::new(Session::default());
+        let cached = ensure_wbi_keys_with(&third_session, &scope, async {
+            panic!("进程缓存命中时不得轮询 nav future")
+        })
+        .await
+        .unwrap();
+        assert_eq!(cached, expected);
+        reset_wbi_keys();
+    }
+
+    #[tokio::test]
+    async fn failed_wbi_key_load_is_not_cached() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const NAV: &str = r#"{
+            "data": {
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/img-key.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/sub-key.png"
+                }
+            }
+        }"#;
+
+        let _guard = lock_wbi_keys().await;
+        reset_wbi_keys();
+        let attempts = AtomicUsize::new(0);
+        let session = Mutex::new(Session::default());
+        let scope = WbiCacheScope::new("test-cookie", &crate::proxy::ProxyRoute::Direct);
+        let failed = ensure_wbi_keys_with(&session, &scope, async {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err::<String, _>(AppError::new("bilibili_http_error", "HTTP 503"))
+        })
+        .await;
+        assert!(failed.is_err());
+        assert!(
+            cached_wbi_keys(&scope).is_none(),
+            "失败结果不得进入进程缓存"
+        );
+
+        let keys = ensure_wbi_keys_with(&session, &scope, async {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Ok(NAV.to_string())
+        })
+        .await
+        .unwrap();
+        assert_eq!(keys, ("img-key".to_string(), "sub-key".to_string()));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        reset_wbi_keys();
+    }
+
+    #[test]
+    fn wbi_keys_expire_and_empty_values_are_rejected() {
+        let now = Instant::now();
+        let scope = WbiCacheScope::new("test-cookie", &crate::proxy::ProxyRoute::Direct);
+        let live = CachedWbiKeys {
+            scope: WbiCacheScope::new("test-cookie", &crate::proxy::ProxyRoute::Direct),
+            img_key: "img".into(),
+            sub_key: "sub".into(),
+            fetched_at: now,
+        };
+        assert_eq!(
+            live.resolve(&scope, now + Duration::from_secs(1)),
+            Some(("img".to_string(), "sub".to_string()))
+        );
+        assert_eq!(live.resolve(&scope, now + WBI_KEYS_TTL), None);
+        assert_eq!(
+            live.resolve(
+                &WbiCacheScope::new("another-cookie", &crate::proxy::ProxyRoute::Direct),
+                now
+            ),
+            None,
+            "不同凭据不得共享进程缓存条目"
+        );
+        assert_eq!(
+            live.resolve(
+                &WbiCacheScope::new(
+                    "test-cookie",
+                    &crate::proxy::ProxyRoute::Custom("http://127.0.0.1:7890".into())
+                ),
+                now
+            ),
+            None,
+            "不同代理路由不得共享进程缓存条目"
+        );
+
+        let empty = CachedWbiKeys {
+            scope: WbiCacheScope::new("test-cookie", &crate::proxy::ProxyRoute::Direct),
+            img_key: String::new(),
+            sub_key: "sub".into(),
+            fetched_at: now,
+        };
+        assert_eq!(empty.resolve(&scope, now), None);
     }
 
     /// 412/429 是暂时受限，必须给稳定错误码；412 的响应体可能是整页 HTML，

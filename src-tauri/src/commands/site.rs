@@ -63,7 +63,7 @@ async fn resolve_recommend_site(
         )
     };
     let client = crate::http_client::client_for_route(&route)?;
-    let site = BilibiliSite::new(client, cookie.unwrap_or_default());
+    let site = BilibiliSite::new_with_route(client, cookie.unwrap_or_default(), &route);
     let Some(credential) = credential else {
         return Ok(Box::new(site));
     };

@@ -124,7 +124,11 @@ pub(crate) fn resolve_bilibili(state: &AppState) -> AppResult<BilibiliSite> {
         )
     };
     let client = crate::http_client::client_for_route(&route)?;
-    Ok(BilibiliSite::new(client, cookie.unwrap_or_default()))
+    Ok(BilibiliSite::new_with_route(
+        client,
+        cookie.unwrap_or_default(),
+        &route,
+    ))
 }
 
 /// 本机存有 TV 凭据就启用个性化：授权是唯一事实来源，不再有单独开关。

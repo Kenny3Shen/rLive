@@ -1,3 +1,4 @@
+import type { QueryFunctionContext } from "@tanstack/react-query";
 import type { VideoHistoryItem, VideoPlayInfo, VideoSessionIds } from "@/shared/types/video";
 import { PendingPlaybackRequests } from "@/features/shorts/pendingPlaybackRequests";
 
@@ -15,6 +16,19 @@ export type VideoPlaybackAttempt = {
   /** 正常成功、真实失败、取消和撤销都会结算本轮自动恢复令牌。 */
   onSettled?: () => void;
 };
+
+/**
+ * TanStack Query 只有在 queryFn 首次读取 signal 后才把 observer 退订视为支持取消。
+ * 先跨过 effect cleanup 所在的微任务边界，StrictMode 的同 query 重挂载才能复用
+ * 原始 fetchPromise；真实卸载排在中间的 owner.clear 又会先作废本轮预留 epoch，
+ * 因此 helper 恢复后不会在 clear 之后另起一条无人接管的 Tauri IPC。
+ */
+async function videoPlaybackQuerySignal(
+  context: QueryFunctionContext,
+): Promise<AbortSignal> {
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  return context.signal;
+}
 
 /** 当前播放器真正使用的地址：与重建时保存的地址比对，确认旧源没有被替换。 */
 export function videoPlaybackSourceUrl(result: VideoPlaybackResult): string {
@@ -56,15 +70,62 @@ export class VideoPlaybackSessions {
     request: () => Promise<VideoPlayInfo>,
     attempt: VideoPlaybackAttempt = {},
   ): Promise<VideoPlaybackResult> {
-    // 一页只有一条当前取流请求；已返回但尚未提交的旧结果也不能遗留到卸载。
-    // 已 claim 的会话不在池内，换画质等待期间仍可继续播放。
+    const epoch = this.reserveAttempt();
+    return this.settleAttempt(
+      this.acquireReserved(epoch, key, signal, request, attempt),
+      attempt.onSettled,
+    );
+  }
+
+  /**
+   * 接收 QueryFunctionContext 的入口：调用栈内先预留 owner 轮次，再等公共
+   * signal 可读。辅助函数恢复时若期间发生过 clear 或更新一轮 acquire，旧轮次
+   * 直接取消，不能再把 owner 从已清理状态推进到新请求。
+   */
+  acquireForQuery(
+    key: string,
+    context: QueryFunctionContext,
+    request: () => Promise<VideoPlayInfo>,
+    attempt: VideoPlaybackAttempt = {},
+  ): Promise<VideoPlaybackResult> {
+    const epoch = this.reserveAttempt();
+    return this.settleAttempt(
+      videoPlaybackQuerySignal(context).then((signal) =>
+        this.acquireReserved(epoch, key, signal, request, attempt),
+      ),
+      attempt.onSettled,
+    );
+  }
+
+  /** 一页只有一条当前取流请求；已返回但尚未提交的旧结果也不能遗留到卸载。 */
+  private reserveAttempt(): number {
     const epoch = ++this.epoch;
     this.pending.clear();
-    const { autoRecoveryCheck, onSettled } = attempt;
+    return epoch;
+  }
+
+  private settleAttempt<T>(
+    pending: Promise<T>,
+    onSettled: (() => void) | undefined,
+  ): Promise<T> {
+    return pending.finally(() => onSettled?.());
+  }
+
+  private async acquireReserved(
+    epoch: number,
+    key: string,
+    signal: AbortSignal,
+    request: () => Promise<VideoPlayInfo>,
+    attempt: VideoPlaybackAttempt,
+  ): Promise<VideoPlaybackResult> {
+    const { autoRecoveryCheck } = attempt;
     const cancelled = () => new DOMException("取流已取消", "AbortError");
     const requireCurrent = (): void => {
       if (epoch !== this.epoch || signal.aborted) throw cancelled();
     };
+    // clear 或后一轮 acquire 可能已在本轮等待 signal 时发生；先核验，再让
+    // pending.acquire 同步开始 request，二者之间没有插入新 IPC 的空隙。
+    requireCurrent();
     const keepOwnedHeld = (fresh: VideoPlaybackResult | null): VideoPlaybackResult | null => {
       requireCurrent();
       // owner.clear() 或 query abort 可以在结果落地后、外层 then 运行前释放
@@ -88,34 +149,25 @@ export class VideoPlaybackSessions {
       if (this.held !== held) throw cancelled();
       return held;
     };
-    return this.pending
-      .acquire(signal, async () => ({ key, info: await request() }))
-      .then(
-        (result) => {
-          try {
-            // Tauri 请求不能中途取消。旧播放器已经缓过来时，释放刚建立的新代理，
-            // 返回原 held 对象本身，让 query 的 data/source 保持完全不变。
-            const held = keepOwnedHeld(result);
-            return held ?? result;
-          } finally {
-            onSettled?.();
-          }
-        },
-        (error: unknown) => {
-          try {
-            const name =
-              typeof error === "object" && error !== null && "name" in error ? error.name : null;
-            if (signal.aborted || name === "AbortError") throw error;
-            // 自动恢复取流失败，但旧播放器此时已有可播数据：不必为一次无效的
-            // 刷新弹出错误，继续沿用仍存活的旧代理。
-            const held = keepOwnedHeld(null);
-            if (!held) throw error;
-            return held;
-          } finally {
-            onSettled?.();
-          }
-        },
-      );
+    try {
+      const result = await this.pending.acquire(signal, async () => ({
+        key,
+        info: await request(),
+      }));
+      // Tauri 请求不能中途取消。旧播放器已经缓过来时，释放刚建立的新代理，
+      // 返回原 held 对象本身，让 query 的 data/source 保持完全不变。
+      const held = keepOwnedHeld(result);
+      return held ?? result;
+    } catch (error) {
+      const name =
+        typeof error === "object" && error !== null && "name" in error ? error.name : null;
+      if (signal.aborted || name === "AbortError") throw error;
+      // 自动恢复取流失败，但旧播放器此时已有可播数据：不必为一次无效的
+      // 刷新弹出错误，继续沿用仍存活的旧代理。
+      const held = keepOwnedHeld(null);
+      if (!held) throw error;
+      return held;
+    }
   }
 
   /** 当前由 layout 接管的会话；自动恢复用它核对 held 没有被卸载或换掉。 */

@@ -72,6 +72,7 @@
 | [vod-home-fix-2026-11-07.json](bench/vod-home-fix-2026-11-07.json) | VOD 续传验证器拒绝证据、完整分片回退与自动恢复修复验收（同上） |
 | [vod-recommend-freshness-2026-11-15.json](bench/vod-recommend-freshness-2026-11-15.json) | APP 推荐返回不更新、真实发布时间与刷新参数对照（[调查报告](zh/B站VOD推荐实时性调查.md)） |
 | [vod-recommend-freshness-fix-2026-11-15.json](bench/vod-recommend-freshness-fix-2026-11-15.json) | 推荐缓存过期与首页刷新、失效通知、补货状态及失败重试验收（同上） |
+| [loading-fix-2026-11-17.json](bench/loading-fix-2026-11-17.json) | Windows 实机首页深分页、视频推荐、直播与固定 VOD 的加载/响应耗时、查询所有权、离页清理和修复行为验收（[性能优化](zh/性能优化.md#问题五本轮慢加载调查与实机验证)、[VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md#第六轮2026-11-17-加载响应与修复行为复测)） |
 
 架构图有两套，用途不同：`assets/architecture.svg` 是项目首页展示用的分层总览；
 运行架构的详细图由本机工具生成在 `diagrams/`，该目录不入库。

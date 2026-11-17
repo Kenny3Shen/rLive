@@ -1,5 +1,6 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import {
+  hashKey,
   keepPreviousData,
   useInfiniteQuery,
   useQuery,
@@ -17,6 +18,7 @@ import { RoomCard } from "@/shared/components/RoomCard";
 import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
+import { findVerticalScrollParent } from "@/shared/gestures/pullToRefresh";
 import { useSiteId } from "@/shared/hooks/useSiteQuery";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
 import type { LiveCategory, LiveRoomItem, LiveSubCategory } from "@/shared/types/live";
@@ -34,7 +36,6 @@ import { SITE_LABELS, cn } from "@/lib/utils";
 import { preloadRouteModule } from "@/app/routeModules";
 import { CategoryBar } from "@/features/category/CategoryBar";
 import { CategoryPanel } from "@/features/category/CategoryPanel";
-import { categoryRoomsQueryOptions } from "@/features/category/categoryRoomsQuery";
 import {
   CATEGORY_BROWSE_PATH,
   CATEGORY_PARAM,
@@ -46,7 +47,13 @@ import {
   parseCategorySelection,
   resolveSelectedCategory,
 } from "@/features/category/categorySelection";
-import { homeRecommendationsQueryOptions, trimRotatingRecommendPages } from "./homeQuery";
+import {
+  homeCategoryRoomsQueryOptions,
+  homeRecommendationsQueryOptions,
+  refreshCategoryRoomsFirstPage,
+  refreshHomeRecommendationsFirstPage,
+  waitForHomeRefreshScroll,
+} from "./homeQuery";
 import { mergeRoomPages } from "./pagination";
 import { roomCoverVersions } from "@/shared/api/roomCoverSnapshot";
 
@@ -104,6 +111,9 @@ export function HomePage() {
   const [panelOpenForSite, setPanelOpenForSite] = useState<string | null>(null);
   const panelOpen = panelOpenForSite === siteId;
   const setPanelOpen = (open: boolean) => setPanelOpenForSite(open ? siteId : null);
+  const [manualRefreshingQueryKeys, setManualRefreshingQueryKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const selection = useMemo(
     () => parseCategorySelection(searchParams.get(CATEGORY_PARAM), siteId),
@@ -124,8 +134,17 @@ export function HomePage() {
     [categoriesQuery.data, selection],
   );
 
+  const recommendOptions = useMemo(
+    () => homeRecommendationsQueryOptions(siteId, appAuthRevision),
+    [appAuthRevision, siteId],
+  );
+  const categoryOptions = useMemo(
+    () => homeCategoryRoomsQueryOptions(siteId, selectedCategory ?? IDLE_CATEGORY),
+    [selectedCategory, siteId],
+  );
+
   const recommendQuery = useInfiniteQuery({
-    ...homeRecommendationsQueryOptions(siteId, appAuthRevision),
+    ...recommendOptions,
     enabled: !selection,
     // 在从未访问过的平台拉取首页时保持当前网格可见。避免页签切换期间用空白表面
     // 替换可用内容；查询缓存仍按 ["recommend", siteId, 授权版本] 分别存储。
@@ -133,7 +152,7 @@ export function HomePage() {
   });
 
   const categoryRoomsQuery = useInfiniteQuery({
-    ...categoryRoomsQueryOptions(siteId, selectedCategory ?? IDLE_CATEGORY),
+    ...categoryOptions,
     enabled: Boolean(selection),
   });
 
@@ -143,29 +162,63 @@ export function HomePage() {
   const coverVersions = useMemo(() => roomCoverVersions(pages), [pages]);
   const hasNextPage = query.isPlaceholderData ? false : query.hasNextPage;
 
+  const activeQueryKey = selection ? categoryOptions.queryKey : recommendOptions.queryKey;
+  const activeQueryHash = hashKey(activeQueryKey);
+  const refreshing =
+    manualRefreshingQueryKeys.has(activeQueryHash) ||
+    (query.isRefetching && !query.isFetchingNextPage);
   const { fetchNextPage, isFetchingNextPage, isFetchNextPageError } = query;
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    // 手动首页刷新期间暂停哨兵。深滚动留下的旧 sentinel 不能触发
+    // fetchNextPage({ cancelRefetch: true }) 去取消正在刷新第一页的请求。
+    enabled: !refreshing,
   });
 
-  const refreshing = query.isRefetching && !query.isFetchingNextPage;
+  const pageHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  const setQueryRefreshing = (queryHash: string, value: boolean) => {
+    setManualRefreshingQueryKeys((current) => {
+      if (current.has(queryHash) === value) return current;
+      const next = new Set(current);
+      if (value) next.add(queryHash);
+      else next.delete(queryHash);
+      return next;
+    });
+  };
 
   const refresh = () => {
     // 分类树失败后条带只剩「推荐」；一次下拉理应把它一起救回来，
     // 而不是逼用户再去点条带上的重试。成功缓存的分类树不会因此重复抓取。
     if (categoriesQuery.isError) void categoriesQuery.refetch();
 
-    if (selection) {
-      void categoryRoomsQuery.refetch();
-      return;
-    }
-    // 轮换型信息流（如抖音）只需要一批新数据；先裁剪可以把对所有已存页面的串行
-    // 重新抓取变成单次请求。
-    trimRotatingRecommendPages(queryClient, siteId, appAuthRevision);
-    void recommendQuery.refetch();
+    const refreshQueryHash = hashKey(
+      selection ? categoryOptions.queryKey : recommendOptions.queryKey,
+    );
+    const refreshQueryKey = selection ? categoryOptions.queryKey : recommendOptions.queryKey;
+    setQueryRefreshing(refreshQueryHash, true);
+    const pending = selection
+      ? refreshCategoryRoomsFirstPage(queryClient, siteId, selectedCategory ?? IDLE_CATEGORY)
+      : refreshHomeRecommendationsFirstPage(queryClient, siteId, appAuthRevision);
+    // 刷新错误保留已有数据和 Query 错误状态；控件仍必须结束忙碌并允许再次重试。
+    return pending
+      .then(() =>
+        waitForHomeRefreshScroll(
+          queryClient,
+          refreshQueryKey,
+          (callback) => window.requestAnimationFrame(callback),
+          // 等新首页提交后再复位；成功前按旧页尾深度 clamp 的位置必须在哨兵
+          // 重新启用前回到顶部，否则页面会像是从尾部继续加载一样连补多页。
+          () => {
+            findVerticalScrollParent(pageHeadingRef.current)?.scrollTo({ top: 0 });
+          },
+        ),
+      )
+      .catch(() => undefined)
+      .finally(() => setQueryRefreshing(refreshQueryHash, false));
   };
 
   /**
@@ -207,7 +260,9 @@ export function HomePage() {
         label={`刷新${title}`}
       />
       <div className="flex flex-col gap-4">
-        <h1 className="sr-only">{title}</h1>
+        <h1 ref={pageHeadingRef} className="sr-only">
+          {title}
+        </h1>
 
         <CategoryBar
           categories={categories}

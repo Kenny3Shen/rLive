@@ -41,7 +41,23 @@ export type StreamProxyTelemetry = {
   first_media_at_ms: number | null;
   /** 最近一次分片续传失败的协议诊断；成功续传不产生该记录。 */
   last_resume_diagnostic: StreamProxyResumeDiagnostic | null;
+  /** 最近一次已验证 VOD 候选被丢弃的原因；后续候选成功时仍保留供诊断。 */
+  last_vod_failure_cause: StreamProxyVodFailureCause | null;
 };
+
+/** 已验证 VOD 候选的失败类别；枚举值与 Rust `StreamProxyVodFailureCause` 一致。 */
+export type StreamProxyVodFailureCause =
+  | "request_failed"
+  | "headers_timed_out"
+  | "status_mismatch"
+  | "content_range_mismatch"
+  | "content_length_mismatch"
+  | "body_read_failed"
+  | "body_stalled"
+  | "body_incomplete"
+  | "body_exceeded_range"
+  | "header_budget_exhausted"
+  | "total_budget_exhausted";
 
 /** 续传失败类别；枚举值与 Rust `StreamProxyResumeFailure` 一致。 */
 export type StreamProxyResumeFailure =

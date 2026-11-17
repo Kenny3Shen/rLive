@@ -54,18 +54,21 @@ pub fn site_with_route(
     route: &crate::proxy::ProxyRoute,
 ) -> AppResult<Box<dyn LiveSite>> {
     let client = http_client::client_for_route(route)?;
-    site_with_client(id, cookie, client)
+    site_with_client(id, cookie, client, route)
 }
 
 fn site_with_client(
     id: &SiteId,
     cookie: Option<String>,
     client: reqwest::Client,
+    route: &crate::proxy::ProxyRoute,
 ) -> AppResult<Box<dyn LiveSite>> {
     match id {
         SiteId::Bilibili => {
             let cookie = cookie.unwrap_or_default();
-            Ok(Box::new(BilibiliSite::new(client, cookie)))
+            Ok(Box::new(BilibiliSite::new_with_route(
+                client, cookie, route,
+            )))
         }
         SiteId::Acfun => Ok(Box::new(AcfunSite::new(client))),
         SiteId::Huya => Ok(Box::new(HuyaSite::new(client, cookie.unwrap_or_default()))),

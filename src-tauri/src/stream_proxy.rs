@@ -63,13 +63,13 @@ const VOD_SEGMENT_RECOVERY_BUDGET: Duration = Duration::from_secs(8);
 const VOD_SEGMENT_RECOVERY_BUDGET: Duration = Duration::from_secs(2);
 /// 整片验证从首个候选请求到完整正文收齐的整轮总预算，与 dash.js 的 20 秒
 /// 请求超时对齐；另设累计 8 秒响应头等待上限（单次 4 秒，不含正文等待），
-/// 以及逐块 15 秒停顿上限。慢正文不消耗响应头预算，但仍受整轮总预算约束，
-/// 因此不会在播放器已经放弃后继续拉备用节点或占用内存额度。
+/// 以及复用 `SEGMENT_STALL_TIMEOUT` 的 4 秒相邻字节无进展上限。慢正文不消耗
+/// 响应头预算，但仍受整轮总预算约束；主候选正文停顿 4 秒就换完整备用 Range，
+/// 不会让已到响应头的坏节点一直拖到整轮 20 秒预算结束。
 #[cfg(not(test))]
 const VERIFIED_SEGMENT_BODY_BUDGET: Duration = Duration::from_secs(20);
 #[cfg(test)]
 const VERIFIED_SEGMENT_BODY_BUDGET: Duration = Duration::from_secs(2);
-const VERIFIED_SEGMENT_READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// 单个分片最多续传几次；仍失败就断开下游，交给 dash.js 自己的重试。
 const SEGMENT_RESUME_ATTEMPTS: u32 = 2;
 // FFmpeg 给每次本机读取 10 秒。要在解复用器把本地代理视为无响应之前，
@@ -224,6 +224,26 @@ pub enum StreamProxyResumeFailure {
     AttemptsExhausted,
 }
 
+/// 最近一次已验证 VOD 候选被丢弃的原因。
+///
+/// 该路径会在写下游响应头之前整片验证，因此不会走普通续传诊断。这里只保留
+/// 稳定的失败类别，不暴露 URL、请求头、验证器或上游自由文本。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamProxyVodFailureCause {
+    RequestFailed,
+    HeadersTimedOut,
+    StatusMismatch,
+    ContentRangeMismatch,
+    ContentLengthMismatch,
+    BodyReadFailed,
+    BodyStalled,
+    BodyIncomplete,
+    BodyExceededRange,
+    HeaderBudgetExhausted,
+    TotalBudgetExhausted,
+}
+
 #[derive(Debug)]
 struct ProxyTelemetryCounters {
     started_at_ms: u64,
@@ -243,6 +263,7 @@ struct ProxyTelemetryCounters {
     /// 因此它只在多条流之间可比，绝不是精确的采集瞬间。
     first_media_at_ms: AtomicU64,
     last_resume_diagnostic: Mutex<Option<StreamProxyResumeDiagnostic>>,
+    last_vod_failure_cause: Mutex<Option<StreamProxyVodFailureCause>>,
 }
 
 impl ProxyTelemetryCounters {
@@ -257,6 +278,7 @@ impl ProxyTelemetryCounters {
             latest_response_ms: AtomicU64::new(0),
             first_media_at_ms: AtomicU64::new(0),
             last_resume_diagnostic: Mutex::new(None),
+            last_vod_failure_cause: Mutex::new(None),
         }
     }
 
@@ -265,6 +287,14 @@ impl ProxyTelemetryCounters {
             .last_resume_diagnostic
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(diagnostic);
+    }
+
+    fn record_vod_failure(&self, cause: StreamProxyVodFailureCause) {
+        *self
+            .last_vod_failure_cause
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(cause);
+        tracing::debug!(cause = ?cause, "verified VOD candidate rejected");
     }
 
     /// 锁存第一个媒体字节的纪元；后续分片沿用第一个的取值。
@@ -316,6 +346,10 @@ impl ProxyTelemetryCounters {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clone(),
+            last_vod_failure_cause: *self
+                .last_vod_failure_cause
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
         }
     }
 }
@@ -331,6 +365,8 @@ pub struct StreamProxyTelemetry {
     pub latest_response_ms: Option<u64>,
     pub first_media_at_ms: Option<u64>,
     pub last_resume_diagnostic: Option<StreamProxyResumeDiagnostic>,
+    /// 最近一次已验证 VOD 候选被丢弃的原因；后续候选成功时仍保留供诊断。
+    pub last_vod_failure_cause: Option<StreamProxyVodFailureCause>,
 }
 
 fn unix_timestamp_ms() -> u64 {
@@ -3164,8 +3200,9 @@ enum VerifiedVodOutcome {
 /// 只用于有同 representation 合法备用地址、闭区间长度不超过 `MAX_SEGMENT_BYTES`、
 /// 且能拿到共享有界内存额度的分片。候选必须回 206、Content-Range 与请求一致、
 /// Content-Length 若存在也须一致、逐块读取到显式 EOF，且总字节数精确；截断或
-/// 读取失败时丢弃整个候选，换下一个备用地址重新请求完整 Range，绝不跨节点或跨
-/// 版本拼接前缀。额度不足或调用方不支持时返回 `Fallback`。
+/// 读取失败、或者正文连续 4 秒没有收到新字节时丢弃整个候选，换下一个备用地址
+/// 重新请求完整 Range，绝不跨节点或跨版本拼接前缀。额度不足或调用方不支持时
+/// 返回 `Fallback`。
 async fn fetch_verified_vod_segment(
     primary: &str,
     backups: &[String],
@@ -3198,6 +3235,7 @@ async fn fetch_verified_vod_segment(
     {
         if header_wait_used >= VOD_SEGMENT_RECOVERY_BUDGET {
             last_error = "VOD segment header recovery budget exhausted".into();
+            telemetry.record_vod_failure(StreamProxyVodFailureCause::HeaderBudgetExhausted);
             break;
         }
         let wait = VOD_SEGMENT_RECOVERY_BUDGET
@@ -3206,6 +3244,7 @@ async fn fetch_verified_vod_segment(
             .min(global_deadline.saturating_duration_since(Instant::now()));
         if wait.is_zero() {
             last_error = "VOD segment total budget exhausted".into();
+            telemetry.record_vod_failure(StreamProxyVodFailureCause::TotalBudgetExhausted);
             break;
         }
         telemetry.upstream_requests.fetch_add(1, Ordering::Relaxed);
@@ -3218,11 +3257,13 @@ async fn fetch_verified_vod_segment(
             Ok(Err(_)) => {
                 header_wait_used += header_started.elapsed();
                 last_error = "upstream request failed".into();
+                telemetry.record_vod_failure(StreamProxyVodFailureCause::RequestFailed);
                 continue;
             }
             Err(_) => {
                 header_wait_used += header_started.elapsed();
                 last_error = "upstream headers timed out".into();
+                telemetry.record_vod_failure(StreamProxyVodFailureCause::HeadersTimedOut);
                 continue;
             }
         };
@@ -3234,10 +3275,14 @@ async fn fetch_verified_vod_segment(
             .get(reqwest::header::CONTENT_RANGE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        if response.status().as_u16() != 206
-            || !content_range_matches(upstream_content_range.as_deref(), start, end)
-        {
-            last_error = "upstream status or Content-Range mismatch".into();
+        if response.status().as_u16() != 206 {
+            last_error = "upstream status mismatch".into();
+            telemetry.record_vod_failure(StreamProxyVodFailureCause::StatusMismatch);
+            continue;
+        }
+        if !content_range_matches(upstream_content_range.as_deref(), start, end) {
+            last_error = "upstream Content-Range mismatch".into();
+            telemetry.record_vod_failure(StreamProxyVodFailureCause::ContentRangeMismatch);
             continue;
         }
         let declared_length = response
@@ -3247,6 +3292,7 @@ async fn fetch_verified_vod_segment(
             .and_then(|value| value.parse::<u64>().ok());
         if declared_length.is_some_and(|length| length != expected_bytes) {
             last_error = "upstream Content-Length does not match Range".into();
+            telemetry.record_vod_failure(StreamProxyVodFailureCause::ContentLengthMismatch);
             continue;
         }
         let content_type = response
@@ -3256,43 +3302,79 @@ async fn fetch_verified_vod_segment(
             .unwrap_or("application/octet-stream")
             .to_owned();
         // 整片长度已受额度约束；正文始终使用整轮截止时刻，不因换源重新计时。
+        // 每次收到非空正文才重置 4 秒停滞计时，空块不能无限刷新“仍在下载”。
         let mut stream = response.bytes_stream();
         let mut bytes = Vec::with_capacity(expected_bytes as usize);
-        let mut body_error = None;
+        let mut stall_deadline = Instant::now() + SEGMENT_STALL_TIMEOUT;
+        let mut body_failure = None;
         loop {
-            let remaining = global_deadline
-                .saturating_duration_since(Instant::now())
-                .min(VERIFIED_SEGMENT_READ_TIMEOUT);
-            if remaining.is_zero() {
-                body_error = Some("VOD segment total budget exhausted");
+            let now = Instant::now();
+            let total_remaining = global_deadline.saturating_duration_since(now);
+            let stall_remaining = stall_deadline.saturating_duration_since(now);
+            if total_remaining.is_zero() {
+                body_failure = Some((
+                    StreamProxyVodFailureCause::TotalBudgetExhausted,
+                    "VOD segment total budget exhausted",
+                ));
                 break;
             }
-            match tokio::time::timeout(remaining, stream.next()).await {
+            let wait = total_remaining.min(stall_remaining);
+            if wait.is_zero() {
+                body_failure = Some((
+                    StreamProxyVodFailureCause::BodyStalled,
+                    "upstream body chunk stalled",
+                ));
+                break;
+            }
+            match tokio::time::timeout(wait, stream.next()).await {
                 Ok(Some(Ok(chunk))) => {
                     if bytes.len().saturating_add(chunk.len()) > expected_bytes as usize {
-                        body_error = Some("upstream body exceeded Range");
+                        body_failure = Some((
+                            StreamProxyVodFailureCause::BodyExceededRange,
+                            "upstream body exceeded Range",
+                        ));
                         break;
                     }
+                    if chunk.is_empty() {
+                        continue;
+                    }
                     bytes.extend_from_slice(&chunk);
+                    stall_deadline = Instant::now() + SEGMENT_STALL_TIMEOUT;
                 }
                 Ok(Some(Err(_))) => {
-                    body_error = Some("upstream body read failed");
+                    body_failure = Some((
+                        StreamProxyVodFailureCause::BodyReadFailed,
+                        "upstream body read failed",
+                    ));
                     break;
                 }
                 Ok(None) => {
                     // reqwest 的干净 EOF：必须已收满闭区间，短一字节也不能交付。
                     if bytes.len() as u64 != expected_bytes {
-                        body_error = Some("upstream body ended before Range was complete");
+                        body_failure = Some((
+                            StreamProxyVodFailureCause::BodyIncomplete,
+                            "upstream body ended before Range was complete",
+                        ));
                     }
                     break;
                 }
                 Err(_) => {
-                    body_error = Some("upstream body chunk stalled");
+                    body_failure = if total_remaining <= stall_remaining {
+                        Some((
+                            StreamProxyVodFailureCause::TotalBudgetExhausted,
+                            "VOD segment total budget exhausted",
+                        ))
+                    } else {
+                        Some((
+                            StreamProxyVodFailureCause::BodyStalled,
+                            "upstream body chunk stalled",
+                        ))
+                    };
                     break;
                 }
             }
         }
-        if body_error.is_none() && bytes.len() as u64 == expected_bytes {
+        if body_failure.is_none() && bytes.len() as u64 == expected_bytes {
             return VerifiedVodOutcome::Verified(VerifiedVodSegment {
                 status: 206,
                 reason: "Partial Content",
@@ -3303,7 +3385,12 @@ async fn fetch_verified_vod_segment(
                 _reservation: reservation,
             });
         }
-        last_error = body_error.unwrap_or("upstream body incomplete").to_owned();
+        let (cause, error) = body_failure.unwrap_or((
+            StreamProxyVodFailureCause::BodyIncomplete,
+            "upstream body incomplete",
+        ));
+        last_error = error.to_owned();
+        telemetry.record_vod_failure(cause);
     }
     VerifiedVodOutcome::Exhausted(last_error)
 }

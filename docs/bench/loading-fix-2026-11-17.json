@@ -1,0 +1,685 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-17T23:02:17+08:00",
+  "scope": {
+    "goal": "在 Windows Debug 真实 Tauri 主窗口中检测首页、视频推荐、直播与固定 VOD 的加载和响应速度，并验证冻结修复的运行时行为。",
+    "production_source_changed_by_measurement_agent": false,
+    "settings_changed": false,
+    "cache_cleared": false,
+    "quality_lowered": false,
+    "proxy_changed": false
+  },
+  "verdict": {
+    "semantic_regressions_confirmed": [],
+    "behavioral_checks_passed": [
+      "首页深分页刷新只重建 page=1，刷新完成回顶前保持 busy，静置不串补，之后可继续 page=2/3。",
+      "刷新期间切换分类后，旧推荐首页请求完成没有触发旧视图回顶或影响新分类视图。",
+      "视频推荐连续三次手动刷新各只有一次手动 page=1 请求；自动 page=2 在 busy 结束后启动，按钮保持可操作。",
+      "固定 VOD 首开只有一次同参数 video_get_play_info；离页 5 秒内没有新增，并触发 video_stop_play。",
+      "直播和 VOD 均取得真实 rVFC，未观察到媒体错误。"
+    ],
+    "remaining_slow_paths": [
+      "首页手动刷新 page=1 本次为 3366ms。",
+      "视频推荐连续手动 page=1 为 1866ms、2399ms、2846ms；自动 page=2 为 2239ms、3227ms、2962ms。",
+      "直播推荐卡片点击到首个 rVFC 为 4829ms；固定房间详情冷/热为 3029ms/1100ms。",
+      "固定 VOD 推荐/搜索卡片点击到首个 rVFC 为 7712ms；其中 video_get_play_info 为 2597ms，首个视频正文 Range 为 2732ms，Range 起点到 rVFC 为 3108ms。"
+    ],
+    "interpretation": "修复后的并发、取消、重复请求和回顶行为通过当前样本；端到端仍存在秒级等待，尤其直播与 VOD 首帧。现有网络与代理条件不足，不能把当前耗时与历史记录换算成纯 A/B 改善率。"
+  },
+  "environment": {
+    "os": "Windows 11 10.0.26300 x64",
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13600KF",
+    "logical_processors": 20,
+    "memory_total_mib": 32559,
+    "webview2": "157.0.4341.46",
+    "build_mode": "Windows Tauri Debug, Vite dev, React development/StrictMode",
+    "window": {
+      "inner_width": 1280,
+      "inner_height": 720,
+      "device_pixel_ratio": 1
+    },
+    "runtime_process": {
+      "pid": 69536,
+      "start_time": "2026-11-17T22:39:14.1445396+08:00",
+      "executable_last_write": "2026-11-17T22:39:14.0345980+08:00",
+      "responding": true,
+      "working_set_mib_at_final_check": 56.1
+    },
+    "source": {
+      "branch": "master",
+      "head_commit": "04d9cef42eec355bbce9fa7597d99eda60b3a08e",
+      "head_subject": "feat(multi-room): 优化直播间添加界面",
+      "worktree_dirty": true,
+      "combined_source_commit": "04d9cef42eec355bbce9fa7597d99eda60b3a08e + frozen uncommitted performance worktree"
+    },
+    "read_only_configuration": {
+      "proxy_mode": "auto",
+      "saved_proxy_present": true,
+      "proxy_address_retained": false,
+      "video_recommend_api": "app",
+      "video_next_episode_preload": true,
+      "room_card_preview_enabled": true,
+      "quality_level": "high"
+    }
+  },
+  "code_and_mirror": {
+    "sync_command": "bash scripts/sync-to-windows.sh",
+    "sync_result": "ok",
+    "windows_mirror": "D:\\dev\\rLive",
+    "comparison": {
+      "method": "sha256 over Git-managed and untracked non-ignored source files excluding build/cache paths",
+      "files_checked": 917,
+      "content_differences": 0,
+      "missing": 0
+    },
+    "selected_source_sha256": {
+      "src/features/home/HomePage.tsx": "35e2ce9266c1ff01b25a81fa792bc1fe8c674e955ca8f5d2712dc6ae87317d2f",
+      "src/features/home/homeQuery.ts": "52653d3551976590039ecb298c9c0f71fabdb3e099dd9b6d838d4231506d2f45",
+      "src/features/video/VideoPlayerPage.tsx": "405e03f40a35fb38477e5d1d4a98a1f52adb0a55e35ac6af5344384cab846d32",
+      "src/features/video/videoPlaybackLifecycle.ts": "7dc40657e257e4a93358f7191581e30d1b627266457a1edd4d1c9466dbded9cc",
+      "src-tauri/src/account/bilibili_app.rs": "8d320c1a9b084a3a1a08838eba615fe64e7387075ce4be171182f04c863ad430",
+      "src-tauri/src/sites/bilibili/mod.rs": "05824639dab4b7fe27c8704d6e0d425708d6aad1eed0fc68cc57c0b8208b2979",
+      "src-tauri/src/commands/video.rs": "d604a1f8353255e9328c0fed34278d3f9c61fdcd2ff872259613eca896c82bbf",
+      "src-tauri/src/stream_proxy.rs": "394aa24755cd8657491a75db8a19dec5c998460c5cf1c31b4f47b912cbe14283",
+      "src/shared/types/player.ts": "dd17519f6c946535d857b8262ee7cf249e5ad52aaec04b794c162aa65723da72",
+      "tests/home-query-refresh.test.ts": "da35869adc296fcd0729dee40a2c2af3c620daca7faae0ca52e20e31b6c169af",
+      "tests/video-playback-lifecycle.test.ts": "adae35eaa1f8aec179baffc26d2e801f2d5ba643c3bb5704e8289759d6af141a"
+    },
+    "building_process_started_after_latest_rust_source_write": true,
+    "latest_frontend_source_applied_by_vite_hmr": true,
+    "production_source_changed_after_runtime_build": false
+  },
+  "excluded_invalid_attempt": {
+    "excluded": true,
+    "reason": "首次首页 CDP 请求事件与滚动容器命中探针未正确绑定，捕获不到真实 IPC，且命中点被过渡层遮挡；该次请求与点击数据全部丢弃。",
+    "replacement_uses": "playwright-cli network request index/body/duration plus active-scroller elementFromPoint and temporary scrollTo wrapper"
+  },
+  "home_bilibili_deep_refresh": {
+    "fixed_query_key": [
+      "recommend",
+      "bilibili",
+      0
+    ],
+    "before_refresh": {
+      "page_params": [
+        1,
+        2,
+        3
+      ],
+      "pages": 3,
+      "visible_cards": 138,
+      "scroll_top": 2965,
+      "scroll_height": 4112
+    },
+    "click_and_feedback": {
+      "capture_click_ms": 1794927033413,
+      "busy_start_ms": 1794927033420,
+      "busy_feedback_ms": 7,
+      "hit_sample_ms_after_click": 93,
+      "old_cards_still_present": true,
+      "old_cards_count": 138,
+      "matching_hit_points": 6,
+      "sample_points_all_resolved_to_same_card": true,
+      "card_pointer_events": "auto"
+    },
+    "refresh_window": {
+      "button_busy_total_ms": 3451,
+      "scroll_to_call_ms": 1794927036847,
+      "scroll_to_call_button_disabled": true,
+      "scroll_to_call_args": [
+        {
+          "top": 0
+        }
+      ],
+      "scroll_to_to_busy_end_ms": 24,
+      "busy_end_ms": 1794927036871,
+      "scroll_event_ms": 1794927036872,
+      "page_starts": [
+        {
+          "cdp_request_index": 3,
+          "command": "site_get_recommend",
+          "page": 1,
+          "status": 200,
+          "duration_ms": 3366
+        }
+      ],
+      "page_starts_above_1": 0
+    },
+    "after_settle": {
+      "minimum_wait_before_inspection_ms": 8000,
+      "page_params": [
+        1
+      ],
+      "pages": 1,
+      "fetch_status": "idle",
+      "scroll_top": 0,
+      "visible_cards": 109,
+      "automatic_refill_observed": false
+    },
+    "continue_paging_after_refresh": {
+      "page_2": {
+        "cdp_request_index": 113,
+        "page": 2,
+        "status": 200,
+        "duration_ms": 588
+      },
+      "page_3": {
+        "cdp_request_index": 124,
+        "page": 3,
+        "status": 200,
+        "duration_ms": 646
+      },
+      "final_page_params": [
+        1,
+        2,
+        3
+      ],
+      "final_visible_cards": 130
+    }
+  },
+  "home_category_switch_during_refresh": {
+    "before": {
+      "page_params": [
+        1,
+        2,
+        3
+      ],
+      "scroll_top": 3311,
+      "scroll_height": 3939
+    },
+    "refresh": {
+      "cdp_request_index": 143,
+      "page": 1,
+      "status": 200,
+      "duration_ms": 1299
+    },
+    "category": {
+      "site_id": "bilibili",
+      "parent_id": "2",
+      "category_id": "0",
+      "name": "全部网游",
+      "cdp_request_index": 144,
+      "page": 1,
+      "status": 200,
+      "duration_ms": 1889
+    },
+    "timeline": {
+      "race_start_ms": 1794927129394,
+      "refresh_busy_start_ms": 1794927129414,
+      "route_switched_ms": 1794927129458,
+      "route_scroll_reset_ms": 1794927129486,
+      "old_refresh_duration_ms": 1299
+    },
+    "final": {
+      "active_query_key": [
+        "category_rooms",
+        "bilibili",
+        "2",
+        "0"
+      ],
+      "active_query_status": "success",
+      "active_query_pages": [
+        1
+      ],
+      "recommend_query_active": false,
+      "recommend_query_pages": [
+        1
+      ],
+      "scroll_top": 0,
+      "visible_cards": 30,
+      "old_completion_scroll_call_observed": false,
+      "old_completion_changed_new_view": false
+    }
+  },
+  "video_recommendation_refresh": {
+    "query_key": [
+      "video_list",
+      "recommend",
+      "",
+      "app",
+      0
+    ],
+    "cold_route_observation": {
+      "click_to_route_ms": 45,
+      "query_ready_after_click_ms": 5183,
+      "requests": {
+        "page_1": [
+          {
+            "cdp_request_index": 179,
+            "page": 1,
+            "status": 200,
+            "duration_ms": 3622,
+            "classification": "cold_navigation"
+          },
+          {
+            "cdp_request_index": 180,
+            "page": 1,
+            "status": 200,
+            "duration_ms": 4657,
+            "classification": "cold_navigation"
+          }
+        ],
+        "page_2": [
+          {
+            "cdp_request_index": 225,
+            "page": 2,
+            "status": 200,
+            "duration_ms": 2311,
+            "classification": "automatic_refill"
+          }
+        ]
+      },
+      "caveat": "共两次 page=1 是开发态 StrictMode/预取下的冷导航观察；三次真实手动刷新均为单次 page=1，不能据此认定生产重复请求。"
+    },
+    "manual_refresh_rounds": [
+      {
+        "round": 1,
+        "page_1_ipc": {
+          "cdp_request_index": 246,
+          "page": 1,
+          "status": 200,
+          "duration_ms": 1866
+        },
+        "busy_start_ms": 1794927226116,
+        "busy_end_ms": 1794927228045,
+        "manual_busy_ms": 1921,
+        "automatic_page_2": {
+          "cdp_request_index": 263,
+          "page": 2,
+          "status": 200,
+          "duration_ms": 2239,
+          "classification": "automatic_refill",
+          "button_disabled_throughout": false,
+          "first_observed_after_busy_ms": 256
+        }
+      },
+      {
+        "round": 2,
+        "page_1_ipc": {
+          "cdp_request_index": 281,
+          "page": 1,
+          "status": 200,
+          "duration_ms": 2399
+        },
+        "busy_start_ms": 1794927258669,
+        "busy_end_ms": 1794927261121,
+        "manual_busy_ms": 2452,
+        "automatic_page_2": {
+          "cdp_request_index": 308,
+          "page": 2,
+          "status": 200,
+          "duration_ms": 3227,
+          "classification": "automatic_refill",
+          "button_disabled_throughout": false,
+          "first_observed_after_busy_ms": 264
+        }
+      },
+      {
+        "round": 3,
+        "page_1_ipc": {
+          "cdp_request_index": 324,
+          "page": 1,
+          "status": 200,
+          "duration_ms": 2846
+        },
+        "busy_start_ms": 1794927264466,
+        "busy_end_ms": 1794927267364,
+        "manual_busy_ms": 2898,
+        "automatic_page_2": {
+          "cdp_request_index": 347,
+          "page": 2,
+          "status": 200,
+          "duration_ms": 2962,
+          "classification": "automatic_refill",
+          "button_disabled_throughout": false,
+          "first_observed_after_busy_ms": 263
+        }
+      }
+    ],
+    "classification_rule": "只有手动 busy 窗口内的 page=1 作为手动刷新；busy 结束后哨兵触发的 page=2 标记为 automatic_refill，不并入按钮响应时间。",
+    "conclusion": "三次手动刷新没有把自动补页混入 busy；自动补页运行时按钮已解除 disabled。"
+  },
+  "bilibili_live_room": {
+    "fixed_detail_probe": {
+      "room_id": "31306592",
+      "calls": [
+        {
+          "order": "cold",
+          "cdp_request_index": 364,
+          "duration_ms": 3029,
+          "status": 200
+        },
+        {
+          "order": "warm",
+          "cdp_request_index": 365,
+          "duration_ms": 1100,
+          "status": 200
+        }
+      ],
+      "request_params": {
+        "siteId": "bilibili",
+        "roomId": "31306592"
+      },
+      "upstream_request_count_claim": "not available from CDP"
+    },
+    "ui_sample": {
+      "entry": "Bilibili 首页真实推荐卡片",
+      "room_id": "31687085",
+      "route": "/room/bilibili/31687085",
+      "ipc_steps": [
+        {
+          "command": "site_get_room_detail",
+          "cdp_request_index": 427,
+          "status": 200,
+          "duration_ms": 833
+        },
+        {
+          "command": "site_get_play_qualities",
+          "cdp_request_index": 436,
+          "status": 200,
+          "duration_ms": 1091
+        },
+        {
+          "command": "site_get_play_urls",
+          "cdp_request_index": 446,
+          "status": 200,
+          "duration_ms": 1087
+        },
+        {
+          "command": "stream_proxy_start",
+          "cdp_request_index": 455,
+          "status": 200,
+          "duration_ms": 3
+        }
+      ],
+      "timeline": {
+        "card_click_ms": 1794927358135,
+        "route_change_ms": 1794927358147,
+        "click_to_route_ms": 12,
+        "loadstart_ms": 1794927361387,
+        "loadedmetadata_ms": 1794927362914,
+        "first_rvfc_ms": 1794927362964,
+        "loadeddata_ms": 1794927363052,
+        "playing_ms": 1794927363220,
+        "click_to_first_rvfc_ms": 4829,
+        "route_to_first_rvfc_ms": 4817,
+        "loadstart_to_first_rvfc_ms": 1577
+      },
+      "first_rvfc": {
+        "media_time_seconds": 0.017,
+        "presented_frames": 1,
+        "width": 1920,
+        "height": 1080
+      },
+      "telemetry": {
+        "session_id_masked": "web-player-<redacted>:3",
+        "upstream_requests": 1,
+        "upstream_failures": 0,
+        "upstream_resumes": 0,
+        "bytes_forwarded_at_snapshot": 27647419,
+        "first_response_ms": 1475,
+        "first_media_after_session_start_ms": 1490,
+        "first_media_to_first_rvfc_ms": 97,
+        "last_resume_diagnostic": null,
+        "last_vod_failure_cause": null
+      },
+      "post_play_progress": {
+        "elapsed_ms": 2500,
+        "current_time_advance_seconds": 2.5008,
+        "media_error": null
+      },
+      "leave_cleanup": {
+        "command": "stream_proxy_stop",
+        "cdp_request_index": 497,
+        "duration_ms": 2,
+        "status": 200
+      }
+    }
+  },
+  "vod_fixed_sample": {
+    "target": {
+      "bvid": "BV1HTWq6iESp",
+      "cid": 43568988395,
+      "requested_quality": "normal UI",
+      "served_qn": 80
+    },
+    "entry": "视频搜索页真实结果卡片，随后进入 /video/play",
+    "history_before_play": {
+      "kind": "ugc",
+      "oid": "BV1HTWq6iESp",
+      "bvid": "BV1HTWq6iESp",
+      "cid": 43568988395,
+      "ep_id": "",
+      "aid": "117608418385737",
+      "progress": 114.826633,
+      "duration": 133.5675,
+      "watched_at": 1794924879201
+    },
+    "play_info": {
+      "request_count_for_this_entry": 1,
+      "cdp_request_index": 576,
+      "request": {
+        "bvid": "BV1HTWq6iESp",
+        "cid": 43568988395,
+        "ep_id": null,
+        "qn": null,
+        "audio_only": false,
+        "media_cache": true
+      },
+      "status": 200,
+      "duration_ms": 2597,
+      "response": {
+        "quality": 80,
+        "quality_label": "高清 1080P",
+        "codecs": "avc1.640032",
+        "duration": 133.5675,
+        "dimension": {
+          "width": 1920,
+          "height": 1080,
+          "rotate": 0
+        },
+        "audio_only": false,
+        "accept_quality_count": 6,
+        "has_video_url": true,
+        "has_audio_url": true,
+        "has_mpd_url": true,
+        "session_ids_present": {
+          "video": "str",
+          "audio": "str",
+          "mpd": "str"
+        }
+      }
+    },
+    "timeline": {
+      "card_click_ms": 1794927469159,
+      "route_change_ms": 1794927469172,
+      "click_to_route_ms": 13,
+      "first_video_content_range_start_ms": 1794927473763.8,
+      "first_rvfc_ms": 1794927476871,
+      "click_to_first_rvfc_ms": 7712,
+      "route_to_first_rvfc_ms": 7699,
+      "first_video_content_range_start_to_first_rvfc_ms": 3107.2,
+      "click_to_first_video_content_range_start_ms": 4604.8
+    },
+    "first_rvfc": {
+      "media_time_seconds": 114.8,
+      "presented_frames": 1,
+      "width": 1920,
+      "height": 1080,
+      "ready_state": 1,
+      "current_time_seconds": 114.826633
+    },
+    "first_ranges_and_resources": {
+      "mpd": {
+        "cdp_request_index": 578,
+        "status": 200,
+        "duration_ms": 2,
+        "content_length": 6615,
+        "content_type": "application/dash+xml"
+      },
+      "video_initialization": {
+        "cdp_request_index": 579,
+        "status": 206,
+        "duration_ms": 2,
+        "range": "bytes=0-932",
+        "content_length": 933,
+        "content_type": "video/mp4"
+      },
+      "audio_initialization": {
+        "cdp_request_index": 580,
+        "status": 206,
+        "duration_ms": 3,
+        "range": "bytes=0-836",
+        "content_length": 837,
+        "content_type": "audio/mp4"
+      },
+      "first_video_content": {
+        "cdp_request_index": 581,
+        "status": 206,
+        "duration_ms": 2731.7000002861023,
+        "performance_start_ms": 826771.4000000954,
+        "performance_end_ms": 829503.1000003815,
+        "range": "bytes=30089321-30870582",
+        "content_range": "bytes 30089321-30870582/36129709",
+        "content_length": 781262,
+        "content_type": "video/mp4"
+      },
+      "first_audio_content": {
+        "cdp_request_index": 582,
+        "status": 206,
+        "duration_ms": 363.69999980926514,
+        "range": "bytes=2457400-2570301",
+        "content_range": "bytes 2457400-2570301/2974606",
+        "content_length": 112902,
+        "content_type": "application/octet-stream"
+      }
+    },
+    "media_events": [
+      {
+        "kind": "media_waiting",
+        "at_ms": 1794927473763,
+        "current_time_seconds": 0,
+        "ready_state": 0
+      },
+      {
+        "kind": "media_loadstart",
+        "at_ms": 1794927473775,
+        "current_time_seconds": 0,
+        "ready_state": 0
+      },
+      {
+        "kind": "media_loadedmetadata",
+        "at_ms": 1794927473783,
+        "current_time_seconds": 0,
+        "ready_state": 1
+      },
+      {
+        "kind": "media_rvfc",
+        "at_ms": 1794927476871,
+        "current_time_seconds": 114.826633,
+        "ready_state": 1
+      }
+    ],
+    "telemetry_snapshot": {
+      "session_ids_masked": {
+        "video": "video-<redacted>-video",
+        "audio": "video-<redacted>-audio",
+        "mpd": "video-<redacted>-mpd"
+      },
+      "tracks": {
+        "video": {
+          "upstream_requests": 5,
+          "upstream_failures": 0,
+          "upstream_resumes": 0,
+          "bytes_forwarded": 6040388,
+          "first_response_ms": 608,
+          "latest_response_ms": 187,
+          "first_media_after_session_start_ms": 2792,
+          "last_resume_diagnostic": null,
+          "last_vod_failure_cause": null
+        },
+        "audio": {
+          "upstream_requests": 5,
+          "upstream_failures": 0,
+          "upstream_resumes": 0,
+          "bytes_forwarded": 517206,
+          "first_response_ms": 134,
+          "latest_response_ms": 35,
+          "first_media_after_session_start_ms": 436,
+          "last_resume_diagnostic": null,
+          "last_vod_failure_cause": null
+        },
+        "mpd": {
+          "upstream_requests": 0,
+          "upstream_failures": 0,
+          "upstream_resumes": 0,
+          "bytes_forwarded": 0,
+          "first_response_ms": null,
+          "latest_response_ms": null,
+          "first_media_after_session_start_ms": null,
+          "last_resume_diagnostic": null,
+          "last_vod_failure_cause": null
+        }
+      }
+    },
+    "media_completion": {
+      "ended": true,
+      "media_error": null,
+      "duration_seconds": 133.566624
+    },
+    "leave_check": {
+      "returned_to": "/video/search",
+      "observed_window_ms": 5000,
+      "video_stop_play": {
+        "cdp_request_index": 644,
+        "status": 200,
+        "duration_ms": 1
+      },
+      "video_get_play_info_count_before_leave": 4,
+      "video_get_play_info_count_after_watch": 4,
+      "unowned_new_play_info": 0
+    },
+    "media_cache_false_diagnostic": {
+      "run": false,
+      "reason": "正常 UI 的 media_cache=true 样本已取得完整视频正文 Range、无 failures/resumes，且 upstream_requests=5 表明并非纯磁盘缓存命中；无需另建完整 Range 诊断。"
+    }
+  },
+  "historical_reference_not_ab_comparison": {
+    "recorded_earlier_on_2026-11-17": {
+      "home_refresh_page_1_ms": 4734,
+      "video_manual_refresh_ms": [
+        9202,
+        5731
+      ],
+      "video_auto_refill_ms": 12419,
+      "vod_same_play_info_count": 2,
+      "vod_first_video_content_range_ms": 15671.2,
+      "vod_video_upstream_requests": 10,
+      "vod_video_upstream_resumes": 1,
+      "vod_first_media_after_session_start_ms": 15756
+    },
+    "comparison_policy": "仅用于确认修复方向和验证带内行为；网络、代理、缓存与运行时均发生变化，不计算改善百分比。"
+  },
+  "limitations": [
+    "仅覆盖 Windows Debug/WebView2 157.0.4341.46、当前机器、当前代理和当前网络。",
+    "CDP 看不到 Rust reqwest 发往 B 站上游的内部请求；WBI 冷/热只能按同进程顺序、请求参数和耗时解释。",
+    "直播媒体画面走硬件层，本报告以 rVFC 和媒体事件判断首帧，不使用 CDP 截图。",
+    "网络耗时波动不提供纯 A/B 改善率；开发态 React StrictMode 的冷导航双 page=1 仍需 release 复核。",
+    "直播播放中既有 waiting 现象仍可能受网络波动影响；本次样本没有媒体错误，但不宣称所有波动已消失。",
+    "未输出 token、cookie、Authorization、签名 URL、完整上游 query 或真实代理地址。"
+  ],
+  "cleanup": {
+    "final_route": "/",
+    "final_search": "",
+    "final_room_card_count": 111,
+    "final_scroll_top": 0,
+    "probe_state_after_delete": {
+      "qc": false,
+      "home": false,
+      "live": false,
+      "vod": false
+    },
+    "runtime_pid_retained": 69536,
+    "cdp_action": "detach_after_final_json"
+  }
+}

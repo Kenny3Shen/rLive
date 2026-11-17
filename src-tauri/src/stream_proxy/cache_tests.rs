@@ -12,8 +12,8 @@ use tokio::time::timeout;
 
 use super::{
     HlsResources, ManifestPin, PrefetchedInitialization, ProxyLoopContext, ProxyTelemetryCounters,
-    StreamProxy, StreamProxyResumeFailure, StreamProxyStartOptions, VodBackupUrls, handle_client,
-    request_header,
+    StreamProxy, StreamProxyResumeFailure, StreamProxyStartOptions, StreamProxyVodFailureCause,
+    VodBackupUrls, handle_client, request_header,
 };
 use crate::media_cache::{MediaCache, MediaCacheSpec};
 
@@ -238,6 +238,10 @@ impl Fixture {
         self.context.telemetry.snapshot().last_resume_diagnostic
     }
 
+    fn last_vod_failure_cause(&self) -> Option<StreamProxyVodFailureCause> {
+        self.context.telemetry.snapshot().last_vod_failure_cause
+    }
+
     /// 每次请求都等待真实 handle_client 结束，避免以“客户端收完”代替正常 EOF。
     async fn start_request_with(
         &self,
@@ -275,6 +279,10 @@ impl Fixture {
             .telemetry
             .upstream_requests
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn upstream_failures(&self) -> u64 {
+        self.context.telemetry.snapshot().upstream_failures
     }
 
     async fn wait_for_complete_cache(&self) {
@@ -1129,9 +1137,98 @@ async fn verified_vod_segment_replaces_truncated_primary_with_one_complete_backu
     assert_eq!(fixture.upstream_requests(), 2);
     assert_eq!(fixture.upstream_resumes(), 1);
     assert_eq!(fixture.last_resume_diagnostic(), None, "整片回退不拼接前缀");
+    assert_eq!(
+        fixture.last_vod_failure_cause(),
+        Some(StreamProxyVodFailureCause::BodyReadFailed)
+    );
     fixture.wait_for_complete_cache().await;
     primary.abort();
     backup.abort();
+}
+
+#[tokio::test]
+async fn verified_vod_segment_uses_complete_primary_without_switch() {
+    let (fixture, primary, backup, requests) =
+        two_node_fixture(vec![complete_response()], vec![complete_response()]).await;
+    let (bytes, result) = fixture.fetch().await;
+    result.unwrap();
+    assert_eq!(body(&bytes), complete_body());
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert_eq!(fixture.upstream_requests(), 1);
+    assert_eq!(fixture.upstream_resumes(), 0);
+    assert_eq!(fixture.last_vod_failure_cause(), None);
+    fixture.wait_for_complete_cache().await;
+    primary.abort();
+    backup.abort();
+}
+
+#[tokio::test]
+async fn verified_vod_segment_switches_backup_after_primary_body_stalls() {
+    let mut fixture = Fixture::new(complete_response()).await;
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let primary_address = primary.local_addr().unwrap();
+    let primary_requests = requests.clone();
+    let stalled_primary = tokio::spawn(async move {
+        let (mut stream, _) = primary.accept().await.unwrap();
+        let request = read_request_head(&mut stream).await;
+        primary_requests.lock().unwrap().push(request);
+        let _ = stream
+            .write_all(&response(
+                206,
+                "bytes 0-799/1600",
+                "Content-Length: 800",
+                &[0xEE; 300],
+            ))
+            .await;
+        tokio::time::sleep(WAIT).await;
+    });
+
+    let backup = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backup_address = backup.local_addr().unwrap();
+    let backup_requests = requests.clone();
+    let healthy_backup = tokio::spawn(async move {
+        let (mut stream, _) = backup.accept().await.unwrap();
+        let request = read_request_head(&mut stream).await;
+        backup_requests.lock().unwrap().push(request);
+        let _ = stream.write_all(&complete_response()).await;
+    });
+
+    fixture.context.url = format!("http://{primary_address}/primary.m4s").into();
+    fixture.context.vod_backup_urls = Some(VodBackupUrls(Arc::from([format!(
+        "http://{backup_address}/backup.m4s"
+    )])));
+    let started = std::time::Instant::now();
+    let (bytes, result) = fixture.fetch().await;
+    result.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "正文 4 秒（测试配置 300ms）停滞必须触发换源，不能等待连接自身结束"
+    );
+    assert_eq!(body(&bytes), complete_body(), "只交付完整备用 Range");
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2, "主节点停滞后只向备用节点重取一次");
+    assert!(
+        requests
+            .iter()
+            .all(|request| request_header(request, "range") == Some("bytes=0-799")),
+        "两次候选都请求同一完整闭区间"
+    );
+    assert_eq!(fixture.upstream_requests(), 2);
+    assert_eq!(fixture.upstream_resumes(), 1);
+    assert_eq!(
+        fixture.upstream_failures(),
+        0,
+        "候选级 cause 诊断不改变连接级失败计数"
+    );
+    assert_eq!(
+        fixture.last_vod_failure_cause(),
+        Some(StreamProxyVodFailureCause::BodyStalled)
+    );
+    fixture.wait_for_complete_cache().await;
+    stalled_primary.abort();
+    healthy_backup.abort();
 }
 
 #[tokio::test]
@@ -1185,6 +1282,83 @@ async fn verified_vod_segment_exhaustion_returns_bad_gateway_without_stream_fall
         primary.abort();
         backup.abort();
     }
+}
+
+#[tokio::test]
+async fn verified_vod_segment_body_stall_exhausts_each_full_range_candidate() {
+    let mut fixture = Fixture::new(complete_response()).await;
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let primary_address = primary.local_addr().unwrap();
+    let primary_requests = requests.clone();
+    let stalled_primary = tokio::spawn(async move {
+        let (mut stream, _) = primary.accept().await.unwrap();
+        let request = read_request_head(&mut stream).await;
+        primary_requests.lock().unwrap().push(request);
+        let _ = stream
+            .write_all(&response(
+                206,
+                "bytes 0-799/1600",
+                "Content-Length: 800",
+                &[0xEE; 300],
+            ))
+            .await;
+        tokio::time::sleep(WAIT).await;
+    });
+
+    let backup = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backup_address = backup.local_addr().unwrap();
+    let backup_requests = requests.clone();
+    let stalled_backup = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = backup.accept().await {
+            let requests = backup_requests.clone();
+            tokio::spawn(async move {
+                let request = read_request_head(&mut stream).await;
+                requests.lock().unwrap().push(request);
+                let _ = stream
+                    .write_all(&response(
+                        206,
+                        "bytes 0-799/1600",
+                        "Content-Length: 800",
+                        &[0xEE; 300],
+                    ))
+                    .await;
+                tokio::time::sleep(WAIT).await;
+            });
+        }
+    });
+
+    fixture.context.url = format!("http://{primary_address}/primary.m4s").into();
+    fixture.context.vod_backup_urls = Some(VodBackupUrls(Arc::from([
+        format!("http://{backup_address}/backup-a.m4s"),
+        format!("http://{backup_address}/backup-b.m4s"),
+    ])));
+    fixture.context.media_cache = None;
+    fixture.context.media_cache_store = None;
+    let (bytes, result) = fixture.fetch().await;
+    assert_bad_gateway_without_media(&bytes, &result);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request_header(request, "range") == Some("bytes=0-799"))
+    );
+    assert_eq!(fixture.upstream_requests(), 3);
+    assert_eq!(fixture.upstream_resumes(), 2);
+    assert_eq!(
+        fixture.upstream_failures(),
+        0,
+        "直接调用 handle_client 时仍只由代理循环记录最终连接失败"
+    );
+    assert_eq!(
+        fixture.last_vod_failure_cause(),
+        Some(StreamProxyVodFailureCause::BodyStalled)
+    );
+    assert_eq!(fixture.store.in_flight(), (0, 0));
+    stalled_primary.abort();
+    stalled_backup.abort();
 }
 
 #[tokio::test]
@@ -1260,11 +1434,14 @@ async fn verified_vod_segment_global_budget_stops_before_another_candidate() {
                 206,
                 "bytes 0-799/1600",
                 "Content-Length: 800",
-                &[0xEE; 300],
+                &[0xEE; 16],
             ))
             .await;
-        // 响应头之后保持连接打开，直到整轮 20 秒预算（测试配置为 2 秒）耗尽。
-        tokio::time::sleep(WAIT).await;
+        // 每块都早于 4 秒（测试配置 300ms）停滞阈值抵达，但整片始终无法在
+        // 整轮 20 秒预算（测试配置 2 秒）内收齐，验证总预算不被逐块活动重置。
+        while stream.write_all(&[0xEE; 16]).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     });
     let backups = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backup_address = backups.local_addr().unwrap();
@@ -1290,6 +1467,10 @@ async fn verified_vod_segment_global_budget_stops_before_another_candidate() {
         "整轮总预算耗尽后不得再向备用节点发请求"
     );
     assert_eq!(fixture.upstream_requests(), 1);
+    assert_eq!(
+        fixture.last_vod_failure_cause(),
+        Some(StreamProxyVodFailureCause::TotalBudgetExhausted)
+    );
     assert_eq!(fixture.store.in_flight(), (0, 0), "超时后必须释放额度");
     stalled_primary.abort();
     idle_backup.abort();

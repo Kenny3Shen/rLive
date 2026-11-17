@@ -3,16 +3,18 @@
 //! Web Cookie 登录不参与此流程。上游扫码凭据只保留在进程内会话表中，
 //! APP 令牌只交给 Rust 调用方；错误信息不包含请求、响应或任何凭据。
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use futures_util::future::BoxFuture;
 use md5::{Digest, Md5};
 use reqwest::cookie::Jar;
 use reqwest::header::{ACCEPT, REFERER, USER_AGENT};
 use reqwest::{Client, Url};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
+use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
 use crate::account::qr::{
@@ -49,6 +51,12 @@ const MAX_TOKEN_LEN: usize = 512;
 const MAX_QR_URL_LEN: usize = 4096;
 // 已验证 TV 凭据有效期为 180 天；允许服务端调整到一年以内，但不接受无限期。
 const MAX_EXPIRES_IN: i64 = 366 * 24 * 60 * 60;
+/// 最近一次成功远端校验的复用窗口。
+///
+/// 首页分页和推荐刷新会在短时间内重复创建站点实例。若每次都请求
+/// `oauth2/info`，同一份凭据会被同一条慢链路串行验证多次；在当前实机上单次
+/// 校验约 5.7 秒。这里只缓存服务端明确成功的结果，失败和风控响应永不缓存。
+const AUTHORIZATION_VALIDATION_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// 仅供 Rust 使用的 APP 凭据，不提供调试输出或序列化实现。
 #[derive(Clone)]
@@ -57,6 +65,131 @@ pub struct AppCredential {
     pub(crate) refresh_token: String,
     pub(crate) mid: String,
     pub(crate) expires_at: i64,
+}
+
+/// 一次服务端成功校验的短期结果。字段用于确认调用方仍使用同一账号、同一凭据和
+/// 同一代理出口；缓存不得跨这些边界复用。
+struct CachedAuthorization {
+    source_access_token: String,
+    source_refresh_token: String,
+    source_mid: String,
+    source_expires_at: i64,
+    credential: AppCredential,
+    route: crate::proxy::ProxyRoute,
+    validated_at: Instant,
+    /// 服务端在 `oauth2/info` 中返回的权威期限。`None` 表示本次校验未返回寿命，
+    /// 此时只由短期缓存窗口约束。
+    expires_at: Option<i64>,
+}
+
+impl CachedAuthorization {
+    fn resolve(
+        &self,
+        credential: &AppCredential,
+        route: &crate::proxy::ProxyRoute,
+        now: i64,
+    ) -> Option<AppAuthorization> {
+        self.resolve_at(credential, route, now, Instant::now())
+    }
+
+    fn resolve_at(
+        &self,
+        credential: &AppCredential,
+        route: &crate::proxy::ProxyRoute,
+        now: i64,
+        checked_at: Instant,
+    ) -> Option<AppAuthorization> {
+        let same_as_source = self.source_access_token == credential.access_token
+            && self.source_refresh_token == credential.refresh_token
+            && self.source_mid == credential.mid
+            && self.source_expires_at == credential.expires_at;
+        let same_as_resolved = self.credential.access_token == credential.access_token
+            && self.credential.refresh_token == credential.refresh_token
+            && self.credential.mid == credential.mid
+            && self.credential.expires_at == credential.expires_at;
+        if (!same_as_source && !same_as_resolved)
+            || &self.route != route
+            || checked_at.saturating_duration_since(self.validated_at)
+                >= AUTHORIZATION_VALIDATION_TTL
+            || self
+                .expires_at
+                .is_some_and(|expires_at| expiry_reached(expires_at, now))
+        {
+            return None;
+        }
+        Some(AppAuthorization {
+            credential: self.credential.clone(),
+            expires_at: self.expires_at,
+            // 并发等待者持有的是刷新前快照。即使它们自己没有发起刷新，也必须
+            // 把本轮轮换后的凭据落库，否则下一次进程启动仍会读旧 refresh token。
+            renewed: same_as_source
+                && (self.source_access_token != self.credential.access_token
+                    || self.source_refresh_token != self.credential.refresh_token
+                    || self.source_mid != self.credential.mid),
+        })
+    }
+}
+
+/// 同一时刻只允许一条远端授权校验在飞。分页或刷新并发到达时，等待者会在取得
+/// 单飞锁后重新读取缓存，不再各自请求同一个慢端点。
+static AUTHORIZATION_CHECK_GATE: AsyncMutex<()> = AsyncMutex::const_new(());
+static AUTHORIZATION_CACHE: Mutex<Option<CachedAuthorization>> = Mutex::new(None);
+
+fn cached_authorization(
+    credential: &AppCredential,
+    route: &crate::proxy::ProxyRoute,
+    now: i64,
+) -> Option<AppAuthorization> {
+    let cache = AUTHORIZATION_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .as_ref()
+        .and_then(|cached| cached.resolve(credential, route, now))
+}
+
+fn store_authorization(
+    source: &AppCredential,
+    mut credential: AppCredential,
+    route: &crate::proxy::ProxyRoute,
+    expires_at: Option<i64>,
+) {
+    // profile 会用 OAuth 权威寿命校正本地快照。缓存中的 resolved credential 必须
+    // 同步采用该值，否则数据库校正后下一次授权会因 expires_at 不同再次走慢校验。
+    if let Some(authoritative) = expires_at {
+        credential.expires_at = authoritative;
+    }
+    let mut cache = AUTHORIZATION_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *cache = Some(CachedAuthorization {
+        source_access_token: source.access_token.clone(),
+        source_refresh_token: source.refresh_token.clone(),
+        source_mid: source.mid.clone(),
+        source_expires_at: source.expires_at,
+        credential,
+        route: route.clone(),
+        validated_at: Instant::now(),
+        expires_at,
+    });
+}
+
+fn clear_authorization_cache() {
+    let mut cache = AUTHORIZATION_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *cache = None;
+}
+
+fn invalidate_authorization(access_token: &str) {
+    let mut cache = AUTHORIZATION_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.as_ref().is_some_and(|cached| {
+        cached.source_access_token == access_token || cached.credential.access_token == access_token
+    }) {
+        *cache = None;
+    }
 }
 
 /// 距到期不足该时长时主动续期，而不是等失败后才补救。
@@ -129,6 +262,7 @@ pub fn save(conn: &Connection, credential: &AppCredential) -> AppResult<()> {
 pub fn clear(conn: &Connection) -> AppResult<()> {
     conn.execute("DELETE FROM bilibili_app_auth WHERE singleton = 1", [])
         .map_err(|_| storage_error())?;
+    clear_authorization_cache();
     Ok(())
 }
 
@@ -272,27 +406,82 @@ pub async fn authorize(
     credential: AppCredential,
     route: &crate::proxy::ProxyRoute,
 ) -> AppResult<AppAuthorization> {
+    authorize_with(
+        credential,
+        route,
+        |credential, route| Box::pin(async move { validate(&credential, &route).await }),
+        |credential, route| Box::pin(async move { refresh(&credential, &route).await }),
+    )
+    .await
+}
+
+/// `authorize` 的可注入核心，只用于把远端 I/O 替换成确定性的并发回归。
+async fn authorize_with<V, R>(
+    credential: AppCredential,
+    route: &crate::proxy::ProxyRoute,
+    validate_op: V,
+    refresh_op: R,
+) -> AppResult<AppAuthorization>
+where
+    V: Fn(AppCredential, crate::proxy::ProxyRoute) -> BoxFuture<'static, AppResult<AppValidation>>
+        + Send
+        + Sync,
+    R: Fn(AppCredential, crate::proxy::ProxyRoute) -> BoxFuture<'static, AppResult<AppCredential>>
+        + Send
+        + Sync,
+{
     if !valid_credential_fields(&credential) {
         return Err(auth_required());
     }
-    let now = now();
-    if needs_refresh(&credential, now) && proactive_refresh_allowed(now) {
-        let refreshed = refresh(&credential, route).await?;
-        LAST_PROACTIVE_REFRESH.store(now, Ordering::Relaxed);
+    let mut current = now();
+    if let Some(authorization) = cached_authorization(&credential, route, current) {
+        return Ok(authorization);
+    }
+
+    // 缓存未命中时单飞远端校验。必须持锁完成第二次缓存检查，避免同一轮分页的
+    // 多个命令都在第一次检查后同时穿到网络请求。
+    let _check_guard = AUTHORIZATION_CHECK_GATE.lock().await;
+    current = now();
+    if let Some(authorization) = cached_authorization(&credential, route, current) {
+        return Ok(authorization);
+    }
+
+    if needs_refresh(&credential, current) && proactive_refresh_allowed(current) {
+        let refreshed = refresh_op(credential.clone(), route.clone()).await?;
+        LAST_PROACTIVE_REFRESH.store(current, Ordering::Relaxed);
+        store_authorization(
+            &credential,
+            refreshed.clone(),
+            route,
+            Some(refreshed.expires_at),
+        );
         return Ok(AppAuthorization {
             expires_at: Some(refreshed.expires_at),
             credential: refreshed,
             renewed: true,
         });
     }
-    match validate(&credential, route).await {
-        Ok(validation) => Ok(AppAuthorization {
-            credential,
-            expires_at: validation.expires_at,
-            renewed: false,
-        }),
+    match validate_op(credential.clone(), route.clone()).await {
+        Ok(validation) => {
+            let mut resolved = credential.clone();
+            if let Some(authoritative) = validation.expires_at {
+                resolved.expires_at = authoritative;
+            }
+            store_authorization(&credential, resolved.clone(), route, validation.expires_at);
+            Ok(AppAuthorization {
+                credential: resolved,
+                expires_at: validation.expires_at,
+                renewed: false,
+            })
+        }
         Err(error) if error.code == "bilibili_app_auth_required" => {
-            let refreshed = refresh(&credential, route).await?;
+            let refreshed = refresh_op(credential.clone(), route.clone()).await?;
+            store_authorization(
+                &credential,
+                refreshed.clone(),
+                route,
+                Some(refreshed.expires_at),
+            );
             Ok(AppAuthorization {
                 expires_at: Some(refreshed.expires_at),
                 credential: refreshed,
@@ -415,17 +604,10 @@ impl AppAuth {
         route: &crate::proxy::ProxyRoute,
     ) -> AppResult<Self> {
         let authorization = authorize(credential, route).await?;
-        let builder = Client::builder()
-            .use_native_tls()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(20))
-            .connect_timeout(Duration::from_secs(10))
-            .gzip(true)
-            .brotli(true);
-        let client = crate::http_client::with_route(builder, route)
-            .map_err(|_| auth_unavailable())?
-            .build()
-            .map_err(|_| auth_unavailable())?;
+        // 该客户端只请求白名单内的固定地址，且携带 access_key；禁止重定向，
+        // 同时复用共享代理路由的连接池，避免每次分页都重新建立 TLS 连接。
+        let client =
+            crate::http_client::build_no_redirect_client(route).map_err(|_| auth_unavailable())?;
         Ok(Self {
             client,
             access_token: authorization.credential.access_token.clone(),
@@ -481,7 +663,12 @@ impl AppAuth {
         // 这两条接口对无效令牌同样静默返回 `code=0`（见 `live_recommend_is_personalized`
         // 在站点层的用法），因此这里只拦真正的错误码：风控 `-352`、`-663` 等一律
         // 归为可重试，不能据此断言凭据失效。
-        require_success_code(&value, false)?;
+        if let Err(error) = require_success_code(&value, false) {
+            if error.code == "bilibili_app_auth_required" {
+                invalidate_authorization(&self.access_token);
+            }
+            return Err(error);
+        }
         Ok(body)
     }
 
@@ -520,7 +707,12 @@ impl AppAuth {
             return Err(auth_unavailable());
         }
         let body = response.text().await.map_err(|_| auth_unavailable())?;
-        check_feed_body(&body)?;
+        if let Err(error) = check_feed_body(&body) {
+            if error.code == "bilibili_app_auth_required" {
+                invalidate_authorization(&self.access_token);
+            }
+            return Err(error);
+        }
         Ok(body)
     }
 }
@@ -794,6 +986,8 @@ fn qr_unavailable(suffix: &str) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static AUTHORIZATION_CACHE_TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
     use crate::db::schema::open_in_memory;
     use serde_json::json;
 
@@ -812,6 +1006,346 @@ mod tests {
 
     fn credential() -> AppCredential {
         parse_credential(&token_data(), NOW).unwrap()
+    }
+
+    #[test]
+    fn cached_authorization_reuses_a_refresh_for_waiters_holding_the_old_snapshot() {
+        let source = credential();
+        let mut refreshed = source.clone();
+        refreshed.access_token = "test-only-rotated-access-token".into();
+        refreshed.refresh_token = "test-only-rotated-refresh-token".into();
+        let route = crate::proxy::ProxyRoute::Custom("http://127.0.0.1:7890".into());
+        let cached = CachedAuthorization {
+            source_access_token: source.access_token.clone(),
+            source_refresh_token: source.refresh_token.clone(),
+            source_mid: source.mid.clone(),
+            source_expires_at: source.expires_at,
+            credential: refreshed.clone(),
+            route: route.clone(),
+            validated_at: Instant::now(),
+            expires_at: Some(NOW + 3600),
+        };
+
+        // 已进入单飞等待队列、仍持有旧快照的调用者复用同一轮刷新结果，并再次
+        // 返回 renewed=true 以便各自走既有的幂等落库路径。
+        let from_old = cached.resolve(&source, &route, NOW).unwrap();
+        assert!(from_old.renewed);
+        assert_eq!(from_old.credential.access_token, refreshed.access_token);
+
+        // 刷新后重新从数据库读取的调用者命中同一缓存，但无需再次落库。
+        let from_new = cached.resolve(&refreshed, &route, NOW).unwrap();
+        assert!(!from_new.renewed);
+        assert_eq!(from_new.credential.access_token, refreshed.access_token);
+
+        let mut other_account = source.clone();
+        other_account.mid = "99".into();
+        assert!(cached.resolve(&other_account, &route, NOW).is_none());
+        let mut externally_updated_source = source.clone();
+        externally_updated_source.expires_at += 1;
+        assert!(
+            cached
+                .resolve(&externally_updated_source, &route, NOW)
+                .is_none()
+        );
+        let mut externally_updated_resolved = refreshed.clone();
+        externally_updated_resolved.expires_at += 1;
+        assert!(
+            cached
+                .resolve(&externally_updated_resolved, &route, NOW)
+                .is_none()
+        );
+        assert!(
+            cached
+                .resolve(&source, &crate::proxy::ProxyRoute::Direct, NOW)
+                .is_none()
+        );
+        // 服务端返回的期限已经到达时，不允许短期窗口继续放行。
+        assert!(cached.resolve(&source, &route, NOW + 3600).is_none());
+        assert!(
+            cached
+                .resolve_at(
+                    &source,
+                    &route,
+                    NOW,
+                    cached.validated_at + AUTHORIZATION_VALIDATION_TTL,
+                )
+                .is_none(),
+            "成功校验缓存必须受有限 TTL 约束"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorize_single_flight_refreshes_once_for_concurrent_old_waiters() {
+        use std::sync::atomic::AtomicUsize;
+
+        let _guard = AUTHORIZATION_CACHE_TEST_LOCK.lock().await;
+        clear_authorization_cache();
+        let mut source = credential();
+        source.expires_at = now() + LIFETIME;
+        let mut rotated = source.clone();
+        rotated.access_token = "test-only-single-flight-access-token".into();
+        rotated.refresh_token = "test-only-single-flight-refresh-token".into();
+        rotated.expires_at = now() + LIFETIME + 60;
+        let route = crate::proxy::ProxyRoute::Custom("http://127.0.0.1:7890".into());
+        let validate_calls = Arc::new(AtomicUsize::new(0));
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+
+        let first_validate = {
+            let calls = validate_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    tokio::task::yield_now().await;
+                    Err::<AppValidation, _>(auth_required())
+                }) as BoxFuture<'static, AppResult<AppValidation>>
+            }
+        };
+        let second_validate = {
+            let calls = validate_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    tokio::task::yield_now().await;
+                    Err::<AppValidation, _>(auth_required())
+                }) as BoxFuture<'static, AppResult<AppValidation>>
+            }
+        };
+        let first_refresh = {
+            let calls = refresh_calls.clone();
+            let rotated = rotated.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let rotated = rotated.clone();
+                Box::pin(async move {
+                    tokio::task::yield_now().await;
+                    Ok(rotated)
+                }) as BoxFuture<'static, AppResult<AppCredential>>
+            }
+        };
+        let second_refresh = {
+            let calls = refresh_calls.clone();
+            let rotated = rotated.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let rotated = rotated.clone();
+                Box::pin(async move {
+                    tokio::task::yield_now().await;
+                    Ok(rotated)
+                }) as BoxFuture<'static, AppResult<AppCredential>>
+            }
+        };
+
+        let (first, second) = tokio::join!(
+            authorize_with(source.clone(), &route, first_validate, first_refresh),
+            authorize_with(source, &route, second_validate, second_refresh),
+        );
+        for result in [first, second] {
+            let authorization = result.unwrap();
+            assert!(authorization.renewed);
+            assert_eq!(authorization.credential.access_token, rotated.access_token);
+            assert_eq!(
+                authorization.credential.refresh_token,
+                rotated.refresh_token
+            );
+        }
+        assert_eq!(validate_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
+        clear_authorization_cache();
+    }
+
+    #[tokio::test]
+    async fn authorize_does_not_cache_retryable_validation_failure() {
+        use std::sync::atomic::AtomicUsize;
+
+        let _guard = AUTHORIZATION_CACHE_TEST_LOCK.lock().await;
+        clear_authorization_cache();
+        let mut source = credential();
+        source.expires_at = now() + LIFETIME;
+        let route = crate::proxy::ProxyRoute::Custom("http://127.0.0.1:7890".into());
+        let validate_calls = Arc::new(AtomicUsize::new(0));
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+
+        let first_validate = {
+            let calls = validate_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err::<AppValidation, _>(AppError::new(
+                        "bilibili_app_unavailable",
+                        "temporary validation failure",
+                    ))
+                }) as BoxFuture<'static, AppResult<AppValidation>>
+            }
+        };
+        let second_validate = {
+            let calls = validate_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err::<AppValidation, _>(AppError::new(
+                        "bilibili_app_unavailable",
+                        "temporary validation failure",
+                    ))
+                }) as BoxFuture<'static, AppResult<AppValidation>>
+            }
+        };
+        let refresh = {
+            let calls = refresh_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err::<AppCredential, AppError>(AppError::new(
+                        "unexpected_refresh",
+                        "retryable validation failure must not refresh",
+                    ))
+                }) as BoxFuture<'static, AppResult<AppCredential>>
+            }
+        };
+
+        let first = authorize_with(source.clone(), &route, first_validate, refresh).await;
+        let first = match first {
+            Ok(_) => panic!("首次网络失败应向上返回"),
+            Err(error) => error,
+        };
+        assert_eq!(first.code, "bilibili_app_unavailable");
+        let refresh = {
+            let calls = refresh_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err::<AppCredential, AppError>(AppError::new(
+                        "unexpected_refresh",
+                        "retryable validation failure must not refresh",
+                    ))
+                }) as BoxFuture<'static, AppResult<AppCredential>>
+            }
+        };
+        let second = authorize_with(source, &route, second_validate, refresh).await;
+        let second = match second {
+            Ok(_) => panic!("失败结果未缓存，第二次必须重新校验"),
+            Err(error) => error,
+        };
+        assert_eq!(second.code, "bilibili_app_unavailable");
+        assert_eq!(validate_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 0);
+        clear_authorization_cache();
+    }
+
+    #[tokio::test]
+    async fn authoritative_expiry_correction_does_not_force_another_validation() {
+        use std::sync::atomic::AtomicUsize;
+
+        let _guard = AUTHORIZATION_CACHE_TEST_LOCK.lock().await;
+        clear_authorization_cache();
+        let mut source = credential();
+        source.expires_at = now() + LIFETIME;
+        let authoritative = source.expires_at + 3600;
+        let route = crate::proxy::ProxyRoute::Custom("http://127.0.0.1:7890".into());
+        let validate_calls = Arc::new(AtomicUsize::new(0));
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+
+        let first_validate = {
+            let calls = validate_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(AppValidation {
+                        expires_at: Some(authoritative),
+                    })
+                }) as BoxFuture<'static, AppResult<AppValidation>>
+            }
+        };
+        let refresh = {
+            let calls = refresh_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err::<AppCredential, AppError>(AppError::new(
+                        "unexpected_refresh",
+                        "profile expiry correction must not refresh tokens",
+                    ))
+                }) as BoxFuture<'static, AppResult<AppCredential>>
+            }
+        };
+        let first = authorize_with(source.clone(), &route, first_validate, refresh)
+            .await
+            .unwrap();
+        assert!(!first.renewed, "仅校正寿命不得误标 token rotation");
+        assert_eq!(first.credential.expires_at, authoritative);
+        assert_eq!(first.expires_at, Some(authoritative));
+
+        // 与 commands/account.rs profile 分支一致：非续期但权威寿命不同，保存校正快照。
+        let conn = open_in_memory().unwrap();
+        save(&conn, &source).unwrap();
+        let corrected = if let Some(authoritative_expiry) = first.expires_at
+            && authoritative_expiry != source.expires_at
+        {
+            let mut corrected = source.clone();
+            corrected.expires_at = authoritative_expiry;
+            Some(corrected)
+        } else {
+            None
+        };
+        if let Some(corrected) = corrected {
+            save(&conn, &corrected).unwrap();
+        }
+        let persisted = load(&conn).unwrap().unwrap();
+        assert_eq!(persisted.expires_at, authoritative);
+
+        let second_validate = {
+            let calls = validate_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err::<AppValidation, _>(AppError::new(
+                        "unexpected_validation",
+                        "corrected profile must hit authorization cache",
+                    ))
+                }) as BoxFuture<'static, AppResult<AppValidation>>
+            }
+        };
+        let refresh = {
+            let calls = refresh_calls.clone();
+            move |_: AppCredential, _: crate::proxy::ProxyRoute| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err::<AppCredential, AppError>(AppError::new(
+                        "unexpected_refresh",
+                        "corrected profile must hit authorization cache",
+                    ))
+                }) as BoxFuture<'static, AppResult<AppCredential>>
+            }
+        };
+        let second = authorize_with(persisted, &route, second_validate, refresh)
+            .await
+            .unwrap();
+        assert!(!second.renewed);
+        assert_eq!(second.credential.expires_at, authoritative);
+        assert_eq!(validate_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 0);
+        clear_authorization_cache();
+    }
+
+    #[tokio::test]
+    async fn explicit_auth_rejection_invalidates_only_the_matching_cache_entry() {
+        let _guard = AUTHORIZATION_CACHE_TEST_LOCK.lock().await;
+        clear_authorization_cache();
+        let source = credential();
+        let route = crate::proxy::ProxyRoute::Custom("http://127.0.0.1:7890".into());
+        store_authorization(&source, source.clone(), &route, Some(source.expires_at));
+        assert!(cached_authorization(&source, &route, NOW).is_some());
+
+        invalidate_authorization("unrelated-token");
+        assert!(
+            cached_authorization(&source, &route, NOW).is_some(),
+            "其他命令的鉴权失败不得误伤当前凭据"
+        );
+        invalidate_authorization(&source.access_token);
+        assert!(
+            cached_authorization(&source, &route, NOW).is_none(),
+            "明确 auth_required 后必须让下一次命令重新校验"
+        );
+        clear_authorization_cache();
     }
 
     fn error_of<T>(result: AppResult<T>) -> AppError {
@@ -1061,8 +1595,10 @@ mod tests {
         assert!(expiry_reached(invalid.expires_at, -1));
     }
 
-    #[test]
-    fn credentials_crud_is_separate_from_web_cookies() {
+    #[tokio::test]
+    async fn credentials_crud_is_separate_from_web_cookies() {
+        let _guard = AUTHORIZATION_CACHE_TEST_LOCK.lock().await;
+        clear_authorization_cache();
         let conn = open_in_memory().unwrap();
         assert!(load(&conn).unwrap().is_none());
         let credential = credential();
@@ -1072,10 +1608,11 @@ mod tests {
         assert_eq!(loaded.refresh_token, credential.refresh_token);
         assert_eq!(loaded.mid, credential.mid);
         assert_eq!(loaded.expires_at, credential.expires_at);
-        let replacement = AppCredential {
+        let mut replacement = AppCredential {
             access_token: "replacement".into(),
             ..credential
         };
+        replacement.expires_at = now() + LIFETIME;
         save(&conn, &replacement).unwrap();
         assert_eq!(load(&conn).unwrap().unwrap().access_token, "replacement");
         assert_eq!(
@@ -1090,7 +1627,19 @@ mod tests {
                 .unwrap(),
             0
         );
+        let route = crate::proxy::ProxyRoute::Direct;
+        store_authorization(
+            &replacement,
+            replacement.clone(),
+            &route,
+            Some(replacement.expires_at),
+        );
+        assert!(cached_authorization(&replacement, &route, now()).is_some());
         clear(&conn).unwrap();
+        assert!(
+            cached_authorization(&replacement, &route, now()).is_none(),
+            "显式退出登录必须同步清空授权校验缓存"
+        );
         clear(&conn).unwrap();
         assert!(load(&conn).unwrap().is_none());
     }

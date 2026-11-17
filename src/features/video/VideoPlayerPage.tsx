@@ -1100,13 +1100,13 @@ function VideoPlayerPageContent() {
       playerRevision,
     ],
     enabled: params !== null && cid > 0,
-    queryFn: ({ signal }) => {
+    queryFn: (context) => {
       // 本轮令牌和结算函数必须在发起取流时捕获：旧请求迟到时不能读到新令牌。
       const attempt = autoRecoveryActiveRef.current;
       const settle = autoRecoverySettleRef.current;
-      return playbackSessions.acquire(
+      return playbackSessions.acquireForQuery(
         videoKey,
-        signal,
+        context,
         () =>
           videoGetPlayInfo({
             bvid: params?.bvid ?? null,

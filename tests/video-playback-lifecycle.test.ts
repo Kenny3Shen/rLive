@@ -51,28 +51,158 @@ function entry(cid: number, title = "标题"): VideoHistoryItem {
 }
 
 describe("VOD query/session 所有权", () => {
-  test("真实 query 在卸载时 abort，迟到的 Tauri 结果仍释放代理", async () => {
+  test("真实卸载在 signal 等待期 clear 后不再启动无人拥有的 IPC", async () => {
     const { owner, stopped } = sessions();
-    const request = deferred<VideoPlayInfo>();
     const client = new QueryClient();
-    let signal: AbortSignal | undefined;
+    let requestCount = 0;
+    let settledCount = 0;
     const observer = new QueryObserver(client, {
       queryKey: ["video_play_info", "unmount"],
-      queryFn: (context) => {
-        signal = context.signal;
-        return owner.acquire("A:1", context.signal, () => request.promise);
-      },
+      queryFn: (context) =>
+        owner.acquireForQuery(
+          "A:1",
+          context,
+          () => {
+            requestCount += 1;
+            return Promise.resolve(info("unexpected"));
+          },
+          { onSettled: () => (settledCount += 1) },
+        ),
       gcTime: 0,
       retry: false,
       structuralSharing: false,
     });
     const unsubscribe = observer.subscribe(() => {});
     unsubscribe();
-    expect(signal?.aborted).toBe(true);
-    owner.clear();
-    request.resolve(info("late"));
+    // 与播放页 cleanup 一致：真实卸载在 queryFn 等待 signal 时排入 owner.clear。
+    queueMicrotask(() => owner.clear());
     await tick();
-    expect(stopped).toEqual(["late"]);
+    expect(requestCount).toBe(0);
+    expect(settledCount).toBe(1);
+    owner.clear();
+    expect(stopped).toEqual([]);
+    client.clear();
+  });
+
+  test("StrictMode 同 query 在微任务内重新订阅只发起一次初始取流", async () => {
+    const { owner, stopped } = sessions();
+    const client = new QueryClient();
+    const request = deferred<VideoPlayInfo>();
+    let requestCount = 0;
+    const observer = new QueryObserver(client, {
+      queryKey: ["video_play_info", "strict-mode"],
+      queryFn: (context) =>
+        owner.acquireForQuery("A:1", context, () => {
+          requestCount += 1;
+          return request.promise;
+        }),
+      gcTime: 0,
+      retry: false,
+      staleTime: Infinity,
+      structuralSharing: false,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    unsubscribe();
+    let unsubscribeAgain = () => {};
+    queueMicrotask(() => {
+      unsubscribeAgain = observer.subscribe(() => {});
+    });
+    await tick();
+    expect(requestCount).toBe(1);
+    expect(observer.getCurrentResult().fetchStatus).toBe("fetching");
+
+    request.resolve(info("A"));
+    await tick();
+    expect(observer.getCurrentResult().data?.info.session_ids.mpd).toBe("A");
+    owner.retain(observer.getCurrentResult().data!);
+    unsubscribeAgain();
+    expect(stopped).toEqual([]);
+    owner.clear();
+    expect(stopped).toEqual(["A"]);
+    client.clear();
+  });
+
+  test("换内容 A/B 都在微任务前启动时后一轮 B 胜出", async () => {
+    const { owner, stopped } = sessions();
+    const client = new QueryClient();
+    const requestA = deferred<VideoPlayInfo>();
+    const requestB = deferred<VideoPlayInfo>();
+    const calls: string[] = [];
+    let settledA = 0;
+    const options = (key: "A:1" | "B:2") => ({
+      queryKey: ["video_play_info", key, "pre-signal-switch"],
+      queryFn: (context: Parameters<VideoPlaybackSessions["acquireForQuery"]>[1]) =>
+        owner.acquireForQuery(
+          key,
+          context,
+          () => {
+            calls.push(key);
+            return key === "A:1" ? requestA.promise : requestB.promise;
+          },
+          key === "A:1" ? { onSettled: () => (settledA += 1) } : {},
+        ),
+      gcTime: 0,
+      retry: false,
+      staleTime: Infinity,
+    });
+    const observer = new QueryObserver(client, options("A:1"));
+    const unsubscribe = observer.subscribe(() => {});
+    observer.setOptions(options("B:2"));
+    await tick();
+    expect(calls).toEqual(["B:2"]);
+    expect(settledA).toBe(1);
+
+    requestB.resolve(info("B"));
+    await tick();
+    expect(observer.getCurrentResult().data?.info.session_ids.mpd).toBe("B");
+    owner.retain(observer.getCurrentResult().data!);
+    unsubscribe();
+    owner.clear();
+    expect(stopped).toEqual(["B"]);
+    client.clear();
+  });
+
+  test("不同 owner 的相同内容 query 不共享初始取流", async () => {
+    const client = new QueryClient();
+    const first = sessions();
+    const second = sessions();
+    const pending = new Map([
+      ["first", deferred<VideoPlayInfo>()],
+      ["second", deferred<VideoPlayInfo>()],
+    ]);
+    const options = (
+      ownerId: "first" | "second",
+      owner: VideoPlaybackSessions,
+    ) => ({
+      queryKey: ["video_play_info", ownerId, "A", 1],
+      queryFn: (context: Parameters<VideoPlaybackSessions["acquireForQuery"]>[1]) =>
+        owner.acquireForQuery("A:1", context, () => pending.get(ownerId)!.promise),
+      gcTime: 0,
+      retry: false,
+      staleTime: Infinity,
+    });
+    const firstObserver = new QueryObserver(client, options("first", first.owner));
+    const secondObserver = new QueryObserver(client, options("second", second.owner));
+    const unsubscribeFirst = firstObserver.subscribe(() => {});
+    const unsubscribeSecond = secondObserver.subscribe(() => {});
+    await tick();
+
+    expect(firstObserver.getCurrentResult().fetchStatus).toBe("fetching");
+    expect(secondObserver.getCurrentResult().fetchStatus).toBe("fetching");
+    pending.get("first")!.resolve(info("first"));
+    pending.get("second")!.resolve(info("second"));
+    await tick();
+    expect(firstObserver.getCurrentResult().data?.info.session_ids.mpd).toBe("first");
+    expect(secondObserver.getCurrentResult().data?.info.session_ids.mpd).toBe("second");
+
+    first.owner.retain(firstObserver.getCurrentResult().data!);
+    second.owner.retain(secondObserver.getCurrentResult().data!);
+    unsubscribeFirst();
+    unsubscribeSecond();
+    first.owner.clear();
+    second.owner.clear();
+    expect(first.stopped).toEqual(["first"]);
+    expect(second.stopped).toEqual(["second"]);
     client.clear();
   });
 
@@ -202,8 +332,8 @@ describe("VOD query/session 所有权", () => {
     const fresh = deferred<VideoPlayInfo>();
     const observer = new QueryObserver(client, {
       queryKey: ["video_play_info", "auto-recovery"],
-      queryFn: ({ signal }) =>
-        owner.acquire("A:1", signal, () => fresh.promise, {
+      queryFn: (context) =>
+        owner.acquireForQuery("A:1", context, () => fresh.promise, {
           autoRecoveryCheck: () => ({ keepHeld: true }),
         }),
       gcTime: 0,
@@ -211,6 +341,7 @@ describe("VOD query/session 所有权", () => {
       structuralSharing: false,
     });
     const unsubscribe = observer.subscribe(() => {});
+    await tick();
     const cancelled = client.cancelQueries({
       queryKey: ["video_play_info", "auto-recovery"],
       exact: true,
@@ -470,8 +601,8 @@ describe("VOD query/session 所有权", () => {
     const requests = new Map<number, ReturnType<typeof deferred<VideoPlayInfo>>>();
     const options = (key: string, revision: number) => ({
       queryKey: ["video_play_info", key, revision],
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        owner.acquire(key, signal, () => {
+      queryFn: (context) =>
+        owner.acquireForQuery(key, context, () => {
           const request = deferred<VideoPlayInfo>();
           requests.set(revision, request);
           return request.promise;
@@ -484,6 +615,7 @@ describe("VOD query/session 所有权", () => {
     const observer = new QueryObserver(client, options("A:1", 0));
     const unsubscribe = observer.subscribe(() => {});
     try {
+      await tick();
       requests.get(0)!.resolve(info("A"));
       await tick();
       const a = observer.getCurrentResult().data!;
@@ -491,6 +623,7 @@ describe("VOD query/session 所有权", () => {
       observer.setOptions(options("B:2", 1));
       expect(observer.getCurrentResult().isPlaceholderData).toBe(true);
       expect(videoPlaybackForKey(observer.getCurrentResult().data, "B:2")).toBeUndefined();
+      await tick();
       requests.get(1)!.reject(new Error("B 失败"));
       await tick();
       expect(observer.getCurrentResult().isError).toBe(true);
@@ -500,6 +633,7 @@ describe("VOD query/session 所有权", () => {
       expect(observer.getCurrentResult().isPlaceholderData).toBe(true);
       expect(videoPlaybackForKey(observer.getCurrentResult().data, "B:2")).toBeUndefined();
       expect(stopped).toEqual([]);
+      await tick();
       requests.get(2)!.resolve(info("B"));
       await tick();
       const b = observer.getCurrentResult().data!;
