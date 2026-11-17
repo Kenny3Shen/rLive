@@ -483,9 +483,11 @@ export function AsrChunkIntervalField({
 
 export function AsrHotwordsField({
   idPrefix,
+  hint = "识别时优先匹配这些词，适合主播名、游戏名和黑话。",
   disabled = false,
 }: {
   idPrefix: string;
+  hint?: string;
   disabled?: boolean;
 }) {
   const hotwords = useSettingsStore((state) => state.asrHotwords);
@@ -496,7 +498,7 @@ export function AsrHotwordsField({
       id={`${idPrefix}-asr-hotwords`}
       label="本地热词"
       noun="热词"
-      hint="识别时优先匹配这些词，适合主播名、游戏名和黑话。"
+      hint={hint}
       entries={hotwords}
       addPlaceholder="输入热词，回车添加"
       emptyText="还没有热词。"

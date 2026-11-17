@@ -2,7 +2,7 @@
 //!
 //! 运行库不是构建输入：首次启用字幕时才从 CrispASR release 下载到应用数据目录，
 //! 这里用 `libloading` 按绝对路径加载并常驻到进程结束（ggml 的 GPU 后端不支持
-//! 安全卸载）。只声明 rLive 用到的符号：Qwen3-ASR 会话、Silero VAD 增量打分，
+//! 安全卸载）。只声明 rLive 用到的符号：Qwen3-ASR / xASR 会话、Silero VAD 增量打分，
 //! 以及 TitaNet 说话人嵌入。
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
@@ -175,7 +175,7 @@ fn sample_count(pcm: &[f32]) -> Result<c_int, String> {
     c_int::try_from(pcm.len()).map_err(|_| "音频片段过长".to_string())
 }
 
-/// 一个 Qwen3-ASR 识别会话。
+/// 一个识别会话；`backend` 为 CrispASR 的模型后端名（`qwen3` 或 `xasr`）。
 pub struct Session {
     handle: *mut c_void,
 }
@@ -184,9 +184,10 @@ pub struct Session {
 unsafe impl Send for Session {}
 
 impl Session {
-    pub fn open(model: &Path, threads: i32, use_gpu: bool) -> Result<Self, String> {
+    pub fn open(model: &Path, backend: &str, threads: i32, use_gpu: bool) -> Result<Self, String> {
         let api = api()?;
         let model = path_cstring(model)?;
+        let backend = CString::new(backend).map_err(|_| "模型后端包含 NUL".to_string())?;
         let params = OpenParams {
             abi_version: 2,
             n_threads: threads.max(1),
@@ -196,14 +197,14 @@ impl Session {
             n_gpu_layers: -1,
             reserved: [0; 6],
         };
-        let handle = unsafe { (api.session_open)(model.as_ptr(), c"qwen3".as_ptr(), &params) };
+        let handle = unsafe { (api.session_open)(model.as_ptr(), backend.as_ptr(), &params) };
         if handle.is_null() {
-            return Err("CrispASR could not open the Qwen3-ASR model".to_string());
+            return Err("CrispASR could not open the ASR model".to_string());
         }
         Ok(Self { handle })
     }
 
-    /// 以自动语言识别转写一段 16 kHz 单声道 PCM。Qwen3 自带标点；
+    /// 以自动语言识别转写一段 16 kHz 单声道 PCM。模型自带标点；
     /// 纯噪声通常返回空串。
     pub fn transcribe(&mut self, pcm: &[f32]) -> Result<String, String> {
         let api = api()?;

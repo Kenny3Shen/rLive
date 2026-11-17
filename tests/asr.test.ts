@@ -7,7 +7,11 @@ import {
   formatAsrCaptionSegment,
   joinAsrCaptionText,
 } from "../src/features/asr/audio";
-import { estimateAsrDownloadBytes, type AsrModelStatus } from "../src/features/asr/model";
+import {
+  describeAsrModelStatus,
+  estimateAsrDownloadBytes,
+  type AsrModelStatus,
+} from "../src/features/asr/model";
 describe("ASR audio transport", () => {
   test("downsamples one second of 48 kHz PCM to 16 kHz", () => {
     const input = new Float32Array(48_000).fill(0.25);
@@ -77,6 +81,7 @@ describe("ASR audio transport", () => {
 
 describe("ASR download estimate", () => {
   const status: AsrModelStatus = {
+    model: "qwen3",
     state: "not_downloaded",
     downloaded_bytes: 100,
     total_bytes: 1_000,
@@ -85,6 +90,7 @@ describe("ASR download estimate", () => {
     vad_enabled: true,
     punctuation_enabled: true,
     hotwords_count: 0,
+    hotwords_supported: true,
     speaker_model_downloaded: false,
     speaker_model_size_bytes: 40,
     cuda_runtime_extra_bytes: 0,
@@ -106,5 +112,39 @@ describe("ASR download estimate", () => {
         true,
       ),
     ).toBe(900);
+  });
+
+  test("shows xASR CPU ready without claiming hotwords", () => {
+    const ready = {
+      ...status,
+      model: "xasr",
+      state: "ready",
+      provider: "cpu",
+      hotwords_count: 2,
+      hotwords_supported: false,
+      message: null,
+    } satisfies AsrModelStatus;
+    const presentation = describeAsrModelStatus(ready, {
+      enabled: true,
+      supported: true,
+    });
+    expect(presentation.message).toContain("xASR 中英模型已就绪（CPU");
+    expect(presentation.message).not.toContain("个热词");
+    expect(presentation.message).not.toContain("CrispASR");
+  });
+
+  test("reports Qwen3 CUDA and applied hotwords separately", () => {
+    const ready = {
+      ...status,
+      state: "ready",
+      provider: "cuda",
+      hotwords_count: 2,
+    } satisfies AsrModelStatus;
+    const presentation = describeAsrModelStatus(ready, {
+      enabled: true,
+      supported: true,
+    });
+    expect(presentation.message).toContain("Qwen3-ASR 0.6B 模型已就绪（NVIDIA CUDA");
+    expect(presentation.message).toContain("2 个热词");
   });
 });

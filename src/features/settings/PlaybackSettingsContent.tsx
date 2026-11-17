@@ -22,6 +22,14 @@ import {
 } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -41,23 +49,21 @@ import {
   VideoBlockedUploaderField,
   resetDanmakuAppearanceSettings,
 } from "@/features/settings/PlaybackPreferenceFields";
-import {
-  SettingsSection,
-  useSettingsFieldOrientation,
-} from "@/features/settings/SettingsSection";
+import { SettingsSection, useSettingsFieldOrientation } from "@/features/settings/SettingsSection";
 import { SwitchField } from "@/features/settings/SwitchField";
 import { cn } from "@/lib/utils";
 import { isMobileClient, isWindowsDesktop } from "@/shared/clientPlatform";
 import { errorText } from "@/shared/components/errorPresentation";
 import {
   ASR_FONT_SIZE_DEFAULT,
+  ASR_MODEL_DEFAULT,
   ASR_WINDOW_SECONDS_DEFAULT,
   ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
   VIDEO_RECOMMEND_API_DEFAULT,
   useSettingsStore,
 } from "@/shared/stores/settingsStore";
-import type { AsrProvider } from "@/shared/types/live";
+import type { AsrModel, AsrProvider } from "@/shared/types/live";
 
 function PlaybackSettingsResetField() {
   const mobileClient = isMobileClient();
@@ -91,6 +97,7 @@ function PlaybackSettingsResetField() {
           ? null
           : {
               roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
+              asrModel: ASR_MODEL_DEFAULT,
               asrProvider: "auto" as const,
               asrVadEnabled: true,
               asrPunctuationEnabled: true,
@@ -113,6 +120,7 @@ function PlaybackSettingsResetField() {
           ? null
           : {
               room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
+              asr_model: ASR_MODEL_DEFAULT,
               asr_provider: "auto",
               asr_vad_enabled: true,
               asr_punctuation_enabled: true,
@@ -180,12 +188,14 @@ function PlaybackSettingsResetField() {
 function AsrModelField({ idPrefix }: { idPrefix: string }) {
   const orientation = useSettingsFieldOrientation();
   const enabled = useSettingsStore((state) => state.asrEnabled);
+  const asrModel = useSettingsStore((state) => state.asrModel);
   const provider = useSettingsStore((state) => state.asrProvider);
   const vadEnabled = useSettingsStore((state) => state.asrVadEnabled);
   const punctuationEnabled = useSettingsStore((state) => state.asrPunctuationEnabled);
   const speakerEnabled = useSettingsStore((state) => state.asrSpeakerDiarizationEnabled);
   const pending = useSettingsStore((state) => state.asrPending);
   const setEnabled = useSettingsStore((state) => state.setAsrEnabled);
+  const setModel = useSettingsStore((state) => state.setAsrModel);
   const setProvider = useSettingsStore((state) => state.setAsrProvider);
   const setVadEnabled = useSettingsStore((state) => state.setAsrVadEnabled);
   const setPunctuationEnabled = useSettingsStore((state) => state.setAsrPunctuationEnabled);
@@ -194,8 +204,12 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const enabledTitleId = `${idPrefix}-asr-enabled-title`;
+  const modelTitleId = `${idPrefix}-asr-model-title`;
+  const modelSelectId = `${idPrefix}-asr-model`;
   const providerTitleId = `${idPrefix}-asr-provider-title`;
-  const presentation = describeAsrModelStatus(model.status, {
+  const selectedStatus = model.status?.model === asrModel ? model.status : null;
+  const modelStatusPending = model.isPending || (model.status !== null && selectedStatus === null);
+  const presentation = describeAsrModelStatus(selectedStatus, {
     enabled,
     supported: model.supported,
     queryError: model.queryError,
@@ -226,6 +240,16 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
     setActionError(null);
     try {
       await setSpeakerEnabled(next);
+      await model.refetch();
+    } catch (error) {
+      setActionError(errorText(error));
+    }
+  }
+
+  async function applyModel(next: AsrModel) {
+    setActionError(null);
+    try {
+      await setModel(next);
       await model.refetch();
     } catch (error) {
       setActionError(errorText(error));
@@ -263,20 +287,25 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
   }
 
   const invalid = presentation.error || actionError !== null;
-  const busy = pending || (enabled && presentation.busy);
-  const unsupported = model.status?.state === "unsupported";
-  const estimatedDownloadBytes = model.status
-    ? estimateAsrDownloadBytes(model.status, speakerEnabled)
+  const busy = pending || modelStatusPending || (enabled && presentation.busy);
+  const unsupported = selectedStatus?.state === "unsupported";
+  const estimatedDownloadBytes = selectedStatus
+    ? estimateAsrDownloadBytes(selectedStatus, speakerEnabled)
     : 0;
   // 选了 CPU 时不会下载 CUDA 运行库。
-  const cudaExtraBytes = provider === "cpu" ? 0 : (model.status?.cuda_runtime_extra_bytes ?? 0);
-  const speakerModelBytes = model.status?.speaker_model_size_bytes ?? 0;
+  const cudaExtraBytes = provider === "cpu" ? 0 : (selectedStatus?.cuda_runtime_extra_bytes ?? 0);
+  const speakerModelBytes = selectedStatus?.speaker_model_size_bytes ?? 0;
+  const hotwordsSupported = selectedStatus?.hotwords_supported ?? asrModel !== "xasr";
+  const controlsPending = !model.supported || modelStatusPending || pending;
+  const enabledControlDisabled = controlsPending || unsupported;
+  const providerNotice =
+    !presentation.busy && !presentation.error && !unsupported ? selectedStatus?.message : null;
 
   return (
     <>
       <Field
         orientation={orientation}
-        data-disabled={!model.supported || undefined}
+        data-disabled={enabledControlDisabled || undefined}
         data-invalid={invalid || undefined}
       >
         <FieldContent className="min-w-0">
@@ -327,9 +356,9 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
             aria-labelledby={enabledTitleId}
             aria-invalid={invalid || undefined}
             checked={enabled}
-            disabled={!model.supported || unsupported || model.isPending || pending}
+            disabled={enabledControlDisabled}
             onCheckedChange={(checked) => {
-              if (checked && model.status?.state === "not_downloaded") {
+              if (checked && selectedStatus?.state === "not_downloaded") {
                 setConfirmOpen(true);
                 return;
               }
@@ -339,26 +368,65 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
         </div>
       </Field>
 
+      <Field orientation={orientation} data-disabled={controlsPending || undefined}>
+        <FieldContent className="min-w-0">
+          <FieldTitle>
+            <span id={modelTitleId}>识别模型</span>
+            <FieldTip>
+              Qwen3-ASR 支持更多语言和热词；xASR 模型更小，适合中英混合语音。切换后按需下载所选模型。
+            </FieldTip>
+          </FieldTitle>
+          {selectedStatus === null && enabled && !model.isPending && (
+            <FieldDescription role="status">正在读取所选模型的状态…</FieldDescription>
+          )}
+        </FieldContent>
+        <Select
+          value={asrModel}
+          disabled={controlsPending}
+          onValueChange={(value) => {
+            if (value === "qwen3" || value === "xasr") {
+              void applyModel(value);
+            }
+          }}
+        >
+          <SelectTrigger
+            id={modelSelectId}
+            size="sm"
+            className="min-w-40 border border-input bg-background"
+            aria-labelledby={modelTitleId}
+          >
+            <SelectValue>{asrModel === "xasr" ? "xASR 中英" : "Qwen3-ASR"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent align="end">
+            <SelectGroup>
+              <SelectItem value="qwen3">Qwen3-ASR</SelectItem>
+              <SelectItem value="xasr">xASR 中英</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+
       <SwitchField
         title="VAD（静音端点检测）"
         tip="用 Silero VAD 按停顿分句；关闭后仅按最长 12 秒切分。"
         orientation={orientation}
         checked={vadEnabled}
-        disabled={!model.supported || model.isPending || pending}
-        fieldDisabled={!model.supported || pending}
+        disabled={controlsPending}
+        fieldDisabled={controlsPending}
         onCheckedChange={(checked) => void applyVadEnabled(checked)}
       />
 
       {isWindowsDesktop() && (
-        <Field orientation={orientation} data-disabled={!model.supported || pending || undefined}>
+        <Field orientation={orientation} data-disabled={controlsPending || undefined}>
           <FieldContent className="min-w-0">
             <FieldTitle>
               <span id={providerTitleId}>推理后端</span>
               <FieldTip>
-                自动优先使用 NVIDIA GPU（GTX 10 系列至 RTX 40 系列），不可用时回退 CPU；选 CPU
-                不下载 CUDA 运行库。已用 CPU 运行库启动时，改用 CUDA 需重启应用。
+                Qwen3-ASR 自动优先使用 NVIDIA GPU（GTX 10 系列至 RTX 40 系列），不可用时回退
+                CPU；选 CPU 不下载 CUDA 运行库。已用 CPU 运行库启动时，改用 CUDA 需重启应用。
               </FieldTip>
             </FieldTitle>
+            {providerNotice && <FieldDescription role="status">{providerNotice}</FieldDescription>}
           </FieldContent>
           <ToggleGroup
             aria-labelledby={providerTitleId}
@@ -366,7 +434,7 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
             variant="outline"
             size="sm"
             spacing={1}
-            disabled={!model.supported || model.isPending || pending}
+            disabled={controlsPending}
             onValueChange={(values) => {
               const next = values[0];
               if (next === "auto" || next === "cpu" || next === "cuda") {
@@ -386,8 +454,8 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
         tip="关闭后去掉识别结果里的标点。"
         orientation={orientation}
         checked={punctuationEnabled}
-        disabled={!model.supported || model.isPending || pending}
-        fieldDisabled={!model.supported || pending}
+        disabled={controlsPending}
+        fieldDisabled={controlsPending}
         onCheckedChange={(checked) => void applyPunctuationEnabled(checked)}
       />
 
@@ -400,19 +468,28 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
         }
         orientation={orientation}
         checked={speakerEnabled}
-        disabled={!model.supported || model.isPending || pending}
-        fieldDisabled={!model.supported || pending}
+        disabled={controlsPending}
+        fieldDisabled={controlsPending}
         onCheckedChange={(checked) => void applySpeakerEnabled(checked)}
       />
 
-      <AsrHotwordsField idPrefix={idPrefix} disabled={!model.supported} />
-      <AsrChunkIntervalField idPrefix={idPrefix} disabled={!model.supported || pending} />
+      <AsrHotwordsField
+        idPrefix={idPrefix}
+        hint={
+          hotwordsSupported
+            ? undefined
+            : "xASR 不支持热词；已保存的热词会保留，切回 Qwen3-ASR 后继续生效。"
+        }
+        disabled={controlsPending || !hotwordsSupported}
+      />
+      <AsrChunkIntervalField idPrefix={idPrefix} disabled={controlsPending} />
 
       <AsrDownloadDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         estimatedDownloadBytes={estimatedDownloadBytes}
         cudaExtraBytes={cudaExtraBytes}
+        model={asrModel}
         onConfirm={() => void applyEnabled(true)}
       />
     </>
@@ -424,12 +501,14 @@ function AsrDownloadDialog({
   onOpenChange,
   estimatedDownloadBytes,
   cudaExtraBytes,
+  model,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   estimatedDownloadBytes: number;
   cudaExtraBytes: number;
+  model: AsrModel;
   onConfirm: () => void;
 }) {
   return (
@@ -441,8 +520,9 @@ function AsrDownloadDialog({
           </AlertDialogMedia>
           <AlertDialogTitle>下载语音字幕模型</AlertDialogTitle>
           <AlertDialogDescription>
-            将下载约 {formatAsrBytes(estimatedDownloadBytes)} 的 CrispASR 运行库和 Qwen3-ASR
-            模型，完成后自动启用并保留在本机。
+            将下载约 {formatAsrBytes(estimatedDownloadBytes)} 的 CrispASR 运行库和{" "}
+            {model === "xasr" ? "xASR 中英模型" : "Qwen3-ASR 模型"}
+            ，完成后自动启用并保留在本机。
             {cudaExtraBytes > 0 &&
               ` 检测到可用的 NVIDIA GPU 时改用 CUDA 运行库，需额外下载约 ${formatAsrBytes(cudaExtraBytes)}。`}
             旧版字幕模型（如有）会被删除以释放空间。

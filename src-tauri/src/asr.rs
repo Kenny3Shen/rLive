@@ -1,12 +1,13 @@
-//! 本地流式 ASR 模型生命周期与转写服务（CrispASR + Qwen3-ASR 0.6B）。
+//! 本地流式 ASR 模型生命周期与转写服务（CrispASR + Qwen3-ASR / xASR）。
 //!
 //! 模型刻意不在应用启动时下载或加载。用户必须在设置中主动开启，
 //! `enable` 才会启动后台任务。音频由 Web 播放器以 16 kHz 单声道
 //! f32 PCM 提供。
 //!
 //! CrispASR 运行库按平台在首次启用时下载（见 `runtime`），经 `libloading` 加载。
-//! Qwen3-ASR 是离线 encoder-decoder：`stream` 用 Silero VAD 分句，语句进行中只重解码
-//! 最近几秒作为在途假设，语句结束时解码整句定稿。启用可选的说话人区分时，
+//! 两个模型都是离线调用：`stream` 用 Silero VAD 分句，语句进行中只重解码
+//! 最近几秒作为在途假设，语句结束时解码整句定稿。Qwen3-ASR 覆盖面更广，
+//! xASR 体积更小，面向中英双语推理。启用可选的说话人区分时，
 //! 每条定稿语句都会经 TitaNet 声纹模型分类。
 
 mod crispasr;
@@ -41,12 +42,20 @@ impl ModelFile {
     }
 }
 
-const ASR_MODEL: ModelFile = ModelFile {
+const QWEN3_MODEL: ModelFile = ModelFile {
     label: "Qwen3-ASR 识别模型",
     file_name: "qwen3-asr-0.6b-q4_k.gguf",
     url: "https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF/resolve/58bd3202f835f46b24b17142cb503b0860c737a5/qwen3-asr-0.6b-q4_k.gguf",
     size: 631_026_336,
     sha256: "f63771c02dfa486d9399d41ab6ab8cd2d8ca24e077cd32130ea1f67f4fd8dade",
+};
+
+const XASR_MODEL: ModelFile = ModelFile {
+    label: "X-ASR 中英双语模型",
+    file_name: "x-asr-zh-en-q8_0.gguf",
+    url: "https://huggingface.co/cstr/x-asr-zh-en-GGUF/resolve/acb1a95eac809719a2c86d1048471f96fc6444ad/x-asr-zh-en-q8_0.gguf",
+    size: 168_189_920,
+    sha256: "1ca120084a1517cf02d96e44cdd9a9544f0c887f6d0149c9f85d151be6833a61",
 };
 
 const VAD_MODEL: ModelFile = ModelFile {
@@ -85,6 +94,14 @@ const LEGACY_RUNTIME_MARKER_PREFIX: &str = "sherpa-onnx";
 const ASR_PROVIDER_AUTO: &str = "auto";
 const ASR_PROVIDER_CPU: &str = "cpu";
 const ASR_PROVIDER_CUDA: &str = "cuda";
+
+const ASR_MODEL_QWEN3: &str = "qwen3";
+const ASR_MODEL_XASR: &str = "xasr";
+
+/// xASR 的 causal/chunk 卷积实际使用 K=8/16/31，CrispASR v0.8.48 的
+/// CUDA `ssm_conv` 只实现 3/4/5/9/15，选中 GPU 后会在运行库内部直接 abort。
+/// 这是当前运行库的能力边界，不代表 xASR 本身不能使用 GPU。
+const XASR_CUDA_CONV_SUPPORTED: bool = false;
 
 const ASR_THREAD_LIMIT: usize = 8;
 const SPEAKER_THREADS: i32 = 4;
@@ -131,6 +148,8 @@ pub enum AsrModelState {
 #[derive(Debug, Clone, Serialize)]
 pub struct AsrModelStatus {
     pub state: AsrModelState,
+    /// 当前选择或正在使用的识别模型：`qwen3` 或 `xasr`。
+    pub model: String,
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
     pub model_size_bytes: u64,
@@ -138,6 +157,8 @@ pub struct AsrModelStatus {
     pub vad_enabled: bool,
     pub punctuation_enabled: bool,
     pub hotwords_count: u32,
+    /// 当前模型是否消费热词。xASR 的 C 会话会保存热词但不参与解码。
+    pub hotwords_supported: bool,
     pub speaker_model_downloaded: bool,
     pub speaker_model_size_bytes: u64,
     /// Windows 尚未探测 GPU 时，若探测到可用 NVIDIA GPU 会多下载的 CUDA 运行库体积；
@@ -160,20 +181,22 @@ impl AsrModelStatus {
             } else {
                 AsrModelState::NotDownloaded
             },
+            model: normalize_asr_model(&options.model).to_owned(),
             downloaded_bytes: snapshot.downloaded_bytes,
             total_bytes: Some(snapshot.total_bytes),
             model_size_bytes: snapshot.total_bytes,
             speaker_enabled: options.speaker_enabled,
             vad_enabled: options.vad_enabled,
             punctuation_enabled: options.punctuation_enabled,
-            hotwords_count: options.hotwords.len() as u32,
+            hotwords_count: asr_hotwords_count(&options.model, &options.hotwords),
+            hotwords_supported: asr_model_supports_hotwords(&options.model),
             speaker_model_downloaded: snapshot.speaker_downloaded,
             speaker_model_size_bytes: SPEAKER_MODEL.size,
             cuda_runtime_extra_bytes: snapshot.cuda_extra_bytes,
             threads: asr_thread_count(),
             // 不在这里解析 provider：`effective_asr_provider` 在 Windows 上会加载
             // NVIDIA 驱动查询 GPU。那属于「真正启用」的代价，不能出现在应用启动路径上。
-            provider: asr_provider_placeholder(&options.provider),
+            provider: asr_provider_placeholder(&options.model, &options.provider),
             message: unsupported.map(str::to_owned),
         }
     }
@@ -181,6 +204,8 @@ impl AsrModelStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsrRuntimeOptions {
+    /// 识别模型：`qwen3` 或 `xasr`。
+    pub model: String,
     /// `auto` 在 Windows 上检测到可用 NVIDIA GPU 时选择 CUDA；
     /// Linux 与 macOS 始终使用 CPU。
     pub provider: String,
@@ -193,6 +218,7 @@ pub struct AsrRuntimeOptions {
 impl Default for AsrRuntimeOptions {
     fn default() -> Self {
         Self {
+            model: ASR_MODEL_QWEN3.to_string(),
             provider: ASR_PROVIDER_AUTO.to_string(),
             vad_enabled: true,
             punctuation_enabled: true,
@@ -246,7 +272,7 @@ impl ModelAssets {
 
 /// 当前配置需要的模型文件，按下载顺序排列。
 fn required_models(options: &AsrRuntimeOptions) -> Vec<&'static ModelFile> {
-    let mut models = vec![&ASR_MODEL];
+    let mut models = vec![asr_model_file(&options.model)];
     if options.vad_enabled {
         models.push(&VAD_MODEL);
     }
@@ -254,6 +280,45 @@ fn required_models(options: &AsrRuntimeOptions) -> Vec<&'static ModelFile> {
         models.push(&SPEAKER_MODEL);
     }
     models
+}
+
+fn normalize_asr_model(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        ASR_MODEL_XASR => ASR_MODEL_XASR,
+        _ => ASR_MODEL_QWEN3,
+    }
+}
+
+fn asr_model_file(model: &str) -> &'static ModelFile {
+    if normalize_asr_model(model) == ASR_MODEL_XASR {
+        &XASR_MODEL
+    } else {
+        &QWEN3_MODEL
+    }
+}
+
+fn asr_model_supports_hotwords(model: &str) -> bool {
+    normalize_asr_model(model) == ASR_MODEL_QWEN3
+}
+
+fn asr_model_cuda_supported(model: &str) -> bool {
+    normalize_asr_model(model) != ASR_MODEL_XASR || XASR_CUDA_CONV_SUPPORTED
+}
+
+fn asr_hotwords_count(model: &str, hotwords: &[String]) -> u32 {
+    if asr_model_supports_hotwords(model) {
+        hotwords.len() as u32
+    } else {
+        0
+    }
+}
+
+fn asr_model_prefers_gpu(options: &AsrRuntimeOptions) -> bool {
+    prefers_gpu(&options.provider) && asr_model_cuda_supported(&options.model)
+}
+
+fn asr_session_use_gpu(model: &str, requested: bool) -> bool {
+    requested && asr_model_cuda_supported(model)
 }
 
 /// 运行库包加上当前配置需要的模型文件的总下载体积。
@@ -280,7 +345,7 @@ fn asset_snapshot(
     runtime_dir: &Path,
     options: &AsrRuntimeOptions,
 ) -> AssetSnapshot {
-    let package = runtime::known_package(runtime_dir, prefers_gpu(&options.provider));
+    let package = runtime::known_package(runtime_dir, asr_model_prefers_gpu(options));
     let runtime_installed = package.is_some_and(|package| package.is_installed(runtime_dir));
     let mut complete = runtime_installed;
     let mut downloaded_bytes = if runtime_installed {
@@ -300,7 +365,7 @@ fn asset_snapshot(
         downloaded_bytes,
         total_bytes: configured_download_size(options, package),
         speaker_downloaded: assets.speaker_is_complete(),
-        cuda_extra_bytes: runtime::cuda_extra_bytes(runtime_dir, prefers_gpu(&options.provider)),
+        cuda_extra_bytes: runtime::cuda_extra_bytes(runtime_dir, asr_model_prefers_gpu(options)),
     }
 }
 
@@ -444,10 +509,19 @@ impl NativeAsrSession {
         use_gpu: bool,
         options: &AsrRuntimeOptions,
     ) -> Result<Self, String> {
-        let mut asr = crispasr::Session::open(&assets.path(&ASR_MODEL), threads, use_gpu)?;
-        let prompt = hotword_prompt(&options.hotwords);
-        if !prompt.is_empty() {
-            asr.set_hotwords(&prompt)?;
+        let model = asr_model_file(&options.model);
+        let use_gpu = asr_session_use_gpu(&options.model, use_gpu);
+        let mut asr = crispasr::Session::open(
+            &assets.path(model),
+            normalize_asr_model(&options.model),
+            threads,
+            use_gpu,
+        )?;
+        if asr_model_supports_hotwords(&options.model) {
+            let prompt = hotword_prompt(&options.hotwords);
+            if !prompt.is_empty() {
+                asr.set_hotwords(&prompt)?;
+            }
         }
         let vad = if options.vad_enabled {
             Some(crispasr::Vad::open(&assets.path(&VAD_MODEL))?)
@@ -572,6 +646,35 @@ impl AsrManager {
             .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))
     }
 
+    /// 功能关闭时按当前设置刷新模型、能力和下载量预览。
+    ///
+    /// 这里不加载会话，也不探测 GPU；功能已启用时以 manager 当前请求的配置为准。
+    pub fn status_for_options(&self, mut options: AsrRuntimeOptions) -> AppResult<AsrModelStatus> {
+        options.model = normalize_asr_model(&options.model).to_owned();
+        options.provider = normalize_asr_provider(&options.provider).to_owned();
+        normalize_hotwords(&mut options.hotwords);
+        let _control = self
+            .inner
+            .control
+            .lock()
+            .map_err(|_| AppError::new("asr_control_lock", "语音字幕状态暂不可用"))?;
+        if self.is_requested() {
+            return self.status();
+        }
+
+        let snapshot = self.asset_snapshot(&options);
+        let mut status = self
+            .inner
+            .status
+            .lock()
+            .map_err(|_| AppError::new("asr_status_lock", "语音字幕状态暂不可用"))?;
+        if self.is_requested() {
+            return Ok(status.clone());
+        }
+        *status = AsrModelStatus::new(&options, snapshot);
+        Ok(status.clone())
+    }
+
     pub fn enable(
         &self,
         route: crate::proxy::ProxyRoute,
@@ -579,6 +682,8 @@ impl AsrManager {
     ) -> AppResult<AsrModelStatus> {
         use std::sync::atomic::Ordering;
 
+        options.model = normalize_asr_model(&options.model).to_owned();
+        options.provider = normalize_asr_provider(&options.provider).to_owned();
         normalize_hotwords(&mut options.hotwords);
         if let Some(reason) = runtime::unsupported_reason() {
             self.update_status(|status| {
@@ -589,7 +694,9 @@ impl AsrManager {
         }
         // Windows 首次启用在这里探测 GPU，下面的完整性判断才按实际需要的运行库包计算。
         #[cfg(all(windows, target_arch = "x86_64"))]
-        let _ = runtime::cuda::probe();
+        if asr_model_prefers_gpu(&options) {
+            let _ = runtime::cuda::probe();
+        }
 
         let _control = self
             .inner
@@ -853,7 +960,6 @@ impl AsrManager {
             .store(false, std::sync::atomic::Ordering::Release);
         self.update_status(|status| {
             status.state = AsrModelState::Idle;
-            status.message = None;
         });
         tracing::debug!("ASR 会话因空闲已释放，下次开启字幕时按需重载");
     }
@@ -928,13 +1034,13 @@ impl AsrManager {
                     .ok()
                     .and_then(|mut guard| guard.take()),
             );
-            self.set_idle_ready_status();
+            self.set_idle_ready_status(&options);
             return;
         }
 
         self.set_loading_status(generation, &options);
         let manager = self.clone();
-        let prefer_gpu = prefers_gpu(&options.provider);
+        let prefer_gpu = asr_model_prefers_gpu(&options);
         let package =
             match tokio::task::spawn_blocking(move || manager.load_runtime(prefer_gpu)).await {
                 Ok(Ok(package)) => package,
@@ -955,7 +1061,7 @@ impl AsrManager {
 
         // 运行库包按硬件选定，CPU / CUDA 偏好只决定是否把模型放上 GPU。
         let use_gpu = runtime::package_has_gpu(package)
-            && effective_asr_provider(&options.provider) == ASR_PROVIDER_CUDA;
+            && effective_asr_provider(&options.model, &options.provider) == ASR_PROVIDER_CUDA;
         let assets = self.inner.assets.clone();
         let threads = asr_thread_count();
         let session_options = options.clone();
@@ -1027,7 +1133,7 @@ impl AsrManager {
         }
         // Windows 首次调用会加载 NVIDIA 驱动探测 GPU，放到阻塞线程池。
         let runtime_dir = self.inner.runtime_dir.clone();
-        let prefer_gpu = prefers_gpu(&options.provider);
+        let prefer_gpu = asr_model_prefers_gpu(options);
         let package = tokio::task::spawn_blocking(move || {
             runtime::required_package(&runtime_dir, prefer_gpu)
         })
@@ -1294,14 +1400,16 @@ impl AsrManager {
     /// 把 `options` 里与会话无关的展示字段同步进状态；`state`、`downloaded_bytes`
     /// 等随场景变化的字段由调用方自行赋值。
     fn apply_runtime_options(&self, status: &mut AsrModelStatus, options: &AsrRuntimeOptions) {
+        status.model = normalize_asr_model(&options.model).to_owned();
         status.speaker_enabled = options.speaker_enabled;
         status.vad_enabled = options.vad_enabled;
         status.punctuation_enabled = options.punctuation_enabled;
-        status.hotwords_count = options.hotwords.len() as u32;
+        status.hotwords_count = asr_hotwords_count(&options.model, &options.hotwords);
+        status.hotwords_supported = asr_model_supports_hotwords(&options.model);
         // 先解析 provider：Windows 上它会完成 GPU 探测，之后的快照才按实际需要的
         // 运行库包计算体积。
-        status.provider = effective_asr_provider(&options.provider).to_string();
-        status.message = asr_provider_fallback_message(&options.provider);
+        status.provider = effective_asr_provider(&options.model, &options.provider).to_string();
+        status.message = asr_provider_fallback_message(&options.model, &options.provider);
         let snapshot = self.asset_snapshot(options);
         status.speaker_model_downloaded = snapshot.speaker_downloaded;
         status.cuda_runtime_extra_bytes = snapshot.cuda_extra_bytes;
@@ -1321,6 +1429,7 @@ impl AsrManager {
     fn set_idle_status(&self) {
         self.update_status(|status| {
             let options = AsrRuntimeOptions {
+                model: status.model.clone(),
                 provider: status.provider.clone(),
                 vad_enabled: status.vad_enabled,
                 punctuation_enabled: status.punctuation_enabled,
@@ -1339,7 +1448,7 @@ impl AsrManager {
             status.downloaded_bytes = snapshot.downloaded_bytes;
             status.total_bytes = Some(snapshot.total_bytes);
             // 关闭功能时不要为了写状态文案去探测 CUDA：用户刚刚选择不用它。
-            status.provider = asr_provider_placeholder(&options.provider);
+            status.provider = asr_provider_placeholder(&options.model, &options.provider);
             status.message = None;
         });
     }
@@ -1347,11 +1456,11 @@ impl AsrManager {
     /// 功能仍启用、资产已就绪、但会话未加载（或刚被空闲释放）。
     /// 与 `set_idle_status` 的区别只在 `state`：这里保持 `Idle`，
     /// 让前端知道点字幕即可加载，而不是让用户重新下载。
-    fn set_idle_ready_status(&self) {
+    fn set_idle_ready_status(&self, options: &AsrRuntimeOptions) {
         self.update_status(|status| {
             status.state = AsrModelState::Idle;
+            self.apply_runtime_options(status, options);
             status.speaker_model_downloaded = self.inner.assets.speaker_is_complete();
-            status.message = None;
         });
     }
 
@@ -1487,7 +1596,10 @@ fn loaded_cpu_only_package() -> bool {
     runtime::loaded().is_some_and(|package| !runtime::package_has_gpu(package))
 }
 
-fn effective_asr_provider(preference: &str) -> &'static str {
+fn effective_asr_provider(model: &str, preference: &str) -> &'static str {
+    if prefers_gpu(preference) && !asr_model_cuda_supported(model) {
+        return ASR_PROVIDER_CPU;
+    }
     #[cfg(all(windows, target_arch = "x86_64"))]
     {
         match normalize_asr_provider(preference) {
@@ -1511,19 +1623,27 @@ fn effective_asr_provider(preference: &str) -> &'static str {
 /// `effective_asr_provider` 在 Windows 上会加载 `nvcuda.dll` 查询 GPU；
 /// 那是「真正启用」才该付的代价。应用启动时的状态快照只需要一个占位值，
 /// 解析留给 `enable`。
-fn asr_provider_placeholder(preference: &str) -> String {
+fn asr_provider_placeholder(model: &str, preference: &str) -> String {
     if cfg!(all(windows, target_arch = "x86_64")) {
-        normalize_asr_provider(preference).to_string()
+        if prefers_gpu(preference) && !asr_model_cuda_supported(model) {
+            ASR_PROVIDER_CPU.to_string()
+        } else {
+            normalize_asr_provider(preference).to_string()
+        }
     } else {
         ASR_PROVIDER_CPU.to_string()
     }
 }
 
-fn asr_provider_fallback_message(preference: &str) -> Option<String> {
+fn asr_provider_fallback_message(model: &str, preference: &str) -> Option<String> {
+    if !asr_model_cuda_supported(model) {
+        return None;
+    }
     #[cfg(all(windows, target_arch = "x86_64"))]
     {
         let normalized = normalize_asr_provider(preference);
-        if normalized == ASR_PROVIDER_CPU || effective_asr_provider(normalized) != ASR_PROVIDER_CPU
+        if normalized == ASR_PROVIDER_CPU
+            || effective_asr_provider(model, normalized) != ASR_PROVIDER_CPU
         {
             None
         } else if runtime::cuda::probe().is_some_and(runtime::cuda::GpuProbe::usable) {
@@ -1567,7 +1687,7 @@ fn asr_download_client(route: &crate::proxy::ProxyRoute) -> AppResult<reqwest::C
 
 /// 删除不属于当前任何模型的 `.part`（固定版本更换后留下的半截文件）。
 async fn remove_stale_model_partials(model_dir: &Path) {
-    let keep: Vec<String> = [&ASR_MODEL, &VAD_MODEL, &SPEAKER_MODEL]
+    let keep: Vec<String> = [&QWEN3_MODEL, &XASR_MODEL, &VAD_MODEL, &SPEAKER_MODEL]
         .iter()
         .map(|model| model.partial_name())
         .collect();
@@ -1590,9 +1710,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::effective_asr_provider;
     use super::{
-        ASR_MODEL, AsrRuntimeOptions, SPEAKER_MODEL, SpeakerClusters, VAD_MODEL,
-        asr_thread_count_for_available, configured_download_size, decode_base64_pcm,
-        hotword_prompt, normalize_asr_provider, normalize_hotwords,
+        ASR_MODEL_QWEN3, ASR_MODEL_XASR, AsrRuntimeOptions, QWEN3_MODEL, SPEAKER_MODEL,
+        SpeakerClusters, VAD_MODEL, XASR_MODEL, asr_hotwords_count, asr_model_prefers_gpu,
+        asr_provider_fallback_message, asr_session_use_gpu, asr_thread_count_for_available,
+        configured_download_size, decode_base64_pcm, hotword_prompt, normalize_asr_model,
+        normalize_asr_provider, normalize_hotwords, required_models,
     };
     use base64::Engine;
 
@@ -1627,11 +1749,19 @@ mod tests {
         assert_eq!(normalize_asr_provider("driver-dependent"), "auto");
     }
 
+    #[test]
+    fn normalizes_unknown_asr_model_to_qwen3() {
+        assert_eq!(normalize_asr_model("xasr"), ASR_MODEL_XASR);
+        assert_eq!(normalize_asr_model(" QWEN3 "), ASR_MODEL_QWEN3);
+        assert_eq!(normalize_asr_model("whisper"), ASR_MODEL_QWEN3);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn always_uses_cpu_provider_on_linux() {
-        assert_eq!(effective_asr_provider("auto"), "cpu");
-        assert_eq!(effective_asr_provider("cuda"), "cpu");
+        assert_eq!(effective_asr_provider(ASR_MODEL_QWEN3, "auto"), "cpu");
+        assert_eq!(effective_asr_provider(ASR_MODEL_QWEN3, "cuda"), "cpu");
+        assert_eq!(effective_asr_provider(ASR_MODEL_XASR, "cuda"), "cpu");
     }
 
     #[test]
@@ -1680,20 +1810,145 @@ mod tests {
         let default_options = AsrRuntimeOptions::default();
         assert_eq!(
             configured_download_size(&default_options, None),
-            ASR_MODEL.size + VAD_MODEL.size
+            QWEN3_MODEL.size + VAD_MODEL.size
         );
         let vad_off = AsrRuntimeOptions {
             vad_enabled: false,
             ..default_options.clone()
         };
-        assert_eq!(configured_download_size(&vad_off, None), ASR_MODEL.size);
+        assert_eq!(configured_download_size(&vad_off, None), QWEN3_MODEL.size);
         let speaker_on = AsrRuntimeOptions {
             speaker_enabled: true,
             ..default_options
         };
         assert_eq!(
             configured_download_size(&speaker_on, None),
-            ASR_MODEL.size + VAD_MODEL.size + SPEAKER_MODEL.size
+            QWEN3_MODEL.size + VAD_MODEL.size + SPEAKER_MODEL.size
+        );
+
+        let xasr = AsrRuntimeOptions {
+            model: ASR_MODEL_XASR.into(),
+            ..AsrRuntimeOptions::default()
+        };
+        assert_eq!(
+            configured_download_size(&xasr, None),
+            XASR_MODEL.size + VAD_MODEL.size
+        );
+    }
+
+    #[test]
+    fn xasr_uses_only_its_model_skips_gpu_package_and_ignores_hotwords() {
+        let gpu_options = AsrRuntimeOptions {
+            model: ASR_MODEL_XASR.into(),
+            provider: "cuda".into(),
+            hotwords: vec!["主播".into()],
+            ..AsrRuntimeOptions::default()
+        };
+        let models = required_models(&gpu_options);
+        let file_names: Vec<_> = models.iter().map(|model| model.file_name).collect();
+        assert_eq!(file_names, vec![XASR_MODEL.file_name, VAD_MODEL.file_name]);
+        assert!(!asr_model_prefers_gpu(&gpu_options));
+        assert!(!asr_session_use_gpu(ASR_MODEL_XASR, true));
+        assert_eq!(
+            asr_hotwords_count(&gpu_options.model, &gpu_options.hotwords),
+            0
+        );
+
+        let auto_options = AsrRuntimeOptions {
+            provider: "auto".into(),
+            ..gpu_options
+        };
+        assert!(!asr_model_prefers_gpu(&auto_options));
+        assert!(asr_model_prefers_gpu(&AsrRuntimeOptions {
+            model: ASR_MODEL_QWEN3.into(),
+            provider: "cuda".into(),
+            ..AsrRuntimeOptions::default()
+        }));
+        assert!(!asr_model_prefers_gpu(&AsrRuntimeOptions {
+            model: ASR_MODEL_QWEN3.into(),
+            provider: "cpu".into(),
+            ..AsrRuntimeOptions::default()
+        }));
+    }
+
+    #[test]
+    fn xasr_has_no_provider_fallback_message() {
+        for provider in ["auto", "cpu", "cuda"] {
+            assert_eq!(
+                asr_provider_fallback_message(ASR_MODEL_XASR, provider),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_status_preview_follows_the_selected_model() {
+        let root = std::env::temp_dir().join(format!(
+            "rlive-asr-preview-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let manager = super::AsrManager::new(&root);
+        let xasr = manager
+            .status_for_options(AsrRuntimeOptions {
+                model: ASR_MODEL_XASR.into(),
+                provider: "cpu".into(),
+                hotwords: vec!["主播昵称".into()],
+                ..AsrRuntimeOptions::default()
+            })
+            .unwrap();
+        assert_eq!(xasr.model, ASR_MODEL_XASR);
+        assert_eq!(xasr.provider, "cpu");
+        assert!(!xasr.hotwords_supported);
+        assert_eq!(xasr.hotwords_count, 0);
+        assert_eq!(xasr.cuda_runtime_extra_bytes, 0);
+
+        let xasr_gpu = manager
+            .status_for_options(AsrRuntimeOptions {
+                model: ASR_MODEL_XASR.into(),
+                provider: "cuda".into(),
+                ..AsrRuntimeOptions::default()
+            })
+            .unwrap();
+        assert_eq!(xasr_gpu.provider, "cpu");
+        assert_eq!(xasr_gpu.cuda_runtime_extra_bytes, 0);
+        assert_eq!(xasr_gpu.message, None);
+
+        let xasr_auto = manager
+            .status_for_options(AsrRuntimeOptions {
+                model: ASR_MODEL_XASR.into(),
+                provider: "auto".into(),
+                ..AsrRuntimeOptions::default()
+            })
+            .unwrap();
+        assert_eq!(xasr_auto.provider, "cpu");
+        assert_eq!(xasr_auto.cuda_runtime_extra_bytes, 0);
+        assert_eq!(xasr_auto.message, None);
+
+        let xasr_cpu = manager
+            .status_for_options(AsrRuntimeOptions {
+                model: ASR_MODEL_XASR.into(),
+                provider: "cpu".into(),
+                ..AsrRuntimeOptions::default()
+            })
+            .unwrap();
+        assert_eq!(xasr_cpu.provider, "cpu");
+        assert_eq!(xasr_cpu.message, None);
+
+        let qwen3 = manager
+            .status_for_options(AsrRuntimeOptions {
+                model: ASR_MODEL_QWEN3.into(),
+                provider: "cpu".into(),
+                hotwords: vec!["主播昵称".into()],
+                ..AsrRuntimeOptions::default()
+            })
+            .unwrap();
+        assert_eq!(qwen3.model, ASR_MODEL_QWEN3);
+        assert!(qwen3.hotwords_supported);
+        assert_eq!(qwen3.hotwords_count, 1);
+        assert_eq!(qwen3.message, None);
+        assert_eq!(
+            qwen3.total_bytes.unwrap() - xasr.total_bytes.unwrap(),
+            QWEN3_MODEL.size - XASR_MODEL.size
         );
     }
 
@@ -1707,27 +1962,54 @@ mod tests {
     }
 
     /// 用真实运行库与模型跑完整链路：安装归档 → 加载 → VAD 分句 → 识别 → 声纹。
-    /// `RLIVE_CRISPASR_ARCHIVE` 指向本平台的运行库归档，`RLIVE_CRISPASR_MODELS`
-    /// 是含三个模型文件的目录，`RLIVE_CRISPASR_WAV` 是 16 kHz 单声道 s16 WAV。
+    /// `RLIVE_CRISPASR_ARCHIVE` 指向本平台的运行库归档；已有安装时可用
+    /// `RLIVE_CRISPASR_RUNTIME_ROOT` 直接复用运行库根目录并跳过安装。
+    /// `RLIVE_CRISPASR_MODELS` 是含模型与 VAD/声纹文件的目录，
+    /// `RLIVE_CRISPASR_WAV` 是 16 kHz 单声道 s16 WAV。
+    /// `RLIVE_CRISPASR_MODEL` 选择 `qwen3`（默认）或 `xasr`；
+    /// `RLIVE_CRISPASR_PROVIDER` 选择 `auto`（默认）、`cpu` 或 `cuda`；
+    /// `RLIVE_CRISPASR_MIN_SEGMENTS` 覆盖段落数下限（默认 5）；
+    /// `RLIVE_CRISPASR_EXPECT` 可断言转写文本包含指定片段。
     #[test]
     #[ignore = "需要真实 CrispASR 运行库与模型"]
     fn crispasr_end_to_end() {
         let env = |name: &str| std::path::PathBuf::from(std::env::var_os(name).expect(name));
-        let runtime_root = std::env::temp_dir().join(format!(
-            "rlive-crispasr-e2e-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let package = super::runtime::required_package(&runtime_root, false).unwrap();
-        super::runtime::install(package, &env("RLIVE_CRISPASR_ARCHIVE"), &runtime_root).unwrap();
-        super::runtime::load(package, &runtime_root).unwrap();
-
         let options = AsrRuntimeOptions {
+            model: std::env::var("RLIVE_CRISPASR_MODEL").unwrap_or_else(|_| ASR_MODEL_QWEN3.into()),
+            provider: std::env::var("RLIVE_CRISPASR_PROVIDER").unwrap_or_else(|_| "auto".into()),
             speaker_enabled: true,
             hotwords: vec!["rLive".into()],
             ..AsrRuntimeOptions::default()
         };
+        let reuse_root =
+            std::env::var_os("RLIVE_CRISPASR_RUNTIME_ROOT").map(std::path::PathBuf::from);
+        let runtime_root = reuse_root.clone().unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "rlive-crispasr-e2e-{}",
+                uuid::Uuid::new_v4().simple()
+            ))
+        });
+        let package =
+            super::runtime::required_package(&runtime_root, asr_model_prefers_gpu(&options))
+                .unwrap();
+        if reuse_root.is_none() {
+            super::runtime::install(package, &env("RLIVE_CRISPASR_ARCHIVE"), &runtime_root)
+                .unwrap();
+        }
+        super::runtime::load(package, &runtime_root).unwrap();
+
         let assets = super::ModelAssets::new(&env("RLIVE_CRISPASR_MODELS"));
-        let mut session = super::NativeAsrSession::open(&assets, 8, false, &options).unwrap();
+        let requested_gpu =
+            super::runtime::package_has_gpu(package) && super::prefers_gpu(&options.provider);
+        let mut session =
+            super::NativeAsrSession::open(&assets, 8, requested_gpu, &options).unwrap();
+        println!(
+            "model={} provider_preference={} requested_gpu={} actual_provider={}",
+            options.model, options.provider, requested_gpu, session.provider
+        );
+        if normalize_asr_model(&options.model) == ASR_MODEL_XASR {
+            assert_eq!(session.provider, "cpu");
+        }
 
         let wav = std::fs::read(env("RLIVE_CRISPASR_WAV")).unwrap();
         let data = wav.windows(4).position(|window| window == b"data").unwrap() + 8;
@@ -1751,16 +2033,34 @@ mod tests {
                 segment.start_ms, segment.end_ms, segment.speaker_id, segment.text
             );
         }
-        std::fs::remove_dir_all(&runtime_root).unwrap();
+        if reuse_root.is_none() {
+            std::fs::remove_dir_all(&runtime_root).unwrap();
+        }
 
         assert!(partials > 0);
-        assert!(segments.len() >= 5, "only {} segments", segments.len());
+        let minimum_segments = std::env::var("RLIVE_CRISPASR_MIN_SEGMENTS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5);
+        assert!(
+            segments.len() >= minimum_segments,
+            "only {} segments",
+            segments.len()
+        );
         assert!(
             segments
                 .iter()
                 .all(|segment| !segment.text.trim().is_empty())
         );
         assert!(segments.iter().all(|segment| segment.speaker_id.is_some()));
+        if let Ok(expected) = std::env::var("RLIVE_CRISPASR_EXPECT") {
+            let text = segments
+                .iter()
+                .map(|segment| segment.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(text.contains(&expected), "unexpected transcript: {text}");
+        }
     }
 
     #[test]

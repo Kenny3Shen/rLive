@@ -4,6 +4,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { invokeCmd } from "@/shared/api/tauri";
 import { getClientPlatform, type ClientPlatform } from "@/shared/clientPlatform";
 import { errorText } from "@/shared/components/errorPresentation";
+import type { AsrModel } from "@/shared/types/live";
 
 export type AsrModelState =
   | "not_downloaded"
@@ -18,6 +19,7 @@ export type AsrModelState =
   | "unsupported";
 
 export type AsrModelStatus = {
+  model: AsrModel;
   state: AsrModelState;
   downloaded_bytes: number;
   total_bytes: number | null;
@@ -26,6 +28,8 @@ export type AsrModelStatus = {
   vad_enabled: boolean;
   punctuation_enabled: boolean;
   hotwords_count: number;
+  /** 当前模型是否把热词用于识别；xASR 不支持热词。 */
+  hotwords_supported: boolean;
   speaker_model_downloaded: boolean;
   speaker_model_size_bytes: number;
   /** Windows 有可用 NVIDIA GPU 时 CUDA 运行库比 CPU 版多出的下载体积；其余平台为 0。 */
@@ -183,10 +187,13 @@ export function describeAsrModelStatus(
         status.vad_enabled ? "VAD" : "关闭 VAD",
         status.punctuation_enabled ? "自动标点" : "原始文本",
         status.speaker_enabled ? "说话人区分" : null,
-        status.hotwords_count > 0 ? `${status.hotwords_count} 个热词` : null,
+        status.hotwords_supported && status.hotwords_count > 0
+          ? `${status.hotwords_count} 个热词`
+          : null,
       ].filter((value): value is string => value !== null);
+      const model = status.model === "xasr" ? "xASR 中英模型" : "Qwen3-ASR 0.6B 模型";
       return {
-        message: `Qwen3-ASR 0.6B 模型已就绪（${status.provider === "cuda" ? "NVIDIA CUDA" : "CPU"} / ${status.threads} 线程 + ${features.join(" + ")}）${status.message ? `；${status.message}` : ""}`,
+        message: `${model}已就绪（${status.provider === "cuda" ? "NVIDIA CUDA" : "CPU"} / ${status.threads} 线程 + ${features.join(" + ")}）${status.message ? `；${status.message}` : ""}`,
         busy: false,
         error: false,
         progress: 100,
@@ -255,7 +262,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
     }
     const status = query.data;
     if (!status || (status.state !== "not_downloaded" && status.state !== "downloaded")) return;
-    const attemptKey = `${status.state}:${status.downloaded_bytes}`;
+    const attemptKey = `${status.model}:${status.state}:${status.downloaded_bytes}`;
     if (attemptedStateRef.current === attemptKey) return;
     attemptedStateRef.current = attemptKey;
     void prepare().catch(() => {});

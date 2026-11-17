@@ -19,6 +19,7 @@ import {
 } from "../navEntries";
 import type {
   AppSettings,
+  AsrModel,
   AsrProvider,
   CaptionTranslationLanguage,
   CaptionTranslationSourceLanguage,
@@ -96,6 +97,12 @@ function parseVideoRecommendApi(value: unknown): VideoRecommendApi {
 
 function parseAsrProvider(value: unknown): AsrProvider {
   return value === "cpu" || value === "cuda" ? value : "auto";
+}
+
+export const ASR_MODEL_DEFAULT: AsrModel = "qwen3";
+
+function parseAsrModel(value: unknown): AsrModel {
+  return value === "xasr" ? "xasr" : ASR_MODEL_DEFAULT;
 }
 
 const ASR_FONT_SIZE_MIN = 12;
@@ -477,6 +484,7 @@ type SettingsState = {
   /** 画面之外用模糊放大的封面垫底。 */
   dynamicBackgroundEnabled: boolean;
   asrEnabled: boolean;
+  asrModel: AsrModel;
   asrProvider: AsrProvider;
   asrVadEnabled: boolean;
   asrPunctuationEnabled: boolean;
@@ -528,6 +536,7 @@ type SettingsState = {
   blockDanmakuUser: (user: string) => void;
   setDynamicBackgroundEnabled: (enabled: boolean) => void;
   setAsrEnabled: (enabled: boolean) => Promise<void>;
+  setAsrModel: (model: AsrModel) => Promise<void>;
   setAsrProvider: (provider: AsrProvider) => Promise<void>;
   setAsrVadEnabled: (enabled: boolean) => Promise<void>;
   setAsrPunctuationEnabled: (enabled: boolean) => Promise<void>;
@@ -580,6 +589,7 @@ const defaultSettings: AppSettings = {
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
   dynamic_background_enabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
   asr_enabled: false,
+  asr_model: ASR_MODEL_DEFAULT,
   asr_provider: "auto",
   asr_vad_enabled: true,
   asr_punctuation_enabled: true,
@@ -626,6 +636,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     room_card_preview_enabled: state.roomCardPreviewEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
     asr_enabled: state.asrEnabled,
+    asr_model: state.asrModel,
     asr_provider: state.asrProvider,
     asr_vad_enabled: state.asrVadEnabled,
     asr_punctuation_enabled: state.asrPunctuationEnabled,
@@ -741,6 +752,7 @@ function asrSettingSetters(
       }
     };
   return {
+    setAsrModel: asrSetting("asrModel", "asr_model"),
     setAsrProvider: asrSetting("asrProvider", "asr_provider"),
     setAsrVadEnabled: asrSetting("asrVadEnabled", "asr_vad_enabled"),
     setAsrPunctuationEnabled: asrSetting("asrPunctuationEnabled", "asr_punctuation_enabled"),
@@ -779,6 +791,7 @@ export const useSettingsStore = create<SettingsState>()(
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
       dynamicBackgroundEnabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
       asrEnabled: false,
+      asrModel: ASR_MODEL_DEFAULT,
       asrProvider: "auto",
       asrVadEnabled: true,
       asrPunctuationEnabled: true,
@@ -1017,6 +1030,7 @@ export const useSettingsStore = create<SettingsState>()(
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
           dynamicBackgroundEnabled: settings.dynamic_background_enabled,
           asrEnabled: settings.asr_enabled,
+          asrModel: parseAsrModel(settings.asr_model),
           asrProvider: parseAsrProvider(settings.asr_provider),
           asrVadEnabled: settings.asr_vad_enabled,
           asrPunctuationEnabled: settings.asr_punctuation_enabled,

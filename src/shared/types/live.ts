@@ -314,15 +314,17 @@ export type AppSettings = {
   dynamic_background_enabled: boolean;
   /** 下载并加载可选 ASR 模型的设备本地同意开关。 */
   asr_enabled: boolean;
+  /** 设备本地识别模型；默认 Qwen3-ASR，xASR 提供更小的中英模型选项。 */
+  asr_model: AsrModel;
   /** 设备本地推理后端：auto、cpu 或 cuda（Windows NVIDIA GPU）。 */
   asr_provider: AsrProvider;
   /** 启用 Silero VAD 分句；关闭时只按最长时长切分。默认 true。 */
   asr_vad_enabled: boolean;
-  /** 保留 Qwen3-ASR 输出的标点；关闭时去掉标点。默认 true。 */
+  /** 保留识别模型输出的标点；关闭时去掉标点。默认 true。 */
   asr_punctuation_enabled: boolean;
   /** 设备本地的端点级匿名说话人区分。 */
   asr_speaker_diarization_enabled: boolean;
-  /** 作为 Qwen3-ASR 提示词上下文的设备本地领域短语。 */
+  /** 作为本地识别提示词上下文或偏置词表的设备本地领域短语。 */
   asr_hotwords: string[];
   /** 本地语音字幕的 PCM 分片间隔（秒）。 */
   asr_window_seconds: number;
@@ -357,3 +359,4 @@ export type AppSettings = {
 };
 
 export type AsrProvider = "auto" | "cpu" | "cuda";
+export type AsrModel = "qwen3" | "xasr";

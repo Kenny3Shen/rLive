@@ -6,7 +6,8 @@ use crate::state::AppState;
 
 #[tauri::command]
 pub fn asr_get_status(state: State<'_, AppState>) -> AppResult<AsrModelStatus> {
-    state.asr.status()
+    let (_, options) = asr_settings(state.inner())?;
+    state.asr.status_for_options(options)
 }
 
 /// 启动幂等的后台下载/加载操作。命令立即返回，
@@ -39,6 +40,7 @@ fn asr_settings(state: &AppState) -> AppResult<(crate::proxy::ProxyRoute, AsrRun
     Ok((
         settings.proxy_route(),
         AsrRuntimeOptions {
+            model: settings.asr_model,
             provider: settings.asr_provider,
             vad_enabled: settings.asr_vad_enabled,
             punctuation_enabled: settings.asr_punctuation_enabled,

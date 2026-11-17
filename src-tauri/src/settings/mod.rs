@@ -119,6 +119,10 @@ fn normalize_proxy_preferences(settings: &mut AppSettings) {
 }
 
 fn normalize_asr_preferences(settings: &mut AppSettings) {
+    if !matches!(settings.asr_model.as_str(), "qwen3" | "xasr") {
+        settings.asr_model = "qwen3".to_owned();
+    }
+
     if !matches!(settings.asr_provider.as_str(), "auto" | "cpu" | "cuda") {
         settings.asr_provider = "auto".to_owned();
     }
@@ -770,6 +774,7 @@ mod tests {
         let conn = open_in_memory().unwrap();
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         for field in [
+            "asr_model",
             "hidden_home_entry_ids",
             "video_blocked_uploaders",
             "room_card_preview_enabled",
@@ -792,6 +797,7 @@ mod tests {
         .unwrap();
         let (actual, saved) = get_with_status(&conn).unwrap();
         assert!(saved);
+        assert_eq!(actual.asr_model, "qwen3");
         assert_eq!(actual.danmaku_font_size, 18);
         assert!(actual.hidden_home_entry_ids.is_empty());
         assert!(actual.video_blocked_uploaders.is_empty());
@@ -800,5 +806,26 @@ mod tests {
         assert_eq!(actual.recording_max_concurrent, 4);
         assert_eq!(actual.recording_ass.overflow_policy, "delay");
         assert_eq!(actual.recording_ass.max_delay_seconds, 5);
+    }
+
+    #[test]
+    fn set_normalizes_unknown_asr_model_to_qwen3() {
+        let conn = open_in_memory().unwrap();
+        let settings = AppSettings {
+            asr_model: "whisper".into(),
+            ..AppSettings::default()
+        };
+        set(&conn, &settings).unwrap();
+        assert_eq!(get(&conn).unwrap().asr_model, "qwen3");
+
+        let settings = AppSettings {
+            asr_model: "xasr".into(),
+            asr_provider: "cuda".into(),
+            ..AppSettings::default()
+        };
+        set(&conn, &settings).unwrap();
+        let stored = get(&conn).unwrap();
+        assert_eq!(stored.asr_model, "xasr");
+        assert_eq!(stored.asr_provider, "cuda");
     }
 }

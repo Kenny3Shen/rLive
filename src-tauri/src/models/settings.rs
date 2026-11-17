@@ -15,6 +15,7 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "video_next_episode_preload",
     "video_blocked_uploaders",
     "proxy_mode",
+    "asr_model",
 ];
 
 /// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
@@ -230,6 +231,12 @@ pub struct AppSettings {
     /// 可选端侧 ASR 模型的本机同意开关。默认关闭，
     /// 保证首次启动绝不下载模型数据。
     pub asr_enabled: bool,
+    /// 本机 ASR 识别模型：`qwen3` 或 `xasr`。
+    ///
+    /// 更早保存的设置记录里没有它，由 serde default 回填 Qwen3。
+    /// 配置包不携带这项设备选择。
+    #[serde(default = "default_asr_model")]
+    pub asr_model: String,
     /// 本机 ASR 执行后端：`auto`、`cpu` 或 `cuda`。
     pub asr_provider: String,
     /// 启用 Silero VAD 分句。默认开启；
@@ -320,6 +327,10 @@ fn default_recording_max_concurrent() -> u32 {
     4
 }
 
+fn default_asr_model() -> String {
+    "qwen3".into()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -350,6 +361,7 @@ impl Default for AppSettings {
             room_card_preview_enabled: default_room_card_preview_enabled(),
             dynamic_background_enabled: default_dynamic_background_enabled(),
             asr_enabled: false,
+            asr_model: default_asr_model(),
             asr_provider: "auto".into(),
             asr_vad_enabled: true,
             asr_punctuation_enabled: true,
