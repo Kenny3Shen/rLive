@@ -1,28 +1,26 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Clock3, Plus, RadioTower } from "lucide-react";
+import { Check, Clock3, Plus, RadioTower } from "lucide-react";
 import {
   Dialog,
   DialogCloseButton,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSeparator,
-  FieldSet,
-} from "@/components/ui/field";
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, FieldError, FieldGroup, FieldLabel, FieldSeparator } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -30,11 +28,20 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { notify } from "@/components/ui/toast";
-import { SITE_LABELS } from "@/lib/utils";
+import { cn, normalizeCoverUrl, normalizeImageUrl, SITE_LABELS } from "@/lib/utils";
 import { invokeCmd } from "@/shared/api/tauri";
+import { CARD_SURFACE_CLASS, CARD_SURFACE_HOVER_CLASS } from "@/shared/components/cardSurface";
+import { SiteLogo } from "@/shared/components/SiteLogo";
 import type { FollowUser, HistoryItem, LiveRoomDetail, SiteId } from "@/shared/types/live";
 import { FOLLOW_LIST_QUERY_KEY } from "@/features/follow/followRefresh";
 import {
@@ -45,6 +52,10 @@ import {
 } from "./multiRoomStore";
 
 const SITE_OPTIONS: readonly SiteId[] = ["bilibili", "huya", "douyu", "douyin", "twitch", "acfun"];
+const SITE_ITEMS = SITE_OPTIONS.map((siteId) => ({
+  value: siteId,
+  label: SITE_LABELS[siteId] ?? siteId,
+}));
 
 type PickerCandidate = MultiRoomCandidate & {
   source: "follow" | "history";
@@ -163,70 +174,91 @@ export function MultiRoomPickerDialog({
       <DialogContent className="max-w-3xl overflow-x-hidden overscroll-y-contain touch-pan-y">
         <DialogHeader>
           <DialogTitle>添加直播间</DialogTitle>
-          <DialogDescription>
-            可输入平台房间号，或从关注与观看历史中选择。当前 {activeKeys.size}/{layout} 路。
-          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={(event) => void addManualRoom(event)}>
-          <FieldGroup>
-            <FieldSet>
-              <FieldLegend variant="label">平台</FieldLegend>
-              <ToggleGroup
-                value={[siteId]}
-                spacing={0}
-                variant="outline"
-                size="sm"
-                className="max-w-full flex-wrap"
-                aria-label="选择直播平台"
-                onValueChange={(value) => {
-                  const next = value[0];
-                  if (SITE_OPTIONS.includes(next as SiteId)) setSiteId(next as SiteId);
-                }}
-              >
-                {SITE_OPTIONS.map((option) => (
-                  <ToggleGroupItem key={option} value={option}>
-                    {SITE_LABELS[option] ?? option}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </FieldSet>
-
-            <Field data-invalid={manualError ? true : undefined}>
-              <FieldLabel htmlFor="multi-room-id">房间号</FieldLabel>
-              <InputGroup>
-                <InputGroupInput
-                  id="multi-room-id"
-                  value={roomId}
-                  placeholder="输入平台房间号"
-                  autoComplete="off"
-                  aria-invalid={manualError ? true : undefined}
+          <FieldGroup className="gap-4">
+            <FieldGroup className="grid grid-cols-[minmax(8rem,10rem)_minmax(0,1fr)] items-start gap-3">
+              <Field data-disabled={manualPending || full ? true : undefined}>
+                <FieldLabel htmlFor="multi-room-site">平台</FieldLabel>
+                <Select
+                  items={SITE_ITEMS}
+                  value={siteId}
                   disabled={manualPending || full}
-                  onChange={(event) => {
-                    setRoomId(event.target.value);
+                  onValueChange={(next) => {
+                    const nextSite = next as SiteId | null;
+                    if (!nextSite || !SITE_OPTIONS.includes(nextSite)) return;
+                    setSiteId(nextSite);
                     if (manualError) setManualError(null);
                   }}
-                />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    type="submit"
-                    variant="secondary"
-                    disabled={manualPending || full}
+                >
+                  <SelectTrigger
+                    id="multi-room-site"
+                    className="w-full border border-input bg-background"
                   >
-                    {/* xs 按钮内图标与 Button 基础规则同权重，显式定尺寸避免加载态跳动。 */}
-                    {manualPending ? (
-                      <Spinner className="size-3.5" data-icon="inline-start" aria-hidden />
-                    ) : (
-                      <Plus className="size-3.5" data-icon="inline-start" aria-hidden />
-                    )}
-                    添加
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
-              <FieldDescription>房间号会先由平台解析，成功后立即开始播放。</FieldDescription>
-              {manualError && <FieldError>{manualError}</FieldError>}
-            </Field>
+                    <SiteLogo siteId={siteId} className="size-4" />
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    <SelectGroup>
+                      {SITE_ITEMS.map((option) => (
+                        <SelectItem
+                          key={option.value}
+                          value={option.value}
+                          aria-label={option.label}
+                        >
+                          <span
+                            className="flex size-4 shrink-0 items-center justify-center"
+                            aria-hidden
+                          >
+                            {siteId === option.value && <Check aria-hidden />}
+                          </span>
+                          <SiteLogo siteId={option.value} />
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
 
+              <Field
+                data-invalid={manualError ? true : undefined}
+                data-disabled={manualPending || full ? true : undefined}
+              >
+                <FieldLabel htmlFor="multi-room-id">房间号</FieldLabel>
+                <InputGroup>
+                  <InputGroupInput
+                    id="multi-room-id"
+                    value={roomId}
+                    placeholder="输入房间号"
+                    autoComplete="off"
+                    aria-invalid={manualError ? true : undefined}
+                    disabled={manualPending || full}
+                    onChange={(event) => {
+                      setRoomId(event.target.value);
+                      if (manualError) setManualError(null);
+                    }}
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      type="submit"
+                      variant="secondary"
+                      disabled={manualPending || full}
+                    >
+                      {/* xs 按钮内图标与 Button 基础规则同权重，显式定尺寸避免加载态跳动。 */}
+                      {manualPending ? (
+                        <Spinner className="size-3.5" data-icon="inline-start" aria-hidden />
+                      ) : (
+                        <Plus className="size-3.5" data-icon="inline-start" aria-hidden />
+                      )}
+                      添加
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+                {manualError && <FieldError>{manualError}</FieldError>}
+              </Field>
+            </FieldGroup>
             <FieldSeparator>关注与最近观看</FieldSeparator>
           </FieldGroup>
         </form>
@@ -247,49 +279,80 @@ export function MultiRoomPickerDialog({
               candidates.map((candidate) => {
                 const key = multiRoomKey(candidate.site_id, candidate.room_id);
                 const added = activeKeys.has(key);
+                const roomTitle = candidate.title?.trim() || "";
+                const displayName = candidate.user_name || roomTitle || "直播间";
+                const historyTitle =
+                  candidate.source === "history" && roomTitle && roomTitle !== displayName
+                    ? roomTitle
+                    : null;
+                const imageSrc =
+                  candidate.source === "follow"
+                    ? normalizeImageUrl(candidate.cover)
+                    : normalizeCoverUrl(candidate.cover);
                 return (
                   <Card
                     key={key}
                     size="sm"
                     data-multi-room-candidate={key}
-                    className="min-w-0 gap-2"
+                    className={cn(
+                      "min-w-0 gap-2 py-3 transition-[background-color,box-shadow]",
+                      CARD_SURFACE_CLASS,
+                      CARD_SURFACE_HOVER_CLASS,
+                    )}
                   >
-                    <CardHeader className="min-w-0 gap-1.5">
-                      <div className="flex min-w-0 items-start gap-2">
-                        {candidate.source === "follow" ? (
-                          <RadioTower className="mt-0.5 shrink-0" aria-hidden />
-                        ) : (
-                          <Clock3 className="mt-0.5 shrink-0" aria-hidden />
-                        )}
+                    <CardHeader className="min-w-0 items-center gap-x-2.5">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <Avatar size="lg">
+                          <AvatarImage src={imageSrc} alt="" referrerPolicy="no-referrer" />
+                          <AvatarFallback>{displayName.slice(0, 1)}</AvatarFallback>
+                        </Avatar>
                         <div className="min-w-0 flex-1">
-                          <CardTitle
-                            className="truncate"
-                            title={candidate.title || candidate.user_name}
-                          >
-                            {candidate.title || candidate.user_name || "直播间"}
+                          <CardTitle className="truncate" title={displayName}>
+                            {displayName}
                           </CardTitle>
                           <CardDescription className="truncate">
                             {SITE_LABELS[candidate.site_id] ?? candidate.site_id}，房间{" "}
                             {candidate.room_id}
                           </CardDescription>
                         </div>
-                        <Badge variant={added ? "secondary" : "outline"} className="shrink-0">
-                          {added ? "已添加" : candidate.source === "follow" ? "关注" : "历史"}
-                        </Badge>
                       </div>
+                      <CardAction className="self-center">
+                        <Button
+                          type="button"
+                          variant={added ? "secondary" : "outline"}
+                          size="sm"
+                          disabled={added || full}
+                          aria-label={
+                            added
+                              ? `${displayName}已添加`
+                              : full
+                                ? "多画面已满"
+                                : `将${displayName}加入多画面`
+                          }
+                          onClick={() => addCandidate(candidate)}
+                        >
+                          {added ? (
+                            <Check data-icon="inline-start" aria-hidden />
+                          ) : (
+                            <Plus data-icon="inline-start" aria-hidden />
+                          )}
+                          {added ? "已添加" : full ? "已满" : "加入"}
+                        </Button>
+                      </CardAction>
                     </CardHeader>
-                    <CardFooter className="border-0 bg-transparent pt-0">
-                      <Button
-                        type="button"
-                        variant={added ? "secondary" : "outline"}
-                        className="w-full"
-                        disabled={added || full}
-                        onClick={() => addCandidate(candidate)}
-                      >
-                        <Plus data-icon="inline-start" aria-hidden />
-                        {added ? "已添加" : "加入多画面"}
-                      </Button>
-                    </CardFooter>
+                    <CardContent className="flex min-h-5 min-w-0 items-center gap-1.5 overflow-hidden">
+                      <Badge variant="outline" className="shrink-0">
+                        {candidate.source === "follow" ? (
+                          <RadioTower aria-hidden />
+                        ) : (
+                          <Clock3 aria-hidden />
+                        )}
+                        {candidate.source === "follow" ? "关注" : "最近观看"}
+                      </Badge>
+                      {historyTitle && (
+                        <span className="truncate text-muted-foreground">{historyTitle}</span>
+                      )}
+                    </CardContent>
                   </Card>
                 );
               })
