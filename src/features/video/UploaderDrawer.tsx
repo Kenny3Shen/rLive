@@ -5,7 +5,13 @@ import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { Button } from "@/components/ui/button";
-import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerTitle,
+  type DrawerSide,
+} from "@/components/ui/drawer";
 import {
   Empty,
   EmptyDescription,
@@ -68,10 +74,14 @@ type UploaderDrawerProps = {
   currentBvid?: string;
   /** 自定义挂载容器，沿 DrawerContent 的 container 类型（如播放页侧栏作用域）。 */
   container?: ComponentProps<typeof DrawerContent>["container"];
+  /** 推入方向。默认右侧；评论入口在短视频底部抽屉里复用时可传底部。 */
+  side?: DrawerSide;
+  /** 覆盖内容尺寸；评论入口用它沿用同层评论抽屉的覆盖范围。 */
+  contentClassName?: string;
 };
 
 /**
- * UP 主投稿视频抽屉，从右侧滑出，展示指定 UP 主的视频列表。
+ * UP 主投稿视频抽屉，展示指定 UP 主的视频列表。
  */
 export function UploaderDrawer({
   open,
@@ -80,6 +90,8 @@ export function UploaderDrawer({
   uploaderName,
   currentBvid = "",
   container,
+  side = "right",
+  contentClassName,
 }: UploaderDrawerProps) {
   const [order, setOrder] = useState<VideoUploaderOrder>("pubdate");
   const nextOrder: VideoUploaderOrder = order === "pubdate" ? "click" : "pubdate";
@@ -203,9 +215,13 @@ export function UploaderDrawer({
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent
-        side="right"
+        side={side}
         container={container}
-        className="w-[min(48rem,90vw)] overflow-hidden"
+        className={cn(
+          "overflow-hidden",
+          side === "right" && "w-[min(48rem,90vw)]",
+          contentClassName,
+        )}
       >
         <div className="flex h-full flex-col">
           {/* 标题栏 */}

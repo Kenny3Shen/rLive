@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useState, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useState, type ReactNode } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -24,6 +24,7 @@ import {
   DrawerTitle,
   useDrawerScoped,
   useDrawerScopedSide,
+  type DrawerSide,
 } from "@/components/ui/drawer";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,6 +42,7 @@ import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import type { VideoComment } from "@/shared/types/video";
 import { CommentLevelBadge } from "./CommentLevelBadge";
 import { renderTimestampText } from "./timestampText";
+import { UploaderDrawer } from "./UploaderDrawer";
 import { VideoCommentComposer } from "./VideoCommentComposer";
 import { videoGetCommentReplies, videoGetComments, videoLikeComment } from "./videoApi";
 import {
@@ -77,6 +79,11 @@ const CommentSeekContext = createContext<((seconds: number) => void) | undefined
 
 /** 点赞写入与缓存改写都按稿件分区；由 `CommentsPanel` 提供，行组件不必层层透传。 */
 const CommentAidContext = createContext("");
+
+/** 评论用户名统一走这里打开投稿抽屉；缺少有效 mid 时行组件保持普通文本。 */
+const CommentAuthorContext = createContext<((mid: string, uname: string) => void) | undefined>(
+  undefined,
+);
 
 /** 点赞与回复共用的图标操作：与 11px 计数同档，不撑高行；粗指针下取消基础按钮的最小触控高度。 */
 const COMMENT_ACTION_CLASS =
@@ -271,6 +278,59 @@ function CommentAuthorBadges({
   );
 }
 
+/** 只接受正十进制 UID；保留字符串原值，避免超出 Number 安全整数后误伤身份。 */
+function validCommentAuthorMid(raw: string): string | null {
+  const mid = raw.trim();
+  return /^\d+$/.test(mid) && !/^0+$/.test(mid) ? mid : null;
+}
+
+/**
+ * 评论昵称入口。预览行本身整行是回复详情按钮，因此入口必须阻止冒泡；
+ * 同时与详情覆盖按钮处于兄弟层，点击只打开作者投稿，不切换二级回复。
+ */
+function CommentAuthorName({
+  comment,
+  preview = false,
+}: {
+  comment: VideoComment;
+  preview?: boolean;
+}) {
+  const onOpenAuthor = useContext(CommentAuthorContext);
+  const mid = validCommentAuthorMid(comment.mid);
+  const text = <span className="truncate">{comment.uname}</span>;
+
+  if (!mid || !onOpenAuthor) {
+    return (
+      <span
+        className={cn(
+          "truncate font-medium text-foreground/90",
+          preview ? "text-xs" : "text-[13px]",
+        )}
+      >
+        {comment.uname}
+      </span>
+    );
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      className={cn(
+        "h-auto min-w-0 shrink p-0 align-baseline text-foreground/90 hover:bg-transparent hover:text-foreground/90 [@media(pointer:coarse)]:min-h-0",
+        preview ? "max-w-full text-xs" : "justify-start text-[13px]",
+      )}
+      aria-label={`查看 ${comment.uname} 的投稿`}
+      title={`查看 ${comment.uname} 的投稿`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpenAuthor(mid, comment.uname);
+      }}
+    >
+      {text}
+    </Button>
+  );
+}
+
 function CommentRow({
   comment,
   thread = comment,
@@ -298,9 +358,7 @@ function CommentRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[13px] font-medium text-foreground/90">
-            {comment.uname}
-          </span>
+          <CommentAuthorName comment={comment} />
           <CommentAuthorBadges isThreadAuthor={isThreadAuthor} isUpper={comment.is_upper} />
           <CommentLevelBadge level={comment.level} />
         </div>
@@ -338,7 +396,7 @@ function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDeta
       onOpenDetail={onOpenDetail}
     >
       <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
-        <span className="font-medium text-primary/90">{reply.uname}</span>
+        <CommentAuthorName comment={reply} preview />
         {/* 预览是一行被裁剪的富文本，塞不进 Badge 的 20px 药丸；
             用等高（h-4 = leading-4）的 inline-flex 小标，行高不受影响。 */}
         {reply.is_upper && (
@@ -681,14 +739,45 @@ export const CommentsPanel = memo(function CommentsPanel({
   /** 一级列表的「回复」交给调用方的输入框；不提供时不显示回复入口。 */
   onReply?: (target: VideoCommentReplyTarget) => void;
 }) {
+  const [authorTarget, setAuthorTarget] = useState<{ mid: string; uname: string } | null>(null);
+  const [authorDrawerOpen, setAuthorDrawerOpen] = useState(false);
+  const scoped = useDrawerScoped();
+  const scopedSide = useDrawerScopedSide();
+  const compact = useCompactPlayerViewport();
+  // 作者投稿抽屉与评论详情共用一套几何：播放页铺满侧栏，短视频 dock 向上推入，
+  // 整窗口形态在宽屏靠右、紧凑屏沿底部，宽度与当前评论面板一致。
+  const drawerSide = scopedSide ?? panelDrawerSide(compact, scoped);
+  const openAuthor = useCallback((mid: string, uname: string) => {
+    // 抽屉关闭后继续保留最后一次目标，关闭动画期间标题与请求键不会突然清空。
+    setAuthorTarget({ mid, uname });
+    setAuthorDrawerOpen(true);
+  }, []);
+
   return (
-    <CommentAidContext value={props.aid}>
-      <CommentSeekContext value={onSeek}>
-        <CommentReplyContext value={onReply}>
-          <CommentsPanelContent {...props} canReply={onReply !== undefined} />
-        </CommentReplyContext>
-      </CommentSeekContext>
-    </CommentAidContext>
+    <CommentAuthorContext value={openAuthor}>
+      <CommentAidContext value={props.aid}>
+        <CommentSeekContext value={onSeek}>
+          <CommentReplyContext value={onReply}>
+            <CommentsPanelContent
+              {...props}
+              canReply={onReply !== undefined}
+              scoped={scoped}
+              drawerSide={drawerSide}
+            />
+          </CommentReplyContext>
+        </CommentSeekContext>
+      </CommentAidContext>
+      {authorTarget && (
+        <UploaderDrawer
+          open={authorDrawerOpen}
+          onOpenChange={setAuthorDrawerOpen}
+          mid={authorTarget.mid}
+          uploaderName={authorTarget.uname}
+          side={drawerSide}
+          contentClassName={cn(scoped && "max-w-full", panelDrawerSizeClass(drawerSide, scoped))}
+        />
+      )}
+    </CommentAuthorContext>
   );
 });
 
@@ -696,26 +785,20 @@ function CommentsPanelContent({
   aid,
   bottomInset,
   canReply,
+  scoped,
+  drawerSide,
 }: {
   aid: string;
   bottomInset?: string;
   canReply: boolean;
+  scoped: boolean;
+  drawerSide: DrawerSide;
 }) {
   const [mode, setMode] = useState(3);
   const [selectedComment, setSelectedComment] = useState<VideoComment | null>(null);
   const mobile = isMobileClient();
   // 抽屉只在移动端成立；桌面端同一份状态驱动「就地展开」。
   const repliesDrawerOpen = mobile && selectedComment !== null;
-  // 二级回复抽屉的几何跟着托管它的那一层走：播放页把抽屉挂在侧栏的
-  // `DrawerViewport` 里（scoped，基础组件自己改成 `absolute w-full`，此时不该再给尺寸），
-  // 而短视频的评论抽屉是全窗口浮层 —— 二级必须自己拿到与一级相同的宽度与侧别，
-  // 否则手机上一级是底部抽屉而二级从右侧滑入一条窄条（看上去不像同一套面板）。
-  const scoped = useDrawerScoped();
-  // 局部容器可能是侧栏（右侧推入）或短视频的评论 dock（底部推入）：侧别由
-  // `DrawerScope` 声明，二级抽屉必须与一级同向，不能一律按 `right` 猜。
-  const scopedSide = useDrawerScopedSide();
-  const compact = useCompactPlayerViewport();
-  const repliesSide = scopedSide ?? panelDrawerSide(compact, scoped);
   const commentsQuery = useInfiniteQuery({
     queryKey: ["video_comments", aid, mode],
     enabled: aid !== "",
@@ -831,10 +914,10 @@ function CommentsPanelContent({
         }}
       >
         <DrawerContent
-          side={repliesSide}
+          side={drawerSide}
           className={cn(
             "flex flex-col overflow-hidden p-0",
-            panelDrawerSizeClass(repliesSide, scoped),
+            panelDrawerSizeClass(drawerSide, scoped),
           )}
         >
           <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
@@ -843,7 +926,7 @@ function CommentsPanelContent({
               render={
                 <Button variant="ghost" size="icon" aria-label="返回评论区" title="返回评论区">
                   {/* 箭头指向抽屉退出的方向：底部形态往下收，侧边形态往右收。 */}
-                  {repliesSide === "bottom" ? <ChevronDown /> : <ChevronRight />}
+                  {drawerSide === "bottom" ? <ChevronDown /> : <ChevronRight />}
                 </Button>
               }
             />
@@ -855,7 +938,7 @@ function CommentsPanelContent({
                 key={selectedComment.rpid}
                 aid={aid}
                 comment={detailComment ?? selectedComment}
-                bottomInset={repliesSide === "bottom" ? bottomInset : undefined}
+                bottomInset={drawerSide === "bottom" ? bottomInset : undefined}
               />
             ) : (
               <CommentReplies
@@ -865,7 +948,7 @@ function CommentsPanelContent({
                 // 二级抽屉与一级同侧：底部形态（含挂在评论 dock 里的局部形态）
                 // 自己是在最底下一层，必须消费底部安全区；右侧形态从侧栏里推入，
                 // 安全区由一级滚动容器负责。
-                bottomInset={repliesSide === "bottom" ? bottomInset : undefined}
+                bottomInset={drawerSide === "bottom" ? bottomInset : undefined}
               />
             ))}
         </DrawerContent>
