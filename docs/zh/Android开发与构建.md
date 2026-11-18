@@ -17,6 +17,8 @@
 
 Android 工程遵循 Tauri CLI `2.12.5` 官方模板验证的 AGP `9.3.1`、Gradle `9.6.1` 与 Kotlin `2.2.10` 组合，不单独盲升 AGP 或 Gradle。Tauri 2 仍通过旧版 Kotlin/DSL 集成点接入 Android 模块，因此 `gradle.properties` 中的 `android.builtInKotlin=false`、`android.newDsl=false` 等兼容开关必须保留，待迁移 Tauri 3 再重新评估。
 
+AGP `9.3.1` 的优化资源收缩要求使用非 final 资源 ID，因此 Android 工程必须保留 `android.nonFinalResIds=true`。若改为 `false`，Release 构建会在 `:app:minifyUniversalReleaseWithR8` 阶段失败并提示 `Optimized resource shrinking requires non-final IDs`。该设置依赖应用代码避免把资源 ID 当作编译期常量或 Java `switch` 分支；当前 Android 工程没有这类依赖。
+
 ```bash
 export ANDROID_HOME="$HOME/Android/Sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
