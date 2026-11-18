@@ -51,6 +51,7 @@ chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1.91"
 base64 = "0.23"
 md-5 = "0.11"
+sha2 = "0.11"
 hex = "0.4"
 percent-encoding = "2"
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
@@ -69,10 +70,9 @@ if-addrs = "0.15"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Local ASR is a desktop-only feature. The CrispASR runtime is downloaded on
 # first enable and loaded with libloading, so nothing native is linked at build
-# time; keep its archive, checksum and loader dependencies out of Android.
+# time; keep its archive and loader dependencies out of Android.
 dirs = "7"
 tar = "0.4"
-sha2 = "0.11"
 libloading = "0.9"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
