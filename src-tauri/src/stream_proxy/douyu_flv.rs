@@ -237,6 +237,8 @@ impl Relay {
 
     fn push(&mut self, bytes: &[u8], first_connection: bool) -> Result<Vec<u8>, String> {
         self.pending.extend_from_slice(bytes);
+        let mut consumed = 0;
+        let mut output = Vec::new();
         if !self.header_seen {
             if self.pending.len() < FLV_HEADER_BYTES + FLV_PREVIOUS_TAG_BYTES {
                 return Ok(Vec::new());
@@ -256,51 +258,52 @@ impl Relay {
             if self.pending.len() < data_offset + FLV_PREVIOUS_TAG_BYTES {
                 return Ok(Vec::new());
             }
-            let header = self.pending.drain(..data_offset).collect::<Vec<_>>();
-            let initial_previous = self
-                .pending
-                .drain(..FLV_PREVIOUS_TAG_BYTES)
-                .collect::<Vec<_>>();
+            consumed = data_offset + FLV_PREVIOUS_TAG_BYTES;
             self.header_seen = true;
             if first_connection {
-                let mut output = header;
-                output.extend_from_slice(&initial_previous);
-                output.extend(self.push_tags(first_connection)?);
-                return Ok(output);
+                output.reserve(bytes.len());
+                output.extend_from_slice(&self.pending[..consumed]);
             }
         }
-        self.push_tags(first_connection)
+        consumed = self.push_tags(first_connection, consumed, &mut output)?;
+        if consumed > 0 {
+            // 只压缩一次，未完成 tag 的尾部由 drain 搬移一次，而不是每个 tag 都搬移。
+            self.pending.drain(..consumed);
+        }
+        Ok(output)
     }
 
-    fn push_tags(&mut self, first_connection: bool) -> Result<Vec<u8>, String> {
-        let mut output = Vec::new();
+    fn push_tags(
+        &mut self,
+        first_connection: bool,
+        mut cursor: usize,
+        output: &mut Vec<u8>,
+    ) -> Result<usize, String> {
         loop {
-            if self.pending.len() < FLV_TAG_HEADER_BYTES {
+            if self.pending.len().saturating_sub(cursor) < FLV_TAG_HEADER_BYTES {
                 break;
             }
-            let data_size = ((self.pending[1] as usize) << 16)
-                | ((self.pending[2] as usize) << 8)
-                | self.pending[3] as usize;
+            let data_size = ((self.pending[cursor + 1] as usize) << 16)
+                | ((self.pending[cursor + 2] as usize) << 8)
+                | self.pending[cursor + 3] as usize;
             if data_size > MAX_TAG_BYTES {
                 return Err("斗鱼 FLV tag 超出长度上限".into());
             }
             let total = FLV_TAG_HEADER_BYTES + data_size;
-            if self.pending.len() < total + FLV_PREVIOUS_TAG_BYTES {
+            let tag_end = cursor + total + FLV_PREVIOUS_TAG_BYTES;
+            if self.pending.len() < tag_end {
                 break;
             }
             let previous_size = u32::from_be_bytes([
-                self.pending[total],
-                self.pending[total + 1],
-                self.pending[total + 2],
-                self.pending[total + 3],
+                self.pending[cursor + total],
+                self.pending[cursor + total + 1],
+                self.pending[cursor + total + 2],
+                self.pending[cursor + total + 3],
             ]) as usize;
             if previous_size != total {
                 return Err("斗鱼 FLV PreviousTagSize 不匹配".into());
             }
-            let tag = self
-                .pending
-                .drain(..total + FLV_PREVIOUS_TAG_BYTES)
-                .collect::<Vec<_>>();
+            let tag = &self.pending[cursor..tag_end];
             let tag_type = tag[0] & 0x1f;
             let timestamp_lo = ((tag[4] as i64) << 16) | ((tag[5] as i64) << 8) | tag[6] as i64;
             let timestamp = timestamp_lo | ((tag[7] as i64) << 24);
@@ -308,8 +311,9 @@ impl Relay {
             if tag_type == FLV_TAG_SCRIPT {
                 if first_connection && !self.metadata_seen {
                     self.metadata_seen = true;
-                    output.extend_from_slice(&tag);
+                    extend_output(output, tag, self.pending.len());
                 }
+                cursor = tag_end;
                 continue;
             }
             if tag_type == FLV_TAG_AUDIO {
@@ -317,11 +321,12 @@ impl Relay {
                     if self.audio_config.is_none() {
                         self.audio_config = Some(data.to_vec());
                         if first_connection {
-                            output.extend_from_slice(&tag);
+                            extend_output(output, tag, self.pending.len());
                         }
                     } else if self.audio_config.as_deref() != Some(data) {
                         return Err("斗鱼 FLV 续接的音频配置发生变化".into());
                     }
+                    cursor = tag_end;
                     continue;
                 }
                 if self.last_audio_dts.is_some_and(|last| timestamp <= last) {
@@ -332,10 +337,12 @@ impl Relay {
                     {
                         return Err("斗鱼 FLV 续接的音频时间轴回退".into());
                     }
+                    cursor = tag_end;
                     continue;
                 }
                 self.last_audio_dts = Some(timestamp);
-                output.extend_from_slice(&tag);
+                extend_output(output, tag, self.pending.len());
+                cursor = tag_end;
                 continue;
             }
             if tag_type == FLV_TAG_VIDEO {
@@ -343,11 +350,12 @@ impl Relay {
                     if self.video_config.is_none() {
                         self.video_config = Some(data.to_vec());
                         if first_connection {
-                            output.extend_from_slice(&tag);
+                            extend_output(output, tag, self.pending.len());
                         }
                     } else if self.video_config.as_deref() != Some(data) {
                         return Err("斗鱼 FLV 续接的视频配置发生变化".into());
                     }
+                    cursor = tag_end;
                     continue;
                 }
                 if self.last_video_dts.is_some_and(|last| timestamp <= last) {
@@ -358,15 +366,25 @@ impl Relay {
                     {
                         return Err("斗鱼 FLV 续接的视频时间轴回退".into());
                     }
+                    cursor = tag_end;
                     continue;
                 }
                 self.last_video_dts = Some(timestamp);
-                output.extend_from_slice(&tag);
+                extend_output(output, tag, self.pending.len());
+                cursor = tag_end;
                 continue;
             }
+            cursor = tag_end;
         }
-        Ok(output)
+        Ok(cursor)
     }
+}
+
+fn extend_output(output: &mut Vec<u8>, bytes: &[u8], capacity_hint: usize) {
+    if output.is_empty() {
+        output.reserve(capacity_hint);
+    }
+    output.extend_from_slice(bytes);
 }
 
 fn is_audio_sequence_header(data: &[u8]) -> bool {
@@ -403,7 +421,10 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use super::{FLV_TAG_AUDIO, FLV_TAG_SCRIPT, FLV_TAG_VIDEO, Relay, proxy_with_min_continuation};
+    use super::{
+        FLV_TAG_AUDIO, FLV_TAG_SCRIPT, FLV_TAG_VIDEO, MAX_TAG_BYTES, Relay,
+        proxy_with_min_continuation,
+    };
     use crate::stream_proxy::ProxyTelemetryCounters;
 
     fn tag(tag_type: u8, timestamp: i64, data: &[u8]) -> Vec<u8> {
@@ -743,6 +764,49 @@ mod tests {
         let tail = audio[audio.len() - 2..].to_vec();
         let output = relay.push(&tail, true).unwrap();
         assert!(output.windows(7).any(|window| window == b"payload"));
+    }
+
+    #[test]
+    fn every_split_boundary_preserves_mixed_tag_output() {
+        let input = stream(&[
+            tag(FLV_TAG_SCRIPT, 0, b"metadata"),
+            tag(FLV_TAG_AUDIO, 12, b"\xaf\x00\x12\x10"),
+            tag(3, 0, b"ignored-unknown"),
+            tag(FLV_TAG_VIDEO, 4_177, b"\x17\x00config"),
+            tag(FLV_TAG_AUDIO, 10_000, b"\xaf\x01audio"),
+            tag(FLV_TAG_VIDEO, 10_010, b"\x27\x01video"),
+        ]);
+        let mut whole_relay = Relay::default();
+        let expected = whole_relay.push(&input, true).unwrap();
+
+        for split in 0..=input.len() {
+            let mut relay = Relay::default();
+            let mut actual = relay.push(&input[..split], true).unwrap();
+            actual.extend(relay.push(&input[split..], true).unwrap());
+            assert_eq!(actual, expected, "split at byte {split}");
+        }
+    }
+
+    #[test]
+    fn invalid_previous_size_and_oversized_tag_are_rejected() {
+        let audio = tag(FLV_TAG_AUDIO, 1, b"\xaf\x01payload");
+        let mut invalid_previous = stream(&[audio]);
+        let previous_offset = invalid_previous.len() - 4;
+        invalid_previous[previous_offset..].fill(0);
+        assert_eq!(
+            Relay::default().push(&invalid_previous, true).unwrap_err(),
+            "斗鱼 FLV PreviousTagSize 不匹配"
+        );
+
+        let mut oversized = stream(&[]);
+        oversized.push(FLV_TAG_VIDEO);
+        let size = (MAX_TAG_BYTES as u32 + 1).to_be_bytes();
+        oversized.extend_from_slice(&size[1..]);
+        oversized.extend_from_slice(&[0; 7]);
+        assert_eq!(
+            Relay::default().push(&oversized, true).unwrap_err(),
+            "斗鱼 FLV tag 超出长度上限"
+        );
     }
 
     #[test]

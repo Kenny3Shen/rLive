@@ -1,0 +1,323 @@
+{
+  "date": "2026-11-19",
+  "baseline_commit": "bdc74ac0b59930f031df6ab1e275a4d3ed0c0b19",
+  "optimized_source": "工作区 src-tauri/src/stream_proxy/douyu_flv.rs",
+  "rustc": "rustc 1.102.0-nightly (5f4effd57 2026-11-13)",
+  "platform": "6.18.58.1-microsoft-standard-WSL2",
+  "compile_flags": [
+    "--edition=2024",
+    "-O"
+  ],
+  "cpu": "13th Gen Intel(R) Core(TM) i5-13600KF",
+  "rounds": 7,
+  "input_kind": "captured_flv",
+  "synthetic_duration_seconds": null,
+  "scope": "仅 Relay 重组，源数据准备、网络、socket 写入、mpegts.js 和解码均不计时；分配计数为单次回放的独立构建，requested_bytes 不是峰值内存或拷贝字节数。",
+  "results": [
+    {
+      "case": "observed_reads",
+      "input_bytes": 1865126,
+      "chunk_count": 29,
+      "output_bytes": 1865126,
+      "iterations": 576,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          0.3141249704861111,
+          0.2984564201388889,
+          0.29494,
+          0.2917902760416667,
+          0.2927427604166667,
+          0.28081574652777774,
+          0.27912197743055556
+        ],
+        "median_ms": 0.2927427604166667,
+        "alloc_calls": 359,
+        "realloc_calls": 58,
+        "requested_bytes": 6876765
+      },
+      "optimized": {
+        "round_ms": [
+          0.09914621006944443,
+          0.10239487847222221,
+          0.09140279861111111,
+          0.09081148263888889,
+          0.09548778472222222,
+          0.09387828645833333,
+          0.08791392534722221
+        ],
+        "median_ms": 0.09387828645833333,
+        "alloc_calls": 31,
+        "realloc_calls": 1,
+        "requested_bytes": 2546340
+      },
+      "speedup": 3.1183223667657884
+    },
+    {
+      "case": "4KiB",
+      "input_bytes": 1865126,
+      "chunk_count": 456,
+      "output_bytes": 1865126,
+      "iterations": 963,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          0.1403773748701973,
+          0.14276755867082036,
+          0.14413903634475597,
+          0.14384892627206647,
+          0.14026978920041536,
+          0.14460642679127725,
+          0.14191865420560748
+        ],
+        "median_ms": 0.14276755867082036,
+        "alloc_calls": 472,
+        "realloc_calls": 128,
+        "requested_bytes": 7157420
+      },
+      "optimized": {
+        "round_ms": [
+          0.08802657632398754,
+          0.07873546417445483,
+          0.07833724195223261,
+          0.0799167414330218,
+          0.07853440290758047,
+          0.07701844963655244,
+          0.0787383717549325
+        ],
+        "median_ms": 0.07873546417445483,
+        "alloc_calls": 144,
+        "realloc_calls": 5,
+        "requested_bytes": 2374940
+      },
+      "speedup": 1.8132560742194785
+    },
+    {
+      "case": "16KiB",
+      "input_bytes": 1865126,
+      "chunk_count": 114,
+      "output_bytes": 1865126,
+      "iterations": 1043,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          0.1456929242569511,
+          0.14480227420901245,
+          0.1469120853307766,
+          0.1432950728667306,
+          0.1570726212847555,
+          0.1460240162991371,
+          0.14671051581975073
+        ],
+        "median_ms": 0.1460240162991371,
+        "alloc_calls": 403,
+        "realloc_calls": 107,
+        "requested_bytes": 7242026
+      },
+      "optimized": {
+        "round_ms": [
+          0.08102993480345158,
+          0.08502420613614572,
+          0.08276033844678811,
+          0.07958132023010547,
+          0.07900194822627037,
+          0.08023480057526367,
+          0.08131512655800575
+        ],
+        "median_ms": 0.08102993480345158,
+        "alloc_calls": 75,
+        "realloc_calls": 3,
+        "requested_bytes": 2485025
+      },
+      "speedup": 1.802099639513927
+    },
+    {
+      "case": "64KiB",
+      "input_bytes": 1865126,
+      "chunk_count": 29,
+      "output_bytes": 1865126,
+      "iterations": 592,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          0.2843622584459459,
+          0.27811439020270273,
+          0.2738033158783784,
+          0.28376410979729727,
+          0.280758222972973,
+          0.2792783074324324,
+          0.2787496875
+        ],
+        "median_ms": 0.2792783074324324,
+        "alloc_calls": 359,
+        "realloc_calls": 58,
+        "requested_bytes": 6876765
+      },
+      "optimized": {
+        "round_ms": [
+          0.09012575675675676,
+          0.09372193918918918,
+          0.09216841385135134,
+          0.08642833108108108,
+          0.09096606418918919,
+          0.09312453716216217,
+          0.08964794425675676
+        ],
+        "median_ms": 0.09096606418918919,
+        "alloc_calls": 31,
+        "realloc_calls": 1,
+        "requested_bytes": 2546340
+      },
+      "speedup": 3.0701373080360566
+    },
+    {
+      "case": "256KiB",
+      "input_bytes": 1865126,
+      "chunk_count": 8,
+      "output_bytes": 1865126,
+      "iterations": 182,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          0.9110601538461539,
+          0.9034749835164836,
+          0.9108762362637363,
+          0.8942672252747252,
+          0.8803788516483516,
+          0.901959032967033,
+          0.8866580219780219
+        ],
+        "median_ms": 0.901959032967033,
+        "alloc_calls": 339,
+        "realloc_calls": 34,
+        "requested_bytes": 7603294
+      },
+      "optimized": {
+        "round_ms": [
+          0.09334363186813187,
+          0.0916457032967033,
+          0.09173596703296703,
+          0.08853560989010989,
+          0.09498215934065934,
+          0.0952617967032967,
+          0.0922617032967033
+        ],
+        "median_ms": 0.0922617032967033,
+        "alloc_calls": 11,
+        "realloc_calls": 1,
+        "requested_bytes": 2850388
+      },
+      "speedup": 9.776093446556409
+    },
+    {
+      "case": "1024KiB",
+      "input_bytes": 1865126,
+      "chunk_count": 2,
+      "output_bytes": 1865126,
+      "iterations": 55,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          2.6648084727272727,
+          2.7223724727272725,
+          2.6912339454545453,
+          2.696267581818182,
+          2.671688890909091,
+          2.6980568363636364,
+          2.6775738727272724
+        ],
+        "median_ms": 2.6912339454545453,
+        "alloc_calls": 333,
+        "realloc_calls": 15,
+        "requested_bytes": 8878406
+      },
+      "optimized": {
+        "round_ms": [
+          0.12099409090909091,
+          0.1188664,
+          0.12458627272727273,
+          0.12408532727272727,
+          0.12921654545454545,
+          0.11523318181818182,
+          0.11473767272727273
+        ],
+        "median_ms": 0.12099409090909091,
+        "alloc_calls": 5,
+        "realloc_calls": 0,
+        "requested_bytes": 2917566
+      },
+      "speedup": 22.24268908699523
+    }
+  ],
+  "capture": {
+    "platform": "Windows WebView2 真实主窗口，本机代理额外短连接",
+    "room_id": "71415",
+    "elapsed_ms": 371.118,
+    "media_span_seconds": {
+      "audio": 4.16,
+      "video": 4.133
+    },
+    "complete_tags": 326,
+    "audio_tags": 198,
+    "video_tags": 127,
+    "tag_payload_bytes": {
+      "audio": {
+        "p50": 416.5,
+        "p95": 554,
+        "max": 740
+      },
+      "video": {
+        "p50": 7612,
+        "p95": 48616,
+        "max": 105526
+      }
+    },
+    "read_lengths": [
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      65536,
+      30118
+    ],
+    "steady_forwarding": {
+      "elapsed_ms": 10003.2,
+      "bytes_forwarded": 4281044,
+      "rate_KiB_s": 418.071,
+      "upstream_requests": 1,
+      "upstream_failures": 0,
+      "captured_at": "2026-11-19 Asia/Shanghai",
+      "room_id": "71415"
+    },
+    "caveats": [
+      "媒体样本来自本机代理的额外短连接，抓到的是启动突发样本，约4.2秒媒体内容。",
+      "chunk lengths 是 Python read(65536) 边界，不等于 reqwest bytes_stream 边界。",
+      "通过 stream_proxy_telemetry 的10秒差分得到持续转发率约418 KiB/s。",
+      "样本是代理输出，原始上游已经过过滤；配置变更、跨连接去重和回退保护由 Rust 回归测试覆盖。",
+      "实流来自优化前正在运行的 Windows 进程，修改前后重组耗时均在 WSL 以同一样本离线测量，未测优化版 Windows 播放帧率。"
+    ]
+  }
+}

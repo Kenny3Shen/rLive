@@ -1,0 +1,210 @@
+{
+  "date": "2026-11-19",
+  "baseline_commit": "bdc74ac0b59930f031df6ab1e275a4d3ed0c0b19",
+  "optimized_source": "工作区 src-tauri/src/stream_proxy/douyu_flv.rs",
+  "rustc": "rustc 1.102.0-nightly (5f4effd57 2026-11-13)",
+  "platform": "6.18.58.1-microsoft-standard-WSL2",
+  "compile_flags": ["--edition=2024", "-O"],
+  "cpu": "13th Gen Intel(R) Core(TM) i5-13600KF",
+  "rounds": 7,
+  "input_kind": "synthetic_flv",
+  "synthetic_duration_seconds": 10,
+  "scope": "仅 Relay 重组，源数据准备、网络、socket 写入、mpegts.js 和解码均不计时；分配计数为单次回放的独立构建，requested_bytes 不是峰值内存或拷贝字节数。",
+  "results": [
+    {
+      "case": "4KiB",
+      "input_bytes": 9931008,
+      "chunk_count": 2425,
+      "output_bytes": 9931008,
+      "iterations": 95,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          0.9554935789473684,
+          1.0908839368421053,
+          0.8249699157894737,
+          0.8416729052631579,
+          0.8691689789473684,
+          0.8613889052631579,
+          0.855111652631579
+        ],
+        "median_ms": 0.8613889052631579,
+        "alloc_calls": 1710,
+        "realloc_calls": 449,
+        "requested_bytes": 34919800
+      },
+      "optimized": {
+        "round_ms": [
+          0.5341522947368421,
+          0.470038,
+          0.4888658105263158,
+          0.4909461789473684,
+          0.5514464526315789,
+          0.46525393684210525,
+          0.44389822105263155
+        ],
+        "median_ms": 0.4888658105263158,
+        "alloc_calls": 635,
+        "realloc_calls": 6,
+        "requested_bytes": 11681743
+      },
+      "speedup": 1.762015028900838
+    },
+    {
+      "case": "16KiB",
+      "input_bytes": 9931008,
+      "chunk_count": 607,
+      "output_bytes": 9931008,
+      "iterations": 123,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          0.9736314959349593,
+          0.9962091219512195,
+          0.953218268292683,
+          1.0460668211382114,
+          0.8977455772357724,
+          0.9264221463414635,
+          0.9377841300813009
+        ],
+        "median_ms": 0.953218268292683,
+        "alloc_calls": 1650,
+        "realloc_calls": 497,
+        "requested_bytes": 36519990
+      },
+      "optimized": {
+        "round_ms": [
+          0.5356893170731707,
+          0.5602286260162601,
+          0.5212789593495935,
+          0.57972081300813,
+          0.5079940975609756,
+          0.5278531788617886,
+          0.5168613983739837
+        ],
+        "median_ms": 0.5278531788617886,
+        "alloc_calls": 575,
+        "realloc_calls": 4,
+        "requested_bytes": 14745430
+      },
+      "speedup": 1.805839779819287
+    },
+    {
+      "case": "64KiB",
+      "input_bytes": 9931008,
+      "chunk_count": 152,
+      "output_bytes": 9931008,
+      "iterations": 95,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          1.5851020736842105,
+          1.6522570842105264,
+          1.5923491157894738,
+          1.8379137368421052,
+          1.6079371368421054,
+          1.4826611157894738,
+          1.4030772526315791
+        ],
+        "median_ms": 1.5923491157894738,
+        "alloc_calls": 1225,
+        "realloc_calls": 429,
+        "requested_bytes": 44200127
+      },
+      "optimized": {
+        "round_ms": [
+          0.7612957052631578,
+          0.6564584,
+          0.6755960210526315,
+          0.6615841684210526,
+          0.6386265263157894,
+          0.6648323263157895,
+          0.6111739789473685
+        ],
+        "median_ms": 0.6615841684210526,
+        "alloc_calls": 150,
+        "realloc_calls": 2,
+        "requested_bytes": 11633791
+      },
+      "speedup": 2.4068730658863857
+    },
+    {
+      "case": "256KiB",
+      "input_bytes": 9931008,
+      "chunk_count": 38,
+      "output_bytes": 9931008,
+      "iterations": 45,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          4.6354753777777775,
+          4.256512977777779,
+          4.020022355555556,
+          3.8810743333333333,
+          3.7461526444444444,
+          3.668492,
+          3.6997671555555556
+        ],
+        "median_ms": 3.8810743333333333,
+        "alloc_calls": 1116,
+        "realloc_calls": 182,
+        "requested_bytes": 45301317
+      },
+      "optimized": {
+        "round_ms": [
+          0.9016094222222222,
+          0.6877971333333333,
+          0.6936261333333333,
+          0.7365915333333333,
+          0.6562416222222223,
+          0.6850248444444444,
+          0.5974883333333334
+        ],
+        "median_ms": 0.6877971333333333,
+        "alloc_calls": 41,
+        "realloc_calls": 1,
+        "requested_bytes": 11165299
+      },
+      "speedup": 5.642760263515687
+    },
+    {
+      "case": "1024KiB",
+      "input_bytes": 9931008,
+      "chunk_count": 10,
+      "output_bytes": 9931008,
+      "iterations": 14,
+      "byte_equal": true,
+      "baseline": {
+        "round_ms": [
+          11.285169285714286,
+          11.2920655,
+          10.957475785714285,
+          11.368822714285715,
+          11.26556707142857,
+          11.573526857142856,
+          11.221072142857144
+        ],
+        "median_ms": 11.285169285714286,
+        "alloc_calls": 1088,
+        "realloc_calls": 67,
+        "requested_bytes": 47572285
+      },
+      "optimized": {
+        "round_ms": [
+          0.9138389285714286,
+          0.9698329285714286,
+          1.0404763571428572,
+          0.9268519285714285,
+          0.8780551428571428,
+          1.0080801428571429,
+          1.025392
+        ],
+        "median_ms": 0.9698329285714286,
+        "alloc_calls": 13,
+        "realloc_calls": 1,
+        "requested_bytes": 13253643
+      },
+      "speedup": 11.636199342434606
+    }
+  ]
+}
