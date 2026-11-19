@@ -14,6 +14,7 @@ describe("代理三档设置", () => {
   let backendSettings: AppSettings;
   let writeHandler: (settings: AppSettings) => void | Promise<void>;
   const writes: AppSettings[] = [];
+  let proxyRefreshes = 0;
 
   beforeEach(async () => {
     windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -23,6 +24,7 @@ describe("代理三档设置", () => {
     originalState = useSettingsStore.getState();
     useSettingsStore.setState(useSettingsStore.getInitialState(), true);
     writes.length = 0;
+    proxyRefreshes = 0;
     writeHandler = () => {};
     mockIPC((command, payload) => {
       if (command === "settings_get") {
@@ -32,6 +34,17 @@ describe("代理三档设置", () => {
         const settings = (payload as { settings: AppSettings }).settings;
         writes.push(settings);
         return writeHandler(settings);
+      }
+      if (command === "image_proxy_url") {
+        proxyRefreshes += 1;
+        return {
+          origins: [
+            "http://127.0.0.1:4101",
+            "http://127.0.0.1:4102",
+            "http://127.0.0.1:4103",
+            "http://127.0.0.1:4104",
+          ],
+        };
       }
       throw new Error(`意外 IPC 命令：${command}`);
     });
@@ -65,6 +78,7 @@ describe("代理三档设置", () => {
       expect(useSettingsStore.getState().proxy).toBe(savedProxy);
       expect(useSettingsStore.getState().hydratedFromBackend).toBe(true);
       expect(writes).toHaveLength(0);
+      expect(proxyRefreshes).toBe(1);
     });
   }
 
@@ -115,6 +129,7 @@ describe("代理三档设置", () => {
       throw writeError;
     };
     await expect(useSettingsStore.getState().setProxyMode("off")).rejects.toBe(writeError);
+    expect(proxyRefreshes).toBe(0);
     expect(useSettingsStore.getState().proxyMode).toBe("custom");
     expect(useSettingsStore.getState().proxy).toBe(savedProxy);
     writeHandler = () => {};

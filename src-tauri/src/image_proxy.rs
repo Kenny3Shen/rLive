@@ -7,7 +7,6 @@
 //! 首次使用时惰性启动并存活整个应用生命周期。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
 use percent_encoding::percent_decode_str;
@@ -15,7 +14,7 @@ use reqwest::Url;
 use tauri::async_runtime::JoinHandle;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Mutex as AsyncMutex, watch};
 
 use crate::error::{AppError, AppResult};
 use crate::image_cache::{ImageCache, MAX_IMAGE_BYTES, sniff_image_type};
@@ -46,6 +45,9 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
 ];
 
 const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// WebView 通常只允许同一 HTTP/1.1 origin 同时建立少量连接。把图片稳定分流到
+/// 四个回环 origin，可在保持完整响应与 `Content-Length` 的同时扩大并发窗口。
+const IMAGE_PROXY_ORIGIN_COUNT: usize = 4;
 
 /// 磁盘缓存图片（头像、分类图标）的 WebView 缓存生存期：
 /// URL 随图片变化而变化，因此较长的生存期是安全的。
@@ -59,25 +61,25 @@ const SNAPSHOT_COVER_MAX_AGE: u32 = 24 * 60 * 60;
 
 pub struct ImageProxy {
     state: Mutex<Option<ImageProxyInner>>,
-    port: AtomicU16,
     cache: Arc<ImageCache>,
-    /// 当前监听器使用的代理路由。设置变化时 `start` 会重启监听器，
-    /// 使图片加载与其余出站请求走同一条出口。
-    route: Mutex<Option<crate::proxy::ProxyRoute>>,
+    /// 启动包含多个监听器。并发调用必须串行完成，避免两组 origin 同时存在或
+    /// 较早的启动结果覆盖较新的代理路由。
+    start_gate: AsyncMutex<()>,
 }
 
 struct ImageProxyInner {
+    bases: Vec<String>,
+    route: crate::proxy::ProxyRoute,
     shutdown: watch::Sender<bool>,
-    task: JoinHandle<()>,
+    tasks: Vec<JoinHandle<()>>,
 }
 
 impl ImageProxy {
     pub fn new(cache_root: PathBuf) -> Self {
         Self {
             state: Mutex::new(None),
-            port: AtomicU16::new(0),
             cache: Arc::new(ImageCache::new(cache_root)),
-            route: Mutex::new(None),
+            start_gate: AsyncMutex::new(()),
         }
     }
 
@@ -96,79 +98,125 @@ impl ImageProxy {
     pub fn stop(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(inner) = state.take() {
-            let _ = inner.shutdown.send(true);
-            inner.task.abort();
+            Self::stop_inner(inner);
         }
-        self.port.store(0, Ordering::Release);
     }
 
-    /// 幂等：已在运行且路由未变时返回现有的回环 origin。
+    fn stop_inner(inner: ImageProxyInner) {
+        let _ = inner.shutdown.send(true);
+        for task in inner.tasks {
+            task.abort();
+        }
+    }
+
+    /// 幂等：已在运行且路由未变时返回现有的回环 origin 列表。
     ///
     /// 路由变化（用户改了代理模式）必须重启：客户端在启动时就把代理策略烧进了
-    /// 连接池，改设置后继续用旧监听器会一直走旧出口。
-    pub async fn start(&self, route: &crate::proxy::ProxyRoute) -> AppResult<String> {
-        {
-            let current = self.route.lock().unwrap_or_else(|p| p.into_inner());
-            if self.port.load(Ordering::Acquire) != 0 && current.as_ref() == Some(route) {
-                return Ok(Self::base_url(self.port.load(Ordering::Acquire)));
-            }
-        }
-        self.stop();
-        self.start_with_allowlist(ALLOWED_IMAGE_HOSTS, route).await
+    /// 连接池，改设置后继续用旧监听器会一直走旧出口。前端应在设置保存成功后
+    /// 再次调用 `image_proxy_url`，取得重启后的 origin 列表。
+    pub async fn start(&self, route: &crate::proxy::ProxyRoute) -> AppResult<Vec<String>> {
+        let _start = self.start_gate.lock().await;
+        self.start_locked(ALLOWED_IMAGE_HOSTS, route).await
     }
 
     /// 以显式的上游白名单启动 `start`（测试使用回环主机）。
+    #[cfg(test)]
     async fn start_with_allowlist(
         &self,
         hosts: &'static [&'static str],
         route: &crate::proxy::ProxyRoute,
-    ) -> AppResult<String> {
-        let port = self.port.load(Ordering::Acquire);
-        if port != 0 {
-            return Ok(Self::base_url(port));
+    ) -> AppResult<Vec<String>> {
+        let _start = self.start_gate.lock().await;
+        self.start_locked(hosts, route).await
+    }
+
+    async fn start_locked(
+        &self,
+        hosts: &'static [&'static str],
+        route: &crate::proxy::ProxyRoute,
+    ) -> AppResult<Vec<String>> {
+        {
+            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(inner) = state.as_ref()
+                && &inner.route == route
+            {
+                return Ok(inner.bases.clone());
+            }
         }
 
-        // 在锁外完成绑定，使并发的第二次调用只是丢弃自己未安装的监听器，
-        // 而不必等待被持有的互斥锁。
-        let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
-            AppError::new("image_proxy_bind", format!("bind localhost failed: {e}")).retryable()
-        })?;
-        let port = listener
-            .local_addr()
-            .map_err(|e| AppError::new("image_proxy_bind", e.to_string()))?
-            .port();
-
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        if state.is_some() {
-            // 另一次调用赢得了竞争；丢弃该监听器并复用现有实例。
-            let port = self.port.load(Ordering::Acquire);
-            return Ok(Self::base_url(port));
+        let client = image_client(route)?;
+        // 所有监听器先绑定完成再安装任务。任一次 bind 失败时局部 listeners
+        // 会整体释放，旧服务也仍可用，不会留下一套不完整的 origin。
+        let mut listeners = Vec::with_capacity(IMAGE_PROXY_ORIGIN_COUNT);
+        let mut bases = Vec::with_capacity(IMAGE_PROXY_ORIGIN_COUNT);
+        for _ in 0..IMAGE_PROXY_ORIGIN_COUNT {
+            let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
+                AppError::new("image_proxy_bind", format!("bind localhost failed: {e}")).retryable()
+            })?;
+            let port = listener
+                .local_addr()
+                .map_err(|e| AppError::new("image_proxy_bind", e.to_string()))?
+                .port();
+            listeners.push(listener);
+            bases.push(Self::base_url(port));
         }
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let task = tauri::async_runtime::spawn(run_image_proxy(
-            listener,
-            hosts,
-            shutdown_rx,
-            self.cache.clone(),
-            route.clone(),
-        ));
-        *state = Some(ImageProxyInner {
+        let tasks = listeners
+            .into_iter()
+            .map(|listener| {
+                tauri::async_runtime::spawn(run_image_proxy(
+                    listener,
+                    hosts,
+                    shutdown_rx.clone(),
+                    self.cache.clone(),
+                    client.clone(),
+                ))
+            })
+            .collect();
+        let next = ImageProxyInner {
+            bases: bases.clone(),
+            route: route.clone(),
             shutdown: shutdown_tx,
-            task,
-        });
-        *self.route.lock().unwrap_or_else(|p| p.into_inner()) = Some(route.clone());
-        self.port.store(port, Ordering::Release);
+            tasks,
+        };
+        // 新监听器已经完整就绪。原子替换状态后再停止旧组；因为绑定新端口时旧
+        // listener 仍持有原端口，新旧 origin 必然不重叠，切换期间也没有服务空窗。
+        let previous = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.replace(next)
+        };
+        if let Some(previous) = previous {
+            Self::stop_inner(previous);
+        }
         let cache = self.cache.clone();
         tauri::async_runtime::spawn(async move {
             cache.sweep().await;
         });
-        Ok(Self::base_url(port))
+        Ok(bases)
     }
 
     fn base_url(port: u16) -> String {
         format!("http://127.0.0.1:{port}")
     }
+}
+
+fn image_client(route: &crate::proxy::ProxyRoute) -> AppResult<reqwest::Client> {
+    crate::http_client::with_route(
+        reqwest::Client::builder()
+            .use_native_tls()
+            .timeout(IMAGE_TIMEOUT)
+            .connect_timeout(std::time::Duration::from_secs(8))
+            .user_agent(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            ),
+        route,
+    )
+    .and_then(|builder| {
+        builder
+            .build()
+            .map_err(|_| AppError::new("image_proxy_client", "图片代理网络客户端初始化失败"))
+    })
 }
 
 fn referer_for(host: &str) -> Option<&'static str> {
@@ -210,30 +258,8 @@ async fn run_image_proxy(
     allowed_hosts: &'static [&'static str],
     mut shutdown: watch::Receiver<bool>,
     cache: Arc<ImageCache>,
-    route: crate::proxy::ProxyRoute,
+    client: reqwest::Client,
 ) {
-    let client = match crate::http_client::with_route(
-        reqwest::Client::builder()
-            .use_native_tls()
-            .timeout(IMAGE_TIMEOUT)
-            .connect_timeout(std::time::Duration::from_secs(8))
-            .user_agent(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            ),
-        &route,
-    )
-    .and_then(|builder| {
-        builder
-            .build()
-            .map_err(|_| AppError::new("image_proxy_client", "图片代理网络客户端初始化失败"))
-    }) {
-        Ok(client) => client,
-        Err(e) => {
-            tracing::warn!(error = %e, "image proxy client build failed");
-            return;
-        }
-    };
-
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -588,6 +614,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_returns_buffered_body_and_closes() {
+        use std::collections::HashSet;
         use std::io::{Read, Write};
         use std::net::TcpListener as StdTcpListener;
         use std::sync::{Arc, Mutex};
@@ -622,10 +649,17 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let proxy = ImageProxy::new(cache_root.clone());
-        let base = proxy
+        let bases = proxy
             .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
             .await
             .unwrap();
+        assert_eq!(bases.len(), 4);
+        assert_eq!(bases.iter().collect::<HashSet<_>>().len(), 4);
+        let repeated = proxy
+            .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
+            .await
+            .unwrap();
+        assert_eq!(repeated, bases, "同一路由必须幂等返回相同的 origin 列表");
         // 显式构造 URL 编码形式以检验百分号解码。
         let encoded_upstream = format!("http://{upstream_addr}/pic.png")
             .as_bytes()
@@ -637,13 +671,12 @@ mod tests {
                 _ => format!("%{b:02X}"),
             })
             .collect::<String>();
-        let target = format!("{base}/img?url={encoded_upstream}");
+        let path = format!("/img?url={encoded_upstream}");
 
-        let mut local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+        let mut local = tokio::net::TcpStream::connect(bases[0].trim_start_matches("http://"))
             .await
             .unwrap();
         // origin 形式的请求目标（`/img?url=…`），与 WebView 发送的一致。
-        let path = target.trim_start_matches(&base);
         local
             .write_all(
                 format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
@@ -686,10 +719,11 @@ mod tests {
         assert!(cache_ready.is_ok(), "proxy did not persist the image");
 
         // 一次性上游监听器现已关闭。第二个请求仍须成功，
-        // 以此证明响应来自磁盘缓存。
-        let mut cached_local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
-            .await
-            .unwrap();
+        // 且改走另一个本机 origin，以此证明所有监听器共享磁盘缓存。
+        let mut cached_local =
+            tokio::net::TcpStream::connect(bases[1].trim_start_matches("http://"))
+                .await
+                .unwrap();
         cached_local
             .write_all(
                 format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
@@ -724,7 +758,7 @@ mod tests {
         let upstream = StdTcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
         let server = std::thread::spawn(move || {
-            for _ in 0..3 {
+            for _ in 0..4 {
                 let (mut stream, _) = upstream.accept().unwrap();
                 let mut request = [0_u8; 2048];
                 let _ = stream.read(&mut request).unwrap();
@@ -747,7 +781,7 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let proxy = ImageProxy::new(cache_root.clone());
-        let base = proxy
+        let bases = proxy
             .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
             .await
             .unwrap();
@@ -763,11 +797,12 @@ mod tests {
         let path = format!("/img?nocache=1&url={encoded}");
         let revision_path = format!("/img?nocache=1&revision=snapshot-1&url={encoded}");
 
-        for (request_path, max_age) in [
+        for (base, (request_path, max_age)) in bases.iter().zip([
             (path.as_str(), COVER_MAX_AGE),
             (path.as_str(), COVER_MAX_AGE),
             (revision_path.as_str(), SNAPSHOT_COVER_MAX_AGE),
-        ] {
+            (path.as_str(), COVER_MAX_AGE),
+        ]) {
             let mut local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
                 .await
                 .unwrap();
@@ -797,10 +832,140 @@ mod tests {
             assert!(response.ends_with(b"\r\n\r\n\x89PNG\r\n\x1a\nlive-cover"));
         }
 
-        // 三个请求都到达了（三次额度的）上游，因此没有一个来自磁盘，
+        // 四个 origin 各转发一次，因此四个请求都到达了上游、没有一个来自磁盘，
         // 也没有写入任何缓存。
         server.join().unwrap();
         assert_eq!(proxy.cache_usage().await.files, 0);
+
+        proxy.stop();
+        let _ = std::fs::remove_dir_all(cache_root);
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_route_start_returns_identical_origin_set() {
+        use std::collections::HashSet;
+
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-image-proxy-concurrent-start-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let proxy = ImageProxy::new(cache_root.clone());
+        let route = crate::proxy::ProxyRoute::Direct;
+        let (left, right) = tokio::join!(
+            proxy.start_with_allowlist(&["127.0.0.1"], &route),
+            proxy.start_with_allowlist(&["127.0.0.1"], &route),
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+
+        assert_eq!(left, right, "并发同路由启动必须取得同一组 origin");
+        assert_eq!(left.len(), 4);
+        assert_eq!(left.iter().collect::<HashSet<_>>().len(), 4);
+        assert_eq!(
+            proxy
+                .start_with_allowlist(&["127.0.0.1"], &route)
+                .await
+                .unwrap(),
+            left,
+            "并发启动后的再次调用仍须幂等"
+        );
+
+        proxy.stop();
+        let _ = std::fs::remove_dir_all(cache_root);
+    }
+
+    #[tokio::test]
+    async fn route_change_replaces_all_origins_atomically() {
+        use std::collections::HashSet;
+
+        let cache_root = std::env::temp_dir().join(format!(
+            "rlive-image-proxy-lifecycle-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let proxy = ImageProxy::new(cache_root.clone());
+        let first = proxy
+            .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 4);
+
+        let switched_route = crate::proxy::ProxyRoute::System(None);
+        let switched = proxy
+            .start_with_allowlist(&["127.0.0.1"], &switched_route)
+            .await
+            .unwrap();
+        assert_eq!(switched.len(), 4);
+        assert_eq!(switched.iter().collect::<HashSet<_>>().len(), 4);
+        assert!(
+            first.iter().all(|base| !switched.contains(base)),
+            "路由切换不得沿用旧 origin"
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let mut any_open = false;
+                for base in &first {
+                    if tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+                        .await
+                        .is_ok()
+                    {
+                        any_open = true;
+                    }
+                }
+                if !any_open {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("路由切换后仍有旧 origin 接受连接");
+
+        for base in &switched {
+            tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+                .await
+                .expect("切换后的 origin 未监听");
+        }
+        assert_eq!(
+            proxy
+                .start_with_allowlist(&["127.0.0.1"], &switched_route)
+                .await
+                .unwrap(),
+            switched,
+            "切换后的同一路由仍须幂等"
+        );
+
+        proxy.stop();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let mut any_open = false;
+                for base in &switched {
+                    if tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+                        .await
+                        .is_ok()
+                    {
+                        any_open = true;
+                    }
+                }
+                if !any_open {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stop 后仍有当前 origin 接受连接");
+
+        let restarted = proxy
+            .start_with_allowlist(&["127.0.0.1"], &switched_route)
+            .await
+            .unwrap();
+        assert_eq!(restarted.len(), 4);
+        for base in &restarted {
+            tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+                .await
+                .expect("重启后的 origin 未监听");
+        }
 
         proxy.stop();
         let _ = std::fs::remove_dir_all(cache_root);
@@ -821,12 +986,12 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let proxy = ImageProxy::new(cache_root.clone());
-        let base = proxy
+        let bases = proxy
             .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
             .await
             .unwrap();
         let encoded = format!("http%3A%2F%2F{closed_addr}%2Fpic.png").replace(':', "%3A");
-        let mut local = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+        let mut local = tokio::net::TcpStream::connect(bases[0].trim_start_matches("http://"))
             .await
             .unwrap();
         local

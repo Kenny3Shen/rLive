@@ -40,7 +40,7 @@
 | [Android 开发与构建](zh/Android开发与构建.md) | Windows/WSL 下的 JDK/SDK/NDK、APK 构建、真机与模拟器调试 |
 | [发布流程](zh/发布流程.md) | 版本递增、签名配置、产物清单与发布前核验 |
 | [代码审计与优化方向](zh/代码审计与优化方向.md) | 性能/功能优化的代码证据、优先级、实施边界与验收指标（不等于已实施） |
-| [性能优化](zh/性能优化.md) | 播放链路性能问题、根因与实机测试前后对比（VOD/短视频首屏、分片卡死、刷新） |
+| [性能优化](zh/性能优化.md) | 播放与图片链路性能问题、根因与实机测试前后对比（VOD/短视频首屏、分片卡死、刷新、封面加载） |
 | [弹幕性能实测](zh/弹幕性能实测.md) | 直播与 VOD 弹幕链路的优化前后对照、瓶颈定位与侧栏钉底回归修复 |
 | [VOD 加载与续播性能实测](zh/VOD加载与续播性能实测.md) | 从头加载与深位置续播的历史实机时间线、前后端瓶颈、网络边界及重新验证口径 |
 
@@ -64,6 +64,7 @@
 
 | 文件 | 来源 |
 | ---- | ---- |
+| [image-loading-2026-11-18.json](bench/image-loading-2026-11-18.json) | Windows 主窗口封面分流、视频缩略图、慢请求与返回列表缓存采样（[性能优化](zh/性能优化.md)） |
 | [rust-target-2026-11-04.json](bench/rust-target-2026-11-04.json) | Rust stable / nightly 干净构建体积、构建耗时、测试结果、最终目标目录与历史缓存清理（[开发指南](zh/开发指南.md)） |
 | [rust-target-windows-2026-11-04.json](bench/rust-target-windows-2026-11-04.json) | Windows MSVC 下 Rust stable / nightly 干净构建的逻辑与实际分配体积、EXE / PDB、构建耗时和库测试（[开发指南](zh/开发指南.md)） |
 | [danmu-migration-desktop-2026-10-15.json](bench/danmu-migration-desktop-2026-10-15.json) · [danmu-migration-android-2026-10-15.json](bench/danmu-migration-android-2026-10-15.json) | 弹幕引擎迁移到 `danmu` 的桌面与真机对照（[弹幕性能实测](zh/弹幕性能实测.md)） |

@@ -153,11 +153,11 @@ fn video_err(msg: impl Into<String>) -> AppError {
     AppError::new("bilibili_video_error", msg).with_site("bilibili")
 }
 
-/// 把封面地址补成可直接加载的 https URL。
+/// 把远程图片地址补成可直接加载的 https URL。
 ///
-/// 列表接口大量返回 `http://i1.hdslb.com/...`。WebView 以 https 源加载页面时
-/// 会按混合内容拦掉这些图片，所以强制升级协议。
-fn video_cover(raw: &str) -> String {
+/// API 可能返回协议相对地址。它在 Tauri 自定义页面协议下没有可用的基准地址，
+/// 而纯 HTTP 地址又会被 WebView 按混合内容拦掉，因此统一补成 HTTPS。
+fn remote_image_url(raw: &str) -> String {
     let raw = raw.trim();
     if raw.is_empty() {
         return String::new();
@@ -170,6 +170,38 @@ fn video_cover(raw: &str) -> String {
         raw.to_string()
     } else {
         format!("https://{raw}")
+    }
+}
+
+/// 视频与番剧列表的封面 URL。
+///
+/// 先补全协议，再让 Bilibili 图片 CDN 输出适合卡片的 480 宽 WebP。`@480w.webp`
+/// 只限制宽度并保持源图比例：横版和竖版封面都不会被强制裁成 16:9。已有 CDN
+/// 变换的 URL 原样保留，避免重复追加；未知主机也只升级协议，不把任意图片 URL
+/// 当作 Bilibili CDN 处理。query 与 fragment 必须仍位于变换后缀之后。
+fn video_cover(raw: &str) -> String {
+    let url = remote_image_url(raw);
+    if url.is_empty() {
+        return url;
+    }
+    let Ok(parsed) = reqwest::Url::parse(&url) else {
+        return url;
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    if host != "hdslb.com" && !host.ends_with(".hdslb.com") {
+        return url;
+    }
+
+    let split_at = url
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '?' | '#').then_some(index))
+        .unwrap_or(url.len());
+    let (path, tail) = url.split_at(split_at);
+    let file_name = path.rsplit('/').next().unwrap_or_default();
+    if file_name.is_empty() || file_name.contains('@') {
+        url
+    } else {
+        format!("{path}@480w.webp{tail}")
     }
 }
 
@@ -1026,7 +1058,7 @@ fn comment_pictures(content: &Value) -> Vec<String> {
                 .iter()
                 .filter_map(|pic| {
                     let src = pic.get("img_src").map(as_str)?;
-                    (!src.is_empty()).then(|| video_cover(&src))
+                    (!src.is_empty()).then(|| remote_image_url(&src))
                 })
                 .collect()
         })
@@ -2278,8 +2310,8 @@ mod tests {
         assert_eq!(item.aid, "117191437455648");
         assert_eq!(item.cid, Some(41_473_934_959));
         assert_eq!(item.view, 1_465_320);
-        // http 封面必须升级成 https，否则 WebView 按混合内容拦掉。
-        assert_eq!(item.cover, "https://i1.hdslb.com/a.jpg");
+        // http 封面必须升级成 https，并换成适合卡片显示的 CDN 缩略图。
+        assert_eq!(item.cover, "https://i1.hdslb.com/a.jpg@480w.webp");
         assert!(page.has_more);
     }
 
@@ -2347,8 +2379,11 @@ mod tests {
         assert_ne!(vertical.reply, Some(vertical.danmaku));
         // 粉丝数是 story 白带的（`owner.fans`），信息行因此不必再请求详情。
         assert_eq!(vertical.author_fans, Some(12_345));
-        // 封面优先 cover 而不是首帧图 ff_cover，且必须升成 https。
-        assert_eq!(vertical.cover, "https://i1.hdslb.com/bfs/archive/a.jpg");
+        // 封面优先 cover 而不是首帧图 ff_cover，且升成 https 卡片缩略图。
+        assert_eq!(
+            vertical.cover,
+            "https://i1.hdslb.com/bfs/archive/a.jpg@480w.webp"
+        );
         let dimension = vertical.dimension.expect("竖屏判定依赖 dimension");
         assert!(dimension.height > dimension.width);
         assert!(
@@ -2379,7 +2414,10 @@ mod tests {
             item.aid, "117190447667445",
             "缺 param 时回退 player_args.aid"
         );
-        assert_eq!(item.cover, "https://i0.hdslb.com/bfs/storyff/c.jpg");
+        assert_eq!(
+            item.cover,
+            "https://i0.hdslb.com/bfs/storyff/c.jpg@480w.webp"
+        );
         // 上游没有下发 dimension 时不能编造画幅。
         assert!(item.dimension.is_none());
         // 没有 fans 字段时是「没说」而不是「0 个粉丝」。
@@ -2509,6 +2547,44 @@ mod tests {
         assert_eq!(season.episodes[0].duration, 2_938);
         assert_eq!(season.episodes[0].ep_id, "826497");
         assert_eq!(season.episodes[0].aid, "1455924625");
+    }
+
+    #[test]
+    fn video_cover_adds_one_thumbnail_transform_only_for_bilibili_cdn() {
+        assert_eq!(
+            video_cover("//i0.hdslb.com/bfs/archive/a.jpg?token=abc#top"),
+            "https://i0.hdslb.com/bfs/archive/a.jpg@480w.webp?token=abc#top"
+        );
+        assert_eq!(
+            video_cover("http://i1.hdslb.com/bfs/archive/a.jpg"),
+            "https://i1.hdslb.com/bfs/archive/a.jpg@480w.webp"
+        );
+        assert_eq!(
+            video_cover("https://i2.hdslb.com/bfs/archive/a.jpg@320w_180h.webp?token=abc"),
+            "https://i2.hdslb.com/bfs/archive/a.jpg@320w_180h.webp?token=abc"
+        );
+        assert_eq!(
+            video_cover("https://i0.hdslb.com.evil.test/a.jpg"),
+            "https://i0.hdslb.com.evil.test/a.jpg"
+        );
+        assert_eq!(
+            video_cover("https://example.com/a.jpg"),
+            "https://example.com/a.jpg"
+        );
+        assert_eq!(video_cover(""), "");
+    }
+
+    #[test]
+    fn comment_images_keep_original_bilibili_image_dimensions() {
+        let content = serde_json::json!({
+            "pictures": [
+                { "img_src": "//i0.hdslb.com/bfs/new_dyn/comment.jpg?token=abc" }
+            ]
+        });
+        assert_eq!(
+            comment_pictures(&content),
+            vec!["https://i0.hdslb.com/bfs/new_dyn/comment.jpg?token=abc"]
+        );
     }
 
     #[test]

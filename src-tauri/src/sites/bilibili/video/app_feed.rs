@@ -547,7 +547,10 @@ mod tests {
                 .unwrap()
                 .starts_with("https://i0.hdslb.com/")
         );
-        assert_eq!(item.cover, "https://i0.hdslb.com/bfs/archive/test.jpg");
+        assert_eq!(
+            item.cover,
+            "https://i0.hdslb.com/bfs/archive/test.jpg@480w.webp"
+        );
         assert_eq!(item.cid, Some(41855094127));
         assert_eq!(item.duration, 91);
         assert_eq!((item.view, item.danmaku), (774000, 12000));

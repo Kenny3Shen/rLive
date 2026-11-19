@@ -45,7 +45,7 @@ export function MediaCardCover({
           src={normalized}
           alt=""
           loading="lazy"
-          decoding="sync"
+          decoding="async"
           className={COVER_IMAGE_CLASS}
           referrerPolicy="no-referrer"
         />

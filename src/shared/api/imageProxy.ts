@@ -25,21 +25,118 @@ const PROXIED_HOST_SUFFIXES = [
   "kwimgs.com",
 ];
 
-let proxyBase: string | null = null;
-let proxyPromise: Promise<string | null> | null = null;
+type ImageProxyResponse = string | { origins: unknown };
 
-function getImageProxyBase(): Promise<string | null> {
-  if (proxyBase !== null) return Promise.resolve(proxyBase);
-  if (!proxyPromise) {
-    proxyPromise = invokeCmd<string>("image_proxy_url")
-      .then((base) => (proxyBase = base))
-      .catch(() => {
-        proxyBase = null;
-        return null;
-      });
+export type ImageProxyOriginState = {
+  get: () => readonly string[] | null;
+  preload: () => Promise<readonly string[] | null>;
+  refresh: () => Promise<readonly string[] | null>;
+};
+
+function normalizeProxyOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = new URL(value.trim());
+    if (
+      parsed.protocol !== "http:" ||
+      parsed.hostname !== "127.0.0.1" ||
+      parsed.port === "" ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
   }
-  return proxyPromise;
 }
+
+/** 解析新协议，并兼容热更新期间旧版后端返回的单个 origin 字符串。 */
+export function parseImageProxyOrigins(response: unknown): readonly string[] | null {
+  const candidates =
+    typeof response === "string"
+      ? [response]
+      : response &&
+          typeof response === "object" &&
+          "origins" in response &&
+          Array.isArray(response.origins)
+        ? response.origins
+        : null;
+  if (!candidates) return null;
+
+  const origins = candidates
+    .map(normalizeProxyOrigin)
+    .filter((origin): origin is string => origin !== null);
+  return origins.length === 0 ? null : Array.from(new Set(origins));
+}
+
+/**
+ * 对规范化后的上游 URL 做稳定分流，让 WebView 可以同时使用多个回环 origin，
+ * 绕过单个 HTTP/1.1 origin 的连接数上限。revision 不参与选择，避免缓存键变化时
+ * 改变图片所属的 origin。
+ */
+export function proxyOriginForUrl(
+  origins: readonly string[],
+  upstreamUrl: string,
+): string | undefined {
+  if (origins.length === 0) return undefined;
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(upstreamUrl)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return origins[hash % origins.length];
+}
+
+/**
+ * 图片代理 origin 的进程内状态。失败后清空在途 Promise，使下一次显式预加载可以
+ * 重试；刷新会递增 epoch，忽略旧设置下迟到的响应。
+ */
+export function createImageProxyOriginState(
+  requestOrigins: () => Promise<unknown>,
+): ImageProxyOriginState {
+  let origins: readonly string[] | null = null;
+  let pending: Promise<readonly string[] | null> | null = null;
+  let epoch = 0;
+
+  function preload(): Promise<readonly string[] | null> {
+    if (origins) return Promise.resolve(origins);
+    if (pending) return pending;
+
+    const requestEpoch = epoch;
+    const request = requestOrigins()
+      .then((response) => {
+        if (requestEpoch !== epoch) return null;
+        origins = parseImageProxyOrigins(response);
+        return origins;
+      })
+      .catch(() => null);
+    const tracked = request.finally(() => {
+      if (requestEpoch === epoch && pending === tracked) pending = null;
+    });
+    pending = tracked;
+    return tracked;
+  }
+
+  return {
+    get: () => origins,
+    preload,
+    refresh: () => {
+      epoch += 1;
+      origins = null;
+      pending = null;
+      return preload();
+    },
+  };
+}
+
+const imageProxyOriginState = createImageProxyOriginState(() =>
+  invokeCmd<ImageProxyResponse>("image_proxy_url"),
+);
 
 /**
  * 后端代理是否会抓取该主机。导出它便于测试断言弹幕片段校验器信任的每个 CDN
@@ -50,9 +147,14 @@ export function shouldProxyHost(hostname: string): boolean {
   return PROXIED_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
-/** 启动时预加载一次回环图片代理。在它就绪前渲染的图片回退到直连 CDN URL。 */
-export function preloadImageProxy(): Promise<string | null> {
-  return getImageProxyBase();
+/** 启动时预加载回环图片代理。在它就绪前渲染的图片回退到直连 CDN URL。 */
+export function preloadImageProxy(): Promise<readonly string[] | null> {
+  return imageProxyOriginState.preload();
+}
+
+/** 代理路由变化后重新获取监听器；失败不会把初始化 Promise 永久锁死。 */
+export function refreshImageProxy(): Promise<readonly string[] | null> {
+  return imageProxyOriginState.refresh();
 }
 
 export type ProxyImageOptions = {
@@ -72,12 +174,14 @@ export type ProxyImageOptions = {
  * `undefined`。
  */
 export function proxyImageUrl(url: string, options?: ProxyImageOptions): string | undefined {
-  if (proxyBase === null) return undefined;
+  const origins = imageProxyOriginState.get();
+  if (origins === null) return undefined;
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:") return undefined;
     if (!shouldProxyHost(parsed.hostname)) return undefined;
-    return buildProxyTarget(proxyBase, parsed.href, options);
+    const base = proxyOriginForUrl(origins, parsed.href);
+    return base ? buildProxyTarget(base, parsed.href, options) : undefined;
   } catch {
     return undefined;
   }

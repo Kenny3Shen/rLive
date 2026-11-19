@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { invokeCmd, isTauriUnavailableError } from "../api/tauri";
+import { refreshImageProxy } from "../api/imageProxy";
 import { isMobileClient } from "../clientPlatform";
 import {
   DEFAULT_SITE_ID,
@@ -709,6 +710,8 @@ function proxySettingSetters(
         if (!get().hydratedFromBackend) return;
         try {
           await invokeCmd<void>("settings_set", { settings: toAppSettings(get()) });
+          // 后端会在下一次 image_proxy_url 调用时按新路由重建监听器。
+          await refreshImageProxy();
         } catch (error) {
           if (isTauriUnavailableError(error)) return;
           set({ [stateKey]: previous } as Partial<SettingsState>);
@@ -1054,6 +1057,8 @@ export const useSettingsStore = create<SettingsState>()(
           const { settings, has_saved_settings: hasSavedSettings } = result;
           const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
           const siteId = resolveEnabledSiteId(settings.default_site, disabledSiteIds);
+          const previousProxyMode = get().proxyMode;
+          const previousProxy = get().proxy;
 
           get().applyFromBackend({
             ...settings,
@@ -1061,6 +1066,11 @@ export const useSettingsStore = create<SettingsState>()(
             default_site: siteId,
             disabled_site_ids: disabledSiteIds,
           });
+          // 导入配置或后端重载可能改变代理路由；等新监听器就绪后再结束加载，
+          // 避免随后的查询失效重建列表时仍把旧端口 URL 写入图片组件。
+          if (previousProxyMode !== settings.proxy_mode || previousProxy !== settings.proxy) {
+            await refreshImageProxy();
+          }
         } catch (error) {
           // 纯浏览器开发没有 Rust 设置来源。真实的 Tauri schema 错误必须保持可观察，
           // 而不能变成默认值。
