@@ -1,3 +1,4 @@
+pub mod acfun;
 pub mod bilibili;
 pub mod douyin;
 pub mod douyin_send;
@@ -886,9 +887,21 @@ pub async fn connect(
             );
             Ok(())
         }
-        SiteId::Acfun => Err(
-            AppError::new("danmaku_unsupported", "AcFun 弹幕将在后续版本接入").with_site("acfun"),
-        ),
+        SiteId::Acfun => {
+            let args = acfun::args_from_raw(detail_raw)?;
+            let route = route.clone();
+            spawn_loop(
+                app.clone(),
+                manager,
+                generation,
+                SiteId::Acfun,
+                source_key.clone(),
+                identity,
+                notice,
+                move |events| acfun::run_loop(events, args, route),
+            );
+            Ok(())
+        }
         SiteId::Douyu => {
             let args = douyu::args_from_raw(room_id, detail_raw)?;
             let route = route.clone();

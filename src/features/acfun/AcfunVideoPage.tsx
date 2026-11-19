@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { notify } from "@/components/ui/toast";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { ErrorState } from "@/shared/components/ErrorState";
@@ -85,14 +86,19 @@ import {
   VIDEO_DETAILS_INFO_CARD_CLASS,
   VIDEO_DETAILS_SIDEBAR_CARD_CLASS,
   VIDEO_DETAILS_SIDEBAR_STACK_CLASS,
-  VIDEO_DETAILS_SELECTION_TRIGGER_CLASS,
 } from "@/shared/components/videoDetailsSidebar";
+import {
+  VideoSelectionRow,
+  VideoSelectionSection,
+} from "@/shared/components/VideoSelectionSection";
 import { formatDateTime, formatVideoDuration } from "@/features/video/videoHistory";
+import { videoSelectionCount } from "@/features/video/videoSelectionCount";
 import { videoSelectionDefaultOpen } from "@/features/video/videoSelectionDefaults";
 import { acfunVideoGetDetail, acfunVideoGetPlayInfo, acfunVideoStopPlay } from "./acfunApi";
 import { AcfunPlaybackSessions } from "./acfunPlaybackLifecycle";
 import { acfunHomePath } from "./acfunRoute";
 import type { AcfunVideoDetail, AcfunVideoPart, AcfunVideoPlayInfo } from "./acfunTypes";
+import { AcfunVideoComments } from "./AcfunVideoComments";
 
 function playbackKind(info: AcfunVideoPlayInfo): VideoJsPlaybackKind {
   if (info.protocol === "hls") return "hls";
@@ -726,70 +732,35 @@ function AcfunPartList({
   }, [currentId, open]);
 
   if (parts.length <= 1) return null;
+  const currentIndex = parts.findIndex((part) => part.id === currentId);
   return (
-    <Collapsible
+    <VideoSelectionSection
+      label="选集"
+      count={videoSelectionCount(currentIndex, parts.length, "P")}
       open={open}
       onOpenChange={setOpen}
-      render={
-        <section className={cn("shrink-0 overflow-hidden", VIDEO_DETAILS_SIDEBAR_CARD_CLASS)} />
-      }
-      aria-label="选集"
     >
-      <h3>
-        <CollapsibleTrigger
-          render={
-            <Button variant="ghost" size="sm" className={VIDEO_DETAILS_SELECTION_TRIGGER_CLASS} />
-          }
-        >
-          <ChevronDown
-            aria-hidden
-            data-icon="inline-start"
-            className={cn("transition-transform", !open && "-rotate-90")}
-          />
-          <span>选集</span>
-          <span className="ml-auto shrink-0 font-normal tabular-nums text-muted-foreground">
-            {parts.length} P
-          </span>
-        </CollapsibleTrigger>
-      </h3>
-      <CollapsibleContent inert={!open || undefined}>
-        <div
-          ref={listRef}
-          className="flex max-h-72 flex-col gap-1 overflow-y-auto overscroll-contain px-2 pb-2 touch-pan-y"
-        >
-          {parts.map((part) => {
-            const active = part.id === currentId;
-            return (
-              <Button
-                ref={active ? currentRowRef : undefined}
-                key={part.id}
-                type="button"
-                variant="ghost"
-                aria-current={active ? "true" : undefined}
-                onClick={() => onChange(part.id)}
-                className={cn(
-                  "h-auto min-h-10 w-full justify-start gap-2 px-2 py-2 text-left",
-                  active && "bg-primary/10 text-foreground",
-                )}
-              >
-                <span
-                  className={cn(
-                    "w-7 shrink-0 text-center text-xs tabular-nums",
-                    active ? "font-semibold text-primary" : "text-muted-foreground",
-                  )}
-                >
-                  P{part.index}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px]">{partLabel(part)}</span>
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                  {formatVideoDuration(part.duration_sec)}
-                </span>
-              </Button>
-            );
-          })}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+      <div
+        ref={listRef}
+        data-video-selection-list="parts"
+        className="max-h-64 overflow-y-auto overscroll-contain px-2 pt-1 pb-2 touch-pan-y"
+      >
+        {parts.map((part) => {
+          const current = part.id === currentId;
+          return (
+            <VideoSelectionRow
+              key={part.id}
+              rowRef={current ? currentRowRef : undefined}
+              current={current}
+              label={`P${part.index}`}
+              title={partLabel(part)}
+              duration={formatVideoDuration(part.duration_sec)}
+              onNavigate={() => onChange(part.id)}
+            />
+          );
+        })}
+      </div>
+    </VideoSelectionSection>
   );
 }
 
@@ -957,6 +928,62 @@ function AcfunSidebarSkeleton() {
         </div>
       </section>
     </div>
+  );
+}
+
+function AcfunVideoDetails({
+  detail,
+  videoId,
+  currentPartId,
+  onPartChange,
+}: {
+  detail: AcfunVideoDetail;
+  videoId: string;
+  currentPartId: string | null;
+  onPartChange: (partId: string) => void;
+}) {
+  const [tab, setTab] = useState<"details" | "comments">("details");
+
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(value) => {
+        if (value === "details" || value === "comments") setTab(value);
+      }}
+      className="flex h-full min-h-0 flex-col gap-0"
+    >
+      <div className="flex h-11 shrink-0 items-center border-b border-border/80">
+        <TabsList
+          variant="line"
+          className="h-11! min-w-0 flex-1 justify-start rounded-none bg-transparent px-2"
+        >
+          <TabsTrigger value="details" className="px-3 text-sm">
+            详情
+          </TabsTrigger>
+          <TabsTrigger value="comments" className="px-3 text-sm">
+            评论
+            {detail.item.comment_count != null && detail.item.comment_count > 0 && (
+              <span className="tabular-nums">{formatOnline(detail.item.comment_count)}</span>
+            )}
+          </TabsTrigger>
+        </TabsList>
+      </div>
+      <TabsContent
+        value="details"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y"
+      >
+        <div className={VIDEO_DETAILS_SIDEBAR_STACK_CLASS}>
+          <AcfunVideoInfoCard detail={detail} />
+          <AcfunPartList parts={detail.parts} currentId={currentPartId} onChange={onPartChange} />
+        </div>
+      </TabsContent>
+      <TabsContent
+        value="comments"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y"
+      >
+        <AcfunVideoComments videoId={videoId} active={tab === "comments"} />
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -1282,16 +1309,15 @@ function AcfunVideoPageContent() {
             "lg:w-[320px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[340px] lg:pb-0",
           )}
         >
-          <div ref={detailsContentRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div ref={detailsContentRef} className="min-h-0 flex-1 overflow-hidden">
             {detail && secondaryReady ? (
-              <div className={VIDEO_DETAILS_SIDEBAR_STACK_CLASS}>
-                <AcfunVideoInfoCard detail={detail} />
-                <AcfunPartList
-                  parts={detail.parts}
-                  currentId={effectivePartId}
-                  onChange={changePart}
-                />
-              </div>
+              <AcfunVideoDetails
+                key={videoId}
+                detail={detail}
+                videoId={videoId}
+                currentPartId={effectivePartId}
+                onPartChange={changePart}
+              />
             ) : detailFailure ? null : (
               <AcfunSidebarSkeleton />
             )}

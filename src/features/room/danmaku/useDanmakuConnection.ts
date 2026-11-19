@@ -5,7 +5,14 @@ import type { SiteId } from "@/shared/types/live";
 import { nextDanmakuConnectionEpoch, nextDanmakuConnectionFence } from "./connectionEpoch";
 import { clearExpectedDanmakuConnectionEpoch, setExpectedDanmakuConnectionEpoch } from "./eventBus";
 
-const DANMAKU_ENABLED_SITES = new Set<SiteId>(["bilibili", "douyu", "huya", "douyin", "twitch"]);
+const DANMAKU_ENABLED_SITES = new Set<SiteId>([
+  "bilibili",
+  "douyu",
+  "huya",
+  "douyin",
+  "twitch",
+  "acfun",
+]);
 
 function errMessage(e: unknown): string {
   if (typeof e === "object" && e && "message" in e) {

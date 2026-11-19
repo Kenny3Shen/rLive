@@ -221,6 +221,7 @@ impl AcfunSite {
             user_id,
             device_id,
             token,
+            security: json_str(value.get("acSecurity").unwrap_or(&Value::Null)),
         })
     }
 
@@ -263,7 +264,7 @@ impl AcfunSite {
             )
             .retryable()
         })?;
-        parse_start_play(&value)
+        parse_start_play(&value, visitor.clone())
     }
 
     async fn start_play(&self, room_id: &str) -> AppResult<PlaySnapshot> {
@@ -277,6 +278,9 @@ impl AcfunSite {
                         started_at: None,
                         qualities: Vec::new(),
                         restricted: true,
+                        visitor: None,
+                        tickets: Vec::new(),
+                        enter_room_attach: String::new(),
                     });
                 }
                 Err(error) if attempt == 0 && error.code == "acfun_risk_control" => {
@@ -327,11 +331,12 @@ impl AcfunSite {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 struct Visitor {
     user_id: String,
     device_id: String,
     token: String,
+    security: String,
 }
 
 #[derive(Debug, Clone)]
@@ -342,12 +347,15 @@ struct PlayQuality {
     urls: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct PlaySnapshot {
     live_id: String,
     started_at: Option<i64>,
     qualities: Vec<PlayQuality>,
     restricted: bool,
+    visitor: Option<Visitor>,
+    tickets: Vec<String>,
+    enter_room_attach: String,
 }
 
 fn parse_listing(value: &Value) -> AppResult<(RoomListPage, String)> {
@@ -401,7 +409,7 @@ fn parse_room_detail(
     value: &Value,
     room_id: &str,
     play: Option<PlaySnapshot>,
-) -> AppResult<LiveRoomDetail> {
+) -> AppResult<(LiveRoomDetail, Value)> {
     let user = value
         .get("user")
         .filter(|user| user.is_object())
@@ -443,7 +451,8 @@ fn parse_room_detail(
         .unwrap_or_else(|| avatar.clone());
     let play_restricted = play.as_ref().is_some_and(|play| play.restricted);
     let qualities = play
-        .map(|play| play.qualities)
+        .as_ref()
+        .map(|play| play.qualities.clone())
         .unwrap_or_default()
         .into_iter()
         .map(|quality| {
@@ -460,7 +469,23 @@ fn parse_room_detail(
             .get("paidShowUuid")
             .is_some_and(|value| !json_str(value).is_empty())
             && value.get("paidShowUserBuyStatus").and_then(Value::as_bool) != Some(true);
-    Ok(LiveRoomDetail {
+    let danmaku_raw = play
+        .as_ref()
+        .and_then(|play| play.visitor.as_ref().map(|visitor| (play, visitor)))
+        .map(|(play, visitor)| {
+            serde_json::json!({
+                "roomId": room_id,
+                "liveId": play.live_id.clone(),
+                "userId": visitor.user_id.clone(),
+                "deviceId": visitor.device_id.clone(),
+                "visitorToken": visitor.token.clone(),
+                "security": visitor.security.clone(),
+                "tickets": play.tickets.clone(),
+                "enterRoomAttach": play.enter_room_attach.clone(),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let detail = LiveRoomDetail {
         site_id: SiteId::Acfun,
         room_id: room_id.to_owned(),
         title: json_str(value.get("title").unwrap_or(&Value::Null)),
@@ -478,10 +503,23 @@ fn parse_room_detail(
             "restricted": restricted,
             "qualities": qualities,
         }),
-    })
+    };
+    Ok((detail, danmaku_raw))
 }
 
-fn parse_start_play(value: &Value) -> AppResult<PlaySnapshot> {
+/// 重新取得 AcFun 后端弹幕会话。票据或访客会话失效时由弹幕循环调用；
+/// 这里复核房间状态并让新访客登录与 `startPlay` 各执行一轮。
+pub(crate) async fn refresh_danmaku_raw(
+    room_id: &str,
+    route: &crate::proxy::ProxyRoute,
+) -> AppResult<Value> {
+    let client = crate::http_client::client_for_route(route)?;
+    let site = AcfunSite::new(client);
+    let (_, danmaku) = site.get_room_detail_with_danmaku(room_id).await?;
+    Ok(danmaku)
+}
+
+fn parse_start_play(value: &Value, visitor: Visitor) -> AppResult<PlaySnapshot> {
     let result = json_i64(value.get("result").unwrap_or(&Value::Null));
     if result == CLOSED_RESULT {
         return Err(AcfunSite::stream_unavailable("AcFun 直播已结束"));
@@ -510,11 +548,23 @@ fn parse_start_play(value: &Value) -> AppResult<PlaySnapshot> {
             "AcFun 取流响应缺少 liveId",
         ));
     }
+    let tickets = data
+        .get("availableTickets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|ticket| json_str(ticket))
+        .filter(|ticket| !ticket.is_empty())
+        .collect();
+    let enter_room_attach = json_str(data.get("enterRoomAttach").unwrap_or(&Value::Null));
     Ok(PlaySnapshot {
         live_id,
         started_at: parse_live_started_at(data.get("liveStartTime")),
         qualities: parse_qualities(data.get("videoPlayRes").unwrap_or(&Value::Null))?,
         restricted: false,
+        visitor: Some(visitor),
+        tickets,
+        enter_room_attach,
     })
 }
 
@@ -862,6 +912,15 @@ impl LiveSite for AcfunSite {
     }
 
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail> {
+        self.get_room_detail_with_danmaku(room_id)
+            .await
+            .map(|(detail, _)| detail)
+    }
+
+    async fn get_room_detail_with_danmaku(
+        &self,
+        room_id: &str,
+    ) -> AppResult<(LiveRoomDetail, Value)> {
         let room_id = room_id.trim();
         let value = self.live_info(room_id).await?;
         let live = !json_str(value.get("liveId").unwrap_or(&Value::Null)).is_empty();
@@ -980,11 +1039,21 @@ mod tests {
             "data": {
                 "liveId": "live-id",
                 "liveStartTime": 1_704_067_200_000_i64,
+                "availableTickets": ["ticket-a", "ticket-b"],
+                "enterRoomAttach": "room-attach",
                 "videoPlayRes": "{\"liveAdaptiveManifest\":[{\"adaptationSet\":{\"representation\":[{\"qualityType\":\"HIGH\",\"name\":\"超清\",\"level\":50,\"bitrate\":2000,\"url\":\"https://cdn.example/high.flv\"},{\"qualityType\":\"BLUE_RAY\",\"name\":\"蓝光 8M\",\"level\":130,\"bitrate\":8000,\"url\":\"https://cdn.example/source.flv\"},{\"qualityType\":\"HIGH\",\"name\":\"超清\",\"level\":50,\"bitrate\":2000,\"url\":\"https://cdn.example/high.flv\"}]}}]}"
             }
         });
-        let play = parse_start_play(&value).unwrap();
+        let visitor = Visitor {
+            user_id: "100".into(),
+            device_id: "web_device".into(),
+            token: "visitor-token".into(),
+            security: "AAAAAAAAAAAAAAAAAAAAAA==".into(),
+        };
+        let play = parse_start_play(&value, visitor).unwrap();
         assert_eq!(play.live_id, "live-id");
+        assert_eq!(play.tickets, ["ticket-a", "ticket-b"]);
+        assert_eq!(play.enter_room_attach, "room-attach");
         assert_eq!(play.started_at, Some(1_704_067_200_000));
         assert_eq!(play.qualities.len(), 2);
         assert_eq!(play.qualities[0].label, "蓝光 8M");
@@ -1005,7 +1074,7 @@ mod tests {
                 "signature": "简介 &amp; 资料"
             }
         });
-        let room = parse_room_detail(&value, "42", None).unwrap();
+        let (room, _) = parse_room_detail(&value, "42", None).unwrap();
         assert!(!room.status);
         assert!(room.live_started_at.is_none());
         assert_eq!(room.notice, "简介 & 资料");

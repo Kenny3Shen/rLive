@@ -63,6 +63,40 @@ export type AcfunVideoPlayInfo = {
   session_id: string;
 };
 
+export type AcfunCommentSort = "hot" | "time";
+
+export type AcfunVideoComment = {
+  id: string;
+  parent_id?: string | null;
+  author: string;
+  author_id?: string | null;
+  avatar?: string | null;
+  content: string;
+  created_at: number;
+  like_count: number;
+  is_uploader: boolean;
+  pictures: string[];
+  reply_to_name?: string | null;
+  /** 一级评论首屏附带的楼中楼预览，最多约三条。 */
+  replies: AcfunVideoComment[];
+  reply_count: number;
+};
+
+export type AcfunCommentPage = {
+  items: AcfunVideoComment[];
+  has_more: boolean;
+  next_page?: number | null;
+  /** 评论与回复的聚合总数，不是当前页主评论条数。 */
+  total: number;
+};
+
+export type AcfunCommentReplyPage = {
+  items: AcfunVideoComment[];
+  has_more: boolean;
+  next_cursor?: string | null;
+  total: number;
+};
+
 export type AcfunArticleChannel = {
   id: string;
   name: string;

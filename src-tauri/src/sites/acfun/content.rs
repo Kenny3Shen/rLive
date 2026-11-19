@@ -12,7 +12,8 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::models::acfun::{
     AcfunArticleBlock, AcfunArticleChannel, AcfunArticleDetail, AcfunArticleInline,
-    AcfunArticleItem, AcfunArticleListPage, AcfunVideoDetail, AcfunVideoItem, AcfunVideoListPage,
+    AcfunArticleItem, AcfunArticleListPage, AcfunCommentPage, AcfunCommentReplyPage,
+    AcfunCommentSort, AcfunVideoComment, AcfunVideoDetail, AcfunVideoItem, AcfunVideoListPage,
     AcfunVideoPart, AcfunVideoQuality, AcfunVideoSection,
 };
 use crate::sites::json::{json_i64, json_i64_opt, json_str};
@@ -353,6 +354,77 @@ impl AcfunContentClient {
         parse_play_source(&play_json, quality)
     }
 
+    pub(crate) async fn video_comments(
+        &self,
+        video_id: &str,
+        page: u32,
+        sort: AcfunCommentSort,
+    ) -> AppResult<AcfunCommentPage> {
+        let video_id = normalize_content_id(video_id, "ac")?;
+        let page = page.max(1);
+        let page_text = page.to_string();
+        let query = [
+            ("sourceId", video_id.as_str()),
+            ("sourceType", "3"),
+            ("page", page_text.as_str()),
+            ("pivotCommentId", "0"),
+            ("newPivotCommentId", ""),
+            ("responseFallbackEnabled", "true"),
+        ];
+        let url = reqwest::Url::parse_with_params(
+            &format!("{ORIGIN}/rest/pc-direct/comment/list"),
+            query,
+        )
+        .map_err(|_| Self::error("acfun_comment_invalid", "AcFun 评论参数无效"))?;
+        let value = self.get_json(url, "视频评论").await?;
+        api_result(&value, "视频评论")?;
+        parse_video_comment_page(&value, sort)
+    }
+
+    pub(crate) async fn video_comment_replies(
+        &self,
+        video_id: &str,
+        comment_id: &str,
+        cursor: Option<&str>,
+    ) -> AppResult<AcfunCommentReplyPage> {
+        let video_id = normalize_content_id(video_id, "ac")?;
+        let comment_id = comment_id.trim();
+        if comment_id.is_empty() || !comment_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(Self::error(
+                "acfun_comment_id_invalid",
+                "AcFun 评论标识无效",
+            ));
+        }
+        // 回复展开后由详情视图独立展示完整列表，因此首次 cursor 为空时读取
+        // 上游第一页；后续 cursor 仍是 1-based 上游页码。
+        let page = cursor
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .map_err(|_| Self::error("acfun_comment_cursor_invalid", "AcFun 回复页码无效"))
+            })
+            .transpose()?
+            .unwrap_or(1)
+            .max(1);
+        let page_text = page.to_string();
+        let query = [
+            ("sourceId", video_id.as_str()),
+            ("sourceType", "3"),
+            ("rootCommentId", comment_id),
+            ("page", page_text.as_str()),
+        ];
+        let url = reqwest::Url::parse_with_params(
+            &format!("{ORIGIN}/rest/pc-direct/comment/sublist"),
+            query,
+        )
+        .map_err(|_| Self::error("acfun_comment_invalid", "AcFun 回复参数无效"))?;
+        let value = self.get_json(url, "评论回复").await?;
+        api_result(&value, "评论回复")?;
+        parse_comment_reply_page(&value, comment_id)
+    }
+
     pub(crate) async fn article_channels(&self) -> AppResult<Vec<AcfunArticleChannel>> {
         let url = reqwest::Url::parse(&format!("{ORIGIN}/rest/pc-direct/realm/query/navigation"))
             .map_err(|_| Self::error("acfun_content_api_error", "AcFun 文章分区地址无效"))?;
@@ -554,6 +626,19 @@ fn required_total(value: &Value, field: &str, what: &str) -> AppResult<u64> {
         .ok_or_else(|| parse_error(format!("{what}缺少 {field} 总数")))
 }
 
+fn required_page(value: &Value, field: &str, minimum: u32, what: &str) -> AppResult<u32> {
+    value
+        .get(field)
+        .and_then(json_i64_opt)
+        .and_then(|page| u32::try_from(page).ok())
+        .filter(|page| *page >= minimum)
+        .ok_or_else(|| {
+            parse_error(format!(
+                "{what}缺少有效的 {field} 分页字段（最小值为 {minimum}）"
+            ))
+        })
+}
+
 fn article_next_cursor(
     value: &Value,
     requested_cursor: &str,
@@ -653,6 +738,222 @@ fn safe_media_url(raw: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+fn parse_video_comment_page(value: &Value, sort: AcfunCommentSort) -> AppResult<AcfunCommentPage> {
+    let total = required_total(value, "commentCount", "AcFun 视频评论")?;
+    let current_page = required_page(value, "curPage", 1, "AcFun 视频评论")?;
+    let total_page = required_page(value, "totalPage", 0, "AcFun 视频评论")?;
+    required_page(value, "pageSize", 1, "AcFun 视频评论")?;
+    let roots = required_array(value, "rootComments", "AcFun 视频评论")?;
+    let hot = required_array(value, "hotComments", "AcFun 视频评论")?;
+    let sub_comments = value
+        .get("subCommentsMap")
+        .and_then(Value::as_object)
+        .ok_or_else(|| parse_error("AcFun 视频评论缺少 subCommentsMap 对象"))?;
+    if total_page == 0 && (!roots.is_empty() || !hot.is_empty()) {
+        return Err(parse_error("AcFun 视频评论分页元数据与列表不一致"));
+    }
+
+    let sources: Vec<&Value> = if sort == AcfunCommentSort::Hot && current_page == 1 {
+        hot.iter().chain(roots.iter()).collect()
+    } else {
+        roots.iter().collect()
+    };
+
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+    for source in sources {
+        let Some(id) = source
+            .get("commentId")
+            .map(json_str)
+            .filter(|id| !id.is_empty())
+        else {
+            return Err(parse_error("AcFun 视频评论缺少 commentId"));
+        };
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let previews = sub_comments
+            .get(&id)
+            .map(|entry| {
+                entry
+                    .get("subComments")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    .ok_or_else(|| parse_error("AcFun 评论回复预览缺少 subComments 数组"))
+            })
+            .transpose()?;
+        let replies = previews
+            .map(|values| {
+                values
+                    .iter()
+                    .take(3)
+                    .map(|reply| parse_video_comment(reply, Some(&id), Vec::new()))
+                    .collect::<AppResult<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        items.push(parse_video_comment(source, None, replies)?);
+    }
+
+    let has_more = current_page < total_page;
+    Ok(AcfunCommentPage {
+        items,
+        has_more,
+        next_page: has_more.then_some(current_page.saturating_add(1)),
+        total,
+    })
+}
+
+fn parse_comment_reply_page(
+    value: &Value,
+    root_comment_id: &str,
+) -> AppResult<AcfunCommentReplyPage> {
+    let items = required_array(value, "subComments", "AcFun 评论回复")?
+        .iter()
+        .map(|comment| parse_video_comment(comment, Some(root_comment_id), Vec::new()))
+        .collect::<AppResult<Vec<_>>>()?;
+    let total = required_total(value, "subCommentCount", "AcFun 评论回复")?;
+    let current_page = required_page(value, "curPage", 1, "AcFun 评论回复")?;
+    let total_page = required_page(value, "totalPage", 0, "AcFun 评论回复")?;
+    required_page(value, "pageSize", 1, "AcFun 评论回复")?;
+    if total == 0 && !items.is_empty() {
+        return Err(parse_error("AcFun 评论回复数量与列表不一致"));
+    }
+    let has_more = current_page < total_page;
+    Ok(AcfunCommentReplyPage {
+        items,
+        has_more,
+        next_cursor: has_more.then(|| current_page.saturating_add(1).to_string()),
+        total,
+    })
+}
+
+fn parse_video_comment(
+    value: &Value,
+    parent_id: Option<&str>,
+    replies: Vec<AcfunVideoComment>,
+) -> AppResult<AcfunVideoComment> {
+    let id = value
+        .get("commentId")
+        .map(json_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| parse_error("AcFun 评论缺少 commentId"))?;
+    let raw_content = value.get("content").map(json_str).unwrap_or_default();
+    let pictures = comment_picture_urls(&raw_content, value);
+    let content = clean_comment_content(&raw_content);
+    let avatar = ["avatarImage", "thumbnailImageCdnUrl"]
+        .iter()
+        .find_map(|field| {
+            value
+                .get(*field)
+                .map(json_str)
+                .and_then(|url| safe_media_url(&url))
+        })
+        .or_else(|| {
+            value
+                .get("headUrl")
+                .and_then(Value::as_array)
+                .and_then(|urls| urls.first())
+                .and_then(|head| head.get("url"))
+                .map(json_str)
+                .and_then(|url| safe_media_url(&url))
+        });
+    Ok(AcfunVideoComment {
+        id,
+        parent_id: parent_id.map(str::to_string),
+        author: value
+            .get("userName")
+            .map(json_str)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "匿名用户".to_string()),
+        author_id: value
+            .get("userId")
+            .map(json_str)
+            .filter(|id| !id.is_empty() && id != "0"),
+        avatar,
+        content,
+        created_at: millis_to_seconds(
+            value
+                .get("timestamp")
+                .and_then(json_i64_opt)
+                .unwrap_or_default(),
+        ),
+        like_count: value
+            .get("likeCount")
+            .and_then(json_i64_opt)
+            .map(nonnegative)
+            .unwrap_or_default(),
+        is_uploader: value.get("isUp").and_then(Value::as_bool).unwrap_or(false),
+        pictures,
+        reply_to_name: value
+            .get("replyToUserName")
+            .map(json_str)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty()),
+        replies,
+        reply_count: value
+            .get("subCommentCount")
+            .and_then(json_i64_opt)
+            .map(nonnegative)
+            .unwrap_or_default(),
+    })
+}
+
+fn comment_picture_urls(raw_content: &str, value: &Value) -> Vec<String> {
+    let ubb_image =
+        regex::Regex::new(r"(?is)\[img(?:=[^\]]*)?\](.*?)\[/img\]").expect("valid AcFun UBB image");
+    let html_image = regex::Regex::new(r#"(?is)<img[^>]+src\s*=\s*["']([^"']+)["'][^>]*>"#)
+        .expect("valid AcFun HTML image");
+    let mut seen = HashSet::new();
+    ubb_image
+        .captures_iter(raw_content)
+        .chain(html_image.captures_iter(raw_content))
+        .filter_map(|capture| capture.get(1).map(|capture| capture.as_str()))
+        .map(decode_html_entities)
+        .filter_map(|url| safe_media_url(&url))
+        .chain(
+            value
+                .get("imageUrl")
+                .map(json_str)
+                .filter(|url| !url.trim().is_empty())
+                .and_then(|url| safe_media_url(&url)),
+        )
+        .filter(|url| seen.insert(url.clone()))
+        .collect()
+}
+
+fn clean_comment_content(raw: &str) -> String {
+    let without_images = regex::Regex::new(r"(?is)\[img(?:=[^\]]*)?\].*?\[/img\]")
+        .expect("valid AcFun UBB image")
+        .replace_all(raw, "");
+    let emotes = regex::Regex::new(r"(?i)\[emot=[^\]]+\]")
+        .expect("valid AcFun emote")
+        .replace_all(&without_images, "[表情]");
+    let breaks = regex::Regex::new(r"(?i)\[br\s*/?\]")
+        .expect("valid AcFun line break")
+        .replace_all(&emotes, "\n");
+    let formatting = regex::Regex::new(
+        r"(?i)\[/?(?:b|i|u|s|center|left|right|quote|code|color(?:=[^\]]*)?|size(?:=[^\]]*)?|font(?:=[^\]]*)?|url(?:=[^\]]*)?)\]",
+    )
+    .expect("valid AcFun UBB formatting")
+    .replace_all(&breaks, "");
+    comment_html_to_text(&formatting)
+}
+
+fn comment_html_to_text(raw: &str) -> String {
+    let hidden = regex::Regex::new(r"(?is)<(?:script|style)[^>]*>.*?</(?:script|style)\s*>")
+        .expect("valid hidden HTML element")
+        .replace_all(raw, "");
+    let block_breaks = regex::Regex::new(r"(?is)<(?:br|/p|/div|/li|/blockquote|/pre)\s*/?>")
+        .expect("valid HTML line break")
+        .replace_all(&hidden, "\n");
+    let tags = regex::Regex::new(r"(?is)<[^>]+>")
+        .expect("valid HTML tag")
+        .replace_all(&block_breaks, "");
+    normalize_flow_text(&decode_html_entities(&tags))
+}
+
 fn cover_url(value: &Value) -> Option<String> {
     value
         .get("coverUrl")
@@ -736,8 +1037,11 @@ fn video_item_from_feed(value: &Value) -> Option<AcfunVideoItem> {
 
 fn video_item_from_search(value: &Value) -> Option<AcfunVideoItem> {
     let id = value
-        .get("videoId")
-        .or_else(|| value.get("contentId"))
+        .get("contentId")
+        .or_else(|| value.get("id"))
+        // 旧响应没有内容 ID 时才回退到内部分 P ID；`videoId` 不是
+        // `/v/ac{id}`、详情或评论接口的 `sourceId`。
+        .or_else(|| value.get("videoId"))
         .map(json_str)?
         .trim()
         .to_string();
@@ -1691,11 +1995,12 @@ fn decode_html_entities(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AcfunArticleBlock, AcfunArticleInline, VIDEO_PAGE_SIZE, api_result,
+        AcfunArticleBlock, AcfunArticleInline, AcfunCommentSort, VIDEO_PAGE_SIZE, api_result,
         article_channels_from_navigation, article_item_from_feed, article_next_cursor,
         decode_html_entities, extract_js_object, indexed_page_has_more, parse_article_blocks,
-        parse_duration, parse_play_source, parse_required_items, required_array, required_total,
-        safe_media_url, total_has_more, video_item_from_feed,
+        parse_comment_reply_page, parse_duration, parse_play_source, parse_required_items,
+        parse_video_comment_page, required_array, required_total, safe_media_url, total_has_more,
+        video_item_from_feed, video_item_from_search,
     };
 
     #[test]
@@ -1962,6 +2267,22 @@ mod tests {
     }
 
     #[test]
+    fn video_search_uses_content_id_instead_of_internal_part_id() {
+        let value = serde_json::json!({
+            "contentId": 16171259_u64,
+            "id": 16171259_u64,
+            "videoId": "13265203",
+            "title": "入站歌",
+            "commentCount": 2142_u64,
+            "viewCount": 161896_u64,
+            "danmuCount": 678_u64
+        });
+        let item = video_item_from_search(&value).unwrap();
+        assert_eq!(item.id, "16171259");
+        assert_eq!(item.comment_count, Some(2142));
+    }
+
+    #[test]
     fn article_channels_keep_real_realm_ids_without_synthetic_all_channel() {
         let navigation = serde_json::json!({
             "data": [
@@ -2127,5 +2448,209 @@ mod tests {
             "A&B 中".to_string()
         );
         assert_eq!(parse_duration("01:02:03"), 3723);
+    }
+
+    #[test]
+    fn parses_comment_pages_with_previews_and_safe_display_content() {
+        let value = serde_json::json!({
+            "result": 0,
+            "commentCount": 4,
+            "curPage": 1,
+            "totalPage": 2,
+            "pageSize": 50,
+            "hotComments": [{
+                "commentId": 12,
+                "userName": "热门",
+                "userId": 2,
+                "content": "热门内容",
+                "timestamp": 1_700_000_000_000_i64,
+                "likeCount": 4,
+                "isUp": false,
+                "subCommentCount": 0
+            }],
+            "rootComments": [{
+                "commentId": 11,
+                "userName": "楼主",
+                "userId": 1,
+                "avatarImage": "//imgs.aixifan.com/avatar.png?imageslim",
+                "content": "[b]正文[/b][emot=acfun,1/][br][img=640,360]//imgs.aixifan.com/a.png[/img]",
+                "timestamp": 1_700_000_000_000_i64,
+                "likeCount": 2,
+                "isUp": true,
+                "subCommentCount": 4
+            }, {
+                "commentId": 12,
+                "userName": "热门",
+                "content": "热门内容",
+                "timestamp": 1_700_000_000_000_i64,
+                "likeCount": 4,
+                "subCommentCount": 0
+            }],
+            "subCommentsMap": {
+                "11": {"subComments": [{
+                    "commentId": 21,
+                    "userName": "回复者",
+                    "replyToUserName": "楼主",
+                    "content": "预览回复",
+                    "timestamp": 1_700_000_001_000_i64,
+                    "likeCount": 0
+                }]}
+            }
+        });
+        let hot = parse_video_comment_page(&value, AcfunCommentSort::Hot).unwrap();
+        assert_eq!(hot.total, 4);
+        assert!(hot.has_more);
+        assert_eq!(hot.next_page, Some(2));
+        assert_eq!(
+            hot.items
+                .iter()
+                .map(|comment| comment.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["12", "11"]
+        );
+        let root = &hot.items[1];
+        assert_eq!(root.content, "正文[表情]");
+        assert_eq!(
+            root.pictures,
+            vec!["https://imgs.aixifan.com/a.png".to_string()]
+        );
+        assert_eq!(
+            root.avatar.as_deref(),
+            Some("https://imgs.aixifan.com/avatar.png?imageslim")
+        );
+        assert_eq!(root.replies[0].parent_id.as_deref(), Some("11"));
+        assert_eq!(root.replies[0].reply_to_name.as_deref(), Some("楼主"));
+
+        let chronological = parse_video_comment_page(&value, AcfunCommentSort::Time).unwrap();
+        assert_eq!(
+            chronological
+                .items
+                .iter()
+                .map(|comment| comment.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["11", "12"]
+        );
+    }
+
+    #[test]
+    fn parses_reply_page_and_advances_with_page_cursor() {
+        let value = serde_json::json!({
+            "result": 0,
+            "subCommentCount": 14,
+            "curPage": 2,
+            "totalPage": 2,
+            "pageSize": 10,
+            "subComments": [{
+                "commentId": 31,
+                "userName": "回复者",
+                "content": "第二页回复",
+                "timestamp": 1_700_000_000_000_i64,
+                "likeCount": 1
+            }]
+        });
+        let page = parse_comment_reply_page(&value, "11").unwrap();
+        assert_eq!(page.total, 14);
+        assert_eq!(page.items[0].parent_id.as_deref(), Some("11"));
+        assert!(!page.has_more);
+        assert_eq!(page.next_cursor, None);
+
+        let mut more = value;
+        more["totalPage"] = serde_json::json!(3);
+        assert_eq!(
+            parse_comment_reply_page(&more, "11")
+                .unwrap()
+                .next_cursor
+                .as_deref(),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn accepts_real_empty_comment_pages_and_rejects_malformed_metadata() {
+        let empty = serde_json::json!({
+            "result": 0,
+            "commentCount": 0,
+            "curPage": 1,
+            "totalPage": 0,
+            "pageSize": 50,
+            "rootComments": [],
+            "hotComments": [],
+            "subCommentsMap": {}
+        });
+        let page = parse_video_comment_page(&empty, AcfunCommentSort::Time).unwrap();
+        assert!(page.items.is_empty());
+        assert!(!page.has_more);
+        assert_eq!(page.total, 0);
+
+        let mut missing_list = empty.clone();
+        missing_list.as_object_mut().unwrap().remove("rootComments");
+        assert_eq!(
+            parse_video_comment_page(&missing_list, AcfunCommentSort::Time)
+                .unwrap_err()
+                .code,
+            "acfun_content_parse_error"
+        );
+
+        let mut wrong_list = empty.clone();
+        wrong_list["hotComments"] = serde_json::json!({});
+        assert_eq!(
+            parse_video_comment_page(&wrong_list, AcfunCommentSort::Hot)
+                .unwrap_err()
+                .code,
+            "acfun_content_parse_error"
+        );
+
+        let mut wrong_metadata = empty.clone();
+        wrong_metadata["totalPage"] = serde_json::json!("zero");
+        assert_eq!(
+            parse_video_comment_page(&wrong_metadata, AcfunCommentSort::Time)
+                .unwrap_err()
+                .code,
+            "acfun_content_parse_error"
+        );
+
+        let mut bad_map = empty;
+        bad_map["subCommentsMap"] = serde_json::json!([]);
+        assert_eq!(
+            parse_video_comment_page(&bad_map, AcfunCommentSort::Time)
+                .unwrap_err()
+                .code,
+            "acfun_content_parse_error"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_empty_reply_page_instead_of_hiding_fields() {
+        let value = serde_json::json!({
+            "result": 0,
+            "subCommentCount": 0,
+            "curPage": 1,
+            "totalPage": 0,
+            "pageSize": 10
+        });
+        assert_eq!(
+            parse_comment_reply_page(&value, "11").unwrap_err().code,
+            "acfun_content_parse_error"
+        );
+
+        let mut wrong_page = value;
+        wrong_page["subComments"] = serde_json::json!([]);
+        wrong_page["curPage"] = serde_json::json!(0);
+        assert_eq!(
+            parse_comment_reply_page(&wrong_page, "11")
+                .unwrap_err()
+                .code,
+            "acfun_content_parse_error"
+        );
+    }
+
+    #[test]
+    fn comment_cleaning_preserves_ubb_and_html_line_breaks() {
+        assert_eq!(
+            super::clean_comment_content(
+                "[b]第一行[/b][br]第二行<br/>第三段\n<p>第四段</p><p>第五段</p><script>隐藏</script>"
+            ),
+            "第一行\n第二行\n第三段\n第四段\n第五段"
+        );
     }
 }

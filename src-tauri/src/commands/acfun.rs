@@ -6,8 +6,9 @@ use tauri::State;
 
 use crate::error::AppResult;
 use crate::models::acfun::{
-    AcfunArticleChannel, AcfunArticleDetail, AcfunArticleListPage, AcfunVideoDetail,
-    AcfunVideoListPage, AcfunVideoPlayInfo, AcfunVideoSection,
+    AcfunArticleChannel, AcfunArticleDetail, AcfunArticleListPage, AcfunCommentPage,
+    AcfunCommentReplyPage, AcfunCommentSort, AcfunVideoDetail, AcfunVideoListPage,
+    AcfunVideoPlayInfo, AcfunVideoSection,
 };
 use crate::sites::acfun::content::{
     AcfunContentClient, CONTENT_REFERER, CONTENT_USER_AGENT, video_sections_static,
@@ -117,6 +118,32 @@ pub async fn acfun_video_get_play_info(
         headers,
         session_id,
     })
+}
+
+#[tauri::command]
+pub async fn acfun_video_get_comments(
+    state: State<'_, AppState>,
+    video_id: String,
+    page: u32,
+    sort: Option<AcfunCommentSort>,
+) -> AppResult<AcfunCommentPage> {
+    content_client(&state)?
+        .0
+        .video_comments(&video_id, page, sort.unwrap_or_default())
+        .await
+}
+
+#[tauri::command]
+pub async fn acfun_video_get_comment_replies(
+    state: State<'_, AppState>,
+    video_id: String,
+    comment_id: String,
+    cursor: Option<String>,
+) -> AppResult<AcfunCommentReplyPage> {
+    content_client(&state)?
+        .0
+        .video_comment_replies(&video_id, &comment_id, cursor.as_deref())
+        .await
 }
 
 #[tauri::command]

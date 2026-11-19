@@ -3,6 +3,9 @@ import type {
   AcfunArticleChannel,
   AcfunArticleDetail,
   AcfunArticleListPage,
+  AcfunCommentPage,
+  AcfunCommentReplyPage,
+  AcfunCommentSort,
   AcfunVideoDetail,
   AcfunVideoListPage,
   AcfunVideoPlayInfo,
@@ -44,6 +47,35 @@ export function acfunVideoGetPlayInfo(params: {
 export function acfunVideoStopPlay(sessionId: string): Promise<void> {
   if (!sessionId) return Promise.resolve();
   return invokeCmd<void>("acfun_video_stop_play", { sessionId }).catch(() => undefined);
+}
+
+export function acfunVideoGetComments(params: {
+  videoId: string;
+  page: number;
+  sort: AcfunCommentSort;
+}): Promise<AcfunCommentPage> {
+  return invokeCmd<AcfunCommentPage>("acfun_video_get_comments", params);
+}
+
+export function acfunVideoGetCommentReplies(params: {
+  videoId: string;
+  commentId: string;
+  cursor?: string | null;
+}): Promise<AcfunCommentReplyPage> {
+  return invokeCmd<AcfunCommentReplyPage>("acfun_video_get_comment_replies", {
+    videoId: params.videoId,
+    commentId: params.commentId,
+    cursor: params.cursor || null,
+  });
+}
+
+/** 上游分页字段只在本模块解析，页面按页码或游标继续请求。 */
+export function acfunCommentNextPage(page: AcfunCommentPage, current: number): number | undefined {
+  return page.has_more ? (page.next_page ?? current + 1) : undefined;
+}
+
+export function acfunCommentNextCursor(page: AcfunCommentReplyPage): string | undefined {
+  return page.has_more ? (page.next_cursor ?? undefined) : undefined;
 }
 
 export function acfunArticleGetChannels(): Promise<AcfunArticleChannel[]> {

@@ -20,6 +20,18 @@ pub trait LiveSite: Send + Sync {
     /// 而关注列表既不展示也不需要它们。
     async fn get_room_live_status(&self, room_id: &str) -> AppResult<LiveRoomStatus>;
     async fn get_room_detail(&self, room_id: &str) -> AppResult<LiveRoomDetail>;
+    /// 房间详情和仅供后端使用的弹幕会话。
+    ///
+    /// 默认平台直接复用公开 `raw`。拥有额外短期凭据的平台可以覆写，
+    /// 在已完成的房间请求中追加私有数据，避免再次登录或重复请求上游。
+    async fn get_room_detail_with_danmaku(
+        &self,
+        room_id: &str,
+    ) -> AppResult<(LiveRoomDetail, serde_json::Value)> {
+        let detail = self.get_room_detail(room_id).await?;
+        let danmaku = detail.raw.clone();
+        Ok((detail, danmaku))
+    }
     async fn get_play_qualities(&self, detail: &LiveRoomDetail) -> AppResult<Vec<LivePlayQuality>>;
     async fn get_play_urls(
         &self,

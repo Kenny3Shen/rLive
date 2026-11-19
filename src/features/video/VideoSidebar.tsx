@@ -33,6 +33,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { LinkText } from "@/shared/components/LinkText";
+import {
+  VideoSelectionRow,
+  VideoSelectionSection,
+} from "@/shared/components/VideoSelectionSection";
 import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
@@ -57,9 +61,7 @@ import { videoGetArchive, videoGetOnlineTotal, videoGetRelated, videoGetSeason }
 import { formatDateTime, formatVideoDuration } from "./videoHistory";
 import {
   VIDEO_DETAILS_INFO_CARD_CLASS,
-  VIDEO_DETAILS_SIDEBAR_CARD_CLASS,
   VIDEO_DETAILS_SIDEBAR_STACK_CLASS,
-  VIDEO_DETAILS_SELECTION_TRIGGER_CLASS,
 } from "@/shared/components/videoDetailsSidebar";
 import { videoPlayPath, videoSearchPath } from "./videoRoute";
 import {
@@ -276,55 +278,6 @@ const RelatedPanel = memo(function RelatedPanel({ bvid }: { bvid: string }) {
 });
 
 /**
- * 分集/合集/选集三种列表共用的行画法：左列集号（或序数、P 号），中间标题，
- * 右侧时长；当前播放项高亮，点击整行跳转。三种列表只差数据来源与左列文案。
- */
-function EpisodeRow({
-  current,
-  label,
-  title,
-  duration,
-  rowRef,
-  onNavigate,
-}: {
-  current: boolean;
-  /** 左列：集号 / 序数 / P 号。 */
-  label: string;
-  title: string;
-  /** 时长，秒。 */
-  duration: number;
-  /** 当前播放行：挂上后由列表滚动定位到可视区中央。 */
-  rowRef?: Ref<HTMLButtonElement>;
-  onNavigate: () => void;
-}) {
-  return (
-    <button
-      ref={rowRef}
-      type="button"
-      aria-current={current || undefined}
-      onClick={onNavigate}
-      className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/50",
-        current && "bg-primary/10",
-      )}
-    >
-      <span
-        className={cn(
-          "min-w-7 shrink-0 text-center text-xs tabular-nums",
-          current ? "font-semibold text-primary" : "text-muted-foreground",
-        )}
-      >
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-[13px]">{title}</span>
-      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-        {formatVideoDuration(duration)}
-      </span>
-    </button>
-  );
-}
-
-/**
  * 只调整选集自身的有限高列表。scrollIntoView 会同时滚动祖先，信息卡移到
  * 同一页签后会把卡片甚至视频挤出视口；直接设置本层 scrollTop 不会产生这种副作用。
  */
@@ -343,71 +296,6 @@ function useCurrentRowScroll(active: boolean | undefined, currentKey: string | n
   }, [active, currentKey]);
 
   return { listRef, currentRowRef };
-}
-
-/**
- * 三类选集共用标题开关；收起时移除内容并立即退出焦点序列。
- *
- * 每个选集区自成一张卡片（与上方 UP 主信息卡同一套描边/底色/圆角）：
- * 选集行与相关视频行都是「封面或序号 + 标题」的列表，不包一层时两段列表
- * 首尾相接，读不出合集在哪里结束、相关推荐从哪里开始。
- *
- * 标题行开关是铺满卡片宽度的 `Button`：基料自带 `border border-transparent` 与
- * `bg-clip-padding`，底色因此被裁到 padding box，那 1px 透明边框不画底色 ——
- * 悬停或展开（`aria-expanded:bg-muted`）时卡片底色会沿四边漏出一圈 1px 缝，
- * 左右两侧最显眼。`bg-clip-border` 让底色铺到边框下，与卡片描边相接。
- */
-function SelectionSection({
-  label,
-  title,
-  count,
-  open,
-  onOpenChange,
-  className,
-  children,
-}: {
-  label: string;
-  title?: string;
-  count: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** 卡片外侧间距由所在面板决定。 */
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={onOpenChange}
-      render={
-        <section
-          data-slot="video-selection-card"
-          className={cn("shrink-0 overflow-hidden", VIDEO_DETAILS_SIDEBAR_CARD_CLASS, className)}
-        />
-      }
-      aria-label={title ? `${label}：${title}` : label}
-    >
-      <h3>
-        <CollapsibleTrigger
-          render={
-            <Button variant="ghost" size="sm" className={VIDEO_DETAILS_SELECTION_TRIGGER_CLASS} />
-          }
-        >
-          <ChevronDown
-            aria-hidden
-            data-icon="inline-start"
-            className={cn("transition-transform", !open && "-rotate-90")}
-          />
-          <span className="shrink-0">{label}</span>
-          {title && <span className="min-w-0 flex-1 truncate text-left">{title}</span>}
-          <span className="ml-auto shrink-0 font-normal tabular-nums text-muted-foreground">
-            {count}
-          </span>
-        </CollapsibleTrigger>
-      </h3>
-      <CollapsibleContent inert={!open || undefined}>{children}</CollapsibleContent>
-    </Collapsible>
-  );
 }
 
 /**
@@ -517,7 +405,7 @@ function EpisodesPanel({
   const currentIndex = episodes.findIndex((episode) => episode.ep_id === epId);
 
   return (
-    <SelectionSection
+    <VideoSelectionSection
       label="分集"
       count={videoSelectionCount(currentIndex, episodes.length, "集")}
       open={open}
@@ -529,13 +417,13 @@ function EpisodesPanel({
         className="max-h-64 overflow-y-auto overscroll-contain px-2 pt-1 pb-2 touch-pan-y"
       >
         {episodes.map((episode, index) => (
-          <EpisodeRow
+          <VideoSelectionRow
             key={episode.ep_id}
             current={episode.ep_id === epId}
             rowRef={episode.ep_id === epId ? currentRowRef : undefined}
             label={episode.title || String(index + 1)}
             title={episode.long_title || episode.title}
-            duration={episode.duration}
+            duration={formatVideoDuration(episode.duration)}
             onNavigate={() => {
               setPlaylist(playlistItems, playlistItems[index].id, "sequence");
               onNavigate({
@@ -549,7 +437,7 @@ function EpisodesPanel({
           />
         ))}
       </div>
-    </SelectionSection>
+    </VideoSelectionSection>
   );
 }
 
@@ -581,7 +469,7 @@ function UgcSeasonPanel({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <SelectionSection
+    <VideoSelectionSection
       label="合集"
       title={season.title}
       count={videoSelectionCount(
@@ -598,7 +486,7 @@ function UgcSeasonPanel({
         active={open && active}
         onNavigate={onNavigate}
       />
-    </SelectionSection>
+    </VideoSelectionSection>
   );
 }
 
@@ -636,12 +524,12 @@ function UgcSeasonList({
       {season.episodes.map((episode, index) => {
         const current = episode.bvid === currentBvid;
         return (
-          <EpisodeRow
+          <VideoSelectionRow
             key={episode.bvid}
             current={current}
             label={String(index + 1)}
             title={episode.title}
-            duration={episode.duration}
+            duration={formatVideoDuration(episode.duration)}
             rowRef={current ? currentRowRef : undefined}
             onNavigate={() => {
               const items = season.episodes.map(playlistItemFromSeasonEpisode);
@@ -697,7 +585,7 @@ function PartsPanel({
   const currentIndex = pages.findIndex((page) => page.cid === currentCid);
 
   return (
-    <SelectionSection
+    <VideoSelectionSection
       label="选集"
       count={videoSelectionCount(currentIndex, pages.length, "P")}
       open={open}
@@ -712,12 +600,12 @@ function PartsPanel({
           const current = currentCid > 0 && page.cid === currentCid;
           const label = page.part || `P${page.page}`;
           return (
-            <EpisodeRow
+            <VideoSelectionRow
               key={page.cid}
               current={current}
               label={`P${page.page}`}
               title={label}
-              duration={page.duration}
+              duration={formatVideoDuration(page.duration)}
               rowRef={current ? currentRowRef : undefined}
               onNavigate={() => {
                 usePlaylistStore.getState().setPlaylist(
@@ -731,7 +619,7 @@ function PartsPanel({
           );
         })}
       </div>
-    </SelectionSection>
+    </VideoSelectionSection>
   );
 }
 

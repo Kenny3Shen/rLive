@@ -66,6 +66,55 @@ pub struct AcfunVideoDetail {
     pub parts: Vec<AcfunVideoPart>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AcfunCommentSort {
+    Hot,
+    #[default]
+    Time,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcfunVideoComment {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    pub content: String,
+    /// Unix 秒。
+    pub created_at: u64,
+    pub like_count: u64,
+    pub is_uploader: bool,
+    pub pictures: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_name: Option<String>,
+    /// 一级评论的首屏回复预览；回复项自身始终为空。
+    pub replies: Vec<AcfunVideoComment>,
+    pub reply_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcfunCommentPage {
+    pub items: Vec<AcfunVideoComment>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page: Option<u32>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcfunCommentReplyPage {
+    pub items: Vec<AcfunVideoComment>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    pub total: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcfunVideoQuality {
     /// 上游稳定的画质类型，例如 `1080p60`。

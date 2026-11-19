@@ -227,15 +227,16 @@ pub async fn danmaku_connect(
     // 而不是悄悄使用一个失效的 uid。
     // 会话探测与详情请求并发进行，
     // 使进入房间的耗时保持不变。
-    let (detail, cookie_status) = tokio::join!(site.get_room_detail(&room_id), async {
-        match (&site_id, &cookie) {
-            (SiteId::Bilibili, Some(value)) if !value.trim().is_empty() => {
-                crate::sites::bilibili::cookie_session_status(value, &route).await
+    let (detail, cookie_status) =
+        tokio::join!(site.get_room_detail_with_danmaku(&room_id), async {
+            match (&site_id, &cookie) {
+                (SiteId::Bilibili, Some(value)) if !value.trim().is_empty() => {
+                    crate::sites::bilibili::cookie_session_status(value, &route).await
+                }
+                _ => None,
             }
-            _ => None,
-        }
-    },);
-    let mut detail = detail?;
+        },);
+    let (mut detail, mut danmaku_raw) = detail?;
     let mut identity_cookie = cookie.clone();
     let mut notice: Option<String> = None;
     if cookie_status == Some(false) {
@@ -244,6 +245,7 @@ pub async fn danmaku_connect(
             "bilibili cookie expired; danmaku falls back to anonymous mode"
         );
         strip_bilibili_danmaku_cookie(&mut detail.raw);
+        strip_bilibili_danmaku_cookie(&mut danmaku_raw);
         identity_cookie = None;
         notice = Some("B站 Cookie 已失效，弹幕已切换为匿名模式。请在设置中重新登录。".to_string());
     }
@@ -259,7 +261,7 @@ pub async fn danmaku_connect(
             generation: connection_epoch,
             site_id,
             room_id: &room_id,
-            detail_raw: &detail.raw,
+            detail_raw: &danmaku_raw,
             cookie: &danmaku_cookie,
             identity_cookie: identity_cookie.as_deref().unwrap_or_default(),
             route: &route,

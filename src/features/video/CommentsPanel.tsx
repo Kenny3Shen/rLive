@@ -35,6 +35,7 @@ import { ImageViewer } from "@/shared/components/ImageViewer";
 import { LinkText } from "@/shared/components/LinkText";
 import { LoadMoreRow } from "@/shared/components/LoadMoreRow";
 import { panelDrawerSide, panelDrawerSizeClass } from "@/shared/components/player/panelDrawer";
+import { videoCommentStyles } from "@/shared/components/videoCommentsStyle";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { useCompactPlayerViewport } from "@/shared/hooks/usePlayerViewport";
 import { isMobileClient } from "@/shared/clientPlatform";
@@ -85,10 +86,6 @@ const CommentAuthorContext = createContext<((mid: string, uname: string) => void
   undefined,
 );
 
-/** 点赞与回复共用的图标操作：与 11px 计数同档，不撑高行；粗指针下取消基础按钮的最小触控高度。 */
-const COMMENT_ACTION_CLASS =
-  "h-5 gap-1 px-1 text-[11px] font-normal text-muted-foreground hover:bg-transparent hover:text-foreground [@media(pointer:coarse)]:min-h-0 [&_svg:not([class*='size-'])]:size-3";
-
 /**
  * 点赞 / 取消点赞：乐观切换缓存里同一 rpid 的所有副本（列表、预览、楼中楼），
  * 失败回滚并提示。发送中禁用，避免连点把赞和取消交错送出。
@@ -111,7 +108,7 @@ function CommentLikeButton({ comment }: { comment: VideoComment }) {
   return (
     <Button
       variant="ghost"
-      className={cn(COMMENT_ACTION_CLASS, comment.liked && "text-primary hover:text-primary")}
+      className={cn(videoCommentStyles.action, comment.liked && "text-primary hover:text-primary")}
       aria-label={`${label}，${formatOnline(comment.like)} 个赞`}
       aria-pressed={comment.liked}
       title={label}
@@ -212,7 +209,7 @@ function CommentBody({ comment }: { comment: VideoComment }) {
 
   return (
     <>
-      <p className="whitespace-pre-line break-words text-[13px] leading-relaxed [overflow-wrap:anywhere]">
+      <p className={videoCommentStyles.body}>
         <CommentMessage message={comment.message} emotes={comment.emotes} />
       </p>
       {comment.pictures.length > 0 && (
@@ -267,10 +264,7 @@ function CommentAuthorBadges({
       {isThreadAuthor && <Badge variant="secondary">楼主</Badge>}
       {isUpper && (
         // 覆盖 Badge 默认的 h-5/py-0.5：UP 标识要与 13px 昵称行等高，不把行撑高。
-        <Badge
-          variant="secondary"
-          className="h-auto shrink-0 rounded-sm border-0 bg-accent/18 px-1 py-0 text-[10px] leading-4 font-semibold text-accent"
-        >
+        <Badge variant="secondary" className={videoCommentStyles.upBadge}>
           UP
         </Badge>
       )}
@@ -301,12 +295,7 @@ function CommentAuthorName({
 
   if (!mid || !onOpenAuthor) {
     return (
-      <span
-        className={cn(
-          "truncate font-medium text-foreground/90",
-          preview ? "text-xs" : "text-[13px]",
-        )}
-      >
+      <span className={preview ? videoCommentStyles.previewAuthor : videoCommentStyles.mainAuthor}>
         {comment.uname}
       </span>
     );
@@ -317,7 +306,9 @@ function CommentAuthorName({
       variant="ghost"
       className={cn(
         "h-auto min-w-0 shrink p-0 align-baseline text-foreground/90 hover:bg-transparent hover:text-foreground/90 [@media(pointer:coarse)]:min-h-0",
-        preview ? "max-w-full text-xs" : "justify-start text-[13px]",
+        preview
+          ? cn("max-w-full", videoCommentStyles.previewAuthor)
+          : cn("justify-start", videoCommentStyles.mainAuthor),
       )}
       aria-label={`查看 ${comment.uname} 的投稿`}
       title={`查看 ${comment.uname} 的投稿`}
@@ -343,7 +334,7 @@ function CommentRow({
 }) {
   const onReply = useContext(CommentReplyContext);
   return (
-    <div className="flex gap-2.5">
+    <div className={videoCommentStyles.row}>
       {comment.avatar ? (
         <img
           src={normalizeImageUrl(comment.avatar)}
@@ -351,30 +342,28 @@ function CommentRow({
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          className="mt-0.5 size-8 shrink-0 rounded-full object-cover"
+          className={videoCommentStyles.avatar}
         />
       ) : (
-        <div className="mt-0.5 size-8 shrink-0 rounded-full bg-muted" aria-hidden />
+        <div className={videoCommentStyles.avatarPlaceholder} aria-hidden />
       )}
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className={videoCommentStyles.metaRow}>
           <CommentAuthorName comment={comment} />
           <CommentAuthorBadges isThreadAuthor={isThreadAuthor} isUpper={comment.is_upper} />
           <CommentLevelBadge level={comment.level} />
         </div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">
-          {formatRelativeTime(comment.ctime)}
-        </div>
-        <div className="mt-1">
+        <div className={videoCommentStyles.time}>{formatRelativeTime(comment.ctime)}</div>
+        <div className={videoCommentStyles.bodyWrap}>
           <CommentBody comment={comment} />
         </div>
         {/* -ml-1 抵消按钮内边距，图标与正文左缘对齐。 */}
-        <div className="mt-1 -ml-1 flex items-center gap-3">
+        <div className={videoCommentStyles.actionRow}>
           <CommentLikeButton comment={comment} />
           {onReply && (
             <Button
               variant="ghost"
-              className={COMMENT_ACTION_CLASS}
+              className={videoCommentStyles.action}
               aria-label={`回复 ${comment.uname}`}
               title="回复"
               onClick={() => onReply(videoCommentReplyTarget(comment, thread))}
@@ -392,18 +381,14 @@ function ReplyPreview({ reply, onOpenDetail }: { reply: VideoComment; onOpenDeta
   return (
     <CommentDetailTrigger
       label={`查看 ${reply.uname} 的回复详情`}
-      className="w-full px-2 py-1.5 text-left text-xs leading-relaxed transition-colors hover:bg-muted/70"
+      className={videoCommentStyles.previewButton}
       onOpenDetail={onOpenDetail}
     >
-      <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
+      <span className={videoCommentStyles.previewText}>
         <CommentAuthorName comment={reply} preview />
         {/* 预览是一行被裁剪的富文本，塞不进 Badge 的 20px 药丸；
             用等高（h-4 = leading-4）的 inline-flex 小标，行高不受影响。 */}
-        {reply.is_upper && (
-          <span className="mx-0.5 inline-flex h-4 items-center rounded-sm bg-accent/18 px-1 align-middle text-[10px] leading-4 font-semibold whitespace-nowrap text-accent">
-            UP
-          </span>
-        )}
+        {reply.is_upper && <span className={videoCommentStyles.inlineUpBadge}>UP</span>}
         <span className="text-muted-foreground">： </span>
         <span className="text-foreground/80">
           <CommentMessage message={reply.message} emotes={reply.emotes} />
@@ -432,13 +417,13 @@ function CommentThread({
   const showPreview = !expanded && (comment.rcount > 0 || previewReplies.length > 0);
 
   return (
-    <div className="border-b border-border/60 py-3 last:border-b-0">
+    <div className={videoCommentStyles.thread}>
       {/* 正文不是详情入口：没有楼中楼的评论点了只会弹出一页「暂无回复」，
           移动端还会把读到一半的列表盖住。只有下方的回复预览框与「共 N 条回复」打开它。 */}
       <CommentRow comment={comment} />
       {showPreview && (
-        <div className="mt-2 pl-10.5">
-          <div className="overflow-hidden rounded-md bg-muted/40 py-1">
+        <div className={videoCommentStyles.previewIndent}>
+          <div className={videoCommentStyles.previewSurface}>
             {previewReplies.map((reply) => (
               <ReplyPreview key={reply.rpid} reply={reply} onOpenDetail={onToggleDetail} />
             ))}
@@ -455,7 +440,7 @@ function CommentThread({
         </div>
       )}
       {expanded && (
-        <div className="mt-2 pl-10.5">
+        <div className={videoCommentStyles.previewIndent}>
           {/* key 换楼层即重挂：翻到第 3 页再展开另一条，不该停在那一页。 */}
           <InlineCommentReplies
             key={comment.rpid}
@@ -507,12 +492,12 @@ function InlineCommentReplies({
 
   return (
     <div role="group" aria-label={`${comment.uname} 的评论的回复`}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">全部回复 {formatOnline(allCount)}</span>
+      <div className={videoCommentStyles.replyHeader}>
+        <span className={videoCommentStyles.replyCount}>全部回复 {formatOnline(allCount)}</span>
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 gap-1 px-2 text-xs text-muted-foreground"
+          className={videoCommentStyles.replyActionButton}
           aria-label={`收起 ${comment.uname} 的评论的回复`}
           onClick={onCollapse}
         >
@@ -541,7 +526,7 @@ function InlineCommentReplies({
       ) : (
         <div className={cn(repliesQuery.isFetching && "opacity-60")}>
           {replies.map((reply) => (
-            <div key={reply.rpid} className="border-b border-border/60 py-3 last:border-b-0">
+            <div key={reply.rpid} className={videoCommentStyles.replyRow}>
               <CommentRow
                 comment={reply}
                 thread={comment}
@@ -832,14 +817,14 @@ function CommentsPanelContent({
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center justify-between px-3 pb-2 pt-3">
-        <span className="text-xs text-muted-foreground">
+      <div className={videoCommentStyles.panelHeader}>
+        <span className={videoCommentStyles.panelCount}>
           {allCount > 0 ? `共 ${formatOnline(allCount)} 条` : "评论"}
         </span>
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 gap-1 px-2 text-xs text-muted-foreground"
+          className={videoCommentStyles.sortButton}
           aria-label={`评论排序：${mode === 3 ? "最热" : "最新"}，点击切换`}
           title="点击切换评论排序"
           onClick={() => setMode(mode === 3 ? 2 : 3)}
@@ -849,9 +834,9 @@ function CommentsPanelContent({
         </Button>
       </div>
       {commentsQuery.isPending ? (
-        <div className="flex flex-col gap-4 px-3 pb-4">
+        <div className={videoCommentStyles.skeletonList}>
           {[0, 1, 2].map((index) => (
-            <div key={index} className="flex gap-2.5">
+            <div key={index} className={videoCommentStyles.skeletonRow}>
               <Skeleton className="size-8 shrink-0 rounded-full" />
               <div className="flex w-full flex-col gap-1.5">
                 <Skeleton className="h-3.5 w-24" />
