@@ -796,12 +796,22 @@ export function Shell() {
     </div>
   );
   const groupPage = (
-    <div ref={bindPageScrollRef} data-slot="app-page" className={pageScrollerClassName}>
+    <div
+      ref={bindPageScrollRef}
+      data-slot="app-page"
+      className={cn(
+        pageScrollerClassName,
+        // 文章页在自身内部拆分正文与评论两列，两列各自滚动。外层继续滚动会
+        // 同时带动右侧评论栏，也会把页面内边距重复加一次。
+        isAcfunArticle && "overflow-hidden! p-0! touch-auto!",
+      )}
+    >
       <PagePan
         // IPTV 来源由单页 swipe 管位移，父级不能同时创建第二段平移。
         panKey={isIptv ? "iptv-source-page" : groupForMotion}
         direction={groupDirection === "backward" ? -1 : 1}
-        className="min-h-full"
+        className={isAcfunArticle ? "h-full min-h-0" : "min-h-full"}
+        contentClassName={isAcfunArticle ? "h-full min-h-0" : undefined}
       >
         {swipePage}
       </PagePan>

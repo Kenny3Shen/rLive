@@ -1,4 +1,4 @@
-//! AcFun 视频与文章浏览、取流。
+//! AcFun 视频与文章浏览、取流及公开评论。
 //!
 //! AcFun 没有为 PC 站提供一套统一的 VOD 客户端协议：列表和搜索是公开 JSON，
 //! 详情与播放清单则嵌在服务端渲染页面中。本模块把这些差异留在 Rust 边界内，
@@ -24,6 +24,8 @@ pub(crate) const CONTENT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64
 const ORIGIN: &str = "https://www.acfun.cn";
 const VIDEO_PAGE_SIZE: usize = 30;
 const ARTICLE_PAGE_SIZE: usize = 10;
+/// AcFun 视频与文章评论使用同一个上游资源类型。
+const COMMENT_SOURCE_TYPE: &str = "3";
 
 const VIDEO_SECTIONS: &[(&str, &str)] = &[
     ("1", "动画"),
@@ -354,18 +356,18 @@ impl AcfunContentClient {
         parse_play_source(&play_json, quality)
     }
 
-    pub(crate) async fn video_comments(
+    async fn comment_page(
         &self,
-        video_id: &str,
+        resource_id: &str,
         page: u32,
         sort: AcfunCommentSort,
+        what: &str,
     ) -> AppResult<AcfunCommentPage> {
-        let video_id = normalize_content_id(video_id, "ac")?;
         let page = page.max(1);
         let page_text = page.to_string();
         let query = [
-            ("sourceId", video_id.as_str()),
-            ("sourceType", "3"),
+            ("sourceId", resource_id),
+            ("sourceType", COMMENT_SOURCE_TYPE),
             ("page", page_text.as_str()),
             ("pivotCommentId", "0"),
             ("newPivotCommentId", ""),
@@ -375,19 +377,19 @@ impl AcfunContentClient {
             &format!("{ORIGIN}/rest/pc-direct/comment/list"),
             query,
         )
-        .map_err(|_| Self::error("acfun_comment_invalid", "AcFun 评论参数无效"))?;
-        let value = self.get_json(url, "视频评论").await?;
-        api_result(&value, "视频评论")?;
-        parse_video_comment_page(&value, sort)
+        .map_err(|_| Self::error("acfun_comment_invalid", format!("{what}参数无效")))?;
+        let value = self.get_json(url, what).await?;
+        api_result(&value, what)?;
+        parse_comment_page(&value, sort)
     }
 
-    pub(crate) async fn video_comment_replies(
+    async fn comment_reply_page(
         &self,
-        video_id: &str,
+        resource_id: &str,
         comment_id: &str,
         cursor: Option<&str>,
+        what: &str,
     ) -> AppResult<AcfunCommentReplyPage> {
-        let video_id = normalize_content_id(video_id, "ac")?;
         let comment_id = comment_id.trim();
         if comment_id.is_empty() || !comment_id.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(Self::error(
@@ -410,8 +412,8 @@ impl AcfunContentClient {
             .max(1);
         let page_text = page.to_string();
         let query = [
-            ("sourceId", video_id.as_str()),
-            ("sourceType", "3"),
+            ("sourceId", resource_id),
+            ("sourceType", COMMENT_SOURCE_TYPE),
             ("rootCommentId", comment_id),
             ("page", page_text.as_str()),
         ];
@@ -419,10 +421,52 @@ impl AcfunContentClient {
             &format!("{ORIGIN}/rest/pc-direct/comment/sublist"),
             query,
         )
-        .map_err(|_| Self::error("acfun_comment_invalid", "AcFun 回复参数无效"))?;
-        let value = self.get_json(url, "评论回复").await?;
-        api_result(&value, "评论回复")?;
+        .map_err(|_| Self::error("acfun_comment_invalid", format!("{what}参数无效")))?;
+        let value = self.get_json(url, what).await?;
+        api_result(&value, what)?;
         parse_comment_reply_page(&value, comment_id)
+    }
+
+    pub(crate) async fn video_comments(
+        &self,
+        video_id: &str,
+        page: u32,
+        sort: AcfunCommentSort,
+    ) -> AppResult<AcfunCommentPage> {
+        let video_id = normalize_content_id(video_id, "ac")?;
+        self.comment_page(&video_id, page, sort, "视频评论").await
+    }
+
+    pub(crate) async fn video_comment_replies(
+        &self,
+        video_id: &str,
+        comment_id: &str,
+        cursor: Option<&str>,
+    ) -> AppResult<AcfunCommentReplyPage> {
+        let video_id = normalize_content_id(video_id, "ac")?;
+        self.comment_reply_page(&video_id, comment_id, cursor, "评论回复")
+            .await
+    }
+
+    pub(crate) async fn article_comments(
+        &self,
+        article_id: &str,
+        page: u32,
+        sort: AcfunCommentSort,
+    ) -> AppResult<AcfunCommentPage> {
+        let article_id = normalize_content_id(article_id, "ac")?;
+        self.comment_page(&article_id, page, sort, "文章评论").await
+    }
+
+    pub(crate) async fn article_comment_replies(
+        &self,
+        article_id: &str,
+        comment_id: &str,
+        cursor: Option<&str>,
+    ) -> AppResult<AcfunCommentReplyPage> {
+        let article_id = normalize_content_id(article_id, "ac")?;
+        self.comment_reply_page(&article_id, comment_id, cursor, "文章评论回复")
+            .await
     }
 
     pub(crate) async fn article_channels(&self) -> AppResult<Vec<AcfunArticleChannel>> {
@@ -738,19 +782,19 @@ fn safe_media_url(raw: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-fn parse_video_comment_page(value: &Value, sort: AcfunCommentSort) -> AppResult<AcfunCommentPage> {
-    let total = required_total(value, "commentCount", "AcFun 视频评论")?;
-    let current_page = required_page(value, "curPage", 1, "AcFun 视频评论")?;
-    let total_page = required_page(value, "totalPage", 0, "AcFun 视频评论")?;
-    required_page(value, "pageSize", 1, "AcFun 视频评论")?;
-    let roots = required_array(value, "rootComments", "AcFun 视频评论")?;
-    let hot = required_array(value, "hotComments", "AcFun 视频评论")?;
+fn parse_comment_page(value: &Value, sort: AcfunCommentSort) -> AppResult<AcfunCommentPage> {
+    let total = required_total(value, "commentCount", "AcFun 评论")?;
+    let current_page = required_page(value, "curPage", 1, "AcFun 评论")?;
+    let total_page = required_page(value, "totalPage", 0, "AcFun 评论")?;
+    required_page(value, "pageSize", 1, "AcFun 评论")?;
+    let roots = required_array(value, "rootComments", "AcFun 评论")?;
+    let hot = required_array(value, "hotComments", "AcFun 评论")?;
     let sub_comments = value
         .get("subCommentsMap")
         .and_then(Value::as_object)
-        .ok_or_else(|| parse_error("AcFun 视频评论缺少 subCommentsMap 对象"))?;
+        .ok_or_else(|| parse_error("AcFun 评论缺少 subCommentsMap 对象"))?;
     if total_page == 0 && (!roots.is_empty() || !hot.is_empty()) {
-        return Err(parse_error("AcFun 视频评论分页元数据与列表不一致"));
+        return Err(parse_error("AcFun 评论分页元数据与列表不一致"));
     }
 
     let sources: Vec<&Value> = if sort == AcfunCommentSort::Hot && current_page == 1 {
@@ -767,7 +811,7 @@ fn parse_video_comment_page(value: &Value, sort: AcfunCommentSort) -> AppResult<
             .map(json_str)
             .filter(|id| !id.is_empty())
         else {
-            return Err(parse_error("AcFun 视频评论缺少 commentId"));
+            return Err(parse_error("AcFun 评论缺少 commentId"));
         };
         if !seen.insert(id.clone()) {
             continue;
@@ -1998,8 +2042,8 @@ mod tests {
         AcfunArticleBlock, AcfunArticleInline, AcfunCommentSort, VIDEO_PAGE_SIZE, api_result,
         article_channels_from_navigation, article_item_from_feed, article_next_cursor,
         decode_html_entities, extract_js_object, indexed_page_has_more, parse_article_blocks,
-        parse_comment_reply_page, parse_duration, parse_play_source, parse_required_items,
-        parse_video_comment_page, required_array, required_total, safe_media_url, total_has_more,
+        parse_comment_page, parse_comment_reply_page, parse_duration, parse_play_source,
+        parse_required_items, required_array, required_total, safe_media_url, total_has_more,
         video_item_from_feed, video_item_from_search,
     };
 
@@ -2283,6 +2327,48 @@ mod tests {
     }
 
     #[test]
+    fn article_comments_use_the_shared_source_type_and_response_shape() {
+        assert_eq!(super::COMMENT_SOURCE_TYPE, "3");
+        let value = serde_json::json!({
+            "result": 0,
+            "commentCount": 4,
+            "curPage": 1,
+            "totalPage": 1,
+            "pageSize": 50,
+            "rootComments": [{
+                "commentId": 807512012,
+                "sourceType": 3,
+                "userName": "文章读者",
+                "content": "[emot=acfun,1680/]这是如何做到的",
+                "timestamp": 1_795_105_000_000_i64,
+                "likeCount": 0,
+                "subCommentCount": 1
+            }],
+            "hotComments": [],
+            "subCommentsMap": {
+                "807512012": {"subComments": [{
+                    "commentId": 807512017,
+                    "sourceType": 3,
+                    "userName": "作者",
+                    "content": "这是慢慢做到的",
+                    "timestamp": 1_795_105_873_176_i64,
+                    "likeCount": 0,
+                    "isUp": true
+                }]}
+            }
+        });
+        let page = parse_comment_page(&value, AcfunCommentSort::Time).unwrap();
+        assert_eq!(page.total, 4);
+        assert_eq!(page.items[0].id, "807512012");
+        assert_eq!(page.items[0].replies[0].id, "807512017");
+        assert_eq!(
+            page.items[0].replies[0].parent_id.as_deref(),
+            Some("807512012")
+        );
+        assert!(page.items[0].replies[0].is_uploader);
+    }
+
+    #[test]
     fn article_channels_keep_real_realm_ids_without_synthetic_all_channel() {
         let navigation = serde_json::json!({
             "data": [
@@ -2497,7 +2583,7 @@ mod tests {
                 }]}
             }
         });
-        let hot = parse_video_comment_page(&value, AcfunCommentSort::Hot).unwrap();
+        let hot = parse_comment_page(&value, AcfunCommentSort::Hot).unwrap();
         assert_eq!(hot.total, 4);
         assert!(hot.has_more);
         assert_eq!(hot.next_page, Some(2));
@@ -2521,7 +2607,7 @@ mod tests {
         assert_eq!(root.replies[0].parent_id.as_deref(), Some("11"));
         assert_eq!(root.replies[0].reply_to_name.as_deref(), Some("楼主"));
 
-        let chronological = parse_video_comment_page(&value, AcfunCommentSort::Time).unwrap();
+        let chronological = parse_comment_page(&value, AcfunCommentSort::Time).unwrap();
         assert_eq!(
             chronological
                 .items
@@ -2577,7 +2663,7 @@ mod tests {
             "hotComments": [],
             "subCommentsMap": {}
         });
-        let page = parse_video_comment_page(&empty, AcfunCommentSort::Time).unwrap();
+        let page = parse_comment_page(&empty, AcfunCommentSort::Time).unwrap();
         assert!(page.items.is_empty());
         assert!(!page.has_more);
         assert_eq!(page.total, 0);
@@ -2585,7 +2671,7 @@ mod tests {
         let mut missing_list = empty.clone();
         missing_list.as_object_mut().unwrap().remove("rootComments");
         assert_eq!(
-            parse_video_comment_page(&missing_list, AcfunCommentSort::Time)
+            parse_comment_page(&missing_list, AcfunCommentSort::Time)
                 .unwrap_err()
                 .code,
             "acfun_content_parse_error"
@@ -2594,7 +2680,7 @@ mod tests {
         let mut wrong_list = empty.clone();
         wrong_list["hotComments"] = serde_json::json!({});
         assert_eq!(
-            parse_video_comment_page(&wrong_list, AcfunCommentSort::Hot)
+            parse_comment_page(&wrong_list, AcfunCommentSort::Hot)
                 .unwrap_err()
                 .code,
             "acfun_content_parse_error"
@@ -2603,7 +2689,7 @@ mod tests {
         let mut wrong_metadata = empty.clone();
         wrong_metadata["totalPage"] = serde_json::json!("zero");
         assert_eq!(
-            parse_video_comment_page(&wrong_metadata, AcfunCommentSort::Time)
+            parse_comment_page(&wrong_metadata, AcfunCommentSort::Time)
                 .unwrap_err()
                 .code,
             "acfun_content_parse_error"
@@ -2612,7 +2698,7 @@ mod tests {
         let mut bad_map = empty;
         bad_map["subCommentsMap"] = serde_json::json!([]);
         assert_eq!(
-            parse_video_comment_page(&bad_map, AcfunCommentSort::Time)
+            parse_comment_page(&bad_map, AcfunCommentSort::Time)
                 .unwrap_err()
                 .code,
             "acfun_content_parse_error"

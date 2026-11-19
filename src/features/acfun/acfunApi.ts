@@ -99,3 +99,23 @@ export function acfunArticleSearch(keyword: string, page: number): Promise<Acfun
 export function acfunArticleGetDetail(id: string): Promise<AcfunArticleDetail> {
   return invokeCmd<AcfunArticleDetail>("acfun_article_get_detail", { id });
 }
+
+export function acfunArticleGetComments(params: {
+  articleId: string;
+  page: number;
+  sort: AcfunCommentSort;
+}): Promise<AcfunCommentPage> {
+  return invokeCmd<AcfunCommentPage>("acfun_article_get_comments", params);
+}
+
+export function acfunArticleGetCommentReplies(params: {
+  articleId: string;
+  commentId: string;
+  cursor?: string | null;
+}): Promise<AcfunCommentReplyPage> {
+  return invokeCmd<AcfunCommentReplyPage>("acfun_article_get_comment_replies", {
+    articleId: params.articleId,
+    commentId: params.commentId,
+    cursor: params.cursor || null,
+  });
+}

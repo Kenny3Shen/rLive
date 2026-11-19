@@ -192,3 +192,29 @@ pub async fn acfun_article_get_detail(
 ) -> AppResult<AcfunArticleDetail> {
     content_client(&state)?.0.article_detail(&id).await
 }
+
+#[tauri::command]
+pub async fn acfun_article_get_comments(
+    state: State<'_, AppState>,
+    article_id: String,
+    page: u32,
+    sort: Option<AcfunCommentSort>,
+) -> AppResult<AcfunCommentPage> {
+    content_client(&state)?
+        .0
+        .article_comments(&article_id, page, sort.unwrap_or_default())
+        .await
+}
+
+#[tauri::command]
+pub async fn acfun_article_get_comment_replies(
+    state: State<'_, AppState>,
+    article_id: String,
+    comment_id: String,
+    cursor: Option<String>,
+) -> AppResult<AcfunCommentReplyPage> {
+    content_client(&state)?
+        .0
+        .article_comment_replies(&article_id, &comment_id, cursor.as_deref())
+        .await
+}

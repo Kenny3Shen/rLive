@@ -1,11 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
-import { Eye, MessageCircle } from "lucide-react";
-import type { ReactNode } from "react";
+import { Eye, MessageCircle, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { panelDrawerSide, panelDrawerSizeClass } from "@/shared/components/player/panelDrawer";
+import {
+  useCompactPlayerViewport,
+  useStackedDetailsViewport,
+} from "@/shared/hooks/usePlayerViewport";
 import { cn, formatOnline, normalizeVideoCoverUrl } from "@/lib/utils";
 import { openExternalUrl } from "@/shared/externalUrl";
 import { acfunArticleGetDetail } from "./acfunApi";
@@ -16,9 +23,13 @@ import {
   safeHttpLink,
 } from "./acfunArticleContent";
 import type { AcfunArticleBlock, AcfunArticleInline } from "./acfunTypes";
+import { AcfunComments } from "./AcfunVideoComments";
 
 const ARTICLE_LINK_CLASS =
   "break-words text-primary underline decoration-current/40 underline-offset-4 [overflow-wrap:anywhere] hover:decoration-current focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
+const ARTICLE_SCROLL_CLASS = "min-w-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y";
+const ARTICLE_PAGE_CLASS =
+  "mx-auto flex w-full max-w-3xl flex-col px-4 pt-16 pb-[calc(4.25rem+var(--app-safe-area-bottom))] md:px-5 lg:pb-12";
 
 function articleDate(timestamp: number): Date | null {
   if (!timestamp) return null;
@@ -162,28 +173,127 @@ function ArticleBlock({ block }: { block: AcfunArticleBlock }) {
   }
 }
 
+function ArticleReadingFrame({
+  children,
+  aside,
+  overlay,
+}: {
+  children: ReactNode;
+  aside?: ReactNode;
+  overlay?: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 bg-background">
+      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div className={cn("h-full min-h-0", ARTICLE_SCROLL_CLASS)}>{children}</div>
+        {overlay}
+      </div>
+      {aside}
+    </div>
+  );
+}
+
 function ArticleSkeleton() {
   return (
-    <article className="mx-auto flex w-full max-w-3xl flex-col pt-12 pb-12">
-      <header className="flex flex-col gap-4 pb-6">
-        <Skeleton className="h-5 w-24" />
-        <Skeleton className="h-12 w-4/5" />
-        <Skeleton className="h-5 w-full" />
-        <Skeleton className="h-11 w-full" />
-      </header>
-      <Separator />
-      <div className="flex flex-col gap-5 pt-7">
-        <Skeleton className="h-5 w-full" />
-        <Skeleton className="h-5 w-11/12" />
-        <Skeleton className="h-44 w-full rounded-lg" />
-        <Skeleton className="h-5 w-4/5" />
-      </div>
-    </article>
+    <ArticleReadingFrame>
+      <article className={ARTICLE_PAGE_CLASS}>
+        <header className="flex flex-col gap-4 pb-6">
+          <Skeleton className="h-5 w-24" />
+          <Skeleton className="h-12 w-4/5" />
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-11 w-full" />
+        </header>
+        <Separator />
+        <div className="flex flex-col gap-5 pt-7">
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-5 w-11/12" />
+          <Skeleton className="h-44 w-full rounded-lg" />
+          <Skeleton className="h-5 w-4/5" />
+        </div>
+      </article>
+    </ArticleReadingFrame>
+  );
+}
+
+function ArticleCommentsDrawer({
+  articleId,
+  open,
+  onOpenChange,
+}: {
+  articleId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const compact = useCompactPlayerViewport();
+  const side = panelDrawerSide(compact);
+
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent
+        side={side}
+        className={cn("flex flex-col overflow-hidden p-0", panelDrawerSizeClass(side))}
+      >
+        <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+          <DrawerTitle>文章评论</DrawerTitle>
+          <DrawerClose
+            render={
+              <Button variant="ghost" size="icon-sm" aria-label="关闭评论" title="关闭评论" />
+            }
+          >
+            <X aria-hidden />
+          </DrawerClose>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <AcfunComments resource={{ kind: "article", id: articleId }} active={open} />
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
+function ArticleNarrowCommentControl({
+  commentCount,
+  open,
+  onOpenChange,
+}: {
+  commentCount: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 tabular-nums">
+      <dt className="font-medium text-foreground">评论</dt>
+      <dd>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="-my-1.5 -ml-2 h-8 gap-1 px-2 font-normal text-muted-foreground"
+          aria-label={`查看文章评论，${formatOnline(commentCount)} 条`}
+          aria-expanded={open}
+          onClick={() => onOpenChange(true)}
+        >
+          <MessageCircle className="size-4" data-icon="inline-start" aria-hidden />
+          {formatOnline(commentCount)}
+        </Button>
+      </dd>
+    </div>
   );
 }
 
 export function AcfunArticlePage() {
   const { articleId = "" } = useParams<{ articleId: string }>();
+  const stackedDetails = useStackedDetailsViewport();
+  const [commentPanel, setCommentPanel] = useState({
+    stacked: stackedDetails,
+    open: false,
+  });
+  if (commentPanel.stacked !== stackedDetails) {
+    setCommentPanel({ stacked: stackedDetails, open: false });
+  }
+  const commentsOpen = commentPanel.stacked === stackedDetails && commentPanel.open;
+  const setCommentsOpen = (open: boolean) => setCommentPanel({ stacked: stackedDetails, open });
+
   const query = useQuery({
     queryKey: ["acfun_article", articleId],
     queryFn: () => acfunArticleGetDetail(articleId),
@@ -197,14 +307,16 @@ export function AcfunArticlePage() {
 
   if (query.isError || !query.data) {
     return (
-      <div className="mx-auto flex w-full max-w-3xl flex-col pt-12 pb-12">
-        <ErrorState
-          className="mt-2"
-          error={query.error ?? new Error("文章内容为空")}
-          title="文章加载失败"
-          onRetry={() => void query.refetch()}
-        />
-      </div>
+      <ArticleReadingFrame>
+        <article className={ARTICLE_PAGE_CLASS}>
+          <ErrorState
+            className="mt-2"
+            error={query.error ?? new Error("文章内容为空")}
+            title="文章加载失败"
+            onRetry={() => void query.refetch()}
+          />
+        </article>
+      </ArticleReadingFrame>
     );
   }
 
@@ -216,82 +328,130 @@ export function AcfunArticlePage() {
   const publishedIso = articleDate(item.published_at)?.toISOString();
 
   return (
-    <article className="mx-auto flex w-full max-w-3xl flex-col pt-12 pb-12">
-      <header className="flex flex-col gap-4 pb-6">
-        {item.channel_name && (
-          <Badge variant="outline" className="max-w-full truncate" title={item.channel_name}>
-            {item.channel_name}
-          </Badge>
-        )}
-        <h1 className="text-3xl leading-tight font-semibold tracking-tight [overflow-wrap:anywhere] md:text-4xl">
-          {item.title}
-        </h1>
-        {summary && (
-          <p className="text-base leading-7 text-muted-foreground [overflow-wrap:anywhere]">
-            {summary}
-          </p>
-        )}
-        <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-border-subtle py-3 text-sm text-muted-foreground">
-          <div className="flex min-w-0 items-baseline gap-1.5">
-            <dt className="shrink-0 font-medium text-foreground">作者</dt>
-            <dd className="min-w-0 truncate">{item.author || "未知作者"}</dd>
-          </div>
-          {published && publishedIso && (
-            <div className="flex items-baseline gap-1.5">
-              <dt className="font-medium text-foreground">发布</dt>
-              <dd>
-                <time dateTime={publishedIso}>{published}</time>
-              </dd>
-            </div>
-          )}
-          <div className="flex items-center gap-1.5 tabular-nums">
-            <dt className="font-medium text-foreground">阅读</dt>
-            <dd className="inline-flex items-center gap-1">
-              <Eye className="size-4" data-icon="inline-start" aria-hidden />
-              {formatOnline(item.view_count)}
-            </dd>
-          </div>
-          <div className="flex items-center gap-1.5 tabular-nums">
-            <dt className="font-medium text-foreground">评论</dt>
-            <dd className="inline-flex items-center gap-1">
-              <MessageCircle className="size-4" data-icon="inline-start" aria-hidden />
-              {formatOnline(item.comment_count)}
-            </dd>
-          </div>
-        </dl>
-      </header>
-
-      {coverSrc && (
-        <figure className="mb-8 flex flex-col items-center">
-          <img
-            src={coverSrc}
-            alt=""
-            loading="eager"
-            decoding="async"
-            className="block h-auto max-h-[68vh] max-w-full rounded-xl object-contain ring-1 ring-border-subtle"
-          />
-        </figure>
-      )}
-
-      <div className="text-base leading-8 md:text-[17px] md:leading-[1.9]">
-        {blocks.map((block, index) => (
-          <ArticleBlock key={index} block={block} />
-        ))}
-      </div>
-
-      {tags.length > 0 && (
-        <footer className="mt-10 flex flex-col gap-3">
-          <Separator />
-          <h2 className="pt-2 text-base font-semibold">文章标签</h2>
-          <div className="flex flex-wrap gap-2" aria-label="文章标签">
-            {tags.map((tag) => (
-              <Badge key={tag} variant="secondary" className="max-w-full truncate" title={tag}>
-                {tag}
+    <>
+      <ArticleReadingFrame
+        overlay={
+          stackedDetails ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="absolute top-3 right-3 z-20 size-11 bg-background/85 shadow-sm backdrop-blur-sm md:right-5"
+              aria-label="查看文章评论"
+              title="查看文章评论"
+              aria-expanded={commentsOpen}
+              onClick={() => setCommentsOpen(true)}
+            >
+              <MessageCircle aria-hidden />
+            </Button>
+          ) : undefined
+        }
+        aside={
+          !stackedDetails ? (
+            <aside
+              aria-label="AcFun 文章评论"
+              className="flex min-h-0 w-[320px] flex-none flex-col border-l border-border/80 bg-sidebar xl:w-[340px]"
+            >
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
+                <AcfunComments resource={{ kind: "article", id: articleId }} active />
+              </div>
+            </aside>
+          ) : null
+        }
+      >
+        <article className={ARTICLE_PAGE_CLASS}>
+          <header className="flex flex-col gap-4 pb-6">
+            {item.channel_name && (
+              <Badge variant="outline" className="max-w-full truncate" title={item.channel_name}>
+                {item.channel_name}
               </Badge>
+            )}
+            <h1 className="text-3xl leading-tight font-semibold tracking-tight [overflow-wrap:anywhere] md:text-4xl">
+              {item.title}
+            </h1>
+            {summary && (
+              <p className="text-base leading-7 text-muted-foreground [overflow-wrap:anywhere]">
+                {summary}
+              </p>
+            )}
+            <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-border-subtle py-3 text-sm text-muted-foreground">
+              <div className="flex min-w-0 items-baseline gap-1.5">
+                <dt className="shrink-0 font-medium text-foreground">作者</dt>
+                <dd className="min-w-0 truncate">{item.author || "未知作者"}</dd>
+              </div>
+              {published && publishedIso && (
+                <div className="flex items-baseline gap-1.5">
+                  <dt className="font-medium text-foreground">发布</dt>
+                  <dd>
+                    <time dateTime={publishedIso}>{published}</time>
+                  </dd>
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 tabular-nums">
+                <dt className="font-medium text-foreground">阅读</dt>
+                <dd className="inline-flex items-center gap-1">
+                  <Eye className="size-4" data-icon="inline-start" aria-hidden />
+                  {formatOnline(item.view_count)}
+                </dd>
+              </div>
+              {stackedDetails ? (
+                <ArticleNarrowCommentControl
+                  commentCount={item.comment_count}
+                  open={commentsOpen}
+                  onOpenChange={setCommentsOpen}
+                />
+              ) : (
+                <div className="flex items-center gap-1.5 tabular-nums">
+                  <dt className="font-medium text-foreground">评论</dt>
+                  <dd className="inline-flex items-center gap-1">
+                    <MessageCircle className="size-4" data-icon="inline-start" aria-hidden />
+                    {formatOnline(item.comment_count)}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </header>
+
+          {coverSrc && (
+            <figure className="mb-8 flex flex-col items-center">
+              <img
+                src={coverSrc}
+                alt=""
+                loading="eager"
+                decoding="async"
+                className="block h-auto max-h-[68vh] max-w-full rounded-xl object-contain ring-1 ring-border-subtle"
+              />
+            </figure>
+          )}
+
+          <div className="text-base leading-8 md:text-[17px] md:leading-[1.9]">
+            {blocks.map((block, index) => (
+              <ArticleBlock key={index} block={block} />
             ))}
           </div>
-        </footer>
+
+          {tags.length > 0 && (
+            <footer className="mt-10 flex flex-col gap-3">
+              <Separator />
+              <h2 className="pt-2 text-base font-semibold">文章标签</h2>
+              <div className="flex flex-wrap gap-2" aria-label="文章标签">
+                {tags.map((tag) => (
+                  <Badge key={tag} variant="secondary" className="max-w-full truncate" title={tag}>
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            </footer>
+          )}
+        </article>
+      </ArticleReadingFrame>
+      {stackedDetails && (
+        <ArticleCommentsDrawer
+          articleId={articleId}
+          open={commentsOpen}
+          onOpenChange={setCommentsOpen}
+        />
       )}
-    </article>
+    </>
   );
 }

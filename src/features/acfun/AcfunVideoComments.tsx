@@ -14,6 +14,8 @@ import { videoCommentStyles } from "@/shared/components/videoCommentsStyle";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
 import {
+  acfunArticleGetCommentReplies,
+  acfunArticleGetComments,
   acfunCommentNextCursor,
   acfunCommentNextPage,
   acfunVideoGetCommentReplies,
@@ -30,6 +32,24 @@ function commentTime(timestamp: number): string {
 
 function dedupeComments(pages: readonly AcfunVideoComment[][]): AcfunVideoComment[] {
   return Array.from(new Map(pages.flat().map((comment) => [comment.id, comment])).values());
+}
+
+export type AcfunCommentResource = { kind: "video"; id: string } | { kind: "article"; id: string };
+
+function getComments(resource: AcfunCommentResource, page: number, sort: AcfunCommentSort) {
+  return resource.kind === "video"
+    ? acfunVideoGetComments({ videoId: resource.id, page, sort })
+    : acfunArticleGetComments({ articleId: resource.id, page, sort });
+}
+
+function getCommentReplies(
+  resource: AcfunCommentResource,
+  commentId: string,
+  cursor: string | null,
+) {
+  return resource.kind === "video"
+    ? acfunVideoGetCommentReplies({ videoId: resource.id, commentId, cursor })
+    : acfunArticleGetCommentReplies({ articleId: resource.id, commentId, cursor });
 }
 
 function CommentPictures({ pictures }: { pictures: readonly string[] }) {
@@ -155,26 +175,21 @@ function ReplyPreview({ comment, onOpen }: { comment: AcfunVideoComment; onOpen:
 }
 
 function CommentReplies({
-  videoId,
+  resource,
   comment,
   active,
   onCollapse,
 }: {
-  videoId: string;
+  resource: AcfunCommentResource;
   comment: AcfunVideoComment;
   active: boolean;
   onCollapse: () => void;
 }) {
   const repliesQuery = useInfiniteQuery({
-    queryKey: ["acfun_video_comment_replies", videoId, comment.id],
-    enabled: active && comment.reply_count > 0,
+    queryKey: ["acfun_comment_replies", resource.kind, resource.id, comment.id],
+    enabled: active && resource.id !== "" && comment.reply_count > 0,
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) =>
-      acfunVideoGetCommentReplies({
-        videoId,
-        commentId: comment.id,
-        cursor: pageParam,
-      }),
+    queryFn: ({ pageParam }) => getCommentReplies(resource, comment.id, pageParam),
     getNextPageParam: (lastPage) => acfunCommentNextCursor(lastPage),
   });
   const replies = dedupeComments(repliesQuery.data?.pages.map((page) => page.items) ?? []);
@@ -243,13 +258,13 @@ function CommentReplies({
 }
 
 function CommentThread({
-  videoId,
+  resource,
   comment,
   active,
   expanded,
   onToggle,
 }: {
-  videoId: string;
+  resource: AcfunCommentResource;
   comment: AcfunVideoComment;
   active: boolean;
   expanded: boolean;
@@ -283,7 +298,7 @@ function CommentThread({
         <div className={videoCommentStyles.previewIndent}>
           <CommentReplies
             key={comment.id}
-            videoId={videoId}
+            resource={resource}
             comment={comment}
             active={active}
             onCollapse={onToggle}
@@ -311,19 +326,28 @@ function CommentsSkeleton() {
   );
 }
 
-export function AcfunVideoComments({ videoId, active }: { videoId: string; active: boolean }) {
+export function AcfunComments({
+  resource,
+  active,
+}: {
+  resource: AcfunCommentResource;
+  active: boolean;
+}) {
   const [sort, setSort] = useState<AcfunCommentSort>("hot");
-  const [expandedCommentId, setExpandedCommentId] = useState<string | null>(null);
+  const [expandedComment, setExpandedComment] = useState<{
+    resourceKind: AcfunCommentResource["kind"];
+    resourceId: string;
+    commentId: string | null;
+  }>({ resourceKind: resource.kind, resourceId: resource.id, commentId: null });
+  const expandedCommentId =
+    expandedComment.resourceKind === resource.kind && expandedComment.resourceId === resource.id
+      ? expandedComment.commentId
+      : null;
   const commentsQuery = useInfiniteQuery({
-    queryKey: ["acfun_video_comments", videoId, sort],
-    enabled: active && videoId !== "",
+    queryKey: ["acfun_comments", resource.kind, resource.id, sort],
+    enabled: active && resource.id !== "",
     initialPageParam: 1,
-    queryFn: ({ pageParam }) =>
-      acfunVideoGetComments({
-        videoId,
-        page: pageParam,
-        sort,
-      }),
+    queryFn: ({ pageParam }) => getComments(resource, pageParam, sort),
     getNextPageParam: (lastPage, _, lastPageParam) => acfunCommentNextPage(lastPage, lastPageParam),
   });
   const pages = commentsQuery.data?.pages ?? [];
@@ -338,7 +362,10 @@ export function AcfunVideoComments({ videoId, active }: { videoId: string; activ
   });
 
   return (
-    <div className="flex min-h-full flex-col" aria-label="AcFun 视频评论">
+    <div
+      className="flex min-h-full flex-col"
+      aria-label={resource.kind === "video" ? "AcFun 视频评论" : "AcFun 文章评论"}
+    >
       <div className={videoCommentStyles.panelHeader}>
         <span className={videoCommentStyles.panelCount} title="评论与回复的聚合总数">
           {total > 0 ? `共 ${formatOnline(total)} 条` : "评论"}
@@ -351,7 +378,11 @@ export function AcfunVideoComments({ videoId, active }: { videoId: string; activ
           title="点击切换评论排序"
           onClick={() => {
             setSort((current) => (current === "hot" ? "time" : "hot"));
-            setExpandedCommentId(null);
+            setExpandedComment({
+              resourceKind: resource.kind,
+              resourceId: resource.id,
+              commentId: null,
+            });
           }}
         >
           {sort === "hot" ? "最热" : "最新"}
@@ -379,13 +410,21 @@ export function AcfunVideoComments({ videoId, active }: { videoId: string; activ
           {comments.map((comment) => (
             <CommentThread
               key={comment.id}
-              videoId={videoId}
+              resource={resource}
               comment={comment}
               active={active}
               expanded={expandedCommentId === comment.id}
-              onToggle={() =>
-                setExpandedCommentId((current) => (current === comment.id ? null : comment.id))
-              }
+              onToggle={() => {
+                setExpandedComment((current) => {
+                  const sameResource =
+                    current.resourceKind === resource.kind && current.resourceId === resource.id;
+                  return {
+                    resourceKind: resource.kind,
+                    resourceId: resource.id,
+                    commentId: sameResource && current.commentId === comment.id ? null : comment.id,
+                  };
+                });
+              }}
             />
           ))}
           <LoadMoreRow
@@ -400,4 +439,8 @@ export function AcfunVideoComments({ videoId, active }: { videoId: string; activ
       )}
     </div>
   );
+}
+
+export function AcfunVideoComments({ videoId, active }: { videoId: string; active: boolean }) {
+  return <AcfunComments resource={{ kind: "video", id: videoId }} active={active} />;
 }
