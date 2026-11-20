@@ -144,13 +144,18 @@ async function retainRecordingDanmaku(target: FollowRecordingTarget): Promise<vo
       siteId: target.site_id,
       roomId: target.room_id,
       connectionEpoch,
+      // 关注入口可能在当前播放房间之外开启录制。后台连接不得替换前台连接、
+      // 修改其 epoch，或抢走当前房间的发送资格。
+      backgroundOnly: true,
     });
-  } finally {
-    // 复用这条连接的 generation。若导航已经安装了更新的房间，
-    // 原生围栏会让这次 detach 变成无操作而不影响它。
+  } catch (error) {
+    // 成功时后端已将连接放入录制持有的后台槽位，不需要再执行路由式 detach。
+    // 失败时仍需按同一个 generation 清掉可能已创建的后台占位。
     await invokeCmd("danmaku_disconnect", {
       connectionEpoch,
-    });
+      backgroundOnly: true,
+    }).catch(() => undefined);
+    throw error;
   }
 }
 
@@ -163,7 +168,7 @@ async function startFollowRecording(
   const context = await resolveFollowRecordingContext(queryClient, target, qualityLevel);
   const item = await startRecording(context, {
     includeDanmaku,
-    // 关注录制的启动总是发生在所属播放器页之外。
+    // 关注列表各入口均按后台任务启动录制，离开播放器页后仍继续。
     continueOnLeave: true,
   });
   setRecordingItemCaches(queryClient, (current) => [
@@ -180,7 +185,7 @@ async function startFollowRecording(
 
 export function useFollowRecordingController() {
   const queryClient = useQueryClient();
-  // 关注页的录制按钮只需要判断目标房间是否已在录制，不读历史库。
+  // 关注列表各入口共享活动录制状态，只判断当前目标是否已在录制，不读历史库。
   const recordings = useActiveRecordings();
   const qualityLevel = useSettingsStore((state) => state.qualityLevel);
   const includeDanmaku = useSettingsStore((state) => state.recordingIncludeDanmaku);

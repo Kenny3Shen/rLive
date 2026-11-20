@@ -183,30 +183,64 @@ pub async fn danmaku_connect(
     site_id: SiteId,
     room_id: String,
     connection_epoch: u64,
+    background_only: Option<bool>,
 ) -> AppResult<()> {
+    let background_only = background_only.unwrap_or(false);
     let source_key = format!("live:{}:{}", site_id.as_str(), room_id.trim());
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    let retained_source = state
-        .danmaku
-        .active_source_key()
-        .filter(|source_key| state.recording.has_background_danmaku_recording(source_key));
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    let retained_source: Option<String> = None;
-    if !state
-        .danmaku
-        .begin_connect(connection_epoch, source_key, retained_source.is_some())
-    {
+    if background_only {
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        {
+            // 录制拥有已有活动连接时，该连接会继续由 emit_batch 写入弹幕轨，
+            // 无需再开第二条 websocket。
+            if !state
+                .recording
+                .has_background_danmaku_recording(&source_key)
+                || !state
+                    .danmaku
+                    .begin_background_connect(connection_epoch, source_key.clone())
+            {
+                return Ok(());
+            }
+            // 首次检查与占位插入之间，录制可能刚好结束。此时 finish 路径还看不到
+            // 占位；插入后必须再次确认，并按本次 generation 精确移除，避免随后
+            // 加载的 metadata 安装一条无人拥有的 websocket。
+            if !state
+                .recording
+                .has_background_danmaku_recording(&source_key)
+            {
+                state
+                    .danmaku
+                    .disconnect_background_for_generation(connection_epoch);
+                return Ok(());
+            }
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
         return Ok(());
     }
-    // 消除"完成与路由清理"的竞争：如果录制在第一次检查之后、
-    // 连接被分离之前完成，它的完成回调此时还看不到后台任务。
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    if let Some(source_key) = retained_source
-        && !state
-            .recording
-            .has_background_danmaku_recording(&source_key)
-    {
-        state.danmaku.disconnect_background_for_source(&source_key);
+    if !background_only {
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        let retained_source = state
+            .danmaku
+            .active_source_key()
+            .filter(|source_key| state.recording.has_background_danmaku_recording(source_key));
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+        let retained_source: Option<String> = None;
+        if !state
+            .danmaku
+            .begin_connect(connection_epoch, source_key, retained_source.is_some())
+        {
+            return Ok(());
+        }
+        // 消除"完成与路由清理"的竞争：如果录制在第一次检查之后、
+        // 连接被分离之前完成，它的完成回调此时还看不到后台任务。
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        if let Some(source_key) = retained_source
+            && !state
+                .recording
+                .has_background_danmaku_recording(&source_key)
+        {
+            state.danmaku.disconnect_background_for_source(&source_key);
+        }
     }
     // 在一次短暂的数据库加锁中读完账号状态与设置。之后站点实例自行持有
     // 临时的 Web 会话，因此没有任何锁会跨越 HTTP 或
@@ -293,7 +327,16 @@ fn strip_bilibili_danmaku_cookie(raw: &mut serde_json::Value) {
 pub fn danmaku_disconnect(
     state: State<'_, AppState>,
     connection_epoch: Option<u64>,
+    background_only: Option<bool>,
 ) -> AppResult<()> {
+    let background_only = background_only.unwrap_or(false);
+    if background_only {
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        if let Some(epoch) = connection_epoch {
+            state.danmaku.disconnect_background_for_generation(epoch);
+        }
+        return Ok(());
+    }
     if let Some(epoch) = connection_epoch {
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         if let Some(source_key) = state.danmaku.source_key_for_generation(epoch)

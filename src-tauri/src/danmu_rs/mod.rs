@@ -480,6 +480,30 @@ impl DanmakuManager {
         accepted
     }
 
+    /// 为录制新增一条独立的后台连接，不改变当前播放页的活动连接与路由围栏。
+    ///
+    /// 当前活动连接已经属于同一房间时返回 `false`：它会在录制登记完成后直接
+    /// 由 `emit_batch` 写入弹幕轨，不能为了录制再开第二条 websocket。
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
+    pub fn begin_background_connect(&self, generation: u64, source_key: String) -> bool {
+        let Ok(mut state) = self.inner.lock() else {
+            return false;
+        };
+        if state.active_source_key.as_deref() == Some(source_key.as_str())
+            || state.background_tasks.contains_key(&source_key)
+        {
+            return false;
+        }
+        state.background_tasks.insert(
+            source_key,
+            BackgroundDanmakuConnection {
+                generation,
+                tasks: DanmakuTasks::default(),
+            },
+        );
+        true
+    }
+
     /// 唤醒正在等待当前 generation 安装 sender 的 HTTP 确认。
     /// generation、活动房间或任务发生任何变化时都要通知一次。
     fn notify_sender_state(&self) {
@@ -591,6 +615,29 @@ impl DanmakuManager {
             return false;
         };
         let Some(connection) = state.background_tasks.remove(source_key) else {
+            return false;
+        };
+        connection.tasks.abort();
+        true
+    }
+
+    /// 清理指定后台 connect 的占位或已安装任务，不影响活动路由连接。
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos", test))]
+    pub fn disconnect_background_for_generation(&self, generation: u64) -> bool {
+        let Ok(mut state) = self.inner.lock() else {
+            return false;
+        };
+        let Some(source_key) =
+            state
+                .background_tasks
+                .iter()
+                .find_map(|(source_key, connection)| {
+                    (connection.generation == generation).then(|| source_key.clone())
+                })
+        else {
+            return false;
+        };
+        let Some(connection) = state.background_tasks.remove(&source_key) else {
             return false;
         };
         connection.tasks.abort();
@@ -1228,6 +1275,64 @@ mod tests {
                 .is_some()
         );
         assert!(manager.disconnect_background_for_source(source));
+    }
+
+    #[tokio::test]
+    async fn background_recording_connect_preserves_active_route_connection() {
+        let manager = DanmakuManager::new();
+        let active_source = "live:bilibili:100";
+        let recording_source = "live:bilibili:200";
+
+        assert!(manager.begin_connect(100, active_source.into(), false));
+        let active_connection = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let active_batch = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let (active_control, _active_receiver) = mpsc::unbounded_channel();
+        assert!(manager.set_tasks_if_current(
+            100,
+            active_connection,
+            active_batch,
+            active_control,
+            DanmakuEventSender::new(mpsc::channel(1).0, SelfDanmakuIdentity::default())
+        ));
+
+        assert!(manager.begin_background_connect(101, recording_source.into()));
+        let recording_connection = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let recording_batch = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let (recording_control, _recording_receiver) = mpsc::unbounded_channel();
+        assert!(manager.set_tasks_if_current(
+            101,
+            recording_connection,
+            recording_batch,
+            recording_control,
+            DanmakuEventSender::new(mpsc::channel(1).0, SelfDanmakuIdentity::default())
+        ));
+
+        assert!(manager.is_current(100));
+        assert!(manager.accepts_connection_generation(100));
+        assert!(manager.accepts_connection_generation(101));
+        assert_eq!(manager.active_source_key().as_deref(), Some(active_source));
+        // 当前播放的房间开始录制时，活动连接本身已进入采集路径，不能再开一条。
+        assert!(!manager.begin_background_connect(102, active_source.into()));
+
+        assert!(manager.disconnect_background_for_generation(101));
+        assert!(!manager.disconnect_background_for_generation(101));
+        assert!(manager.accepts_connection_generation(100));
+        assert!(!manager.accepts_connection_generation(101));
+        assert_eq!(manager.active_source_key().as_deref(), Some(active_source));
+
+        // 录制收尾移除占位后才到达的 connect continuation 必须被拒绝，
+        // 不能重新安装无人持有、也不会被 finish 路径清理的任务。
+        let stale_connection = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let stale_batch = tauri::async_runtime::spawn(std::future::pending::<()>());
+        let (stale_control, _stale_receiver) = mpsc::unbounded_channel();
+        assert!(!manager.set_tasks_if_current(
+            101,
+            stale_connection,
+            stale_batch,
+            stale_control,
+            DanmakuEventSender::new(mpsc::channel(1).0, SelfDanmakuIdentity::default())
+        ));
+        manager.disconnect();
     }
 
     #[tokio::test]
