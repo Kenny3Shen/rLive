@@ -229,9 +229,11 @@ const RecordingCard = memo(function RecordingCard({
           }
         />
       </ContextMenuTrigger>
-      <ContextMenuContent className="min-w-48">
+      <ContextMenuContent className="w-60 max-w-[calc(100vw-1rem)]">
         <ContextMenuGroup>
-          <ContextMenuLabel className="truncate">{item.title}</ContextMenuLabel>
+          <ContextMenuLabel className="truncate" title={item.title}>
+            {item.title}
+          </ContextMenuLabel>
           {playable && (
             <ContextMenuItem onClick={() => onOpen(item)}>
               <Play data-icon="inline-start" aria-hidden />

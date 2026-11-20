@@ -356,9 +356,11 @@ export const VideoCard = memo(function VideoCard({
         {cardBody}
       </ContextMenuTrigger>
 
-      <ContextMenuContent className="min-w-48">
+      <ContextMenuContent className="w-60 max-w-[calc(100vw-1rem)]">
         <ContextMenuGroup>
-          <ContextMenuLabel>{item.title}</ContextMenuLabel>
+          <ContextMenuLabel className="truncate" title={item.title}>
+            {item.title}
+          </ContextMenuLabel>
           {canDownload && (
             <ContextMenuItem
               disabled={downloadMutation.isPending}

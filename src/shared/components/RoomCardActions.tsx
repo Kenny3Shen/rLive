@@ -279,9 +279,18 @@ export function RoomCardActions({
           onOpenChange={onOpenChange}
           onOpenChangeComplete={(nextOpen) => setClosed(!nextOpen)}
         >
-          <ContextMenuContent className="min-w-48" anchor={anchor} finalFocus={cardRef}>
+          <ContextMenuContent
+            className="w-60 max-w-[calc(100vw-1rem)]"
+            anchor={anchor}
+            finalFocus={cardRef}
+          >
             <ContextMenuGroup>
-              <ContextMenuLabel>{room.title || room.user_name || "直播间"}</ContextMenuLabel>
+              <ContextMenuLabel
+                className="truncate"
+                title={room.title || room.user_name || "直播间"}
+              >
+                {room.title || room.user_name || "直播间"}
+              </ContextMenuLabel>
               <ContextMenuItem onClick={() => void copyRoomLink()}>
                 <Copy aria-hidden />
                 复制房间链接

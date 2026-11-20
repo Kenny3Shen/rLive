@@ -643,9 +643,11 @@ function DownloadRow({
       <ContextMenuTrigger render={<article data-download-id={item.id} className={cardClassName} />}>
         {cardBody}
       </ContextMenuTrigger>
-      <ContextMenuContent className="min-w-48">
+      <ContextMenuContent className="w-60 max-w-[calc(100vw-1rem)]">
         <ContextMenuGroup>
-          <ContextMenuLabel>{item.title}</ContextMenuLabel>
+          <ContextMenuLabel className="truncate" title={item.title}>
+            {item.title}
+          </ContextMenuLabel>
           {playable && onPlay && (
             <ContextMenuItem onClick={onPlay}>
               <Play aria-hidden />
