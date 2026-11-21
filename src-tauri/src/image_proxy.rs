@@ -971,18 +971,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(cache_root);
     }
 
-    /// 上游连不上时必须回 502，而不是不写任何字节就断开（ERR_EMPTY_RESPONSE）。
+    /// 上游连接后断开时必须回 502，而不是不写任何字节就断开（ERR_EMPTY_RESPONSE）。
     #[tokio::test]
-    async fn unreachable_upstream_is_answered_with_bad_gateway() {
+    async fn upstream_disconnect_is_answered_with_bad_gateway() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        // 先占一个端口再释放，得到一个当前无人监听的地址。
-        let closed_addr = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap();
+        // 持有监听器，直到代理连接后再主动断开，稳定触发 request.send() 的连接错误。
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let mut upstream_task = tokio::spawn(async move {
+            let (stream, _) = upstream.accept().await?;
+            drop(stream);
+            Ok::<(), std::io::Error>(())
+        });
         let cache_root = std::env::temp_dir().join(format!(
-            "rlive-image-proxy-unreachable-{}",
+            "rlive-image-proxy-disconnect-{}",
             uuid::Uuid::new_v4().simple()
         ));
         let proxy = ImageProxy::new(cache_root.clone());
@@ -990,7 +993,7 @@ mod tests {
             .start_with_allowlist(&["127.0.0.1"], &crate::proxy::ProxyRoute::Direct)
             .await
             .unwrap();
-        let encoded = format!("http%3A%2F%2F{closed_addr}%2Fpic.png").replace(':', "%3A");
+        let encoded = format!("http%3A%2F%2F{upstream_addr}%2Fpic.png").replace(':', "%3A");
         let mut local = tokio::net::TcpStream::connect(bases[0].trim_start_matches("http://"))
             .await
             .unwrap();
@@ -1014,7 +1017,21 @@ mod tests {
         let text = String::from_utf8_lossy(&response);
         assert!(text.starts_with("HTTP/1.1 502 Bad Gateway"), "{text}");
         assert!(text.contains("Cache-Control: no-store"), "{text}");
-        assert!(!text.contains(&closed_addr.to_string()), "不得回显上游地址");
+        assert!(
+            !text.contains(&upstream_addr.to_string()),
+            "不得回显上游地址"
+        );
+
+        match tokio::time::timeout(std::time::Duration::from_secs(1), &mut upstream_task).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => panic!("upstream accept failed: {error}"),
+            Ok(Err(error)) => panic!("upstream task failed: {error}"),
+            Err(_) => {
+                upstream_task.abort();
+                let _ = upstream_task.await;
+                panic!("upstream accept task did not finish");
+            }
+        }
 
         proxy.stop();
         let _ = std::fs::remove_dir_all(cache_root);
