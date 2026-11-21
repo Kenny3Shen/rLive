@@ -37,14 +37,9 @@ describe("代理三档设置", () => {
       }
       if (command === "image_proxy_url") {
         proxyRefreshes += 1;
-        return {
-          origins: [
-            "http://127.0.0.1:4101",
-            "http://127.0.0.1:4102",
-            "http://127.0.0.1:4103",
-            "http://127.0.0.1:4104",
-          ],
-        };
+        // 本组只验证设置变化会刷新图片代理；返回不可用路由，避免全局 origin
+        // 留给后续测试文件，使完整套件不再依赖测试执行顺序。
+        return null;
       }
       throw new Error(`意外 IPC 命令：${command}`);
     });
