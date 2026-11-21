@@ -209,20 +209,50 @@ export function describeAsrModelStatus(
   }
 }
 
-export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boolean }) {
+export function shouldQueryAsrModelStatus({
+  supported,
+  startupReady = true,
+}: {
+  supported: boolean;
+  startupReady?: boolean;
+}): boolean {
+  return supported && startupReady;
+}
+
+export function shouldAutoPrepareAsrModel({
+  supported,
+  featureEnabled,
+  startupReady = true,
+  autoPrepare = true,
+}: {
+  supported: boolean;
+  featureEnabled: boolean;
+  startupReady?: boolean;
+  autoPrepare?: boolean;
+}): boolean {
+  return supported && featureEnabled && startupReady && autoPrepare;
+}
+
+export function useAsrModelStatus(options: {
+  enabled: boolean;
+  autoPrepare?: boolean;
+  /** 当前播放会话是否已经允许启动 ASR 外围查询；默认立即允许。 */
+  startupReady?: boolean;
+}) {
   const queryClient = useQueryClient();
   const supported = supportsLocalAsr();
   const autoPrepare = options.autoPrepare ?? true;
+  const startupReady = options.startupReady ?? true;
   const attemptedStateRef = useRef<string | null>(null);
   const query = useQuery({
     queryKey: ASR_MODEL_STATUS_QUERY_KEY,
-    enabled: supported,
+    enabled: shouldQueryAsrModelStatus({ supported, startupReady }),
     staleTime: 0,
     refetchOnMount: "always",
     retry: 1,
     queryFn: () => invokeCmd<AsrModelStatus>("asr_get_status"),
     refetchInterval: (currentQuery) => {
-      if (!options.enabled) return false;
+      if (!options.enabled || !startupReady) return false;
       const state = currentQuery.state.data?.state;
       if (!state || state === "downloading" || state === "extracting" || state === "loading") {
         return 500;
@@ -256,7 +286,14 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
   }, [queryClient, supported]);
 
   useEffect(() => {
-    if (!supported || !autoPrepare || !options.enabled) {
+    if (
+      !shouldAutoPrepareAsrModel({
+        supported,
+        featureEnabled: options.enabled,
+        startupReady,
+        autoPrepare,
+      })
+    ) {
       attemptedStateRef.current = null;
       return;
     }
@@ -266,7 +303,7 @@ export function useAsrModelStatus(options: { enabled: boolean; autoPrepare?: boo
     if (attemptedStateRef.current === attemptKey) return;
     attemptedStateRef.current = attemptKey;
     void prepare().catch(() => {});
-  }, [autoPrepare, options.enabled, prepare, query.data, supported]);
+  }, [autoPrepare, options.enabled, prepare, query.data, startupReady, supported]);
 
   return {
     supported,

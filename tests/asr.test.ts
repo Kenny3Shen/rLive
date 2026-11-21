@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   appendAsrCaptionLine,
   appendPendingPcm,
@@ -10,6 +12,8 @@ import {
 import {
   describeAsrModelStatus,
   estimateAsrDownloadBytes,
+  shouldAutoPrepareAsrModel,
+  shouldQueryAsrModelStatus,
   type AsrModelStatus,
 } from "../src/features/asr/model";
 describe("ASR audio transport", () => {
@@ -146,5 +150,53 @@ describe("ASR download estimate", () => {
     });
     expect(presentation.message).toContain("Qwen3-ASR 0.6B 模型已就绪（NVIDIA CUDA");
     expect(presentation.message).toContain("2 个热词");
+  });
+});
+
+describe("ASR 播放启动门控", () => {
+  test("模型状态查询和自动下载只在当前播放会话启动后执行", () => {
+    expect(shouldQueryAsrModelStatus({ supported: true, startupReady: false })).toBe(false);
+    expect(shouldQueryAsrModelStatus({ supported: false, startupReady: true })).toBe(false);
+    expect(shouldQueryAsrModelStatus({ supported: true, startupReady: true })).toBe(true);
+    expect(
+      shouldAutoPrepareAsrModel({
+        supported: true,
+        featureEnabled: true,
+        startupReady: false,
+        autoPrepare: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoPrepareAsrModel({
+        supported: true,
+        featureEnabled: true,
+        startupReady: true,
+        autoPrepare: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("启动门只暂停外围副作用，不复位用户的字幕开关", () => {
+    const sourceRoot = join(import.meta.dir, "..");
+    const hook = readFileSync(join(sourceRoot, "src/features/asr/useAsrCaptions.ts"), "utf8");
+    const featureResetStart = hook.indexOf("功能或模型不可用时整条字幕管线复位");
+    const mediaResetStart = hook.indexOf("切房间或换媒体元素时清空流式解码状态");
+    const captureStart = hook.indexOf(
+      "useEffect(() => {\n    if (\n      !captionsOn",
+      mediaResetStart,
+    );
+    expect(featureResetStart).toBeGreaterThanOrEqual(0);
+    expect(mediaResetStart).toBeGreaterThan(featureResetStart);
+    expect(captureStart).toBeGreaterThan(mediaResetStart);
+    const featureReset = hook.slice(featureResetStart, mediaResetStart);
+    const mediaReset = hook.slice(mediaResetStart, captureStart);
+    const player = readFileSync(join(sourceRoot, "src/features/video/VideoPlayerPage.tsx"), "utf8");
+
+    expect(featureReset).toContain("if (!options.featureEnabled || !model.supported)");
+    expect(featureReset).not.toContain("startupReady");
+    expect(mediaReset).toContain('if (startupReady) void invokeCmd("asr_reset_stream")');
+    expect(mediaReset).toContain("startupReady,");
+    expect(player).toContain("featureEnabled: asrEnabled,");
+    expect(player).toContain("startupReady: mediaReady,");
   });
 });

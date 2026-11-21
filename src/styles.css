@@ -1224,6 +1224,31 @@ html[data-platform="android"] .app-shell {
   initial-value: 0px;
 }
 
+/* 移动 VOD 首屏直接按方向落位，不等待宽度断点或媒体元数据纠正布局。
+   横屏把详情留在右侧，视频与上下控制层共用左侧舞台；方向变化不重建媒体节点。 */
+[data-video-details-frame][data-vod-mobile="true"][data-vod-orientation="landscape"] {
+  flex-direction: row;
+}
+
+[data-video-details-frame][data-vod-mobile="true"][data-vod-orientation="landscape"]
+  > [data-vod-details-stage] {
+  width: auto;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  flex: 1;
+  aspect-ratio: auto;
+}
+
+[data-video-details-frame][data-vod-mobile="true"][data-vod-orientation="landscape"]
+  > [data-vod-details-aside] {
+  width: clamp(15rem, 32vw, 20rem);
+  flex: none;
+  border-top-width: 0;
+  border-left-width: 1px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 @media (width < 64rem) {
   [data-video-details-frame][data-vod-details-share="true"] {
     position: relative;

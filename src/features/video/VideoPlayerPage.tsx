@@ -70,7 +70,6 @@ import {
   PLAYER_HUD_SURFACE_POSITION_CLASS,
   PLAYER_HUD_SURFACE_TOP_CLASS,
 } from "@/shared/components/player/playerBackGeometry";
-import { usePlayerStartupGate } from "@/shared/hooks/usePlayerStartupGate";
 import { usePlayerChromeIdle } from "@/shared/hooks/usePlayerChromeIdle";
 import { usePlayerEdgeGesture } from "@/shared/hooks/usePlayerEdgeGesture";
 import { usePlayerStageTapGestures } from "@/shared/hooks/usePlayerStageTapGestures";
@@ -90,6 +89,7 @@ import {
   showPlayerFullscreenLock,
 } from "@/shared/components/player/PlayerFullscreenLock";
 import { useScreenWakeLock } from "@/shared/hooks/useScreenWakeLock";
+import { useVideoStartupReveal } from "@/shared/motion/useVideoStartupReveal";
 import { copyText } from "@/shared/clipboard";
 import { openExternalUrl } from "@/shared/externalUrl";
 import {
@@ -224,7 +224,12 @@ import {
   videoPlayPath,
 } from "./videoRoute";
 import { shortsPath } from "@/features/shorts/shortsFeed";
-import { ShortsStageSkeleton } from "@/features/shorts/ShortsStageSkeleton";
+import {
+  canReleaseVideoMedia,
+  canReleaseExistingVideoSource,
+  useVideoStartupGate,
+  videoStartupSessionKey,
+} from "./useVideoStartupGate";
 import { videoDimensionAspect } from "@/shared/videoDimension";
 import { navigateBackFromVideo, navigateToVideoHome } from "./videoHomeNavigation";
 import {
@@ -522,6 +527,11 @@ function VideoPlayerPageContent() {
   const autoRecoverySettleRef = useRef<() => void>(() => {});
   const playInfoResultRef = useRef<VideoPlaybackResult | undefined>(undefined);
   const playUrlRef = useRef<string | undefined>(undefined);
+  const playDurationRef = useRef(0);
+  /** 当前真正绑定到唯一 `<video>` 的地址；placeholder 不等于已绑定源。 */
+  const activeMediaSourceRef = useRef<{ url: string; kind: VideoJsPlaybackKind } | null>(null);
+  const playbackStartupKeyRef = useRef("");
+  const playInfoSettledRef = useRef(false);
   const playerSettingsRef = useRef({ playerRevision, qualityQn, audioOnly, videoKey: "" });
 
   /** 只结算令牌所属的那一轮自动恢复：迟到旧请求不会清掉下一轮令牌。 */
@@ -633,6 +643,21 @@ function VideoPlayerPageContent() {
   }, [fullscreen.fullscreen]);
 
   const rawCid = params?.cid ?? 0;
+  /**
+   * 显式 cid 已足够发起播放，稿件详情必须让位给取流。
+   *
+   * URL 缺 cid 时详情本身就是取流键的前置条件，只能继续先行；显式 cid
+   * 则在当前会话真正出画后才放行，避免侧栏/自动分流与首个媒体分片抢带宽。
+   */
+  const archiveBootstrapKey = JSON.stringify([
+    params?.bvid ?? "",
+    params?.epId ?? "",
+    rawCid,
+    qualityQn,
+    audioOnly,
+    playerRevision,
+  ]);
+  const [archiveUnlockedKey, setArchiveUnlockedKey] = useState<string | null>(null);
 
   // 番剧 / 影视卡片直入：链接只带 season（索引/排行榜接口都不给 bvid/cid），
   // 先取 season 详情挑出要播的那一集，再把 URL 规范成带完整取流键的形态
@@ -689,7 +714,10 @@ function VideoPlayerPageContent() {
   // 共享一次请求。PGC（epId）有专属分集接口，不经此路径。
   const archiveQuery = useQuery({
     queryKey: ["video_archive", params?.bvid ?? ""],
-    enabled: Boolean(params?.bvid) && !params?.epId,
+    enabled:
+      Boolean(params?.bvid) &&
+      !params?.epId &&
+      (rawCid <= 0 || archiveUnlockedKey === archiveBootstrapKey),
     queryFn: () => videoGetArchive(params!.bvid!),
     staleTime: 5 * 60_000,
     retry: false,
@@ -738,8 +766,15 @@ function VideoPlayerPageContent() {
     gcTime: 0,
     retry: false,
   });
-  /** 身份已定但历史还没查完：播放器要等它，否则先从 0 播再跳会闪一下。 */
-  const resumePending = resumeQuery.isPending && historyKind !== null && historyOid.length > 0;
+  /**
+   * 播放器要等续播身份和历史一起落定，否则先从 0 播再跳会闪一下。
+   * PGC 的 season 详情负责提供历史主键，本身也是这条依赖的一部分；否则
+   * `historyOid` 从空变成 season_id 时会让已经起播的媒体白白重建一次。
+   */
+  const resumePending =
+    historyKind !== null &&
+    ((historyKind === "pgc" && seasonQuery.isPending) ||
+      (historyOid.length > 0 && resumeQuery.isPending));
   // 取流键。URL 带了就用它（用户明确点的那一集）；只带 bvid 进来（首页/搜索/UP 主
   // 卡片）时，上次看到一半的那一 P 优先于详情给的 P1 —— 「上次退出的地方」包含
   // 「上次看的是哪一 P」。续播查询未落定前保持 0：先按 P1 取流再切到上次那一 P
@@ -766,7 +801,6 @@ function VideoPlayerPageContent() {
     window.addEventListener("popstate", cancelShortsNavigation);
     return () => window.removeEventListener("popstate", cancelShortsNavigation);
   }, [cancelShortsNavigation]);
-  const { ready: mediaReady, release: releaseStartup } = usePlayerStartupGate(videoKey);
   // 渲染期不读 ref：内容键同步给记录续播快照的回调。
   useLayoutEffect(() => {
     videoKeyRef.current = videoKey;
@@ -782,6 +816,7 @@ function VideoPlayerPageContent() {
   const frameHintAspectRatio = videoFrameHintFromState(location.state, videoKey);
   const detailsResizeEnabled =
     mobileClient &&
+    portraitOrientation &&
     stackedDetails &&
     !webFullscreen &&
     !fullscreen.fullscreen &&
@@ -1167,23 +1202,91 @@ function VideoPlayerPageContent() {
   useLayoutEffect(() => {
     playerSettingsRef.current = { playerRevision, qualityQn, audioOnly, videoKey };
     playInfoResultRef.current = playInfoQuery.data;
+    playDurationRef.current = playInfo?.duration ?? 0;
+    playInfoSettledRef.current = !playInfoQuery.isFetching && !playInfoQuery.isPlaceholderData;
     // keepPreviousData 的占位渲染仍属于本轮取流，令牌留到结果终态结算。
     if (autoRecoveryActiveRef.current && !autoRecoveryActiveRef.current()) {
       autoRecoveryActiveRef.current = null;
     }
-  }, [audioOnly, playerRevision, playInfoQuery.data, qualityQn, videoKey]);
-  // 保留取流键与本地续播的必要依赖；侧栏、字幕、缩略图和弹幕让首帧先走。
-  // 失败时也显示侧栏，不能把切集/查看详情等恢复入口一起锁住。
-  const secondaryReady =
-    mediaReady ||
-    playInfoQuery.isError ||
-    !!playbackError ||
-    archiveQuery.isError ||
-    seasonQuery.isError;
-  const secondaryReadyRef = useRef(secondaryReady);
+  }, [
+    audioOnly,
+    playerRevision,
+    playInfoQuery.data,
+    playInfoQuery.isFetching,
+    playInfoQuery.isPlaceholderData,
+    playInfo?.duration,
+    qualityQn,
+    videoKey,
+  ]);
+
+  const mpdUrl = playInfo?.mpd_url;
+  // 仅音频时直接播音轨地址并使用浏览器原生媒体能力；视频轨使用 Video.js 的 DASH 适配器。
+  const playUrl = playInfo?.audio_only ? playInfo.audio_url : mpdUrl;
+  const playbackStartupKey = videoStartupSessionKey({
+    videoKey,
+    qualityQn,
+    audioOnly,
+    playerRevision,
+    playUrl,
+  });
+  const {
+    mediaReady,
+    chromeReady: playbackChromeReady,
+    release: releaseStartup,
+  } = useVideoStartupGate(playbackStartupKey);
+  useVideoStartupReveal({
+    containerRef: detailsFrameRef,
+    entryKey: location.key,
+    ready: playbackChromeReady,
+    orientation: portraitOrientation ? "portrait" : "landscape",
+    mobileClient,
+  });
+  const mediaReadyRef = useRef(mediaReady);
   useLayoutEffect(() => {
-    secondaryReadyRef.current = secondaryReady;
-  }, [secondaryReady]);
+    mediaReadyRef.current = mediaReady;
+  }, [mediaReady]);
+  useEffect(() => {
+    if (mediaReady) setArchiveUnlockedKey(archiveBootstrapKey);
+  }, [archiveBootstrapKey, mediaReady]);
+  const playKind: VideoJsPlaybackKind = playInfo?.audio_only ? "native" : "dash";
+  // Video.js 的 dash.js 适配器原生处理带 SegmentList 的 MPD，不再维护私有分片时间轴补丁。
+  useLayoutEffect(() => {
+    playUrlRef.current = playUrl;
+    playbackStartupKeyRef.current = playbackStartupKey;
+  }, [playUrl, playbackStartupKey]);
+
+  /**
+   * 设置改变时完整 key 会先关闭闸门，但 keepPreviousData 仍可能返回同一地址。
+   * 查询真正结算后，若现存媒体就是该地址且已经可播，只重新放行闸门，不重绑源。
+   * 旧查询的 placeholder/pending 状态不能走这里，避免比新结果更早放行。
+   */
+  useEffect(() => {
+    const media = videoRef.current;
+    if (
+      !canReleaseExistingVideoSource({
+        activeSource: activeMediaSourceRef.current?.url ?? null,
+        activeKind: activeMediaSourceRef.current?.kind ?? null,
+        playUrl,
+        playKind,
+        queryFetching: playInfoQuery.isFetching,
+        placeholder: playInfoQuery.isPlaceholderData,
+        mediaReady,
+        readyState: media?.readyState ?? 0,
+        mediaError: Boolean(media?.error),
+      })
+    ) {
+      return;
+    }
+    releaseStartup(playbackStartupKey);
+  }, [
+    mediaReady,
+    playbackStartupKey,
+    playInfoQuery.isFetching,
+    playInfoQuery.isPlaceholderData,
+    playKind,
+    playUrl,
+    releaseStartup,
+  ]);
 
   // 换集过渡：清掉旧集的播放错误并停住旧画面/声音（playInfo 已抹成 undefined，
   // 播放器 effect 会随之销毁旧实例），等新集信息就位再重建。
@@ -1226,7 +1329,7 @@ function VideoPlayerPageContent() {
   // CC 字幕和章节来自同一个 player v2 请求；缺失/失败均不阻塞播放。
   const playerMetaQuery = useQuery({
     queryKey: ["video_player_meta", cid, params?.bvid ?? "", params?.epId ?? ""],
-    enabled: cid > 0 && secondaryReady,
+    enabled: cid > 0 && mediaReady,
     queryFn: () =>
       videoGetPlayerMeta({
         bvid: params?.bvid ?? null,
@@ -1254,7 +1357,7 @@ function VideoPlayerPageContent() {
   // 视频缩略图（storyboard）快照：无快照或纯音频不请求。
   const storyboardQuery = useQuery({
     queryKey: ["video_storyboard", cid, bvid ?? "", epId ?? ""],
-    enabled: cid > 0 && !audioOnly && secondaryReady,
+    enabled: cid > 0 && !audioOnly && mediaReady,
     queryFn: async () => {
       // 雪碧图必须经本机图片代理（videoshot CDN 拒绝非 bilibili Referer），
       // 而代理端口是异步取回的。先等它就绪，否则 VTT 可能烧进直连 URL ——
@@ -1269,7 +1372,7 @@ function VideoPlayerPageContent() {
   const [storyboardVttUrl, setStoryboardVttUrl] = useState<string | null>(null);
   const storyboardData = storyboardQuery.data;
   useEffect(() => {
-    if (!storyboardData) {
+    if (!mediaReady || !storyboardData) {
       // oxlint-disable-next-line react/set-state-in-effect
       setStoryboardVttUrl(null);
       return;
@@ -1286,12 +1389,12 @@ function VideoPlayerPageContent() {
     return () => {
       URL.revokeObjectURL(objectUrl);
     };
-  }, [storyboardData, duration]);
+  }, [mediaReady, storyboardData, duration]);
 
   // 投屏直链：打开弹层时才取（html5 playurl 的 MP4，与主播放链路无关）。
   const castQuery = useQuery({
     queryKey: ["video_cast_url", cid, params?.bvid ?? "", params?.epId ?? ""],
-    enabled: castOpen && cid > 0,
+    enabled: castOpen && cid > 0 && mediaReady,
     queryFn: () =>
       videoGetCastUrl({
         bvid: params?.bvid ?? null,
@@ -1361,7 +1464,7 @@ function VideoPlayerPageContent() {
 
   const ensureDanmakuSegments = useCallback(
     (positionMs: number) => {
-      if (!cid || !danmakuVisibleRef.current || !secondaryReadyRef.current) return;
+      if (!cid || !danmakuVisibleRef.current || !mediaReadyRef.current) return;
       // 换视频会把 map/set 换成新实例；在途请求带着旧引用回来时据此丢弃，
       // 否则旧视频的段落会写进新视频的弹幕里。
       const segmentsMap = loadedSegmentsRef.current;
@@ -1402,10 +1505,10 @@ function VideoPlayerPageContent() {
 
   // 媒体就绪或重新开启弹幕后从当前进度加载，续播不白取开头分段。
   useEffect(() => {
-    if (danmakuVisible && secondaryReady) {
+    if (danmakuVisible && mediaReady) {
       ensureDanmakuSegments((videoRef.current?.currentTime ?? 0) * 1_000);
     }
-  }, [danmakuVisible, ensureDanmakuSegments, secondaryReady]);
+  }, [danmakuVisible, ensureDanmakuSegments, mediaReady]);
 
   const seekTo = useCallback(
     (target: number) => {
@@ -1422,18 +1525,6 @@ function VideoPlayerPageContent() {
     },
     [duration, playbackClock],
   );
-
-  const mpdUrl = playInfo?.mpd_url;
-  // 仅音频时直接播音轨地址并使用浏览器原生媒体能力；视频轨使用 Video.js 的 DASH 适配器。
-  const playUrl = playInfo?.audio_only ? playInfo.audio_url : mpdUrl;
-  const { ready: transportReady, release: releaseTransport } = usePlayerStartupGate(
-    JSON.stringify([videoKey, playUrl]),
-  );
-  const playKind: VideoJsPlaybackKind = playInfo?.audio_only ? "native" : "dash";
-  // Video.js 的 dash.js 适配器原生处理带 SegmentList 的 MPD，不再维护私有分片时间轴补丁。
-  useLayoutEffect(() => {
-    playUrlRef.current = playUrl;
-  }, [playUrl]);
 
   /**
    * 下一分集预加载。
@@ -1452,7 +1543,7 @@ function VideoPlayerPageContent() {
     : null;
   useEffect(() => {
     // 仅音频模式不启用分片缓存（后端忽略该位），预热也不会被读回，直接不做。
-    if (!videoNextEpisodePreload || audioOnly || loading || playbackError) return;
+    if (!mediaReady || !videoNextEpisodePreload || audioOnly || loading || playbackError) return;
     // 末片闸门：当前会话的最后一个分片还没进缓冲，就不碰下一集的取流。
     if (!playUrl || tailBufferedUrl !== playUrl) return;
     if (!nextPreloadKey || preloadedNextRef.current === nextPreloadKey) return;
@@ -1467,6 +1558,7 @@ function VideoPlayerPageContent() {
       audio_only: false,
     }).catch(() => undefined);
   }, [
+    mediaReady,
     videoNextEpisodePreload,
     audioOnly,
     loading,
@@ -1487,6 +1579,9 @@ function VideoPlayerPageContent() {
     const media = video;
     // 本轮的取流地址：effect 已保证它存在，之后的闸门登记不再需要可空判断。
     const sessionUrl = playUrl;
+    // 时长在绑定时快照：内容切换后旧播放器的迟到事件和 cleanup 不能读到新集时长。
+    const sourceDuration = playDurationRef.current;
+    activeMediaSourceRef.current = { url: sessionUrl, kind: playKind };
     let cancelled = false;
     let endedTimer: ReturnType<typeof setTimeout> | null = null;
     let endedSequence = 0;
@@ -1496,6 +1591,31 @@ function VideoPlayerPageContent() {
     // 未恢复到有效媒体位置前，失败实例的 0 秒不能覆盖上一轮留下的断点。
     let positionReady = false;
     let initialResumePosition = 0;
+    let initialSeekPending = false;
+    /**
+     * 所有可播事件共用的放行入口。
+     *
+     * 设置变化期间继续拦截 pending/placeholder；恢复续播位置时还要等 seek
+     * 完成。暂停的纯音频只会在 metadata 后执行 seek，随后可能只收到 seeked
+     * 或第二轮 canplay，不能把 `playing` 当作唯一出口。
+     */
+    function releaseCurrentStartup() {
+      const currentSource = activeMediaSourceRef.current;
+      const allowed = canReleaseVideoMedia({
+        sessionMatchesTarget: playUrlRef.current === sessionUrl,
+        querySettled: playInfoSettledRef.current,
+        activeSourceMatches: currentSource?.url === sessionUrl && currentSource.kind === playKind,
+        readyState: media.readyState,
+        mediaSeeking: media.seeking,
+        mediaError: Boolean(media.error),
+        positionReady,
+        initialSeekPending,
+      });
+      if (!allowed) {
+        return;
+      }
+      releaseStartup(playbackStartupKeyRef.current);
+    }
     function establishPosition() {
       if (
         media.readyState >= 2 &&
@@ -1539,14 +1659,14 @@ function VideoPlayerPageContent() {
     setPaused(true);
     userPausedRef.current = false;
     playbackClock.set(0);
-    setDuration(playInfo?.duration ?? 0);
+    setDuration(sourceDuration);
     // 本轮播放器会话向 waiting 自动恢复登记：同 key 续用预算，换 key 重置；
     // 上一会话挂起的计时在模块内随之作废。
     waitingRecovery.beginSession(videoKey);
 
     /** 当前分集的总时长：后端算出的值优先，缺失时退回媒体元数据。 */
     function totalDuration() {
-      const fromInfo = playInfo?.duration ?? 0;
+      const fromInfo = sourceDuration;
       if (fromInfo > 0) return fromInfo;
       return Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
     }
@@ -1585,7 +1705,7 @@ function VideoPlayerPageContent() {
       if (cancelled) return;
       // 后端从 sidx 时间轴累加出的时长比媒体元数据更早可用也更精确；
       // 只有它缺失时才退回 `media.duration`。
-      const fromInfo = playInfo?.duration ?? 0;
+      const fromInfo = sourceDuration;
       if (fromInfo > 0) return;
       if (Number.isFinite(media.duration) && media.duration > 0) setDuration(media.duration);
     }
@@ -1632,6 +1752,23 @@ function VideoPlayerPageContent() {
     }
     function onReady() {
       if (cancelled) return;
+      // 加载态时间轴不可操作；元数据就绪后一次性应用待续播位置。
+      if (pendingInitialResume) {
+        const initialResume = pendingInitialResume;
+        pendingInitialResume = null;
+        // DASH 已从目标分片开始调度，不能再 seek，否则会取消在途分片并重取 init。
+        if (playKind !== "dash") {
+          initialSeekPending = Math.abs(media.currentTime - initialResume.position) > 0.001;
+          media.currentTime = initialResume.position;
+        }
+        playbackClock.set(initialResume.position);
+        // 用户在加载期间按过暂停就保持暂停，不被自动续播重新拉起。
+        if (initialResume.playing && !userPausedRef.current) {
+          void media.play().catch(() => {
+            // 自动续播被策略拦截时留在暂停态，用户点一下即可。
+          });
+        }
+      }
       establishPosition();
       syncTime();
       syncDuration();
@@ -1645,27 +1782,13 @@ function VideoPlayerPageContent() {
         setWaiting(true);
         waitingRecovery.notifyWaiting();
       }
-      // 加载态时间轴不可操作；元数据就绪后一次性应用待续播位置。
-      if (pendingInitialResume) {
-        const initialResume = pendingInitialResume;
-        pendingInitialResume = null;
-        // DASH 已从目标分片开始调度，不能再 seek，否则会取消在途分片并重取 init。
-        if (playKind !== "dash") media.currentTime = initialResume.position;
-        playbackClock.set(initialResume.position);
-        // 用户在加载期间按过暂停就保持暂停，不被自动续播重新拉起。
-        if (initialResume.playing && !userPausedRef.current) {
-          void media.play().catch(() => {
-            // 自动续播被策略拦截时留在暂停态，用户点一下即可。
-          });
-        }
-      }
+      releaseCurrentStartup();
     }
     function onPlaying() {
       // 连续跳转时，上一跳排队的完成事件可能在新一跳开始后才送达。
       if (cancelled || media.seeking) return;
       establishPosition();
-      releaseStartup();
-      releaseTransport();
+      releaseCurrentStartup();
       setWaiting(false);
       setKeyboardSeeking(false);
       setLoading(false);
@@ -1689,10 +1812,12 @@ function VideoPlayerPageContent() {
       }
     }
     function onSeeked() {
-      if (cancelled || media.seeking) return;
+      if (cancelled) return;
+      initialSeekPending = false;
       establishPosition();
       setKeyboardSeeking(false);
       if (media.readyState >= 2) {
+        setLoading(false);
         setWaiting(false);
         waitingRecovery.notifyResumed(media.readyState);
       } else if (!media.paused && !media.ended) {
@@ -1701,6 +1826,7 @@ function VideoPlayerPageContent() {
       }
       // 跳到片尾附近时，末片可能这一跳就已进缓冲。
       syncTailBuffered();
+      releaseCurrentStartup();
     }
     function syncAudio() {
       if (cancelled) return;
@@ -1811,8 +1937,7 @@ function VideoPlayerPageContent() {
     const onLoadedData = () => {
       if (cancelled) return;
       establishPosition();
-      releaseStartup();
-      releaseTransport();
+      releaseCurrentStartup();
       setLoading(false);
       setWaiting(false);
       waitingRecovery.notifyResumed(media.readyState);
@@ -1912,6 +2037,7 @@ function VideoPlayerPageContent() {
       if (endedTimer !== null) clearTimeout(endedTimer);
       // 播放器会话拆除：waiting 自动恢复的判定计时随之作废（新会话另行登记）。
       waitingRecovery.endSession();
+      if (activeMediaSourceRef.current?.url === sessionUrl) activeMediaSourceRef.current = null;
       media.removeEventListener("loadeddata", onLoadedData);
       media.removeEventListener("timeupdate", syncTime);
       media.removeEventListener("durationchange", syncDuration);
@@ -1940,12 +2066,10 @@ function VideoPlayerPageContent() {
     epId,
     ensureDanmakuSegments,
     releaseStartup,
-    releaseTransport,
     goToPlaylistItem,
     historySession,
     playbackClock,
     playUrl,
-    playInfo?.duration,
     playKind,
     playRelatedItem,
     reportVideoProgress,
@@ -2009,7 +2133,9 @@ function VideoPlayerPageContent() {
   }, [muted, nativePlayerControlsActive, volume]);
 
   // 选中的字幕轨 → 后端代拉 JSON → 转 VTT blob；换语言时回收旧 blob。
-  const subtitleUrl = subtitles.find((item) => item.lan === subtitleLan)?.url;
+  const subtitleUrl = mediaReady
+    ? subtitles.find((item) => item.lan === subtitleLan)?.url
+    : undefined;
   useEffect(() => {
     // Blob 的寿命属于本次外部请求；切轨时清空，清理时释放，updater 保持纯函数。
     // oxlint-disable-next-line react/set-state-in-effect
@@ -2037,7 +2163,7 @@ function VideoPlayerPageContent() {
     const media = videoRef.current;
     if (!media) return;
     for (const track of media.querySelectorAll('track[kind="subtitles"]')) track.remove();
-    if (!subtitleVttUrl) return;
+    if (!mediaReady || !subtitleVttUrl) return;
     const track = document.createElement("track");
     track.kind = "subtitles";
     track.srclang = subtitleLan ?? "zh";
@@ -2045,13 +2171,15 @@ function VideoPlayerPageContent() {
     track.src = subtitleVttUrl;
     media.appendChild(track);
     track.track.mode = "showing";
-  }, [subtitleLan, subtitleVttUrl, playUrl, subtitles]);
+  }, [mediaReady, subtitleLan, subtitleVttUrl, playUrl, subtitles]);
 
   // 章节轨让现有 TimeSlider 自动分段并展示预览标题，不另做一套 seek/进度计算。
   // blob 与轨道同属本次 effect：切 P/换集立即清旧轨，换画质/仅音频后重新挂载。
   useEffect(() => {
     const media = videoRef.current;
-    if (!media || !playUrl) return;
+    if (!media) return;
+    for (const track of media.querySelectorAll('track[kind="chapters"]')) track.remove();
+    if (!mediaReady || !playUrl) return;
     const vtt = chaptersToVtt(chapters);
     if (!vtt) return;
     const objectUrl = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
@@ -2067,7 +2195,7 @@ function VideoPlayerPageContent() {
       track.remove();
       URL.revokeObjectURL(objectUrl);
     };
-  }, [chapters, playUrl]);
+  }, [chapters, mediaReady, playUrl]);
 
   // 把缩略图（storyboard）VTT 挂到媒体元素（供 Video.js TimeSlider 缩略图预览使用）。
   useEffect(() => {
@@ -2076,7 +2204,7 @@ function VideoPlayerPageContent() {
     for (const track of media.querySelectorAll('track[data-track-kind="thumbnails"]')) {
       track.remove();
     }
-    if (!storyboardVttUrl) return;
+    if (!mediaReady || !storyboardVttUrl) return;
     const track = document.createElement("track");
     track.kind = "metadata";
     track.label = "thumbnails";
@@ -2085,7 +2213,7 @@ function VideoPlayerPageContent() {
     track.src = storyboardVttUrl;
     media.appendChild(track);
     track.track.mode = "hidden";
-  }, [storyboardVttUrl, playUrl]);
+  }, [mediaReady, storyboardVttUrl, playUrl]);
 
   // 语音字幕（本地 ASR）：与直播间、IPTV 共用同一条管线。点播的媒体元素跨会话
   // 复用，mediaKey 保持固定；sessionKey 用稿件身份 + 取流地址区分真实换代。
@@ -2096,8 +2224,9 @@ function VideoPlayerPageContent() {
     mediaKey: 0,
     sessionKey: `vod:${videoKey}:${playUrl ?? "idle"}`,
     featureEnabled: asrEnabled,
+    startupReady: mediaReady,
     settingPending: asrPending,
-    mediaAvailable: Boolean(playUrl) && !loading && !switchingItem && !playbackError,
+    mediaAvailable: mediaReady && Boolean(playUrl) && !loading && !switchingItem && !playbackError,
     chunkSeconds: asrWindowSeconds,
     translationEnabled: asrTranslationEnabled,
     translationFrom: asrTranslationFrom,
@@ -2706,8 +2835,7 @@ function VideoPlayerPageContent() {
 
   /**
    * 自动分流用的画幅：实测优先，其次取流结果里的实际视频轨，最后才是列表先验。
-   * 取流结果已经足够早，能在常规播放器挂载前完成判定；只有取流已落定但上游
-   * 没给轨尺寸时才退回列表先验，避免用列表元数据推翻实际流。
+   * 视频节点始终先挂载；即使详情来自缓存，也必须等当前代理会话出画后才允许导航。
    */
   const autoEntryAspectRatio =
     frameAspectRatio ??
@@ -2732,6 +2860,7 @@ function VideoPlayerPageContent() {
     blockedUploader,
   });
   useEffect(() => {
+    if (!mediaReady) return;
     if (autoShortsKeyRef.current === videoKey) return;
     // 用户在画幅落定前按过暂停：那是一次明确的「我要留在这里」。记下这条内容已
     // 经做过决定，随后恢复播放也不再补做分流 —— 否则暂停只是把导航推迟到下一次
@@ -2753,7 +2882,7 @@ function VideoPlayerPageContent() {
       // 等待退全屏时切到仅音频、改为详情意图或换片，取消这一轮自动请求。
       if (request) request.cancelled = true;
     };
-  }, [autoEnterShorts, enterShorts, paused, videoKey]);
+  }, [autoEnterShorts, enterShorts, mediaReady, paused, videoKey]);
 
   /** 手动短视频入口保留原有 seed 与 PGC/缺 bvid 时的裸流回退。 */
   const openShorts = useCallback(async () => {
@@ -2763,37 +2892,6 @@ function VideoPlayerPageContent() {
     setOverlayInteractionOpen(false);
     await enterShorts(false);
   }, [enterShorts, videoKey]);
-
-  /**
-   * 自动分流确认期间只画竖屏加载态。
-   *
-   * 取流结果能在媒体元数据之前判定画幅；在它与稿件详情落定前，常规播放页只会
-   * 先画出一个还没定形的播放器，随后再跳到短视频。这里保持黑场与返回入口，等
-   * `autoEnterShorts` 成立后直接 `replace`，不再挂载常规播放器。
-   *
-   * 覆盖所有移动端单 P UGC 入口，而不只依赖列表画幅先验：横画幅只是一次短暂的
-   * 加载等待，竖画幅则不会闪现普通界面。详情落定后若是多 P、被屏蔽或取流失败，
-   * 条件随之消失，页面回到正常播放/错误界面，不会卡在黑场。
-   */
-  const shortsEntryPending =
-    mobileClient &&
-    !audioOnly &&
-    !params?.epId &&
-    !params?.seasonId &&
-    !videoDetailsIntentForKey(location.state, videoKey) &&
-    !blockedUploader &&
-    (archiveQuery.isPending ||
-      (archiveQuery.data?.pages.length === 0 &&
-        (autoEnterShorts || (cid > 0 && !playInfo && !playInfoQuery.isError))));
-
-  if (shortsEntryPending) {
-    return (
-      <div className="relative h-full min-h-0 bg-black">
-        <PlayerLoadingBackButton label="返回视频列表" onClick={goBack} />
-        <ShortsStageSkeleton label="正在进入短视频…" />
-      </div>
-    );
-  }
 
   const title = params?.title || "视频播放";
 
@@ -3214,7 +3312,7 @@ function VideoPlayerPageContent() {
   /** 内容还在播、只是同内容刷新失败：非阻塞提示，不黑屏。 */
   const retainedSourceFailure =
     currentSourceAvailable && playInfoQuery.isError ? playInfoQuery.error : null;
-  const controlsAvailable = transportReady || Boolean(playbackError || fatalError);
+  const controlsAvailable = playbackChromeReady;
   const playerBackLabel = fullscreen.fullscreen
     ? "退出全屏"
     : webFullscreen
@@ -3256,6 +3354,9 @@ function VideoPlayerPageContent() {
       <main
         ref={detailsFrameRef}
         data-video-details-frame
+        data-vod-mobile={mobileClient ? "true" : undefined}
+        data-vod-orientation={portraitOrientation ? "portrait" : "landscape"}
+        data-vod-chrome-ready={playbackChromeReady ? "true" : undefined}
         className="flex min-h-0 flex-1 flex-col bg-black lg:flex-row"
       >
         <div
@@ -3477,7 +3578,7 @@ function VideoPlayerPageContent() {
                     />
                   </div>
 
-                  {danmakuEntries.length > 0 && (
+                  {mediaReady && danmakuEntries.length > 0 && (
                     <VideoDanmakuLayer
                       videoRef={videoRef}
                       rendererRef={danmakuRendererRef}
@@ -3536,7 +3637,7 @@ function VideoPlayerPageContent() {
 
                   {/* 可恢复的引擎错误：画面仍在播，只提示刚才有分片/字幕失败。
                       与上面的失败卡互斥（后者接管舞台时前者没有意义）。 */}
-                  {!playbackError && !fatalError && recoverableError && (
+                  {mediaReady && !playbackError && !fatalError && recoverableError && (
                     <div
                       role="status"
                       className="pointer-events-none absolute inset-x-3 top-3 z-20 flex justify-center"
@@ -3558,7 +3659,7 @@ function VideoPlayerPageContent() {
 
                   {/* 同内容刷新失败但旧取流仍在：画面继续播，只给一条可重试的提示。
                       这里不能铺满错误卡 —— 那会把正在播放的内容说成不可播放。 */}
-                  {!playbackError && !fatalError && retainedSourceFailure && (
+                  {mediaReady && !playbackError && !fatalError && retainedSourceFailure && (
                     <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center">
                       <div className="pointer-events-auto flex max-w-md items-center gap-2 rounded-lg bg-black/80 px-3 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
                         <span className="min-w-0">刷新播放地址失败，正在使用上一次的流</span>
@@ -3578,23 +3679,25 @@ function VideoPlayerPageContent() {
 
                 {/* 语音字幕叠加层：CC 轨由 `<track>` 原生渲染，本地识别是 DOM 叠加层。
                     两者互斥，不会同时出现。锚在画面框底边上方，位于控制栏之下。 */}
-                <AsrCaptionOverlay
-                  asr={asr}
-                  fontSize={asrFontSize}
-                  translationOnly={asrTranslationOnly}
-                  translationFrom={asrTranslationFrom}
-                  translationTo={asrTranslationTo}
-                  translationActive={asrTranslationEnabled}
-                  onFontSizeChange={setAsrFontSize}
-                  onTranslationOnlyChange={setAsrTranslationOnly}
-                  onTranslationFromChange={setAsrTranslationFrom}
-                  onTranslationToChange={setAsrTranslationTo}
-                  onTranslationActiveChange={setAsrTranslationEnabled}
-                  onClose={selectNoCaptions}
-                  portalContainer={stageRef}
-                  videoAspectRatio={frameAspectRatio}
-                  vodResizeAnchor
-                />
+                {mediaReady && (
+                  <AsrCaptionOverlay
+                    asr={asr}
+                    fontSize={asrFontSize}
+                    translationOnly={asrTranslationOnly}
+                    translationFrom={asrTranslationFrom}
+                    translationTo={asrTranslationTo}
+                    translationActive={asrTranslationEnabled}
+                    onFontSizeChange={setAsrFontSize}
+                    onTranslationOnlyChange={setAsrTranslationOnly}
+                    onTranslationFromChange={setAsrTranslationFrom}
+                    onTranslationToChange={setAsrTranslationTo}
+                    onTranslationActiveChange={setAsrTranslationEnabled}
+                    onClose={selectNoCaptions}
+                    portalContainer={stageRef}
+                    videoAspectRatio={frameAspectRatio}
+                    vodResizeAnchor
+                  />
+                )}
 
                 {!controlsAvailable && (
                   <PlayerLoadingBackButton onClick={handlePlayerBack} label={playerBackLabel} />
@@ -3747,7 +3850,7 @@ function VideoPlayerPageContent() {
               </div>
             </div>
 
-            {fullscreenLockMounted && (
+            {playbackChromeReady && fullscreenLockMounted && (
               <PlayerFullscreenLock
                 ref={lockRef}
                 visible={true}
@@ -3768,61 +3871,66 @@ function VideoPlayerPageContent() {
         {!webFullscreen && (
           <aside
             data-vod-details-aside
+            data-vod-chrome-ready={playbackChromeReady ? "true" : undefined}
             tabIndex={-1}
-            aria-label="视频详情"
+            aria-label={playbackChromeReady ? "视频详情" : undefined}
+            aria-hidden={!playbackChromeReady}
             className={cn(
               // 与直播/IPTV 播放页右侧栏同一套规格：bg-sidebar、边框、断点宽度
               // （320/340，UP 信息卡的「标题 + 播放/评论/发布时间」典型值
               // 单行放下，超长数值退到第二行而非截断），窄屏则列在播放器下方。
               "relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar max-md:pb-[env(safe-area-inset-bottom)]",
               "lg:w-[320px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[340px] lg:pb-0",
+              !playbackChromeReady && "border-transparent bg-black",
             )}
           >
-            {secondaryReady && (
-              <Suspense fallback={null}>
-                <VideoSidebar
-                  tabMemory={sidebarTabMemory}
-                  bvid={params.bvid}
-                  epId={params.epId}
-                  aid={params.aid}
-                  cid={cid}
-                  onSeek={seekTo}
-                  detailsContentRef={detailsContentRef}
-                  danmakuComposer={
-                    mobilePortraitControls ? (
-                      <DanmakuComposer
-                        key={videoKey}
-                        roomTitle={title}
-                        video={{
-                          cid,
-                          aid: aid ?? "",
-                          getProgressMs: () => playbackClock.get() * 1000,
-                        }}
-                      />
-                    ) : undefined
-                  }
-                  danmaku={{
-                    entries: danmakuEntries,
-                    clock: playbackClock,
-                    // 空列表只有在「本段已落定且没有在途请求」时才不是加载中，
-                    // 否则无弹幕的视频会永远显示加载动画。
-                    loading:
-                      danmakuVisible &&
-                      !playbackError &&
-                      (danmakuRequestsInFlight > 0 || !danmakuSegmentSettled),
-                    onSeek: (positionMs) => seekTo(positionMs / 1000),
-                  }}
-                />
-              </Suspense>
+            {playbackChromeReady && (
+              <>
+                <Suspense fallback={null}>
+                  <VideoSidebar
+                    tabMemory={sidebarTabMemory}
+                    bvid={params.bvid}
+                    epId={params.epId}
+                    aid={params.aid}
+                    cid={cid}
+                    onSeek={seekTo}
+                    detailsContentRef={detailsContentRef}
+                    danmakuComposer={
+                      mobilePortraitControls ? (
+                        <DanmakuComposer
+                          key={videoKey}
+                          roomTitle={title}
+                          video={{
+                            cid,
+                            aid: aid ?? "",
+                            getProgressMs: () => playbackClock.get() * 1000,
+                          }}
+                        />
+                      ) : undefined
+                    }
+                    danmaku={{
+                      entries: danmakuEntries,
+                      clock: playbackClock,
+                      // 空列表只有在「本段已落定且没有在途请求」时才不是加载中，
+                      // 否则无弹幕的视频会永远显示加载动画。
+                      loading:
+                        danmakuVisible &&
+                        !playbackError &&
+                        (danmakuRequestsInFlight > 0 || !danmakuSegmentSettled),
+                      onSeek: (positionMs) => seekTo(positionMs / 1000),
+                    }}
+                  />
+                </Suspense>
+                <DrawerViewport active={!fullscreen.fullscreen} />
+              </>
             )}
-            <DrawerViewport active={!fullscreen.fullscreen} />
           </aside>
         )}
       </main>
       {/* 底部 Shell 只在桌面端常驻（与直播页底部操作行同一画法）：移动端
           的两个入口收进顶栏 `⋮` 抽屉。全屏（元素级 top layer）时被舞台盖住，
           HUD 的 `⋮` 溢出菜单里另有镜像；窗口全屏时从布局卸载。 */}
-      {!webFullscreen && !mobileClient && (
+      {!webFullscreen && !mobileClient && playbackChromeReady && (
         <footer className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 border-t border-border/80 bg-sidebar/90 px-3 pt-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] md:flex">
           {videoDownloadSupported() && (
             <Button

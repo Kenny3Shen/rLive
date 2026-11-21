@@ -14,53 +14,118 @@ const PORTRAIT_ORIENTATION_QUERY = "(orientation: portrait)";
  */
 const STACKED_DETAILS_QUERY = "(width < 64rem)";
 
-function matches(query: string): boolean {
-  return typeof window !== "undefined" && window.matchMedia(query).matches;
-}
+type PlayerViewportSnapshot = {
+  mobileClient: boolean;
+  /** `null` 表示所有方向来源都无法区分横竖屏。 */
+  landscape: boolean | null;
+  width: number | null;
+  height: number | null;
+  coarsePointer: boolean;
+  mediaMatches: boolean;
+};
 
-function isLandscapeViewport(): boolean {
-  if (typeof window === "undefined") return false;
-
-  const orientationType = window.screen.orientation?.type;
+export function playerViewportIsLandscape({
+  orientationType,
+  orientationAngle,
+  legacyOrientation,
+  width,
+  height,
+}: {
+  orientationType?: string;
+  orientationAngle?: number;
+  legacyOrientation?: number;
+  width?: number | null;
+  height?: number | null;
+}): boolean | null {
   if (orientationType) return orientationType.startsWith("landscape");
 
-  const orientationAngle = window.screen.orientation?.angle;
   if (orientationAngle === 90 || orientationAngle === 270) return true;
   if (orientationAngle === 0 || orientationAngle === 180) return false;
 
-  const legacyOrientation = (window as Window & { orientation?: number }).orientation;
   if (legacyOrientation === 90 || legacyOrientation === -90 || legacyOrientation === 270) {
     return true;
   }
   if (legacyOrientation === 0 || legacyOrientation === 180) return false;
 
-  const viewport = window.visualViewport;
-  return (viewport?.width ?? window.innerWidth) > (viewport?.height ?? window.innerHeight);
+  if (width === null || width === undefined || height === null || height === undefined) return null;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  if (width === height) return null;
+  return width > height;
 }
 
 /**
- * 移动端 WebView 可能在首次渲染时上报布局前的媒体查询状态。
- * 在真正的 media query 监听器得到第一次稳定更新之前，
- * 先用移动端安全的答案播种播放器。
+ * 解析一次视口采样。
+ *
+ * 移动端 WebView 首次渲染时，`matchMedia` 可能仍停留在布局前，方向尤其容易
+ * 与真实屏幕相反。因此移动端的方向查询先读 `screen.orientation`；它不可用时
+ * 才退回真实视口宽高。宽高断点同样优先使用数值，避免媒体查询在冷启动时把
+ * 平板误判成手机，或让移动端永久保持紧凑布局。桌面端继续完全尊重媒体查询。
  */
-function playerViewportFallbackMatches(
+export function resolvePlayerViewportMatch(
   query: string,
-  mobileClient: boolean,
-  landscape: boolean,
+  snapshot: PlayerViewportSnapshot,
 ): boolean {
-  if (!mobileClient) return false;
-  if (query === COMPACT_PLAYER_QUERY) return true;
-  if (query === COMPACT_LANDSCAPE_PLAYER_QUERY) return landscape;
-  if (query === PORTRAIT_ORIENTATION_QUERY) return !landscape;
-  // 侧栏是否列在舞台下方：手机竖屏恒为真，因此首帧按真播种（真值只影响拖动抓手
-  // 是否在首帧可用）；平板上真值会在挂载后的首次重读里纠正。
-  if (query === STACKED_DETAILS_QUERY) return !landscape;
-  return false;
+  if (!snapshot.mobileClient) return snapshot.mediaMatches;
+
+  if (query === PORTRAIT_ORIENTATION_QUERY) {
+    return snapshot.landscape === null ? snapshot.mediaMatches : !snapshot.landscape;
+  }
+
+  if (query === COMPACT_LANDSCAPE_PLAYER_QUERY) {
+    if (snapshot.landscape === null || snapshot.height === null) return snapshot.mediaMatches;
+    return snapshot.landscape && snapshot.height <= 540 && snapshot.coarsePointer;
+  }
+
+  if (query === COMPACT_PLAYER_QUERY) {
+    if (snapshot.width === null) return snapshot.mediaMatches;
+    const narrow = snapshot.width <= 767;
+    const shortLandscape =
+      snapshot.landscape === true &&
+      snapshot.height !== null &&
+      snapshot.height <= 540 &&
+      snapshot.coarsePointer;
+    return narrow || shortLandscape;
+  }
+
+  if (query === STACKED_DETAILS_QUERY) {
+    return snapshot.width === null ? snapshot.mediaMatches : snapshot.width < 1024;
+  }
+
+  return snapshot.mediaMatches;
 }
 
-function initialMatches(query: string): boolean {
-  if (matches(query)) return true;
-  return playerViewportFallbackMatches(query, isMobileClient(), isLandscapeViewport());
+function readPlayerViewportSnapshot(query: string): PlayerViewportSnapshot {
+  if (typeof window === "undefined") {
+    return {
+      mobileClient: false,
+      landscape: null,
+      width: null,
+      height: null,
+      coarsePointer: false,
+      mediaMatches: false,
+    };
+  }
+
+  const viewport = window.visualViewport;
+  const width = viewport?.width ?? window.innerWidth;
+  const height = viewport?.height ?? window.innerHeight;
+  const screenOrientation = window.screen.orientation;
+  const media = window.matchMedia(query);
+  const mobileClient = isMobileClient();
+  return {
+    mobileClient,
+    landscape: playerViewportIsLandscape({
+      orientationType: screenOrientation?.type,
+      orientationAngle: screenOrientation?.angle,
+      legacyOrientation: (window as Window & { orientation?: number }).orientation,
+      width,
+      height,
+    }),
+    width: Number.isFinite(width) && width > 0 ? width : null,
+    height: Number.isFinite(height) && height > 0 ? height : null,
+    coarsePointer: mobileClient || window.matchMedia("(pointer: coarse)").matches,
+    mediaMatches: media.matches,
+  };
 }
 
 /**
@@ -77,15 +142,14 @@ function initialMatches(query: string): boolean {
  * 取值稳定后这些额外检查零成本。
  */
 function usePlayerMediaQuery(query: string): boolean {
-  const [matched, setMatched] = useState(() => initialMatches(query));
+  const [matched, setMatched] = useState(() =>
+    resolvePlayerViewportMatch(query, readPlayerViewportSnapshot(query)),
+  );
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(query);
-    // 读取只信 matchMedia。兜底只负责播种首个渲染帧：若在这里长期叠加
-    // `mediaQuery.matches || fallback(...)`，任何移动客户端 —— 包括视口宽度
-    // 超过 md 断点的平板 —— 都会被永久判成 compact，直播间因此永远走
-    // 手机堆叠布局。真正的冷启动修正由下面的跨帧复读与视口事件承担。
-    const update = () => setMatched(mediaQuery.matches);
+    const update = () =>
+      setMatched(resolvePlayerViewportMatch(query, readPlayerViewportSnapshot(query)));
     update();
     const updateFromEvent = () => update();
 
@@ -100,6 +164,7 @@ function usePlayerMediaQuery(query: string): boolean {
     window.addEventListener("resize", updateFromEvent);
     window.addEventListener("orientationchange", updateFromEvent);
     window.visualViewport?.addEventListener("resize", updateFromEvent);
+    window.screen.orientation?.addEventListener("change", updateFromEvent);
     return () => {
       window.cancelAnimationFrame(frame);
       if (secondFrame !== null) window.cancelAnimationFrame(secondFrame);
@@ -107,6 +172,7 @@ function usePlayerMediaQuery(query: string): boolean {
       window.removeEventListener("resize", updateFromEvent);
       window.removeEventListener("orientationchange", updateFromEvent);
       window.visualViewport?.removeEventListener("resize", updateFromEvent);
+      window.screen.orientation?.removeEventListener("change", updateFromEvent);
     };
   }, [query]);
 

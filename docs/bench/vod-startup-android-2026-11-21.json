@@ -1,0 +1,2680 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-21T17:20:00+08:00",
+  "goal": "验收移动端 VOD 视频先加载与首次方向动画重构",
+  "environment": {
+    "avd": "rlive_win",
+    "device": "emulator-5554",
+    "android": "16",
+    "abi": "x86_64",
+    "app_version": "9.5.3",
+    "version_code": 9005003,
+    "target_sdk": 37,
+    "webview": "133.0.6943.137",
+    "mode": "Tauri Android debug，Vite dev，React development",
+    "physical_size": [
+      1080,
+      2400
+    ],
+    "density": 420,
+    "dpr": 2.625
+  },
+  "method": "连接真实 Tauri 主 WebView，使用真实视频及 Rust IPC；媒体事件、rVFC、QueryCache、MutationObserver 与实际 Web Animations API 调用只作时序观察。方向由 adb settings 改变，画面通过 adb screencap 核对；按钮使用实际 UI 点击及键盘操作。不伪造媒体事件或接口数据。",
+  "verdict": {
+    "passed": [
+      "竖屏首开视频先挂载，辅助请求与完整控制层晚于媒体可播，详情从下方进入",
+      "横屏首开详情在右侧，从右侧进入，顶部 HUD 与底部控制栏原位淡入",
+      "两方向的首个真实视频帧早于 chrome，控制层挂载前后视频区域尺寸一致",
+      "加载中竖转横时布局及时切换，动画沿用该历史条目首次竖屏方向",
+      "暂停状态切仅音频的初始 seek 完成后放行，恢复画面保持原进度与暂停意图",
+      "360P 切换 480P 后可播并恢复控制栏，未重播入场动画",
+      "正常 UI 刷新播放后重新放行，同一历史条目不重播入场动画"
+    ],
+    "fixed_during_validation": "原生音频 loadedmetadata 触发续播 seek 后，loadeddata/canplay 可能回落到 readyState=1；暂停时没有 playing，旧放行入口导致控制层永久关闭。现由 onReady、loadeddata、seeked、playing 共用会话、seek 与位置校验入口。"
+  },
+  "limitations": [
+    "本次为 Android 16 x86_64 模拟器与 WebView 133，不代表 arm64 真机、其他 WebView 或长按手势效果",
+    "加载中旋转样本采于媒体事件补全前；方向模块和动画实现此后未改变",
+    "首开使用同一主 WebView 的真实深链，不清应用数据；包含已有续播记录，耗时只用于时序核对",
+    "未注入网络失败；旧事件迟到及同源自动恢复由聚焦回归覆盖，首开阻塞失败未做断网实机验收",
+    "dev WebSocket 首地址被 cleartext 策略拒绝后走 fallback，WebView 默认 poster 存在 CORS 提示；深链整页导航偶见 Tauri runCallback 开发注入提示，实际 IPC 与媒体正常"
+  ],
+  "cases": {
+    "portrait-final": {
+      "path": "/video/play",
+      "orientation": "portrait-primary",
+      "viewport": [
+        412,
+        915
+      ],
+      "dpr": 2.625,
+      "stageOrientation": "portrait",
+      "media": {
+        "readyState": 4,
+        "paused": false,
+        "currentTime": 52.924,
+        "videoSize": [
+          853,
+          480
+        ],
+        "errorCode": null
+      },
+      "events": [
+        {
+          "at": 2757.4,
+          "kind": "query-observer-ready"
+        },
+        {
+          "at": 3989.1,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 4061.8,
+          "kind": "chrome-state",
+          "readyState": 0
+        },
+        {
+          "at": 4061.8,
+          "kind": "orientation-change",
+          "value": "portrait",
+          "readyState": 0
+        },
+        {
+          "at": 4061.9,
+          "kind": "video-mounted",
+          "readyState": 0,
+          "bounds": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        },
+        {
+          "at": 4061.9,
+          "kind": "stage-mounted",
+          "readyState": 0,
+          "orientation": "portrait",
+          "stage": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ],
+          "aside": [
+            0,
+            280.6,
+            412.2,
+            634.4
+          ],
+          "video": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        },
+        {
+          "at": 4471.7,
+          "kind": "media",
+          "name": "play",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 4517.6,
+          "kind": "media",
+          "name": "waiting",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 4549.7,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 4816.6,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 6854.1,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 44.851,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 6908,
+          "kind": "query-fetch",
+          "name": "video_player_meta"
+        },
+        {
+          "at": 6908.4,
+          "kind": "query-fetch",
+          "name": "video_storyboard"
+        },
+        {
+          "at": 6912.8,
+          "kind": "video-frame",
+          "readyState": 4,
+          "mediaTime": 44.792,
+          "videoSize": [
+            853,
+            480
+          ]
+        },
+        {
+          "at": 6917.4,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 44.914,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 6918.2,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 44.915,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 6950.3,
+          "kind": "query-fetch",
+          "name": "video_archive"
+        },
+        {
+          "at": 6954.3,
+          "kind": "media",
+          "name": "playing",
+          "readyState": 4,
+          "currentTime": 44.915,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 7061,
+          "kind": "startup-animation",
+          "target": "hud",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "portrait"
+        },
+        {
+          "at": 7061.2,
+          "kind": "startup-animation",
+          "target": "controls",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "portrait"
+        },
+        {
+          "at": 7061.2,
+          "kind": "startup-animation",
+          "target": "details",
+          "keyframes": [
+            {
+              "transform": "translate3d(0, 12px, 0)",
+              "opacity": 0.35
+            },
+            {
+              "transform": "translate3d(0, 0, 0)",
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "portrait"
+        },
+        {
+          "at": 7101,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 7101,
+          "kind": "chrome-ready",
+          "readyState": 4,
+          "orientation": "portrait",
+          "stage": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ],
+          "aside": [
+            0,
+            292.7,
+            412.2,
+            634.3
+          ],
+          "video": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        },
+        {
+          "at": 7101,
+          "kind": "hud-mounted",
+          "readyState": 4,
+          "orientation": "portrait",
+          "stage": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ],
+          "aside": [
+            0,
+            292.7,
+            412.2,
+            634.3
+          ],
+          "video": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        },
+        {
+          "at": 7101,
+          "kind": "controls-mounted",
+          "readyState": 4,
+          "orientation": "portrait",
+          "stage": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ],
+          "aside": [
+            0,
+            292.7,
+            412.2,
+            634.3
+          ],
+          "video": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        },
+        {
+          "at": 8285.9,
+          "kind": "query-fetch",
+          "name": "video_related"
+        },
+        {
+          "at": 8331.5,
+          "kind": "details-content-mounted",
+          "readyState": 4,
+          "orientation": "portrait",
+          "stage": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ],
+          "aside": [
+            0,
+            280.7,
+            412.2,
+            634.3
+          ],
+          "video": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        }
+      ],
+      "assertions": {
+        "media_before_auxiliary_queries": true,
+        "decoded_frame_before_chrome": true,
+        "video_bounds_unchanged": true,
+        "correct_single_entry_animation": true
+      },
+      "timings_ms": {
+        "first_playable": 6854.1,
+        "first_video_frame": 6912.8,
+        "chrome_observed": 7101,
+        "media_to_chrome": 246.9
+      }
+    },
+    "landscape-final": {
+      "path": "/video/play",
+      "orientation": "landscape-primary",
+      "viewport": [
+        915,
+        412
+      ],
+      "dpr": 2.625,
+      "stageOrientation": "landscape",
+      "media": {
+        "readyState": 4,
+        "paused": false,
+        "currentTime": 13.777,
+        "videoSize": [
+          853,
+          480
+        ],
+        "errorCode": null
+      },
+      "events": [
+        {
+          "at": 2035.2,
+          "kind": "query-observer-ready"
+        },
+        {
+          "at": 3018,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 3078.5,
+          "kind": "chrome-state",
+          "readyState": 0
+        },
+        {
+          "at": 3078.5,
+          "kind": "orientation-change",
+          "value": "landscape",
+          "readyState": 0
+        },
+        {
+          "at": 3078.5,
+          "kind": "video-mounted",
+          "readyState": 0,
+          "bounds": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 3078.6,
+          "kind": "stage-mounted",
+          "readyState": 0,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 3921.4,
+          "kind": "media",
+          "name": "play",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 3975.6,
+          "kind": "media",
+          "name": "waiting",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 4021.3,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 4334.6,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5076.7,
+          "kind": "video-frame",
+          "readyState": 1,
+          "mediaTime": 0.125,
+          "videoSize": [
+            853,
+            480
+          ]
+        },
+        {
+          "at": 5140.2,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 0.127,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5196.3,
+          "kind": "query-fetch",
+          "name": "video_player_meta"
+        },
+        {
+          "at": 5196.5,
+          "kind": "query-fetch",
+          "name": "video_storyboard"
+        },
+        {
+          "at": 5199,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 0.186,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5199.5,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 0.187,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5224.9,
+          "kind": "query-fetch",
+          "name": "video_archive"
+        },
+        {
+          "at": 5225.8,
+          "kind": "media",
+          "name": "playing",
+          "readyState": 4,
+          "currentTime": 0.187,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5339.7,
+          "kind": "startup-animation",
+          "target": "hud",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5339.8,
+          "kind": "startup-animation",
+          "target": "controls",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5340.3,
+          "kind": "startup-animation",
+          "target": "details",
+          "keyframes": [
+            {
+              "transform": "translate3d(12px, 0, 0)",
+              "opacity": 0.35
+            },
+            {
+              "transform": "translate3d(0, 0, 0)",
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5369.6,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 5369.7,
+          "kind": "chrome-ready",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            634.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5369.8,
+          "kind": "hud-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            634.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5369.8,
+          "kind": "controls-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            634.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5441.2,
+          "kind": "video-frame",
+          "readyState": 4,
+          "mediaTime": 0.167,
+          "videoSize": [
+            853,
+            480
+          ]
+        },
+        {
+          "at": 6876.3,
+          "kind": "query-fetch",
+          "name": "video_related"
+        },
+        {
+          "at": 6904.7,
+          "kind": "details-content-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        }
+      ],
+      "assertions": {
+        "media_before_auxiliary_queries": true,
+        "decoded_frame_before_chrome": true,
+        "video_bounds_unchanged": true,
+        "correct_single_entry_animation": true
+      },
+      "timings_ms": {
+        "first_playable": 5140.2,
+        "first_video_frame": 5076.7,
+        "chrome_observed": 5369.7,
+        "media_to_chrome": 229.5
+      }
+    },
+    "loading-rotate": {
+      "path": "/video/play",
+      "orientation": "landscape-primary",
+      "viewport": [
+        915,
+        412
+      ],
+      "dpr": 2.625,
+      "stageOrientation": "landscape",
+      "media": {
+        "readyState": 4,
+        "paused": false,
+        "currentTime": 259.21,
+        "videoSize": [
+          853,
+          480
+        ],
+        "errorCode": null
+      },
+      "events": [
+        {
+          "at": 1843.3,
+          "kind": "query-observer-ready"
+        },
+        {
+          "at": 2765.6,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 2877.3,
+          "kind": "chrome-state",
+          "readyState": 0
+        },
+        {
+          "at": 2877.3,
+          "kind": "orientation-change",
+          "value": "portrait",
+          "readyState": 0
+        },
+        {
+          "at": 2877.5,
+          "kind": "video-mounted",
+          "readyState": 0,
+          "bounds": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        },
+        {
+          "at": 2877.5,
+          "kind": "stage-mounted",
+          "readyState": 0,
+          "orientation": "portrait",
+          "stage": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ],
+          "aside": [
+            0,
+            280.6,
+            412.2,
+            634.4
+          ],
+          "video": [
+            0,
+            48.8,
+            412.2,
+            231.9
+          ]
+        },
+        {
+          "at": 3688.8,
+          "kind": "media",
+          "name": "play",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 3743.2,
+          "kind": "media",
+          "name": "waiting",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 3788.5,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 4178.6,
+          "kind": "orientation-change",
+          "value": "landscape",
+          "readyState": 0
+        },
+        {
+          "at": 4389,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5306.6,
+          "kind": "video-frame",
+          "readyState": 1,
+          "mediaTime": 245.125,
+          "videoSize": [
+            853,
+            480
+          ]
+        },
+        {
+          "at": 5361.9,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 245.141,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5429.8,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 245.169,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5430,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 245.169,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5454.6,
+          "kind": "query-fetch",
+          "name": "video_player_meta"
+        },
+        {
+          "at": 5454.9,
+          "kind": "query-fetch",
+          "name": "video_storyboard"
+        },
+        {
+          "at": 5456,
+          "kind": "media",
+          "name": "playing",
+          "readyState": 4,
+          "currentTime": 245.195,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5490.4,
+          "kind": "query-fetch",
+          "name": "video_archive"
+        },
+        {
+          "at": 5653.3,
+          "kind": "startup-animation",
+          "target": "hud",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5655,
+          "kind": "startup-animation",
+          "target": "controls",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5655,
+          "kind": "startup-animation",
+          "target": "details",
+          "keyframes": [
+            {
+              "transform": "translate3d(0, 12px, 0)",
+              "opacity": 0.35
+            },
+            {
+              "transform": "translate3d(0, 0, 0)",
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5691.4,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 5691.5,
+          "kind": "chrome-ready",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            36,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5691.5,
+          "kind": "hud-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            36,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5691.5,
+          "kind": "controls-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            36,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5691.8,
+          "kind": "video-frame",
+          "readyState": 4,
+          "mediaTime": 245.333,
+          "videoSize": [
+            853,
+            480
+          ]
+        },
+        {
+          "at": 6840.1,
+          "kind": "query-fetch",
+          "name": "video_related"
+        },
+        {
+          "at": 6869.7,
+          "kind": "details-content-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        }
+      ]
+    },
+    "audio-paused-fixed": {
+      "path": "/video/play",
+      "orientation": "landscape-primary",
+      "viewport": [
+        915,
+        412
+      ],
+      "dpr": 2.625,
+      "stageOrientation": "landscape",
+      "media": {
+        "readyState": 4,
+        "paused": true,
+        "currentTime": 219.787,
+        "videoSize": [
+          0,
+          0
+        ],
+        "errorCode": null
+      },
+      "events": [
+        {
+          "at": 0.2,
+          "kind": "query-observer-ready"
+        },
+        {
+          "at": 0.2,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 0.2,
+          "kind": "orientation-change",
+          "value": "landscape",
+          "readyState": 4
+        },
+        {
+          "at": 0.3,
+          "kind": "video-mounted",
+          "readyState": 4,
+          "bounds": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "stage-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "chrome-ready",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "hud-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "controls-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "details-content-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 80779.1,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 80790.1,
+          "kind": "chrome-state",
+          "readyState": 4
+        },
+        {
+          "at": 81215.2,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81411.8,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 4,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81427,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 1,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81427.3,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 1,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81520.8,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81533.6,
+          "kind": "query-fetch",
+          "name": "video_player_meta"
+        },
+        {
+          "at": 81540.5,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81544.2,
+          "kind": "query-fetch",
+          "name": "video_archive"
+        },
+        {
+          "at": 81731.3,
+          "kind": "query-fetch",
+          "name": "video_related"
+        },
+        {
+          "at": 81889.5,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        }
+      ]
+    },
+    "audio-restore-fixed": {
+      "path": "/video/play",
+      "orientation": "landscape-primary",
+      "viewport": [
+        915,
+        412
+      ],
+      "dpr": 2.625,
+      "stageOrientation": "landscape",
+      "media": {
+        "readyState": 4,
+        "paused": true,
+        "currentTime": 219.787,
+        "videoSize": [
+          640,
+          360
+        ],
+        "errorCode": null
+      },
+      "events": [
+        {
+          "at": 0.2,
+          "kind": "query-observer-ready"
+        },
+        {
+          "at": 0.2,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 0.2,
+          "kind": "orientation-change",
+          "value": "landscape",
+          "readyState": 4
+        },
+        {
+          "at": 0.3,
+          "kind": "video-mounted",
+          "readyState": 4,
+          "bounds": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "stage-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "chrome-ready",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "hud-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "controls-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "details-content-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 80779.1,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 80790.1,
+          "kind": "chrome-state",
+          "readyState": 4
+        },
+        {
+          "at": 81215.2,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81411.8,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 4,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81427,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 1,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81427.3,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 1,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81520.8,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81533.6,
+          "kind": "query-fetch",
+          "name": "video_player_meta"
+        },
+        {
+          "at": 81540.5,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 81544.2,
+          "kind": "query-fetch",
+          "name": "video_archive"
+        },
+        {
+          "at": 81731.3,
+          "kind": "query-fetch",
+          "name": "video_related"
+        },
+        {
+          "at": 81889.5,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 135018.5,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 135028.8,
+          "kind": "chrome-state",
+          "readyState": 4
+        },
+        {
+          "at": 135420.8,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 135611.1,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 136577.5,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 136622.7,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 136623.2,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 136639.4,
+          "kind": "video-frame",
+          "readyState": 4,
+          "mediaTime": 219.767,
+          "videoSize": [
+            640,
+            360
+          ]
+        },
+        {
+          "at": 136994.6,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        }
+      ]
+    },
+    "quality": {
+      "path": "/video/play",
+      "orientation": "landscape-primary",
+      "viewport": [
+        915,
+        412
+      ],
+      "dpr": 2.625,
+      "stageOrientation": "landscape",
+      "media": {
+        "readyState": 4,
+        "paused": true,
+        "currentTime": 219.787,
+        "videoSize": [
+          853,
+          480
+        ],
+        "errorCode": null
+      },
+      "events": [
+        {
+          "at": 0.2,
+          "kind": "query-observer-ready"
+        },
+        {
+          "at": 0.3,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 0.3,
+          "kind": "orientation-change",
+          "value": "landscape",
+          "readyState": 4
+        },
+        {
+          "at": 0.3,
+          "kind": "video-mounted",
+          "readyState": 4,
+          "bounds": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.4,
+          "kind": "stage-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.4,
+          "kind": "chrome-ready",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "hud-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "controls-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 0.5,
+          "kind": "details-content-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 12455.5,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 12470.4,
+          "kind": "chrome-state",
+          "readyState": 4
+        },
+        {
+          "at": 12940.1,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 13085.9,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 14154.3,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 14205.1,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 14205.2,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 219.787,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 14222.4,
+          "kind": "video-frame",
+          "readyState": 4,
+          "mediaTime": 219.767,
+          "videoSize": [
+            853,
+            480
+          ]
+        },
+        {
+          "at": 14591.4,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        }
+      ]
+    },
+    "retry-final": {
+      "path": "/video/play",
+      "orientation": "landscape-primary",
+      "viewport": [
+        915,
+        412
+      ],
+      "dpr": 2.625,
+      "stageOrientation": "landscape",
+      "media": {
+        "readyState": 4,
+        "paused": true,
+        "currentTime": 43.008,
+        "videoSize": [
+          640,
+          360
+        ],
+        "errorCode": null
+      },
+      "events": [
+        {
+          "at": 1943.7,
+          "kind": "query-observer-ready"
+        },
+        {
+          "at": 2881.7,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 2971,
+          "kind": "chrome-state",
+          "readyState": 0
+        },
+        {
+          "at": 2971,
+          "kind": "orientation-change",
+          "value": "landscape",
+          "readyState": 0
+        },
+        {
+          "at": 2971.1,
+          "kind": "video-mounted",
+          "readyState": 0,
+          "bounds": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 2971.1,
+          "kind": "stage-mounted",
+          "readyState": 0,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 3667.9,
+          "kind": "media",
+          "name": "play",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 3720.3,
+          "kind": "media",
+          "name": "waiting",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 3769.9,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 4076.1,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5701,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 219.318,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5764.1,
+          "kind": "query-fetch",
+          "name": "video_player_meta"
+        },
+        {
+          "at": 5764.3,
+          "kind": "query-fetch",
+          "name": "video_storyboard"
+        },
+        {
+          "at": 5766.7,
+          "kind": "video-frame",
+          "readyState": 4,
+          "mediaTime": 219.292,
+          "videoSize": [
+            853,
+            480
+          ]
+        },
+        {
+          "at": 5769.9,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 219.362,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5770.2,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 219.362,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5789.8,
+          "kind": "query-fetch",
+          "name": "video_archive"
+        },
+        {
+          "at": 5790.9,
+          "kind": "media",
+          "name": "playing",
+          "readyState": 4,
+          "currentTime": 219.383,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 5918,
+          "kind": "startup-animation",
+          "target": "hud",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5918.3,
+          "kind": "startup-animation",
+          "target": "controls",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5918.4,
+          "kind": "startup-animation",
+          "target": "details",
+          "keyframes": [
+            {
+              "transform": "translate3d(12px, 0, 0)",
+              "opacity": 0.35
+            },
+            {
+              "transform": "translate3d(0, 0, 0)",
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 5954.1,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 5954.1,
+          "kind": "chrome-ready",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            634.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5954.1,
+          "kind": "hud-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            634.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 5954.2,
+          "kind": "controls-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            634.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 7005.8,
+          "kind": "query-fetch",
+          "name": "video_related"
+        },
+        {
+          "at": 7030,
+          "kind": "details-content-mounted",
+          "readyState": 4,
+          "orientation": "landscape",
+          "stage": [
+            0,
+            24,
+            622.2,
+            388.2
+          ],
+          "aside": [
+            622.2,
+            24,
+            292.8,
+            388.2
+          ],
+          "video": [
+            0,
+            24,
+            622.2,
+            388.2
+          ]
+        },
+        {
+          "at": 110505.9,
+          "kind": "media",
+          "name": "waiting",
+          "readyState": 1,
+          "currentTime": 323.708,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 110507.6,
+          "kind": "media",
+          "name": "pause",
+          "readyState": 1,
+          "currentTime": 323.708,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 110587.9,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 323.708,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 110661.6,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 323.708,
+          "videoSize": [
+            853,
+            480
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 111508.3,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 111534.7,
+          "kind": "chrome-state",
+          "readyState": 0
+        },
+        {
+          "at": 111827,
+          "kind": "media",
+          "name": "play",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 111867,
+          "kind": "media",
+          "name": "waiting",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 111893.1,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 112055.1,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 112462.8,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 0,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 112463.1,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 0,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 112504.1,
+          "kind": "query-fetch",
+          "name": "video_player_meta"
+        },
+        {
+          "at": 112504.3,
+          "kind": "query-fetch",
+          "name": "video_storyboard"
+        },
+        {
+          "at": 112539.4,
+          "kind": "media",
+          "name": "playing",
+          "readyState": 4,
+          "currentTime": 0.063,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 112934,
+          "kind": "startup-animation",
+          "target": "hud",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 112934.6,
+          "kind": "startup-animation",
+          "target": "controls",
+          "keyframes": [
+            {
+              "opacity": 0
+            },
+            {
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 112934.7,
+          "kind": "startup-animation",
+          "target": "details",
+          "keyframes": [
+            {
+              "transform": "translate3d(12px, 0, 0)",
+              "opacity": 0.35
+            },
+            {
+              "transform": "translate3d(0, 0, 0)",
+              "opacity": 1
+            }
+          ],
+          "duration": 320,
+          "orientation": "landscape"
+        },
+        {
+          "at": 112996.9,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        },
+        {
+          "at": 155773.5,
+          "kind": "media",
+          "name": "pause",
+          "readyState": 4,
+          "currentTime": 43.008,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 156110.3,
+          "kind": "query-fetch",
+          "name": "video_play_info"
+        },
+        {
+          "at": 156127.9,
+          "kind": "chrome-state",
+          "readyState": 4
+        },
+        {
+          "at": 156405.3,
+          "kind": "media",
+          "name": "loadstart",
+          "readyState": 0,
+          "currentTime": 0,
+          "videoSize": [
+            0,
+            0
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 156651.9,
+          "kind": "media",
+          "name": "loadedmetadata",
+          "readyState": 1,
+          "currentTime": 0,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 157543.2,
+          "kind": "media",
+          "name": "seeked",
+          "readyState": 4,
+          "currentTime": 43.008,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 157597.2,
+          "kind": "media",
+          "name": "loadeddata",
+          "readyState": 4,
+          "currentTime": 43.008,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 157597.5,
+          "kind": "media",
+          "name": "canplay",
+          "readyState": 4,
+          "currentTime": 43.008,
+          "videoSize": [
+            640,
+            360
+          ],
+          "errorCode": null
+        },
+        {
+          "at": 158020.6,
+          "kind": "chrome-state",
+          "value": "true",
+          "readyState": 4
+        }
+      ]
+    }
+  }
+}

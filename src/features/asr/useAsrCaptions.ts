@@ -48,6 +48,13 @@ export type AsrCaptionsOptions = {
   /** 会话身份（房间 / 频道 / 稿件）：变化时清空流式解码状态。 */
   sessionKey: string;
   featureEnabled: boolean;
+  /**
+   * 本播放会话是否已经允许启动 ASR 外围查询与重置 IPC。
+   *
+   * 它与 `featureEnabled` 分离：换画质或重建播放器只会暂时关闭启动闸门，
+   * 不能把用户已开启的字幕意图重置为关闭。非点播调用方默认立即可用。
+   */
+  startupReady?: boolean;
   settingPending: boolean;
   mediaAvailable: boolean;
   chunkSeconds: number;
@@ -88,7 +95,11 @@ export type AsrCaptions = {
 export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const clientPlatform = getClientPlatform();
   const localAsrClient = clientPlatform === "desktop";
-  const model = useAsrModelStatus({ enabled: options.featureEnabled });
+  const startupReady = options.startupReady ?? true;
+  const model = useAsrModelStatus({
+    enabled: options.featureEnabled,
+    startupReady,
+  });
   const [captionsOn, setCaptionsOn] = useState(false);
   const [text] = useState(createAsrCaptionTextStore);
   const [notice, setNotice] = useState<string | null>(null);
@@ -286,7 +297,9 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     // 否则下一条字幕会从上一条语句中间继续。
     // 副画面也常驻此 hook；禁用 ASR 时不得用其媒体切换重置主画面的全局流。
     if (options.featureEnabled && model.supported) {
-      void invokeCmd("asr_reset_stream").catch(() => {});
+      // 媒体尚未就绪时只清本地解码状态；startupReady 翻真后本 effect 会再次运行
+      // 并发送全局重置。不能把 featureEnabled 暂设为 false，否则会丢用户选择。
+      if (startupReady) void invokeCmd("asr_reset_stream").catch(() => {});
     }
   }, [
     clearCaptionTimer,
@@ -295,6 +308,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     options.featureEnabled,
     options.mediaKey,
     options.sessionKey,
+    startupReady,
     text,
   ]);
 
@@ -395,7 +409,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
   const modelQueryError = model.queryError;
   const loadSession = model.loadSession;
   const toggle = useCallback(() => {
-    if (!localAsrClient || !modelSupported || !options.featureEnabled) return;
+    if (!localAsrClient || !modelSupported || !options.featureEnabled || !startupReady) return;
     if (modelState === "error" || modelQueryError) {
       // 失败后重试：`asr_load_session` 会重新校验/补齐资产再加载会话，
       // 一次点击就能把用户带回可看状态。
@@ -449,6 +463,7 @@ export function useAsrCaptions(options: AsrCaptionsOptions): AsrCaptions {
     modelSupported,
     options.featureEnabled,
     options.mediaAvailable,
+    startupReady,
     text,
   ]);
 
