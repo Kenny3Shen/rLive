@@ -137,6 +137,17 @@ pub struct AcfunVideoPlayInfo {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcfunVideoDanmakuItem {
+    pub id: String,
+    /// 相对视频开头的出现时间，毫秒。
+    pub progress: u64,
+    pub mode: u32,
+    pub size: u32,
+    pub color: u32,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcfunArticleChannel {
     pub id: String,

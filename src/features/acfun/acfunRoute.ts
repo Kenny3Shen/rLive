@@ -22,6 +22,10 @@ export function isAcfunSource(value: string | null): boolean {
   return value === ACFUN_SOURCE;
 }
 
+export function acfunContentId(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/^ac(?=\d)/i, "");
+}
+
 export function acfunViewFromSearch(value: string | null): AcfunView {
   return value === "article" ? "article" : "video";
 }
@@ -51,7 +55,7 @@ export function acfunSearchPath(view: AcfunView, keyword?: string | null): strin
 }
 
 export function acfunVideoPath(id: string, partId?: string | null): string {
-  const params = new URLSearchParams({ id });
+  const params = new URLSearchParams({ id: acfunContentId(id) });
   if (partId) params.set("part", partId);
   return `${ACFUN_PLAY_PATH}?${params.toString()}`;
 }

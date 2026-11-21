@@ -9,3 +9,5 @@ export const VIDEO_DETAILS_INFO_CARD_CLASS =
 
 export const VIDEO_DETAILS_SELECTION_TRIGGER_CLASS =
   "h-auto w-full min-w-0 justify-start gap-2 rounded-none bg-clip-border px-3 py-2";
+
+export const VIDEO_SIDEBAR_TAB_COUNT_CLASS = "text-xs leading-none tabular-nums";

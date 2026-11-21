@@ -62,6 +62,7 @@ import { formatDateTime, formatVideoDuration } from "./videoHistory";
 import {
   VIDEO_DETAILS_INFO_CARD_CLASS,
   VIDEO_DETAILS_SIDEBAR_STACK_CLASS,
+  VIDEO_SIDEBAR_TAB_COUNT_CLASS,
 } from "@/shared/components/videoDetailsSidebar";
 import { videoPlayPath, videoSearchPath } from "./videoRoute";
 import {
@@ -112,6 +113,13 @@ function SidebarCardStack({ children }: { children: ReactNode }) {
  * 而那个表面用不上这里的相关视频 / 分集 / 选集 / 弹幕设置。
  */
 export type SidebarTab = "related" | "danmaku" | "comments" | "settings";
+
+export type SidebarTabMemory = {
+  get: () => SidebarTab | null;
+  set: (tab: SidebarTab) => void;
+  request: (tab: SidebarTab) => void;
+  subscribe: (listener: (tab: SidebarTab) => void) => () => void;
+};
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   related: "相关视频",
@@ -696,7 +704,7 @@ export function VideoSidebar({
    * 页签记忆，由播放页持有以便侧栏重挂（切集等待首帧）后回到原页签。
    * 当前页签是侧栏自己的 state：切页只重渲染侧栏，不触发播放页提交。
    */
-  tabMemory?: { get: () => SidebarTab | null; set: (tab: SidebarTab) => void };
+  tabMemory?: SidebarTabMemory;
   /** 当前播放的 cid：多 P 稿件的选集列表用它高亮当前 P。 */
   cid: number;
   /** 评论空降到当前视频的播放位置（秒），与弹幕是否开启无关。 */
@@ -727,6 +735,7 @@ export function VideoSidebar({
     },
     [tabMemory],
   );
+  useEffect(() => tabMemory?.subscribe(onTabChange), [onTabChange, tabMemory]);
   const [uploaderDrawerOpen, setUploaderDrawerOpen] = useState(false);
   const [videoFollowPickerOpen, setVideoFollowPickerOpen] = useState(false);
   const [videoFollowRemoveOpen, setVideoFollowRemoveOpen] = useState(false);
@@ -786,6 +795,7 @@ export function VideoSidebar({
   const multiPart = !isPgc && (archive?.pages.length ?? 0) > 0;
   // 合集 / 分集 / 多 P 统一在相关视频的信息卡下，不再占独立页签。
   const showDanmakuTab = danmaku !== undefined;
+  const commentCount = !isPgc && archive && archive.reply > 0 ? archive.reply : null;
   const hasSeason = Boolean(archive?.ugc_season);
   // 稳定引用：useHorizontalSwipe 的 items 参与 effect 依赖，切页签时不应因数组
   // 每次重建而重新执行停靠逻辑。
@@ -1231,6 +1241,14 @@ export function VideoSidebar({
           {visibleTabs.map((value) => (
             <TabsTrigger key={value} value={value} className="px-3 text-sm">
               {TAB_LABELS[value]}
+              {value === "comments" && commentCount !== null && (
+                <span className={VIDEO_SIDEBAR_TAB_COUNT_CLASS}>{formatOnline(commentCount)}</span>
+              )}
+              {value === "danmaku" && danmaku && danmaku.entries.length > 0 && (
+                <span className={VIDEO_SIDEBAR_TAB_COUNT_CLASS}>
+                  {formatOnline(danmaku.entries.length)}
+                </span>
+              )}
             </TabsTrigger>
           ))}
         </TabsList>

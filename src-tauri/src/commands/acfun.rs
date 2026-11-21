@@ -7,8 +7,8 @@ use tauri::State;
 use crate::error::AppResult;
 use crate::models::acfun::{
     AcfunArticleChannel, AcfunArticleDetail, AcfunArticleListPage, AcfunCommentPage,
-    AcfunCommentReplyPage, AcfunCommentSort, AcfunVideoDetail, AcfunVideoListPage,
-    AcfunVideoPlayInfo, AcfunVideoSection,
+    AcfunCommentReplyPage, AcfunCommentSort, AcfunVideoDanmakuItem, AcfunVideoDetail,
+    AcfunVideoListPage, AcfunVideoPlayInfo, AcfunVideoSection,
 };
 use crate::sites::acfun::content::{
     AcfunContentClient, CONTENT_REFERER, CONTENT_USER_AGENT, video_sections_static,
@@ -118,6 +118,18 @@ pub async fn acfun_video_get_play_info(
         headers,
         session_id,
     })
+}
+
+#[tauri::command]
+pub async fn acfun_video_get_danmaku(
+    state: State<'_, AppState>,
+    video_id: String,
+    part_id: String,
+) -> AppResult<Vec<AcfunVideoDanmakuItem>> {
+    content_client(&state)?
+        .0
+        .video_danmaku(&video_id, &part_id)
+        .await
 }
 
 #[tauri::command]

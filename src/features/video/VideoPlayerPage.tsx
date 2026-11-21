@@ -24,6 +24,9 @@ import {
   FastForward,
   Home,
   Link2,
+  MessageSquareOff,
+  MessageSquareText,
+  Settings,
   Smartphone,
 } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -37,10 +40,8 @@ import {
   DrawerTitle,
   DrawerViewport,
 } from "@/components/ui/drawer";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
@@ -58,6 +59,7 @@ import {
   type PlayerMenuRadioOption,
 } from "@/shared/components/player/PlayerControls";
 import { PlayerAudioOnlyButton } from "@/shared/components/player/PlayerAudioOnlyButton";
+import { PlaybackSettingRow } from "@/shared/components/player/PlaybackSettingRow";
 import {
   useCompactPlayerViewport,
   usePortraitOrientation,
@@ -202,7 +204,7 @@ import {
 import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
 import { VideoDownloadDialog, type VideoDownloadTarget } from "./VideoDownloadDialog";
 import { videoDownloadSupported } from "./videoDownload";
-import type { SidebarTab } from "./VideoSidebar";
+import type { SidebarTab, SidebarTabMemory } from "./VideoSidebar";
 import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
 import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
 import {
@@ -441,12 +443,23 @@ function VideoPlayerPageContent() {
    * 侧栏页签记忆：只由 VideoSidebar 读写。不放进本页 state，切页签只重渲染侧栏，
    * 不带着播放页整棵树（播放器、控制栏、弹幕层）一起提交。
    */
-  const [sidebarTabMemory] = useState(() => {
+  const [sidebarTabMemory] = useState<SidebarTabMemory>(() => {
     let remembered: SidebarTab | null = null;
+    const listeners = new Set<(tab: SidebarTab) => void>();
     return {
       get: () => remembered,
       set: (tab: SidebarTab) => {
         remembered = tab;
+      },
+      request: (tab: SidebarTab) => {
+        remembered = tab;
+        for (const listener of listeners) listener(tab);
+      },
+      subscribe: (listener: (tab: SidebarTab) => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
       },
     };
   });
@@ -878,6 +891,7 @@ function VideoPlayerPageContent() {
         cid: episode?.cid ?? params.cid,
         ep_id: params.epId ?? "",
         aid: episode?.aid || params.aid || "",
+        part_id: "",
         progress: 0,
         duration: 0,
         watched_at: watchedAt,
@@ -899,6 +913,7 @@ function VideoPlayerPageContent() {
       cid,
       ep_id: "",
       aid: aid ?? "",
+      part_id: "",
       progress: 0,
       duration: 0,
       watched_at: watchedAt,
@@ -3799,6 +3814,26 @@ function VideoPlayerPageContent() {
                       >
                         <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
                           <PlayerToolTile
+                            icon={danmakuVisible ? MessageSquareText : MessageSquareOff}
+                            label={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
+                            onClick={() => {
+                              setHudMenuOpen(false);
+                              setOverlayInteractionOpen(false);
+                              setDanmakuVisible((visible) => !visible);
+                            }}
+                          />
+                          {!fullscreen.fullscreen && !webFullscreen && (
+                            <PlayerToolTile
+                              icon={Settings}
+                              label="弹幕设置"
+                              onClick={() => {
+                                setHudMenuOpen(false);
+                                setOverlayInteractionOpen(false);
+                                sidebarTabMemory.request("settings");
+                              }}
+                            />
+                          )}
+                          <PlayerToolTile
                             icon={Cast}
                             label={castingDevice ? "投屏中" : "投屏"}
                             pressed={castOpen || castingDevice != null}
@@ -3962,30 +3997,5 @@ function VideoPlayerPageContent() {
         container={fullscreen.fullscreen ? stageRef : undefined}
       />
     </div>
-  );
-}
-
-/**
- * 播放设置面板里的开关行。偏好项共用同一画法：与设置页、字幕菜单的开关
- * 同源（`Switch` + `FieldLabel`），标签文字同样可点。
- */
-function PlaybackSettingRow({
-  id,
-  label,
-  checked,
-  onToggle,
-}: {
-  id: string;
-  label: string;
-  checked: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <Field orientation="horizontal" className="min-h-9 px-2.5 py-1.5">
-      <FieldLabel htmlFor={id} className="text-sm font-normal">
-        {label}
-      </FieldLabel>
-      <Switch id={id} size="sm" checked={checked} onCheckedChange={() => onToggle()} />
-    </Field>
   );
 }

@@ -13,7 +13,7 @@ pub const VIDEO_HISTORY_RETENTION_LIMIT: i64 = 500;
 /// 上限主要防的是用户在应用外删掉录像目录后留下的孤行——没有可依赖的
 /// 扫描联动去清它们，只能靠容量兜底让旧进度最终被汰汰。
 pub const RECORDING_WATCH_PROGRESS_RETENTION_LIMIT: i64 = 1_000;
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 9;
 
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DB_CACHE_SIZE_KIB: i64 = 8 * 1_024;
@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS video_history (
   cid INTEGER NOT NULL DEFAULT 0,
   ep_id TEXT NOT NULL DEFAULT '',
   aid TEXT NOT NULL DEFAULT '',
+  part_id TEXT NOT NULL DEFAULT '',
   progress REAL NOT NULL DEFAULT 0,
   duration REAL NOT NULL DEFAULT 0,
   watched_at INTEGER NOT NULL,
@@ -259,13 +260,15 @@ fn initialize_schema(conn: &Connection) -> AppResult<()> {
         return Ok(());
     }
 
-    // v3→v7 均为增量建表，保留原有 Cookie、设置及观看历史。
+    // v3→v9 均为增量迁移，保留原有 Cookie、设置及观看历史。
     if (3..SCHEMA_VERSION).contains(&version) {
         let transaction = conn
             .unchecked_transaction()
             .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
         if version < 4 {
             create_video_history_objects(&transaction)?;
+        } else if version < 9 {
+            add_video_history_part_id(&transaction)?;
         }
         if version < 5 {
             create_recording_watch_progress_objects(&transaction)?;
@@ -346,6 +349,22 @@ fn create_video_history_objects(tx: &Connection) -> AppResult<()> {
     Ok(())
 }
 
+fn add_video_history_part_id(tx: &Connection) -> AppResult<()> {
+    let mut statement = tx
+        .prepare("PRAGMA table_info(video_history)")
+        .map_err(map_db_err)?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(map_db_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_db_err)?;
+    if !columns.iter().any(|column| column == "part_id") {
+        tx.execute_batch("ALTER TABLE video_history ADD COLUMN part_id TEXT NOT NULL DEFAULT ''")
+            .map_err(|error| AppError::new("db_schema_error", error.to_string()))?;
+    }
+    Ok(())
+}
+
 /// 建 `recording_watch_progress` 的表、索引与修剪触发器。新库初始化与 v4→v5
 /// 迁移共用此函数，避免两条路径各写一份 DDL 而逐渐漂移。触发器排序键与
 /// 索引一致（`watched_at DESC, id ASC`），`INDEXED BY` 保证修剪走的正是索引。
@@ -383,7 +402,7 @@ mod tests {
 
     #[test]
     fn upgrades_supported_versions_without_losing_existing_data() {
-        for old_version in [0, 3, 4, 5, 6, SCHEMA_VERSION] {
+        for old_version in [0, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION] {
             let conn = Connection::open_in_memory().unwrap();
             if old_version == SCHEMA_VERSION {
                 initialize_schema(&conn).unwrap();
@@ -463,6 +482,48 @@ mod tests {
                     .unwrap();
                 assert_eq!(video_follow, ("UP".into(), Some("tech".into())));
             }
+        }
+    }
+
+    #[test]
+    fn v7_and_v8_video_history_gain_an_empty_acfun_part_id() {
+        for old_version in [7, 8] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE video_history (
+               kind TEXT NOT NULL,
+               oid TEXT NOT NULL,
+               title TEXT NOT NULL,
+               cover TEXT NOT NULL DEFAULT '',
+               author TEXT NOT NULL DEFAULT '',
+               part_title TEXT NOT NULL DEFAULT '',
+               bvid TEXT NOT NULL DEFAULT '',
+               cid INTEGER NOT NULL DEFAULT 0,
+               ep_id TEXT NOT NULL DEFAULT '',
+               aid TEXT NOT NULL DEFAULT '',
+               progress REAL NOT NULL DEFAULT 0,
+               duration REAL NOT NULL DEFAULT 0,
+               watched_at INTEGER NOT NULL,
+               PRIMARY KEY (kind, oid)
+             );
+             INSERT INTO video_history (kind, oid, title, watched_at)
+             VALUES ('ugc', 'BV1', '旧记录', 7);
+             PRAGMA user_version = {old_version};"
+            ))
+            .unwrap();
+
+            initialize_schema(&conn).unwrap();
+
+            let (title, part_id): (String, String) = conn
+                .query_row(
+                    "SELECT title, part_id FROM video_history WHERE kind = 'ugc' AND oid = 'BV1'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(title, "旧记录");
+            assert_eq!(part_id, "");
+            assert_eq!(version(&conn), SCHEMA_VERSION);
         }
     }
 

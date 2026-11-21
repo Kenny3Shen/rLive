@@ -26,6 +26,7 @@ import { useDanmakuPinInteraction } from "@/features/room/danmaku/useDanmakuPinI
 import { createShieldMatcher } from "@/features/room/danmaku/filter";
 import { prefersReducedMotion } from "@/shared/motion/preference";
 import { parseDanmakuSpeed, useSettingsStore } from "@/shared/stores/settingsStore";
+import type { SiteId } from "@/shared/types/live";
 import {
   filterVideoDanmakuEntries,
   videoDanmakuComment,
@@ -44,6 +45,8 @@ type VideoDanmakuLayerProps = {
   /** 关闭时仅隐藏并停止点选，实例与调度保持运行。 */
   active: boolean;
   interactive?: boolean;
+  siteId?: SiteId;
+  canRepeat?: boolean;
   cid?: number;
   aid?: string;
   title?: string;
@@ -60,6 +63,8 @@ export function VideoDanmakuLayer({
   entries,
   active,
   interactive = true,
+  siteId = "bilibili",
+  canRepeat = siteId === "bilibili",
   cid = 0,
   aid = "",
   title,
@@ -95,7 +100,9 @@ export function VideoDanmakuLayer({
    * 重算全部条目的样式对象是纯浪费。外观参数变化时 key 失配自然重建；
    * 同时淘汰已不在列表里的 id，长视频下不会随段落累积无界增长。
    */
-  const [commentCache] = useState(() => new Map<string, { key: string; comment: DanmakuComment }>());
+  const [commentCache] = useState(
+    () => new Map<string, { key: string; comment: DanmakuComment }>(),
+  );
   const scheduleComments = useMemo(() => {
     // 减少动态效果时用正常媒体时长的顶部弹幕代替近乎静止、长期占道的滚动弹幕。
     const reducedMotion = prefersReducedMotion();
@@ -319,9 +326,18 @@ export function VideoDanmakuLayer({
           <DanmakuActionMenu
             key={target.hoverKey}
             target={target}
-            siteId="bilibili"
+            siteId={siteId}
             roomTitle={title}
-            video={{ cid, aid, getProgressMs: () => (videoRef.current?.currentTime ?? 0) * 1_000 }}
+            video={
+              siteId === "bilibili"
+                ? {
+                    cid,
+                    aid,
+                    getProgressMs: () => (videoRef.current?.currentTime ?? 0) * 1_000,
+                  }
+                : undefined
+            }
+            canRepeat={canRepeat}
             large={large}
           />
         </div>

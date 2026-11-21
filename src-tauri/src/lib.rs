@@ -40,11 +40,11 @@ use commands::account::{
     account_qr_login_start, account_set_cookie,
 };
 use commands::acfun::{
-    acfun_article_get_channels, acfun_article_get_detail, acfun_article_get_feed,
-    acfun_article_search, acfun_video_get_comment_replies, acfun_video_get_comments,
+    acfun_article_get_channels, acfun_article_get_comment_replies, acfun_article_get_comments,
+    acfun_article_get_detail, acfun_article_get_feed, acfun_article_search,
+    acfun_video_get_comment_replies, acfun_video_get_comments, acfun_video_get_danmaku,
     acfun_video_get_detail, acfun_video_get_play_info, acfun_video_get_recommend,
     acfun_video_get_section, acfun_video_get_sections, acfun_video_search, acfun_video_stop_play,
-    acfun_article_get_comment_replies, acfun_article_get_comments,
 };
 #[cfg(target_os = "android")]
 use commands::android_navigation::AndroidNavigation;
@@ -457,6 +457,7 @@ pub fn run() {
             acfun_video_search,
             acfun_video_get_detail,
             acfun_video_get_play_info,
+            acfun_video_get_danmaku,
             acfun_video_get_comments,
             acfun_video_get_comment_replies,
             acfun_video_stop_play,

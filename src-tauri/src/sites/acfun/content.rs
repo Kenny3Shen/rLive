@@ -120,7 +120,12 @@ impl AcfunContentClient {
         })
     }
 
-    async fn post_form(&self, path: &str, form: &[(&str, String)], what: &str) -> AppResult<Value> {
+    pub(super) async fn post_form(
+        &self,
+        path: &str,
+        form: &[(&str, String)],
+        what: &str,
+    ) -> AppResult<Value> {
         let response = self
             .client
             .post(format!("{ORIGIN}{path}"))
@@ -354,6 +359,23 @@ impl AcfunContentClient {
                 Self::error("acfun_content_parse_error", "AcFun 视频详情缺少播放清单")
             })?;
         parse_play_source(&play_json, quality)
+    }
+
+    pub(crate) async fn video_danmaku(
+        &self,
+        video_id: &str,
+        part_id: &str,
+    ) -> AppResult<Vec<crate::models::acfun::AcfunVideoDanmakuItem>> {
+        let video_id = normalize_content_id(video_id, "ac")?;
+        let part_id = normalize_content_id(part_id, "ac")?;
+        let value = self.video_page(&video_id, None).await?;
+        if !super::danmaku::part_belongs_to_video(&value, &part_id) {
+            return Err(Self::error(
+                "acfun_video_part_invalid",
+                "AcFun 视频分 P 不属于当前稿件",
+            ));
+        }
+        super::danmaku::fetch_all(self, &part_id).await
     }
 
     async fn comment_page(

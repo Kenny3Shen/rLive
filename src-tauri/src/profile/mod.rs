@@ -558,6 +558,55 @@ mod tests {
         }
     }
 
+    fn video_history(kind: &str, oid: &str, part_id: &str) -> VideoHistoryRecord {
+        VideoHistoryRecord {
+            kind: kind.into(),
+            oid: oid.into(),
+            title: "视频".into(),
+            cover: String::new(),
+            author: "作者".into(),
+            part_title: "第二集".into(),
+            bvid: String::new(),
+            cid: 0,
+            ep_id: String::new(),
+            aid: String::new(),
+            part_id: part_id.into(),
+            progress: 30.0,
+            duration: 120.0,
+            watched_at: 10,
+        }
+    }
+
+    #[test]
+    fn legacy_profile_video_history_defaults_part_id_and_roundtrips_acfun() {
+        let mut value = serde_json::to_value(ProfilePackage::sample()).unwrap();
+        value["video_history"] = serde_json::json!([{
+            "kind": "ugc",
+            "oid": "BV1",
+            "title": "旧记录",
+            "cover": "",
+            "author": "",
+            "part_title": "",
+            "bvid": "BV1",
+            "cid": 1,
+            "ep_id": "",
+            "aid": "1",
+            "progress": 10.0,
+            "duration": 100.0,
+            "watched_at": 1
+        }]);
+        let package = decode_package(&serde_json::to_string(&value).unwrap()).unwrap();
+        assert_eq!(package.video_history[0].part_id, "");
+
+        let mut conn = open_in_memory().unwrap();
+        let mut package = ProfilePackage::sample();
+        package.video_history = vec![video_history("acfun", "49004803", "p2")];
+        merge_into_db(&mut conn, &package).unwrap();
+        let exported = export_package(&conn).unwrap();
+        assert_eq!(exported.video_history[0].kind, "acfun");
+        assert_eq!(exported.video_history[0].part_id, "p2");
+    }
+
     #[test]
     fn portable_export_omits_cookies_and_local_only_settings() {
         let mut package = ProfilePackage::sample();

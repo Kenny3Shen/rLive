@@ -32,7 +32,8 @@ function dateLabel(timestamp: number, today: number, yesterday: number): string 
 
 /**
  * 按平台页签与「已禁用平台」设置过滤。
- * 只有带 `site_id` 的历史（直播、弹幕）需要它；视频历史只有 B 站一个来源。
+ * 只有带 `site_id` 的历史（直播、弹幕）直接使用；视频历史按 `kind`
+ * 映射到 B 站或 AcFun 后再复用同一套平台可见性。
  */
 export function filterHistoryBySite<T extends { site_id: SiteId }>(
   items: readonly T[],

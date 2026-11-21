@@ -5,6 +5,7 @@
 //! `content` 子模块处理。
 
 pub(crate) mod content;
+pub(crate) mod danmaku;
 
 use std::collections::{HashMap, HashSet};
 

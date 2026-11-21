@@ -125,6 +125,7 @@ describe("短视频平台适配器", () => {
               cid: video.cid,
               ep_id: "",
               aid: video.aid,
+              part_id: "",
               progress: 25,
               duration: 61,
               watched_at: 123456,

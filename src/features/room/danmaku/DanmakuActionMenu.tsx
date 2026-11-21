@@ -57,6 +57,7 @@ type DanmakuActionMenuProps = {
   roomTitle?: string;
   roomUserName?: string;
   video?: DanmakuActionsParams["video"];
+  canRepeat?: boolean;
   /** 为全屏桌面舞台提供的更大瞄准目标。 */
   large?: boolean;
 };
@@ -68,6 +69,7 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
   roomTitle,
   roomUserName,
   video,
+  canRepeat = true,
   large = false,
 }: DanmakuActionMenuProps) {
   const message = target.content.trim();
@@ -158,21 +160,23 @@ export const DanmakuActionMenu = memo(function DanmakuActionMenu({
             <Star aria-hidden className={iconClass} />
           )}
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-lg"
-          className={cn("rounded-full", buttonClass, glassOptionClass())}
-          disabled={!actions.canRepeat || actions.sending}
-          aria-label={actions.repeatLabel}
-          title={actions.repeatLabel}
-          onClick={() => void actions.repeat()}
-        >
-          {/* 带加号的气泡读作"再发一条"，正是 +1 的含义。`SendHorizontal` 读作
-              "发送我输入的内容" —— 这里没有输入框。方形气泡已是播放器 chrome 中
-              弹幕的符号（`MessageSquareText` / `MessageSquareOff`）。 */}
-          <MessageSquarePlus aria-hidden className={iconClass} />
-        </Button>
+        {canRepeat && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-lg"
+            className={cn("rounded-full", buttonClass, glassOptionClass())}
+            disabled={!actions.canRepeat || actions.sending}
+            aria-label={actions.repeatLabel}
+            title={actions.repeatLabel}
+            onClick={() => void actions.repeat()}
+          >
+            {/* 带加号的气泡读作"再发一条"，正是 +1 的含义。`SendHorizontal` 读作
+                "发送我输入的内容" —— 这里没有输入框。方形气泡已是播放器 chrome 中
+                弹幕的符号（`MessageSquareText` / `MessageSquareOff`）。 */}
+            <MessageSquarePlus aria-hidden className={iconClass} />
+          </Button>
+        )}
       </div>
       {!flipBelow && actions.statusMessage && (
         <DanmakuActionStatus message={actions.statusMessage} failed={actions.failed} />

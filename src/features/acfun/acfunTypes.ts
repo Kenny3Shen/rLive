@@ -63,6 +63,15 @@ export type AcfunVideoPlayInfo = {
   session_id: string;
 };
 
+export type AcfunVideoDanmakuItem = {
+  id: string;
+  progress: number;
+  mode: number;
+  size: number;
+  color: number;
+  content: string;
+};
+
 export type AcfunCommentSort = "hot" | "time";
 
 export type AcfunVideoComment = {

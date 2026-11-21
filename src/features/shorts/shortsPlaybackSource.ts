@@ -57,6 +57,7 @@ export const BILIBILI_SHORTS_SOURCE: ShortsPlaybackSource<VideoItem, VideoPlayIn
       cid: item.cid ?? 0,
       ep_id: "",
       aid: item.aid,
+      part_id: "",
       progress: position,
       duration: info?.duration ?? 0,
       watched_at: now,

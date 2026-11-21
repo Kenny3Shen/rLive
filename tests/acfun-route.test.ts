@@ -7,6 +7,7 @@ import {
 } from "../src/app/routeModules";
 import { isImmersivePlayerPath } from "../src/app/layout/immersiveRoutes";
 import {
+  acfunContentId,
   acfunArticleBackNavigation,
   acfunArticlePath,
   acfunHomePath,
@@ -56,6 +57,9 @@ describe("AcFun 路由模块", () => {
   });
 
   test("路径构造函数保留内容类型和定位参数", () => {
+    expect(acfunContentId(" ac49004803 ")).toBe("49004803");
+    expect(acfunContentId("49004803")).toBe("49004803");
+    expect(acfunContentId("AC49004803")).toBe("49004803");
     expect(acfunHomePath()).toBe("/video?source=acfun");
     expect(acfunHomePath("video", { section: "86" })).toBe("/video?source=acfun&section=86");
     expect(acfunHomePath("article")).toBe("/video?source=acfun&view=article");
@@ -67,6 +71,7 @@ describe("AcFun 路由模块", () => {
       "/video/acfun/search?view=article&q=%E4%B8%89%E8%A7%92%E6%B4%B2%E8%A1%8C%E5%8A%A8",
     );
     expect(acfunVideoPath("123", "456")).toBe("/video/acfun/play?id=123&part=456");
+    expect(acfunVideoPath("ac123", "456")).toBe("/video/acfun/play?id=123&part=456");
     expect(acfunArticlePath("a/b 1")).toBe("/video/acfun/article/a%2Fb%201");
   });
 

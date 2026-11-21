@@ -9,14 +9,14 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::db::schema::{VIDEO_HISTORY_RETENTION_LIMIT, map_db_err};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VideoHistoryRecord {
-    /// 作品类型：`ugc`（普通稿件）或 `pgc`（番剧/影视）。
+    /// 作品类型：`ugc`（B 站稿件）、`pgc`（番剧/影视）或 `acfun`。
     pub kind: String,
-    /// 作品标识：UGC 为 bvid，PGC 为 season_id。与 `kind` 共同构成主键。
+    /// 作品标识：UGC 为 bvid，PGC 为 season_id，AcFun 为 dougaId。
     pub oid: String,
     /// 作品标题（不含分集名）。
     pub title: String,
@@ -34,6 +34,9 @@ pub struct VideoHistoryRecord {
     pub ep_id: String,
     /// 评论区的 oid（aid）。取不到时为空。
     pub aid: String,
+    /// AcFun 分 P 的内部 videoId；B 站记录为空。
+    #[serde(default)]
+    pub part_id: String,
     /// 该分集已观看到的秒数。
     pub progress: f64,
     /// 该分集总时长秒数。上游未给出时为 0。
@@ -47,7 +50,23 @@ pub struct VideoHistoryRecord {
 const LIST_LIMIT: i64 = VIDEO_HISTORY_RETENTION_LIMIT;
 
 /// `list` / `find` 共用的 SELECT 列清单；列序与 [`map_video_history_record`] 一致。
-const VIDEO_HISTORY_COLUMNS: &str = "kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid, progress, duration, watched_at";
+const VIDEO_HISTORY_COLUMNS: &str = "kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid, part_id, progress, duration, watched_at";
+
+fn validate_identity(kind: &str, oid: &str) -> AppResult<()> {
+    if !matches!(kind, "ugc" | "pgc" | "acfun") {
+        return Err(AppError::new(
+            "video_history_kind_invalid",
+            format!("不支持的视频历史类型：{kind}"),
+        ));
+    }
+    if oid.trim().is_empty() {
+        return Err(AppError::new(
+            "video_history_oid_invalid",
+            "视频历史缺少作品标识",
+        ));
+    }
+    Ok(())
+}
 
 fn map_video_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoHistoryRecord> {
     Ok(VideoHistoryRecord {
@@ -61,9 +80,10 @@ fn map_video_history_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoHi
         cid: row.get(7)?,
         ep_id: row.get(8)?,
         aid: row.get(9)?,
-        progress: row.get(10)?,
-        duration: row.get(11)?,
-        watched_at: row.get(12)?,
+        part_id: row.get(10)?,
+        progress: row.get(11)?,
+        duration: row.get(12)?,
+        watched_at: row.get(13)?,
     })
 }
 
@@ -89,6 +109,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<VideoHistoryRecord>> {
 
 /// 查单个作品的观看记录。播放页进入时用它决定是否提示续播；从未看过返回 `None`。
 pub fn find(conn: &Connection, kind: &str, oid: &str) -> AppResult<Option<VideoHistoryRecord>> {
+    validate_identity(kind, oid)?;
     conn.query_row(
         &format!(
             "SELECT {VIDEO_HISTORY_COLUMNS}
@@ -104,12 +125,13 @@ pub fn find(conn: &Connection, kind: &str, oid: &str) -> AppResult<Option<VideoH
 
 /// 写入一次观看上报，按 `(kind, oid)` 就地更新。
 pub fn upsert(conn: &Connection, record: VideoHistoryRecord) -> AppResult<()> {
+    validate_identity(&record.kind, &record.oid)?;
     conn.execute(
         "INSERT INTO video_history (
            kind, oid, title, cover, author, part_title, bvid, cid, ep_id, aid,
-           progress, duration, watched_at
+           part_id, progress, duration, watched_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(kind, oid) DO UPDATE SET
            -- 进度直接覆盖，刻意不取 MAX：用户拖回去重看前面的内容时，
            -- 续播位置必须跟着回退，否则「继续播放」会跳到他已经离开的地方。
@@ -133,6 +155,10 @@ pub fn upsert(conn: &Connection, record: VideoHistoryRecord) -> AppResult<()> {
            ep_id = excluded.ep_id,
            aid = excluded.aid,
            cid = excluded.cid,
+           part_id = CASE
+             WHEN excluded.part_id = '' THEN video_history.part_id
+             ELSE excluded.part_id
+           END,
            -- 时钟回拨时不让历史顺序往前跳。
            watched_at = MAX(video_history.watched_at, excluded.watched_at)",
         params![
@@ -146,6 +172,7 @@ pub fn upsert(conn: &Connection, record: VideoHistoryRecord) -> AppResult<()> {
             record.cid,
             record.ep_id,
             record.aid,
+            record.part_id,
             record.progress,
             record.duration,
             record.watched_at,
@@ -157,6 +184,7 @@ pub fn upsert(conn: &Connection, record: VideoHistoryRecord) -> AppResult<()> {
 
 /// 删除单个作品的观看记录。历史按作品唯一，因此不需要时间戳参与定位。
 pub fn remove(conn: &Connection, kind: &str, oid: &str) -> AppResult<()> {
+    validate_identity(kind, oid)?;
     conn.execute(
         "DELETE FROM video_history WHERE kind = ?1 AND oid = ?2",
         params![kind, oid],
@@ -188,6 +216,7 @@ mod tests {
             cid: 1,
             ep_id: String::new(),
             aid: "42".into(),
+            part_id: String::new(),
             progress: 10.0,
             duration: 100.0,
             watched_at,
@@ -261,6 +290,44 @@ mod tests {
         assert_eq!(stored.cover, "https://example.com/BV1.jpg");
         assert_eq!(stored.duration, 100.0);
         assert_eq!(stored.progress, 66.0);
+    }
+
+    #[test]
+    fn acfun_part_id_is_updated_independently_from_bilibili_fields() {
+        let conn = open_in_memory().unwrap();
+        let mut item = record("acfun", "49004803", 100);
+        item.bvid = String::new();
+        item.cid = 0;
+        item.aid = String::new();
+        item.part_id = "123456".into();
+        item.part_title = "第二集".into();
+        upsert(&conn, item.clone()).unwrap();
+
+        item.part_id = "654321".into();
+        item.part_title = "第三集".into();
+        upsert(&conn, item.clone()).unwrap();
+
+        let stored = find(&conn, "acfun", "49004803").unwrap().unwrap();
+        assert_eq!(stored.part_id, "654321");
+        assert_eq!(stored.part_title, "第三集");
+        assert!(stored.bvid.is_empty());
+        assert_eq!(stored.cid, 0);
+
+        item.part_id = String::new();
+        upsert(&conn, item).unwrap();
+        assert_eq!(
+            find(&conn, "acfun", "49004803").unwrap().unwrap().part_id,
+            "654321"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_history_kinds_and_empty_oids() {
+        let conn = open_in_memory().unwrap();
+        let error = upsert(&conn, record("youtube", "video", 1)).unwrap_err();
+        assert_eq!(error.code, "video_history_kind_invalid");
+        let error = find(&conn, "acfun", " ").unwrap_err();
+        assert_eq!(error.code, "video_history_oid_invalid");
     }
 
     #[test]

@@ -44,6 +44,7 @@ function entry(cid: number, title = "标题"): VideoHistoryItem {
     part_title: `P${cid}`,
     ep_id: "",
     aid: "1",
+    part_id: "",
     progress: 0,
     duration: 600,
     watched_at: 0,
@@ -170,10 +171,7 @@ describe("VOD query/session 所有权", () => {
       ["first", deferred<VideoPlayInfo>()],
       ["second", deferred<VideoPlayInfo>()],
     ]);
-    const options = (
-      ownerId: "first" | "second",
-      owner: VideoPlaybackSessions,
-    ) => ({
+    const options = (ownerId: "first" | "second", owner: VideoPlaybackSessions) => ({
       queryKey: ["video_play_info", ownerId, "A", 1],
       queryFn: (context: Parameters<VideoPlaybackSessions["acquireForQuery"]>[1]) =>
         owner.acquireForQuery("A:1", context, () => pending.get(ownerId)!.promise),

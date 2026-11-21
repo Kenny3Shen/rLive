@@ -158,15 +158,14 @@ export type VideoSessionIds = {
 /**
  * 一条视频观看历史。镜像 Rust `db::video_history::VideoHistoryRecord`。
  *
- * **按「作品」而不是「分集」去重**：`(kind, oid)` 是主键，`oid` 为 UGC 的 bvid
- * 或 PGC 的 season_id。同一稿件换分 P、同一剧集换集只更新这一行的进度与
- * `cid`/`ep_id`，历史列表因此不会被一部番的几十集刷满 —— 与 PiliPlus 的
- * 「同一作品一条记录」语义一致。
+ * **按「作品」而不是「分集」去重**：`(kind, oid)` 是主键，`oid` 为 UGC 的 bvid、
+ * PGC 的 season_id 或 AcFun 的 dougaId。同一稿件换分 P、同一剧集换集只更新
+ * 这一行的进度与分集标识，历史列表因此不会被一部番的几十集刷满。
  */
 export type VideoHistoryItem = {
-  /** `ugc` = 稿件（oid 为 bvid），`pgc` = 番剧/影视剧集（oid 为 season_id）。 */
+  /** `ugc` = B 站稿件，`pgc` = 番剧/影视，`acfun` = AcFun 稿件。 */
   kind: VideoHistoryKind;
-  /** 作品标识：UGC 为 bvid，PGC 为 season_id。 */
+  /** 作品标识：UGC 为 bvid，PGC 为 season_id，AcFun 为 dougaId。 */
   oid: string;
   /** 作品标题：UGC 为稿件标题，PGC 为剧集名。 */
   title: string;
@@ -183,6 +182,8 @@ export type VideoHistoryItem = {
   ep_id: string;
   /** 续播用：评论区 oid，可为空。 */
   aid: string;
+  /** AcFun 分 P 的内部 videoId；B 站记录为空。 */
+  part_id: string;
   /** 已观看位置，秒。 */
   progress: number;
   /** 该分集总时长，秒；未知为 0。 */
@@ -191,7 +192,7 @@ export type VideoHistoryItem = {
   watched_at: number;
 };
 
-export type VideoHistoryKind = "ugc" | "pgc";
+export type VideoHistoryKind = "ugc" | "pgc" | "acfun";
 
 /**
  * 播放一条 VOD 所需的全部内容。

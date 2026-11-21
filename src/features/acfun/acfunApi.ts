@@ -7,6 +7,7 @@ import type {
   AcfunCommentReplyPage,
   AcfunCommentSort,
   AcfunVideoDetail,
+  AcfunVideoDanmakuItem,
   AcfunVideoListPage,
   AcfunVideoPlayInfo,
   AcfunVideoSection,
@@ -42,6 +43,13 @@ export function acfunVideoGetPlayInfo(params: {
     partId: params.partId ?? null,
     quality: params.quality ?? null,
   });
+}
+
+export function acfunVideoGetDanmaku(params: {
+  videoId: string;
+  partId: string;
+}): Promise<AcfunVideoDanmakuItem[]> {
+  return invokeCmd<AcfunVideoDanmakuItem[]>("acfun_video_get_danmaku", params);
 }
 
 export function acfunVideoStopPlay(sessionId: string): Promise<void> {

@@ -32,6 +32,7 @@ import {
   videoHistoryList,
   videoHistoryPlayPath,
   videoHistoryRemove,
+  videoHistorySiteId,
 } from "@/features/video/videoHistory";
 import {
   filterHistoryBySite,
@@ -70,6 +71,7 @@ import {
   HistorySearchInput,
 } from "./HistoryHeaderControls";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -280,6 +282,7 @@ type VideoHistoryCardProps = {
  */
 function VideoHistoryCard({ item, onOpen, onRemove, isRemoving }: VideoHistoryCardProps) {
   const title = item.title || "未命名视频";
+  const acfun = item.kind === "acfun";
   const playPath = videoHistoryPlayPath(item);
   const cover = normalizeImageUrl(item.cover);
   // 副行优先分集标题：番剧没有作者，分集名才是这一行唯一有信息量的内容。
@@ -305,20 +308,39 @@ function VideoHistoryCard({ item, onOpen, onRemove, isRemoving }: VideoHistoryCa
       cover={cover}
       coverFallback={<MonitorPlay className="size-6 text-muted-foreground" aria-hidden />}
       coverOverlay={
-        hasDuration ? (
+        hasDuration || acfun ? (
           <>
-            <span className="absolute right-1 bottom-1.5 rounded-md bg-black/60 px-1 text-[10px] leading-4 font-medium text-white backdrop-blur-sm">
-              {formatVideoDuration(item.duration)}
-            </span>
-            {/* 进度条压在封面底边：它是缩略图的一部分，不占文本列的行。 */}
-            <span className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
-              <span className="block h-full bg-primary" style={{ width: `${progressPercent}%` }} />
-            </span>
+            {acfun && (
+              <span className="absolute top-1 left-1 flex size-5 items-center justify-center rounded-md bg-black/60 backdrop-blur-sm">
+                <SiteLogo siteId="acfun" className="size-3.5" />
+              </span>
+            )}
+            {hasDuration && (
+              <>
+                <span className="absolute right-1 bottom-1.5 rounded-md bg-black/60 px-1 text-[10px] leading-4 font-medium text-white backdrop-blur-sm">
+                  {formatVideoDuration(item.duration)}
+                </span>
+                {/* 进度条压在封面底边：它是缩略图的一部分，不占文本列的行。 */}
+                <span className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
+                  <span
+                    className="block h-full bg-primary"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </span>
+              </>
+            )}
           </>
         ) : undefined
       }
     >
-      <span className="block truncate text-sm font-medium text-foreground">{title}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="block truncate text-sm font-medium text-foreground">{title}</span>
+        {acfun && (
+          <Badge variant="outline" className="shrink-0">
+            AcFun
+          </Badge>
+        )}
+      </span>
       <span className="mt-0.5 block truncate text-xs text-muted-foreground">
         {subtitle || "未知作者"}
       </span>
@@ -501,11 +523,8 @@ export function HistoryPage() {
     requestedPlatform === "all" || visibleSiteIds.includes(requestedPlatform)
       ? requestedPlatform
       : "all";
-  // 视频历史只有 B 站一个来源，平台筛选对它不适用：把它算进去会让用户在直播视图
-  // 设过平台后，切到视频视图看到「没有匹配的记录」而不是真空态。
   const hasTextFilters = keyword.trim().length > 0 || dateFilter !== "all";
-  const hasFilters =
-    activeView === "video" ? hasTextFilters : hasTextFilters || platformFilter !== "all";
+  const hasFilters = hasTextFilters || platformFilter !== "all";
 
   const allWatchHistoryQuery = useQuery({
     queryKey: ["history", "all"],
@@ -617,15 +636,30 @@ export function HistoryPage() {
   const videoGroups = useMemo(
     () =>
       groupHistoryByDate(
-        filterHistoryItems(videoHistoryQuery.data ?? [], {
-          keyword,
-          dateFilter,
-          getTimestamp: (item) => item.watched_at,
-          getSearchFields: (item) => [item.title, item.author, item.part_title, item.bvid],
-        }),
+        filterHistoryItems(
+          (videoHistoryQuery.data ?? []).filter(
+            (item) =>
+              visibleSiteIds.includes(videoHistorySiteId(item)) &&
+              (platformFilter === "all" || videoHistorySiteId(item) === platformFilter),
+          ),
+          {
+            keyword,
+            dateFilter,
+            getTimestamp: (item) => item.watched_at,
+            getSearchFields: (item) => [
+              item.title,
+              item.author,
+              item.part_title,
+              item.oid,
+              item.bvid,
+              item.part_id,
+              videoHistorySiteId(item),
+            ],
+          },
+        ),
         (item) => item.watched_at,
       ),
-    [dateFilter, keyword, videoHistoryQuery.data],
+    [dateFilter, keyword, platformFilter, videoHistoryQuery.data, visibleSiteIds],
   );
   const danmakuGroups = useMemo(
     () =>

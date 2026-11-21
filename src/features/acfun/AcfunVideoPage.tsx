@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -19,28 +20,41 @@ import {
   Home,
   Link2,
   MessageCircle,
+  MessageSquareOff,
+  MessageSquareText,
   Play,
+  Settings,
+  SkipBack,
+  SkipForward,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { notify } from "@/components/ui/toast";
 import { Button as MediaButton } from "@/components/videojs/ui/button";
 import { ErrorState } from "@/shared/components/ErrorState";
+import { usePlaylistStore } from "@/features/video/playlistStore";
 import {
   PLAYER_HUD_BUTTON_CLASS,
   PLAYER_HUD_ICON_CLASS,
   PLAYER_HUD_TITLE_CLASS,
+  VOD_PLAYBACK_RATES,
+  formatPlaybackRateLabel,
   PlayerControls,
+  PlayerMenuRadioGroup,
 } from "@/shared/components/player/PlayerControls";
 import { PlayerHudOverflowMenu, PlayerToolTile } from "@/shared/components/player/PlayerHudMenu";
 import { PlayerLoadingBackButton } from "@/shared/components/player/PlayerLoadingBackButton";
 import { PlayerStageSkeleton } from "@/shared/components/player/PlayerStageSkeleton";
+import { PlaybackSettingRow } from "@/shared/components/player/PlaybackSettingRow";
+import { glassMutedTextClass, glassSeparatorClass } from "@/shared/components/player/glassSurface";
 import {
   PLAYER_HUD_SURFACE_POSITION_CLASS,
   PLAYER_HUD_SURFACE_TOP_CLASS,
@@ -77,6 +91,7 @@ import {
   type VideoJsPlayerInstance,
 } from "@/features/room/player/videoJsPlayer";
 import {
+  useVideoJsPlaybackRate,
   VideoJsContainer,
   VideoJsPlayerProvider,
   VideoJsVideo,
@@ -86,19 +101,41 @@ import {
   VIDEO_DETAILS_INFO_CARD_CLASS,
   VIDEO_DETAILS_SIDEBAR_CARD_CLASS,
   VIDEO_DETAILS_SIDEBAR_STACK_CLASS,
+  VIDEO_SIDEBAR_TAB_COUNT_CLASS,
 } from "@/shared/components/videoDetailsSidebar";
 import {
   VideoSelectionRow,
   VideoSelectionSection,
 } from "@/shared/components/VideoSelectionSection";
-import { formatDateTime, formatVideoDuration } from "@/features/video/videoHistory";
+import {
+  formatDateTime,
+  formatVideoDuration,
+  videoHistoryFind,
+} from "@/features/video/videoHistory";
 import { videoSelectionCount } from "@/features/video/videoSelectionCount";
 import { videoSelectionDefaultOpen } from "@/features/video/videoSelectionDefaults";
-import { acfunVideoGetDetail, acfunVideoGetPlayInfo, acfunVideoStopPlay } from "./acfunApi";
+import {
+  DanmakuAppearanceSettingsFields,
+  DanmakuFilterSettingsFields,
+  DanmakuTrackSettingsFields,
+} from "@/features/settings/PlaybackPreferenceFields";
+import { SettingsLayoutProvider, SettingsSection } from "@/features/settings/SettingsSection";
+import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
+import { VideoDanmakuList } from "@/features/video/VideoDanmakuList";
+import { createPlaybackClock, type PlaybackClock } from "@/features/video/videoPlaybackClock";
+import type { VideoDanmakuEntry } from "@/features/video/videoDanmaku";
+import {
+  acfunVideoGetDanmaku,
+  acfunVideoGetDetail,
+  acfunVideoGetPlayInfo,
+  acfunVideoStopPlay,
+} from "./acfunApi";
+import { acfunVideoDanmakuEntries } from "./acfunDanmaku";
 import { AcfunPlaybackSessions } from "./acfunPlaybackLifecycle";
-import { acfunHomePath } from "./acfunRoute";
+import { acfunContentId, acfunHomePath } from "./acfunRoute";
 import type { AcfunVideoDetail, AcfunVideoPart, AcfunVideoPlayInfo } from "./acfunTypes";
 import { AcfunVideoComments } from "./AcfunVideoComments";
+import { acfunResumePartId, acfunResumePosition, useAcfunWatchProgress } from "./acfunHistory";
 
 function playbackKind(info: AcfunVideoPlayInfo): VideoJsPlaybackKind {
   if (info.protocol === "hls") return "hls";
@@ -115,7 +152,7 @@ function isPlayerControlTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      'button, a, input, select, textarea, [role="button"], [role="slider"], [role="dialog"], [data-player-controls], [data-player-hud]',
+      'button, a, input, select, textarea, [role="button"], [role="slider"], [role="dialog"], [data-player-controls], [data-player-hud], [data-rlive-danmaku-id]',
     ),
   );
 }
@@ -142,6 +179,7 @@ function openAcfunOriginalUrl(originalUrl: string): void {
 
 function AcfunPlayerSurface({
   detail,
+  partId,
   info,
   originalUrl,
   retainedError,
@@ -152,10 +190,21 @@ function AcfunPlayerSurface({
   onStartupReady,
   onAspectRatioChange,
   onFullscreenChange,
+  videoRef,
+  playbackClock,
+  danmakuEntries,
+  danmakuVisible,
+  onToggleDanmaku,
+  onOpenDanmakuSettings,
+  hasPreviousPart,
+  hasNextPart,
+  onPreviousPart,
+  onNextPart,
   initialPosition,
   initialAutoplay,
 }: {
   detail: AcfunVideoDetail;
+  partId: string;
   info: AcfunVideoPlayInfo;
   originalUrl: string;
   retainedError: unknown | null;
@@ -166,6 +215,16 @@ function AcfunPlayerSurface({
   onStartupReady: () => void;
   onAspectRatioChange: (aspectRatio: number) => void;
   onFullscreenChange: (fullscreen: boolean) => void;
+  videoRef: RefObject<HTMLVideoElement | null>;
+  playbackClock: PlaybackClock;
+  danmakuEntries: readonly VideoDanmakuEntry[];
+  danmakuVisible: boolean;
+  onToggleDanmaku: () => void;
+  onOpenDanmakuSettings: () => void;
+  hasPreviousPart: boolean;
+  hasNextPart: boolean;
+  onPreviousPart: () => void;
+  onNextPart: () => void;
   initialPosition: number;
   initialAutoplay: boolean;
 }) {
@@ -173,7 +232,6 @@ function AcfunPlayerSurface({
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const hudRef = useRef<HTMLDivElement | null>(null);
   const lockRef = useRef<HTMLDivElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<VideoJsPlayerInstance | null>(null);
   const playerId = useId();
   const [revision, setRevision] = useState(0);
@@ -182,6 +240,7 @@ function AcfunPlayerSurface({
   const [paused, setPaused] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hudMenuOpen, setHudMenuOpen] = useState(false);
+  const [overlayInteractionOpen, setOverlayInteractionOpen] = useState(false);
   const [initialAudio] = useState(() => readPlayerVolume());
   const volumeRef = useRef(initialAudio.volume);
   const mutedRef = useRef(initialAudio.muted);
@@ -191,6 +250,11 @@ function AcfunPlayerSurface({
   const initialAutoplayRef = useRef(initialAutoplay);
   const [volume, setVolume] = useState(initialAudio.volume);
   const [muted, setMuted] = useState(initialAudio.muted);
+  const loopPlayback = usePlaylistStore((state) => state.loopPlayback);
+  const autoPlayNext = usePlaylistStore((state) => state.autoPlayNext);
+  const toggleLoopPlayback = usePlaylistStore((state) => state.toggleLoopPlayback);
+  const toggleAutoPlayNext = usePlaylistStore((state) => state.toggleAutoPlayNext);
+  const playbackRate = useVideoJsPlaybackRate();
   const compact = useCompactPlayerViewport();
   const portrait = usePortraitOrientation();
   const mobileClient = isMobileClient();
@@ -200,6 +264,17 @@ function AcfunPlayerSurface({
     0,
     info.accept_qualities.findIndex((quality) => quality.id === info.quality),
   );
+  const nextPartHandlerRef = useRef(onNextPart);
+  useLayoutEffect(() => {
+    nextPartHandlerRef.current = onNextPart;
+  }, [onNextPart]);
+
+  useAcfunWatchProgress({
+    videoRef,
+    detail,
+    partId,
+    enabled: !loading && error === null,
+  });
 
   const resetPlayback = useCallback(() => {
     setError(null);
@@ -214,7 +289,8 @@ function AcfunPlayerSurface({
       hudRef,
       lockRef,
       fullscreenLocked: false,
-      keepVisible: paused || loading || waiting || error !== null || hudMenuOpen,
+      keepVisible:
+        paused || loading || waiting || error !== null || hudMenuOpen || overlayInteractionOpen,
     });
   useScreenWakeLock(!paused && !loading && !error);
 
@@ -243,7 +319,7 @@ function AcfunPlayerSurface({
       video.removeEventListener("loadedmetadata", reportAspectRatio);
       video.removeEventListener("resize", reportAspectRatio);
     };
-  }, [onAspectRatioChange]);
+  }, [onAspectRatioChange, videoRef]);
 
   useLayoutEffect(() => {
     // 新地址可能晚于画质交接状态到达；先用 ref 暂存，避免位置变化重建旧播放器。
@@ -256,23 +332,29 @@ function AcfunPlayerSurface({
     if (!video) return;
     const resumePosition = initialPositionRef.current;
     let cancelled = false;
+    let endedNextTimer: ReturnType<typeof setTimeout> | null = null;
     setLoading(true);
     setWaiting(false);
     setError(null);
     setPaused(true);
     desiredAutoplayRef.current = initialAutoplayRef.current;
-    let resumeApplied = false;
+    playbackClock.set(resumePosition);
+    let resumeApplied = resumePosition <= 0;
 
     const applyResume = () => {
-      if (resumeApplied) return;
-      resumeApplied = true;
-      if (resumePosition <= 0) return;
+      if (cancelled || resumeApplied || video.readyState < HTMLMediaElement.HAVE_METADATA) return;
       const duration = Number.isFinite(video.duration) ? video.duration : 0;
-      const target = duration > 0 ? Math.min(resumePosition, duration) : resumePosition;
+      if (duration <= 0) return;
+      const target = Math.min(resumePosition, duration);
+      if (target <= 0) {
+        resumeApplied = true;
+        return;
+      }
       try {
         video.currentTime = Math.max(0, target);
+        resumeApplied = Math.abs(video.currentTime - target) < 0.5;
       } catch {
-        // 个别分片容器在 metadata 到达前不允许 seek；保留从头播放。
+        // 个别分片容器在首段数据到达前不允许 seek，后续事件会再试。
       }
     };
 
@@ -298,6 +380,31 @@ function AcfunPlayerSurface({
     };
     const onSeeked = () => {
       if (!cancelled) setWaiting(false);
+    };
+    const onEnded = () => {
+      if (cancelled) return;
+      setPaused(true);
+      setWaiting(false);
+      setLoading(false);
+      const playback = usePlaylistStore.getState();
+      if (playback.loopPlayback) {
+        endedNextTimer = setTimeout(() => {
+          endedNextTimer = null;
+          if (cancelled || !video.ended || !usePlaylistStore.getState().loopPlayback) return;
+          video.currentTime = 0;
+          void video.play().catch(() => undefined);
+        }, 0);
+        return;
+      }
+      if (!playback.autoPlayNext) return;
+      endedNextTimer = setTimeout(() => {
+        endedNextTimer = null;
+        if (cancelled || !video.ended || !usePlaylistStore.getState().autoPlayNext) return;
+        nextPartHandlerRef.current();
+      }, 1_000);
+    };
+    const onTimeUpdate = () => {
+      if (!cancelled) playbackClock.set(video.currentTime);
     };
     const onMediaError = () => {
       if (cancelled) return;
@@ -327,6 +434,8 @@ function AcfunPlayerSurface({
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("seeking", onWaiting);
     video.addEventListener("seeked", onSeeked);
+    video.addEventListener("ended", onEnded);
+    video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("error", onMediaError);
     video.addEventListener("volumechange", syncAudio);
 
@@ -376,6 +485,9 @@ function AcfunPlayerSurface({
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("seeking", onWaiting);
       video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("ended", onEnded);
+      if (endedNextTimer !== null) clearTimeout(endedNextTimer);
+      video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("volumechange", syncAudio);
       const player = playerRef.current;
@@ -387,7 +499,7 @@ function AcfunPlayerSurface({
         // 上游资源可能已先于路由卸载结束。
       }
     };
-  }, [info.url, kind, revision]);
+  }, [info.url, kind, playbackClock, revision, videoRef]);
 
   useEffect(() => {
     rememberPlayerVolume(volume, muted);
@@ -407,20 +519,23 @@ function AcfunPlayerSurface({
       desiredAutoplayRef.current = false;
       player.pause();
     }
-  }, []);
+  }, [videoRef]);
 
-  const commitVolume = useCallback((nextVolume: number, nextMuted: boolean) => {
-    const normalizedVolume = Math.max(0, Math.min(100, nextVolume));
-    const normalizedMuted = nextMuted || normalizedVolume === 0;
-    volumeRef.current = normalizedVolume;
-    mutedRef.current = normalizedMuted;
-    if (normalizedVolume > 0) previousVolumeRef.current = normalizedVolume;
-    if (videoRef.current) {
-      applyWebPlayerAudio(videoRef.current, normalizedVolume, normalizedMuted);
-    }
-    setVolume(normalizedVolume);
-    setMuted(normalizedMuted);
-  }, []);
+  const commitVolume = useCallback(
+    (nextVolume: number, nextMuted: boolean) => {
+      const normalizedVolume = Math.max(0, Math.min(100, nextVolume));
+      const normalizedMuted = nextMuted || normalizedVolume === 0;
+      volumeRef.current = normalizedVolume;
+      mutedRef.current = normalizedMuted;
+      if (normalizedVolume > 0) previousVolumeRef.current = normalizedVolume;
+      if (videoRef.current) {
+        applyWebPlayerAudio(videoRef.current, normalizedVolume, normalizedMuted);
+      }
+      setVolume(normalizedVolume);
+      setMuted(normalizedMuted);
+    },
+    [videoRef],
+  );
 
   const toggleMute = useCallback(() => {
     if (mutedRef.current || volumeRef.current === 0) {
@@ -431,12 +546,15 @@ function AcfunPlayerSurface({
     commitVolume(volumeRef.current, true);
   }, [commitVolume]);
 
-  const seek = useCallback((offset: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    const duration = Number.isFinite(video.duration) ? video.duration : 0;
-    video.currentTime = Math.max(0, Math.min(video.currentTime + offset, duration || Infinity));
-  }, []);
+  const seek = useCallback(
+    (offset: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      video.currentTime = Math.max(0, Math.min(video.currentTime + offset, duration || Infinity));
+    },
+    [videoRef],
+  );
 
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -500,6 +618,13 @@ function AcfunPlayerSurface({
   };
   const controlsAvailable = !loading || error !== null;
   const mobilePortraitControls = mobileClient && portrait && !fullscreen.fullscreen;
+  const currentPlaybackRate = String(
+    VOD_PLAYBACK_RATES.find((rate) => rate === playbackRate?.playbackRate) ?? 1,
+  );
+  const playbackRateMenuOptions = VOD_PLAYBACK_RATES.map((rate) => ({
+    value: String(rate),
+    label: formatPlaybackRateLabel(rate),
+  }));
 
   return (
     <VideoJsContainer
@@ -551,6 +676,35 @@ function AcfunPlayerSurface({
             compact={compact}
             stackedBelowPlayer={compact}
             progressPlacement={mobilePortraitControls ? "center" : "above"}
+            osdOn={danmakuVisible}
+            playbackSettings={
+              <div className="flex flex-col gap-2 px-1 py-1">
+                <div className="flex flex-col gap-1.5">
+                  <span className={cn("px-2 pt-1 text-xs", glassMutedTextClass())}>播放倍数</span>
+                  <PlayerMenuRadioGroup
+                    label="播放倍数"
+                    value={currentPlaybackRate}
+                    options={playbackRateMenuOptions}
+                    columns={playbackRateMenuOptions.length}
+                    onValueChange={(nextValue) => playbackRate?.setPlaybackRate(Number(nextValue))}
+                  />
+                </div>
+                <Separator className={glassSeparatorClass()} />
+                <PlaybackSettingRow
+                  id="acfun-video-playback-loop"
+                  label="循环播放"
+                  checked={loopPlayback}
+                  onToggle={toggleLoopPlayback}
+                />
+                <PlaybackSettingRow
+                  id="acfun-video-playback-next"
+                  label="自动切集"
+                  checked={autoPlayNext}
+                  onToggle={toggleAutoPlayNext}
+                />
+              </div>
+            }
+            playbackSettingsTitle="播放设置"
             portalContainer={stageRef}
             disabled={loading}
             refreshDisabled={loading}
@@ -575,8 +729,11 @@ function AcfunPlayerSurface({
               }
             }}
             onRefresh={retry}
+            onNext={hasNextPart ? onNextPart : undefined}
+            onToggleOsd={onToggleDanmaku}
             onTogglePause={togglePlayback}
             onToggleFullscreen={fullscreen.nativeLayer ? () => void fullscreen.toggle() : undefined}
+            onOverlayInteractionChange={setOverlayInteractionOpen}
           />
         )
       }
@@ -598,6 +755,18 @@ function AcfunPlayerSurface({
               controls={false}
               className="absolute inset-0 size-full bg-black object-contain"
             />
+            {danmakuEntries.length > 0 && (
+              <VideoDanmakuLayer
+                key={partId}
+                videoRef={videoRef}
+                entries={danmakuEntries}
+                active={danmakuVisible}
+                interactive={!loading && error === null}
+                siteId="acfun"
+                title={title}
+                large={!compact && fullscreen.fullscreen}
+              />
+            )}
             {(loading || waiting) && !error && (
               <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/20">
                 <Spinner
@@ -642,7 +811,7 @@ function AcfunPlayerSurface({
             >
               <div
                 className={cn(
-                  "player-scrim-overlay-top flex min-w-0 items-center gap-2 bg-transparent text-white",
+                  "player-scrim-overlay-top flex min-w-0 items-center justify-between gap-2 bg-transparent text-white",
                   PLAYER_HUD_SURFACE_POSITION_CLASS,
                   PLAYER_HUD_SURFACE_TOP_CLASS,
                   compact ? "pb-1.5" : "pb-3",
@@ -675,14 +844,50 @@ function AcfunPlayerSurface({
                   </p>
                 </div>
                 <PlayerHudOverflowMenu
-                  label="更多播放操作"
+                  label="更多操作"
                   title="播放操作"
                   open={hudMenuOpen}
                   onOpenChange={setHudMenuOpen}
                   compact={compact}
                   portalContainer={fullscreen.fullscreen ? stageRef : undefined}
                 >
-                  <div className="grid grid-cols-2 gap-1.5 max-md:gap-2">
+                  <div className="grid grid-cols-4 gap-1.5 max-md:gap-2">
+                    <PlayerToolTile
+                      icon={danmakuVisible ? MessageSquareText : MessageSquareOff}
+                      label={danmakuVisible ? "关闭弹幕" : "开启弹幕"}
+                      onClick={() => {
+                        setHudMenuOpen(false);
+                        onToggleDanmaku();
+                      }}
+                    />
+                    {!fullscreen.fullscreen && (
+                      <PlayerToolTile
+                        icon={Settings}
+                        label="弹幕设置"
+                        onClick={() => {
+                          setHudMenuOpen(false);
+                          onOpenDanmakuSettings();
+                        }}
+                      />
+                    )}
+                    <PlayerToolTile
+                      icon={SkipBack}
+                      label="上一 P"
+                      disabled={!hasPreviousPart}
+                      onClick={() => {
+                        setHudMenuOpen(false);
+                        onPreviousPart();
+                      }}
+                    />
+                    <PlayerToolTile
+                      icon={SkipForward}
+                      label="下一 P"
+                      disabled={!hasNextPart}
+                      onClick={() => {
+                        setHudMenuOpen(false);
+                        onNextPart();
+                      }}
+                    />
                     <PlayerToolTile
                       icon={Link2}
                       label="复制链接"
@@ -931,24 +1136,46 @@ function AcfunSidebarSkeleton() {
   );
 }
 
+type AcfunDetailsTab = "details" | "danmaku" | "comments" | "settings";
+
 function AcfunVideoDetails({
   detail,
   videoId,
   currentPartId,
   onPartChange,
+  tab,
+  onTabChange,
+  danmakuEntries,
+  danmakuClock,
+  danmakuLoading,
+  danmakuError,
+  onDanmakuRetry,
+  onSeek,
 }: {
   detail: AcfunVideoDetail;
   videoId: string;
   currentPartId: string | null;
   onPartChange: (partId: string) => void;
+  tab: AcfunDetailsTab;
+  onTabChange: (tab: AcfunDetailsTab) => void;
+  danmakuEntries: readonly VideoDanmakuEntry[];
+  danmakuClock: PlaybackClock;
+  danmakuLoading: boolean;
+  danmakuError: unknown | null;
+  onDanmakuRetry: () => void;
+  onSeek: (positionMs: number) => void;
 }) {
-  const [tab, setTab] = useState<"details" | "comments">("details");
-
   return (
     <Tabs
       value={tab}
       onValueChange={(value) => {
-        if (value === "details" || value === "comments") setTab(value);
+        if (
+          value === "details" ||
+          value === "danmaku" ||
+          value === "comments" ||
+          value === "settings"
+        )
+          onTabChange(value);
       }}
       className="flex h-full min-h-0 flex-col gap-0"
     >
@@ -960,11 +1187,24 @@ function AcfunVideoDetails({
           <TabsTrigger value="details" className="px-3 text-sm">
             详情
           </TabsTrigger>
+          <TabsTrigger value="danmaku" className="px-3 text-sm">
+            弹幕
+            {danmakuEntries.length > 0 && (
+              <span className={VIDEO_SIDEBAR_TAB_COUNT_CLASS}>
+                {formatOnline(danmakuEntries.length)}
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="comments" className="px-3 text-sm">
             评论
             {detail.item.comment_count != null && detail.item.comment_count > 0 && (
-              <span className="tabular-nums">{formatOnline(detail.item.comment_count)}</span>
+              <span className={VIDEO_SIDEBAR_TAB_COUNT_CLASS}>
+                {formatOnline(detail.item.comment_count)}
+              </span>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="px-3 text-sm">
+            设置
           </TabsTrigger>
         </TabsList>
       </div>
@@ -976,6 +1216,37 @@ function AcfunVideoDetails({
           <AcfunVideoInfoCard detail={detail} />
           <AcfunPartList parts={detail.parts} currentId={currentPartId} onChange={onPartChange} />
         </div>
+      </TabsContent>
+      <TabsContent value="danmaku" className="min-h-0 flex-1 overflow-hidden">
+        {danmakuError ? (
+          <div className="px-3 py-6">
+            <ErrorState error={danmakuError} title="弹幕加载失败" onRetry={onDanmakuRetry} />
+          </div>
+        ) : (
+          <VideoDanmakuList
+            key={currentPartId ?? videoId}
+            entries={danmakuEntries}
+            clock={danmakuClock}
+            loading={danmakuLoading}
+            onSeek={onSeek}
+            active={tab === "danmaku"}
+          />
+        )}
+      </TabsContent>
+      <TabsContent value="settings" className="min-h-0 flex-1 overflow-hidden">
+        <ScrollArea className="h-full">
+          <div className="flex flex-col gap-4 px-3 py-3">
+            <SettingsLayoutProvider layout="sidebar">
+              <SettingsSection title="弹幕设置">
+                <DanmakuTrackSettingsFields idPrefix="acfun" />
+                <DanmakuAppearanceSettingsFields idPrefix="acfun" />
+              </SettingsSection>
+              <SettingsSection title="消息过滤">
+                <DanmakuFilterSettingsFields idPrefix="acfun" />
+              </SettingsSection>
+            </SettingsLayoutProvider>
+          </div>
+        </ScrollArea>
       </TabsContent>
       <TabsContent
         value="comments"
@@ -1063,6 +1334,10 @@ function AcfunVideoPageContent() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [playbackClock] = useState(() => createPlaybackClock());
+  const [danmakuVisible, setDanmakuVisible] = useState(true);
+  const [detailsTab, setDetailsTab] = useState<AcfunDetailsTab>("details");
   const detailsFrameRef = useRef<HTMLElement | null>(null);
   const playbackSessions = useMemo(
     () => new AcfunPlaybackSessions((sessionId) => void acfunVideoStopPlay(sessionId)),
@@ -1071,7 +1346,7 @@ function AcfunVideoPageContent() {
   const activePlaybackKeyRef = useRef<string | null>(null);
   const playbackMountEpochRef = useRef(0);
   const queryMountEpochRef = useRef(0);
-  const videoId = params.get("id")?.trim() ?? "";
+  const videoId = acfunContentId(params.get("id"));
   const requestedPartId = params.get("part");
   const [qualityState, setQualityState] = useState<{
     partId: string | null;
@@ -1090,18 +1365,31 @@ function AcfunVideoPageContent() {
     staleTime: 5 * 60_000,
   });
   const detail = detailQuery.data;
-  const effectivePartId =
+  const historyQuery = useQuery({
+    queryKey: ["video_history_resume", "acfun", videoId],
+    queryFn: () => videoHistoryFind("acfun", videoId),
+    enabled: videoId.length > 0,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  const explicitPart =
     requestedPartId && detail?.parts.some((part) => part.id === requestedPartId)
       ? requestedPartId
-      : (detail?.parts[0]?.id ?? null);
+      : null;
+  const historySettled = historyQuery.isSuccess || historyQuery.isError;
+  const effectivePartId =
+    detail && historySettled ? acfunResumePartId(historyQuery.data, detail, explicitPart) : null;
+  const resumePosition = acfunResumePosition(historyQuery.data, effectivePartId);
   const playbackKey = `${videoId}:${effectivePartId ?? ""}`;
   const [playbackState, setPlaybackState] = useState({
     key: playbackKey,
-    time: 0,
+    time: resumePosition,
     autoplay: true,
   });
   if (playbackState.key !== playbackKey) {
-    setPlaybackState({ key: playbackKey, time: 0, autoplay: true });
+    setPlaybackState({ key: playbackKey, time: resumePosition, autoplay: true });
   }
 
   if (qualityState.partId !== effectivePartId) {
@@ -1123,7 +1411,7 @@ function AcfunVideoPageContent() {
           quality,
         }),
       ),
-    enabled: Boolean(detail && videoId),
+    enabled: Boolean(detail && videoId && effectivePartId),
     gcTime: 0,
     staleTime: 0,
     retry: 1,
@@ -1132,6 +1420,21 @@ function AcfunVideoPageContent() {
   });
   const playResult = playQuery.data;
   const playInfo = playResult?.key === playbackKey ? playResult.info : undefined;
+  const danmakuQuery = useQuery({
+    queryKey: ["acfun_video_danmaku", videoId, effectivePartId],
+    queryFn: () =>
+      acfunVideoGetDanmaku({
+        videoId,
+        partId: effectivePartId!,
+      }),
+    enabled: Boolean(videoId && effectivePartId),
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
+  const danmakuEntries = useMemo(
+    () => acfunVideoDanmakuEntries(danmakuQuery.data ?? [], effectivePartId ?? ""),
+    [danmakuQuery.data, effectivePartId],
+  );
   const mobileClient = isMobileClient();
   const stackedDetails = useStackedDetailsViewport();
   const { ready: playerStartupReady, release: releasePlayerStartup } =
@@ -1155,6 +1458,10 @@ function AcfunVideoPageContent() {
     if (previous !== null && previous !== playbackKey) playbackSessions.clear();
     activePlaybackKeyRef.current = playbackKey;
   }, [playbackKey, playbackSessions]);
+
+  useLayoutEffect(() => {
+    playbackClock.set(playbackState.time);
+  }, [playbackClock, playbackKey, playbackState.time]);
 
   useLayoutEffect(() => {
     if (!playResult || playResult.key !== playbackKey) return;
@@ -1216,16 +1523,51 @@ function AcfunVideoPageContent() {
   const handleFullscreenChange = useCallback((fullscreen: boolean) => {
     setPlayerFullscreenOpen(fullscreen);
   }, []);
-  const changePart = (partId: string) => {
-    setParams(
-      (current) => {
-        const next = new URLSearchParams(current);
-        next.set("part", partId);
-        return next;
-      },
-      { replace: true },
-    );
-  };
+  const changePart = useCallback(
+    (partId: string) => {
+      setPlaybackState({
+        key: `${videoId}:${partId}`,
+        time: 0,
+        autoplay: true,
+      });
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.set("part", partId);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setParams, videoId],
+  );
+  const currentPartIndex =
+    detail && effectivePartId ? detail.parts.findIndex((part) => part.id === effectivePartId) : -1;
+  const previousPart = currentPartIndex > 0 ? (detail?.parts[currentPartIndex - 1] ?? null) : null;
+  const nextPart =
+    currentPartIndex >= 0 && detail && currentPartIndex + 1 < detail.parts.length
+      ? detail.parts[currentPartIndex + 1]
+      : null;
+  const goPreviousPart = useCallback(() => {
+    if (previousPart) changePart(previousPart.id);
+  }, [changePart, previousPart]);
+  const goNextPart = useCallback(() => {
+    if (nextPart) changePart(nextPart.id);
+  }, [changePart, nextPart]);
+  const seekToPosition = useCallback(
+    (positionMs: number) => {
+      const media = videoRef.current;
+      if (!media || !Number.isFinite(positionMs)) return;
+      const duration = Number.isFinite(media.duration) ? media.duration : 0;
+      const target = Math.max(
+        0,
+        duration > 0 ? Math.min(positionMs / 1_000, duration - 0.25) : positionMs / 1_000,
+      );
+      playbackClock.set(target);
+      media.currentTime = target;
+    },
+    [playbackClock],
+  );
 
   const originalUrl = videoId ? `https://www.acfun.cn/v/ac${encodeURIComponent(videoId)}` : "";
   const detailFailure = !videoId
@@ -1266,7 +1608,9 @@ function AcfunVideoPageContent() {
             />
           ) : playInfo && detail ? (
             <AcfunPlayerSurface
+              key={playbackKey}
               detail={detail}
+              partId={effectivePartId ?? ""}
               info={playInfo}
               originalUrl={originalUrl}
               retainedError={retainedPlayFailure}
@@ -1280,6 +1624,16 @@ function AcfunVideoPageContent() {
               onStartupReady={releasePlayerStartup}
               onAspectRatioChange={handleAspectRatioChange}
               onFullscreenChange={handleFullscreenChange}
+              videoRef={videoRef}
+              playbackClock={playbackClock}
+              danmakuEntries={danmakuEntries}
+              danmakuVisible={danmakuVisible}
+              onToggleDanmaku={() => setDanmakuVisible((visible) => !visible)}
+              onOpenDanmakuSettings={() => setDetailsTab("settings")}
+              hasPreviousPart={previousPart !== null}
+              hasNextPart={nextPart !== null}
+              onPreviousPart={goPreviousPart}
+              onNextPart={goNextPart}
               initialPosition={playbackState.time}
               initialAutoplay={playbackState.autoplay}
             />
@@ -1317,6 +1671,14 @@ function AcfunVideoPageContent() {
                 videoId={videoId}
                 currentPartId={effectivePartId}
                 onPartChange={changePart}
+                tab={detailsTab}
+                onTabChange={setDetailsTab}
+                danmakuEntries={danmakuEntries}
+                danmakuClock={playbackClock}
+                danmakuLoading={danmakuQuery.isPending}
+                danmakuError={danmakuQuery.isError ? danmakuQuery.error : null}
+                onDanmakuRetry={() => void danmakuQuery.refetch()}
+                onSeek={seekToPosition}
               />
             ) : detailFailure ? null : (
               <AcfunSidebarSkeleton />

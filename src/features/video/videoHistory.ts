@@ -9,6 +9,7 @@
 
 import { invokeCmd } from "@/shared/api/tauri";
 import { watchResumePosition } from "@/shared/watchProgress";
+import { acfunVideoPath } from "@/features/acfun/acfunRoute";
 import { videoPlayPath } from "./videoRoute";
 import type {
   SeasonEpisode,
@@ -16,6 +17,7 @@ import type {
   VideoHistoryItem,
   VideoHistoryKind,
 } from "@/shared/types/video";
+import type { SiteId } from "@/shared/types/live";
 
 /** 观看历史的 react-query key 前缀；上报后按它失效缓存。 */
 export const VIDEO_HISTORY_QUERY_KEY = ["video-history"] as const;
@@ -113,6 +115,9 @@ export function videoPgcEntryEpisode(
 
 /** 历史条目的续播链接：带上最后观看那一集的取流键。 */
 export function videoHistoryPlayPath(item: VideoHistoryItem): string {
+  if (item.kind === "acfun") {
+    return acfunVideoPath(item.oid, item.part_id || null);
+  }
   return videoPlayPath({
     bvid: item.bvid || null,
     cid: item.cid,
@@ -120,6 +125,10 @@ export function videoHistoryPlayPath(item: VideoHistoryItem): string {
     title: item.title,
     aid: item.aid || null,
   });
+}
+
+export function videoHistorySiteId(item: VideoHistoryItem): SiteId {
+  return item.kind === "acfun" ? "acfun" : "bilibili";
 }
 
 /** `mm:ss` / `h:mm:ss`。进度覆层与时长标签共用。 */
