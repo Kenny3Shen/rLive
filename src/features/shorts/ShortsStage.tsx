@@ -1,8 +1,8 @@
 import { useCallback, useLayoutEffect, useState, type RefObject } from "react";
 import { Video } from "@videojs/react/video";
-import { SpinnerIcon } from "@videojs/react/icons";
 import { BufferingIndicator } from "@/components/videojs/ui/buffering-indicator";
 import { PlayButton } from "@/components/videojs/ui/play-button";
+import { ShortsLoadingIndicator } from "./ShortsLoadingIndicator";
 import { ShortsStagePlayer } from "./shortsStagePlayer";
 import { VideoDanmakuLayer } from "@/features/video/VideoDanmakuLayer";
 import { Button } from "@/components/ui/button";
@@ -11,14 +11,13 @@ import { useSettingsStore } from "@/shared/stores/settingsStore";
 import { cn, normalizeImageUrl } from "@/lib/utils";
 import type { VideoItem } from "@/shared/types/video";
 import {
-  SHORTS_BOTTOM_BAR_HEIGHT_PX,
   SHORTS_DANMAKU_FONT_SCALE,
   SHORTS_DANMAKU_TOP_OFFSET_PX,
-  SHORTS_SAFE_AREA_BOTTOM,
   shortsFrameFill,
   shortsFrameTop,
   shortsChromeColumn,
   shortsMediaAspect,
+  shortsMediaAreaStyle,
   shortsMediaFrame,
 } from "./shortsFeed";
 import type { ShortsDanmakuState } from "./useShortsDanmaku";
@@ -49,44 +48,6 @@ function useShortsStageSize() {
     return () => observer.disconnect();
   }, []);
   return { size, measure };
-}
-
-/**
- * 画面区域：视口顶边之下、底部操作栏之上的那块矩形。
- *
- * 用 CSS 表达而不是把安全区读成数字：读数字要么靠探针元素、要么靠
- * `getComputedStyle`，两者都会在系统栏变化时慢一帧。这里只需要「画面不许越过
- * 这两条线」，交给 CSS 表达最直接，JS 只量结果。
- *
- * 底部安全区走 `SHORTS_SAFE_AREA_BOTTOM`（原生注入的变量优先、`env()` 兜底）而不是裸
- * `env()`：Android WebView 的 `env(safe-area-inset-*)` 会读到 0，本项目因此由
- * `MainActivity` 注入 `--android-safe-area-*`。裸 `env()` 在那里等于不留安全区，
- * 底部操作栏会被系统手势条压住。
- *
- * 底部让位是硬性的：操作栏（进度条 + 弹幕输入 + 几个按钮）占真实空间而不是浮在
- * 画面上，因此画面可用高度必须先减掉它，否则输入框会盖住画面底部。
- *
- * 评论 dock 打开时传 `bottomBar: false`：那条操作栏连同画面底部浮层与顶栏一起整体
- * 收起，画面区只剩画面本身。此时画面区直接铺到播放区下沿（dock 的上沿），没有任何
- * 控件压在画面上 —— 这也是「评论打开后视频窗口只有视频」的几何落点。底部安全区
- * 随之由 dock 自己消费（它是页面最底层），画面区不再让位。
- *
- * 顶部相反，一点不减：状态栏已由 `.app-shell` 的 `padding-top` 统一预留，短视频
- * 视口的顶边就是状态栏下沿，这里再减一次会在顶部空出一条状态栏高的黑带
- * （见 `shortsFeed` 的安全区注释）。顶栏是浮层，压在画面顶部这一条上，弹幕另有
- * 起始线让位（见 `--video-danmaku-top`）。
- */
-function shortsMediaAreaStyle(safeAreaBottom: boolean, bottomBar = true) {
-  if (!bottomBar) return { top: 0, bottom: 0 } as const;
-  return {
-    top: 0,
-    // 底部安全区默认由这条栏消费（页面最底层是底部操作栏）。评论 dock 出现后，
-    // 最底层变成 dock，安全区在那里消费一次 —— 这里必须停掉，否则画面区会再缩
-    // 一条手势条的高度，画面凭空上移一段。
-    bottom: safeAreaBottom
-      ? `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`
-      : `${SHORTS_BOTTOM_BAR_HEIGHT_PX}px`,
-  } as const;
 }
 
 /**
@@ -154,8 +115,8 @@ function shortsDanmakuColumnStyle(frame: { width: number }): React.CSSProperties
  * 一个槽位就是一个播放器实例加三条本机代理会话，为滑动跟手再多起一份是把上游
  * 取流成本翻倍，而滑动过程中相邻条目只要有画面占位。
  *
- * 这一层只剩「画面本身」：进度条、信息与评论入口都住在页面的固定层里（见
- * `ShortsPage`）—— 它们不该随条带平移，否则换片时会跟着画面一起滑走。
+ * 这一层只剩「画面本身」：进度条、信息、控制栏与评论入口由同一槽位面板里的
+ * `ShortsPanelChrome` 渲染，随条带一起平移和缩放。
  */
 
 export type ShortsStageItem = Pick<VideoItem, "title" | "cover" | "dimension"> &
@@ -186,9 +147,9 @@ type ShortsStageProps = {
   /**
    * 画面区下沿是否让开底部操作栏。
    *
-   * 默认 true：操作栏占真实空间，画面不能压到它下面。评论 dock 打开时操作栏整体
-   * 收起（页面层把顶栏、信息浮层与底栏一起藏掉），画面区直接铺到播放区下沿 ——
-   * 这一段里画面就是整块播放区，没有任何控件叠在上面。
+   * 默认 true：操作栏占真实空间，画面不能压到它下面。评论 dock 打开时每个槽位面板
+   * 同步收起顶栏、信息浮层与底栏，画面区直接铺到播放区下沿 —— 这一段里画面就是
+   * 整块播放区，没有任何控件叠在上面。
    */
   bottomBar?: boolean;
   /**
@@ -199,14 +160,12 @@ type ShortsStageProps = {
    */
   onSurfaceTap: () => void;
   /**
-   * 把「页面层控件该多宽」上报给页面。
+   * 把本槽位控件列该多宽上报给面板。
    *
    * 宽屏上画面会收成居中的竖卡，顶栏/信息/评论/换片箭头/进度条如果还按视口边摆放
    * 就会与画面隔着大片黑。舞台知道画面框的真实宽度（它自己量的），页面只负责用这个
-   * 数字去收窄那几层控件。传 0 表示「铺满，控件退回通栏」。
-   *
-   * 只有活动舞台上报（`mode === "play"`）：预热槽位在屏幕外，它的画面框宽不是当前
-   * 看到的那一条。
+   * 数字去收窄那几层控件。传 0 表示「铺满，控件退回通栏」。活动与预热槽位都要上报：
+   * 每个面板现在有自己的一份控件，换片时后续面板必须已经按自己的画面框排好。
    */
   onChromeColumn?: (width: number) => void;
 };
@@ -231,13 +190,12 @@ export function ShortsStage({
   const { fill, frame, offset } = useShortsFrameGeometry(aspect, area);
   const warming = mode !== "play";
 
-  // 页面层控件的收窄宽度。只由活动舞台报，且只报「比画面区窄」的那些：铺满时给 0，
-  // 页面据此退回通栏，手机竖屏的观感与从前完全一致。`useLayoutEffect` 在浏览器绘制前
+  // 本面板控件列的收窄宽度。只报「比画面区窄」的那些：铺满时给 0，控件退回通栏，
+  // 手机竖屏的观感与从前完全一致。`useLayoutEffect` 在浏览器绘制前
   // 跑，宽屏第一帧就不会先画一遍通栏控件再跳成收窄 —— 那一下闪跳比不优化还显眼。
   useLayoutEffect(() => {
-    if (mode !== "play") return;
     onChromeColumn?.(shortsChromeColumn(frame.width, area.width));
-  }, [area.width, frame.width, mode, onChromeColumn]);
+  }, [area.width, frame.width, onChromeColumn]);
 
   const cover = normalizeImageUrl(item.cover);
   // `play` 与 `waiting` 不能证明首帧已出画；只认当前条目的帧回调。
@@ -360,27 +318,6 @@ export function ShortsStage({
             />
           )}
 
-          {/*
-            起播转圈：首帧到达前的黑屏上给一个「在加载」的明确信号。
-
-            不直接用 `BufferingIndicator`：它读 store 的 `waiting`，起播前暂停时
-            读不到。首帧后才挂载它，避免 play 先到、帧未到时两颗转圈同时出现。
-            图标仍复用同一个 `SpinnerIcon` 与 `--media-icon-size` 令牌。
-
-            只当指示器：`aria-hidden` + `pointer-events-none`，点按暂停仍由下面的
-            命中层接管。
-          */}
-          {!warming && awaitingFirstFrame && !playback.error && (
-            <div
-              aria-hidden
-              data-slot="shorts-loading-indicator"
-              className="pointer-events-none absolute inset-0 grid place-items-center text-media-controls-foreground"
-              style={{ "--media-icon-size": "2rem" } as React.CSSProperties}
-            >
-              <SpinnerIcon className="size-media-icon drop-shadow-media-icon" />
-            </div>
-          )}
-
           {!warming && playback.error && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/70 px-4 py-6">
               {/* 与播放页同一张错误卡：说明与原始诊断分开，长串不再把舞台撑破。 */}
@@ -471,6 +408,9 @@ export function ShortsStage({
           </div>
         )}
       </div>
+      {!warming && awaitingFirstFrame && !playback.error && (
+        <ShortsLoadingIndicator safeAreaBottom={safeAreaBottom} bottomBar={bottomBar} />
+      )}
     </div>
   );
 }
@@ -520,8 +460,8 @@ function ShortsDynamicBackground({
  * 反而像卡了一帧；加载期间黑屏加转圈（活动槽位里）就够。相邻条目也不会渲染模糊
  * 背景 —— 它同样是这张稿件的封面，同样只属于「已经在播」的舞台。
  *
- * 不画信息与操作入口：那些住在页面的固定层里，只描述**当前**条目。占位上再画
- * 一份会在滑动过程中出现两套信息。
+ * 不画信息与操作入口：真实槽位面板各自带一份随条带移动的控件；这个只负责额外
+ * 邻居的画面几何，不建立第二套可交互界面。
  */
 export function ShortsBlankStage({
   item,

@@ -136,6 +136,23 @@ export const SHORTS_SAFE_AREA_BOTTOM =
   "var(--android-safe-area-bottom, env(safe-area-inset-bottom))";
 
 /**
+ * 画面区的上下边界。
+ *
+ * 首屏骨架、起播指示与真正的舞台必须共用这一份几何。三者横跨 Suspense、
+ * 内容查询和媒体首帧三个提交阶段；任何一处单独写底栏高度，转圈都会在阶段切换时
+ * 纵向跳一下。画面区不在这里测宽高，因为转圈只需要一个不随源画幅变化的中心。
+ */
+export function shortsMediaAreaStyle(safeAreaBottom: boolean, bottomBar = true) {
+  if (!bottomBar) return { top: 0, bottom: 0 } as const;
+  return {
+    top: 0,
+    bottom: safeAreaBottom
+      ? `calc(${SHORTS_BOTTOM_BAR_HEIGHT_PX}px + ${SHORTS_SAFE_AREA_BOTTOM})`
+      : `${SHORTS_BOTTOM_BAR_HEIGHT_PX}px`,
+  } as const;
+}
+
+/**
  * 顶部控制栏的高度（px）。
  *
  * 就是这一条的全部高度：栏顶紧贴视口顶边（即状态栏下沿，外壳已让位），不再叠加

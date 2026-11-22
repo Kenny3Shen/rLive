@@ -87,6 +87,8 @@ import { PagePan } from "@/shared/motion/PagePan";
 import { PageZoom } from "@/shared/motion/PageZoom";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { PlayerStageSkeleton } from "@/shared/components/player/PlayerStageSkeleton";
+import { ShortsStageSkeleton } from "@/features/shorts/ShortsStageSkeleton";
+import { BILIBILI_SHORTS_PATH } from "@/features/shorts/shortsFeed";
 import { enabledSiteIds } from "@/shared/siteId";
 import { PlatformScope, type PlatformScopeValue } from "@/shared/hooks/useSiteQuery";
 import type { SiteId } from "@/shared/types/live";
@@ -172,6 +174,7 @@ function RouteOutlet({
   outlet,
   platform,
   immersive = false,
+  immersiveFallback,
 }: {
   defer: boolean;
   /** 等调用方确认活动表面已提交后才挂载（defer 仍控制首帧占位）。 */
@@ -181,6 +184,8 @@ function RouteOutlet({
   platform: PlatformScopeValue;
   /** 沉浸播放页：加载占位换成播放器舞台，而不是锚在顶部的一条加载条。 */
   immersive?: boolean;
+  /** 沉浸路由自己的轻量占位；短视频在模块加载阶段也要保持与页面首屏相同的几何。 */
+  immersiveFallback?: ReactNode;
 }) {
   const gate = `${defer ? 1 : 0}${waitForReady ? 1 : 0}`;
   const initialReady = !defer && !waitForReady;
@@ -219,10 +224,14 @@ function RouteOutlet({
     onReady();
   }, [onReady, ready]);
 
-  // 沉浸播放页的加载占位保持纯黑，不模拟顶部或底部控制栏。
+  // 沉浸路由复用各自的轻量加载占位；短视频提前预留上下控制栏的固定骨架。
   // 避免首次进入在顶部闪出一条应用外壳画法的加载条再被播放器顶掉。
   // 共用轻量骨架，不把各页的播放器、弹幕与评论依赖拖进外壳关键路径。
-  const fallback = immersive ? <PlayerStageSkeleton /> : <RouteLoadingFallback />;
+  const fallback = immersive ? (
+    (immersiveFallback ?? <PlayerStageSkeleton />)
+  ) : (
+    <RouteLoadingFallback />
+  );
 
   if (!ready) return fallback;
 
@@ -778,6 +787,7 @@ export function Shell() {
       outlet={outlet}
       platform={platformForMotion}
       immersive={isImmersivePlayer}
+      immersiveFallback={pathname === BILIBILI_SHORTS_PATH ? <ShortsStageSkeleton /> : undefined}
     />
   );
   const pageScrollerClassName = cn(
