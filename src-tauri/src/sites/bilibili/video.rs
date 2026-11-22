@@ -995,6 +995,7 @@ pub fn parse_archive(raw: &str) -> AppResult<VideoArchive> {
             .map(as_i64)
             .unwrap_or_default(),
         pubdate: data.get("pubdate").map(as_i64).unwrap_or_default(),
+        dimension: video_dimension(data),
         pages: parse_archive_pages(data),
         ugc_season: parse_ugc_season(data),
     })
@@ -2835,6 +2836,7 @@ mod tests {
             "data": {
                 "bvid": "BV1Ykt46iEYW",
                 "cid": 41444770475i64,
+                "dimension": { "width": 1080, "height": 1920, "rotate": 0 },
                 "pages": [
                     { "page": 1, "cid": 41444770475i64, "part": "前言1.0", "duration": 2328 },
                     { "page": 2, "cid": 41444771227i64, "part": "01", "duration": 140 },
@@ -2845,6 +2847,18 @@ mod tests {
         })
         .to_string();
         let archive = parse_archive(&raw).unwrap();
+        assert_eq!(
+            archive.dimension.map(|dimension| (
+                dimension.width,
+                dimension.height,
+                dimension.rotate
+            )),
+            Some((1080, 1920, 0))
+        );
+        assert_eq!(
+            serde_json::to_value(&archive).unwrap()["dimension"]["width"],
+            1080
+        );
         assert_eq!(archive.pages.len(), 3);
         assert_eq!(archive.pages[0].part, "前言1.0");
         assert_eq!(archive.pages[1].cid, 41444771227i64);

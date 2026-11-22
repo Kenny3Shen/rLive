@@ -4,11 +4,13 @@ import {
   canCompleteVideoShortsNavigation,
   parseVideoPlayParams,
   shouldAutoEnterVideoShorts,
+  shouldPreflightVideoCardShorts,
   videoDetailsIntentForKey,
   videoDetailsNavigationState,
   videoFrameHintFromState,
   videoFrameHintNavigationState,
   videoPlayPath,
+  videoShortsEntryAspectRatio,
   videoShortsEntryFromState,
   videoShortsEntryNavigationState,
 } from "../src/features/video/videoRoute";
@@ -212,6 +214,72 @@ describe("列表画幅先验", () => {
     { videoFrameHint: { videoKey, frameAspectRatio: "0.5" } },
   ])("形状不合法时视为没有先验：%s", (state) => {
     expect(videoFrameHintFromState(state, videoKey)).toBeNull();
+  });
+});
+
+describe("移动端卡片直入预检", () => {
+  test("只有有效移动端竖画幅卡片先取 archive 判定单 P", () => {
+    expect(
+      shouldPreflightVideoCardShorts({
+        mobileClient: true,
+        bvid,
+        cid,
+        frameAspectRatio: 9 / 16,
+        onShortsPage: false,
+      }),
+    ).toBe(true);
+  });
+
+  test.each([
+    { mobileClient: false, bvid, cid, frameAspectRatio: 9 / 16, onShortsPage: false },
+    { mobileClient: true, bvid: "", cid, frameAspectRatio: 9 / 16, onShortsPage: false },
+    { mobileClient: true, bvid, cid: -1, frameAspectRatio: 9 / 16, onShortsPage: false },
+    { mobileClient: true, bvid, cid, frameAspectRatio: 1, onShortsPage: false },
+    { mobileClient: true, bvid, cid, frameAspectRatio: 16 / 9, onShortsPage: false },
+    { mobileClient: true, bvid, cid, frameAspectRatio: NaN, onShortsPage: false },
+    { mobileClient: true, bvid, cid, frameAspectRatio: 9 / 16, onShortsPage: true },
+  ])("横屏、桌面或非法取流键不预检：%o", (input) => {
+    expect(shouldPreflightVideoCardShorts(input)).toBe(false);
+  });
+
+  test("未知 dimension 或 cid 时先取 archive 补齐后再判定", () => {
+    expect(
+      shouldPreflightVideoCardShorts({
+        mobileClient: true,
+        bvid,
+        cid,
+        frameAspectRatio: null,
+        onShortsPage: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreflightVideoCardShorts({
+        mobileClient: true,
+        bvid,
+        cid: null,
+        frameAspectRatio: null,
+        onShortsPage: false,
+      }),
+    ).toBe(true);
+  });
+
+  test("archive 分 P 仍由既有自动入口规则拒绝，预检不替代单 P 证明", () => {
+    const pages = [
+      { page: 1, cid, part: "首 P", duration: 10 },
+      { page: 2, cid: 43, part: "次 P", duration: 10 },
+    ];
+    expect(shouldEnter({ archive: { ...entry.archive, pages } })).toBe(false);
+  });
+
+  test("已落定的 archive 画幅优先，列表只在详情未知时兜底", () => {
+    expect(
+      videoShortsEntryAspectRatio({ width: 1080, height: 1920, rotate: 0 }, 16 / 9),
+    ).toBeCloseTo(9 / 16);
+    expect(
+      videoShortsEntryAspectRatio({ width: 1920, height: 1080, rotate: 0 }, 9 / 16),
+    ).toBeCloseTo(16 / 9);
+    expect(videoShortsEntryAspectRatio({ width: 0, height: 1920, rotate: 0 }, 9 / 16)).toBe(9 / 16);
+    expect(videoShortsEntryAspectRatio(null, null)).toBeNull();
   });
 });
 

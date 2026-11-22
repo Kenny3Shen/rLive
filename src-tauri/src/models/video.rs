@@ -380,6 +380,12 @@ pub struct VideoArchive {
     pub danmaku: i64,
     pub reply: i64,
     pub pubdate: i64,
+    /// 上游稿件详情提供的显示画幅；缺失或尺寸无效时为 None。
+    ///
+    /// 列表入口没有 `dimension` 时，移动端卡片用它和 `pages` 一起决定
+    /// 能否直接进入短视频流，不必先挂载详情播放器。
+    #[serde(default)]
+    pub dimension: Option<VideoDimension>,
     /// 多 P 稿件的分 P 列表：选集与连播沿它走；少于 2 个 P 不成选集，为空。
     pub pages: Vec<VideoArchivePage>,
     /// UGC 合集（ugc_season）：稿件属于合集时连播沿合集走，无合集为 None。

@@ -71,6 +71,7 @@ function archive(overrides: Partial<VideoArchive> = {}): VideoArchive {
     danmaku: 0,
     pubdate: 0,
     reply: 0,
+    dimension: null,
     pages: [],
     ugc_season: null,
     ...overrides,

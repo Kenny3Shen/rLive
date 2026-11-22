@@ -1,6 +1,6 @@
-import { memo } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ComponentProps } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Download, MessageSquareText, Play, UserRoundX } from "lucide-react";
 import { preloadRouteModule } from "@/app/routeModules";
@@ -20,6 +20,7 @@ import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { notify } from "@/components/ui/toast";
 import { useLongPressDrawer } from "@/shared/hooks/useLongPressDrawer";
 import { useSettingsStore } from "@/shared/stores/settingsStore";
+import { BILIBILI_SHORTS_PATH, shortsPath } from "@/features/shorts/shortsFeed";
 import { videoDimensionAspect } from "@/shared/videoDimension";
 import { formatOnline, cn } from "@/lib/utils";
 import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
@@ -46,7 +47,16 @@ import {
   type PlaylistUploader,
 } from "./playlistStore";
 import { formatRelativeTime, formatVideoDuration } from "./videoHistory";
-import { videoFrameHintNavigationState, videoPlayPath } from "./videoRoute";
+import {
+  canCompleteVideoShortsNavigation,
+  shouldAutoEnterVideoShorts,
+  shouldPreflightVideoCardShorts,
+  videoFrameHintNavigationState,
+  videoPlayPath,
+  videoShortsEntryAspectRatio,
+  videoShortsEntryNavigationState,
+} from "./videoRoute";
+import { isBlockedUploader, videoBlockedUploaderSet } from "./videoUploaderBlock";
 
 /**
  * 视频卡片。
@@ -92,6 +102,7 @@ export const VideoCard = memo(function VideoCard({
   showPubdate?: boolean;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   // 搜索与 UP 主空间列表的条目没有 cid：只要带 bvid 就可点，播放页用稿件详情
   // 补齐取流键（P1）。真正不可点的只剩无 bvid 的脏数据（后端已过滤，防御而已）。
   const playable = Boolean(item.bvid);
@@ -117,6 +128,27 @@ export const VideoCard = memo(function VideoCard({
     enabled: mobile && (uploaderMid !== "" || canDownload),
   });
   const queryClient = useQueryClient();
+  const [opening, setOpening] = useState(false);
+  const openRequestRef = useRef(0);
+  const openingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      openingRef.current = false;
+      openRequestRef.current += 1;
+    };
+  }, []);
+  const cardCid = item.cid ?? null;
+  const preflightShorts = shouldPreflightVideoCardShorts({
+    mobileClient: mobile,
+    bvid: item.bvid,
+    cid: cardCid,
+    frameAspectRatio,
+    onShortsPage: location.pathname === BILIBILI_SHORTS_PATH,
+  });
+  const shortsPathForItem = shortsPath(item.bvid);
   const downloadMutation = useMutation({
     mutationFn: async () => {
       if (!item.bvid) throw new Error("这条视频缺少 BV 号，无法下载。");
@@ -152,7 +184,7 @@ export const VideoCard = memo(function VideoCard({
     notify.success(`已屏蔽 ${item.author || "该 UP 主"}`, "其视频不再出现在浏览列表与竖屏流中。");
   }
 
-  function openVideo() {
+  async function openVideo() {
     // 长按弹出操作抽屉后，松手合成的点按属于菜单手势的一部分，不打开视频。
     if (cardDrawer.consumeSyntheticClick()) return;
     if (!playPath) return;
@@ -162,24 +194,102 @@ export const VideoCard = memo(function VideoCard({
         .getState()
         .setPlaylist([...playlist], playListId, playlistKind, playlistUploader);
     }
-    onNavigate?.();
-    navigate(playPath, frameHint ? { state: frameHint } : undefined);
+    const detailNavigation = () => {
+      onNavigate?.();
+      navigate(playPath, frameHint ? { state: frameHint } : undefined);
+    };
+
+    // 已知竖画幅先取详情；列表没有尺寸时也用详情里的 dimension 补画幅。
+    // archive 同时决定是否单 P，并与播放页共享查询缓存。
+    if (!preflightShorts) {
+      detailNavigation();
+      return;
+    }
+    if (openingRef.current) return;
+    const requestedEntryKey = location.key;
+    const currentEntryKey = () => window.history.state?.key ?? location.key;
+    // 退场动画会暂留旧卡片；若浏览器已经 POP 到别的历史条目，迟到的点击不能启动。
+    if (currentEntryKey() !== requestedEntryKey) return;
+    openingRef.current = true;
+    const request = ++openRequestRef.current;
+    const canNavigate = () =>
+      canCompleteVideoShortsNavigation({
+        requestedKey: item.bvid,
+        currentKey: item.bvid,
+        requestedEntryKey,
+        currentEntryKey: currentEntryKey(),
+        cancelled: !mountedRef.current || request !== openRequestRef.current,
+      });
+    setOpening(true);
+    preloadRouteModule(shortsPathForItem);
+    try {
+      const archive = await queryClient.fetchQuery({
+        queryKey: ["video_archive", item.bvid],
+        queryFn: () => videoGetArchive(item.bvid),
+        staleTime: 5 * 60_000,
+        retry: false,
+      });
+      if (!canNavigate()) return;
+      const targetCid = cardCid && cardCid > 0 ? cardCid : archive.cid;
+      const entryAspectRatio = videoShortsEntryAspectRatio(archive.dimension, frameAspectRatio);
+      const videoKey = `${item.bvid}:${targetCid}`;
+      const blockedUploaders = videoBlockedUploaderSet(
+        useSettingsStore.getState().videoBlockedUploaders,
+      );
+      const openShorts = shouldAutoEnterVideoShorts({
+        mobileClient: mobile,
+        bvid: item.bvid,
+        cid: targetCid,
+        epId: null,
+        seasonId: null,
+        archive,
+        frameAspectRatio: entryAspectRatio,
+        audioOnly: false,
+        videoKey,
+        navigationState: null,
+        blockedUploader:
+          isBlockedUploader(item, blockedUploaders) || isBlockedUploader(archive, blockedUploaders),
+      });
+      if (openShorts) {
+        onNavigate?.();
+        navigate(shortsPathForItem, {
+          state: videoShortsEntryNavigationState({
+            bvid: item.bvid,
+            cid: targetCid,
+            title: item.title,
+            aid: item.aid,
+            videoKey,
+          }),
+        });
+      } else {
+        detailNavigation();
+      }
+    } catch {
+      // 详情请求失败不代表稿件不可播放；交回播放页展示可重试的失败态。
+      if (canNavigate()) detailNavigation();
+    } finally {
+      if (request === openRequestRef.current) {
+        openingRef.current = false;
+        if (mountedRef.current) setOpening(false);
+      }
+    }
   }
 
   // 三个分支（无 UID / 触摸端 / 桌面端）共用同一套属性，避免三份漂移。
   // 与 `RoomCard` 的 `cardButtonProps` 同一写法。
   const cardButtonProps: ComponentProps<"button"> = {
     type: "button",
-    onClick: openVideo,
+    onClick: () => void openVideo(),
     onPointerEnter: (event) => {
-      if (playPath) preloadRouteModule(playPath);
+      if (playPath) preloadRouteModule(preflightShorts ? shortsPathForItem : playPath);
       preview.onPointerEnter(event);
     },
     onPointerLeave: preview.stop,
     onFocus: () => {
-      if (playPath) preloadRouteModule(playPath);
+      if (playPath) preloadRouteModule(preflightShorts ? shortsPathForItem : playPath);
     },
-    disabled: !playable,
+    disabled: !playable || opening,
+    "aria-busy": opening || undefined,
     "aria-label": `${item.title}，UP 主 ${item.author}，时长 ${formatVideoDuration(item.duration)}`,
     className: cn(
       MEDIA_CARD_CLASS,
@@ -200,12 +310,12 @@ export const VideoCard = memo(function VideoCard({
           orientation === "row" ? "w-2/5 shrink-0 rounded-md ring-1 ring-border-subtle" : undefined
         }
         previewMount={preview.mountRef}
-        previewLoading={preview.phase === "loading"}
+        previewLoading={opening || preview.phase === "loading"}
         overlay={
           <>
             {/* 推荐理由是平台给的运营文案（如「百万播放」），放左上与底排的统计、
                 时长分开，三者都靠边而不互相挤。 */}
-            {item.rcmd_reason && (
+            {!opening && item.rcmd_reason && (
               <span
                 data-mobile-static-backdrop
                 className={cn(MEDIA_CARD_BADGE_CLASS, "left-2 top-2 max-w-[70%] truncate")}

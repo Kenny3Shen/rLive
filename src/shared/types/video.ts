@@ -378,6 +378,8 @@ export type VideoArchive = {
   /** 发布时间，Unix 秒。 */
   pubdate: number;
   reply: number;
+  /** 稿件详情的显示画幅；列表未提供尺寸时供移动端入口判定。 */
+  dimension: VideoDimension | null;
   /** 多 P 稿件的分 P 列表：选集与连播沿它走；少于 2 个 P 为空数组。 */
   pages: VideoArchivePage[];
   /** UGC 合集：稿件属于合集时连播沿合集走，无合集为 null。 */

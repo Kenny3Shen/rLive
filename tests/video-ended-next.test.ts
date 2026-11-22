@@ -45,6 +45,7 @@ function archive(pages: VideoArchive["pages"]): VideoArchive {
     danmaku: 0,
     pubdate: 0,
     reply: 0,
+    dimension: null,
     ugc_season: null,
     pages,
   };

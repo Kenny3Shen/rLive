@@ -5,7 +5,8 @@
  * 参数组合都能单测，同时 Shell 只为一条页签切换器付出一次 import。
  */
 
-import type { VideoArchive } from "@/shared/types/video";
+import { videoDimensionAspect } from "@/shared/videoDimension";
+import type { VideoArchive, VideoDimension } from "@/shared/types/video";
 
 export const VIDEO_HOME_PATH = "/video";
 export const VIDEO_PLAY_PATH = "/video/play";
@@ -373,6 +374,55 @@ export function videoDetailsIntentForKey(state: unknown, videoKey: string): bool
     "videoDetailsKey" in state &&
     state.videoDetailsKey === videoKey
   );
+}
+
+/**
+ * 移动端列表卡片是否值得先取稿件详情来判定短视频直入。
+ *
+ * 已知竖画幅先直接预检；未知画幅也可以先取详情，用 `VideoArchive.dimension`
+ * 补足画幅。真正的导航决定仍由 `shouldAutoEnterVideoShorts` 在
+ * `archive.pages` 与画幅都落定后完成，不能把未知画幅误判成竖屏。
+ *
+ * 短视频页内的作者投稿卡片不走这条预检：同一 pathname 只换 `seed` 时页面
+ * 不会以新种子重建 feed，直接导航会让地址与实际播放内容不一致。
+ */
+export function shouldPreflightVideoCardShorts({
+  mobileClient,
+  bvid,
+  cid,
+  frameAspectRatio,
+  onShortsPage,
+}: {
+  mobileClient: boolean;
+  bvid: string;
+  cid: number | null;
+  frameAspectRatio: number | null;
+  onShortsPage: boolean;
+}): boolean {
+  const knownCidIsValid = cid === null || (Number.isSafeInteger(cid) && cid > 0);
+  const frameMayBeVertical =
+    frameAspectRatio === null ||
+    (Number.isFinite(frameAspectRatio) && frameAspectRatio > 0 && frameAspectRatio < 1);
+  return (
+    !onShortsPage &&
+    mobileClient &&
+    /^BV[0-9A-Za-z]{10}$/.test(bvid) &&
+    knownCidIsValid &&
+    frameMayBeVertical
+  );
+}
+
+/**
+ * 短视频入口的最终画幅。
+ *
+ * 已落定的稿件详情优先于列表卡片先验：两者矛盾时必须服从详情；只有
+ * 详情未下发有效尺寸时才回退列表，两个来源都没有则留给详情播放页继续等待。
+ */
+export function videoShortsEntryAspectRatio(
+  archiveDimension: VideoDimension | null | undefined,
+  frameHintAspectRatio: number | null,
+): number | null {
+  return videoDimensionAspect(archiveDimension) ?? frameHintAspectRatio;
 }
 
 /**
