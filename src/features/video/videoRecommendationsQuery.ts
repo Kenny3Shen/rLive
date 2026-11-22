@@ -16,17 +16,8 @@ export type RecommendationFeedPage = { kind: "ugc"; fetchedAt: number } & VideoL
 export type RecommendationFeedData = InfiniteData<RecommendationFeedPage, number>;
 export type RecommendationPageFetcher = (page: number) => Promise<VideoListPage>;
 
-export function videoRecommendationQueryKey(
-  api: VideoRecommendApi,
-  appAuthRevision: number,
-) {
-  return [
-    "video_list",
-    "recommend",
-    "",
-    api,
-    api === "app" ? appAuthRevision : 0,
-  ] as const;
+export function videoRecommendationQueryKey(api: VideoRecommendApi, appAuthRevision: number) {
+  return ["video_list", "recommend", "", api, api === "app" ? appAuthRevision : 0] as const;
 }
 
 /** 只有当前来源与授权版本的推荐首页失效，才唤醒活动页面做首页刷新。 */
@@ -112,10 +103,8 @@ export function videoRecommendationQueryOptions(
         fetchedAt: now(),
       };
     },
-    getNextPageParam: (
-      _lastPage: RecommendationFeedPage,
-      allPages: RecommendationFeedPage[],
-    ) => nextRecommendPage(allPages),
+    getNextPageParam: (_lastPage: RecommendationFeedPage, allPages: RecommendationFeedPage[]) =>
+      nextRecommendPage(allPages),
     staleTime: VIDEO_RECOMMENDATION_FRESHNESS_MS,
     gcTime: 60 * 60_000,
     refetchOnMount: false,

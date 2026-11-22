@@ -12,10 +12,7 @@ import { BROWSING_LIST_QUERY_OPTIONS } from "@/shared/api/browsingQueryPolicy";
 import { ErrorState } from "@/shared/components/ErrorState";
 import { BilibiliAppAuthAction } from "@/shared/components/BilibiliAppAuthAction";
 import { PullToRefresh } from "@/shared/components/PullToRefresh";
-import {
-  RefreshFab,
-  useRefreshFabVisibility,
-} from "@/shared/components/RefreshFab";
+import { RefreshFab, useRefreshFabVisibility } from "@/shared/components/RefreshFab";
 import { useInfiniteScroll } from "@/shared/hooks/useInfiniteScroll";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,12 +26,7 @@ import { CARD_GRID_CLASS } from "@/shared/components/cardGrid";
 import { MediaCardSkeletonGrid } from "@/shared/components/MediaCard";
 import { findVerticalScrollParent } from "@/shared/gestures/pullToRefresh";
 import type { PgcItem, PgcListPage, VideoListPage, VideoZone } from "@/shared/types/video";
-import {
-  videoGetPgcIndex,
-  videoGetPopular,
-  videoGetZone,
-  videoZoneList,
-} from "./videoApi";
+import { videoGetPgcIndex, videoGetPopular, videoGetZone, videoZoneList } from "./videoApi";
 import { PgcCard, VideoGrid } from "./VideoCard";
 import { VideoZoneBar } from "./VideoZoneBar";
 import { dedupeVideoItems, playlistItemFromVideoItem } from "./playlistStore";
@@ -158,17 +150,8 @@ function BilibiliVideoPage() {
     chips,
   );
 
-  const recommendationOptions = videoRecommendationQueryOptions(
-    videoRecommendApi,
-    appAuthRevision,
-  );
-  const browseListQueryKey = [
-    "video_list",
-    tab,
-    zoneKey ?? "",
-    "web",
-    0,
-  ] as const;
+  const recommendationOptions = videoRecommendationQueryOptions(videoRecommendApi, appAuthRevision);
+  const browseListQueryKey = ["video_list", tab, zoneKey ?? "", "web", 0] as const;
   const listQuery = useInfiniteQuery<
     VideoFeedPage,
     Error,
@@ -242,9 +225,7 @@ function BilibiliVideoPage() {
   const { fetchNextPage, isFetchingNextPage, isFetchNextPageError } = listQuery;
   const hasNextPage = listQuery.isPlaceholderData ? false : listQuery.hasNextPage;
   const recommendationRefreshFailed =
-    tab === "recommend" &&
-    listQuery.isRefetchError &&
-    !listQuery.isFetchNextPageError;
+    tab === "recommend" && listQuery.isRefetchError && !listQuery.isFetchNextPageError;
   const [automaticRefreshing, setAutomaticRefreshing] = useState(false);
   const [activationRevision, setActivationRevision] = useState(0);
   const [manualRefreshing, setManualRefreshing] = useState(false);
@@ -276,11 +257,7 @@ function BilibiliVideoPage() {
     const unsubscribeInvalidation = queryClient.getQueryCache().subscribe((event) => {
       if (
         document.visibilityState === "visible" &&
-        isVideoRecommendationInvalidationEvent(
-          event,
-          videoRecommendApi,
-          appAuthRevision,
-        )
+        isVideoRecommendationInvalidationEvent(event, videoRecommendApi, appAuthRevision)
       ) {
         setActivationRevision((revision) => revision + 1);
       }
@@ -293,10 +270,7 @@ function BilibiliVideoPage() {
   }, [appAuthRevision, pageVisible, queryClient, tab, videoRecommendApi]);
 
   useEffect(() => {
-    const recommendationQueryKey = videoRecommendationQueryKey(
-      videoRecommendApi,
-      appAuthRevision,
-    );
+    const recommendationQueryKey = videoRecommendationQueryKey(videoRecommendApi, appAuthRevision);
     const recommendationState =
       queryClient.getQueryState<RecommendationFeedData>(recommendationQueryKey);
     if (
@@ -325,14 +299,7 @@ function BilibiliVideoPage() {
       .finally(() => {
         setAutomaticRefreshing(false);
       });
-  }, [
-    activationRevision,
-    appAuthRevision,
-    pageVisible,
-    queryClient,
-    tab,
-    videoRecommendApi,
-  ]);
+  }, [activationRevision, appAuthRevision, pageVisible, queryClient, tab, videoRecommendApi]);
 
   const refreshing =
     tab === "recommend"

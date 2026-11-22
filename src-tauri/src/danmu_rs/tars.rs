@@ -25,10 +25,7 @@ pub struct Head {
 }
 
 #[derive(Debug)]
-pub struct TarsError(
-    #[expect(dead_code, reason = "由 Debug 输出解码失败原因")]
-    pub String,
-);
+pub struct TarsError(#[expect(dead_code, reason = "由 Debug 输出解码失败原因")] pub String);
 
 type Result<T> = std::result::Result<T, TarsError>;
 

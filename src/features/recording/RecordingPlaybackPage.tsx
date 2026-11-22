@@ -115,9 +115,7 @@ function PlaybackSidebar({ item, danmaku }: { item: RecordingItem; danmaku: Play
                   <Tv className="size-3.5" aria-hidden />
                 )}
                 <span className="truncate">{recordingSourceLabel(item)}</span>
-                {item.room_id && (
-                  <span className="truncate tabular-nums">房间 {item.room_id}</span>
-                )}
+                {item.room_id && <span className="truncate tabular-nums">房间 {item.room_id}</span>}
               </div>
             </div>
           </div>

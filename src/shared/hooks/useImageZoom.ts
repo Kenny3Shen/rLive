@@ -739,7 +739,10 @@ export function useImageZoom({ index }: UseImageZoomOptions) {
         settleTo(IMAGE_ZOOM_IDENTITY, IMAGE_ZOOM_SETTLE_MS);
         return true;
       }
-      const next = imageZoomStepScale(transformRef.current.scale, key === "+" || key === "=" ? 1 : -1);
+      const next = imageZoomStepScale(
+        transformRef.current.scale,
+        key === "+" || key === "=" ? 1 : -1,
+      );
       if (next === transformRef.current.scale) {
         // 已在边界：仍然吃掉按键，免得它继续传给页面。
         return true;

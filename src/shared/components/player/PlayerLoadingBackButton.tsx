@@ -18,7 +18,12 @@ export function PlayerLoadingBackButton({
       data-density={isMobileClient() ? "dense" : undefined}
       className={PLAYER_BACK_ONLY_SURFACE_CLASS}
     >
-      <MediaButton type="button" aria-label={label} className={PLAYER_HUD_BUTTON_CLASS} onClick={onClick}>
+      <MediaButton
+        type="button"
+        aria-label={label}
+        className={PLAYER_HUD_BUTTON_CLASS}
+        onClick={onClick}
+      >
         <ChevronLeft className={PLAYER_HUD_ICON_CLASS} data-icon="inline-start" aria-hidden />
       </MediaButton>
     </div>

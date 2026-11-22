@@ -52,12 +52,7 @@ export function getDanmakuSendConfig(siteId?: SiteId): DanmakuSendConfig | null 
 }
 
 export function isDanmakuSendSite(siteId?: SiteId): siteId is DanmakuSendSiteId {
-  return (
-    siteId === "bilibili" ||
-    siteId === "douyu" ||
-    siteId === "huya" ||
-    siteId === "douyin"
-  );
+  return siteId === "bilibili" || siteId === "douyu" || siteId === "huya" || siteId === "douyin";
 }
 
 /** VOD 弹幕发送：oid 是视频 cid，历史与冷却按稿件 aid 记。 */

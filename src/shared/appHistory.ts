@@ -25,11 +25,7 @@ export function canNavigateBackInApp(historyState: unknown): boolean {
  *
  * React Router 对初始记录使用 `"default"`，且初始 history state 可能尚未写入 key。
  */
-export function readAppHistoryIndex(
-  historyState: unknown,
-  entryKey: string,
-  fallback = 0,
-): number {
+export function readAppHistoryIndex(historyState: unknown, entryKey: string, fallback = 0): number {
   if (!historyState || typeof historyState !== "object" || Array.isArray(historyState)) {
     return fallback;
   }

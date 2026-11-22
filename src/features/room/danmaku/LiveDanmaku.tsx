@@ -59,12 +59,12 @@ export function danmakuVisibleContentRect(
     (rect): rect is DanmakuHitRect =>
       Boolean(
         rect &&
-          Number.isFinite(rect.x) &&
-          Number.isFinite(rect.y) &&
-          Number.isFinite(rect.width) &&
-          Number.isFinite(rect.height) &&
-          rect.width > 0 &&
-          rect.height > 0,
+        Number.isFinite(rect.x) &&
+        Number.isFinite(rect.y) &&
+        Number.isFinite(rect.width) &&
+        Number.isFinite(rect.height) &&
+        rect.width > 0 &&
+        rect.height > 0,
       ),
   );
   if (rects.length === 0) return fallbackRect;
@@ -127,7 +127,8 @@ function useReducedMotionPreference(): boolean {
     else if (typeof query.addListener === "function") query.addListener(sync);
     sync();
     return () => {
-      if (typeof query.removeEventListener === "function") query.removeEventListener("change", sync);
+      if (typeof query.removeEventListener === "function")
+        query.removeEventListener("change", sync);
       else if (typeof query.removeListener === "function") query.removeListener(sync);
     };
   }, []);
@@ -182,7 +183,10 @@ function visualRect(meta: DanmakuBulletMeta): DanmakuHitRect | null {
   );
 }
 
-function relativeVisualRect(container: HTMLElement, meta: DanmakuBulletMeta): DanmakuHitRect | null {
+function relativeVisualRect(
+  container: HTMLElement,
+  meta: DanmakuBulletMeta,
+): DanmakuHitRect | null {
   const rect = visualRect(meta);
   if (!rect) return null;
   const containerRect = container.getBoundingClientRect();
@@ -290,7 +294,10 @@ export const LiveDanmaku = memo(function LiveDanmaku({
     if (!host) return;
     const measure = () => {
       const rect = host.getBoundingClientRect();
-      const next = { width: Math.max(0, Math.floor(rect.width)), height: Math.max(0, Math.floor(rect.height)) };
+      const next = {
+        width: Math.max(0, Math.floor(rect.width)),
+        height: Math.max(0, Math.floor(rect.height)),
+      };
       setStageSize((current) =>
         current.width === next.width && current.height === next.height ? current : next,
       );
@@ -346,7 +353,9 @@ export const LiveDanmaku = memo(function LiveDanmaku({
   // 屏蔽只作用于尚未投放的待处理事件；已上屏的弹幕保留到自然结束。
   useLayoutEffect(() => {
     const matcher = blockedUserMatcher;
-    pendingEventsRef.current = pendingEventsRef.current.filter((pending) => !matcher(pending.event));
+    pendingEventsRef.current = pendingEventsRef.current.filter(
+      (pending) => !matcher(pending.event),
+    );
   }, [blockedUserMatcher]);
 
   const selectBullet = useCallback(
@@ -632,9 +641,9 @@ export const LiveDanmaku = memo(function LiveDanmaku({
       setHoverTarget((current) =>
         current && current.hoverKey === selectedId
           ? current.left === rect.x &&
-              current.top === rect.y &&
-              current.width === rect.width &&
-              current.height === rect.height
+            current.top === rect.y &&
+            current.width === rect.width &&
+            current.height === rect.height
             ? current
             : { ...current, left: rect.x, top: rect.y, width: rect.width, height: rect.height }
           : current,

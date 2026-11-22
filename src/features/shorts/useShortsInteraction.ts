@@ -502,15 +502,7 @@ export function useShortsInteraction({
       settle(target, shortsSwipeSettleDuration(target - offsetRef.current, velocity));
       setIndex(next);
     },
-    [
-      navigationLocked,
-      index,
-      items.length,
-      onBoundary,
-      setIndex,
-      settle,
-      stageHeight,
-    ],
+    [navigationLocked, index, items.length, onBoundary, setIndex, settle, stageHeight],
   );
 
   const onPointerDownCapture = useCallback(

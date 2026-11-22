@@ -109,10 +109,7 @@ const PLAYER_STAGE_TAP_MAX_DISTANCE_PX = 14;
 
 /** 全屏桌面画面需要更大的目标；移动端保持紧凑胶囊，
  * 使三个操作不会遮住不成比例的视频区域。 */
-function shouldUseLargeDanmakuActionMenu(
-  fullscreen: boolean,
-  mobileClient: boolean,
-): boolean {
+function shouldUseLargeDanmakuActionMenu(fullscreen: boolean, mobileClient: boolean): boolean {
   return fullscreen && !mobileClient;
 }
 
@@ -1442,9 +1439,7 @@ function PlayerPaneContent({
           // 且仅在 chrome 真正预留时生效。
           style={
             {
-              "--player-chrome-inset": stackedPlayer
-                ? "0px"
-                : "env(safe-area-inset-bottom)",
+              "--player-chrome-inset": stackedPlayer ? "0px" : "env(safe-area-inset-bottom)",
             } as CSSProperties
           }
           className={cn(
@@ -1467,97 +1462,103 @@ function PlayerPaneContent({
           onPointerLeave={handleStagePointerLeave}
           onKeyDown={handleStageKeyDown}
           controls={
-            controlsAvailable && <PlayerControls
-              chrome={{
-                ref: controlsRef,
-                "data-player-controls": true,
-                "data-visible": "true",
-                "aria-hidden": false,
-                // chrome 悬浮于画面底边而不消耗布局高度，隐藏它即把整个舞台还给视频。
-                // 保持被滤镜的表面静止：移动的背景模糊会在过渡的每一帧重新采样视频。
-                // data 属性以命令式变更，
-                // 这种仅合成器的淡出也避免了对视频、弹幕层和侧面板的协调。
-                className:
-                  "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
-                onPointerEnter: holdControlsVisible,
-                onPointerDown: handleChromePointerDown,
-                onPointerLeave: resumeControlsAutoHide,
-                onFocusCapture: handleChromeFocusCapture,
-                onBlurCapture: handleChromeBlurCapture,
-              }}
-              externalAudioControls={
-                nativePlayerControlsActive
-                  ? {
-                      volume: playerControlVolume,
-                      muted: playerControlMuted,
-                      onVolumeChange: handlePlayerVolumeChange,
-                      onToggleMute: handleToggleMute,
-                    }
-                  : undefined
-              }
-              sidePanelOpen={sidePanelOpen}
-              sidePanelLabel={
-                compactViewport ? (sidePanelOpen ? "收起直播间面板" : "打开直播间面板") : undefined
-              }
-              webFullscreen={webFullscreen}
-              osdOn={osdOn}
-              asrVisible={asr.desktopClient}
-              asrOn={asr.captionsOn}
-              asrLabel={asr.controlLabel}
-              asrDisabled={asr.controlDisabled}
-              asrBusy={asr.controlBusy}
-              asrTranslationEnabled={asrTranslationEnabled}
-              asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
-              qualities={qualities}
-              qualityIndex={qualityIndex}
-              lines={lines}
-              lineIndex={lineIndex}
-              fullscreen={player.mode === "fullscreen"}
-              pictureInPictureDisabled={
-                !player.running || player.mode === "fullscreen" || audioOnly
-              }
-              loadError={loadError}
-              disabled={transportDisabled}
-              // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
-              // 那里没有手势栏 inset。
-              stackedBelowPlayer={stackedPlayer}
-              // 只按详情里的开播时间显示已播时长；详情刷新带上新场次后会跟着归零。
-              liveStartedAt={liveStartedAt}
-              compact={compactViewport}
-              portalContainer={playerStageRef}
-              centerSlot={
-                secondaryReady &&
-                !composerInSidePanel && (
-                  <DanmakuComposer
-                    siteId={siteId}
-                    roomId={roomId}
-                    roomTitle={roomTitle}
-                    roomUserName={roomUserName}
-                    overlay
-                    // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
-                    // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
-                    // body 级弹窗会被压在其下。
-                    portalContainer={playerStageRef}
-                    onOverlayInteractionChange={handleComposerOverlayInteractionChange}
-                  />
-                )
-              }
-              onOverlayInteractionChange={handleControlsOverlayInteractionChange}
-              refreshDisabled={refreshDisabled}
-              onRefresh={onRefresh}
-              onTogglePause={player.togglePause}
-              onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
-              onToggleWebFullscreen={
-                onWebFullscreenChange ? () => onWebFullscreenChange(!webFullscreen) : undefined
-              }
-              onToggleOsd={handleToggleOsd}
-              onToggleAsr={asr.toggle}
-              onAsrTranslationEnabledChange={setAsrTranslationEnabled}
-              onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
-              onQualityChange={onQualityChange ?? (() => {})}
-              onLineChange={onLineChange ?? (() => {})}
-              onToggleFullscreen={() => void player.toggleFullscreen()}
-            />
+            controlsAvailable && (
+              <PlayerControls
+                chrome={{
+                  ref: controlsRef,
+                  "data-player-controls": true,
+                  "data-visible": "true",
+                  "aria-hidden": false,
+                  // chrome 悬浮于画面底边而不消耗布局高度，隐藏它即把整个舞台还给视频。
+                  // 保持被滤镜的表面静止：移动的背景模糊会在过渡的每一帧重新采样视频。
+                  // data 属性以命令式变更，
+                  // 这种仅合成器的淡出也避免了对视频、弹幕层和侧面板的协调。
+                  className:
+                    "absolute inset-x-0 bottom-0 z-30 [will-change:opacity] transition-opacity duration-150 ease-out motion-reduced:transition-none data-[visible=false]:pointer-events-none data-[visible=false]:opacity-0",
+                  onPointerEnter: holdControlsVisible,
+                  onPointerDown: handleChromePointerDown,
+                  onPointerLeave: resumeControlsAutoHide,
+                  onFocusCapture: handleChromeFocusCapture,
+                  onBlurCapture: handleChromeBlurCapture,
+                }}
+                externalAudioControls={
+                  nativePlayerControlsActive
+                    ? {
+                        volume: playerControlVolume,
+                        muted: playerControlMuted,
+                        onVolumeChange: handlePlayerVolumeChange,
+                        onToggleMute: handleToggleMute,
+                      }
+                    : undefined
+                }
+                sidePanelOpen={sidePanelOpen}
+                sidePanelLabel={
+                  compactViewport
+                    ? sidePanelOpen
+                      ? "收起直播间面板"
+                      : "打开直播间面板"
+                    : undefined
+                }
+                webFullscreen={webFullscreen}
+                osdOn={osdOn}
+                asrVisible={asr.desktopClient}
+                asrOn={asr.captionsOn}
+                asrLabel={asr.controlLabel}
+                asrDisabled={asr.controlDisabled}
+                asrBusy={asr.controlBusy}
+                asrTranslationEnabled={asrTranslationEnabled}
+                asrSpeakerDiarizationEnabled={asrSpeakerDiarizationEnabled}
+                qualities={qualities}
+                qualityIndex={qualityIndex}
+                lines={lines}
+                lineIndex={lineIndex}
+                fullscreen={player.mode === "fullscreen"}
+                pictureInPictureDisabled={
+                  !player.running || player.mode === "fullscreen" || audioOnly
+                }
+                loadError={loadError}
+                disabled={transportDisabled}
+                // 竖屏把弹幕面板堆叠在画面之下，控件悬浮于视频底边而非窗口底边 ——
+                // 那里没有手势栏 inset。
+                stackedBelowPlayer={stackedPlayer}
+                // 只按详情里的开播时间显示已播时长；详情刷新带上新场次后会跟着归零。
+                liveStartedAt={liveStartedAt}
+                compact={compactViewport}
+                portalContainer={playerStageRef}
+                centerSlot={
+                  secondaryReady &&
+                  !composerInSidePanel && (
+                    <DanmakuComposer
+                      siteId={siteId}
+                      roomId={roomId}
+                      roomTitle={roomTitle}
+                      roomUserName={roomUserName}
+                      overlay
+                      // 输入框位于播放器 chrome 内部，其快捷选择器必须 portal 进舞台而不是 `<body>`：
+                      // 全屏会把舞台放入 top layer（Tauri 客户端则是固定 z-index 层），
+                      // body 级弹窗会被压在其下。
+                      portalContainer={playerStageRef}
+                      onOverlayInteractionChange={handleComposerOverlayInteractionChange}
+                    />
+                  )
+                }
+                onOverlayInteractionChange={handleControlsOverlayInteractionChange}
+                refreshDisabled={refreshDisabled}
+                onRefresh={onRefresh}
+                onTogglePause={player.togglePause}
+                onToggleSidePanel={() => setSidePanelOpen((open) => !open)}
+                onToggleWebFullscreen={
+                  onWebFullscreenChange ? () => onWebFullscreenChange(!webFullscreen) : undefined
+                }
+                onToggleOsd={handleToggleOsd}
+                onToggleAsr={asr.toggle}
+                onAsrTranslationEnabledChange={setAsrTranslationEnabled}
+                onAsrSpeakerDiarizationEnabledChange={setAsrSpeakerDiarizationEnabled}
+                onQualityChange={onQualityChange ?? (() => {})}
+                onLineChange={onLineChange ?? (() => {})}
+                onToggleFullscreen={() => void player.toggleFullscreen()}
+              />
+            )
           }
         >
           <div
@@ -1665,7 +1666,13 @@ function PlayerPaneContent({
           {!controlsAvailable && (
             <PlayerLoadingBackButton
               onClick={handleHudBack}
-              label={player.mode === "fullscreen" ? "退出全屏" : webFullscreen ? "退出网页全屏" : "返回上一页"}
+              label={
+                player.mode === "fullscreen"
+                  ? "退出全屏"
+                  : webFullscreen
+                    ? "退出网页全屏"
+                    : "返回上一页"
+              }
             />
           )}
           {controlsAvailable && fullscreenHudVisible && (

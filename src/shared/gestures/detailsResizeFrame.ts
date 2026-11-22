@@ -50,8 +50,7 @@ export function createDetailsResizeFrameQueue(
 ): DetailsResizeFrameQueue {
   const requestFrame =
     options.requestFrame ?? ((callback: (time: number) => void) => requestAnimationFrame(callback));
-  const cancelFrame =
-    options.cancelFrame ?? ((handle: number) => cancelAnimationFrame(handle));
+  const cancelFrame = options.cancelFrame ?? ((handle: number) => cancelAnimationFrame(handle));
   let handle: number | null = null;
   let generation = 0;
 
@@ -104,9 +103,7 @@ export function consumeDetailsResizeDeltas(
   deltas: readonly number[],
   bounds: DetailsResizeFrameBounds,
 ): DetailsResizeFrameResult {
-  const maxScrollTop = Number.isFinite(bounds.maxScrollTop)
-    ? Math.max(0, bounds.maxScrollTop)
-    : 0;
+  const maxScrollTop = Number.isFinite(bounds.maxScrollTop) ? Math.max(0, bounds.maxScrollTop) : 0;
   let percent = cursor.percent;
   let scrollTop = clampScrollTop(cursor.scrollTop, maxScrollTop);
   const startScrollTop = scrollTop;

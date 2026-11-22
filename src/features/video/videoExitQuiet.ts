@@ -1,8 +1,5 @@
 // VOD 保留既有入口，共用实现位于 shared，供直播、IPTV 和本地回放复用。
-import type {
-  PlayerExitQuiet,
-  QuietableDanmakuRenderer,
-} from "@/shared/player/playerExitQuiet";
+import type { PlayerExitQuiet, QuietableDanmakuRenderer } from "@/shared/player/playerExitQuiet";
 import type { PlaybackClock } from "./videoPlaybackClock";
 
 export type VideoExitQuiet = PlayerExitQuiet & {

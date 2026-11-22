@@ -373,7 +373,8 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
           <FieldTitle>
             <span id={modelTitleId}>识别模型</span>
             <FieldTip>
-              Qwen3-ASR 支持更多语言和热词；xASR 模型更小，适合中英混合语音。切换后按需下载所选模型。
+              Qwen3-ASR 支持更多语言和热词；xASR
+              模型更小，适合中英混合语音。切换后按需下载所选模型。
             </FieldTip>
           </FieldTitle>
           {selectedStatus === null && enabled && !model.isPending && (
@@ -422,8 +423,8 @@ function AsrModelField({ idPrefix }: { idPrefix: string }) {
             <FieldTitle>
               <span id={providerTitleId}>推理后端</span>
               <FieldTip>
-                Qwen3-ASR 自动优先使用 NVIDIA GPU（GTX 10 系列至 RTX 40 系列），不可用时回退
-                CPU；选 CPU 不下载 CUDA 运行库。已用 CPU 运行库启动时，改用 CUDA 需重启应用。
+                Qwen3-ASR 自动优先使用 NVIDIA GPU（GTX 10 系列至 RTX 40 系列），不可用时回退 CPU；选
+                CPU 不下载 CUDA 运行库。已用 CPU 运行库启动时，改用 CUDA 需重启应用。
               </FieldTip>
             </FieldTitle>
             {providerNotice && <FieldDescription role="status">{providerNotice}</FieldDescription>}

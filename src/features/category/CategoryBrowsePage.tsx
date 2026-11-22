@@ -92,17 +92,16 @@ export function CategoryBrowsePage() {
           />
         )}
 
-        {categories &&
-          categories.length > 0 && (
-            // 换平台就换掉整棵分类树，上一平台展开过的父分区 id 在新树里没有意义。
-            // 用 key 丢弃子树状态，而不是在副作用里补一次 setState。
-            <CategoryGroups
-              key={siteId}
-              categories={categories}
-              selectedKey={selectedKey}
-              onSelect={select}
-            />
-          )}
+        {categories && categories.length > 0 && (
+          // 换平台就换掉整棵分类树，上一平台展开过的父分区 id 在新树里没有意义。
+          // 用 key 丢弃子树状态，而不是在副作用里补一次 setState。
+          <CategoryGroups
+            key={siteId}
+            categories={categories}
+            selectedKey={selectedKey}
+            onSelect={select}
+          />
+        )}
 
         {/* 请求成功但树是空的（平台改版、接口降级）。这不是错误，别摆重试按钮当主
             操作 —— 推荐流仍然可用，把用户送回去比让他反复重试有用。 */}

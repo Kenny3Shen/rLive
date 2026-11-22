@@ -46,13 +46,7 @@ export function useFrozenRouter(): FrozenRouter {
  * React 把上一帧的层原样搬进离场位，子节点类型一变就退化成卸载重建 ——
  * 媒体元素、播放器实例与页面状态全部从头再来。
  */
-export function RouterScope({
-  value,
-  children,
-}: {
-  value: FrozenRouter;
-  children: ReactNode;
-}) {
+export function RouterScope({ value, children }: { value: FrozenRouter; children: ReactNode }) {
   return (
     <UNSAFE_LocationContext.Provider value={value.location}>
       <UNSAFE_RouteContext.Provider value={value.route}>{children}</UNSAFE_RouteContext.Provider>

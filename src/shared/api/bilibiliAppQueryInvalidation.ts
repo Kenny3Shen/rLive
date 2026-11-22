@@ -14,13 +14,13 @@ export function isBilibiliAppQuery(queryKey: QueryKey): boolean {
   if (queryKey[0] === "shorts_story") return true;
   // 直播首页：["recommend", siteId, 授权版本]。
   if (queryKey[0] === "recommend") return queryKey[1] === "bilibili";
-  return (
-    queryKey[0] === "video_list" && queryKey[1] === "recommend" && queryKey[3] === "app"
-  );
+  return queryKey[0] === "video_list" && queryKey[1] === "recommend" && queryKey[3] === "app";
 }
 
 export async function invalidateBilibiliAppQueries(queryClient: QueryClient): Promise<void> {
-  const filter = { predicate: (query: { queryKey: QueryKey }) => isBilibiliAppQuery(query.queryKey) };
+  const filter = {
+    predicate: (query: { queryKey: QueryKey }) => isBilibiliAppQuery(query.queryKey),
+  };
   // 取消旧身份的在途结果，再丢弃列表，避免授权变更后仍展示旧推荐。
   await queryClient.cancelQueries(filter);
   await queryClient.resetQueries(filter);

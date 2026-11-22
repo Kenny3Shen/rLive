@@ -176,10 +176,7 @@ export function useAutoDanmakuSend({
       ? "正在等待直播间信息。"
       : (currentAvailability?.message ?? "正在检查登录状态…");
   const canEnable = Boolean(
-    sendConfig &&
-    roomId &&
-    currentAvailability?.available &&
-    !validation.error,
+    sendConfig && roomId && currentAvailability?.available && !validation.error,
   );
 
   // 路由切换可能复用 PlayerPane。防止直接切换房间把会话开关带进新挂载的房间。

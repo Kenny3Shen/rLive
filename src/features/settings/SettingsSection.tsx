@@ -14,9 +14,7 @@ export function SettingsLayoutProvider({
   layout: SettingsLayout;
   children: ReactNode;
 }) {
-  return (
-    <SettingsLayoutContext.Provider value={layout}>{children}</SettingsLayoutContext.Provider>
-  );
+  return <SettingsLayoutContext.Provider value={layout}>{children}</SettingsLayoutContext.Provider>;
 }
 
 /** 设置页按容器宽度响应；播放侧栏固定单行。 */

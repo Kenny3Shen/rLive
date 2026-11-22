@@ -23,9 +23,7 @@ export type VideoPlaybackAttempt = {
  * 原始 fetchPromise；真实卸载排在中间的 owner.clear 又会先作废本轮预留 epoch，
  * 因此 helper 恢复后不会在 clear 之后另起一条无人接管的 Tauri IPC。
  */
-async function videoPlaybackQuerySignal(
-  context: QueryFunctionContext,
-): Promise<AbortSignal> {
+async function videoPlaybackQuerySignal(context: QueryFunctionContext): Promise<AbortSignal> {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
   return context.signal;
 }
@@ -104,10 +102,7 @@ export class VideoPlaybackSessions {
     return epoch;
   }
 
-  private settleAttempt<T>(
-    pending: Promise<T>,
-    onSettled: (() => void) | undefined,
-  ): Promise<T> {
+  private settleAttempt<T>(pending: Promise<T>, onSettled: (() => void) | undefined): Promise<T> {
     return pending.finally(() => onSettled?.());
   }
 

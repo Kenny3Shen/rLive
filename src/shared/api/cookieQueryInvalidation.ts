@@ -50,13 +50,11 @@ export function invalidateCookieDependentSiteQueries(
   return Promise.all([
     // 推荐必须保留旧列表、先去取首页；默认无限查询失效会按已加载页数串行重取。
     queryClient.invalidateQueries({
-      predicate: (query) =>
-        affected(query.queryKey) && isVideoRecommendationQuery(query.queryKey),
+      predicate: (query) => affected(query.queryKey) && isVideoRecommendationQuery(query.queryKey),
       refetchType: "none",
     }),
     queryClient.invalidateQueries({
-      predicate: (query) =>
-        affected(query.queryKey) && !isVideoRecommendationQuery(query.queryKey),
+      predicate: (query) => affected(query.queryKey) && !isVideoRecommendationQuery(query.queryKey),
     }),
   ]).then(() => undefined);
 }

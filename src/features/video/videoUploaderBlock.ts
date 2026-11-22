@@ -12,9 +12,7 @@ import type { VideoItem } from "@/shared/types/video";
  */
 
 /** 名单查询用的集合；空名单时返回 `null`，调用方据此跳过整条过滤。 */
-export function videoBlockedUploaderSet(
-  uploaders: readonly string[],
-): ReadonlySet<string> | null {
+export function videoBlockedUploaderSet(uploaders: readonly string[]): ReadonlySet<string> | null {
   const set = new Set<string>();
   for (const raw of uploaders) {
     if (typeof raw !== "string") continue;

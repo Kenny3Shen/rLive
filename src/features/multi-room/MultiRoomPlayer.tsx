@@ -966,9 +966,7 @@ function MultiRoomPlayerContent({ room, main, dragHandle }: MultiRoomPlayerProps
           </OverlayIconButton>
           {/* 仅播声音：只有主画面有业务意义（副画面不承载这条切换），
               原先在底部控制栏，统一到 HUD 后与其它页面同处。 */}
-          {main && (
-            <PlayerAudioOnlyButton audioOnly={audioOnly} onToggle={toggleAudioOnly} />
-          )}
+          {main && <PlayerAudioOnlyButton audioOnly={audioOnly} onToggle={toggleAudioOnly} />}
           <OverlayIconButton
             label="移除此路"
             portalContainer={playerStageRef}

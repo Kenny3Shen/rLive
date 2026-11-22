@@ -226,7 +226,10 @@ export function VideoChapterMenu({
         sticky
         glass
         aria-label="章节"
-        className={cn("flex max-h-[min(24rem,var(--available-height))] w-[min(20rem,calc(100vw-1.5rem))] flex-col gap-0 p-1.5", glassPanelClass({ overlay: true }))}
+        className={cn(
+          "flex max-h-[min(24rem,var(--available-height))] w-[min(20rem,calc(100vw-1.5rem))] flex-col gap-0 p-1.5",
+          glassPanelClass({ overlay: true }),
+        )}
         {...hover.popup}
       >
         {chapterList}
