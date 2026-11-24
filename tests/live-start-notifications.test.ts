@@ -166,20 +166,36 @@ describe("开播通知设置", () => {
 
 describe("开播通知权限", () => {
   let windowDescriptor: PropertyDescriptor | undefined;
+  let navigatorDescriptor: PropertyDescriptor | undefined;
   let tauriDescriptor: PropertyDescriptor | undefined;
   let notificationDescriptor: PropertyDescriptor | undefined;
+  let nativePermission: boolean | null;
+  let nativeCalls: number;
 
   beforeEach(() => {
     windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
     tauriDescriptor = Object.getOwnPropertyDescriptor(globalThis, "isTauri");
     notificationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Notification");
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: globalThis,
     });
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        userAgent: "Mozilla/5.0 (Linux; Android 16; rLive) AppleWebKit/537.36",
+        maxTouchPoints: 1,
+      },
+    });
     Object.defineProperty(globalThis, "isTauri", { configurable: true, value: true });
+    nativePermission = false;
+    nativeCalls = 0;
     mockIPC((command) => {
-      if (command === "plugin:notification|is_permission_granted") return false;
+      if (command === "plugin:notification|is_permission_granted") {
+        nativeCalls += 1;
+        return nativePermission;
+      }
       throw new Error(`意外 IPC 命令：${command}`);
     });
   });
@@ -188,6 +204,8 @@ describe("开播通知权限", () => {
     clearMocks();
     if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
     else Reflect.deleteProperty(globalThis, "window");
+    if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+    else Reflect.deleteProperty(globalThis, "navigator");
     if (tauriDescriptor) Object.defineProperty(globalThis, "isTauri", tauriDescriptor);
     else Reflect.deleteProperty(globalThis, "isTauri");
     if (notificationDescriptor) {
@@ -197,7 +215,8 @@ describe("开播通知权限", () => {
     }
   });
 
-  test("系统拒绝时返回 denied，且不会误判为已授权", async () => {
+  test("Android 首次 null 返回 default，显式请求后返回 denied", async () => {
+    nativePermission = null;
     let requests = 0;
     Object.defineProperty(globalThis, "Notification", {
       configurable: true,
@@ -216,6 +235,95 @@ describe("开播通知权限", () => {
     expect(requests).toBe(0);
     await expect(requestLiveStartNotificationPermission()).resolves.toBe("denied");
     expect(requests).toBe(1);
+  });
+
+  test("Android 绕过 denied 缓存，原生已授权时直接返回 granted 且不弹窗", async () => {
+    nativePermission = true;
+    let requests = 0;
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: {
+        permission: "denied",
+        requestPermission: async () => {
+          requests += 1;
+          return "denied";
+        },
+      },
+    });
+    const { getLiveStartNotificationPermission, requestLiveStartNotificationPermission } =
+      await import("../src/features/follow/liveStartNotifications");
+
+    await expect(getLiveStartNotificationPermission()).resolves.toBe("granted");
+    await expect(requestLiveStartNotificationPermission()).resolves.toBe("granted");
+    expect(nativeCalls).toBe(2);
+    expect(requests).toBe(0);
+  });
+
+  test("Android 绕过 granted 缓存，原生已撤销时返回 denied", async () => {
+    nativePermission = false;
+    let requests = 0;
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: {
+        permission: "granted",
+        requestPermission: async () => {
+          requests += 1;
+          return "granted";
+        },
+      },
+    });
+    const { getLiveStartNotificationPermission, requestLiveStartNotificationPermission } =
+      await import("../src/features/follow/liveStartNotifications");
+
+    await expect(getLiveStartNotificationPermission()).resolves.toBe("denied");
+    await expect(requestLiveStartNotificationPermission()).resolves.toBe("denied");
+    expect(nativeCalls).toBe(2);
+    expect(requests).toBe(0);
+  });
+
+  test("Android 原生 null 时用已有 denied 保留首次拒绝状态", async () => {
+    nativePermission = null;
+    let requests = 0;
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: {
+        permission: "denied",
+        requestPermission: async () => {
+          requests += 1;
+          return "granted";
+        },
+      },
+    });
+    const { getLiveStartNotificationPermission, requestLiveStartNotificationPermission } =
+      await import("../src/features/follow/liveStartNotifications");
+
+    await expect(getLiveStartNotificationPermission()).resolves.toBe("denied");
+    await expect(requestLiveStartNotificationPermission()).resolves.toBe("denied");
+    expect(nativeCalls).toBe(2);
+    expect(requests).toBe(0);
+  });
+
+  test("非 Android 继续使用插件现有权限 helper", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        maxTouchPoints: 0,
+      },
+    });
+    nativePermission = true;
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      value: {
+        permission: "denied",
+        requestPermission: async () => "denied",
+      },
+    });
+    const { getLiveStartNotificationPermission } =
+      await import("../src/features/follow/liveStartNotifications");
+
+    await expect(getLiveStartNotificationPermission()).resolves.toBe("denied");
+    expect(nativeCalls).toBe(0);
   });
 
   test("开播事件拒绝未知平台和缺失字段", async () => {

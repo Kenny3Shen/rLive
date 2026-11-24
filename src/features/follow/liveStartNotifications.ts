@@ -4,6 +4,8 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { invokeCmd } from "@/shared/api/tauri";
+import { getClientPlatform } from "@/shared/clientPlatform";
 import { isSiteId } from "@/shared/siteId";
 
 export const FOLLOW_LIVE_STARTED_EVENT = "follow-live-started";
@@ -20,6 +22,24 @@ export type FollowLiveStartedPayload = {
   room_id: string;
   user_name: string;
 };
+
+function getCachedNotificationPermission(): NotificationPermission | undefined {
+  if (typeof window === "undefined" || !("Notification" in window)) return undefined;
+  return window.Notification.permission;
+}
+
+async function getAndroidNotificationPermission(): Promise<LiveStartNotificationPermission> {
+  try {
+    const granted = await invokeCmd<boolean | null>(
+      "plugin:notification|is_permission_granted",
+    );
+    if (granted === true) return "granted";
+    if (granted === false) return "denied";
+    return getCachedNotificationPermission() === "denied" ? "denied" : "default";
+  } catch {
+    return "error";
+  }
+}
 
 /** 只接受后端公开事件本身，拒绝缺字段或未知平台。 */
 export function parseFollowLiveStartedPayload(payload: unknown): FollowLiveStartedPayload | null {
@@ -46,6 +66,7 @@ export function parseFollowLiveStartedPayload(payload: unknown): FollowLiveStart
  */
 export async function getLiveStartNotificationPermission(): Promise<LiveStartNotificationPermission> {
   if (!isTauri()) return "unavailable";
+  if (getClientPlatform() === "android") return getAndroidNotificationPermission();
   if (typeof window === "undefined" || !("Notification" in window)) return "error";
 
   try {

@@ -16,6 +16,10 @@ import { SettingsSection as Section, useSettingsFieldOrientation } from "./Setti
 import { SwitchField } from "./SwitchField";
 
 type PermissionView = LiveStartNotificationPermission | "checking";
+type LocalError = {
+  kind: "permission" | "save";
+  message: string;
+};
 
 const PERMISSION_PRESENTATION: Record<
   PermissionView,
@@ -74,31 +78,57 @@ export function LiveStartNotificationSettings() {
     available ? "checking" : "unavailable",
   );
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LocalError | null>(null);
   const mountedRef = useRef(true);
   const operationRef = useRef(0);
+  const permissionReadRef = useRef(0);
+  const operationInFlightRef = useRef(false);
   const disabled = !available || busy || pending;
   const permissionView = PERMISSION_PRESENTATION[permission];
 
   useEffect(() => {
     mountedRef.current = true;
-    let cancelled = false;
-    if (available) {
+    if (!available) return;
+
+    const refreshPermission = () => {
+      if (operationInFlightRef.current) return;
+      const read = ++permissionReadRef.current;
       void getLiveStartNotificationPermission().then((next) => {
-        if (!cancelled) setPermission(next);
+        if (
+          !mountedRef.current ||
+          read !== permissionReadRef.current ||
+          operationInFlightRef.current
+        ) {
+          return;
+        }
+        setPermission(next);
+        if (next === "granted") {
+          setError((current) => (current?.kind === "permission" ? null : current));
+        }
       });
-    }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshPermission();
+    };
+
+    refreshPermission();
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshPermission);
     return () => {
-      cancelled = true;
       mountedRef.current = false;
       operationRef.current += 1;
+      permissionReadRef.current += 1;
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshPermission);
     };
   }, [available]);
 
   async function applySetting(value: boolean) {
     setError(null);
     setBusy(true);
+    operationInFlightRef.current = true;
     const operation = ++operationRef.current;
+    permissionReadRef.current += 1;
     try {
       if (value) {
         // 页面缓存只用于展示；开启前重新读取系统权限，
@@ -107,7 +137,10 @@ export function LiveStartNotificationSettings() {
         if (!mountedRef.current || operation !== operationRef.current) return;
         setPermission(nextPermission);
         if (nextPermission !== "granted") {
-          setError(PERMISSION_ERROR[nextPermission] ?? "系统通知权限不可用。");
+          setError({
+            kind: "permission",
+            message: PERMISSION_ERROR[nextPermission] ?? "系统通知权限不可用。",
+          });
           return;
         }
       }
@@ -120,9 +153,10 @@ export function LiveStartNotificationSettings() {
       );
     } catch (cause) {
       if (!mountedRef.current || operation !== operationRef.current) return;
-      setError(`开播通知保存失败：${errorText(cause)}`);
+      setError({ kind: "save", message: `开播通知保存失败：${errorText(cause)}` });
     } finally {
       if (mountedRef.current && operation === operationRef.current) {
+        operationInFlightRef.current = false;
         setBusy(false);
       }
     }
@@ -132,7 +166,9 @@ export function LiveStartNotificationSettings() {
     if (busy || pending) return;
     setError(null);
     setBusy(true);
+    operationInFlightRef.current = true;
     const operation = ++operationRef.current;
+    permissionReadRef.current += 1;
     try {
       const next = await requestLiveStartNotificationPermission();
       if (!mountedRef.current || operation !== operationRef.current) return;
@@ -140,10 +176,14 @@ export function LiveStartNotificationSettings() {
       if (next === "granted") {
         notify.success("系统通知权限已授权");
       } else {
-        setError(PERMISSION_ERROR[next] ?? "系统通知权限不可用。");
+        setError({
+          kind: "permission",
+          message: PERMISSION_ERROR[next] ?? "系统通知权限不可用。",
+        });
       }
     } finally {
       if (mountedRef.current && operation === operationRef.current) {
+        operationInFlightRef.current = false;
         setBusy(false);
       }
     }
@@ -156,7 +196,7 @@ export function LiveStartNotificationSettings() {
         description="应用运行期间每分钟检查已关注主播。关闭应用后停止提醒。"
         checked={enabled}
         disabled={disabled}
-        error={error}
+        error={error?.message ?? null}
         orientation={orientation}
         onCheckedChange={(checked) => void applySetting(checked)}
       />
