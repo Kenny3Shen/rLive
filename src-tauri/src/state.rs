@@ -12,6 +12,7 @@ use crate::danmu_rs::DanmakuManager;
 use crate::db::Db;
 use crate::dlna::DlnaManager;
 use crate::error::{AppError, AppResult};
+use crate::follow_notifications::FollowNotificationTracker;
 use crate::image_proxy::ImageProxy;
 use crate::lan_sync::LanSyncManager;
 use crate::media_cache::MediaCache;
@@ -41,6 +42,8 @@ pub struct AppState {
     pub dlna: DlnaManager,
     pub image_proxy: ImageProxy,
     pub lan_sync: LanSyncManager,
+    /// 应用生命周期内的直播开播去重与场次切换状态。
+    pub follow_notifications: FollowNotificationTracker,
     /// 短视频媒体分片的磁盘缓存（与图片缓存并列，预算与 TTL 各自独立）。
     pub media_cache: MediaCache,
 }
@@ -149,6 +152,7 @@ impl AppState {
             image_proxy: ImageProxy::new(directories.cache.join("images")),
             media_cache: MediaCache::new(directories.cache.join("media")),
             lan_sync: LanSyncManager::new(),
+            follow_notifications: FollowNotificationTracker::new(),
         })
     }
 }

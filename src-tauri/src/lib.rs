@@ -8,6 +8,7 @@ mod db;
 mod disk_cache;
 mod dlna;
 mod error;
+mod follow_notifications;
 mod http_client;
 mod image_cache;
 mod image_proxy;
@@ -343,6 +344,7 @@ fn main_window_only(
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init());
     // 仅限 Android：为播放器边缘手势提供窗口亮度、STREAM_MUSIC 音量

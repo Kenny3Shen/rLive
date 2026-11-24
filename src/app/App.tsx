@@ -41,6 +41,7 @@ import { BilibiliAppAuthStartupCheck } from "../features/settings/BilibiliAppAut
 import { useFollowAutoRecording } from "../features/recording/followRecording";
 import { RecordingExitGuard } from "../features/recording/RecordingExitGuard";
 import { UpdateChecker } from "../features/update/UpdatePrompt";
+import { useLiveStartNotifications } from "../features/follow/useLiveStartNotifications";
 
 // 让发现页保持在关键路径上，把次要页面（尤其是播放器及其弹幕渲染器）
 // 推迟到路由真正需要时再加载。
@@ -82,6 +83,7 @@ function EnabledRoomRoute() {
 
 function AppRuntime() {
   useFollowAutoRecording();
+  useLiveStartNotifications();
 
   return (
     <>

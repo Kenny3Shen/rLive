@@ -37,5 +37,14 @@ pub fn settings_set(state: State<'_, AppState>, settings: AppSettings) -> AppRes
         .db
         .lock()
         .map_err(|e| crate::error::AppError::new("db_lock_error", format!("settings_set: {e}")))?;
-    crate::settings::set(&conn, &settings)
+    let previous_enabled = crate::settings::get(&conn)?.live_start_notifications_enabled;
+    crate::settings::set(&conn, &settings)?;
+    if previous_enabled != settings.live_start_notifications_enabled {
+        // 与刷新收尾保持 DB -> tracker 的固定锁顺序。开关切换后的第一条
+        // 成功刷新只建立基线，不能让旧轮次补发通知。
+        state
+            .follow_notifications
+            .reset_notifications_setting(settings.live_start_notifications_enabled)?;
+    }
+    Ok(())
 }

@@ -469,6 +469,7 @@ mod tests {
             proxy: Some("http://127.0.0.1:7890".into()),
             iptv_custom_m3u_url: Some("https://example.invalid/private.m3u".into()),
             danmaku_font_size: 22,
+            live_start_notifications_enabled: true,
             ..AppSettings::default()
         };
         set(&conn, &s).unwrap();
@@ -780,6 +781,7 @@ mod tests {
             "room_card_preview_enabled",
             "recording_max_concurrent",
             "dynamic_background_enabled",
+            "live_start_notifications_enabled",
         ] {
             value.as_object_mut().unwrap().remove(field);
         }
@@ -804,6 +806,7 @@ mod tests {
         assert!(actual.room_card_preview_enabled);
         assert!(!actual.dynamic_background_enabled);
         assert_eq!(actual.recording_max_concurrent, 4);
+        assert!(!actual.live_start_notifications_enabled);
         assert_eq!(actual.recording_ass.overflow_policy, "delay");
         assert_eq!(actual.recording_ass.max_delay_seconds, 5);
     }

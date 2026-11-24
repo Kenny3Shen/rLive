@@ -70,6 +70,7 @@ export function parseDanmakuFontStroke(value: unknown): number {
 // 用过期快照覆盖最新设置。
 let settingsWriteQueue: Promise<void> = Promise.resolve();
 let asrSettingEpoch = 0;
+let liveStartNotificationSettingEpoch = 0;
 
 /** 调用者接收本次错误，队列本身始终恢复，避免一次失败阻断后续写入。 */
 function enqueueSettingsWrite(write: () => Promise<void>): Promise<void> {
@@ -482,6 +483,10 @@ type SettingsState = {
   bilibiliAppAuthRevision: number;
   /** 悬停浏览页直播间卡片时播放静音直播预览。 */
   roomCardPreviewEnabled: boolean;
+  /** 关注主播开播时发送系统与应用内通知；默认关闭。 */
+  liveStartNotificationsEnabled: boolean;
+  /** 开播通知设置正在等待后端确认。 */
+  liveStartNotificationsPending: boolean;
   /** 画面之外用模糊放大的封面垫底。 */
   dynamicBackgroundEnabled: boolean;
   asrEnabled: boolean;
@@ -532,6 +537,11 @@ type SettingsState = {
   /** 屏蔽一个 UP 主；已在名单中时为无操作。 */
   blockVideoUploader: (mid: string) => void;
   setRoomCardPreviewEnabled: (enabled: boolean) => void;
+  /**
+   * 严格持久化开播通知开关：仅在后端确认写入后更新状态。
+   * 调用者负责展示 rejection，本 setter 不吞错。
+   */
+  setLiveStartNotificationsEnabled: (enabled: boolean) => Promise<void>;
   setSuperChatEnabled: (enabled: boolean) => void;
   /** 屏蔽一个用户；已在列表中时为无操作。 */
   blockDanmakuUser: (user: string) => void;
@@ -588,6 +598,7 @@ const defaultSettings: AppSettings = {
   video_next_episode_preload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
   video_blocked_uploaders: [],
   room_card_preview_enabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
+  live_start_notifications_enabled: false,
   dynamic_background_enabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
   asr_enabled: false,
   asr_model: ASR_MODEL_DEFAULT,
@@ -635,6 +646,7 @@ function toAppSettings(state: SettingsState): AppSettings {
     video_next_episode_preload: state.videoNextEpisodePreload,
     video_blocked_uploaders: state.videoBlockedUploaders,
     room_card_preview_enabled: state.roomCardPreviewEnabled,
+    live_start_notifications_enabled: state.liveStartNotificationsEnabled,
     dynamic_background_enabled: state.dynamicBackgroundEnabled,
     asr_enabled: state.asrEnabled,
     asr_model: state.asrModel,
@@ -792,6 +804,8 @@ export const useSettingsStore = create<SettingsState>()(
       videoNextEpisodePreload: VIDEO_NEXT_EPISODE_PRELOAD_DEFAULT,
       videoBlockedUploaders: [],
       roomCardPreviewEnabled: ROOM_CARD_PREVIEW_ENABLED_DEFAULT,
+      liveStartNotificationsEnabled: false,
+      liveStartNotificationsPending: false,
       dynamicBackgroundEnabled: DYNAMIC_BACKGROUND_ENABLED_DEFAULT,
       asrEnabled: false,
       asrModel: ASR_MODEL_DEFAULT,
@@ -861,6 +875,33 @@ export const useSettingsStore = create<SettingsState>()(
         const danmakuBlockedUsers = normalizeDanmakuBlockedUsers([...current, name]);
         set({ danmakuBlockedUsers });
         void get().persistToBackend({ danmaku_blocked_users: danmakuBlockedUsers });
+      },
+      setLiveStartNotificationsEnabled: async (enabled) => {
+        const epoch = ++liveStartNotificationSettingEpoch;
+        set({ liveStartNotificationsPending: true });
+        try {
+          if (!get().hydratedFromBackend) {
+            throw new Error("设置尚未从客户端加载完成，请稍后重试。");
+          }
+          await enqueueSettingsWrite(async () => {
+            const settings = {
+              ...toAppSettings(get()),
+              live_start_notifications_enabled: enabled,
+            };
+            await invokeCmd<void>("settings_set", { settings });
+          });
+          if (epoch === liveStartNotificationSettingEpoch) {
+            set({
+              liveStartNotificationsEnabled: enabled,
+              liveStartNotificationsPending: false,
+            });
+          }
+        } catch (error) {
+          if (epoch === liveStartNotificationSettingEpoch) {
+            set({ liveStartNotificationsPending: false });
+          }
+          throw error;
+        }
       },
       setAsrEnabled: async (asrEnabled) => {
         const epoch = ++asrSettingEpoch;
@@ -1004,6 +1045,8 @@ export const useSettingsStore = create<SettingsState>()(
           bilibiliAppAuthRevision: state.bilibiliAppAuthRevision + 1,
         })),
       applyFromBackend: (settings) => {
+        // 导入配置或重新加载会取代仍在等待的后端确认；迟到 Promise 不得覆盖新设置。
+        liveStartNotificationSettingEpoch += 1;
         const theme = isThemeMode(settings.theme) ? settings.theme : "system";
         const disabledSiteIds = normalizeDisabledSiteIds(settings.disabled_site_ids);
         set({
@@ -1031,6 +1074,8 @@ export const useSettingsStore = create<SettingsState>()(
           videoNextEpisodePreload: settings.video_next_episode_preload === true,
           videoBlockedUploaders: normalizeVideoBlockedUploaders(settings.video_blocked_uploaders),
           roomCardPreviewEnabled: settings.room_card_preview_enabled,
+          liveStartNotificationsEnabled: settings.live_start_notifications_enabled === true,
+          liveStartNotificationsPending: false,
           dynamicBackgroundEnabled: settings.dynamic_background_enabled,
           asrEnabled: settings.asr_enabled,
           asrModel: parseAsrModel(settings.asr_model),
@@ -1094,8 +1139,15 @@ export const useSettingsStore = create<SettingsState>()(
           try {
             // 代理事务可能在本次快照入队后才完成或回滚，不能再写回快照中的旧值。
             const { proxyMode, proxy } = get();
+            const liveStartNotificationsEnabled = get().liveStartNotificationsEnabled;
             await invokeCmd<void>("settings_set", {
-              settings: { ...next, proxy_mode: proxyMode, proxy, ...patch },
+              settings: {
+                ...next,
+                proxy_mode: proxyMode,
+                proxy,
+                live_start_notifications_enabled: liveStartNotificationsEnabled,
+                ...patch,
+              },
             });
           } catch {
             // 保持普通 setter 既有的异常语义；代理表单使用独立的严格写入。

@@ -16,6 +16,7 @@ pub const BACKFILLED_SETTINGS_FIELDS: &[&str] = &[
     "video_blocked_uploaders",
     "proxy_mode",
     "asr_model",
+    "live_start_notifications_enabled",
 ];
 
 /// 可由用户在「设置 → 外观配置 → 主页入口」中隐藏的导航入口 id。
@@ -220,6 +221,10 @@ pub struct AppSettings {
     /// 由这里的 serde default 补齐，避免升级后整份设置不可读。
     #[serde(default = "default_room_card_preview_enabled")]
     pub room_card_preview_enabled: bool,
+    /// 是否对所有直播关注发送开播事件。默认关闭；旧设置和旧配置包
+    /// 由 serde default 回填关闭，见 `BACKFILLED_SETTINGS_FIELDS`。
+    #[serde(default)]
+    pub live_start_notifications_enabled: bool,
     /// 画面之外的留白是否用内容自身的模糊放大铺底（当前只有短视频竖屏流有这种
     /// 留白）。默认关闭：那一层是全屏尺寸的模糊合成，在低端设备上每帧都要重新
     /// 采样，而它带来的只是观感上的一点氛围。
@@ -359,6 +364,7 @@ impl Default for AppSettings {
             video_next_episode_preload: false,
             video_blocked_uploaders: Vec::new(),
             room_card_preview_enabled: default_room_card_preview_enabled(),
+            live_start_notifications_enabled: false,
             dynamic_background_enabled: default_dynamic_background_enabled(),
             asr_enabled: false,
             asr_model: default_asr_model(),

@@ -3,6 +3,7 @@ import { CheckCircle2, CircleAlert, Info, X } from "lucide-react";
 import { create } from "zustand";
 
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 export type ToastType = "success" | "error" | "info";
 
@@ -54,6 +55,9 @@ function ToastList() {
       <div className="min-w-0 flex-1">
         <ToastPrimitive.Title className="text-sm font-medium" />
         <ToastPrimitive.Description className="mt-0.5 text-xs/relaxed text-muted-foreground" />
+        {item.actionProps && (
+          <ToastPrimitive.Action render={<Button variant="outline" size="sm" className="mt-2" />} />
+        )}
       </div>
       <ToastPrimitive.Close
         type="button"
@@ -88,17 +92,31 @@ export function Toaster({ children }: { children: React.ReactNode }) {
   );
 }
 
-function addToast(type: ToastType, title: string, description?: string) {
+type ToastAction = {
+  label: string;
+  onClick: () => void;
+};
+
+function addToast(type: ToastType, title: string, description?: string, action?: ToastAction) {
   return toast.add({
     type,
     title,
     description,
     priority: type === "error" ? "high" : "low",
+    actionProps: action
+      ? {
+          children: action.label,
+          onClick: action.onClick,
+        }
+      : undefined,
   });
 }
 
 export const notify = {
-  success: (title: string, description?: string) => addToast("success", title, description),
-  error: (title: string, description?: string) => addToast("error", title, description),
-  info: (title: string, description?: string) => addToast("info", title, description),
+  success: (title: string, description?: string, action?: ToastAction) =>
+    addToast("success", title, description, action),
+  error: (title: string, description?: string, action?: ToastAction) =>
+    addToast("error", title, description, action),
+  info: (title: string, description?: string, action?: ToastAction) =>
+    addToast("info", title, description, action),
 };

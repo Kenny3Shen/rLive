@@ -27,6 +27,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# Desktop and mobile system notifications. Android manifest permissions and
+# receivers are merged from the plugin's platform manifest.
+tauri-plugin-notification = "2"
 # Native document picker used by profile import and export on desktop/mobile.
 tauri-plugin-dialog = "2"
 # The dialog plugin yields Android content:// URIs. Register the filesystem

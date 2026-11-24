@@ -35,5 +35,7 @@ pub async fn lan_sync_receive(
 ) -> AppResult<ProfileImportResult> {
     let bytes = receive_profile(&address, &code).await?;
     let mut conn = state.conn()?;
+    // 与文件导入共用同一提交边界：旧刷新不能把状态套到同步后的关注快照上。
+    state.follow_notifications.reset_all()?;
     profile::import_package_reader(&mut conn, Cursor::new(bytes))
 }

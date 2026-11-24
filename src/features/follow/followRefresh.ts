@@ -14,7 +14,20 @@ export const FOLLOW_STATUS_REFRESH_INTERVAL_MS = 60_000;
 const FOLLOW_LIST_QUERY_HASH = hashKey(FOLLOW_LIST_QUERY_KEY);
 const EMPTY_FOLLOWS: readonly FollowUser[] = [];
 
-let lastFollowRefreshAt = 0;
+type FollowRefreshScheduler = {
+  consumers: number;
+  timer: number | undefined;
+  visibilityHandler: (() => void) | undefined;
+  nextRefreshAt: number;
+  lastRefreshAt: number;
+  running: boolean;
+};
+
+/**
+ * 每个 QueryClient 只维护一条自动刷新时间线。关注页、房间侧栏和全局通知
+ * 通过引用计数共享它，避免同一轮对 `follow_refresh` 发起多次调用。
+ */
+const followRefreshSchedulers = new WeakMap<QueryClient, FollowRefreshScheduler>();
 
 /** 缓存尚未建立时返回稳定的空列表，不把单条提交结果误认为完整关注表。 */
 export function resolveCachedFollows(
@@ -60,6 +73,94 @@ function followStatusRefreshDelay(
   const elapsed = now - lastRefreshAt;
   if (!Number.isFinite(elapsed) || elapsed < 0) return 0;
   return Math.max(0, Math.min(intervalMs, intervalMs - elapsed));
+}
+
+function schedulerFor(queryClient: QueryClient): FollowRefreshScheduler {
+  const existing = followRefreshSchedulers.get(queryClient);
+  if (existing) return existing;
+  const scheduler: FollowRefreshScheduler = {
+    consumers: 0,
+    timer: undefined,
+    visibilityHandler: undefined,
+    nextRefreshAt: 0,
+    lastRefreshAt: 0,
+    running: false,
+  };
+  followRefreshSchedulers.set(queryClient, scheduler);
+  return scheduler;
+}
+
+function clearScheduledRefresh(scheduler: FollowRefreshScheduler): void {
+  if (scheduler.timer == null) return;
+  window.clearTimeout(scheduler.timer);
+  scheduler.timer = undefined;
+}
+
+function scheduleFollowRefresh(queryClient: QueryClient, scheduler: FollowRefreshScheduler): void {
+  if (scheduler.consumers === 0 || scheduler.running || scheduler.timer != null) return;
+
+  const run = () => {
+    scheduler.timer = undefined;
+    if (scheduler.consumers === 0 || scheduler.running) return;
+    scheduler.running = true;
+    // 自动刷新失败也按完整周期重试，不能因一次网络错误形成紧循环。
+    void refreshFollows(queryClient)
+      .catch(() => {})
+      .finally(() => {
+        scheduler.running = false;
+        scheduler.nextRefreshAt = Date.now() + FOLLOW_STATUS_REFRESH_INTERVAL_MS;
+        scheduleFollowRefresh(queryClient, scheduler);
+      });
+  };
+
+  scheduler.timer = window.setTimeout(run, Math.max(0, scheduler.nextRefreshAt - Date.now()));
+}
+
+function noteFollowRefresh(queryClient: QueryClient): void {
+  const scheduler = schedulerFor(queryClient);
+  scheduler.lastRefreshAt = Date.now();
+  scheduler.nextRefreshAt = scheduler.lastRefreshAt + FOLLOW_STATUS_REFRESH_INTERVAL_MS;
+  if (!scheduler.running) {
+    clearScheduledRefresh(scheduler);
+    scheduleFollowRefresh(queryClient, scheduler);
+  }
+}
+
+export function acquireFollowRefreshScheduler(queryClient: QueryClient): () => void {
+  const scheduler = schedulerFor(queryClient);
+  scheduler.consumers += 1;
+
+  if (scheduler.consumers === 1) {
+    const now = Date.now();
+    scheduler.nextRefreshAt = now + followStatusRefreshDelay(scheduler.lastRefreshAt, now);
+    if (typeof document !== "undefined") {
+      scheduler.visibilityHandler = () => {
+        if (
+          document.visibilityState !== "visible" ||
+          scheduler.consumers === 0 ||
+          scheduler.running ||
+          Date.now() < scheduler.nextRefreshAt
+        ) {
+          return;
+        }
+        // 隐藏窗口的计时器可能被系统节流；回到前台后立即补上一轮。
+        clearScheduledRefresh(scheduler);
+        scheduleFollowRefresh(queryClient, scheduler);
+      };
+      document.addEventListener("visibilitychange", scheduler.visibilityHandler);
+    }
+    scheduleFollowRefresh(queryClient, scheduler);
+  }
+
+  return () => {
+    scheduler.consumers = Math.max(0, scheduler.consumers - 1);
+    if (scheduler.consumers > 0) return;
+    clearScheduledRefresh(scheduler);
+    if (typeof document !== "undefined" && scheduler.visibilityHandler) {
+      document.removeEventListener("visibilitychange", scheduler.visibilityHandler);
+    }
+    scheduler.visibilityHandler = undefined;
+  };
 }
 
 /** 把一轮结果写入共享列表缓存。 */
@@ -192,8 +293,8 @@ export async function refreshFollows(queryClient: QueryClient): Promise<FollowRe
     staleTime: 0,
   });
   const outcome = summarizeRefresh(result);
-  lastFollowRefreshAt = Date.now();
   applyRefreshResult(queryClient, outcome);
+  noteFollowRefresh(queryClient);
   return outcome;
 }
 
@@ -214,9 +315,9 @@ export async function retryFailedFollows(
     targets: targets.map((target) => ({ site_id: target.siteId, room_id: target.roomId })),
   });
   const outcome = summarizeRefresh(result);
-  lastFollowRefreshAt = Date.now();
   // 定向重试后仍写回整表：成功项应立刻反映，未参与项与之前一致。
   if (outcome.follows.length > 0) applyRefreshResult(queryClient, outcome);
+  noteFollowRefresh(queryClient);
   return outcome;
 }
 
@@ -231,24 +332,6 @@ export function useFollowStatusRefresh(enabled = true) {
 
   useEffect(() => {
     if (!enabled) return;
-    let interval: number | undefined;
-    const refresh = () => {
-      // 自动刷新失败不应把可用的缓存关注列表替换成错误页。
-      // 下一次计划刷新会重试。
-      void refreshFollows(queryClient).catch(() => {});
-    };
-
-    const timeout = window.setTimeout(
-      () => {
-        refresh();
-        interval = window.setInterval(refresh, FOLLOW_STATUS_REFRESH_INTERVAL_MS);
-      },
-      followStatusRefreshDelay(lastFollowRefreshAt, Date.now()),
-    );
-
-    return () => {
-      window.clearTimeout(timeout);
-      if (interval != null) window.clearInterval(interval);
-    };
+    return acquireFollowRefreshScheduler(queryClient);
   }, [enabled, queryClient]);
 }

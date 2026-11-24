@@ -460,6 +460,7 @@ pub fn merge_into_db(
     }
     settings.video_blocked_uploaders = uploaders.into_iter().collect();
     settings.room_card_preview_enabled = package.settings.room_card_preview_enabled;
+    settings.live_start_notifications_enabled = package.settings.live_start_notifications_enabled;
     settings.dynamic_background_enabled = package.settings.dynamic_background_enabled;
     settings.recording_ass = package.settings.recording_ass.clone();
     // 不要复制 `asr_enabled`、`asr_model`、`asr_provider`、
@@ -701,6 +702,37 @@ mod tests {
             assert_eq!(package.settings.proxy_mode, expected);
             assert_eq!(package.settings.proxy.as_deref(), address);
         }
+    }
+
+    #[test]
+    fn live_start_notifications_default_off_for_legacy_profiles_and_roundtrip_when_enabled() {
+        let mut legacy = portable_profile_value(&ProfilePackage::sample()).unwrap();
+        legacy["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("live_start_notifications_enabled");
+        let package = decode_package(&legacy.to_string()).unwrap();
+        assert!(!package.settings.live_start_notifications_enabled);
+
+        let mut package = ProfilePackage::sample();
+        package.settings.live_start_notifications_enabled = true;
+        let encoded = encode_package(&package).unwrap();
+        let decoded = decode_package(&encoded).unwrap();
+        assert!(decoded.settings.live_start_notifications_enabled);
+
+        let mut conn = open_in_memory().unwrap();
+        merge_into_db(&mut conn, &decoded).unwrap();
+        assert!(
+            crate::settings::get(&conn)
+                .unwrap()
+                .live_start_notifications_enabled
+        );
+        assert!(
+            export_package(&conn)
+                .unwrap()
+                .settings
+                .live_start_notifications_enabled
+        );
     }
 
     /// 旧配置包与旧记录里的 `danmaku_collision_mode` 必须被消费掉而不是拒绝：

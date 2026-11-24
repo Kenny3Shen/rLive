@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::account;
 use crate::db::follow::{self, FollowRecord, TagRecord};
 use crate::error::{AppError, AppResult};
+use crate::follow_notifications::{
+    FOLLOW_LIVE_STARTED_EVENT, LiveStatusObservation, LiveStatusObservationState,
+};
 use crate::models::live::{LiveRoomStatus, SiteId};
 use crate::sites;
 use crate::state::AppState;
@@ -132,8 +135,13 @@ pub fn follow_add(state: State<'_, AppState>, user: FollowUserDto) -> AppResult<
     if rec.updated_at == 0 {
         rec.updated_at = chrono::Utc::now().timestamp_millis();
     }
+    let site_id = rec.site_id.clone();
+    let room_id = rec.room_id.clone();
     let conn = state.conn()?;
-    follow::upsert(&conn, rec)
+    follow::upsert(&conn, rec)?;
+    // 新关注和重新关注都从静默基线开始。即使首次刷新时主播已在播，
+    // 也不能把添加前遗留的应用生命周期状态当成一次开播。
+    state.follow_notifications.reset_follow(&site_id, &room_id)
 }
 
 #[tauri::command]
@@ -143,7 +151,8 @@ pub fn follow_remove(
     room_id: String,
 ) -> AppResult<()> {
     let conn = state.conn()?;
-    follow::remove(&conn, &site_id, &room_id)
+    follow::remove(&conn, &site_id, &room_id)?;
+    state.follow_notifications.reset_follow(&site_id, &room_id)
 }
 
 #[tauri::command]
@@ -203,18 +212,24 @@ pub fn tag_remove(state: State<'_, AppState>, id: String) -> AppResult<()> {
 }
 
 async fn refresh_follows(
+    app: &AppHandle,
     state: &AppState,
     auto_record_only: bool,
     targets: Option<Vec<FollowRefreshTarget>>,
 ) -> AppResult<FollowRefreshResult> {
-    let (follows, proxy) = {
+    let (follows, proxy, refresh_token) = {
         let conn = state.conn()?;
         let follows = if auto_record_only {
             follow::list_auto_record(&conn)?
         } else {
             follow::list(&conn)?
         };
-        (follows, crate::settings::get(&conn)?.proxy_route())
+        let settings = crate::settings::get(&conn)?;
+        let notifications_enabled = settings.live_start_notifications_enabled;
+        let refresh_token = state
+            .follow_notifications
+            .begin_refresh(notifications_enabled)?;
+        (follows, settings.proxy_route(), refresh_token)
     };
 
     // 定向重试时只探测点名的那几条；其余照旧返回列表，但不参与本轮的
@@ -303,28 +318,54 @@ async fn refresh_follows(
         }
     }
 
-    let mut updated = Vec::new();
-    let mut refreshed_keys = Vec::new();
-    let mut refreshed = 0_usize;
-    // 本轮状态落库的时间，也是前端标记“本轮已确认”的时间。
-    let checked_at = chrono::Utc::now().timestamp_millis();
-    {
+    let checked_at;
+    let (updated, refreshed_keys, refreshed, notifications) = {
         let mut conn = state.conn()?;
+        // 网络等待期间设置可能从任意写入路径改变。收尾必须重新读取，
+        // 不能使用刷新开始时缓存的开关值。
+        let current_enabled = crate::settings::get(&conn)?.live_start_notifications_enabled;
         // 网络等待结束后重读：期间用户可能已经改过标签、自动录制或删了关注。
         let mut list = if auto_record_only {
             follow::list_auto_record(&conn)?
         } else {
             follow::list(&conn)?
         };
-        let now = checked_at;
+        let mut observations = Vec::new();
+        for rec in &list {
+            let key = (rec.site_id.clone(), rec.room_id.clone());
+            let Some(live_status) = status_map.get(&key) else {
+                continue;
+            };
+            let state = match live_status {
+                Some(status) if status.status => LiveStatusObservationState::Live {
+                    live_started_at: status.live_started_at,
+                },
+                Some(_) => LiveStatusObservationState::Offline,
+                None => LiveStatusObservationState::Unknown,
+            };
+            observations.push(LiveStatusObservation {
+                site_id: rec.site_id.clone(),
+                room_id: rec.room_id.clone(),
+                user_name: rec.user_name.clone(),
+                state,
+            });
+        }
+        let plan = state.follow_notifications.plan_round(
+            &refresh_token,
+            current_enabled,
+            &observations,
+        )?;
+        // 收尾时间在数据库锁内生成，使并发刷新按实际提交顺序比较时间戳。
+        let now = chrono::Utc::now().timestamp_millis();
+        checked_at = now;
         let mut batch = Vec::new();
+        let mut applied_observations = Vec::new();
+        let mut updated = Vec::new();
         for rec in &mut list {
             let key = (rec.site_id.clone(), rec.room_id.clone());
-            if let Some(live_status) = status_map.get(&key) {
-                if live_status.is_some() {
-                    refreshed_keys.push(follow_key(&rec.site_id, &rec.room_id));
-                    refreshed += 1;
-                }
+            if let Some(live_status) = status_map.get(&key)
+                && plan.allows(&rec.site_id, &rec.room_id)
+            {
                 apply_live_status(rec, *live_status);
                 rec.updated_at = now;
                 batch.push(follow::FollowLiveStatusUpdate {
@@ -334,11 +375,39 @@ async fn refresh_follows(
                     live_started_at: rec.live_started_at,
                     updated_at: now,
                 });
+                if let Some(observation) = observations.iter().find(|observation| {
+                    observation.site_id == rec.site_id && observation.room_id == rec.room_id
+                }) {
+                    applied_observations.push(observation.clone());
+                }
             }
             updated.push(FollowUserDto::from(rec.clone()));
         }
         // 一轮刷新一个事务；只写状态字段，不覆盖用户修改也不复活已删除的关注。
         follow::apply_live_status_batch(&mut conn, &batch)?;
+        // 状态成功落库后才推进追踪器。该更新仍在数据库锁内，并与设置写入
+        // 使用相同的 DB -> tracker 锁顺序。
+        let notifications = state.follow_notifications.record_round(
+            &refresh_token,
+            current_enabled,
+            &applied_observations,
+        )?;
+        let mut refreshed_keys = Vec::new();
+        let mut refreshed = 0_usize;
+        for observation in &applied_observations {
+            if !matches!(observation.state, LiveStatusObservationState::Unknown) {
+                refreshed_keys.push(follow_key(&observation.site_id, &observation.room_id));
+                refreshed += 1;
+            }
+        }
+        (updated, refreshed_keys, refreshed, notifications)
+    };
+    for notification in notifications {
+        // 数据库提交和追踪器清理已经完成；事件发送只是通知通道，
+        // 失败不能把已经成功的关注刷新改写成失败。
+        if let Err(error) = app.emit(FOLLOW_LIVE_STARTED_EVENT, notification) {
+            tracing::warn!("failed to emit {FOLLOW_LIVE_STARTED_EVENT}: {error}");
+        }
     }
     // 定向重试时 total 只统计被点名的条数，避免 UI 把未参与的房间算作本轮结果。
     let total = if targets.is_some() {
@@ -366,24 +435,29 @@ pub struct FollowRefreshResult {
 }
 
 #[tauri::command]
-pub async fn follow_refresh(state: State<'_, AppState>) -> AppResult<FollowRefreshResult> {
-    refresh_follows(&state, false, None).await
+pub async fn follow_refresh(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<FollowRefreshResult> {
+    refresh_follows(&app, &state, false, None).await
 }
 
 #[tauri::command]
 pub async fn follow_refresh_auto_record(
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<FollowRefreshResult> {
-    refresh_follows(&state, true, None).await
+    refresh_follows(&app, &state, true, None).await
 }
 
 /// 只重试指定房间。用于 UI 的「重试失败项」，不需要重新探测整张列表。
 #[tauri::command]
 pub async fn follow_refresh_selected(
+    app: AppHandle,
     state: State<'_, AppState>,
     targets: Vec<FollowRefreshTarget>,
 ) -> AppResult<FollowRefreshResult> {
-    refresh_follows(&state, false, Some(targets)).await
+    refresh_follows(&app, &state, false, Some(targets)).await
 }
 
 /// 定向重试的目标。带上 `user_name` 以便失败时还能显示是谁。

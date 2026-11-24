@@ -44,5 +44,8 @@ pub fn profile_import(
         )
     })?;
     let mut conn = state.conn()?;
+    // 导入会在同一事务中替换设置并合并关注。先在数据库锁内推进追踪代次，
+    // 让所有网络中的旧刷新失效，再允许新基线落库。
+    state.follow_notifications.reset_all()?;
     profile::import_package_reader(&mut conn, file)
 }

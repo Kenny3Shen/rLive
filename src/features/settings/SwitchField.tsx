@@ -1,6 +1,12 @@
 import { useId, type ReactNode } from "react";
 
-import { Field, FieldContent, FieldTitle } from "@/components/ui/field";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldTitle,
+} from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +17,8 @@ type SwitchFieldProps = {
   title: ReactNode;
   /** 标题旁的说明图标文案。 */
   tip?: ReactNode;
+  /** 标题下方用正文大小的说明，承载运行边界与必要解释。 */
+  description?: ReactNode;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   /** 禁用开关本体。 */
@@ -21,6 +29,8 @@ type SwitchFieldProps = {
   className?: string;
   /** 透传给 Field 的 className。 */
   fieldClassName?: string;
+  /** 持久化或权限错误；显示在标题下方。 */
+  error?: ReactNode;
   /** 设置页默认横排；窄容器里需要换行时传 responsive。 */
   orientation?: "horizontal" | "responsive";
 };
@@ -29,19 +39,23 @@ type SwitchFieldProps = {
 function SwitchField({
   title,
   tip,
+  description,
   checked,
   onCheckedChange,
   disabled = false,
   fieldDisabled,
   className,
   fieldClassName,
+  error,
   orientation = "horizontal",
 }: SwitchFieldProps) {
   const labelId = useId();
+  const errorId = useId();
   return (
     <Field
       orientation={orientation}
       data-disabled={fieldDisabled || undefined}
+      data-invalid={error ? true : undefined}
       className={fieldClassName}
     >
       <FieldContent className="min-w-0">
@@ -49,6 +63,8 @@ function SwitchField({
           <span id={labelId}>{title}</span>
           {tip && <FieldTip>{tip}</FieldTip>}
         </FieldTitle>
+        {description && <FieldDescription>{description}</FieldDescription>}
+        {error && <FieldError id={errorId}>{error}</FieldError>}
       </FieldContent>
       <div
         className={cn(
@@ -61,6 +77,8 @@ function SwitchField({
           className={className}
           checked={checked}
           disabled={disabled}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
           onCheckedChange={onCheckedChange}
         />
       </div>
