@@ -114,6 +114,13 @@ export function SiteLogo({ siteId, className }: SiteLogoProps) {
           <path d="M18 15v11m8-11v11" stroke="white" strokeWidth="4" />
         </svg>
       );
+    case "youtube":
+      return (
+        <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">
+          <rect x="4" y="9" width="40" height="30" rx="10" fill="#FF0033" />
+          <path d="m20 16 13 8-13 8V16Z" fill="white" />
+        </svg>
+      );
     case "acfun":
       return (
         <svg viewBox="0 0 48 48" className={svgClassName} aria-hidden="true">

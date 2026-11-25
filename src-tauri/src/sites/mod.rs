@@ -8,5 +8,6 @@ pub(crate) mod json;
 pub mod registry;
 pub mod traits;
 pub mod twitch;
+pub mod youtube;
 
 pub use registry::{all_meta, site_with_route};

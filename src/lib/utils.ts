@@ -32,9 +32,8 @@ export function formatByteSize(bytes: number): string {
  * 但在桌面应用里会相对 Tauri 自定义页面协议解析。升级纯 http 地址也避免了
  * WebView 的混合内容失败。
  *
- * 有防盗链的 CDN 主机（Bilibili / 斗鱼 / 虎牙 / 抖音 / Twitch）额外经本机图片代理
- * 路由，由其附加 WebView 无法发送的平台 Referer。代理启动之前的地址或未知主机的
- * 地址原样返回。
+ * 有防盗链的 CDN 主机（Bilibili / 斗鱼 / 虎牙 / 抖音 / Twitch / YouTube）额外经
+ * 本机图片代理路由。代理启动之前的地址或未知主机的地址原样返回。
  *
  * 用于头像和其他跨会话保持同一地址的图片素材。
  * 直播房间封面属于 `normalizeCoverUrl`。
@@ -90,6 +89,7 @@ export const SITE_LABELS: Record<string, string> = {
   huya: "虎牙直播",
   douyin: "抖音直播",
   twitch: "Twitch",
+  youtube: "Youtube",
   acfun: "AcFun",
 };
 
@@ -99,5 +99,6 @@ export const SITE_ACCENT: Record<string, string> = {
   huya: "#FF9A00",
   douyin: "#25F4EE",
   twitch: "#9146FF",
+  youtube: "#FF0033",
   acfun: "#FF5D00",
 };

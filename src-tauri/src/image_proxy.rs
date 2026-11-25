@@ -38,6 +38,9 @@ const ALLOWED_IMAGE_HOSTS: &[&str] = &[
     "jtvnw.net",
     "twitch.tv",
     "7tv.app",
+    "ytimg.com",
+    "ggpht.com",
+    "googleusercontent.com",
     "acfun.cn",
     "aixifan.com",
     "yximgs.com",
@@ -241,6 +244,11 @@ fn referer_for(host: &str) -> Option<&'static str> {
         || host.ends_with("kwimgs.com")
     {
         Some("https://www.acfun.cn/")
+    } else if host.ends_with("ytimg.com")
+        || host.ends_with("ggpht.com")
+        || host.ends_with("googleusercontent.com")
+    {
+        Some("https://www.youtube.com/")
     } else {
         None
     }
@@ -547,6 +555,13 @@ mod tests {
             ALLOWED_IMAGE_HOSTS
         ));
         assert!(host_is_allowed("static-cdn.jtvnw.net", ALLOWED_IMAGE_HOSTS));
+        assert!(host_is_allowed("i.ytimg.com", ALLOWED_IMAGE_HOSTS));
+        assert!(host_is_allowed("yt3.ggpht.com", ALLOWED_IMAGE_HOSTS));
+        assert!(host_is_allowed(
+            "yt3.googleusercontent.com",
+            ALLOWED_IMAGE_HOSTS
+        ));
+        assert!(!host_is_allowed("ytimg.com.evil.com", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed("imgs.aixifan.com", ALLOWED_IMAGE_HOSTS));
         assert!(host_is_allowed(
             "tx-free-imgs.acfun.cn",
@@ -578,6 +593,9 @@ mod tests {
             Some("https://live.bilibili.com/")
         );
         assert_eq!(referer_for("static-cdn.jtvnw.net"), None);
+        for host in ["i.ytimg.com", "yt3.ggpht.com", "yt3.googleusercontent.com"] {
+            assert_eq!(referer_for(host), Some("https://www.youtube.com/"));
+        }
         for host in [
             "imgs.aixifan.com",
             "tx-free-imgs.acfun.cn",

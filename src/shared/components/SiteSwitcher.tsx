@@ -15,6 +15,7 @@ const FALLBACK_SITES: SiteInfo[] = [
   { id: "huya", name: "Huya" },
   { id: "douyin", name: "Douyin" },
   { id: "twitch", name: "Twitch" },
+  { id: "youtube", name: "Youtube" },
   { id: "acfun", name: "AcFun" },
 ];
 
@@ -24,6 +25,7 @@ const PLATFORM_ORDER: readonly SiteId[] = [
   "huya",
   "douyin",
   "twitch",
+  "youtube",
   "acfun",
 ];
 

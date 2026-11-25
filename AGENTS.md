@@ -49,7 +49,7 @@
 ## 播放与功能边界
 
 - 直播和 IPTV 使用 Video.js（HLS/DASH）与 `mpegts.js`；支持原生播放时直接使用 `<video>`；请求头和同源处理统一走 Rust `stream_proxy`。Video.js React 文档：https://videojs.org/docs/framework/react/llms.txt
-- 支持 Bilibili、Huya、Douyu、Douyin、Twitch；能力以现有实现为准，不伪造不可靠能力；Twitch 使用 HLS 和匿名 IRC，公开浏览接口仅保证首屏。
+- 支持 Bilibili、Huya、Douyu、Douyin、Twitch、YouTube、AcFun；能力以现有实现为准，不伪造不可靠能力；Twitch 使用 HLS 和匿名 IRC，公开浏览接口仅保证首屏；YouTube 使用匿名直播搜索、HLS 与只读网页聊天。
 
 ## UI 与文档
 

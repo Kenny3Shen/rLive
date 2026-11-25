@@ -290,7 +290,7 @@ const settingsCategorySearchText: Record<SettingsCategory, string> = {
   playback:
     "播放 播放质量 清晰度 线路记忆 软切换 视频 点播 推荐 接口 App API Web API 预加载 下一分集 初始化段 音视频 分片 额外流量 相关视频 悬停 预览 卡片 封面 语音 字幕 asr qwen3 crispasr vad 标点 说话人 热词 刷新间隔 CUDA NVIDIA GPU 推理后端 弹幕 轨道 区域 文字 透明度 字号 描边 速度 过滤 屏蔽词 重复 礼物 合并 醒目留言 sc 恢复默认 重置 reset",
   platform:
-    "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch acfun AcFun 开播 通知 系统通知 权限 关注主播 提醒",
+    "平台 直播平台 bilibili 哔哩哔哩 douyu 斗鱼 huya 虎牙 douyin 抖音 twitch youtube YouTube acfun AcFun 开播 通知 系统通知 权限 关注主播 提醒",
   network: "网络 代理 iptv IPTV M3U 源 地址 直链 播放 媒体 HLS M3U8 FLV MPEG-TS MP4",
   recording:
     "录制 设置 默认 弹幕 后台 离开 自动 分割 时长 保存 路径 目录 ASS 导出 分辨率 字体 不透明度 描边 阴影 粗体 屏蔽 正则 FFmpeg 超时 重连 HLS 分片 重试",

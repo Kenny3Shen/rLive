@@ -1,4 +1,4 @@
-import type { LiveRoomItem } from "@/shared/types/live";
+import type { LiveRoomItem, SiteId } from "@/shared/types/live";
 
 export const SEARCH_SCOPES = [
   { value: "all", label: "全部" },
@@ -25,6 +25,21 @@ export function searchPath(keyword: string, scope: SearchScope = "all"): string 
 
 export function searchScopeLabel(scope: SearchScope): string {
   return SEARCH_SCOPES.find((item) => item.value === scope)?.label ?? "全部";
+}
+
+/**
+ * 房间号直查的入口判定。除 YouTube 外沿用各平台现有的原样直查行为；
+ * YouTube 只拦明显不是视频、频道或直播链接的普通搜索词，具体规范化与存在性
+ * 校验仍由 Rust 站点适配器负责。
+ */
+export function isDirectRoomInput(siteId: SiteId, value: string): boolean {
+  const input = value.trim();
+  if (!input) return false;
+  if (siteId !== "youtube") return true;
+
+  return /^(?:[A-Za-z0-9_-]{11}|@[^\s/?#]{1,100}(?:\/live)?|\/?channel\/[A-Za-z0-9_-]{1,100}\/live|(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\/[^\s]+)$/i.test(
+    input,
+  );
 }
 
 function normalize(value: string): string {

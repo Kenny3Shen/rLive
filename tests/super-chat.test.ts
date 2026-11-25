@@ -25,8 +25,9 @@ function superChat(overrides: Partial<DanmakuEvent> = {}): DanmakuEvent {
 }
 
 describe("Super Chat presentation", () => {
-  test("enables SC only for Bilibili", () => {
+  test("enables SC for platforms with validated event metadata", () => {
     expect(siteSupportsSuperChat("bilibili")).toBe(true);
+    expect(siteSupportsSuperChat("youtube")).toBe(true);
     expect(siteSupportsSuperChat("douyu")).toBe(false);
     expect(siteSupportsSuperChat(undefined)).toBe(false);
   });

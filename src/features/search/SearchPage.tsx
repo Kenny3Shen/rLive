@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 import {
   parseSearchScope,
   prepareSearchResults,
+  isDirectRoomInput,
   roomFromDetail,
   SEARCH_SCOPES,
   searchMatch,
@@ -71,6 +72,8 @@ export function SearchPage() {
     setDraftScope(scope);
   }
 
+  const directRoomInput = isDirectRoomInput(siteId, keyword);
+  const directRoomLookupActive = scope === "room" && directRoomInput;
   const roomLookup = useQuery({
     queryKey: ["search_room", siteId, keyword],
     queryFn: () =>
@@ -78,13 +81,13 @@ export function SearchPage() {
         siteId,
         roomId: keyword,
       }),
-    enabled: scope === "room" && keyword.length > 0,
+    enabled: directRoomLookupActive && keyword.length > 0,
     retry: false,
   });
 
   // 对房间号而言直接查询既更快也更可靠。若某平台对别名的解析方式不同，
   // 再回退到其常规搜索接口。
-  const useTextSearch = keyword.length > 0 && (scope !== "room" || roomLookup.isError);
+  const useTextSearch = keyword.length > 0 && (!directRoomLookupActive || roomLookup.isError);
   const textQuery = useInfiniteQuery({
     queryKey: ["search", siteId, keyword, scope],
     queryFn: ({ pageParam }) =>
@@ -109,16 +112,21 @@ export function SearchPage() {
     [keyword, scope, textQuery.data],
   );
   const rooms = useMemo<LiveRoomItem[]>(
-    () => (scope === "room" && roomLookup.data ? [roomFromDetail(roomLookup.data)] : textRooms),
-    [roomLookup.data, scope, textRooms],
+    () =>
+      directRoomLookupActive && roomLookup.data
+        ? [roomFromDetail(roomLookup.data)]
+        : textRooms,
+    [directRoomLookupActive, roomLookup.data, textRooms],
   );
 
   const isLoading =
     keyword.length > 0 &&
-    (scope === "room"
+    (directRoomLookupActive
       ? roomLookup.isLoading || (roomLookup.isError && textQuery.isLoading)
       : textQuery.isLoading);
-  const isError = scope === "room" ? roomLookup.isError && textQuery.isError : textQuery.isError;
+  const isError = directRoomLookupActive
+    ? roomLookup.isError && textQuery.isError
+    : textQuery.isError;
   const error = textQuery.error ?? roomLookup.error;
   const { loadMore, loadMoreRef, supportsIntersectionObserver } = useInfiniteScroll({
     hasNextPage: textQuery.hasNextPage,

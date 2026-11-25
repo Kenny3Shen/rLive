@@ -1,7 +1,14 @@
 import type { HomeEntryId } from "../navEntries";
 
 /** 镜像 Rust `SiteId` 的 serde snake_case 取值。 */
-export type SiteId = "bilibili" | "huya" | "douyu" | "douyin" | "twitch" | "acfun";
+export type SiteId =
+  | "bilibili"
+  | "huya"
+  | "douyu"
+  | "douyin"
+  | "twitch"
+  | "youtube"
+  | "acfun";
 
 /** 镜像 Rust `commands::site::SiteInfo`。 */
 export type SiteInfo = {

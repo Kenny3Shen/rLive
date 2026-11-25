@@ -14,6 +14,7 @@ export const LIVE_SITE_IDS = [
   "huya",
   "douyin",
   "twitch",
+  "youtube",
   "acfun",
 ] as const satisfies readonly SiteId[];
 

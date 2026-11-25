@@ -55,6 +55,7 @@
 | [虎牙](zh/虎牙平台API文档.md) | 移动端页解析、anticode、FLV 与发送条件 |
 | [抖音](zh/抖音平台API文档.md) | 直播 feed 与分区列表、`a_bogus` 验签、本地签名实时弹幕；短视频推荐下线依据 |
 | [Twitch](zh/Twitch平台API文档.md) | 公开 GraphQL、语言分片分页、HLS 与匿名 IRC |
+| [YouTube](zh/YouTube平台API文档.md) | 匿名直播搜索、频道直播入口、HLS 清晰度与网页聊天 |
 | [AcFun](zh/AcFun平台API文档.md) | 直播、视频与文章接入，直播与视频弹幕、评论、观看历史与续播、公开接口与播放边界 |
 
 ## 性能原始数据

@@ -11,6 +11,7 @@ const DANMAKU_ENABLED_SITES = new Set<SiteId>([
   "huya",
   "douyin",
   "twitch",
+  "youtube",
   "acfun",
 ]);
 

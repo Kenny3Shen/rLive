@@ -9,6 +9,7 @@ mod proxy;
 pub mod reconnect;
 pub mod tars;
 pub mod twitch;
+pub mod youtube;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -67,7 +68,7 @@ impl SelfDanmakuIdentity {
             SiteId::Huya => (&["yyuid", "udb_uid"], &["udb_n"]),
             // 不要从抖音／Twitch 的不透明会话 token 推断身份。
             // 可读的显式名称仍是安全的兜底。
-            SiteId::Douyin | SiteId::Twitch => (&[], &[]),
+            SiteId::Douyin | SiteId::Twitch | SiteId::Youtube => (&[], &[]),
         };
         const GENERIC_NAME_KEYS: &[&str] =
             &["username", "user_name", "nickname", "nick", "display_name"];
@@ -991,6 +992,21 @@ pub async fn connect(
                 identity,
                 notice,
                 move |events| twitch::run_loop(events, args, route),
+            );
+            Ok(())
+        }
+        SiteId::Youtube => {
+            let args = youtube::args_from_raw(room_id, detail_raw)?;
+            let route = route.clone();
+            spawn_loop(
+                app.clone(),
+                manager,
+                generation,
+                SiteId::Youtube,
+                source_key.clone(),
+                identity,
+                notice,
+                move |events| youtube::run_loop(events, args, route),
             );
             Ok(())
         }

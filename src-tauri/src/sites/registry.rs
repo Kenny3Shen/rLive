@@ -8,6 +8,7 @@ use crate::sites::douyu::DouyuSite;
 use crate::sites::huya::HuyaSite;
 use crate::sites::traits::LiveSite;
 use crate::sites::twitch::TwitchSite;
+use crate::sites::youtube::YoutubeSite;
 
 /// 站点列表 UI 使用的元数据（不含 cookie / HTTP 会话）。
 pub struct SiteMeta {
@@ -41,6 +42,10 @@ pub fn all_meta() -> Vec<SiteMeta> {
         SiteMeta {
             id: SiteId::Twitch,
             name: "Twitch",
+        },
+        SiteMeta {
+            id: SiteId::Youtube,
+            name: "Youtube",
         },
     ]
 }
@@ -81,6 +86,7 @@ fn site_with_client(
             cookie.unwrap_or_default(),
         ))),
         SiteId::Twitch => Ok(Box::new(TwitchSite::new(client))),
+        SiteId::Youtube => Ok(Box::new(YoutubeSite::new(client, route.clone()))),
     }
 }
 
@@ -89,8 +95,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_has_six_sites() {
-        assert_eq!(all_meta().len(), 6);
+    fn registry_has_seven_sites() {
+        assert_eq!(all_meta().len(), 7);
     }
 
     #[test]

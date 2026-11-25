@@ -51,7 +51,15 @@ import {
   type MultiRoomCandidate,
 } from "./multiRoomStore";
 
-const SITE_OPTIONS: readonly SiteId[] = ["bilibili", "huya", "douyu", "douyin", "twitch", "acfun"];
+const SITE_OPTIONS: readonly SiteId[] = [
+  "bilibili",
+  "huya",
+  "douyu",
+  "douyin",
+  "twitch",
+  "youtube",
+  "acfun",
+];
 const SITE_ITEMS = SITE_OPTIONS.map((siteId) => ({
   value: siteId,
   label: SITE_LABELS[siteId] ?? siteId,
@@ -226,12 +234,16 @@ export function MultiRoomPickerDialog({
                 data-invalid={manualError ? true : undefined}
                 data-disabled={manualPending || full ? true : undefined}
               >
-                <FieldLabel htmlFor="multi-room-id">房间号</FieldLabel>
+                <FieldLabel htmlFor="multi-room-id">
+                  {siteId === "youtube" ? "视频 ID 或直播间链接" : "房间号"}
+                </FieldLabel>
                 <InputGroup>
                   <InputGroupInput
                     id="multi-room-id"
                     value={roomId}
-                    placeholder="输入房间号"
+                    placeholder={
+                      siteId === "youtube" ? "输入视频 ID、@频道或 YouTube 直播链接" : "输入房间号"
+                    }
                     autoComplete="off"
                     aria-invalid={manualError ? true : undefined}
                     disabled={manualPending || full}

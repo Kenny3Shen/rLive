@@ -10,6 +10,7 @@ pub enum SiteId {
     Douyu,
     Douyin,
     Twitch,
+    Youtube,
 }
 
 impl SiteId {
@@ -21,6 +22,7 @@ impl SiteId {
             SiteId::Douyu => "douyu",
             SiteId::Douyin => "douyin",
             SiteId::Twitch => "twitch",
+            SiteId::Youtube => "youtube",
         }
     }
 
@@ -32,6 +34,7 @@ impl SiteId {
             "douyu" => Some(SiteId::Douyu),
             "douyin" => Some(SiteId::Douyin),
             "twitch" => Some(SiteId::Twitch),
+            "youtube" => Some(SiteId::Youtube),
             _ => None,
         }
     }
@@ -358,13 +361,13 @@ pub enum DanmakuKind {
     System,
 }
 
-/// Bilibili Super Chat 事件携带的可选元数据。
+/// 平台 Super Chat 事件携带的可选元数据。
 ///
 /// websocket 负载在不同 Bilibili 客户端间并非完全稳定，因此每个字段都独立可选。
 /// 取值在解码进入本模型之前完成校验。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SuperChatInfo {
-    /// Bilibili 的消息 id，客户端用它对重连做去重。
+    /// 平台的消息 id，客户端用它对重连做去重。
     pub id: Option<String>,
     /// Super Chat 的付费金额。
     pub price: Option<f64>,
@@ -430,6 +433,9 @@ mod tests {
         assert_eq!(s, "\"bilibili\"");
         let s = serde_json::to_string(&SiteId::Acfun).unwrap();
         assert_eq!(s, "\"acfun\"");
+        let s = serde_json::to_string(&SiteId::Youtube).unwrap();
+        assert_eq!(s, "\"youtube\"");
+        assert_eq!(SiteId::from_str_loose("youtube"), Some(SiteId::Youtube));
     }
 
     #[test]
