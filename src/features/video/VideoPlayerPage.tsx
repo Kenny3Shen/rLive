@@ -205,6 +205,7 @@ import { VideoDanmakuLayer } from "./VideoDanmakuLayer";
 import { VideoDownloadDialog, type VideoDownloadTarget } from "./VideoDownloadDialog";
 import { videoDownloadSupported } from "./videoDownload";
 import type { SidebarTab, SidebarTabMemory } from "./VideoSidebar";
+import { VideoSidebarSkeleton } from "./VideoSidebarSkeleton";
 import { useHoverOpen } from "@/components/videojs/lib/use-hover-open";
 import { mediaPopupTriggerOpenClass } from "@/components/videojs/lib/popup-surface";
 import {
@@ -3328,6 +3329,8 @@ function VideoPlayerPageContent() {
   const retainedSourceFailure =
     currentSourceAvailable && playInfoQuery.isError ? playInfoQuery.error : null;
   const controlsAvailable = playbackChromeReady;
+  const showPlaybackDetailsSkeleton =
+    !mobileClient && !playbackChromeReady && !playbackError && !fatalError;
   const playerBackLabel = fullscreen.fullscreen
     ? "退出全屏"
     : webFullscreen
@@ -3916,12 +3919,12 @@ function VideoPlayerPageContent() {
               // 单行放下，超长数值退到第二行而非截断），窄屏则列在播放器下方。
               "relative isolate flex min-h-0 flex-1 flex-col border-t border-border/80 bg-sidebar max-md:pb-[env(safe-area-inset-bottom)]",
               "lg:w-[320px] lg:flex-none lg:border-t-0 lg:border-l xl:w-[340px] lg:pb-0",
-              !playbackChromeReady && "border-transparent bg-black",
+              !showPlaybackDetailsSkeleton && !playbackChromeReady && "border-transparent bg-black",
             )}
           >
-            {playbackChromeReady && (
+            {playbackChromeReady ? (
               <>
-                <Suspense fallback={null}>
+                <Suspense fallback={mobileClient ? null : <VideoSidebarSkeleton />}>
                   <VideoSidebar
                     tabMemory={sidebarTabMemory}
                     bvid={params.bvid}
@@ -3958,7 +3961,9 @@ function VideoPlayerPageContent() {
                 </Suspense>
                 <DrawerViewport active={!fullscreen.fullscreen} />
               </>
-            )}
+            ) : showPlaybackDetailsSkeleton ? (
+              <VideoSidebarSkeleton />
+            ) : null}
           </aside>
         )}
       </main>

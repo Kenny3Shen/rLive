@@ -26,7 +26,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -37,7 +36,6 @@ import {
   VideoSelectionRow,
   VideoSelectionSection,
 } from "@/shared/components/VideoSelectionSection";
-import { CARD_SURFACE_CLASS } from "@/shared/components/cardSurface";
 import { useHorizontalSwipe } from "@/shared/hooks/useHorizontalSwipe";
 import { isMobileClient } from "@/shared/clientPlatform";
 import { cn, formatOnline, normalizeImageUrl } from "@/lib/utils";
@@ -64,6 +62,7 @@ import {
   VIDEO_DETAILS_SIDEBAR_STACK_CLASS,
   VIDEO_SIDEBAR_TAB_COUNT_CLASS,
 } from "@/shared/components/videoDetailsSidebar";
+import { RelatedVideoSkeletonList, UpCardSkeleton } from "./VideoSidebarSkeleton";
 import { videoPlayPath, videoSearchPath } from "./videoRoute";
 import {
   dedupeVideoItems,
@@ -138,54 +137,6 @@ function isSidebarTab(value: string): value is SidebarTab {
 }
 
 /**
- * 稿件详情未落定时的 UP 主信息卡骨架。
- *
- * 几何与真卡逐项对齐（`section` 的 `px-2.5 py-2`、卡壳的 `rounded-xl` + 同底同描边、
- * 40px 头像、名称行 `pr-16`、标题行的 `mt-1.5` + 24px、统计行的 `mt-0.5` + 16px），
- * 数据到达时只有内容替换、不重新排布。
- *
- * 必须和真卡一样画在「相关视频」面板里：UP 主卡属于内容区而不是页签之外，
- * 所以首屏加载时它是列表的第一块 —— 从前只在 `archive` 到位后才渲染，移动端冷启动
- * （`archive` 与 `related` 同时 pending）会先看到一条没有 UP 主卡的相关列表，
- * 数据到达后整块内容再被往下推一次。
- */
-function UpCardSkeleton() {
-  return (
-    <section
-      data-slot="video-up-card-skeleton"
-      aria-hidden
-      // 与真卡一致：不自行带内外边距（间距由 `SidebarCardStack` 给）、不带下分割线。
-      className="shrink-0"
-    >
-      <div className={VIDEO_DETAILS_INFO_CARD_CLASS}>
-        <div className="flex min-w-0 items-start gap-2.5 pr-16">
-          {/* 头像按 `Avatar size="lg"` 的实际渲染尺寸（40px）：真卡的 `size-11`
-              与 `data-[size=lg]:size-10` 同时存在时后者胜出，因此量到的是 40。 */}
-          <Skeleton className="size-10 shrink-0 rounded-full ring-1 ring-border/80" />
-          <div className="min-w-0 flex-1">
-            {/* 名称行与粉丝/视频行：真卡是 20px 名称 + 4px 间距 + 16px 元信息。 */}
-            <Skeleton className="h-5 w-32" />
-            <div className="mt-0.5 flex items-center gap-2">
-              <Skeleton className="h-4 w-14" />
-              <Skeleton className="h-4 w-12" />
-            </div>
-          </div>
-        </div>
-        {/* 标题行：真卡是 20px 一行标题，行高 24px（行盒 + 上下 2px）。 */}
-        <Skeleton className="mt-1.5 h-6 w-4/5" />
-        {/* 统计行（播放/评论/发布时间/当前在线）。 */}
-        <div className="mt-0.5 flex items-center gap-x-2">
-          <Skeleton className="h-4 w-12" />
-          <Skeleton className="h-4 w-10" />
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-4 w-14" />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/**
  * 评论页签：列表 + 底部输入框。回复目标的 state 放在这里而不是 `VideoSidebar`
  * 本体上，选目标与取消只重渲染这一页签，不带着整个侧栏重提交。
  * 调用方按 aid 重挂，换稿件即清空目标。
@@ -239,23 +190,7 @@ const RelatedPanel = memo(function RelatedPanel({ bvid }: { bvid: string }) {
   return (
     <div data-slot="video-related-list" className="flex flex-col gap-2">
       {relatedQuery.isPending ? (
-        <>
-          {[0, 1, 2].map((index) => (
-            // 与行式 VideoCard 同几何与同表面：卡片底色 + 细描边，封面占 2/5 列宽，
-            // 右侧三行文本。
-            <div
-              key={index}
-              className={cn("flex items-start gap-2.5 rounded-xl p-1.5", CARD_SURFACE_CLASS)}
-            >
-              <Skeleton className="aspect-video w-2/5 shrink-0 rounded-md ring-1 ring-border-subtle" />
-              <div className="flex min-w-0 flex-1 flex-col gap-1.5 py-0.5">
-                <Skeleton className="h-3.5 w-full" />
-                <Skeleton className="h-3 w-3/5" />
-                <Skeleton className="h-3 w-2/5" />
-              </div>
-            </div>
-          ))}
-        </>
+        <RelatedVideoSkeletonList />
       ) : relatedQuery.isError ? (
         <ErrorState
           error={relatedQuery.error}
