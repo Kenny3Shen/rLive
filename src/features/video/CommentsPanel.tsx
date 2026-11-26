@@ -309,6 +309,8 @@ function CommentAuthorName({
         preview
           ? cn("max-w-full", videoCommentStyles.previewAuthor)
           : cn("justify-start", videoCommentStyles.mainAuthor),
+        // 省略交给内部文本处理，避免外层圆角按钮把末字裁进圆角。
+        "overflow-visible",
       )}
       aria-label={`查看 ${comment.uname} 的投稿`}
       title={`查看 ${comment.uname} 的投稿`}
