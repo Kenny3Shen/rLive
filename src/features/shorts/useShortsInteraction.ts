@@ -19,6 +19,7 @@ import { clearStaleSelection } from "@/shared/selection";
 import {
   SHORTS_SWIPE_SETTLE_EASING,
   SHORTS_SWIPE_VELOCITY_WINDOW_MS,
+  shortsUploaderSwipeCommitted,
   shortsPanelDepth,
   shortsSwipeDragOffset,
   shortsSwipeIntent,
@@ -38,6 +39,42 @@ import type { ShortsPlaybackState } from "./useShortsPlayback";
  */
 const SHORTS_TAP_SUPPRESSION_MS = 300;
 
+/** 信息区里以短点进入详情的入口仍参与左滑。 */
+const LIGHT_TAP_ENTRY_SELECTOR = [
+  "[data-slot='shorts-uploader-entry']",
+  "[data-slot='shorts-detail-entry']",
+  "[data-slot='player-chapter-pill']",
+].join(",");
+
+/** 这些控件拥有持续输入、拖动或独立操作，长按与左滑必须绕开。 */
+const FUNCTIONAL_CONTROL_SELECTOR = [
+  "a",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "[contenteditable='true']",
+  "[role='button']",
+  "[role='link']",
+  "[role='slider']",
+  "[role='switch']",
+  "[data-slot='shorts-seek']",
+].join(",");
+
+function canEnterUploaderFromTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  if (target.closest(LIGHT_TAP_ENTRY_SELECTOR)) return true;
+  return target.closest(FUNCTIONAL_CONTROL_SELECTOR) === null;
+}
+
+function canStartSpeedHold(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  // 信息栏与上下控制栏是 media-area 的兄弟；它们即使视觉上压在画面上，也不会
+  // 命中这里。media-area 本身覆盖视频、上下留边和宽屏两侧黑边。
+  if (!target.closest('[data-slot="shorts-media-area"]')) return false;
+  return target.closest(FUNCTIONAL_CONTROL_SELECTOR) === null;
+}
+
 type ShortsInteractionOptions = {
   items: readonly unknown[];
   index: number;
@@ -48,6 +85,7 @@ type ShortsInteractionOptions = {
   navigationLocked: boolean;
   blocked: boolean;
   onMotionActiveChange: (active: boolean) => void;
+  onSwipeLeft?: () => void;
   onBoundary?: (next: number) => void;
 };
 
@@ -62,6 +100,7 @@ export function useShortsInteraction({
   navigationLocked,
   blocked,
   onMotionActiveChange,
+  onSwipeLeft,
   onBoundary,
 }: ShortsInteractionOptions) {
   const [gestureActive, setGestureActive] = useState(false);
@@ -69,7 +108,7 @@ export function useShortsInteraction({
   /* ---------- 长按倍速 ---------- */
 
   /**
-   * 按住画面临时倍速，松手回 1x —— 与播放页同一套语义、同一组常量
+   * 按住舞台临时倍速，松手回 1x —— 与播放页同一套语义、同一组常量
    * （`LONG_PRESS_SPEED_RATE` / `LONG_PRESS_TRIGGER_MS`），因此两个表面上的手感一致。
    *
    * 挂在页面这条 pointer 管线里而不是另起一个识别器：换片手势会
@@ -121,14 +160,9 @@ export function useShortsInteraction({
   const armSpeedHold = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       releaseSpeedHold();
-      // 只认领画面框上的按压：框外是背景区与两条控制栏，按住它们不该改变播放速度
-      // （点按暂停层也只铺画面框，两者的命中范围刻意一致）。
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest('[data-slot="shorts-frame"]')
-      ) {
-        return;
-      }
+      // 只认领视频框及其黑边；信息栏和上下控制栏是 media-area 的兄弟，信息入口
+      // 与播放控制各自保留短点语义。叠加在画面内的按钮、输入框与滑块同样绕开。
+      if (!canStartSpeedHold(event.target)) return;
       speedPressRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
       speedHoldTimerRef.current = window.setTimeout(() => {
         speedHoldTimerRef.current = null;
@@ -212,8 +246,10 @@ export function useShortsInteraction({
     stageHeight: number;
     index: number;
     length: number;
-    /** 已锁定为纵向手势。锁定前不移动条带，也不拦子元素的点按。 */
-    vertical: boolean;
+    /** 方向锁定结果。锁定前不移动条带，也不拦子元素的点按。 */
+    axis: "pending" | "vertical" | "left";
+    /** 从按钮等交互控件起手时不抢它的左滑入口，但纵向换片行为保持不变。 */
+    canEnterUploader: boolean;
     samples: ShortsSwipeSample[];
   } | null>(null);
 
@@ -221,7 +257,7 @@ export function useShortsInteraction({
   useEffect(() => {
     const finishPending = (event: PointerEvent) => {
       const swipe = swipeRef.current;
-      if (!swipe || swipe.pointerId !== event.pointerId || swipe.vertical) return;
+      if (!swipe || swipe.pointerId !== event.pointerId || swipe.axis !== "pending") return;
       swipeRef.current = null;
       if (!settlingRef.current) onMotionActiveChange(false);
     };
@@ -431,7 +467,7 @@ export function useShortsInteraction({
 
   /** 把条带停靠在当前下标处，不做运动（挂载、尺寸变化、下标被外部改动）。 */
   const parkTrack = useCallback(() => {
-    if (swipeRef.current?.vertical) return;
+    if (swipeRef.current?.axis === "vertical") return;
     // 收尾进行中就让它跑到终点：这里取消动画会变成一次硬切（目标与收尾目标相同）。
     if (settlingRef.current) return;
     cancelSettle();
@@ -460,7 +496,7 @@ export function useShortsInteraction({
     const observer = new ResizeObserver(() => {
       const height = viewport.clientHeight;
       // 只有高度变化才重建：手势与收尾进行中一律不动，避免把运行中的动画跳到终点。
-      if (height <= 0 || height === applied || swipeRef.current?.vertical) return;
+      if (height <= 0 || height === applied || swipeRef.current?.axis === "vertical") return;
       if (settlingRef.current) return;
       applied = height;
       stageHeightRef.current = height;
@@ -535,6 +571,7 @@ export function useShortsInteraction({
       // 必须在这里采。一旦开始拖动，`offsetTop` 会被条带平移影响（这里读到的仍是布局值，
       // 但集合本身会在换片提交时增减），所以基准就该在按下时定下。
       collectDepthPanels();
+      const canEnterUploader = canEnterUploaderFromTarget(event.target);
       swipeRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
@@ -544,7 +581,8 @@ export function useShortsInteraction({
         stageHeight: stageHeight() || event.currentTarget.clientHeight,
         index,
         length: items.length,
-        vertical: false,
+        axis: "pending",
+        canEnterUploader,
         samples: [{ y: event.clientY, time: performance.now() }],
       };
     },
@@ -569,15 +607,27 @@ export function useShortsInteraction({
       const deltaX = event.clientX - swipe.startX;
       const deltaY = event.clientY - swipe.startY;
 
-      if (!swipe.vertical) {
+      if (swipe.axis === "pending") {
         const intent = shortsSwipeIntent(deltaX, deltaY);
         if (intent === "pending") return;
-        if (intent === "reject") {
+        if (intent === "reject" || (intent === "left" && !swipe.canEnterUploader)) {
           swipeRef.current = null;
           if (!settlingRef.current) onMotionActiveChange(false);
           return;
         }
-        swipe.vertical = true;
+        if (intent === "left") {
+          swipe.axis = "left";
+          // 锁定横轴后接管指针，保证在画面外抬手也能完成一次左滑。
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+          } catch {
+            // 没有捕获时允许本次手势取消，下一次仍可正常识别。
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        swipe.axis = "vertical";
         setGestureActive(true);
         // 从收尾到达的精确像素接管，过渡中途抓住条带从那里继续而不是跳变。
         cancelSettle();
@@ -586,7 +636,7 @@ export function useShortsInteraction({
         // 只有确认纵向后才提升层；面板的纵深基准也在这一刻采一次（集合与高度都还新鲜）。
         if (el) el.style.willChange = "transform";
         collectDepthPanels();
-        // 指针捕获是增强而不是前提：`touchAction: pan-x` 已经把纵向移动交给我们，
+        // 指针捕获是增强而不是前提：`touchAction: none` 已经把两个方向交给我们，
         // 捕获只是让手指滑出元素后仍然收到事件。它会在指针已经结束时抛
         // NotFoundError（Android WebView 上真实发生过），不接住的话这一帧剩下的
         // 采样重置、偏移写入与 preventDefault 全部被跳过。
@@ -597,6 +647,10 @@ export function useShortsInteraction({
         }
         // 从锁定点重启采样：锁定前的样本描述的是还没被认作换片的手势。
         swipe.samples = [];
+      } else if (swipe.axis === "left") {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
       }
 
       swipe.samples.push({ y: event.clientY, time: performance.now() });
@@ -627,8 +681,23 @@ export function useShortsInteraction({
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-      if (!swipe.vertical) {
+      if (swipe.axis === "pending") {
         if (!settlingRef.current) onMotionActiveChange(false);
+        return;
+      }
+      if (swipe.axis === "left") {
+        onMotionActiveChange(false);
+        // 左滑提交后浏览器仍可能补一次 click；不能让它顺带切暂停。
+        suppressTapUntilRef.current = Date.now() + SHORTS_TAP_SUPPRESSION_MS;
+        if (
+          !cancelled &&
+          swipe.canEnterUploader &&
+          shortsUploaderSwipeCommitted(event.clientX - swipe.startX, event.clientY - swipe.startY)
+        ) {
+          onSwipeLeft?.();
+        }
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
       setGestureActive(false);
@@ -662,7 +731,7 @@ export function useShortsInteraction({
       settle(target, shortsSwipeSettleDuration(target - offsetRef.current, velocity));
       setIndex(next);
     },
-    [onMotionActiveChange, setIndex, settle],
+    [onMotionActiveChange, onSwipeLeft, setIndex, settle],
   );
 
   const onPointerUpCapture = useCallback(
@@ -782,6 +851,18 @@ export function useShortsInteraction({
     }
   }, []);
 
+  /**
+   * 左滑认领后，浏览器仍可能向原按钮补发 click；视频长按也要拦住抬手点击。
+   *
+   * 在舞台捕获阶段统一拦截，视频区域松手不会顺带切暂停，信息入口左滑后也不会
+   * 继续执行那一次短点。
+   */
+  const onClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (Date.now() >= suppressTapUntilRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
   /** 切换页内模式前释放倍速与手势，不改动页面持有的槽位和下标。 */
   const resetInteraction = useCallback(() => {
     releaseSpeedHold();
@@ -795,6 +876,7 @@ export function useShortsInteraction({
     gestureActive,
     onSurfaceTap,
     onContextMenu,
+    onClickCapture,
     goToIndex,
     onPointerDownCapture,
     onPointerMoveCapture,

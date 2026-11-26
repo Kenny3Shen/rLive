@@ -279,6 +279,7 @@ export function ShortsPanelChrome({
                 {active ? (
                   <button
                     type="button"
+                    data-slot="shorts-detail-entry"
                     aria-label={`视频详情：${item.title}`}
                     title="视频详情"
                     className="pointer-events-auto block w-full text-left"

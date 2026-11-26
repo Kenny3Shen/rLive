@@ -7,6 +7,7 @@ import {
   shortsMediaFrame,
   shortsFrameFill,
   shortsSwipeIntent,
+  shortsUploaderSwipeCommitted,
   shortsSwipeTargetIndex,
   shortsSwipeDragOffset,
   shortsSwipeVelocity,
@@ -51,10 +52,19 @@ describe("短视频手势", () => {
   test.each([
     [4, 6, "pending"],
     [0, -40, "switch"],
+    [-40, 0, "left"],
     [40, 0, "reject"],
+    [-30, 32, "reject"],
     [30, 32, "reject"],
   ] as const)("轴锁 %s/%s", (x, y, expected) => {
     expect(shortsSwipeIntent(x, y)).toBe(expected);
+  });
+
+  test("只有明确向左且跨过提交距离才进入 UP 主列表", () => {
+    expect(shortsUploaderSwipeCommitted(-55, 0)).toBe(false);
+    expect(shortsUploaderSwipeCommitted(-56, 0)).toBe(true);
+    expect(shortsUploaderSwipeCommitted(56, 0)).toBe(false);
+    expect(shortsUploaderSwipeCommitted(-60, 50)).toBe(false);
   });
 
   test.each([

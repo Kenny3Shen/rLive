@@ -248,6 +248,7 @@ export function ShortsPage() {
     gestureActive,
     onSurfaceTap,
     onContextMenu,
+    onClickCapture,
     goToIndex,
     onPointerDownCapture,
     onPointerMoveCapture,
@@ -266,6 +267,7 @@ export function ShortsPage() {
     // 章节弹层展开时列表要能上下滚，手指/滚轮不能同时被当成换片。
     blocked: panels.anyOpen || chapterMenuOpen,
     onMotionActiveChange: setFeedMotionActive,
+    onSwipeLeft: feed.enterUploaderFromGesture,
     onBoundary: (next) => {
       if (feed.uploaderMode) void feed.load(next < 0 ? "prev" : "next");
     },
@@ -478,8 +480,9 @@ export function ShortsPage() {
             className="media-skin relative min-h-0 flex-1 select-none overflow-hidden bg-black"
             style={
               {
-                // 纵向手势由本页接管，横向留给系统返回手势。
-                touchAction: "pan-x",
+                // 纵横手势都由本页接管：上下换片、左滑进入当前 UP 主列表。
+                // Android 的系统边缘返回仍由系统优先处理，页面只接收系统放行的手指内左滑。
+                touchAction: "none",
                 // 进度条与悬停预览保持现有缩放；顶栏按钮另有自己的尺寸作用域。
                 "--media-scale-unit": "1.2rem",
               } as React.CSSProperties
@@ -490,6 +493,7 @@ export function ShortsPage() {
             onPointerCancelCapture={onPointerCancelCapture}
             onWheel={onWheel}
             onContextMenu={onContextMenu}
+            onClickCapture={onClickCapture}
           >
             <div ref={trackRef} data-slot="shorts-track" className="relative h-full">
               {/*
@@ -673,7 +677,7 @@ export function ShortsPage() {
         </Drawer>
       )}
       <Drawer open={panels.detailOpen} onOpenChange={panels.setDetailOpen}>
-        <ShortsDrawerContent compact={compact} title="视频详情">
+        <ShortsDrawerContent compact={compact} title="视频详情" fitContent>
           {detailBody}
         </ShortsDrawerContent>
       </Drawer>
@@ -804,15 +808,19 @@ function ShortsDrawerContent({
   title,
   children,
   scoped = false,
+  fitContent = false,
 }: {
   compact: boolean;
   title: string;
   children: React.ReactNode;
   /** 挂在 `DrawerViewport`（评论 dock）里：尺寸与侧别都由那块容器决定。 */
   scoped?: boolean;
+  /** 底部详情抽屉随内容撑高，长简介仍限制高度并在正文内滚动。 */
+  fitContent?: boolean;
 }) {
   // 评论 dock 是一条横栏，从下方推入；整窗口形态仍按视口宽窄决定侧别。
   const side = scoped ? "bottom" : panelDrawerSide(compact);
+  const contentSized = fitContent && !scoped && side === "bottom";
   return (
     <DrawerContent
       side={side}
@@ -821,7 +829,7 @@ function ShortsDrawerContent({
         // dock 形态铺满下栏：基础组件的底部抽屉带 `max-w-[36rem]`，平板横屏的
         // dock 比它宽，不覆盖会在两侧露出下面的画面。
         scoped && "max-w-full",
-        panelDrawerSizeClass(side, scoped),
+        contentSized ? "h-auto max-h-[70dvh]" : panelDrawerSizeClass(side, scoped),
       )}
     >
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
@@ -843,7 +851,10 @@ function ShortsDrawerContent({
         外壳上，滚到底时才让出这段距离。
       */}
       <div
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        className={cn(
+          "min-h-0 overflow-y-auto overscroll-contain",
+          contentSized ? "flex-auto" : "flex-1",
+        )}
         // dock 形态是页面最底层（底部操作栏在它打开时整条收起），安全区得由它自己
         // 消费 —— 不补的话手机上最后一条评论会压在系统手势条下面。
         style={{ paddingBottom: compact ? SHORTS_SAFE_AREA_BOTTOM : undefined }}

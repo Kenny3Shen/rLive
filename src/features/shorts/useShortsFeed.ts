@@ -126,19 +126,26 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
     if (!target && current?.bvid) storySeedRef.current = current.bvid;
   }, [current?.bvid, target]);
 
-  const enterUploader = useCallback(() => {
-    const item = view.items[view.index];
-    const mid = item?.author_mid?.trim();
-    if (!item || !mid || motionActive || target?.mid === mid) return;
-    // 同一次入口的重复点击不产生第二个 session；不同入口/退出重进永远不用旧响应。
-    sessionRef.current += 1;
-    setTarget({
-      session: sessionRef.current,
-      mid,
-      aid: item.aid,
-      recommendation: target?.recommendation ?? view,
-    });
-  }, [motionActive, target, view]);
+  const openUploader = useCallback(
+    (allowDuringMotion: boolean) => {
+      const item = view.items[view.index];
+      const mid = item?.author_mid?.trim();
+      if (!item || !mid || (!allowDuringMotion && motionActive) || target?.mid === mid) return;
+      // 同一次入口的重复点击不产生第二个 session；不同入口/退出重进永远不用旧响应。
+      sessionRef.current += 1;
+      setTarget({
+        session: sessionRef.current,
+        mid,
+        aid: item.aid,
+        recommendation: target?.recommendation ?? view,
+      });
+    },
+    [motionActive, target, view],
+  );
+  const enterUploader = useCallback(() => openUploader(false), [openUploader]);
+  // 左滑已经由舞台手势确认方向，不会触发纵向换片；即使按下时暂时锁住了视图，
+  // 也必须在这一刻进入列表，不能等 motionActive 的 state 回落后再要求用户滑一次。
+  const enterUploaderFromGesture = useCallback(() => openUploader(true), [openUploader]);
   const exitUploader = useCallback(() => {
     if (!target) return;
     setView(target.recommendation);
@@ -237,6 +244,7 @@ export function useShortsFeed(entrySeed: string | null, motionActive: boolean) {
     navigationLocked: !!target && !uploaderReady,
     counter,
     enterUploader,
+    enterUploaderFromGesture,
     exitUploader,
     directionFailures,
     load,

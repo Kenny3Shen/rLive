@@ -459,6 +459,8 @@ export function shortsItemKey(item: Pick<VideoItem, "bvid" | "cid">): string {
 const SHORTS_SWIPE_LOCK_DISTANCE_PX = 12;
 /** 主轴必须超过副轴的倍数，斜向拖动一律不认领。 */
 const SHORTS_SWIPE_DIRECTION_RATIO = 1.25;
+/** 左滑进入当前 UP 主列表所需的最小水平位移。 */
+export const SHORTS_UPLOADER_SWIPE_COMMIT_PX = 56;
 /**
  * 慢速拖拽提交换片所需的舞台高度比例。
  *
@@ -486,13 +488,16 @@ export type ShortsSwipeSample = {
 };
 
 /**
- * 这次按压是否交给纵向换片。
+ * 这次按压是否交给纵向换片或左滑进入 UP 主列表。
  *
- * 竖屏舞台上没有别的纵向手势（刻意不启用左右半屏亮度/音量：那套要求画面静止时
- * 的精细拖动，与「上下滑动换片」在同一根轴上不可共存），因此纵向一律接手，
- * 横向与斜向拒绝。
+ * 竖屏舞台刻意不启用左右半屏亮度/音量：那套要求画面静止时的精细拖动，与
+ * 「上下滑动换片」在同一根轴上不可共存。纵向因此一律接手；明确向左的横向手势
+ * 交给 UP 主列表入口，右滑与斜向仍拒绝，避免抢走系统的前进/返回手势。
  */
-export function shortsSwipeIntent(deltaX: number, deltaY: number): "pending" | "switch" | "reject" {
+export function shortsSwipeIntent(
+  deltaX: number,
+  deltaY: number,
+): "pending" | "switch" | "left" | "reject" {
   const horizontal = Math.abs(deltaX);
   const vertical = Math.abs(deltaY);
   if (horizontal < SHORTS_SWIPE_LOCK_DISTANCE_PX && vertical < SHORTS_SWIPE_LOCK_DISTANCE_PX) {
@@ -504,7 +509,22 @@ export function shortsSwipeIntent(deltaX: number, deltaY: number): "pending" | "
   ) {
     return "switch";
   }
+  if (
+    deltaX < 0 &&
+    horizontal >= SHORTS_SWIPE_LOCK_DISTANCE_PX &&
+    horizontal > vertical * SHORTS_SWIPE_DIRECTION_RATIO
+  ) {
+    return "left";
+  }
   return "reject";
+}
+
+/** 左滑跨过提交距离后才进入 UP 主列表，避免按下时的细微横移误触。 */
+export function shortsUploaderSwipeCommitted(deltaX: number, deltaY: number): boolean {
+  return (
+    shortsSwipeIntent(deltaX, deltaY) === "left" &&
+    Math.abs(deltaX) >= SHORTS_UPLOADER_SWIPE_COMMIT_PX
+  );
 }
 
 /**
